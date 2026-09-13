@@ -49,3 +49,18 @@ fun Cat.takeExtensionAgeInMonths(): Int? {
 // ADR-105 amendment (2026-09-11): a nullable handle receiver. Binds as a C# extension on `Cat?`,
 // so a null reference is a legal call site and the null crosses the ABI as `IntPtr.Zero`.
 fun Cat?.nameOrStray(): String = this?.name ?: "stray"
+
+// ADR-132 (receiver shapes beyond handle/value-class): the receiver slot must reuse the parameter
+// lowerings, so a BARE INTERFACE receiver binds like an `IPet` parameter does (ADR-040 sub-decision
+// B / ADR-084 stage 3: `HandleOf(receiver, out owned)` on the C# side, a borrowed StableRef read on
+// the Kotlin side). The body composes `name`, `legs` and `speak()` rather than echoing the receiver
+// back, so a C#-implemented `Dog` can only produce the expected string if all three interface slots
+// really dispatched back across the bridge. `describe` is deliberately NOT a `Pet` member: an
+// extension is indistinguishable from a member at the call site, and a member of this name would
+// also collide with the ADR-040 `pet_*` dispatch exports.
+fun Pet.describe(): String = "$name has $legs legs and says ${speak()}"
+
+// The other half: a NULLABLE VALUE-CLASS receiver (ADR-077 sub-item 3's wire - a null pointer for
+// the absent case, the underlying `String` otherwise). Oreo's chart has an id; the stray at the
+// back door does not, and answers to "anonymous".
+fun CatId?.orAnonymous(): String = this?.id ?: "anonymous"

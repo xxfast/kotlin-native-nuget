@@ -18,8 +18,12 @@ import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
+import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyFlowReturn
+import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericReturnRoute
+import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyLambdaParameter
 import io.github.xxfast.kotlin.native.nuget.processor.bridgeParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 
 /**
  * Why the planner declined to build an ordinary synchronous plan for a callable.
@@ -69,6 +73,13 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  point at the object-handle export set. */
   THROWABLE(droppedFromCSharp = true),
   NULLABLE(droppedFromCSharp = true),
+
+  /** ADR-132: an extension receiver whose wire is the ADR-079/080 adjacent `HasValue` + value
+   *  PAIR (`fun Int?.x()`, `fun Dosage?.x()`). Every other admitted receiver shape now lowers
+   *  exactly like a parameter; this one cannot, because the plan model allows a single
+   *  RECEIVER-role slot and it must come first. A genuine drop, named rather than crashing plan
+   *  validation. */
+  RECEIVER_FAN_OUT(droppedFromCSharp = true),
   OBJECT(droppedFromCSharp = true),
   STRING(droppedFromCSharp = true),
   UNSUPPORTED(droppedFromCSharp = true),
@@ -96,6 +107,16 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  that inherits it. Separate from [SEALED_SUBCLASS_UNROUTED] because the remedy differs: the
    *  author can move the member onto each arm, which does have those routes. */
   SEALED_BASE_UNROUTED(droppedFromCSharp = true),
+
+  /** ADR-064 amendment (2026-09-13): the ordinary-owner twin of [SEALED_SUBCLASS_UNROUTED]. The
+   *  four legacy-route deferrals below ([GENERIC], [FLOW_PROTOCOL], [CALLBACK_PROTOCOL],
+   *  [SUSPEND_CALLBACK_PROTOCOL]) are only deferrals at the handful of owner/position combinations
+   *  a legacy route is actually keyed to (research H measured six). Everywhere else — a Flow at a
+   *  parameter, a lambda at a class-method return, any of them on an object, an interface, an
+   *  extension or a constructor — the member vanishes from both halves, so the deferral is a drop
+   *  and has to be named. The reason it was reclassified from rides in
+   *  [ForwardCallableCatalogEntry.Skipped.detail]. */
+  UNROUTED_POSITION(droppedFromCSharp = true),
 
   /** ADR-064/ADR-082: a value-class member whose signature a supertype declares — inherited,
    *  forwarded by interface delegation (e.g. `CharSequence by value`) or explicitly overridden. */
@@ -152,6 +173,12 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  Excludes the two nested shapes that ARE declared: a sealed subclass (ADR-009, nested under
    *  its base) and a companion object (ADR-013, its owner's statics). */
   UNDECLARED_CLASS(droppedFromCSharp = true),
+
+  /** ADR-133: a Kotlin `object` at a parameter or return position. An object is declared in C# as
+   *  a STATIC class, and a static type cannot be a parameter or return type at all (CS0722), so
+   *  the member is dropped however the object is declared -- top-level or nested. Distinct from
+   *  [UNDECLARED_CLASS], whose remedy (move it to the top level) would not help here. */
+  OBJECT_POSITION(droppedFromCSharp = true),
 
   /** ROADMAP Phase 3 (issue #54): a sealed base at a position the plan does not marshal, which
    *  since ADR-105 means an INPUT position only -- a bare parameter, a nullable one, or a
@@ -237,8 +264,65 @@ internal sealed interface ForwardCallableCatalogEntry {
     // return position so the return-side skip sites, which are the majority, stay untouched.
     val position: ForwardSkipPosition = ForwardSkipPosition.RETURN,
     val parameter: String? = null,
+    /**
+     * ADR-064 amendment (2026-09-13): the skip is about the *declaration's own* type parameters
+     * (`fun <T> f(value: T): T`), not about a type standing at [position]. Set only by the
+     * unrouted-position reclassification, and read by `toDiagnosticKind` to pick
+     * `SKIPPED_UNSUPPORTED_COMBINATION`: a structural GENERIC and a type-based one at a return
+     * carry the same reason and the same position, and the author's remedy differs.
+     */
+    val structural: Boolean = false,
   ) : ForwardCallableCatalogEntry
 }
+
+/**
+ * ADR-064 amendment (2026-09-13): the deferral reasons whose legacy route exists only at *some*
+ * owner/position combinations, so a skip carrying one has to be checked against the route's own
+ * gate before it is allowed to stay silent. `SUSPEND` is deliberately absent (the suspend route is
+ * keyed to every owner the planner reaches), and so are `ABSTRACT` and `TYPE_PARAMETER`.
+ */
+private val UNROUTED_CANDIDATE_REASONS: Set<ForwardPlanSkipReason> = setOf(
+  ForwardPlanSkipReason.GENERIC,
+  ForwardPlanSkipReason.FLOW_PROTOCOL,
+  ForwardPlanSkipReason.CALLBACK_PROTOCOL,
+  ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL,
+)
+
+/**
+ * ADR-064 amendment (2026-09-13), shaped after ADR-116's sealed reclassification: turn a
+ * legacy-route deferral no route re-emits into a named [ForwardPlanSkipReason.UNROUTED_POSITION]
+ * drop, carrying the reason it came from as the detail.
+ *
+ * [isRouted] is the *route's own* selection predicate re-run on the declaration, never an
+ * (owner, reason, position) tuple: `fun f(): List<Flow<Int>>` on a class reaches here as
+ * `FLOW_PROTOCOL` at `RETURN`, exactly like the routed `fun f(): Flow<Int>`, and only the route's
+ * gate ("is the *return type* a Flow") tells them apart.
+ */
+internal fun ForwardCallableCatalogEntry.nameUnroutedPosition(
+  isRouted: (ForwardCallableCatalogEntry.Skipped) -> Boolean,
+): ForwardCallableCatalogEntry {
+  if (this !is ForwardCallableCatalogEntry.Skipped) return this
+  if (reason !in UNROUTED_CANDIDATE_REASONS) return this
+  if (isRouted(this)) return this
+  return ForwardCallableCatalogEntry.Skipped(
+    symbol = symbol,
+    reason = ForwardPlanSkipReason.UNROUTED_POSITION,
+    node = node,
+    detail = reason.name,
+    position = position,
+    parameter = parameter,
+    // The structural producers (`method.typeParameters.isNotEmpty()`) are the only way a GENERIC
+    // skip can be about the declaration rather than about a type at a position, and they are
+    // recognisable from the declaration itself.
+    structural = reason == ForwardPlanSkipReason.GENERIC &&
+        (node as? KSFunctionDeclaration)?.typeParameters?.isNotEmpty() == true,
+  )
+}
+
+/** The same reclassification over a producer's whole entry list. */
+internal fun List<ForwardCallableCatalogEntry>.nameUnroutedPositions(
+  isRouted: (ForwardCallableCatalogEntry.Skipped) -> Boolean = { false },
+): List<ForwardCallableCatalogEntry> = map { entry -> entry.nameUnroutedPosition(isRouted) }
 
 /**
  * ADR-082's 2026-08-08 amendment: the declared-vs-inherited signal for value-class members.
@@ -303,15 +387,14 @@ internal class ForwardSupertypeMembers private constructor(
       )
     }
 
-    /** Null for a type-parameter position, which the comparison treats as a wildcard. */
+    /**
+     * [forwardTypeKey], plus this side's wildcard: null for a type-parameter position, which the
+     * comparison treats as matching any argument type. The strict half of the spelling lives in
+     * `ForwardClassMembership.kt`, so the two comparisons cannot drift.
+     */
     private fun typeKey(type: KSType): String? {
-      val expanded: KSType = type.expandAliases()
-      val declaration: KSDeclaration = expanded.declaration
-      if (declaration is KSTypeParameter) return null
-      val name: String = declaration.qualifiedName?.asString()
-        ?: declaration.simpleName.asString()
-      val nullable: Boolean = type.isMarkedNullable || expanded.isMarkedNullable
-      return if (nullable) "$name?" else name
+      if (type.expandAliases().declaration is KSTypeParameter) return null
+      return type.forwardTypeKey()
     }
   }
 }
@@ -529,8 +612,22 @@ internal class ForwardCallablePlanner(
         // ADR-116 amendment (2026-09-11): the base's own declared members first, so an arm's
         // projection can ask whether the C# base already carries the signature it is about to
         // spell (`override` when it matches, nothing at all when the arm declares none).
-        addAll(sealedBaseEntries(sealed))
-        sealed.getSealedSubclasses().forEach { sub -> addAll(sealedSubclassEntries(sealed, sub)) }
+        val base: List<ForwardCallableCatalogEntry> = sealedBaseEntries(sealed)
+        addAll(base)
+        // ADR-116 amendment (2026-09-13): *which* base members actually planned, as the ADR-096
+        // synthesis gate on the arms. A base member the planner declined (an opt-in marker, an
+        // unshapeable return type) has no C# carrier at all, so an arm that overrides it owes the
+        // omitting overloads itself. The catalog cannot answer this -- it is mid-construction here
+        // and `plansFor` requires it complete -- so the entries are read directly. Synthesized
+        // entries are excluded: they are the overloads, not the declared members being asked about.
+        val plannedBaseMembers: Set<KSNode> = base
+          .filterIsInstance<ForwardCallableCatalogEntry.Planned>()
+          .filter { entry -> !entry.synthesized }
+          .mapNotNull { entry -> entry.node }
+          .toSet()
+        sealed.getSealedSubclasses().forEach { sub ->
+          addAll(sealedSubclassEntries(sealed, sub, plannedBaseMembers))
+        }
       }
       classes.forEach { cls -> addAll(constructorEntries(cls)) }
       // ADR-095: top-level and extension overloads number per (package, name), the extension one
@@ -593,7 +690,7 @@ internal class ForwardCallablePlanner(
    */
   private fun valueClassEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val owner: String = cls.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = cls.simpleName.asString().lowercase()
+    val prefix: String = cls.nativePrefix()
     val underlyingParam = cls.primaryConstructor?.parameters?.firstOrNull() ?: return emptyList()
     val underlyingPropName: String = underlyingParam.name?.asString() ?: return emptyList()
     val classifiedUnderlying: BridgeType = classifier.classify(underlyingParam.type.resolve())
@@ -822,7 +919,7 @@ internal class ForwardCallablePlanner(
    */
   fun interfaceEntries(iface: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val ifaceName: String = iface.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = iface.simpleName.asString().lowercase()
+    val prefix: String = iface.nativePrefix()
     val receiverType: BridgeType = BridgeType.ObjectHandle(ifaceName)
     val methods: List<KSFunctionDeclaration> = iface.getAllFunctions()
       .filter { method -> method.getVisibility() == Visibility.PUBLIC }
@@ -853,12 +950,31 @@ internal class ForwardCallablePlanner(
           node = method,
         )
       }
+    }.nameUnroutedPositions { skipped ->
+      // ADR-064 amendment (2026-09-13): the interface DECLARATION is where a default member's
+      // unrouted position is named (`classEntries` defers to this). The two exemptions are the
+      // measured PART pair: a Flow return and a lambda parameter declared as an interface default
+      // ARE re-emitted, on every implementing class, through that class's own legacy routes — a
+      // C# caller reaches them through the class rather than through `IFoo`. Warning about a
+      // member the consumer can still call is the false positive this reclassification is most
+      // likely to introduce (whether `IFoo` should declare them is a separate bug).
+      val method: KSFunctionDeclaration = skipped.node as? KSFunctionDeclaration
+        ?: return@nameUnroutedPositions true
+      when {
+        // As in `classEntries`: the route selects on the return type and owns the member, refused
+        // parameters included (those are named once, by `warnRefusedLegacyRouteMembers`).
+        method.hasLegacyFlowReturn() -> true
+        skipped.reason == ForwardPlanSkipReason.CALLBACK_PROTOCOL ->
+          method.hasLegacyLambdaParameter()
+
+        else -> false
+      }
     }
   }
 
   private fun classEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val className: String = cls.simpleName.asString()
-    val prefix: String = className.lowercase()
+    val prefix: String = cls.nativePrefix()
     val superClass: KSClassDeclaration? = cls.forwardSuperClass(classifier.exportedObjectHandles)
     val receiverType: BridgeType = BridgeType.ObjectHandle(
       requireNotNull(cls.qualifiedName?.asString()) {
@@ -960,6 +1076,31 @@ internal class ForwardCallablePlanner(
           add(entryFor(method, omitted + 1).synthesized())
         }
       }
+    }.nameUnroutedPositions { skipped ->
+      // ADR-064 amendment (2026-09-13): an ordinary class is the owner with the MOST legacy
+      // routes, and still only two — the Flow/StateFlow return (ADR-012/065) and the lambda
+      // parameter, per-call (ADR-036) or as a stored/interface-bridge add-remove pair. Each is
+      // tested through the route's own hoisted gate, so `fun f(): List<Flow<Int>>` (same reason,
+      // same position as the routed `fun f(): Flow<Int>`) is named rather than silently dropped.
+      val method: KSFunctionDeclaration = skipped.node as? KSFunctionDeclaration
+        ?: return@nameUnroutedPositions true
+      when {
+        // One warning per *declaration*: a defaulted interface member binds here too, and naming
+        // it on every implementing class would report the author's one declaration N times. The
+        // interface's own planner names it (`interfaceEntries`).
+        method.parentDeclaration != cls -> true
+        // The Flow route owns the whole member, not just its return: a parameter or element it
+        // cannot marshal makes the route refuse the member, and ADR-114/ADR-123 already name that
+        // refusal (`warnRefusedLegacyRouteMembers`) with a message that says which type failed.
+        // Reporting it here as well would double-report, with the weaker of the two messages
+        // first (`TreatBoard.paired`).
+        method.hasLegacyFlowReturn() -> true
+        skipped.reason == ForwardPlanSkipReason.CALLBACK_PROTOCOL ->
+          method in interfaceBridgeMethods || method in storedCallbackMethods ||
+              method.hasLegacyLambdaParameter()
+
+        else -> false
+      }
     }
   }
 
@@ -981,7 +1122,7 @@ internal class ForwardCallablePlanner(
    */
   private fun sealedBaseEntries(sealed: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val owner: String = sealed.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = sealed.simpleName.asString().lowercase()
+    val prefix: String = sealed.nativePrefix()
     val receiverType: BridgeType = BridgeType.ObjectHandle(owner)
     val methods: List<KSFunctionDeclaration> = sealed.getAllFunctions()
       .filter { method -> method.getVisibility() == Visibility.PUBLIC }
@@ -1088,12 +1229,17 @@ internal class ForwardCallablePlanner(
    *   amendment 2026-09-11), since a final arm renders `public sealed class`, where `virtual` is
    *   CS0549.
    * - Every skip an ordinary class would defer to a legacy route becomes a named
-   *   [ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED] drop, because no legacy route is keyed to a
-   *   sealed subclass. Planned entries are untouched.
+   *   [ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED] drop, except for the suspend, Flow, per-call
+   *   lambda and stored-callback/interface-bridge-pair routes now keyed to the arm too, which stay
+   *   deferred like an ordinary class's. Planned entries are untouched.
    */
   private fun sealedSubclassEntries(
     sealed: KSClassDeclaration,
     subclass: KSClassDeclaration,
+    // ADR-116 amendment (2026-09-13): the base's own declared members that produced a `Planned`
+    // entry, i.e. the ones the generated C# base really carries. Keyed on node identity, since a
+    // `KSFunctionDeclaration` is the only thing that identifies one overload of a name.
+    plannedBaseMembers: Set<KSNode>,
   ): List<ForwardCallableCatalogEntry> {
     val subName: String = subclass.simpleName.asString()
     val owner: String = subclass.qualifiedName?.asString() ?: return emptyList()
@@ -1101,7 +1247,7 @@ internal class ForwardCallablePlanner(
     // arm can carry `virtual`. On a final arm the member is effectively final in Kotlin anyway,
     // and `virtual` inside a `public sealed class` is CS0549.
     val isOpenArm: Boolean = subclass.modifiers.contains(Modifier.OPEN)
-    val prefix: String = "${sealed.simpleName.asString().lowercase()}_${subName.lowercase()}"
+    val prefix: String = "${sealed.nativePrefix()}_${subName.lowercase()}"
     val receiverType: BridgeType = BridgeType.ObjectHandle(owner)
     val methods: List<KSFunctionDeclaration> = subclass.getAllFunctions()
       .filter { method -> method.getVisibility() == Visibility.PUBLIC }
@@ -1175,22 +1321,23 @@ internal class ForwardCallablePlanner(
       // this counter scope so declared exports keep their numbers.
       methods.forEachIndexed { index, method ->
         if (declared[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
-        // ADR-116 amendment (2026-09-11): keyed on the C# fact, exactly as `classEntries` is since
-        // ADR-096's own amendment. Skipping every Kotlin `override` was only ever right because
-        // the sealed C# base carried nothing; now that it carries its declared members it also
-        // carries their omitting overloads, and the arm inherits them. An `override` of anything
-        // else (an interface member, a member the base's plan declined) has no such carrier, and
-        // the arm owes the overload itself or the consumer's short call is CS1501.
-        if (method.findOverridee()?.parentDeclaration == sealed) return@forEachIndexed
-        repeat(method.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
+        // ADR-116 amendment (2026-09-11, narrowed 2026-09-13): keyed on the C# fact, exactly as
+        // `classEntries` is since ADR-096's own amendment. Skipping every Kotlin `override` was
+        // only ever right because the sealed C# base carried nothing; now that it carries its
+        // declared members it also carries their omitting overloads, and the arm inherits them.
+        // The C# fact is "the base *planned* it", not "the base declared it": an `override` of an
+        // interface member, or of a base member the base's own plan declined, has no carrier at
+        // all, and the arm owes the overload itself or the consumer's short call is CS1501.
+        val overridee: KSNode? = method.findOverridee()
+        if (overridee != null && overridee in plannedBaseMembers) return@forEachIndexed
+        // ADR-116 amendment (2026-09-13): the flags come through the override chain, as
+        // `classEntries` already reads them. Kotlin forbids an override from restating a default,
+        // so the arm's own parameters all report `false` and only the overridee carries the bit.
+        repeat(memberDefaultFlags(method).trailingCount()) { omitted ->
           add(entryFor(method, omitted + 1).synthesized())
         }
       }
     }
-
-    // The union the CALLBACK_PROTOCOL exemption below reads, as a `Set<KSNode>` so an entry's
-    // nullable node can be tested against it directly.
-    val pairedCallbackMethods: Set<KSNode> = interfaceBridgeMethods + storedCallbackMethods
 
     // ADR-116 Diagnostics: `droppedFromCSharp = false` means "a named legacy route re-emits it",
     // which is only true for an ordinary class. On a sealed arm the member is simply gone, so the
@@ -1211,13 +1358,14 @@ internal class ForwardCallablePlanner(
             // ADR-124: and the same for the legacy Flow/StateFlow route, one issue later.
             entry.reason != ForwardPlanSkipReason.FLOW_PROTOCOL &&
             // ADR-116 amendment (2026-09-11): the per-call lambda-parameter route (ADR-036) is
-            // keyed to the arms too now, so its skip is a deferral again. Split by **origin**, not
-            // by reason: an add/remove pair takes the identical `CALLBACK_PROTOCOL` constant from
-            // the structural check above, no arm route emits one, and exempting the reason
-            // wholesale would put a pair back into the silent absence this ADR exists to end.
-            // What is left named is GENERIC, SUSPEND_CALLBACK_PROTOCOL and the pairs.
-            !(entry.reason == ForwardPlanSkipReason.CALLBACK_PROTOCOL &&
-                entry.node !in pairedCallbackMethods)
+            // keyed to the arms too now, so its skip is a deferral again. The 2026-09-13 amendment
+            // finished the reason off: the stored-callback (ADR-037) and interface-bridge
+            // (ADR-039) add/remove **pairs**, which take the identical `CALLBACK_PROTOCOL`
+            // constant from the structural check above, are keyed to the arm as well, so the
+            // origin split that kept a pair named is gone and the exemption is by reason like the
+            // other three. What is left named on an arm is GENERIC and SUSPEND_CALLBACK_PROTOCOL,
+            // neither of which any route emits for any owner.
+            entry.reason != ForwardPlanSkipReason.CALLBACK_PROTOCOL
       if (!isUnrouted) return@map entry
 
       ForwardCallableCatalogEntry.Skipped(
@@ -1232,7 +1380,7 @@ internal class ForwardCallablePlanner(
   private fun constructorEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     if (cls.modifiers.contains(Modifier.ABSTRACT)) return emptyList()
     val owner: String = cls.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = cls.simpleName.asString().lowercase()
+    val prefix: String = cls.nativePrefix()
     val result = BridgeType.ObjectHandle(owner)
     val constructors: List<KSFunctionDeclaration> = cls.getConstructors()
       .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -1437,6 +1585,11 @@ internal class ForwardCallablePlanner(
       node = constructor,
       droppedOptInMarker = droppedOptInMarker(constructor.parameters, omitted),
     )
+      // ADR-064 amendment (2026-09-13): no legacy route re-emits a CONSTRUCTOR (measured cell 24:
+      // a secondary taking a lambda, a Flow or a generic type beside a bindable primary vanished
+      // with no diagnostic, because `WARNING_NO_PUBLIC_CONSTRUCTOR` only fires when *every*
+      // constructor is skipped). Each such constructor is now named once, at its input position.
+      .nameUnroutedPosition { false }
   }
 
   /**
@@ -1470,11 +1623,24 @@ internal class ForwardCallablePlanner(
     target = null,
     member = function.simpleName.asString(),
     omitted = omitted,
-  )
+  ).nameUnroutedPosition { skipped ->
+    // ADR-064 amendment (2026-09-13): the top-level owner has exactly one legacy route for these
+    // reasons — `addFunctionExports` / `translateSpecializedFunction`, keyed on a
+    // generic-declaration RETURN. It carries both the lambda return (`(String) -> String` is
+    // `Function1`, measured RE) and the generic-type return (`Box<Int>`, measured emitting), and
+    // since the amendment it refuses a Flow/StateFlow return, which is what makes cell 4 a named
+    // skip instead of a consumer-side CS0246. A PARAMETER of any of those types has no route here
+    // at all, and an element-carried one (`List<Box<Int>>`) is unmeasured and therefore named.
+    //
+    // The structural GENERIC deferral never reaches this entry builder: `catalog()` is called with
+    // the non-generic `functions` only, so a `fun <T> f(...)` is named from `NugetProcessor`
+    // instead (`warnUnroutedGenericFunctions`).
+    skipped.position == ForwardSkipPosition.RETURN && function.hasLegacyGenericReturnRoute()
+  }
 
   private fun objectEntries(obj: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val owner: String = obj.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = obj.simpleName.asString().lowercase()
+    val prefix: String = obj.nativePrefix()
     val occurrences: MutableMap<String, Int> = mutableMapOf()
     val members: List<KSFunctionDeclaration> = obj.getAllFunctions()
       .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -1508,14 +1674,16 @@ internal class ForwardCallablePlanner(
           add(entryFor(member, omitted + 1).synthesized())
         }
       }
-    }
+      // ADR-064 amendment (2026-09-13): no legacy route is keyed to an object owner at all —
+      // measured, cells 3a/13a/18a/22a — so every deferral here is a drop, with no exemption.
+    }.nameUnroutedPositions()
   }
 
   private fun companionEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val owner: String = cls.qualifiedName?.asString() ?: return emptyList()
     val companion: KSClassDeclaration = cls.declarations.filterIsInstance<KSClassDeclaration>()
       .firstOrNull { it.isCompanionObject } ?: return emptyList()
-    val prefix: String = cls.simpleName.asString().lowercase()
+    val prefix: String = cls.nativePrefix()
     val occurrences: MutableMap<String, Int> = mutableMapOf()
     val members: List<KSFunctionDeclaration> = companion.getAllFunctions()
       .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -1547,7 +1715,10 @@ internal class ForwardCallablePlanner(
           add(entryFor(member, omitted + 1).synthesized())
         }
       }
-    }
+      // ADR-064 amendment (2026-09-13): a companion is a static owner like an object, and the
+      // legacy routes are keyed to instance members; unmeasured, so a companion member appearing
+      // in the diagnostic diff is worth checking against `Interop.cs` before it is believed.
+    }.nameUnroutedPositions()
   }
 
   private fun staticEntry(
@@ -1810,7 +1981,24 @@ internal class ForwardCallablePlanner(
       else -> null
     }
     if (structuralReason != null) {
+      // The structural half of the same amendment: `fun <T> Depot.tagged(value: T)` has no route
+      // either (the generic-function route takes top-level functions only), so its GENERIC
+      // deferral is named here too. SUSPEND is not a candidate and stays silent.
       return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = function)
+        .nameUnroutedPosition { false }
+    }
+
+    // ADR-132: a receiver whose wire is the ADR-079/080 adjacent `receiverHasValue` + `receiver`
+    // PAIR is a named drop, not a plan. `validateRoles` requires at most one RECEIVER-role slot,
+    // and it must be first; `nativeInputParameters` marks only the *value* half of a fan-out with
+    // the caller's role, so such a receiver lands its RECEIVER slot at index 1 and fails plan
+    // validation outright (an exception out of the processor, not a diagnostic). Supporting it
+    // needs a multi-slot receiver in the model, which no fixture asks for; until then it is
+    // dropped by name rather than crashing the build.
+    if (receiverType.sealedAsHandle().isHasValueFanOutInput()) {
+      return ForwardCallableCatalogEntry.Skipped(
+        symbol, ForwardPlanSkipReason.RECEIVER_FAN_OUT, node = function,
+      )
     }
 
     return planOrSkip(
@@ -1833,6 +2021,11 @@ internal class ForwardCallablePlanner(
       node = function,
       droppedOptInMarker = droppedOptInMarker(function.parameters, omitted),
     )
+      // ADR-064 amendment (2026-09-13): no legacy route is keyed to an extension for any of these
+      // reasons (measured cells 6a/6b/13c/18c/22c; `translateExtensionFunction` has no caller at
+      // all, and `genericFunctions` excludes extensions outright), so every deferral here is a
+      // drop, with no exemption.
+      .nameUnroutedPosition { false }
   }
 
   /**
@@ -1973,6 +2166,11 @@ internal class ForwardCallablePlanner(
           ?: plannedResult.undeclaredTypeDetail()
           ?: plannedResult.sealedTypeDetail()
           ?: plannedResult.collectionComponentDetail(),
+        // ADR-064 amendment (2026-09-13): the default already, stated explicitly because the
+        // unrouted-position reclassification reads it — a `fun <T> f(): List<T>` and a
+        // `fun f(): Flow<Int>` both have to report RETURN, and an implicit default is not
+        // something the next reader of that reclassification can check.
+        position = ForwardSkipPosition.RETURN,
       )
     }
 
@@ -2862,6 +3060,18 @@ internal class ForwardCallablePlanner(
     this is BridgeType.Primitive || this is BridgeType.Enum
 
   /**
+   * ADR-132: whether [nativeInputParameters] fans this input out into the adjacent
+   * `${name}HasValue` + `$name` PAIR (ADR-076/079/080/103) rather than a single slot. Read at the
+   * extension-receiver position, where a two-slot input cannot be expressed today.
+   */
+  private fun BridgeType.isHasValueFanOutInput(): Boolean {
+    val inner: BridgeType = (this as? BridgeType.Nullable)?.type ?: return false
+    return inner.isHasValueFanOutUnderlying() ||
+        inner == BridgeType.Instant || inner == BridgeType.Duration ||
+        (inner as? BridgeType.ValueClass)?.underlying?.isHasValueFanOutUnderlying() == true
+  }
+
+  /**
    * ADR-079: the type an ADR-061 `valueOut` slot carries for a has-value fan-out value class. It is
    * the *bare* underlying primitive (an enum's ordinal is a plain INT), never the value class
    * itself, so the slot renders as `double`/`int` in the DllImport and inherits ADR-069's
@@ -2953,7 +3163,12 @@ internal class ForwardCallablePlanner(
     // side of this same ADR.
     is BridgeType.Nullable -> when (val inner = type) {
       BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Primitive,
-        // ADR-106: `Uuid?` rides the null pointer, like `String?`.
+      // ADR-133: an interface parameter is already plannable non-null (ADR-040 sub-decision B,
+      // `NugetMarshal.HandleOf`), and the nullable C# lowering is the same helper's
+      // `HandleOfOrZero` (ForwardCirPlanProjection). Without this a nullable interface
+      // PARAMETER skipped while a nullable interface RETURN and PROPERTY both bound.
+      is BridgeType.Interface,
+      // ADR-106: `Uuid?` rides the null pointer, like `String?`.
       BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid -> null
 
       // ADR-080: a bare nullable enum fans out to the has-value pair with the ordinal in the
@@ -3363,7 +3578,7 @@ internal fun BridgeType.undeclaredTypeDetail(): String? {
   return (candidate as? BridgeType.Unsupported)
     ?.takeIf { unsupported ->
       unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface ||
-          unsupported.isUndeclaredClass
+          unsupported.isUndeclaredClass || unsupported.isObjectPosition
     }
     ?.rendered
 }
@@ -3474,6 +3689,8 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
     isUndeclaredInterface -> ForwardPlanSkipReason.UNDECLARED_INTERFACE
     // ...and for a nested class or object.
     isUndeclaredClass -> ForwardPlanSkipReason.UNDECLARED_CLASS
+    // ADR-133: an `object` is declared (as a C# static class) but unusable at a member position.
+    isObjectPosition -> ForwardPlanSkipReason.OBJECT_POSITION
     // The closure records WHY it refused a dependency declaration; each refusal wants a
     // different remedy, and only NOT_INCLUDED (or an unrecorded refusal, e.g. a module-local
     // type the closure never saw) wants the `include(...)` one.

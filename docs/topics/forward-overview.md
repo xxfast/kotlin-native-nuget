@@ -79,9 +79,42 @@ Kotlin sub-packages map relative to `rootPackage`, and the C# namespace root is 
 
 Every generated declaration lands under its mapped namespace inside the single `Interop.cs` file.
 
-By default every public declaration in the module is bridged, not only those under `rootPackage`.
-`publish { include(...); exclude(...) }` narrows that to an explicit package-prefix allowlist, and
-when `include` is left empty, `rootPackage` itself becomes the default scope. `publish {
+The mapping has three cases
+([ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md)
+§5's 2026-09-13 amendment):
+
+| Kotlin package | C# namespace |
+|---|---|
+| `rootPackage` itself | `<packageId>` |
+| under `rootPackage` (`<root>.a.b`) | `<packageId>.A.B` |
+| outside `rootPackage`, admitted by an explicit `include(...)` (`x.y.z`) | `<packageId>.X.Y.Z`, the **full** package PascalCased |
+
+With `rootPackage` unset, every package collapses to `<packageId>` regardless, since there is no
+prefix to strip or compare against. The full-package case reaches an admitted
+dependency-module type the same way an in-root type does: `Billboards`, declared under
+`rootPackage`, returns a `Billboard` from `dev.other.admitted`, a package outside `rootPackage` that
+`test-library/build.gradle.kts` admits with `include("io.github.xxfast.kotlin.native.nuget.test",
+"dev.other.admitted")`:
+
+```kotlin
+class Billboards {
+  fun current(): Billboard = Billboard("Oreo naps here. Mylo supervises.")
+}
+```
+
+```C#
+public global::TestLibrary.Dev.Other.Admitted.Billboard Current()
+```
+
+`Billboard` itself is declared at `namespace TestLibrary.Dev.Other.Admitted`, the full Kotlin
+package PascalCased under the assembly's root namespace, not the bare `Dev.Other.Admitted` a package
+outside a module's own files might otherwise suggest: one NuGet package is one assembly, so every
+namespace under its `packageId` stays collision-free against any other assembly a consumer
+references. See the ADR for the two rejected alternatives.
+
+With no `include(...)` set, the default scope is `rootPackage` itself, when one is configured, or
+every public declaration in the module when it isn't. `publish { include(...); exclude(...) }`
+narrows that to an explicit package-prefix allowlist. `publish {
 exportMarkers(...) }` is a separate, orthogonal escape list: it names `@RequiresOptIn` markers whose
 declarations keep exporting instead of being dropped, see [Opt-in-marked declarations skip
 named](#opt-in-marked-declarations-skip-named).
@@ -184,6 +217,51 @@ sealed interface itself rather than the outer collection shape:
 `Flow`, or `StateFlow` (nullable or not): those are unplannable by design and still bind through a
 named legacy route, so warning would tell a consumer a working property had vanished.
 
+### Unrouted positions for a lambda, `Flow`, or a generic declaration {id="unrouted-positions"}
+
+The three legacy routes above (`Flow`/`StateFlow`, a lambda, a generic declaration) each bind at a
+handful of specific `(owner, position)` pairs, a class-method return or parameter, a top-level
+function return, and nowhere else: an `object`, an interface default, an extension, a secondary
+constructor, a collection element, or the same reason at the *other* position on a class method,
+used to vanish from both the Kotlin and C# output with no diagnostic at all. Since
+[ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
+2026-09-13 amendment every one of those positions is a named skip instead:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping Depot.flowParamOnClass: a Flow/StateFlow binds at a
+    class-method return and a property, but not at this position. return the Flow from a method on
+    an ordinary class (or expose it as a property); a Flow cannot be passed in, and no object,
+    interface, extension or constructor route carries one
+    at UnroutedPositionsSample.kt:21
+```
+
+A callable's own type parameter (a class or `object` method declared `fun <T> f(value: T): T`, as
+opposed to a *top-level* generic function) is one of these positions too, and skips
+`SKIPPED_UNSUPPORTED_COMBINATION` naming the structural mismatch rather than the position:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_COMBINATION] Skipping Depot.structuralOnClass: a generic type binds at a
+    top-level function return, and a generic function at a top-level function with a parameter of
+    its own type parameter, but not at this position. expose a non-generic wrapper (`fun f(value:
+    Int)` beside `fun <T> f(value: T)`), or move the declaration to a top-level function with a
+    parameter of its own type parameter
+    at UnroutedPositionsSample.kt:36
+```
+
+A top-level `fun f(): Flow<T>` used to be worse than silent: it passed the generic-return route's
+own gate on both halves, so the Kotlin side exported a handle and the C# side rendered a return type
+declared nowhere in the generated file (`CS0246` in the consumer). The route now refuses it ahead of
+that gate, so it is a named skip and no member, the same as every other position above, rather than
+a build that only fails downstream in the consumer's own project.
+
+Two positions are exempt on purpose and stay silent, because a legacy route genuinely re-emits them
+elsewhere: an interface default with a `Flow`/`StateFlow` return or a lambda parameter still
+re-emits on every class that implements the interface (just not on the generated C# `interface`
+itself, see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)), and a
+top-level generic return in the *same* Kotlin package as the generic type still binds (a
+cross-package one does not, and is not yet named either, see
+[ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)).
+
 The same kind also fires when an extension property's *receiver* type, not its declared type, is
 what the planner can't wire. `String`, a primitive, `ObjectHandle` classes, an eligible sealed base
 (see [Extensions: Sealed receivers](extensions.md#sealed-receivers)), and a value class over any of
@@ -204,13 +282,22 @@ the file and line of the Kotlin declaration that was skipped, something the reve
 `RirDiagnostic` cannot carry, since it works from compiled metadata rather than source. See each
 forward page's own **Limitations** section for which named diagnostic fires where.
 
-A member typed with an enum that is never declared in C#, a nested `enum class`, skips named too,
-with the `SKIPPED_UNSUPPORTED_TYPE` kind naming the `UNDECLARED_ENUM` reason instead of being
-spelled as a dangling reference; see [Enums: Nested enums skip named](enums.md#nested-enums-skip-named).
-A nested `class` or `object` gets the same treatment, naming `UNDECLARED_CLASS` instead (a nested
-`interface` was already `UNDECLARED_INTERFACE`, see [Interfaces, abstract and sealed classes: Nested
-interfaces skip named](interfaces-abstract-sealed.md#nested-interfaces-skip-named)); see
-[Classes and objects: Nested classes and objects](classes-and-objects.md#nested-classes-and-objects).
+A nested `class`, `object`, `interface`, or `enum class` under a non-generic, non-`inner` `class` or
+`object` owner is declared as a real C# nested type, `Outer.Nested`, at any depth
+([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md));
+see [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects). A nested
+declaration under a still-deferred owner shape (an `inner class`, a generic, `enum class`,
+`interface`, or sealed base/arm owner) still skips named, `SKIPPED_NESTED_DECLARATION` at the
+declaration, and a member typed with it skips `SKIPPED_UNSUPPORTED_TYPE` naming `UNDECLARED_CLASS`/
+`UNDECLARED_ENUM`/`UNDECLARED_INTERFACE` instead of being spelled as a dangling reference; see
+[Enums: Nested enums](enums.md#nested-enums-skip-named) and [Interfaces, abstract and sealed classes: Nested
+interfaces](interfaces-abstract-sealed.md#nested-interfaces-skip-named).
+
+A member positioned with a Kotlin `object` type, nested or top-level, skips named too, with the same
+`SKIPPED_UNSUPPORTED_TYPE` kind naming a new `OBJECT_POSITION` reason: an `object` renders as a C#
+static class, and C# forbids a static type at a parameter or return position (CS0722). This is not a
+nesting limitation; it applies to a top-level object the same way. See
+[Classes and objects: An `object` at a member position stays CS0722](classes-and-objects.md#nested-object-position).
 
 Three more kinds cover the cross-module export closure ([ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md);
 see [The nuget {} DSL](nuget-dsl.md) for the closure's own rules). A reachable dependency-module type
@@ -221,8 +308,8 @@ outside the effective `include`/`rootPackage` scope is skipped, naming the exact
 ```
 [nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping Newsroom.sponsor: its type
     `dev.other.core.Advertisement` is declared in a dependency module outside the export scope.
-    add include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.core") to
-    nuget { publish { } } (an explicit include replaces the rootPackage default, so keep your own
+    add include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.admitted", "dev.other.core")
+    to nuget { publish { } } (an explicit include replaces the rootPackage default, so keep your own
     packages listed), or expose a type from an in-scope package instead
     at Newsroom.kt:66
 ```
@@ -741,22 +828,33 @@ shows for `carrier_create`, which is why the bracketed signature pair reads `(in
 rather than just `(in string)`.) The trailing `at` line echoes the first owner's own location again,
 the same location `logger.error` attaches the diagnostic to; it is not a third declaration.
 
-Owner naming has two granularities, depending on which universe the colliding export lives in. Every
-plan-routed export (an ordinary constructor, a top-level function, a class method) and the `suspend`
-legacy route name the exact declaration, with parameter types and `file:line`, as above. The
-remaining legacy routes, a sealed discriminator, a `Flow` collector, and the generated `Dispose`,
-name the owning top-level declaration instead (class-granular, since every export those routes
-produce derives from that declaration's own prefix). `fun dispose()` on an exported class is this
-shape: it collides with the always-generated `IDisposable.Dispose()` export, and the message names
-the method plus a `(route-owned export: ...)` marker for the generated side, again reconstructed from
-the same test's dispose cell:
+Every `@CName` export, on every route, names its exact owning declaration; there is no route left
+that can only point at a class-level range. An ordinary declaration (a constructor, a top-level
+function, a class method or property, a `suspend` method) names itself, with parameter types and
+`file:line`, as above. A **generated** member, one Kotlin itself never declares, such as the
+`IDisposable.Dispose()` every class gets for free, a sealed discriminator, a data-class `equals` /
+`hashCode` / `toString`, or a generic class's per-variant `_create_<suffix>`, names the class (or
+sealed arm, or generic class) that owns it plus a role in parentheses, since several such members
+can share one class or arm. `fun dispose()` on an exported class is this shape: it collides with the
+always-generated `Dispose`, and the message names the method plus the generated member's role
+([ADR-117](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/117-forward-abi-collision-names-owning-declarations.md)'s
+2026-09-13 amendment):
 
 ```
   - tier1.abicollision.dispose.Closer.dispose()
     at .../Closer.kt:4
-  - tier1.abicollision.dispose.Closer (route-owned export: the generated Dispose, a
-    suspend/Flow/sealed export, or another legacy route)
+  - tier1.abicollision.dispose.Closer (generated Dispose)
     at .../Closer.kt:3
+```
+
+A generic class's own role names *which* variant collided, since a dozen primitive variants share
+one class:
+
+```
+  - tier1.abicollision.generic.oreo.Box (generic create variant: string)
+    at .../A.kt:3
+  - tier1.abicollision.generic.mylo.Box (generic create variant: string)
+    at .../B.kt:3
 ```
 
 The hint is always the same: rename one of the colliding declarations. The prefix scheme itself
@@ -806,8 +904,8 @@ repository's own fixture, KSP task `UP-TO-DATE`:
 > Task :test-library:kspKotlinMacosArm64 UP-TO-DATE
 
 > Task :test-library:nugetReportDiagnostics
-[nuget:INFO_EXPORTED_FROM_DEPENDENCY] Note TestLibraryNative: the export closure admitted 6 type(s) from dependency modules: io.github.xxfast.kotlin.native.nuget.test.models.Byline, io.github.xxfast.kotlin.native.nuget.test.models.Purr, io.github.xxfast.kotlin.native.nuget.test.models.StoryCode, io.github.xxfast.kotlin.native.nuget.test.models.StoryUri, io.github.xxfast.kotlin.native.nuget.test.models.TopStory, io.github.xxfast.kotlin.native.nuget.test.models.Whisker. these are generated exactly like module-local types; narrow with exclude(...) if any of them should not be part of the public API
-[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.sponsor: its type `dev.other.core.Advertisement` is declared in a dependency module outside the export scope. add include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.core") to nuget { publish { } } (an explicit include replaces the rootPackage default, so keep your own packages listed), or expose a type from an in-scope package instead
+[nuget:INFO_EXPORTED_FROM_DEPENDENCY] Note TestLibraryNative: the export closure admitted 11 type(s) from dependency modules: dev.other.admitted.Billboard, io.github.xxfast.kotlin.native.nuget.test.models.Broadcast, io.github.xxfast.kotlin.native.nuget.test.models.Byline, io.github.xxfast.kotlin.native.nuget.test.models.Nap, io.github.xxfast.kotlin.native.nuget.test.models.Nap.Deep, io.github.xxfast.kotlin.native.nuget.test.models.Nap.Zoomies, io.github.xxfast.kotlin.native.nuget.test.models.Purr, io.github.xxfast.kotlin.native.nuget.test.models.StoryCode, io.github.xxfast.kotlin.native.nuget.test.models.StoryUri, io.github.xxfast.kotlin.native.nuget.test.models.TopStory, io.github.xxfast.kotlin.native.nuget.test.models.Whisker. these are generated exactly like module-local types; narrow with exclude(...) if any of them should not be part of the public API
+[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.sponsor: its type `dev.other.core.Advertisement` is declared in a dependency module outside the export scope. add include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.admitted", "dev.other.core") to nuget { publish { } } (an explicit include replaces the rootPackage default, so keep your own packages listed), or expose a type from an in-scope package instead
     at /Users/xxfast/Developer/XXFAST/KMP/kotlin-native-nuget/test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/test/Newsroom.kt:66
 [nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.length: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
 [nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.get: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares

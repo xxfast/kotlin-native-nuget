@@ -11,6 +11,22 @@ Accepted
 
 > **Amended below (2026-09-11).** The sealed **base** carries its own declared methods, so "declared-only" no longer means "absent from C#" for a base `open fun`: it means the base is the carrier and every arm inherits it. See "Amendment (2026-09-11)".
 
+> **Amended below (2026-09-13).** The 2026-09-11 amendment's ADR-096 synthesis gate keyed an arm's
+> omitting overloads on whether `findOverridee()` pointed at the sealed base, not on whether the
+> base's own plan actually carried the member. An arm overriding a base member the base's plan
+> *declined* (an opt-in marker) therefore still synthesized nothing, the residual that amendment
+> called "deliberately left". The gate is now keyed on the base's `Planned` entries, and the arm's
+> default flags are read through the override chain instead of off the override's own (always-false)
+> parameters. See "Amendment (2026-09-13)".
+
+> **Amended below (2026-09-13, second).** The stored-callback (ADR-037) and interface-bridge
+> (ADR-039) `addX`/`removeX` pair the 2026-09-11 lambda-parameter amendment left behind is also
+> keyed to sealed arms now: `Job.Running.AddTicker`/`RemoveTicker` and `Job.Idle.AddWatcher`/
+> `RemoveWatcher` bind the same `IDisposable` subscription an ordinary class's pair returns.
+> `SEALED_SUBCLASS_UNROUTED` now covers only a generic method and a `suspend` lambda parameter,
+> neither of which has a route on an *ordinary* class either. See "Amendment (2026-09-13): the
+> stored-callback and interface-bridge pairs on the arms".
+
 ## Implementation notes (2026-09-08)
 
 Shipped as designed, with four corrections found during implementation:
@@ -501,6 +517,8 @@ What changes against the Decision above:
   One case remains conservative and is deliberately left: if the base's own plan *declined* the
   member, the overridee still points at the base and the arm synthesizes nothing. No fixture
   exercises it, and the visible symptom would be a missing short overload, not wrong output.
+  (Closed 2026-09-13: the gate is keyed on the base's `Planned` entries and a fixture now exercises
+  it; see "Amendment (2026-09-13)".)
 - **A base-declared member with no route is named.** `SEALED_BASE_UNROUTED` is the base's twin of
   `SEALED_SUBCLASS_UNROUTED`, separate because the remedy differs: the arms do carry the suspend
   (ADR-118) and Flow (ADR-124) routes the base does not, so the hint says to declare it on each arm.
@@ -549,8 +567,12 @@ Six sites, all mirrors of ADR-124's:
 Still named `SKIPPED_UNSUPPORTED_COMBINATION` (`SEALED_SUBCLASS_UNROUTED`) on an arm: a generic
 method, a `suspend` lambda parameter (`SUSPEND_CALLBACK_PROTOCOL`, a different constant, never
 exempted), and both halves of an add/remove pair. Routing the pairs is a separate change: their
-export builders are prefix-keyed already, but `translateStoredCallbackMethod` needs a `context` the
-arm branch does not thread today. It is a ROADMAP line, not a deferral hidden in silence.
+export builders are prefix-keyed already. **Corrected by the 2026-09-13 amendment below**: the
+claim that `translateStoredCallbackMethod` "needs a `context` the arm branch does not thread today"
+was wrong, `context` was already in scope in the arm block since ADR-124; the actual remaining work
+was the planner's origin-split exemption and the Kotlin import gates' `classes`-only walk. It is a
+ROADMAP line, not a deferral hidden in silence, until "Amendment (2026-09-13): the stored-callback
+and interface-bridge pairs on the arms" below closes it.
 
 Two findings worth recording:
 
@@ -608,3 +630,149 @@ Inferred, must be checked by the implementer:
 - `tracker.trackPlan` on a sealed arm plan pulls in the same collection/lambda helpers it does for
   an ordinary class (it reads only the plan).
 - The Swift/ObjC prior-art sentence, from docs only.
+
+## Amendment (2026-09-13): an arm owes its omitting overloads when the base declined the member
+
+The 2026-09-11 amendment's ADR-096 gate narrowed `Modifier.OVERRIDE`'s early return to
+`method.findOverridee()?.parentDeclaration == sealed`, correct exactly when the base's own plan
+actually carried the member the arm overrides. It left one case "deliberately conservative": an
+arm's `override fun` whose sealed base *declares* the member but whose base plan *declined* it (a
+structural skip, not a covariant narrowing). `findOverridee()` still resolved to the base
+declaration regardless, the early return still fired, and the arm synthesized nothing, leaving a
+`CS1501` on the short call.
+
+Two root causes, both fixed in `ForwardCallablePlanner.kt`:
+
+1. **The gate keyed on the wrong fact.** `catalog()` now derives `plannedBaseMembers: Set<KSNode>`
+   from `sealedBaseEntries(sealed)`'s own `Planned`, non-synthesized entries, and passes it into
+   `sealedSubclassEntries(sealed, sub, plannedBaseMembers)`. The gate becomes
+   `method.findOverridee() in plannedBaseMembers`: node identity **verified by execution**, an
+   existing arm/base pair exercised the gate as true. The catalog itself cannot be consulted here
+   (it is mid-construction, `plansFor` requires it complete), so the entries are read directly.
+2. **The default count read the wrong parameters.** The same pass counted raw
+   `method.parameters.map { it.hasDefault }`, always `false` on every parameter of an `override`
+   (Kotlin forbids restating a default). It now reads `memberDefaultFlags(method).trailingCount()`,
+   as `classEntries` already does for the same reason.
+
+Fixing only the gate without the default-count fix would still synthesize nothing; both changed
+together. A consequence follows that this ADR did not set out to fix and no fixture pins:
+narrowing the gate to `plannedBaseMembers` means an arm's `override` of an **interface** member
+(never a `plannedBaseMembers` entry, since it is not on the sealed base at all) now also reaches the
+`memberDefaultFlags` count and gets its own omitting overloads, where the 2026-09-11 text claimed
+it "still owes its own" without the count actually working. **Inferred**, not pinned by a test.
+
+Shipped fixture: `test-library/src/nativeMain/kotlin/.../issue115/JobSample.kt` adds
+`@RequiresOptIn annotation class Unstable` and a base `@Unstable open fun tag(prefix: String, suffix:
+String = "!")`, overridden on `Job.Running` as `@OptIn(Unstable::class) override fun tag(prefix,
+suffix)`. `Job` and `Job.Idle` declare no `Tag` in any arity; `Job.Running` gets both
+`job_running_tag` (declared) and `job_running_tag_2` (synthesized short arity). No new handle kind:
+the synthesized overload reuses the declared arity's receiver/result types, so `LiveHandleTests.cs`
+gains no row. Tests: four cases added to `IntegrationTests/SealedSubclassMethodTests.cs`, and Tier 1
+`Tier1SealedArmOmittingOverloadDeclinedBaseTest`. Closes ROADMAP Phase 3's line tracking this residual.
+
+## Amendment (2026-09-13, second): the stored-callback and interface-bridge pairs on the arms
+
+The fourth row of the table this ADR opened (ADR-118 suspend, ADR-124 Flow, the 2026-09-11 per-call
+lambda amendment), the same shape of fix site for site. A stored-callback pair (ADR-037,
+`addX(listener: (T) -> Unit)` / `removeX(...)`) or an interface-bridge pair (ADR-039,
+`addX(listener: Iface)` / `removeX(...)`) a sealed arm declares now binds under the arm's own export
+prefix, exactly as the same pair on an ordinary class does: `Job.Running.addTicker`/`removeTicker`
+exports as `job_running_addTicker` / `job_running_removeTicker` and renders as
+`public IDisposable AddTicker(Action<string> listener)` inside `Job.Running`, returning the same
+`NugetSubscription` `Cat.AddMoodListener` returns. `Job.Idle.addWatcher(JobWatcher)` is the
+interface-bridge half on a `data object` arm, guarded by `throw new ObjectDisposedException(nameof(Idle))`
+naming the arm itself.
+
+### What is, and is not, in this row
+
+Two residual kinds the ROADMAP line named turn out to have **no route on an ordinary class
+either**, so the arm's named skip is already at parity (and exceeds it, since the skip is named
+rather than silent):
+
+- A **generic member method** (`fun <T> map(...)`). `ClassExports.allRegularMethods` has no
+  `typeParameters` branch and emits only what the callable plan planned; every `classEntries` site
+  classifies `typeParameters.isNotEmpty() -> GENERIC` before `planOrSkip`, and `GENERIC` is
+  `droppedFromCSharp = false`. So on an ordinary class a generic member is **silently** absent; on
+  an arm it is *named* (`SEALED_SUBCLASS_UNROUTED`, detail `GENERIC`).
+- A **`suspend` lambda parameter** (`fun f(cb: suspend (Int) -> String)`). Both legacy halves
+  partition lambda-parameter methods on `LAMBDA_TYPES` alone; `SUSPEND_LAMBDA_TYPES` is read only at
+  property positions. The plan declines it as `SUSPEND_CALLBACK_PROTOCOL`
+  (`droppedFromCSharp = false`), and nothing re-emits it: **silently** absent on an ordinary class,
+  named on an arm.
+
+Both stay named `SEALED_SUBCLASS_UNROUTED` on an arm. They are the residual named by
+[ADR-064](064-forward-unsupported-declaration-diagnostics.md)'s 2026-09-13 amendment on the ordinary
+class route too (`SKIPPED_UNSUPPORTED_COMBINATION` / `SKIPPED_UNSUPPORTED_INPUT`), so routing them is
+an ordinary-class feature first, not an arm-parity one; this belongs to the ROADMAP's existing
+`GENERIC`/`FLOW_PROTOCOL`/`CALLBACK_PROTOCOL` "some route re-emits this" item, moved to Phase 4.
+
+### Bridge mechanism, per change (mirrors of the 2026-09-11 amendment's six sites)
+
+1. **Selector** (`exports/StoredCallbackExports.kt`): `forwardArmStoredCallbackPairs(classifier)` and
+   `forwardArmInterfaceBridgePairs(classifier)`, built over a shared `forwardArmCallbackCandidates()`
+   list (`exports/LambdaParameterExports.kt`) that both the pair selectors and `forwardArmLambdaMethods`
+   read, so pair detection and per-call lambda exclusion cannot mint one `@CName` twice for one
+   member.
+2. **Kotlin export loop** (`NugetProcessor.kt`): the arm export loop calls the existing
+   `addStoredCallbackExports`/`addInterfaceBridgeExports` with the arm's prefix; both builders read
+   only `qualifiedClassName` and `classPrefix` off the owner, so there is no owner-shaped parameter to
+   re-key.
+3. **Kotlin import gates**: `hasStoredCallbackMethods` and `hasInterfaceBridgeMethods` gained an arm
+   walk through the selectors in (1), the same load-bearing fix the 2026-09-11 amendment made for
+   `hasLambdaParamMethods`: without it a module whose only callback owner is a pair-bearing arm
+   generates Kotlin missing the `invoke`/`CFunction`/`COpaquePointer` imports its own callback
+   wrapper needs.
+4. **C# translator** (`CirClassTranslator.kt`, the arm block): appends
+   `translateStoredCallbackMethod`/`translateInterfaceBridgeMethod`, with `className = subName`, not
+   the base's simple name. **Correction to the 2026-09-11 amendment's own claim above**: `context` is
+   already in scope in the arm block since ADR-124, so the earlier text's "needs a `context` the arm
+   branch does not thread today" was wrong. The `className` argument is the one hazard that *is*
+   load-bearing: it lands in `nameof(${method.className})` inside the interface-bridge renderer's
+   `ObjectDisposedException`, and passing the base's name would compile (the arm is nested inside it)
+   while misnaming the owner, the same owner-name rule ADR-124 made load-bearing for `ownerCsName`.
+5. **Model and renderer**: no code change. `CirStoredCallbackMethod`/`CirInterfaceBridgeMethod` are
+   already `CirMember`, `CirSealedSubclass.callbackMembers` is already `List<CirMember>`, and
+   `renderMember`'s `when` already carries both arms; only the KDoc is reworded.
+6. **Planner** (`ForwardCallablePlanner.kt`): the sealed post-process exemption stops being split by
+   **origin**. `CALLBACK_PROTOCOL` is now exempted wholesale, the `entry.node !in pairedCallbackMethods`
+   clause and the `pairedCallbackMethods` set removed, since an arm route now emits a pair too. What
+   stays named under `SEALED_SUBCLASS_UNROUTED` is exactly `GENERIC` and `SUSPEND_CALLBACK_PROTOCOL`.
+7. **Diagnostics** (`ForwardDiagnostic.kt`): the hint naming "a shape the arm's routes do carry" is
+   reworded once more; with the pairs routed, the remaining kinds have no ordinary-class route to
+   move to either, so the hint says so honestly instead of pointing at a shape that doesn't exist.
+
+### Fixture
+
+`test-library/.../issue115/JobSample.kt` adds a top-level, void-only interface `JobWatcher` (not a
+reuse of `JobListener`, whose `String`-returning method would mismatch `addInterfaceBridgeExports`'
+all-`Unit` override). `Job.Running.addTicker`/`removeTicker`/`tick()` is the stored-callback pair
+with a `String` payload on a `data class` arm that already carries suspend, flow and per-call
+members, so `callbackMembers` holds a per-call member and a pair member at once.
+`Job.Idle.addWatcher`/`removeWatcher`/`wake()` is the interface-bridge pair on a `data object` arm,
+two interface methods so both delegate shapes register; `Idle` is a process-wide singleton, so every
+subscription on it is disposed by the test that made it. `Job.Done` stays the control, gaining no
+`Add*`/`Remove*` member.
+
+Tests: `IntegrationTests/SealedArmCallbackPairTests.cs` (fires on trigger, silent after dispose, two
+subscriptions both fire, `data object` arm both methods fire, `Done` gains no `Add*`); two rows in
+`LeakTests/LiveHandleTests.cs`, `SealedArm_StoredCallbackPair_ReturnsToBaseline` and
+`SealedArm_InterfaceBridgePair_ReturnsToBaseline`; `Tier1SealedArmLambdaTest` cells 4-5 flip from
+"keeps its named skip" to "binds on the arm" with a pair-only fixture, plus one cell each keeping a
+generic member and a `suspend` lambda parameter on an arm *named*. Verify: green, 1775 / 0 / 0, 34.
+
+### ROADMAP, rewritten
+
+The pair case tracked by ROADMAP Phase 3's line is closed by this amendment. The generic-method and
+`suspend`-lambda-parameter residual moves to Phase 4, narrowed to one line: neither has a route on an
+*ordinary* class either (both named there since ADR-064's 2026-09-13 amendment), so routing them is
+an ordinary-class feature first, not a sealed-arm one.
+
+### Claims list
+
+Verified by reading: both pair builders' parameter lists and bodies; the two translators' signatures
+and `needsSubscription` sets; `CirSealedSubclass.callbackMembers` type and the `renderMember` `when`;
+the arm block's in-scope `context`/`exportedTypes`; the planner's structural `when` and origin-split
+removal; the two `classes`-only import gates before this change; `GenericFunctionExports`'
+top-level-only call site; the `LAMBDA_TYPES`-only partition in both halves; ADR-020's Phase 6
+suspend-lambda-parameter deferral; the `nameof(className)` site in the interface-bridge renderer.
+Verified by execution: the full Tier 1 / integration / leak suite, green, 1775 / 0 / 0.

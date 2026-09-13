@@ -997,3 +997,15 @@ day (ADR-066's 2026-09-07 amendment) the closure started refusing a nested depen
 of every bucket, interfaces included, so a nested dependency interface now skips named
 (`SKIPPED_NESTED_DECLARATION` at the declaration, `UNDECLARED_INTERFACE` at each use) exactly like
 a module-local one.
+
+### Pointer (2026-09-13): the nested-interface skip is now fixed
+
+[ADR-133](133-nested-types.md) declares a nested interface under a supported owner (a non-generic,
+non-`inner` `class` or `object`) as a real C# nested type, `Outer.IListener`, with this ADR's own
+backing wrapper nested beside it as `Outer.Listener` rather than at namespace root. The `I` prefix
+attaches to the interface's last enclosing-chain segment only; the flattened-dependency-interface
+caveat above is absorbed, not by any closure change (the closure is untouched) but because a nested
+dependency interface is now declared alongside its owner once the owner itself is admitted by an
+ordinary member-type edge, the same free ride ADR-066's pointer describes.
+`SKIPPED_NESTED_DECLARATION`/`UNDECLARED_INTERFACE` survive only for an interface nested under a
+still-deferred owner shape (`inner class`, generic, `enum class`, another `interface`, or sealed).

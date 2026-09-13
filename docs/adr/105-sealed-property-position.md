@@ -606,6 +606,10 @@ which fall to the same two `else` branches and are admitted by `inputSkipReason`
 Neither has a fixture yet, and each needs its own null spelling (an underlying wire, a transfer
 GCHandle) rather than a handle field.
 
+**(2026-09-13):** Closed by [ADR-132](132-extension-receiver-shapes.md), which deletes both `else`
+branches entirely and routes every admitted receiver shape through the same lowering a declared
+parameter already uses.
+
 Fixtures: `test-library/.../test/cat/CatExtensions.kt` (`fun Cat?.nameOrStray()`); consumer
 `IntegrationTests/ExtensionFunctionTests.cs` (a non-null receiver and a null one, the only proof
 that the null crosses rather than throwing); `Tier1NullableReceiverExtensionTest.kt`, whose control

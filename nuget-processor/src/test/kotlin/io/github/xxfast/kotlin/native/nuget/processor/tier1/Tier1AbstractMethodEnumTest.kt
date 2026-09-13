@@ -74,57 +74,58 @@ class Tier1AbstractMethodEnumTest {
     )
   }
 
+  /**
+   * ADR-133 inverted this cell's premise: a nested `enum class` is now DECLARED as the C# nested
+   * type `Pottery.Firing`, so the inherited unimplemented member is no longer dropped -- it is
+   * emitted, spelled through the classifier with its enclosing scope. The gap this file owns is
+   * unchanged: the walk must spell an enum the classifier's way, never by bare simple name.
+   */
   @Test
-  fun `an undeclared nested enum drops the abstract member rather than dangling`() {
+  fun `a nested enum on an inherited unimplemented method is spelled with its enclosing scope`() {
     val result = Tier1Harness.run(source)
 
-    val dangling: List<String> = result.generatedCSharp.lines()
-      .filter { "abstract" in it && "Fire" in it }
-    assertTrue(
-      dangling.isEmpty(),
-      "an abstract member typed with an undeclared nested enum must be dropped, not emitted as a " +
-          "dangling reference; got $dangling in generatedCSharp:\n${result.generatedCSharp}",
-    )
-  }
-
-  @Test
-  fun `the dropped abstract member skips named with the undeclared-enum reason`() {
-    val result = Tier1Harness.run(source)
-
-    val diagnostics: List<String> = result.kspWarnings.filter {
-      it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE.name) && it.contains("Kiln.fire")
-    }
-    assertEquals(
-      1,
-      diagnostics.size,
-      "expected exactly one SKIPPED_UNSUPPORTED_TYPE naming Kiln.fire; " +
-          "kspWarnings=${result.kspWarnings}",
-    )
-    val diagnostic: String = diagnostics.single()
-    assertTrue(
-      diagnostic.contains("tier1.abstractenum.Pottery.Firing"),
-      "expected the diagnostic to name the undeclared enum; got: $diagnostic",
-    )
-    assertTrue(
-      diagnostic.contains("never declared as a C# enum") && diagnostic.contains("UNDECLARED_ENUM"),
-      "expected the shared UNDECLARED_ENUM reason sentence; got: $diagnostic",
-    )
-    assertTrue(
-      diagnostic.contains("move it to the top level"),
-      "expected the shared UNDECLARED_ENUM hint; got: $diagnostic",
+    assertContains(
+      result.generatedCSharp,
+      "public abstract global::Interop.Pottery.Firing Fire(global::Interop.Pottery.Firing firing);",
+      message = "expected the abstract member to spell the nested enum `Outer.Inner`, qualified " +
+          "exactly as the classifier does; generatedCSharp=" +
+          "${result.generatedCSharp.lines().filter { "abstract" in it }}",
     )
   }
 
   /**
-   * The two routes have to agree: `translateInterface` is plan-driven and drops `fire` from
-   * `IPotter` already, so the walk dropping it from `Kiln` leaves the class implementable rather
-   * than CS0535 against an interface member it no longer declares. (The interface's own drop is
-   * silent, which is a separate gap: nothing feeds the declaration catalog's dropped callables to
-   * `warnDroppedForwardCallables`. Out of scope here; the walk's diagnostic above is the one this
-   * route owns.)
+   * Was: exactly one `SKIPPED_UNSUPPORTED_TYPE` naming `Kiln.fire`. ADR-133 declares the nested
+   * enum, so the member binds and nothing about it is skipped -- a surviving skip would mean the
+   * walk still consults a membership gate the declaration set has moved past.
    */
   @Test
-  fun `the interface projection drops the same member, so the class stays implementable`() {
+  fun `the member typed with the nested enum is no longer skipped`() {
+    val result = Tier1Harness.run(source)
+
+    val diagnostics: List<String> = result.kspWarnings.filter {
+      it.contains("SKIPPED_") && it.contains("Kiln.fire")
+    }
+    assertEquals(
+      0,
+      diagnostics.size,
+      "expected no skip for the now-declared nested enum; kspWarnings=${result.kspWarnings}",
+    )
+    assertTrue(
+      result.kspWarnings.none {
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE.name) &&
+            it.contains("tier1.abstractenum.Pottery.Firing")
+      },
+      "expected nothing to blame the nested enum any more; kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
+   * The two routes still have to agree, with the sign flipped by ADR-133: `translateInterface` is
+   * plan-driven and now projects `fire` onto `IPotter`, so the walk must declare it on `Kiln` too
+   * -- an abstract class missing an interface member it inherits is CS0535 in the consumer.
+   */
+  @Test
+  fun `the interface projection declares the same member, so the class stays implementable`() {
     val result = Tier1Harness.run(source)
 
     assertContains(
@@ -135,8 +136,9 @@ class Tier1AbstractMethodEnumTest {
     )
     val fire: List<String> = result.generatedCSharp.lines().filter { "Fire(" in it }
     assertTrue(
-      fire.isEmpty(),
-      "expected neither route to declare the member typed with the undeclared enum; got $fire",
+      fire.size >= 2,
+      "expected both the interface and the abstract class to declare the member typed with the " +
+          "now-declared nested enum; got $fire",
     )
   }
 }

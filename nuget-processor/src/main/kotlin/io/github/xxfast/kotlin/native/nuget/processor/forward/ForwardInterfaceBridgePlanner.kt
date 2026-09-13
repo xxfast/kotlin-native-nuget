@@ -8,6 +8,8 @@ import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedInterfaceCsName
 
 /**
  * ADR-084 stage 1: the single ordered slot list for one Kotlin interface a C# class may implement.
@@ -62,6 +64,8 @@ internal data class ForwardBridgeSlot(
 }
 
 internal data class ForwardBridgeInterfacePlan(
+  /** ADR-117 amendment: the interface itself, so the bridge factory export names its owner. */
+  val declaration: KSClassDeclaration,
   val qualifiedName: String,
   val simpleName: String,
   /** The projected C# interface name (`IPet`). */
@@ -102,10 +106,12 @@ internal object ForwardInterfaceBridgePlanner {
     if (slots.isEmpty()) return null
 
     return ForwardBridgeInterfacePlan(
+      declaration = iface,
       qualifiedName = qualifiedName,
       simpleName = simpleName,
-      csName = "I$simpleName",
-      exportName = "${simpleName.lowercase()}_bridge_create",
+      // ADR-133: `Aviary.IKeeper`, and the bridge export carries the chain like every other.
+      csName = iface.nestedInterfaceCsName(),
+      exportName = "${iface.nativePrefix()}_bridge_create",
       stateClassName = "${simpleName}BridgeState",
       slots = slots,
     )

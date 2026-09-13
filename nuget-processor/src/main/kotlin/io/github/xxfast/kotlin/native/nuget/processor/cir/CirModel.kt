@@ -75,6 +75,10 @@ data class CirClass(
   // uses. Text, not markup: `renderRemarks` owns the XML escaping, because the detail names
   // Kotlin constructors as `<init>`.
   val remarks: String? = null,
+  // ADR-133: public nested `class`/`object`/`interface`/`enum` declared inside this type,
+  // rendered inside its block exactly as ADR-009 renders a sealed arm. Empty for a declaration
+  // with no nested declarations, which keeps every construction site intact.
+  val nestedDeclarations: List<CirDeclaration> = emptyList(),
 ) : CirDeclaration
 
 data class CirValueClass(
@@ -108,6 +112,12 @@ data class CirValueClassConstructor(
 data class CirEnum(
   val name: String,
   val libraryName: String,
+  // ADR-133: the C entry-point prefix, the enclosing chain (`owner_kind`); the enum entry point
+  // used to be composed from the simple name alone.
+  val nativePrefix: String = name.lowercase(),
+  // ADR-133: the C# spelling with its enclosing scope (`Owner.Kind`), used by the extension class,
+  // which cannot itself nest (CS1109) and so stays at namespace level as `OwnerKindExtensions`.
+  val csName: String = name,
   val entries: List<CirEnumEntry>,
   val properties: List<CirEnumProperty> = emptyList(),
 ) : CirDeclaration
@@ -140,10 +150,10 @@ data class CirSealedSubclass(
   /**
    * ADR-116: the arm's own declared member functions, projected from the ADR-062 callable plan the
    * way an ordinary [CirClass]'s methods are. Empty for an arm that declares none. A `suspend`
-   * member rides [asyncMembers] (ADR-118) and a `Flow`-returning one [flowMembers] (ADR-124); a
-   * generic member has no arm route at all and is named by a `SKIPPED_UNSUPPORTED_COMBINATION`
-   * diagnostic instead, and so does a callback member the arm route does not cover (an add/remove
-   * pair, a `suspend` lambda parameter).
+   * member rides [asyncMembers] (ADR-118), a `Flow`-returning one [flowMembers] (ADR-124), and a
+   * per-call lambda or an add/remove pair [callbackMembers] (ADR-116 amendments); a generic member
+   * or a `suspend` lambda parameter has no arm route at all and is named by a
+   * `SKIPPED_UNSUPPORTED_COMBINATION` diagnostic instead.
    */
   val methods: List<CirMethod> = emptyList(),
   /**
@@ -204,6 +214,8 @@ data class CirObject(
   val libraryName: String,
   val nativePrefix: String,
   val methods: List<CirMember>,
+  // ADR-133: an `object` owner carries nested declarations too (`Registry.Entry`).
+  val nestedDeclarations: List<CirDeclaration> = emptyList(),
 ) : CirDeclaration
 
 enum class CirVariance { INVARIANT, COVARIANT, CONTRAVARIANT }

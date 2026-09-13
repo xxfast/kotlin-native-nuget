@@ -204,7 +204,7 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
 
   val builder: FunSpec.Builder = FunSpec
     .builder("export_${classPrefix}_$methodName")
-    .addAnnotation(cNameAnnotation("${classPrefix}_$methodName"))
+    .addAnnotation(cNameAnnotation("${classPrefix}_$methodName", ownedBy(method)))
     .addParameter("handle", cOpaquePointer)
     .addParameter("${lambdaParamName}Ptr", cOpaquePointer)
     .addParameter("${lambdaParamName}UserData", cOpaquePointer)
@@ -231,14 +231,40 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
  * Declared-only (`parentDeclaration == this`), which is ADR-116's rule for the arm's method
  * surface: a base method the arm does not override belongs to no arm.
  *
- * An add/remove **pair** is excluded here and stays a named `SEALED_SUBCLASS_UNROUTED` drop: the
- * stored-callback route (ADR-037) is not re-keyed by this change, and emitting the add half as a
- * per-call callback would silently change what the member means.
+ * An add/remove **pair** is excluded here, because ADR-116's 2026-09-13 amendment re-keys the
+ * stored-callback route (ADR-037) onto the arm as well: the pair binds as one
+ * `IDisposable AddX(...)` subscription through [forwardArmStoredCallbackPairs], and emitting the
+ * add half here as a per-call callback too would mint the same `@CName` twice. The exclusion is
+ * read off that very selector's candidate list so the two cannot disagree.
  */
 internal fun KSClassDeclaration.forwardArmLambdaMethods(
   classifier: ForwardBridgeTypeClassifier,
 ): List<KSFunctionDeclaration> {
-  val candidates: List<KSFunctionDeclaration> = getAllFunctions()
+  val candidates: List<KSFunctionDeclaration> = forwardArmCallbackCandidates()
+    .filter { it.hasLegacyLambdaParameter() }
+
+  val paired: Set<KSFunctionDeclaration> = findStoredCallbackPairs(candidates)
+    .flatMap { (add, remove) -> listOf(add, remove) }
+    .toSet()
+
+  return candidates
+    .filter { it !in paired }
+    .filter { it.isArmCallbackRoutable(classifier) }
+}
+
+/**
+ * The declared-only member surface every arm-keyed callback route selects from: the per-call
+ * lambda-parameter route ([forwardArmLambdaMethods]), the stored-callback pair route
+ * ([forwardArmStoredCallbackPairs]) and the interface-bridge pair route
+ * ([forwardArmInterfaceBridgePairs]). Structural only — the routability filters below are applied
+ * per route, *after* pair detection, so a refused half cannot silently turn its partner into a
+ * per-call callback.
+ *
+ * Declared-only (`parentDeclaration == this`), which is ADR-116's rule for the arm's method
+ * surface: a base method the arm does not override belongs to no arm.
+ */
+internal fun KSClassDeclaration.forwardArmCallbackCandidates(): List<KSFunctionDeclaration> =
+  getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { it.parentDeclaration == this }
     .filter { !it.modifiers.contains(Modifier.SUSPEND) }
@@ -251,23 +277,17 @@ internal fun KSClassDeclaration.forwardArmLambdaMethods(
           (name == "copy" || name.startsWith("component"))
       name !in setOf("equals", "hashCode", "toString", "<init>") && !isDataClassMethod
     }
-    .filter { method ->
-      method.parameters.any { parameter ->
-        parameter.type.resolve().expandAliases().declaration.qualifiedName?.asString() in
-            LAMBDA_TYPES
-      }
-    }
     .toList()
 
-  val paired: Set<KSFunctionDeclaration> = findStoredCallbackPairs(candidates)
-    .flatMap { (add, remove) -> listOf(add, remove) }
-    .toSet()
-
-  return candidates
-    .filter { it !in paired }
-    // Issue #121: a marked declaration reaches neither artifact, legacy route or not.
-    .filter { it.optInMarker(classifier.exportMarkers) == null }
-    // ADR-123: a return this route cannot marshal drops the member on both halves, the C# rule
-    // `translateClass` applies upstream of its own projection.
-    .filter { classifier.legacyRefusedReturn(it) == null }
-}
+/**
+ * The two refusals every arm-keyed callback route applies to a member before emitting it, in both
+ * halves (the Kotlin export loop and the C# translator read the same selectors).
+ *
+ * - Issue #121: a marked declaration reaches neither artifact, legacy route or not.
+ * - ADR-123: a return this route cannot marshal drops the member on both halves, the C# rule
+ *   `translateClass` applies upstream of its own projection.
+ */
+internal fun KSFunctionDeclaration.isArmCallbackRoutable(
+  classifier: ForwardBridgeTypeClassifier,
+): Boolean = optInMarker(classifier.exportMarkers) == null &&
+    classifier.legacyRefusedReturn(this) == null

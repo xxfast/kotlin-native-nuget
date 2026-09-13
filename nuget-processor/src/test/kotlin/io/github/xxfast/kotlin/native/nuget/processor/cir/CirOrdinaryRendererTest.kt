@@ -1074,6 +1074,55 @@ class CirOrdinaryRendererTest {
     )
   }
 
+  /**
+   * ADR-066 §5 amendment, the CORRECTION cell — **RED** until `CirTypeMapping.kt` ~:195 uses the
+   * segment-bounded "outside root" test that admission already uses (`PackageScope.covers`,
+   * `NugetProcessor.kt` ~:488: `pkg == p || pkg.startsWith("$p.")`).
+   *
+   * `com.examples.x` is not under `com.example` — `examples` is a different segment — so it is an
+   * out-of-root package and must render its full path. The unbounded `startsWith` strips the
+   * literal prefix `com.example`, leaves `s.x`, and renders the mangled `Clinic.S.X`: a namespace
+   * built out of half a package segment, which no admission decision agrees with.
+   *
+   * Oreo and Mylo both answer to "cat"; only one of them answers to "Oreo". A prefix is not a name.
+   */
+  @Test
+  fun `mapPackageToNamespace treats a non-segment prefix extension of root as outside root`() {
+    assertEquals(
+      "Clinic.Com.Examples.X",
+      mapPackageToNamespace("com.examples.x", "com.example", "Clinic"),
+    )
+  }
+
+  /**
+   * ADR-066 §5 amendment, **PIN** (green today). Option (i): a package genuinely outside
+   * `rootPackage` keeps every segment of its full Kotlin package, each PascalCased, under the
+   * assembly's root namespace. This is the shape `dev.other.admitted.Billboard` renders end to
+   * end in `IntegrationTests/OutOfRootNamespaceTests.cs`.
+   */
+  @Test
+  fun `mapPackageToNamespace keeps an out-of-root package's full path under the root namespace`() {
+    assertEquals(
+      "Clinic.Dev.Other.Core",
+      mapPackageToNamespace("dev.other.core", "com.example", "Clinic"),
+    )
+  }
+
+  /**
+   * ADR-066 §5 amendment, **PIN** (green today). Third clause of the rule: with `rootPackage`
+   * unset every package collapses to the root namespace — including one that would be "outside"
+   * any root — so the out-of-root branch degrades continuously into the unset case rather than
+   * suddenly spraying top-level namespaces. The cell below covers an in-root-shaped input; this
+   * one covers the out-of-root-shaped input.
+   */
+  @Test
+  fun `mapPackageToNamespace collapses an out-of-root package when root package is unset`() {
+    assertEquals(
+      "Clinic",
+      mapPackageToNamespace("dev.other.core", "", "Clinic"),
+    )
+  }
+
   @Test
   fun `mapPackageToNamespace ignores empty root package`() {
     assertEquals(

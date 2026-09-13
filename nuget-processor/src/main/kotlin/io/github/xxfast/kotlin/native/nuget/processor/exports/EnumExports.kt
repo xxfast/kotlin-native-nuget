@@ -9,6 +9,7 @@ import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 
 /**
  * Generates @CName bridge exports for enum properties.
@@ -19,7 +20,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 internal fun FileSpec.Builder.addEnumExports(enum: KSClassDeclaration) {
   val name: String = enum.simpleName.asString()
   val qualifiedName: String = enum.qualifiedName?.asString() ?: return
-  val prefix: String = name.lowercase()
+  val prefix: String = enum.nativePrefix()
 
   val properties: List<KSPropertyDeclaration> = enum.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -34,7 +35,7 @@ internal fun FileSpec.Builder.addEnumExports(enum: KSClassDeclaration) {
 
     addFunction(
       FunSpec.builder("export_${prefix}_get_$propName")
-        .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
+        .addAnnotation(cNameAnnotation("${prefix}_get_$propName", ownedBy(prop)))
         .addParameter("ordinal", Int::class)
         .returns(ClassName.bestGuess(propType))
         .addStatement("val ${prefix}: %L = %L.entries[ordinal]", qualifiedName, qualifiedName)

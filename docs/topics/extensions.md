@@ -4,7 +4,7 @@ Kotlin extension functions and properties don't have a native C# analog (C# has 
 
 | Kotlin | C# | Notes |
 |---|---|---|
-| extension function | static method | true C# extension method (`this` parameter); receiver may also be an eligible sealed base, see [Sealed receivers](#sealed-receivers) below, or nullable (`Cat?`), rendered `this Cat? receiver` with a null receiver crossing as `IntPtr.Zero`, see [Nullable receivers](#nullable-receivers) below |
+| extension function | static method | true C# extension method (`this` parameter); receiver may also be an eligible sealed base, see [Sealed receivers](#sealed-receivers) below, nullable (`Cat?`), rendered `this Cat? receiver` with a null receiver crossing as `IntPtr.Zero`, see [Nullable receivers](#nullable-receivers) below, a bare interface, see [Interface receivers](#interface-receivers) below, or a nullable value class, see [Value-class receivers](#value-class-receivers) below; a has-value fan-out receiver (`Int?`, `Enum?`, `Instant?`, `Duration?`, a `Primitive`/`Enum`-underlying value class `?`) skips named `RECEIVER_FAN_OUT` instead, see [Limitations](#limitations) below ([ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md)) |
 | extension property | static accessor | receiver may also be an eligible sealed base, see [Sealed receivers](#sealed-receivers) below; see [ADR-013](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md) |
 | extension function return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, …) | matching C# return type | same cascade as a class-method return via the shared plan, see Return marshalling below and [Classes and objects](classes-and-objects.md) |
 | two or more same-named extension functions | one C# overload set | numbered native export/extern name, unnumbered public name, counter scoped per (package, name), receiver-agnostic; see [Method overloads](#method-overloads) below ([ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md)) |
@@ -236,6 +236,71 @@ public static partial class TemperamentExtensions
 }
 ```
 
+### Nullable value-class receivers {id="value-class-nullable-receivers"}
+
+An extension **function**'s value-class receiver may also be nullable (`CatId?`), over a
+`String`- or `ObjectHandle`-underlying value class: the underlying's own nullable wire carries the
+absent case as a null pointer, and the Kotlin side re-wraps only when a value is present, exactly
+like a nullable value-class parameter
+([ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md),
+[ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md)).
+A `Primitive`- or `Enum`-underlying value class receiver (an ADR-079/080 has-value pair, not a
+null pointer) does **not** bind this way, see [Limitations](#limitations) below. `CatId`, from
+`test-library/src/nativeMain/kotlin/.../cat/CatExtensions.kt`:
+
+```kotlin
+fun CatId?.orAnonymous(): String = this?.id ?: "anonymous"
+```
+
+Generated C#, from `Interop.cs`:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catid_orAnonymous")]
+private static extern IntPtr Native_OrAnonymous([MarshalAs(UnmanagedType.LPUTF8Str)] string? receiver, out IntPtr error);
+
+public static string OrAnonymous(this global::TestLibrary.Cat.CatId? receiver)
+{
+    IntPtr nativeResult = Native_OrAnonymous(receiver?.Id, out IntPtr error);
+    if (error != IntPtr.Zero)
+    {
+        throw NugetErrorNative.BuildException(error);
+    }
+    return Marshal.PtrToStringUTF8(nativeResult)!;
+}
+```
+
+From `IntegrationTests/ExtensionFunctionTests.cs`:
+
+```C#
+[Fact]
+public void NullableValueClassReceiver_Value_ReturnsTheId()
+{
+    CatId? id = new CatId("Oreo-1");
+    Assert.Equal("Oreo-1", id.OrAnonymous());
+}
+
+[Fact]
+public void NullableValueClassReceiver_Null_ReturnsAnonymous()
+{
+    CatId? id = null;
+    Assert.Equal("anonymous", id.OrAnonymous());
+}
+```
+
+<note>
+    <p>
+        <code>CatId</code> generates as a <code>readonly record struct</code>, so <code>this CatId?
+        receiver</code> is a <code>Nullable&lt;CatId&gt;</code>. C# binds an extension receiver only
+        through an identity, implicit-reference, or boxing conversion, and <code>CatId -&gt;
+        CatId?</code> is none of those, so <code>new CatId("x").OrAnonymous()</code> fails to
+        compile (<code>CS1929</code>) even though Kotlin allows calling a <code>T?</code> extension
+        on a non-null <code>T</code>. Call it on a <code>CatId?</code> local instead, as both tests
+        above do. See
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md">ADR-132</a>'s
+        sub-decision for why no forwarding non-null overload is emitted.
+    </p>
+</note>
+
 ## Nullable receivers
 
 An extension function's receiver may also be nullable (`Cat?`). It still renders as a genuine C#
@@ -290,6 +355,91 @@ public void NullableReceiver_NullCat_ReturnsStray()
     Assert.Equal("stray", none.NameOrStray());
 }
 ```
+
+## Interface receivers
+
+An extension function's receiver may also be a bare interface. It binds the same way an interface
+*parameter* does: a Kotlin-backed implementation crosses as its own `StableRef`, and a
+C#-implemented one routes through the ADR-084 stage-3 bridge factory, `NugetMarshal.HandleOf`,
+minting a transfer handle that is disposed again once the call returns
+([ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md)).
+
+### Kotlin {id="interface-receiver-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../cat/CatExtensions.kt`. The body composes `name`,
+`legs`, and `speak()` rather than echoing the receiver back, so only a receiver whose members
+genuinely dispatch across the bridge can produce the right string:
+
+```kotlin
+fun Pet.describe(): String = "$name has $legs legs and says ${speak()}"
+```
+
+### Generated C# {id="interface-receiver-generated-c"}
+
+From `Interop.cs`. `HandleOf` mints a transfer `StableRef` only when the receiver has no `_handle`
+of its own (a C#-implemented `Pet`); `receiverOwned` tracks whether the cleanup must dispose it:
+
+```C#
+[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "pet_describe")]
+private static extern IntPtr Native_Describe(IntPtr receiver, out IntPtr error);
+
+public static string Describe(this global::TestLibrary.Cat.IPet receiver)
+{
+    IntPtr receiverHandle = IntPtr.Zero;
+    bool receiverOwned = false;
+    try
+    {
+        receiverHandle = NugetMarshal.HandleOf(receiver, out receiverOwned);
+        IntPtr nativeResult = Native_Describe(receiverHandle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return Marshal.PtrToStringUTF8(nativeResult)!;
+    }
+    finally
+    {
+        if (receiverOwned) { NugetMarshal.Dispose(receiverHandle); }
+    }
+}
+```
+
+### Using it from C# {id="interface-receiver-using-it-from-c"}
+
+From `IntegrationTests/ExtensionFunctionTests.cs`: a Kotlin-backed wrapper (nothing minted, nothing
+to dispose), an anonymous Kotlin object with no generated wrapper class of its own, and a
+C#-implemented `Dog : IPet`, which can only produce the expected string if `name`, `legs`, and
+`speak()` all really dispatched back into C#:
+
+```C#
+[Fact]
+public void InterfaceReceiver_KotlinCat_DescribesThroughInterfaceMembers()
+{
+    using var oreo = new Cat("Oreo", 9);
+    Assert.Equal("Oreo has 4 legs and says Meow! My name is Oreo", oreo.Describe());
+}
+
+[Fact]
+public void InterfaceReceiver_CSharpImplementedDog_DispatchesBackIntoCSharp()
+{
+    using IPet rex = new Dog("Rex");
+    Assert.Equal("Rex has 4 legs and says Woof!", rex.Describe());
+}
+```
+
+<note>
+    <p>
+        The C#-implemented case mints a transfer <code>StableRef</code> per crossing, since the
+        bridge object has no <code>_handle</code> of its own. <code>LeakTests/LiveHandleTests.cs</code>
+        row 6b, <code>InterfaceReceiverExtension_CSharpImplementedPet_ReleasesTransferHandle</code>,
+        proves it returns to baseline. A nullable interface receiver (<code>Pet?</code>) and the
+        other admitted receiver shapes (an enum, <code>Uuid</code>, <code>Instant</code>,
+        <code>Duration</code>, a collection, a nullable <code>Uuid</code>/collection, and a bound
+        interface) route through the identical parameter lowering but carry no dedicated fixture.
+        A nullable enum, <code>Instant</code>, or <code>Duration</code> receiver does <b>not</b>
+        bind this way, see <a href="#limitations">Limitations</a> below.
+    </p>
+</note>
 
 ## Sealed receivers
 
@@ -595,6 +745,18 @@ An extension property typed `Flow`, `StateFlow`, or a lambda is also named as a 
 exported, even on an otherwise-supported receiver: unlike a class property, no legacy adapter
 re-emits it, so it is not exempt from the diagnostic the way a class property of the same type is.
 
+An extension **property**'s receiver still admits only `String`, a primitive, a class in the
+export set, an eligible sealed base, or a value class over one of those underlyings: unlike
+extension *functions* since [ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md),
+a bare interface receiver (`val Pet.x`) or a nullable value-class receiver (`val CatId?.x`) still
+skips named `SKIPPED_UNSUPPORTED_PROPERTY`.
+
+An extension **function**'s receiver whose wire is a has-value fan-out pair (`Int?`, `Enum?`,
+`Instant?`, `Duration?`, or a `Primitive`/`Enum`-underlying value class `?`) is a named skip,
+`RECEIVER_FAN_OUT` (`SKIPPED_UNSUPPORTED_INPUT`), rather than a build failure or a silently wrong
+crossing: the plan model admits only one RECEIVER-role slot and it must come first, and a fan-out
+receiver would need two. The same type binds fine as an ordinary *parameter*.
+
 See [Publishing Kotlin to C#: Diagnostics](forward-overview.md#diagnostics) for the full diagnostic
 model.
 
@@ -703,5 +865,6 @@ public void Toy_Tags_ReturnsMarshalledStringElements()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md">ADR-096: Function default parameters</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md">ADR-105: Sealed types at property positions</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/126-extension-class-per-declaring-package.md">ADR-126: One Extensions class per declaring package</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md">ADR-132: Extension receiver shapes</a>
     </category>
 </seealso>

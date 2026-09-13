@@ -11,6 +11,7 @@ import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.ParameterSpec
 import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.TypeSpec
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 
 /**
  * Generates @CName bridge exports for generic classes using type erasure.
@@ -19,7 +20,7 @@ import com.squareup.kotlinpoet.TypeSpec
 internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
   val name: String = cls.simpleName.asString()
   val qualifiedName: String = cls.qualifiedName?.asString() ?: return
-  val prefix: String = name.lowercase()
+  val prefix: String = cls.nativePrefix()
 
   val hasNonTrivialBound: Boolean = cls.typeParameters.firstOrNull()
     ?.bounds?.toList()?.any { bound ->
@@ -44,7 +45,7 @@ internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
     )
 
     for ((suffix, param) in primitiveVariants) {
-      addGenericCreateExport(prefix, suffix, param, qualifiedName, "value")
+      addGenericCreateExport(cls, prefix, suffix, param, qualifiedName, "value")
     }
   }
 
@@ -62,6 +63,7 @@ internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
   }
 
   addGenericCreateExport(
+    cls,
     prefix,
     "object",
     ParameterSpec.builder("value", cOpaquePointer).build(),
@@ -71,7 +73,7 @@ internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
 
   addFunction(
     FunSpec.builder("export_${prefix}_dispose")
-      .addAnnotation(cNameAnnotation("${prefix}_dispose"))
+      .addAnnotation(cNameAnnotation("${prefix}_dispose", ownedBy(cls, "generated Dispose")))
       .addParameter("handle", cOpaquePointer)
       .addStatement("%T.release(handle)", nugetHandles)
       .build()
@@ -86,7 +88,7 @@ internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
 
     addFunction(
       FunSpec.builder("export_${prefix}_get_$propName")
-        .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
+        .addAnnotation(cNameAnnotation("${prefix}_get_$propName", ownedBy(prop)))
         .addParameter("handle", cOpaquePointer)
         // ADR-083: a null property value rides the null pointer out, closing the `.prop!!` NPE that
         // any nullable property on a generic class used to hit at its first read.
@@ -106,6 +108,9 @@ internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
  * the Kotlin constructor throws, and the export returns null instead of a handle.
  */
 private fun FileSpec.Builder.addGenericCreateExport(
+  // ADR-117 amendment: the owner of the `_create_<variant>` export it emits. Threaded rather than
+  // re-derived, so the diagnostic names the class declaration itself with its own `file:line`.
+  cls: KSClassDeclaration,
   prefix: String,
   suffix: String,
   valueParam: ParameterSpec,
@@ -114,7 +119,12 @@ private fun FileSpec.Builder.addGenericCreateExport(
 ) {
   addFunction(
     FunSpec.builder("export_${prefix}_create_$suffix")
-      .addAnnotation(cNameAnnotation("${prefix}_create_$suffix"))
+      .addAnnotation(
+        cNameAnnotation(
+          "${prefix}_create_$suffix",
+          ownedBy(cls, "generic create variant: $suffix"),
+        ),
+      )
       .addParameter(valueParam)
       .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
       .returns(cOpaquePointer.copy(nullable = true))

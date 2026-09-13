@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.exports
 
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.squareup.kotlinpoet.AnnotationSpec
@@ -10,6 +11,7 @@ import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.TypeName
 import com.squareup.kotlinpoet.ksp.toTypeName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwnerTag
 
 internal val cNameAnnotation = ClassName("kotlin.native", "CName")
 internal val cOpaquePointer = ClassName("kotlinx.cinterop", "COpaquePointer")
@@ -141,10 +143,26 @@ internal fun FunSpec.Builder.addEnumAwareParameters(
   return this
 }
 
-internal fun cNameAnnotation(value: String): AnnotationSpec =
+/**
+ * The one `@CName` minter of the whole forward bridge (ADR-117 amendment, 2026-09-13). [owner] is
+ * **required**: it hangs the owning Kotlin declaration on the `AnnotationSpec` itself, so
+ * `ForwardExportOwners` can name the exact declaration behind a duplicate entry point on every
+ * route, and so a future export site that forgets its owner does not compile. A KotlinPoet tag is
+ * builder metadata and never renders, so `CNameExports.kt` is unchanged by it.
+ */
+internal fun cNameAnnotation(value: String, owner: ForwardExportOwnerTag): AnnotationSpec =
   AnnotationSpec.builder(cNameAnnotation)
     .addMember("%S", value)
+    .tag(ForwardExportOwnerTag::class, owner)
     .build()
+
+/**
+ * The owner tag for a site that holds its declaration. [role] names *which generated member* of
+ * [declaration] the export is (`generated Dispose`, `sealed discriminator`,
+ * `generic create variant: string`); a member the user wrote needs none.
+ */
+internal fun ownedBy(declaration: KSDeclaration, role: String? = null): ForwardExportOwnerTag =
+  ForwardExportOwnerTag(declaration = declaration, role = role)
 
 /**
  * ADR-127: the package of the `nuget-runtime` klib, which owns the fixed 67-name `nuget_*` ABI

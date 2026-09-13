@@ -31,6 +31,11 @@ import kotlin.test.assertTrue
  *  - `onBeat` is the **`Boolean`** cell, the one primitive that is not its own wire type: it
  *    crosses as a `byte` and has to be widened on the C# side, so it catches a fix that forwards
  *    the argument verbatim,
+ *  - `onVelocity` is the **signed 8-bit** cell (`Byte`), declared straight after `onBeat`. It
+ *    shares `Boolean`'s one-byte wire but not its C# type (`sbyte` against `byte`), and the
+ *    delegate-name suffix spelled `Byte` for both, so under first-wins registration the pair got
+ *    one declaration and the loser rendered a lambda that cannot convert to it (ADR-036
+ *    amendment, 2026-09-13). Two names, two shapes, one declaration each,
  *  - `onTempo` is the **floating point** cell, a different register class from the integers, so
  *    it catches a by-value fix that only ever passes integer-shaped payloads.
  *
@@ -58,6 +63,7 @@ class Tier1PrimitiveLambdaParameterTest {
     class Metronome(private val beats: Int) {
       fun onTick(listener: (Int) -> Unit) = repeat(beats) { listener(it + 1) }
       fun onBeat(listener: (Boolean) -> Unit) = repeat(beats) { listener(it % 2 == 0) }
+      fun onVelocity(listener: (Byte) -> Unit) = repeat(beats) { listener((it * 40 - 100).toByte()) }
       fun onTempo(listener: (Double) -> Unit) = repeat(beats) { listener(60.0 + it * 0.5) }
     }
 
@@ -130,7 +136,8 @@ class Tier1PrimitiveLambdaParameterTest {
 
     val expected: Map<String, String> = mapOf(
       "NugetIntVoidCallback" to "int",
-      "NugetByteVoidCallback" to "byte",
+      "NugetBoolVoidCallback" to "byte",
+      "NugetByteVoidCallback" to "sbyte",
       "NugetDoubleVoidCallback" to "double",
     )
     expected.forEach { (name, csType) ->
@@ -161,6 +168,33 @@ class Tier1PrimitiveLambdaParameterTest {
       "the stored enum-ordinal route registers `(int, IntPtr)`; the per-call Int payload must " +
           "land on the same shape; got: ${declarations.single()}",
     )
+  }
+
+  /**
+   * The reported collision. `Boolean` and Kotlin `Byte` both spelled the suffix `Byte`, so the
+   * two shapes landed on one `NugetByteVoidCallback` declaration and the second registration
+   * reused the first's parameter list. They are separate wires (`byte` widened to `bool`, against
+   * `sbyte` passed through) and so must be separate delegates, each declared exactly once.
+   */
+  @Test
+  fun `the Boolean and Byte payloads get two distinct delegates`() {
+    val result = run()
+
+    val declarations: List<String> = result.generatedCSharp.lines()
+      .filter { it.contains("internal delegate") }
+
+    listOf("NugetBoolVoidCallback" to "byte", "NugetByteVoidCallback" to "sbyte")
+      .forEach { (name, csType) ->
+        val matching: List<String> = declarations.filter { it.contains("$name(") }
+        assertTrue(
+          matching.size == 1,
+          "expected exactly one declaration of `$name`; got: $matching",
+        )
+        assertTrue(
+          Regex("""$name\($csType \w+, IntPtr \w+\);""").containsMatchIn(matching.single()),
+          "expected `$name` to take a `$csType` by value; got: ${matching.single()}",
+        )
+      }
   }
 
   /** The C# thunk body reads the payload straight off the typed parameter. */
@@ -217,7 +251,12 @@ class Tier1PrimitiveLambdaParameterTest {
   fun `the public method still binds Action of the C sharp primitive`() {
     val result = run()
 
-    listOf("Action<int> listener", "Action<bool> listener", "Action<double> listener")
+    listOf(
+      "Action<int> listener",
+      "Action<bool> listener",
+      "Action<sbyte> listener",
+      "Action<double> listener",
+    )
       .forEach { signature ->
         assertTrue(
           result.generatedCSharp.contains(signature),

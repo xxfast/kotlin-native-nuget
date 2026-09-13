@@ -7,6 +7,7 @@ using TestLibrary.Issue126;
 using TestLibrary.Issue127;
 using TestLibrary.Issue131;
 using TestLibrary.Models;
+using TestLibrary.Nested;
 using TestLibrary.Routes;
 
 namespace LeakTests;
@@ -143,6 +144,22 @@ public class LiveHandleTests
         });
     }
 
+    // Row 1a. ADR-133: a nested class mints through `aviary_perch_create` into the same
+    // NugetHandles StableRef route Row 1 measures, and releases through
+    // `aviary_perch_dispose`. No new mint path, so this is the happy-path checklist row, not
+    // a new mechanism: the one thing it can catch is a nested export wired to a retain without the
+    // matching release. Oreo takes the perch fifty times and comes down fifty times.
+    [Fact]
+    public void NestedClass_CreateAndDispose_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var aviary = new Aviary("Oreo");
+            using var perch = aviary.PerchAt(3);
+            Assert.Equal(3, aviary.HeightOf(perch));
+        });
+    }
+
     // Row 1b. The ADR-035 value-class secondary constructor mints a Cat StableRef inside Kotlin
     // and hands it to the struct's underlying property, so the consumer disposes it like any other
     // `new Cat(...)`. Mylo is created fifty times from his name alone and must come back every time.
@@ -239,6 +256,22 @@ public class LiveHandleTests
             using var oreo = new Cat("Oreo", 9);
             using IPet rex = new Dog("Rex");
             Assert.Equal("Rex says: Woof!", oreo.Interview(rex));
+        });
+    }
+
+    // Row 6b. The same ADR-084 transfer handle, one slot to the left: a C#-implemented `IPet` as
+    // the RECEIVER of an extension function. `HandleOf` mints a StableRef per crossing because
+    // `Dog` has no `_handle`, so the receiver needs the same `finally`-dispose the argument
+    // position got - the receiver used to bypass `interfaceCleanup` entirely, which is what makes
+    // this a real leak surface rather than a duplicate of Row 6. (The nullable value-class
+    // receiver, `CatId?.OrAnonymous()`, mints nothing on either side, so it gets no row.)
+    [Fact]
+    public void InterfaceReceiverExtension_CSharpImplementedPet_ReleasesTransferHandle()
+    {
+        AssertNoLeak(() =>
+        {
+            using IPet rex = new Dog("Rex");
+            Assert.Equal("Rex has 4 legs and says Woof!", rex.Describe());
         });
     }
 
@@ -439,6 +472,51 @@ public class LiveHandleTests
         });
     }
 
+    // Rows 8k and 8l. ADR-116's 2026-09-13 amendment: the same two callback families, one owner
+    // kind to the left. A stored-callback pair (`StableRef.create(unregister)` on subscribe,
+    // `ref.dispose()` on `Dispose`) and an interface-bridge pair (that, plus one retained handle
+    // per `String` payload the C# thunk owns) declared on a **sealed arm**, so the receiver is a
+    // `StableRef<Job.Running>` / `StableRef<Job.Idle>` rather than an ordinary class. The pair's
+    // own handles are unchanged; the arm receiver is the new thing, and a re-key that retains the
+    // receiver per subscription rather than borrowing it shows up here as +N and nowhere else.
+    private sealed class ProbeWatcher : IJobWatcher
+    {
+        public int Wakes { get; private set; }
+        public void OnWake(string reason) => Wakes++;
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void SealedArm_StoredCallbackPair_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var factory = new JobFactory();
+            using Job.Running oreo = factory.Running(40);
+            var ticks = new List<string>();
+            IDisposable subscription = oreo.AddTicker(tick => ticks.Add(tick));
+            oreo.Tick();
+            subscription.Dispose();
+            Assert.Equal(new[] { "tick:40" }, ticks);
+        });
+    }
+
+    // `Job.Idle` is a process-wide `data object`, so an undisposed bridge here would outlive the
+    // iteration and be fired again by the next one: the `using` is load-bearing, not stylistic.
+    [Fact]
+    public void SealedArm_InterfaceBridgePair_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var factory = new JobFactory();
+            using Job.Idle mylo = factory.Idle();
+            var watcher = new ProbeWatcher();
+            using IDisposable sub = mylo.AddWatcher(watcher);
+            mylo.Wake("hallway");
+            Assert.Equal(1, watcher.Wakes);
+        });
+    }
+
     // Row 8f. ADR-071: a `MutableStateFlow<T>` returned from a function, held by the wrapper. The
     // fix mints a StableRef for the flow itself on every call (the wrapper's `ownedHandle`, freed
     // in `Dispose()`), which is a handle no other flow route owns: the property half re-reads a
@@ -499,6 +577,70 @@ public class LiveHandleTests
             await using Job.Running oreo = await factory.RunningLaterAsync(9);
             Assert.Equal(9, oreo.Progress);
         });
+    }
+
+    // Row 9e. A suspend call whose result is the sealed *base* rather than an arm. Kotlin mints
+    // the StableRef on the concrete arm, and the completion has to hand that same handle to
+    // `Job.FromHandle`, which discriminates and constructs the arm wrapper that then owns it. A
+    // completion that reads the discriminator through a second handle, or mints one to read the
+    // type and forgets it, shows up here and nowhere in the functional tests: those assert the
+    // payload, which a double mint answers correctly.
+    [Fact]
+    public async Task Suspend_ReturningTheSealedBase_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var factory = new JobFactory();
+            await using Job.Running oreo = factory.Running(9);
+            using Job next = await oreo.NextLaterAsync();
+            Assert.Equal(10, Assert.IsType<Job.Done>(next).Code);
+        });
+    }
+
+    // Row 9f. The nullable twin. Both branches inside one crossing: the null return mints no
+    // handle at all (a guard that releases something it never received goes negative here), and
+    // the arm return goes through the same discriminated read as Row 9e.
+    [Fact]
+    public async Task Suspend_ReturningTheNullableSealedBase_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var factory = new JobFactory();
+            await using Job.Running finished = factory.Running(100);
+            Assert.Null(await finished.NextOrNullLaterAsync());
+
+            await using Job.Running oreo = factory.Running(12);
+            using Job? next = await oreo.NextOrNullLaterAsync();
+            Assert.Equal(13, Assert.IsType<Job.Done>(next).Code);
+        });
+    }
+
+    // Row 9g. The throw path of the same route, which no row covered for a suspend call at all
+    // (the only `Throws` row before this one is the synchronous `Archive` at the bottom). When the
+    // body throws, no result is minted and the ADR-128/130 error envelope crosses instead, so this
+    // pins that `NugetErrorNative.BuildException` releases what it was handed. `nextOrThrowLater`
+    // has no suspension point, so the body completes before the P/Invoke returns and the ADR-019
+    // ordering window is open on the error path too: hence the tight loop rather than the default
+    // ten, on the `Suspend_NoSuspensionPoint_...` precedent.
+    [Fact]
+    public async Task Suspend_ReturningTheSealedBase_Throws_ReturnsToBaseline()
+    {
+        using var factory = new JobFactory();
+        await using Job.Running oreo = factory.Running(4);
+
+        // The receiver is hoisted out of the measured window so the loop crosses nothing but the
+        // throwing call, and the arm's scope is minted lazily (`GetOrCreateScope()` on the first
+        // suspend call), so it has to be warmed up *before* the baseline is read. Without this the
+        // scope handle is retained inside the loop and released only when `oreo` is disposed, long
+        // after the measurement: a +1 that is the harness's own doing, and one the negative-delta
+        // retry would not absorb.
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(
+            async () => await oreo.NextOrThrowLaterAsync(-1));
+
+        await AssertNoLeakAsync(
+            async () => await Assert.ThrowsAnyAsync<InvalidOperationException>(
+                async () => await oreo.NextOrThrowLaterAsync(-1)),
+            iterations: 5000);
     }
 
     // Row 9c. The cancellation-registration half of the same ADR-019 ordering hole: `reg` is

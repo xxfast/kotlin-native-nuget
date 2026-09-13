@@ -27,6 +27,44 @@ public class PrimitiveLambdaPayloadTests
         Assert.Equal(new List<bool> { true, false, true, false }, beats);
     }
 
+    /// <summary>
+    /// ADR-036 amendment: Kotlin `Byte` is `sbyte` in C#, a different wire from `Boolean`'s `byte`,
+    /// so the pair may not share one internal delegate. The velocities are deliberately negative
+    /// for the first three beats: read through an unsigned wire, -100 would arrive as 156, so this
+    /// asserts a signed read and not merely arrival.
+    ///
+    /// Oreo's first pounce of the night registers well below the line.
+    /// </summary>
+    [Fact]
+    public void Metronome_OnVelocity_DeliversSignedBytePayloadByValue()
+    {
+        using var metronome = new Metronome(4);
+        var velocities = new List<sbyte>();
+        metronome.OnVelocity(velocity => velocities.Add(velocity));
+        Assert.Equal(new List<sbyte> { -100, -60, -20, 20 }, velocities);
+    }
+
+    /// <summary>
+    /// The contract in one place: both lambda shapes on a single instance, each receiving its own
+    /// correctly typed values. `Boolean` is registered first; before the fix the `Byte` payload then
+    /// reused its delegate name and the generated bindings failed to compile (CS1678).
+    ///
+    /// Mylo keeps time; Oreo keeps hitting the meter.
+    /// </summary>
+    [Fact]
+    public void Metronome_OnBeatAndOnVelocity_CoexistOnOneInstance()
+    {
+        using var metronome = new Metronome(2);
+        var beats = new List<bool>();
+        var velocities = new List<sbyte>();
+
+        metronome.OnBeat(beat => beats.Add(beat));
+        metronome.OnVelocity(velocity => velocities.Add(velocity));
+
+        Assert.Equal(new List<bool> { true, false }, beats);
+        Assert.Equal(new List<sbyte> { -100, -60 }, velocities);
+    }
+
     [Fact]
     public void Metronome_OnTempo_DeliversDoublePayloadByValue()
     {

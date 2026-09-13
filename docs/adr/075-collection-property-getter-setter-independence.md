@@ -220,9 +220,10 @@ imports because it *has* a plan. Both render the same bodiless `public abstract 
 `var` gives the base `{ get; set; }` and the implementing subclass's own setter is not `CS0546`.
 
 Out of scope, unchanged: an **unexported** interface (ADR-101 drops `: IFoo` from the base list, and there is
-no declaration plan to spell the member from, so a subclass `override` still hits `CS0115`), and the same
-shape on an `abstract` sealed arm. Pinned by `Tier1AbstractInterfacePropertyTest`, the `aviary` fixture
-(`Feathered` / `Bird` / `Finch`) and `IntegrationTests/AbstractInterfacePropertyTests.cs`.
+no declaration plan to spell the member from, so a subclass `override` still hits `CS0115`; closed by the
+2026-09-13 amendment below), and the same shape on an `abstract` sealed arm. Pinned by
+`Tier1AbstractInterfacePropertyTest`, the `aviary` fixture (`Feathered` / `Bird` / `Finch`) and
+`IntegrationTests/AbstractInterfacePropertyTests.cs`.
 
 ### Question D — is a nullable collection setter (`var notes: List<String>?`) in v1?
 
@@ -480,3 +481,46 @@ an abstract C# method has no `DllImport`.
 Not fixed, noted: the abstract path's type mapping is still by simple name, so a class-declared
 `abstract fun` using a cross-namespace or collection type renders that type unqualified. Evidence:
 `Tier1AbstractMethodTest` and the `test/garage/` fixtures (`Vehicle`/`Truck`, `Register`/`Vault`/`StrongRoom`).
+
+**2026-09-13 amendment: the unexported-interface case scoped out above now renders the same
+`public abstract` declaration too, off a separately-planned catalog, with a named skip when the
+member's own type is unbridgeable.** The 2026-09-11 amendment's declaration walk reads the C# type
+off the ADR-113 interface declaration catalog, which is planned only for the exported `interfaces`
+bucket, so an exported abstract class inheriting `val`/`var` from an interface ADR-101 drops from
+the base list found no plan, `inheritedAbstractProperty` answered null, and the member vanished with
+no diagnostic while a concrete subclass's `override` still rendered `public override`, `CS0115` on
+the generated file itself.
+
+The fix plans the gap: at the ADR-113 declaration-catalog construction site (`NugetProcessor.kt`),
+every unexported `ClassKind.INTERFACE` supertype of an exported class (`getAllSuperTypes()`,
+transitive, deduplicated by qualified name) is now planned too, through a third
+`ForwardPropertyPlanner` whose `droppedProperties` stay deliberately unmerged into the warned set,
+the same reason the ADR-113 planner's own drop channel is unmerged: merging would warn on every
+concretely-implemented member of the unexported interface as well, not only the unimplemented one.
+`inheritedAbstractProperty` looks the member up on this catalog exactly as it already did for the
+exported case, so the base and the override read the same plan and cannot drift (`CS1715`/`CS0534`).
+On a miss, and only when the owner is an unexported `INTERFACE`, a new `emitInheritedAbstractPropertySkip`
+emits one named `SKIPPED_UNSUPPORTED_PROPERTY` at `<class>.<name>` (the class, not the interface,
+since the class is where the member is missing from), classifying the property's own type the same
+way the property planner would have. For the fixture's `val lining: Nesting.Lining`, `Lining` being a
+nested class classifies as `ForwardPlanSkipReason.UNDECLARED_CLASS`, so the message reads "its type
+`Lining` is a nested class or object never declared in C#". The diagnostic's *kind* is hardcoded to
+`SKIPPED_UNSUPPORTED_PROPERTY` rather than read off `reason.toDiagnosticKind()`: that helper `error()`s
+on the legacy-route reasons (`GENERIC`, `FLOW_PROTOCOL`, `CALLBACK_PROTOCOL`, …) a property can
+genuinely hold, and the kind here is positional (it names where the drop happened), not
+reason-derived. An unexported abstract **base class** owner is deliberately left silent by this same
+miss site: its members are not planned anywhere, so a miss there says nothing about bridgeability and
+would invent a reason for an ordinary type.
+
+Pinned by `Tier1AbstractUnexportedInterfacePropertyTest`, the fixture `hidden/Nesting.kt`
+(unexported: `val material: String`, `var height: Int`, `val lining: Nesting.Lining` where `Lining`
+is a nested class, deliberately unbridgeable) plus `aviary/Nester.kt` (`abstract class Nester :
+Nesting`, `class Wren : Nester` overriding all three), and
+`IntegrationTests/AbstractUnexportedInterfacePropertyTests.cs`, which also compiles a pure C#
+`PaperWren : Nester` subclass (`base(IntPtr.Zero)`) to prove the generated declaration is itself
+overridable from C#, not only from a further Kotlin subclass.
+
+No export, handle kind or ABI change; `LiveHandleTests` gains no row. Still open, **Inferred** (read,
+not exercised by a fixture): whether KSP's `getAllProperties()` surfaces an abstract `val` from an
+interface declared in a separate **dependency module** the same way it does for the same-module case
+this fixture covers (Tier 1 here uses two same-module packages only).

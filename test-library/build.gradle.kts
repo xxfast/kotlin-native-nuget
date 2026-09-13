@@ -191,6 +191,14 @@ nuget {
     authors = "xxfast"
     description = "A sample Kotlin/Native library packaged as NuGet"
     rootPackage = "io.github.xxfast.kotlin.native.nuget.test"
+    // ADR-066 §5 amendment: admit ONE out-of-root package so the rule
+    // `<packageId>.<full Kotlin package, PascalCased>` is rendered end to end
+    // (`dev.other.admitted.Billboard` → `TestLibrary.Dev.Other.Admitted.Billboard`). An explicit
+    // include *replaces* the `rootPackage` default (ADR-063 / issue #55), so the own package has
+    // to be listed here too. `dev.other.core` stays OUT on purpose: it is the load-bearing
+    // negative case for `Newsroom.sponsor`/`airwave`, `CatCam.onSponsor`, `Issue42Api` and
+    // `Issue42Derived`, and the two packages now differ by exactly one segment.
+    include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.admitted")
     // ADR-115 amendment: one waived marker, so this build shows both halves of the feature. Every
     // other `@RequiresOptIn` marker in `issue113/` stays unlisted and keeps being dropped.
     exportMarkers("io.github.xxfast.kotlin.native.nuget.test.issue113.ExperimentalDiet")

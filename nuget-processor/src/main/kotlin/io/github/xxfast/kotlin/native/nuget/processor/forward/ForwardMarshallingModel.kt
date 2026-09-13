@@ -251,6 +251,9 @@ internal sealed interface BridgeType {
     val isUndeclaredEnum: kotlin.Boolean = false,
     val isUndeclaredInterface: kotlin.Boolean = false,
     val isUndeclaredClass: kotlin.Boolean = false,
+    /** ADR-133: a Kotlin `object` at a member type position. Declared in C# as a static class,
+     *  which cannot be a parameter or return type (CS0722), wherever the object itself lives. */
+    val isObjectPosition: kotlin.Boolean = false,
     val optInMarker: kotlin.String? = null,
   ) : BridgeType
 

@@ -8,6 +8,7 @@ import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 
 /**
  * Detects `add{X}`/`remove{X}` (or `subscribe{X}`/`unsubscribe{X}`) method pairs where the
@@ -218,7 +219,7 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
 
   addFunction(
     FunSpec.builder("export_${classPrefix}_$addMethodName")
-      .addAnnotation(cNameAnnotation("${classPrefix}_$addMethodName"))
+      .addAnnotation(cNameAnnotation("${classPrefix}_$addMethodName", ownedBy(addMethod)))
       .addParameter("handle", cOpaquePointer)
       .addParameter("listenerPtr", cOpaquePointer)
       .addParameter("userData", cOpaquePointer)
@@ -236,10 +237,48 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
 
   addFunction(
     FunSpec.builder("export_${classPrefix}_$removeMethodName")
-      .addAnnotation(cNameAnnotation("${classPrefix}_$removeMethodName"))
+      .addAnnotation(cNameAnnotation("${classPrefix}_$removeMethodName", ownedBy(removeMethod)))
       .addParameter("handle", cOpaquePointer)
       .addParameter("subscriptionHandle", cOpaquePointer)
       .addCode(unsubscribeBody)
       .build()
   )
 }
+
+/**
+ * ADR-116 amendment (2026-09-13): a sealed arm's **stored-callback** `add`/`remove` pairs
+ * (ADR-037), the fourth legacy route re-keyed onto the arm after ADR-118's suspend, ADR-124's flow
+ * and the per-call lambda route. One selector for the three halves that must agree on the member
+ * set (the Kotlin export loop in `NugetProcessor`, `translateSealedClass` and the
+ * `hasStoredCallbackMethods` import gate), shaped after [forwardArmLambdaMethods].
+ *
+ * Pair detection runs on the structural candidate list and the routability refusals are applied to
+ * the pair as a whole: a refused half takes its partner with it, rather than leaving a half-pair
+ * whose `Dispose()` would call an export nothing emitted.
+ */
+internal fun KSClassDeclaration.forwardArmStoredCallbackPairs(
+  classifier: ForwardBridgeTypeClassifier,
+): List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
+  findStoredCallbackPairs(forwardArmCallbackCandidates().filter { it.hasLegacyLambdaParameter() })
+    .filter { (add, remove) ->
+      add.isArmCallbackRoutable(classifier) && remove.isArmCallbackRoutable(classifier)
+    }
+
+/**
+ * The interface-bridge (ADR-039) twin of [forwardArmStoredCallbackPairs]: a sealed arm's
+ * `add`/`remove` pair whose parameter is a Kotlin interface rather than a lambda, which binds as
+ * `IDisposable AddX(IListener listener)` on the arm.
+ *
+ * Selected from the candidates that carry **no** lambda parameter, the same partition
+ * `translateClass` makes for an ordinary class (`normalMethods`), so a pair cannot be claimed by
+ * both pair routes.
+ */
+internal fun KSClassDeclaration.forwardArmInterfaceBridgePairs(
+  classifier: ForwardBridgeTypeClassifier,
+): List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
+  findInterfaceBridgePairs(
+    forwardArmCallbackCandidates().filterNot { it.hasLegacyLambdaParameter() },
+  )
+    .filter { (add, remove) ->
+      add.isArmCallbackRoutable(classifier) && remove.isArmCallbackRoutable(classifier)
+    }

@@ -203,19 +203,24 @@ export prefix rather than a class name, exactly as the `suspend` and `Flow` rout
 
 ### A primitive payload {id="a-primitive-payload"}
 
-A `kotlin.*` primitive payload (`Int`, `Boolean`, `Double`, ...) crosses by value instead of going
-through `NugetMarshal.FromHandle`. From `test-library/src/nativeMain/kotlin/.../metronome/Metronome.kt`:
+A `kotlin.*` primitive payload (`Int`, `Boolean`, `Byte`, `Double`, ...) crosses by value instead of
+going through `NugetMarshal.FromHandle`. From
+`test-library/src/nativeMain/kotlin/.../metronome/Metronome.kt`:
 
 ```kotlin
 class Metronome(private val beats: Int) {
   fun onTick(listener: (Int) -> Unit) = repeat(beats) { listener(it + 1) }
   fun onBeat(listener: (Boolean) -> Unit) = repeat(beats) { listener(it % 2 == 0) }
+  fun onVelocity(listener: (Byte) -> Unit) = repeat(beats) { listener((it * 40 - 100).toByte()) }
   fun onTempo(listener: (Double) -> Unit) = repeat(beats) { listener(60.0 + it * 0.5) }
 }
 ```
 
-The generated delegate reads the argument directly, `Boolean` widening from the `byte` wire back to
-`bool`:
+The generated delegate reads the argument directly, `Boolean` widening from a `byte` wire back to
+`bool`. `Boolean` and `Byte` bind independently, `NugetBoolVoidCallback` and `NugetByteVoidCallback`,
+even though both cross an 8-bit value: a class declaring both a `(Boolean) -> Unit` and a
+`(Byte) -> Unit` per-call lambda parameter used to register `NugetByteVoidCallback` for both and fail
+the consumer's own compile (CS1678) the moment the two disagreed on `byte` vs `sbyte`:
 
 ```C#
 public void OnTick(Action<int> listener)
@@ -229,9 +234,18 @@ public void OnTick(Action<int> listener)
 
 public void OnBeat(Action<bool> listener)
 {
-    NugetByteVoidCallback nativeCallback = (byte arg0Byte, IntPtr userData) =>
+    NugetBoolVoidCallback nativeCallback = (byte arg0Byte, IntPtr userData) =>
     {
     bool arg0 = arg0Byte != 0;
+    listener(arg0);
+    };
+    ...
+}
+
+public void OnVelocity(Action<sbyte> listener)
+{
+    NugetByteVoidCallback nativeCallback = (sbyte arg0, IntPtr userData) =>
+    {
     listener(arg0);
     };
     ...
@@ -309,6 +323,10 @@ public void Cat_AddMoodListener_NoCallbackAfterDispose()
     Assert.Empty(recorded);
 }
 ```
+
+The same pair also binds when declared on a **sealed arm**, re-keyed onto the arm's own export
+prefix; see [Stored-callback and interface-bridge pairs on a sealed
+arm](interfaces-abstract-sealed.md#sealed-callback-pair-generated-c).
 
 ## C# implementing a Kotlin interface as a parameter
 
@@ -420,8 +438,9 @@ Be precise about what's supported here: the interface *parameter* shape on **thi
 
 - Converging the `add`/`remove` subscription route above onto that general bridge factory is not done; the two routes are separate machinery today, and the subscription route has its own known gaps (a non-Unit-returning or property-bearing subscription interface generates non-compiling Kotlin with no diagnostic), tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - Exception propagation from inside a C# callback back into Kotlin is not implemented (the forward-direction `ADR-024`/`ADR-028`/`ADR-029` machinery has no mirror here yet).
-- `Flow<T>` or a suspend lambda (`suspend (T) -> R`) as a function parameter is not implemented.
+- `Flow<T>` or a suspend lambda (`suspend (T) -> R`) as a function parameter is not implemented; since [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s 2026-09-13 amendment both are now a named `SKIPPED_UNSUPPORTED_INPUT` skip rather than a silent one, the same as any other lambda position with no legacy route to re-emit it (an `object`, an interface default reached through the interface type, an extension, a secondary constructor, a `List<(T) -> R>` element, or a lambda return anywhere but a top-level function).
 - `WrapArg<T>` only handles `string`/`int`/`long`/`float`/`double`/`bool` and `INugetHandle` at an **argument** position; an `sbyte`/`short`/`char`/`uint` argument, or a reference-underlying value-class argument, throws `NotSupportedException` at runtime rather than failing to build (see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)).
+- A per-call lambda-parameter method returning anything other than `Unit` (`fun f(cb: (Int) -> Unit): Int`) fails `packNuget` with a forward ABI mismatch rather than generating: every shipped example on this page returns `Unit` ([ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)).
 
 <seealso>
     <category ref="related">
@@ -435,6 +454,7 @@ Be precise about what's supported here: the interface *parameter* shape on **thi
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/037-stored-callbacks.md">ADR-037: Stored callbacks</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/039-interface-bridging.md">ADR-039: Interface bridging</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md">ADR-040: Interface return type mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md">ADR-084: C#-implemented Kotlin interfaces</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/102-aot-safe-forward-callbacks.md">ADR-102: AOT-safe forward callbacks</a>
     </category>

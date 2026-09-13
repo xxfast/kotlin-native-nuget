@@ -367,13 +367,57 @@ internal fun translate(
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
 
-  regularClasses.forEach { cls ->
+  // ADR-133: the owner walk is the sole declarer of a nested type, so a declaration whose parent
+  // is a class or object is routed into its owner's `nestedDeclarations` slot instead of the
+  // namespace. Every kind list has to be partitioned: one missed partition emits a namespace-level
+  // twin, which is CS0426 against every `Outer.Inner` reference (the pre-2026-09-07 flattening) or
+  // CS0101 outright (the issue #54/#110 lesson). A companion never reaches these lists (ADR-013
+  // folds it into its owner's statics) and neither does a sealed arm (ADR-009 declares it).
+  fun KSClassDeclaration.isNestedDeclaration(): Boolean = parentDeclaration is KSClassDeclaration
+
+  fun isOwnedBy(owner: KSClassDeclaration, declaration: KSClassDeclaration): Boolean =
+    (declaration.parentDeclaration as? KSClassDeclaration)?.qualifiedName?.asString() ==
+        owner.qualifiedName?.asString()
+
+  fun translateNestedOf(owner: KSClassDeclaration): List<CirDeclaration> = buildList {
+    regularClasses.filter { isOwnedBy(owner, it) }.forEach { cls ->
+      add(
+        translateClass(
+          cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
+          classifier, interfaceDeclarationCatalog,
+        ).copy(nestedDeclarations = translateNestedOf(cls)),
+      )
+    }
+    enums.filter { isOwnedBy(owner, it) }.forEach { enum ->
+      add(translateEnum(enum, context.libraryName))
+    }
+    interfaces.filter { isOwnedBy(owner, it) }.forEach { iface ->
+      add(translateInterface(iface, interfaceDeclarationCatalog, logger))
+      // ADR-040's backing wrapper nests BESIDE its interface (`Owner.Listener : IListener`)
+      // rather than at namespace root, which is the caveat ADR-133 closes.
+      interfaceBackingClasses
+        .filter { it.qualifiedName?.asString() == iface.qualifiedName?.asString() }
+        .forEach { backing ->
+          add(
+            translateInterfaceBackingClass(backing, context.libraryName, callableCatalog, tracker),
+          )
+        }
+    }
+    objects.filter { isOwnedBy(owner, it) }.forEach { obj ->
+      add(
+        translateObject(obj, context.libraryName, callableCatalog, tracker, logger)
+          .copy(nestedDeclarations = translateNestedOf(obj)),
+      )
+    }
+  }
+
+  regularClasses.filter { !it.isNestedDeclaration() }.forEach { cls ->
     namespaces.addDeclaration(
       namespaceOf(cls.packageName.asString()),
       translateClass(
         cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
         classifier, interfaceDeclarationCatalog,
-      ),
+      ).copy(nestedDeclarations = translateNestedOf(cls)),
     )
   }
 
@@ -392,14 +436,14 @@ internal fun translate(
     )
   }
 
-  enums.forEach { enum ->
+  enums.filter { !it.isNestedDeclaration() }.forEach { enum ->
     namespaces.addDeclaration(
       namespaceOf(enum.packageName.asString()),
       translateEnum(enum, context.libraryName),
     )
   }
 
-  interfaces.forEach { iface ->
+  interfaces.filter { !it.isNestedDeclaration() }.forEach { iface ->
     namespaces.addDeclaration(
       namespaceOf(iface.packageName.asString()),
       translateInterface(iface, interfaceDeclarationCatalog, logger),
@@ -412,22 +456,27 @@ internal fun translate(
   // fail fast rather than emit ambiguous code, mirroring the existing
   // ERROR_CSHARP_SIGNATURE_COLLISION style (`CirClassTranslator.kt`'s duplicate-constructor check).
   val existingTypeNamesByNamespace: MutableMap<String, MutableSet<String>> = mutableMapOf()
-  fun recordExistingTypeName(pkg: String, simpleName: String) {
-    existingTypeNamesByNamespace.getOrPut(namespaceOf(pkg)) { mutableSetOf() }.add(simpleName)
+  // ADR-133: keyed by the ENCLOSING-SCOPE name (`Shape.Circle`, `Owner.Nested`), not the bare
+  // simple name. A nested type only collides with something in the same scope, so the bare key
+  // also reported a sealed arm `Shape.Circle` as colliding with an unrelated top-level `Circle`.
+  fun recordExistingTypeName(declaration: KSClassDeclaration) {
+    existingTypeNamesByNamespace
+      .getOrPut(namespaceOf(declaration.packageName.asString())) { mutableSetOf() }
+      .add(declaration.nestedCsName())
   }
   (regularClasses + genericClasses + valueClasses + enums + objects).forEach { decl ->
-    recordExistingTypeName(decl.packageName.asString(), decl.simpleName.asString())
+    recordExistingTypeName(decl)
   }
   sealedClasses.forEach { sealed ->
-    recordExistingTypeName(sealed.packageName.asString(), sealed.simpleName.asString())
+    recordExistingTypeName(sealed)
     sealed.getSealedSubclasses().forEach { sub ->
-      recordExistingTypeName(sub.packageName.asString(), sub.simpleName.asString())
+      recordExistingTypeName(sub)
     }
   }
 
-  interfaceBackingClasses.forEach { iface ->
+  interfaceBackingClasses.filter { !it.isNestedDeclaration() }.forEach { iface ->
     val namespace: String = namespaceOf(iface.packageName.asString())
-    val backingName: String = iface.simpleName.asString()
+    val backingName: String = iface.nestedCsName()
     val collides: Boolean = existingTypeNamesByNamespace[namespace]?.contains(backingName) == true
     if (collides) {
       ForwardDiagnosticSink.emit(
@@ -461,10 +510,11 @@ internal fun translate(
     )
   }
 
-  objects.forEach { obj ->
+  objects.filter { !it.isNestedDeclaration() }.forEach { obj ->
     namespaces.addDeclaration(
       namespaceOf(obj.packageName.asString()),
-      translateObject(obj, context.libraryName, callableCatalog, tracker, logger),
+      translateObject(obj, context.libraryName, callableCatalog, tracker, logger)
+        .copy(nestedDeclarations = translateNestedOf(obj)),
     )
   }
 

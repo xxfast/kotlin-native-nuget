@@ -13,7 +13,7 @@ A Kotlin `class` becomes a C# `class` backed by an opaque `StableRef` handle, im
 | nullable exported class *parameter* (`Foo?`), on a constructor, method, extension, or top-level function | nullable handle argument | `null` rides `IntPtr.Zero`, no has-value/value pair needed; see A nullable class handle parameter below ([#131](https://github.com/xxfast/kotlin-native-nuget/issues/131)) |
 | two or more same-named methods | one C# overload set | numbered native export/extern name, unnumbered public name; see Method overloads below ([ADR-090](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md)) |
 | a method with a trailing run of defaulted parameters | omitting overload per suffix length | same `@JvmOverloads` rule as constructor defaults, see Method default parameters below ([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)) |
-| nested `class`/`object`/`interface`/`enum class` (at any depth) | never declared | skips named (`SKIPPED_NESTED_DECLARATION` on the declaration, `UNDECLARED_CLASS` on a member typed with it), except a companion object and a sealed subclass, which are still declared; see Nested classes and objects below ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)) |
+| nested `class`/`object`/`interface`/`enum class` (at any depth) | `Outer.Nested` (a real C# nested type) | under a non-generic, non-`inner` `class` or `object` owner; an `inner class`, a generic, `enum class`, `interface`, or sealed owner, and a nested `value class`, still skip named (`SKIPPED_NESTED_DECLARATION`); see Nested types below ([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)) |
 
 ## Kotlin
 
@@ -894,7 +894,11 @@ public void NarratorRate_SynthesizedOverload_UsesBoostDefaultOfOne()
         and <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md">ADR-101</a>),
         there is no C# base to inherit an overload from, so the override synthesizes its own,
         reading the default flags off the root of its <code>findOverridee()</code> chain, the
-        declaration furthest up that actually carries them. The interface route (<a
+        declaration furthest up that actually carries them. A sealed arm's override of a
+        <b>declined</b> base member (not unexported, but structurally skipped, e.g. an opt-in
+        marker) is the same shape: see
+        <a href="interfaces-abstract-sealed.md#sealed-method-declined-base-overload">An override of
+        a base member the base declined to plan</a>. The interface route (<a
         href="interfaces-abstract-sealed.md">Interfaces, abstract and sealed classes</a>) still
         synthesizes nothing in v1: adding a member to a generated C# interface would oblige every
         implementer to carry it. A defaulted interface member bound onto an implementing <b>class</b>
@@ -1068,79 +1072,243 @@ closure terminates rather than recursing forever, and a type whose package falls
 effective `include`/`rootPackage` scope is skipped with a named diagnostic instead of silently
 binding or breaking the build; see [Publishing Kotlin to C#](forward-overview.md#diagnostics).
 
-## Nested classes and objects {id="nested-classes-and-objects"}
+## Nested types {id="nested-classes-and-objects"}
 
-A public `class`, `object`, `interface`, or `enum class` nested inside another class is never
-declared in C#: only a top-level declaration is, along with the two nested shapes the generator
-already has a route for, a sealed subclass (nested under its base, [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md))
-and a companion object (folded into its owner's statics, see [Objects and companions](objects-and-companions.md)).
-Every other nested declaration now skips named, whether it lives in this module or is reached
-through the [reachability closure](#classes-declared-in-a-dependency-module) from a dependency
-module ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)
-2026-09-07 amendment). Before this, a module-local nested class or object vanished with no
-diagnostic at all, and a nested dependency class or object was admitted and declared flattened at
-namespace root under its simple name while every reference still spelled it `Outer.Inner`,
-`CS0426`.
+A public `class`, `object`, `interface`, or `enum class` declared inside a non-generic, non-`inner`
+`class` or `object` owner is declared as a real C# nested type, `Outer.Nested`, at any depth, whether
+the owner is module-local or an admitted dependency type. This generalises the nesting rule a sealed
+subclass already followed ([ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md))
+and a companion object still follows (folded into its owner's statics, see
+[Objects and companions](objects-and-companions.md)) to every nested kind
+([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)).
 
-From `test-library/src/nativeMain/kotlin/.../issue54/ProbeOuter.kt`:
+| Kotlin nested kind | C# shape |
+|---|---|
+| `class` | `public class Outer.Nested : IDisposable, INugetHandle`, same members as a top-level class |
+| `object` | `public static class Outer.Defaults`, statics only, exactly as a top-level `object` renders |
+| `enum class` | `public enum Outer.Kind`, with its extension class hoisted to the top level, `OuterKindExtensions` |
+| `interface` | `public interface Outer.IListener` (the `I` on the last enclosing segment only), with its [ADR-040](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md) backing wrapper nested beside it, `Outer.Listener` |
+
+The `@CName` export prefix carries the whole enclosing chain, lowercased and `_`-joined
+(`aviary_perch_create`; `aviary_middle_inner_create` two levels down), so a nested type never
+collides on a C entry point with an unrelated top-level declaration of the same simple name
+([ADR-117](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/117-forward-abi-collision-names-owning-declarations.md)).
+A top-level declaration's chain has exactly one element, so no previously released entry point
+changes.
+
+**Deferred owner shapes still skip named**, `SKIPPED_NESTED_DECLARATION`, its reason now naming
+which shape defers it: an `inner class` owner (its constructor needs the outer instance), a generic
+owner (`Outer<T>.Nested` would itself be generic in C#), an `enum class` owner, an `interface`
+owner, a sealed base or arm owner (ADR-009 owns that block already), and a nested `value class`
+candidate regardless of its owner.
+
+### Kotlin {id="nested-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../nested/Aviary.kt`:
 
 ```kotlin
-class ProbeOuter {
+class Aviary(val name: String) {
 
-  /** Module-local, nested, and therefore never declared in C#. Nullable member on purpose. */
-  data class Nested(val x: String?)
+  /** Nested `class`: `public class Aviary.Perch : IDisposable, INugetHandle`. */
+  class Perch(val height: Int) {
+    fun describe(): String = "perch@$height"
+  }
 
-  /** Module-local, nested, `OBJECT` kind: the cell a class-only gate would miss. */
-  object Marker
+  /** Nested `object`: `public static class Aviary.Defaults`, statics only. */
+  object Defaults {
+    fun capacity(): Int = 12
+  }
 
-  /** Non-null return position. */
-  fun make(): Nested = Nested("n")
+  /**
+   * Nested `enum class`, with a property so the extension class is actually rendered: it must be
+   * the TOP-LEVEL `AviaryKindExtensions`, because C# (CS1109) forbids extension methods in a
+   * nested class.
+   */
+  enum class Kind(val label: String) {
+    INDOOR("indoor"),
+    OUTDOOR("outdoor"),
+  }
 
-  /** Nullable return position: today the `NULLABLE` branch of the generic skip. */
-  fun maybe(): Nested? = null
+  /** Nested `interface`: `Aviary.IKeeper`, with the ADR-040 wrapper `Aviary.Keeper` beside it. */
+  interface Keeper {
+    fun greet(): String
+  }
 
-  /** Nested-object return position. */
-  fun single(): Marker = Marker
+  /** Depth-2 owner: [Middle.Inner] is two levels in, so the prefix chain has three segments. */
+  class Middle {
+    class Inner(val depth: Int) {
+      fun describe(): String = "inner@$depth"
+    }
+  }
 
-  /** Control: the sibling that must survive the gate. */
-  val label: String = "outer"
+  /** Return position, nested class: mints a handle the consumer disposes. */
+  fun perchAt(height: Int): Perch = Perch(height)
 
-  companion object {
-    /** Carve-out guard: a companion is nested too, but it must keep bridging as a static factory. */
-    fun make(): ProbeOuter = ProbeOuter()
+  /** Parameter position, nested class: the handle has to unwrap back into Kotlin. */
+  fun heightOf(perch: Perch): Int = perch.height
+
+  /** Property position, nested enum. */
+  val habitat: Kind = Kind.OUTDOOR
+
+  /** Parameter position, nested interface: Kotlin calls back into a C# implementation. */
+  fun greetVia(keeper: Keeper): String = "${keeper.greet()} @ $name"
+
+  /** Return position, nested interface: the ADR-040 wrapper, nested beside its interface. */
+  fun currentKeeper(): Keeper = object : Keeper {
+    override fun greet(): String = "hi from $name"
   }
 }
 ```
 
-Generated C#: `ProbeOuter` itself still binds, with `Label` and the companion's static `Make()`.
-Neither `Nested` nor `Marker` appears anywhere in the assembly, and `ProbeOuter` carries no `Make`
-instance method, no `Maybe`, and no `Single`. The declaration itself warns once:
+### Generated C# {id="nested-generated-c"}
+
+From `Interop.cs`. Every nested kind lands inside `Aviary`'s own block, one level in, plus the
+depth-2 `Middle.Inner`:
+
+```C#
+public class Aviary : IDisposable, INugetHandle
+{
+    // ... Aviary's own members ...
+
+    public class Middle : IDisposable, INugetHandle
+    {
+        // ...
+        public class Inner : IDisposable, INugetHandle
+        {
+            // exports aviary_middle_inner_create, aviary_middle_inner_get_depth, ...
+        }
+    }
+
+    public class Perch : IDisposable, INugetHandle
+    {
+        // exports aviary_perch_create, aviary_perch_get_height, aviary_perch_describe, ...
+    }
+
+    public enum Kind
+    {
+        Indoor = 0,
+        Outdoor = 1,
+    }
+
+    public interface IKeeper : IDisposable
+    {
+        string Greet();
+    }
+
+    public sealed class Keeper : IKeeper, IDisposable, INugetHandle
+    {
+        // exports aviary_keeper_greet, aviary_keeper_dispose
+    }
+
+    public static class Defaults
+    {
+        // exports aviary_defaults_capacity
+    }
+}
+
+public static class AviaryKindExtensions
+{
+    public static string Label(this Aviary.Kind aviarykind)
+        => Marshal.PtrToStringUTF8(Native_GetLabel((int)aviarykind))!;
+}
+```
+
+An `object` owner declares a nested class through the same route: `Registry.Entry` renders as
+`public class Entry` inside `public static class Registry`, exported as `registry_entry_create`.
+
+### Using it from C# {id="nested-using-it-from-c"}
+
+From `IntegrationTests/NestedTypesTests.cs`. The nested class round-trips through a return and a
+parameter position:
+
+```C#
+[Fact]
+public void NestedClass_ReturnedFromTheOwner_AndPassedBackIn()
+{
+    using var aviary = new Aviary("Oreo");
+    using var perch = aviary.PerchAt(5);
+
+    Assert.Equal("perch@5", perch.Describe());
+    Assert.Equal(5, aviary.HeightOf(perch));
+}
+```
+
+The nested enum reads from a property and its extension method stays callable, off the top-level
+extension class:
+
+```C#
+[Fact]
+public void NestedEnum_ExtensionClass_StaysAtNamespaceLevel()
+{
+    Assert.Null(typeof(Aviary).GetNestedType("KindExtensions"));
+    Assert.Equal("outdoor", Aviary.Kind.Outdoor.Label());
+}
+```
+
+The nested interface is implemented in C# and called back from Kotlin:
+
+```C#
+private sealed class CountingKeeper : Aviary.IKeeper
+{
+    public int Greetings { get; private set; }
+
+    public string Greet()
+    {
+        Greetings++;
+        return "hello from CSharp";
+    }
+
+    public void Dispose() { }
+}
+
+[Fact]
+public void NestedInterface_ImplementedInCSharp_IsCalledBackFromKotlin()
+{
+    using var aviary = new Aviary("Oreo");
+    var keeper = new CountingKeeper();
+
+    Assert.Equal("hello from CSharp @ Oreo", aviary.GreetVia(keeper));
+    Assert.Equal(1, keeper.Greetings);
+}
+```
+
+A dependency-module nested type (`Broadcast.Schedule`/`Broadcast.AdBand`/`Broadcast.Defaults`) is
+declared exactly the same way as a module-local one, once its owner (`Broadcast`) is itself admitted
+through an ordinary member-type edge (`Newsroom.broadcast(): Broadcast`,
+[ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md)).
+The owner walk is the sole declarer, so no nested declaration is ever also flattened to namespace
+root, whether it comes from this module or a dependency; see
+`IntegrationTests/NestedClassGateTests.cs`. `LeakTests/LiveHandleTests.cs` Row 1a mints and releases
+a nested class handle through the same `NugetHandles` route Row 1 measures for a top-level class:
+nesting adds no new mint path.
+
+### An `object` at a member position stays CS0722 {id="nested-object-position"}
+
+A member returning or taking a Kotlin `object` type, nested or top-level, is still absent. A Kotlin
+`object` renders as a C# **static** class, and a static type cannot appear at a parameter or return
+position (CS0722); this is not a nesting limitation, it is a pre-existing hazard the old
+nested-declaration gate happened to also cover, so it now has its own named skip, `OBJECT_POSITION`
+(folded into the `SKIPPED_UNSUPPORTED_TYPE` diagnostic kind):
 
 ```
-[nuget:SKIPPED_NESTED_DECLARATION] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.ProbeOuter.Nested: nested class `io.github.xxfast.kotlin.native.nuget.test.issue54.ProbeOuter.Nested` is never declared in C# (only top-level declarations, sealed subclasses and companions are). move it to the top level of its file
-    at .../ProbeOuter.kt:47
+[nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.ProbeOuter.single: its type `io.github.xxfast.kotlin.native.nuget.test.issue54.ProbeOuter.Marker` is a Kotlin `object`, declared in C# as a static class, which cannot appear at a parameter or return position (CS0722). `io.github.xxfast.kotlin.native.nuget.test.issue54.ProbeOuter.Marker` is a Kotlin `object`, which is declared in C# as a static class (its members are callable as `io.github.xxfast.kotlin.native.nuget.test.issue54.ProbeOuter.Marker.Member()`), and C# forbids a static type at a parameter or return position (CS0722), so every member typed with it is skipped rather than emitted as uncompilable C#; return a regular class, or call the object`s members directly
+    at .../ProbeOuter.kt:76
 ```
 
-A member typed with a nested class or object, at a non-null, nullable, or property position, skips
-with `SKIPPED_UNSUPPORTED_TYPE` naming the new `UNDECLARED_CLASS` reason (a nullable position
-reports `UNDECLARED_CLASS`, not `NULLABLE`):
+`ProbeOuter.Marker` itself is still declared as `public static class ProbeOuter.Marker`; only the
+member returning it (`single()`) is absent.
 
-```
-[nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.schedule: its type `io.github.xxfast.kotlin.native.nuget.test.models.Broadcast.Schedule` is a nested class or object never declared in C# (UNDECLARED_CLASS). `io.github.xxfast.kotlin.native.nuget.test.models.Broadcast.Schedule` is nested inside another declaration, and a nested class or object is never declared in C# (only top-level ones are, plus sealed subclasses and companion objects), so every member typed with it is skipped rather than emitted as a dangling reference; move it to the top level of its file
-    at .../Newsroom.kt:90
-```
+### An owner-scope name collision is fatal {id="nested-owner-scope-collision"}
 
-The same gate closes the ADR-066 reachability closure's matching hole: a nested dependency
-`class`/`object` (`Broadcast.Schedule`, `Broadcast.Defaults`, declared one Gradle module away in
-`:test-models`) is now refused admission outright, with its own `SKIPPED_NESTED_DECLARATION`
-warning, instead of being declared at namespace root under a name nothing resolves against. The
-owning dependency class, `Broadcast`, still generates and constructs, and its unrelated members
-still bind; see `IntegrationTests/NestedClassGateTests.cs`.
-
-The rule holds at any nesting depth: `class A { class B { class C } }` gives `B` and `C` each their
-own `SKIPPED_NESTED_DECLARATION` warning, every public declaration named exactly once regardless of
-how deep it sits ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)
-2026-09-11 amendment).
+Kotlin permits a nested type named exactly like its owner, and a nested type named like a
+PascalCased member of its owner (`class Config` beside `val config: Config`); C# forbids both
+(CS0542 and CS0102 respectively). Both are a fatal `ERROR_CSHARP_SIGNATURE_COLLISION`, naming the
+nested declaration and the C# name it collides with, raised after the generated C# and Kotlin export
+files are both written (the colliding nested type is skipped, not the whole module, so the ABI
+contract check still runs over everything else). This is why the fixture above names its accessors
+`perchAt`, `habitat`, and `currentKeeper` rather than `perch`, `kind`, and `keeper`: a `Perch()`
+method, a `Kind` property, or a `Keeper()` method beside the nested types `Perch`, `Kind`, and
+`Keeper` would each be exactly this collision.
 
 <note>
     <p>The generated code itself is always <code>global::</code>-qualified, so a generated type
@@ -1173,6 +1341,10 @@ how deep it sits ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/m
 - An `expect`/`actual` pair's function defaults are only surfaced on the top-level-function route;
   a class method, `object` member, companion member, or extension declared on an `expect` class
   gets no synthesized overload. See [expect/actual declarations](expect-actual.md#function-default-parameters-on-a-top-level-expect-function).
+- Nested types: an `inner class`, a generic, `enum class`, `interface`, or sealed base/arm owner,
+  and a nested `value class` regardless of its owner, stay a named `SKIPPED_NESTED_DECLARATION`
+  skip. An extension function or property on a nested type still spells the bare simple name and
+  fails as a forward ABI mismatch rather than binding; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 
 <seealso>
     <category ref="related">
@@ -1196,5 +1368,6 @@ how deep it sits ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/m
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md">ADR-090: Ordinary-class method overloads</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md">ADR-091: Constructor default parameters</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md">ADR-096: Function default parameters</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md">ADR-133: Nested types</a>
     </category>
 </seealso>

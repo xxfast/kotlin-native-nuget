@@ -226,6 +226,22 @@ for the collection-return leak this harness proved and closed.
 Only forward handles are counted; the reverse side's own `StableRef` sites are not (see
 [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)).
 
+**Row 1a**, `NestedClass_CreateAndDispose_ReturnsToBaseline`, proves a nested class mints and
+releases through the exact same `NugetHandles` route Row 1 measures for a top-level class
+(`aviary_perch_create`/`aviary_perch_dispose`): nesting a declaration
+([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md))
+adds no new mint path, so this is a checklist row confirming that, not a new mechanism. See
+[Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects).
+
+**Row 6b**, `InterfaceReceiverExtension_CSharpImplementedPet_ReleasesTransferHandle`, covers the
+same ADR-084 transfer handle Row 6 measures for an interface *argument*, one slot to the left: a
+C#-implemented `IPet` as the RECEIVER of an extension function. `HandleOf` mints a `StableRef` per
+crossing since the bridge object has no `_handle` of its own, so the receiver needs the same
+`finally`-dispose the argument position already had, since
+[ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md)
+gave the receiver the shared prelude/cleanup pipeline for the first time. See
+[Extensions: Interface receivers](extensions.md#interface-receivers).
+
 Rows 8g through 8j cover every route with a handle-passed callback payload, now that
 [ADR-036](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md)'s
 2026-09-11 ownership amendment gives the C# side sole ownership of the free (see
@@ -242,6 +258,38 @@ Rows 8g through 8j cover every route with a handle-passed callback payload, now 
   `String`.
 - **8j**, `InterfaceBridge_StringPayload_ReturnsToBaseline`, the interface-bridge route
   (`CatEventSource.Trigger`), which had freed the same handle three times before the fix.
+- **8k**, `SealedArm_StoredCallbackPair_ReturnsToBaseline`, the ADR-037 stored-callback `addX`/`removeX`
+  pair declared on a sealed arm (`Job.Running.AddTicker`/`RemoveTicker`): subscribe, trigger once,
+  dispose. The receiver is a `StableRef<Job.Running>` rather than an ordinary class's, so a re-key
+  that retains the receiver per subscription instead of borrowing it shows up here. See
+  [Stored-callback and interface-bridge pairs on a sealed
+  arm](interfaces-abstract-sealed.md#sealed-callback-pair-generated-c).
+- **8l**, `SealedArm_InterfaceBridgePair_ReturnsToBaseline`, the same pattern for the ADR-039
+  interface-bridge pair on a `data object` arm (`Job.Idle.AddWatcher`/`RemoveWatcher`), plus one
+  retained handle per `String` payload the C# thunk owns.
+
+No row covers `Metronome`'s by-value primitive payloads (`Int`, `Boolean`, `Byte`, `Double`): a
+by-value payload mints no `StableRef` on the Kotlin side to begin with, and the per-call `GCHandle`
+that carries the delegate itself is freed in the calling method's own `finally`, so there is nothing
+for `LiveHandles` to measure.
+
+Rows 9e through 9g cover a suspend call returning the sealed base itself, now that it completes
+through the generated discriminator instead of failing to compile (see
+[A `suspend fun` returning the sealed base](interfaces-abstract-sealed.md#sealed-method-suspend-base-generated-c)):
+
+- **9e**, `Suspend_ReturningTheSealedBase_ReturnsToBaseline`: Kotlin mints the `StableRef` on the
+  concrete arm, and the completion hands that same handle to `Job.FromHandle`, which discriminates
+  and constructs the arm wrapper that then owns it. A completion that reads the discriminator
+  through a second handle, or mints one to read the type and forgets it, shows up here and nowhere
+  in the functional tests, which assert only the payload.
+- **9f**, `Suspend_ReturningTheNullableSealedBase_ReturnsToBaseline`, both branches in one crossing:
+  the null return mints no handle at all (a guard that releases something it never received goes
+  negative here), and the arm return goes through the same discriminated read as 9e.
+- **9g**, `Suspend_ReturningTheSealedBase_Throws_ReturnsToBaseline`, the throw path of the same
+  route: when the body throws, no result is minted and the ADR-128/130 error envelope crosses
+  instead, pinning that `NugetErrorNative.BuildException` releases what it was handed. Run at 5000
+  iterations, the same tight-loop precedent as the no-suspension-point row above, since the body has
+  no suspension point either.
 
 <note>
     <p><code>NugetMarshal.LiveHandles</code> is process-global: any other handle-crossing code

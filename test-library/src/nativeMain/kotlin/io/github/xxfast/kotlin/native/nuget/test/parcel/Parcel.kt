@@ -21,3 +21,23 @@ open class Parcel<T>(val value: T)
 class NamedParcel(name: String) : Parcel<String>(name) {
   fun own(): String = "own:$value"
 }
+
+/**
+ * ADR-101 amendment (2026-09-13) sibling of [Parcel]: the base function's parameter mentions `T`,
+ * so KSP hands the subclass a *substituted* `describe(tag: String)` parented to the subclass.
+ *
+ * The crate is Oreo's cat-treat crate. He describes its contents at length, to nobody.
+ */
+open class Crate<T>(val item: T) {
+  fun describe(tag: T): String = "$tag:$item"
+}
+
+/**
+ * Declares an overload of [Crate.describe] with a *different* signature. Only this one is the
+ * subclass's own declaration: the substituted `describe(String)` must stay off `LabelledCrate`.
+ *
+ * Mylo labels his crate by number, because he cannot read.
+ */
+class LabelledCrate(item: String) : Crate<String>(item) {
+  fun describe(tag: Int): String = "#$tag:$item"
+}

@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using TestLibrary.Issue115;
+using TestLibrary.Issue54;
 
 namespace IntegrationTests;
 
@@ -123,6 +124,91 @@ public class SealedSubclassMethodTests
         int[] arities = typeof(Job.Running)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
             .Where(method => method.Name == "Step")
+            .Select(method => method.GetParameters().Length)
+            .OrderBy(arity => arity)
+            .ToArray();
+
+        Assert.Equal([1, 2], arities);
+    }
+
+    // ---- ADR-116's 2026-09-13 amendment: an override whose base member the planner declined. ----
+
+    /// <summary>
+    /// <c>Job.tag</c> is <c>@Unstable</c> (an ADR-115 <c>@RequiresOptIn</c> marker), so the base's
+    /// own plan is structurally declined and the base binds no <c>Tag</c> at all. The arm's
+    /// <c>@OptIn</c> override binds, and because nothing on the base carries the ADR-096 omitting
+    /// overload for it, the arm owes its own: the short-arity call has to compile on a
+    /// <c>Job.Running</c>-typed reference and answer exactly what the full-arity call with the
+    /// declared default answers.
+    /// <para>
+    /// This is CS1501 today — <c>sealedSubclassEntries</c> returns early on any <c>override</c>
+    /// whose overridee is declared on the sealed base, planned or not, and it reads raw
+    /// <c>hasDefault</c> off the override's parameters, which is always <c>false</c>.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Tag_ShortArityOnAnArmWhoseBaseMemberWasDeclined_AppliesTheDeclaredDefault()
+    {
+        using var factory = new JobFactory();
+        using Job.Running oreo = factory.Running(42);
+
+        Assert.Equal(oreo.Tag("hallway", "!"), oreo.Tag("hallway"));
+        Assert.Equal("hallway42!", oreo.Tag("hallway"));
+    }
+
+    /// <summary>
+    /// The declared arity, which binds today: the pair is what tells "the overload was synthesized"
+    /// apart from "the declared binding silently changed shape".
+    /// </summary>
+    [Fact]
+    public void Tag_FullArityOnTheArm_PassesBothArgumentsThrough()
+    {
+        using var factory = new JobFactory();
+        using Job.Running oreo = factory.Running(42);
+
+        Assert.Equal("hallway42?", oreo.Tag("hallway", "?"));
+    }
+
+    /// <summary>
+    /// The absence half, asserted by reflection because a base-typed call could not compile either
+    /// way: an opt-in-marked base member is not part of the C# surface, so <c>Job</c> declares no
+    /// <c>Tag</c> in any arity — and neither does <c>Job.Idle</c>, which inherits the declined
+    /// member without overriding it. Enumerated rather than <c>GetMethod</c> so a wrong
+    /// implementation that puts <em>two</em> <c>Tag</c> overloads on the base fails here instead of
+    /// throwing <c>AmbiguousMatchException</c>.
+    /// </summary>
+    [Fact]
+    public void Tag_OnTheDecliningBaseAndOnANonOverridingArm_IsAbsentEntirely()
+    {
+        string[] onBase = typeof(Job)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .Where(method => method.Name == "Tag")
+            .Select(method => method.ToString() ?? "Tag")
+            .OrderBy(signature => signature, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(onBase.Length == 0, $"Job must declare no Tag: {string.Join(", ", onBase)}");
+
+        string[] onIdle = typeof(Job.Idle)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .Where(method => method.Name == "Tag")
+            .Select(method => method.ToString() ?? "Tag")
+            .OrderBy(signature => signature, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(onIdle.Length == 0, $"Job.Idle must declare no Tag: {string.Join(", ", onIdle)}");
+    }
+
+    /// <summary>
+    /// Both arities exist as two declared methods on the arm, not one binding with a C#-side
+    /// default parameter answering both calls.
+    /// </summary>
+    [Fact]
+    public void Tag_IsDeclaredTwiceOnTheArm_OnceForEachArity()
+    {
+        int[] arities = typeof(Job.Running)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+            .Where(method => method.Name == "Tag")
             .Select(method => method.GetParameters().Length)
             .OrderBy(arity => arity)
             .ToArray();
@@ -286,14 +372,19 @@ public class SealedSubclassMethodTests
     }
 
     /// <summary>
-    /// ROADMAP line 39's literal example: a nested interface return. <c>rootInterfaces</c> never
-    /// declares <c>NestedListenerOwner.Listener</c>, so binding it would emit a dangling
-    /// <c>TestLibrary.Issue54.IListener</c> and fail the consumer compile with CS0246.
+    /// ROADMAP line 39's literal example, inverted by ADR-133: a nested interface is now DECLARED
+    /// as the C# nested type <c>NestedListenerOwner.IListener</c>, so the arm's nested-interface
+    /// return binds instead of being dropped. The return type is what this cell pins: it must be
+    /// the nested spelling, never a namespace-root <c>IListener</c> (CS0246 in every consumer).
     /// </summary>
     [Fact]
-    public void PickNested_NestedInterfaceReturnOnASealedArm_IsAbsent()
+    public void PickNested_NestedInterfaceReturnOnASealedArm_Binds()
     {
-        Assert.Null(typeof(Job.Running).GetMethod("PickNested"));
+        var pickNested = typeof(Job.Running).GetMethod("PickNested");
+
+        Assert.NotNull(pickNested);
+        Assert.Same(typeof(NestedListenerOwner.IListener), pickNested!.ReturnType);
+        Assert.Same(typeof(NestedListenerOwner), pickNested.ReturnType.DeclaringType);
     }
 
     /// <summary>
@@ -608,6 +699,119 @@ public class SealedSubclassMethodTests
         Assert.IsAssignableFrom<Job>(oreo);
     }
 
+    // ---- The sealed *base* (not an arm) at a suspend return: Task<Job> via Job.FromHandle. ----
+
+    /// <summary>
+    /// The defect this section pins: when a <c>suspend fun</c> returns the sealed <em>base</em>,
+    /// the return type is spelled correctly as <c>Task&lt;Job&gt;</c> but the completion renders
+    /// <c>t.SetResult(new Job(resultPtr))</c>, and <c>Job</c> is <c>public abstract class</c>, so
+    /// the consumer's <c>Interop.cs</c> fails CS0144 ("cannot create an instance of the abstract
+    /// type") and nothing in the assembly compiles. The Kotlin half already mints the StableRef on
+    /// the concrete arm, so the completion only has to read it through
+    /// <c>Job.FromHandle(resultPtr)</c>, the discriminator the synchronous <c>Next()</c> above
+    /// already goes through.
+    /// <para>
+    /// The answer is a <em>different</em> arm than the receiver on purpose: a completion that
+    /// constructs the receiver's type by name, or reads the discriminator off the wrong handle,
+    /// fails on <c>Code</c> rather than passing by luck. Oreo is 4% down the hallway and the next
+    /// job is the finished one at 5.
+    /// </para>
+    /// <para>
+    /// <c>using</c>, not <c>await using</c>: the base is only <c>IDisposable</c>
+    /// (<c>CirSealedRenderer</c> puts <c>IAsyncDisposable</c> on the suspending arms alone), so
+    /// <c>await using</c> on a <c>Job</c>-typed local is CS8410. The arm's synchronous
+    /// <c>Dispose()</c> cancels and disposes its scope before releasing the handle, so a
+    /// suspending arm held as the base still cleans up both.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task NextLaterAsync_SealedBaseAtASuspendReturnOnAnArm_DiscriminatesToTheOtherArm()
+    {
+        using var factory = new JobFactory();
+        await using Job.Running oreo = factory.Running(4);
+
+        using Job next = await oreo.NextLaterAsync();
+
+        Job.Done done = Assert.IsType<Job.Done>(next);
+        Assert.Equal(5, done.Code);
+    }
+
+    /// <summary>
+    /// The ordinary-class owner, dispatching across all three arm shapes from one
+    /// <c>Task&lt;Job&gt;</c> completion: a <c>data object</c> arm, a payload <c>data class</c>
+    /// arm, and a second <c>data class</c> arm. A completion pinned to a single constructor cannot
+    /// pass all three, and the payloads are distinct so a wrong discriminator is a wrong value.
+    /// </summary>
+    [Fact]
+    public async Task NextLaterAsync_SealedBaseOnAnOrdinaryClass_DispatchesPerArm()
+    {
+        using var factory = new JobFactory();
+
+        using Job idle = await factory.NextLaterAsync(-1);
+        using Job running = await factory.NextLaterAsync(7);
+        using Job done = await factory.NextLaterAsync(100);
+
+        Assert.IsType<Job.Idle>(idle);
+        Assert.Equal(7, Assert.IsType<Job.Running>(running).Progress);
+        Assert.Equal(100, Assert.IsType<Job.Done>(done).Code);
+    }
+
+    /// <summary>
+    /// The nullable twin, <c>Task&lt;Job?&gt;</c>: the branch one step up in the same renderer,
+    /// which spells <c>resultPtr == IntPtr.Zero ? null : new Job(resultPtr)</c> and carries the
+    /// identical CS0144. Both branches in one test, because a fix that reads the null guard right
+    /// and the handle wrong (or the reverse) passes on one of them alone. Oreo at 100% is already
+    /// at the bowl, so there is no next job for him.
+    /// </summary>
+    [Fact]
+    public async Task NextOrNullLaterAsync_NullableSealedBase_ReadsNullAsNullAndAnArmAsTheArm()
+    {
+        using var factory = new JobFactory();
+        await using Job.Running finished = factory.Running(100);
+        await using Job.Running oreo = factory.Running(12);
+
+        Assert.Null(await finished.NextOrNullLaterAsync());
+
+        using Job? next = await oreo.NextOrNullLaterAsync();
+        Assert.Equal(13, Assert.IsType<Job.Done>(next).Code);
+    }
+
+    /// <summary>
+    /// The throw path of the same route. When the body throws, no result handle is minted, so the
+    /// discriminated read is never reached and only the ADR-128/130 error envelope crosses:
+    /// Kotlin's <c>IllegalStateException</c> arrives as
+    /// <c>KotlinInvalidOperationException : InvalidOperationException</c>. The non-throwing input
+    /// is asserted beside it so the sentinel is a branch rather than the whole member.
+    /// </summary>
+    [Fact]
+    public async Task NextOrThrowLaterAsync_SealedBaseSuspendThatThrows_PropagatesAndStillBinds()
+    {
+        using var factory = new JobFactory();
+        await using Job.Running oreo = factory.Running(4);
+
+        using Job next = await oreo.NextOrThrowLaterAsync(3);
+        Assert.Equal(7, Assert.IsType<Job.Done>(next).Code);
+
+        InvalidOperationException failure =
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(
+                async () => await oreo.NextOrThrowLaterAsync(-1));
+        Assert.Contains("backwards down the hallway", failure.Message);
+    }
+
+    /// <summary>
+    /// The second spelling site: the sealed base at a <em>top-level</em> <c>suspend fun</c> on the
+    /// ADR-007 static class. It has its own return speller, so a fix applied to the class route
+    /// alone leaves this one emitting <c>new Job(resultPtr)</c> and the assembly still fails to
+    /// compile.
+    /// </summary>
+    [Fact]
+    public async Task AnyNextLaterAsync_TopLevelSuspendReturningTheSealedBase_UsesFromHandle()
+    {
+        using Job next = await JobSample.AnyNextLaterAsync(3);
+
+        Assert.Equal(3, Assert.IsType<Job.Done>(next).Code);
+    }
+
     // ---- ADR-124: the Flow / StateFlow route, re-keyed so a sealed arm is a valid owner. ----
 
     /// <summary>
@@ -856,16 +1060,28 @@ public class SealedSubclassMethodDiagnosticsTests
                 string.Join("\n  ", named));
         }
     }
-
     /// <summary>
-    /// The nested-interface return keeps the diagnostic an ordinary class already gets for the same
-    /// shape: the type is unsupported, not the routing. This is the row of ADR-116's table that the
-    /// post-process must leave alone.
+    /// Inverted by ADR-133: the nested interface is declared now, so the arm's nested-interface
+    /// return binds and nothing about it is skipped. A surviving diagnostic would mean one half of
+    /// the pipeline still treats a nested declaration as undeclarable while the other emits it.
     /// </summary>
     [Fact]
-    public void PickNested_NestedInterfaceReturnOnASealedArm_IsNamedAsAnUnsupportedType()
+    public void PickNested_NestedInterfaceReturnOnASealedArm_IsNotNamedAsSkipped()
     {
-        AssertNamed($"{Package}.Job.Running.pickNested", "SKIPPED_UNSUPPORTED_TYPE");
+        foreach ((string path, IReadOnlyList<Diagnostic> entries) in DiagnosticFiles())
+        {
+            string[] named = entries
+                .Where(entry =>
+                    entry.Declaration == $"{Package}.Job.Running.pickNested" &&
+                    entry.Kind.StartsWith("SKIPPED_", StringComparison.Ordinal))
+                .Select(entry => $"{entry.Kind} {entry.Declaration}")
+                .ToArray();
+
+            Assert.True(
+                named.Length == 0,
+                $"{path} still names the nested-interface return ADR-133 binds:\n  " +
+                string.Join("\n  ", named));
+        }
     }
 
     /// <summary>
@@ -888,6 +1104,10 @@ public class SealedSubclassMethodDiagnosticsTests
             $"{Package}.Job.Running.next",
             $"{Package}.Job.Running.finish",
             $"{Package}.Job.Running.pick",
+            // ADR-116's 2026-09-13 amendment: the arm's override of a declined base member
+            // binds at its declared arity, so a SKIPPED_ line naming it is a false alarm. The
+            // base's own `Job.tag` is legitimately skipped (`@Unstable`) and stays off this list.
+            $"{Package}.Job.Running.tag",
             $"{Package}.Job.Idle.poke",
             $"{Package}.Job.Idle.describe",
             // ADR-118: the suspend members the arms now bind. `pause_2` is the planner's numbered

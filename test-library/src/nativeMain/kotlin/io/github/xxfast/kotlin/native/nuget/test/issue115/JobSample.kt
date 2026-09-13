@@ -16,6 +16,36 @@ interface JobListener {
 }
 
 /**
+ * ADR-116's 2026-09-13 amendment marker, declared here rather than reused from issue113:
+ * `ExperimentalDiet` next door is waived by `exportMarkers(...)` in `test-library/build.gradle.kts`
+ * and would keep exporting, which is the opposite of what this cell needs, and `InternalApi` /
+ * `LedgerApi` belong to ADR-115's own table.
+ *
+ * `WARNING` level on purpose. ADR-115 never consults the level, so [Job.tag] is skipped either way
+ * (Issue113Sample cell 7 pins the level-independence), while a `WARNING` marker cannot turn an
+ * unexpected opt-in propagation inside the generated `CNameExports.kt` into a compile error that
+ * would mask the C# symptom this fixture exists to show.
+ */
+@RequiresOptIn(level = RequiresOptIn.Level.WARNING, message = "Hallway timing is still settling")
+@Target(AnnotationTarget.CLASS, AnnotationTarget.PROPERTY, AnnotationTarget.FUNCTION)
+annotation class Unstable
+
+/**
+ * The interface-bridge half of ADR-116's 2026-09-13 amendment, declared top-level beside
+ * [JobListener] and deliberately **not** [JobListener] itself: `addInterfaceBridgeExports` emits
+ * every override as `Unit` and reinterprets each slot as `CFunction<(...) -> Unit>`, so
+ * [JobListener.onEvent]'s `String` return would generate a Kotlin override with a mismatched
+ * return type and break the build for a reason that has nothing to do with the arm re-key.
+ *
+ * Void-only and single-method on purpose: it is the pair's payload carrier ([Job.Idle.addWatcher]
+ * / [Job.Idle.removeWatcher]), the `CatEventListener` shape one arity down.
+ */
+interface JobWatcher {
+  /** One `String` payload, so the UTF8 pair crosses on the bridged callback argument. */
+  fun onWake(reason: String)
+}
+
+/**
  * Fixture for issue [#115](https://github.com/xxfast/kotlin-native-nuget/issues/115) / ADR-116: a
  * public **member function declared on a sealed subclass** is never exported, and nothing says so.
  *
@@ -119,6 +149,27 @@ interface JobListener {
  * - [anyRunningLater], the **top-level** suspend route (ADR-007 static class `JobSample`), the
  *   second spelling site. A fix applied to the class route alone still leaves this one broken.
  *
+ * The sealed **base** (not an arm) at a `suspend` return is the row ADR-118's amendment left
+ * behind: `Task<Job>` is spelled correctly, but the completion renders
+ * `t.SetResult(new Job(resultPtr))` against `public abstract class Job`, which is CS0144 in the
+ * consumer. It must read `Job.FromHandle(resultPtr)`, the discriminator the synchronous
+ * [Job.Running.next] already goes through. Every owner kind, once:
+ * - [Job.Running.nextLater] — the base at a suspend return **on an arm**, answering with a
+ *   *different* arm than the receiver, so a completion that constructs the receiver's type by
+ *   name (or reads the discriminator wrong) fails on the payload rather than passing by luck.
+ * - [Job.Running.nextOrNullLater] — the **nullable** twin, the branch one step up in the same
+ *   renderer (`resultPtr == IntPtr.Zero ? null : new Job(resultPtr)`). Both the null input and an
+ *   arm-returning one are reachable, so the guard and the read are crossed separately.
+ * - [Job.Running.nextOrThrowLater] — the **throw** path: no result is minted, so the new read is
+ *   never reached and only the ADR-128/130 error envelope crosses. It is the leak row's fixture.
+ * - [JobFactory.nextLater] — an **ordinary class** owner dispatching across all three arm shapes
+ *   by input (`data object`, payload `data class`, second `data class`), so a completion pinned to
+ *   one constructor cannot pass all three.
+ * - [anyNextLater] — the **top-level** route's own speller, the second site.
+ * All of them are named `...Later`: [Job.Running.next] already owns the synchronous half of this
+ * cell, and `suspend fun next()` beside it is `CONFLICTING_OVERLOADS`. The sealed-*interface* twin
+ * lives on `Monitor.nextPulseLater` (issue54), and [Job.Done] stays suspend-free.
+ *
  * Deliberately absent on the ADR-124 half: a base-declared flow property on [Job] itself (the
  * all-properties rule comes from ADR-111 and is already fixture-covered for ordinary property
  * types), a `suspend fun` returning a `Flow` (still a named `SKIPPED_UNSUPPORTED_RETURN` since
@@ -135,10 +186,26 @@ interface JobListener {
  *   receiver in one member, so a route that only ever binds the value-returning shape, or only
  *   ever binds a `data class` receiver, cannot go green on this pair.
  *
- * Deliberately absent on the lambda half: a stored-callback or interface-bridge **pair** on an arm
- * (`addX`/`removeX`), a `suspend` lambda parameter, and a generic method. All three keep the
- * `SEALED_SUBCLASS_UNROUTED` row of the sealed post-process table, and a pair in particular must
- * stay *named* rather than fall silent, which is a diagnostic assertion rather than a cell.
+ * The stored-callback / interface-bridge **pair** (`addX`/`removeX`) is the row ADR-116's
+ * lambda-parameter amendment left behind, and the one ADR-116's 2026-09-13 amendment closes. Both
+ * builders are already prefix-keyed, so an arm owes the same `IDisposable AddX(...)` subscription
+ * an ordinary class gets, and the two owner kinds are crossed once each:
+ * - [Job.Running.addTicker] / [Job.Running.removeTicker] / [Job.Running.tick] — the ADR-037
+ *   **stored-callback** pair on a `data class` arm, `(String) -> Unit` storage, exactly the shape
+ *   `Cat.addMoodListener`/`removeMoodListener` admits. `Tick()` fires every registered ticker with
+ *   `"tick:$progress"`, so the payload is unreachable from a subscription that never registered
+ *   and a disposed one that still fires shows up as an extra element rather than a wrong value.
+ * - [Job.Idle.addWatcher] / [Job.Idle.removeWatcher] / [Job.Idle.wake] — the ADR-039
+ *   **interface-bridge** pair on a `data object` arm, carrying the new void-only [JobWatcher].
+ *   The object arm is the receiver cell: `handle.asStableRef<Job.Idle>()` rather than a static,
+ *   the same receiver [Job.Idle.pokeWith] proves for the per-call route. Because `Idle` is a
+ *   process-wide singleton, `watchers` is process-global mutable state that outlives a test: every
+ *   subscription on it must be disposed, and every assertion must read its own watcher's
+ *   recording, never a total.
+ *
+ * Still deliberately absent, and still expected to keep the `SEALED_SUBCLASS_UNROUTED` row of the
+ * sealed post-process table: a `suspend` lambda parameter and a generic method. Neither has a
+ * route on an *ordinary* class either, so the arm's named skip is already stricter than parity.
  *
  * Oreo (black with the white middle) does all the running: he starts at a percentage of the hallway
  * and finishes it. Mylo (brown and creamy) is [Job.Idle], and pokes back exactly once when nudged.
@@ -163,10 +230,39 @@ sealed class Job {
    */
   open suspend fun rest(): Int = 0
 
+  /**
+   * ADR-116's 2026-09-13 amendment: an **opt-in-marked base member carrying a trailing default**
+   * whose own plan the planner structurally declines (ADR-115 drops anything behind a
+   * `@RequiresOptIn` marker), overridden on [Job.Running], which opts in rather than propagates.
+   *
+   * So the C# base carries **no** `Tag` at all — neither the declared arity nor an ADR-096
+   * omitting overload — while the arm's override owes its own `Tag(string)` beside
+   * `Tag(string, string)`. Today `sealedSubclassEntries` returns early on any `override` whose
+   * overridee is declared on the sealed base, whether or not that base member ever planned, and it
+   * reads raw `hasDefault` off the override's own parameters (always `false`), so the short-arity
+   * call `running.Tag("x")` is CS1501.
+   *
+   * [Job.Idle] deliberately does not override it: a declined base member inherited by an arm stays
+   * absent on that arm too. Oreo's hallway sprints get tagged; nobody else's do.
+   */
+  @Unstable
+  open fun tag(prefix: String, suffix: String = "!"): String = prefix + suffix
+
   /** Oreo, mid-sprint down the hallway, [progress] percent of the way to the food bowl. */
   data class Running(val progress: Int) : Job() {
     /** The one arm that overrides [Job.kind]; the rest inherit the base's `"job"`. */
     override val kind: String = "running"
+
+    /**
+     * The override half of ADR-116's 2026-09-13 amendment cell. `@OptIn` rather than `@Unstable`:
+     * the arm *consumes* the marker instead of propagating it, so the arm's member is bindable
+     * (ADR-115 Finding 7 — `kotlin.OptIn` is not itself `@RequiresOptIn`-meta-annotated) while
+     * the base's identically-named member is not. `suffix` restates no default, because Kotlin
+     * forbids an override from restating one, so the arm's ADR-096 omitting overload can only be
+     * synthesized from the *overridee's* defaults.
+     */
+    @OptIn(Unstable::class)
+    override fun tag(prefix: String, suffix: String): String = "$prefix$progress$suffix"
 
     /** `Int` return, no conversion at the seam. */
     fun cancel(): Int = progress
@@ -181,6 +277,23 @@ sealed class Job {
      */
     fun relabel(transform: (String) -> String): String = transform("running-$progress")
 
+    // The ADR-037 **stored-callback pair** on a sealed arm, modelled on the ordinary-class
+    // precedent `Cat.addMoodListener`/`removeMoodListener` so the storage shape is the one the
+    // stored-callback route admits. Private, so the arm's public surface is the pair plus [tick].
+    private val tickers: MutableList<(String) -> Unit> = mutableListOf()
+
+    /** Subscribe half: binds as `IDisposable AddTicker(Action<string> listener)`. */
+    fun addTicker(listener: (String) -> Unit) { tickers += listener }
+
+    /** Unsubscribe half: the export the returned subscription's `Dispose()` calls. */
+    fun removeTicker(listener: (String) -> Unit) { tickers -= listener }
+
+    /**
+     * The trigger. Every registered ticker hears Oreo's progress, so a subscription that was never
+     * registered records nothing and a disposed one that still fires records an extra element.
+     */
+    fun tick() { tickers.forEach { it("tick:$progress") } }
+
     /** Overload pair, first arm. */
     fun step(by: Int): Int = progress + by
 
@@ -189,6 +302,33 @@ sealed class Job {
 
     /** Sealed **base** return: `Job.FromHandle` discriminates it back onto [Done]. */
     fun next(): Job = Done(progress)
+
+    /**
+     * The sealed **base** at a *suspend* return, on an arm: `Task<Job>` completed through
+     * `Job.FromHandle(resultPtr)`. Answers with a *different* arm than the receiver, so a
+     * completion that constructs the receiver's type by name, or reads the discriminator wrong,
+     * fails on `Code` rather than passing by luck. Named `nextLater` because [next] already owns
+     * the synchronous half of this cell and `suspend fun next()` beside it is
+     * `CONFLICTING_OVERLOADS`.
+     */
+    suspend fun nextLater(): Job = Done(progress + 1)
+
+    /**
+     * The nullable twin, `Task<Job?>`: the branch one step up in the completion renderer, which
+     * spells `resultPtr == IntPtr.Zero ? null : new Job(resultPtr)` today and is the same defect.
+     * Oreo at 100% is already at the bowl, so there is no next job.
+     */
+    suspend fun nextOrNullLater(): Job? = if (progress >= 100) null else Done(progress + 1)
+
+    /**
+     * The throw path of the same route: when the body throws, no result is minted, so the new
+     * `FromHandle` read is never reached and the error envelope (ADR-128/130) is the only thing
+     * crossing. A leak row drives this thousands of times, so the sentinel is cheap and the body
+     * has no suspension point at all.
+     */
+    suspend fun nextOrThrowLater(step: Int): Job =
+      if (step < 0) error("Oreo refuses to run backwards down the hallway")
+      else Done(progress + step)
 
     /** Sibling nested arm return, spelled as its own concrete type. */
     fun finish(): Done = Done(progress)
@@ -206,7 +346,7 @@ sealed class Job {
         null
       }
 
-    /** Nullable **nested** interface return: never declared in C#, so a named skip, not a binding. */
+    /** Nullable nested interface return: binds as `NestedListenerOwner.IListener?` (ADR-133). */
     fun pickNested(): NestedListenerOwner.Listener? = null
 
     /** `suspend` on an arm: binds as `Task<int> PauseAsync()` off `job_running_pause_async`. */
@@ -289,6 +429,20 @@ sealed class Job {
      */
     fun pokeWith(action: (String) -> Unit) = action("idle")
 
+    // The ADR-039 **interface-bridge pair** on a `data object` arm, the `CatEventSource` shape.
+    // `Idle` is a singleton, so this list is process-global: every C# subscription must be
+    // disposed by the test that made it.
+    private val watchers: MutableList<JobWatcher> = mutableListOf()
+
+    /** Subscribe half: binds as `IDisposable AddWatcher(IJobWatcher listener)`. */
+    fun addWatcher(w: JobWatcher) { watchers += w }
+
+    /** Unsubscribe half, called by the returned subscription's `Dispose()`. */
+    fun removeWatcher(w: JobWatcher) { watchers -= w }
+
+    /** The trigger: Mylo stirs and tells every watcher why, `String` across the bridged slot. */
+    fun wake(reason: String) { watchers.forEach { it.onWake(reason) } }
+
     /** Declared `override` of [Job.describe]: renders as a plain `public` method on the arm. */
     override fun describe(): String = "idle"
 
@@ -322,6 +476,18 @@ class JobFactory {
 
   /** The `data object` arm on the suspend route: `Task<Job.Idle>`, `new Job.Idle(resultPtr)`. */
   suspend fun idleLater(): Job.Idle = Job.Idle
+
+  /**
+   * The sealed **base** at a suspend return on an *ordinary class* owner, dispatching across all
+   * three payload shapes by input: a `data object` arm, a `data class` arm with a payload, and a
+   * second `data class` arm. One `Task<Job>` completion has to land on whichever arm the
+   * discriminator names, so a completion pinned to a single constructor cannot pass all three.
+   */
+  suspend fun nextLater(progress: Int): Job = when {
+    progress < 0 -> Job.Idle
+    progress < 100 -> Job.Running(progress)
+    else -> Job.Done(progress)
+  }
 }
 
 /**
@@ -340,3 +506,11 @@ fun idleJob(): Job = Job.Idle
  * rather than the argument.
  */
 suspend fun anyRunningLater(): Job.Running = Job.Running(33)
+
+/**
+ * The **top-level** spelling site for the sealed *base* at a suspend return (ADR-007 static class
+ * `JobSample`). The top-level route has its own return speller, so a fix applied to the class
+ * route alone still leaves this one completing with `new Job(resultPtr)`. Always [Job.Done], so
+ * the assertion reads a payload the base cannot answer.
+ */
+suspend fun anyNextLater(progress: Int): Job = Job.Done(progress)

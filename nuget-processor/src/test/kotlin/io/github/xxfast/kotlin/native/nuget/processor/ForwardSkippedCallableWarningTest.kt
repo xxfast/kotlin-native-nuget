@@ -264,6 +264,10 @@ class ForwardSkippedCallableWarningTest {
         // ADR-106: defensive, like INSTANT/DURATION.
         ForwardPlanSkipReason.UUID,
         ForwardPlanSkipReason.NULLABLE,
+        // ADR-132: an extension receiver whose wire is the ADR-079/080 `HasValue` + value pair.
+        // Every other admitted receiver shape lowers like a parameter now; this one cannot be
+        // expressed as a single first RECEIVER-role slot, and no legacy route re-emits it.
+        ForwardPlanSkipReason.RECEIVER_FAN_OUT,
         ForwardPlanSkipReason.OBJECT,
         ForwardPlanSkipReason.STRING,
         ForwardPlanSkipReason.UNSUPPORTED,
@@ -273,6 +277,11 @@ class ForwardSkippedCallableWarningTest {
         // ADR-064: genuine drops with their own named diagnostic kind (cell 23's combination,
         // and a value-class member inherited via interface delegation).
         ForwardPlanSkipReason.UNSUPPORTED_COMBINATION,
+        // ADR-064 amendment (2026-09-13): a Flow/lambda/generic deferral at an owner or position
+        // no legacy route is keyed to (an object, an extension, a constructor, a Flow at a
+        // parameter, a lambda at a class-method return). The member is absent from both halves,
+        // so it warns; the reason it was reclassified from rides in `detail`.
+        ForwardPlanSkipReason.UNROUTED_POSITION,
         ForwardPlanSkipReason.INHERITED_MEMBER,
         // ADR-066: a reachable dependency-module type the closure did not admit.
         ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE,
@@ -291,6 +300,9 @@ class ForwardSkippedCallableWarningTest {
         ForwardPlanSkipReason.UNDECLARED_INTERFACE,
         // ...and the nested class/object twin of both.
         ForwardPlanSkipReason.UNDECLARED_CLASS,
+        // ADR-133: a Kotlin `object` at a member position. Declared in C# as a static class, so
+        // it is a genuine drop at every position (CS0722) and no legacy route re-emits it.
+        ForwardPlanSkipReason.OBJECT_POSITION,
         // ADR-088: a bound C# interface at a position v1 does not marshal, and one that cannot be
         // implemented in Kotlin at a return position. Both are real drops with their own kinds.
         ForwardPlanSkipReason.BOUND_INTERFACE_POSITION,

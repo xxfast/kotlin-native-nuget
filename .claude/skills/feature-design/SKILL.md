@@ -29,6 +29,20 @@ At the start of a phase (Phases 9–13 especially), classify its items instead o
 
 Step 0's checks still run per item, but batch the restatements: state them all in one message alongside the kickoff dispatch, never one interruption per item.
 
+### Parallel worktrees, serial assembly (for a batch of items)
+
+Running a phase's items one after another is the safe default, not a law. The Phase 3 close-out (2026-09-13, 11 items) ran fully serial and took ~8.5 hours of wall clock; only the research fan-out was parallel. Measured, the serial part was about 40 minutes per item, and nothing in the workflow forces that: the "one Gradle driver at a time" rule below is about the **project lock of one checkout**, and a `git worktree` has its own `build/`, so Gradle drivers in separate worktrees do not contend. The fixture pack mints a fresh immutable version per build, so the shared NuGet cache is safe across worktrees too.
+
+What actually serialises a batch, and what to do about each:
+
+- **The stack.** A request for stacked PRs makes each branch's base the previous branch. Parallel work must branch every item off `main` and assemble the stack at the end with one `git rebase --onto` per branch, in stack order. Budget that assembly as its own step (30–60 min for ten branches), because the next two bullets guarantee conflicts.
+- **Shared doc surfaces.** Every item's `documenter` edits the same lines: the phase block in ROADMAP.md, FEATURES.md, `docs/adr/README.md`, and two or three topic pages. Reserve ADR numbers up front in the ledger (one per needs-ADR item, in stack order) so parallel drafts never collide on a number, and expect to resolve ROADMAP/FEATURES/README conflicts by hand during assembly; they are line-adjacent inserts and deletes, mechanical but never automatic.
+- **Generator-core overlap.** Group items by the files their research names. In Phase 3, five items touched `CirClassTranslator.kt`, four touched `ForwardCallablePlanner.kt`, and the per-site `@CName` owner tags (ADR-117) and the nested-type prefix (ADR-133) rewrote the *same* call sites. Items with overlapping cores go in the same worktree, serially; only disjoint groups run side by side. Later items that build on an earlier item's API (a required parameter it introduced, a named skip it added) belong after it, not beside it.
+- **Machine capacity.** A `verify.sh` is a two-target Kotlin/Native compile plus a NuGet pack plus two `dotnet test` runs. Two or three worktrees verifying at once is the practical ceiling on one workstation; four or more mostly contend.
+- **Wrong-branch edits.** The Phase 2 run left orphaned `.claude/worktrees/agent-*` checkouts and an agent editing a branch nobody was watching. Never use the Agent tool's `isolation: worktree`; create worktrees yourself (`git worktree add ../kn-<slug> -b ir/<slug> main`), pass each agent the absolute worktree path in its prompt, and remove the worktree once its branch is pushed.
+
+Expected gain is roughly a halving of wall clock for a ten-item batch, not a tenfold cut, because research, assembly, and the largest item stay on the critical path. Say which mode you are using in the kickoff message.
+
 ## Budgets
 
 A budget is a checkpoint, not a ceiling, and goes **in the agent's prompt**: run `date` at start and re-check it before each new expensive line of work. What happens at the deadline depends on what is still open, and the common case must not stop:
@@ -101,7 +115,7 @@ The `refactorer`'s verify starts with `:test-library:clean`, which deletes the `
 - After implementation run `scripts/verify.sh` (add `--plugin` for Gradle plugin changes). Fixture packs mint a fresh immutable version on every pack, so a re-pack cannot silently resolve against the old package.
 - CLAUDE.md's rules bind every agent here too, no restating needed: no manual path around `verify.sh`, instrument before hypothesizing, no stale-artifact debugging.
 - **Split pre-existing bugs out** into their own commit/ticket; a first-of-its-kind fixture flushing latent bugs means the old fixtures were unrealistic. Track every one and hand the list to the `documenter` in Step 5; a split-out bug forgotten is worse than never found.
-- **Two Gradle-driving agents never run in parallel**: one takes the project lock, the other queues silently. Parallel fan-out is safe only for agents touching neither Gradle nor `build/` (e.g. `research` at phase kickoff). When an agent goes quiet, check for an orphaned build (CLAUDE.md) before assuming it is thinking.
+- **Two Gradle-driving agents never run in parallel in one checkout**: one takes the project lock, the other queues silently. Parallel fan-out inside a checkout is safe only for agents touching neither Gradle nor `build/` (e.g. `research` at phase kickoff); across separate worktrees it is fine, see "Parallel worktrees, serial assembly" above. When an agent goes quiet, check for an orphaned build (CLAUDE.md) before assuming it is thinking.
 - Never write the docs yourself; the `documenter` grounds every snippet in real generated output, the main thread would write them from memory.
 
 ## Prompting subagents

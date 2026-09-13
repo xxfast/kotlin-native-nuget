@@ -12,7 +12,6 @@ import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwnerTag
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.collectionResultProjection
@@ -24,6 +23,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParam
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 
 /**
  * Generates @CName bridge exports for suspend functions using a callback-based async pattern.
@@ -66,10 +66,9 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
     buildSuspendFunctionBody(funcName, paramCall, paramPrelude, isUnit, isNullable, boxed)
 
   val builder: FunSpec.Builder = FunSpec.builder("export_${cname}_async")
-    .addAnnotation(cNameAnnotation("${cname}_async"))
     // ADR-117: the one live legacy route that can collide *within* a class (two suspend
     // overloads share `${cname}_async`), so it names the method, not the class.
-    .tag(ForwardExportOwnerTag::class, ForwardExportOwnerTag(declaration = func))
+    .addAnnotation(cNameAnnotation("${cname}_async", ownedBy(func)))
     .addLegacySuspendParameters(func, paramShapes)
     .addParameter("callbackPtr", cOpaquePointer)
     .addParameter("userData", cOpaquePointer)
@@ -88,7 +87,7 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
   cls: KSClassDeclaration,
   classifier: ForwardBridgeTypeClassifier,
   callableCatalog: ForwardCallablePlanCatalog,
-  prefix: String = cls.simpleName.asString().lowercase(),
+  prefix: String = cls.nativePrefix(),
   declaredOnly: Boolean = false,
 ) {
   val qualifiedName: String = cls.qualifiedName?.asString() ?: return
@@ -131,8 +130,7 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
     )
 
     val builder: FunSpec.Builder = FunSpec.builder("export_${prefix}_${cname}_async")
-      .addAnnotation(cNameAnnotation("${prefix}_${cname}_async"))
-      .tag(ForwardExportOwnerTag::class, ForwardExportOwnerTag(declaration = method))
+      .addAnnotation(cNameAnnotation("${prefix}_${cname}_async", ownedBy(method)))
       .addParameter("handle", cOpaquePointer)
       .addParameter("scopeHandle", cOpaquePointer)
 

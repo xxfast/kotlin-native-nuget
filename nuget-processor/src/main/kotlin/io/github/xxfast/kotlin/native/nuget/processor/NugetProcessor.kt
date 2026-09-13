@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor
 
+import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.findActualType
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.processing.CodeGenerator
@@ -37,14 +38,18 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowPropertyExp
 import io.github.xxfast.kotlin.native.nuget.processor.exports.declaresOrInheritsFlowMember
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMethods
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmLambdaMethods
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmStoredCallbackPairs
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowProperties
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFunctionExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericFunctionRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceBridgeFactoryExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addLambdaParamMethodExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addStoredCallbackExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceBridgeExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionFunctionExports
@@ -103,6 +108,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.optInMarker
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ownsSentence
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toDiagnosticKind
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
 
 // A `@kotlin.native.CName`-annotated function is already a C-ABI export by definition (its native
 // export name is fixed by the annotation itself). It must never be picked up by the forward
@@ -148,11 +154,87 @@ private fun KSClassDeclaration.nestedClassDeclarations(): Sequence<KSClassDeclar
     .filter { it.classKind in NESTED_DECLARATION_KINDS }
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .flatMap { nested ->
-      // `enums` is deliberately not in the owner set, so an enum class is a candidate but not an
-      // owner: what sits inside one still says nothing, at any depth.
-      if (nested.classKind == ClassKind.ENUM_CLASS) sequenceOf(nested)
-      else sequenceOf(nested) + nested.nestedClassDeclarations()
+      // ADR-133: the walk descends into an `enum class` too. An enum owner stays DEFERRED (it has
+      // no C# declaration block to nest into), but the deferred set is named, not silent, so
+      // `Season.Almanac` has to be reached to be reported at all.
+      sequenceOf(nested) + nested.nestedClassDeclarations()
     }
+
+// ADR-133: the enclosing declaration chain, innermost-first, of a nested declaration.
+private fun KSClassDeclaration.enclosingClassChain(): List<KSClassDeclaration> =
+  generateSequence<KSDeclaration>(this) { it.parentDeclaration }
+    .drop(1)
+    .takeWhile { it is KSClassDeclaration }
+    .filterIsInstance<KSClassDeclaration>()
+    .toList()
+
+/**
+ * ADR-133: why this declaration cannot OWN a C# nested type, or null when it can.
+ *
+ * v1 declares children under a non-generic, non-inner `class` or `object` (root or admitted
+ * dependency) at any depth. Every other shape keeps ADR-064's named skip, with this text as the
+ * reason, so a deferred nested declaration still says why instead of vanishing.
+ */
+internal fun KSClassDeclaration.unsupportedNestedOwnerReason(): String? = when {
+  classKind == ClassKind.ENUM_CLASS ->
+    "an `enum class` owner has no C# declaration block to nest a type into"
+  classKind == ClassKind.INTERFACE ->
+    "an `interface` owner declares no nested types in the generated C#"
+  classKind != ClassKind.CLASS && classKind != ClassKind.OBJECT ->
+    "only a `class` or `object` owner carries nested declarations"
+  typeParameters.isNotEmpty() ->
+    "a generic owner's nested type is itself generic in C# (`Owner<T>.Nested`)"
+  modifiers.contains(Modifier.INNER) ->
+    "an `inner class` owner needs the outer instance to construct"
+  isValueClass() -> "a `value class` owner has no nested-type slot"
+  modifiers.contains(Modifier.SEALED) || isSealedSubclass() ->
+    "a sealed base or sealed arm owner has no nested-declaration slot (ADR-009 owns that block)"
+  isCompanionObject -> "a companion object is folded into its owner's statics (ADR-013)"
+  else -> null
+}
+
+/** ADR-133: why this nested candidate itself is deferred, or null when it is declared. */
+internal fun KSClassDeclaration.unsupportedNestedCandidateReason(): String? = when {
+  modifiers.contains(Modifier.INNER) ->
+    "an `inner class` needs the outer instance its constructor takes"
+  typeParameters.isNotEmpty() -> "a generic nested type is deferred"
+  isValueClass() -> "a nested `value class` is deferred"
+  modifiers.contains(Modifier.SEALED) ->
+    "a nested sealed hierarchy is deferred (its arms would have to nest twice)"
+  else -> null
+}
+
+/**
+ * ADR-133: the whole deferral reason for a nested candidate -- its own shape first, then the
+ * nearest enclosing declaration that cannot own it. Null means "declare it as `Owner.Nested`".
+ */
+internal fun KSClassDeclaration.nestedDeclarationDeferral(): String? {
+  unsupportedNestedCandidateReason()?.let { return it }
+  enclosingClassChain().forEach { owner ->
+    owner.unsupportedNestedOwnerReason()?.let { reason ->
+      val ownerName: String = owner.qualifiedName?.asString() ?: owner.simpleName.asString()
+      return "its enclosing declaration `$ownerName` cannot own one: $reason"
+    }
+  }
+  return null
+}
+
+/**
+ * ADR-133 surface 6: the C# member name of the owner this nested type's name collides with, or
+ * null. C# forbids a member and a nested type sharing a name in the same declaring type (CS0102),
+ * and forbids a nested type named like its owner (CS0542); Kotlin permits both, so
+ * `class Config` beside `val config: Config` would otherwise generate uncompilable C#.
+ */
+internal fun KSClassDeclaration.nestedOwnerScopeCollision(): String? {
+  val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return null
+  val name: String = simpleName.asString()
+  if (owner.simpleName.asString() == name) return "its owner's own name (CS0542)"
+  val memberNames: List<String> =
+    (owner.getAllProperties().map { it.simpleName.asString() }.toList() +
+        owner.getAllFunctions().map { it.simpleName.asString() }.toList())
+      .map { it.replaceFirstChar { c -> c.uppercase() } }
+  return if (name in memberNames) "the member `$name` of the same C# type (CS0102)" else null
+}
 
 internal fun warnDroppedForwardCallables(
   catalog: ForwardCallablePlanCatalog,
@@ -162,7 +244,7 @@ internal fun warnDroppedForwardCallables(
 ) {
   val diagnostics: List<ForwardDiagnostic> = catalog.droppedCallables.map { dropped ->
     ForwardDiagnostic(
-      kind = dropped.reason.toDiagnosticKind(dropped.position),
+      kind = dropped.reason.toDiagnosticKind(dropped.position, dropped.structural),
       symbol = dropped.node,
       declaration = dropped.symbol,
       // ADR-064's 2026-09-10 amendment: the sentence lives on the reason, beside the hint it
@@ -172,6 +254,42 @@ internal fun warnDroppedForwardCallables(
       hint = dropped.reason.diagnosticHint(dropped.detail, scope, dropped.parameter),
     )
   }
+  ForwardDiagnosticSink.emit(diagnostics, logger)
+}
+
+/**
+ * ADR-064 amendment (2026-09-13): the structural top-level generic functions the planner never
+ * sees. `catalog()` is called with `functions` (the `typeParameters.isEmpty()` half of the
+ * collected list), so a `fun <T> f(...)` produces no catalog entry at all and the catalog's
+ * unrouted-position reclassification cannot reach it. Its only route is
+ * `addGenericFunctionExports` / `translateGenericFunction`, which dispatch on a parameter typed
+ * with the function's own type parameter and refuse everything else with a bare `return` —
+ * measured silent on both halves for `fun <T> f(): List<T>` (research H cell 16).
+ *
+ * Same shape as [warnRefusedLegacyRouteMembers]: the route's own hoisted gate decides, so the
+ * diagnostic and the two emitters cannot drift. The position is the RETURN: a refused declaration
+ * always has a `T` somewhere other than a direct parameter, which for every measured cell is the
+ * return type.
+ */
+internal fun warnUnroutedGenericFunctions(
+  genericFunctions: List<KSFunctionDeclaration>,
+  logger: KSPLogger,
+) {
+  val diagnostics: List<ForwardDiagnostic> = genericFunctions
+    .filterNot { function -> function.hasLegacyGenericFunctionRoute() }
+    .map { function ->
+      val declaration: String =
+        "${function.packageName.asString()}.${function.simpleName.asString()}"
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
+        symbol = function,
+        declaration = declaration,
+        reason = ForwardPlanSkipReason.UNROUTED_POSITION
+          .diagnosticReason(ForwardPlanSkipReason.GENERIC.name),
+        hint = ForwardPlanSkipReason.UNROUTED_POSITION
+          .diagnosticHint(ForwardPlanSkipReason.GENERIC.name),
+      )
+    }
   ForwardDiagnosticSink.emit(diagnostics, logger)
 }
 
@@ -837,17 +955,107 @@ class NugetProcessor(
     fun dependenciesIn(bucket: ForwardReachabilityBucket): List<KSClassDeclaration> =
       dependencyByBucket[bucket] ?: emptyList()
 
-    val allClasses: List<KSClassDeclaration> =
+    // ADR-133: the root+dependency sets. The nested walk below appends to them, so a nested
+    // declaration reaches `exportedObjectHandles`, the planner catalog, the Kotlin export
+    // generators and the CIR translator exactly like a top-level one.
+    val declaredClasses: List<KSClassDeclaration> =
       rootClasses + dependenciesIn(ForwardReachabilityBucket.CLASS)
     val valueClasses: List<KSClassDeclaration> =
       rootValueClasses + dependenciesIn(ForwardReachabilityBucket.VALUE_CLASS)
     val sealedClasses: List<KSClassDeclaration> =
       rootSealedClasses + dependenciesIn(ForwardReachabilityBucket.SEALED_CLASS)
-    val objects: List<KSClassDeclaration> =
+    val declaredObjects: List<KSClassDeclaration> =
       rootObjects + dependenciesIn(ForwardReachabilityBucket.OBJECT)
-    val enums: List<KSClassDeclaration> = rootEnums + dependenciesIn(ForwardReachabilityBucket.ENUM)
-    val interfaces: List<KSClassDeclaration> =
+    val declaredEnums: List<KSClassDeclaration> =
+      rootEnums + dependenciesIn(ForwardReachabilityBucket.ENUM)
+    val declaredInterfaces: List<KSClassDeclaration> =
       rootInterfaces + dependenciesIn(ForwardReachabilityBucket.INTERFACE)
+
+    // ADR-133: the owner walk is the SOLE declarer of a nested type. Every root bucket filters
+    // `parentDeclaration == null` and the ADR-066 closure feeds a nested dependency declaration to
+    // no root list, so a nested declaration enters the pipeline here and nowhere else: declaring it
+    // twice would be CS0101 in every consumer (the issue #54/#110 lesson).
+    //
+    // Excluded before any decision: a sealed subclass (ADR-009 declares it nested under its base),
+    // a companion object (ADR-013 folds it into its owner's statics), and an arm of an ineligible
+    // sealed interface (ADR-112 warns once for the whole hierarchy).
+    val nestedCandidates: List<KSClassDeclaration> =
+      (declaredClasses + valueClasses + sealedClasses + declaredObjects + declaredInterfaces +
+          declaredEnums)
+        .flatMap { owner -> owner.nestedClassDeclarations() }
+        .filter { it.getVisibility() == Visibility.PUBLIC }
+        .filter { !it.isCompanionObject }
+        .filter { !it.isSealedSubclass() }
+        .filter { !it.isArmOfIneligibleSealedInterface() }
+        .filter { it.classKind in NESTED_DECLARATION_KINDS }
+        .distinctBy { it.qualifiedName?.asString() ?: it.simpleName.asString() }
+        .sortedBy { it.qualifiedName?.asString() ?: it.simpleName.asString() }
+
+    // ADR-133 surface 6: Kotlin permits `class Config` beside `val config: Config`; C# does not
+    // (CS0102), and it permits a nested type named like its owner, which C# rejects too (CS0542).
+    // Fatal and skipped, never emitted: the alternative is C# the consumer cannot compile, with no
+    // KSP message naming the Kotlin shape that caused it.
+    val nestedCollisions: Map<String, String> = nestedCandidates
+      .filter { it.nestedDeclarationDeferral() == null }
+      .mapNotNull { nested ->
+        val collision: String = nested.nestedOwnerScopeCollision() ?: return@mapNotNull null
+        (nested.qualifiedName?.asString() ?: nested.simpleName.asString()) to collision
+      }
+      .toMap()
+    // ADR-133: deferred, not emitted here. `NugetProcessor` stops before writing `CNameExports.kt`
+    // once any ERROR_* has fired (ADR-064's gate), and that gate exists for a construct that must
+    // never compile. This one is different: the colliding nested type is SKIPPED, so both halves of
+    // the generated output are valid and the ABI contract check should still run over them. The
+    // error is an authoring failure, so it still fails the consumer's build -- it just fires after
+    // the two files are written.
+    val nestedCollisionDiagnostics: List<ForwardDiagnostic> = nestedCandidates
+      .filter { (it.qualifiedName?.asString() ?: it.simpleName.asString()) in nestedCollisions }
+      .map { nested ->
+        val name: String = nested.qualifiedName?.asString() ?: nested.simpleName.asString()
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION,
+          symbol = nested.takeIf { it.containingFile != null },
+          declaration = name,
+          reason = "nested ${nested.nestedDeclarationKind()} `$name` is declared in C# as " +
+              "`${nested.nestedCsName()}`, whose name collides with " +
+              "${nestedCollisions.getValue(name)}",
+          hint = "rename the nested declaration, or the colliding member, so the two names " +
+              "differ after PascalCasing",
+        )
+      }
+
+    val (nestedDeclared: List<KSClassDeclaration>, nestedDeferred: List<KSClassDeclaration>) =
+      nestedCandidates
+        .filter { (it.qualifiedName?.asString() ?: it.simpleName.asString()) !in nestedCollisions }
+        .partition { it.nestedDeclarationDeferral() == null }
+
+    // ADR-064's named skip survives for exactly the owner and candidate shapes ADR-133 defers, and
+    // the reason now names WHICH shape rather than "only top-level declarations are declared".
+    ForwardDiagnosticSink.emit(
+      nestedDeferred.map { nested ->
+        val name: String = nested.qualifiedName?.asString() ?: nested.simpleName.asString()
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION,
+          // ADR-066, verified: a klib declaration has no containing file, so an admitted
+          // dependency type's nested declaration has no source location to point at.
+          symbol = nested.takeIf { it.containingFile != null },
+          declaration = name,
+          reason = "nested ${nested.nestedDeclarationKind()} `$name` is not declared in C#: " +
+              "${nested.nestedDeclarationDeferral()}",
+          hint = "move it to the top level of its file",
+        )
+      },
+      logger,
+    )
+
+    val allClasses: List<KSClassDeclaration> =
+      declaredClasses + nestedDeclared.filter { it.classKind == ClassKind.CLASS }
+    val objects: List<KSClassDeclaration> =
+      declaredObjects + nestedDeclared.filter { it.classKind == ClassKind.OBJECT }
+    val enums: List<KSClassDeclaration> =
+      declaredEnums + nestedDeclared.filter { it.classKind == ClassKind.ENUM_CLASS }
+    val interfaces: List<KSClassDeclaration> =
+      declaredInterfaces + nestedDeclared.filter { it.classKind == ClassKind.INTERFACE }
 
     // ADR-112: an ineligible sealed interface is still declared as `I<Name>`, and every member
     // typed with it still skips as SKIPPED_SEALED_POSITION, but that skip can only say there is no
@@ -877,45 +1085,6 @@ class NugetProcessor(
                 "sealed class",
           )
         },
-      logger,
-    )
-
-    // Every root bucket above filters `parentDeclaration == null`, and the ADR-066 closure now
-    // refuses to admit a nested dependency declaration for the same reason, so a public nested
-    // class/object/interface/enum is declared by no route at all. It used to vanish in total
-    // silence: only the members typed with it said anything, and a nested declaration nothing
-    // references said nothing whatsoever. Named here, once, at the declaration itself -- before
-    // the `hasNothingToProcess` early return, so it reaches NugetDiagnostics.json even in a module
-    // that generates nothing else.
-    //
-    // The two nested shapes that ARE declared are excluded: a sealed subclass (ADR-009 declares it
-    // nested under its base) and a companion object (ADR-013 folds it into its owner's statics).
-    val nestedDeclarations: List<KSClassDeclaration> =
-      (allClasses + valueClasses + sealedClasses + objects + interfaces)
-        .flatMap { owner -> owner.nestedClassDeclarations() }
-        .filter { it.getVisibility() == Visibility.PUBLIC }
-        .filter { !it.isCompanionObject }
-        .filter { !it.isSealedSubclass() }
-        // ADR-112 amendment: an ineligible sealed interface warns once for its whole hierarchy,
-        // so an arm of it is not a second undeclared thing to report.
-        .filter { !it.isArmOfIneligibleSealedInterface() }
-        .filter { it.classKind in NESTED_DECLARATION_KINDS }
-        .distinctBy { it.qualifiedName?.asString() ?: it.simpleName.asString() }
-        .sortedBy { it.qualifiedName?.asString() ?: it.simpleName.asString() }
-    ForwardDiagnosticSink.emit(
-      nestedDeclarations.map { nested ->
-        val name: String = nested.qualifiedName?.asString() ?: nested.simpleName.asString()
-        ForwardDiagnostic(
-          kind = ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION,
-          // ADR-066, verified: a klib declaration has no containing file, so an admitted
-          // dependency type's nested declaration has no source location to point at.
-          symbol = nested.takeIf { it.containingFile != null },
-          declaration = name,
-          reason = "nested ${nested.nestedDeclarationKind()} `$name` is never declared in C# " +
-              "(only top-level declarations, sealed subclasses and companions are)",
-          hint = "move it to the top level of its file",
-        )
-      },
       logger,
     )
 
@@ -1030,10 +1199,41 @@ class NugetProcessor(
     // (a reachable interface is planned by both).
     val declarationPlanner = ForwardCallablePlanner(forwardClassifier, expects)
     val declarationPropertyPlanner = ForwardPropertyPlanner(forwardClassifier)
+
+    // ADR-075 amendment (2026-09-13): the UNEXPORTED interface supertypes of exported classes,
+    // planned onto the same declaration catalog. ADR-101 drops `: INesting` from the base list,
+    // but the members it declares and the class never implements still have to be spelled on the
+    // C# class itself, or the class's own generated subclass renders `public override` against
+    // nothing (CS0115 inside the generated file). Planning them here means
+    // `inheritedAbstractProperty` reads base and override off ONE plan, so the type spelling and
+    // the setter's presence cannot drift (CS1715 / CS0534 / CS0546).
+    //
+    // Transitive on purpose (`getAllSuperTypes`): an unexported interface extending another
+    // unexported one declares the grandparent's members on the class too, and the lookup key is
+    // built from the member's own `parentDeclaration`.
+    //
+    // Nothing is *rendered* for these interfaces: `translateInterface` is driven by `interfaces`
+    // alone, and this catalog reaches only the C# translation, never `generateCNameWrappers` and
+    // never the ADR-055 contract check, so no `DllImport` and no Kotlin export follows.
+    val unexportedSupertypeInterfaces: List<KSClassDeclaration> = allClasses
+      .asSequence()
+      .flatMap { cls -> cls.getAllSuperTypes() }
+      .map { it.declaration }
+      .filterIsInstance<KSClassDeclaration>()
+      .filter { it.classKind == ClassKind.INTERFACE }
+      .filter { it.qualifiedName?.asString() !in exportedObjectHandles }
+      .distinctBy { it.qualifiedName?.asString() }
+      .toList()
+    // A THIRD planner instance, for the same reason the declaration planner above is a second one:
+    // its drop channel must not be merged, or every declared member of an unexported interface the
+    // class implements concretely would be warned about on every build.
+    val supertypePropertyPlanner = ForwardPropertyPlanner(forwardClassifier)
     val interfaceDeclarationCatalog = ForwardCallablePlanCatalog(
       entries = interfaces.flatMap { iface -> declarationPlanner.interfaceEntries(iface) },
       propertyPlans = interfaces.flatMap { iface ->
         declarationPropertyPlanner.interfaceProperties(iface)
+      } + unexportedSupertypeInterfaces.flatMap { iface ->
+        supertypePropertyPlanner.interfaceProperties(iface)
       },
     )
 
@@ -1043,6 +1243,30 @@ class NugetProcessor(
     warnDroppedForwardExtensionReceivers(callableCatalog, logger)
     warnRefusedLegacyRouteMembers(
       classes, sealedClasses, suspendFunctions, forwardClassifier, logger,
+    )
+    // ADR-064 amendment (2026-09-13): the structural generic functions, which never reach the
+    // planner (see the function's own KDoc).
+    warnUnroutedGenericFunctions(genericFunctions, logger)
+    // ADR-064 amendment (2026-09-13): an interface's own declared members are planned onto
+    // `callableCatalog` only when the interface is REACHABLE (ADR-040), so an unrouted member of
+    // an interface that is merely implemented would be named nowhere -- and `classEntries`
+    // deliberately defers to the declaration rather than warning once per implementing class.
+    // `interfaceDeclarationCatalog` plans every interface, so it is the one producer that sees
+    // them all. Narrowed to the new reason on purpose: that catalog's drop channel is otherwise
+    // unmerged by design (a reachable interface is planned twice), and widening it would report
+    // every other drop of every interface a second time.
+    val warnedCallableSymbols: Set<String> =
+      callableCatalog.droppedCallables.map { it.symbol }.toSet()
+    warnDroppedForwardCallables(
+      ForwardCallablePlanCatalog(
+        entries = interfaceDeclarationCatalog.entries.filter { entry ->
+          entry is ForwardCallableCatalogEntry.Skipped &&
+              entry.reason == ForwardPlanSkipReason.UNROUTED_POSITION &&
+              entry.symbol !in warnedCallableSymbols
+        },
+      ),
+      logger,
+      effectiveInclude,
     )
 
     val cNameWrappers: ForwardCNameExports = generateCNameWrappers(
@@ -1109,6 +1333,11 @@ class NugetProcessor(
       ),
     )
     cNameExports.writeTo(codeGenerator, deps)
+    // ADR-133: the owner-scope collisions, after both files are written. The colliding nested type
+    // was skipped, so the output compiles; the ERROR still fails the consumer build by name.
+    if (nestedCollisionDiagnostics.isNotEmpty()) {
+      ForwardDiagnosticSink.emit(nestedCollisionDiagnostics, logger)
+    }
     writeForwardDiagnostics(deps)
 
     logger.info(
@@ -1477,8 +1706,25 @@ class NugetProcessor(
 
     val hasLambdaParamMethods: Boolean = armsHaveLambdaParamMethods || classesHaveLambdaParamMethods
 
+    // ADR-116 amendment (2026-09-13): the arm half of both gates below. A sealed class is not in
+    // `classes` (ADR-009), so a module whose only callback owner is a pair-bearing arm would emit
+    // `fn.invoke(...)` with no `invoke`/`CFunction`/`COpaquePointer` import — a compile error in
+    // the generated file, and `armsHaveLambdaParamMethods` above cannot stand in for it because
+    // its selector excludes the pairs on purpose.
+    val armsHaveStoredCallbackPairs: Boolean = sealedClasses.any { sealed ->
+      sealed.getSealedSubclasses().any { subclass ->
+        subclass.forwardArmStoredCallbackPairs(forwardClassifier).isNotEmpty()
+      }
+    }
+
+    val armsHaveInterfaceBridgePairs: Boolean = sealedClasses.any { sealed ->
+      sealed.getSealedSubclasses().any { subclass ->
+        subclass.forwardArmInterfaceBridgePairs(forwardClassifier).isNotEmpty()
+      }
+    }
+
     // Stored-callback pairs also need invoke/CFunction/COpaquePointer (the bridge lambda calls fn.invoke).
-    val hasStoredCallbackMethods: Boolean = classes.any { cls ->
+    val hasStoredCallbackMethods: Boolean = armsHaveStoredCallbackPairs || classes.any { cls ->
       val lambdaParamMethods: List<KSFunctionDeclaration> = cls.getAllFunctions()
         .filter { method ->
           method.parameters.any { param ->
@@ -1489,7 +1735,7 @@ class NugetProcessor(
     }
 
     // Interface-bridge pairs also need invoke/CFunction/COpaquePointer (each method's fn.invoke).
-    val hasInterfaceBridgeMethods: Boolean = classes.any { cls ->
+    val hasInterfaceBridgeMethods: Boolean = armsHaveInterfaceBridgePairs || classes.any { cls ->
       val allMethods: List<KSFunctionDeclaration> = cls.getAllFunctions().toList()
       findInterfaceBridgePairs(allMethods).isNotEmpty()
     }
@@ -1621,6 +1867,33 @@ class NugetProcessor(
         attributing(subclass) {
           armLambdaMethods.forEach { method ->
             builder.addLambdaParamMethodExport(method, subQualifiedName, armPrefix)
+          }
+        }
+      }
+    }
+
+    // ADR-116 amendment (2026-09-13): the fourth legacy route on the arm, the stored-callback
+    // (ADR-037) and interface-bridge (ADR-039) `addX`/`removeX` **pairs**, under the same
+    // `${sealedPrefix}_${sub}` prefix. Both builders are already `(add, remove, qualifiedName,
+    // prefix)`-keyed and mint their own `ownedBy(...)` owner, so the arm needs no export shape of
+    // its own; `forwardArmStoredCallbackPairs` / `forwardArmInterfaceBridgePairs` are the two
+    // selectors this loop, the import gates below and `translateSealedClass` all read.
+    sealedClasses.forEach { sealed ->
+      val sealedPrefix: String = sealed.simpleName.asString().lowercase()
+      sealed.getSealedSubclasses().forEach { subclass ->
+        val subQualifiedName: String = subclass.qualifiedName?.asString() ?: return@forEach
+        val armPrefix: String = "${sealedPrefix}_${subclass.simpleName.asString().lowercase()}"
+        val storedPairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
+          subclass.forwardArmStoredCallbackPairs(forwardClassifier)
+        val bridgePairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
+          subclass.forwardArmInterfaceBridgePairs(forwardClassifier)
+        if (storedPairs.isEmpty() && bridgePairs.isEmpty()) return@forEach
+        attributing(subclass) {
+          storedPairs.forEach { (addMethod, removeMethod) ->
+            builder.addStoredCallbackExports(addMethod, removeMethod, subQualifiedName, armPrefix)
+          }
+          bridgePairs.forEach { (addMethod, removeMethod) ->
+            builder.addInterfaceBridgeExports(addMethod, removeMethod, subQualifiedName, armPrefix)
           }
         }
       }

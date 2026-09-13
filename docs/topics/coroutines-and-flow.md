@@ -7,6 +7,7 @@ Kotlin coroutines map onto .NET's own async model: `suspend fun` becomes `async`
 | `suspend fun` | `async` / `Task<T>` | overloads on a class or a sealed arm number `_2` on the native symbol only, no visible C# numbering, see [`suspend fun` overloads](#suspend-fun-overloads), [ADR-019](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/019-suspend-function-mapping.md), [ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md) |
 | `suspend fun` returning `T?` | `async` / `Task<T?>` | nullable string, object, and primitive returns, [ADR-019](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/019-suspend-function-mapping.md) |
 | `suspend fun` returning `List<T>` / `Set<T>` / `Map<K, V>` | `Task<IReadOnlyList<T>>` / `Task<IReadOnlySet<T>>` / `Task<IReadOnlyDictionary<K, V>>` | spelled and read exactly as the property route spells the same type; any other generic return is a named skip, see [`suspend fun` returning a collection](#suspend-fun-returning-a-collection), [ADR-119](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/119-collection-returns-on-the-legacy-suspend-route.md) |
+| `suspend fun` returning a sealed base or eligible sealed interface base, plain or nullable | `Task<Base>` / `Task<Base?>` | completes through the generated `Base.FromHandle(resultPtr)` discriminator rather than a constructor, on a class, a sealed arm, or a top-level function; an ineligible sealed type is a named skip, see [A `suspend fun` returning the sealed base](interfaces-abstract-sealed.md#sealed-method-suspend-base-generated-c), [ADR-131](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/131-suspend-route-sealed-base-return.md) |
 | `suspend () -> R` lambda | `KotlinSuspendFunc<R>` / `Task<R>` | [ADR-020](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/020-suspend-lambda-mapping.md) |
 | structured concurrency | honoured on `Dispose()` | [ADR-021](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/021-structured-concurrency.md) |
 | coroutine cancellation | `CancellationToken` | [ADR-022](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/022-cancellation-token-support.md) |
@@ -1481,7 +1482,7 @@ Hot streams and several `Flow` positions are not yet supported (ROADMAP Phase 6)
 - `Boolean?` / `Char?` value elements on a nullable `StateFlow` (the same width fragility as ADR-061)
 - Nullable `SharedFlow<T>` (follows `SharedFlow<T>` itself, still deferred)
 - `INotifyPropertyChanged` adapter over `KotlinStateFlow<T>` (opt-in convenience, not core)
-- `Flow<T>` as a function **parameter** (C# → Kotlin direction)
+- `Flow<T>` as a function **parameter** (C# → Kotlin direction); named `SKIPPED_UNSUPPORTED_INPUT` rather than silent since [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s 2026-09-13 amendment, the same as a `Flow` return on anything other than a class method or a property (an `object`, an interface default's return through the interface itself, an extension, a secondary constructor, or a collection element), all previously silent and now named. A top-level `Flow` return used to render a type declared nowhere in the generated C# (`CS0246` in the consumer); it is refused by the route itself and named the same way now, still with no member
 - Nullable `Flow<T>?`
 - `Flow<T>` as a generic type argument (e.g. `Box<Flow<String>>`)
 - `suspend fun` returning `Flow<T>` (would follow the same outer-suspend-kept-as-`Task` decision [ADR-068](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/068-suspend-returning-stateflow.md) made for its `StateFlow` sibling, not yet implemented)
@@ -1523,5 +1524,6 @@ rather than the raw `Function1`/`Result` this generated before
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md">ADR-118: Suspend route: sealed-arm owners and overload numbering</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/122-handle-parameters-on-the-legacy-routes.md">ADR-122: Handle parameters on the legacy Flow and suspend routes</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/123-collection-elements-on-the-flow-routes.md">ADR-123: Collection elements on the Flow and StateFlow routes</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/131-suspend-route-sealed-base-return.md">ADR-131: Suspend route: a sealed base at a return reads through FromHandle</a>
     </category>
 </seealso>
