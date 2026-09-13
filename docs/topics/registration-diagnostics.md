@@ -251,6 +251,15 @@ Rows 8g through 8j cover every route with a handle-passed callback payload, now 
   `String`.
 - **8j**, `InterfaceBridge_StringPayload_ReturnsToBaseline`, the interface-bridge route
   (`CatEventSource.Trigger`), which had freed the same handle three times before the fix.
+- **8k**, `SealedArm_StoredCallbackPair_ReturnsToBaseline`, the ADR-037 stored-callback `addX`/`removeX`
+  pair declared on a sealed arm (`Job.Running.AddTicker`/`RemoveTicker`): subscribe, trigger once,
+  dispose. The receiver is a `StableRef<Job.Running>` rather than an ordinary class's, so a re-key
+  that retains the receiver per subscription instead of borrowing it shows up here. See
+  [Stored-callback and interface-bridge pairs on a sealed
+  arm](interfaces-abstract-sealed.md#sealed-callback-pair-generated-c).
+- **8l**, `SealedArm_InterfaceBridgePair_ReturnsToBaseline`, the same pattern for the ADR-039
+  interface-bridge pair on a `data object` arm (`Job.Idle.AddWatcher`/`RemoveWatcher`), plus one
+  retained handle per `String` payload the C# thunk owns.
 
 No row covers `Metronome`'s by-value primitive payloads (`Int`, `Boolean`, `Byte`, `Double`): a
 by-value payload mints no `StableRef` on the Kotlin side to begin with, and the per-call `GCHandle`

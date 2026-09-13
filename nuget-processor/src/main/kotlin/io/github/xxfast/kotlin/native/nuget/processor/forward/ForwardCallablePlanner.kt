@@ -1222,15 +1222,16 @@ internal class ForwardCallablePlanner(
    *   amendment 2026-09-11), since a final arm renders `public sealed class`, where `virtual` is
    *   CS0549.
    * - Every skip an ordinary class would defer to a legacy route becomes a named
-   *   [ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED] drop, because no legacy route is keyed to a
-   *   sealed subclass. Planned entries are untouched.
+   *   [ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED] drop, except for the suspend, Flow, per-call
+   *   lambda and stored-callback/interface-bridge-pair routes now keyed to the arm too, which stay
+   *   deferred like an ordinary class's. Planned entries are untouched.
    */
   private fun sealedSubclassEntries(
     sealed: KSClassDeclaration,
     subclass: KSClassDeclaration,
     // ADR-116 amendment (2026-09-13): the base's own declared members that produced a `Planned`
-    // entry, i.e. the ones the generated C# base really carries. Keyed on node identity, the same
-    // `Set<KSNode>` idiom `pairedCallbackMethods` below uses.
+    // entry, i.e. the ones the generated C# base really carries. Keyed on node identity, since a
+    // `KSFunctionDeclaration` is the only thing that identifies one overload of a name.
     plannedBaseMembers: Set<KSNode>,
   ): List<ForwardCallableCatalogEntry> {
     val subName: String = subclass.simpleName.asString()
@@ -1331,10 +1332,6 @@ internal class ForwardCallablePlanner(
       }
     }
 
-    // The union the CALLBACK_PROTOCOL exemption below reads, as a `Set<KSNode>` so an entry's
-    // nullable node can be tested against it directly.
-    val pairedCallbackMethods: Set<KSNode> = interfaceBridgeMethods + storedCallbackMethods
-
     // ADR-116 Diagnostics: `droppedFromCSharp = false` means "a named legacy route re-emits it",
     // which is only true for an ordinary class. On a sealed arm the member is simply gone, so the
     // silent deferral becomes a named drop carrying the reason it came from. ABSTRACT cannot occur
@@ -1354,13 +1351,14 @@ internal class ForwardCallablePlanner(
             // ADR-124: and the same for the legacy Flow/StateFlow route, one issue later.
             entry.reason != ForwardPlanSkipReason.FLOW_PROTOCOL &&
             // ADR-116 amendment (2026-09-11): the per-call lambda-parameter route (ADR-036) is
-            // keyed to the arms too now, so its skip is a deferral again. Split by **origin**, not
-            // by reason: an add/remove pair takes the identical `CALLBACK_PROTOCOL` constant from
-            // the structural check above, no arm route emits one, and exempting the reason
-            // wholesale would put a pair back into the silent absence this ADR exists to end.
-            // What is left named is GENERIC, SUSPEND_CALLBACK_PROTOCOL and the pairs.
-            !(entry.reason == ForwardPlanSkipReason.CALLBACK_PROTOCOL &&
-                entry.node !in pairedCallbackMethods)
+            // keyed to the arms too now, so its skip is a deferral again. The 2026-09-13 amendment
+            // finished the reason off: the stored-callback (ADR-037) and interface-bridge
+            // (ADR-039) add/remove **pairs**, which take the identical `CALLBACK_PROTOCOL`
+            // constant from the structural check above, are keyed to the arm as well, so the
+            // origin split that kept a pair named is gone and the exemption is by reason like the
+            // other three. What is left named on an arm is GENERIC and SUSPEND_CALLBACK_PROTOCOL,
+            // neither of which any route emits for any owner.
+            entry.reason != ForwardPlanSkipReason.CALLBACK_PROTOCOL
       if (!isUnrouted) return@map entry
 
       ForwardCallableCatalogEntry.Skipped(

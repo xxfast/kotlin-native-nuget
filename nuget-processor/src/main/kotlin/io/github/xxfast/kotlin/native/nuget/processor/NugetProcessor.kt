@@ -38,6 +38,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowPropertyExp
 import io.github.xxfast.kotlin.native.nuget.processor.exports.declaresOrInheritsFlowMember
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMethods
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmLambdaMethods
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmStoredCallbackPairs
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowProperties
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericFunctionRoute
@@ -47,6 +49,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceBridge
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addLambdaParamMethodExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addStoredCallbackExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceBridgeExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionFunctionExports
@@ -1570,8 +1573,25 @@ class NugetProcessor(
 
     val hasLambdaParamMethods: Boolean = armsHaveLambdaParamMethods || classesHaveLambdaParamMethods
 
+    // ADR-116 amendment (2026-09-13): the arm half of both gates below. A sealed class is not in
+    // `classes` (ADR-009), so a module whose only callback owner is a pair-bearing arm would emit
+    // `fn.invoke(...)` with no `invoke`/`CFunction`/`COpaquePointer` import — a compile error in
+    // the generated file, and `armsHaveLambdaParamMethods` above cannot stand in for it because
+    // its selector excludes the pairs on purpose.
+    val armsHaveStoredCallbackPairs: Boolean = sealedClasses.any { sealed ->
+      sealed.getSealedSubclasses().any { subclass ->
+        subclass.forwardArmStoredCallbackPairs(forwardClassifier).isNotEmpty()
+      }
+    }
+
+    val armsHaveInterfaceBridgePairs: Boolean = sealedClasses.any { sealed ->
+      sealed.getSealedSubclasses().any { subclass ->
+        subclass.forwardArmInterfaceBridgePairs(forwardClassifier).isNotEmpty()
+      }
+    }
+
     // Stored-callback pairs also need invoke/CFunction/COpaquePointer (the bridge lambda calls fn.invoke).
-    val hasStoredCallbackMethods: Boolean = classes.any { cls ->
+    val hasStoredCallbackMethods: Boolean = armsHaveStoredCallbackPairs || classes.any { cls ->
       val lambdaParamMethods: List<KSFunctionDeclaration> = cls.getAllFunctions()
         .filter { method ->
           method.parameters.any { param ->
@@ -1582,7 +1602,7 @@ class NugetProcessor(
     }
 
     // Interface-bridge pairs also need invoke/CFunction/COpaquePointer (each method's fn.invoke).
-    val hasInterfaceBridgeMethods: Boolean = classes.any { cls ->
+    val hasInterfaceBridgeMethods: Boolean = armsHaveInterfaceBridgePairs || classes.any { cls ->
       val allMethods: List<KSFunctionDeclaration> = cls.getAllFunctions().toList()
       findInterfaceBridgePairs(allMethods).isNotEmpty()
     }
@@ -1714,6 +1734,33 @@ class NugetProcessor(
         attributing(subclass) {
           armLambdaMethods.forEach { method ->
             builder.addLambdaParamMethodExport(method, subQualifiedName, armPrefix)
+          }
+        }
+      }
+    }
+
+    // ADR-116 amendment (2026-09-13): the fourth legacy route on the arm, the stored-callback
+    // (ADR-037) and interface-bridge (ADR-039) `addX`/`removeX` **pairs**, under the same
+    // `${sealedPrefix}_${sub}` prefix. Both builders are already `(add, remove, qualifiedName,
+    // prefix)`-keyed and mint their own `ownedBy(...)` owner, so the arm needs no export shape of
+    // its own; `forwardArmStoredCallbackPairs` / `forwardArmInterfaceBridgePairs` are the two
+    // selectors this loop, the import gates below and `translateSealedClass` all read.
+    sealedClasses.forEach { sealed ->
+      val sealedPrefix: String = sealed.simpleName.asString().lowercase()
+      sealed.getSealedSubclasses().forEach { subclass ->
+        val subQualifiedName: String = subclass.qualifiedName?.asString() ?: return@forEach
+        val armPrefix: String = "${sealedPrefix}_${subclass.simpleName.asString().lowercase()}"
+        val storedPairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
+          subclass.forwardArmStoredCallbackPairs(forwardClassifier)
+        val bridgePairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
+          subclass.forwardArmInterfaceBridgePairs(forwardClassifier)
+        if (storedPairs.isEmpty() && bridgePairs.isEmpty()) return@forEach
+        attributing(subclass) {
+          storedPairs.forEach { (addMethod, removeMethod) ->
+            builder.addStoredCallbackExports(addMethod, removeMethod, subQualifiedName, armPrefix)
+          }
+          bridgePairs.forEach { (addMethod, removeMethod) ->
+            builder.addInterfaceBridgeExports(addMethod, removeMethod, subQualifiedName, armPrefix)
           }
         }
       }

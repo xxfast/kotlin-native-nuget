@@ -140,10 +140,10 @@ data class CirSealedSubclass(
   /**
    * ADR-116: the arm's own declared member functions, projected from the ADR-062 callable plan the
    * way an ordinary [CirClass]'s methods are. Empty for an arm that declares none. A `suspend`
-   * member rides [asyncMembers] (ADR-118) and a `Flow`-returning one [flowMembers] (ADR-124); a
-   * generic member has no arm route at all and is named by a `SKIPPED_UNSUPPORTED_COMBINATION`
-   * diagnostic instead, and so does a callback member the arm route does not cover (an add/remove
-   * pair, a `suspend` lambda parameter).
+   * member rides [asyncMembers] (ADR-118), a `Flow`-returning one [flowMembers] (ADR-124), and a
+   * per-call lambda or an add/remove pair [callbackMembers] (ADR-116 amendments); a generic member
+   * or a `suspend` lambda parameter has no arm route at all and is named by a
+   * `SKIPPED_UNSUPPORTED_COMBINATION` diagnostic instead.
    */
   val methods: List<CirMethod> = emptyList(),
   /**

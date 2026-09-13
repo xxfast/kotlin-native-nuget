@@ -455,6 +455,51 @@ public class LiveHandleTests
         });
     }
 
+    // Rows 8k and 8l. ADR-116's 2026-09-13 amendment: the same two callback families, one owner
+    // kind to the left. A stored-callback pair (`StableRef.create(unregister)` on subscribe,
+    // `ref.dispose()` on `Dispose`) and an interface-bridge pair (that, plus one retained handle
+    // per `String` payload the C# thunk owns) declared on a **sealed arm**, so the receiver is a
+    // `StableRef<Job.Running>` / `StableRef<Job.Idle>` rather than an ordinary class. The pair's
+    // own handles are unchanged; the arm receiver is the new thing, and a re-key that retains the
+    // receiver per subscription rather than borrowing it shows up here as +N and nowhere else.
+    private sealed class ProbeWatcher : IJobWatcher
+    {
+        public int Wakes { get; private set; }
+        public void OnWake(string reason) => Wakes++;
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void SealedArm_StoredCallbackPair_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var factory = new JobFactory();
+            using Job.Running oreo = factory.Running(40);
+            var ticks = new List<string>();
+            IDisposable subscription = oreo.AddTicker(tick => ticks.Add(tick));
+            oreo.Tick();
+            subscription.Dispose();
+            Assert.Equal(new[] { "tick:40" }, ticks);
+        });
+    }
+
+    // `Job.Idle` is a process-wide `data object`, so an undisposed bridge here would outlive the
+    // iteration and be fired again by the next one: the `using` is load-bearing, not stylistic.
+    [Fact]
+    public void SealedArm_InterfaceBridgePair_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var factory = new JobFactory();
+            using Job.Idle mylo = factory.Idle();
+            var watcher = new ProbeWatcher();
+            using IDisposable sub = mylo.AddWatcher(watcher);
+            mylo.Wake("hallway");
+            Assert.Equal(1, watcher.Wakes);
+        });
+    }
+
     // Row 8f. ADR-071: a `MutableStateFlow<T>` returned from a function, held by the wrapper. The
     // fix mints a StableRef for the flow itself on every call (the wrapper's `ownedHandle`, freed
     // in `Dispose()`), which is a handle no other flow route owns: the property half re-reads a

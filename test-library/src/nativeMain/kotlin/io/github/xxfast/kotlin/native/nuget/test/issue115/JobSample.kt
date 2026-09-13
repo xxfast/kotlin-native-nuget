@@ -31,6 +31,21 @@ interface JobListener {
 annotation class Unstable
 
 /**
+ * The interface-bridge half of ADR-116's 2026-09-13 amendment, declared top-level beside
+ * [JobListener] and deliberately **not** [JobListener] itself: `addInterfaceBridgeExports` emits
+ * every override as `Unit` and reinterprets each slot as `CFunction<(...) -> Unit>`, so
+ * [JobListener.onEvent]'s `String` return would generate a Kotlin override with a mismatched
+ * return type and break the build for a reason that has nothing to do with the arm re-key.
+ *
+ * Void-only and single-method on purpose: it is the pair's payload carrier ([Job.Idle.addWatcher]
+ * / [Job.Idle.removeWatcher]), the `CatEventListener` shape one arity down.
+ */
+interface JobWatcher {
+  /** One `String` payload, so the UTF8 pair crosses on the bridged callback argument. */
+  fun onWake(reason: String)
+}
+
+/**
  * Fixture for issue [#115](https://github.com/xxfast/kotlin-native-nuget/issues/115) / ADR-116: a
  * public **member function declared on a sealed subclass** is never exported, and nothing says so.
  *
@@ -171,10 +186,26 @@ annotation class Unstable
  *   receiver in one member, so a route that only ever binds the value-returning shape, or only
  *   ever binds a `data class` receiver, cannot go green on this pair.
  *
- * Deliberately absent on the lambda half: a stored-callback or interface-bridge **pair** on an arm
- * (`addX`/`removeX`), a `suspend` lambda parameter, and a generic method. All three keep the
- * `SEALED_SUBCLASS_UNROUTED` row of the sealed post-process table, and a pair in particular must
- * stay *named* rather than fall silent, which is a diagnostic assertion rather than a cell.
+ * The stored-callback / interface-bridge **pair** (`addX`/`removeX`) is the row ADR-116's
+ * lambda-parameter amendment left behind, and the one ADR-116's 2026-09-13 amendment closes. Both
+ * builders are already prefix-keyed, so an arm owes the same `IDisposable AddX(...)` subscription
+ * an ordinary class gets, and the two owner kinds are crossed once each:
+ * - [Job.Running.addTicker] / [Job.Running.removeTicker] / [Job.Running.tick] — the ADR-037
+ *   **stored-callback** pair on a `data class` arm, `(String) -> Unit` storage, exactly the shape
+ *   `Cat.addMoodListener`/`removeMoodListener` admits. `Tick()` fires every registered ticker with
+ *   `"tick:$progress"`, so the payload is unreachable from a subscription that never registered
+ *   and a disposed one that still fires shows up as an extra element rather than a wrong value.
+ * - [Job.Idle.addWatcher] / [Job.Idle.removeWatcher] / [Job.Idle.wake] — the ADR-039
+ *   **interface-bridge** pair on a `data object` arm, carrying the new void-only [JobWatcher].
+ *   The object arm is the receiver cell: `handle.asStableRef<Job.Idle>()` rather than a static,
+ *   the same receiver [Job.Idle.pokeWith] proves for the per-call route. Because `Idle` is a
+ *   process-wide singleton, `watchers` is process-global mutable state that outlives a test: every
+ *   subscription on it must be disposed, and every assertion must read its own watcher's
+ *   recording, never a total.
+ *
+ * Still deliberately absent, and still expected to keep the `SEALED_SUBCLASS_UNROUTED` row of the
+ * sealed post-process table: a `suspend` lambda parameter and a generic method. Neither has a
+ * route on an *ordinary* class either, so the arm's named skip is already stricter than parity.
  *
  * Oreo (black with the white middle) does all the running: he starts at a percentage of the hallway
  * and finishes it. Mylo (brown and creamy) is [Job.Idle], and pokes back exactly once when nudged.
@@ -245,6 +276,23 @@ sealed class Job {
      * return at once. Oreo answers with his own progress and lets C# rename it.
      */
     fun relabel(transform: (String) -> String): String = transform("running-$progress")
+
+    // The ADR-037 **stored-callback pair** on a sealed arm, modelled on the ordinary-class
+    // precedent `Cat.addMoodListener`/`removeMoodListener` so the storage shape is the one the
+    // stored-callback route admits. Private, so the arm's public surface is the pair plus [tick].
+    private val tickers: MutableList<(String) -> Unit> = mutableListOf()
+
+    /** Subscribe half: binds as `IDisposable AddTicker(Action<string> listener)`. */
+    fun addTicker(listener: (String) -> Unit) { tickers += listener }
+
+    /** Unsubscribe half: the export the returned subscription's `Dispose()` calls. */
+    fun removeTicker(listener: (String) -> Unit) { tickers -= listener }
+
+    /**
+     * The trigger. Every registered ticker hears Oreo's progress, so a subscription that was never
+     * registered records nothing and a disposed one that still fires records an extra element.
+     */
+    fun tick() { tickers.forEach { it("tick:$progress") } }
 
     /** Overload pair, first arm. */
     fun step(by: Int): Int = progress + by
@@ -380,6 +428,20 @@ sealed class Job {
      * handle receiver rather than a `data class` one. Mylo says exactly one thing when nudged.
      */
     fun pokeWith(action: (String) -> Unit) = action("idle")
+
+    // The ADR-039 **interface-bridge pair** on a `data object` arm, the `CatEventSource` shape.
+    // `Idle` is a singleton, so this list is process-global: every C# subscription must be
+    // disposed by the test that made it.
+    private val watchers: MutableList<JobWatcher> = mutableListOf()
+
+    /** Subscribe half: binds as `IDisposable AddWatcher(IJobWatcher listener)`. */
+    fun addWatcher(w: JobWatcher) { watchers += w }
+
+    /** Unsubscribe half, called by the returned subscription's `Dispose()`. */
+    fun removeWatcher(w: JobWatcher) { watchers -= w }
+
+    /** The trigger: Mylo stirs and tells every watcher why, `String` across the bridged slot. */
+    fun wake(reason: String) { watchers.forEach { it.onWake(reason) } }
 
     /** Declared `override` of [Job.describe]: renders as a plain `public` method on the arm. */
     override fun describe(): String = "idle"

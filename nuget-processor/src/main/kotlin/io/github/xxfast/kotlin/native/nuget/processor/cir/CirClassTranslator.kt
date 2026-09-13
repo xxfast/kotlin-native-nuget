@@ -19,6 +19,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMethods
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmLambdaMethods
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmStoredCallbackPairs
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
 import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsHeldMutableStateFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
@@ -1896,10 +1898,35 @@ internal fun translateSealedClass(
       // the delegate registration and the extern shape are an ordinary class's. The entry point is
       // composed from `subPrefix`, which is the prefix the Kotlin export loop passes to
       // `addLambdaParamMethodExport`; `forwardArmLambdaMethods` is the selector both read.
-      val callbackMembers: List<CirMember> = subclass.forwardArmLambdaMethods(classifier)
+      val perCallCallbackMembers: List<CirMember> = subclass.forwardArmLambdaMethods(classifier)
         .mapNotNull { method ->
           translateCallbackMethod(method, libraryName, subPrefix, exportedTypes, tracker)
         }
+
+      // ADR-116 amendment (2026-09-13): and the pair routes on the arm, through the same two
+      // translators an ordinary class's pairs go through, so the delegate, the thunk, the
+      // `NugetSubscription` and the extern shapes are an ordinary class's. Entry points compose
+      // from `subPrefix`, the prefix the Kotlin export loop passes to the matching builders.
+      val storedCallbackMembers: List<CirMember> =
+        subclass.forwardArmStoredCallbackPairs(classifier).mapNotNull { (addMethod, removeMethod) ->
+          translateStoredCallbackMethod(
+            addMethod, removeMethod, libraryName, subPrefix, exportedTypes, tracker, context,
+          )
+        }
+
+      val interfaceBridgeMembers: List<CirMember> =
+        subclass.forwardArmInterfaceBridgePairs(classifier)
+          .mapNotNull { (addMethod, removeMethod) ->
+            // The arm's own C# name, not the base's: it lands in the subscribe body's
+            // `ObjectDisposedException(nameof(...))`, where the base's name compiles (the arm is
+            // nested inside it) and misnames the owner of the handle that was disposed.
+            translateInterfaceBridgeMethod(
+              addMethod, removeMethod, libraryName, subPrefix, subName, tracker,
+            )
+          }
+
+      val callbackMembers: List<CirMember> =
+        perCallCallbackMembers + storedCallbackMembers + interfaceBridgeMembers
 
       CirSealedSubclass(
         name = subName,

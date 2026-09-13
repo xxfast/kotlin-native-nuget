@@ -324,6 +324,10 @@ public void Cat_AddMoodListener_NoCallbackAfterDispose()
 }
 ```
 
+The same pair also binds when declared on a **sealed arm**, re-keyed onto the arm's own export
+prefix; see [Stored-callback and interface-bridge pairs on a sealed
+arm](interfaces-abstract-sealed.md#sealed-callback-pair-generated-c).
+
 ## C# implementing a Kotlin interface as a parameter
 
 From `test-library/src/nativeMain/kotlin/.../cat/CatEventListener.kt` and `CatEventSource.kt`:
