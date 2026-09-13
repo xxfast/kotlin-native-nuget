@@ -20,7 +20,7 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 | a sealed subclass declared nested inside its sealed base, used at a return, property, or parameter position | `Base.Sub` (enclosing scope kept) | see [A nested sealed subclass at a member position](#a-nested-sealed-subclass-at-a-member-position) |
 | an `interface` declared nested inside another class, used at a return, property, or parameter position | skipped named (`UNDECLARED_INTERFACE`) | see [Nested interfaces skip named](#nested-interfaces-skip-named) |
 | an exported base class's own declared `open val`/`open var`/`open fun` | `public virtual` property or method (both accessors, when a property has one of each) | so a subclass `override` compiles instead of `CS0506`; a concrete `open class`'s generated `Dispose()` renders `public virtual void Dispose()` for the same reason, see [A base class's own `open val`/`open var`/`open fun`](#a-base-class-s-own-open-val-open-var), [ADR-101](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md) |
-| an exported base class's `abstract val`/`abstract var`, own, or inherited from an exported interface without an implementation | `public abstract` property (both accessors, when it has one of each) | so a subclass `override` compiles instead of `CS0506`; the base's own abstract member keeps its (uncallable) `_get_`/`_set_` export pair, but an inherited-and-unimplemented interface member generates no native import at all, see [An exported base class's own `abstract val`/`abstract var`](#a-base-class-s-own-abstract-val-abstract-var), [An interface property a base class inherits without implementing](#an-interface-property-a-base-class-inherits-without-implementing), [ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md) |
+| an exported base class's `abstract val`/`abstract var`, own, or inherited from an exported **or unexported** interface without an implementation | `public abstract` property (both accessors, when it has one of each) | so a subclass `override` compiles instead of `CS0506`; the base's own abstract member keeps its (uncallable) `_get_`/`_set_` export pair, but an inherited-and-unimplemented interface member generates no native import at all; a member whose own type is unbridgeable (e.g. a nested class) skips named (`SKIPPED_UNSUPPORTED_PROPERTY`) on the abstract class instead, see [An exported base class's own `abstract val`/`abstract var`](#a-base-class-s-own-abstract-val-abstract-var), [An interface property a base class inherits without implementing](#an-interface-property-a-base-class-inherits-without-implementing), [An unexported interface](#an-interface-property-a-base-class-inherits-without-implementing-unexported), [ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md) |
 | an exported base class's own declared `abstract fun` (no body, no interface behind it) | `public abstract` method | so a subclass `override` compiles instead of `CS0115`; the walk keys on whether the Kotlin member has a body, so an *inherited* member the planner declined to plan is dropped instead of rendered `public abstract`, avoiding `CS0534` on a further subclass, see [An exported base class's own `abstract fun`](#a-base-class-s-own-abstract-fun), [ADR-101](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md), [ADR-075](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md) |
 
 ## Kotlin
@@ -669,13 +669,133 @@ public void Finch_PerchWrittenThroughTheBase_IsSeenByKotlinDispatch()
 ```
 
 <note>
-    <p>This is narrower than the base-class case above: it only covers an <b>exported</b>
-    interface. When the interface itself is unexported, <a
-    href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md">ADR-101</a>
-    drops it from the base list entirely, so there is no declaration left to spell a type from and
-    the inherited member still vanishes, leaving a consumer subclass's <code>override</code>
-    <code>CS0115</code>. See <a
-    href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
+    <p>The interface here (<code>Feathered</code>) is exported, so its own declaration is on the
+    ADR-113 catalog and <code>IFeathered</code> is declared. See the next section for the
+    unexported case.</p>
+</note>
+
+## An interface property a base class inherits without implementing, when the interface is unexported {id="an-interface-property-a-base-class-inherits-without-implementing-unexported"}
+
+[ADR-101](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md)
+drops an unexported interface from the base list (`: IFoo` never appears, and no `IFoo` is declared
+at all), but an exported abstract class can still inherit an abstract `val`/`var` from one without
+implementing it. That member now renders `public abstract` on the class too, planned separately from
+the exported interface's own declaration, so a further subclass's `override` compiles instead of
+`CS0115`. A member whose own type cannot be bridged, a nested class in the example below, is absent
+from both classes and skipped named (`SKIPPED_UNSUPPORTED_PROPERTY`) on the abstract class instead of
+silently dropped or crashing generation.
+
+### Kotlin {id="unexported-interface-property-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../hidden/Nesting.kt` (outside `rootPackage`, so never
+exported) and `test-library/src/nativeMain/kotlin/.../aviary/Nester.kt`:
+
+```kotlin
+interface Nesting {
+  val material: String
+  var height: Int
+  val lining: Lining
+
+  class Lining(val fibre: String = "down")
+}
+```
+
+```kotlin
+abstract class Nester : Nesting {
+  fun describe(): String = "$material@$height"
+}
+
+class Wren : Nester() {
+  override val material: String = "twig"
+  override var height: Int = 3
+  override val lining: Nesting.Lining = Nesting.Lining()
+}
+```
+
+### Generated C# {id="unexported-interface-property-generated-c"}
+
+From `Interop.cs`. No `INesting` is declared, and `Nester` declares `Material`/`Height` abstract with
+no native import for either; `lining` is absent from both classes:
+
+```C#
+public abstract class Nester : IDisposable, INugetHandle
+{
+    internal IntPtr _handle;
+
+    internal Nester(IntPtr handle)
+    {
+        _handle = handle;
+    }
+
+    public abstract string Material { get; }
+
+    public abstract int Height { get; set; }
+
+    public string Describe()
+    {
+        /* ... */
+    }
+
+    public abstract void Dispose();
+}
+public class Wren : Nester
+{
+    public override string Material
+    {
+        get { /* ... */ }
+    }
+
+    public override int Height
+    {
+        get { /* ... */ }
+        set { /* ... */ }
+    }
+}
+```
+
+### Using it from C# {id="unexported-interface-property-using-it-from-c"}
+
+From `IntegrationTests/AbstractUnexportedInterfacePropertyTests.cs`. A pure C# subclass compiles
+against the generated declaration, and a write through a `Nester`-typed reference to a Kotlin object
+is seen by Kotlin's own dispatch:
+
+```C#
+[Fact]
+public void Wren_HeightWrittenThroughTheBase_IsSeenByKotlinDispatch()
+{
+    using var wren = new Wren();
+
+    Nester nester = wren;
+
+    Assert.Equal("twig@3", nester.Describe());
+
+    nester.Height = 5;
+
+    Assert.Equal(5, wren.Height);
+    Assert.Equal("twig@5", nester.Describe());
+}
+
+private sealed class PaperWren : Nester
+{
+    public PaperWren() : base(IntPtr.Zero)
+    {
+    }
+
+    public override string Material => "paper";
+
+    public override int Height { get; set; } = 1;
+
+    public override void Dispose()
+    {
+    }
+}
+```
+
+<note>
+    <p>An unexported abstract <b>base class</b> a class inherits an unplanned abstract member from
+    stays silent, with no member and no diagnostic: its members are not planned anywhere, so a miss
+    there says nothing about bridgeability. See
+    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
 </note>
 
 `Observation` renders as an abstract class with each Kotlin subtype as a nested `sealed class`, plus a `FromHandle` dispatcher that reads a type tag off the native handle:

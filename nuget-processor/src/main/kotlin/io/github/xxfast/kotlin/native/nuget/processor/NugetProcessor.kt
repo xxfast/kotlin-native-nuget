@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor
 
+import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.findActualType
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.processing.CodeGenerator
@@ -1030,10 +1031,41 @@ class NugetProcessor(
     // (a reachable interface is planned by both).
     val declarationPlanner = ForwardCallablePlanner(forwardClassifier, expects)
     val declarationPropertyPlanner = ForwardPropertyPlanner(forwardClassifier)
+
+    // ADR-075 amendment (2026-09-13): the UNEXPORTED interface supertypes of exported classes,
+    // planned onto the same declaration catalog. ADR-101 drops `: INesting` from the base list,
+    // but the members it declares and the class never implements still have to be spelled on the
+    // C# class itself, or the class's own generated subclass renders `public override` against
+    // nothing (CS0115 inside the generated file). Planning them here means
+    // `inheritedAbstractProperty` reads base and override off ONE plan, so the type spelling and
+    // the setter's presence cannot drift (CS1715 / CS0534 / CS0546).
+    //
+    // Transitive on purpose (`getAllSuperTypes`): an unexported interface extending another
+    // unexported one declares the grandparent's members on the class too, and the lookup key is
+    // built from the member's own `parentDeclaration`.
+    //
+    // Nothing is *rendered* for these interfaces: `translateInterface` is driven by `interfaces`
+    // alone, and this catalog reaches only the C# translation, never `generateCNameWrappers` and
+    // never the ADR-055 contract check, so no `DllImport` and no Kotlin export follows.
+    val unexportedSupertypeInterfaces: List<KSClassDeclaration> = allClasses
+      .asSequence()
+      .flatMap { cls -> cls.getAllSuperTypes() }
+      .map { it.declaration }
+      .filterIsInstance<KSClassDeclaration>()
+      .filter { it.classKind == ClassKind.INTERFACE }
+      .filter { it.qualifiedName?.asString() !in exportedObjectHandles }
+      .distinctBy { it.qualifiedName?.asString() }
+      .toList()
+    // A THIRD planner instance, for the same reason the declaration planner above is a second one:
+    // its drop channel must not be merged, or every declared member of an unexported interface the
+    // class implements concretely would be warned about on every build.
+    val supertypePropertyPlanner = ForwardPropertyPlanner(forwardClassifier)
     val interfaceDeclarationCatalog = ForwardCallablePlanCatalog(
       entries = interfaces.flatMap { iface -> declarationPlanner.interfaceEntries(iface) },
       propertyPlans = interfaces.flatMap { iface ->
         declarationPropertyPlanner.interfaceProperties(iface)
+      } + unexportedSupertypeInterfaces.flatMap { iface ->
+        supertypePropertyPlanner.interfaceProperties(iface)
       },
     )
 
