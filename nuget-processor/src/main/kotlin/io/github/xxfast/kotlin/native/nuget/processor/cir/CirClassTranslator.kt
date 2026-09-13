@@ -49,6 +49,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverride
 import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesBaseClassMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionRead
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyDiscriminatedRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementReadArgument
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElement
@@ -1520,7 +1521,23 @@ internal fun suspendMembers(
       body = "",
       isAsync = true,
       asyncReturnType = asyncReturnType,
-      asyncResultRead = collectionReturn?.let { legacyCollectionRead("resultPtr", it) },
+      // ADR-119 / ADR-131: exhaustive on purpose -- a new return shape must be answered here
+      // rather than fall through an `else` into the renderer's `new T(resultPtr)`.
+      asyncResultRead = when (returnShape) {
+        is ForwardLegacyReturnShape.Marshalled ->
+          legacyCollectionRead("resultPtr", returnShape.type)
+
+        // ADR-131: spelled off `asyncReturnType`, which is the same `nestedCsName()` string
+        // `Task<...>` above is built from, so the declared type and the read cannot drift.
+        is ForwardLegacyReturnShape.Discriminated -> legacyDiscriminatedRead(
+          handle = "resultPtr",
+          csharpType = asyncReturnType.removeSuffix("?"),
+          nullable = returnShape.nullable,
+        )
+
+        // `Refused` already returned above; `Plain` keeps the renderer's shipped spelling.
+        ForwardLegacyReturnShape.Plain, is ForwardLegacyReturnShape.Refused -> null
+      },
     )
 
     listOf(nativeImport, asyncMethod)

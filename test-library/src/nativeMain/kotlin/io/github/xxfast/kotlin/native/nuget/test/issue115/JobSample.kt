@@ -119,6 +119,27 @@ interface JobListener {
  * - [anyRunningLater], the **top-level** suspend route (ADR-007 static class `JobSample`), the
  *   second spelling site. A fix applied to the class route alone still leaves this one broken.
  *
+ * The sealed **base** (not an arm) at a `suspend` return is the row ADR-118's amendment left
+ * behind: `Task<Job>` is spelled correctly, but the completion renders
+ * `t.SetResult(new Job(resultPtr))` against `public abstract class Job`, which is CS0144 in the
+ * consumer. It must read `Job.FromHandle(resultPtr)`, the discriminator the synchronous
+ * [Job.Running.next] already goes through. Every owner kind, once:
+ * - [Job.Running.nextLater] — the base at a suspend return **on an arm**, answering with a
+ *   *different* arm than the receiver, so a completion that constructs the receiver's type by
+ *   name (or reads the discriminator wrong) fails on the payload rather than passing by luck.
+ * - [Job.Running.nextOrNullLater] — the **nullable** twin, the branch one step up in the same
+ *   renderer (`resultPtr == IntPtr.Zero ? null : new Job(resultPtr)`). Both the null input and an
+ *   arm-returning one are reachable, so the guard and the read are crossed separately.
+ * - [Job.Running.nextOrThrowLater] — the **throw** path: no result is minted, so the new read is
+ *   never reached and only the ADR-128/130 error envelope crosses. It is the leak row's fixture.
+ * - [JobFactory.nextLater] — an **ordinary class** owner dispatching across all three arm shapes
+ *   by input (`data object`, payload `data class`, second `data class`), so a completion pinned to
+ *   one constructor cannot pass all three.
+ * - [anyNextLater] — the **top-level** route's own speller, the second site.
+ * All of them are named `...Later`: [Job.Running.next] already owns the synchronous half of this
+ * cell, and `suspend fun next()` beside it is `CONFLICTING_OVERLOADS`. The sealed-*interface* twin
+ * lives on `Monitor.nextPulseLater` (issue54), and [Job.Done] stays suspend-free.
+ *
  * Deliberately absent on the ADR-124 half: a base-declared flow property on [Job] itself (the
  * all-properties rule comes from ADR-111 and is already fixture-covered for ordinary property
  * types), a `suspend fun` returning a `Flow` (still a named `SKIPPED_UNSUPPORTED_RETURN` since
@@ -189,6 +210,33 @@ sealed class Job {
 
     /** Sealed **base** return: `Job.FromHandle` discriminates it back onto [Done]. */
     fun next(): Job = Done(progress)
+
+    /**
+     * The sealed **base** at a *suspend* return, on an arm: `Task<Job>` completed through
+     * `Job.FromHandle(resultPtr)`. Answers with a *different* arm than the receiver, so a
+     * completion that constructs the receiver's type by name, or reads the discriminator wrong,
+     * fails on `Code` rather than passing by luck. Named `nextLater` because [next] already owns
+     * the synchronous half of this cell and `suspend fun next()` beside it is
+     * `CONFLICTING_OVERLOADS`.
+     */
+    suspend fun nextLater(): Job = Done(progress + 1)
+
+    /**
+     * The nullable twin, `Task<Job?>`: the branch one step up in the completion renderer, which
+     * spells `resultPtr == IntPtr.Zero ? null : new Job(resultPtr)` today and is the same defect.
+     * Oreo at 100% is already at the bowl, so there is no next job.
+     */
+    suspend fun nextOrNullLater(): Job? = if (progress >= 100) null else Done(progress + 1)
+
+    /**
+     * The throw path of the same route: when the body throws, no result is minted, so the new
+     * `FromHandle` read is never reached and the error envelope (ADR-128/130) is the only thing
+     * crossing. A leak row drives this thousands of times, so the sentinel is cheap and the body
+     * has no suspension point at all.
+     */
+    suspend fun nextOrThrowLater(step: Int): Job =
+      if (step < 0) error("Oreo refuses to run backwards down the hallway")
+      else Done(progress + step)
 
     /** Sibling nested arm return, spelled as its own concrete type. */
     fun finish(): Done = Done(progress)
@@ -322,6 +370,18 @@ class JobFactory {
 
   /** The `data object` arm on the suspend route: `Task<Job.Idle>`, `new Job.Idle(resultPtr)`. */
   suspend fun idleLater(): Job.Idle = Job.Idle
+
+  /**
+   * The sealed **base** at a suspend return on an *ordinary class* owner, dispatching across all
+   * three payload shapes by input: a `data object` arm, a `data class` arm with a payload, and a
+   * second `data class` arm. One `Task<Job>` completion has to land on whichever arm the
+   * discriminator names, so a completion pinned to a single constructor cannot pass all three.
+   */
+  suspend fun nextLater(progress: Int): Job = when {
+    progress < 0 -> Job.Idle
+    progress < 100 -> Job.Running(progress)
+    else -> Job.Done(progress)
+  }
 }
 
 /**
@@ -340,3 +400,11 @@ fun idleJob(): Job = Job.Idle
  * rather than the argument.
  */
 suspend fun anyRunningLater(): Job.Running = Job.Running(33)
+
+/**
+ * The **top-level** spelling site for the sealed *base* at a suspend return (ADR-007 static class
+ * `JobSample`). The top-level route has its own return speller, so a fix applied to the class
+ * route alone still leaves this one completing with `new Job(resultPtr)`. Always [Job.Done], so
+ * the assertion reads a payload the base cannot answer.
+ */
+suspend fun anyNextLater(progress: Int): Job = Job.Done(progress)

@@ -608,6 +608,119 @@ public class SealedSubclassMethodTests
         Assert.IsAssignableFrom<Job>(oreo);
     }
 
+    // ---- The sealed *base* (not an arm) at a suspend return: Task<Job> via Job.FromHandle. ----
+
+    /// <summary>
+    /// The defect this section pins: when a <c>suspend fun</c> returns the sealed <em>base</em>,
+    /// the return type is spelled correctly as <c>Task&lt;Job&gt;</c> but the completion renders
+    /// <c>t.SetResult(new Job(resultPtr))</c>, and <c>Job</c> is <c>public abstract class</c>, so
+    /// the consumer's <c>Interop.cs</c> fails CS0144 ("cannot create an instance of the abstract
+    /// type") and nothing in the assembly compiles. The Kotlin half already mints the StableRef on
+    /// the concrete arm, so the completion only has to read it through
+    /// <c>Job.FromHandle(resultPtr)</c>, the discriminator the synchronous <c>Next()</c> above
+    /// already goes through.
+    /// <para>
+    /// The answer is a <em>different</em> arm than the receiver on purpose: a completion that
+    /// constructs the receiver's type by name, or reads the discriminator off the wrong handle,
+    /// fails on <c>Code</c> rather than passing by luck. Oreo is 4% down the hallway and the next
+    /// job is the finished one at 5.
+    /// </para>
+    /// <para>
+    /// <c>using</c>, not <c>await using</c>: the base is only <c>IDisposable</c>
+    /// (<c>CirSealedRenderer</c> puts <c>IAsyncDisposable</c> on the suspending arms alone), so
+    /// <c>await using</c> on a <c>Job</c>-typed local is CS8410. The arm's synchronous
+    /// <c>Dispose()</c> cancels and disposes its scope before releasing the handle, so a
+    /// suspending arm held as the base still cleans up both.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task NextLaterAsync_SealedBaseAtASuspendReturnOnAnArm_DiscriminatesToTheOtherArm()
+    {
+        using var factory = new JobFactory();
+        await using Job.Running oreo = factory.Running(4);
+
+        using Job next = await oreo.NextLaterAsync();
+
+        Job.Done done = Assert.IsType<Job.Done>(next);
+        Assert.Equal(5, done.Code);
+    }
+
+    /// <summary>
+    /// The ordinary-class owner, dispatching across all three arm shapes from one
+    /// <c>Task&lt;Job&gt;</c> completion: a <c>data object</c> arm, a payload <c>data class</c>
+    /// arm, and a second <c>data class</c> arm. A completion pinned to a single constructor cannot
+    /// pass all three, and the payloads are distinct so a wrong discriminator is a wrong value.
+    /// </summary>
+    [Fact]
+    public async Task NextLaterAsync_SealedBaseOnAnOrdinaryClass_DispatchesPerArm()
+    {
+        using var factory = new JobFactory();
+
+        using Job idle = await factory.NextLaterAsync(-1);
+        using Job running = await factory.NextLaterAsync(7);
+        using Job done = await factory.NextLaterAsync(100);
+
+        Assert.IsType<Job.Idle>(idle);
+        Assert.Equal(7, Assert.IsType<Job.Running>(running).Progress);
+        Assert.Equal(100, Assert.IsType<Job.Done>(done).Code);
+    }
+
+    /// <summary>
+    /// The nullable twin, <c>Task&lt;Job?&gt;</c>: the branch one step up in the same renderer,
+    /// which spells <c>resultPtr == IntPtr.Zero ? null : new Job(resultPtr)</c> and carries the
+    /// identical CS0144. Both branches in one test, because a fix that reads the null guard right
+    /// and the handle wrong (or the reverse) passes on one of them alone. Oreo at 100% is already
+    /// at the bowl, so there is no next job for him.
+    /// </summary>
+    [Fact]
+    public async Task NextOrNullLaterAsync_NullableSealedBase_ReadsNullAsNullAndAnArmAsTheArm()
+    {
+        using var factory = new JobFactory();
+        await using Job.Running finished = factory.Running(100);
+        await using Job.Running oreo = factory.Running(12);
+
+        Assert.Null(await finished.NextOrNullLaterAsync());
+
+        using Job? next = await oreo.NextOrNullLaterAsync();
+        Assert.Equal(13, Assert.IsType<Job.Done>(next).Code);
+    }
+
+    /// <summary>
+    /// The throw path of the same route. When the body throws, no result handle is minted, so the
+    /// discriminated read is never reached and only the ADR-128/130 error envelope crosses:
+    /// Kotlin's <c>IllegalStateException</c> arrives as
+    /// <c>KotlinInvalidOperationException : InvalidOperationException</c>. The non-throwing input
+    /// is asserted beside it so the sentinel is a branch rather than the whole member.
+    /// </summary>
+    [Fact]
+    public async Task NextOrThrowLaterAsync_SealedBaseSuspendThatThrows_PropagatesAndStillBinds()
+    {
+        using var factory = new JobFactory();
+        await using Job.Running oreo = factory.Running(4);
+
+        using Job next = await oreo.NextOrThrowLaterAsync(3);
+        Assert.Equal(7, Assert.IsType<Job.Done>(next).Code);
+
+        InvalidOperationException failure =
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(
+                async () => await oreo.NextOrThrowLaterAsync(-1));
+        Assert.Contains("backwards down the hallway", failure.Message);
+    }
+
+    /// <summary>
+    /// The second spelling site: the sealed base at a <em>top-level</em> <c>suspend fun</c> on the
+    /// ADR-007 static class. It has its own return speller, so a fix applied to the class route
+    /// alone leaves this one emitting <c>new Job(resultPtr)</c> and the assembly still fails to
+    /// compile.
+    /// </summary>
+    [Fact]
+    public async Task AnyNextLaterAsync_TopLevelSuspendReturningTheSealedBase_UsesFromHandle()
+    {
+        using Job next = await JobSample.AnyNextLaterAsync(3);
+
+        Assert.Equal(3, Assert.IsType<Job.Done>(next).Code);
+    }
+
     // ---- ADR-124: the Flow / StateFlow route, re-keyed so a sealed arm is a valid owner. ----
 
     /// <summary>

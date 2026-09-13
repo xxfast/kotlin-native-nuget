@@ -126,6 +126,32 @@ public class SealedInterfaceTests
     }
 
     /// <summary>
+    /// The sealed-interface half of the suspend-route cell whose sealed-<em>class</em> half is
+    /// <c>Job.Running.NextLaterAsync</c> (issue115). An eligible sealed interface is rendered by
+    /// the same <c>CirSealedRenderer</c> as <c>public abstract class Pulse</c> with a
+    /// <c>Pulse.FromHandle</c> discriminator, so a <c>suspend fun</c> returning the base binds as
+    /// <c>Task&lt;Pulse&gt;</c> and today completes with <c>t.SetResult(new Pulse(resultPtr))</c>:
+    /// CS0144, identically. Both arms are driven from one member, so the discriminator rather than
+    /// the declared type has to decide. Oreo purrs at 72; Mylo, counted at nothing, reads flat.
+    /// <para>
+    /// <c>using</c>, not <c>await using</c>: the base carries <c>IDisposable</c> only (CS8410). The
+    /// owner is disposed synchronously too, so this cell stays independent of whether the suspend
+    /// member also hands <c>Monitor</c> an <c>IAsyncDisposable</c>.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task NextPulseLaterAsync_SealedInterfaceBaseAtASuspendReturn_UsesFromHandle()
+    {
+        using var monitor = new Monitor();
+
+        using Pulse beat = await monitor.NextPulseLaterAsync(72);
+        Assert.Equal(72, Assert.IsType<Pulse.Beat>(beat).Bpm);
+
+        using Pulse flat = await monitor.NextPulseLaterAsync(0);
+        Assert.IsType<Pulse.Flat>(flat);
+    }
+
+    /// <summary>
     /// The parameter position: the handle crosses back and is unwrapped to a real Kotlin
     /// <c>Pulse</c>. The return is a plain <c>Int</c>, so the assertion reads the Kotlin side of the
     /// wire; a handle that arrived as a raw pointer cannot answer it.

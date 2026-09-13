@@ -14,6 +14,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeC
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionRead
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyDiscriminatedRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
@@ -698,7 +699,19 @@ internal fun translateSuspendFunction(
     isStatic = true,
     isAsync = true,
     asyncReturnType = asyncReturnType,
-    asyncResultRead = collectionReturn?.let { legacyCollectionRead("resultPtr", it) },
+    // ADR-119 / ADR-131: the top-level route's own copy of the class route's decision, exhaustive
+    // for the same reason -- the two routes have to answer a new return shape identically.
+    asyncResultRead = when (returnShape) {
+      is ForwardLegacyReturnShape.Marshalled -> legacyCollectionRead("resultPtr", returnShape.type)
+
+      is ForwardLegacyReturnShape.Discriminated -> legacyDiscriminatedRead(
+        handle = "resultPtr",
+        csharpType = asyncReturnType.removeSuffix("?"),
+        nullable = returnShape.nullable,
+      )
+
+      ForwardLegacyReturnShape.Plain, is ForwardLegacyReturnShape.Refused -> null
+    },
   )
 
   return listOf(nativeImport, asyncMethod)

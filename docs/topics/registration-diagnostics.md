@@ -248,6 +248,24 @@ by-value payload mints no `StableRef` on the Kotlin side to begin with, and the 
 that carries the delegate itself is freed in the calling method's own `finally`, so there is nothing
 for `LiveHandles` to measure.
 
+Rows 9e through 9g cover a suspend call returning the sealed base itself, now that it completes
+through the generated discriminator instead of failing to compile (see
+[A `suspend fun` returning the sealed base](interfaces-abstract-sealed.md#sealed-method-suspend-base-generated-c)):
+
+- **9e**, `Suspend_ReturningTheSealedBase_ReturnsToBaseline`: Kotlin mints the `StableRef` on the
+  concrete arm, and the completion hands that same handle to `Job.FromHandle`, which discriminates
+  and constructs the arm wrapper that then owns it. A completion that reads the discriminator
+  through a second handle, or mints one to read the type and forgets it, shows up here and nowhere
+  in the functional tests, which assert only the payload.
+- **9f**, `Suspend_ReturningTheNullableSealedBase_ReturnsToBaseline`, both branches in one crossing:
+  the null return mints no handle at all (a guard that releases something it never received goes
+  negative here), and the arm return goes through the same discriminated read as 9e.
+- **9g**, `Suspend_ReturningTheSealedBase_Throws_ReturnsToBaseline`, the throw path of the same
+  route: when the body throws, no result is minted and the ADR-128/130 error envelope crosses
+  instead, pinning that `NugetErrorNative.BuildException` releases what it was handed. Run at 5000
+  iterations, the same tight-loop precedent as the no-suspension-point row above, since the body has
+  no suspension point either.
+
 <note>
     <p><code>NugetMarshal.LiveHandles</code> is process-global: any other handle-crossing code
     running in the same process moves the count during the window a leak assertion measures across.
