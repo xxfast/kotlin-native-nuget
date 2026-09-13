@@ -1273,14 +1273,16 @@ public void NestedInterface_ImplementedInCSharp_IsCalledBackFromKotlin()
 ```
 
 A dependency-module nested type (`Broadcast.Schedule`/`Broadcast.AdBand`/`Broadcast.Defaults`) is
-declared exactly the same way as a module-local one, once its owner (`Broadcast`) is itself admitted
-through an ordinary member-type edge (`Newsroom.broadcast(): Broadcast`,
-[ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md)).
-The owner walk is the sole declarer, so no nested declaration is ever also flattened to namespace
-root, whether it comes from this module or a dependency; see
-`IntegrationTests/NestedClassGateTests.cs`. `LeakTests/LiveHandleTests.cs` Row 1a mints and releases
-a nested class handle through the same `NugetHandles` route Row 1 measures for a top-level class:
-nesting adds no new mint path.
+declared exactly the same way as a module-local one, once its owner (`Broadcast`) is admitted. The
+owner does not need a member of its own returning it: a member naming only the nested type climbs
+the owner chain and admits the owner on its own strength, so `Newsroom.page(): Almanac.Page` admits
+`Almanac` even though nothing anywhere returns `Almanac` itself
+([ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md)
+amendment). The owner walk is still the sole declarer, so no nested declaration is ever also
+flattened to namespace root, whether it comes from this module or a dependency; see
+`IntegrationTests/NestedClassGateTests.cs` and `IntegrationTests/ReachabilityNestedEdgeTests.cs`.
+`LeakTests/LiveHandleTests.cs` Row 1a mints and releases a nested class handle through the same
+`NugetHandles` route Row 1 measures for a top-level class: nesting adds no new mint path.
 
 ### An `object` at a member position stays CS0722 {id="nested-object-position"}
 

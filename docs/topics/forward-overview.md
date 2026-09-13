@@ -364,6 +364,38 @@ When at least one dependency-module type *is* admitted, the closure also emits o
 `INFO_EXPORTED_FROM_DEPENDENCY` line per KSP run rather than one line per type, naming the whole
 admitted set.
 
+The closure follows two more edges through a nested type, closing a gap
+[ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md) left
+when it shipped nested-type declaration with no closure change of its own. A member returning or
+taking a nested type climbs to its owner first, so a dependency member naming only `Almanac.Page`
+admits `Almanac` even when nothing anywhere returns `Almanac` itself; and once a nested type is
+declared under an admitted owner, the closure also walks *its own* member types, so
+`Broadcast.Schedule.timetable(): Timetable` admits the top-level dependency type `Timetable` on the
+strength of a member declared two levels down. Neither edge gives the nested type its own admission
+record: the owner is what the manifest and the generated C# name, exactly as
+[Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects) describes.
+
+From `Interop.cs`, `Almanac` is declared at namespace level with `Page` nested inside it even though
+no member anywhere returns `Almanac`, and `Timetable` is declared at namespace level even though the
+only member naming it is two levels down, on `Broadcast.Schedule`:
+
+```C#
+public class Almanac : IDisposable, INugetHandle
+{
+    // ...
+
+    public class Page : IDisposable, INugetHandle
+    {
+        // ...
+    }
+}
+
+public class Timetable : IDisposable, INugetHandle
+{
+    // ...
+}
+```
+
 ### Duplicate-type hazard across two published packages {id="duplicate-type-hazard"}
 
 Two Gradle modules can each publish forward and each independently admit the same dependency-module

@@ -162,6 +162,7 @@ public class NestedClassGateTests
             ("Marker", typeof(ProbeOuter)),
             ("Schedule", typeof(Broadcast)),
             ("Defaults", typeof(Broadcast)),
+            ("Page", typeof(Almanac)),
         };
 
         var declarations = typeof(ProbeOuter).Assembly

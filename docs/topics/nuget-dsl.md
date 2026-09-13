@@ -217,16 +217,20 @@ warning would be noise at this scale.
 
 A dependency type nested inside another declaration (`Broadcast.Schedule`) is declared nested under
 its owner, `Broadcast.Schedule`, exactly like a module-local nested type, once the *owner* itself
-(`Broadcast`) is admitted through an ordinary member-type edge; the closure takes no direct part in
-declaring the nested type itself
-([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)).
-A dependency member naming only the nested type, with no other member reaching its owner, still
-admits nothing: there is no edge from "a member returns a nested type" to "admit its owner." A
-dependency type nested under a still-deferred owner shape (an `inner class`, a generic, an `enum
-class`, an `interface`, or a sealed base/arm) is refused admission outright and skips named with
-`SKIPPED_NESTED_DECLARATION` on the declaration and `UNDECLARED_CLASS`/`UNDECLARED_ENUM`/
-`UNDECLARED_INTERFACE` on any member typed with it, the same as a module-local one under the same
-deferred shape; see [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects).
+(`Broadcast`) is admitted; the closure never gives the nested type a bucket of its own, since
+[ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)'s
+owner walk is the sole declarer.
+The owner no longer has to be admitted through some *other* member: a member naming only the nested
+type climbs the owner chain first, so `Newsroom.page(): Almanac.Page` admits `Almanac` even when
+nothing anywhere returns `Almanac` itself, and the closure also walks a declared nested type's own
+member types, so `Broadcast.Schedule.timetable(): Timetable` admits the top-level dependency type
+`Timetable` on the strength of a member declared two levels down. Either way the manifest and the
+generated C# name the owner, never the nested type, since the nested type still gets no admission
+record of its own. A dependency type nested under a still-deferred owner shape (an `inner class`, a
+generic, an `enum class`, an `interface`, or a sealed base/arm) is refused admission outright and
+skips named with `SKIPPED_NESTED_DECLARATION` on the declaration and `UNDECLARED_CLASS`/
+`UNDECLARED_ENUM`/`UNDECLARED_INTERFACE` on any member typed with it, the same as a module-local one
+under the same deferred shape; see [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects).
 
 <note>
 <p>Every cross-namespace type reference in the generated <code>Interop.cs</code> is emitted

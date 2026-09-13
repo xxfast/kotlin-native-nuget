@@ -178,6 +178,14 @@ shape (`Box<T>`, `enum class Season`, `interface Cage`, `inner class Guest` unde
   sites still spell the `I$simpleName` shape unfixed; the CS0542 arm of the owner-scope collision and
   the value-class/sealed/companion owner-scope arms have no fixture. Recorded as Phase 4 ROADMAP
   items.
+
+  **(2026-09-13) Closed** by [ADR-066](066-forward-export-reachability-closure.md)'s 2026-09-13
+  amendment: the closure gained both edges this bullet named, so `Almanac.Page`
+  (`Newsroom.page(): Almanac.Page`, nothing else returning `Almanac`) and
+  `Broadcast.Schedule.timetable(): Timetable` now admit their owner and their own dependency
+  respectively. The extension-receiver, legacy-route `I$simpleName`, and owner-scope-collision
+  fixture gaps this bullet also named are untouched by that amendment and remain open, still on
+  ROADMAP Phase 4.
 - Cost: about 20 source files (collection, classifier, diagnostics wording, `CirTypeMapping.kt`,
   `CirModel.kt`, four renderers, `CirClassTranslator.kt`, `CirTranslator.kt`, two planners, five export
   generators); `ForwardReachabilityClosure.kt` itself is not one of them. Plus one fixture file, one

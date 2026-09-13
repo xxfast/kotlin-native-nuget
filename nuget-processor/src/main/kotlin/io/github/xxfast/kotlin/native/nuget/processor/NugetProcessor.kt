@@ -125,8 +125,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
 // intentionally contain such declarations and generation must keep succeeding.
 /** The nested declaration kinds [ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION] names. An
  *  `annotation class` is excluded: it is not declared in C# wherever it lives, and
- *  [ForwardDiagnosticKind.SKIPPED_ANNOTATION_CLASS] already says so. */
-private val NESTED_DECLARATION_KINDS: Set<ClassKind> = setOf(
+ *  [ForwardDiagnosticKind.SKIPPED_ANNOTATION_CLASS] already says so. Shared with the ADR-066
+ *  reachability closure, whose edge-B descent walks exactly the kinds ADR-133 can declare. */
+internal val NESTED_DECLARATION_KINDS: Set<ClassKind> = setOf(
   ClassKind.CLASS,
   ClassKind.OBJECT,
   ClassKind.INTERFACE,

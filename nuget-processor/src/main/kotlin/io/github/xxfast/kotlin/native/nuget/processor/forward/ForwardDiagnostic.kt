@@ -656,6 +656,32 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
 }
 
 /**
+ * ADR-066 amendment: the package an `include(...)` hint has to name, from a qualified name that
+ * may be a NESTED one. `dep.edge.Ledger.Entry` is in package `dep.edge`, not `dep.edge.Ledger`,
+ * and the closure admits an owner reached only through its nested type since that amendment, so
+ * this name now reaches the hint for real rather than only in theory. A bare
+ * `substringBeforeLast('.')` produced an `include("dep.edge.Ledger")` line matching no package at
+ * all — a remedy that silently changes nothing.
+ *
+ * Convention-based on purpose: by the time a hint is built, the only thing in hand is the rendered
+ * qualified name ([ForwardCallableCatalogEntry.Skipped] carries no declaration and no package
+ * slot), so the type segments are identified the one way a string allows — Kotlin type names are
+ * capitalised and package segments are not. The `substringBeforeLast` fallback keeps a lowercase
+ * type name (`dep.edge.entry`) on the shipped behaviour, and every non-nested capitalised name
+ * resolves identically to the old expression.
+ */
+private fun String.dependencyPackageName(): String {
+  val segments: List<String> = split('.')
+  val packageSegments: List<String> =
+    segments.dropLastWhile { segment -> segment.firstOrNull()?.isUpperCase() == true }
+  return if (packageSegments.isEmpty() || packageSegments.size == segments.size) {
+    substringBeforeLast('.', this)
+  } else {
+    packageSegments.joinToString(".")
+  }
+}
+
+/**
  * ADR-064: an actionable per-reason hint, kept alongside the mapping above it documents.
  *
  * @param detail ADR-066: the unexported dependency type's qualified name
@@ -681,8 +707,7 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   parameter: String? = null,
 ): String = when (this) {
   ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE -> {
-    val dependencyPackage: String = detail
-      ?.let { qualifiedName -> qualifiedName.substringBeforeLast('.', qualifiedName) }
+    val dependencyPackage: String = detail?.dependencyPackageName()
       ?: "the dependency's package"
     if (dependencyPackage.isStdlibPackage()) {
       // Issue #55/#56: `include("kotlin")` was the hint here, and following it replaced the
@@ -720,8 +745,7 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "type you declare instead"
 
   ForwardPlanSkipReason.CROSS_MODULE_DISABLED_DEPENDENCY_TYPE -> {
-    val dependencyPackage: String = detail
-      ?.let { qualifiedName -> qualifiedName.substringBeforeLast('.', qualifiedName) }
+    val dependencyPackage: String = detail?.dependencyPackageName()
       ?: "the dependency's package"
     "no rootPackage or include is set, so nuget { publish { } } never crosses the module " +
         "boundary and ${detail ?: "the type"} stays out of the export set; set rootPackage(...) " +
@@ -861,14 +885,18 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "skipped rather than emitted as a dangling reference; move it to the top level of its file"
   }
 
-  // Names the class or object, for the reason above. Covers exactly one shape (a nested
-  // declaration in either module), so like the interface hint it does not hedge about scope.
+  // Names the class or object, for the reason above. Since ADR-133 a nested class or object IS
+  // declared as a C# nested type when its shape and its whole owner chain allow it, so this hint
+  // no longer says nesting is fatal: reaching it means this particular one is deferred (the
+  // `SKIPPED_NESTED_DECLARATION` warning at the declaration carries the specific reason), and the
+  // ADR-066 amendment routes the remaining scope cases to the `include(...)` hint instead of here.
   ForwardPlanSkipReason.UNDECLARED_CLASS -> {
     val className: String = detail ?: "the class"
-    "`$className` is nested inside another declaration, and a nested class or object is never " +
-        "declared in C# (only top-level ones are, plus sealed subclasses and companion objects), " +
-        "so every member typed with it is skipped rather than emitted as a dangling reference; " +
-        "move it to the top level of its file"
+    "`$className` is nested inside another declaration and no C# nested type is generated " +
+        "for it, so every member typed with it is skipped rather than emitted as a dangling " +
+        "reference; the SKIPPED_NESTED_DECLARATION warning on the declaration itself names which " +
+        "shape rule defers it (a generic, `inner`, `value` or sealed nested type, or an owner " +
+        "that cannot carry one), or move it to the top level of its file"
   }
 
   // ADR-133: names the object and the C# rule. Deliberately not the UNDECLARED_CLASS hint: moving

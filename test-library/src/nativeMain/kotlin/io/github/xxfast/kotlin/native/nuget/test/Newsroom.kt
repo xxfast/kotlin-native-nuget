@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.test
 
 import dev.other.core.Advertisement
 import dev.other.core.Airwave
+import io.github.xxfast.kotlin.native.nuget.test.models.Almanac
 import io.github.xxfast.kotlin.native.nuget.test.models.Broadcast
 import io.github.xxfast.kotlin.native.nuget.test.models.Byline
 import io.github.xxfast.kotlin.native.nuget.test.models.Nap
@@ -88,6 +89,16 @@ class Newsroom {
    * declare a `Schedule`, and this member must skip named.
    */
   fun schedule(): Broadcast.Schedule = Broadcast.Schedule(7)
+
+  /**
+   * ADR-066 amendment, **edge (A)**: reaches [Almanac.Page], a nested class in an admitted
+   * dependency package whose OWNER nothing returns. Unlike [schedule], where `broadcast()` already
+   * admits `Broadcast`, the only path to [Almanac] is upward from this nested reference, so the
+   * closure has to walk the owner chain to admit it. Until it does, no `Almanac` is declared at all
+   * and this member skips as `UNDECLARED_CLASS` (folded into `SKIPPED_UNSUPPORTED_TYPE`) with the
+   * post-ADR-133 stale remedy "move it to the top level of its file".
+   */
+  fun page(): Almanac.Page = Almanac.Page(3)
 
   /**
    * Same shape, `OBJECT` kind: [Broadcast.Defaults] is the cell a closure fix that only refuses
