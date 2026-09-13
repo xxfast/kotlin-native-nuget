@@ -6,6 +6,8 @@ import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
+import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericReturnRoute
+import io.github.xxfast.kotlin.native.nuget.processor.exports.legacyGenericRouteParameterIndex
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
@@ -46,11 +48,11 @@ internal fun translateSpecializedFunction(
   exportedTypes: Set<String>,
   logger: KSPLogger,
 ): List<CirMember> {
-  val returnType = func.returnType?.resolve()?.expandAliases()
-  val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
-  val isGenericReturnType: Boolean = returnDecl?.typeParameters?.isNotEmpty() == true &&
-      returnType != null && returnType.arguments.isNotEmpty()
-  if (!isGenericReturnType) return emptyList()
+  // ADR-064 amendment (2026-09-13): the route's gate is one hoisted predicate now, shared with the
+  // Kotlin half and with the planner's unrouted-position reclassification — including its
+  // Flow/StateFlow refusal, without which this half rendered `public static Flow<int> F()` against
+  // a type Interop.cs never declares (research H cell 4, a consumer-side CS0246).
+  if (!func.hasLegacyGenericReturnRoute()) return emptyList()
   return translateFunction(
     func, libraryName, context, tracker, exportedTypes, logger,
   )
@@ -751,9 +753,9 @@ internal fun translateGenericFunction(
       }
     } ?: emptyList()
 
-  val paramIndex: Int = func.parameters.indexOfFirst { param ->
-    param.type.resolve().expandAliases().declaration.simpleName.asString() == typeParamName
-  }
+  // ADR-064 amendment (2026-09-13): the shared gate, so this half, the Kotlin half and the
+  // diagnostic that now names the refusal cannot disagree about which generic functions bind.
+  val paramIndex: Int = func.legacyGenericRouteParameterIndex()
 
   if (paramIndex == -1) return emptyList()
 

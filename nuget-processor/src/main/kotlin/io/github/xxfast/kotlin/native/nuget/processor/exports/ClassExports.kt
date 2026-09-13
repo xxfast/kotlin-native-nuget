@@ -27,6 +27,29 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardProperty
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
 
 /**
+ * ADR-064 amendment (2026-09-13): the legacy class Flow/StateFlow route's own selection gate,
+ * hoisted so the route below and the planner's unrouted-position reclassification cannot drift.
+ * Deliberately *only* the return-type test: the ADR-114/ADR-123 refusal filters that follow it in
+ * [addClassExports] have their own named diagnostic (`warnRefusedLegacyRouteMembers`), so folding
+ * them in here would double-report the same member.
+ */
+internal fun KSFunctionDeclaration.hasLegacyFlowReturn(): Boolean {
+  val returnQualified: String? = returnType?.resolve()
+    ?.expandAliases()?.declaration?.qualifiedName?.asString()
+  return returnQualified == "kotlinx.coroutines.flow.Flow" || returnQualified in STATE_FLOW_TYPES
+}
+
+/**
+ * ADR-064 amendment (2026-09-13): the legacy per-call lambda-parameter route's own gate (the
+ * `allNonFlowMethods.partition` below), hoisted for the same reason as [hasLegacyFlowReturn]. A
+ * lambda carried by a collection *element* (`List<(Int) -> Unit>`) is not a lambda parameter and
+ * this says so.
+ */
+internal fun KSFunctionDeclaration.hasLegacyLambdaParameter(): Boolean = parameters.any { param ->
+  param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in LAMBDA_TYPES
+}
+
+/**
  * Generates @CName bridge exports for classes: dispose, planned constructors/properties/methods,
  * and named specialized-protocol adapters (Flow, lambda, stored callback, interface bridge).
  * Ordinary synchronous members without a plan are skipped — no IntPtr/defaultValueFor fallthrough.
@@ -126,27 +149,19 @@ internal fun FileSpec.Builder.addClassExports(
 
   // ADR-065: StateFlow-returning methods route through the same `_collect` shape as plain-Flow
   // methods, plus a sibling synchronous `_value` export (see the flowMethods.forEach loop below).
-  val flowMethods: List<KSFunctionDeclaration> = allRegularMethods.filter { method ->
-    val returnQualified: String? = method.returnType?.resolve()
-      ?.expandAliases()?.declaration?.qualifiedName?.asString()
-    returnQualified == "kotlinx.coroutines.flow.Flow" || returnQualified in STATE_FLOW_TYPES
-  }
+  val flowMethods: List<KSFunctionDeclaration> = allRegularMethods
+    .filter { method -> method.hasLegacyFlowReturn() }
     // ADR-114: a generic parameter this route cannot marshal skips the member entirely rather
     // than emitting non-compiling Kotlin. `NugetProcessor` names it in a SKIPPED_UNSUPPORTED_INPUT.
     // ADR-123: likewise an element this route cannot marshal, named SKIPPED_UNSUPPORTED_RETURN.
     .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
     .filter { method -> classifier.legacyRefusedReturn(method) == null }
 
-  val allNonFlowMethods: List<KSFunctionDeclaration> = allRegularMethods.filter { method ->
-    val returnQualified: String? = method.returnType?.resolve()
-      ?.expandAliases()?.declaration?.qualifiedName?.asString()
-    returnQualified != "kotlinx.coroutines.flow.Flow" && returnQualified !in STATE_FLOW_TYPES
-  }
+  val allNonFlowMethods: List<KSFunctionDeclaration> = allRegularMethods
+    .filterNot { method -> method.hasLegacyFlowReturn() }
 
   val (lambdaParamMethods, methods) = allNonFlowMethods.partition { method ->
-    method.parameters.any { param ->
-      param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in LAMBDA_TYPES
-    }
+    method.hasLegacyLambdaParameter()
   }
 
   val storedCallbackPairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =

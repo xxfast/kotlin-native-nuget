@@ -217,6 +217,51 @@ sealed interface itself rather than the outer collection shape:
 `Flow`, or `StateFlow` (nullable or not): those are unplannable by design and still bind through a
 named legacy route, so warning would tell a consumer a working property had vanished.
 
+### Unrouted positions for a lambda, `Flow`, or a generic declaration {id="unrouted-positions"}
+
+The three legacy routes above (`Flow`/`StateFlow`, a lambda, a generic declaration) each bind at a
+handful of specific `(owner, position)` pairs, a class-method return or parameter, a top-level
+function return, and nowhere else: an `object`, an interface default, an extension, a secondary
+constructor, a collection element, or the same reason at the *other* position on a class method,
+used to vanish from both the Kotlin and C# output with no diagnostic at all. Since
+[ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
+2026-09-13 amendment every one of those positions is a named skip instead:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping Depot.flowParamOnClass: a Flow/StateFlow binds at a
+    class-method return and a property, but not at this position. return the Flow from a method on
+    an ordinary class (or expose it as a property); a Flow cannot be passed in, and no object,
+    interface, extension or constructor route carries one
+    at UnroutedPositionsSample.kt:21
+```
+
+A callable's own type parameter (a class or `object` method declared `fun <T> f(value: T): T`, as
+opposed to a *top-level* generic function) is one of these positions too, and skips
+`SKIPPED_UNSUPPORTED_COMBINATION` naming the structural mismatch rather than the position:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_COMBINATION] Skipping Depot.structuralOnClass: a generic type binds at a
+    top-level function return, and a generic function at a top-level function with a parameter of
+    its own type parameter, but not at this position. expose a non-generic wrapper (`fun f(value:
+    Int)` beside `fun <T> f(value: T)`), or move the declaration to a top-level function with a
+    parameter of its own type parameter
+    at UnroutedPositionsSample.kt:36
+```
+
+A top-level `fun f(): Flow<T>` used to be worse than silent: it passed the generic-return route's
+own gate on both halves, so the Kotlin side exported a handle and the C# side rendered a return type
+declared nowhere in the generated file (`CS0246` in the consumer). The route now refuses it ahead of
+that gate, so it is a named skip and no member, the same as every other position above, rather than
+a build that only fails downstream in the consumer's own project.
+
+Two positions are exempt on purpose and stay silent, because a legacy route genuinely re-emits them
+elsewhere: an interface default with a `Flow`/`StateFlow` return or a lambda parameter still
+re-emits on every class that implements the interface (just not on the generated C# `interface`
+itself, see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)), and a
+top-level generic return in the *same* Kotlin package as the generic type still binds (a
+cross-package one does not, and is not yet named either, see
+[ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)).
+
 The same kind also fires when an extension property's *receiver* type, not its declared type, is
 what the planner can't wire. `String`, a primitive, `ObjectHandle` classes, an eligible sealed base
 (see [Extensions: Sealed receivers](extensions.md#sealed-receivers)), and a value class over any of

@@ -1411,3 +1411,141 @@ it can no longer go green on a `tags` that started binding.
   record is `GENERIC` and keeps the shipped text. The Writerside page quoting it is re-lifted with
   this change.
 - No ABI, no export, no handle, no leak-harness change.
+
+## Amendment (2026-09-13): the three legacy-route deferrals are named where no route re-emits them
+
+Judgement: an **amendment**, not a new ADR. It closes the ROADMAP Phase 3 item that `GENERIC`,
+`FLOW_PROTOCOL`, and `CALLBACK_PROTOCOL` were still `droppedFromCSharp = false` legacy-route
+deferrals on the same "some route re-emits this" assumption the 2026-09-07 `SEALED_PROTOCOL`
+amendment closed for sealed types at a parameter position, and whether that assumption held at
+every other position was unverified. It adds one `ForwardPlanSkipReason`, one reclassification pass
+over the callable catalog, and no new `ForwardDiagnosticKind`. Status stays Accepted.
+
+### The gap, measured
+
+A one-declaration-per-cell fixture
+(`test-library/.../test/unrouted/UnroutedPositionsSample.kt` plus `UnroutedTopLevelFlow.kt`,
+`research/H-observed-matrix.md`) exercised every `(origin, position)` combination the three reasons
+can reach. The assumption held at exactly six pairs; everywhere else the callable vanished from
+both halves of the bridge with **no diagnostic of any kind**, and one cell was worse than silent: a
+top-level `fun f(): Flow<Int>` passed the generic-return route's gate on both halves, so the Kotlin
+side exported a handle and the C# side rendered `return new Flow<int>(nativeResult)` against a type
+declared nowhere in the generated file, `CS0246` in the consumer
+(`research/H-run1-evidence/generated-bindings-check.log:4`).
+
+| Position | `GENERIC` | `FLOW_PROTOCOL` | `CALLBACK_PROTOCOL` |
+|---|---|---|---|
+| class method **return** | named `_RETURN` (a declared generic type, e.g. `Box<Int>`) | **routed, stays silent** (`Flow`/`StateFlow` return); ABI mismatch if the *sibling parameter* route below returns non-`Unit`, see Residuals | named `_RETURN` (a lambda return) |
+| class method **parameter** | named `_INPUT` | named `_INPUT` | **routed, stays silent** (per-call, or a stored add/remove pair); ABI mismatch on a non-`Unit` return, see Residuals |
+| class method's own `<T>` (structural) | named `_COMBINATION` | -- | -- |
+| `object`/companion member | named (INPUT/RETURN as above; no legacy route is keyed to an object owner at all) | named | named |
+| interface default, **generic** return/structural `<T>` | named `_RETURN` / `_COMBINATION`, once on the interface declaration | -- | -- |
+| interface default, **Flow return / lambda parameter** | -- | re-emits on every implementing class (class-owner route); **not named**, residual, see below | re-emits on every implementing class; **not named**, residual, see below |
+| extension function | named | named | named |
+| collection element (class or top-level) | named `_RETURN` | named `_RETURN`/`_PROPERTY` | named `_RETURN` |
+| secondary constructor beside a plannable primary | named `_INPUT`, one report per constructor, no double `WARNING_NO_PUBLIC_CONSTRUCTOR` | named `_INPUT` | named `_INPUT` |
+| top-level function **return** | **routed, stays silent** same-package (`WrapInBox<T>`, `Interop.cs:1404`); cross-package still an unnamed `CS0246`, residual, see below | was a `CS0246` LIE, now refused by the route itself and named `_RETURN` | **routed, stays silent** (a lambda return) |
+| top-level function **parameter** | named `_INPUT` | named `_INPUT` | named `_INPUT` |
+| top-level `fun <T>` with a `T`-typed direct parameter | **routed, stays silent** (dispatches per primitive) | -- | -- |
+| top-level `fun <T>` with no `T`-typed parameter (e.g. `fun <T> f(): List<T>`) | named `_RETURN`, from a new producer (below), not the planner | -- | -- |
+`SUSPEND_CALLBACK_PROTOCOL` (a `suspend` lambda parameter), measured alongside the other three
+because it is in the same candidate set, has no legacy route at any position and is named
+`SKIPPED_UNSUPPORTED_INPUT` everywhere it was tried.
+
+A real, pre-existing sample record moves from silent to named as a side effect:
+`garage.Register.tally`, a generic interface default `Vault` structurally declines (its own KDoc
+already calls this "declined structurally"), now warns `SKIPPED_UNSUPPORTED_COMBINATION` where it
+previously warned nothing.
+
+### Mechanism, as shipped
+
+1. **A new reason, not a flag flip.** `ForwardPlanSkipReason.UNROUTED_POSITION(droppedFromCSharp =
+   true)` (`forward/ForwardCallablePlanner.kt`), carrying `detail` set to the original reason's
+   name. `GENERIC`, `FLOW_PROTOCOL`, `CALLBACK_PROTOCOL` and `SUSPEND_CALLBACK_PROTOCOL` keep
+   `droppedFromCSharp = false`, so the six still-routed pairs stay silent and `toDiagnosticKind`
+   still `error()`s if one of them is ever handed to it directly, which is what proves the
+   reclassifier ran rather than a flag flip.
+2. **The routed predicate lives on each route itself, not in a shared table.** `hasLegacyFlowReturn`
+   and `hasLegacyLambdaParameter` (`exports/ClassExports.kt`), `hasLegacyGenericReturnRoute`
+   (`exports/FunctionExports.kt`) and `hasLegacyGenericFunctionRoute`
+   (`exports/GenericFunctionExports.kt`) are hoisted functions the route's own Kotlin-emission code,
+   the CIR translator, and the planner's reclassification pass all call, so the three cannot drift
+   apart the way a separate table could.
+3. **One reclassification pass in `ForwardCallablePlanner.kt`** turns a `Skipped` entry whose reason
+   is one of the four above and whose routed predicate answers false into `Skipped(..., reason =
+   UNROUTED_POSITION, detail = <original reason>.name, structural = ...)`. `toDiagnosticKind` maps
+   it by position: `INPUT` to `SKIPPED_UNSUPPORTED_INPUT`, `RETURN` (a collection element at a
+   return included) to `SKIPPED_UNSUPPORTED_RETURN`, and the structural form (a callable's own
+   `<T>`) to `SKIPPED_UNSUPPORTED_COMBINATION`, the same three kinds ADR-116 gave the sealed twin.
+   The sentence and hint read `detail` and name where the type *does* bind, e.g. (quoted verbatim
+   from a real run):
+
+   ```
+   [nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping ...unrouted.Depot.flowParamOnClass: a Flow/StateFlow
+   binds at a class-method return and a property, but not at this position. return the Flow from a
+   method on an ordinary class (or expose it as a property); a Flow cannot be passed in, and no
+   object, interface, extension or constructor route carries one
+   ```
+4. **The top-level `Flow` return is a route defect, fixed with the same skip.** The generic-return
+   route's own gate (`hasLegacyGenericReturnRoute`) now refuses `Flow`/`StateFlow` ahead of the
+   generic-shape test that used to let it through; the planner's existing `FLOW_PROTOCOL` skip at
+   `TOP_LEVEL + RETURN` is then reclassified by (3) into `SKIPPED_UNSUPPORTED_RETURN`, so a
+   top-level `Flow` return goes from a guaranteed `CS0246` to a named skip and no member. Bridging a
+   top-level `Flow` is a separate feature, not decided here.
+5. **A structural top-level `fun <T> f(): List<T>` (no `T`-typed direct parameter) is named by a new
+   producer, not the planner.** `catalog()` is built from `functions` only (the
+   `typeParameters.isEmpty()` half), so a generic top-level function never reaches the callable
+   catalog at all and the reclassification pass in (3) cannot see it. `warnUnroutedGenericFunctions`
+   (`NugetProcessor.kt`) walks the generic-function list directly, filters out anything
+   `hasLegacyGenericFunctionRoute()` answers true for, and emits `SKIPPED_UNSUPPORTED_RETURN`
+   through the same reason/hint pair `UNROUTED_POSITION.diagnosticReason/diagnosticHint("GENERIC")`
+   produce, so the wording matches even though the code path differs.
+6. **An interface default is named once, on the interface declaration, not once per implementing
+   class.** `interfaceDeclarationCatalog` (the ADR-113 declaration-route catalog, which plans every
+   reachable interface, not only ones some class happens to implement) is filtered to entries
+   reclassified to `UNROUTED_POSITION` and not already reported by the ordinary callable catalog,
+   and reported once. This is deliberately narrow: that catalog's drop channel is otherwise left
+   unmerged (a reachable interface is planned twice, once as itself and once folded into each
+   implementer), and widening it would double-report every other interface drop.
+7. **A skipped secondary constructor reports once**, and does not also trigger
+   `WARNING_NO_PUBLIC_CONSTRUCTOR` when a plannable primary constructor exists beside it.
+
+### Residuals, left open (see ROADMAP Phase 4)
+
+- **The PART pair.** An interface default with a `Flow`/`StateFlow` return or a lambda parameter
+  re-emits on every implementing class (through that class's own class-owner route) but is declared
+  on no generated C# `interface`, so a caller holding only the interface-typed reference cannot
+  reach it. Both halves emit successfully, so this reclassification correctly leaves it alone; it is
+  a decision (declare it on the interface too, or document the asymmetry), not a bug this amendment
+  fixes.
+- **The cross-package generic-return LIE.** A top-level function returning a generic type declared
+  in a different package than the function's own (`fun f(): Box<Int>`, `Box` in another namespace)
+  still renders the type unqualified and still fails `CS0246`; only the same-package case is
+  measured working. This cell was moved to `.kt.disabled` before the final green verify specifically
+  because it does not compile, so it ships in no fixture and is named by no diagnostic.
+- **Three claims verified only by reading**, not by this fixture: a default inherited from an
+  *unexported* interface (the ADR-075 path) is still named nowhere; a top-level `fun f(): List<Box<Int>>`
+  / `List<Flow<Int>>` passes the generic-return gate and stays silent because the route emits,
+  whether the result compiles is unmeasured; `VALUE_CLASS` origin is not reclassified by this pass
+  and `COMPANION` is reclassified but was not exercised by the fixture.
+- **`ABSTRACT`, `SUSPEND`, and `TYPE_PARAMETER`** rest on the identical assumption and were not
+  audited; a `suspend fun` on an `object` is a likely candidate, since `NugetProcessor.kt` walks
+  `classes` only.
+
+### Testing seam, as shipped
+
+`Tier1UnroutedPositionsTest.kt` (9 tests): one absence-plus-diagnostic-kind assertion per silent
+cell, and a negative assertion per routed pair (`Cat.forEachToy`, the top-level lambda-return route,
+etc.) that no `SKIPPED_` diagnostic fires for it. `IntegrationTests/UnroutedPositionsTests.cs` (9
+tests) pins the compiled-C# shape by reflective absence, with a control member per owner so an
+absence assertion cannot pass by the whole type having disappeared. One `ForwardSkippedCallableWarningTest`
+cell pins the `UNROUTED_POSITION` sentence.
+
+### Consequences
+
+- Every silent cell in the gap table above now warns, named, at the author's own Kotlin source; no
+  routed member's ABI, export or handle changes.
+- The top-level `Flow`-return LIE is fixed as an observable-behaviour change: what used to be a
+  non-compiling consumer is now a warning and no member.
+- `garage.Register.tally` gains a diagnostic it did not have before; no other shipped sample record's
+  generated output changes.

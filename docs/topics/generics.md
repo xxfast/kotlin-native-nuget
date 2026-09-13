@@ -467,6 +467,12 @@ public void DefaultScores_ReturnsReadOnlyDictionaryOfStringInt()
   project. `Crate<T>.describe(tag: T)` above has no `Describe` on `Crate<T>` itself, only on
   `LabelledCrate`, which declares its own
   ([ADR-101](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md)).
+- The `fun <T> f()` row above binds only for a **top-level** function with a `T`-typed direct
+  parameter (`fun <T> identity(value: T): T`). A generic function declared on a class, `object`, or
+  interface, or a top-level one with no `T`-typed parameter (e.g. `fun <T> f(): List<T>`), skips
+  named `SKIPPED_UNSUPPORTED_COMBINATION` instead of vanishing silently, since
+  [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
+  2026-09-13 amendment.
 
 <seealso>
     <category ref="related">
