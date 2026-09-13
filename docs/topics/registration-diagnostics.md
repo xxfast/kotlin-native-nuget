@@ -226,6 +226,15 @@ for the collection-return leak this harness proved and closed.
 Only forward handles are counted; the reverse side's own `StableRef` sites are not (see
 [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)).
 
+**Row 6b**, `InterfaceReceiverExtension_CSharpImplementedPet_ReleasesTransferHandle`, covers the
+same ADR-084 transfer handle Row 6 measures for an interface *argument*, one slot to the left: a
+C#-implemented `IPet` as the RECEIVER of an extension function. `HandleOf` mints a `StableRef` per
+crossing since the bridge object has no `_handle` of its own, so the receiver needs the same
+`finally`-dispose the argument position already had, since
+[ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md)
+gave the receiver the shared prelude/cleanup pipeline for the first time. See
+[Extensions: Interface receivers](extensions.md#interface-receivers).
+
 Rows 8g through 8j cover every route with a handle-passed callback payload, now that
 [ADR-036](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md)'s
 2026-09-11 ownership amendment gives the C# side sole ownership of the free (see

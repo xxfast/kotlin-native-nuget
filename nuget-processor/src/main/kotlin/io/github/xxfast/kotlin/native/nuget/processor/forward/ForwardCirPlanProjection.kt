@@ -427,43 +427,22 @@ internal object ForwardCirPlanProjection {
       receiver.wireType.csharpType(),
     )
     val publicParams: List<CirParameter> = listOf(receiverParam) + plan.publicParameters()
-    val receiverArgument: String = when (val type: BridgeType = receiver.transfer.type) {
-      is BridgeType.ObjectHandle -> "receiver._handle"
-      // A value-class receiver unwraps to its capitalized underlying property and then lowers to
-      // the wire per underlying, the same two steps a value-class *parameter* takes in
-      // `callArguments` (ADR-077 sub-item 4). Passing the record struct itself would hand the
-      // native import the wrong type (CS1503 in generated code).
-      is BridgeType.ValueClass -> {
-        val unwrapped: String =
-          "receiver.${type.underlyingPropertyName.replaceFirstChar { it.uppercase() }}"
-        when (type.underlying) {
-          is BridgeType.Enum -> "(int)$unwrapped"
-          is BridgeType.ObjectHandle -> "$unwrapped._handle"
-          else -> unwrapped
-        }
-      }
-
-      // ADR-105 amendment (2026-09-11): a nullable handle receiver (`this Cat? receiver`) passes
-      // the same handle field, only null-guarded, so a null receiver crosses as a null pointer
-      // rather than throwing. This is the receiver-position form of the ADR-062 nullable handle
-      // parameter slot's `${name}?._handle ?? IntPtr.Zero`.
-      is BridgeType.Nullable -> when (type.type) {
-        is BridgeType.ObjectHandle -> "receiver?._handle ?? IntPtr.Zero"
-        else -> "receiver"
-      }
-
-      else -> "receiver"
-    }
     val nativeName: String = "Native_${plan.publicSignature.name}${plan.overloadSuffix()}"
-    val needsCustomParams: Boolean = receiver.transfer.type is BridgeType.ObjectHandle ||
-        receiver.transfer.type is BridgeType.ValueClass ||
-        (receiver.transfer.type as? BridgeType.Nullable)?.type is BridgeType.ObjectHandle ||
-        plan.publicSignature.parameters.any { parameter -> !parameter.type.isTrivialInput() }
+    // ADR-132: the receiver is parameter zero. Instead of a hand-rolled `receiverArgument` string
+    // (which had an `else -> "receiver"` arm that handed the extern an `IPet`/`CatId?` where it
+    // wanted an `IntPtr`/`string`, CS1503) and a hand-listed `needsCustomParams` gate, it enters
+    // [resultProjection] as a [ForwardPublicParameter] at the head of the input list. That makes it
+    // share `callArgument` (including two-slot fan-outs), all three preludes and both cleanups with
+    // every declared parameter — so an interface receiver finally gets its ADR-084 stage-3
+    // `HandleOf` / `Dispose` lifecycle, and a collection receiver its `CreateList` handle. The
+    // custom-body gate now follows from the same list: `parameters.any { !isTrivialInput() }`
+    // inside [resultProjection] covers the receiver too, so no `forceCustomBody` is needed here.
+    // The three shapes the old `when` handled render byte-identically: `callArgument` emits the
+    // same `receiver._handle`, value-class unwrap, and `receiver?._handle ?? IntPtr.Zero`.
+    val receiverInput = ForwardPublicParameter(receiver.name, receiver.transfer.type)
     val result: CirResultProjection = plan.resultProjection(
       nativeName = nativeName,
-      parameters = plan.publicSignature.parameters,
-      receiverArgument = receiverArgument,
-      forceCustomBody = needsCustomParams,
+      parameters = listOf(receiverInput) + plan.publicSignature.parameters,
     )
 
     val nativeImport = CirDllImport(
