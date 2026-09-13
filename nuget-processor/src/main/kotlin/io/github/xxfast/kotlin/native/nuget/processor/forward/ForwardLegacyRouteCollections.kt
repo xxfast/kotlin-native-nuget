@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSValueParameter
@@ -142,6 +143,21 @@ internal sealed interface ForwardLegacyReturnShape {
   /** A collection the ordinary route's `List`/`Set`/`Map` return already reads back. */
   data class Marshalled(val type: BridgeType.Collection) : ForwardLegacyReturnShape
 
+  /**
+   * ADR-131: an ADR-009 sealed **base** (a sealed class, or an ADR-112 eligible sealed interface)
+   * at a suspend return. The wire is unchanged -- the Kotlin half already pins a `StableRef` on
+   * the *concrete arm* the body produced -- but the C# completion has to read it back through the
+   * generated `internal static Base FromHandle(IntPtr)` discriminator, because ADR-009 renders the
+   * base as `public abstract class` and `new Base(resultPtr)` is CS0144.
+   *
+   * [nullable] carries the `?` from the declaration, so the completion can guard a null result
+   * pointer before discriminating, the same guard the shipped nullable-object arm applies.
+   */
+  data class Discriminated(
+    val handle: BridgeType.ObjectHandle,
+    val nullable: Boolean,
+  ) : ForwardLegacyReturnShape
+
   /** Any other generic return, named so the skip diagnostic can quote it. */
   data class Refused(val description: String) : ForwardLegacyReturnShape
 }
@@ -158,7 +174,28 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
   type: KSType?,
 ): ForwardLegacyReturnShape {
   val expanded: KSType = type?.expandAliases() ?: return ForwardLegacyReturnShape.Plain
+
+  // ADR-131: the sealed case is decided *before* the non-generic early return below, because a
+  // sealed base carries no type arguments and so was `Plain` -- i.e. `new Job(resultPtr)` against
+  // an abstract class. The gate is the declaration's `sealed` modifier, not the classification:
+  // an ordinary class return is an `ObjectHandle` too, and must keep its `new T(resultPtr)`.
+  if ((expanded.declaration as? KSClassDeclaration)?.modifiers?.contains(Modifier.SEALED) == true) {
+    // ADR-105's rewrite, the same one `legacyParameterShape` applies: an *eligible* sealed type
+    // carries the `ObjectHandle(viaDiscriminator = true)` its arms cross as. Anything else (an
+    // ineligible sealed interface, an out-of-scope sealed class) has a null `sealedHandle`, and is
+    // refused by name rather than rendered as C# that cannot compile.
+    val unwrapped: BridgeType = classify(type).sealedAsHandle().let {
+      if (it is BridgeType.Nullable) it.type else it
+    }
+    return if (unwrapped is BridgeType.ObjectHandle && unwrapped.viaDiscriminator) {
+      ForwardLegacyReturnShape.Discriminated(unwrapped, expanded.isMarkedNullable)
+    } else {
+      ForwardLegacyReturnShape.Refused(expanded.legacyDescription())
+    }
+  }
+
   if (expanded.arguments.isEmpty()) return ForwardLegacyReturnShape.Plain
+
   // ADR-068 peels a StateFlow return into its own bucket before the plain-async path sees it.
   // ADR-123: that bucket reads every element through the module-wide `nuget_stateflow_value`
   // export, which has no per-member projection seam, so a collection element cannot cross there
@@ -310,6 +347,27 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnCollectionKinds(
  */
 internal fun legacyCollectionRead(handle: String, type: BridgeType.Collection): String =
   componentCollectionRead(handle, type, csharpType = { it.forwardPublicCsharpType() })
+
+/**
+ * ADR-131: the C# expression reading a suspend member's awaited **sealed base** handle back into
+ * its public type. The Kotlin half pins a `StableRef` on the concrete arm the body produced, so
+ * the generated `internal static Base FromHandle(IntPtr)` discriminator (ADR-009, the same one
+ * the ordinary plan route reads a sealed return through) resolves the arm and takes ownership of
+ * that handle. `new Base(resultPtr)`, the shipped spelling, is CS0144 against an abstract class.
+ *
+ * [csharpType] is passed in already spelled by the caller's own `nestedCsName()`, the one the
+ * route spells `Task<...>` with, so the declared type and the read can never drift apart.
+ *
+ * A nullable base is guarded on the wire pointer first: the Kotlin half sends `null` as a null
+ * result pointer, and `FromHandle` would otherwise discriminate on `IntPtr.Zero`.
+ */
+internal fun legacyDiscriminatedRead(
+  handle: String,
+  csharpType: String,
+  nullable: Boolean,
+): String =
+  if (nullable) "$handle == IntPtr.Zero ? null : $csharpType.FromHandle($handle)"
+  else "$csharpType.FromHandle($handle)"
 
 /**
  * ADR-123: the same read as a named `Func<IntPtr, T>` argument, for the flow routes.

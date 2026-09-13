@@ -21,9 +21,9 @@ import kotlin.test.assertTrue
  * parents, so a file-level declaration is unchanged.
  *
  * Deliberately not covered here: a suspend return of the sealed **base** (`suspend fun next():
- * Shape`), which still renders `new Shape(resultPtr)` and fails CS0144 on an abstract class. That
- * is a separate mapping decision (ADR-105's `sealedAsHandle()` on the legacy suspend route), split
- * out rather than folded in.
+ * Shape`), which was the separate mapping decision this file split out rather than folded in. It
+ * is now ADR-131's, pinned by [Tier1SuspendSealedBaseReturnTest]: the base reads through
+ * `Shape.FromHandle(resultPtr)`, while the arm cells below keep the concrete constructor.
  *
  * `libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore)` is load-bearing: without coroutines on
  * the KSP libraries path there is no suspend surface to project and every assertion below passes

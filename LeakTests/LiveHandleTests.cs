@@ -501,6 +501,70 @@ public class LiveHandleTests
         });
     }
 
+    // Row 9e. A suspend call whose result is the sealed *base* rather than an arm. Kotlin mints
+    // the StableRef on the concrete arm, and the completion has to hand that same handle to
+    // `Job.FromHandle`, which discriminates and constructs the arm wrapper that then owns it. A
+    // completion that reads the discriminator through a second handle, or mints one to read the
+    // type and forgets it, shows up here and nowhere in the functional tests: those assert the
+    // payload, which a double mint answers correctly.
+    [Fact]
+    public async Task Suspend_ReturningTheSealedBase_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var factory = new JobFactory();
+            await using Job.Running oreo = factory.Running(9);
+            using Job next = await oreo.NextLaterAsync();
+            Assert.Equal(10, Assert.IsType<Job.Done>(next).Code);
+        });
+    }
+
+    // Row 9f. The nullable twin. Both branches inside one crossing: the null return mints no
+    // handle at all (a guard that releases something it never received goes negative here), and
+    // the arm return goes through the same discriminated read as Row 9e.
+    [Fact]
+    public async Task Suspend_ReturningTheNullableSealedBase_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var factory = new JobFactory();
+            await using Job.Running finished = factory.Running(100);
+            Assert.Null(await finished.NextOrNullLaterAsync());
+
+            await using Job.Running oreo = factory.Running(12);
+            using Job? next = await oreo.NextOrNullLaterAsync();
+            Assert.Equal(13, Assert.IsType<Job.Done>(next).Code);
+        });
+    }
+
+    // Row 9g. The throw path of the same route, which no row covered for a suspend call at all
+    // (the only `Throws` row before this one is the synchronous `Archive` at the bottom). When the
+    // body throws, no result is minted and the ADR-128/130 error envelope crosses instead, so this
+    // pins that `NugetErrorNative.BuildException` releases what it was handed. `nextOrThrowLater`
+    // has no suspension point, so the body completes before the P/Invoke returns and the ADR-019
+    // ordering window is open on the error path too: hence the tight loop rather than the default
+    // ten, on the `Suspend_NoSuspensionPoint_...` precedent.
+    [Fact]
+    public async Task Suspend_ReturningTheSealedBase_Throws_ReturnsToBaseline()
+    {
+        using var factory = new JobFactory();
+        await using Job.Running oreo = factory.Running(4);
+
+        // The receiver is hoisted out of the measured window so the loop crosses nothing but the
+        // throwing call, and the arm's scope is minted lazily (`GetOrCreateScope()` on the first
+        // suspend call), so it has to be warmed up *before* the baseline is read. Without this the
+        // scope handle is retained inside the loop and released only when `oreo` is disposed, long
+        // after the measurement: a +1 that is the harness's own doing, and one the negative-delta
+        // retry would not absorb.
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(
+            async () => await oreo.NextOrThrowLaterAsync(-1));
+
+        await AssertNoLeakAsync(
+            async () => await Assert.ThrowsAnyAsync<InvalidOperationException>(
+                async () => await oreo.NextOrThrowLaterAsync(-1)),
+            iterations: 5000);
+    }
+
     // Row 9c. The cancellation-registration half of the same ADR-019 ordering hole: `reg` is
     // assigned after the native call too, so a callback that wins the race calls `reg.Dispose()`
     // on a default registration and the real one is never disposed. Whether that costs a Kotlin

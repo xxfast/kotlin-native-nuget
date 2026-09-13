@@ -27,6 +27,11 @@ package io.github.xxfast.kotlin.native.nuget.test.issue54
  * - [Monitor.record] carries it at a **parameter**, spelled on the way in and unwrapped back to
  *   Kotlin, returning a plain `Int` so the assertion reads the Kotlin side of the wire instead of
  *   another handle,
+ * - [Monitor.nextPulseLater] carries it at a **suspend return**, the legacy async route rather
+ *   than the member plan: `Task<Pulse>` whose completion must go through `Pulse.FromHandle`
+ *   instead of `new Pulse(resultPtr)` against the abstract base (CS0144). The sealed-*class* half
+ *   of that cell is `Job.Running.nextLater` (issue115); this is the interface half, and it is here
+ *   rather than in a new fixture because eligibility, not the keyword, is what opens the route,
  * - [anyPulse] is the **top-level function return** (ADR-007 puts it on the static class
  *   `SealedInterfaceSample`), the one sealed-return position this repository already exercises for
  *   sealed classes, so a regression in the fix is distinguishable from the bug it repairs.
@@ -80,6 +85,16 @@ class Monitor {
     is Pulse.Beat -> pulse.bpm
     Pulse.Flat -> 0
   }
+
+  /**
+   * The sealed **interface** base at a `suspend` return, the twin of `Job.Running.nextLater`
+   * (issue115). An eligible sealed interface renders as `public abstract class Pulse` with a
+   * `Pulse.FromHandle` discriminator exactly as a sealed class does, so the suspend completion's
+   * `t.SetResult(new Pulse(resultPtr))` is the same CS0144 and the same fix. It answers with a
+   * different arm per input so the discriminator, not the declared type, decides: Oreo purring at
+   * [bpm], or Mylo flat when nothing is counted.
+   */
+  suspend fun nextPulseLater(bpm: Int): Pulse = if (bpm == 0) Pulse.Flat else Pulse.Beat(bpm)
 
   /**
    * The ineligible control: [Mixed] has a subclass with another superclass, so it has no C#

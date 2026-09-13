@@ -691,3 +691,8 @@ Still open on this route, deliberately:
   `new Job(resultPtr)`: CS0144, no accessible constructor on an abstract class. The fix is routing
   it through ADR-105's `sealedAsHandle()` on the legacy suspend route, a separate mapping decision,
   not this amendment's.
+
+> **Closed by [ADR-131](131-suspend-route-sealed-base-return.md) (2026-09-13).** `legacyReturnShape`
+> now gates on `Modifier.SEALED` and reads a base return through a new `Discriminated` shape,
+> completing with `Base.FromHandle(resultPtr)` on all three suspend owners. `global::` qualification
+> on this route stays open, as this item names.
