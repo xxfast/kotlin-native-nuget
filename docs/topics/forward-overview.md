@@ -79,9 +79,42 @@ Kotlin sub-packages map relative to `rootPackage`, and the C# namespace root is 
 
 Every generated declaration lands under its mapped namespace inside the single `Interop.cs` file.
 
-By default every public declaration in the module is bridged, not only those under `rootPackage`.
-`publish { include(...); exclude(...) }` narrows that to an explicit package-prefix allowlist, and
-when `include` is left empty, `rootPackage` itself becomes the default scope. `publish {
+The mapping has three cases
+([ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md)
+§5's 2026-09-13 amendment):
+
+| Kotlin package | C# namespace |
+|---|---|
+| `rootPackage` itself | `<packageId>` |
+| under `rootPackage` (`<root>.a.b`) | `<packageId>.A.B` |
+| outside `rootPackage`, admitted by an explicit `include(...)` (`x.y.z`) | `<packageId>.X.Y.Z`, the **full** package PascalCased |
+
+With `rootPackage` unset, every package collapses to `<packageId>` regardless, since there is no
+prefix to strip or compare against. The full-package case reaches an admitted
+dependency-module type the same way an in-root type does: `Billboards`, declared under
+`rootPackage`, returns a `Billboard` from `dev.other.admitted`, a package outside `rootPackage` that
+`test-library/build.gradle.kts` admits with `include("io.github.xxfast.kotlin.native.nuget.test",
+"dev.other.admitted")`:
+
+```kotlin
+class Billboards {
+  fun current(): Billboard = Billboard("Oreo naps here. Mylo supervises.")
+}
+```
+
+```C#
+public global::TestLibrary.Dev.Other.Admitted.Billboard Current()
+```
+
+`Billboard` itself is declared at `namespace TestLibrary.Dev.Other.Admitted`, the full Kotlin
+package PascalCased under the assembly's root namespace, not the bare `Dev.Other.Admitted` a package
+outside a module's own files might otherwise suggest: one NuGet package is one assembly, so every
+namespace under its `packageId` stays collision-free against any other assembly a consumer
+references. See the ADR for the two rejected alternatives.
+
+With no `include(...)` set, the default scope is `rootPackage` itself, when one is configured, or
+every public declaration in the module when it isn't. `publish { include(...); exclude(...) }`
+narrows that to an explicit package-prefix allowlist. `publish {
 exportMarkers(...) }` is a separate, orthogonal escape list: it names `@RequiresOptIn` markers whose
 declarations keep exporting instead of being dropped, see [Opt-in-marked declarations skip
 named](#opt-in-marked-declarations-skip-named).
@@ -221,8 +254,8 @@ outside the effective `include`/`rootPackage` scope is skipped, naming the exact
 ```
 [nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping Newsroom.sponsor: its type
     `dev.other.core.Advertisement` is declared in a dependency module outside the export scope.
-    add include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.core") to
-    nuget { publish { } } (an explicit include replaces the rootPackage default, so keep your own
+    add include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.admitted", "dev.other.core")
+    to nuget { publish { } } (an explicit include replaces the rootPackage default, so keep your own
     packages listed), or expose a type from an in-scope package instead
     at Newsroom.kt:66
 ```
@@ -806,8 +839,8 @@ repository's own fixture, KSP task `UP-TO-DATE`:
 > Task :test-library:kspKotlinMacosArm64 UP-TO-DATE
 
 > Task :test-library:nugetReportDiagnostics
-[nuget:INFO_EXPORTED_FROM_DEPENDENCY] Note TestLibraryNative: the export closure admitted 6 type(s) from dependency modules: io.github.xxfast.kotlin.native.nuget.test.models.Byline, io.github.xxfast.kotlin.native.nuget.test.models.Purr, io.github.xxfast.kotlin.native.nuget.test.models.StoryCode, io.github.xxfast.kotlin.native.nuget.test.models.StoryUri, io.github.xxfast.kotlin.native.nuget.test.models.TopStory, io.github.xxfast.kotlin.native.nuget.test.models.Whisker. these are generated exactly like module-local types; narrow with exclude(...) if any of them should not be part of the public API
-[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.sponsor: its type `dev.other.core.Advertisement` is declared in a dependency module outside the export scope. add include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.core") to nuget { publish { } } (an explicit include replaces the rootPackage default, so keep your own packages listed), or expose a type from an in-scope package instead
+[nuget:INFO_EXPORTED_FROM_DEPENDENCY] Note TestLibraryNative: the export closure admitted 11 type(s) from dependency modules: dev.other.admitted.Billboard, io.github.xxfast.kotlin.native.nuget.test.models.Broadcast, io.github.xxfast.kotlin.native.nuget.test.models.Byline, io.github.xxfast.kotlin.native.nuget.test.models.Nap, io.github.xxfast.kotlin.native.nuget.test.models.Nap.Deep, io.github.xxfast.kotlin.native.nuget.test.models.Nap.Zoomies, io.github.xxfast.kotlin.native.nuget.test.models.Purr, io.github.xxfast.kotlin.native.nuget.test.models.StoryCode, io.github.xxfast.kotlin.native.nuget.test.models.StoryUri, io.github.xxfast.kotlin.native.nuget.test.models.TopStory, io.github.xxfast.kotlin.native.nuget.test.models.Whisker. these are generated exactly like module-local types; narrow with exclude(...) if any of them should not be part of the public API
+[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.sponsor: its type `dev.other.core.Advertisement` is declared in a dependency module outside the export scope. add include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.admitted", "dev.other.core") to nuget { publish { } } (an explicit include replaces the rootPackage default, so keep your own packages listed), or expose a type from an in-scope package instead
     at /Users/xxfast/Developer/XXFAST/KMP/kotlin-native-nuget/test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/test/Newsroom.kt:66
 [nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.length: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
 [nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.get: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
