@@ -243,6 +243,11 @@ Rows 8g through 8j cover every route with a handle-passed callback payload, now 
 - **8j**, `InterfaceBridge_StringPayload_ReturnsToBaseline`, the interface-bridge route
   (`CatEventSource.Trigger`), which had freed the same handle three times before the fix.
 
+No row covers `Metronome`'s by-value primitive payloads (`Int`, `Boolean`, `Byte`, `Double`): a
+by-value payload mints no `StableRef` on the Kotlin side to begin with, and the per-call `GCHandle`
+that carries the delegate itself is freed in the calling method's own `finally`, so there is nothing
+for `LiveHandles` to measure.
+
 <note>
     <p><code>NugetMarshal.LiveHandles</code> is process-global: any other handle-crossing code
     running in the same process moves the count during the window a leak assertion measures across.

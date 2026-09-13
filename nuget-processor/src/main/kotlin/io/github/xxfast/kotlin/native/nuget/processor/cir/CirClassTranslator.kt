@@ -2606,7 +2606,7 @@ private fun translateCallbackMethod(
 
   // Delegate name: Nuget{Arg1}...{Return}Callback
   fun typeSuffix(kotlinType: String, qualified: String?): String = when {
-    kotlinType == "Boolean" -> "Byte"
+    kotlinType == "Boolean" -> "Bool"
     kotlinType == "String" -> "String"
     kotlinType == "Unit" -> "Void"
     qualified != null && qualified in exportedTypes -> "Object"
@@ -2817,7 +2817,7 @@ private fun translateStoredCallbackMethod(
   // Delegate naming for stored callbacks: enum ordinal -> "Int" suffix, object -> "Object" suffix.
   fun storedArgSuffix(argType: KSType, isEnum: Boolean): String = when {
     isEnum -> "Int"
-    argType.declaration.simpleName.asString() == "Boolean" -> "Byte"
+    argType.declaration.simpleName.asString() == "Boolean" -> "Object"
     argType.declaration.simpleName.asString() == "String" -> "Object"
     argType.declaration.qualifiedName?.asString() in KOTLIN_TO_CSHARP_RETURN ->
       argType.declaration.simpleName.asString()
@@ -2934,7 +2934,7 @@ private fun translateInterfaceBridgeMethod(
       val isPrimitive: Boolean = pQualified.startsWith("kotlin.") && pSimple != "String"
       when {
         isEnum -> "Int"
-        pSimple == "Boolean" -> "Byte"
+        pSimple == "Boolean" -> "Bool"
         isPrimitive -> pSimple
         else -> "Object"
       }

@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -571,3 +571,55 @@ is the -2 the table above predicts. `Tier1CallbackPayloadOwnershipTest` pins the
 all three routes: no `NugetHandles.release(arg...)` after an invoke, no `NugetMarshal.Dispose(arg...)`
 after a `FromHandle`, both retains and the result-box release still in place, and the by-value
 primitive row unchanged.
+
+## Amendment (2026-09-13): a delegate name is injective over its wire, so `Boolean` is `Bool`, not `Byte`
+
+The 2026-09-11 amendment above made cross-route sharing of `Nuget{...}VoidCallback` a decision: one
+name, one declaration, one thunk, registered first-wins across the per-call, stored, and
+interface-bridge routes. That only holds if two payloads that share a name also share a wire. The
+suffix rule broke that in one cell: a `Boolean` payload was spelled `Byte` because it crosses as a
+byte, and Kotlin's own `Byte` is spelled `Byte` because that is its name. Their C# wires differ,
+`byte arg0Byte` widened to `bool` for the former, `sbyte arg0` for the latter, so a class declaring
+both a `(Boolean) -> Unit` and a `(Byte) -> Unit` per-call lambda parameter registered
+`NugetByteVoidCallback` twice with two shapes and kept the first.
+
+This was not a silent marshalling swap: the loser's lambda is checked against the winner's declared
+delegate shape at the consumer's own compile, so the generated `Interop.cs` failed with CS1661/CS1678
+(`Parameter 1 is declared as type 'sbyte' but should be 'byte'`, or the reverse, depending on
+registration order) rather than building and misbehaving at run time.
+
+**Decision.** The suffix for a `Boolean` payload or return becomes `Bool` at the two sites that pass
+it by value on a `byte` wire: `typeSuffix` in `translateCallbackMethod` and the inline suffix in
+`translateBridgeMethod`. The stored-callback route (`storedArgSuffix` in
+`translateStoredCallbackMethod`) keeps `Object` for `Boolean`: that route boxes every non-enum
+payload as `IntPtr` regardless of kind, so `Boolean` there already shares a shape-identical name with
+`String`, and moving it to `Bool` would only relocate the collision with the by-value routes rather
+than remove it. It joins the `Bool` rule once that route's boxing of scalar payloads (see the sibling
+defect below) is fixed. Kotlin `Byte` keeps the suffix `Byte`.
+
+Regenerated names, verified in the generated `Interop.cs`: `NugetBoolVoidCallback(byte arg0Byte,
+IntPtr userData)` beside `NugetByteVoidCallback(sbyte arg0, IntPtr userData)`; on the return position
+`NugetStringBoolCallback` and `NugetStringStringBoolCallback` replace the `...ByteCallback` spellings
+this ADR and ADR-102 previously listed for `(String) -> Boolean` and `(String, String) -> Boolean`.
+
+**Not a breaking change.** Every delegate in the pool is `internal` to the consumer's own assembly,
+and no public method signature (`OnBeat(Action<bool>)`, `OnVelocity(Action<sbyte>)`) names it.
+Nothing on the Kotlin side or the C ABI carries the name.
+
+**Left named, not fixed here:** `ForwardBridgeWire.nameFragment()` in the planned interface-bridge
+route still spells `BOOLEAN -> "Byte"` under the separate `NugetBridge...` prefix; its wire enum has
+no `BYTE` member, so it cannot collide today, but it must take `Bool` the day one is added. Two
+sibling defects seen on the same walk, not fixed here: a non-`Boolean` scalar *return* on the per-call
+route (`(String) -> Int`, `-> Byte`, ...) still renders an `IntPtr` delegate whose body calls
+`NugetMarshal.WrapString(<scalar>)`, which does not compile; and the interface-bridge route's
+`isPrimitive` test (`pQualified.startsWith("kotlin.") && pSimple != "String"`) admits
+`kotlin.collections.List` and `kotlin.Any`, wiring either as `int`. All three are tracked on
+[ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
+
+**Verification.** `Metronome` (the primitive-payload fixture) gains `onVelocity(listener: (Byte) ->
+Unit)` declared after `onBeat`, delivering a signed byte sequence so the assert proves the signed
+reading, not mere arrival; `PrimitiveLambdaPayloadTests` asserts that sequence and that `OnBeat` and
+`OnVelocity` coexist on one instance. `Tier1PrimitiveLambdaParameterTest` pins both declarations,
+`NugetBoolVoidCallback(byte ...)` and `NugetByteVoidCallback(sbyte ...)`, exactly once each. No
+`LiveHandleTests` row is needed: a by-value primitive payload mints no `StableRef` on the Kotlin side,
+and the per-call `GCHandle` is freed in the method's `finally`.
