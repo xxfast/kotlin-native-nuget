@@ -46,9 +46,10 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
   }
 
   val builder: FunSpec.Builder = FunSpec.builder("export_${call.exportName}")
-    .addAnnotation(cNameAnnotation(call.exportName))
     // ADR-117: the fine-grained owner of this C entry point, read back at contract-check time.
-    .tag(ForwardExportOwnerTag::class, ForwardExportOwnerTag(symbol = plan.invocation.symbol))
+    .addAnnotation(
+      cNameAnnotation(call.exportName, ForwardExportOwnerTag(symbol = plan.invocation.symbol)),
+    )
 
   call.parameters.forEachIndexed { index, parameter ->
     builder.addParameter(parameter.name, kotlinType(parameter, index == 0))
@@ -282,8 +283,9 @@ private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallableP
 
   fun exportBuilder(call: ForwardNativeCall): FunSpec.Builder {
     val builder: FunSpec.Builder = FunSpec.builder("export_${call.exportName}")
-      .addAnnotation(cNameAnnotation(call.exportName))
-      .tag(ForwardExportOwnerTag::class, ForwardExportOwnerTag(symbol = plan.invocation.symbol))
+      .addAnnotation(
+        cNameAnnotation(call.exportName, ForwardExportOwnerTag(symbol = plan.invocation.symbol)),
+      )
     call.parameters.forEach { parameter ->
       builder.addParameter(parameter.name, kotlinType(parameter, isReceiver = false))
     }
@@ -363,9 +365,10 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
   }
 
   val builder: FunSpec.Builder = FunSpec.builder("export_${call.exportName}")
-    .addAnnotation(cNameAnnotation(call.exportName))
     // ADR-117: the fine-grained owner of this C entry point, read back at contract-check time.
-    .tag(ForwardExportOwnerTag::class, ForwardExportOwnerTag(symbol = plan.invocation.symbol))
+    .addAnnotation(
+      cNameAnnotation(call.exportName, ForwardExportOwnerTag(symbol = plan.invocation.symbol)),
+    )
 
   call.parameters.forEach { parameter ->
     // A RECEIVER role already implies index 0 on a non-constructor plan (ADR-062 validateRoles).

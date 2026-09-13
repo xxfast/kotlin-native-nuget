@@ -4,6 +4,15 @@
 
 Accepted
 
+> **Amended 2026-09-13: Alternative 3 adopted.** Every `@CName` export now carries its owning
+> declaration on the annotation itself, minted by the one `cNameAnnotation(value, owner)` helper
+> whose `owner` parameter is required. The coarse `members`-range attribution in
+> `generateCNameWrappers` is no longer reached by any export and is scheduled for deletion (kept
+> dead in this change for reviewability); the "route-owned export" wording it rendered is replaced
+> by the exact owner with a role label for a generated member. The Phase 3 roadmap item this closed
+> is recorded in [FEATURES.md](../../FEATURES.md) and this amendment; see "Implementation notes
+> (2026-09-13)" below for what shipped and how it differs from the amendment's own draft.
+
 > **Amended by [ADR-118](118-suspend-route-sealed-arm-owners-and-overload-numbering.md) (2026-09-09).**
 > ADR-118 numbers a `suspend` overload pair, so the Tests section's `Radio` cell below
 > (`play(Player)` / `play(Track)`, deliberately guard-agnostic) no longer collides and was reshaped
@@ -365,3 +374,108 @@ the shipped code, not a spike. No `else ->` swallow site exists for `ERROR_C_ENT
 The legacy-import-conflict guard (`csharpLegacy`'s `CONFLICTING_LEGACY_IMPORTS`) is covered at the
 unit level (`ForwardAbiContractTest`) but no Tier 1 cell reaches it through a real KSP round; the
 three Tier 1 cells hit the other two guards.
+
+## Amendment (2026-09-13): per-site owner tags, Alternative 3 adopted
+
+Alternative 3 ("Tag every Kotlin `cNameAnnotation` site") was rejected above on a count of "~96
+`cNameAnnotation(...)` call sites in 16 `exports/` files". Re-counted by grep and by reading each
+site: **42 sites in 15 files** (38 in 13 `exports/` files, 4 in 2 `forward/` plan emitters), of
+which 6 were already tagged (the suspend route, the plan emitters). The other stated con, "every
+future legacy site must remember the tag", is answered by making the owner a **required** parameter
+of the only minter: a site that omits it does not compile.
+
+### What shipped
+
+1. **The tag rides on the `AnnotationSpec` itself, minted at the choke point.**
+   `exports/Helpers.kt`'s `cNameAnnotation(value: String)` became
+   `cNameAnnotation(value: String, owner: ForwardExportOwnerTag)`, calling
+   `.tag(ForwardExportOwnerTag::class, owner)` on the `AnnotationSpec.Builder`. **Verified**: this
+   is compiler-enforced (every call site needs an owner argument), and `CNameExports.kt` /
+   `Interop.cs` are byte-identical before and after, since a KotlinPoet tag is builder metadata that
+   never renders. A sugar `ownedBy(declaration: KSDeclaration, role: String? = null)` builds the tag
+   for the 36 sites that hold a declaration directly.
+2. **`ForwardExportOwnerTag` gained `role: String?`.** A generated member owned by a class renders
+   `qualified(class) (role)`: `generated Dispose`, `sealed discriminator`, `data-class equals` /
+   `hashCode` / `toString`, `generic create variant: <suffix>`, `generic variant: <suffix>` (or
+   `: object`), `interface bridge factory`. A member-owned export (a property getter, a Flow
+   `_collect`, a stored-callback pair, a lambda-parameter method) tags the member and carries no
+   role.
+3. **`ForwardExportOwners.owner()` reads the annotation tag first**, through a new
+   `FunSpec.cNameOwnerTag()` sibling of `cNameEntryPoint()`; the six pre-existing `FunSpec`-level
+   `.tag(ForwardExportOwnerTag::class, ...)` calls (the suspend route, the three plan emitters) fold
+   into their `cNameAnnotation(...)` call, so there is one owner source, not two.
+4. **Three sites thread one extra parameter** because the owner was not in scope at the call:
+   `GenericClassExports.kt`'s private `addGenericCreateExport` gained a leading `cls` parameter,
+   `SealedClassExports.kt`'s private `sealedPropertyGetter` gained the declaring `prop`, and
+   `ForwardBridgeInterfacePlan` gained a `declaration: KSClassDeclaration` field (set from `iface`
+   in `ForwardInterfaceBridgePlanner.plan`), read by `InterfaceBridgeFactoryExports.kt` for the
+   `interface bridge factory` role.
+5. **The coarse range mechanism stays, dead.** With a required owner on the only minter,
+   `ForwardExportOwners.owner()`'s `members`-range branch (and the `ROUTE_OWNED` /
+   `GENERATED_HELPER` text it used to reach for a tagged export) is unreachable for every export
+   Kover shows those lines uncovered. `attributing(...)` in `NugetProcessor.kt` (about 25 wrapper
+   call sites) and `ForwardExportOwnerRange` are left in place so this change stayed confined to the
+   15 site files, `Helpers.kt`, `ForwardExportOwners.kt` and the interface-bridge planner; deleting
+   them is its own follow-up, tracked on the roadmap (Phase 4).
+
+Divergences from this amendment's own working draft: the sugar is named `ownedBy`, not `owner`; no
+`ForwardAbiContractTest` cell was added (the shipped test surface is the five new
+`Tier1EntryPointCollisionTest` cells below plus one `HelpersTest` cell); the per-file research note
+referenced while drafting this amendment was scratch work, not a repo artifact, and is not cited
+here.
+
+### The Flow-fixture finding, resolved
+
+While building the Flow-property and Flow-method Tier 1 cells below, the first attempt at each
+showed no collision at all: with no `kotlinx-coroutines-core` on the KSP **resolution** classpath
+(as opposed to the compile classpath), `Flow` resolves to an error type, the property or method is
+dropped as `SKIPPED_UNSUPPORTED_PROPERTY`/`_METHOD` before it ever reaches a `@CName` export, and
+there is nothing left to collide. Adding `libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore)`
+to the fixture's `Tier1Harness.run(...)` call reproduces the collision on both cells (`DUPLICATE_KOTLIN_EXPORT`
+on the `_collect` export). **Verified**: there is no detection gap in the Flow route; the earlier
+non-reproduction was a Tier 1 harness fixture omission, not a bridge defect. The harness footgun
+this exposes (a `Flow`/`StateFlow` fixture silently degrading without that classpath entry) is
+recorded as its own roadmap item rather than folded into this ADR's scope.
+
+### Tests
+
+- `tier1/Tier1EntryPointCollisionTest.kt`: the pre-existing `Closer` cell's assertion now names
+  `tier1.abicollision.dispose.Closer (generated Dispose)` instead of the old
+  `"route-owned export"` text. Five new cross-package cells, one per remaining legacy route, each
+  asserting the exact entry point and both exact owner texts: a `suspend` method against a
+  top-level `suspend` function (`radio_play_async`), a Flow property (`radio_get_purrs_collect`:
+  `Radio.purrs` in each package), a Flow method (`radio_stream_collect`: `Radio.stream()`), a
+  sealed class (`loadstate_get_type`: `LoadState (sealed discriminator)`; `loadstate_ready_equals`:
+  `LoadState.Ready (data-class equals)`), a generic class (`box_create_string`:
+  `Box (generic create variant: string)`; `box_get_value`: `Box.value`), and a generic top-level
+  function (`wrap_string`: `wrap(T) (generic variant: string)`).
+- `exports/HelpersTest.kt`: `cNameAnnotation` now takes a stub `ForwardExportOwnerTag` and asserts
+  the built `AnnotationSpec.tag(ForwardExportOwnerTag::class)` returns it, the unit-level pin for
+  the tag mechanism.
+
+### Mechanism claims, labelled
+
+- **Verified**: 42 `cNameAnnotation(...)` call sites across 15 files (grep and reading, 2026-09-13),
+  of which 36 needed a new owner argument.
+- **Verified**: a KotlinPoet `AnnotationSpec` tag never renders into `CNameExports.kt`; the file and
+  `Interop.cs` are byte-identical to the pre-amendment generation (the earlier ADR text left this
+  Inferred by analogy to the `FunSpec` tags; it is now checked directly).
+- **Verified**: every new Tier 1 fixture reaches the contract check rather than an earlier
+  `ERROR_*`/skip (the earlier ADR text left this Inferred); the Flow cells are the one case that did
+  not, for the classpath reason above, not a preempting diagnostic.
+- **Verified**: no test constructs `ForwardBridgeInterfacePlan(...)` directly, so adding its
+  required `declaration` field broke no test.
+
+### Consequences
+
+- Every `ERROR_C_ENTRY_POINT_COLLISION` names the exact owning declaration on every route; the
+  `"(route-owned export: ...)"` wording no longer appears in any message. This closes the Phase 3
+  roadmap item that tracked the class-level-only naming on the non-suspend legacy routes.
+- No wire change: `CNameExports.kt` and `Interop.cs` are byte-identical to the pre-amendment
+  generation.
+- Adding a `@CName` export without an owner is now a compile error in the processor, not a future
+  reviewer's reminder.
+- Deferred, tracked on the roadmap (Phase 4): deleting the now-dead `attributing` range wrappers and
+  `ForwardExportOwners.owner()`'s range/`ROUTE_OWNED`/`GENERATED_HELPER` fallback; the Tier 1
+  Flow-classpath footgun found while building the new cells; the `csharpLegacy` `.distinct()`
+  detection gap for two byte-identical cross-package legacy imports, named but not chased here.

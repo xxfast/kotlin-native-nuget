@@ -87,7 +87,7 @@ internal fun FileSpec.Builder.addClassExports(
 
   addFunction(
     FunSpec.builder("export_${prefix}_dispose")
-      .addAnnotation(cNameAnnotation("${prefix}_dispose"))
+      .addAnnotation(cNameAnnotation("${prefix}_dispose", ownedBy(cls, "generated Dispose")))
       .addParameter("handle", cOpaquePointer)
       .addStatement("%T.release(handle)", nugetHandles)
       .build()
@@ -116,7 +116,7 @@ internal fun FileSpec.Builder.addClassExports(
       // CIR ships lambda property getters without errorOut (hasSyncErrorOut = false).
       addFunction(
         FunSpec.builder("export_${prefix}_get_$propName")
-          .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
+          .addAnnotation(cNameAnnotation("${prefix}_get_$propName", ownedBy(prop)))
           .addParameter("handle", cOpaquePointer)
           .returns(cOpaquePointer.copy(nullable = true))
           .addStatement(
@@ -200,7 +200,7 @@ internal fun FileSpec.Builder.addClassExports(
   if (cls.modifiers.contains(Modifier.DATA)) {
     addFunction(
       FunSpec.builder("export_${prefix}_equals")
-        .addAnnotation(cNameAnnotation("${prefix}_equals"))
+        .addAnnotation(cNameAnnotation("${prefix}_equals", ownedBy(cls, "data-class equals")))
         .addParameter("handle", cOpaquePointer)
         .addParameter("other", cOpaquePointer)
         .returns(Boolean::class)
@@ -213,7 +213,7 @@ internal fun FileSpec.Builder.addClassExports(
 
     addFunction(
       FunSpec.builder("export_${prefix}_hashcode")
-        .addAnnotation(cNameAnnotation("${prefix}_hashcode"))
+        .addAnnotation(cNameAnnotation("${prefix}_hashcode", ownedBy(cls, "data-class hashCode")))
         .addParameter("handle", cOpaquePointer)
         .returns(Int::class)
         .addStatement(
@@ -225,7 +225,7 @@ internal fun FileSpec.Builder.addClassExports(
 
     addFunction(
       FunSpec.builder("export_${prefix}_tostring")
-        .addAnnotation(cNameAnnotation("${prefix}_tostring"))
+        .addAnnotation(cNameAnnotation("${prefix}_tostring", ownedBy(cls, "data-class toString")))
         .addParameter("handle", cOpaquePointer)
         .returns(String::class)
         .addStatement(

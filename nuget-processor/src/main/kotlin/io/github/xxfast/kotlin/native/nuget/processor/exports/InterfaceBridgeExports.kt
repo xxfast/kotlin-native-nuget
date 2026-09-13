@@ -154,7 +154,7 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
   }
 
   val subscribeBuilder: FunSpec.Builder = FunSpec.builder("export_${classPrefix}_$addMethodName")
-    .addAnnotation(cNameAnnotation("${classPrefix}_$addMethodName"))
+    .addAnnotation(cNameAnnotation("${classPrefix}_$addMethodName", ownedBy(addMethod)))
     .addParameter("handle", cOpaquePointer)
 
   ifaceMethods.forEach { method ->
@@ -178,7 +178,7 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
 
   addFunction(
     FunSpec.builder("export_${classPrefix}_$removeMethodName")
-      .addAnnotation(cNameAnnotation("${classPrefix}_$removeMethodName"))
+      .addAnnotation(cNameAnnotation("${classPrefix}_$removeMethodName", ownedBy(removeMethod)))
       .addParameter("handle", cOpaquePointer)
       .addParameter("subscriptionHandle", cOpaquePointer)
       .addCode(unsubscribeBody)

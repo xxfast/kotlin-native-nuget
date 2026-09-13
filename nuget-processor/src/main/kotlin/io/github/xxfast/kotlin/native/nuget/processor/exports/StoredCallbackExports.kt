@@ -218,7 +218,7 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
 
   addFunction(
     FunSpec.builder("export_${classPrefix}_$addMethodName")
-      .addAnnotation(cNameAnnotation("${classPrefix}_$addMethodName"))
+      .addAnnotation(cNameAnnotation("${classPrefix}_$addMethodName", ownedBy(addMethod)))
       .addParameter("handle", cOpaquePointer)
       .addParameter("listenerPtr", cOpaquePointer)
       .addParameter("userData", cOpaquePointer)
@@ -236,7 +236,7 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
 
   addFunction(
     FunSpec.builder("export_${classPrefix}_$removeMethodName")
-      .addAnnotation(cNameAnnotation("${classPrefix}_$removeMethodName"))
+      .addAnnotation(cNameAnnotation("${classPrefix}_$removeMethodName", ownedBy(removeMethod)))
       .addParameter("handle", cOpaquePointer)
       .addParameter("subscriptionHandle", cOpaquePointer)
       .addCode(unsubscribeBody)

@@ -74,7 +74,7 @@ internal fun FileSpec.Builder.addFunctionExports(func: KSFunctionDeclaration) {
 
   addFunction(
     FunSpec.builder("export_$cname")
-      .addAnnotation(cNameAnnotation(cname))
+      .addAnnotation(cNameAnnotation(cname, ownedBy(func)))
       .addEnumAwareParameters(func)
       .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
       .returns(cOpaquePointer.copy(nullable = true))

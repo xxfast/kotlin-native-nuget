@@ -342,8 +342,7 @@ private fun exportBuilder(
   includeError: Boolean = true,
 ): FunSpec.Builder {
   val builder: FunSpec.Builder = FunSpec.builder("export_${call.exportName}")
-    .addAnnotation(cNameAnnotation(call.exportName))
-    .tag(ForwardExportOwnerTag::class, ForwardExportOwnerTag(symbol = symbol))
+    .addAnnotation(cNameAnnotation(call.exportName, ForwardExportOwnerTag(symbol = symbol)))
   when (receiver) {
     is ForwardPropertyReceiver.Handle -> builder.addParameter("handle", cOpaquePointer)
     is ForwardPropertyReceiver.Value ->

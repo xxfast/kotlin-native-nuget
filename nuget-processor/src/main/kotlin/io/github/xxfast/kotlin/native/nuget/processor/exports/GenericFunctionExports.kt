@@ -76,7 +76,7 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
     if (returnsGenericClass) {
       addFunction(
         FunSpec.builder("export_$cname")
-          .addAnnotation(cNameAnnotation(cname))
+          .addAnnotation(cNameAnnotation(cname, ownedBy(func, "generic variant: $suffix")))
           .addParameter(paramName, kotlinTypeClass(kotlinType))
           .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
           .returns(cOpaquePointer.copy(nullable = true))
@@ -98,7 +98,7 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
       val qualifiedKotlinType: String = "kotlin.$kotlinType"
       addFunction(
         FunSpec.builder("export_$cname")
-          .addAnnotation(cNameAnnotation(cname))
+          .addAnnotation(cNameAnnotation(cname, ownedBy(func, "generic variant: $suffix")))
           .addParameter(paramName, kotlinTypeClass(kotlinType))
           .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
           .returns(kotlinTypeClass(kotlinType))
@@ -133,7 +133,7 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
   if (returnsGenericClass) {
     addFunction(
       FunSpec.builder("export_$cname")
-        .addAnnotation(cNameAnnotation(cname))
+        .addAnnotation(cNameAnnotation(cname, ownedBy(func, "generic variant: object")))
         .addParameter(paramName, cOpaquePointer)
         .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
         .returns(cOpaquePointer.copy(nullable = true))
@@ -154,7 +154,7 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
   } else if (returnDecl == typeParamName) {
     addFunction(
       FunSpec.builder("export_$cname")
-        .addAnnotation(cNameAnnotation(cname))
+        .addAnnotation(cNameAnnotation(cname, ownedBy(func, "generic variant: object")))
         .addParameter(paramName, cOpaquePointer)
         .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
         .returns(cOpaquePointer.copy(nullable = true))
