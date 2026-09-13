@@ -325,6 +325,6 @@ private fun StringBuilder.renderSealedSubclassProperty(prop: CirProperty) {
 }
 
 /** Shifts an ordinary-class member body one nesting level deeper, leaving blank lines untouched. */
-private fun String.indentNestedBody(): String =
+internal fun String.indentNestedBody(): String =
   lines().joinToString("\n") { line -> if (line.isBlank()) line else "    $line" }
 

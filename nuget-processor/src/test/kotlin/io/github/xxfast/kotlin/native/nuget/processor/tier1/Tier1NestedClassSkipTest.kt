@@ -2,25 +2,24 @@ package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * The nested class/object gate, the last member of the family [Tier1UndeclaredEnumSkipTest] and
- * [Tier1NestedInterfaceSkipTest] already cover.
+ * ADR-133 flips this file: a plain nested `class` or `object` under a supported owner is no longer
+ * skipped, it is declared as the C# nested type `Owner.Nested` / `Owner.Single`, and every member
+ * typed with one binds instead of skipping `UNDECLARED_CLASS`.
  *
- * Every root bucket in `NugetProcessor` filters `parentDeclaration == null`, so a plain nested
- * `class` or `object` is never declared in C#. Two things were missing:
+ * What the file keeps, and why it is still called a skip test: the two cells that must NOT flip.
+ * A `companion object` is still not a nested declaration (ADR-013 folds it into its owner's
+ * statics), and nothing under a **private** owner is API at all, so neither may be declared and
+ * neither may be warned about. Those two carve-outs are what a "declare every nested declaration"
+ * implementation is most likely to sweep up.
  *
- * - the declaration itself produced NO diagnostic at all, in any bucket: it simply vanished
- *   (`SKIPPED_NESTED_DECLARATION` now names it once, where it is declared).
- * - a member typed with one skipped as the generic `SKIPPED_UNSUPPORTED_TYPE`/`UNSUPPORTED`, whose
- *   "expose a bridgeable adapter" hint is wrong advice for a type no adapter can make declarable,
- *   and a *nullable* one blamed `NULLABLE` instead, telling the author to un-nullable a type that
- *   can never bind at any position.
- *
- * `label` is the control: a gate that drops the whole owning class is distinguishable from one
- * that drops only the members typed with the nested declaration.
+ * The full presence surface (all four kinds, depth 2, object owner, export prefix chain, deferred
+ * owner shapes) lives in [Tier1NestedTypesTest]; this file stays on the class/object pair its
+ * fixture already pinned so the flip is readable as a diff.
  */
 class Tier1NestedClassSkipTest {
 
@@ -37,8 +36,7 @@ class Tier1NestedClassSkipTest {
 
       fun make(): Nested = Nested("a")
       fun maybe(): Nested? = null
-      val nested: Nested = Nested("a")
-      fun single(): Single = Single
+      val stored: Nested = Nested("a")
 
       val label: String = "owner"
     }
@@ -55,101 +53,109 @@ class Tier1NestedClassSkipTest {
   """.trimIndent()
 
   @Test
-  fun `a nested class or object is never spelled in the generated C#`() {
+  fun `a nested class or object is declared as a nested C# type`() {
     val result = Tier1Harness.run(source)
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
-    listOf("Nested", "Single", "Unused", "Deeper").forEach { nested ->
-      assertFalse(
-        result.generatedCSharp.contains(nested),
-        "expected no declaration of, or dangling reference to, $nested; generatedCSharp=" +
-            "${result.generatedCSharp.lines().filter { it.contains(nested) }}",
-      )
+    val csharp: String = result.generatedCSharp
+    listOf(
+      "public class Nested",
+      "public static class Single",
+      "public class Unused",
+      // Depth 2 was already in this fixture: `Quiet.Unused.Deeper`.
+      "public class Deeper",
+    ).forEach { declaration ->
+      assertContains(csharp, declaration, message = "expected `$declaration`; csharp=$csharp")
     }
+    // Was: every one of these exports had to be ABSENT.
     listOf(
       "export_owner_make",
       "export_owner_maybe",
-      "export_owner_get_nested",
-      "export_owner_single",
+      "export_owner_get_stored",
     ).forEach { export ->
-      assertFalse(
-        result.generated.contains(export),
-        "expected $export to be absent from the generated exports; generated=${result.generated}",
+      assertContains(
+        result.generated,
+        export,
+        message = "expected $export to bind now that its type is declared; generated=${result.generated}",
       )
     }
     assertTrue(
       result.generated.contains("export_owner_get_label"),
-      "expected the control member to survive the gate; generated=${result.generated}",
+      "expected the control member to keep binding; generated=${result.generated}",
     )
   }
 
   @Test
-  fun `every nested declaration is named once, and the companion is not`() {
+  fun `the export prefix is the enclosing chain, not the bare simple name`() {
+    val result = Tier1Harness.run(source)
+
+    // ADR-117 would raise ERROR_C_ENTRY_POINT_COLLISION if `Owner.Nested` exported `nested_create`
+    // against an unrelated top-level `Nested`; the chain is what keeps the symbol unique.
+    assertContains(result.generated, "@CName(\"owner_nested_create\")")
+    assertContains(result.generated, "@CName(\"quiet_unused_deeper_create\")")
+    assertFalse(
+      result.generated.contains("@CName(\"nested_create\")") ||
+          result.generated.contains("@CName(\"deeper_create\")"),
+      "expected no unchained entry point; generated=${result.generated}",
+    )
+  }
+
+  @Test
+  fun `the companion and everything under a private owner are still not declared`() {
     val result = Tier1Harness.run(source)
 
     val nestedWarnings: List<String> = result.kspWarnings
       .filter { it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) }
+    // Was: each of Owner.Nested, Owner.Single, Quiet.Unused and Quiet.Unused.Deeper had to be
+    // named here. They are declared now, so a warning for any of them is a bug.
     listOf(
       "tier1.nestedclass.Owner.Nested",
       "tier1.nestedclass.Owner.Single",
       "tier1.nestedclass.Quiet.Unused",
       "tier1.nestedclass.Quiet.Unused.Deeper",
     ).forEach { declaration ->
-      val warning: String = requireNotNull(
-        nestedWarnings.firstOrNull { it.contains(declaration) },
-      ) { "expected $declaration to be named once; nestedWarnings=$nestedWarnings" }
-      assertTrue(
-        warning.contains("move it to the top level"),
-        "expected the move-to-top-level fix; got: $warning",
+      assertFalse(
+        nestedWarnings.any { it.contains(declaration) },
+        "expected $declaration to be declared, not skipped; nestedWarnings=$nestedWarnings",
       )
     }
-    // A companion object is declared in C# as its owner's statics (ADR-013), so it is emphatically
-    // not an undeclared nested declaration.
+    // Carve-out 1: a companion is its owner's statics, never a nested type.
     assertFalse(
       nestedWarnings.any { it.contains("Companion") },
       "expected no nested-declaration warning for the companion; nestedWarnings=$nestedWarnings",
     )
-    // The walk descends through public children only: what hides under a private owner is not
-    // reachable API, so neither the owner nor anything below it is a declaration to report.
+    assertFalse(
+      result.generatedCSharp.contains("class Companion"),
+      "expected the companion to stay folded into its owner's statics; csharp=" +
+          "${result.generatedCSharp.lines().filter { it.contains("Companion") }}",
+    )
+    assertTrue(
+      result.generated.contains("export_owner_create"),
+      "expected the companion's own member to keep binding; generated=${result.generated}",
+    )
+    // Carve-out 2: what hides under a private owner is not reachable API, so it is neither
+    // declared nor reported -- the walk still descends through public children only.
     assertFalse(
       nestedWarnings.any { it.contains("Hushed") || it.contains("Buried") },
       "expected no warning under the private owner; nestedWarnings=$nestedWarnings",
     )
-    assertTrue(
-      result.generated.contains("export_owner_create"),
-      "expected the companion's own member to still bind; generated=${result.generated}",
+    assertFalse(
+      result.generatedCSharp.contains("Hushed") || result.generatedCSharp.contains("Buried"),
+      "expected nothing under a private owner to be declared; csharp=" +
+          "${result.generatedCSharp.lines().filter { it.contains("Hushed") || it.contains("Buried") }}",
     )
   }
 
   @Test
-  fun `members typed with a nested class skip as UNDECLARED_CLASS, naming it`() {
+  fun `the nullable nested return binds and keeps its nullability`() {
     val result = Tier1Harness.run(source)
 
-    mapOf(
-      "Owner.make" to "tier1.nestedclass.Owner.Nested",
-      "Owner.maybe" to "tier1.nestedclass.Owner.Nested",
-      "Owner.single" to "tier1.nestedclass.Owner.Single",
-    ).forEach { (member, nested) ->
-      val diagnostic: String = requireNotNull(
-        result.kspWarnings.firstOrNull { it.contains("SKIPPED_") && it.contains(member) },
-      ) { "expected a skip diagnostic for $member; kspWarnings=${result.kspWarnings}" }
-      assertTrue(
-        diagnostic.contains("UNDECLARED_CLASS"),
-        "expected $member to skip as UNDECLARED_CLASS, not the generic bucket; got: $diagnostic",
-      )
-      assertTrue(
-        diagnostic.contains(nested) && diagnostic.contains("move it to the top level"),
-        "expected the $member diagnostic to name $nested and the fix; got: $diagnostic",
-      )
-    }
-    // The nullable return is the position that used to blame NULLABLE: undeclarable outranks
-    // position-shaped reasons, exactly as it does for a nested enum or interface.
-    val maybe: String = result.kspWarnings.first {
-      it.contains("SKIPPED_") && it.contains("Owner.maybe")
-    }
+    // Was: `Owner.maybe` had to skip, and the assertion was only that it did not blame NULLABLE.
+    // The nullable position was a separate code path then and stays a separate cell now.
+    assertContains(result.generated, "export_owner_maybe")
     assertFalse(
-      maybe.contains("NULLABLE"),
-      "expected the nullable return to blame the undeclared type, not nullability; got: $maybe",
+      result.kspWarnings.any { it.contains("SKIPPED_") && it.contains("Owner.maybe") },
+      "expected no skip for the nullable nested return; kspWarnings=${result.kspWarnings}",
     )
   }
 }

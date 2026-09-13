@@ -474,7 +474,7 @@ internal fun translateClass(
   interfaceDeclarationCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanCatalog(emptyList()),
 ): CirClass {
   val name: String = cls.simpleName.asString()
-  val prefix: String = name.lowercase()
+  val prefix: String = cls.nativePrefix()
   val isDataClass: Boolean = cls.modifiers.contains(Modifier.DATA)
   val isAbstract: Boolean = cls.modifiers.contains(Modifier.ABSTRACT)
   val isOpen: Boolean = !isAbstract && cls.modifiers.contains(Modifier.OPEN)
@@ -529,7 +529,9 @@ internal fun translateClass(
     .filter { iface ->
       keepsSupertype(cls, name, iface, SupertypeKind.INTERFACE, exportedTypes, logger)
     }
-    .map { "I${it.simpleName.asString()}" }
+    // ADR-133: the enclosing scope with the `I` on the last segment (`Aviary.IKeeper`); a bare
+    // `IKeeper` names nothing at namespace level (CS0234).
+    .map { it.nestedInterfaceCsName() }
     .toList()
 
   // ADR-091: constructors come off the catalog, the same move ADR-090 made for methods. The
@@ -1025,7 +1027,7 @@ internal fun translateGenericClass(
   logger: KSPLogger,
 ): CirGenericClass {
   val name: String = cls.simpleName.asString()
-  val prefix: String = name.lowercase()
+  val prefix: String = cls.nativePrefix()
   val typeParams: List<CirTypeParameter> = cls.typeParameters.map { param ->
     val bounds: List<String> = param.bounds.toList().mapNotNull { bound ->
       val resolved = bound.resolve()
@@ -1708,7 +1710,7 @@ internal fun translateSealedClass(
 ): CirSealedClass {
   val libraryName: String = context.libraryName
   val name: String = cls.simpleName.asString()
-  val prefix: String = name.lowercase()
+  val prefix: String = cls.nativePrefix()
   val qualifiedName: String? = cls.qualifiedName?.asString()
 
   // ADR-111/ADR-116 amendment (2026-09-11): the base's own declared members, off base-keyed plans
@@ -2043,7 +2045,7 @@ internal fun translateObject(
   logger: KSPLogger,
 ): CirObject {
   val name: String = obj.simpleName.asString()
-  val prefix: String = name.lowercase()
+  val prefix: String = obj.nativePrefix()
 
   // Object methods are static (no receiver handle), so they route through the same
   // shape as top-level functions (CirFunctionTranslator's static template) rather than
@@ -2494,7 +2496,7 @@ internal fun translateInterfaceBackingClass(
   tracker: CollectionHelperTracker,
 ): CirClass {
   val name: String = iface.simpleName.asString()
-  val prefix: String = name.lowercase()
+  val prefix: String = iface.nativePrefix()
   val ifaceQualified: String = iface.qualifiedName?.asString() ?: name
 
   val properties: List<CirProperty> = iface.getAllProperties()
@@ -2542,6 +2544,10 @@ internal fun translateEnum(
   val name: String = enum.simpleName.asString()
   val entries: List<CirEnumEntry> = enum.declarations
     .filterIsInstance<KSClassDeclaration>()
+    // ADR-133: an enum body can also declare a nested CLASS, which is not an entry. Without this
+    // filter it was rendered as an extra C# enum member (`Almanac = 2`) with an ordinal no Kotlin
+    // entry has -- a pre-existing defect no fixture had reached.
+    .filter { it.classKind == ClassKind.ENUM_ENTRY }
     .mapIndexed { index, entry ->
       val entryName: String = entry.simpleName.asString()
       val csEntryName: String = entryName.split("_")
@@ -2571,7 +2577,16 @@ internal fun translateEnum(
     }
     .toList()
 
-  return CirEnum(name, libraryName, entries, properties)
+  return CirEnum(
+    name = name,
+    libraryName = libraryName,
+    // ADR-133: the chain, so a nested `Owner.Kind` exports `owner_kind_get_*` and cannot collide
+    // with a top-level `Kind` (ADR-117).
+    nativePrefix = enum.nativePrefix(),
+    csName = enum.nestedCsName(),
+    entries = entries,
+    properties = properties,
+  )
 }
 
 internal fun translateValueClass(
@@ -2583,7 +2598,7 @@ internal fun translateValueClass(
 ): CirValueClass {
   val name: String = cls.simpleName.asString()
   val qualifiedName: String = cls.qualifiedName?.asString() ?: name
-  val prefix: String = name.lowercase()
+  val prefix: String = cls.nativePrefix()
 
   val underlyingParamName: String = cls.primaryConstructor!!.parameters.first().name!!.asString()
   val underlyingProp: KSPropertyDeclaration = cls.getAllProperties()

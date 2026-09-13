@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using TestLibrary.Issue115;
+using TestLibrary.Issue54;
 
 namespace IntegrationTests;
 
@@ -371,14 +372,19 @@ public class SealedSubclassMethodTests
     }
 
     /// <summary>
-    /// ROADMAP line 39's literal example: a nested interface return. <c>rootInterfaces</c> never
-    /// declares <c>NestedListenerOwner.Listener</c>, so binding it would emit a dangling
-    /// <c>TestLibrary.Issue54.IListener</c> and fail the consumer compile with CS0246.
+    /// ROADMAP line 39's literal example, inverted by ADR-133: a nested interface is now DECLARED
+    /// as the C# nested type <c>NestedListenerOwner.IListener</c>, so the arm's nested-interface
+    /// return binds instead of being dropped. The return type is what this cell pins: it must be
+    /// the nested spelling, never a namespace-root <c>IListener</c> (CS0246 in every consumer).
     /// </summary>
     [Fact]
-    public void PickNested_NestedInterfaceReturnOnASealedArm_IsAbsent()
+    public void PickNested_NestedInterfaceReturnOnASealedArm_Binds()
     {
-        Assert.Null(typeof(Job.Running).GetMethod("PickNested"));
+        var pickNested = typeof(Job.Running).GetMethod("PickNested");
+
+        Assert.NotNull(pickNested);
+        Assert.Same(typeof(NestedListenerOwner.IListener), pickNested!.ReturnType);
+        Assert.Same(typeof(NestedListenerOwner), pickNested.ReturnType.DeclaringType);
     }
 
     /// <summary>
@@ -1054,16 +1060,28 @@ public class SealedSubclassMethodDiagnosticsTests
                 string.Join("\n  ", named));
         }
     }
-
     /// <summary>
-    /// The nested-interface return keeps the diagnostic an ordinary class already gets for the same
-    /// shape: the type is unsupported, not the routing. This is the row of ADR-116's table that the
-    /// post-process must leave alone.
+    /// Inverted by ADR-133: the nested interface is declared now, so the arm's nested-interface
+    /// return binds and nothing about it is skipped. A surviving diagnostic would mean one half of
+    /// the pipeline still treats a nested declaration as undeclarable while the other emits it.
     /// </summary>
     [Fact]
-    public void PickNested_NestedInterfaceReturnOnASealedArm_IsNamedAsAnUnsupportedType()
+    public void PickNested_NestedInterfaceReturnOnASealedArm_IsNotNamedAsSkipped()
     {
-        AssertNamed($"{Package}.Job.Running.pickNested", "SKIPPED_UNSUPPORTED_TYPE");
+        foreach ((string path, IReadOnlyList<Diagnostic> entries) in DiagnosticFiles())
+        {
+            string[] named = entries
+                .Where(entry =>
+                    entry.Declaration == $"{Package}.Job.Running.pickNested" &&
+                    entry.Kind.StartsWith("SKIPPED_", StringComparison.Ordinal))
+                .Select(entry => $"{entry.Kind} {entry.Declaration}")
+                .ToArray();
+
+            Assert.True(
+                named.Length == 0,
+                $"{path} still names the nested-interface return ADR-133 binds:\n  " +
+                string.Join("\n  ", named));
+        }
     }
 
     /// <summary>

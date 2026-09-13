@@ -8,6 +8,7 @@ import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
 /**
@@ -127,7 +128,7 @@ internal class ForwardPropertyPlanner(
    */
   private fun sealedBaseProperties(sealed: KSClassDeclaration): List<ForwardPropertyPlan> {
     val owner: String = sealed.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = sealed.simpleName.asString().lowercase()
+    val prefix: String = sealed.nativePrefix()
     return sealed.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { prop -> prop.parentDeclaration == sealed }
@@ -160,7 +161,7 @@ internal class ForwardPropertyPlanner(
   ): List<ForwardPropertyPlan> {
     val owner: String = subclass.qualifiedName?.asString() ?: return emptyList()
     val prefix: String =
-      "${sealed.simpleName.asString().lowercase()}_${subclass.simpleName.asString().lowercase()}"
+      "${sealed.nativePrefix()}_${subclass.simpleName.asString().lowercase()}"
     return subclass.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { prop -> prop.isForwardPlannableMemberOf(subclass, superClass = sealed) }
@@ -192,8 +193,8 @@ internal class ForwardPropertyPlanner(
           position = ForwardPropertyPosition.CLASS,
           receiver = ForwardPropertyReceiver.Handle(owner),
           prop = prop,
-          getExport = "${cls.simpleName.asString().lowercase()}_get_${prop.simpleName.asString()}",
-          setExport = "${cls.simpleName.asString().lowercase()}_set_${prop.simpleName.asString()}",
+          getExport = "${cls.nativePrefix()}_get_${prop.simpleName.asString()}",
+          setExport = "${cls.nativePrefix()}_set_${prop.simpleName.asString()}",
           superClass = superClass,
         )
       }
@@ -208,7 +209,7 @@ internal class ForwardPropertyPlanner(
    */
   fun interfaceProperties(iface: KSClassDeclaration): List<ForwardPropertyPlan> {
     val owner: String = iface.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = iface.simpleName.asString().lowercase()
+    val prefix: String = iface.nativePrefix()
     return iface.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { prop -> prop.parentDeclaration == iface }
@@ -229,7 +230,7 @@ internal class ForwardPropertyPlanner(
     val companion: KSClassDeclaration = cls.declarations.filterIsInstance<KSClassDeclaration>()
       .firstOrNull { it.isCompanionObject } ?: return emptyList()
     val owner: String = cls.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = cls.simpleName.asString().lowercase()
+    val prefix: String = cls.nativePrefix()
     return companion.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { !it.modifiers.contains(Modifier.CONST) }

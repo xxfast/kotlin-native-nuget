@@ -461,6 +461,9 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   ForwardPlanSkipReason.UNDECLARED_INTERFACE,
     // The nested class/object twin of the two above, in the same bucket for the same reason.
   ForwardPlanSkipReason.UNDECLARED_CLASS,
+    // ADR-133: the object-position drop shares the bucket -- one unsupported type at every
+    // position, distinguished only by its sentence and hint.
+  ForwardPlanSkipReason.OBJECT_POSITION,
   ForwardPlanSkipReason.VALUE_CLASS,
     -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE
 
@@ -617,6 +620,12 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
     ForwardPlanSkipReason.UNDECLARED_CLASS ->
       "its type `${detail ?: "the class"}` is a nested class or object never declared in C# " +
           "($name)"
+
+    // ADR-133: the object-at-a-member-position drop. Owns its sentence so the author reads the C#
+    // rule (a static type has no parameter or return position) rather than the generic combination.
+    ForwardPlanSkipReason.OBJECT_POSITION ->
+      "its type `${detail ?: "the object"}` is a Kotlin `object`, declared in C# as a static " +
+          "class, which cannot appear at a parameter or return position (CS0722)"
 
     // ADR-082: nothing about the types failed; a supertype declares this signature.
     ForwardPlanSkipReason.INHERITED_MEMBER ->
@@ -860,6 +869,17 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "declared in C# (only top-level ones are, plus sealed subclasses and companion objects), " +
         "so every member typed with it is skipped rather than emitted as a dangling reference; " +
         "move it to the top level of its file"
+  }
+
+  // ADR-133: names the object and the C# rule. Deliberately not the UNDECLARED_CLASS hint: moving
+  // the object to the top level changes nothing, because a Kotlin `object` renders as a C# STATIC
+  // class wherever it is declared, and a static type is illegal at a parameter or return position.
+  ForwardPlanSkipReason.OBJECT_POSITION -> {
+    val objectName: String = detail ?: "the object"
+    "`$objectName` is a Kotlin `object`, which is declared in C# as a static class (its members " +
+        "are callable as `$objectName.Member()`), and C# forbids a static type at a parameter or " +
+        "return position (CS0722), so every member typed with it is skipped rather than emitted " +
+        "as uncompilable C#; return a regular class, or call the object`s members directly"
   }
 
   // ADR-115: no `include(...)`, no move-to-top-level and no scope change can repair either of

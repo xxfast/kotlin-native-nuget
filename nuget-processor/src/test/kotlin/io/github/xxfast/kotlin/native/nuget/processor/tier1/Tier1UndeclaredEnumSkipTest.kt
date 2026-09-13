@@ -3,6 +3,8 @@ package io.github.xxfast.kotlin.native.nuget.processor.tier1
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import java.io.File
 import kotlin.test.Test
+import kotlin.test.assertContains
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -14,14 +16,15 @@ import kotlin.test.assertTrue
  * a type nothing emits — CS0426/CS0234 on the consumer's `Interop.cs`, with no KSP diagnostic to
  * explain it.
  *
- * Three shapes reach the gate, and they must not collapse into one message:
- * - (a) a **module-local nested** enum — `SKIPPED_UNSUPPORTED_TYPE` / `UNDECLARED_ENUM`, naming the
- *   enum and the move-to-top-level fix,
- * - (b) a **cross-module nested** enum on an *admitted* dependency class — the reachability closure
- *   now refuses to admit it (admitting it declared a namespace-root `public enum AdBand` that the
- *   `Broadcast.AdBand` references never resolved against), so it lands on the same
- *   `UNDECLARED_ENUM` route rather than the `include(...)` one, which cannot help a nested enum,
- * - (c) a **top-level dependency** enum in a never-admitted package — this one keeps
+ * ADR-133 flips the two nested shapes from absence to presence; the third is untouched, and keeping
+ * all three in one file is what makes "the gate collapsed into one message" visible:
+ * - (a) a **module-local nested** enum — now DECLARED as the nested `Owner.Mode`, so every position
+ *   typed with it binds and nothing skips,
+ * - (b) a **cross-module nested** enum on an *admitted* dependency class — now declared once,
+ *   nested under `Broadcast`, by the owner walk alone (a second declaration from the dependency
+ *   merge would be CS0101, and a namespace-root one would be the pre-2026-09-07 flattening that
+ *   `Broadcast.AdBand` references never resolved against),
+ * - (c) a **top-level dependency** enum in a never-admitted package — unchanged, and it keeps
  *   `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` and its `include(...)` hint, exactly as an unadmitted
  *   *class* already did; the enum branch simply used to run before that route could be reached.
  *
@@ -47,11 +50,11 @@ class Tier1UndeclaredEnumSkipTest {
     class Owner {
       enum class Mode { ON, OFF }
 
-      var mode: Mode = Mode.ON
-      fun activate(mode: Mode) { this.mode = mode }
-      fun current(): Mode = mode
-      fun apply(modes: List<Mode>) { this.mode = modes.first() }
-      fun index(byMode: Map<Mode, String>) { this.mode = byMode.keys.first() }
+      var setting: Mode = Mode.ON
+      fun activate(mode: Mode) { this.setting = mode }
+      fun current(): Mode = setting
+      fun apply(modes: List<Mode>) { this.setting = modes.first() }
+      fun index(byMode: Map<Mode, String>) { this.setting = byMode.keys.first() }
 
       var volume: Volume = Volume.LOW
       fun tune(volume: Volume) { this.volume = volume }
@@ -66,74 +69,85 @@ class Tier1UndeclaredEnumSkipTest {
   """.trimIndent()
 
   @Test
-  fun `a module-local nested enum is never spelled in the generated C#`() {
+  fun `a module-local nested enum is declared as a nested C# enum`() {
     val result = Tier1Harness.run(source)
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    // Was: assertFalse(csharp.contains("Owner.Mode")) plus an absent-export assertion for each
+    // position. ADR-133 declares the nested enum, so every one of them binds.
+    assertContains(result.generatedCSharp, "public enum Mode")
     assertFalse(
-      result.generatedCSharp.contains("Owner.Mode"),
-      "expected no dangling reference to the undeclared nested enum; " +
-          "generatedCSharp=${result.generatedCSharp.lines().filter { it.contains("Mode") }}",
+      Regex("""^ {4}public enum Mode\b""", RegexOption.MULTILINE)
+        .containsMatchIn(result.generatedCSharp),
+      "expected no namespace-level twin of the nested enum; generatedCSharp=" +
+          "${result.generatedCSharp.lines().filter { it.contains("Mode") }}",
     )
     listOf(
-      "export_owner_get_mode",
+      "export_owner_get_setting",
       "export_owner_activate",
       "export_owner_current",
       "export_owner_apply",
       "export_owner_index",
+      "export_dial_create",
     ).forEach { export ->
-      assertFalse(
-        result.generated.contains(export),
-        "expected $export to be absent from the generated exports; generated=${result.generated}",
+      assertContains(
+        result.generated,
+        export,
+        message = "expected $export to bind now that the nested enum is declared; " +
+            "generated=${result.generated}",
       )
     }
   }
 
   @Test
-  fun `every nested-enum position skips named with the undeclared-enum hint`() {
+  fun `the nested enum's own exports carry the enclosing chain`() {
     val result = Tier1Harness.run(source)
 
+    // The enum entry point is composed from the enum's simple name today; ADR-133 makes it the
+    // chain, so `Owner.Mode` cannot collide with a top-level `Mode` (ADR-117).
+    assertTrue(
+      result.generated.contains("owner_mode_") || !result.generated.contains("\"mode_"),
+      "expected the nested enum's exports to carry the owner chain; generated=${result.generated}",
+    )
+    assertFalse(
+      result.generated.contains("@CName(\"mode_"),
+      "expected no unchained `mode_` entry point; generated=${result.generated}",
+    )
+  }
+
+  @Test
+  fun `no position typed with the nested enum skips any more`() {
+    val result = Tier1Harness.run(source)
+
+    // Was: every one of these had to carry SKIPPED_UNSUPPORTED_TYPE naming Owner.Mode, and the
+    // property had to carry SKIPPED_UNSUPPORTED_PROPERTY. The collection and map positions stay in
+    // the list because an element-type route that keeps its own membership check would fail here
+    // while the scalar positions pass.
     listOf(
       "Owner.activate",
       "Owner.current",
       "Owner.apply",
       "Owner.index",
+      "Owner.setting",
       "Dial",
     ).forEach { member ->
-      val diagnostic: String = requireNotNull(
-        result.kspWarnings.firstOrNull {
-          it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE.name) && it.contains(member)
+      assertFalse(
+        result.kspWarnings.any {
+          it.contains("SKIPPED_") &&
+              it.contains(member) &&
+              it.contains("tier1.undeclaredenum.Owner.Mode")
         },
-      ) {
-        "expected a SKIPPED_UNSUPPORTED_TYPE diagnostic for $member; " +
-            "kspWarnings=${result.kspWarnings}"
-      }
-      assertTrue(
-        diagnostic.contains("tier1.undeclaredenum.Owner.Mode"),
-        "expected the $member diagnostic to name the undeclared enum; got: $diagnostic",
-      )
-      assertTrue(
-        diagnostic.contains("move it to the top level"),
-        "expected the $member diagnostic to name the move-to-top-level fix; got: $diagnostic",
+        "expected no skip naming the now-declared nested enum for $member; " +
+            "kspWarnings=${result.kspWarnings}",
       )
     }
-  }
-
-  @Test
-  fun `the nested-enum property skips named too`() {
-    val result = Tier1Harness.run(source)
-
-    assertTrue(
+    assertFalse(
       result.kspWarnings.any {
-        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
-            it.contains("Owner.mode") &&
-            it.contains("tier1.undeclaredenum.Owner.Mode") &&
-            // ADR-064's 2026-09-11 amendment: the property route reads the reason's own hint,
-            // the same remedy the parameter and return positions already print.
-            it.contains("move it to the top level")
+        it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
+            it.contains("tier1.undeclaredenum.Owner.Mode")
       },
-      "expected the property route to skip naming the undeclared enum and its move-to-top-level " +
-          "fix; kspWarnings=${result.kspWarnings}",
+      "expected the nested enum itself to be declared, not skipped; " +
+          "kspWarnings=${result.kspWarnings}",
     )
   }
 
@@ -209,25 +223,35 @@ class Tier1UndeclaredEnumSkipTest {
   )
 
   @Test
-  fun `an admitted dependency's nested enum is neither declared nor referenced`() {
+  fun `an admitted dependency's nested enum is declared once, nested under its owner`() {
     val result = dependencyResult()
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    // Was: assertFalse(csharp.contains("AdBand")) and a SKIPPED_UNSUPPORTED_PROPERTY for
+    // Broadcast.band. ADR-133's closure edge admits a nested dependency declaration whose whole
+    // enclosing chain is admitted, and the OWNER WALK is the sole declarer: if the dependency
+    // merge declared it too, `AdBand` would appear twice (CS0101, the issue #54/#110 lesson).
+    assertContains(result.generatedCSharp, "public enum AdBand")
     assertFalse(
-      result.generatedCSharp.contains("AdBand"),
-      "expected the nested dependency enum to be neither declared at namespace root nor " +
-          "referenced; generatedCSharp=" +
+      Regex("""^ {4}public enum AdBand\b""", RegexOption.MULTILINE)
+        .containsMatchIn(result.generatedCSharp),
+      "expected no namespace-root twin of the nested dependency enum; generatedCSharp=" +
           "${result.generatedCSharp.lines().filter { it.contains("AdBand") }}",
     )
-    assertTrue(
+    assertEquals(
+      1,
+      Regex("""public enum AdBand\b""").findAll(result.generatedCSharp).count(),
+      "expected exactly one declaration of AdBand; generatedCSharp=" +
+          "${result.generatedCSharp.lines().filter { it.contains("AdBand") }}",
+    )
+    assertFalse(
       result.kspWarnings.any {
-        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
-            it.contains("Broadcast.band") &&
-            it.contains("dep.models.Broadcast.AdBand")
+        it.contains("SKIPPED_") && it.contains("Broadcast.band")
       },
-      "expected Broadcast.band to skip naming the undeclared nested enum; " +
+      "expected Broadcast.band to bind now that AdBand is declared; " +
           "kspWarnings=${result.kspWarnings}",
     )
+    assertContains(result.generated, "export_broadcast_get_band")
     assertTrue(
       result.generated.contains("export_newsroom_broadcast") &&
           result.generated.contains("export_broadcast_get_station"),

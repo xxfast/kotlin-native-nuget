@@ -195,6 +195,14 @@ reopen this ADR's flat-ordinal shape and was rejected here.
 
 An `abstract` arm is still out of scope: `FromHandle`'s `new Perch(handle)` would be CS0144.
 
+### Amendment (2026-09-13): generalised to every nested declaration kind
+
+[ADR-133](133-nested-types.md) lifts this ADR's nested-block rendering (`indentNestedBody()`,
+promoted from `private` to `internal`) out of the sealed route entirely: a plain nested `class`,
+`object`, `interface`, or `enum class` under a non-generic, non-`inner` `class` or `object` owner now
+nests in the generated C# the same way a sealed arm always has, at any depth. The sealed route itself
+is unchanged; it is now one caller of the shared mechanism rather than the mechanism's only caller.
+
 ## Consequences
 
 - Sealed hierarchies are type-safe and pattern-matchable in C#

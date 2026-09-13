@@ -4,6 +4,10 @@ package io.github.xxfast.kotlin.native.nuget.test.issue54
  * Fixture for the **undeclared-enum gate**, shape (a): a *module-local* `enum class` nested inside
  * an exported class.
  *
+ * ADR-133 (2026-09-13) inverted the premise below: the nested enum is now declared as the C#
+ * nested type `NestedModeOwner.Mode` and every position typed with it binds; the paragraphs that
+ * follow record the pre-ADR-133 gate this fixture was written to pin.
+ *
  * `rootEnums` (`NugetProcessor.kt`) filters `parentDeclaration == null`, so [NestedModeOwner.Mode]
  * is never declared as a C# enum, and the reachability closure never admits a module-local
  * declaration either. The forward classifier's enum branch has no membership gate, though, so
@@ -19,7 +23,8 @@ package io.github.xxfast.kotlin.native.nuget.test.issue54
  * Every classifier-fed position the nested enum can occupy, once each — the point is the widest
  * set of seams, not the fewest members, because a fixture trimmed to one position would go green
  * against a gate that only covers that one:
- * - [mode] — **property** position (classifier via `ForwardPropertyPlanner`),
+ * - [setting] — **property** position (named `setting`, not `mode`: once ADR-133 declares the
+ *   nested enum, a `Mode` property beside the nested type `Mode` is CS0102) (classifier via `ForwardPropertyPlanner`),
  * - [set] — **parameter** position (spelled on the way in, ordinal-unwrapped),
  * - [current] — **return** position (spelled on the way out),
  * - [name] — the **control**, an unrelated `String` member that must keep binding so a fix that
@@ -34,19 +39,19 @@ package io.github.xxfast.kotlin.native.nuget.test.issue54
  */
 class NestedModeOwner {
 
-  /** Module-local, nested, and therefore never declared in C#. */
+  /** Module-local and nested: declared as the nested enum `NestedModeOwner.Mode` (ADR-133). */
   enum class Mode { ON, OFF }
 
   /** Property position. */
-  var mode: Mode = Mode.ON
+  var setting: Mode = Mode.ON
 
   /** Parameter position. */
   fun set(mode: Mode) {
-    this.mode = mode
+    this.setting = mode
   }
 
   /** Return position. */
-  fun current(): Mode = mode
+  fun current(): Mode = setting
 
   /** Control: the sibling that must survive the gate. */
   val name: String = "owner"

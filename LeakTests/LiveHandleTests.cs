@@ -7,6 +7,7 @@ using TestLibrary.Issue126;
 using TestLibrary.Issue127;
 using TestLibrary.Issue131;
 using TestLibrary.Models;
+using TestLibrary.Nested;
 using TestLibrary.Routes;
 
 namespace LeakTests;
@@ -140,6 +141,22 @@ public class LiveHandleTests
         {
             using var oreo = new Cat("Oreo", 9);
             Assert.Equal("Oreo", oreo.Name);
+        });
+    }
+
+    // Row 1a. ADR-133: a nested class mints through `aviary_perch_create` into the same
+    // NugetHandles StableRef route Row 1 measures, and releases through
+    // `aviary_perch_dispose`. No new mint path, so this is the happy-path checklist row, not
+    // a new mechanism: the one thing it can catch is a nested export wired to a retain without the
+    // matching release. Oreo takes the perch fifty times and comes down fifty times.
+    [Fact]
+    public void NestedClass_CreateAndDispose_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var aviary = new Aviary("Oreo");
+            using var perch = aviary.PerchAt(3);
+            Assert.Equal(3, aviary.HeightOf(perch));
         });
     }
 

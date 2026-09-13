@@ -17,6 +17,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardProperty
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
 import io.github.xxfast.kotlin.native.nuget.processor.forward.handleBody
 import io.github.xxfast.kotlin.native.nuget.processor.forward.nullableHandleBody
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 
 /**
  * Generates @CName bridge exports for sealed classes: type discriminator,
@@ -34,7 +35,7 @@ internal fun FileSpec.Builder.addSealedClassExports(
 ) {
   val name: String = sealed.simpleName.asString()
   val qualifiedName: String = sealed.qualifiedName?.asString() ?: return
-  val prefix: String = name.lowercase()
+  val prefix: String = sealed.nativePrefix()
 
   val subclasses: List<KSClassDeclaration> = sealed.getSealedSubclasses().toList()
 

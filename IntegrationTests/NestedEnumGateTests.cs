@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using TestLibrary;
 using TestLibrary.Issue54;
@@ -6,30 +7,23 @@ using TestLibrary.Models;
 namespace IntegrationTests;
 
 /// <summary>
-/// The undeclared-enum gate: an exported member typed with an <c>enum class</c> that is not in the
-/// exported set is classified as a C# enum reference and spelled
-/// <c>global::TestLibrary.Issue54.NestedModeOwner.Mode</c> even though the enum is never declared,
-/// so <c>Interop.cs</c> fails the consumer compile with CS0246/CS0426.
+/// ADR-133 flips shapes (a) and (b) of the undeclared-enum gate from absence to presence: an
+/// <c>enum class</c> nested inside an exported class is now declared as the C# nested enum
+/// <c>NestedModeOwner.Mode</c> / <c>Broadcast.AdBand</c>, so every member typed with one binds
+/// instead of skipping.
 ///
-/// Three shapes, because the classifier's enum branch reaches them by three different routes and a
-/// gate that closes one does not close the others:
+/// The three shapes stay separate, because they reach the classifier's enum branch by three
+/// different routes and only two of them flip:
 /// <list type="bullet">
-/// <item>(a) a module-local enum <em>nested</em> inside an exported class — <c>rootEnums</c> only
-/// declares top-level enums, and the closure never admits a module-local declaration;</item>
-/// <item>(b) a dependency module's <em>nested</em> enum that the closure <em>does</em> admit (its
-/// ENUM admission has no <c>parentDeclaration</c> filter), declared at namespace root under its
-/// simple name while every reference spells it <c>Broadcast.AdBand</c>;</item>
-/// <item>(c) a top-level enum in the never-admitted <c>dev.other.core</c>, the
-/// <c>containingFile == null</c> half of the gate.</item>
+/// <item>(a) a module-local enum nested in an exported class: declared by the owner walk;</item>
+/// <item>(b) a dependency module's nested enum whose owner the ADR-066 closure admits: declared
+/// once, by the owner walk, never a second time by the dependency merge;</item>
+/// <item>(c) a top-level enum in the never-admitted <c>dev.other.core</c>
+/// (<c>Newsroom.airwave()</c>): unchanged by ADR-133 and still skipped named. Nesting has nothing
+/// to do with why it is undeclarable, which is exactly why this cell stays red-adjacent here.</item>
 /// </list>
 ///
-/// After the fix every enum-typed member skips with a named diagnostic, the owning classes still
-/// generate and construct, and their unrelated members still bind. The diagnostics themselves
-/// (<c>SKIPPED_UNSUPPORTED_TYPE</c> with the <c>UNDECLARED_ENUM</c> reason,
-/// <c>SKIPPED_UNEXPORTED_DEPENDENCY_TYPE</c> for shape (c)) are asserted at Tier 1; from compiled
-/// C# only the absence of the members, and the survival of everything around them, is observable.
-///
-/// Oreo runs on two modes and no more; Mylo only listens to the cat radio station on FM.
+/// Oreo is either ON or OFF. Mylo still lobbies for a third mode, and still loses.
 /// </summary>
 public class NestedEnumGateTests
 {
@@ -38,37 +32,55 @@ public class NestedEnumGateTests
     [Fact]
     public void NestedModeOwner_StillConstructs_AndItsUnrelatedMemberStillBinds()
     {
-        // The control half: a gate that drops the whole owning class instead of just its
-        // enum-typed members would also make this pass-looking test fail, which is the point.
+        // The control half: an implementation that drops the owning class to make its nested enum
+        // fit would also make this pass-looking test fail, which is the point.
         using var owner = new NestedModeOwner();
 
         Assert.Equal("owner", owner.Name);
     }
 
     [Fact]
-    public void NestedModeOwner_PropertyPosition_IsSkipped()
+    public void NestedModeOwner_PropertyPosition_Binds()
     {
-        Assert.Null(typeof(NestedModeOwner).GetProperty("Mode"));
+        // Was: Assert.Null(GetProperty("Mode"), before the property was renamed to Setting to dodge CS0102).
+        using var owner = new NestedModeOwner();
+
+        Assert.Equal(NestedModeOwner.Mode.On, owner.Setting);
+        owner.Setting = NestedModeOwner.Mode.Off;
+        Assert.Equal(NestedModeOwner.Mode.Off, owner.Setting);
     }
 
     [Fact]
-    public void NestedModeOwner_ParameterPosition_IsSkipped()
+    public void NestedModeOwner_ParameterPosition_Binds()
     {
-        Assert.Null(typeof(NestedModeOwner).GetMethod("Set"));
+        // Was: Assert.Null(GetMethod("Set")). The ordinal wire is what actually crosses.
+        using var owner = new NestedModeOwner();
+
+        owner.Set(NestedModeOwner.Mode.Off);
+
+        Assert.Equal(NestedModeOwner.Mode.Off, owner.Current());
     }
 
     [Fact]
-    public void NestedModeOwner_ReturnPosition_IsSkipped()
+    public void NestedModeOwner_ReturnPosition_Binds()
     {
-        Assert.Null(typeof(NestedModeOwner).GetMethod("Current"));
+        // Was: Assert.Null(GetMethod("Current")).
+        using var owner = new NestedModeOwner();
+
+        Assert.Equal(NestedModeOwner.Mode.On, owner.Current());
     }
 
     [Fact]
-    public void NestedModeOwner_NestedEnum_IsNeverDeclaredAsANestedType()
+    public void NestedModeOwner_NestedEnum_IsDeclaredAsANestedEnum()
     {
-        // A fix that "declares nested enums" instead of gating them would satisfy the member
-        // assertions above by emitting NestedModeOwner.Mode; this pins the chosen behaviour.
-        Assert.Null(typeof(NestedModeOwner).GetNestedType("Mode"));
+        // Was: Assert.Null(GetNestedType("Mode")). This is the ADR-133 pin for the enum kind.
+        Type? mode = typeof(NestedModeOwner).GetNestedType("Mode");
+
+        Assert.NotNull(mode);
+        Assert.True(mode!.IsEnum);
+        Assert.Same(typeof(NestedModeOwner), mode.DeclaringType);
+        Assert.Equal(0, (int)NestedModeOwner.Mode.On);
+        Assert.Equal(1, (int)NestedModeOwner.Mode.Off);
     }
 
     // --- Shape (b): admitted dependency class, nested enum ---
@@ -83,13 +95,19 @@ public class NestedEnumGateTests
     }
 
     [Fact]
-    public void Broadcast_NestedDependencyEnumProperty_IsSkipped()
+    public void Broadcast_NestedDependencyEnumProperty_Binds()
     {
-        Assert.Null(typeof(Broadcast).GetProperty("Band"));
-        Assert.Null(typeof(Broadcast).GetNestedType("AdBand"));
+        // Was: Assert.Null(GetProperty("Band")) and Assert.Null(GetNestedType("AdBand")). The
+        // closure admits a nested dependency declaration whose enclosing chain is admitted, and
+        // Broadcast's own walk is the sole declarer of AdBand.
+        using var newsroom = new Newsroom();
+        using Broadcast broadcast = newsroom.Broadcast();
+
+        Assert.NotNull(typeof(Broadcast).GetNestedType("AdBand"));
+        Assert.Equal(Broadcast.AdBand.Fm, broadcast.Band);
     }
 
-    // --- Shape (c): unadmitted top-level dependency enum ---
+    // --- Shape (c): unadmitted top-level dependency enum, unchanged ---
 
     [Fact]
     public void Airwave_UnadmittedDependencyEnum_MemberIsSkipped_AndNewsroomSurvives()
@@ -102,21 +120,24 @@ public class NestedEnumGateTests
         Assert.NotNull(typeof(Newsroom).GetMethod("Broadcast"));
     }
 
-    // --- Assembly-wide: none of the three enums may be declared anywhere ---
+    // --- Assembly-wide: nested, once, and shape (c) still nowhere ---
 
     [Fact]
-    public void NoneOfTheUndeclarableEnums_ExistAnywhereInTheGeneratedAssembly()
+    public void TheTwoNestedEnums_AreNestedAndDeclaredOnce_AndAirwaveIsStillAbsent()
     {
-        // Shape (b) fails here today in a way the per-type assertions cannot see: the closure
-        // admits Broadcast.AdBand and translateEnum declares it as a namespace-root `public enum
-        // AdBand`, so a type named AdBand exists even though no reference resolves against it.
-        var strays = typeof(NestedModeOwner).Assembly
+        // Was: Assert.Empty over all three names. A namespace-root `Mode`/`AdBand` would be the old
+        // flattening coming back (CS0426 against every reference), and a second declaration would
+        // be CS0101; Airwave stays absent because no closure edge reaches dev.other.core.
+        var types = typeof(NestedModeOwner).Assembly
             .GetTypes()
             .Where(type => type.Name is "Mode" or "AdBand" or "Airwave")
-            .Select(type => type.FullName)
-            .OrderBy(name => name)
             .ToArray();
 
-        Assert.Empty(strays);
+        Assert.Empty(types.Where(type => type.Name == "Airwave").Select(type => type.FullName));
+        Assert.Empty(types.Where(type => !type.IsNested).Select(type => type.FullName));
+        Assert.Single(types.Where(type => type.Name == "AdBand"));
+        // `Mode` is a common name: at least the one under NestedModeOwner must exist, and no
+        // namespace-root twin of it may (asserted above).
+        Assert.Contains(types, type => type.Name == "Mode" && type.DeclaringType == typeof(NestedModeOwner));
     }
 }

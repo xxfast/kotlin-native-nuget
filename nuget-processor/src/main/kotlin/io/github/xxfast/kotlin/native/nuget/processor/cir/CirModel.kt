@@ -75,6 +75,10 @@ data class CirClass(
   // uses. Text, not markup: `renderRemarks` owns the XML escaping, because the detail names
   // Kotlin constructors as `<init>`.
   val remarks: String? = null,
+  // ADR-133: public nested `class`/`object`/`interface`/`enum` declared inside this type,
+  // rendered inside its block exactly as ADR-009 renders a sealed arm. Empty for a declaration
+  // with no nested declarations, which keeps every construction site intact.
+  val nestedDeclarations: List<CirDeclaration> = emptyList(),
 ) : CirDeclaration
 
 data class CirValueClass(
@@ -108,6 +112,12 @@ data class CirValueClassConstructor(
 data class CirEnum(
   val name: String,
   val libraryName: String,
+  // ADR-133: the C entry-point prefix, the enclosing chain (`owner_kind`); the enum entry point
+  // used to be composed from the simple name alone.
+  val nativePrefix: String = name.lowercase(),
+  // ADR-133: the C# spelling with its enclosing scope (`Owner.Kind`), used by the extension class,
+  // which cannot itself nest (CS1109) and so stays at namespace level as `OwnerKindExtensions`.
+  val csName: String = name,
   val entries: List<CirEnumEntry>,
   val properties: List<CirEnumProperty> = emptyList(),
 ) : CirDeclaration
@@ -204,6 +214,8 @@ data class CirObject(
   val libraryName: String,
   val nativePrefix: String,
   val methods: List<CirMember>,
+  // ADR-133: an `object` owner carries nested declarations too (`Registry.Entry`).
+  val nestedDeclarations: List<CirDeclaration> = emptyList(),
 ) : CirDeclaration
 
 enum class CirVariance { INVARIANT, COVARIANT, CONTRAVARIANT }

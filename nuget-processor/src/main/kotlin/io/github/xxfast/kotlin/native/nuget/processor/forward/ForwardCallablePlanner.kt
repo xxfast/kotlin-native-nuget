@@ -23,6 +23,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericRe
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyLambdaParameter
 import io.github.xxfast.kotlin.native.nuget.processor.bridgeParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 
 /**
  * Why the planner declined to build an ordinary synchronous plan for a callable.
@@ -172,6 +173,12 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  Excludes the two nested shapes that ARE declared: a sealed subclass (ADR-009, nested under
    *  its base) and a companion object (ADR-013, its owner's statics). */
   UNDECLARED_CLASS(droppedFromCSharp = true),
+
+  /** ADR-133: a Kotlin `object` at a parameter or return position. An object is declared in C# as
+   *  a STATIC class, and a static type cannot be a parameter or return type at all (CS0722), so
+   *  the member is dropped however the object is declared -- top-level or nested. Distinct from
+   *  [UNDECLARED_CLASS], whose remedy (move it to the top level) would not help here. */
+  OBJECT_POSITION(droppedFromCSharp = true),
 
   /** ROADMAP Phase 3 (issue #54): a sealed base at a position the plan does not marshal, which
    *  since ADR-105 means an INPUT position only -- a bare parameter, a nullable one, or a
@@ -683,7 +690,7 @@ internal class ForwardCallablePlanner(
    */
   private fun valueClassEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val owner: String = cls.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = cls.simpleName.asString().lowercase()
+    val prefix: String = cls.nativePrefix()
     val underlyingParam = cls.primaryConstructor?.parameters?.firstOrNull() ?: return emptyList()
     val underlyingPropName: String = underlyingParam.name?.asString() ?: return emptyList()
     val classifiedUnderlying: BridgeType = classifier.classify(underlyingParam.type.resolve())
@@ -912,7 +919,7 @@ internal class ForwardCallablePlanner(
    */
   fun interfaceEntries(iface: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val ifaceName: String = iface.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = iface.simpleName.asString().lowercase()
+    val prefix: String = iface.nativePrefix()
     val receiverType: BridgeType = BridgeType.ObjectHandle(ifaceName)
     val methods: List<KSFunctionDeclaration> = iface.getAllFunctions()
       .filter { method -> method.getVisibility() == Visibility.PUBLIC }
@@ -967,7 +974,7 @@ internal class ForwardCallablePlanner(
 
   private fun classEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val className: String = cls.simpleName.asString()
-    val prefix: String = className.lowercase()
+    val prefix: String = cls.nativePrefix()
     val superClass: KSClassDeclaration? = cls.forwardSuperClass(classifier.exportedObjectHandles)
     val receiverType: BridgeType = BridgeType.ObjectHandle(
       requireNotNull(cls.qualifiedName?.asString()) {
@@ -1115,7 +1122,7 @@ internal class ForwardCallablePlanner(
    */
   private fun sealedBaseEntries(sealed: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val owner: String = sealed.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = sealed.simpleName.asString().lowercase()
+    val prefix: String = sealed.nativePrefix()
     val receiverType: BridgeType = BridgeType.ObjectHandle(owner)
     val methods: List<KSFunctionDeclaration> = sealed.getAllFunctions()
       .filter { method -> method.getVisibility() == Visibility.PUBLIC }
@@ -1240,7 +1247,7 @@ internal class ForwardCallablePlanner(
     // arm can carry `virtual`. On a final arm the member is effectively final in Kotlin anyway,
     // and `virtual` inside a `public sealed class` is CS0549.
     val isOpenArm: Boolean = subclass.modifiers.contains(Modifier.OPEN)
-    val prefix: String = "${sealed.simpleName.asString().lowercase()}_${subName.lowercase()}"
+    val prefix: String = "${sealed.nativePrefix()}_${subName.lowercase()}"
     val receiverType: BridgeType = BridgeType.ObjectHandle(owner)
     val methods: List<KSFunctionDeclaration> = subclass.getAllFunctions()
       .filter { method -> method.getVisibility() == Visibility.PUBLIC }
@@ -1373,7 +1380,7 @@ internal class ForwardCallablePlanner(
   private fun constructorEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     if (cls.modifiers.contains(Modifier.ABSTRACT)) return emptyList()
     val owner: String = cls.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = cls.simpleName.asString().lowercase()
+    val prefix: String = cls.nativePrefix()
     val result = BridgeType.ObjectHandle(owner)
     val constructors: List<KSFunctionDeclaration> = cls.getConstructors()
       .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -1633,7 +1640,7 @@ internal class ForwardCallablePlanner(
 
   private fun objectEntries(obj: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val owner: String = obj.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = obj.simpleName.asString().lowercase()
+    val prefix: String = obj.nativePrefix()
     val occurrences: MutableMap<String, Int> = mutableMapOf()
     val members: List<KSFunctionDeclaration> = obj.getAllFunctions()
       .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -1676,7 +1683,7 @@ internal class ForwardCallablePlanner(
     val owner: String = cls.qualifiedName?.asString() ?: return emptyList()
     val companion: KSClassDeclaration = cls.declarations.filterIsInstance<KSClassDeclaration>()
       .firstOrNull { it.isCompanionObject } ?: return emptyList()
-    val prefix: String = cls.simpleName.asString().lowercase()
+    val prefix: String = cls.nativePrefix()
     val occurrences: MutableMap<String, Int> = mutableMapOf()
     val members: List<KSFunctionDeclaration> = companion.getAllFunctions()
       .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -3156,7 +3163,12 @@ internal class ForwardCallablePlanner(
     // side of this same ADR.
     is BridgeType.Nullable -> when (val inner = type) {
       BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Primitive,
-        // ADR-106: `Uuid?` rides the null pointer, like `String?`.
+      // ADR-133: an interface parameter is already plannable non-null (ADR-040 sub-decision B,
+      // `NugetMarshal.HandleOf`), and the nullable C# lowering is the same helper's
+      // `HandleOfOrZero` (ForwardCirPlanProjection). Without this a nullable interface
+      // PARAMETER skipped while a nullable interface RETURN and PROPERTY both bound.
+      is BridgeType.Interface,
+      // ADR-106: `Uuid?` rides the null pointer, like `String?`.
       BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid -> null
 
       // ADR-080: a bare nullable enum fans out to the has-value pair with the ordinal in the
@@ -3566,7 +3578,7 @@ internal fun BridgeType.undeclaredTypeDetail(): String? {
   return (candidate as? BridgeType.Unsupported)
     ?.takeIf { unsupported ->
       unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface ||
-          unsupported.isUndeclaredClass
+          unsupported.isUndeclaredClass || unsupported.isObjectPosition
     }
     ?.rendered
 }
@@ -3677,6 +3689,8 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
     isUndeclaredInterface -> ForwardPlanSkipReason.UNDECLARED_INTERFACE
     // ...and for a nested class or object.
     isUndeclaredClass -> ForwardPlanSkipReason.UNDECLARED_CLASS
+    // ADR-133: an `object` is declared (as a C# static class) but unusable at a member position.
+    isObjectPosition -> ForwardPlanSkipReason.OBJECT_POSITION
     // The closure records WHY it refused a dependency declaration; each refusal wants a
     // different remedy, and only NOT_INCLUDED (or an unrecorded refusal, e.g. a module-local
     // type the closure never saw) wants the `include(...)` one.

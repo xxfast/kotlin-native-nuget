@@ -215,11 +215,18 @@ handle. When at least one type is admitted from a dependency module, the process
 `INFO_EXPORTED_FROM_DEPENDENCY` line per KSP run, naming the whole admitted set, since a per-type
 warning would be noise at this scale.
 
-A dependency type nested inside another declaration (`Broadcast.Schedule`) is refused admission
-outright, whatever bucket it would otherwise fall into, and skips named with
+A dependency type nested inside another declaration (`Broadcast.Schedule`) is declared nested under
+its owner, `Broadcast.Schedule`, exactly like a module-local nested type, once the *owner* itself
+(`Broadcast`) is admitted through an ordinary member-type edge; the closure takes no direct part in
+declaring the nested type itself
+([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)).
+A dependency member naming only the nested type, with no other member reaching its owner, still
+admits nothing: there is no edge from "a member returns a nested type" to "admit its owner." A
+dependency type nested under a still-deferred owner shape (an `inner class`, a generic, an `enum
+class`, an `interface`, or a sealed base/arm) is refused admission outright and skips named with
 `SKIPPED_NESTED_DECLARATION` on the declaration and `UNDECLARED_CLASS`/`UNDECLARED_ENUM`/
-`UNDECLARED_INTERFACE` on any member typed with it, the same as a module-local nested declaration;
-see [Classes and objects: Nested classes and objects](classes-and-objects.md#nested-classes-and-objects).
+`UNDECLARED_INTERFACE` on any member typed with it, the same as a module-local one under the same
+deferred shape; see [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects).
 
 <note>
 <p>Every cross-namespace type reference in the generated <code>Interop.cs</code> is emitted

@@ -68,14 +68,21 @@ class Tier1NoPublicConstructorWarningTest {
 
   private fun warnings(result: Tier1Result): List<String> = result.kspWarnings
     .filter { it.contains(ForwardDiagnosticKind.WARNING_NO_PUBLIC_CONSTRUCTOR.name) }
+  /**
+   * ADR-133 moved the cause: `Dial(mode: Owner.Mode)` used to be unconstructible because a nested
+   * enum was never declared, and it now constructs like any other class. The cell keeps its
+   * subject by moving to `Drawing(ghost: Ghost)`, whose constructor still drops (SEALED_POSITION,
+   * an INELIGIBLE sealed interface) -- the warning is about a dropped constructor, not about
+   * nesting.
+   */
 
   @Test
   fun `a class whose only constructor is dropped warns once and keeps its type`() {
     val result = Tier1Harness.run(source)
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
-    val dial: List<String> = warnings(result).filter { it.contains("Dial") }
-    assertEquals(1, dial.size, "expected exactly one Dial warning; got: ${warnings(result)}")
+    val dial: List<String> = warnings(result).filter { it.contains("Drawing") }
+    assertEquals(1, dial.size, "expected exactly one Drawing warning; got: ${warnings(result)}")
     assertTrue(
       dial.single().contains("Keeping"),
       "expected the verb to say the type is kept, not skipped; got: ${dial.single()}",
@@ -85,14 +92,14 @@ class Tier1NoPublicConstructorWarningTest {
       "expected the message to point at Kotlin factories; got: ${dial.single()}",
     )
     assertTrue(
-      result.generatedCSharp.contains("internal Dial(IntPtr handle)"),
-      "expected Dial to keep its handle constructor; generatedCSharp=" +
-          "${result.generatedCSharp.lines().filter { it.contains("Dial") }}",
+      result.generatedCSharp.contains("internal Drawing(IntPtr handle)"),
+      "expected Drawing to keep its handle constructor; generatedCSharp=" +
+          "${result.generatedCSharp.lines().filter { it.contains("Drawing") }}",
     )
     assertFalse(
-      result.generatedCSharp.contains("public Dial("),
-      "expected no public Dial constructor; generatedCSharp=" +
-          "${result.generatedCSharp.lines().filter { it.contains("Dial") }}",
+      result.generatedCSharp.contains("public Drawing("),
+      "expected no public Drawing constructor; generatedCSharp=" +
+          "${result.generatedCSharp.lines().filter { it.contains("Drawing") }}",
     )
   }
 
@@ -163,29 +170,29 @@ class Tier1NoPublicConstructorWarningTest {
     val cs: List<String> = result.generatedCSharp.lines()
 
     val remark: Int = cs.indexOfFirst {
-      it.contains("Cannot be constructed from C#") && it.contains("Dial")
+      it.contains("Cannot be constructed from C#") && it.contains("Drawing")
     }
     assertTrue(
       remark >= 0,
-      "expected a remarks line for Dial; got: ${cs.filter { it.contains("Dial") }}",
+      "expected a remarks line for Drawing; got: ${cs.filter { it.contains("Drawing") }}",
     )
     assertEquals("    /// <remarks>", cs[remark - 1])
     assertEquals("    /// </remarks>", cs[remark + 1])
     assertTrue(
-      cs[remark + 2].startsWith("    public class Dial"),
+      cs[remark + 2].startsWith("    public class Drawing"),
       "expected the remarks to sit directly above the class line; got: ${cs[remark + 2]}",
     )
     assertTrue(
-      cs[remark].contains("&lt;init&gt;: UNDECLARED_ENUM"),
+      cs[remark].contains("&lt;init&gt;: SEALED_POSITION"),
       "expected an XML-escaped constructor name; got: ${cs[remark]}",
     )
     assertFalse(
       cs[remark].contains("<init>"),
       "a raw <init> is malformed XML doc (CS1570); got: ${cs[remark]}",
     )
-    val dial: String = warnings(result).single { it.contains("Dial") }
+    val dial: String = warnings(result).single { it.contains("Drawing") }
     assertTrue(
-      dial.contains("<init>: UNDECLARED_ENUM"),
+      dial.contains("<init>: SEALED_POSITION"),
       "expected the log and the tooltip to name the same reasons; got: $dial",
     )
   }

@@ -841,6 +841,12 @@ survival of everything around the skip.
   renderer, `@CName` prefixing, the closure's edge table, and the bare-simple-name collision check, a
   materially larger change than a skip-and-diagnose gate. Tracked as its own `ROADMAP.md` item.
 
+> **Pointer (2026-09-13):** [ADR-133](133-nested-types.md) built this deferred alternative.
+> `SKIPPED_NESTED_DECLARATION` now fires only for the owner shapes ADR-133 still defers (an `inner
+> class`, a generic, `enum class`, `interface`, or sealed owner, and a nested `value class`), its
+> reason naming which shape defers it; every other nested `class`/`object`/`interface`/`enum class`
+> is declared as `Outer.Nested`.
+
 ## Amendment (2026-09-07): `SEALED_PROTOCOL` is retired
 
 Judgement: an **amendment**, not a new ADR. This closes the ROADMAP Phase 3 item "A bare

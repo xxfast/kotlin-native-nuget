@@ -221,24 +221,24 @@ class Tier1LambdaTypeArgumentTest {
   }
 
   /**
-   * The other unnameable shape: a type argument that is a perfectly ordinary class but is never
-   * *declared* in C#. `Kennel.Bunk` is nested, and only top-level declarations are emitted, so no
-   * spelling of it resolves. Same outcome as the `Flow` cells, reached by a different predicate.
-   *
-   * The diagnostic *kind* is deliberately not pinned here: the repo already routes an undeclared
-   * nested type through `SKIPPED_UNSUPPORTED_TYPE` with a bespoke hint elsewhere, and either that
-   * or `SKIPPED_UNSUPPORTED_PROPERTY` satisfies "skip named". What is pinned is that the member
-   * vanishes and something names it.
+   * ADR-133 inverted this cell: `Kennel.Bunk` is nested and is now DECLARED as the C# nested type
+   * `Kennel.Bunk`, so the lambda type argument has a spelling that resolves and the property binds
+   * instead of skipping. What the file still owns is the spelling itself -- the argument must be
+   * qualified and carry its enclosing scope, never the bare simple name this route used to emit.
    */
   @Test
-  fun `an undeclared nested lambda type argument skips the property named`() {
+  fun `a nested lambda type argument binds, qualified with its enclosing scope`() {
     val result = run()
 
     val members: List<String> = memberLines(result, "OnBunk")
-    assertTrue(members.isEmpty(), "expected no OnBunk member; got: $members")
+    assertTrue(members.isNotEmpty(), "expected the OnBunk member to bind; got: $members")
     assertTrue(
-      result.kspWarnings.any { it.contains("[nuget:SKIPPED_") && it.contains("CatCam.onBunk") },
-      "expected onBunk to skip named rather than silently; kspWarnings=${result.kspWarnings}",
+      members.any { it.contains("global::Interop.Catcam.Kennel.Bunk") },
+      "expected the nested type argument to be qualified with its enclosing scope; got: $members",
+    )
+    assertTrue(
+      result.kspWarnings.none { it.contains("[nuget:SKIPPED_") && it.contains("CatCam.onBunk") },
+      "expected no skip now that the nested type is declared; kspWarnings=${result.kspWarnings}",
     )
   }
 

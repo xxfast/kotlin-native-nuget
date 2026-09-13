@@ -282,13 +282,22 @@ the file and line of the Kotlin declaration that was skipped, something the reve
 `RirDiagnostic` cannot carry, since it works from compiled metadata rather than source. See each
 forward page's own **Limitations** section for which named diagnostic fires where.
 
-A member typed with an enum that is never declared in C#, a nested `enum class`, skips named too,
-with the `SKIPPED_UNSUPPORTED_TYPE` kind naming the `UNDECLARED_ENUM` reason instead of being
-spelled as a dangling reference; see [Enums: Nested enums skip named](enums.md#nested-enums-skip-named).
-A nested `class` or `object` gets the same treatment, naming `UNDECLARED_CLASS` instead (a nested
-`interface` was already `UNDECLARED_INTERFACE`, see [Interfaces, abstract and sealed classes: Nested
-interfaces skip named](interfaces-abstract-sealed.md#nested-interfaces-skip-named)); see
-[Classes and objects: Nested classes and objects](classes-and-objects.md#nested-classes-and-objects).
+A nested `class`, `object`, `interface`, or `enum class` under a non-generic, non-`inner` `class` or
+`object` owner is declared as a real C# nested type, `Outer.Nested`, at any depth
+([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md));
+see [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects). A nested
+declaration under a still-deferred owner shape (an `inner class`, a generic, `enum class`,
+`interface`, or sealed base/arm owner) still skips named, `SKIPPED_NESTED_DECLARATION` at the
+declaration, and a member typed with it skips `SKIPPED_UNSUPPORTED_TYPE` naming `UNDECLARED_CLASS`/
+`UNDECLARED_ENUM`/`UNDECLARED_INTERFACE` instead of being spelled as a dangling reference; see
+[Enums: Nested enums](enums.md#nested-enums-skip-named) and [Interfaces, abstract and sealed classes: Nested
+interfaces](interfaces-abstract-sealed.md#nested-interfaces-skip-named).
+
+A member positioned with a Kotlin `object` type, nested or top-level, skips named too, with the same
+`SKIPPED_UNSUPPORTED_TYPE` kind naming a new `OBJECT_POSITION` reason: an `object` renders as a C#
+static class, and C# forbids a static type at a parameter or return position (CS0722). This is not a
+nesting limitation; it applies to a top-level object the same way. See
+[Classes and objects: An `object` at a member position stays CS0722](classes-and-objects.md#nested-object-position).
 
 Three more kinds cover the cross-module export closure ([ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md);
 see [The nuget {} DSL](nuget-dsl.md) for the closure's own rules). A reachable dependency-module type

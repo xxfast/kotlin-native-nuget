@@ -185,6 +185,37 @@ internal fun KSClassDeclaration.nestedCsName(): String =
     .asReversed()
     .joinToString(".")
 
+/**
+ * ADR-133: the C entry-point prefix of a declaration -- the whole enclosing chain, each simple name
+ * lowercased, `_`-joined (`owner_nested`, `owner_middle_inner`).
+ *
+ * A top-level declaration's chain has exactly one element, so its prefix is byte-identical to the
+ * `simpleName.lowercase()` this replaces and no released entry point changes. The sealed route
+ * composes an arm on top of the base's prefix, which keeps both `shape_circle` (nested arm) and
+ * `flatshape_label` (sibling arm) exactly as they were.
+ */
+internal fun KSClassDeclaration.nativePrefix(): String =
+  generateSequence<KSDeclaration>(this) { it.parentDeclaration }
+    .takeWhile { it is KSClassDeclaration }
+    .map { it.simpleName.asString().lowercase() }
+    .toList()
+    .asReversed()
+    .joinToString("_")
+
+/**
+ * ADR-133: the ADR-040 C# interface name of a declaration, with the `I` on the LAST segment only
+ * (`Owner.IListener`). A naive `I` + [nestedCsName] gives the nonexistent `IOwner.Listener`.
+ */
+internal fun KSClassDeclaration.nestedInterfaceCsName(): String {
+  val nested: String = nestedCsName()
+  val cut: Int = nested.lastIndexOf('.')
+  return if (cut < 0) {
+    "I$nested"
+  } else {
+    nested.substring(0, cut + 1) + "I" + nested.substring(cut + 1)
+  }
+}
+
 internal fun mapPackageToNamespace(
   kotlinPackage: String,
   rootPackage: String,

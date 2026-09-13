@@ -25,6 +25,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPl
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardPropertyPlanExports
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 
 /**
  * ADR-064 amendment (2026-09-13): the legacy class Flow/StateFlow route's own selection gate,
@@ -71,7 +72,7 @@ internal fun FileSpec.Builder.addClassExports(
 ) {
   val name: String = cls.simpleName.asString()
   val qualifiedName: String = cls.qualifiedName?.asString() ?: return
-  val prefix: String = name.lowercase()
+  val prefix: String = cls.nativePrefix()
   val isAbstract: Boolean = cls.modifiers.contains(Modifier.ABSTRACT)
 
   // The shared has-superclass predicate (`ForwardClassMembership.kt`), so this emitter keeps

@@ -346,7 +346,7 @@ sealed class Job {
         null
       }
 
-    /** Nullable **nested** interface return: never declared in C#, so a named skip, not a binding. */
+    /** Nullable nested interface return: binds as `NestedListenerOwner.IListener?` (ADR-133). */
     fun pickNested(): NestedListenerOwner.Listener? = null
 
     /** `suspend` on an arm: binds as `Task<int> PauseAsync()` off `job_running_pause_async`. */

@@ -307,6 +307,9 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
     hasSuspendMethods = cls.hasSuspendMethods,
   )
 
+  // ADR-133: nested declarations render last, inside this block, re-indented one level.
+  renderNestedDeclarations(cls.nestedDeclarations)
+
   appendLine("    }")
 }
 

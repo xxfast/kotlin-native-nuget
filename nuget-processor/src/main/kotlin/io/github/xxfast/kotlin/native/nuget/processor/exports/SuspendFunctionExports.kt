@@ -23,6 +23,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParam
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 
 /**
  * Generates @CName bridge exports for suspend functions using a callback-based async pattern.
@@ -86,7 +87,7 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
   cls: KSClassDeclaration,
   classifier: ForwardBridgeTypeClassifier,
   callableCatalog: ForwardCallablePlanCatalog,
-  prefix: String = cls.simpleName.asString().lowercase(),
+  prefix: String = cls.nativePrefix(),
   declaredOnly: Boolean = false,
 ) {
   val qualifiedName: String = cls.qualifiedName?.asString() ?: return

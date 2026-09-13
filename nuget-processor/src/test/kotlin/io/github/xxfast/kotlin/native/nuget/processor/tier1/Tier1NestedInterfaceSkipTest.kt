@@ -1,25 +1,25 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
+import kotlin.test.assertContains
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * The nested-interface membership gate, the sibling of [Tier1UndeclaredEnumSkipTest]'s shape (a).
+ * ADR-133 flips the nested-interface membership gate: an `interface` nested in an exported class is
+ * declared as `Owner.IListener`, with the ADR-040 backing wrapper `Owner.Listener` nested beside it
+ * rather than at namespace root.
  *
- * `rootInterfaces` (`NugetProcessor.kt`) filters `parentDeclaration == null`, exactly as
- * `rootEnums` does for enums, so an `interface` nested inside an exported class is never declared
- * in C#. The classifier's `interfaceType` membership check already skips every member typed with
- * it, which is correct and stays. What was wrong was the *diagnostic*: the skip landed in the
- * generic "UNSUPPORTED type combination" bucket without ever naming the interface, and the nullable
- * return position blamed `NULLABLE` instead, so the author was told to write a non-nullable wrapper
- * for a type that can never bind at any position.
+ * The placement is the whole point, and it is only visible here. `interfaceType` used to spell an
+ * interface `global::$namespace.I$simpleName` with no enclosing scope, so the naive flip emits a
+ * namespace-root `IListener` that nothing declares (CS0426/CS0246 in the consumer), and prefixing
+ * the whole chain gives the equally wrong `IOwner.Listener`. The `I` attaches to the last segment
+ * only.
  *
- * Every classifier-fed position the nested interface occupies here (parameter, nullable parameter,
- * nullable return, property) must skip named, with the top-level fix in the hint where the route
- * carries one.
- * `label` rides along as the control: a gate that drops the whole owning class is distinguishable
- * from one that drops only the interface-typed members.
+ * Whether a *nullable* interface position binds is orthogonal and ADR-133 does not decide it, so
+ * the nullable cells pin only that the three nullable positions agree with each other.
  */
 class Tier1NestedInterfaceSkipTest {
 
@@ -29,81 +29,79 @@ class Tier1NestedInterfaceSkipTest {
     class Owner {
       interface Listener { fun onEvent(): String }
 
-      var listener: Listener? = null
+      var attached: Listener? = null
       fun attach(listener: Listener) {}
       fun detach(listener: Listener?) {}
-      fun current(): Listener? = listener
+      fun current(): Listener? = attached
 
       val label: String = "owner"
     }
   """.trimIndent()
 
   @Test
-  fun `a nested interface is never spelled in the generated C#`() {
+  fun `the nested interface is declared inside its owner, with the I on the last segment`() {
     val result = Tier1Harness.run(source)
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val csharp: String = result.generatedCSharp
+    // Was: assertFalse(csharp.contains("IListener")).
+    assertContains(csharp, "public interface IListener")
     assertFalse(
-      result.generatedCSharp.contains("IListener"),
-      "expected no dangling reference to the projected nested interface; generatedCSharp=" +
-          "${result.generatedCSharp.lines().filter { it.contains("Listener") }}",
+      csharp.contains("IOwner.Listener"),
+      "expected the `I` on the last segment only, never `IOwner.Listener`; csharp=" +
+          "${csharp.lines().filter { it.contains("Listener") }}",
     )
     assertFalse(
-      result.generatedCSharp.contains("Owner.Listener"),
-      "expected no dangling reference to the nested interface; generatedCSharp=" +
-          "${result.generatedCSharp.lines().filter { it.contains("Listener") }}",
+      Regex("""^ {4}public (?:sealed )?(?:class|interface) I?Listener\b""", RegexOption.MULTILINE)
+        .containsMatchIn(csharp),
+      "expected no namespace-level IListener/Listener (the pre-2026-09-07 flattening); csharp=" +
+          "${csharp.lines().filter { it.contains("Listener") }}",
     )
-    listOf(
-      "export_owner_attach",
-      "export_owner_detach",
-      "export_owner_current",
-      "export_owner_get_listener",
+    assertFalse(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
+            it.contains("tier1.nestedinterface.Owner.Listener")
+      },
+      "expected the nested interface to be declared, not skipped; kspWarnings=${result.kspWarnings}",
     )
-      .forEach { export ->
-        assertFalse(
-          result.generated.contains(export),
-          "expected $export to be absent from the generated exports; generated=${result.generated}",
-        )
-      }
+  }
+
+  @Test
+  fun `the non-null parameter position binds through the chain-prefixed exports`() {
+    val result = Tier1Harness.run(source)
+
+    // Was: assertFalse(generated.contains("export_owner_attach")).
+    assertContains(result.generated, "export_owner_attach")
+    assertContains(result.generated, "@CName(\"owner_attach\")")
+    // The interface's own ADR-040 dispatch exports carry the enclosing chain too.
+    assertTrue(
+      result.generated.contains("owner_listener_"),
+      "expected the nested interface's exports to carry the `owner_listener_` chain prefix; " +
+          "generated=${result.generated}",
+    )
     assertTrue(
       result.generated.contains("export_owner_get_label"),
-      "expected the control member to survive the gate; generated=${result.generated}",
+      "expected the control member to keep binding; generated=${result.generated}",
     )
   }
 
   @Test
-  fun `the parameter and return positions skip named with the top-level hint`() {
+  fun `the three nullable interface positions agree with each other`() {
     val result = Tier1Harness.run(source)
 
-    listOf("Owner.attach", "Owner.detach", "Owner.current").forEach { member ->
-      val diagnostic: String = requireNotNull(
-        result.kspWarnings.firstOrNull { it.contains("SKIPPED_") && it.contains(member) },
-      ) { "expected a skip diagnostic for $member; kspWarnings=${result.kspWarnings}" }
-      assertTrue(
-        diagnostic.contains("tier1.nestedinterface.Owner.Listener"),
-        "expected the $member diagnostic to name the undeclared nested interface; got: $diagnostic",
-      )
-      assertTrue(
-        diagnostic.contains("nested interface") && diagnostic.contains("move it to the top level"),
-        "expected the $member diagnostic to name the move-to-top-level fix; got: $diagnostic",
-      )
-    }
-  }
+    // A nullable interface is a capability ADR-133 does not settle; what it must not do is bind one
+    // nullable position and drop another, which would be a bug in the nullable path, not nesting.
+    val bound: List<Boolean> = listOf(
+      "export_owner_detach",
+      "export_owner_current",
+      "export_owner_get_attached",
+    ).map { result.generated.contains(it) }
 
-  @Test
-  fun `the nested-interface property skips named too`() {
-    val result = Tier1Harness.run(source)
-
-    assertTrue(
-      result.kspWarnings.any {
-        it.contains("SKIPPED_UNSUPPORTED_PROPERTY") &&
-            it.contains("Owner.listener") &&
-            it.contains("tier1.nestedinterface.Owner.Listener") &&
-            // ADR-064's 2026-09-11 amendment: same reason, same hint, at a property position too.
-            it.contains("move it to the top level")
-      },
-      "expected the property route to skip naming the undeclared nested interface and its " +
-          "move-to-top-level fix; kspWarnings=${result.kspWarnings}",
+    assertEquals(
+      1,
+      bound.distinct().size,
+      "expected the nullable parameter, return and property positions to agree; generated=" +
+          "${result.generated}",
     )
   }
 }

@@ -1,6 +1,8 @@
 # Objects and companions
 
-A Kotlin `object` singleton becomes a static C# class: no instance, no constructor, just static members reached directly through the type. A `data object` nested inside a `sealed class` hierarchy becomes a sealed subclass instead (see [Interfaces, abstract and sealed classes](interfaces-abstract-sealed.md)). A `companion object`'s members land as static members on the enclosing C# class.
+A Kotlin `object` singleton becomes a static C# class: no instance, no constructor, just static members reached directly through the type. A `data object` nested inside a `sealed class` hierarchy becomes a sealed subclass instead (see [Interfaces, abstract and sealed classes](interfaces-abstract-sealed.md)). A `companion object`'s members land as static members on the enclosing C# class. An `object` can
+also *own* a nested `class`/`interface`/`enum class` the same way a `class` owner does (`Registry.Entry`
+inside `public static class Registry`); see [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects).
 
 | Kotlin | C# | Notes |
 |---|---|---|

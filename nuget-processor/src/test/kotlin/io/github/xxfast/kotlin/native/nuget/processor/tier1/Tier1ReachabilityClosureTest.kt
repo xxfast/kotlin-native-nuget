@@ -135,20 +135,34 @@ class Tier1ReachabilityClosureTest {
     libraries = listOf(nestedDependencyJar),
   )
 
-  /** The closure admits a dependency type into THIS module's namespace, and `translateClass`
-   *  declares it at namespace root under its simple name while every reference to it is spelled
-   *  `Outer.Inner` -- so admitting a *nested* one emits a `class Inner` no reference resolves
-   *  against (CS0426). The enum bucket already refused nested; every bucket does now. */
+  /**
+   * ADR-133 inverted this cell. A nested dependency declaration used to be refused by every bucket
+   * (a namespace-root `class Inner` resolved against nothing, CS0426); it is now declared as the
+   * real nested type `Outer.Inner` by the OWNER's walk -- exactly once, since the dependency merge
+   * still feeds no nested declaration to a root list (a second one would be CS0101).
+   *
+   * `Outer.Defaults` keeps a skip, for a different reason that survives the ADR: a Kotlin `object`
+   * is a C# *static* class, which cannot appear at a return position (CS0722). So this one cell
+   * pins both halves: the nested class binds, the object-typed member still skips named.
+   */
   @Test
-  fun `a nested dependency class or object is neither declared nor referenced`() {
+  fun `a nested dependency class is declared once, nested, and its object sibling still skips`() {
     val result = nestedResult()
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    listOf("public class Inner", "public static class Defaults").forEach { declaration ->
+      assertTrue(
+        result.generatedCSharp.contains(declaration),
+        "expected `$declaration` to be declared; generatedCSharp=" +
+            "${result.generatedCSharp.lines().filter { it.contains("Inner") || it.contains("Defaults") }}",
+      )
+    }
     listOf("Inner", "Defaults").forEach { nested ->
       assertFalse(
-        result.generatedCSharp.contains(nested),
-        "expected no flat declaration of, or nested reference to, $nested; generatedCSharp=" +
-            "${result.generatedCSharp.lines().filter { it.contains(nested) }}",
+        Regex("""^ {4}public (?:static )?class $nested\b""", RegexOption.MULTILINE)
+          .containsMatchIn(result.generatedCSharp),
+        "expected no namespace-root twin of $nested (the pre-2026-09-07 flattening); " +
+            "generatedCSharp=${result.generatedCSharp.lines().filter { it.contains(nested) }}",
       )
     }
     assertTrue(
@@ -156,22 +170,25 @@ class Tier1ReachabilityClosureTest {
       "expected the admitted OUTER type and its own members to survive; " +
           "generated:\n${result.generated}",
     )
+    assertTrue(
+      "export_newsroom_inner" in result.generated,
+      "expected the member returning the nested dependency class to bind; " +
+          "generated:\n${result.generated}",
+    )
 
-    listOf("Newsroom.inner", "Newsroom.defaults").forEach { member ->
-      val diagnostic: String = requireNotNull(
-        result.kspWarnings.firstOrNull { it.contains("SKIPPED_") && it.contains(member) },
-      ) { "expected a skip diagnostic for $member; kspWarnings=${result.kspWarnings}" }
-      assertTrue(
-        diagnostic.contains("UNDECLARED_CLASS") && diagnostic.contains("move it to the top level"),
-        "expected $member to take the undeclarable route, not the closure's scope route; " +
-            "got: $diagnostic",
-      )
-      // `include(...)` cannot make a nested declaration declarable, so it must not be offered.
-      assertFalse(
-        diagnostic.contains("include("),
-        "expected no include(...) advice for a nested dependency declaration; got: $diagnostic",
-      )
-    }
+    val defaults: String = requireNotNull(
+      result.kspWarnings.firstOrNull { it.contains("SKIPPED_") && it.contains("Newsroom.defaults") },
+    ) { "expected a skip diagnostic for Newsroom.defaults; kspWarnings=${result.kspWarnings}" }
+    assertTrue(
+      defaults.contains("CS0722"),
+      "expected the object-position rule, not the undeclarable-nesting one; got: $defaults",
+    )
+    // `include(...)` cannot make a static C# type usable at a return position, so it must not be
+    // offered -- the same rule the nested route followed before ADR-133.
+    assertFalse(
+      defaults.contains("include("),
+      "expected no include(...) advice for an object-typed position; got: $defaults",
+    )
   }
 
   /** The carve-out: ADR-009 declares a sealed subclass nested, and `nestedCsName` spells it the

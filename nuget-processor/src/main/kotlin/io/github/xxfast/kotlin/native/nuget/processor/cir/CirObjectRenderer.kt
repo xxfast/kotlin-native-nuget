@@ -5,6 +5,8 @@ internal fun StringBuilder.renderObject(obj: CirObject) {
   appendLine("    {")
 
   obj.methods.forEach { method -> renderMember(method) }
+  // ADR-133: an `object` owner nests its declarations exactly as a class owner does.
+  renderNestedDeclarations(obj.nestedDeclarations)
 
   appendLine("    }")
 }

@@ -300,6 +300,9 @@ class ForwardSkippedCallableWarningTest {
         ForwardPlanSkipReason.UNDECLARED_INTERFACE,
         // ...and the nested class/object twin of both.
         ForwardPlanSkipReason.UNDECLARED_CLASS,
+        // ADR-133: a Kotlin `object` at a member position. Declared in C# as a static class, so
+        // it is a genuine drop at every position (CS0722) and no legacy route re-emits it.
+        ForwardPlanSkipReason.OBJECT_POSITION,
         // ADR-088: a bound C# interface at a position v1 does not marshal, and one that cannot be
         // implemented in Kotlin at a return position. Both are real drops with their own kinds.
         ForwardPlanSkipReason.BOUND_INTERFACE_POSITION,

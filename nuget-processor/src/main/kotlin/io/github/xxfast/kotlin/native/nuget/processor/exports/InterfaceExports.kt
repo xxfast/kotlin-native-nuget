@@ -11,6 +11,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardPropertyPlanExports
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 
 /**
  * ADR-040: `@CName` interface-dispatch exports for a reachable Kotlin interface's own declared
@@ -30,7 +31,7 @@ internal fun FileSpec.Builder.addInterfaceExports(
   callableCatalog: ForwardCallablePlanCatalog,
 ) {
   val qualifiedName: String = iface.qualifiedName?.asString() ?: return
-  val prefix: String = iface.simpleName.asString().lowercase()
+  val prefix: String = iface.nativePrefix()
 
   iface.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }

@@ -5,6 +5,7 @@ A Kotlin `enum class` becomes a plain C# `enum` with matching ordinal values. An
 | Kotlin | C# | Notes |
 |---|---|---|
 | `enum class` | `enum` | with extension methods |
+| nested `enum class` (under a non-generic, non-`inner` `class` or `object` owner, at any depth) | `Outer.Kind` (a real nested `enum`) | extension class hoisted to the top level (`OuterKindExtensions`); see [Nested enums](#nested-enums-skip-named) below |
 | `Mood?` (bare nullable enum, not wrapped in a value class) | `Mood?` (`Nullable<Mood>`) | at property, constructor/method/extension/top-level parameter, method return, and top-level return; see [Nullable](#nullable) below |
 | bare `Mood` as a `List`/`Map`/`Set` component (element, key, or value, nullable included) | element/key/value of the matching `IReadOnlyList<T>`/`IReadOnlyDictionary<K,V>`/`IReadOnlySet<T>` etc. | rides the `int` ordinal, projected per element; see [As a collection component](#as-a-collection-component) below |
 
@@ -491,19 +492,18 @@ properties](collections.md#mutable-collection-properties).
     a nested collection still loses its member today.</p>
 </note>
 
-## Nested enums skip named {id="nested-enums-skip-named"}
+## Nested enums {id="nested-enums-skip-named"}
 
-An `enum class` declared nested inside another class is never declared in C#, whether it is
-module-local or reached from a dependency module: only a top-level enum becomes a C# `enum`. A
-member typed with a nested enum used to be spelled anyway, a `global::Namespace.Outer.Mode`
-reference to a type that does not exist, failing the consumer's C# compile with `CS0246`. The
-classifier's enum branch is now gated on the same exported-handle membership check the sealed-class
-branch uses ([ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)),
-so every member typed with a nested enum skips named instead, and the owning class still generates
-with its other members. A C#-implemented interface's bridge factory (see
-[C#-implemented interfaces](interfaces-abstract-sealed.md)) is gated the same way: an interface
-member typed with a nested (or otherwise undeclared) enum plans no bridge factory at all rather than
-spelling a dangling `global::` reference.
+An `enum class` declared nested inside a non-generic, non-`inner` `class` or `object` owner is
+declared as a real nested C# `enum`, `Outer.Kind`, whether it is module-local or reached from a
+dependency module, generalising ADR-009's sealed-arm nesting to every nested kind
+([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)).
+Its extension class is hoisted to the top level (`OuterKindExtensions`, named for the whole
+enclosing chain), never nested beside it: C# forbids an extension method inside a nested class
+(CS1109). A member typed with the nested enum binds exactly like a member typed with a top-level
+one; a C#-implemented interface's bridge factory (see
+[C#-implemented interfaces](interfaces-abstract-sealed.md)) plans a real factory for it too, instead
+of dropping it as an undeclared type.
 
 From `test-library/src/nativeMain/kotlin/.../issue54/NestedModeOwner.kt`:
 
@@ -514,58 +514,36 @@ class NestedModeOwner {
   enum class Mode { ON, OFF }
 
   /** Property position. */
-  var mode: Mode = Mode.ON
+  var setting: Mode = Mode.ON
 
   /** Parameter position. */
   fun set(mode: Mode) {
-    this.mode = mode
+    this.setting = mode
   }
 
   /** Return position. */
-  fun current(): Mode = mode
+  fun current(): Mode = setting
 
   /** Control: the sibling that must survive the gate. */
   val name: String = "owner"
 }
 ```
 
-A parameter or return position skips with `SKIPPED_UNSUPPORTED_TYPE`, naming the new
-`UNDECLARED_ENUM` reason. From `NugetDiagnostics.json`:
+`Mode` is now declared (`NestedModeOwner.Mode`) rather than absent. The property is named `setting`,
+not `mode`: a property PascalCasing to `Mode` would collide with the nested type `Mode` itself
+(CS0102). `set`, `current`, and `setting` all bind, exported off the owner's own prefix, and
+`typeof(NestedModeOwner).GetNestedType("Mode")` is non-null.
 
-```
-[nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.set:
-    its enum type `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode` is never
-    declared as a C# enum (UNDECLARED_ENUM). enum
-    `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode` is not in the export set, so it
-    is never declared as a C# enum and every member typed with it is skipped rather than emitted as a
-    dangling reference; a nested enum class is never declared (only top-level enums are), so move it to the
-    top level of its file, or, if it already is top level, bring its package into the export scope
-    at NestedModeOwner.kt:44
-```
+A nested enum under a still-deferred owner shape (an `inner class`, a generic, another `enum class`,
+an `interface`, or a sealed base/arm; see
+[Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects)) still skips
+named: the declaration itself carries `SKIPPED_NESTED_DECLARATION`, and a parameter or return
+position typed with it skips `SKIPPED_UNSUPPORTED_TYPE` naming `UNDECLARED_ENUM`, a property
+position skips `SKIPPED_UNSUPPORTED_PROPERTY` with the same reason, and the owning class still
+generates with its other members.
 
-An exported abstract class's inherited but unimplemented method (declared by an interface it does
-not override) is the same named skip: the walk that renders its C# `abstract` member has no route
-of its own, so a declared enum on it is spelled through the classifier too, qualified
-(`global::Ns.Glaze`), and an undeclared one drops the member with this same
-`SKIPPED_UNSUPPORTED_TYPE`/`UNDECLARED_ENUM` diagnostic rather than a dangling reference; see [An
-exported base class's own `abstract fun`](interfaces-abstract-sealed.md#a-base-class-s-own-abstract-fun).
-
-A property position skips with `SKIPPED_UNSUPPORTED_PROPERTY`, but carries the same
-`UNDECLARED_ENUM` reason and move-to-top-level hint as the parameter and return positions above:
-
-```
-[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.mode:
-    its enum type `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode` is never
-    declared as a C# enum (UNDECLARED_ENUM). enum
-    `io.github.xxfast.kotlin.native.nuget.test.issue54.NestedModeOwner.Mode` is not in the export set, so it
-    is never declared as a C# enum and every member typed with it is skipped rather than emitted as a
-    dangling reference; a nested enum class is never declared (only top-level enums are), so move it to the
-    top level of its file, or, if it already is top level, bring its package into the export scope
-    at NestedModeOwner.kt:41
-```
-
-The same gate closes a second shape: a top-level enum in a *dependency module* whose package was
-never brought into the export scope. It skips with the existing
+The same gate closes a second, unrelated shape: a top-level enum in a *dependency module* whose
+package was never brought into the export scope. It skips with the existing
 `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` kind instead, naming the `include(...)` fix
 ([The nuget {} DSL](nuget-dsl.md)):
 
@@ -578,24 +556,20 @@ never brought into the export scope. It skips with the existing
     at Newsroom.kt:117
 ```
 
-<note>
-    <p>
-        A nested enum reached from a dependency module (admitted by the
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066</a>
-        reachability closure) is a third shape of the same gap: the closure's <code>ENUM</code>
-        admission now refuses a nested enum outright, so it is never declared at namespace root
-        under its simple name either, and a member typed with it skips the same way as the
-        module-local case above. A nested <code>class</code>, <code>object</code>, or
-        <code>interface</code> gets the same treatment; see
-        <a href="classes-and-objects.md#nested-classes-and-objects">Classes and objects: Nested
-        classes and objects</a>.
-    </p>
-</note>
+An exported abstract class's inherited but unimplemented method (declared by an interface it does
+not override) hits the same `UNDECLARED_ENUM` gate as a deferred-owner nested enum: the walk that
+renders its C# `abstract` member has no route of its own, so a declared enum on it is spelled
+through the classifier too, qualified (`global::Ns.Glaze`), and an undeclared one drops the member
+with this same `SKIPPED_UNSUPPORTED_TYPE`/`UNDECLARED_ENUM` diagnostic rather than a dangling
+reference; see [An exported base class's own `abstract fun`](interfaces-abstract-sealed.md#a-base-class-s-own-abstract-fun).
 
 ## Limitations
 
 - A nested-collection component (`List<List<Mood>>`) has no representation on the write side and is
   skipped; see [Collections](collections.md).
+- A nested `enum class` under a still-deferred owner shape (an `inner class`, a generic, another
+  `enum class`, an `interface`, or a sealed base/arm) stays `SKIPPED_NESTED_DECLARATION`; see
+  [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects).
 
 <seealso>
     <category ref="related">
@@ -612,5 +586,6 @@ never brought into the export scope. It skips with the existing
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/097-enum-collection-components.md">ADR-097: Enum collection components</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md">ADR-105: Sealed types at property positions</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md">ADR-133: Nested types</a>
     </category>
 </seealso>

@@ -226,6 +226,13 @@ for the collection-return leak this harness proved and closed.
 Only forward handles are counted; the reverse side's own `StableRef` sites are not (see
 [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)).
 
+**Row 1a**, `NestedClass_CreateAndDispose_ReturnsToBaseline`, proves a nested class mints and
+releases through the exact same `NugetHandles` route Row 1 measures for a top-level class
+(`aviary_perch_create`/`aviary_perch_dispose`): nesting a declaration
+([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md))
+adds no new mint path, so this is a checklist row confirming that, not a new mechanism. See
+[Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects).
+
 **Row 6b**, `InterfaceReceiverExtension_CSharpImplementedPet_ReleasesTransferHandle`, covers the
 same ADR-084 transfer handle Row 6 measures for an interface *argument*, one slot to the left: a
 C#-implemented `IPet` as the RECEIVER of an extension function. `HandleOf` mints a `StableRef` per

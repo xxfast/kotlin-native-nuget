@@ -11,6 +11,7 @@ import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.ParameterSpec
 import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.TypeSpec
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 
 /**
  * Generates @CName bridge exports for generic classes using type erasure.
@@ -19,7 +20,7 @@ import com.squareup.kotlinpoet.TypeSpec
 internal fun FileSpec.Builder.addGenericClassExports(cls: KSClassDeclaration) {
   val name: String = cls.simpleName.asString()
   val qualifiedName: String = cls.qualifiedName?.asString() ?: return
-  val prefix: String = name.lowercase()
+  val prefix: String = cls.nativePrefix()
 
   val hasNonTrivialBound: Boolean = cls.typeParameters.firstOrNull()
     ?.bounds?.toList()?.any { bound ->

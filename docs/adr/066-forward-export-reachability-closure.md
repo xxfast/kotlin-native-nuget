@@ -424,6 +424,18 @@ the *root* callable's own return/parameter type is unexportable does the callabl
 > `SKIPPED_NESTED_DECLARATION` warning. See
 > [ADR-064](064-forward-unsupported-declaration-diagnostics.md)'s 2026-09-07 amendment for the full
 > mechanism, shared with the module-local nested-class/object gap it closes at the same time.
+>
+> **Pointer (2026-09-13):** [ADR-133](133-nested-types.md) leaves this closure, and its
+> `NESTED_DECLARATION` refusal, entirely unchanged; a nested dependency candidate the closure walks
+> directly is still refused exactly as described above. What changed is that a nested type under a
+> supported owner (a non-generic, non-`inner` `class` or `object`) no longer needs this refusal to
+> resolve in its favour at all: once the owner itself is admitted through an ordinary member-type
+> edge (`Newsroom.broadcast(): Broadcast`), `Broadcast.Schedule`/`Broadcast.Defaults` are discovered
+> and declared as `Broadcast`'s own nested declarations by a separate collection-surface walk in
+> `NugetProcessor.kt`, bypassing the closure altogether. A nested dependency candidate under a
+> still-deferred owner shape gets no such free ride and keeps skipping exactly as this amendment
+> describes. Nothing admits the *owner* on the strength of a member naming only its nested type, so
+> that case is still refused; see [ADR-133](133-nested-types.md)'s Consequences.
 
 ### 5. Namespacing: no new rule
 

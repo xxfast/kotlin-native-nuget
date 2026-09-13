@@ -14,6 +14,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.mapPackageToNamespace
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedInterfaceCsName
 
 /** The declarations whose StableRef handles are part of this forward export set. */
 internal data class ForwardBridgeTypeContext(
@@ -292,6 +293,19 @@ internal class ForwardBridgeTypeClassifier(
         unexportedDependencyRefusal = context.refusedDependencyTypes[qualifiedName],
       )
     }
+    // ADR-133: a Kotlin `object` renders as a C# STATIC class, which cannot be a member type
+    // (CS0722: "cannot convert to/from a static type", and a static type is illegal as a
+    // parameter or return type at all). Before this ADR every nested object was refused one line
+    // up by the nested gate and every top-level object return emitted uncompilable C#. Skipped
+    // named at the position instead, so `fun single(): Marker` says why it vanished.
+    if (classDeclaration.classKind == ClassKind.OBJECT && !classDeclaration.isSealedSubclass()) {
+      return BridgeType.Unsupported(
+        qualifiedName,
+        "`${classDeclaration.simpleName.asString()}` is a Kotlin `object`, declared in C# as a " +
+            "static class, which cannot appear at a parameter or return position (CS0722)",
+        isObjectPosition = true,
+      )
+    }
     return BridgeType.ObjectHandle(qualifiedName, csharpType = csharpTypeNameFor(classDeclaration))
   }
 
@@ -371,9 +385,17 @@ internal class ForwardBridgeTypeClassifier(
         unexportedDependencyRefusal = context.refusedDependencyTypes[qualifiedName],
       )
     }
-    val simpleName: String = declaration.simpleName.asString()
+    // ADR-133: the enclosing scope, with the `I` on the LAST segment only (`Owner.IListener`).
+    // `I` + nestedCsName() would give the nonexistent `IOwner.Listener`, and the bare simple name
+    // would give a namespace-root `IListener` nothing declares (CS0246).
+    val simpleName: String = declaration.nestedCsName()
+    val interfaceName: String = declaration.nestedInterfaceCsName()
     if (context.rootNamespace.isEmpty()) {
-      return BridgeType.Interface(qualifiedName, csharpType = "I$simpleName", backingType = simpleName)
+      return BridgeType.Interface(
+        qualifiedName,
+        csharpType = interfaceName,
+        backingType = simpleName,
+      )
     }
     val namespace: String = mapPackageToNamespace(
       declaration.packageName.asString(),
@@ -382,7 +404,7 @@ internal class ForwardBridgeTypeClassifier(
     )
     return BridgeType.Interface(
       qualifiedName,
-      csharpType = "global::$namespace.I$simpleName",
+      csharpType = "global::$namespace.$interfaceName",
       backingType = "global::$namespace.$simpleName",
     )
   }
