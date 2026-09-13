@@ -9,7 +9,9 @@ import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
+import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
+import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 
 /**
  * The declared base class, ungated: what the class *says* it extends, whether or not the export
@@ -388,18 +390,61 @@ internal fun KSDeclaration.overridesBaseClassMember(superClass: KSClassDeclarati
  * inherited-member behaviour (`Tier1InheritedMemberDiagnosticsTest`) never saw this.
  *
  * The declared list is the ground truth, so a real `override val` in the subclass still answers
- * true and keeps ADR-101's virtual/override pair. Matching is by simple name: a subclass that
- * declares one overload of a name it also inherits *substituted* from a generic base would keep
- * both, which no fixture reaches (ROADMAP has the generic-subclass work).
+ * true and keeps ADR-101's virtual/override pair.
+ *
+ * ADR-101 amendment (2026-09-13): functions are matched by *signature*, not by simple name. The
+ * name-only rule was silently wrong for an overload. `class LabelledCrate : Crate<String>` that
+ * declares `describe(tag: Int)` also receives the base's `describe(tag: T)` substituted to
+ * `describe(tag: String)`, parented to the subclass and — unlike the property twin above —
+ * carrying no `OVERRIDE` modifier, so the name match called it declared and the subclass rendered
+ * a second `Describe(string)` plus a wrongly minted `labelledcrate_describe_2` entry point.
+ * Comparison is strict (a type-parameter position spells as its own name, with no ADR-082
+ * wildcard) because a declared member and a substituted member of *identical* signature never
+ * co-exist in `getAllFunctions()` — the declaration replaces the substitution — so a
+ * substituted member must never match the declared list. Properties stay name-keyed: Kotlin
+ * properties cannot overload, so for them the name *is* the signature.
  */
 private fun KSDeclaration.isDeclaredBy(cls: KSClassDeclaration): Boolean {
   if (parentDeclaration != cls) return false
-  val name: String = simpleName.asString()
   return when (this) {
-    is KSPropertyDeclaration -> cls.getDeclaredProperties().any { it.simpleName.asString() == name }
-    is KSFunctionDeclaration -> cls.getDeclaredFunctions().any { it.simpleName.asString() == name }
+    is KSPropertyDeclaration -> {
+      val name: String = simpleName.asString()
+      cls.getDeclaredProperties().any { it.simpleName.asString() == name }
+    }
+
+    is KSFunctionDeclaration -> {
+      val key: List<String> = forwardSignatureKey()
+      cls.getDeclaredFunctions().any { declared -> declared.forwardSignatureKey() == key }
+    }
+
     else -> true
   }
+}
+
+/**
+ * A function's identity for the "is this the same declaration" question: simple name, then the
+ * extension receiver if it has one, then one key per parameter position. Arity falls out of the
+ * list length.
+ *
+ * One spelling, shared with ADR-082's supertype-member comparison (`ForwardSupertypeMembers`,
+ * which layers its type-parameter wildcard on top of [forwardTypeKey]); this side is strict.
+ */
+internal fun KSFunctionDeclaration.forwardSignatureKey(): List<String> =
+  listOf(simpleName.asString()) +
+      listOfNotNull(extensionReceiver?.resolve()?.forwardTypeKey()) +
+      parameters.map { parameter -> parameter.type.resolve().forwardTypeKey() }
+
+/**
+ * One type position, as a comparable string: the alias-expanded declaration's qualified name plus
+ * nullability. A type *parameter* spells as its own simple name, so `T` and `kotlin.String` differ,
+ * which is exactly what makes a substituted member distinguishable from a declared one.
+ */
+internal fun KSType.forwardTypeKey(): String {
+  val expanded: KSType = expandAliases()
+  val declaration: KSDeclaration = expanded.declaration
+  val name: String = declaration.qualifiedName?.asString() ?: declaration.simpleName.asString()
+  val nullable: Boolean = isMarkedNullable || expanded.isMarkedNullable
+  return if (nullable) "$name?" else name
 }
 
 private fun KSDeclaration.hasImplementation(): Boolean = when (this) {
