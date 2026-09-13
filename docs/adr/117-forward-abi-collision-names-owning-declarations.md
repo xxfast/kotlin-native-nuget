@@ -479,3 +479,11 @@ recorded as its own roadmap item rather than folded into this ADR's scope.
   `ForwardExportOwners.owner()`'s range/`ROUTE_OWNED`/`GENERATED_HELPER` fallback; the Tier 1
   Flow-classpath footgun found while building the new cells; the `csharpLegacy` `.distinct()`
   detection gap for two byte-identical cross-package legacy imports, named but not chased here.
+
+> **Note (2026-09-13):** the deferred deletion above shipped in the same stack. The `attributing`
+> range wrappers in `NugetProcessor.kt`, `ForwardExportOwnerRange` and `ForwardCNameExports` are
+> gone; `ForwardExportOwners.owner()` no longer has a range fallback. An untagged `@CName` export
+> (or a tag carrying neither a declaration nor a symbol) now fails the index build via `error(...)`
+> (an `IllegalStateException` naming the entry point), pinned by `ForwardExportOwnersTest`'s two
+> cells (a tagged export resolving its own owner, and an untagged export failing by name).
+> `GENERATED_HELPER` and `owners()`'s `ifEmpty` fallback stay, for the live C#-only collision case.

@@ -375,3 +375,7 @@ amendment block, ADR-118's Consequences placeholder.
   arm's flow exports carry no ADR-117 owner tag, like every other `exports/` legacy route
   (ROADMAP.md already records this), so a collision message names the arm through the
   `attributing(subclass)` range rather than through a tag.
+
+  > **Note (2026-09-13):** superseded by [ADR-117](117-forward-abi-collision-names-owning-declarations.md)'s
+  > same-day amendment. The arm's flow exports now carry their own owner tag like every other
+  > `exports/` route, and the `attributing(subclass)` range this bullet describes has been deleted.

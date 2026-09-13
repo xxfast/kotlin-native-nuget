@@ -14,18 +14,14 @@ import com.squareup.kotlinpoet.FunSpec
  * failure can name the *owners* (`sample.Radio.play(Player)`) rather than only the mangled symbol.
  *
  * The index is built from the one artifact that holds every export of both universes — the
- * `CNameExports.kt` [FileSpec] the processor already has in hand before the contract check — at
- * two granularities:
+ * `CNameExports.kt` [FileSpec] the processor already has in hand before the contract check.
  *
- * - **fine**: an export whose `FunSpec` carries a [ForwardExportOwnerTag] (every planned callable,
- *   every planned property, and the two suspend legacy sites) resolves to its own declaration;
- * - **coarse**: any other export is attributed by [ForwardExportOwnerRange], the `members` range
- *   the per-declaration loop in `generateCNameWrappers` added it in, so a route-owned export (the
- *   generated `Dispose`, a sealed discriminator, a `_collect`) names its owning top-level
- *   declaration.
- *
- * A `FunSpec` in neither bucket is a generator helper (`nuget_dispose`, the scope/job and lambda
- * helpers) and says so.
+ * Every export resolves through its own [ForwardExportOwnerTag] (ADR-117 amendment, 2026-09-13):
+ * the tag rides on the `@CName` annotation, minted by the single `cNameAnnotation(value, owner)`
+ * helper whose `owner` parameter is required, so a planned callable, a planned property and every
+ * legacy route alike name the declaration they came from. An export whose `@CName` bypassed that
+ * helper carries no tag and fails [build] by name, rather than being attributed to a declaration
+ * that merely sits near it.
  */
 internal data class ForwardExportOwnerTag(
   /** A planned callable's `plan.invocation.symbol` or a property plan's `plan.symbol`. */
@@ -51,16 +47,6 @@ internal data class ForwardExportOwner(val text: String, val node: KSNode? = nul
   }
 }
 
-/**
- * The `[from, until)` half-open range of `FileSpec.Builder.members` indices a single top-level
- * declaration's export builders added, recorded by `generateCNameWrappers`.
- */
-internal data class ForwardExportOwnerRange(
-  val from: Int,
-  val until: Int,
-  val declaration: KSDeclaration,
-)
-
 internal class ForwardExportOwners(
   private val byEntryPoint: Map<String, List<ForwardExportOwner>>,
 ) {
@@ -78,64 +64,48 @@ internal class ForwardExportOwners(
     val GENERATED_HELPER: ForwardExportOwner =
       ForwardExportOwner("generated helper (no Kotlin declaration)")
 
-    private const val ROUTE_OWNED: String =
-      " (route-owned export: the generated Dispose, a suspend/Flow/sealed export, or another " +
-          "legacy route)"
-
-    fun build(
-      file: FileSpec,
-      ranges: List<ForwardExportOwnerRange>,
-      catalog: ForwardCallablePlanCatalog,
-    ): ForwardExportOwners {
+    fun build(file: FileSpec, catalog: ForwardCallablePlanCatalog): ForwardExportOwners {
       val byEntryPoint: MutableMap<String, MutableList<ForwardExportOwner>> = mutableMapOf()
-      // `FileSpec.members` preserves the builder's own `members` order (KotlinPoet copies the list
-      // verbatim), so a builder-side index range addresses the same element here.
-      file.members.forEachIndexed { index, member ->
-        val function: FunSpec = member as? FunSpec ?: return@forEachIndexed
-        val entryPoint: String = function.cNameEntryPoint() ?: return@forEachIndexed
-        byEntryPoint.getOrPut(entryPoint) { mutableListOf() } +=
-          function.owner(index, ranges, catalog)
+      file.members.forEach { member ->
+        val function: FunSpec = member as? FunSpec ?: return@forEach
+        val entryPoint: String = function.cNameEntryPoint() ?: return@forEach
+        byEntryPoint.getOrPut(entryPoint) { mutableListOf() } += function.owner(entryPoint, catalog)
       }
       return ForwardExportOwners(byEntryPoint)
     }
 
     private fun FunSpec.owner(
-      index: Int,
-      ranges: List<ForwardExportOwnerRange>,
+      entryPoint: String,
       catalog: ForwardCallablePlanCatalog,
     ): ForwardExportOwner {
       // ADR-117 amendment: the tag rides on the `@CName` annotation, minted by the one
       // `cNameAnnotation(value, owner)` helper whose owner is required, so every export of every
       // route carries its own owner.
-      // Tag wins over range: a planned member of a class sits inside that class's coarse range.
       val tag: ForwardExportOwnerTag? = cNameOwnerTag()
-      if (tag != null) {
-        val role: String = tag.role?.let { label -> " ($label)" }.orEmpty()
-        val tagged: KSDeclaration? = tag.declaration
-        if (tagged != null) return ForwardExportOwner(render(tagged) + role, tagged)
-        val symbol: String? = tag.symbol
-        if (symbol != null) {
-          // A property plan has no catalog node, and an unresolvable symbol must degrade to its
-          // own text rather than fail: this is a diagnostic, never a generator invariant.
-          val node: KSNode? = catalog.entries.firstOrNull { entry -> entry.symbol == symbol }?.node
-          val declaration: KSDeclaration? = node as? KSDeclaration
-          return if (declaration != null) {
-            ForwardExportOwner(render(declaration) + role, declaration)
-          } else {
-            ForwardExportOwner(symbol + role, node)
-          }
+      val role: String = tag?.role?.let { label -> " ($label)" }.orEmpty()
+      val tagged: KSDeclaration? = tag?.declaration
+      if (tagged != null) return ForwardExportOwner(render(tagged) + role, tagged)
+
+      val symbol: String? = tag?.symbol
+      if (symbol != null) {
+        // A property plan has no catalog node, and an unresolvable symbol must degrade to its own
+        // text rather than fail: this is a diagnostic, never a generator invariant.
+        val node: KSNode? = catalog.entries.firstOrNull { entry -> entry.symbol == symbol }?.node
+        val declaration: KSDeclaration? = node as? KSDeclaration
+        return if (declaration != null) {
+          ForwardExportOwner(render(declaration) + role, declaration)
+        } else {
+          ForwardExportOwner(symbol + role, node)
         }
       }
 
-      val range: ForwardExportOwnerRange? = ranges.firstOrNull { range ->
-        index >= range.from && index < range.until
-      }
-      if (range != null) {
-        val declaration: KSDeclaration = range.declaration
-        return ForwardExportOwner(qualified(declaration) + ROUTE_OWNED, declaration)
-      }
-
-      return GENERATED_HELPER
+      // No tag at all, or a tag carrying neither declaration nor symbol: an export minted outside
+      // `cNameAnnotation(value, owner)`. Fail loudly here rather than let it be attributed to
+      // whatever sits near it in the file.
+      error(
+        "Forward ABI export $entryPoint carries no owner tag; every @CName export must be minted " +
+            "through cNameAnnotation(value, owner) with a declaration or a symbol",
+      )
     }
 
     /**
@@ -168,8 +138,9 @@ private fun FunSpec.cName(): AnnotationSpec? = annotations
 
 /**
  * Sibling of [cNameEntryPoint]: the owner tag `cNameAnnotation(value, owner)` hung on the
- * annotation itself. A `FunSpec` whose `@CName` was not minted by that helper has none, which is
- * unreachable today: the helper is the only minter and its `owner` parameter is required.
+ * annotation itself. A `FunSpec` whose `@CName` was not minted by that helper has none — a
+ * generator invariant now, enforced by [ForwardExportOwners.build], which fails naming the entry
+ * point.
  */
 internal fun FunSpec.cNameOwnerTag(): ForwardExportOwnerTag? =
   cName()?.tag(ForwardExportOwnerTag::class)
@@ -180,13 +151,3 @@ internal fun FunSpec.cNameEntryPoint(): String? = cName()
   ?.singleOrNull()
   ?.toString()
   ?.removeSurrounding("\"")
-
-/**
- * ADR-117: `generateCNameWrappers`' result — the exports file plus the coarse per-declaration
- * `members` ranges the owner index needs. Bundled rather than threaded through a mutable
- * out-parameter so the index cannot be built from ranges that belong to a different `FileSpec`.
- */
-internal data class ForwardCNameExports(
-  val file: FileSpec,
-  val ranges: List<ForwardExportOwnerRange>,
-)
