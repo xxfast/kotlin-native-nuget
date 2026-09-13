@@ -161,7 +161,7 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
 
   addFunction(
     FunSpec.builder("export_${prefix}_get_${propName}_collect")
-      .addAnnotation(cNameAnnotation("${prefix}_get_${propName}_collect"))
+      .addAnnotation(cNameAnnotation("${prefix}_get_${propName}_collect", ownedBy(prop)))
       .addParameter("handle", cOpaquePointer)
       .addParameter("scopeHandle", cOpaquePointer)
       .addParameter("onNextPtr", cOpaquePointer)
@@ -186,7 +186,7 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
     // guards the box with `if (v != null) … else null`.
     addFunction(
       FunSpec.builder("export_${prefix}_get_${propName}_value")
-        .addAnnotation(cNameAnnotation("${prefix}_get_${propName}_value"))
+        .addAnnotation(cNameAnnotation("${prefix}_get_${propName}_value", ownedBy(prop)))
         .addParameter("handle", cOpaquePointer)
         .returns(
           if (elementNullable || memberNullable) cOpaquePointer.copy(nullable = true)
@@ -205,7 +205,7 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
       // pattern; the getter returns `null` when this is false, else constructs normally.
       addFunction(
         FunSpec.builder("export_${prefix}_get_${propName}_has_value")
-          .addAnnotation(cNameAnnotation("${prefix}_get_${propName}_has_value"))
+          .addAnnotation(cNameAnnotation("${prefix}_get_${propName}_has_value", ownedBy(prop)))
           .addParameter("handle", cOpaquePointer)
           .returns(Boolean::class)
           .addCode(buildStateFlowHasValuePropertyBody(qualifiedName, propName))
@@ -224,7 +224,7 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
         mutableStateFlowValueParameter(flowElementType)
       addFunction(
         FunSpec.builder("export_${prefix}_set_${propName}_value")
-          .addAnnotation(cNameAnnotation("${prefix}_set_${propName}_value"))
+          .addAnnotation(cNameAnnotation("${prefix}_set_${propName}_value", ownedBy(prop)))
           .addParameter("handle", cOpaquePointer)
           .addParameter("value", valueParamType)
           .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
@@ -315,7 +315,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       ?.declaration?.qualifiedName?.asString() ?: flowElementQualified
     val acquireBuilder: FunSpec.Builder = FunSpec
       .builder("export_${prefix}_$cname")
-      .addAnnotation(cNameAnnotation("${prefix}_$cname"))
+      .addAnnotation(cNameAnnotation("${prefix}_$cname", ownedBy(method)))
       .addParameter("handle", cOpaquePointer)
 
     acquireBuilder.addFlowParameters()
@@ -330,7 +330,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       mutableStateFlowValueParameter(flowElementType)
     val heldSetValueBuilder: FunSpec.Builder = FunSpec
       .builder("export_${prefix}_${cname}_set_value")
-      .addAnnotation(cNameAnnotation("${prefix}_${cname}_set_value"))
+      .addAnnotation(cNameAnnotation("${prefix}_${cname}_set_value", ownedBy(method)))
       // The owner handle and the method's own parameters are gone: the write is keyed on the flow
       // this call already handed out, which is the whole point of holding it.
       .addParameter("flowHandle", cOpaquePointer)
@@ -348,7 +348,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
 
   val builder: FunSpec.Builder = FunSpec
     .builder("export_${prefix}_${cname}_collect")
-    .addAnnotation(cNameAnnotation("${prefix}_${cname}_collect"))
+    .addAnnotation(cNameAnnotation("${prefix}_${cname}_collect", ownedBy(method)))
     .addParameter("handle", cOpaquePointer)
     .addParameter("scopeHandle", cOpaquePointer)
 
@@ -376,7 +376,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
     // guards the box with `if (v != null) … else null`.
     val valueBuilder: FunSpec.Builder = FunSpec
       .builder("export_${prefix}_${cname}_value")
-      .addAnnotation(cNameAnnotation("${prefix}_${cname}_value"))
+      .addAnnotation(cNameAnnotation("${prefix}_${cname}_value", ownedBy(method)))
       .addParameter("handle", cOpaquePointer)
 
     valueBuilder.addFlowParameters()
@@ -400,7 +400,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       // pattern; the getter returns `null` when this is false, else constructs normally.
       val hasValueBuilder: FunSpec.Builder = FunSpec
         .builder("export_${prefix}_${cname}_has_value")
-        .addAnnotation(cNameAnnotation("${prefix}_${cname}_has_value"))
+        .addAnnotation(cNameAnnotation("${prefix}_${cname}_has_value", ownedBy(method)))
         .addParameter("handle", cOpaquePointer)
 
       hasValueBuilder.addFlowParameters()

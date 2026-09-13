@@ -5,6 +5,7 @@ import com.google.devtools.ksp.symbol.FileLocation
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSNode
+import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 
@@ -29,8 +30,15 @@ import com.squareup.kotlinpoet.FunSpec
 internal data class ForwardExportOwnerTag(
   /** A planned callable's `plan.invocation.symbol` or a property plan's `plan.symbol`. */
   val symbol: String? = null,
-  /** The declaration itself, where the emitter holds it (the suspend legacy route). */
+  /** The declaration itself, where the emitter holds it (every legacy route). */
   val declaration: KSDeclaration? = null,
+  /**
+   * ADR-117 amendment (2026-09-13): which *generated* member of [declaration] this export is, when
+   * the owner is the class rather than a member the user wrote: `generated Dispose`,
+   * `sealed discriminator`, `data-class equals`, `generic create variant: string`. A member site
+   * (a property getter, a Flow `_collect`, a stored-callback pair) carries none.
+   */
+  val role: String? = null,
 )
 
 /** One owning Kotlin declaration of a C entry point, with the source location when there is one. */
@@ -96,19 +104,26 @@ internal class ForwardExportOwners(
       ranges: List<ForwardExportOwnerRange>,
       catalog: ForwardCallablePlanCatalog,
     ): ForwardExportOwner {
+      // ADR-117 amendment: the tag rides on the `@CName` annotation, minted by the one
+      // `cNameAnnotation(value, owner)` helper whose owner is required, so every export of every
+      // route carries its own owner.
       // Tag wins over range: a planned member of a class sits inside that class's coarse range.
-      val tag: ForwardExportOwnerTag? = tag(ForwardExportOwnerTag::class)
+      val tag: ForwardExportOwnerTag? = cNameOwnerTag()
       if (tag != null) {
+        val role: String = tag.role?.let { label -> " ($label)" }.orEmpty()
         val tagged: KSDeclaration? = tag.declaration
-        if (tagged != null) return ForwardExportOwner(render(tagged), tagged)
+        if (tagged != null) return ForwardExportOwner(render(tagged) + role, tagged)
         val symbol: String? = tag.symbol
         if (symbol != null) {
           // A property plan has no catalog node, and an unresolvable symbol must degrade to its
           // own text rather than fail: this is a diagnostic, never a generator invariant.
           val node: KSNode? = catalog.entries.firstOrNull { entry -> entry.symbol == symbol }?.node
           val declaration: KSDeclaration? = node as? KSDeclaration
-          return if (declaration != null) ForwardExportOwner(render(declaration), declaration)
-          else ForwardExportOwner(symbol, node)
+          return if (declaration != null) {
+            ForwardExportOwner(render(declaration) + role, declaration)
+          } else {
+            ForwardExportOwner(symbol + role, node)
+          }
         }
       }
 
@@ -147,9 +162,20 @@ internal class ForwardExportOwners(
   }
 }
 
-/** The `@CName` entry point a generated export declares, if it is one. */
-internal fun FunSpec.cNameEntryPoint(): String? = annotations
+/** The `@CName` annotation a generated export declares, if it is one. */
+private fun FunSpec.cName(): AnnotationSpec? = annotations
   .firstOrNull { annotation -> annotation.typeName.toString() == "kotlin.native.CName" }
+
+/**
+ * Sibling of [cNameEntryPoint]: the owner tag `cNameAnnotation(value, owner)` hung on the
+ * annotation itself. A `FunSpec` whose `@CName` was not minted by that helper has none, which is
+ * unreachable today: the helper is the only minter and its `owner` parameter is required.
+ */
+internal fun FunSpec.cNameOwnerTag(): ForwardExportOwnerTag? =
+  cName()?.tag(ForwardExportOwnerTag::class)
+
+/** The `@CName` entry point a generated export declares, if it is one. */
+internal fun FunSpec.cNameEntryPoint(): String? = cName()
   ?.members
   ?.singleOrNull()
   ?.toString()

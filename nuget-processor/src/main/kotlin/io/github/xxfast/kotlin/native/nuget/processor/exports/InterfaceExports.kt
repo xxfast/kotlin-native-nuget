@@ -53,7 +53,7 @@ internal fun FileSpec.Builder.addInterfaceExports(
 
   addFunction(
     FunSpec.builder("export_${prefix}_dispose")
-      .addAnnotation(cNameAnnotation("${prefix}_dispose"))
+      .addAnnotation(cNameAnnotation("${prefix}_dispose", ownedBy(iface, "generated Dispose")))
       .addParameter("handle", cOpaquePointer)
       .addStatement("%T.release(handle)", nugetHandles)
       .build()

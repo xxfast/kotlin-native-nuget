@@ -40,7 +40,7 @@ internal fun FileSpec.Builder.addSealedClassExports(
 
   addFunction(
     FunSpec.builder("export_${prefix}_get_type")
-      .addAnnotation(cNameAnnotation("${prefix}_get_type"))
+      .addAnnotation(cNameAnnotation("${prefix}_get_type", ownedBy(sealed, "sealed discriminator")))
       .addParameter("handle", cOpaquePointer)
       .returns(Int::class)
       .addStatement("val obj: %L = handle.asStableRef<%L>().get()", qualifiedName, qualifiedName)
@@ -80,7 +80,9 @@ internal fun FileSpec.Builder.addSealedClassExports(
 
     addFunction(
       FunSpec.builder("export_${subPrefix}_dispose")
-        .addAnnotation(cNameAnnotation("${subPrefix}_dispose"))
+        .addAnnotation(
+          cNameAnnotation("${subPrefix}_dispose", ownedBy(subclass, "generated Dispose")),
+        )
         .addParameter("handle", cOpaquePointer)
         .addStatement("%T.release(handle)", nugetHandles)
         .build()
@@ -119,7 +121,7 @@ internal fun FileSpec.Builder.addSealedClassExports(
         handleBody(access, "errorOut")
       }
       addFunction(
-        sealedPropertyGetter(subPrefix, propName)
+        sealedPropertyGetter(prop, subPrefix, propName)
           .returns(cOpaquePointer.copy(nullable = true))
           .addCode(body, nugetHandles, cOpaquePointerVar, nugetHandles)
           .build()
@@ -136,7 +138,9 @@ internal fun FileSpec.Builder.addSealedClassExports(
     if (isDataClass) {
       addFunction(
         FunSpec.builder("export_${subPrefix}_equals")
-          .addAnnotation(cNameAnnotation("${subPrefix}_equals"))
+          .addAnnotation(
+            cNameAnnotation("${subPrefix}_equals", ownedBy(subclass, "data-class equals")),
+          )
           .addParameter("handle", cOpaquePointer)
           .addParameter("other", cOpaquePointer)
           .returns(Boolean::class)
@@ -149,7 +153,9 @@ internal fun FileSpec.Builder.addSealedClassExports(
 
       addFunction(
         FunSpec.builder("export_${subPrefix}_hashcode")
-          .addAnnotation(cNameAnnotation("${subPrefix}_hashcode"))
+          .addAnnotation(
+            cNameAnnotation("${subPrefix}_hashcode", ownedBy(subclass, "data-class hashCode")),
+          )
           .addParameter("handle", cOpaquePointer)
           .returns(Int::class)
           .addStatement(
@@ -161,7 +167,9 @@ internal fun FileSpec.Builder.addSealedClassExports(
 
       addFunction(
         FunSpec.builder("export_${subPrefix}_tostring")
-          .addAnnotation(cNameAnnotation("${subPrefix}_tostring"))
+          .addAnnotation(
+            cNameAnnotation("${subPrefix}_tostring", ownedBy(subclass, "data-class toString")),
+          )
           .addParameter("handle", cOpaquePointer)
           .returns(String::class)
           .addStatement(
@@ -181,8 +189,14 @@ internal fun FileSpec.Builder.addSealedClassExports(
  * the property name for a single-call getter, or the `_has_value` / `_value` suffixed name for the
  * nullable-primitive pair.
  */
-private fun sealedPropertyGetter(subPrefix: String, exportSuffix: String): FunSpec.Builder =
+private fun sealedPropertyGetter(
+  // ADR-117 amendment: the arm property this getter exports, threaded so a colliding entry point
+  // names the property rather than the sealed class it hangs under.
+  prop: KSPropertyDeclaration,
+  subPrefix: String,
+  exportSuffix: String,
+): FunSpec.Builder =
   FunSpec.builder("export_${subPrefix}_get_$exportSuffix")
-    .addAnnotation(cNameAnnotation("${subPrefix}_get_$exportSuffix"))
+    .addAnnotation(cNameAnnotation("${subPrefix}_get_$exportSuffix", ownedBy(prop)))
     .addParameter("handle", cOpaquePointer)
     .addParameter("errorOut", cOpaquePointer.copy(nullable = true))

@@ -34,7 +34,7 @@ internal fun FileSpec.Builder.addEnumExports(enum: KSClassDeclaration) {
 
     addFunction(
       FunSpec.builder("export_${prefix}_get_$propName")
-        .addAnnotation(cNameAnnotation("${prefix}_get_$propName"))
+        .addAnnotation(cNameAnnotation("${prefix}_get_$propName", ownedBy(prop)))
         .addParameter("ordinal", Int::class)
         .returns(ClassName.bestGuess(propType))
         .addStatement("val ${prefix}: %L = %L.entries[ordinal]", qualifiedName, qualifiedName)

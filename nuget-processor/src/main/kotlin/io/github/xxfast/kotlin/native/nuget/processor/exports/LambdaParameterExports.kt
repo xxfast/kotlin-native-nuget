@@ -204,7 +204,7 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
 
   val builder: FunSpec.Builder = FunSpec
     .builder("export_${classPrefix}_$methodName")
-    .addAnnotation(cNameAnnotation("${classPrefix}_$methodName"))
+    .addAnnotation(cNameAnnotation("${classPrefix}_$methodName", ownedBy(method)))
     .addParameter("handle", cOpaquePointer)
     .addParameter("${lambdaParamName}Ptr", cOpaquePointer)
     .addParameter("${lambdaParamName}UserData", cOpaquePointer)

@@ -64,7 +64,9 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
   }
 
   val builder: FunSpec.Builder = FunSpec.builder("export_${plan.exportName}")
-    .addAnnotation(cNameAnnotation(plan.exportName))
+    .addAnnotation(
+      cNameAnnotation(plan.exportName, ownedBy(plan.declaration, "interface bridge factory")),
+    )
     .addAnnotation(
       AnnotationSpec.builder(ClassName("kotlin", "OptIn"))
         .addMember("%T::class", ClassName("kotlin.experimental", "ExperimentalNativeApi"))
