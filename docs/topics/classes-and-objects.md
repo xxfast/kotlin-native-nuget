@@ -894,7 +894,11 @@ public void NarratorRate_SynthesizedOverload_UsesBoostDefaultOfOne()
         and <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md">ADR-101</a>),
         there is no C# base to inherit an overload from, so the override synthesizes its own,
         reading the default flags off the root of its <code>findOverridee()</code> chain, the
-        declaration furthest up that actually carries them. The interface route (<a
+        declaration furthest up that actually carries them. A sealed arm's override of a
+        <b>declined</b> base member (not unexported, but structurally skipped, e.g. an opt-in
+        marker) is the same shape: see
+        <a href="interfaces-abstract-sealed.md#sealed-method-declined-base-overload">An override of
+        a base member the base declined to plan</a>. The interface route (<a
         href="interfaces-abstract-sealed.md">Interfaces, abstract and sealed classes</a>) still
         synthesizes nothing in v1: adding a member to a generated C# interface would oblige every
         implementer to carry it. A defaulted interface member bound onto an implementing <b>class</b>

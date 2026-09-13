@@ -11,6 +11,14 @@ Accepted
 
 > **Amended below (2026-09-11).** The sealed **base** carries its own declared methods, so "declared-only" no longer means "absent from C#" for a base `open fun`: it means the base is the carrier and every arm inherits it. See "Amendment (2026-09-11)".
 
+> **Amended below (2026-09-13).** The 2026-09-11 amendment's ADR-096 synthesis gate keyed an arm's
+> omitting overloads on whether `findOverridee()` pointed at the sealed base, not on whether the
+> base's own plan actually carried the member. An arm overriding a base member the base's plan
+> *declined* (an opt-in marker) therefore still synthesized nothing, the residual that amendment
+> called "deliberately left". The gate is now keyed on the base's `Planned` entries, and the arm's
+> default flags are read through the override chain instead of off the override's own (always-false)
+> parameters. See "Amendment (2026-09-13)".
+
 ## Implementation notes (2026-09-08)
 
 Shipped as designed, with four corrections found during implementation:
@@ -501,6 +509,8 @@ What changes against the Decision above:
   One case remains conservative and is deliberately left: if the base's own plan *declined* the
   member, the overridee still points at the base and the arm synthesizes nothing. No fixture
   exercises it, and the visible symptom would be a missing short overload, not wrong output.
+  (Closed 2026-09-13: the gate is keyed on the base's `Planned` entries and a fixture now exercises
+  it; see "Amendment (2026-09-13)".)
 - **A base-declared member with no route is named.** `SEALED_BASE_UNROUTED` is the base's twin of
   `SEALED_SUBCLASS_UNROUTED`, separate because the remedy differs: the arms do carry the suspend
   (ADR-118) and Flow (ADR-124) routes the base does not, so the hint says to declare it on each arm.
@@ -608,3 +618,42 @@ Inferred, must be checked by the implementer:
 - `tracker.trackPlan` on a sealed arm plan pulls in the same collection/lambda helpers it does for
   an ordinary class (it reads only the plan).
 - The Swift/ObjC prior-art sentence, from docs only.
+
+## Amendment (2026-09-13): an arm owes its omitting overloads when the base declined the member
+
+The 2026-09-11 amendment's ADR-096 gate narrowed `Modifier.OVERRIDE`'s early return to
+`method.findOverridee()?.parentDeclaration == sealed`, correct exactly when the base's own plan
+actually carried the member the arm overrides. It left one case "deliberately conservative": an
+arm's `override fun` whose sealed base *declares* the member but whose base plan *declined* it (a
+structural skip, not a covariant narrowing). `findOverridee()` still resolved to the base
+declaration regardless, the early return still fired, and the arm synthesized nothing, leaving a
+`CS1501` on the short call.
+
+Two root causes, both fixed in `ForwardCallablePlanner.kt`:
+
+1. **The gate keyed on the wrong fact.** `catalog()` now derives `plannedBaseMembers: Set<KSNode>`
+   from `sealedBaseEntries(sealed)`'s own `Planned`, non-synthesized entries, and passes it into
+   `sealedSubclassEntries(sealed, sub, plannedBaseMembers)`. The gate becomes
+   `method.findOverridee() in plannedBaseMembers`: node identity **verified by execution**, an
+   existing arm/base pair exercised the gate as true. The catalog itself cannot be consulted here
+   (it is mid-construction, `plansFor` requires it complete), so the entries are read directly.
+2. **The default count read the wrong parameters.** The same pass counted raw
+   `method.parameters.map { it.hasDefault }`, always `false` on every parameter of an `override`
+   (Kotlin forbids restating a default). It now reads `memberDefaultFlags(method).trailingCount()`,
+   as `classEntries` already does for the same reason.
+
+Fixing only the gate without the default-count fix would still synthesize nothing; both changed
+together. A consequence follows that this ADR did not set out to fix and no fixture pins:
+narrowing the gate to `plannedBaseMembers` means an arm's `override` of an **interface** member
+(never a `plannedBaseMembers` entry, since it is not on the sealed base at all) now also reaches the
+`memberDefaultFlags` count and gets its own omitting overloads, where the 2026-09-11 text claimed
+it "still owes its own" without the count actually working. **Inferred**, not pinned by a test.
+
+Shipped fixture: `test-library/src/nativeMain/kotlin/.../issue115/JobSample.kt` adds
+`@RequiresOptIn annotation class Unstable` and a base `@Unstable open fun tag(prefix: String, suffix:
+String = "!")`, overridden on `Job.Running` as `@OptIn(Unstable::class) override fun tag(prefix,
+suffix)`. `Job` and `Job.Idle` declare no `Tag` in any arity; `Job.Running` gets both
+`job_running_tag` (declared) and `job_running_tag_2` (synthesized short arity). No new handle kind:
+the synthesized overload reuses the declared arity's receiver/result types, so `LiveHandleTests.cs`
+gains no row. Tests: four cases added to `IntegrationTests/SealedSubclassMethodTests.cs`, and Tier 1
+`Tier1SealedArmOmittingOverloadDeclinedBaseTest`. Closes ROADMAP Phase 3's line tracking this residual.
