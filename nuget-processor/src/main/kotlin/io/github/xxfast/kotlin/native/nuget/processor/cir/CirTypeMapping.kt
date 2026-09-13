@@ -246,6 +246,25 @@ internal fun mapPackageToNamespace(
 }
 
 /**
+ * ADR-133: the C# spelling of an interface used as a generic **type-parameter bound**
+ * (`class Box<T : Pet>` -> `where T : IPet`), on the legacy generic class and function routes.
+ *
+ * A NESTED interface carries its owner chain and is qualified exactly as the classifier qualifies
+ * an interface at a member position: bare `IKeeper` names nothing at namespace scope (CS0246).
+ * A TOP-LEVEL one keeps the shipped bare `I$simpleName`, byte for byte -- `PetBox<T> where T :
+ * IPet` is the shipped spelling, and a cross-namespace top-level bound (which that spelling also
+ * gets wrong) is a separate, pre-existing defect this does not widen into.
+ */
+internal fun KSClassDeclaration.legacyBoundInterfaceCsName(context: NugetContext): String {
+  val simpleName: String = simpleName.asString()
+  if (parentDeclaration == null || context.rootNamespace.isEmpty()) return "I$simpleName"
+  val namespace: String = mapPackageToNamespace(
+    packageName.asString(), context.rootPackage, context.rootNamespace,
+  )
+  return "global::$namespace.${nestedInterfaceCsName()}"
+}
+
+/**
  * ADR-066: the `Flow<T>`/`StateFlow<T>` element-type route mapped its element by *simple* name
  * (`declaration.simpleName.asString()`), so `Flow<TopStory>` emitted the unqualified
  * `KotlinFlow<TopStory>`, a type that only resolves inside `Interop.cs` when the element's

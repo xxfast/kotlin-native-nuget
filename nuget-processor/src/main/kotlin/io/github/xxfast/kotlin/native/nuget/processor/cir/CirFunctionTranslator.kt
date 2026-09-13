@@ -18,6 +18,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCshar
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyDiscriminatedRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredCsharpType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyInterfaceRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
@@ -661,6 +663,9 @@ internal fun translateSuspendFunction(
   val asyncReturnType: String = when {
     isUnit -> ""
     collectionReturn != null -> collectionReturn.forwardPublicCsharpType()
+    // ADR-040: the class route's own line -- the projected interface, not the backing wrapper
+    // `nestedCsName()` would spell below. `strayPetLater()` is `Task<IPet>`, ADR-040's own example.
+    returnShape is ForwardLegacyReturnShape.Interface -> returnShape.declaredCsharpType()
     else -> {
       // ADR-118: same speller as the class route -- a nested sealed arm return carries its
       // enclosing base, a top-level type stays bare.
@@ -712,6 +717,10 @@ internal fun translateSuspendFunction(
         nullable = returnShape.nullable,
       )
 
+      // ADR-040: the backing wrapper, for the class route's reason -- the declared type is now
+      // the interface, and only the wrapper has a handle constructor.
+      is ForwardLegacyReturnShape.Interface -> returnShape.legacyInterfaceRead("resultPtr")
+
       ForwardLegacyReturnShape.Plain, is ForwardLegacyReturnShape.Refused -> null
     },
   )
@@ -722,6 +731,8 @@ internal fun translateSuspendFunction(
 internal fun translateGenericFunction(
   func: KSFunctionDeclaration,
   libraryName: String,
+  // ADR-133: as on the generic class route -- a bound on a nested interface needs the namespace.
+  context: NugetContext,
 ): List<CirMember> {
   val funcName: String = func.simpleName.asString()
   // ADR-110: PascalCase, escaped after the case change; every DllImport on this route pins its
@@ -741,14 +752,13 @@ internal fun translateGenericFunction(
       val simpleName: String =
         resolved.declaration.simpleName.asString()
 
-      val isInterface: Boolean =
-        resolved.declaration is KSClassDeclaration &&
-            (resolved.declaration as KSClassDeclaration).classKind ==
-            ClassKind.INTERFACE
+      val declaration: KSClassDeclaration? = resolved.declaration as? KSClassDeclaration
+      val isInterface: Boolean = declaration?.classKind == ClassKind.INTERFACE
 
       when {
         qualifiedName == "kotlin.Any" -> null
-        isInterface -> "I$simpleName"
+        // ADR-133: nested carries the chain, top-level keeps the shipped bare `I$simpleName`.
+        isInterface && declaration != null -> declaration.legacyBoundInterfaceCsName(context)
         else -> simpleName
       }
     } ?: emptyList()

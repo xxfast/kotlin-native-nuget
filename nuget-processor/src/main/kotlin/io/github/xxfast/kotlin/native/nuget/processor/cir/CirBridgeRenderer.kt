@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.bridgeImplVariable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeSlot
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeWire
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpWire
@@ -27,9 +28,14 @@ internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
   appendLine("        {")
   helper.interfaces.forEach { entry ->
     val plan: ForwardBridgeInterfacePlan = entry.plan
-    appendLine("            if (impl is ${entry.csQualifiedName} ${plan.simpleName.lowercase()}Impl)")
+    // ADR-133: spelled off the state class, not off the simple name -- every arm of this one
+    // block declares its pattern variable in the same scope, so two owners' nested `Keeper`s
+    // declared `keeperImpl` twice (CS0128). Deriving it from `stateClassName` is also what keeps
+    // the two names from drifting; a top-level interface still reads `petImpl`.
+    val implVariable: String = plan.bridgeImplVariable()
+    appendLine("            if (impl is ${entry.csQualifiedName} $implVariable)")
     appendLine("            {")
-    appendLine("                return ${plan.stateClassName}.Create(${plan.simpleName.lowercase()}Impl).KotlinHandle;")
+    appendLine("                return ${plan.stateClassName}.Create($implVariable).KotlinHandle;")
     appendLine("            }")
   }
   appendLine("            throw new NotSupportedException(")

@@ -1,6 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
+using TestLibrary.Cat;
 using TestLibrary.Nested;
 
 namespace IntegrationTests;
@@ -193,6 +196,116 @@ public class NestedTypesTests
         Assert.Equal("hi from Mylo", keeper.Greet());
         Assert.NotNull(typeof(Aviary).GetNestedType("IKeeper"));
         Assert.Null(typeof(Aviary).Assembly.GetType("TestLibrary.Nested.IKeeper"));
+    }
+
+    private sealed class CountingKeeperForRegistry : Registry.IKeeper
+    {
+        public int Greetings { get; private set; }
+
+        public string Greet()
+        {
+            Greetings++;
+            return "hello from the registry desk";
+        }
+
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void TwoOwners_EachWithANestedIKeeper_BothBridgeIntoCSharp()
+    {
+        // ADR-084's bridge state is named from the simple name alone and rendered in the root
+        // namespace's CirBridgeHelper, so `Aviary.Keeper` and `Registry.Keeper` both want to be
+        // `KeeperBridgeState` (CS0101) with two `keeperImpl` pattern variables in one block
+        // (CS0128).
+        //
+        // Both interfaces need a *return* position for that to be true, not just the parameter
+        // position exercised here: measured 2026-09-13, the bridge plans are built from
+        // `CirTranslator.interfaceBackingClasses`, the RETURN-reachable subset. With
+        // `Registry.greetVia` alone, `Registry.IKeeper` had no plan at all, `NugetBridge.HandleFor`
+        // fell through to its `NotSupportedException` arm, and this test killed the entire test
+        // host with a native `kotlin.NullPointerException` ("Test host process crashed") instead of
+        // failing. `Registry.currentKeeper()` is in the fixture to close that.
+        using var aviary = new Aviary("Oreo");
+        var atTheAviary = new CountingKeeper();
+        var atTheDesk = new CountingKeeperForRegistry();
+
+        Assert.Equal("hello from CSharp @ Oreo", aviary.GreetVia(atTheAviary));
+        Assert.Equal("hello from the registry desk @ registry", Registry.GreetVia(atTheDesk));
+        Assert.Equal(1, atTheAviary.Greetings);
+        Assert.Equal(1, atTheDesk.Greetings);
+    }
+
+    // --- Interface return on the legacy suspend and Flow routes (ADR-040 x ADR-019) ---
+
+    [Fact]
+    public async Task NestedInterface_ReturnedFromASuspendFunction_IsTypedAsTheInterface()
+    {
+        // The value assertion passes either way: the wrapper `Aviary.Keeper` implements
+        // `Aviary.IKeeper`, so a wrapper-typed Task still assigns here. The reflection cell below
+        // is the discriminator, and this one is what proves the route actually runs.
+        using var aviary = new Aviary("Mylo");
+        using Aviary.IKeeper keeper = await aviary.CurrentKeeperLaterAsync();
+
+        Assert.Equal("hi from Mylo", keeper.Greet());
+    }
+
+    [Fact]
+    public void SuspendInterfaceReturn_IsSpelledAsTheInterface_NotTheBackingWrapper()
+    {
+        // ADR-040: a consumer never sees the backing wrapper at a declared position. The legacy
+        // suspend route spells the completion's result with `nestedCsName()`, which for an
+        // interface is the wrapper, so the declared signature is `Task<Aviary.Keeper>` today.
+        // GetMethods, not GetMethod: the suspend route also emits a CancellationToken overload.
+        MethodInfo member = Assert.Single(
+            typeof(Aviary).GetMethods().Where(method => method.Name == "CurrentKeeperLaterAsync"),
+            method => method.GetParameters().All(parameter => parameter.IsOptional));
+        Assert.Equal(typeof(Task<Aviary.IKeeper>), member.ReturnType);
+
+        // The same route, declared at the top level and returning the nested interface: the
+        // chain and the interface spelling have to be right together.
+        MethodInfo topLevel = Assert.Single(
+            typeof(AviaryRoutes).GetMethods().Where(method => method.Name == "AnyKeeperLaterAsync"),
+            method => method.GetParameters().All(parameter => parameter.IsOptional));
+        Assert.Equal(typeof(Task<Aviary.IKeeper>), topLevel.ReturnType);
+    }
+
+    [Fact]
+    public async Task TopLevelInterface_ReturnedFromASuspendFunction_IsTypedAsTheInterface()
+    {
+        // ADR-040's own example: `strayPet()` is `IPet`, so `strayPetLater()` is `Task<IPet>`, not
+        // `Task<Pet>`. Nothing about this one is nested, which is how it shows the defect is the
+        // legacy suspend route's and not ADR-133's.
+        using IPet stray = await PetKt.StrayPetLaterAsync();
+        Assert.Equal("Mrrp?", stray.Speak());
+
+        MethodInfo member = Assert.Single(
+            typeof(PetKt).GetMethods().Where(method => method.Name == "StrayPetLaterAsync"),
+            method => method.GetParameters().All(parameter => parameter.IsOptional));
+        Assert.Equal(typeof(Task<IPet>), member.ReturnType);
+    }
+
+    [Fact]
+    public async Task NestedInterface_AsAFlowElement_IsTypedAsTheInterface_AndEveryElementReads()
+    {
+        // The element spelling is the wrapper today, and the flow is read through
+        // `NugetMarshal.FromHandle<T>`, whose Activator branch cannot construct an interface --
+        // so the corrected spelling only works if the generator also passes an explicit read
+        // lambda. Two elements, so a read that only surfaces the first is distinguishable.
+        using var aviary = new Aviary("Oreo");
+        var greetings = new List<string>();
+        await foreach (Aviary.IKeeper keeper in aviary.Keepers())
+        {
+            greetings.Add(keeper.Greet());
+            keeper.Dispose();
+        }
+
+        Assert.Equal(new List<string> { "first keeper of Oreo", "second keeper of Oreo" }, greetings);
+
+        MethodInfo member = Assert.Single(
+            typeof(Aviary).GetMethods().Where(method => method.Name == "Keepers"),
+            method => method.GetParameters().All(parameter => parameter.IsOptional));
+        Assert.Equal(typeof(Aviary.IKeeper), member.ReturnType.GetGenericArguments().Single());
     }
 
     // --- Object owner: the translator path a class-only implementation misses ---

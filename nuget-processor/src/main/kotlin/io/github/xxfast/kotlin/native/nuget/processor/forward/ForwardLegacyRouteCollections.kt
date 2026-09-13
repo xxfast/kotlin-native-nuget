@@ -158,6 +158,22 @@ internal sealed interface ForwardLegacyReturnShape {
     val nullable: Boolean,
   ) : ForwardLegacyReturnShape
 
+  /**
+   * ADR-040 at a suspend return: an interface that is in the exported set. The wire is unchanged
+   * -- the Kotlin half already pins a `StableRef` on whatever object the body produced -- but the
+   * C# half has to DECLARE the position with the projected interface (`Task<Aviary.IKeeper>`)
+   * while CONSTRUCTING the ADR-040 backing wrapper (`new Aviary.Keeper(resultPtr)`) to read the
+   * handle back. The shipped route spelled both with `nestedCsName()`, which for an interface is
+   * the wrapper: the one type ADR-040 says a consumer never sees at a declared position.
+   *
+   * [nullable] carries the `?` from the declaration, so the completion guards a null result
+   * pointer before constructing, exactly as the shipped nullable-object arm does.
+   */
+  data class Interface(
+    val type: BridgeType.Interface,
+    val nullable: Boolean,
+  ) : ForwardLegacyReturnShape
+
   /** Any other generic return, named so the skip diagnostic can quote it. */
   data class Refused(val description: String) : ForwardLegacyReturnShape
 }
@@ -192,6 +208,19 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
     } else {
       ForwardLegacyReturnShape.Refused(expanded.legacyDescription())
     }
+  }
+
+  // ADR-040: decided before the non-generic early return below, for ADR-131's reason one type
+  // shape over -- an interface carries no type arguments either, so it was `Plain`, and `Plain`
+  // means "spell the return with `nestedCsName()`", which for an interface is the backing wrapper.
+  // Gated on the classification rather than on `classKind == INTERFACE`: only an interface in the
+  // exported set has a projected `I...` spelling to declare at all, and one outside it keeps the
+  // shipped spelling (its member is refused upstream for its own reason).
+  val classified: BridgeType = classify(expanded).let {
+    if (it is BridgeType.Nullable) it.type else it
+  }
+  if (classified is BridgeType.Interface) {
+    return ForwardLegacyReturnShape.Interface(classified, expanded.isMarkedNullable)
   }
 
   if (expanded.arguments.isEmpty()) return ForwardLegacyReturnShape.Plain
@@ -370,6 +399,25 @@ internal fun legacyDiscriminatedRead(
   else "$csharpType.FromHandle($handle)"
 
 /**
+ * ADR-040: the C# type a suspend member's **interface** return is DECLARED with -- the projected
+ * interface, fully qualified and owner-chained by the classifier, never the backing wrapper.
+ */
+internal fun ForwardLegacyReturnShape.Interface.declaredCsharpType(): String =
+  if (nullable) "${type.csharpType}?" else type.csharpType
+
+/**
+ * ...and the expression the completion READS the awaited handle back with: the ADR-040 backing
+ * wrapper, which is the only type that has a handle constructor (`new IKeeper(ptr)` is CS0144).
+ * It converts implicitly to the declared interface, so the two spellings coexist in one statement.
+ *
+ * A nullable return is guarded on the wire pointer first, for the shipped nullable-object arm's
+ * reason: `new Wrapper(IntPtr.Zero)` would hand out a live wrapper over a null handle.
+ */
+internal fun ForwardLegacyReturnShape.Interface.legacyInterfaceRead(handle: String): String =
+  if (nullable) "$handle == IntPtr.Zero ? null : new ${type.backingType}($handle)"
+  else "new ${type.backingType}($handle)"
+
+/**
  * ADR-123: the same read as a named `Func<IntPtr, T>` argument, for the flow routes.
  * `KotlinFlowEnumerator<T>` and `KotlinStateFlow<T>` are shared by every member in the generated
  * file, so a collection element cannot specialise them; it hands them this per-member delegate
@@ -378,6 +426,38 @@ internal fun legacyDiscriminatedRead(
  */
 internal fun legacyFlowElementReadArgument(type: BridgeType.Collection): String =
   "read: static h => ${legacyCollectionRead("h", type)}"
+
+/**
+ * ADR-040 at a `Flow`/`StateFlow` **element**: the projected interface the element is declared
+ * with, or null for every other element (which keeps `qualifiedElementCsType`'s spelling).
+ *
+ * The classifier is the speller, not `qualifiedElementCsType`: it is the one place that carries
+ * BOTH spellings an interface needs (the `I...` projection to declare and the backing wrapper to
+ * construct), already `global::`-qualified and owner-chained, and already gated on the exported
+ * set -- so an interface no C# declaration exists for falls through unchanged.
+ */
+internal fun ForwardBridgeTypeClassifier.legacyFlowElementInterface(
+  type: KSType?,
+): BridgeType.Interface? {
+  val expanded: KSType = type?.expandAliases() ?: return null
+  val classified: BridgeType = classify(expanded).let {
+    if (it is BridgeType.Nullable) it.type else it
+  }
+  return classified as? BridgeType.Interface
+}
+
+/**
+ * The element materialiser an interface element needs, in the same `read:` slot ADR-123 added for
+ * a collection element. Without it the stream is read through `NugetMarshal.FromHandle<T>`, which
+ * has no factory for an interface and falls through to its `Activator.CreateInstance` branch: the
+ * wrong spelling COMPILES and dies at the first emission.
+ */
+internal fun legacyInterfaceElementReadArgument(
+  type: BridgeType.Interface,
+  nullable: Boolean,
+): String =
+  if (nullable) "read: static h => h == IntPtr.Zero ? null : new ${type.backingType}(h)"
+  else "read: static h => new ${type.backingType}(h)"
 
 private fun BridgeType.Collection.nestedKinds(): Sequence<CollectionKind> = sequence {
   yield(kind)

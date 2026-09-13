@@ -3689,7 +3689,7 @@ public fun export_pet_bridge_create(
 } catch (e: Throwable) { /* ... */ null }
 ```
 
-### Generated C#: the bridge state
+### Generated C#: the bridge state {id="csharp-implemented-interface-bridge-state"}
 
 C# pins one delegate per slot, calls the factory once per crossing, and frees every pin from the
 release slot. Each slot's function pointer is a shared `[UnmanagedCallersOnly]` static thunk keyed
@@ -3783,6 +3783,27 @@ named: the declaration itself carries `SKIPPED_NESTED_DECLARATION`, and a parame
 position typed with it skips `SKIPPED_UNSUPPORTED_TYPE` naming `UNDECLARED_INTERFACE`, a property
 position skips `SKIPPED_UNSUPPORTED_PROPERTY` with the same reason, and the owning class still
 generates with its other members.
+
+The legacy `suspend`/`Flow` routes now spell a nested interface return with the interface too, the
+same fix the sync route already had; see [Coroutines and Flow: `suspend fun` returning an
+interface](coroutines-and-flow.md#suspend-fun-returning-an-interface).
+
+A [C#-implemented interface's bridge state](#csharp-implemented-interface-bridge-state) is named from the
+interface's **owner chain**, not its bare simple name: `Aviary.Keeper` and `Registry.Keeper`, two
+different nested interfaces that happen to share the simple name `Keeper`, generate
+`AviaryKeeperBridgeState` and `RegistryKeeperBridgeState` rather than two colliding
+`KeeperBridgeState` classes in the shared root-namespace bridge helper
+([ADR-084](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md)).
+A top-level interface's bridge state name is unaffected (`PetBridgeState`).
+
+<warning>
+    <p>A C#-implemented interface's bridge state and factory are generated only for an interface
+    reachable at a <b>return</b> position (<code>CirTranslator.interfaceBackingClasses</code>). A
+    nested interface used only as a <b>parameter</b> type gets no bridge plan at all, and passing a
+    C# implementation at that position crashes the host process with an unlocated Kotlin
+    <code>NullPointerException</code>, no diagnostic naming the cause. See
+    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
+</warning>
 
 ## Limitations
 

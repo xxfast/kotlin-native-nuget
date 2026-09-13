@@ -329,7 +329,8 @@ internal fun translate(
   groupByNamespaceAndFile(genericFunctions).forEach { (key, funcs) ->
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
-    val members: List<CirMember> = funcs.flatMap { translateGenericFunction(it, context.libraryName) }
+    val members: List<CirMember> =
+      funcs.flatMap { translateGenericFunction(it, context.libraryName, context) }
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
 
@@ -424,7 +425,7 @@ internal fun translate(
   genericClasses.forEach { cls ->
     namespaces.addDeclaration(
       namespaceOf(cls.packageName.asString()),
-      translateGenericClass(cls, context.libraryName, logger),
+      translateGenericClass(cls, context.libraryName, logger, context),
     )
     needsMarshalHelper = true
   }

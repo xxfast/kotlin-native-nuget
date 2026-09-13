@@ -532,4 +532,199 @@ class Tier1NestedTypesTest {
           "${csharp.lines().filter { it.contains("Extensions") }}",
     )
   }
+
+  /**
+   * ADR-040 x ADR-019 x ADR-084, all reachable from one fixture: an **interface** returned on the
+   * legacy suspend route, the same interface as a `Flow` element, a second nested interface with
+   * the same simple name under a different owner, and a generic bound on a nested interface.
+   *
+   * Its own source string, not the shared [source]: these cells need coroutines and a second
+   * `Keeper`, and appending them to the fixture every other cell brace-matches through would make
+   * five unrelated tests move for reasons that have nothing to do with them.
+   *
+   * Oreo's keeper arrives later; Mylo's keeps the registry.
+   */
+  private val asyncSource: String = """
+    package tier1.nestedasync
+
+    import kotlinx.coroutines.flow.Flow
+    import kotlinx.coroutines.flow.flowOf
+
+    class Owner(val name: String) {
+      interface Keeper {
+        fun greet(): String
+      }
+
+      fun greetVia(keeper: Keeper): String = keeper.greet()
+      fun currentKeeper(): Keeper = object : Keeper {
+        override fun greet(): String = "hi from " + name
+      }
+      suspend fun currentKeeperLater(): Keeper = currentKeeper()
+      fun keepers(): Flow<Keeper> = flowOf(currentKeeper(), currentKeeper())
+      val label: String = "owner"
+    }
+
+    object Registry {
+      interface Keeper {
+        fun greet(): String
+      }
+
+      fun greetVia(keeper: Keeper): String = keeper.greet()
+      fun currentKeeper(): Keeper = object : Keeper {
+        override fun greet(): String = "registry keeper"
+      }
+      fun label(): String = "registry"
+    }
+
+    interface Pet {
+      fun speak(): String
+    }
+
+    fun strayPet(): Pet = object : Pet {
+      override fun speak(): String = "Mrrp?"
+    }
+
+    suspend fun strayPetLater(): Pet = strayPet()
+
+    class Aviary<T : Owner.Keeper>(val item: T) {
+      fun greetItem(): String = item.greet()
+    }
+  """.trimIndent()
+
+  @Test
+  fun `a suspend function returning an interface is typed with the interface, not the wrapper`() {
+    val result = Tier1Harness.run(
+      asyncSource,
+      fileName = "Async.kt",
+      // Load-bearing: `Tier1Harness` puts only `kotlin-stdlib` on the KSP `libraries` path
+      // (`coroutinesOnCompileClasspath` governs the *compile* step alone), so without this a
+      // `Flow` return resolves to `<ERROR TYPE: Flow>` and every Flow member drops.
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val csharp: String = result.generatedCSharp
+    // ADR-040: a consumer never sees the ADR-040 backing wrapper at a declared position. The
+    // legacy suspend route spells its completion result with `nestedCsName()`, which for an
+    // interface is exactly that wrapper (`Task<Owner.Keeper>` + `new Owner.Keeper(resultPtr)`),
+    // and spells it bare, without `global::`.
+    assertContains(
+      csharp,
+      "public Task<global::Interop.Owner.IKeeper> CurrentKeeperLaterAsync(",
+      message = "expected the interface spelling on the member suspend route; csharp=" +
+          "${csharp.lines().filter { it.contains("CurrentKeeperLater") }}",
+    )
+    // The top-level route (CirFunctionTranslator) has the same defect, and a top-level interface
+    // is where ADR-040's own `Task<IPet>` example lives, so an owner-chain-only fix is not enough.
+    assertContains(
+      csharp,
+      "public static Task<global::Interop.IPet> StrayPetLaterAsync(",
+      message = "expected the interface spelling on the top-level suspend route; csharp=" +
+          "${csharp.lines().filter { it.contains("StrayPetLater") }}",
+    )
+    // The completion reads the handle through the wrapper -- that part is correct, it is the
+    // declared type that must be the interface.
+    val wrapperTypedTaskLines: List<String> = csharp.lines()
+      .filter { it.contains("Task<") && it.contains("Keeper") || it.contains("Task<Pet>") }
+    assertFalse(
+      csharp.contains("Task<global::Interop.Owner.Keeper>") ||
+          csharp.contains("Task<Owner.Keeper>") ||
+          csharp.contains("Task<Pet>"),
+      "expected no wrapper-typed Task; csharp=$wrapperTypedTaskLines",
+    )
+  }
+
+  @Test
+  fun `a Flow whose element is an interface is typed with the interface`() {
+    val result = Tier1Harness.run(
+      asyncSource,
+      fileName = "Async.kt",
+      // Load-bearing: `Tier1Harness` puts only `kotlin-stdlib` on the KSP `libraries` path
+      // (`coroutinesOnCompileClasspath` governs the *compile* step alone), so without this a
+      // `Flow` return resolves to `<ERROR TYPE: Flow>` and every Flow member drops.
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    val csharp: String = result.generatedCSharp
+    // `qualifiedElementCsType` spells a Flow element with the wrapper too. Worse than a cosmetic
+    // difference: the stream is read through `NugetMarshal.FromHandle<T>`, whose Activator branch
+    // cannot construct an interface, so the corrected spelling needs an explicit read lambda.
+    //
+    // Measured 2026-09-13, and the reason this cell first read as an environment disagreement:
+    // the harness call above omitted `libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore)`,
+    // and `Tier1Harness` only ever puts `kotlin-stdlib` on the KSP `libraries` path -- its
+    // `coroutinesOnCompileClasspath` flag governs the *compile* step, not resolution. `Flow` was
+    // therefore `<ERROR TYPE: Flow>` to KSP and EVERY Flow member dropped, `Flow<String>`
+    // included, with the generic `SKIPPED_UNSUPPORTED_TYPE ... its UNSUPPORTED type combination
+    // is not supported` that names neither the Flow nor its element. With coroutines on the KSP
+    // path the harness agrees with the real test-library build, which emits the wrapper spelling
+    // `public KotlinFlow<global::TestLibrary.Nested.Aviary.Keeper> Keepers()` this cell is about.
+    assertContains(
+      csharp,
+      "KotlinFlow<global::Interop.Owner.IKeeper> Keepers(",
+      message = "expected the interface element spelling; csharp=" +
+          "${csharp.lines().filter { it.contains("Keepers") }} warnings=${result.kspWarnings}",
+    )
+  }
+
+  @Test
+  fun `each owner's interface bridge state is named for its chain`() {
+    val result = Tier1Harness.run(
+      asyncSource,
+      fileName = "Async.kt",
+      // Load-bearing: `Tier1Harness` puts only `kotlin-stdlib` on the KSP `libraries` path
+      // (`coroutinesOnCompileClasspath` governs the *compile* step alone), so without this a
+      // `Flow` return resolves to `<ERROR TYPE: Flow>` and every Flow member drops.
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    val csharp: String = result.generatedCSharp
+    // ADR-084 names the state class from the simple name alone and renders every one of them into
+    // the ROOT namespace's CirBridgeHelper, so `Owner.Keeper` and `Registry.Keeper` both emit
+    // `KeeperBridgeState` (CS0101) plus two `keeperImpl` pattern variables in one block (CS0128).
+    // Both are at a parameter position, so both plans are real.
+    listOf("OwnerKeeperBridgeState", "RegistryKeeperBridgeState").forEach { state ->
+      assertContains(
+        csharp,
+        "internal sealed class $state : NugetBridgeState",
+        message = "expected $state; csharp=${csharp.lines().filter { it.contains("BridgeState") }}",
+      )
+    }
+    assertFalse(
+      csharp.contains("class KeeperBridgeState"),
+      "expected no bare-simple-name bridge state (CS0101 between the two owners); csharp=" +
+          "${csharp.lines().filter { it.contains("BridgeState") }}",
+    )
+    // The pattern variable in `HandleFor` is derived from the same name, so two bare `keeperImpl`
+    // declarations land in one block (CS0128). A top-level interface keeps its bare spelling:
+    // Tier1InterfaceBridgeFactoryTest pins `PetBridgeState` / `petImpl` and must stay green.
+    assertFalse(
+      Regex("""\bkeeperImpl\b""").findAll(csharp).count() > 0,
+      "expected no bare `keeperImpl` pattern variable (CS0128, see comment above); csharp=" +
+          "${csharp.lines().filter { it.contains("Impl") }}",
+    )
+    assertContains(csharp, "internal sealed class PetBridgeState : NugetBridgeState")
+  }
+
+  @Test
+  fun `a generic bound on a nested interface carries the owner chain`() {
+    val result = Tier1Harness.run(
+      asyncSource,
+      fileName = "Async.kt",
+      // Load-bearing: `Tier1Harness` puts only `kotlin-stdlib` on the KSP `libraries` path
+      // (`coroutinesOnCompileClasspath` governs the *compile* step alone), so without this a
+      // `Flow` return resolves to `<ERROR TYPE: Flow>` and every Flow member drops.
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    val csharp: String = result.generatedCSharp
+    // The legacy bound spellers build "I" + simpleName, which for a nested interface is a bare
+    // `IKeeper` at namespace scope: CS0246, nothing in that scope is called that.
+    assertContains(
+      csharp,
+      "where T : global::Interop.Owner.IKeeper",
+      message = "expected the bound to carry the chain; csharp=" +
+          "${csharp.lines().filter { it.contains("where T") }}",
+    )
+  }
 }

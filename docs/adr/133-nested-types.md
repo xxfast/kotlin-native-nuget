@@ -118,7 +118,9 @@ A nested class crosses exactly as a top-level class: `outer_nested_create` mints
 on the qualified name. A nested object is a static class with `outer_defaults_*` static exports. A
 nested enum crosses by ordinal, `outer_kind_get_prop(ordinal)`, with its extension class hoisted to
 namespace level. A nested interface follows ADR-040 unchanged (`outer_listener_*` dispatch exports),
-its `I`-prefix rule fixed to the last segment. No new marshalling, no new handle kind, no
+its `I`-prefix rule fixed to the last segment. **This "unchanged" claim held only for the
+plan-driven sync route**; the legacy `suspend`/`Flow` routes did not, see the 2026-09-13 amendment
+below. No new marshalling, no new handle kind, no
 `LeakTests/LiveHandleTests.cs` mint path beyond Row 1's (Row 1a pins a nested class mints and releases
 through the same `NugetHandles` route Row 1 measures for a top-level class).
 
@@ -249,3 +251,50 @@ Tests: `NestedTypesTests.ExtensionOnANestedReceiver_BindsUnderTheOwnerChain` (xU
 single-receiver cell and a two-owner cell (`Coop.Inner`/`Roost.Inner`) pinning both the chained
 symbols and the distinct `{Chain}Extensions` classes. No new handle kind, no new marshalling.
 Verify: green, 1788 / 0 / 0, 35.
+
+## Amendment (2026-09-13): the legacy suspend and Flow routes now spell a nested interface with the interface
+
+"A nested interface follows ADR-040 unchanged" (Bridge mechanism, above) held for the plan-driven
+sync route only. The legacy `suspend`/`Flow` routes spelled an interface return with the
+[ADR-040](040-interface-return-type-mapping.md) *backing wrapper* instead of the interface, nested
+or top-level. (The ROADMAP line this amendment replaces cited `CirClassTranslator.kt` ~:1040 and
+`CirFunctionTranslator.kt` ~:751; those lines are actually where a nested interface's generic-type
+bound is spelled `I$simpleName`, a related but distinct defect fixed by the Generic bounds
+paragraph below. The wrapper-spelling defect this amendment fixes lives at the suspend-completion
+and `Flow`-element construction sites, elsewhere in the same two files.) `suspend fun currentKeeperLater(): Keeper`
+completed as `Task<Aviary.Keeper>` rather than `Task<Aviary.IKeeper>`, and `fun keepers(): Flow<Keeper>`
+constructed its element the same way, which additionally fails to compile at all, since
+`NugetMarshal.FromHandle<T>`'s `Activator` branch cannot construct an interface. No fixture existed
+in this shape, nested or top-level, until now: every suspend/Flow return in the fixture set was a
+class or a sealed arm.
+
+**Fix.** `ForwardLegacyReturnShape.Interface(type, nullable)` is a new case in `legacyReturnShape`,
+mirroring [ADR-131](131-suspend-route-sealed-base-return.md)'s `Discriminated`; the suspend
+completion and the `Flow` element sites both read the classifier's `csharpType` (the interface) and
+`backingType` (the ADR-040 wrapper, used only to construct the value: `new Aviary.Keeper(resultPtr)`,
+`read: static h => new Aviary.Keeper(h)`).
+
+**Generic bounds.** A nested interface used as a generic type bound is now qualified
+(`where T : global::Interop.Owner.IKeeper`); a top-level interface bound stays bare (`IPet`), which
+is load-bearing byte-identity for the pre-existing `PetBox<T>` fixture. A cross-namespace top-level
+interface bound is still spelled wrong; pre-existing, unrelated to nesting, tracked on the ROADMAP.
+
+**Identity asymmetry, inherited from ADR-040/ADR-084, not introduced here.** The sync plan route
+resolves a returned handle back to its original C#-implemented instance first
+(`NugetMarshal.TryResolveCSharp`) and only wraps when there is no original to resolve to. The
+suspend and Flow reads fixed here always construct the wrapper (`new Wrapper(ptr)`), the same as the
+already-shipped collection- and sealed-return reads; a C#-implemented object returned over `Task<T>`
+or through a `Flow<T>` never round-trips to the original instance the way the sync return does. See
+[ADR-084](084-csharp-implemented-interfaces.md)'s 2026-09-13 amendment.
+
+**Return-reachability, verified.** [ADR-084](084-csharp-implemented-interfaces.md)'s bridge plan
+(state class + C#-implementable factory) is built only from interfaces reachable at a *return*
+position (`CirTranslator.interfaceBackingClasses`). A nested interface used only as a *parameter*
+type gets no wrapper and no bridge plan; passing a C# implementation at that position crashes the
+host with an unlocated Kotlin `NullPointerException`, no diagnostic. See ADR-084's 2026-09-13
+amendment for the full finding.
+
+Fixtures: `nested/Aviary.kt` (`currentKeeperLater`, `keepers()`), `nested/AviaryRoutes.kt`
+(`anyKeeperLater`, top-level), `cat/Pet.kt` (`strayPetLater`, top-level interface). Tests:
+`NestedTypesTests.cs` reflection facts, four Tier 1 cells, `LiveHandleTests.cs` Row 9h
+(`Suspend_ReturningAnInterface_ReturnsToBaseline`). Verify: green, 1793 / 0 / 0, 36; processor 834.

@@ -1009,3 +1009,24 @@ dependency interface is now declared alongside its owner once the owner itself i
 ordinary member-type edge, the same free ride ADR-066's pointer describes.
 `SKIPPED_NESTED_DECLARATION`/`UNDECLARED_INTERFACE` survive only for an interface nested under a
 still-deferred owner shape (`inner class`, generic, `enum class`, another `interface`, or sealed).
+
+### Pointer (2026-09-13): the legacy suspend and Flow routes now spell an interface return like the sync route
+
+The pointer above covers the sync, plan-driven route only. The legacy `suspend`/`Flow` routes
+(`CirClassTranslator.kt`, `CirFunctionTranslator.kt`) still spelled an interface return with this
+ADR's own backing wrapper, not the interface: a `suspend fun` returning `Pet` completed as
+`Task<Pet>` rather than `Task<IPet>`, at both a top-level and a nested position, and a `Flow<Pet>`
+element did the same. No fixture exercised either route at an interface return until
+[ADR-133](133-nested-types.md)'s 2026-09-13 amendment gave both a `ForwardLegacyReturnShape.Interface`
+classification: the completion and the `Flow` element now read the interface as the C# type and the
+backing wrapper only to construct the value (`new Pet(resultPtr)`).
+
+**Identity asymmetry, made visible, not introduced.** This ADR's own sync return
+(`NugetMarshal.TryResolveCSharp`) resolves back to a stored C#-implemented original first, falling
+back to a fresh wrapper only when there is none. The suspend and Flow reads fixed here have no such
+resolution step: they always construct a fresh wrapper, exactly like every other non-sync interface
+read this ADR already ships (a collection element, a sealed return). A C#-implemented `IPet` handed
+back over `Task<IPet>` or through a `Flow<IPet>` therefore never round-trips to the original C#
+instance the way a synchronous return does. See [ADR-084](084-csharp-implemented-interfaces.md)'s
+2026-09-13 amendment for the fuller finding (including a return-reachability gap in the bridge plan
+itself, unrelated to this pointer).
