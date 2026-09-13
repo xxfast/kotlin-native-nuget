@@ -310,15 +310,14 @@ internal class ForwardSupertypeMembers private constructor(
       )
     }
 
-    /** Null for a type-parameter position, which the comparison treats as a wildcard. */
+    /**
+     * [forwardTypeKey], plus this side's wildcard: null for a type-parameter position, which the
+     * comparison treats as matching any argument type. The strict half of the spelling lives in
+     * `ForwardClassMembership.kt`, so the two comparisons cannot drift.
+     */
     private fun typeKey(type: KSType): String? {
-      val expanded: KSType = type.expandAliases()
-      val declaration: KSDeclaration = expanded.declaration
-      if (declaration is KSTypeParameter) return null
-      val name: String = declaration.qualifiedName?.asString()
-        ?: declaration.simpleName.asString()
-      val nullable: Boolean = type.isMarkedNullable || expanded.isMarkedNullable
-      return if (nullable) "$name?" else name
+      if (type.expandAliases().declaration is KSTypeParameter) return null
+      return type.forwardTypeKey()
     }
   }
 }

@@ -6,7 +6,7 @@ Generic classes and functions cross the bridge through a type-erased native laye
 |---|---|---|
 | `class<T>` | `class<T>` | type-erased bridge + generic C# wrapper |
 | `class<T>(...)` constructor | typed constructors | typed arguments through the bridge |
-| `class X : GenericBase<Arg>(...)` | `class X : GenericBase<Arg>` | subclassing an exported generic base spells the closed type argument; an `open` generic base renders `virtual Dispose()`, see [ADR-101](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md) |
+| `class X : GenericBase<Arg>(...)` | `class X : GenericBase<Arg>` | subclassing an exported generic base spells the closed type argument; an `open` generic base renders `virtual Dispose()`; a subclass overload of a name it also inherits from the base stays a single declared member, the inherited one is not re-declared, see [ADR-101](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md) |
 | nullable property (`val x: T?`) | `T?` | a `null` read surfaces as `null`, or `default(T)` at a value-type instantiation, see [ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md) |
 | `fun <T> f()` | typed variants | runtime dispatch via `NugetMarshal` |
 | `<T : Bound>` constraint | `where T : ...` | see [ADR-015](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/015-generic-type-constraint-mapping.md) |
@@ -53,6 +53,21 @@ open class Parcel<T>(val value: T)
 
 class NamedParcel(name: String) : Parcel<String>(name) {
   fun own(): String = "own:$value"
+}
+```
+
+A subclass declaring its own overload of a name it also inherits, from
+`test-library/src/nativeMain/kotlin/.../parcel/Parcel.kt`. The base's `describe(tag: T)` is
+substituted onto `LabelledCrate` as `describe(tag: String)`, but that substituted member is never
+the same declaration as `LabelledCrate`'s own `describe(tag: Int)`, so only the declared one binds:
+
+```kotlin
+open class Crate<T>(val item: T) {
+  fun describe(tag: T): String = "$tag:$item"
+}
+
+class LabelledCrate(item: String) : Crate<String>(item) {
+  fun describe(tag: Int): String = "#$tag:$item"
 }
 ```
 
@@ -198,6 +213,42 @@ public class NamedParcel : Parcel<string>
 }
 ```
 
+`LabelledCrate`'s own `describe(tag: Int)` renders as its single `Describe(int)`. The base's
+`describe(tag: T)`, substituted onto `LabelledCrate` as `describe(tag: string)` by KSP, is not a
+declaration of `LabelledCrate`'s own and is not rendered a second time:
+
+```C#
+public class Crate<T> : IDisposable, INugetHandle
+{
+    internal IntPtr _handle;
+
+    public T Item => NugetMarshal.FromHandle<T>(CrateNative.Get_item(_handle));
+
+    public virtual void Dispose()
+    {
+        /* ... */
+    }
+}
+
+public class LabelledCrate : Crate<string>
+{
+    public LabelledCrate(string item) : base(IntPtr.Zero)
+    {
+        /* ... */
+    }
+
+    public string Describe(int tag)
+    {
+        /* ... */
+    }
+
+    public override void Dispose()
+    {
+        /* ... */
+    }
+}
+```
+
 A generic function dispatches per primitive type at runtime, falling back to the object/handle path
 otherwise. The object path materialises `T` from a generated factory registry
 (`NugetMarshal.Materialize<T>`) rather than reflecting over `T`'s constructor:
@@ -319,6 +370,30 @@ public void NamedParcel_IsAssignableToClosedGenericBase()
 }
 ```
 
+A subclass's own overload of an inherited name, from `IntegrationTests/GenericBaseOverloadTests.cs`:
+
+```C#
+[Fact]
+public void LabelledCrate_DescribesThroughItsOwnIntOverload()
+{
+    using var crate = new LabelledCrate("apple");
+    Assert.Equal("#7:apple", crate.Describe(7));
+}
+
+[Fact]
+public void LabelledCrate_DeclaresExactlyOneDescribeTakingInt()
+{
+    MethodInfo[] describes = typeof(LabelledCrate)
+        .GetMethods()
+        .Where(method => method.Name == "Describe")
+        .ToArray();
+
+    Assert.Single(describes);
+    Assert.Equal(typeof(int), describes[0].GetParameters().Single().ParameterType);
+    Assert.Equal(typeof(LabelledCrate), describes[0].GetBaseDefinition().DeclaringType);
+}
+```
+
 Generic functions, from `IntegrationTests/GenericFunctionTests.cs`:
 
 ```C#
@@ -388,6 +463,10 @@ public void DefaultScores_ReturnsReadOnlyDictionaryOfStringInt()
   protocol, which has never been exercised across a module boundary; it is skipped with the existing
   diagnostic rather than generated
   ([ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md)).
+- A generic class's own declared **functions** have no C# carrier at all; only its properties
+  project. `Crate<T>.describe(tag: T)` above has no `Describe` on `Crate<T>` itself, only on
+  `LabelledCrate`, which declares its own
+  ([ADR-101](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md)).
 
 <seealso>
     <category ref="related">

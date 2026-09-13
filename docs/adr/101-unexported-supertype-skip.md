@@ -592,10 +592,10 @@ performs no substitution, so nothing about the 2026-09-05 behaviour moves
 declared member and keeps the 2026-09-10 virtual/override pair.
 
 Deferred, named: a subclass that declares one overload of a name it also inherits *substituted*
-from a generic base keeps both, since the declared-member match is by simple name. No fixture
-reaches it, and a generic *subclass* (`class Derived<T> : Parcel<T>()`) still takes the generic
-route, which ignores supertypes and renders base-less. Both stay on `ROADMAP.md` with the rest of
-the generic-class work.
+from a generic base keeps both, since the declared-member match is by simple name (**fixed by the
+2026-09-13 amendment below**). A generic *subclass* (`class Derived<T> : Parcel<T>()`) still takes
+the generic route, which ignores supertypes and renders base-less; this one stays on `ROADMAP.md`
+with the rest of the generic-class work.
 
 Evidence: `Tier1GenericBaseClassTest.kt` (base list, `virtual`/`override` `Dispose`, no re-bound
 `stringcrate_get_value`) and `IntegrationTests/GenericBaseClassTests.cs` (`NamedParcel("Oreo").Value`
@@ -716,3 +716,78 @@ Evidence: `Tier1AbstractMethodTest` (`public abstract string Honk();` on `Vehicl
 `override` compiling; no line carrying both `abstract` and `Tally` for `Vault : Register`, with
 `: IRegister` still in the base list) and the `test/garage/` fixtures behind
 `IntegrationTests/AbstractMethodTests.cs`.
+
+## Amendment (2026-09-13): the declared-member match is by signature, not by name
+
+The 2026-09-11 generic-base amendment above deferred one line: a subclass declaring one overload
+of a name it also inherits *substituted* from a generic base keeps both, because `isDeclaredBy`
+(`ForwardClassMembership.kt`) matched the declared list by simple name. Only a **function
+overload** reaches the hole: Kotlin properties cannot overload, so the property side of
+`isDeclaredBy` (name-keyed) was never wrong.
+
+`open class Crate<T>(val item: T) { fun describe(tag: T): String }` with `class
+LabelledCrate(item: String) : Crate<String>(item) { fun describe(tag: Int): String }`: KSP hands
+`LabelledCrate` a `describe(tag: String)` substituted from the base, parented to the subclass, and
+carrying **no** `OVERRIDE` modifier (unlike the property case above). The name-only match called it
+declared, so `LabelledCrate` planned and rendered a second `Describe(string)` beside the intended
+`Describe(int)`, and minted a spurious `labelledcrate_describe_2` entry point alongside the real
+`labelledcrate_describe`. No `CS0115`: the substituted member carries no `override`, so the result
+is a silent second overload, not a compile error, which is why the 2026-09-11 deferral's CS0115
+prediction was wrong. **Verified** by execution, not merely by reading:
+`Tier1GenericBaseOverloadTest.kt`'s red cell reproduced exactly this pair before the fix.
+
+### The fix
+
+`isDeclaredBy` now compares functions by `forwardSignatureKey()`: the simple name, the extension
+receiver's `forwardTypeKey()` if any, then one `forwardTypeKey()` per parameter, in declaration
+order. `forwardTypeKey()` spells one type position as a comparable string, the alias-expanded
+declaration's qualified name plus nullability; a type *parameter* spells as its own name (`T`),
+never expanded to the instantiation's argument, which is exactly what makes the substituted
+`describe(tag: String)` distinguishable from the declared `describe(tag: Int)`: their keys are
+`["describe", "kotlin.String"]` and `["describe", "kotlin.Int"]`, not equal.
+
+The comparison is strict, unlike ADR-082's `ForwardSupertypeMembers.typeKey`
+(`ForwardCallablePlanner.kt`), which wildcards a type-parameter position to `null` so it
+over-matches conservatively in the other direction. `forwardTypeKey()` is the shared primitive
+underneath both: `ForwardSupertypeMembers.typeKey` now delegates to it and keeps only its own
+wildcard, so the two comparisons cannot drift apart on the non-wildcard cases. Strict is correct
+for `isDeclaredBy` because a declared member and a substituted member of identical signature never
+co-exist in `getAllFunctions()`: the declaration replaces the substitution in the member scope, so
+a substituted member must never match the declared list, and strict equality answers false even
+when KSP2 hands the parameter back as `T` rather than the closed type argument. Properties are
+unchanged, still matched by simple name: Kotlin properties cannot overload, so for them the name
+already is the full signature.
+
+Shipped shape: `LabelledCrate : Crate<string>` declares exactly `public string Describe(int tag)`
+(`[DllImport(..., EntryPoint = "labelledcrate_describe")]`), no `_2`. `Crate<T>`'s own `describe`
+still has no C# carrier at all, a pre-existing gap this fix does not touch (see Consequences).
+
+Pinned by `Tier1GenericBaseOverloadTest.kt` and `IntegrationTests/GenericBaseOverloadTests.cs`'s
+four facts: `LabelledCrate_DescribesThroughItsOwnIntOverload` (behaviour),
+`LabelledCrate_DeclaresExactlyOneDescribeTakingInt` (reflection: exactly one `Describe`, declared
+by `LabelledCrate` itself), `GenericBase_CarriesNoDescribeOfItsOwn` (deliberately pins the
+pre-existing gap, to be flipped when that gap closes), `LabelledCrate_StillInheritsItemFromGenericBase`
+(the inherited-property path is untouched).
+
+Named, not rendered: a declared method whose C# name equals an inherited base-class *property*
+(e.g. a derived `Value(string)` method beside an inherited `Value` property) is `CS0108` hiding in
+C# rather than a build failure, and the base property vanishes from the derived static type either
+way; no check names it today. Rendering `new` was rejected as a silently different API from what
+the author wrote.
+
+### Consequences
+
+- One wrongly minted export (`labelledcrate_describe_2`) is removed; no export is minted. This
+  change removes an export and mints nothing, so it carries no leak row of its own.
+- **Deferred, named, tracked on `ROADMAP.md` (Phase 4)**: `forwardTypeKey()` keys the outer
+  declaration's qualified name only, so two functions differing only in a *type argument* of the
+  same outer generic type (a declared `describe(tags: List<Int>)` beside a substituted
+  `describe(tags: List<String>)`) both key to `kotlin.collections.List` and the duplicate-overload
+  bug this amendment fixes returns for that shape, the same limit ADR-082's `typeKey` already had
+  before this amendment shared the primitive; `baseClassOverridee`'s by-name fallback
+  (`ForwardClassMembership.kt`) is untouched and has the identical name-only shape, now
+  inconsistent with `isDeclaredBy`'s strict key for the `override`/`virtual` decision; a generic
+  base class's own declared functions are still absent from C# entirely, unrelated to this fix
+  (`translateGenericClass` projects properties only).
+- Not changed: the property side of `isDeclaredBy`, the ADR-082 wildcard comparison, the ABI,
+  `translateGenericClass`.
