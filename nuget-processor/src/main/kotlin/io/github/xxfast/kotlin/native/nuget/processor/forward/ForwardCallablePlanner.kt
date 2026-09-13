@@ -529,8 +529,22 @@ internal class ForwardCallablePlanner(
         // ADR-116 amendment (2026-09-11): the base's own declared members first, so an arm's
         // projection can ask whether the C# base already carries the signature it is about to
         // spell (`override` when it matches, nothing at all when the arm declares none).
-        addAll(sealedBaseEntries(sealed))
-        sealed.getSealedSubclasses().forEach { sub -> addAll(sealedSubclassEntries(sealed, sub)) }
+        val base: List<ForwardCallableCatalogEntry> = sealedBaseEntries(sealed)
+        addAll(base)
+        // ADR-116 amendment (2026-09-13): *which* base members actually planned, as the ADR-096
+        // synthesis gate on the arms. A base member the planner declined (an opt-in marker, an
+        // unshapeable return type) has no C# carrier at all, so an arm that overrides it owes the
+        // omitting overloads itself. The catalog cannot answer this -- it is mid-construction here
+        // and `plansFor` requires it complete -- so the entries are read directly. Synthesized
+        // entries are excluded: they are the overloads, not the declared members being asked about.
+        val plannedBaseMembers: Set<KSNode> = base
+          .filterIsInstance<ForwardCallableCatalogEntry.Planned>()
+          .filter { entry -> !entry.synthesized }
+          .mapNotNull { entry -> entry.node }
+          .toSet()
+        sealed.getSealedSubclasses().forEach { sub ->
+          addAll(sealedSubclassEntries(sealed, sub, plannedBaseMembers))
+        }
       }
       classes.forEach { cls -> addAll(constructorEntries(cls)) }
       // ADR-095: top-level and extension overloads number per (package, name), the extension one
@@ -1094,6 +1108,10 @@ internal class ForwardCallablePlanner(
   private fun sealedSubclassEntries(
     sealed: KSClassDeclaration,
     subclass: KSClassDeclaration,
+    // ADR-116 amendment (2026-09-13): the base's own declared members that produced a `Planned`
+    // entry, i.e. the ones the generated C# base really carries. Keyed on node identity, the same
+    // `Set<KSNode>` idiom `pairedCallbackMethods` below uses.
+    plannedBaseMembers: Set<KSNode>,
   ): List<ForwardCallableCatalogEntry> {
     val subName: String = subclass.simpleName.asString()
     val owner: String = subclass.qualifiedName?.asString() ?: return emptyList()
@@ -1175,14 +1193,19 @@ internal class ForwardCallablePlanner(
       // this counter scope so declared exports keep their numbers.
       methods.forEachIndexed { index, method ->
         if (declared[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
-        // ADR-116 amendment (2026-09-11): keyed on the C# fact, exactly as `classEntries` is since
-        // ADR-096's own amendment. Skipping every Kotlin `override` was only ever right because
-        // the sealed C# base carried nothing; now that it carries its declared members it also
-        // carries their omitting overloads, and the arm inherits them. An `override` of anything
-        // else (an interface member, a member the base's plan declined) has no such carrier, and
-        // the arm owes the overload itself or the consumer's short call is CS1501.
-        if (method.findOverridee()?.parentDeclaration == sealed) return@forEachIndexed
-        repeat(method.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
+        // ADR-116 amendment (2026-09-11, narrowed 2026-09-13): keyed on the C# fact, exactly as
+        // `classEntries` is since ADR-096's own amendment. Skipping every Kotlin `override` was
+        // only ever right because the sealed C# base carried nothing; now that it carries its
+        // declared members it also carries their omitting overloads, and the arm inherits them.
+        // The C# fact is "the base *planned* it", not "the base declared it": an `override` of an
+        // interface member, or of a base member the base's own plan declined, has no carrier at
+        // all, and the arm owes the overload itself or the consumer's short call is CS1501.
+        val overridee: KSNode? = method.findOverridee()
+        if (overridee != null && overridee in plannedBaseMembers) return@forEachIndexed
+        // ADR-116 amendment (2026-09-13): the flags come through the override chain, as
+        // `classEntries` already reads them. Kotlin forbids an override from restating a default,
+        // so the arm's own parameters all report `false` and only the overridee carries the bit.
+        repeat(memberDefaultFlags(method).trailingCount()) { omitted ->
           add(entryFor(method, omitted + 1).synthesized())
         }
       }

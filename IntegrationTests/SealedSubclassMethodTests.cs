@@ -130,6 +130,91 @@ public class SealedSubclassMethodTests
         Assert.Equal([1, 2], arities);
     }
 
+    // ---- ADR-116's 2026-09-13 amendment: an override whose base member the planner declined. ----
+
+    /// <summary>
+    /// <c>Job.tag</c> is <c>@Unstable</c> (an ADR-115 <c>@RequiresOptIn</c> marker), so the base's
+    /// own plan is structurally declined and the base binds no <c>Tag</c> at all. The arm's
+    /// <c>@OptIn</c> override binds, and because nothing on the base carries the ADR-096 omitting
+    /// overload for it, the arm owes its own: the short-arity call has to compile on a
+    /// <c>Job.Running</c>-typed reference and answer exactly what the full-arity call with the
+    /// declared default answers.
+    /// <para>
+    /// This is CS1501 today — <c>sealedSubclassEntries</c> returns early on any <c>override</c>
+    /// whose overridee is declared on the sealed base, planned or not, and it reads raw
+    /// <c>hasDefault</c> off the override's parameters, which is always <c>false</c>.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Tag_ShortArityOnAnArmWhoseBaseMemberWasDeclined_AppliesTheDeclaredDefault()
+    {
+        using var factory = new JobFactory();
+        using Job.Running oreo = factory.Running(42);
+
+        Assert.Equal(oreo.Tag("hallway", "!"), oreo.Tag("hallway"));
+        Assert.Equal("hallway42!", oreo.Tag("hallway"));
+    }
+
+    /// <summary>
+    /// The declared arity, which binds today: the pair is what tells "the overload was synthesized"
+    /// apart from "the declared binding silently changed shape".
+    /// </summary>
+    [Fact]
+    public void Tag_FullArityOnTheArm_PassesBothArgumentsThrough()
+    {
+        using var factory = new JobFactory();
+        using Job.Running oreo = factory.Running(42);
+
+        Assert.Equal("hallway42?", oreo.Tag("hallway", "?"));
+    }
+
+    /// <summary>
+    /// The absence half, asserted by reflection because a base-typed call could not compile either
+    /// way: an opt-in-marked base member is not part of the C# surface, so <c>Job</c> declares no
+    /// <c>Tag</c> in any arity — and neither does <c>Job.Idle</c>, which inherits the declined
+    /// member without overriding it. Enumerated rather than <c>GetMethod</c> so a wrong
+    /// implementation that puts <em>two</em> <c>Tag</c> overloads on the base fails here instead of
+    /// throwing <c>AmbiguousMatchException</c>.
+    /// </summary>
+    [Fact]
+    public void Tag_OnTheDecliningBaseAndOnANonOverridingArm_IsAbsentEntirely()
+    {
+        string[] onBase = typeof(Job)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .Where(method => method.Name == "Tag")
+            .Select(method => method.ToString() ?? "Tag")
+            .OrderBy(signature => signature, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(onBase.Length == 0, $"Job must declare no Tag: {string.Join(", ", onBase)}");
+
+        string[] onIdle = typeof(Job.Idle)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .Where(method => method.Name == "Tag")
+            .Select(method => method.ToString() ?? "Tag")
+            .OrderBy(signature => signature, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(onIdle.Length == 0, $"Job.Idle must declare no Tag: {string.Join(", ", onIdle)}");
+    }
+
+    /// <summary>
+    /// Both arities exist as two declared methods on the arm, not one binding with a C#-side
+    /// default parameter answering both calls.
+    /// </summary>
+    [Fact]
+    public void Tag_IsDeclaredTwiceOnTheArm_OnceForEachArity()
+    {
+        int[] arities = typeof(Job.Running)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+            .Where(method => method.Name == "Tag")
+            .Select(method => method.GetParameters().Length)
+            .OrderBy(arity => arity)
+            .ToArray();
+
+        Assert.Equal([1, 2], arities);
+    }
+
     /// <summary>
     /// The sealed <em>base</em> at a return position (ADR-105 <c>sealedAsHandle</c>): the handle
     /// comes back through <c>Job.FromHandle</c> and has to discriminate onto the right arm.
@@ -1001,6 +1086,10 @@ public class SealedSubclassMethodDiagnosticsTests
             $"{Package}.Job.Running.next",
             $"{Package}.Job.Running.finish",
             $"{Package}.Job.Running.pick",
+            // ADR-116's 2026-09-13 amendment: the arm's override of a declined base member
+            // binds at its declared arity, so a SKIPPED_ line naming it is a false alarm. The
+            // base's own `Job.tag` is legitimately skipped (`@Unstable`) and stays off this list.
+            $"{Package}.Job.Running.tag",
             $"{Package}.Job.Idle.poke",
             $"{Package}.Job.Idle.describe",
             // ADR-118: the suspend members the arms now bind. `pause_2` is the planner's numbered

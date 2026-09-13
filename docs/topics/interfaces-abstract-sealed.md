@@ -12,7 +12,7 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 | interface-typed return (method result or property) | `IFoo` / `IFoo?` | backed by a generated `sealed class Foo : IFoo`, see [ADR-040](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md) |
 | interface-typed parameter, a C# class implementing `IFoo` | accepted, no `_handle` needed | dispatched through a per-interface bridge factory, see [ADR-084](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md) |
 | a property of a sealed subclass, any shape a class property supports (nullable enum, nullable reference, `Boolean`, collections, `var`, `Duration`/`Uuid`/value classes/interfaces) | the same shape an ordinary class property gets | planned by [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)'s property plan, same as any class, since [ADR-111](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/111-sealed-subclass-properties-on-the-property-plan.md); see [Every property shape on a sealed subclass](#every-property-shape-on-a-sealed-subclass) |
-| a public method a sealed subclass **itself declares** (including its own `override fun`), any shape a class method supports | the same shape an ordinary class method gets, exported `${sealed}_${sub}_${name}[_n]` | planned by [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)'s callable plan, same as any class, since [ADR-116](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/116-sealed-subclass-methods-on-the-callable-plan.md); declared-only. A declared `suspend fun` also binds, as `Task<T> XxxAsync` off the arm's own export prefix, with overloads numbered `_2` on both the entry point and the private extern, see [ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md); returning the sealed base itself (plain or nullable) instead of an arm binds as `Task<Base>`/`Task<Base?>` completing through `Base.FromHandle`, see [A `suspend fun` returning the sealed base](#sealed-method-suspend-base-generated-c) ([ADR-131](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/131-suspend-route-sealed-base-return.md)). A declared `Flow<T>`/`StateFlow<T>` member (property or method return) also binds now, as `KotlinFlow<T>`/`KotlinStateFlow<T>` off the arm's own export prefix, through the same collect/value thunks the ordinary-class route uses, see [ADR-124](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/124-flow-route-sealed-arm-owners.md). A declared lambda-parameter method (`Func<>`/`Action<>`) also binds now, re-keyed onto the arm's own export prefix through the same per-call callback thunk the ordinary-class route uses; a generic method, a `suspend` lambda parameter, and a stored-callback/interface-bridge pair are still a named skip, see [Lambda parameters on a sealed arm](#sealed-lambda-generated-c); and the base's own declared `abstract`/`open` `val`/`var`/`fun`, `virtual` on the base so a consumer can read it without pattern-matching to an arm, see [Methods on a sealed subclass](#methods-on-a-sealed-subclass) |
+| a public method a sealed subclass **itself declares** (including its own `override fun`), any shape a class method supports | the same shape an ordinary class method gets, exported `${sealed}_${sub}_${name}[_n]` | planned by [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)'s callable plan, same as any class, since [ADR-116](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/116-sealed-subclass-methods-on-the-callable-plan.md); declared-only. A declared `suspend fun` also binds, as `Task<T> XxxAsync` off the arm's own export prefix, with overloads numbered `_2` on both the entry point and the private extern, see [ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md); returning the sealed base itself (plain or nullable) instead of an arm binds as `Task<Base>`/`Task<Base?>` completing through `Base.FromHandle`, see [A `suspend fun` returning the sealed base](#sealed-method-suspend-base-generated-c) ([ADR-131](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/131-suspend-route-sealed-base-return.md)). A declared `Flow<T>`/`StateFlow<T>` member (property or method return) also binds now, as `KotlinFlow<T>`/`KotlinStateFlow<T>` off the arm's own export prefix, through the same collect/value thunks the ordinary-class route uses, see [ADR-124](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/124-flow-route-sealed-arm-owners.md). A declared lambda-parameter method (`Func<>`/`Action<>`) also binds now, re-keyed onto the arm's own export prefix through the same per-call callback thunk the ordinary-class route uses; a generic method, a `suspend` lambda parameter, and a stored-callback/interface-bridge pair are still a named skip, see [Lambda parameters on a sealed arm](#sealed-lambda-generated-c); and the base's own declared `abstract`/`open` `val`/`var`/`fun`, `virtual` on the base so a consumer can read it without pattern-matching to an arm, see [Methods on a sealed subclass](#methods-on-a-sealed-subclass). An `override fun` whose base member the base's own plan declined (e.g. behind an opt-in marker) owes its own [ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md) omitting overloads too, since nothing on the base carries them, see [An override of a base member the base declined to plan](#sealed-method-declined-base-overload) |
 | property whose own type is a sealed class (bare, nullable, or a collection component, read-only or `var`) | the sealed base | materialised through `<Base>.FromHandle(...)`, see [Sealed types as property types](#sealed-types-as-property-types), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) |
 | a class, object, or companion method returning a sealed base, scalar or as a `List`/`Map`/`Set` component | the sealed base (or `IReadOnlyList<Base>`) | reads through the same `FromHandle` discriminator a top-level sealed return already used, see [A class method returning a sealed base](#a-class-method-returning-a-sealed-base), [ADR-009](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/009-sealed-class-mapping.md) |
 | a sealed type at a **parameter** position, bare, nullable, or as a collection component, including a constructor parameter | an ordinary handle argument (`shape._handle`, or boxed per element through `NugetMarshal.Wrap<T>` in a collection) | the same `sealedAsHandle()` rewrite the property planner uses applies to every declared parameter, so `Issue54Drawing`'s own four-parameter constructor now binds, see [A sealed type at a parameter position](#a-sealed-type-at-a-parameter-position), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) |
@@ -2959,6 +2959,61 @@ Assert.Null(typeof(Job).GetMethod("RestAsync"));
 Assert.Null(typeof(Job.Running).GetMethod("PickNested"));
 ```
 
+### An override of a base member the base declined to plan {id="sealed-method-declined-base-overload"}
+
+The inheritance rule above, an overriding arm renders `override` or `new` and inherits the base's
+omitting overloads, assumed the base's own plan actually carries the member. It does not always: an
+opt-in-marked base member
+([ADR-115](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/115-opt-in-marker-declarations.md))
+is a structural skip, so the base declares no such member at all, not even under `virtual`. An arm
+that overrides it anyway (opting in itself, rather than propagating the marker) still binds, and
+since there is nothing on the base to inherit the omitting overload from, the arm synthesizes its
+own, exactly as it would for an override of an interface member. `Job.Running.Tag` itself renders
+plain `public`, neither `override` nor `new`: the base declares no `Tag` at all for it to relate to.
+
+From `test-library/src/nativeMain/kotlin/.../issue115/JobSample.kt`:
+
+```kotlin
+sealed class Job {
+  @Unstable
+  open fun tag(prefix: String, suffix: String = "!"): String = prefix + suffix
+
+  data class Running(val progress: Int) : Job() {
+    @OptIn(Unstable::class)
+    override fun tag(prefix: String, suffix: String): String = "$prefix$progress$suffix"
+  }
+}
+```
+
+`Job` declares no `Tag` in any arity, and neither does `Job.Idle`, which inherits the declined member
+without overriding it. `Job.Running` declares both: the declared arity and its own synthesized
+omitting overload, from `Interop.cs`:
+
+```C#
+public sealed class Running : Job
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "job_running_tag")]
+    private static extern IntPtr Native_Tag(IntPtr handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string prefix, [MarshalAs(UnmanagedType.LPUTF8Str)] string suffix, out IntPtr error);
+
+    public string Tag(string prefix, string suffix) { /* ... */ }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "job_running_tag_2")]
+    private static extern IntPtr Native_Tag_2(IntPtr handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string prefix, out IntPtr error);
+
+    public string Tag(string prefix) { /* ... */ }
+}
+```
+
+From `IntegrationTests/SealedSubclassMethodTests.cs`:
+
+```C#
+using var factory = new JobFactory();
+using Job.Running oreo = factory.Running(42);
+
+Assert.Equal(oreo.Tag("hallway", "!"), oreo.Tag("hallway"));
+Assert.Equal("hallway42!", oreo.Tag("hallway"));
+```
+
 ## Defaulted interface members on implementing classes
 
 A class implementing an interface without overriding one of its defaulted members still has to carry that member in C#: the generated class declares the interface, so omitting the member is `CS0535`. The defaulted body is reached by ordinary dynamic dispatch on the Kotlin instance behind the handle, so no separate delegation is generated for it. A member with no default at all is a different shape, since there is no body to dispatch to: see [An interface property a base class inherits without implementing](#an-interface-property-a-base-class-inherits-without-implementing) for how an abstract class carries that case instead.
@@ -3521,8 +3576,6 @@ The owning class still generates, and its unrelated `name` member still binds; s
 - An eligible sealed interface arm's **extra interfaces** (e.g. `class Odd : Kind, CharSequence`) are dropped silently: the arm stays eligible, but the generated class declares only its sealed base, with no interface list and no diagnostic naming the loss. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - [Declaring every exported interface](#declaring-every-exported-interface) has its own residual gaps: `CirInterface` has no super-interface list, so `interface Derived : Base` still flattens (`IDerived` no longer redeclares `Base`'s members after ADR-113, but doesn't inherit them either); a `var` interface property still renders `{ get; }` only (`hasSetter` is never derived from the plan); the CS0102 property/method name-collision guard is interface-route only, the same collision on the ordinary class route is unguarded; and an interface that is neither reachable nor implemented by any exported class still silently loses its unbridgeable members with no diagnostic naming why. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - [Methods on a sealed subclass](#methods-on-a-sealed-subclass): the sealed **base**'s own declared `abstract`/`open` `val`/`var`/`fun` now renders `public virtual` on the C# base and is readable through it directly, no pattern-match required, but its own `open suspend fun` and any `Flow`/`StateFlow` member still have no base carrier: [ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md)'s suspend route and [ADR-124](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/124-flow-route-sealed-arm-owners.md)'s flow route both carry only an **arm**'s own declaration, so a base-declared `open suspend fun rest()` no arm overrides is still absent everywhere, now named `SEALED_BASE_UNROUTED` instead of silently dropped. A generic method, a `suspend` lambda parameter, or a stored-callback/interface-bridge pair (`addX`/`removeX`) on an arm is still a named `SKIPPED_UNSUPPORTED_COMBINATION` skip rather than a binding; a declared `suspend fun`, a declared `Flow<T>`/`StateFlow<T>` member, or a declared plain lambda-parameter method on an **arm** binds instead, and only an arm that declares a `suspend` or `Flow`/`StateFlow` member gains `IAsyncDisposable`, so a consumer holding the sealed base has to pattern-match to the concrete arm before `await using` / `DisposeAsync()` (see [Suspend methods on a sealed arm](#sealed-method-suspend-generated-c) and [Flow and StateFlow members on a sealed arm](#sealed-flow-generated-c)). An arm's own `fun dispose()` collides with the always-emitted `Dispose()`, the same pre-existing hazard an ordinary class has; a same-arity suspend overload pair differing only in reference nullability and a `suspend fun` returning plain `Flow<T>` are also pre-existing, unfixed gaps on the legacy suspend route.
-- An overriding arm whose sealed **base** declined to plan its own member (a structural skip, not a covariant narrowing) still synthesizes no [ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md) omitting overload for a short call against the base's default-argument signature: `findOverridee()` still resolves to the base's declaration even when the base itself carries no plan for it. No fixture reaches this combination; see [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
-
 ## Using it from C#
 
 Polymorphism through `IPet`, from `IntegrationTests/InterfaceTests.cs`:

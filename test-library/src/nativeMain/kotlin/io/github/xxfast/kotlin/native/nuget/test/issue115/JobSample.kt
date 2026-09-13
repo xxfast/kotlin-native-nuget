@@ -16,6 +16,21 @@ interface JobListener {
 }
 
 /**
+ * ADR-116's 2026-09-13 amendment marker, declared here rather than reused from issue113:
+ * `ExperimentalDiet` next door is waived by `exportMarkers(...)` in `test-library/build.gradle.kts`
+ * and would keep exporting, which is the opposite of what this cell needs, and `InternalApi` /
+ * `LedgerApi` belong to ADR-115's own table.
+ *
+ * `WARNING` level on purpose. ADR-115 never consults the level, so [Job.tag] is skipped either way
+ * (Issue113Sample cell 7 pins the level-independence), while a `WARNING` marker cannot turn an
+ * unexpected opt-in propagation inside the generated `CNameExports.kt` into a compile error that
+ * would mask the C# symptom this fixture exists to show.
+ */
+@RequiresOptIn(level = RequiresOptIn.Level.WARNING, message = "Hallway timing is still settling")
+@Target(AnnotationTarget.CLASS, AnnotationTarget.PROPERTY, AnnotationTarget.FUNCTION)
+annotation class Unstable
+
+/**
  * Fixture for issue [#115](https://github.com/xxfast/kotlin-native-nuget/issues/115) / ADR-116: a
  * public **member function declared on a sealed subclass** is never exported, and nothing says so.
  *
@@ -184,10 +199,39 @@ sealed class Job {
    */
   open suspend fun rest(): Int = 0
 
+  /**
+   * ADR-116's 2026-09-13 amendment: an **opt-in-marked base member carrying a trailing default**
+   * whose own plan the planner structurally declines (ADR-115 drops anything behind a
+   * `@RequiresOptIn` marker), overridden on [Job.Running], which opts in rather than propagates.
+   *
+   * So the C# base carries **no** `Tag` at all — neither the declared arity nor an ADR-096
+   * omitting overload — while the arm's override owes its own `Tag(string)` beside
+   * `Tag(string, string)`. Today `sealedSubclassEntries` returns early on any `override` whose
+   * overridee is declared on the sealed base, whether or not that base member ever planned, and it
+   * reads raw `hasDefault` off the override's own parameters (always `false`), so the short-arity
+   * call `running.Tag("x")` is CS1501.
+   *
+   * [Job.Idle] deliberately does not override it: a declined base member inherited by an arm stays
+   * absent on that arm too. Oreo's hallway sprints get tagged; nobody else's do.
+   */
+  @Unstable
+  open fun tag(prefix: String, suffix: String = "!"): String = prefix + suffix
+
   /** Oreo, mid-sprint down the hallway, [progress] percent of the way to the food bowl. */
   data class Running(val progress: Int) : Job() {
     /** The one arm that overrides [Job.kind]; the rest inherit the base's `"job"`. */
     override val kind: String = "running"
+
+    /**
+     * The override half of ADR-116's 2026-09-13 amendment cell. `@OptIn` rather than `@Unstable`:
+     * the arm *consumes* the marker instead of propagating it, so the arm's member is bindable
+     * (ADR-115 Finding 7 — `kotlin.OptIn` is not itself `@RequiresOptIn`-meta-annotated) while
+     * the base's identically-named member is not. `suffix` restates no default, because Kotlin
+     * forbids an override from restating one, so the arm's ADR-096 omitting overload can only be
+     * synthesized from the *overridee's* defaults.
+     */
+    @OptIn(Unstable::class)
+    override fun tag(prefix: String, suffix: String): String = "$prefix$progress$suffix"
 
     /** `Int` return, no conversion at the seam. */
     fun cancel(): Int = progress
