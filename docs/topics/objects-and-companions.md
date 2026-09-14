@@ -1,20 +1,14 @@
 # Objects and companions
 
-A Kotlin `object` singleton becomes a static C# class: no instance, no constructor, just static members reached directly through the type. A `data object` nested inside a `sealed class` hierarchy becomes a sealed subclass instead (see [Interfaces, abstract and sealed classes](interfaces-abstract-sealed.md)). A `companion object`'s members land as static members on the enclosing C# class. An `object` can
-also *own* a nested `class`/`interface`/`enum class` the same way a `class` owner does (`Registry.Entry`
-inside `public static class Registry`); see [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects).
+A Kotlin `object` becomes a C# `static class`: no instance, no constructor, its members reached
+directly through the type. A `companion object`'s members land as static members directly on the
+enclosing C# class, not on a separate `Companion` type. A `data object` nested inside a
+`sealed class` becomes a sealed subclass instead; see
+[Interfaces, abstract and sealed classes](interfaces-abstract-sealed.md). An `object` can also own
+a nested type the same way a `class` can; see
+[Nested types](classes-and-objects.md#nested-classes-and-objects).
 
-| Kotlin | C# | Notes |
-|---|---|---|
-| `object` | `static class` | singleton; methods are PascalCased and their returns marshalled, exactly like a class method |
-| `data object` (in `sealed class`) | sealed subclass | with `ToString` |
-| companion object | static members | |
-| two or more same-named `object`/companion members | one C# overload set | numbered native export/extern name, unnumbered public name; see [Method overloads](#method-overloads) below ([ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md)) |
-| `object`/companion member with a trailing run of defaulted parameters | omitting overload per suffix length | see Method default parameters below ([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)) |
-
-## Kotlin
-
-A top-level singleton, from `test-library/src/nativeMain/kotlin/.../cat/CatRegistry.kt`:
+For this declaration in `CatRegistry.kt`:
 
 ```kotlin
 object CatRegistry {
@@ -25,21 +19,38 @@ object CatRegistry {
   }
 
   fun count(): Int = cats.size
-
-  fun clear() {
-    cats.clear()
-  }
 }
 ```
 
-A companion object, from `test-library/src/nativeMain/kotlin/.../cat/Cat.kt`:
+Call it from C# through the type; there is nothing to construct:
+
+```C#
+CatRegistry.Register("Oreo");
+CatRegistry.Register("Mylo");
+int count = CatRegistry.Count(); // 2
+```
+
+Object methods are PascalCased and their returns marshalled exactly like class methods; see
+[Classes and objects](classes-and-objects.md).
+
+<note>
+    <p>Naming an <code>object</code> member <code>All</code>, <code>Any</code>, <code>First</code>,
+    or <code>Select</code> is legal Kotlin, but if that member ever fails to bind for an unrelated
+    reason, C#'s implicit usings resolve the call site against a <code>System.Linq</code> extension
+    method of the same name instead of leaving it unresolved. A consumer then sees a confusing
+    <code>CS1501</code> ("no overload takes N arguments") rather than the <code>CS0117</code>
+    ("does not contain a definition") that would point at the real cause.</p>
+</note>
+
+## Companion objects
+
+A companion's members are static members on the enclosing class itself:
 
 ```kotlin
 class Cat(
   name: String,
   val lives: Int = 9,
 ) : Animal(name) {
-  // ...
   companion object {
     const val SPECIES: String = "Felis catus"
     val defaultBreed: String = "Domestic Shorthair"
@@ -48,356 +59,61 @@ class Cat(
 }
 ```
 
-## Generated C#
-
-`CatRegistry` renders as a `static class` with no handle at all. Each method is PascalCased and routes through the same static-function marshalling as a top-level function: a private `[DllImport]` extern plus a public wrapper that checks the error out-parameter across the bridge.
-
 ```C#
-public static class CatRegistry
-{
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catregistry_register_")]
-    private static extern void Register_native(string name, out IntPtr error);
+string species = Cat.Species; // "Felis catus"
+string breed = Cat.DefaultBreed; // "Domestic Shorthair"
 
-    public static void Register(string name)
-    {
-        Register_native(name, out IntPtr error);
-        if (error != IntPtr.Zero)
-        {
-            throw NugetErrorNative.BuildException(error);
-        }
-    }
-
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catregistry_count")]
-    private static extern int Count_native(out IntPtr error);
-
-    public static int Count()
-    {
-        int result = Count_native(out IntPtr error);
-        if (error != IntPtr.Zero)
-        {
-            throw NugetErrorNative.BuildException(error);
-        }
-        return result;
-    }
-
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catregistry_clear")]
-    private static extern void Clear_native(out IntPtr error);
-
-    public static void Clear()
-    {
-        Clear_native(out IntPtr error);
-        if (error != IntPtr.Zero)
-        {
-            throw NugetErrorNative.BuildException(error);
-        }
-    }
-
-}
+using var cat = Cat.FromName("Whiskers");
 ```
 
-A non-primitive return is marshalled to its idiomatic C# type, exactly like a class method — the hidden `IntPtr` and `Marshal.PtrToStringUTF8` live on the generated side, never the consumer's. The `Clinic` object (`test-library/src/nativeMain/kotlin/.../clinic/ClinicSample.kt`) has a `String`-returning method:
+There is no separate `Cat.Companion` class in the generated output.
 
-```kotlin
-object Clinic {
-  fun greet(name: String): String = "Welcome to the clinic, $name"
-  fun capacity(): Int = 12
-  fun reset() {}
-}
-```
-
-`greet` surfaces as a PascalCased `Greet` returning a real `string`:
-
-```C#
-public static class Clinic
-{
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "clinic_greet")]
-    private static extern IntPtr Greet_native(string name, out IntPtr error);
-
-    public static string Greet(string name)
-    {
-        IntPtr nativeResult = Greet_native(name, out IntPtr error);
-        if (error != IntPtr.Zero)
-        {
-            throw NugetErrorNative.BuildException(error);
-        }
-        return Marshal.PtrToStringUTF8(nativeResult)!;
-    }
-
-    // Capacity() and Reset() follow the same wrapper pattern as CatRegistry above.
-}
-```
-
-Object methods thus match class and companion methods on both facets: PascalCased names and marshalled returns (completing [ADR-060](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/060-adversarial-forward-fixture.md) cells 1 and 25; naming follows [ADR-007](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/007-top-level-function-class-naming.md)).
-
-<note>
-    <p>Naming an <code>object</code> member <code>All</code>, <code>Any</code>, <code>First</code>,
-    or <code>Select</code> is legal Kotlin, but if that member ever fails to bind for an unrelated
-    reason, C#'s implicit usings resolve the call site against a <code>System.Linq</code> extension
-    method of the same name instead of leaving it unresolved, so a consumer sees a confusing
-    <code>CS1501</code> ("no overload takes N arguments") rather than the <code>CS0117</code>
-    ("does not contain a definition") that would point at the real cause. This is a C# naming
-    collision, not a bridge behaviour.</p>
-</note>
-
-The `Cat` companion's members are generated as static members directly on the `Cat` class itself (`Cat.Species`, `Cat.DefaultBreed`, `Cat.FromName(...)`) rather than a nested type. There's no separate `Cat.Companion` class in the generated output.
-
-## Using it from C#
-
-Singleton object, from `IntegrationTests/ObjectTests_Singleton.cs`:
-
-```C#
-[Fact]
-public void CatRegistry_IsStaticClass()
-{
-    Assert.True(typeof(CatRegistry).IsAbstract && typeof(CatRegistry).IsSealed);
-}
-
-[Fact]
-public void CatRegistry_RegisterAndCount()
-{
-    CatRegistry.Clear();
-    CatRegistry.Register("Oreo");
-    CatRegistry.Register("Mylo");
-    Assert.Equal(2, CatRegistry.Count());
-    CatRegistry.Clear();
-}
-```
-
-An object method with a non-primitive return is called just like any other marshalled member — no `Marshal.PtrToStringUTF8` at the call site. From `IntegrationTests/ObjectMethodMarshallingTests.cs`:
-
-```C#
-[Fact]
-public void Clinic_Greet_ReturnsMarshalledString()
-{
-    string greeting = Clinic.Greet("Bob");
-    Assert.Equal("Welcome to the clinic, Bob", greeting);
-}
-```
-
-Companion object, from `IntegrationTests/CompanionObjectTests.cs`:
-
-```C#
-[Fact]
-public void CompanionConstVal()
-{
-    Assert.Equal("Felis catus", Cat.Species);
-}
-
-[Fact]
-public void CompanionProperty()
-{
-    Assert.Equal("Domestic Shorthair", Cat.DefaultBreed);
-}
-
-[Fact]
-public void CompanionFactoryMethod()
-{
-    using var cat = Cat.FromName("Whiskers");
-    Assert.Equal("Whiskers", cat.Name);
-}
-```
-
-## Method overloads
+## Method overloads {id="method-overloads"}
 
 Two or more same-named members on an `object` or a `companion object` generate one natural C#
-overload set, the same [ADR-090](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md)
-template a class method uses (see [Method overloads](classes-and-objects.md#method-overloads) in
-Classes and objects), extended to these routes by [ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md).
-Numbering is per object and per companion, independently of any other container.
-
-### Kotlin {id="overloads-kotlin"}
-
-From `test-library/src/nativeMain/kotlin/.../grooming/GroomingSample.kt`:
+overload set, resolved by parameter type like any other C# overload, including an `Int` overload
+beside an enum overload:
 
 ```kotlin
 object Parlour {
-  fun describe(): String = "the parlour is open"
-
-  fun describe(cat: String): String = "$cat is booked in"
-
   fun rate(stars: Int): String = "the parlour is rated $stars"
 
   fun rate(coat: Coat): String = "the parlour grooms ${coat.name.lowercase()} coats"
 }
-
-class Groomer(val name: String) {
-  companion object {
-    fun of(name: String): Groomer = Groomer(name)
-
-    fun of(chairs: Int): Groomer = Groomer("groomer of $chairs chairs")
-
-    fun of(coat: Coat): Groomer = Groomer("${coat.name.lowercase()} groomer")
-  }
-}
-```
-
-`rate(Int)`/`rate(Coat)` and `of(Int)`/`of(Coat)` each pair a plain `Int` with an enum: both cross
-the C ABI as `int`, the shape that forces the private extern *name* itself to carry the number, not
-just the `DllImport` `EntryPoint`.
-
-### Generated C# {id="overloads-generated-c"}
-
-From `Interop.cs`. The object route numbers on `${prefix}_${name}_$n`; the companion route inserts
-`_companion_` before the name:
-
-```C#
-public static class Parlour
-{
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "parlour_describe")]
-    private static extern IntPtr Native_Describe(out IntPtr error);
-
-    public static string Describe() { /* ... */ }
-
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "parlour_describe_2")]
-    private static extern IntPtr Native_Describe_2([MarshalAs(UnmanagedType.LPUTF8Str)] string cat, out IntPtr error);
-
-    public static string Describe(string cat) { /* ... */ }
-
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "parlour_rate")]
-    private static extern IntPtr Native_Rate(int stars, out IntPtr error);
-
-    public static string Rate(int stars) { /* ... */ }
-
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "parlour_rate_2")]
-    private static extern IntPtr Native_Rate_2(int coat, out IntPtr error);
-
-    public static string Rate(global::TestLibrary.Grooming.Coat coat) { /* ... */ }
-}
 ```
 
 ```C#
-[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "groomer_companion_of")]
-private static extern IntPtr Native_Companion_Of([MarshalAs(UnmanagedType.LPUTF8Str)] string name, out IntPtr error);
-
-public static Groomer Of(string name) { /* ... */ }
-
-[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "groomer_companion_of_2")]
-private static extern IntPtr Native_Companion_Of_2(int chairs, out IntPtr error);
-
-public static Groomer Of(int chairs) { /* ... */ }
-
-[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "groomer_companion_of_3")]
-private static extern IntPtr Native_Companion_Of_3(int coat, out IntPtr error);
-
-public static Groomer Of(global::TestLibrary.Grooming.Coat coat) { /* ... */ }
+string byStars = Parlour.Rate(10); // "the parlour is rated 10"
+string byCoat = Parlour.Rate(Coat.Tuxedo); // "the parlour grooms tuxedo coats"
 ```
 
-### Using it from C# {id="overloads-using-it-from-c"}
-
-From `IntegrationTests/StaticRouteOverloadTests.cs`:
-
-```C#
-[Fact]
-public void ParlourRate_IntAndCoat_ShareOneWireShapeAndStayDistinct()
-{
-    Assert.Equal("the parlour is rated 10", Parlour.Rate(10));
-    Assert.Equal("the parlour grooms tuxedo coats", Parlour.Rate(Coat.Tuxedo));
-}
-
-[Fact]
-public void GroomerOf_WithCoat_DispatchesToEnumOverload()
-{
-    using var groomer = Groomer.Of(Coat.Tabby);
-    Assert.Equal("tabby groomer", groomer.Name);
-}
-```
+See [Method overloads](classes-and-objects.md#method-overloads) in Classes and objects for the
+same rule on class methods, top-level functions, and extension functions.
 
 <note>
     <p>
         A companion static and an instance method on the same class share one generated C# class,
-        and C# does not distinguish an overload by <code>static</code>-ness, so the
-        <code>ERROR_CSHARP_SIGNATURE_COLLISION</code> check (see
-        <a href="classes-and-objects.md#method-overloads">Method overloads</a> in Classes and
-        objects) compares a companion static against the owning class's planned instance methods
-        too, not just against its own companion siblings.
+        and C# does not distinguish an overload by <code>static</code>-ness. Giving a companion
+        member the same signature as an instance method on the enclosing class fails generation
+        with <code>ERROR_CSHARP_SIGNATURE_COLLISION</code>; rename one of them.
     </p>
 </note>
 
 ## Method default parameters
 
-[ADR-091](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md)'s
-`@JvmOverloads`-style rule extends to `object` and companion members
-([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)),
-the same rule and numbering scope (per object, per companion) as [Method overloads](#method-overloads)
-above.
-
-### Kotlin {id="defaults-kotlin"}
-
-From `test-library/src/nativeMain/kotlin/.../whiskers/WhiskersSample.kt`:
+A trailing run of defaulted parameters on an `object` or companion member generates one overload
+per omitted trailing default, each using the Kotlin default for the parameters it drops:
 
 ```kotlin
 object Kibble {
   fun scoop(flavour: String, scoops: Int = 2): String = "$scoops scoops of $flavour"
 }
-
-class Basket(val label: String) {
-  companion object {
-    fun of(city: String, capacity: Int = 4): Basket = Basket("$city basket for $capacity")
-  }
-}
-```
-
-### Generated C# {id="defaults-generated-c"}
-
-From `Interop.cs`:
-
-```C#
-public static class Kibble
-{
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "kibble_scoop")]
-    private static extern IntPtr Native_Scoop(string flavour, int scoops, out IntPtr error);
-
-    public static string Scoop(string flavour, int scoops) { /* ... */ }
-
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "kibble_scoop_2")]
-    private static extern IntPtr Native_Scoop_2(string flavour, out IntPtr error);
-
-    public static string Scoop(string flavour) { /* ... */ } // scoops omitted; Kotlin supplies 2
-}
 ```
 
 ```C#
-[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "basket_companion_of")]
-private static extern IntPtr Native_Companion_Of(string city, int capacity, out IntPtr error);
-
-public static Basket Of(string city, int capacity) { /* ... */ }
-
-[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "basket_companion_of_2")]
-private static extern IntPtr Native_Companion_Of_2(string city, out IntPtr error);
-
-public static Basket Of(string city) { /* ... */ } // capacity omitted; Kotlin supplies 4
+string oneFlavour = Kibble.Scoop("tuna"); // "2 scoops of tuna"; scoops defaults to 2
 ```
 
-### Using it from C# {id="defaults-using-it-from-c"}
-
-From `IntegrationTests/FunctionDefaultParameterTests.cs`:
-
-```C#
-[Fact]
-public void KibbleScoop_OmittingScoops_UsesKotlinDefaultOfTwo()
-{
-    Assert.Equal("2 scoops of tuna", Kibble.Scoop("tuna"));
-}
-
-[Fact]
-public void BasketOf_OmittingCapacity_UsesKotlinDefaultOfFour()
-{
-    using var basket = Basket.Of("Colombo");
-
-    Assert.Equal("Colombo basket for 4", basket.Label);
-}
-```
-
-<seealso>
-    <category ref="related">
-        <a href="interfaces-abstract-sealed.md">Interfaces, abstract and sealed classes</a>
-        <a href="top-level-declarations.md">Top-level declarations</a>
-        <a href="classes-and-objects.md">Classes and objects</a>
-        <a href="expect-actual.md">expect/actual declarations</a>
-    </category>
-    <category ref="external">
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md">ADR-090: Ordinary-class method overloads</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md">ADR-095: Overloads on the four static export routes</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md">ADR-096: Function default parameters</a>
-    </category>
-</seealso>
+Only a *trailing* run of defaults gets an omitting overload: a defaulted parameter followed by a
+non-defaulted one does not, so pass it explicitly. See the method default parameters section of
+[Classes and objects](classes-and-objects.md) for the full rule.

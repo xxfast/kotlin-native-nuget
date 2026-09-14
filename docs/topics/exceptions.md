@@ -1,54 +1,31 @@
 # Exceptions
 
-Every generated bridge call has an `out IntPtr error` parameter (or the object-handle equivalent for constructors). When a Kotlin function throws, the native call packs the exception into that out-parameter instead of aborting the process; the generated C# checks it after every call and throws the corresponding .NET exception. The mechanism is uniform across functions, property getters/setters, and constructors. Anything that can throw in Kotlin gets an error slot. A Kotlin parameter literally named `error` collides with this slot's name and is renamed on the C# side; see [Primitives and strings](primitives-and-strings.md).
+A Kotlin function, property accessor, or constructor that throws crosses the bridge as a .NET
+exception instead of aborting the process. Nothing needs to be written differently in the exported
+Kotlin to get this: it applies uniformly to every generated call shape.
 
-| Kotlin | C# | Notes |
-|---|---|---|
-| thrown exception | `KotlinException` | synchronous propagation, [ADR-023](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/023-exception-propagation.md)/[ADR-024](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/024-sync-exception-propagation.md) |
-| stack trace | `KotlinStackTrace` property | [ADR-027](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/027-stacktrace-propagation.md) |
-| `e.cause` | `InnerException` | cause chain, [ADR-028](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/028-exception-cause-chain.md) |
-| `IllegalArgumentException` etc. | `ArgumentException` etc. | core exceptions mapped via `IKotlinException`, [ADR-029](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/029-exception-type-mapping.md) |
-| property getter/setter throws | propagated | [ADR-030](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/030-property-exception-propagation.md) |
-| constructor / `init` throws | propagated | primary, secondary, data class `copy()`, generic + value class constructors, [ADR-031](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/031-constructor-exception-propagation.md)–[ADR-035](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/035-value-class-primary-constructor-validation.md) |
-| `Throwable`/`Throwable?` property | `Exception`/`Exception?` | constructed, unthrown, riding the same error envelope; see [Throwable properties](#throwable-properties) below and [ADR-107](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/107-throwable-property-mapping.md) |
-| `Result<T>` return | `T`, failure thrown | see [Result return values](#result-return-values) below and [ADR-108](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/108-result-return-mapping.md) |
-
-## `KotlinException` and `IKotlinException`
-
-Every generated exception type implements `IKotlinException`, carrying the original fully-qualified Kotlin class name and the Kotlin-side stack trace:
-
-```C#
-public interface IKotlinException
-{
-    string KotlinType { get; }
-    string KotlinStackTrace { get; }
-}
-
-public class KotlinException : Exception, IKotlinException
-{
-    public string KotlinType { get; }
-    public string KotlinStackTrace { get; }
-
-    public KotlinException(string kotlinType, string message, string kotlinStackTrace,
-        Exception? innerException = null) : base(message, innerException)
-    {
-        KotlinType = kotlinType;
-        KotlinStackTrace = kotlinStackTrace;
-    }
-
-    public override string ToString()
-    {
-        return base.ToString()
-            + Environment.NewLine + " ---> Kotlin stack trace:"
-            + Environment.NewLine + KotlinStackTrace
-            + Environment.NewLine + " --- End of Kotlin stack trace ---";
-    }
+```kotlin
+fun checkOreoWeight(grams: Int): String {
+  if (grams > 0) throw IllegalArgumentException("Oreo is on a diet, $grams g treat is too much")
+  return "Mylo accepted ${-grams} g of kibble gracefully"
 }
 ```
 
-## Core exception type mapping
+```C#
+try
+{
+    MappedExceptions.CheckOreoWeight(10);
+}
+catch (KotlinArgumentException ex)
+{
+    Console.WriteLine(ex.Message);
+}
+```
 
-A fixed set of Kotlin stdlib exceptions map to the closest .NET analog, as a `sealed class` implementing `IKotlinException` and inheriting the matching .NET base type. Anything not in this table falls back to the base `KotlinException`.
+## Catching a specific exception type
+
+A fixed set of Kotlin stdlib exceptions map to the closest .NET type, as a subtype of that type
+implementing `IKotlinException`:
 
 | Kotlin | C# |
 |---|---|
@@ -58,25 +35,35 @@ A fixed set of Kotlin stdlib exceptions map to the closest .NET analog, as a `se
 | `ClassCastException` | `KotlinInvalidCastException : InvalidCastException` |
 | `ArithmeticException` | `KotlinArithmeticException : ArithmeticException` |
 | `NumberFormatException` | `KotlinFormatException : FormatException` |
-| `NullPointerException`, `IndexOutOfBoundsException`, user-defined | `KotlinException` (fallback) |
 
-## Kotlin
+Anything not in this table, including `NullPointerException` and `IndexOutOfBoundsException`
+(.NET reserves `NullReferenceException` for the CLR itself) and any user-defined exception, arrives
+as the base `KotlinException`. `catch (ArgumentException)` still catches `KotlinArgumentException`
+since it inherits from the .NET type.
 
-Sample throw sites, from `test-library/src/nativeMain/kotlin/.../cat/MappedExceptions.kt`:
+## Catching any Kotlin exception
 
-```kotlin
-fun checkOreoWeight(grams: Int): String {
-  if (grams > 0) throw IllegalArgumentException("Oreo is on a diet, $grams g treat is too much")
-  return "Mylo accepted ${-grams} g of kibble gracefully"
-}
+Every generated exception type, mapped or not, implements `IKotlinException`:
 
-fun activateLaserPointer(catName: String): String {
-  if (catName == "Oreo") error("Cannot play: Oreo is asleep")
-  return "$catName chased the red dot enthusiastically"
+```C#
+public interface IKotlinException
+{
+    string KotlinType { get; }        // fully-qualified Kotlin class name, e.g. "kotlin.IllegalArgumentException"
+    string KotlinStackTrace { get; }  // Kotlin-side stack trace
 }
 ```
 
-A cause chain, from `CauseExceptions.kt`:
+Use it as a catch filter to handle any Kotlin exception the same way, mapped or not:
+
+```C#
+catch (Exception ex) when (ex is IKotlinException ke)
+{
+    Console.WriteLine(ke.KotlinType);
+}
+```
+
+`Exception.InnerException` follows Kotlin's `cause` chain, one exception per link, each mapped (or
+falling back to `KotlinException`) independently:
 
 ```kotlin
 fun groomCat(catName: String): String {
@@ -89,323 +76,71 @@ fun groomCat(catName: String): String {
 }
 ```
 
-A throwing property setter/getter, from `PropertyExceptions.kt`:
-
-```kotlin
-class TreatJar(initial: Int) {
-  var treatCount: Int = initial
-    set(value) {
-      require(value >= 0) { "Treat count cannot be negative" }
-      field = value
-    }
-}
-
-class SnackBowl {
-  private val snacks: MutableList<String> = mutableListOf()
-  val nextSnack: String
-    get() {
-      check(!isEmpty) { "Snack bowl is empty — Mylo ate everything" }
-      return snacks.first()
-    }
-}
+```C#
+var ex = Assert.ThrowsAny<ArgumentException>(() => CauseExceptions.GroomCat("Oreo"));
+var mid = (InvalidOperationException)ex.InnerException!;      // KotlinInvalidOperationException
+var root = (KotlinException)mid.InnerException!;               // RuntimeException isn't mapped
 ```
 
-A throwing constructor, from `ConstructorExceptions.kt`:
+## Where this applies
 
-```kotlin
-class Kitten(val name: String, val age: Int) {
-  init {
-    require(age >= 0) { "Kitten age cannot be negative" }
-  }
-}
-
-class CatLitter(val brand: String, val weightKg: Int) {
-  init {
-    require(weightKg > 0) { "Litter weight must be positive" }
-  }
-
-  constructor(brand: String, bags: Int, perBag: Int) : this(brand, bags * perBag)
-}
-```
-
-## Generated C#
-
-Every bridge call checks the `error` out-parameter and converts it via `NugetErrorNative.BuildException`:
+The same error channel carries a thrown exception out of a property getter or setter, a primary,
+secondary, or generic class constructor, a value class's constructor (see
+[Value classes](value-classes.md)), and a data class's generated `Copy()`, which re-runs the
+constructor's `init` validation. A `suspend` function propagates the exception through the
+returned `Task` the ordinary C# async way; see [Coroutines and Flow](coroutines-and-flow.md).
 
 ```C#
-public static string checkOreoWeight(int grams)
-{
-    IntPtr nativeResult = checkOreoWeight_native(grams, out IntPtr error);
-    if (error != IntPtr.Zero)
-    {
-        throw NugetErrorNative.BuildException(error);
-    }
-    return Marshal.PtrToStringUTF8(nativeResult)!;
-}
+using var jar = new TreatJar(5);
+Assert.ThrowsAny<ArgumentException>(() => jar.TreatCount = -1);       // setter
+
+Assert.ThrowsAny<ArgumentException>(() => new Kitten("Oreo", -1));    // constructor
+
+using var profile = new CatProfile("Oreo", 100);
+Assert.ThrowsAny<ArgumentException>(() => profile.Copy("Oreo", -1));  // Copy() re-validates
 ```
 
-The same pattern appears on property setters (`TreatJar.TreatCount`), getters (`SnackBowl.NextSnack`), and constructors (`Kitten(string, int)`), all shown throughout this project's `Interop.cs`. `CatId`'s value-class constructor routes through a private `CreateChecked` helper that does the same check (see [Value classes](value-classes.md)).
-
-A method with a `List`/`Map`/`Set` parameter wraps the error check in a `try`/`finally` instead of
-the flat shape above, so a temporary collection handle is released whether the call returns or
-throws; see [Collections](collections.md#exception-safety-on-collection-parameters-and-returns).
-
-## Using it from C#
-
-Type mapping, from `IntegrationTests/ExceptionTypeMappingTests.cs`:
-
-```C#
-[Fact]
-public void Oreo_OnDiet_IsExactType_KotlinArgumentException()
-{
-    var ex = Assert.ThrowsAny<ArgumentException>(
-        () => MappedExceptions.CheckOreoWeight(10));
-    Assert.IsType<KotlinArgumentException>(ex);
-}
-
-[Fact]
-public void Oreo_ToyBehindSofa_NullPointer_IsBaseKotlinException()
-{
-    // NullPointerException is NOT mapped, .NET reserves NullReferenceException for the CLR
-    var ex = Assert.Throws<KotlinException>(
-        () => MappedExceptions.RetrieveCatToy("Oreo"));
-    Assert.IsType<KotlinException>(ex);
-}
-
-[Fact]
-public void CatchAll_ViaIKotlinException_Guard_WorksForMappedType()
-{
-    // The idiom that works for ANY Kotlin exception, mapped or unmapped
-    Exception? caught = null;
-    try
-    {
-        MappedExceptions.CheckOreoWeight(10);
-    }
-    catch (Exception ex) when (ex is IKotlinException)
-    {
-        caught = ex;
-    }
-
-    Assert.NotNull(caught);
-    var ke = (IKotlinException)caught;
-    Assert.Equal("kotlin.IllegalArgumentException", ke.KotlinType);
-    Assert.NotEmpty(ke.KotlinStackTrace);
-}
-```
-
-Cause chain, from `IntegrationTests/ExceptionCauseTests.cs`:
-
-```C#
-[Fact]
-public void Oreo_GroomingFailed_DeepChain_RootCause_IsBaseKotlinException()
-{
-    // RuntimeException is NOT mapped — stays base KotlinException
-    var ex = Assert.ThrowsAny<ArgumentException>(
-        () => CauseExceptions.GroomCat("Oreo"));
-    var mid = (InvalidOperationException)ex.InnerException!;
-    Assert.IsType<KotlinException>(mid.InnerException);
-}
-```
-
-Property propagation, from `IntegrationTests/PropertyExceptionPropagationTests.cs`:
-
-```C#
-[Fact]
-public void TreatJar_NegativeTreatCount_SetterThrowsArgumentException()
-{
-    using var jar = new TreatJar(5);
-    Assert.ThrowsAny<ArgumentException>(
-        () => jar.TreatCount = -1);
-}
-
-[Fact]
-public void SnackBowl_EmptyBowl_GetterThrowsInvalidOperationException()
-{
-    using var bowl = new SnackBowl();
-    Assert.ThrowsAny<InvalidOperationException>(
-        () => bowl.NextSnack);
-}
-```
-
-Constructor propagation, from `IntegrationTests/ConstructorExceptionPropagationTests.cs`, including a `data class`'s generated `Copy()`, which re-runs the same `init` validation:
-
-```C#
-[Fact]
-public void Kitten_NegativeAge_ConstructorThrowsArgumentException()
-{
-    Assert.ThrowsAny<ArgumentException>(
-        () => new Kitten("Oreo", -1));
-}
-
-[Fact]
-public void CatProfile_Copy_NegativeTreatBudget_ThrowsArgumentException()
-{
-    using var profile = new CatProfile("Oreo", 100);
-    Assert.ThrowsAny<ArgumentException>(
-        () => profile.Copy("Oreo", -1));
-}
-```
-
-Secondary constructors, from `IntegrationTests/SecondaryConstructorExceptionTests.cs`, exported as separate overloads (`catlitter_create`/`catlitter_create_2`) that each propagate independently:
-
-```C#
-[Fact]
-public void CatLitter_SecondaryConstructor_ZeroBags_ThrowsArgumentException()
-{
-    Assert.ThrowsAny<ArgumentException>(() => new CatLitter("Tidy", 0, 5));
-}
-```
-
-Async exception propagation, from `IntegrationTests/ExceptionPropagationTests.cs`:
-
-```C#
-[Fact]
-public async Task OreoOnDiet_ThrowsArgumentException_WithTypeName()
-{
-    var ex = await Assert.ThrowsAnyAsync<ArgumentException>(
-        () => AsyncExceptions.FetchCatTreatAsync("Oreo"));
-    var ke = (IKotlinException)ex;
-    Assert.Equal("kotlin.IllegalArgumentException", ke.KotlinType);
-    Assert.Equal("Oreo is on a diet!", ex.Message);
-}
-```
+A method with a `List`/`Map`/`Set` parameter releases its temporary collection handle whether the
+call throws or returns; see
+[Collections](collections.md#exception-safety-on-collection-parameters-and-returns). For an
+exception thrown out of a Kotlin implementation of a C#-declared interface, called back from C#,
+see [The bridgeable subset](bridgeable-subset.md).
 
 ## Throwable properties
 
-A property declared `Throwable`, `Throwable?`, or a stdlib subtype (`Exception?`,
-`IllegalStateException?`, ...) reads as a **constructed, unthrown** `System.Exception`, riding the
-same error envelope a thrown exception already crosses on. The value is always, in fact, an
-`IKotlinException`: the ADR-029 type mapping and the ADR-028 cause chain both apply, exactly as for
-a thrown exception. It binds get-only, since C# cannot mint a typed Kotlin `Throwable` to satisfy a
-setter, and it binds on both an ordinary exported class and a **sealed subclass**.
-
-<note>
-    <p>Each read allocates a fresh <code>Exception</code>: this is a snapshot, not an identity.
-    <code>ReferenceEquals</code> on two reads of the same property is <code>false</code>, even
-    though the messages and types are equal.</p>
-</note>
-
-From `test-library/src/nativeMain/kotlin/.../test/issue56/Issue56Sample.kt`:
+A property declared `Throwable`, `Throwable?`, or a stdlib subtype reads from C# as a plain,
+unthrown `Exception` (or `Exception?`), constructed with the same type mapping and cause chain a
+thrown exception gets, not something you catch:
 
 ```kotlin
 data class Issue56Failure(
   val reason: String,
   val error: Throwable?,
   val fatal: Throwable,
-) {
-  var lastError: Throwable? = error
-}
-
-sealed class Issue56LoadState {
-  data object Loading : Issue56LoadState()
-  data class Failure(val error: Throwable?) : Issue56LoadState()
-}
+)
 ```
-
-Generated C#, from `Interop.cs`. The getter reconstructs the exception without throwing:
 
 ```C#
-public global::System.Exception? Error
-{
-    get
-    {
-        IntPtr nativeResult = Native_Get_error(_handle, out IntPtr error);
-        if (error != IntPtr.Zero)
-        {
-            throw NugetErrorNative.BuildException(error);
-        }
-        return nativeResult == IntPtr.Zero ? null : NugetErrorNative.BuildException(nativeResult);
-    }
-}
-
-public global::System.Exception Fatal
-{
-    get { /* same shape, no null check */ }
-}
+using var failure = Issue56Sample.DietViolation();
+Assert.IsType<KotlinArgumentException>(failure.Error);
 ```
 
-The sealed-subclass arm goes through the same
-[ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)
-property plan as the class case above, since
-[ADR-111](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/111-sealed-subclass-properties-on-the-property-plan.md)
-moved sealed-subclass properties onto it, and produces the identical getter shape:
+It binds get-only, even for a `var` in Kotlin, since C# has no way to construct a typed Kotlin
+`Throwable` to satisfy a setter, and each read allocates a new `Exception` instance: compare
+`Message` and type, not references. It works the same way on a sealed subclass's property.
 
-```C#
-public sealed class Failure : Issue56LoadState
-{
-    public global::System.Exception? Error
-    {
-        get
-        {
-            IntPtr nativeResult = Native_Get_error(_handle, out IntPtr error);
-            if (error != IntPtr.Zero)
-            {
-                throw NugetErrorNative.BuildException(error);
-            }
-            return nativeResult == IntPtr.Zero ? null : NugetErrorNative.BuildException(nativeResult);
-        }
-    }
-}
-```
+A class whose constructor or `copy()` takes a `Throwable` parameter (like `Issue56Failure` above)
+gets no generated C# constructor or `Copy` at all; construct it in Kotlin and expose it through a
+factory function, as `Issue56Sample.DietViolation()` does here.
 
-From `IntegrationTests/Issue56Tests.cs`:
-
-```C#
-[Fact]
-public void DietViolation_Error_IsTheAdr029MappedSubtype()
-{
-    using var failure = Issue56Sample.DietViolation();
-
-    Assert.IsType<KotlinArgumentException>(failure.Error);
-}
-
-[Fact]
-public void DietViolation_Error_UnmappedCause_FallsBackToBaseKotlinException()
-{
-    // RuntimeException has no ADR-029 mapping, so the cause must be the base type.
-    using var failure = Issue56Sample.DietViolation();
-
-    Assert.IsType<KotlinException>(failure.Error!.InnerException);
-}
-
-[Fact]
-public void LastError_VarThrowableProperty_HasNoSetter()
-{
-    var property = typeof(Issue56Failure).GetProperty("LastError");
-
-    Assert.NotNull(property);
-    Assert.True(property!.CanRead);
-    Assert.False(property.CanWrite);
-}
-
-[Fact]
-public void FailedLoad_SealedSubclassThrowableProperty_IsTheMappedException()
-{
-    using Issue56LoadState state = Issue56Sample.FailedLoad();
-
-    var failure = (Issue56LoadState.Failure)state;
-    Exception? error = failure.Error;
-
-    Assert.IsType<KotlinArgumentException>(error);
-    Assert.Equal("Oreo is on a diet!", error!.Message);
-}
-```
+Only a property getter is supported today. A method return, a parameter, `List<Throwable>`, and a
+module-local `class MyError : Exception()` that is not itself exported all keep their existing skip.
 
 ## Result return values
 
-`kotlin.Result<T>` at an ordinary (non-suspend) return position lowers to `T`: the generated export
-calls `.getOrThrow()` on the invocation inside the same `try` every other export already wraps its
-call in, so a `Result.failure(e)` is indistinguishable in C# from `throw e` and arrives mapped
-exactly as ADR-029 describes. `Result<Unit>` binds as `void`, not `Unit`.
-
-<warning>
-    <p>This is a deliberate semantic loss: a C# caller cannot tell a modelled
-    <code>Result.failure</code> from an unexpected exception. Both surface as the same mapped
-    <code>KotlinException</code> subtype. There is no <code>TryRun</code>-style non-throwing
-    overload.</p>
-</warning>
-
-From `test-library/src/nativeMain/kotlin/.../test/cat/ResultSample.kt`:
+A `kotlin.Result<T>` return from an ordinary (non-suspend) function lowers to `T`: success returns
+the payload, and `Result.failure(e)` throws exactly as `throw e` would, mapped the same way as any
+other exception. `Result<Unit>` binds as `void`, not `Unit`.
 
 ```kotlin
 class Service {
@@ -417,83 +152,16 @@ class Service {
 }
 ```
 
-Generated C#, from `Interop.cs`: `Run()` is `void`, not `Unit`-returning, and `Feed` returns the
-payload type directly:
-
 ```C#
-public void Run()
-{
-    Native_Run(_handle, out IntPtr error);
-    if (error != IntPtr.Zero)
-    {
-        throw NugetErrorNative.BuildException(error);
-    }
-}
-
-public string Feed(string catName)
-{
-    IntPtr nativeResult = Native_Feed(_handle, catName, out IntPtr error);
-    if (error != IntPtr.Zero)
-    {
-        throw NugetErrorNative.BuildException(error);
-    }
-    return Marshal.PtrToStringUTF8(nativeResult)!;
-}
+using var service = ResultSample.Service();
+service.Run();                                    // void, always succeeds here
+string treat = service.Feed("Mylo");              // "Mylo got a treat"
+Assert.ThrowsAny<ArgumentException>(() => service.Feed("Oreo"));
 ```
 
-From `IntegrationTests/ResultReturnTests.cs`:
+A C# caller cannot tell a modelled `Result.failure` apart from an unexpected exception: both surface
+as the same mapped `KotlinException` subtype, and there is no non-throwing `TryRun`-style overload.
 
-```C#
-[Fact]
-public void Run_ResultOfUnit_BindsAsVoidAndSucceeds()
-{
-    using var service = ResultSample.Service();
-
-    // Compile-time contract: Run() is void, not Unit-returning and not a bool Try shape.
-    Assert.Null(Record.Exception(() => service.Run()));
-}
-
-[Fact]
-public void Feed_Mylo_ResultSuccess_ReturnsThePayloadAsAPlainString()
-{
-    using var service = ResultSample.Service();
-
-    string treat = service.Feed("Mylo");
-
-    Assert.Equal("Mylo got a treat", treat);
-}
-```
-
-## Limitations
-
-- `Throwable` binds at a **property getter only**: a method return, a parameter, and
-  `List<Throwable>` all keep their existing named skip. A module-local, non-exported
-  `class MyError : Exception()` does not classify as `Throwable` either and keeps skipping named:
-  only a klib/stdlib-origin throwable that is not itself in the export set qualifies. Both deferred
-  by [ADR-107](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/107-throwable-property-mapping.md),
-  tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
-- `Result<T>` binds at an ordinary **return position only**: property, parameter,
-  value-class-own-member, and `suspend fun` positions all keep their existing named skip (a
-  `Result<T>` whose payload has no return shape of its own, such as a sealed base or `Flow`, also
-  keeps the named skip rather than adopting the payload's). There is no non-throwing `Try`-style
-  overload. Deferred by [ADR-108](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/108-result-return-mapping.md),
-  tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
-
-<seealso>
-    <category ref="related">
-        <a href="value-classes.md">Value classes</a>
-        <a href="data-classes.md">Data classes</a>
-        <a href="coroutines-and-flow.md">Coroutines and Flow</a>
-    </category>
-    <category ref="external">
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/023-exception-propagation.md">ADR-023: Exception propagation</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/027-stacktrace-propagation.md">ADR-027: Stack trace propagation</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/028-exception-cause-chain.md">ADR-028: Exception cause chain</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/029-exception-type-mapping.md">ADR-029: Exception type mapping</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/030-property-exception-propagation.md">ADR-030: Property exception propagation</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/031-constructor-exception-propagation.md">ADR-031: Constructor exception propagation</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/034-secondary-constructor-exceptions.md">ADR-034: Secondary constructor exceptions</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/107-throwable-property-mapping.md">ADR-107: Throwable property mapping</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/108-result-return-mapping.md">ADR-108: Result return mapping</a>
-    </category>
-</seealso>
+Only an ordinary return position is supported today. `Result<T>` at a property, parameter,
+value-class-own-member, or `suspend fun` position keeps its existing skip, as does a `Result<T>`
+whose payload has no return shape of its own (a sealed base, `Flow`).

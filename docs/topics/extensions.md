@@ -1,211 +1,143 @@
 # Extensions
 
-Kotlin extension functions and properties don't have a native C# analog (C# has extension methods but not extension properties), so both map to static methods, grouped by source file the same way as any other top-level declaration (see [Top-level declarations](top-level-declarations.md)). Extension functions render as true C# extension methods (`this` parameter); extension properties render as ordinary static getter methods, since C# can't declare an extension property.
+An extension function renders as a genuine C# extension method (`this` parameter). An extension
+property renders as an ordinary static method with a `Get` prefix, since C# has no extension-property
+syntax: call it like a method, not like a property. Both are grouped by receiver into a
+`{Receiver}Extensions` static class, alongside any other top-level declarations
+(see [Top-level declarations](top-level-declarations.md)).
 
-| Kotlin | C# | Notes |
-|---|---|---|
-| extension function | static method | true C# extension method (`this` parameter); receiver may also be an eligible sealed base, see [Sealed receivers](#sealed-receivers) below, nullable (`Cat?`), rendered `this Cat? receiver` with a null receiver crossing as `IntPtr.Zero`, see [Nullable receivers](#nullable-receivers) below, a bare interface, see [Interface receivers](#interface-receivers) below, a nullable value class, see [Value-class receivers](#value-class-receivers) below, or a nested class, binding under the receiver's own owner chain the same way its members do, see [Nested receivers](#nested-receivers) below; a has-value fan-out receiver (`Int?`, `Enum?`, `Instant?`, `Duration?`, a `Primitive`/`Enum`-underlying value class `?`) skips named `RECEIVER_FAN_OUT` instead, see [Limitations](#limitations) below ([ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md), [ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)) |
-| extension property | static accessor | receiver may also be a bare interface or a nullable interface, see [Interface receivers](#interface-receiver-property) below, a nullable class, see [Nullable receivers](#nullable-receiver-property) below, an eligible sealed base, see [Sealed receivers](#sealed-receivers) below, or a nested class, see [Nested receivers](#nested-receivers) below; an enum, `Uuid`, `Instant`, `Duration`, or nullable `String`/`Uuid`/value-class receiver still skips named, see [Limitations](#limitations) below ([ADR-013](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md), [ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md), [ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)) |
-| extension function return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, …) | matching C# return type | same cascade as a class-method return via the shared plan, see Return marshalling below and [Classes and objects](classes-and-objects.md) |
-| two or more same-named extension functions | one C# overload set | numbered native export/extern name, unnumbered public name, counter scoped per (package, name), receiver-agnostic among top-level receivers; a nested-class receiver's own owner chain joins the scope, see [Method overloads](#method-overloads) below ([ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md), [ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)) |
-| extension function with a trailing run of defaulted parameters | omitting overload per suffix length | receiver is not a plan parameter and always survives truncation; see Method default parameters below ([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)) |
-| unexported-receiver `{Receiver}Extensions` class (`String`, a primitive, any stdlib type) | one class per declaring package's namespace | functions and properties on the same receiver in the same package share one class; a different package never merges into it; an exported receiver keeps its own namespace instead, see Namespace placement below ([ADR-126](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/126-extension-class-per-declaring-package.md)) |
-
-## Kotlin
-
-Extension functions on `String`, from `test-library/src/nativeMain/kotlin/.../StringExtensions.kt`:
-
-```kotlin
-fun String.meowify(): String = "$this meow!"
-fun String.isPurring(): Boolean = lowercase().contains("purr")
-
-val String.wordCount: Int get() = trim().split("\\s+".toRegex()).size
-```
-
-Extension functions and properties on `Cat`, from `test-library/src/nativeMain/kotlin/.../cat/CatExtensions.kt`:
+From `test-library/src/nativeMain/kotlin/.../cat/CatExtensions.kt` and `StringExtensions.kt`:
 
 ```kotlin
 fun Cat.sayName(): String = "My name is ${this.name}"
-fun Cat.greetWith(greeting: String): String = "$greeting, ${this.name}!"
-
 val Cat.isKitten: Boolean get() = lives > 7
-val Cat.label: String get() = "${name} (${mood.name.lowercase()})"
+
+fun String.meowify(): String = "$this meow!"
 ```
-
-## Generated C#
-
-From `Interop.cs`, `CatExtensions` static class. `SayName` is a genuine C# extension method (`this Cat cat`); `GetIsKitten` is the extension-property accessor, named with a `Get` prefix since C# has no extension-property syntax:
 
 ```C#
-public static partial class CatExtensions
-{
-    [DllImport("sample", CallingConvention = CallingConvention.Cdecl, EntryPoint = "cat_sayName")]
-    private static extern IntPtr Native_SayName(IntPtr handle);
-
-    public static string SayName(this Cat cat)
-        => Marshal.PtrToStringUTF8(Native_SayName(cat._handle))!;
-
-    [DllImport("sample", CallingConvention = CallingConvention.Cdecl, EntryPoint = "cat_greetWith")]
-    private static extern IntPtr Native_GreetWith(IntPtr handle, string greeting);
-
-    public static string GreetWith(this Cat cat, string greeting)
-        => Marshal.PtrToStringUTF8(Native_GreetWith(cat._handle, greeting))!;
-
-    [DllImport("sample", CallingConvention = CallingConvention.Cdecl, EntryPoint = "cat_get_isKitten")]
-    private static extern bool Native_GetIsKitten(IntPtr handle, out IntPtr error);
-
-    public static bool GetIsKitten(this Cat cat)
-    {
-        bool result = Native_GetIsKitten(cat._handle, out IntPtr error);
-        if (error != IntPtr.Zero)
-        {
-            throw NugetErrorNative.BuildException(error);
-        }
-        return result;
-    }
-}
+using var cat = new Cat("Oreo", 9);
+cat.SayName();       // "My name is Oreo"
+cat.GetIsKitten();    // extension property, called as a method
+"Oreo".Meowify();
 ```
 
-## Using it from C#
+## Where the generated class lands
 
-Extension functions, from `IntegrationTests/ExtensionFunctionTests.cs`:
+An extension on an **exported** receiver (a class this library publishes, e.g. `Cat`) lands in that
+receiver's own namespace (`TestLibrary.Cat.CatExtensions`). An extension on an **unexported**
+receiver (`String`, a primitive, any stdlib type) has no such home, so it lands in the namespace of
+the package that *declares* the extension instead. Extensions on the same unexported receiver
+declared in the same package share one class; a different package gets its own class in its own
+namespace, and never merges with the first.
+
+Extension-method call syntax (`"Oreo".Meowify()`) compiles wherever the receiver's extensions land,
+as long as the calling file has that namespace in scope via `using`. Only a fully-qualified static
+call pins the namespace at compile time:
 
 ```C#
-[Fact]
-public void String_Meowify_AppendsMeow()
-{
-    Assert.Equal("Oreo meow!", "Oreo".Meowify());
-}
-
-[Fact]
-public void Cat_SayName()
-{
-    using var cat = new Cat("Oreo", 9);
-    Assert.Equal("My name is Oreo", cat.SayName());
-}
-
-[Fact]
-public void Cat_GreetWith()
-{
-    using var cat = new Cat("Oreo", 9);
-    Assert.Equal("Hello, Oreo!", cat.GreetWith("Hello"));
-}
+TestLibrary.StringExtensions.Meowify("Oreo");
+TestLibrary.Reserved.StringExtensions.Tag("Oreo", "Mylo"); // a different package's own String extension
 ```
 
-Extension properties, from `IntegrationTests/ExtensionPropertyTests.cs`, called as a method, not a property, on the C# side:
+## Supported receivers
 
-```C#
-[Fact]
-public void Cat_GetIsKitten_ReturnsTrueForNewCatWithNineLives()
-{
-    using var cat = new Cat("Oreo", 9);
-    Assert.True(cat.GetIsKitten());
-}
+| Kotlin receiver | Extension function | Extension property |
+|---|---|---|
+| Exported class, nested class, or eligible sealed base | yes | yes |
+| Bare interface | yes | yes |
+| Nullable class or nullable interface | yes | yes |
+| `String`, a primitive | yes | yes |
+| Value class over `String`, a primitive, an enum, or an object handle | yes | yes |
+| Nullable value class over `String` or an object handle | yes | no |
+| Bare enum, `Uuid`, `Instant`, `Duration` | yes | no |
+| `Int?`, `Enum?`, `Instant?`, `Duration?`, or a nullable primitive/enum-underlying value class | no | no |
+| Collection, generic type, unexported (non-stdlib) type | no | no |
 
-[Fact]
-public void Cat_GetLabel_ReturnsNameWithMood()
-{
-    using var cat = new Cat("Oreo", 9);
-    Assert.Equal("Oreo (sleepy)", cat.GetLabel());
-}
+A receiver in a "no" cell is dropped with a named diagnostic
+(`SKIPPED_UNSUPPORTED_PROPERTY` for a property, `RECEIVER_FAN_OUT` for the fan-out function case).
+Declare a top-level function taking the value as a parameter instead
+(see [Publishing Kotlin to C#: Diagnostics](forward-overview.md#diagnostics)).
+An extension property typed `Flow`, `StateFlow`, or a lambda is skipped the same way, even on an
+otherwise-supported receiver.
 
-[Fact]
-public void String_GetWordCount_ReturnsTwoForTwoWords()
-{
-    Assert.Equal(2, "hello world".GetWordCount());
-}
-```
+`Instant`, `Duration`, and `Uuid` (mapped to `DateTimeOffset`, `TimeSpan`, and `Guid`, see
+[Primitives and strings](primitives-and-strings.md#instant)) work as extension-function receivers,
+not extension-property receivers. A nullable `Instant`, `Duration`, or primitive/enum-underlying
+value class only works as a function *parameter*, never as a receiver (see the table above).
 
-## Namespace placement
+### Nullable receivers
 
-Where a merged `{Receiver}Extensions` class lands depends on whether the receiver is exported by
-this library:
-
-- an **exported** receiver (a class this library publishes, e.g. `Cat`) homes the class on the
-  receiver's own package, `TestLibrary.Cat.CatExtensions` above. Deterministic: the receiver has
-  exactly one package.
-- an **unexported** receiver (`String`, a primitive, any stdlib type) has no such home, so the
-  class lands in the namespace of the package that *declares* the extension instead. Extension
-  functions and extension properties on the same receiver declared in the same package always
-  merge into one class; a different package's extensions on the same receiver never merge into it,
-  they render their own class in their own namespace.
-
-### Kotlin {id="namespace-kotlin"}
-
-The root package's `String` extensions (`meowify`, `isPurring`, `wordCount`, shown above) sit
-beside a second package's own `String` extension, from
-`test-library/src/nativeMain/kotlin/.../reserved/ReservedExtensions.kt`:
+An extension function on a nullable receiver (`Cat?`) is still a genuine C# extension method, so
+calling it on a null reference is legal and reaches Kotlin: extension methods dispatch statically,
+there is no `NullReferenceException`.
 
 ```kotlin
-fun String.tag(receiver: String): String = "$this:$receiver"
+fun Cat?.nameOrStray(): String = this?.name ?: "stray"
 ```
-
-### Generated C# {id="namespace-generated-c"}
-
-From `Interop.cs`. The root package's `String` extensions land in `TestLibrary`; `reserved`'s own
-`String` extension lands in `TestLibrary.Reserved`, a distinct class that never merges with the
-first:
 
 ```C#
-namespace TestLibrary
-{
-    public static partial class StringExtensions
-    {
-        public static string Meowify(this string receiver) { /* ... */ }
-        public static bool IsPurring(this string receiver) { /* ... */ }
-        public static int GetWordCount(this string receiver) { /* ... */ }
-    }
-}
-
-namespace TestLibrary.Reserved
-{
-    public static partial class StringExtensions
-    {
-        public static string Tag(this string receiver, string receiver_) { /* ... */ }
-    }
-}
+Cat? none = null;
+none.NameOrStray(); // "stray"
 ```
 
-### Using it from C# {id="namespace-using-it-from-c"}
+An extension property behaves the same way (`none.GetNameOrStray()`).
 
-A fully-qualified static call, from `IntegrationTests/ExtensionNamespaceTests.cs`, is the only way
-to pin a namespace at compile time: extension-method call syntax resolves through `using`
-directives and keeps compiling wherever the class lands.
+### Interface receivers {id="interface-receivers"}
 
-```C#
-[Fact]
-public void RootPackage_Meowify_RendersInTheRootNamespace()
-{
-    Assert.Equal("Oreo meow!", TestLibrary.StringExtensions.Meowify("Oreo"));
-}
-
-[Fact]
-public void ReservedPackage_Tag_RendersInItsOwnNamespace()
-{
-    Assert.Equal("Oreo:Mylo", TestLibrary.Reserved.StringExtensions.Tag("Oreo", "Mylo"));
-}
-```
-
-<note>
-    <p>
-        Extension-method call syntax (<code>"Oreo".Meowify()</code>) keeps compiling regardless of
-        which package a receiver's extensions land in, as long as the calling file has that
-        package's namespace in scope via <code>using</code>. Only a fully-qualified static call
-        pins the namespace at compile time, which is why the test above uses one.
-    </p>
-</note>
-
-## Value-class receivers
-
-A value class also works as the receiver of an extension function or extension property, over any
-of the four underlyings admitted at ordinary positions: `String`, a primitive, an enum, or
-`ObjectHandle` (see [Value classes](value-classes.md#as-an-extension-receiver)). `ChartId.abbreviate`
-(`String` underlying) and `Temperament.escalate` (`Mood` enum underlying, returning another
-`Temperament`), from `test-library/src/nativeMain/kotlin/.../clinic/ClinicSample.kt`:
+An interface receiver works whether the concrete instance is Kotlin-backed or implemented in C#, the
+same as an interface *parameter*: the plugin dispatches back to whichever side actually implements
+the members, so a C# `Dog : IPet` behaves correctly without anything extra on the caller's part.
 
 ```kotlin
-fun ChartId.abbreviate(length: Int): String = value.take(length)
+fun Pet.describe(): String = "$name has $legs legs and says ${speak()}"
+```
 
+```C#
+using var oreo = new Cat("Oreo", 9);
+oreo.Describe(); // "Oreo has 4 legs and says Meow! My name is Oreo"
+
+using IPet rex = new Dog("Rex");
+rex.Describe(); // "Rex has 4 legs and says Woof!", dispatched back into C#
+```
+
+#### On an extension property {id="interface-receiver-property"}
+
+An extension property's receiver may be a bare interface too, with the same dispatch behavior:
+
+```kotlin
+val Pet.summary: String get() = "$name/$legs/${speak()}"
+```
+
+```C#
+rex.GetSummary(); // "Rex/4/Woof!"
+```
+
+### Sealed receivers {id="sealed-receivers"}
+
+An extension function's or property's receiver may be an eligible sealed base (see
+[Sealed interfaces](interfaces-abstract-sealed.md#sealed-interfaces)). The extension binds on the
+abstract base and every arm inherits it, so you don't need to `when`-match the arm just to call it:
+
+```kotlin
+fun Issue54Shape.footprint(): String = when (this) {
+  Issue54Shape.Empty -> "empty"
+  is Issue54Shape.Circle -> "circle r=$radius"
+}
+```
+
+```C#
+using Issue54Shape shape = drawing.Shape;
+shape.Footprint(); // works on the base type, no cast needed
+```
+
+### Value-class receivers
+
+A value class works as a receiver over any of its four supported underlyings (`String`, a
+primitive, an enum, or an object handle; see
+[Value classes](value-classes.md#as-an-extension-receiver)):
+
+```kotlin
 fun Temperament.escalate(): Temperament = when (mood) {
   Mood.CALM -> Temperament(Mood.ANXIOUS)
   Mood.ANXIOUS -> Temperament(Mood.PLAYFUL)
@@ -213,867 +145,79 @@ fun Temperament.escalate(): Temperament = when (mood) {
 }
 ```
 
-The receiver crosses as its underlying wire value, re-wrapped with the value class's own
-constructor on the Kotlin side so `init` runs, exactly like a value-class parameter
-([ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md)).
-Generated C#, from `Interop.cs`:
-
-```C#
-public static partial class TemperamentExtensions
-{
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "temperament_escalate")]
-    private static extern int Native_Escalate(int receiver, out IntPtr error);
-
-    public static Temperament Escalate(this Temperament receiver)
-    {
-        int nativeResult = Native_Escalate((int)receiver.Mood, out IntPtr error);
-        if (error != IntPtr.Zero)
-        {
-            throw NugetErrorNative.BuildException(error);
-        }
-        return new Temperament((global::TestLibrary.Clinic.Mood)nativeResult);
-    }
-}
-```
-
-### Nullable value-class receivers {id="value-class-nullable-receivers"}
-
-An extension **function**'s value-class receiver may also be nullable (`CatId?`), over a
-`String`- or `ObjectHandle`-underlying value class: the underlying's own nullable wire carries the
-absent case as a null pointer, and the Kotlin side re-wraps only when a value is present, exactly
-like a nullable value-class parameter
-([ADR-077](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md),
-[ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md)).
-A `Primitive`- or `Enum`-underlying value class receiver (an ADR-079/080 has-value pair, not a
-null pointer) does **not** bind this way, see [Limitations](#limitations) below. `CatId`, from
-`test-library/src/nativeMain/kotlin/.../cat/CatExtensions.kt`:
+A `String`- or object-handle-underlying value class receiver may also be nullable:
 
 ```kotlin
 fun CatId?.orAnonymous(): String = this?.id ?: "anonymous"
 ```
 
-Generated C#, from `Interop.cs`:
+`CatId` generates as a `readonly record struct`, so the receiver is `CatId?`
+(`Nullable<CatId>`). C# only binds an extension receiver through an identity, implicit-reference, or
+boxing conversion, and `CatId -> CatId?` is none of those, so calling the extension on a bare
+`CatId` fails to compile (`CS1929`):
 
 ```C#
-[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "catid_orAnonymous")]
-private static extern IntPtr Native_OrAnonymous([MarshalAs(UnmanagedType.LPUTF8Str)] string? receiver, out IntPtr error);
+CatId? id = new CatId("Oreo-1");
+id.OrAnonymous();          // compiles: "Oreo-1"
 
-public static string OrAnonymous(this global::TestLibrary.Cat.CatId? receiver)
-{
-    IntPtr nativeResult = Native_OrAnonymous(receiver?.Id, out IntPtr error);
-    if (error != IntPtr.Zero)
-    {
-        throw NugetErrorNative.BuildException(error);
-    }
-    return Marshal.PtrToStringUTF8(nativeResult)!;
-}
+new CatId("Oreo-1").OrAnonymous(); // CS1929: call it on a CatId? variable instead
 ```
 
-From `IntegrationTests/ExtensionFunctionTests.cs`:
-
-```C#
-[Fact]
-public void NullableValueClassReceiver_Value_ReturnsTheId()
-{
-    CatId? id = new CatId("Oreo-1");
-    Assert.Equal("Oreo-1", id.OrAnonymous());
-}
-
-[Fact]
-public void NullableValueClassReceiver_Null_ReturnsAnonymous()
-{
-    CatId? id = null;
-    Assert.Equal("anonymous", id.OrAnonymous());
-}
-```
-
-<note>
-    <p>
-        <code>CatId</code> generates as a <code>readonly record struct</code>, so <code>this CatId?
-        receiver</code> is a <code>Nullable&lt;CatId&gt;</code>. C# binds an extension receiver only
-        through an identity, implicit-reference, or boxing conversion, and <code>CatId -&gt;
-        CatId?</code> is none of those, so <code>new CatId("x").OrAnonymous()</code> fails to
-        compile (<code>CS1929</code>) even though Kotlin allows calling a <code>T?</code> extension
-        on a non-null <code>T</code>. Call it on a <code>CatId?</code> local instead, as both tests
-        above do. See
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md">ADR-132</a>'s
-        sub-decision for why no forwarding non-null overload is emitted.
-    </p>
-</note>
-
-## Nullable receivers
-
-An extension function's receiver may also be nullable (`Cat?`). It still renders as a genuine C#
-extension method, on the nullable wrapper type, so calling it on a null reference is legal C#:
-extension methods dispatch statically, there is no `NullReferenceException`. The null crosses the
-ABI as `IntPtr.Zero`, and nothing on the native side dereferences it unless the Kotlin body does
-([ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)).
-
-### Kotlin {id="nullable-receiver-kotlin"}
-
-From `test-library/src/nativeMain/kotlin/.../cat/CatExtensions.kt`:
-
-```kotlin
-fun Cat?.nameOrStray(): String = this?.name ?: "stray"
-```
-
-### Generated C# {id="nullable-receiver-generated-c"}
-
-From `Interop.cs`:
-
-```C#
-[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "cat_nameOrStray")]
-private static extern IntPtr Native_NameOrStray(IntPtr receiver, out IntPtr error);
-
-public static string NameOrStray(this global::TestLibrary.Cat.Cat? receiver)
-{
-    IntPtr nativeResult = Native_NameOrStray(receiver?._handle ?? IntPtr.Zero, out IntPtr error);
-    if (error != IntPtr.Zero)
-    {
-        throw NugetErrorNative.BuildException(error);
-    }
-    return Marshal.PtrToStringUTF8(nativeResult)!;
-}
-```
-
-### Using it from C# {id="nullable-receiver-using-it-from-c"}
-
-From `IntegrationTests/ExtensionFunctionTests.cs`, a live receiver and a null one:
-
-```C#
-[Fact]
-public void NullableReceiver_LiveCat_ReturnsName()
-{
-    using var mylo = new Cat("Mylo", 9);
-    Assert.Equal("Mylo", mylo.NameOrStray());
-}
-
-[Fact]
-public void NullableReceiver_NullCat_ReturnsStray()
-{
-    Cat? none = null;
-    Assert.Equal("stray", none.NameOrStray());
-}
-```
-
-### Extension property {id="nullable-receiver-property"}
-
-A nullable class receiver binds on an extension property too, since 2026-09-14
-([ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md)
-amendment). `val Cat?.nameOrStray`, from
-`test-library/src/nativeMain/kotlin/.../cat/CatExtensions.kt`, sits beside
-`fun Cat?.nameOrStray()` above, the same shape one slot to the left:
-
-```kotlin
-val Cat?.nameOrStray: String get() = this?.name ?: "stray"
-```
-
-Generated C#, from `Interop.cs`. Nothing is minted for this receiver, so there is no scope and no
-cleanup:
-
-```C#
-[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "cat_get_nameOrStray")]
-private static extern IntPtr Native_CatGetNameOrStray(IntPtr receiver, out IntPtr error);
-
-public static string GetNameOrStray(this global::TestLibrary.Cat.Cat? receiver)
-{            IntPtr nativeResult = Native_CatGetNameOrStray(receiver?._handle ?? IntPtr.Zero, out IntPtr error);
-    if (error != IntPtr.Zero)
-    {
-        throw NugetErrorNative.BuildException(error);
-    }
-    return Marshal.PtrToStringUTF8(nativeResult)!;
-}
-```
-
-From `IntegrationTests/ExtensionPropertyTests.cs`, a null receiver and a live one:
-
-```C#
-[Fact]
-public void NullableCatReceiver_GetNameOrStray_NullCat()
-{
-    Cat? none = null;
-    Assert.Equal("stray", none.GetNameOrStray());
-}
-
-[Fact]
-public void NullableCatReceiver_GetNameOrStray_LiveCat()
-{
-    using var mylo = new Cat("Mylo", 3);
-    Assert.Equal("Mylo", mylo.GetNameOrStray());
-}
-```
-
-## Interface receivers
-
-An extension function's receiver may also be a bare interface. It binds the same way an interface
-*parameter* does: a Kotlin-backed implementation crosses as its own `StableRef`, and a
-C#-implemented one routes through the ADR-084 stage-3 bridge factory, `NugetMarshal.HandleOf`,
-minting a transfer handle that is disposed again once the call returns
-([ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md)).
-
-### Kotlin {id="interface-receiver-kotlin"}
-
-From `test-library/src/nativeMain/kotlin/.../cat/CatExtensions.kt`. The body composes `name`,
-`legs`, and `speak()` rather than echoing the receiver back, so only a receiver whose members
-genuinely dispatch across the bridge can produce the right string:
-
-```kotlin
-fun Pet.describe(): String = "$name has $legs legs and says ${speak()}"
-```
-
-### Generated C# {id="interface-receiver-generated-c"}
-
-From `Interop.cs`. `HandleOf` mints a transfer `StableRef` only when the receiver has no `_handle`
-of its own (a C#-implemented `Pet`); `receiverOwned` tracks whether the cleanup must dispose it:
-
-```C#
-[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "pet_describe")]
-private static extern IntPtr Native_Describe(IntPtr receiver, out IntPtr error);
-
-public static string Describe(this global::TestLibrary.Cat.IPet receiver)
-{
-    IntPtr receiverHandle = IntPtr.Zero;
-    bool receiverOwned = false;
-    try
-    {
-        receiverHandle = NugetMarshal.HandleOf(receiver, out receiverOwned);
-        IntPtr nativeResult = Native_Describe(receiverHandle, out IntPtr error);
-        if (error != IntPtr.Zero)
-        {
-            throw NugetErrorNative.BuildException(error);
-        }
-        return Marshal.PtrToStringUTF8(nativeResult)!;
-    }
-    finally
-    {
-        if (receiverOwned) { NugetMarshal.Dispose(receiverHandle); }
-    }
-}
-```
-
-### Using it from C# {id="interface-receiver-using-it-from-c"}
-
-From `IntegrationTests/ExtensionFunctionTests.cs`: a Kotlin-backed wrapper (nothing minted, nothing
-to dispose), an anonymous Kotlin object with no generated wrapper class of its own, and a
-C#-implemented `Dog : IPet`, which can only produce the expected string if `name`, `legs`, and
-`speak()` all really dispatched back into C#:
-
-```C#
-[Fact]
-public void InterfaceReceiver_KotlinCat_DescribesThroughInterfaceMembers()
-{
-    using var oreo = new Cat("Oreo", 9);
-    Assert.Equal("Oreo has 4 legs and says Meow! My name is Oreo", oreo.Describe());
-}
-
-[Fact]
-public void InterfaceReceiver_CSharpImplementedDog_DispatchesBackIntoCSharp()
-{
-    using IPet rex = new Dog("Rex");
-    Assert.Equal("Rex has 4 legs and says Woof!", rex.Describe());
-}
-```
-
-<note>
-    <p>
-        The C#-implemented case mints a transfer <code>StableRef</code> per crossing, since the
-        bridge object has no <code>_handle</code> of its own. <code>LeakTests/LiveHandleTests.cs</code>
-        row 6b, <code>InterfaceReceiverExtension_CSharpImplementedPet_ReleasesTransferHandle</code>,
-        proves it returns to baseline. This binds even when the receiver interface is never
-        returned and never a declared parameter anywhere else, since
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/135-interface-parameter-reachability.md">ADR-135</a>
-        widened the bridge reachability walk to cover a RECEIVER-role slot too. A nullable interface receiver (<code>Pet?</code>) and the
-        other admitted receiver shapes (an enum, <code>Uuid</code>, <code>Instant</code>,
-        <code>Duration</code>, a collection, a nullable <code>Uuid</code>/collection, and a bound
-        interface) route through the identical parameter lowering but carry no dedicated fixture.
-        A nullable enum, <code>Instant</code>, or <code>Duration</code> receiver does <b>not</b>
-        bind this way, see <a href="#limitations">Limitations</a> below.
-    </p>
-</note>
-
-### Extension property {id="interface-receiver-property"}
-
-An extension **property**'s receiver may be a bare interface too, since 2026-09-14: it binds
-through the same lowering the extension-function receiver above uses, `HandleOf`/`Dispose` on the
-C# side and a borrowed `StableRef` read on the Kotlin side
-([ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md)
-amendment). `val Pet.summary`, from `test-library/src/nativeMain/kotlin/.../cat/CatExtensions.kt`,
-composes `name`, `legs`, and `speak()` rather than echoing the receiver, for the same reason
-`describe()` above does:
-
-```kotlin
-val Pet.summary: String get() = "$name/$legs/${speak()}"
-```
-
-Generated C#, from `Interop.cs`. The getter body is now scoped, so the transfer handle a
-C#-implemented receiver mints is disposed in `finally`:
-
-```C#
-[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "pet_get_summary")]
-private static extern IntPtr Native_PetGetSummary(IntPtr receiver, out IntPtr error);
-
-public static string GetSummary(this global::TestLibrary.Cat.IPet receiver)
-{            IntPtr receiverHandle = IntPtr.Zero;
-    bool receiverOwned = false;
-    try
-    {
-        receiverHandle = NugetMarshal.HandleOf(receiver, out receiverOwned);
-        IntPtr nativeResult = Native_PetGetSummary(receiverHandle, out IntPtr error);
-        if (error != IntPtr.Zero)
-        {
-            throw NugetErrorNative.BuildException(error);
-        }
-        return Marshal.PtrToStringUTF8(nativeResult)!;
-    }
-    finally
-    {
-        if (receiverOwned && receiverHandle != IntPtr.Zero) { NugetMarshal.Dispose(receiverHandle); }
-    }
-}
-```
-
-From `IntegrationTests/ExtensionPropertyTests.cs`, a Kotlin-backed wrapper and a C#-implemented
-`Dog : IPet`, which can only produce the expected string if all three interface members dispatch:
-
-```C#
-[Fact]
-public void PetReceiver_GetSummary_KotlinBackedCat()
-{
-    using var oreo = new Cat("Oreo", 9);
-    Assert.Equal("Oreo/4/Meow! My name is Oreo", oreo.GetSummary());
-}
-
-[Fact]
-public void PetReceiver_GetSummary_CSharpImplementedDog_DispatchesAllThreeSlots()
-{
-    using IPet rex = new Dog("Rex");
-    Assert.Equal("Rex/4/Woof!", rex.GetSummary());
-}
-```
-
-<note>
-    <p>
-        <code>LeakTests/LiveHandleTests.cs</code> row 6h,
-        <code>InterfaceReceiverExtensionProperty_CSharpImplementedPet_ReleasesTransferHandle</code>,
-        proves the getter's minted transfer handle returns to baseline: the setter route already
-        had a handle scope, the getter body used to be flat. A receiver-only interface, reachable
-        through no other member, still binds through the property plan's own arm of the
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/135-interface-parameter-reachability.md">ADR-135</a>
-        reachability walk: <code>InterfaceParameterTests.cs</code>'s
-        <code>ReceiverOnlyInterface_ExtensionProperty_IsCalledBackFromKotlin</code> reads
-        <code>ISitter.GetAddress()</code> on a <code>Sitter</code> interface that appears nowhere
-        else in the fixture. <code>Nullable(Interface)</code> routes through the identical
-        lowering but carries no dedicated fixture. An enum, <code>Uuid</code>, <code>Instant</code>,
-        or <code>Duration</code> receiver does <b>not</b> bind this way on the property route, see
-        <a href="#limitations">Limitations</a> below.
-    </p>
-</note>
-
-## Sealed receivers
-
-An extension function's or extension property's receiver may also be an eligible sealed base (a
-`sealed class`, or an eligible `sealed interface`, see
-[Sealed interfaces](interfaces-abstract-sealed.md#sealed-interfaces)). The same `sealedAsHandle()`
-rewrite the parameter-position route uses applies to the receiver too, so the extension binds on the
-abstract base and every arm inherits it. The Kotlin export takes the base handle and dereferences it
-with `asStableRef<Base>().get()`, the same idiom the sealed discriminator's own `_get_type` export
-uses. An ineligible or out-of-scope sealed receiver still skips: an extension **function** is named
-`SKIPPED_SEALED_POSITION`, an extension **property** is named `SKIPPED_UNSUPPORTED_PROPERTY` (the
-property planner records it as an unsupported receiver rather than a dedicated sealed-position reason)
-([ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)).
-A nullable sealed receiver (`Shape?`) binds the same way as [a nullable handle receiver](#nullable-receivers)
-above, through the same `sealedAsHandle()` recursion into `Nullable`.
-
-### Kotlin {id="sealed-receiver-kotlin"}
-
-From `test-library/src/nativeMain/kotlin/.../issue54/Issue54Sample.kt`:
-
-```kotlin
-fun Issue54Shape.footprint(): String = when (this) {
-  Issue54Shape.Empty -> "empty"
-  is Issue54Shape.Circle -> "circle r=$radius"
-}
-
-fun Issue54Shape.covers(other: Issue54Shape): Boolean = when (this) {
-  Issue54Shape.Empty -> other == Issue54Shape.Empty
-  is Issue54Shape.Circle -> other !is Issue54Shape.Circle || other.radius <= radius
-}
-
-val Issue54Shape.area: Double
-  get() = when (this) {
-    Issue54Shape.Empty -> 0.0
-    is Issue54Shape.Circle -> kotlin.math.PI * radius * radius
-  }
-```
-
-### Generated C# {id="sealed-receiver-generated-c"}
-
-From `Interop.cs`. `Issue54ShapeExtensions` lands in the receiver's own namespace, `TestLibrary.Issue54`, since `Issue54Shape` is exported:
-
-```C#
-public static partial class Issue54ShapeExtensions
-{
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue54shape_footprint")]
-    private static extern IntPtr Native_Footprint(IntPtr receiver, out IntPtr error);
-
-    public static string Footprint(this global::TestLibrary.Issue54.Issue54Shape receiver)
-    {
-        IntPtr nativeResult = Native_Footprint(receiver._handle, out IntPtr error);
-        if (error != IntPtr.Zero)
-        {
-            throw NugetErrorNative.BuildException(error);
-        }
-        return Marshal.PtrToStringUTF8(nativeResult)!;
-    }
-
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue54shape_covers")]
-    [return: MarshalAs(UnmanagedType.I1)]
-    private static extern bool Native_Covers(IntPtr receiver, IntPtr other, out IntPtr error);
-
-    public static bool Covers(this global::TestLibrary.Issue54.Issue54Shape receiver, global::TestLibrary.Issue54.Issue54Shape other)
-    {
-        bool nativeResult = Native_Covers(receiver._handle, other._handle, out IntPtr error);
-        if (error != IntPtr.Zero)
-        {
-            throw NugetErrorNative.BuildException(error);
-        }
-        return nativeResult;
-    }
-
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "issue54shape_get_area")]
-    private static extern double Native_Issue54shapeGetArea(IntPtr receiver, out IntPtr error);
-
-    public static double GetArea(this global::TestLibrary.Issue54.Issue54Shape receiver)
-    {
-        double nativeResult = Native_Issue54shapeGetArea(receiver._handle, out IntPtr error);
-        if (error != IntPtr.Zero)
-        {
-            throw NugetErrorNative.BuildException(error);
-        }
-        return nativeResult;
-    }
-}
-```
-
-### Using it from C# {id="sealed-receiver-using-it-from-c"}
-
-From `IntegrationTests/Issue54Tests.cs`:
-
-```C#
-[Fact]
-public void Footprint_SealedReceiverExtension_BindsOnThePayloadArm()
-{
-    using Issue54Drawing drawing = Issue54Sample.CurledCats();
-
-    using Issue54Shape shape = drawing.Shape;
-
-    Assert.Equal("circle r=7.5", shape.Footprint());
-    Assert.Equal("circle r=7.5", Assert.IsType<Issue54Shape.Circle>(shape).Footprint());
-}
-
-[Fact]
-public void Area_SealedReceiverExtensionProperty_BindsOnThePayloadArm()
-{
-    using Issue54Drawing drawing = Issue54Sample.CurledCats();
-
-    using Issue54Shape shape = drawing.Shape;
-
-    Assert.Equal(Math.PI * 7.5 * 7.5, shape.GetArea(), 9);
-    Assert.Equal(Math.PI * 7.5 * 7.5, Assert.IsType<Issue54Shape.Circle>(shape).GetArea(), 9);
-}
-
-[Fact]
-public void Area_SealedReceiverExtensionProperty_BindsOnThePayloadFreeArm()
-{
-    using Issue54Drawing drawing = Issue54Sample.CurledCats();
-
-    using Issue54Shape shape = drawing.Current;
-
-    Assert.Equal(0.0, shape.GetArea());
-}
-```
-
-## Nested receivers
-
-An extension function's or extension property's receiver may also be a nested class (see
-[Nested types](classes-and-objects.md#nested-classes-and-objects)). It binds under the receiver's
-own owner chain, the same way a member of that receiver does: `fun Aviary.Perch.summarize()` exports
-as `aviary_perch_summarize`, not the bare `perch_summarize` a top-level `Perch`, or another owner's
-own nested `Perch`, could also claim. The generated extension class is named for the whole chain and
-stays at namespace level (`AviaryPerchExtensions`, not `Aviary.PerchExtensions`), since C# forbids
-nesting an extension class (CS1109), the same rule a nested enum's extension class already follows
-([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)).
-
-### Kotlin {id="nested-receiver-kotlin"}
-
-From `test-library/src/nativeMain/kotlin/.../nested/Aviary.kt`:
+### Nested receivers
+
+A nested class works as a receiver too, binding under its own owner chain the same way a member of
+that class does (see [Nested types](classes-and-objects.md#nested-classes-and-objects)). The
+generated class stays at namespace level rather than nesting (`AviaryPerchExtensions`, not
+`Aviary.PerchExtensions`), since C# forbids nesting an extension class; extension-call syntax is
+unaffected:
 
 ```kotlin
 fun Aviary.Perch.summarize(): String = "perch@$height (ext)"
-
-val Aviary.Perch.isHigh: Boolean get() = height > 5
 ```
 
-### Generated C# {id="nested-receiver-generated-c"}
-
-From `Interop.cs`:
-
 ```C#
-public static partial class AviaryPerchExtensions
-{
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "aviary_perch_summarize")]
-    private static extern IntPtr Native_Summarize(IntPtr receiver, out IntPtr error);
-
-    public static string Summarize(this global::TestLibrary.Nested.Aviary.Perch receiver)
-    {
-        IntPtr nativeResult = Native_Summarize(receiver._handle, out IntPtr error);
-        if (error != IntPtr.Zero)
-        {
-            throw NugetErrorNative.BuildException(error);
-        }
-        return Marshal.PtrToStringUTF8(nativeResult)!;
-    }
-
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "aviary_perch_get_isHigh")]
-    [return: MarshalAs(UnmanagedType.I1)]
-    private static extern bool Native_AviaryPerchGetIsHigh(IntPtr receiver, out IntPtr error);
-
-    public static bool GetIsHigh(this global::TestLibrary.Nested.Aviary.Perch receiver) { /* ... */ }
-}
-```
-
-### Using it from C# {id="nested-receiver-using-it-from-c"}
-
-From `IntegrationTests/NestedTypesTests.cs`:
-
-```C#
-using var aviary = new Aviary("Oreo");
 using var perch = aviary.PerchAt(9);
-
-Assert.Equal("perch@9 (ext)", perch.Summarize());
-Assert.True(perch.GetIsHigh());
+perch.Summarize(); // "perch@9 (ext)"
 ```
 
-## Method overloads
+## Overloads and default parameters {id="method-overloads"}
 
-Two or more same-named extension functions generate one natural C# overload set, the same
-[ADR-090](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md)
-numbering template a class method uses, extended to this route by
-[ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md).
-The symbol key is `$package.$name`, which does **not** include the receiver itself, so among
-top-level receivers the counter is receiver-agnostic: two same-named extensions on *different*
-top-level receivers in one package number off the same sequence, even though their C exports would
-never have collided on their own. A nested receiver's *owner chain* does scope the counter, though
-(empty for a top-level receiver, so the rule above is unchanged): two nested receivers under
-different owners, `Coop.Inner.describe` and `Roost.Inner.describe`, each export unsuffixed
-(`coop_inner_describe`/`roost_inner_describe`) rather than sharing one sequence, since their chained
-symbols were never going to collide either
-([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)).
-
-### Kotlin {id="overloads-kotlin"}
-
-From `test-library/src/nativeMain/kotlin/.../grooming/GroomingSample.kt`:
-
-```kotlin
-class Mitten(val name: String)
-
-class Tomcat(val name: String)
-
-fun Mitten.pat(): String = "$name purrs"
-
-fun Mitten.pat(style: String): String = "$name enjoys a $style pat"
-
-fun Mitten.brush(strokes: Int): String = "$name is brushed $strokes times"
-
-fun Mitten.brush(coat: Coat): String = "$name is brushed for a ${coat.name.lowercase()} coat"
-
-/** Same package, same name, different receiver from Mitten.pat. */
-fun Tomcat.pat(): String = "$name tolerates exactly one pat"
-```
-
-### Generated C# {id="overloads-generated-c"}
-
-From `Interop.cs`. `Mitten.pat`'s two declarations number `mitten_pat` / `mitten_pat_2`; `Tomcat.pat`
-comes after all four `Mitten` overloads in source order, so it inherits the *next* number in the
-shared package-scoped sequence, `tomcat_pat_3`, on its own `TomcatExtensions` class:
+Two or more same-named extensions on the same receiver render as one ordinary C# overload set,
+resolved the normal C# way by parameter types:
 
 ```C#
-public static partial class MittenExtensions
-{
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "mitten_pat")]
-    private static extern IntPtr Native_Pat(IntPtr receiver, out IntPtr error);
-
-    public static string Pat(this Mitten receiver) { /* ... */ }
-
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "mitten_pat_2")]
-    private static extern IntPtr Native_Pat_2(IntPtr receiver, [MarshalAs(UnmanagedType.LPUTF8Str)] string style, out IntPtr error);
-
-    public static string Pat(this Mitten receiver, string style) { /* ... */ }
-
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "mitten_brush")]
-    private static extern IntPtr Native_Brush(IntPtr receiver, int strokes, out IntPtr error);
-
-    public static string Brush(this Mitten receiver, int strokes) { /* ... */ }
-
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "mitten_brush_2")]
-    private static extern IntPtr Native_Brush_2(IntPtr receiver, int coat, out IntPtr error);
-
-    public static string Brush(this Mitten receiver, global::TestLibrary.Grooming.Coat coat) { /* ... */ }
-}
-
-public static partial class TomcatExtensions
-{
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "tomcat_pat_3")]
-    private static extern IntPtr Native_Pat_3(IntPtr receiver, out IntPtr error);
-
-    public static string Pat(this Tomcat receiver) { /* ... */ }
-}
+public static string Pat(this Mitten receiver);
+public static string Pat(this Mitten receiver, string style);
 ```
 
-### Using it from C# {id="overloads-using-it-from-c"}
-
-From `IntegrationTests/StaticRouteOverloadTests.cs`:
-
-```C#
-[Fact]
-public void TomcatPat_SameNameDifferentReceiver_ResolvesToItsOwnExport()
-{
-    // Extension plan symbols are receiver-agnostic ($package.$name), so this declaration
-    // shares a symbol with Mitten.pat and crashes generation today. Both must survive, each on
-    // its own {Receiver}Extensions class.
-    using var oreo = new Mitten("Oreo");
-    using var mylo = new Tomcat("Mylo");
-
-    Assert.Equal("Oreo purrs", oreo.Pat());
-    Assert.Equal("Mylo tolerates exactly one pat", mylo.Pat());
-}
-```
-
-<note>
-    <p>
-        The redundant <code>_3</code> on <code>tomcat_pat_3</code> is a native-export detail only:
-        it composes after <code>toCName</code> and never reaches the public C# name. Package-scoped
-        numbering was chosen over a receiver-qualified symbol so cross-receiver namesakes share the
-        same rule as top-level functions; see the ADR's Alternatives Considered.
-    </p>
-</note>
-
-## Method default parameters
-
-A trailing run of defaulted parameters on an extension function synthesizes an omitting overload
-per suffix length, the same [ADR-091](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md)
-rule extended to this route by [ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md).
-Extensions are the other route (with top-level functions) where the synthesized entry shares its
-Kotlin declaration node with the declared one, needing the plural `plansFor(declaration)` accessor.
-The receiver is a `ForwardReceiver.Value`, not a plan parameter, so it is never truncated: even when
-every parameter is defaulted, the omitting overload with zero remaining parameters still carries the
-receiver.
-
-### Kotlin {id="defaults-kotlin"}
-
-From `test-library/src/nativeMain/kotlin/.../whiskers/WhiskersSample.kt`:
+A trailing run of defaulted parameters synthesizes the same omitting overloads a class method or
+top-level function gets. The receiver itself is never part of that truncation, so it is always
+present, even when every declared parameter is defaulted:
 
 ```kotlin
-class Paw(val name: String)
-
 fun Paw.knead(times: Int = 2, surface: String = "blanket"): String =
   "$name kneads the $surface $times times"
 ```
 
-### Generated C# {id="defaults-generated-c"}
-
-From `Interop.cs`:
-
 ```C#
-public static partial class PawExtensions
-{
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "paw_knead")]
-    private static extern IntPtr Native_Knead(IntPtr receiver, int times, string surface, out IntPtr error);
-
-    public static string Knead(this Paw receiver, int times, string surface) { /* ... */ }
-
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "paw_knead_2")]
-    private static extern IntPtr Native_Knead_2(IntPtr receiver, int times, out IntPtr error);
-
-    public static string Knead(this Paw receiver, int times) { /* ... */ } // surface omitted
-
-    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "paw_knead_3")]
-    private static extern IntPtr Native_Knead_3(IntPtr receiver, out IntPtr error);
-
-    public static string Knead(this Paw receiver) { /* ... */ } // times and surface both omitted
-}
+paw.Knead();               // "Oreo kneads the blanket 2 times"
+paw.Knead(3);
+paw.Knead(3, "sofa");
 ```
 
-### Using it from C# {id="defaults-using-it-from-c"}
+## Return values
 
-From `IntegrationTests/FunctionDefaultParameterTests.cs`:
-
-```C#
-[Fact]
-public void PawKnead_OmittingEveryParameter_KeepsTheReceiverAndUsesBothDefaults()
-{
-    // All parameters are defaulted, so at k = 2 the plan carries ZERO parameters. The receiver
-    // still has to know it is Oreo's paw.
-    using var paw = new Paw("Oreo");
-
-    Assert.Equal("Oreo kneads the blanket 2 times", paw.Knead());
-}
-```
-
-## Limitations
-
-An extension property only binds when its *receiver* is `String`, a primitive, a class in the
-export set (an `ObjectHandle`), an interface, a nullable class or interface, an eligible sealed
-base (see [Sealed receivers](#sealed-receivers) above), or a value class over a `String`,
-primitive, enum, or `ObjectHandle` underlying. A receiver outside that set (a generic class, an
-unexported type) is warned about and the whole property is dropped, naming the receiver rather
-than the property's own type:
-
-```
-[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping tier1.skipreceiver.Box.label: its extension receiver
-    type generic declaration tier1.skipreceiver.Box is not a supported extension-property receiver.
-    declare the property on a class, interface, nullable class, nullable interface, String,
-    primitive, or value class receiver, or expose a top-level getter function instead
-    at <file>:<line>
-```
-
-An extension property typed `Flow`, `StateFlow`, or a lambda is also named as a skip rather than
-exported, even on an otherwise-supported receiver: unlike a class property, no legacy adapter
-re-emits it, so it is not exempt from the diagnostic the way a class property of the same type is.
-
-An extension **property**'s receiver, since the
-[2026-09-14 amendment](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md)
-to ADR-132, admits a bare interface and `Nullable(Interface)`/`Nullable(ObjectHandle)` alongside
-its previous set, matching extension *functions* for those shapes. It is still narrower than the
-function-receiver set: an `Enum`, `Uuid`, `Instant`, or `Duration` receiver, and the nullable
-spellings of `String`, `Uuid`, or a value class, stay a named `SKIPPED_UNSUPPORTED_PROPERTY` skip
-on the property route even though every one of those shapes binds at a declared parameter or an
-extension-*function* receiver position.
-
-An extension **function**'s receiver whose wire is a has-value fan-out pair (`Int?`, `Enum?`,
-`Instant?`, `Duration?`, or a `Primitive`/`Enum`-underlying value class `?`) is a named skip,
-`RECEIVER_FAN_OUT` (`SKIPPED_UNSUPPORTED_INPUT`), rather than a build failure or a silently wrong
-crossing: the plan model admits only one RECEIVER-role slot and it must come first, and a fan-out
-receiver would need two. The same type binds fine as an ordinary *parameter*. A fan-out receiver on
-an extension **property** (`val Int?.x`) is unrepresentable for the same reason (one receiver slot
-mints exactly once), and is a named skip too, but through `SKIPPED_UNSUPPORTED_PROPERTY` rather
-than `RECEIVER_FAN_OUT`, since the property route never gets far enough to reach the callable-side
-gate.
-
-A `typealias` receiver binds, but its C entry point is derived from the alias's own name rather than
-the expanded type's owner chain, so an alias for a nested type does not get the chained entry point
-described above.
-
-See [Publishing Kotlin to C#: Diagnostics](forward-overview.md#diagnostics) for the full diagnostic
-model.
-
-## Return marshalling
-
-An extension function's return goes through the same marshalling cascade a class-method return
-does (see [Method returns](classes-and-objects.md) in Classes and objects): object, nullable
-object, collection, nullable `String`, and nullable primitive (single call, `bool` has-value +
-`valueOut` out-parameter, not the property getter's two-call pattern).
-
-From `test-library/src/nativeMain/kotlin/.../cat/CatExtensions.kt`. The receiver is `Toy`, not
-`Cat`: an extension can't be distinguished from a member of the same name on the same receiver, so
-exercising the extension-function export path needs a receiver with no colliding member:
-
-```kotlin
-/** Object return (converting), extension-function position. Always non-null. */
-fun Toy.findOwner(): Cat = Cat(name, color.length)
-
-/** Nullable object return, extension-function position. Non-null only for the "Gray" toys. */
-fun Toy.maybeOwner(): Cat? = if (color == "Gray") Cat(name, name.length) else null
-
-/** Collection return, converting element, extension-function position. */
-fun Toy.tags(): List<String> = listOf("$name-tag", "$color-tag")
-
-/** Collection return, non-converting element, extension-function position. */
-fun Toy.scores(): List<Int> = listOf(name.length, color.length)
-
-/** Nullable String return, extension-function position. Non-null only for the "Gray" toys. */
-fun Toy.alias(): String? = if (color == "Gray") "$name (aka Grey Ghost)" else null
-
-/** Nullable primitive return, extension-function position. Non-null only for the "Gray" toys. */
-fun Toy.ageInMonths(): Int? = if (color == "Gray") name.length * 12 else null
-```
-
-Generated C#, from `Interop.cs`, `ToyExtensions`:
-
-```C#
-public static Cat FindOwner(this Toy toy)
-{
-    IntPtr nativeResult = Native_FindOwner(toy._handle, out IntPtr error);
-    if (error != IntPtr.Zero)
-    {
-        throw NugetErrorNative.BuildException(error);
-    }
-    return new Cat(nativeResult);
-}
-
-public static Cat? MaybeOwner(this Toy toy)
-{
-    IntPtr nativeResult = Native_MaybeOwner(toy._handle, out IntPtr error);
-    if (error != IntPtr.Zero)
-    {
-        throw NugetErrorNative.BuildException(error);
-    }
-    return nativeResult == IntPtr.Zero ? null : new Cat(nativeResult);
-}
-
-public static int? AgeInMonths(this Toy toy)
-{
-    bool hasValue = Native_AgeInMonths(toy._handle, out int value, out IntPtr error);
-    if (error != IntPtr.Zero)
-    {
-        throw NugetErrorNative.BuildException(error);
-    }
-    return hasValue ? value : null;
-}
-```
-
-From `IntegrationTests/MethodReturnMarshallingTests.cs`:
-
-```C#
-[Fact]
-public void Toy_MaybeOwner_NonNullForGrayToy()
-{
-    var mouse = new Toy("Mouse", "Gray");
-    using Cat? owner = mouse.MaybeOwner();
-    Assert.NotNull(owner);
-    Assert.Equal("Mouse", owner!.Name);
-}
-
-[Fact]
-public void Toy_Tags_ReturnsMarshalledStringElements()
-{
-    var mouse = new Toy("Mouse", "Gray");
-    IReadOnlyList<string> tags = mouse.Tags();
-    Assert.Equal(new List<string> { "Mouse-tag", "Gray-tag" }, tags);
-}
-```
+An extension function's return goes through the same marshalling as a class method's (see
+[Classes and objects](classes-and-objects.md)): converted objects, nullable objects, collections,
+and nullable primitives all follow the same rules. A returned object still needs disposal the same
+way any other returned handle does.
 
 <seealso>
     <category ref="related">
         <a href="top-level-declarations.md">Top-level declarations</a>
         <a href="classes-and-objects.md">Classes and objects</a>
-        <a href="collections.md">Collections</a>
         <a href="value-classes.md">Value classes</a>
         <a href="interfaces-abstract-sealed.md">Interfaces, abstract classes, and sealed classes</a>
-    </category>
-    <category ref="external">
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md">ADR-013: Extension property mapping</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md">ADR-061: Method return marshalling</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/077-value-classes-at-ordinary-positions.md">ADR-077: Value classes at ordinary positions</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md">ADR-090: Ordinary-class method overloads</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md">ADR-095: Overloads on the four static export routes</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md">ADR-091: Constructor default parameters</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md">ADR-096: Function default parameters</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md">ADR-105: Sealed types at property positions</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/126-extension-class-per-declaring-package.md">ADR-126: One Extensions class per declaring package</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md">ADR-132: Extension receiver shapes</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md">ADR-133: Nested types</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/135-interface-parameter-reachability.md">ADR-135: Interface parameter positions join the ADR-084 bridge reachability set</a>
+        <a href="primitives-and-strings.md">Primitives and strings</a>
     </category>
 </seealso>

@@ -1,23 +1,7 @@
 # Generics
 
-Generic classes and functions cross the bridge through a type-erased native layer plus a typed C# surface. The Kotlin side exports one bridge entry point per primitive type argument (`create_string`, `create_int`, ...) plus a generic `create_object` for reference types; `NugetMarshal` on the C# side dispatches to the right one at runtime based on `typeof(T)`. Type constraints and variance both carry through to the generated C# generic parameter.
-
-| Kotlin | C# | Notes |
-|---|---|---|
-| `class<T>` | `class<T>` | type-erased bridge + generic C# wrapper |
-| `class<T>(...)` constructor | typed constructors | typed arguments through the bridge |
-| `class X : GenericBase<Arg>(...)` | `class X : GenericBase<Arg>` | subclassing an exported generic base spells the closed type argument; an `open` generic base renders `virtual Dispose()`; a subclass overload of a name it also inherits from the base stays a single declared member, the inherited one is not re-declared, see [ADR-101](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md) |
-| nullable property (`val x: T?`) | `T?` | a `null` read surfaces as `null`, or `default(T)` at a value-type instantiation, see [ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md) |
-| `fun <T> f()` | typed variants | runtime dispatch via `NugetMarshal` |
-| `<T : Bound>` constraint | `where T : ...` | a bound declared in another package is spelled fully qualified, `where T : global::Namespace.Bound`, see [A generic bound from another package](#a-generic-bound-from-another-package), [ADR-015](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/015-generic-type-constraint-mapping.md) |
-| `out T` / `in T` variance | `out T` / `in T` | see [ADR-016](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/016-generic-variance-mapping.md) |
-| `inline fun` | regular method | see [ADR-017](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/017-inline-function-mapping.md) |
-| `inline fun <reified T>` | typed variants | reified type parameters |
-| `typealias` | C# alias / underlying | generic type aliases, see [ADR-018](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/018-type-alias-mapping.md) |
-
-## Kotlin
-
-An unconstrained generic class, from `test-library/src/nativeMain/kotlin/.../cat/Box.kt`:
+Generic Kotlin classes and functions become generic C# classes and methods, keeping the same type
+parameter, constraints, and variance.
 
 ```kotlin
 class Box<T>(val value: T) {
@@ -27,7 +11,28 @@ class Box<T>(val value: T) {
 }
 ```
 
-A generic class with a nullable property, from `test-library/src/nativeMain/kotlin/.../cat/Slot.kt`:
+```C#
+using var box = new Box<Cat>(oreo);
+Cat cat = box.Value;
+```
+
+## Type mappings
+
+| Kotlin | C# |
+|---|---|
+| `class<T>` | `class<T>` |
+| `<T : Bound>` | `where T : Bound` |
+| `out T` / `in T` on an interface | `out T` / `in T` |
+| `fun <T> f(value: T): T` (top-level) | a generic method |
+| `inline fun` | an ordinary method |
+| `inline fun <reified T>` | an ordinary generic method |
+| `typealias` | the aliased type itself, no separate alias type |
+
+## Nullable properties
+
+A nullable property on a generic class (`val x: T?`) is `T?` in C#. At a reference-type
+instantiation a `null` read stays `null`; at a value-type instantiation it collapses to `default(T)`,
+same as any other unconstrained C# generic.
 
 ```kotlin
 class Slot<T>(val value: T) {
@@ -36,7 +41,18 @@ class Slot<T>(val value: T) {
 }
 ```
 
-A constrained generic class, from `test-library/src/nativeMain/kotlin/.../cat/PetBox.kt`:
+```C#
+using var stringSlot = new Slot<string>("hi");
+Assert.Null(stringSlot.Previous);
+
+using var intSlot = new Slot<int>(42);
+Assert.Equal(0, intSlot.Previous); // default(int), not null
+```
+
+## Constraints
+
+A bound (`<T : Pet>`) becomes a C# `where T : ...` clause. Any type assignable to the bound works
+as the type argument:
 
 ```kotlin
 class PetBox<T : Pet>(val value: T) {
@@ -46,52 +62,21 @@ class PetBox<T : Pet>(val value: T) {
 }
 ```
 
-A generic bound declared in another package, from `test-library/src/nativeMain/kotlin/.../nested/Crates.kt`:
-
-```kotlin
-class PetCrate<T : Pet>(val value: T)
-
-class CatCrate<T : Cat>(val value: T)
+```C#
+using var oreo = new Cat("Oreo", 9);
+using var box = new PetBox<Cat>(oreo);
 ```
 
-A class extending an exported generic base, from `test-library/src/nativeMain/kotlin/.../parcel/Parcel.kt`:
+### A generic bound from another package {id="a-generic-bound-from-another-package"}
 
-```kotlin
-open class Parcel<T>(val value: T)
+When the bound is declared in a different Kotlin package than the generic class itself, the
+generated `where` clause spells it fully qualified (`where T : global::TestLibrary.Cat.IPet`)
+instead of a bare name. This only matters if you inspect the constraint through reflection; calling
+the class works the same either way.
 
-class NamedParcel(name: String) : Parcel<String>(name) {
-  fun own(): String = "own:$value"
-}
-```
+## Variance
 
-A subclass declaring its own overload of a name it also inherits, from
-`test-library/src/nativeMain/kotlin/.../parcel/Parcel.kt`. The base's `describe(tag: T)` is
-substituted onto `LabelledCrate` as `describe(tag: String)`, but that substituted member is never
-the same declaration as `LabelledCrate`'s own `describe(tag: Int)`, so only the declared one binds:
-
-```kotlin
-open class Crate<T>(val item: T) {
-  fun describe(tag: T): String = "$tag:$item"
-}
-
-class LabelledCrate(item: String) : Crate<String>(item) {
-  fun describe(tag: Int): String = "#$tag:$item"
-}
-```
-
-Generic functions, from `test-library/src/nativeMain/kotlin/.../cat/Helpers.kt`:
-
-```kotlin
-fun <T> identity(value: T): T = value
-
-fun <T> wrapInBox(value: T): Box<T> = Box(value)
-
-fun <T : Pet> adoptPet(pet: T): T = pet
-
-inline fun <reified T : Pet> groomPet(pet: T): T = pet
-```
-
-Variance, from `test-library/src/nativeMain/kotlin/.../cat/Variance.kt`:
+`out T` / `in T` on an interface carries straight through to the C# interface:
 
 ```kotlin
 interface Readable<out T> {
@@ -103,431 +88,86 @@ interface Writable<in T> {
 }
 ```
 
-`inline fun` (non-reified), from `test-library/src/nativeMain/kotlin/.../math/Arithmetic.kt`:
-
-```kotlin
-inline fun square(x: Int): Int = x * x
+```C#
+// IReadable<Cat> can be assigned to IReadable<IPet> because T is covariant
+Assert.True(typeof(IReadable<IPet>).IsAssignableFrom(typeof(IReadable<Cat>)));
 ```
 
-Generic type aliases, from `test-library/src/nativeMain/kotlin/.../TypeAliases.kt`:
+Variance declared on a **class's** own type parameter, as opposed to an interface's, is dropped: C#
+does not support variance on classes. The class still generates and works, just without `out`/`in`
+on its type parameter.
+
+## Subclassing a generic base
+
+A class extending an exported generic base spells the closed type argument, and inherits members
+from that closed base:
+
+```kotlin
+open class Parcel<T>(val value: T)
+
+class NamedParcel(name: String) : Parcel<String>(name)
+```
+
+```C#
+using var parcel = new NamedParcel("Oreo");
+Assert.Equal("Oreo", parcel.Value); // inherited from Parcel<string>
+Assert.IsAssignableFrom<Parcel<string>>(parcel);
+```
+
+Because `Parcel` is declared `open`, its generated `Dispose()` is `virtual` so `NamedParcel` can
+override it.
+
+A generic base class's own **functions**, as opposed to properties, never get a C# member: only a
+subclass's own declared function does. If you need a method on the closed type, declare it directly
+on the subclass rather than relying on the generic base.
+
+## Generic functions
+
+```kotlin
+fun <T> identity(value: T): T = value
+
+fun <T> wrapInBox(value: T): Box<T> = Box(value)
+
+fun <T : Pet> adoptPet(pet: T): T = pet
+
+inline fun <reified T : Pet> groomPet(pet: T): T = pet
+```
+
+```C#
+using Box<int> box = Helpers.WrapInBox<int>(99);
+Assert.Equal(99, box.Value);
+```
+
+A constrained generic function carries the same `where` clause as a constrained class. `reified`
+and non-reified `inline fun` (like a plain `square(x: Int)`) both generate as an ordinary method or
+generic method; inlining and reification only matter inside Kotlin and don't change the C# side.
+
+This row only binds for a **top-level** function with a `T`-typed direct parameter
+(`fun <T> f(value: T): T`). A generic function declared on a class, `object`, or interface, or a
+top-level one with no `T`-typed parameter (e.g. `fun <T> f(): List<T>`), is not generated.
+
+## Type aliases
+
+A `typealias` erases to its underlying type; there is no separate alias type in the generated C#.
 
 ```kotlin
 typealias Score = Int
 typealias CatNames = List<String>
-typealias CatScores = Map<String, Int>
 
 fun topScore(): Score = 10
 fun defaultNames(): CatNames = listOf("Oreo", "Mylo")
-fun defaultScores(): CatScores = mapOf("Oreo" to 10, "Mylo" to 8)
 ```
 
-## Generated C#
-
-`Box<T>` uses `NugetMarshal.CreateBox<T>` to dispatch construction by runtime type:
-
 ```C#
-public class Box<T> : IDisposable
-{
-    internal IntPtr _handle;
-
-    public Box(T value)
-    {
-        _handle = NugetMarshal.CreateBox<T>(value);
-    }
-
-    public T Value => NugetMarshal.FromHandle<T>(BoxNative.Get_value(_handle));
-
-    public void Dispose() { /* ... */ }
-}
-```
-
-`Slot<T>` shows the two property shapes side by side: `Value` and `Current` are typed `T`/`T?` matching their Kotlin declarations, and a `null` read collapses to `default(T)` at a value-type instantiation because `NugetMarshal.FromHandle<T>` already returns `default!` for a zero handle:
-
-```C#
-public class Slot<T> : IDisposable
-{
-    internal IntPtr _handle;
-
-    public T Value => NugetMarshal.FromHandle<T>(SlotNative.Get_value(_handle));
-
-    public T? Previous => NugetMarshal.FromHandle<T>(SlotNative.Get_previous(_handle));
-
-    public T? Current => NugetMarshal.FromHandle<T>(SlotNative.Get_current(_handle));
-
-    public void Dispose() { /* ... */ }
-}
-```
-
-`PetBox<T>` carries the constraint through to C#'s `where` clause. `T`'s bound (`IPet`) is backed by a
-generated wrapper that implements the internal `INugetHandle` interface, so the constructor casts to
-it directly instead of reflecting for a `_handle` field (see [ADR-094](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md)):
-
-```C#
-public class PetBox<T> : IDisposable, INugetHandle where T : IPet
-{
-    internal IntPtr _handle;
-
-    IntPtr INugetHandle.Handle => _handle;
-
-    public PetBox(T value)
-    {
-        IntPtr handle = PetBoxNative.Create_object(((INugetHandle)value!).Handle, out IntPtr error);
-        if (error != IntPtr.Zero)
-        {
-            throw NugetErrorNative.BuildException(error);
-        }
-        _handle = handle;
-    }
-
-    public T Value => NugetMarshal.FromHandle<T>(PetBoxNative.Get_value(_handle));
-
-    public void Dispose() { /* ... */ }
-}
-```
-
-### A generic bound from another package {id="a-generic-bound-from-another-package"}
-
-`PetBox<T : Pet>` above is declared beside its own bound, so the bare `where T : IPet` it renders
-never exercises qualification. `PetCrate`/`CatCrate` are declared in a different package from `Pet`
-and `Cat`, and the bound, interface or class, is spelled fully qualified instead of bare, the same
-qualify-everywhere rule [#41](https://github.com/xxfast/kotlin-native-nuget/issues/41) applies at
-every other render site:
-
-```C#
-public class PetCrate<T> : IDisposable, INugetHandle where T : global::TestLibrary.Cat.IPet
-{
-    internal IntPtr _handle;
-
-    IntPtr INugetHandle.Handle => _handle;
-
-    public PetCrate(T value)
-    {
-        IntPtr handle = PetCrateNative.Create_object(((INugetHandle)value!).Handle, out IntPtr error);
-        /* ... */
-    }
-
-    public T Value => NugetMarshal.FromHandle<T>(PetCrateNative.Get_value(_handle));
-
-    public void Dispose() { /* ... */ }
-}
-
-public class CatCrate<T> : IDisposable, INugetHandle where T : global::TestLibrary.Cat.Cat
-{
-    /* ... same shape, class bound instead of interface ... */
-}
-```
-
-Using it, from `IntegrationTests/InterfaceSpellingSiteTests.cs`:
-
-```C#
-[Fact]
-public void PetCrate_BoundIsTheQualifiedInterface_AndAcceptsACat()
-{
-    using var oreo = new Cat("Oreo", 9);
-    using var crate = new PetCrate<Cat>(oreo);
-
-    Assert.Equal("Oreo", crate.Value.Name);
-    Type[] constraints = typeof(PetCrate<>).GetGenericArguments()[0].GetGenericParameterConstraints();
-    Assert.Contains(typeof(IPet), constraints);
-}
-```
-
-`NamedParcel` closes `Parcel<T>` over `string` in its base list, and, since `Parcel` is declared
-`open`, its generated `Dispose()` is `virtual` so `NamedParcel`'s `override` compiles. `NamedParcel`
-inherits `Value` from `Parcel<string>`'s own export rather than re-exporting it:
-
-```C#
-public class Parcel<T> : IDisposable, INugetHandle
-{
-    internal IntPtr _handle;
-
-    public T Value => NugetMarshal.FromHandle<T>(ParcelNative.Get_value(_handle));
-
-    public virtual void Dispose()
-    {
-        /* ... */
-    }
-}
-
-public class NamedParcel : Parcel<string>
-{
-    public NamedParcel(string name) : base(IntPtr.Zero)
-    {
-        /* ... */
-    }
-
-    public string Own()
-    {
-        /* ... */
-    }
-
-    public override void Dispose()
-    {
-        /* ... */
-    }
-}
-```
-
-`LabelledCrate`'s own `describe(tag: Int)` renders as its single `Describe(int)`. The base's
-`describe(tag: T)`, substituted onto `LabelledCrate` as `describe(tag: string)` by KSP, is not a
-declaration of `LabelledCrate`'s own and is not rendered a second time:
-
-```C#
-public class Crate<T> : IDisposable, INugetHandle
-{
-    internal IntPtr _handle;
-
-    public T Item => NugetMarshal.FromHandle<T>(CrateNative.Get_item(_handle));
-
-    public virtual void Dispose()
-    {
-        /* ... */
-    }
-}
-
-public class LabelledCrate : Crate<string>
-{
-    public LabelledCrate(string item) : base(IntPtr.Zero)
-    {
-        /* ... */
-    }
-
-    public string Describe(int tag)
-    {
-        /* ... */
-    }
-
-    public override void Dispose()
-    {
-        /* ... */
-    }
-}
-```
-
-A generic function dispatches per primitive type at runtime, falling back to the object/handle path
-otherwise. The object path materialises `T` from a generated factory registry
-(`NugetMarshal.Materialize<T>`) rather than reflecting over `T`'s constructor:
-
-```C#
-public static T identity<T>(T value)
-{
-    IntPtr error;
-    if (typeof(T) == typeof(string))
-        return (T)(object)Marshal.PtrToStringUTF8(NugetErrorNative.Check(identity_string_native((string)(object)value!, out error), error))!;
-    if (typeof(T) == typeof(int))
-        return (T)(object)NugetErrorNative.Check(identity_int_native((int)(object)value!, out error), error);
-    // ... long, float, double, bool ...
-    IntPtr handle = ((INugetHandle)value!).Handle;
-    IntPtr result = NugetErrorNative.Check(identity_object_native(handle, out error), error);
-    return NugetMarshal.Materialize<T>(result);
-}
-```
-
-A constrained generic function carries the `where` clause the same way as the class:
-
-```C#
-public static T adoptPet<T>(T pet) where T : IPet
-{
-    IntPtr error;
-    IntPtr handle = ((INugetHandle)pet!).Handle;
-    IntPtr result = NugetErrorNative.Check(adoptPet_object_native(handle, out error), error);
-    return NugetMarshal.Materialize<T>(result);
-}
-```
-
-`inline fun <reified T : Pet> groomPet` generates identically to a regular constrained generic function (`groomPet<T>(T pet) where T : IPet`). Reification only matters Kotlin-side, where it lets the function inspect `T` at the call site; the bridge doesn't need to know the difference.
-
-Variance carries straight through to the C# interface declaration:
-
-```C#
-public interface IReadable<out T> : IDisposable
-{
-    T Read();
-}
-
-public interface IWritable<in T> : IDisposable
-{
-    void Write(T value);
-}
-```
-
-Generic type aliases erase to their underlying type; `Score` (an alias for `Int`) generates identically to `Int`, and `CatNames`/`CatScores` (aliases for `List<String>`/`Map<String, Int>`) generate as `IReadOnlyList<string>`/`IReadOnlyDictionary<string, int>`. There's no separate alias type in the generated C#.
-
-## Using it from C#
-
-Unconstrained generics, from `IntegrationTests/GenericTests.cs`:
-
-```C#
-[Fact]
-public void Box_Cat_ConstructorAndGetter()
-{
-    using var oreo = new Cat("Oreo", 9);
-    using var box = new Box<Cat>(oreo);
-    using Cat cat = box.Value;
-    Assert.Equal("Oreo", cat.Name);
-}
-```
-
-A nullable property on a generic class, from `IntegrationTests/NullableGenericPropertyTests.cs`:
-
-```C#
-[Fact]
-public void Slot_String_NullPrevious()
-{
-    using var slot = new Slot<string>("hi");
-    Assert.Null(slot.Previous);
-}
-
-// Unconstrained generics in C# collapse a null T to default(T), so a value-type
-// instantiation sees 0 where the reference-type ones see null. Mylo gets 42 naps.
-[Fact]
-public void Slot_Int_PreviousCollapsesToDefault()
-{
-    using var slot = new Slot<int>(42);
-    Assert.Equal(0, slot.Previous);
-}
-```
-
-Constrained generics, from `IntegrationTests/GenericConstraintTests.cs`:
-
-```C#
-[Fact]
-public void PetBox_TypeParameter_HasIPetConstraint()
-{
-    Type[] constraints = typeof(PetBox<>).GetGenericArguments()[0].GetGenericParameterConstraints();
-    Assert.Contains(typeof(IPet), constraints);
-}
-
-[Fact]
-public void AdoptPet_Oreo_ReturnsSameCat()
-{
-    using var oreo = new Cat("Oreo", 9);
-    using Cat adopted = Helpers.adoptPet<Cat>(oreo);
-    Assert.Equal("Oreo", adopted.Name);
-}
-```
-
-A class extending an exported generic base, from `IntegrationTests/GenericBaseClassTests.cs`:
-
-```C#
-[Fact]
-public void NamedParcel_InheritsValueFromGenericBase()
-{
-    using var parcel = new NamedParcel("Oreo");
-    Assert.Equal("Oreo", parcel.Value);
-}
-
-[Fact]
-public void NamedParcel_IsAssignableToClosedGenericBase()
-{
-    using var parcel = new NamedParcel("Oreo");
-    Assert.IsAssignableFrom<Parcel<string>>(parcel);
-}
-```
-
-A subclass's own overload of an inherited name, from `IntegrationTests/GenericBaseOverloadTests.cs`:
-
-```C#
-[Fact]
-public void LabelledCrate_DescribesThroughItsOwnIntOverload()
-{
-    using var crate = new LabelledCrate("apple");
-    Assert.Equal("#7:apple", crate.Describe(7));
-}
-
-[Fact]
-public void LabelledCrate_DeclaresExactlyOneDescribeTakingInt()
-{
-    MethodInfo[] describes = typeof(LabelledCrate)
-        .GetMethods()
-        .Where(method => method.Name == "Describe")
-        .ToArray();
-
-    Assert.Single(describes);
-    Assert.Equal(typeof(int), describes[0].GetParameters().Single().ParameterType);
-    Assert.Equal(typeof(LabelledCrate), describes[0].GetBaseDefinition().DeclaringType);
-}
-```
-
-Generic functions, from `IntegrationTests/GenericFunctionTests.cs`:
-
-```C#
-[Fact]
-public void WrapInBox_Int()
-{
-    using Box<int> box = Helpers.wrapInBox<int>(99);
-    Assert.Equal(99, box.Value);
-}
-```
-
-Variance, from `IntegrationTests/VarianceTests.cs`:
-
-```C#
-[Fact]
-public void IReadable_Covariance_AllowsNarrowingAssignment()
-{
-    // IReadable<Cat> can be assigned to IReadable<IPet> because T is covariant (out T)
-    Assert.True(typeof(IReadable<IPet>).IsAssignableFrom(typeof(IReadable<Cat>)));
-}
-
-[Fact]
-public void IWritable_Contravariance_AllowsWideningAssignment()
-{
-    Assert.True(typeof(IWritable<Cat>).IsAssignableFrom(typeof(IWritable<IPet>)));
-}
-```
-
-`inline fun square`, from `IntegrationTests/ArithmeticTests.cs`:
-
-```C#
-[Fact]
-public void Square_ReturnsSquaredValue()
-{
-    int result = Arithmetic.Square(5);
-    Assert.Equal(25, result);
-}
-```
-
-Type aliases, from `IntegrationTests/TypeAliasTests.cs`:
-
-```C#
-[Fact]
-public void TopScore_ReturnsInt()
-{
-    int result = TypeAliases.TopScore();
-    Assert.Equal(10, result);
-}
-
-[Fact]
-public void DefaultScores_ReturnsReadOnlyDictionaryOfStringInt()
-{
-    IReadOnlyDictionary<string, int> scores = TypeAliases.DefaultScores();
-    Assert.Equal(2, scores.Count);
-}
+int score = TypeAliases.TopScore(); // Score is just Int
+IReadOnlyList<string> names = TypeAliases.DefaultNames();
 ```
 
 ## Limitations
 
-- Variance (`out`/`in`) declared on a **generic class**'s own type parameter (as opposed to an
-  interface's, shown above) is dropped: C# does not support variance on classes. The member still
-  binds; the generator notes it with an `INFO_DROPPED_VARIANCE` diagnostic rather than silently
-  ignoring the annotation
-  ([ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)).
-- A generic class declared in a dependency module and admitted through the
-  [export reachability closure](nuget-dsl.md) resolves fully but still routes to the legacy generic
-  protocol, which has never been exercised across a module boundary; it is skipped with the existing
-  diagnostic rather than generated
-  ([ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md)).
-- A generic class's own declared **functions** have no C# carrier at all; only its properties
-  project. `Crate<T>.describe(tag: T)` above has no `Describe` on `Crate<T>` itself, only on
-  `LabelledCrate`, which declares its own
-  ([ADR-101](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md)).
-- The `fun <T> f()` row above binds only for a **top-level** function with a `T`-typed direct
-  parameter (`fun <T> identity(value: T): T`). A generic function declared on a class, `object`, or
-  interface, or a top-level one with no `T`-typed parameter (e.g. `fun <T> f(): List<T>`), skips
-  named `SKIPPED_UNSUPPORTED_COMBINATION` instead of vanishing silently, since
-  [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
-  2026-09-13 amendment.
+A generic class declared in a dependency module and reachable through the
+[export closure](nuget-dsl.md) still routes to the legacy generic protocol, which has never been
+exercised across a module boundary; it is skipped rather than generated.
 
 <seealso>
     <category ref="related">
@@ -535,16 +175,5 @@ public void DefaultScores_ReturnsReadOnlyDictionaryOfStringInt()
         <a href="value-classes.md">Value classes</a>
         <a href="nuget-dsl.md">The nuget {} DSL</a>
         <a href="expect-actual.md">expect/actual declarations</a>
-    </category>
-    <category ref="external">
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/010-generics-mapping.md">ADR-010: Generics mapping</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/015-generic-type-constraint-mapping.md">ADR-015: Generic type constraint mapping</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/016-generic-variance-mapping.md">ADR-016: Generic variance mapping</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/017-inline-function-mapping.md">ADR-017: Inline function mapping</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/018-type-alias-mapping.md">ADR-018: Type alias mapping</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md">ADR-083: Nullable collection components</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/094-reflection-free-generic-dispatch.md">ADR-094: Reflection-free generic dispatch</a>
     </category>
 </seealso>
