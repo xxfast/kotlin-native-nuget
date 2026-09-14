@@ -265,6 +265,10 @@ combination fails generation (`ERROR_CSHARP_SIGNATURE_COLLISION`) instead of emi
 Avoid naming an accessor the same as its nested return type (`fun perch(): Perch`); name the
 accessor differently instead (`perchAt`).
 
+A `@Serializable` class exports the same as any other class. kotlinx.serialization's
+compiler-generated `$serializer` nested object is never declared in C#, since `$` isn't a legal C#
+identifier there; it has no members you'd want to call, so skipping it costs nothing.
+
 ### An `object` at a member position stays CS0722 {id="nested-object-position"}
 
 A Kotlin `object`, nested or top-level, renders as a C# **static** class, and C# forbids a static

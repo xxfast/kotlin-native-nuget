@@ -149,6 +149,10 @@ private fun KSClassDeclaration.nestedDeclarationKind(): String = when (classKind
 private fun KSClassDeclaration.nestedClassDeclarations(): Sequence<KSClassDeclaration> =
   declarations
     .filterIsInstance<KSClassDeclaration>()
+    // Issue #223: a compiler-synthesized declaration is neither declared nor descended into.
+    // Filtered here rather than at the candidate funnel because this walk also feeds the ADR-066
+    // reachability closure, which must not admit types on a synthetic declaration's behalf either.
+    .filter { !it.isCompilerSynthesized() }
     // Kind before visibility, verified: `getVisibility()` on an enum entry read from a dependency
     // klib/jar throws `Internal KSP Error` out of its `modifiers` delegate, and an entry is never a
     // nested-declaration candidate anyway.
@@ -160,6 +164,18 @@ private fun KSClassDeclaration.nestedClassDeclarations(): Sequence<KSClassDeclar
       // `Season.Almanac` has to be reached to be reported at all.
       sequenceOf(nested) + nested.nestedClassDeclarations()
     }
+
+/**
+ * Issue #223: is this declaration written by a compiler plugin rather than by a person?
+ *
+ * Read as a name shape, not as [com.google.devtools.ksp.symbol.Origin], verified: KSP reports
+ * kotlinx.serialization's synthesized `Carton.$serializer` as `KOTLIN_LIB`, exactly like the
+ * `@Serializable` class that owns it, so origin cannot separate the two across a klib boundary.
+ * A `$` in a *simple* name can only have been synthesized: Kotlin source cannot declare one
+ * (it is not an identifier character) and neither can C# spell one, which is the whole defect.
+ */
+private fun KSClassDeclaration.isCompilerSynthesized(): Boolean =
+  '$' in simpleName.asString()
 
 // ADR-133: the enclosing declaration chain, innermost-first, of a nested declaration.
 private fun KSClassDeclaration.enclosingClassChain(): List<KSClassDeclaration> =
