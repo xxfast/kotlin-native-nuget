@@ -55,20 +55,13 @@ internal object ForwardCirPropertyProjection {
     // The underlying itself then unwraps to its own wire, mirroring the parameter lowering in
     // `ForwardCirPlanProjection.callArguments`: an enum casts to its `int` ordinal, an object
     // handle hands over its `_handle`.
-    val receiverArgument: String = when (val receiverType = receiver.type) {
-      is BridgeType.ObjectHandle -> "receiver._handle"
-      is BridgeType.ValueClass -> {
-        val underlying: String =
-          "receiver.${receiverType.underlyingPropertyName.replaceFirstChar { it.uppercase() }}"
-        when (receiverType.underlying) {
-          is BridgeType.Enum -> "(int)$underlying"
-          is BridgeType.ObjectHandle -> "$underlying._handle"
-          else -> underlying
-        }
-      }
-
-      else -> "receiver"
-    }
+    // ADR-132 at the property position: the receiver is an input on the same wire the setter's
+    // *value* rides, so it goes through the same three functions. An interface receiver mints an
+    // ADR-084 transfer handle here and has to dispose it afterwards, which is why both accessors
+    // get a handle scope rather than just an argument string.
+    val receiverArgument: String = receiver.type.inputArgument("receiver")
+    val receiverStep: ForwardCirHandleStep? = receiver.type.handleStep("receiver")
+    val receiverCleanup: String? = receiver.type.handleCleanup("receiver")
     val imports: List<CirMember> = plan.calls().map { call ->
       nativeImport(call, libraryName, listOf(CirParameter("receiver", nativeReceiver)), plan)
     }
@@ -77,7 +70,7 @@ internal object ForwardCirPropertyProjection {
       returnType = plan.type.csharpType(),
       nativeReturnType = plan.getter.calls().first().result.csharpWireType(),
       parameters = listOf(CirParameter("receiver", publicReceiver)),
-      body = getterBody(plan, receiverArgument),
+      body = getterBody(plan, receiverArgument, receiverStep, receiverCleanup),
       isStatic = true,
       isExtension = true,
       hasCustomBody = true,
@@ -87,7 +80,7 @@ internal object ForwardCirPropertyProjection {
         name = "Set${plan.publicName}",
         returnType = "void",
         parameters = listOf(CirParameter("receiver", publicReceiver), CirParameter("value", plan.type.csharpType())),
-        body = setterBody(plan, receiverArgument),
+        body = setterBody(plan, receiverArgument, receiverStep, receiverCleanup),
         isStatic = true,
         isExtension = true,
         hasCustomBody = true,
@@ -177,9 +170,18 @@ internal object ForwardCirPropertyProjection {
     )
   }
 
-  private fun getterBody(plan: ForwardPropertyPlan, receiver: String): String {
+  // ADR-132 / ADR-120: the getter used to be flat, which was correct only while no receiver ever
+  // minted a handle. An interface receiver mints one per read, so the core goes inside a scope
+  // whose `finally` disposes it even when the error check throws. With no receiver handle
+  // [forwardCirHandleScope] keeps the flat shape byte for byte.
+  private fun getterBody(
+    plan: ForwardPropertyPlan,
+    receiver: String,
+    receiverStep: ForwardCirHandleStep? = null,
+    receiverCleanup: String? = null,
+  ): String {
     val args: String = listOf(receiver).filter { it.isNotBlank() }.joinToString(", ")
-    return when (val getter = plan.getter) {
+    val core: String = when (val getter = plan.getter) {
       is ForwardPropertyGetter.Direct -> checkedGetter(
         nativeName(plan, getter.call), args,
         plan.type,
@@ -189,18 +191,34 @@ internal object ForwardCirPropertyProjection {
         nativeName(plan, getter.presence), nativeName(plan, getter.value), args, plan.type,
       )
     }
+    return forwardCirHandleScope(
+      prelude = listOfNotNull(receiverStep),
+      cleanup = listOfNotNull(receiverCleanup),
+      core = core,
+      leadingNewline = false,
+    )
   }
 
-  private fun setterBody(plan: ForwardPropertyPlan, receiver: String): String {
+  private fun setterBody(
+    plan: ForwardPropertyPlan,
+    receiver: String,
+    receiverStep: ForwardCirHandleStep? = null,
+    receiverCleanup: String? = null,
+  ): String {
     val prefix: String = listOf(receiver).filter { it.isNotBlank() }.joinToString(", ")
     fun args(extra: String = ""): String = listOf(prefix, extra).filter { it.isNotBlank() }.joinToString(", ")
     return when (val setter = plan.setter) {
       // ROADMAP:130: the setter's temporary handle is released in a `finally`, so the error
       // check's throw cannot skip it. With no handle to release the body keeps its flat shape.
+      // The receiver's own step comes first: it is an argument to the same native call, and its
+      // dispose belongs in the same `finally` as the value's.
       is ForwardPropertySetter.Direct -> forwardCirHandleScope(
-        prelude = listOfNotNull(plan.setterPrelude()),
-        cleanup = listOfNotNull(plan.setterCleanup()),
-        core = checkedVoidBody(nativeName(plan, setter.call), args(plan.valueArgument())),
+        prelude = listOfNotNull(receiverStep, plan.type.handleStep("value")),
+        cleanup = listOfNotNull(receiverCleanup, plan.type.handleCleanup("value")),
+        core = checkedVoidBody(
+          nativeName(plan, setter.call),
+          args(plan.type.inputArgument("value")),
+        ),
         leadingNewline = false,
       )
 
@@ -209,7 +227,7 @@ internal object ForwardCirPropertyProjection {
         append(
           checkedVoidBody(
             nativeName(plan, setter.value),
-            args(plan.valueArgument("value.Value", nonNull = true)),
+            args(plan.type.inputArgument("value.Value", nonNull = true)),
             indent = "                "
           )
         )
@@ -449,15 +467,18 @@ internal object ForwardCirPropertyProjection {
    * handle whose disposal is what lets the bridge ever be collected; a collection value builds a
    * Kotlin list/map/set handle that was likewise never freed. One mechanism closes both.
    */
-  private fun ForwardPropertyPlan.setterPrelude(name: String = "value"): ForwardCirHandleStep? {
-    val nullable: Boolean = type is BridgeType.Nullable
-    return when (val value = type.unwrapNullable()) {
+  private fun BridgeType.handleStep(name: String): ForwardCirHandleStep? {
+    val nullable: Boolean = this is BridgeType.Nullable
+    return when (val value = unwrapNullable()) {
       is BridgeType.Interface -> {
         val helper: String = if (nullable) "HandleOfOrZero" else "HandleOf"
         ForwardCirHandleStep(
-          flat = "IntPtr valueHandle = NugetMarshal.$helper($name, out bool valueOwned);",
-          declarations = listOf("IntPtr valueHandle = IntPtr.Zero;", "bool valueOwned = false;"),
-          statement = "valueHandle = NugetMarshal.$helper($name, out valueOwned);",
+          flat = "IntPtr ${name}Handle = NugetMarshal.$helper($name, out bool ${name}Owned);",
+          declarations = listOf(
+            "IntPtr ${name}Handle = IntPtr.Zero;",
+            "bool ${name}Owned = false;",
+          ),
+          statement = "${name}Handle = NugetMarshal.$helper($name, out ${name}Owned);",
         )
       }
 
@@ -477,9 +498,9 @@ internal object ForwardCirPropertyProjection {
           "NugetMarshal.$factory($source)"
         }
         ForwardCirHandleStep(
-          flat = "IntPtr valueHandle = $built;",
-          declarations = listOf("IntPtr valueHandle = IntPtr.Zero;"),
-          statement = "valueHandle = $built;",
+          flat = "IntPtr ${name}Handle = $built;",
+          declarations = listOf("IntPtr ${name}Handle = IntPtr.Zero;"),
+          statement = "${name}Handle = $built;",
         )
       }
 
@@ -487,37 +508,38 @@ internal object ForwardCirPropertyProjection {
     }
   }
 
-  private fun ForwardPropertyPlan.setterCleanup(): String? = when (val value = type.unwrapNullable()) {
-    // Only a minted bridge handle is disposed: a Kotlin-backed wrapper's `_handle` belongs to that
-    // wrapper, and `owned` is how HandleOf reports which of the two it returned.
-    // ADR-135: the same zero guard the collection arm below carries. A throw from the mint in
-    // `setterPrelude` reaches this `finally` with the handle still Zero, and `nuget_dispose` is
-    // not null-safe.
-    is BridgeType.Interface ->
-      "if (valueOwned && valueHandle != IntPtr.Zero) { NugetMarshal.Dispose(valueHandle); }"
-    is BridgeType.Collection -> {
-      val native: String = when (value.kind) {
-        CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "NugetListNative"
-        CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "NugetMapNative"
-        CollectionKind.SET, CollectionKind.MUTABLE_SET -> "NugetSetNative"
+  private fun BridgeType.handleCleanup(name: String): String? =
+    when (val value = unwrapNullable()) {
+      // Only a minted bridge handle is disposed: a Kotlin-backed wrapper's `_handle` belongs to
+      // that wrapper, and `owned` is how HandleOf reports which of the two it returned.
+      // ADR-135: the same zero guard the collection arm below carries. A throw from the mint in
+      // `handleStep` reaches this `finally` with the handle still Zero, and `nuget_dispose` is
+      // not null-safe.
+      is BridgeType.Interface ->
+        "if (${name}Owned && ${name}Handle != IntPtr.Zero) { NugetMarshal.Dispose(${name}Handle); }"
+      is BridgeType.Collection -> {
+        val native: String = when (value.kind) {
+          CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "NugetListNative"
+          CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> "NugetMapNative"
+          CollectionKind.SET, CollectionKind.MUTABLE_SET -> "NugetSetNative"
+        }
+        // ADR-075: a null value never built a handle, and `nuget_dispose` is not null-safe.
+        // ROADMAP:130: unconditional now, because the `finally` this lands in is also reached by a
+        // throw from the creation itself, where the handle is still Zero.
+        "if (${name}Handle != IntPtr.Zero) { $native.Dispose(${name}Handle); }"
       }
-      // ADR-075: a null value never built a handle, and `nuget_dispose` is not null-safe.
-      // ROADMAP:130: unconditional now, because the `finally` this lands in is also reached by a
-      // throw from the creation itself, where the handle is still Zero.
-      "if (valueHandle != IntPtr.Zero) { $native.Dispose(valueHandle); }"
-    }
 
-    else -> null
-  }
+      else -> null
+    }
 
   /** [nonNull] marks a call site that has already unwrapped the `Nullable<T>` (the
    *  `NullableDispatch` setter's `value.Value`), so no `?.` propagation may be emitted: `?.` on a
    *  non-nullable struct is a C# error. */
-  private fun ForwardPropertyPlan.valueArgument(
-    name: String = "value",
+  private fun BridgeType.inputArgument(
+    name: String,
     nonNull: Boolean = false,
   ): String =
-    when (val value = type.unwrapNullable()) {
+    when (val value = unwrapNullable()) {
       is BridgeType.Enum -> "(int)$name"
       // ADR-076: UtcTicks is load-bearing (verified) -- a consumer holding a non-UTC
       // DateTimeOffset must not send its wall-clock ticks.
@@ -526,23 +548,24 @@ internal object ForwardCirPropertyProjection {
       BridgeType.Duration -> "$name.Ticks"
       // ADR-106: the default "D" format only -- never a format string (see ADR-106 Decision 2).
       // A `Guid?` setter rides the null-pointer wire, so the safe call is the whole null handling.
-      BridgeType.Uuid -> if (type is BridgeType.Nullable && !nonNull) {
+      BridgeType.Uuid -> if (this is BridgeType.Nullable && !nonNull) {
         "$name?.ToString()"
       } else {
         "$name.ToString()"
       }
 
-      is BridgeType.ObjectHandle -> if (type is BridgeType.Nullable) "$name?._handle ?? IntPtr.Zero" else "$name._handle"
+      is BridgeType.ObjectHandle ->
+        if (this is BridgeType.Nullable) "$name?._handle ?? IntPtr.Zero" else "$name._handle"
       // ADR-040 sub-decision B: the setter's static parameter type is `IFoo`, so extraction goes
       // through the shared reflective helper rather than a direct `._handle` field read.
-      // ADR-084 stage 3: extraction moved into [setterPrelude], because a C#-implemented value
+      // ADR-084 stage 3: extraction moved into [handleStep], because a C#-implemented value
       // mints a transfer handle that has to be disposed *after* the native call.
-      is BridgeType.Interface -> "valueHandle"
+      is BridgeType.Interface -> "${name}Handle"
 
       // ADR-075 Decision 3: a nullable collection is a call-site conditional, not a
       // nullable-returning `CreateList`/`CreateMap`/`CreateSet` -- character-for-character the
       // same shape as the nullable-`Interface` arm above.
-      is BridgeType.Collection -> "valueHandle"
+      is BridgeType.Collection -> "${name}Handle"
 
       // ADR-077 sub-items 2/3/4: unwrap the record struct to its capitalized underlying property
       // and lower it to the wire per underlying, with null propagation for the nullable spelling
@@ -550,7 +573,7 @@ internal object ForwardCirPropertyProjection {
       // the struct where the native import expects the wire type (CS1503 in generated code).
       is BridgeType.ValueClass -> {
         val prop: String = value.underlyingPropertyName.replaceFirstChar { it.uppercase() }
-        val nullable: Boolean = type is BridgeType.Nullable && !nonNull
+        val nullable: Boolean = this is BridgeType.Nullable && !nonNull
         val unwrapped: String = if (nullable) "$name?.$prop" else "$name.$prop"
         when (value.underlying) {
           is BridgeType.Enum -> "(int)$unwrapped"

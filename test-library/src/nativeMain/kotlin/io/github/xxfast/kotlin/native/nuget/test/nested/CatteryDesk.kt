@@ -81,6 +81,19 @@ interface Sitter {
 fun Sitter.checkIn(): String = "checked in at ${house()}"
 
 /**
+ * The same receiver, one slot to the right: an ADR-132 interface receiver at the extension
+ * **property** position. `checkIn()` reaches [Sitter] through the callable route's RECEIVER slot;
+ * this one is the only cell in the fixture that reaches it through the **property** plan's arm of
+ * `NugetProcessor.reachableInterfaceNames` (ADR-135), so a widening that only walks callable plans
+ * leaves `Sitter` unbridged here while `checkIn()` stays green. The body calls back into the
+ * implementation rather than echoing the receiver, so a C#-implemented sitter has to dispatch for
+ * the string to come out right.
+ *
+ * Oreo and Mylo need someone at number 9 while the humans are away.
+ */
+val Sitter.address: String get() = "at ${house()}"
+
+/**
  * The residual, **plans-to-null** case: a `var` member is out of ADR-084's v1 slot vocabulary, so
  * `ForwardInterfaceBridgePlanner.plan` returns null for this interface however reachable it is.
  * The contract is a managed `NotSupportedException` naming the C# implementation, which is what

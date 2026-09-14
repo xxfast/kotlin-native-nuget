@@ -388,6 +388,22 @@ public class LiveHandleTests
         });
     }
 
+    // Row 6h. The same minted receiver handle as Row 6b, but read through an extension PROPERTY
+    // getter rather than an extension function. The getter body is the new surface: the setter
+    // route already owns a handle scope, the getter body is flat, so without a `finally`-dispose
+    // around it a read on a C#-implemented receiver leaks one StableRef per call, invisible to
+    // IntegrationTests. (The nullable handle receiver, `Cat?.GetNameOrStray()`, mints nothing on
+    // either side, so it gets no row.)
+    [Fact]
+    public void InterfaceReceiverExtensionProperty_CSharpImplementedPet_ReleasesTransferHandle()
+    {
+        AssertNoLeak(() =>
+        {
+            using IPet rex = new Dog("Rex");
+            Assert.Equal("Rex/4/Woof!", rex.GetSummary());
+        });
+    }
+
     // Row 7. Flow enumerated to completion: per-item box disposed by the enumerator, job handle
     // disposed when the flow completes.
     [Fact]

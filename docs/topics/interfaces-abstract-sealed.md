@@ -3841,9 +3841,12 @@ A top-level interface's bridge state name is unaffected (`PetBridgeState`).
 
 An interface never returned anywhere, only ever taken as a parameter, a property setter, or an
 [ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md)
-extension receiver, still gets the full ADR-084 treatment: a backing wrapper, dispatch exports, and
-a bridge factory, nested or top-level alike
+extension receiver (a function's or, since ADR-132's 2026-09-14 amendment, a property's), still
+gets the full ADR-084 treatment: a backing wrapper, dispatch exports, and a bridge factory, nested
+or top-level alike
 ([ADR-135](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/135-interface-parameter-reachability.md)).
+See [Extensions: Interface receivers, extension property](extensions.md#interface-receiver-property)
+for a receiver-only interface reached solely through an extension property.
 
 From `test-library/src/nativeMain/kotlin/.../nested/CatteryDesk.kt`, `Boarding.Clerk` is never
 returned, only taken by `fileVia`:

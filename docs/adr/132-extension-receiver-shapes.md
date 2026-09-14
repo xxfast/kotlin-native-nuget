@@ -158,11 +158,14 @@ either side, so it gets no row.
   (`ForwardPropertyPlanner.kt:~284`: `ObjectHandle | Primitive | String | ValueClass` only), so
   `val Pet.x` and `val Cat?.x` still skip named (`SKIPPED_UNSUPPORTED_PROPERTY`). Unifying
   extension properties onto this same lowering is a separate, unstarted item (ROADMAP Phase 4).
+  **Amended 2026-09-14** (below): `val Pet.x` and `val Cat?.x` now bind; `Enum`, `Uuid`,
+  `Instant`, `Duration`, and the remaining nullable spellings stay a named skip.
 - `ForwardCirPropertyProjection.kt`'s own receiver-argument `when` (~lines 58-70) still has an
   `else -> "receiver"` pass-through mirroring the one this ADR removed from the callable route.
   It is unreachable today only because the property planner's `supportedReceiver` gate above never
   lets an interface or nullable-value-class receiver reach it; unifying the two routes would need
   to either delete this arm too or prove it can never fire. Not touched by this ADR.
+  **Amended 2026-09-14** (below): this arm is deleted.
 - Deferred: sub-decision (b) (a forwarding non-null overload for a value-class receiver);
   `Nullable(BoundInterface)` receiver (still a named `BOUND_INTERFACE_POSITION` skip, out of scope
   for this change).
@@ -195,3 +198,40 @@ Not investigated separately from ADR-077 (value classes at ordinary positions) a
 types / nullable handles at property and receiver positions); this ADR is a mechanical unification
 of those two ADRs' parameter-position work with the receiver slot the planner already modeled
 identically, not a new mapping decision.
+
+## Amendment (2026-09-14): extension properties take the same lowering as extension functions
+
+The Consequences section above named the extension-**property** route as the one place still
+carrying its own receiver gate and its own `else -> "receiver"` pass-through. Both are gone.
+`ForwardPropertyPlanner.extensionProperty` replaced `supportedReceiver`/`isSupportedValueClass`
+with one exhaustive `BridgeType.isSupportedReceiver()` (no `else`, `ForwardPropertyPlanner.kt`),
+admitting `Interface`, `Nullable(Interface)` and `Nullable(ObjectHandle)` alongside the shapes it
+already supported. `ForwardPropertyKotlinEmitter.valueExpression()`, the setter-value lowering that
+already had an arm for every admitted `BridgeType`, was lifted to a name-keyed
+`inputLowering(name)` and `accessExpression()`'s `Value` arm now calls it with `"receiver"` instead
+of falling through to the bare `receiver.$kotlinName`. `ForwardCirPropertyProjection`'s
+`setterPrelude`/`setterCleanup`/`valueArgument` were re-keyed by name the same way, the getter body
+is now wrapped in `forwardCirHandleScope` so a C#-implemented receiver's ADR-084 transfer handle is
+minted and disposed around the read (guarded per [ADR-135](135-interface-parameter-reachability.md)),
+and `extension()`'s own `else -> "receiver"` arm is deleted.
+
+Decided narrower than the ADR-132 parameter set: `Enum`, `Uuid`, `Instant`, `Duration`, and the
+remaining nullable spellings (`Nullable(String)`, `Nullable(Uuid)`, `Nullable(ValueClass)`) stay a
+named `SKIPPED_UNSUPPORTED_PROPERTY` skip on the property route, even though the shared lowering
+has an arm for each and admits them at the parameter and function-receiver positions. No fixture or
+demand for them yet; the `SKIPPED_UNSUPPORTED_PROPERTY` hint text
+(`NugetProcessor.kt`) now reads "declare the property on a class, interface, nullable class,
+nullable interface, String, primitive, or value class receiver, or expose a top-level getter
+function instead". A has-value fan-out receiver (`Int?`-style) is refused the same way the
+function-receiver route refuses it: the property route mints exactly one slot per receiver and a
+fan-out needs two.
+
+**Fixture-verified:** `val Pet.summary`, `val Cat?.nameOrStray`
+(`test-library/.../cat/CatExtensions.kt`), and a receiver-only interface, `val Sitter.address`
+(`test-library/.../nested/CatteryDesk.kt`), proving the property plan's own arm of
+`NugetProcessor.reachableInterfaceNames` (the one ADR-135 added) reaches an interface that appears
+*only* as an extension property's receiver. `var Pet.tag` over an interface receiver binds too, but
+with no fixture backing a runtime `var` over that shape, it is a Tier 1 compile pin only
+(`Tier1ReceiverShapesExtensionPropertyTest.kt`). `LeakTests/LiveHandleTests.cs` gained Row 6h,
+mirroring Row 6b for the getter route: the C#-implemented receiver's transfer handle returns to
+baseline. The nullable handle receiver mints nothing on either side, so it gets no row.
