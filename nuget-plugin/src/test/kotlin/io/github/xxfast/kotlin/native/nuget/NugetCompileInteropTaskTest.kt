@@ -29,7 +29,7 @@ class NugetCompileInteropTaskTest {
 
     val kotlin: KotlinMultiplatformExtension =
       project.extensions.getByType(KotlinMultiplatformExtension::class.java)
-    kotlin.macosArm64 {
+    kotlin.mingwX64 {
       binaries {
         sharedLib {
           baseName = "test"
