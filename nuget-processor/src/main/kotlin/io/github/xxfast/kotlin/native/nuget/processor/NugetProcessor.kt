@@ -391,8 +391,9 @@ internal fun warnDroppedForwardExtensionReceivers(
       declaration = dropped.symbol,
       reason = "its extension receiver type ${dropped.receiverDescription} is not a supported " +
           "extension-property receiver",
-      hint = "declare the property on a class, String, primitive, or value class receiver, or " +
-          "expose a top-level getter function instead",
+      hint = "declare the property on a class, interface, nullable class, nullable interface, " +
+          "String, primitive, or value class receiver, or expose a top-level getter function " +
+          "instead",
     )
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)

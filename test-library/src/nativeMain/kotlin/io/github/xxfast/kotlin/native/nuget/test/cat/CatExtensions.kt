@@ -64,3 +64,19 @@ fun Pet.describe(): String = "$name has $legs legs and says ${speak()}"
 // the absent case, the underlying `String` otherwise). Oreo's chart has an id; the stray at the
 // back door does not, and answers to "anonymous".
 fun CatId?.orAnonymous(): String = this?.id ?: "anonymous"
+
+/**
+ * ADR-132 receiver lowering, at the extension-PROPERTY position: a bare `Pet` receiver must lower
+ * exactly like the `fun Pet.describe()` receiver does (`HandleOf` on the C# side, a borrowed
+ * StableRef read on the Kotlin side). The body composes `name`, `legs` and `speak()` instead of
+ * echoing the receiver, so a C#-implemented `Dog` can only produce the expected string if all
+ * three interface slots really dispatched back across the bridge.
+ */
+val Pet.summary: String get() = "$name/$legs/${speak()}"
+
+/**
+ * ADR-132 receiver lowering, nullable handle receiver on a property. Oreo is home and answers to
+ * his name; the cat that is not there is a stray. Sits beside `fun Cat?.nameOrStray()`, which is
+ * the same shape one slot to the right.
+ */
+val Cat?.nameOrStray: String get() = this?.name ?: "stray"

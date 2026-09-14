@@ -78,3 +78,8 @@ public static bool GetIsKitten(this Cat cat)
 - Extension properties and extension functions share the same `{ReceiverName}Extensions` class
 - The `Get`/`Set` prefix convention should be documented for consumers
 - When C# 14 extension properties stabilize, this can be migrated with a major version bump
+
+Note (2026-09-14): the receiver set an extension property accepts widened to include a bare
+interface and a nullable class/interface, matching extension functions for those shapes; see
+[ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md)'s
+2026-09-14 amendment.

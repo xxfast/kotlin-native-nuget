@@ -110,6 +110,19 @@ public class InterfaceParameterTests
         Assert.Equal(1, ((HouseSitter)sitter).Visits);
     }
 
+    [Fact]
+    public void ReceiverOnlyInterface_ExtensionProperty_IsCalledBackFromKotlin()
+    {
+        // The same receiver one slot to the right: `val Sitter.address` reaches `ISitter` through
+        // the property plan's RECEIVER arm of the reachability walk, the arm no other fixture
+        // touches. The read has to dispatch back into this instance, so the visit counter moving
+        // is what separates a real crossing from a Kotlin-side constant.
+        using ISitter sitter = new HouseSitter();
+
+        Assert.Equal("at number 9", sitter.GetAddress());
+        Assert.Equal(1, ((HouseSitter)sitter).Visits);
+    }
+
     // --- (d) interface whose bridge plans to null: managed throw, not a dead host ---
 
     private sealed class ClawMarks : IScratchLog

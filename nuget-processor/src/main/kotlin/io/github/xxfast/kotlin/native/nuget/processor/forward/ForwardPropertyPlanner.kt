@@ -270,24 +270,7 @@ internal class ForwardPropertyPlanner(
     // rides the existing handle arms of the emitter and the projection; an ineligible one stays a
     // protocol and drops below exactly as before.
     val receiverType: BridgeType = classifier.classify(receiver).sealedAsHandle()
-    // ADR-075: a value class crosses the bridge as its own underlying value (ADR-014), the same
-    // wire shape its own declared members already use (`ForwardCallablePlanner.valueClassEntries`).
-    // The receiver admits every underlying `isPlannable` admits at an ordinary position (ADR-077's
-    // String/Primitive/Enum/ObjectHandle set): the receiver is reconstructed from that wire before
-    // the property access, so an enum ordinal or a StableRef pointer is no harder here than it is
-    // in a parameter slot.
-    val isSupportedValueClass: Boolean = receiverType is BridgeType.ValueClass &&
-        when (receiverType.underlying) {
-          BridgeType.String, is BridgeType.Primitive, is BridgeType.Enum,
-          is BridgeType.ObjectHandle -> true
-
-          else -> false
-        }
-    val supportedReceiver: Boolean =
-      receiverType is BridgeType.ObjectHandle ||
-          receiverType is BridgeType.Primitive ||
-          receiverType == BridgeType.String ||
-          isSupportedValueClass
+    val supportedReceiver: Boolean = receiverType.isSupportedReceiver()
     // ADR-133 amendment: the receiver spelled with its enclosing chain (`Aviary.Perch`), both in
     // the plan symbol and -- lowercased and `_`-joined by `nativePrefix()` -- in the entry point.
     // The symbol is spelled a second time in `CirTranslator` to look this plan back up, so the two
@@ -321,6 +304,40 @@ internal class ForwardPropertyPlanner(
       getExport = "${receiverPrefix}_get_${toCName(name)}",
       setExport = "${receiverPrefix}_set_${toCName(name)}",
     )
+  }
+
+  /**
+   * Which receiver shapes the extension-property route lowers, as one exhaustive `when`: a new
+   * [BridgeType] variant is a compile error here rather than a silent admission or a silent skip.
+   *
+   * ADR-132 at the property position: `Interface`, `Nullable(Interface)` and
+   * `Nullable(ObjectHandle)` ride the same single POINTER / `HANDLE_TO_STABLE_REF` slot the bare
+   * handle receiver already uses, so both renderers lower them through the arms the setter
+   * *value* has always owned.
+   * Everything else stays a named `SKIPPED_UNSUPPORTED_PROPERTY` through `droppedReceivers`: an
+   * `Enum` / `Instant` / `Duration` / `Uuid` receiver and the remaining nullable spellings have no
+   * fixture and no demand yet, and a `Nullable(Primitive)` receiver would need the multi-slot
+   * has-value fan-out this route cannot represent (one `valueParameter` mints exactly one slot).
+   */
+  private fun BridgeType.isSupportedReceiver(): Boolean = when (this) {
+    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Primitive,
+    BridgeType.String -> true
+
+    is BridgeType.Nullable -> type is BridgeType.ObjectHandle || type is BridgeType.Interface
+    // ADR-075: a value class crosses the bridge as its own underlying value (ADR-014), the same
+    // wire shape its own declared members already use (`ForwardCallablePlanner.valueClassEntries`).
+    // The receiver admits every underlying `isPlannable` admits at an ordinary position (ADR-077's
+    // String/Primitive/Enum/ObjectHandle set): the receiver is reconstructed from that wire before
+    // the property access, so an enum ordinal or a StableRef pointer is no harder here than it is
+    // in a parameter slot.
+    is BridgeType.ValueClass ->
+      underlying is BridgeType.String || underlying is BridgeType.Primitive ||
+          underlying is BridgeType.Enum || underlying is BridgeType.ObjectHandle
+
+    BridgeType.Char, BridgeType.Unit, BridgeType.Instant, BridgeType.Duration, BridgeType.Throwable,
+    BridgeType.Uuid, is BridgeType.Enum, is BridgeType.BoundInterface, is BridgeType.Collection,
+    is BridgeType.SpecializedProtocol, is BridgeType.RawKSType, is BridgeType.Unsupported,
+    is BridgeType.RawCollection -> false
   }
 
   private fun propertyPlan(

@@ -277,6 +277,15 @@ holder that outlives the call, so a value read that forgets its handle would lea
 than per call. See [Coroutines and Flow: `StateFlow<T>` element type is an
 interface](coroutines-and-flow.md#suspend-stateflow-interface-element).
 
+**Row 6h**, `InterfaceReceiverExtensionProperty_CSharpImplementedPet_ReleasesTransferHandle`, is
+Row 6b's own shape one slot to the right: the same C#-implemented `IPet` receiver, read through an
+extension **property** getter rather than an extension function. The setter route already carried
+a handle scope; the getter body used to be flat, so before
+[ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md)'s
+2026-09-14 amendment a minted receiver handle had nowhere to be released on a read. The nullable
+handle receiver, `Cat?.GetNameOrStray()`, mints nothing on either side, so it gets no row. See
+[Extensions: Interface receivers, extension property](extensions.md#interface-receiver-property).
+
 Rows 8g through 8j cover every route with a handle-passed callback payload, now that
 [ADR-036](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md)'s
 2026-09-11 ownership amendment gives the C# side sole ownership of the free (see

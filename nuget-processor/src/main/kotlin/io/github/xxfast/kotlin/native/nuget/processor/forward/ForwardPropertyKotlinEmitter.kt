@@ -359,46 +359,46 @@ private fun ForwardPropertyPlan.accessExpression(): String =
     is ForwardPropertyReceiver.Handle ->
       "handle.asStableRef<${receiver.owner}>().get().$kotlinName"
 
-    is ForwardPropertyReceiver.Value -> when (val type: BridgeType = receiver.type) {
-      is BridgeType.ObjectHandle ->
-        "receiver.asStableRef<${type.qualifiedName}>().get().$kotlinName"
-
-      // ADR-075: an extension property whose receiver is a value class crosses the bridge as its
-      // own underlying value (ADR-014), exactly like
-      // `ForwardKotlinPlanEmitter.valueClassReconstruction`'s `Owner(value)` for the value class's
-      // own declared members -- the receiver must be reconstructed before the property access. The
-      // wire carries the *underlying's* representation, so an enum ordinal / StableRef pointer is
-      // lowered first by the same shared helper the setter value uses.
-      is BridgeType.ValueClass -> {
-        val lowered: String = valueClassUnderlyingLowering("receiver", type.underlying)
-        "${type.qualifiedName}($lowered).$kotlinName"
-      }
-
-      else -> "receiver.$kotlinName"
+    // ADR-132 at the property position: the receiver is lowered by the *same* wire-to-Kotlin
+    // function the setter value uses, so an interface receiver reads its borrowed StableRef and a
+    // value-class receiver is reconstructed from its underlying (ADR-014/075) before the property
+    // access. The nullable handle receiver's `?.` chain is parenthesised, because `a?.b().c` binds
+    // `.c` to the *safe-called* result, which is not the nullable extension's receiver.
+    is ForwardPropertyReceiver.Value -> {
+      val lowered: String = inputLowering(receiver.type, "receiver")
+      if (receiver.type is BridgeType.Nullable) "($lowered).$kotlinName" else "$lowered.$kotlinName"
     }
 
     is ForwardPropertyReceiver.Static ->
       receiver.owner?.let { "$it.$kotlinName" } ?: kotlinName
   }
 
-private fun ForwardPropertyPlan.valueExpression(): String = when (val type: BridgeType = type) {
+private fun ForwardPropertyPlan.valueExpression(): String = inputLowering(type, "value")
+
+/**
+ * The wire value named [name], lowered to the Kotlin type [type] spells. Shared by the setter's
+ * value and (ADR-132) by an extension property's receiver: both are inputs on the same wire, so
+ * one `when` covers both and a shape neither has an arm for is a build failure rather than a
+ * `receiver.foo` on a `COpaquePointer`.
+ */
+private fun inputLowering(type: BridgeType, name: String): String = when (type) {
   is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
-    is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> "value"
+    is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> name
     // ADR-106: a null wire value stays null; only real text is parsed.
-    BridgeType.Uuid -> "value?.let(kotlin.uuid.Uuid::parse)"
-    is BridgeType.ObjectHandle -> "value?.asStableRef<${inner.qualifiedName}>()?.get()"
-    is BridgeType.Interface -> "value?.asStableRef<${inner.qualifiedName}>()?.get()"
+    BridgeType.Uuid -> "$name?.let(kotlin.uuid.Uuid::parse)"
+    is BridgeType.ObjectHandle -> "$name?.asStableRef<${inner.qualifiedName}>()?.get()"
+    is BridgeType.Interface -> "$name?.asStableRef<${inner.qualifiedName}>()?.get()"
     // ADR-076: the wire value is a raw INT64 of ticks; convert it back to an Instant.
-    BridgeType.Instant -> "instantFromDotNetTicks(value)"
+    BridgeType.Instant -> "instantFromDotNetTicks($name)"
     // ADR-103: the same, into a Duration.
-    BridgeType.Duration -> "durationFromDotNetTicks(value)"
+    BridgeType.Duration -> "durationFromDotNetTicks($name)"
     // ADR-080: the NullableDispatch `set` export carries the bare ordinal (`set_null` is the
     // other export), so the entry lookup is unconditional.
-    is BridgeType.Enum -> "${inner.qualifiedName}.entries[value]"
+    is BridgeType.Enum -> "${inner.qualifiedName}.entries[$name]"
     // ADR-075 Question D: a nullable collection setter is an ordinary `Direct` route with a
     // nullable `COpaquePointer` value -- `?.` short-circuits before `asStableRef` is ever reached
     // for a null wire value, so the property's static type stays the property's own `List<T>?`.
-    is BridgeType.Collection -> loweredCollectionExpression("value", inner, nullable = true)
+    is BridgeType.Collection -> loweredCollectionExpression(name, inner, nullable = true)
     // ADR-077 sub-items 3/4: `?.let` re-wraps only a non-null wire value, matching the callable
     // parameter lowering in ForwardKotlinPlanEmitter.
     // ADR-079: a Primitive/Enum underlying takes the NullableDispatch route instead, whose `set`
@@ -406,31 +406,31 @@ private fun ForwardPropertyPlan.valueExpression(): String = when (val type: Brid
     // export), so the value is re-wrapped unconditionally.
     is BridgeType.ValueClass ->
       if (inner.underlying is BridgeType.Primitive || inner.underlying is BridgeType.Enum) {
-        "${inner.qualifiedName}(${valueClassUnderlyingLowering("value", inner.underlying)})"
+        "${inner.qualifiedName}(${valueClassUnderlyingLowering(name, inner.underlying)})"
       } else {
         val lowered: String = valueClassUnderlyingLowering("it", inner.underlying)
-        "value?.let { ${inner.qualifiedName}($lowered) }"
+        "$name?.let { ${inner.qualifiedName}($lowered) }"
       }
 
-    else -> error("Forward property emitter has no nullable setter route for $type")
+    else -> error("Forward property emitter has no nullable input route for $type")
   }
 
-  is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> "value"
+  is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> name
   // ADR-106: parse the canonical text back; spelled fully qualified so no import is needed.
-  BridgeType.Uuid -> "kotlin.uuid.Uuid.parse(value)"
-  is BridgeType.Enum -> "${type.qualifiedName}.entries[value]"
-  BridgeType.Instant -> "instantFromDotNetTicks(value)"
-  BridgeType.Duration -> "durationFromDotNetTicks(value)"
-  is BridgeType.ObjectHandle -> "value.asStableRef<${type.qualifiedName}>().get()"
-  is BridgeType.Interface -> "value.asStableRef<${type.qualifiedName}>().get()"
-  is BridgeType.Collection -> loweredCollectionExpression("value", type)
+  BridgeType.Uuid -> "kotlin.uuid.Uuid.parse($name)"
+  is BridgeType.Enum -> "${type.qualifiedName}.entries[$name]"
+  BridgeType.Instant -> "instantFromDotNetTicks($name)"
+  BridgeType.Duration -> "durationFromDotNetTicks($name)"
+  is BridgeType.ObjectHandle -> "$name.asStableRef<${type.qualifiedName}>().get()"
+  is BridgeType.Interface -> "$name.asStableRef<${type.qualifiedName}>().get()"
+  is BridgeType.Collection -> loweredCollectionExpression(name, type)
   // ADR-077 sub-items 2/4: re-wrap the raw underlying wire value, re-running the value class's
   // own `init` validation, exactly like the callable parameter lowering in
   // ForwardKotlinPlanEmitter.
   is BridgeType.ValueClass ->
-    "${type.qualifiedName}(${valueClassUnderlyingLowering("value", type.underlying)})"
+    "${type.qualifiedName}(${valueClassUnderlyingLowering(name, type.underlying)})"
 
-  else -> error("Forward property emitter has no setter route for $type")
+  else -> error("Forward property emitter has no input route for $type")
 }
 
 private fun kotlinInputType(type: BridgeType): TypeName = when (type) {
