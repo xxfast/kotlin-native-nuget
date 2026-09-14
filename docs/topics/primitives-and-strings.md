@@ -29,7 +29,7 @@ string result = Mappings.String(); // "Kotlin/Native!"
 | `kotlin.uuid.Uuid` | `System.Guid` |
 
 These mappings describe Kotlin APIs exported to C#. For consuming a C# library from Kotlin,
-see [Objects and handles](objects-and-handles.md); nullable value types and the
+see [Types that cross the wire](bridgeable-subset.md#types-that-cross-the-wire); nullable value types and the
 `DateTimeOffset`, `TimeSpan`, and `Guid` mappings are not supported in that direction.
 
 ## Nullable values

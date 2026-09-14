@@ -1,438 +1,152 @@
 # Registration diagnostics
 
-This page is not a language mapping. It's what to reach for when the reverse bridge's registration
-step (see [Consuming C# in Kotlin](reverse-overview.md)) doesn't behave: nothing registered, one type
-didn't register, or the process fails at startup with a contract-mismatch message. Every consumer of
-a bound package hits this surface if they ever mix a stale build with a fresh one, so it ships to
-them, not just to this repo.
+Consuming a bound C# package (see [Consuming C# in Kotlin](reverse-overview.md)) starts with a
+registration step: every C# `[ModuleInitializer]` hands its function pointers to the matching
+Kotlin register export at process startup. This page is what to read when that step doesn't
+behave: a missing native library, a stale half of the package, or a type that never registered. A
+type or member excluded when Kotlin bindings were generated is a different problem, a Gradle build
+warning rather than a registration failure; see [The bridgeable subset](bridgeable-subset.md).
 
-## Two checks that are always on, no environment variable
+## Stale build: registration contract mismatch
 
-Every `nuget_{ns}_{type}_register` export (and the shared `nuget_runtime_register`) does two things
-before it stores a single function pointer:
+Before storing anything, each register export compares a `slotCount` and a `contractHash` the C#
+shim passes against this native library's own compile-time values. For a struct-typed reference,
+the hash covers each component's **name** as well as its type, so reordering two same-typed fields
+is source-compatible for C# callers but still changes the hash and is caught here:
 
-1. **A contract self-check.** The C# `[ModuleInitializer]` passes two leading scalars ahead of the
-   thunk pointers, `slotCount: Int` and `contractHash: Long`, computed by the same shared plugin
-   function on both generated sides. Kotlin compares them against its own compile-time values. If
-   they disagree, it stores nothing and throws, naming both sides. For a struct-typed reference, the
-   hash covers each component's **name** as well as its type (ADR-058 Decision 5), so reordering two
-   same-typed fields of a Shape B struct, which is source-compatible for C# callers, still changes the
-   contract hash and is caught here rather than silently mismatching ABI slots:
+```
+[nuget] FATAL: registration contract mismatch for {Type} ({Package}). The C# shim passed {N}
+slots (contract {H1}); this native library expects {M} slots (contract {H2}). The compiled C#
+shim and the native library were generated from different builds. One of them is stale. No
+pointers were stored (a mismatched table would corrupt memory).
+```
 
-   ```
-   [nuget] FATAL: registration contract mismatch for {Type} ({Package}). The C# shim passed {N}
-   slots (contract {H1}); this native library expects {M} slots (contract {H2}). The compiled C#
-   shim and the native library were generated from different builds. One of them is stale. No
-   pointers were stored (a mismatched table would corrupt memory).
-   ```
+The C# shim ships as source (`contentFiles/cs/any/`) compiled into *your* assembly, while the
+register export lives in the separately built native library. NuGet caches by version, so it's
+routine for one half to lag the other. Fix: purge the cached package
+(`~/.nuget/packages/<packageId>`), delete the consuming project's `obj/`/`bin/`, and rebuild both
+sides.
 
-   **A mismatch almost always means a stale build**: the C# shim ships as source
-   (`contentFiles/cs/any/`) compiled into *your* assembly, while the register export lives in the
-   separately built native library. NuGet caches by version, so it's routine for one half to be
-   stale relative to the other. Fix: purge the cached package
-   (`~/.nuget/packages/<packageId>`), delete the consuming project's `obj/`/`bin/`, and rebuild both
-   sides. `scripts/verify.sh` does the purge and wipe in the right order; a manual
-   `packNuget` does not.
+## Native library or export missing
 
-2. **A computed "N of M registrations fired" message**, replacing what used to be a constant string.
-   Every generated stub's `requireNotNull` guard, and `NugetObjectHandle.free()`'s runtime guard,
-   route through a generated `NugetRegistry` that knows, from generation time, the full expected set
-   of registrations for the build. On the failure path it distinguishes zero registrations from a
-   partial result and gives the matching remediation:
+Each `[ModuleInitializer]` also wraps its register call, so a load failure names its cause before
+it rethrows the original exception:
 
-   ```
-   [nuget] Test.Text.Template bindings are not registered (TestDependency). 0 of 7 expected
-   registrations have fired. NOTHING has registered. Missing: <runtime>, MimeMapping.MimeUtility,
-   Test.Enums.CatMoodService, Test.Nullability.Nickname, Test.Nullability.NicknameBook,
-   Test.Nullability.LegacyNicknameBook, Test.Text.Template.
+```
+[nuget:shim] FATAL: native library 'test' not found: <DllNotFoundException.Message>
+```
 
-   No [ModuleInitializer] in any *Registration.cs ran, so those files are not compiled into any
-   assembly the host has loaded. This is almost never a codegen bug. In order of likelihood:
-     1. Stale build state: delete the consuming project's obj/ and bin/, purge
-        ~/.nuget/packages/TestDependency, then restore and rebuild.
-     2. The consuming project does not reference the packed package at all.
-     3. The shim files compiled, but the assembly containing them was never loaded.
-   Verify with: NUGET_INTEROP_TRACE=1 (each [ModuleInitializer] logs as it fires).
-   ```
+```
+[nuget:shim] FATAL: export 'nuget_sample_enums_cat_mood_service_register' missing from 'test'.
+The native library predates this shim (stale build state). <EntryPointNotFoundException.Message>
+```
 
-   ```
-   [nuget] Test.Text.Template bindings are not registered (TestDependency). 6 of 7 expected
-   registrations have fired: <runtime>, MimeMapping.MimeUtility, Test.Enums.CatMoodService,
-   Test.Nullability.Nickname, Test.Nullability.NicknameBook, Test.Nullability.LegacyNicknameBook.
-   Missing: Test.Text.Template.
+The first means the native library itself never loaded. The second means the library loaded but
+doesn't contain this export, an older native library paired with a newer C# shim, the same
+stale-build fix as the contract mismatch above. Both messages print unconditionally, not only
+under `NUGET_INTEROP_TRACE`.
 
-   Other shims DID register, so the shim source IS compiled in and the native library IS loaded.
-   Scope this to Test.Text.Template alone: its TemplateRegistration.cs is absent from the compiled
-   output, or its [ModuleInitializer] threw before reaching the register call.
-   Verify with: NUGET_INTEROP_TRACE=1.
-   ```
+## Nothing registered, or one type missing
 
-   With zero registrations, the first remedy specifically addresses a stale
-   `obj/project.assets.json`: NuGet did not re-resolve the package, so it did not give
-   `contentFiles/cs/any/*Registration.cs` to the compiler. A partial result proves that the shim
-   source was compiled and the native library loaded, so investigate only the missing type's
-   `{Type}Registration.cs` and initializer.
+When a generated stub finds its function pointer still null, it throws with one of two messages,
+distinguishing zero registrations from a partial result, since they're different bugs:
 
-Both checks cost nothing on the bridge-call path: no trace code is emitted into any stub, thunk,
-getter, or setter. The cost is one CAS and two scalar compares per bound type, once, at process start.
+```
+[nuget] Test.Text.Template bindings are not registered (TestDependency). 0 of 7 expected
+registrations have fired. NOTHING has registered. Missing: <runtime>, MimeMapping.MimeUtility,
+Test.Enums.CatMoodService, Test.Nullability.Nickname, Test.Nullability.NicknameBook,
+Test.Nullability.LegacyNicknameBook, Test.Text.Template.
 
-## The opt-in trace: `NUGET_INTEROP_TRACE`
+No [ModuleInitializer] in any *Registration.cs ran, so those files are not compiled into any
+assembly the host has loaded. This is almost never a codegen bug. In order of likelihood:
+  1. Stale build state: the consuming project's obj/project.assets.json was not re-resolved, so
+     NuGet never handed contentFiles/cs/any/*Registration.cs to the compiler. Delete obj/ and
+     bin/, purge the NuGet cache at ~/.nuget/packages/TestDependency, restore, rebuild.
+  2. The consuming project does not reference the packed package at all.
+  3. The shim files compiled, but the assembly containing them was never loaded.
+Verify with: NUGET_INTEROP_TRACE=1 (each [ModuleInitializer] logs as it fires).
+```
 
-| Variable | Effect |
-|---|---|
-| `NUGET_INTEROP_TRACE=1` (also `true` or `all`) | Enables a line-per-registration trace on both sides of the bridge, plus the forward `[nuget:interop] runtime <version> loaded from <library>` line printed at assembly load |
-| `NUGET_INTEROP_TRACEFILE=<path>` | Redirects the trace from stderr to the given file, opened in append mode and flushed per line |
+```
+[nuget] Test.Text.Template bindings are not registered (TestDependency). 6 of 7 expected
+registrations have fired: <runtime>, MimeMapping.MimeUtility, Test.Enums.CatMoodService,
+Test.Nullability.Nickname, Test.Nullability.NicknameBook, Test.Nullability.LegacyNicknameBook.
+Missing: Test.Text.Template.
 
-Off by default, and it stays off unless you set it: nothing is emitted into generated code beyond the
-one `if (!enabled) return` check. Default sink is **stderr**, not `Console.Out`, because xunit v2
-doesn't capture stdout/stderr and a naive `Console.WriteLine` would be invisible at exactly the moment
-it matters. The file sink additionally survives a crashed test host, since it's flushed after every
-line rather than buffered.
+Other shims DID register, so the shim source IS compiled in and the native library IS loaded.
+Scope this to Test.Text.Template alone: its TemplateRegistration.cs is absent from the compiled
+output, or its [ModuleInitializer] threw before reaching the register call.
+Verify with: NUGET_INTEROP_TRACE=1.
+```
 
-A real run (`NUGET_INTEROP_TRACE=1 NUGET_INTEROP_TRACEFILE=trace.log dotnet test`), both sides of the
-bridge interleaved in one stream:
+Zero registrations point at a stale `obj/project.assets.json`, fixed the same way as the contract
+mismatch above. A partial count proves the shim compiled and the native library loaded, so look
+only at the missing type's own `{Type}Registration.cs` and its `[ModuleInitializer]`.
+
+## Tracing registration
+
+Set `NUGET_INTEROP_TRACE=1` (also `true` or `all`) to log a line per registration on both sides of
+the bridge, off by default. Redirect it to a file with `NUGET_INTEROP_TRACEFILE=<path>` (opened in
+append mode and flushed per line, so it survives a crashed host); otherwise it goes to stderr,
+since some test runners (xunit v2 included) don't capture stdout/stderr.
 
 ```
 [nuget:shim] register enter Test.Enums.CatMoodService -> nuget_sample_enums_cat_mood_service_register(7 slots) dll=sample
 [nuget] registered Test.Enums.CatMoodService (7 slots) [1/7]
 [nuget:shim] register ok    Test.Enums.CatMoodService
-[nuget:shim] register enter Test.Nullability.LegacyNicknameBook -> nuget_sample_nullability_legacy_nickname_book_register(2 slots) dll=sample
-[nuget] registered Test.Nullability.LegacyNicknameBook (2 slots) [2/7]
-[nuget:shim] register ok    Test.Nullability.LegacyNicknameBook
-[nuget:shim] register enter MimeMapping.MimeUtility -> nuget_mimemapping_mime_utility_register(1 slot) dll=sample
-[nuget] registered MimeMapping.MimeUtility (1 slot) [3/7]
-[nuget:shim] register ok    MimeMapping.MimeUtility
-[nuget:shim] register enter Test.Nullability.NicknameBook -> nuget_sample_nullability_nickname_book_register(12 slots) dll=sample
-[nuget] registered Test.Nullability.NicknameBook (12 slots) [4/7]
-[nuget:shim] register ok    Test.Nullability.NicknameBook
-[nuget:shim] register enter Test.Nullability.Nickname -> nuget_sample_nullability_nickname_register(2 slots) dll=sample
-[nuget] registered Test.Nullability.Nickname (2 slots) [5/7]
-[nuget:shim] register ok    Test.Nullability.Nickname
-[nuget:shim] register enter <runtime> -> nuget_runtime_register(1 slot) dll=sample
-[nuget] registered <runtime> (1 slot) [6/7]
+[nuget:shim] register enter <runtime> -> nuget_runtime_register(5 slots) dll=sample
+[nuget] registered <runtime> (5 slots) [2/7]
 [nuget:shim] register ok    <runtime>
-[nuget:shim] register enter Test.Text.Template -> nuget_sample_text_template_register(11 slots) dll=sample
-[nuget] registered Test.Text.Template (11 slots) [7/7]
-[nuget:shim] register ok    Test.Text.Template
 ```
 
-`[nuget:shim]` lines come from the C# side, before and after the register P/Invoke; `[nuget]` lines
-come from inside the Kotlin register export. The enter/ok pair on the C# side is what matters if the
-process dies *inside* the P/Invoke: the last line names the type that killed it. Order across types
-isn't fixed (`[ModuleInitializer]` order is up to the CLR), which is why each Kotlin line carries a
-running `[m/N]` count rather than assuming a position.
+`[nuget:shim]` lines come from C#, printed before and after the register P/Invoke; `[nuget]` lines
+come from inside the Kotlin export. If the process dies inside a P/Invoke, the last `enter` line
+with no matching `ok` names the type that killed it. `[ModuleInitializer]` order is up to the CLR,
+so each Kotlin line carries its own running `[m/N]` count rather than assuming a position.
 
-Registration granularity only: there is no per-call trace, and none is planned for v1. Every bug this
-feature exists to catch is a registration bug, not a call bug.
-
-### The forward side traces too, for every consumer
-
-The two lines above only fire for a consumer using the reverse bridge (a bound package). Since
-[ADR-129](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/129-nuget-runtime-version-export.md)
-the generated `Interop.cs` also carries an always-emitted `[ModuleInitializer]` that fires at
-assembly load for **every** consumer, forward-only included, gated by the same two variables:
+This line fires for every consumer, including one that never binds a C# package, gated by the same
+two variables:
 
 ```
 [nuget:interop] runtime <version> loaded from <library>
 ```
 
-`<library>` is the `DllImport` library name your generated bindings use, and `<version>` is the
-`nuget-runtime` version baked into the linked native library, read through a dedicated
-`nuget_runtime_version` export rather than the build-time value the generator expected, so a stale
-`.dylib`/`.dll` shows up here even when the C# shim compiled clean. Tag `[nuget:interop]` is distinct
-from `[nuget]` and `[nuget:shim]` above so an interleaved trace still reads unambiguously. Trace off
-means no P/Invoke from the initializer at all, so the moment the native library first loads is
-unchanged for every consumer today.
+`<library>` is the `DllImport` library name your generated bindings use; `<version>` is read at
+load time through a dedicated `nuget_runtime_version` export rather than the version the generator
+expected, so a stale native library shows up here even when the C# shim compiled clean. If the
+library predates that export, the line instead reads
+`[nuget:interop] runtime version unavailable from <library>: <ExceptionType>: <message>`.
 
-## Diagnosing forward handle leaks: `LiveHandles`
+There is no per-call trace: every diagnostic on this page is registration-granularity, checked once
+per bound type at process start, not on the bridge-call path.
 
-A different bridge health question: how many **forward** `StableRef` handles (Kotlin exports called
-from C#) does Kotlin currently hold. Every mint and release routes through one shared pair. Since
-[ADR-127](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md)
-this pair lives in the `nuget-runtime` library the plugin `export()`s, not in the generated
-`CNameExports.kt`, behind the `@NugetRuntimeApi` opt-in marker:
+## Checking for a forward handle leak
 
-```kotlin
-@NugetRuntimeApi
-public object NugetHandles {
-  public val live: AtomicLong = AtomicLong(0L)
+`NugetMarshal.LiveHandles`, generated into the same shim, reports how many Kotlin `StableRef`
+handles the forward bridge (a Kotlin object passed to C#) currently holds. It's `internal`, so code
+you write in the same consuming assembly can read it: snapshot the count, run the operation you
+suspect leaks, then compare. `NugetBridge.GcCollect()` (also internal, in the same shim) forces a
+pending release round before you re-read the count, since a release lands on a later GC cycle, not
+promptly. The count is process-global, so isolate the check from anything else running in the
+process that crosses a handle at the same time.
 
-  public fun retain(`value`: Any): COpaquePointer {
-    live.incrementAndGet()
-    return StableRef.create(value).asCPointer()
-  }
+## Forward direction has no registration step
 
-  public fun release(handle: COpaquePointer) {
-    handle.asStableRef<Any>().dispose()
-    live.decrementAndGet()
-  }
-}
-
-@NugetRuntimeApi
-@CName("nuget_live_handles")
-public fun export_nuget_live_handles(): Long = NugetHandles.live.value
-```
-
-Moving this into the runtime added no new handle mint and no new crossing family: every existing
-route still calls the same `retain`/`release` pair, byte-identical bodies, so no
-`LeakTests/LiveHandleTests.cs` row was added for the move. The new check that move needed is a
-binary one instead, `scripts/verify-runtime-exports.sh`, which asserts all 67 `nuget_*` names are
-present in the linked `.dylib`/`.dll` (see the entry-point diagnostic below).
-
-C# reads it as an `internal` property on `NugetMarshal`, matching the visibility of ADR-084's
-`NugetBridgeState.ReleasedCount`:
-
-```C#
-[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "nuget_live_handles")]
-private static extern long Native_live_handles();
-
-/// <summary>The number of Kotlin StableRef handles the forward bridge currently holds.</summary>
-internal static long LiveHandles => Native_live_handles();
-```
-
-`LeakTests/LiveHandleTests.cs` uses the count to assert one crossing family at a time returns
-to baseline: snapshot the count, run a batch of crossings, settle until the count stops moving, and
-compare. Settling loops `GC.Collect()` + `WaitForPendingFinalizers()` + `NugetBridge.GcCollect()`
-(the ADR-084 cleaner round) until the count is stable for several consecutive rounds, since some
-releases land asynchronously:
-
-```C#
-private static void AssertNoLeak(Action crossing, int iterations = 50)
-{
-    for (int attempt = 1; ; attempt++)
-    {
-        Settle();
-        long before = NugetMarshal.LiveHandles;
-
-        for (int i = 0; i < iterations; i++) crossing();
-
-        Settle();
-        long after = NugetMarshal.LiveHandles;
-        if (after == before) return;
-        if (after < before && attempt < MeasurementAttempts) continue;
-
-        Assert.Fail(
-            $"expected {before} live handles after {iterations} crossings, got {after} (delta {after - before}) on attempt {attempt}");
-    }
-}
-```
-
-A negative delta on an early attempt is re-measured (it can be a release owed by earlier work landing
-inside the window, not a leak of the crossing under test). A positive delta fails immediately, with
-no tolerance band: that is the shape of a leak this harness exists to catch. See
-[Exception safety on collection parameters and returns](collections.md#exception-safety-on-collection-parameters-and-returns)
-for the collection-return leak this harness proved and closed.
-
-Only forward handles are counted; the reverse side's own `StableRef` sites are not (see
-[ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)).
-
-**Row 1a**, `NestedClass_CreateAndDispose_ReturnsToBaseline`, proves a nested class mints and
-releases through the exact same `NugetHandles` route Row 1 measures for a top-level class
-(`aviary_perch_create`/`aviary_perch_dispose`): nesting a declaration
-([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md))
-adds no new mint path, so this is a checklist row confirming that, not a new mechanism. See
-[Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects).
-
-**Row 6b**, `InterfaceReceiverExtension_CSharpImplementedPet_ReleasesTransferHandle`, covers the
-same ADR-084 transfer handle Row 6 measures for an interface *argument*, one slot to the left: a
-C#-implemented `IPet` as the RECEIVER of an extension function. `HandleOf` mints a `StableRef` per
-crossing since the bridge object has no `_handle` of its own, so the receiver needs the same
-`finally`-dispose the argument position already had, since
-[ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md)
-gave the receiver the shared prelude/cleanup pipeline for the first time. See
-[Extensions: Interface receivers](extensions.md#interface-receivers).
-
-**Row 6c**, `ParameterOnlyInterface_Argument_ReturnsToBaseline`, is the same ADR-084 transfer
-handle again, minted for an interface reached only at a parameter position
-([ADR-135](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/135-interface-parameter-reachability.md)
-widened the reachability walk to cover this position at all). No new handle kind: the row exists
-because the widening is what first makes a `StableRef` get minted here, and a fix that mints
-without disposing would be invisible to `IntegrationTests` alone.
-
-**Row 6d**, `UnbridgeableInterface_Argument_ThrowsAndReturnsToBaseline`, is the fault-injection
-twin: an interface with a `var` member plans to `null`, so `NugetBridge.HandleFor` throws before
-any handle is minted. Before ADR-135's throw-safety fix the `finally` still ran and disposed
-`IntPtr.Zero` with no zero guard, crashing the process; this row pins that a **failed** mint
-neither leaks nor disposes anything, asserting the throw inside `AssertNoLeak` rather than around
-it. See [Implementing a Kotlin interface in C#: An interface reachable only at a parameter
-position](interfaces-abstract-sealed.md#an-interface-reachable-only-at-a-parameter-position).
-
-**Row 6e**, `SuspendReturn_ResolvedCSharpInterface_ReturnsToBaseline`, and **Row 6f**,
-`FlowElement_ResolvedCSharpInterface_ReturnsToBaseline`, cover the two async reads
-[ADR-136](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/136-csharp-identity-on-async-interface-reads.md)
-gave the same resolve-then-wrap identity the synchronous return already had: a `suspend fun`
-completion and a `Flow<T>` element, each handing back a stored C#-implemented `IPet`. Since
-`NugetMarshal.TryResolveCSharp` now disposes the transfer handle Kotlin minted for the crossing, the
-freeing site moves from the consumer's `using` to the read itself; both rows pin that the handle
-count still returns to baseline with the free happening there instead. See
-[Interfaces, abstract classes and sealed classes: Lifetime and identity](interfaces-abstract-sealed.md#lifetime-and-identity).
-
-**Row 6g**, `SuspendStateFlowOfInterface_ValueReads_ReturnToBaseline`, is a `suspend fun` returning
-`StateFlow<Interface>`, the newest of the interface-element async reads: three handles ride on one
-call and each is freed at a different place, the awaited `StateFlow`'s own `StableRef` (owned by the
-returned `KotlinStateFlow<T>`, released by the consumer's `using`), the `nuget_stateflow_value` read
-per `.Value`, and the ADR-136 resolve of a stored C# keeper. Unlike the other async rows, which read
-one handle per completion or per emission, this one reads a fresh element handle per `.Value` on a
-holder that outlives the call, so a value read that forgets its handle would leak per read rather
-than per call. See [Coroutines and Flow: `StateFlow<T>` element type is an
-interface](coroutines-and-flow.md#suspend-stateflow-interface-element).
-
-**Row 6h**, `InterfaceReceiverExtensionProperty_CSharpImplementedPet_ReleasesTransferHandle`, is
-Row 6b's own shape one slot to the right: the same C#-implemented `IPet` receiver, read through an
-extension **property** getter rather than an extension function. The setter route already carried
-a handle scope; the getter body used to be flat, so before
-[ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md)'s
-2026-09-14 amendment a minted receiver handle had nowhere to be released on a read. The nullable
-handle receiver, `Cat?.GetNameOrStray()`, mints nothing on either side, so it gets no row. See
-[Extensions: Interface receivers, extension property](extensions.md#interface-receiver-property).
-
-Rows 8g through 8j cover every route with a handle-passed callback payload, now that
-[ADR-036](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md)'s
-2026-09-11 ownership amendment gives the C# side sole ownership of the free (see
-[Ownership of a callback payload](lambdas-and-callbacks.md#ownership-of-a-callback-payload)):
-
-- **8g**, `LambdaParameter_OnASealedArm_StringInAndOut_ReturnsToBaseline`, the per-call route on a
-  sealed arm's `String` payload. See
-  [Lambda parameters on a sealed arm](interfaces-abstract-sealed.md#sealed-lambda-generated-c).
-- **8h**, `LambdaParameter_OnAnOrdinaryClass_StringInAndOut_ReturnsToBaseline`, the same per-call
-  route on an ordinary class (`Cat.DescribeWith`), proving the fix isn't specific to a sealed
-  receiver.
-- **8i**, `LambdaParameter_OnAnOrdinaryClass_ObjectPayload_ReturnsToBaseline`, the per-call route's
-  other payload kind: an exported object (`Cat.ForEachToy`'s `Toy`) rather than a marshalled
-  `String`.
-- **8j**, `InterfaceBridge_StringPayload_ReturnsToBaseline`, the interface-bridge route
-  (`CatEventSource.Trigger`), which had freed the same handle three times before the fix.
-- **8k**, `SealedArm_StoredCallbackPair_ReturnsToBaseline`, the ADR-037 stored-callback `addX`/`removeX`
-  pair declared on a sealed arm (`Job.Running.AddTicker`/`RemoveTicker`): subscribe, trigger once,
-  dispose. The receiver is a `StableRef<Job.Running>` rather than an ordinary class's, so a re-key
-  that retains the receiver per subscription instead of borrowing it shows up here. See
-  [Stored-callback and interface-bridge pairs on a sealed
-  arm](interfaces-abstract-sealed.md#sealed-callback-pair-generated-c).
-- **8l**, `SealedArm_InterfaceBridgePair_ReturnsToBaseline`, the same pattern for the ADR-039
-  interface-bridge pair on a `data object` arm (`Job.Idle.AddWatcher`/`RemoveWatcher`), plus one
-  retained handle per `String` payload the C# thunk owns.
-
-No row covers `Metronome`'s by-value primitive payloads (`Int`, `Boolean`, `Byte`, `Double`): a
-by-value payload mints no `StableRef` on the Kotlin side to begin with, and the per-call `GCHandle`
-that carries the delegate itself is freed in the calling method's own `finally`, so there is nothing
-for `LiveHandles` to measure.
-
-Rows 9e through 9g cover a suspend call returning the sealed base itself, now that it completes
-through the generated discriminator instead of failing to compile (see
-[A `suspend fun` returning the sealed base](interfaces-abstract-sealed.md#sealed-method-suspend-base-generated-c)):
-
-- **9e**, `Suspend_ReturningTheSealedBase_ReturnsToBaseline`: Kotlin mints the `StableRef` on the
-  concrete arm, and the completion hands that same handle to `Job.FromHandle`, which discriminates
-  and constructs the arm wrapper that then owns it. A completion that reads the discriminator
-  through a second handle, or mints one to read the type and forgets it, shows up here and nowhere
-  in the functional tests, which assert only the payload.
-- **9f**, `Suspend_ReturningTheNullableSealedBase_ReturnsToBaseline`, both branches in one crossing:
-  the null return mints no handle at all (a guard that releases something it never received goes
-  negative here), and the arm return goes through the same discriminated read as 9e.
-- **9g**, `Suspend_ReturningTheSealedBase_Throws_ReturnsToBaseline`, the throw path of the same
-  route: when the body throws, no result is minted and the ADR-128/130 error envelope crosses
-  instead, pinning that `NugetErrorNative.BuildException` releases what it was handed. Run at 5000
-  iterations, the same tight-loop precedent as the no-suspension-point row above, since the body has
-  no suspension point either.
-
-<note>
-    <p><code>NugetMarshal.LiveHandles</code> is process-global: any other handle-crossing code
-    running in the same process moves the count during the window a leak assertion measures across.
-    A leak test therefore needs a process of its own, isolated from anything else that creates or
-    frees a handle.</p>
-</note>
-
-## Proving the object is collected, not only the handle
-
-`LiveHandles` returning to baseline proves the `StableRef` is gone. It says nothing about the Kotlin
-object the handle pointed at: something Kotlin-side (a closure, a registry, a list) could still hold
-it reachable with zero live handles, and the counter would never see it. `test-library` ships a
-`Morgue` fixture that watches one forward object with a Kotlin weak reference, so a C# test can prove
-the object itself is collected, not just its handle:
-
-```kotlin
-@OptIn(ExperimentalNativeApi::class)
-object Morgue {
-  private var watched: WeakReference<Any>? = null
-
-  /** Watch a plain class instance: the object behind `cat_create`, nothing else touches it. */
-  fun watchCat(cat: Cat) { watched = WeakReference(cat) }
-
-  /** Watch a stored-callback receiver: the unsubscribe closure captures it (ADR-039). */
-  fun watchSource(source: CatEventSource) { watched = WeakReference(source) }
-
-  /** True while the watched object is reachable; false once Kotlin's GC has collected it. */
-  fun isAlive(): Boolean = watched?.get() != null
-
-  fun forget() { watched = null }
-}
-```
-
-C# does the sequencing: create the wrapper, hand it to `Morgue`, dispose it, then poll
-`NugetBridge.GcCollect()` until the weak reference reads dead or a deadline passes. Each step is its
-own P/Invoke, since a disposed object stays reachable while a Kotlin frame still holds its pointer
-local (`LeakTests/CollectabilityTests.cs`):
-
-```C#
-private static bool CollectedWithin(TimeSpan budget)
-{
-    DateTime deadline = DateTime.UtcNow + budget;
-    while (DateTime.UtcNow < deadline)
-    {
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        NugetBridge.GcCollect();
-        if (!Morgue.IsAlive()) return true;
-        Thread.Sleep(25);
-    }
-    return false;
-}
-```
-
-`CollectabilityTests` also carries a negative control, `StoredCallbackReceiver_TokenStillHeld_StaysAlive`:
-a held subscription token roots the receiver and the assertion stays false for a full second, then
-flips true once the token is disposed. That is what proves the positive assertions above can actually
-go red, not just pass by construction.
-
-<note>
-    <p>Today this covers a plain class and a stored-callback receiver only. A zero <code>LiveHandles</code>
-    count next to a live weak reference means Kotlin-side retention the handle counter cannot see;
-    see the open ROADMAP item to extend this to the other crossing families.</p>
-</note>
-
-## Limitations
-
-- No structured, queryable diagnostics report for registration; the trace is a plain text stream,
-  greppable but not machine-parseable beyond that.
-- The forward direction (Kotlin exports called from C#) has no registration table and so no
-  equivalent observability gap: it resolves by symbol name and fails loudly with
-  `DllNotFoundException` / `EntryPointNotFoundException` at the P/Invoke site. Since
-  [ADR-127](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md)
-  a missing `nuget_*` entry point specifically (as opposed to a per-declaration one) means the
-  `nuget-runtime` library was not `export()`ed into the shared library; `scripts/verify-runtime-exports.sh`
-  checks for exactly this against the linked binary for all 67 names, auto-selecting the platform's
-  linked library (`.dylib`, `.dll`, `.so`) and reading it with BSD `nm -gU` on macOS or, on Windows
-  and Linux, the GNU `nm` that Kotlin/Native's own msys2 toolchain dependency ships.
-- Tracing the native library's own load path (which `runtimes/{rid}/native/` payload the CLR actually
-  resolved) is a separate, unaddressed problem; this feature covers registration, not load resolution.
+Kotlin exports called from C# resolve by symbol name through an ordinary P/Invoke: no contract
+check and no register table. A mismatch there surfaces as a plain `DllNotFoundException` (the
+native library didn't load) or `EntryPointNotFoundException` (the symbol isn't in it) at the first
+call, rather than one of the messages above. The `[nuget:interop]` line is the only added signal on
+this path; tracing which native asset the .NET host actually resolved is outside what this feature
+covers.
 
 <seealso>
     <category ref="related">
         <a href="reverse-overview.md">Consuming C# in Kotlin</a>
+        <a href="bind-nuget-package-for-kotlin.md">Bind a NuGet package for Kotlin</a>
         <a href="objects-and-handles.md">Objects and handles</a>
         <a href="bridgeable-subset.md">The bridgeable subset</a>
-        <a href="collections.md">Collections</a>
     </category>
     <category ref="external">
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/041-kotlin-to-csharp-call-mechanism.md">ADR-041: Kotlin → managed C# call mechanism</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/048-kotlin-stub-generation-from-reverse-ir.md">ADR-048: Kotlin stub generation from reverse IR</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/049-csharp-registration-shim-generation.md">ADR-049: C# registration shim generation</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/054-reverse-bridge-registration-observability.md">ADR-054: Reverse-bridge registration observability</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/058-csharp-shape-b-structs-in-kotlin.md">ADR-058: C# Shape B structs in Kotlin</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/120-live-stableref-counter-and-leak-harness.md">ADR-120: Live StableRef counter and leak harness</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/121-kotlin-object-collectability-after-last-dispose.md">ADR-121: Kotlin object collectability after the last dispose</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md">ADR-127: `nuget-runtime` Kotlin/Native library</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/135-interface-parameter-reachability.md">ADR-135: Interface parameter positions join the ADR-084 bridge reachability set</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/129-nuget-runtime-version-export.md">ADR-129: A 67th runtime export, `nuget_runtime_version`</a>
     </category>
 </seealso>

@@ -1,648 +1,152 @@
 # C# structs
 
-A bridgeable C# `struct` becomes an immutable Kotlin `data class`. No struct ever crosses the C ABI
-itself: a struct-typed parameter expands into one ABI argument per component, and a struct-typed
-return expands into `void` plus one out-pointer per component. There is no handle, no `close()`, no
-`Cleaner`, and equality is structural. This holds recursively: a component may itself be a struct,
-at any depth, flattened onto the wire the same way (see [Nested struct
-components](#nested-struct-components)).
-
-There are two ways a struct qualifies, tried in order:
-
-- **Shape A**: exactly one public instance constructor covers all stored state. Components are its
-  parameters, in constructor-parameter order. C# reconstructs with `new T(a, b)`.
-- **Shape B**: no such constructor, but every field is either a public settable field or a settable
-  auto-property (`set` or `init`). Components are the fields/properties, in C# declaration order. C#
-  reconstructs with an object initializer, `new T { A = a, B = b }`.
-
-A struct that is neither is skipped (see [Which structs bind](#which-structs-bind)). Both shapes share
-everything else: the same wire format, the same immutable `data class` surface, the same registration
-machinery. Its unique state constructor (Shape A) or its object-initializer reconstruction (Shape B)
-both claim zero registration slots; each alternate public constructor on a Shape A struct claims one
-slot and reconstructs the returned components through out-pointers (Shape B structs bind no alternate
-constructors, see [Which structs bind](#which-structs-bind)). Methods and get-only computed properties
-on the struct itself also bind, for either shape: each call reconstructs the value from its components
-on the wire (the reverse of
-[ADR-014](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/014-value-class-mapping.md)'s
-"reconstruct on each invocation"), and members alone force a `Bindings` / registration export even
-when the struct has no alternate constructors.
-
-| C# | Kotlin |
-|---|---|
-| a bridgeable struct (see [Which structs bind](#which-structs-bind) below) | immutable `data class`, one `val` per component |
-| struct-typed parameter | one ABI argument per **leaf** component; a component that is itself a struct flattens in place, recursively (see [Nested struct components](#nested-struct-components)) |
-| struct-typed return | thunk return becomes `void`; one out-pointer argument per leaf component |
-| struct-typed property getter | as a return: out-pointers |
-| struct-typed property setter | as a parameter: decomposed arguments |
-| alternate public constructor (Shape A only) | Kotlin secondary constructor; one registration slot and one out-pointer per state component |
-| public instance method (non-void) | member function on the `data class`; receiver components lead the wire args |
-| get-only computed property (not a component) | `val` with bridge-backed getter on the `data class` |
-| public static method on the struct | function in the Kotlin `companion object` |
-
-## The `Point` fixture
-
-`TestDependency/Geometry.cs` declares a struct whose constructor parameters are lower camelCase
-while the properties they back are PascalCase, deliberately exercising the case-insensitive
-component-match rule:
+A bridgeable C# `struct` becomes an immutable Kotlin `data class`: no handle, nothing to `close()`,
+and structural `==`/`hashCode()`. A copy crosses the bridge each time, so a change on the Kotlin side
+is never seen by C# and vice versa; use `copy()` and pass the result back where you need an update.
 
 ```C#
-// TestDependency/Geometry.cs (real source)
+// TestDependency/Geometry.cs (trimmed)
 public readonly struct Point
 {
-    public Point(int x, int y)
-    {
-        X = x;
-        Y = y;
-    }
-
+    public Point(int x, int y) { X = x; Y = y; }
     public Point(int value) : this(value, value) { }
-
     public Point(bool unit) : this(unit ? 1 : 0, unit ? 1 : 0) { }
-
     public Point(Size size) : this(size.Width, size.Height) { }
-
     public int X { get; }
     public int Y { get; }
-
     public int Magnitude => Math.Abs(X) + Math.Abs(Y);
-
     public Point Offset(int dx, int dy) => new Point(X + dx, Y + dy);
-
     public string Format() => $"({X},{Y})";
-
     public static Point Origin() => new Point(0, 0);
 }
 
 public static class Geometry
 {
     public static Point Translate(Point p, int dx, int dy) => new Point(p.X + dx, p.Y + dy);
-    public static string Describe(Point p) => $"({p.X}, {p.Y})";
-    public static int Manhattan(Point a, Point b) => Math.Abs(a.X - b.X) + Math.Abs(a.Y - b.Y);
-}
-```
-
-Generated Kotlin surface (`build/nuget-interop/kotlin/nativeMain/sample/structs/Point.kt`, real
-output). Components stay primary constructor `val`s; methods and computed properties sit on the same
-`data class`, and statics land in a `companion object`:
-
-```kotlin
-internal data class Point(
-  val x: Int,
-  val y: Int,
-) {
-  private constructor(components: PointConstructorComponents) : this(components.x, components.y)
-  constructor(size: Size) : this(construct__4df77a50827105506f4258372b08561b(size))
-  constructor(unit: Boolean) : this(construct__e802c1ad168a16a38ec169d93b7f55fc(unit))
-  constructor(value: Int) : this(construct__e71e420dcea5e3c083737f3c34b97ec7(value))
-  fun format(): String {
-    val fn = requireNotNull(PointBindings.format__0fb3c58859d9da606915abab731b3187Fn) {
-      NugetRegistry.notRegistered("Test.Structs.Point", "TestDependency")
-    }
-    val resultPtr = fn.invoke(x, y)
-      ?: error("Point.Format returned null, expected a non-null string pointer")
-    val result = resultPtr.reinterpret<ByteVar>().toKString()
-    freeManagedString(resultPtr)
-    return result
-  }
-
-  fun offset(dx: Int, dy: Int): Point = memScoped {
-    val fn = requireNotNull(PointBindings.offset__8a9f2cbc4c6860d43d71b26e499229c9Fn) {
-      NugetRegistry.notRegistered("Test.Structs.Point", "TestDependency")
-    }
-    val outX = alloc<IntVar>()
-    val outY = alloc<IntVar>()
-    fn.invoke(x, y, dx, dy, outX.ptr, outY.ptr)
-    Point(outX.value, outY.value)
-  }
-  val magnitude: Int
-    get() {
-      val fn = requireNotNull(PointBindings.magnitudeGetterFn) {
-        NugetRegistry.notRegistered("Test.Structs.Point", "TestDependency")
-      }
-      return fn.invoke(x, y)
-    }
-  companion object {
-    fun origin(): Point = memScoped {
-      val fn = requireNotNull(PointBindings.origin__8692fa20d808eeacc66f94518d080914Fn) {
-        NugetRegistry.notRegistered("Test.Structs.Point", "TestDependency")
-      }
-      val outX = alloc<IntVar>()
-      val outY = alloc<IntVar>()
-      fn.invoke(outX.ptr, outY.ptr)
-      Point(outX.value, outY.value)
-    }
-  }
-}
-```
-
-The type is generated `internal`, not `public`: it must stay invisible to the forward-direction (KSP)
-exporter's own public-API scan, so a reverse-bound struct never gets re-exported forward into the
-package's own `Interop.cs`.
-
-`Translate` shows the full shape for a *host* type taking a struct: a struct parameter decomposed
-into leading arguments, and a struct return assembled from out-pointers:
-
-```kotlin
-// build/nuget-interop/kotlin/nativeMain/sample/structs/GeometryBindings.kt (real generated output)
-internal var translateFn: CPointer<CFunction<(Int, Int, Int, Int, CPointer<IntVar>, CPointer<IntVar>) -> Unit>>? = null
-```
-
-```C#
-// build/nuget-interop/csharp/GeometryRegistration.cs (real generated output)
-[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-private static unsafe void Translate_Thunk(int p_X, int p_Y, int dx, int dy, int* outX, int* outY)
-{
-    Point result = Geometry.Translate(new Point(p_X, p_Y), dx, dy);
-    *outX = result.X;
-    *outY = result.Y;
-}
-```
-
-`Manhattan` shows two struct parameters in one signature (`int a_X, int a_Y, int b_X, int b_Y`, a
-single non-struct `int` return, no out-pointers), and `Describe` shows a struct parameter with a
-non-struct (`string`) return.
-
-## The full v1 component vocabulary
-
-`TestDependency/Profile.cs` exercises every v1 component kind together: `string`, `bool`, `char`,
-and a bound enum:
-
-```C#
-// TestDependency/Profile.cs (real source)
-public readonly struct Profile
-{
-    public Profile(string tag, bool active, char grade, CatMood mood)
-    {
-        Tag = tag;
-        Active = active;
-        Grade = grade;
-        Mood = mood;
-    }
-
-    public string Tag { get; }
-    public bool Active { get; }
-    public char Grade { get; }
-    public CatMood Mood { get; }
-
-    public string Label => $"{Tag}:{Mood}";
-
-    public bool IsPlayful => Mood == CatMood.Playful;
-
-    public Profile WithMood(CatMood mood) => new Profile(Tag, Active, Grade, mood);
-
-    public static Profile Resting(string tag) => new Profile(tag, false, 'Z', CatMood.Sleepy);
 }
 ```
 
 ```kotlin
-// build/nuget-interop/kotlin/nativeMain/sample/structs/Profile.kt (real generated output)
-internal data class Profile(
-  val tag: String,
-  val active: Boolean,
-  val grade: Char,
-  val mood: CatMood,
-)
+val moved: Point = Geometry.translate(Point(x, y), dx, dy)
+val magnitude: Int = Point(x, y).magnitude
+val formatted: String = Point(x, y).offset(dx, dy).format()
+val origin: Point = Point.origin()
+
+val a = Point(3, 4)
+val b = a.copy()
+a == b                 // true, structural equality
+a.copy(x = 99) != a    // true
 ```
 
-Members on `Profile` (same file) follow the same reconstruct-on-call shape as `Point`, with the full
-string / bool / char / enum conversion vocabulary on every receiver component. See
-[Struct methods and computed properties](#struct-methods-and-computed-properties).
+The generated struct type is `internal`, so a function your library exports forward to C# cannot take
+or return it directly; pass its components as primitives, strings, or enums instead.
 
-Per-component ABI types reuse the existing wire tables (no new scalar is introduced by structs):
+## Which structs bind
 
-| Component type | Kotlin `CFunction` (in) | Kotlin `CFunction` (out-ptr) | C# thunk (in) | C# thunk (out-ptr) |
-|---|---|---|---|---|
-| `int` / enum | `Int` | `CPointer<IntVar>` | `int` | `int*` |
-| `long` | `Long` | `CPointer<LongVar>` | `long` | `long*` |
-| `bool` | `UByte` | `CPointer<UByteVar>` | `byte` | `byte*` |
-| `char` | `UShort` | `CPointer<UShortVar>` | `ushort` | `ushort*` |
-| `float` / `double` | `Float` / `Double` | `CPointer<FloatVar>` / `CPointer<DoubleVar>` | `float` / `double` | `float*` / `double*` |
-| `string` | `COpaquePointer?` | `CPointer<COpaquePointerVar>` | `IntPtr` | `IntPtr*` |
+A public, top-level, non-generic C# struct binds one of two ways:
 
-`TestDependency/Metrics.cs` covers the "pass-through" numeric components (`long`/`float`/`double`),
-each crossing as its own scalar with no ABI-side conversion, unlike `bool`/`char`/`string`/enum.
+- **A state constructor.** Exactly one public constructor whose parameters cover all stored state,
+  each parameter matching a public property or field of the same type by name (case-insensitively).
+  Kotlin's generated components, and their order, follow that constructor's parameter list. Other
+  public constructors on the same struct bind as [alternate constructors](#members-on-the-struct).
+- **No such constructor.** Every stored field must then be a public settable field, or a public
+  auto-property with a `set` or `init` setter. Components, and their order, follow the C# field
+  declaration order. There are no alternate constructors in this shape.
 
-## Shape B: structs with no public constructor
+Either way, a component's type must be a primitive, `string`, a bound enum, or another bridgeable
+struct (nested, at any depth; see [Nested structs](#nested-structs)).
 
-A struct with no state-covering constructor, but whose stored state is entirely public settable
-fields and/or settable auto-properties (`set` or `init`), still binds. Components are recovered from
-the FieldDef table in C# declaration order, a public field is its own row and an auto-property is its
-backing field's row, so a field and a property interleave correctly. The Kotlin surface is identical
-to Shape A: an immutable `data class`. Only the C# reconstruction expression changes, from
-`new T(a, b)` to an object initializer, `new T { A = a, B = b }`; `init`-only setters bind with no
-special handling, since an object initializer is exactly the context in which `init` is callable.
+A struct is skipped, with no generated Kotlin type, if it fails both shapes: for example, a private
+field with no public component covering it, a `readonly` public field (an object initializer can't
+set it), a hand-written property setter (metadata can't prove it writes the field it appears to), or
+zero stored state. If a nested component itself fails, the whole outer struct is skipped too, and the
+build warning names the failing component's path, not the outer struct's own rules.
 
-`TestDependency/Collar.cs` has both sub-shapes: `Extent` is pure public fields, `Collar` mixes a
-public field with `set` and `init` auto-properties across the full component vocabulary:
+## Component order for the no-constructor shape
+
+When a struct has a state constructor, its component order is already public C# API: reordering the
+parameters breaks C# callers too, so the Kotlin side can't drift silently. When a struct has no state
+constructor, component order is the field declaration order, which C# callers never see, since they
+always construct with named properties. Reordering two same-typed fields in the C# source is
+source-compatible in C# but silently reorders the generated Kotlin `data class` constructor.
 
 ```C#
-// TestDependency/Collar.cs (real source)
-public struct Extent
-{
-    public int Width;
-    public int Height;
-
-    public int Area => Width * Height;
-    public Extent Grow(int by) => new Extent { Width = Width + by, Height = Height + by };
-    public static Extent Unit() => new Extent { Width = 1, Height = 1 };
-}
-
+// TestDependency/Collar.cs (trimmed) -- no constructor covers this state, so it binds this way
 public struct Collar
 {
-    public int Girth;                            // public field           -> int, direct
-    public string Colour { get; set; }           // settable auto-prop     -> IntPtr / UTF-8
-    public bool Belled { get; init; }             // INIT-only auto-prop    -> byte
-    public char Initial { get; init; }            // INIT-only auto-prop    -> ushort
-    public CatMood Mood { get; set; }             // settable auto-prop     -> int ordinal
-
-    public string Label => $"{Colour}:{Girth}{(Belled ? "*" : "")}";
-    public bool IsLoud => Belled && Mood == CatMood.Playful;
-
-    public Collar Resize(int by) =>
-        new Collar { Girth = Girth + by, Colour = Colour, Belled = Belled, Initial = Initial, Mood = Mood };
-
-    public static Collar Plain(string colour) =>
-        new Collar { Girth = 1, Colour = colour, Belled = false, Initial = 'P', Mood = CatMood.Calm };
+    public int Girth;                   // public field
+    public string Colour { get; set; }  // settable auto-property
+    public bool Belled { get; init; }   // init-only auto-property
+    public char Initial { get; init; }
+    public CatMood Mood { get; set; }
 }
 ```
 
-Generated Kotlin: components stay primary constructor `val`s, in declaration order. The class shape is
-otherwise unchanged from Shape A, but the KDoc is not: a `data class` generated for an `INITIALIZER`
-struct carries an extra paragraph warning about the declaration-order hazard (see [Component order is
-a hazard Shape A does not have](#component-order-is-a-hazard-shape-a-does-not-have) below); a Shape A
-`data class` like `Point` does not, since its order is already C# API
-(`build/nuget-interop/kotlin/nativeMain/sample/structs/Extent.kt` and `Collar.kt`, real output):
+Always use named arguments when constructing this shape from Kotlin:
 
 ```kotlin
-internal data class Extent(
-  val width: Int,
-  val height: Int,
-) {
-  fun grow(by: Int): Extent = memScoped {
-    val fn = requireNotNull(ExtentBindings.grow__9121219becc53aca492b7a3eeec39b31Fn) {
-      NugetRegistry.notRegistered("Test.Structs.Extent", "TestDependency")
-    }
-    val outWidth = alloc<IntVar>()
-    val outHeight = alloc<IntVar>()
-    fn.invoke(width, height, by, outWidth.ptr, outHeight.ptr)
-    Extent(outWidth.value, outHeight.value)
-  }
-  // ...
-}
-
-/**
- * Kotlin value type for the C# struct `TestDependency.Collar`.
- *
- * Copied by value across the bridge: equality is structural, and there is nothing to close.
- * The C# struct's fields/properties are settable, but a Kotlin-side change can never be
- * observable in C# (a copy crossed the boundary), so every component is a `val`. Use [copy]
- * and pass the result back.
- *
- * Component order follows the C# declaration order. Prefer named arguments.
- */
-internal data class Collar(
-  val girth: Int,
-  val colour: String,
-  val belled: Boolean,
-  val initial: Char,
-  val mood: CatMood,
-)
+val c: Collar =
+  Collar(girth = 1, colour = "black", belled = true, initial = 'O', mood = CatMood.CALM)
 ```
 
-The reconstruction delta is on the C# side, in the reconstruction expression
-(`build/nuget-interop/csharp/ExtentRegistration.cs` and `CollarRegistration.cs`, real output):
+## Members on the struct
 
-```C#
-[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-private static unsafe void Grow__9121219becc53aca492b7a3eeec39b31_Thunk(int Width, int Height, int by, int* outWidth, int* outHeight)
-{
-    Extent result = new Extent { Width = Width, Height = Height }.Grow(by);
-    *outWidth = result.Width;
-    *outHeight = result.Height;
-}
-
-[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-private static unsafe void Resize__50abd5f4f4e3ddfc0ecdc552fbbca9ab_Thunk(int Girth, IntPtr ColourPtr, byte Belled, ushort Initial, int Mood, int by, int* outGirth, IntPtr* outColour, byte* outBelled, ushort* outInitial, int* outMood)
-{
-    Collar result = new Collar { Girth = Girth, Colour = Marshal.PtrToStringUTF8(ColourPtr)!, Belled = Belled != 0, Initial = (char)Initial, Mood = (CatMood)Mood }.Resize(by);
-    *outGirth = result.Girth;
-    *outColour = Marshal.StringToCoTaskMemUTF8(result.Colour);
-    *outBelled = result.Belled ? (byte)1 : (byte)0;
-    *outInitial = (ushort)result.Initial;
-    *outMood = (int)result.Mood;
-}
-```
-
-`TestDependency/Collars.cs`'s `Pair(Collar a, Extent b)` takes two Shape B structs of different
-sub-shapes in one signature, decomposing both onto the wire and reconstructing each with its own
-object initializer (`build/nuget-interop/csharp/CollarsRegistration.cs`, real output):
-
-```C#
-[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-private static IntPtr Pair__19127a5e1495d2eeb2514ce30eb72bd2_Thunk(int a_Girth, IntPtr a_ColourPtr, byte a_Belled, ushort a_Initial, int a_Mood, int b_Width, int b_Height)
-{
-    string result = Collars.Pair(new Collar { Girth = a_Girth, Colour = Marshal.PtrToStringUTF8(a_ColourPtr)!, Belled = a_Belled != 0, Initial = (char)a_Initial, Mood = (CatMood)a_Mood }, new Extent { Width = b_Width, Height = b_Height });
-    return Marshal.StringToCoTaskMemUTF8(result);
-}
-```
-
-Hand-written Kotlin in `test-library` looks exactly like the Shape A samples; nothing about calling
-a Shape B struct differs from Kotlin's point of view:
+Alternate public constructors (state-constructor shape only) become Kotlin secondary constructors.
+Non-void instance methods and get-only computed properties (not themselves components) become member
+functions and `val`s; public static methods land in the `companion object`. `Equals`, `GetHashCode`,
+`ToString`, `Deconstruct`, operators, setters, and void-returning instance methods are not bound;
+Kotlin's `data class` keeps its own equality and stringification instead.
 
 ```kotlin
-// test-library/.../sample/structs/CollarSample.kt (real source)
-fun describeCollar(
-  girth: Int,
-  colour: String,
-  belled: Boolean,
-  initialCode: Int,
-  mood: CatMood,
-): String = Collars.describe(Collar(girth, colour, belled, initialCode.toChar(), mood))
+val primary = Point(2, 3)
+val scalar = Point(4)                  // alternate constructor
+val converted = Point(true)            // alternate constructor
+val structArgument = Point(Size(5, 6)) // alternate constructor taking another struct
 
-fun collarMembers(girth: Int, colour: String, mood: CatMood): String {
-  val c = Collar(girth, colour, true, 'B', mood)
-  return "${c.label}|${c.isLoud}|${c.resize(1).girth}|${Collar.plain(colour).label}"
-}
-
-// The documented defence against the declaration-order hazard: named arguments.
-fun collarNamedArgs(): String {
-  val c: Collar =
-    Collar(girth = 1, colour = "black", belled = true, initial = 'O', mood = CatMood.CALM)
-  return "${c.girth},${c.colour},${c.belled},${c.initial},${c.mood}"
-}
+Point.origin().format()   // static factory, then an instance method
+Point(x, y).magnitude     // get-only computed property
 ```
 
-```C#
-// IntegrationTests/CollarRoundTripTests.cs (real source)
-[Fact]
-public void DescribeCollar_RendersEveryComponent()
-{
-    string result = CollarSample.DescribeCollar(5, "Oreo", true, 'O', CatMood.Playful);
-    Assert.Equal("Oreo 5 O Playful True", result);
-}
+## Struct-typed properties and methods on classes
 
-[Fact]
-public void PairCollar_TwoDifferentShapeBStructsInOneSignature()
-{
-    string result = CollarSample.PairCollar(2, "Oreo", 3, 4);
-    Assert.Equal("Oreo:2*/3x4", result);
-}
-
-[Fact]
-public void CollarNamedArgs_ComponentNamesMatchDeclarationOrder()
-{
-    string result = CollarSample.CollarNamedArgs();
-    Assert.Equal("1,black,true,O,CALM", result);
-}
-```
-
-A reverse struct's own `char` component round-trips correctly regardless of how a caller happens to
-produce it: `DescribeCollar` above takes its `initialCode` as an `Int` code point and converts it to
-`Char` before constructing the `Collar`, but nothing about the reverse-struct binding requires that
-detour. A `Char` also binds directly, at a forward parameter, property, or return; see
-[Primitives and strings](primitives-and-strings.md).
-
-### Component order is a hazard Shape A does not have
-
-For a Shape A struct, component order is the constructor's parameter order, which is already C# API:
-reordering it breaks every positional C# caller too. For a Shape B struct, component order is the
-*field declaration* order, which C# callers never see (they always use named object-initializer
-syntax). Reordering two same-typed fields in the C# source is source-compatible for C# callers and
-silently reorders the generated Kotlin `data class` primary constructor.
-
-Two independent defences exist, at two different layers:
-
-- **Documentation, at the Kotlin source layer.** Every `data class` generated for a Shape B
-  (`RirStructShape.INITIALIZER`) struct carries the extra KDoc paragraph quoted above, verbatim:
-  "Component order follows the C# declaration order. Prefer named arguments." A Shape A `data class`
-  like `Point` does not carry it, since its order already tracks C# API. A generator test pins the
-  exact wording. Named arguments are the correct defence (`collarNamedArgs` above), not a workaround.
-- **The contract hash, at the wire layer.** The ADR-054 contract hash now includes component
-  **names**, not just types, so a reorder changes `contractHash` and a stale shim paired with a fresh
-  library is caught rather than silently corrupting memory (see [Registration
-  diagnostics](registration-diagnostics.md)).
-
-Neither defence stops a Kotlin consumer who ignores the KDoc and calls `Extent(3, 4)` positionally
-from getting a value with the components swapped after a reorder and successful rebuild: the contract
-hash only catches a stale-shim mismatch, and the KDoc is only read, not enforced. The named-arguments
-recommendation is real advice, not a guarantee.
-
-## Struct-typed properties and instance methods
-
-A struct works as a parameter or return on both static and instance members. `TestDependency`'s
-`Cattery` (a bound handle class) has an instance method taking and returning `Metrics`, and a
-**settable** struct-typed property, `CurrentProfile`:
+A struct works as a parameter, return, or settable property on a bound class's static or instance
+members, the same as on a top-level function. `Cattery` is a real handle-backed class with a
+`weigh` instance method taking and returning a struct, and a settable struct-typed property,
+`currentProfile`:
 
 ```kotlin
-// build/nuget-interop/kotlin/nativeMain/sample/structs/Cattery.kt (real generated output)
-fun weigh(m: Metrics, factor: Float): Metrics = memScoped {
-  val fn = requireNotNull(CatteryBindings.weighFn) { /* ... */ }
-  val outHeartRateBpm = alloc<LongVar>()
-  val outWeightKg = alloc<FloatVar>()
-  val outTemperatureC = alloc<DoubleVar>()
-  fn.invoke(handle.require("Cattery"), m.heartRateBpm, m.weightKg, m.temperatureC, factor, outHeartRateBpm.ptr, outWeightKg.ptr, outTemperatureC.ptr)
-  Metrics(outHeartRateBpm.value, outWeightKg.value, outTemperatureC.value)
+val cattery = Cattery(name)
+try {
+  val result: Metrics = cattery.weigh(Metrics(heartRateBpm, weightKg, temperatureC), factor)
+  cattery.currentProfile = Profile(tag, active, 'A', mood)
+  val current: Profile = cattery.currentProfile
+} finally {
+  cattery.close()
 }
-
-var currentProfile: Profile
-  get() {
-    val fn = requireNotNull(CatteryBindings.currentProfileGetterFn) { /* ... */ }
-    return memScoped {
-      val outTag = alloc<COpaquePointerVar>()
-      val outActive = alloc<UByteVar>()
-      val outGrade = alloc<UShortVar>()
-      val outMood = alloc<IntVar>()
-      fn.invoke(handle.require("Cattery"), outTag.ptr, outActive.ptr, outGrade.ptr, outMood.ptr)
-      val outTagPtr = requireNotNull(outTag.value) { "a struct string component returned null unexpectedly" }
-      val outTagResult = outTagPtr.reinterpret<ByteVar>().toKString()
-      freeManagedString(outTagPtr)
-      Profile(outTagResult, outActive.value.toInt() != 0, outGrade.value.toInt().toChar(), nugetEnumEntry(CatMood.entries, outMood.value, "CatMood"))
-    }
-  }
-  set(value) {
-    val fn = requireNotNull(CatteryBindings.currentProfileSetterFn) { /* ... */ }
-    memScoped { fn.invoke(handle.require("Cattery"), value.tag.cstr.ptr, value.active, value.grade.code.toUShort(), value.mood.ordinal) }
-  }
 ```
 
-The generated C# thunks show the same shape from the other side, an instance thunk's leading
-`selfHandle` parameter followed by the decomposed struct components:
+`Cattery` itself still needs `close()` (or `use { }`), the same as any other handle-backed class;
+`Metrics` and `Profile` are plain values and have none of that.
+
+## Nested structs
+
+A struct component can itself be a struct, at any depth. The Kotlin surface stays nested, one `val`
+per component, each typed as its own generated `data class`:
 
 ```C#
-// build/nuget-interop/csharp/CatteryRegistration.cs (real generated output)
-[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-private static unsafe void CurrentProfile_Get_Thunk(IntPtr selfHandle, IntPtr* outTag, byte* outActive, ushort* outGrade, int* outMood)
-{
-    Cattery receiver = (Cattery)GCHandle.FromIntPtr(selfHandle).Target!;
-    Profile result = receiver.CurrentProfile;
-    *outTag = Marshal.StringToCoTaskMemUTF8(result.Tag);
-    *outActive = result.Active ? (byte)1 : (byte)0;
-    *outGrade = (ushort)result.Grade;
-    *outMood = (int)result.Mood;
-}
-
-[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-private static void CurrentProfile_Set_Thunk(IntPtr selfHandle, IntPtr value_TagPtr, byte value_Active, ushort value_Grade, int value_Mood)
-{
-    Cattery receiver = (Cattery)GCHandle.FromIntPtr(selfHandle).Target!;
-    receiver.CurrentProfile = new Profile(Marshal.PtrToStringUTF8(value_TagPtr)!, value_Active != 0, (char)value_Grade, (CatMood)value_Mood);
-}
-```
-
-`Cattery` itself is a real C# class (an ADR-051 handle wrapper), so it keeps `close()`. `Point`,
-`Metrics`, and `Profile` are values and have none of that.
-
-## Struct methods and computed properties
-
-Members declared *on* the struct itself bind too. This is the reverse mirror of
-[ADR-014](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/014-value-class-mapping.md):
-the C# thunk rebuilds `new Point(X, Y)` (or the equivalent for other component vocabularies) from
-leading wire args, then invokes the real member. There is no handle and no `selfHandle`.
-
-What binds:
-
-| C# on the struct | Kotlin | Wire |
-|---|---|---|
-| public instance method with a non-void return | member function | N component args, then ordinary args; struct returns use out-pointers |
-| get-only non-component computed property | `val` with bridge-backed getter | N component args only |
-| public static method | `companion object` function | ordinary args only (no receiver components) |
-
-What is skipped (so the `data class` keeps Kotlin's own equality / stringification, and components
-stay primary constructor vals rather than bridge getters):
-
-- `Equals` / `GetHashCode` / `ToString` / `Deconstruct`
-- operators
-- setters
-- void-returning instance methods
-- component auto-properties (`X`, `Y`, `Tag`, …)
-
-Registration slots on a struct follow the ADR-057 category order for that type:
-**alternate constructors → static methods → instance methods → computed getters**. Members alone force
-`PointBindings.kt` / `PointRegistration.cs` even when the struct has no alternate constructors
-(`Profile` is that case: four member slots, zero alternate ctors).
-
-Generated C# thunks for `Point` (`build/nuget-interop/csharp/PointRegistration.cs`, real output):
-
-```C#
-[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-private static IntPtr Format__0fb3c58859d9da606915abab731b3187_Thunk(int X, int Y)
-{
-    string result = new Point(X, Y).Format();
-    return Marshal.StringToCoTaskMemUTF8(result);
-}
-
-[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-private static unsafe void Offset__8a9f2cbc4c6860d43d71b26e499229c9_Thunk(int X, int Y, int dx, int dy, int* outX, int* outY)
-{
-    Point result = new Point(X, Y).Offset(dx, dy);
-    *outX = result.X;
-    *outY = result.Y;
-}
-
-[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-private static int Magnitude_Get_Thunk(int X, int Y)
-{
-    int result = new Point(X, Y).Magnitude;
-    return result;
-}
-
-[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-private static unsafe void Origin__8692fa20d808eeacc66f94518d080914_Thunk(int* outX, int* outY)
-{
-    Point result = Point.Origin();
-    *outX = result.X;
-    *outY = result.Y;
-}
-```
-
-`Profile` shows the same reconstruct path with the non-primitive component vocabulary. Real thunks
-from `build/nuget-interop/csharp/ProfileRegistration.cs`:
-
-```C#
-[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-private static unsafe void WithMood__af153c00af41f44bcc8d2d1964698940_Thunk(IntPtr TagPtr, byte Active, ushort Grade, int Mood, int mood, IntPtr* outTag, byte* outActive, ushort* outGrade, int* outMood)
-{
-    Profile result = new Profile(Marshal.PtrToStringUTF8(TagPtr)!, Active != 0, (char)Grade, (CatMood)Mood).WithMood((CatMood)mood);
-    *outTag = Marshal.StringToCoTaskMemUTF8(result.Tag);
-    *outActive = result.Active ? (byte)1 : (byte)0;
-    *outGrade = (ushort)result.Grade;
-    *outMood = (int)result.Mood;
-}
-
-[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-private static IntPtr Label_Get_Thunk(IntPtr TagPtr, byte Active, ushort Grade, int Mood)
-{
-    string result = new Profile(Marshal.PtrToStringUTF8(TagPtr)!, Active != 0, (char)Grade, (CatMood)Mood).Label;
-    return Marshal.StringToCoTaskMemUTF8(result);
-}
-```
-
-Hand-written Kotlin in `test-library` calls the members like any other Kotlin API:
-
-```kotlin
-// test-library/.../sample/structs/StructsSample.kt (real source)
-fun pointMagnitude(x: Int, y: Int): Int = Point(x, y).magnitude
-
-fun offsetPoint(x: Int, y: Int, dx: Int, dy: Int): String = Point(x, y).offset(dx, dy).format()
-
-fun pointOriginFormat(): String = Point.origin().format()
-
-fun profileLabel(tag: String, active: Boolean, gradeCode: Int, mood: CatMood): String =
-  Profile(tag, active, gradeCode.toChar(), mood).label
-
-fun profileWithMood(
-  tag: String,
-  active: Boolean,
-  gradeCode: Int,
-  mood: CatMood,
-  newMood: CatMood,
-): String {
-  val updated: Profile = Profile(tag, active, gradeCode.toChar(), mood).withMood(newMood)
-  return "${updated.label}|${updated.isPlayful}"
-}
-
-fun profileRestingLabel(tag: String): String = Profile.resting(tag).label
-```
-
-## Nested struct components
-
-A struct-typed component may itself be a struct, at any depth. The wire flattens the whole
-component tree recursively, depth-first, pre-order: every ABI argument is a leaf (a primitive,
-`string`, or bound enum), and a leaf's ABI name is the path to it, joined with `_`. The Kotlin
-surface stays nested: the generated `data class` for the outer struct declares one `val` per
-component, and a struct-typed component's own type is its own generated `data class`, never the
-flattened leaves. C# reconstruction is recursive too, and composes with no rules of its own: each
-struct rebuilds itself with its own shape (Shape A: a constructor call, Shape B: an object
-initializer), nested inside whichever shape the containing struct uses. A-in-A, B-in-A, A-in-B, and
-B-in-B all fall out of the same recursive call.
-
-`TestDependency/Litter.cs` nests a Shape A struct (`Profile`, the full string/bool/char/enum
-vocabulary) and a Shape B struct (`Extent`, plain ints) inside one Shape A outer struct:
-
-```C#
-// TestDependency/Litter.cs (real source)
+// TestDependency/Litter.cs (trimmed)
 public readonly struct Litter
 {
     public Litter(Profile mother, Extent basket, int count, CatMood mood)
     {
         Mother = mother; Basket = basket; Count = count; Mood = mood;
     }
-
-    public Profile Mother { get; }   // nested Shape A, converted components
-    public Extent Basket { get; }    // nested Shape B, direct components
+    public Profile Mother { get; }
+    public Extent Basket { get; }
     public int Count { get; }
     public CatMood Mood { get; }
-
-    public string Summary => $"{Mother.Tag}x{Count}@{Basket.Width}x{Basket.Height}/{Mood}";
-
-    public Litter Grow(int by) =>
-        new Litter(Mother, new Extent { Width = Basket.Width + by, Height = Basket.Height + by },
-                   Count + by, Mood);
 }
 ```
-
-The generated Kotlin surface keeps the nesting (`build/nuget-interop/kotlin/nativeMain/sample/structs/Litter.kt`,
-real output). `mother` is a `Profile`, not eight separate fields:
 
 ```kotlin
 internal data class Litter(
@@ -653,114 +157,20 @@ internal data class Litter(
 )
 ```
 
-The wire is flat. `grow`'s `CFunction` type (`build/nuget-interop/kotlin/nativeMain/sample/structs/LittersBindings.kt`,
-real output) takes the 8 leaves of `Litter` (`Mother.{Tag,Active,Grade,Mood}`, `Basket.{Width,Height}`,
-`Count`, `Mood`), then `by`, then 8 out-pointers:
+Equality and `copy()` compose through the nesting with no extra work:
 
 ```kotlin
-internal var grow__9f37803769e29e1e2ab56290d2857a11Fn: CPointer<CFunction<(COpaquePointer?, Boolean, UShort, Int, Int, Int, Int, Int, Int, CPointer<COpaquePointerVar>, CPointer<UByteVar>, CPointer<UShortVar>, CPointer<IntVar>, CPointer<IntVar>, CPointer<IntVar>, CPointer<IntVar>, CPointer<IntVar>) -> Unit>>? = null
-```
-
-The stub flattens a path expression per leaf on the way out (`l.mother.tag.cstr.ptr`, never a raw
-`l.mother`) and reassembles a nested constructor expression on the way in
-(`build/nuget-interop/kotlin/nativeMain/sample/structs/Litters.kt`, real output, trimmed):
-
-```kotlin
-fun grow(l: Litter, by: Int): Litter = memScoped {
-  val fn = requireNotNull(LittersBindings.grow__9f37803769e29e1e2ab56290d2857a11Fn) { /* ... */ }
-  val outMother_Tag = alloc<COpaquePointerVar>()
-  // ... one alloc per leaf ...
-  fn.invoke(l.mother.tag.cstr.ptr, l.mother.active, l.mother.grade.code.toUShort(), l.mother.mood.ordinal, l.basket.width, l.basket.height, l.count, l.mood.ordinal, by, outMother_Tag.ptr, /* ... */)
-  // ...
-  Litter(Profile(outMother_TagResult, outMother_Active.value.toInt() != 0, /* ... */), Extent(outBasket_Width.value, outBasket_Height.value), outCount.value, nugetEnumEntry(CatMood.entries, outMood.value, "CatMood"))
-}
-```
-
-C# reconstructs the same tree, one call per struct, recursively
-(`build/nuget-interop/csharp/LittersRegistration.cs`, real output):
-
-```C#
-private static unsafe void Grow__9f37803769e29e1e2ab56290d2857a11_Thunk(IntPtr l_Mother_TagPtr, byte l_Mother_Active, ushort l_Mother_Grade, int l_Mother_Mood, int l_Basket_Width, int l_Basket_Height, int l_Count, int l_Mood, int by, IntPtr* outMother_Tag, byte* outMother_Active, ushort* outMother_Grade, int* outMother_Mood, int* outBasket_Width, int* outBasket_Height, int* outCount, int* outMood)
-{
-    Litter result = Litters.Grow(new Litter(new Profile(Marshal.PtrToStringUTF8(l_Mother_TagPtr)!, l_Mother_Active != 0, (char)l_Mother_Grade, (CatMood)l_Mother_Mood), new Extent { Width = l_Basket_Width, Height = l_Basket_Height }, l_Count, (CatMood)l_Mood), by);
-    *outMother_Tag = Marshal.StringToCoTaskMemUTF8(result.Mother.Tag);
-    *outMother_Active = result.Mother.Active ? (byte)1 : (byte)0;
-    *outMother_Grade = (ushort)result.Mother.Grade;
-    *outMother_Mood = (int)result.Mother.Mood;
-    *outBasket_Width = result.Basket.Width;
-    *outBasket_Height = result.Basket.Height;
-    *outCount = result.Count;
-    *outMood = (int)result.Mood;
-}
-```
-
-`new Litter(new Profile(...), new Extent { ... }, ...)` is one expression: the outer's Shape A
-constructor call, taking a nested Shape A constructor call and a nested Shape B object initializer
-as two of its arguments. Read-back uses path expressions (`result.Mother.Tag`, not `result.Tag`).
-
-### Depth, and across a package boundary
-
-Nesting itself has no depth limit (the real limit is arity, below). `TestDependency/Nursery.cs`
-nests `Litter` inside `Nursery` (depth 2: `Nursery -> Litter -> Profile -> string`), declared in a
-**different C# namespace** than `Litter`'s own, so the generated Kotlin has to import across a
-package boundary and the generated C# has to `using` a namespace it would not otherwise reference:
-
-```C#
-// TestDependency/Nursery.cs (real source)
-namespace Test.Nested;
-
-public readonly struct Nursery
-{
-    public Nursery(Litter litter, int room) { Litter = litter; Room = room; }
-    public Litter Litter { get; }
-    public int Room { get; }
-}
-```
-
-The generated `Nursery.kt` (package `sample.nested`) imports the nested struct's own package
-(`build/nuget-interop/kotlin/nativeMain/sample/nested/Nursery.kt`, real output):
-
-```kotlin
-package sample.nested
-
-import sample.enums.CatMood
-import sample.structs.Litter
-
-internal data class Nursery(
-  val litter: Litter,
-  val room: Int,
-)
-```
-
-and the generated shim adds `using Test.Structs;` alongside its own namespace, then flattens the
-whole depth-2 path (`n_Litter_Mother_Tag`, `n_Litter_Basket_Width`, ...)
-(`build/nuget-interop/csharp/NurseriesRegistration.cs`, real output, trimmed):
-
-```C#
-namespace Test.Nested
-{
-    using Test.Enums;
-    using Test.Structs;
-
-    private static unsafe void Rehome__7030230e3e73ec968cf53164b5fcc5be_Thunk(IntPtr n_Litter_Mother_TagPtr, byte n_Litter_Mother_Active, ushort n_Litter_Mother_Grade, int n_Litter_Mother_Mood, int n_Litter_Basket_Width, int n_Litter_Basket_Height, int n_Litter_Count, int n_Litter_Mood, int n_Room, IntPtr* outLitter_Mother_Tag, byte* outLitter_Mother_Active, ushort* outLitter_Mother_Grade, int* outLitter_Mother_Mood, int* outLitter_Basket_Width, int* outLitter_Basket_Height, int* outLitter_Count, int* outLitter_Mood, int* outRoom)
-    {
-        Nursery result = Nurseries.Rehome(new Nursery(new Litter(new Profile(Marshal.PtrToStringUTF8(n_Litter_Mother_TagPtr)!, n_Litter_Mother_Active != 0, (char)n_Litter_Mother_Grade, (CatMood)n_Litter_Mother_Mood), new Extent { Width = n_Litter_Basket_Width, Height = n_Litter_Basket_Height }, n_Litter_Count, (CatMood)n_Litter_Mood), n_Room));
-        // ...
-    }
-}
+val a = Litter(Profile("o", true, 'A', CatMood.CALM), Extent(1, 2), 3, CatMood.CALM)
+a == a.copy()                                  // true
+a != a.copy(mother = a.mother.copy(tag = "p")) // true, a change two levels down is observable
 ```
 
 ### The 22-argument ceiling
 
-Flattening multiplies ABI arity, and `kotlinx.cinterop`'s `CPointer<CFunction<...>>.invoke` tops out
-at 22 arguments (a Kotlin/Native implementation limit, not a C ABI one). A member whose flattened
-arity (receiver, if any, plus parameters plus out-pointers, all counted at the leaf) exceeds 22 is
-**skipped**, not generated, with a `skipped_abi_arity_limit` diagnostic naming the member and the
-count; the rest of the type still binds.
-
-`TestDependency/Litter.cs`'s `Litters.Merge(Litter, Litter)` pins this deliberately: two `Litter`
-parameters (8 leaves each) plus a `Litter` return (8 out-pointers) is 24 arguments, four over the
-ceiling. Real build-log warning:
+Each struct component becomes its own ABI argument (or out-pointer, for a return), and nesting
+multiplies that count. A member whose flattened argument count, receiver and out-pointers included,
+exceeds 22 is skipped entirely rather than generated, with a build warning naming the member and the
+count:
 
 ```
 w: [nuget:TestDependency] Skipping Test.Structs.Litters.Merge(...): flattened ABI arity (24)
@@ -769,263 +179,18 @@ Shrink one of the nested structs in this member's signature (fewer components, o
 split it into multiple members with fewer struct parameters.
 ```
 
-`Merge` does not appear in the generated `Litters.kt` or `LittersBindings.kt`; `Compare`, `Describe`,
-and `Grow` (17 arguments) do.
-
-### A skipped nested component names the path
-
-If a nested component itself fails to bind, the whole outer struct is skipped, and its
-`skipped_unsupported_struct` diagnostic names the component **path** and the inner reason, not one
-of the outer struct's own shape rules:
-
-```C#
-// TestDependency/UnsupportedStructs.cs (real source)
-public readonly struct Kennel
-{
-    public Kennel(Manual manual, int n) { Manual = manual; N = n; }
-    public Manual Manual { get; }
-    public int N { get; }
-}
-```
-
-Real diagnostic from `test-library/build/nuget-interop/reverse-ir.json` (trimmed): when a struct
-fails **both** shapes, the reason carries both attempts, not just the last one:
-
-```json
-{
-  "kind": "skipped_unsupported_struct",
-  "typeName": "Kennel",
-  "reason": "Shape A: property `Manual`: struct `Test.Structs.Manual` is not bridgeable: property `A` is settable but is not an auto-property (no compiler-generated backing field), so the struct's stored state cannot be proven covered; Shape B: auto-property `Manual` has no public setter and there is no constructor to set it"
-}
-```
-
-### Equality composes
-
-Deep structural equality falls out of nesting `data class`es inside each other with no extra work,
-and `copy()` composes the same way a C# `with` expression would:
-
-```kotlin
-// test-library/.../sample/structs/NestedSample.kt (real source)
-fun nestedValueEquality(): Boolean {
-  val a = Litter(Profile("o", true, 'A', CatMood.CALM), Extent(1, 2), 3, CatMood.CALM)
-  return a == a.copy() &&
-      a.mother == a.copy().mother &&
-      a != a.copy(count = 4) &&
-      a != a.copy(mother = a.mother.copy(tag = "p"))
-}
-```
-
-## Value semantics
-
-The generated `data class` gives value equality for free, and it holds across independent bridge
-calls, not just against itself:
-
-```kotlin
-// test-library/src/nativeMain/kotlin/.../sample/structs/StructsSample.kt (real source)
-fun pointValueEqualityRoundTrip(): Boolean {
-  val a = Point(3, 4)
-  val b = a.copy()
-  val c = a.copy(x = 99)
-  val translatedOnce: Point = Geometry.translate(a, 1, 1)
-  val translatedAgain: Point = Geometry.translate(a, 1, 1)
-  return a == b &&
-      a.hashCode() == b.hashCode() &&
-      a != c &&
-      translatedOnce == translatedAgain &&
-      translatedOnce.hashCode() == translatedAgain.hashCode()
-}
-```
-
-## Using it from C#
-
-Structs only appear on the Kotlin side; the forward-exported functions that exercise them stay in the
-existing `String`/`Int`/`Long`/`Float`/`Double`/`Boolean`/enum vocabulary rather than exporting a
-struct forward (mapping a plain multi-field data class forward is [ADR-014](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/014-value-class-mapping.md)'s
-concern, single-component value classes only, and out of scope here):
-
-```C#
-// IntegrationTests/StructRoundTripTests.cs (real source)
-[Fact]
-public void TranslatePointDescription_MovesBothComponents()
-{
-    string result = StructsSample.TranslatePointDescription(1, 2, 10, 20);
-    Assert.Equal("11,22", result);
-}
-
-[Theory]
-[InlineData(0, 0, 3, 4, 7)]
-[InlineData(1, 2, 1, 2, 0)]
-[InlineData(-2, -3, 2, 3, 10)]
-public void ManhattanDistance_TwoStructParameters(int x1, int y1, int x2, int y2, int expected)
-{
-    int result = StructsSample.ManhattanDistance(x1, y1, x2, y2);
-    Assert.Equal(expected, result);
-}
-
-[Fact]
-public void CatteryCurrentProfile_GetSetRoundTrip()
-{
-    string result = StructsSample.CatteryCurrentProfileRoundTrip("Household", "Mylo", true, 66, CatMood.Hungry);
-    Assert.Equal("unset,false,63,SLEEPY|Mylo,true,66,HUNGRY", result);
-}
-
-[Theory]
-[InlineData(3, -4, 7)]
-[InlineData(0, 0, 0)]
-[InlineData(-2, -3, 5)]
-public void PointMagnitude_ComputedProperty(int x, int y, int expected)
-{
-    int result = StructsSample.PointMagnitude(x, y);
-    Assert.Equal(expected, result);
-}
-
-[Fact]
-public void PointOffset_InstanceMethodStructReturn_ThenFormat()
-{
-    string result = StructsSample.OffsetPoint(1, 2, 10, 20);
-    Assert.Equal("(11,22)", result);
-}
-
-[Fact]
-public void PointOrigin_StaticFactory_ThenFormat()
-{
-    string result = StructsSample.PointOriginFormat();
-    Assert.Equal("(0,0)", result);
-}
-
-[Fact]
-public void ProfileWithMood_InstanceMethodStructReturn_ThenLabelAndIsPlayful()
-{
-    string result = StructsSample.ProfileWithMood(
-        "Mylo", false, 66, CatMood.Hungry, CatMood.Playful);
-    Assert.Equal("Mylo:Playful|true", result);
-}
-
-[Fact]
-public void ProfileResting_StaticFactory_ThenLabel()
-{
-    string result = StructsSample.ProfileRestingLabel("Oreo");
-    Assert.Equal("Oreo:Sleepy", result);
-}
-```
-
-## Which structs bind
-
-A struct is a classification candidate at all only if it is public, top-level, non-generic,
-non-`ref struct`, and not an enum. It is then classified in this order:
-
-**Shape A** iff:
-
-1. Exactly one public instance constructor, the state constructor, has at least one parameter and
-   covers all stored state. Other public constructors may bind as alternate constructors.
-2. Every state-constructor parameter matches, case-insensitively by name, a public readable instance
-   **property or public instance field** of the same type (`x` matches `X`). (Widened by ADR-058 to
-   include fields, so an ordinary `struct { public int A; public int B; public S(int a, int b) {...} }`
-   binds as Shape A instead of colliding with a generated `data class` primary constructor.)
-3. Every component type is in the v1 vocabulary: primitives (including `bool` and `char`), `string`,
-   bound enums, or another bridgeable struct (flattened recursively; see [Nested struct
-   components](#nested-struct-components)).
-4. Its state constructor covers all stored state: the number of non-static instance fields equals
-   the number of state-constructor parameters.
-
-Components, and their order, are the state constructor's parameter list, not metadata field order.
-Rule 4 exists because without it a struct with more stored fields than constructor parameters would
-silently drop a field's value on every crossing.
-
-**Shape B** iff no constructor satisfies Shape A, and every non-static field is covered: it is either
-a public settable field, or the `[CompilerGenerated]` backing field of a public, non-static
-auto-property with a public getter and a public setter (`set` or `init`). A field that fails
-coverage (private, `readonly`, or a manually-written property whose setter cannot be proven to write
-it) skips the whole struct rather than silently dropping that field. Components, and their order, are
-the FieldDef declaration order (see [Shape B](#shape-b-structs-with-no-public-constructor) above). A
-Shape B struct binds no constructors at all, alternate or otherwise: every public constructor on it is
-skipped with its own diagnostic, since a Shape B struct's primary constructor already reaches every
-component and an "alternate" would collide with it.
-
-Otherwise the struct is **skipped**, with a `skipped_unsupported_struct` diagnostic naming the failed
-rule. `TestDependency/UnsupportedStructs.cs` has one adversarial case per rule:
-
-```C#
-// TestDependency/UnsupportedStructs.cs (real source)
-public readonly struct Overstuffed                 // fails Shape A rule 4, then Shape B (uncovered _hidden)
-{
-    private readonly int _hidden;
-    public Overstuffed(int visible) { Visible = visible; _hidden = visible; }
-    public int Visible { get; }
-}
-
-public struct PartlyHidden                          // Shape B: settable Visible, but _hidden is uncovered
-{
-    private int _hidden;
-    public int Visible { get; set; }
-}
-
-public struct Frozen                                 // Shape B: a public readonly field is not settable
-{
-    public readonly int A;
-    public int B;
-}
-
-public struct Manual                                  // Shape B: settable A, but not an auto-property
-{
-    private int _a;
-    public int A { get => _a; set => _a = value; }
-}
-
-public struct Nothing { }                              // Shape B: zero stored state, zero components
-```
-
-Every one of these is skipped with a `skipped_unsupported_struct` diagnostic in `reverse-ir.json` and
-generates no Kotlin type. Real diagnostics, trimmed, from
-`test-library/build/nuget-interop/reverse-ir.json`:
-
-```json
-{
-  "kind": "skipped_unsupported_struct",
-  "typeName": "Overstuffed",
-  "reason": "field `_hidden` is private and no public component covers it: state would be silently dropped"
-}
-{
-  "kind": "skipped_unsupported_struct",
-  "typeName": "Frozen",
-  "reason": "public field `A` is readonly and cannot be set by an object initializer"
-}
-{
-  "kind": "skipped_unsupported_struct",
-  "typeName": "Manual",
-  "reason": "property `A` is settable but is not an auto-property (no compiler-generated backing field), so the struct's stored state cannot be proven covered"
-}
-{
-  "kind": "skipped_unsupported_struct",
-  "typeName": "Nothing",
-  "reason": "struct has no settable public state: zero components"
-}
-```
+Shrink a nested struct in the signature, or split the member into smaller ones, to bring it back
+under the ceiling.
 
 ## Limitations
 
-- **Alternate constructors on a Shape B struct** are diagnosed, not bound: since a Shape B struct's
-  primary reconstruction already reaches every component, an "alternate" would collide with it.
-- **Manual (non-auto) settable properties as components** (`Manual` above) are not bound: metadata
-  alone cannot prove that a hand-written setter writes the field it appears to.
-- **Shape A constructor-parameter nullability** is not decoded (a pre-existing gap; Shape B's own
-  components *are* nullability-decoded, since a Shape B struct's `default(T)` reachability makes a
-  reference-typed component's nullness observable). Nesting widens this: a Shape A outer with a
-  Shape B inner mixes nullability-decoded components (the inner's) with undecoded ones (the outer's)
-  in one flat argument list.
-- **Void instance methods**, **setters**, **operators**, and the synthesized
-  `Equals`/`GetHashCode`/`ToString`/`Deconstruct` surface on a struct are not bound (see
-  [Struct methods and computed properties](#struct-methods-and-computed-properties)).
-- **Raising the 22-argument ceiling** (see [The 22-argument ceiling](#the-22-argument-ceiling)) is
-  not built: a member over the ceiling is skipped, not packed into a scratch buffer.
-- **`Nullable<T>` components**, including a nullable nested struct, are not supported.
-- **Class-typed (handle) components** inside a struct are not supported: a `GCHandle` does not compose
-  with an immutable value copy. Unaffected by nesting: a handle component would be a leaf on the
-  wire, not something the recursion descends through.
-- **Generic structs** and **structs as collection elements** are not supported.
-
-Tracked in [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 9
-and Phase 10.
+- **`Nullable<T>` components** are not supported, including a nullable nested struct.
+- **Class-typed (handle) components** inside a struct are not supported: a handle doesn't compose
+  with an immutable value copy.
+- **Generic structs** and **structs as collection elements** (`List<Point>`) are not supported.
+- **A state constructor's parameter nullability is not decoded**: a `string?` parameter surfaces in
+  Kotlin as non-nullable `String`. A `null` from C# there fails fast rather than corrupting memory.
+  The no-constructor shape's components are decoded correctly and are unaffected.
 
 <seealso>
     <category ref="related">
@@ -1037,10 +202,7 @@ and Phase 10.
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md">ADR-056: C# structs (value types) in Kotlin</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/057-csharp-overload-sets-in-kotlin.md">ADR-057: C# overload sets in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/058-csharp-shape-b-structs-in-kotlin.md">ADR-058: C# Shape B structs in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/059-nested-struct-components-in-kotlin.md">ADR-059: Nested struct components in Kotlin</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/014-value-class-mapping.md">ADR-014: Value class mapping</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/054-reverse-bridge-registration-observability.md">ADR-054: Reverse-bridge registration observability</a>
     </category>
 </seealso>

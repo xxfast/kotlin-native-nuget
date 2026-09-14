@@ -1,254 +1,88 @@
 # Instance members
 
-Instance methods and instance properties on a bound C# class become member functions and properties
-on the generated Kotlin wrapper introduced in [Objects and handles](objects-and-handles.md). There is
-no dedicated ADR for this feature; it's a confirmed extension of the insight
-[ADR-051](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/051-csharp-objects-as-opaque-handles.md)
-already states: an instance thunk is a static thunk whose first parameter is the receiver's handle.
-
-## The `Template` fixture
-
-`TestDependency`'s `Test.Text.Template` is the canonical fixture for this feature: a
-constructor, two static methods, a read-only property, a settable property, an instance method with
-a string in and out, an instance method that returns a fresh handle of the same type, plus read-only
-and settable static properties.
+Instance methods and instance properties on a bound C# class become member functions and
+properties on the generated Kotlin wrapper (see [Objects and handles](objects-and-handles.md)).
+Every call passes the wrapper's handle as the receiver, the same mechanism a handle-typed
+parameter already uses elsewhere.
 
 ```C#
-// TestDependency/Template.cs (real source)
 public class Template
 {
-    public static string DefaultName { get; set; } = "Oreo";
-    public static int RenderCount { get; private set; }
-
     public Template(string source) => _source = source;
 
-    public string Source => _source;                    // read-only instance property
+    public string Source => _source;             // read-only instance property
+    public string Name { get; set; } = "world";   // settable instance property
 
-    public string Name { get; set; } = "world";          // settable instance property
-
-    public string Apply(string name) =>                  // instance method, string in/out
-        _source.Replace("{name}", name);
-
-    public Template Clone() => new(_source) { Name = Name }; // instance method returning a handle
-
-    public static Template Parse(string source) => new(source);
-    public static string Render(Template template, string name) =>
-        template._source.Replace("{name}", name);
+    public string Apply(string name) => _source.Replace("{name}", name);
+    public Template Clone() => new(_source) { Name = Name };
 }
 ```
-
-Generated Kotlin (`build/nuget-interop/kotlin/nativeMain/sample/text/Template.kt`, real output):
 
 ```kotlin
-internal class Template internal constructor(handle: COpaquePointer) : AutoCloseable {
-  // ...handle, cleaner, close(), secondary constructor...
+val template: Template = Template("Hello, {name}")
+template.name = name
 
-  fun apply(name: String): String {
-    val fn = requireNotNull(applyFn) { /* ... */ }
-    val resultPtr = memScoped { fn.invoke(handle.require("Template"), name.cstr.ptr) }
-      ?: error("Template.Apply returned null - expected a non-null string pointer")
-    val result = resultPtr.reinterpret<ByteVar>().toKString()
-    freeManagedString(resultPtr)
-    return result
-  }
-
-  fun clone(): Template {
-    val fn = requireNotNull(cloneFn) { /* ... */ }
-    val ptr: COpaquePointer? = fn.invoke(handle.require("Template"))
-    return Template(requireNotNull(ptr) {
-      "Template.Clone returned null, but the C# API annotates it non-null."
-    })
-  }
-
-  val source: String
-    get() {
-      val fn = requireNotNull(sourceGetterFn) { /* ... */ }
-      val resultPtr = fn.invoke(handle.require("Template"))
-        ?: error("Template.Source returned null - expected a non-null string pointer")
-      val result = resultPtr.reinterpret<ByteVar>().toKString()
-      freeManagedString(resultPtr)
-      return result
-    }
-
-  var name: String
-    get() { /* same shape as source's getter, backed by nameGetterFn */ }
-    set(value) {
-      val fn = requireNotNull(nameSetterFn) { /* ... */ }
-      memScoped { fn.invoke(handle.require("Template"), value.cstr.ptr) }
-    }
-
-  companion object { /* parse, render - see Objects and handles */ }
-}
+val copy: Template = template.clone()
+copy.name        // "world", carried over from template
+copy.apply(name) // substitutes {name} in copy's source
 ```
 
-Every instance member call prepends `handle.require("Template")` as the receiver argument, exactly
-mirroring what a handle-typed *parameter* already does elsewhere: it's the same
-`handle.require(...)` mechanism used for object parameters in
-[Objects and handles](objects-and-handles.md), applied to `this` instead of an explicit argument.
+A read-only property (`{ get; }`, or a getter-only expression body) becomes a Kotlin `val`. A
+settable property (`{ get; set; }`) becomes a `var`. Neither is a stored field: every access calls
+through the bridge, just like a method call.
 
-The generated C# thunk shows the same shape from the other side (`selfHandle` first):
+## Overloads
+
+Same-name C# instance methods become ordinary Kotlin overloads, resolved by parameter type:
 
 ```C#
-// build/nuget-interop/csharp/TemplateRegistration.cs (real generated output)
-[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-private static IntPtr Apply_Thunk(IntPtr selfHandle, IntPtr namePtr)
-{
-    Template receiver = (Template)GCHandle.FromIntPtr(selfHandle).Target!;
-    string result = receiver.Apply(Marshal.PtrToStringUTF8(namePtr)!);
-    return Marshal.StringToCoTaskMemUTF8(result);
-}
+public string Apply(string value) => $"{_origin}:text:{value}";
+public string Apply(int value) => $"{_origin}:int:{value}";
 ```
-
-`test-library` puts all of this together:
 
 ```kotlin
-// test-library/src/nativeMain/kotlin/.../sample/Greetings.kt (real source)
-fun greetViaInstanceMembers(name: String): String {
-  val template: Template = Template("Hello, {name}")
-  template.name = name
-
-  val copy: Template = requireNotNull(template.clone()) {
-    "Template.clone returned null - expected a non-null Template handle"
-  }
-  check(copy.name == template.name) { "Template.clone did not carry over the Name property" }
-  check(copy.source == template.source) { "Template.clone did not carry over the source" }
-
-  return template.use { copy.use { c -> c.apply(name) } }
-}
+lab.apply("hi") // resolves to the string overload
+lab.apply(3)    // resolves to the int overload
 ```
 
-## Property mapping
-
-| C# property | Kotlin |
-|---|---|
-| read-only (`{ get; }`, or a getter-only expression body) | `val` |
-| settable (`{ get; set; }`) | `var`, with bridge-backed `get()`/`set()` |
-
-Neither is a stored field; both `get()` and `set()` (when present) call through a registered function
-pointer on every access, just like a method.
-
-## Instance method overloads
-
-Same-name C# instance methods become ordinary Kotlin overloads. From the generated
-`sample.overloads.OverloadLab` wrapper:
-
-```kotlin
-fun apply(value: Int): String {
-  val fn = requireNotNull(OverloadLabBindings.apply__0053cbaf86159b038b186eb3f58e5325Fn) {
-    NugetRegistry.notRegistered("Test.Overloads.OverloadLab", "TestDependency")
-  }
-  val resultPtr = fn.invoke(handle.require("OverloadLab"), value)
-    ?: error("OverloadLab.Apply returned null, expected a non-null string pointer")
-  val result = resultPtr.reinterpret<ByteVar>().toKString()
-  freeManagedString(resultPtr)
-  return result
-}
-
-fun apply(value: String): String {
-  val fn = requireNotNull(OverloadLabBindings.apply__2698962af99422165da00ce0a194caceFn) {
-    NugetRegistry.notRegistered("Test.Overloads.OverloadLab", "TestDependency")
-  }
-  val resultPtr = memScoped { fn.invoke(handle.require("OverloadLab"), value.cstr.ptr) }
-    ?: error("OverloadLab.Apply returned null, expected a non-null string pointer")
-  val result = resultPtr.reinterpret<ByteVar>().toKString()
-  freeManagedString(resultPtr)
-  return result
-}
-```
-
-## Registration slot order
-
-The registration export's parameters follow one fixed order, derived from a single shared function
-(`bridgeableRegistrables` in `RirBridging.kt`) that both the Kotlin and C# generators consume, so the
-two sides can never drift out of alignment:
-
-1. constructors, sorted by canonical managed signature
-2. static methods, sorted by canonical managed signature
-3. instance methods, sorted by canonical managed signature
-4. instance properties, sorted by canonical property identity, getter before setter
-5. static properties, sorted by canonical property identity, getter before setter
-
-```C#
-// build/nuget-interop/csharp/TemplateRegistration.cs (real generated output, full parameter list)
-private static extern void nuget_sample_text_template_register(
-    int slotCount, long contractHash,
-    IntPtr ctor__88b141e80a5108003d6f860a1ce95a8bPtr,
-    IntPtr parse__ffb4590e9c348d4335b0daf3bf67290dPtr,
-    IntPtr render__09735fbd1f678e3c5379e20685e83436Ptr,
-    IntPtr apply__24f0465fa09a4b89c4df743720ee967ePtr,
-    IntPtr clone__ff6587faf14671db32af677f29126dcePtr,
-    IntPtr nameGetterPtr, IntPtr nameSetterPtr, IntPtr sourceGetterPtr,
-    IntPtr defaultNameGetterPtr, IntPtr defaultNameSetterPtr, IntPtr renderCountGetterPtr);
-```
+An overload set the mapping can't tell apart is skipped with its own build diagnostic; the type's
+other bridgeable members still generate.
 
 ## Name collisions with the wrapper itself
 
-The generated wrapper already owns three Kotlin member names: `handle`, `close`, and `cleaner`. A C#
-instance method or property whose Kotlin name (camelCase of the C# PascalCase name) would collide
-with one of those is skipped entirely and reported as a Gradle build warning:
+The generated wrapper already owns three Kotlin member names: `handle`, `close`, and `cleaner`
+(see [Objects and handles](objects-and-handles.md)). A C# instance method or property whose
+camelCased Kotlin name would collide with one of those is skipped, with a Gradle build warning
+naming the member and asking you to rename it on the C# side or expose it through a
+differently-named adapter member. Static members are unaffected: they land in the Kotlin
+`companion object`, a separate name scope from the wrapper's own instance members (see
+[Static classes and methods](static-classes-and-methods.md)).
 
+## Handle-typed properties
+
+A settable property whose type is itself a bound class renders as a Kotlin `var`, and its
+nullability follows the property's `NullableAttribute`, exactly as for a handle-typed method
+parameter or return (see [Objects and handles](objects-and-handles.md)):
+
+```C#
+public Nickname? Favourite { get; set; }  // nullable getter and setter agree: Nickname?
+public Nickname Primary { get; set; }     // non-null getter and setter agree: Nickname
 ```
-w: [nuget:SomeLib] Skipping SomeType.Close(): member name collision - Kotlin name 'close' would
-   shadow the generated wrapper's own 'close' member. Rename or remove this member on the bound C#
-   type, or expose it via a differently-named C# adapter method.
-```
-
-Statics are unaffected by this rule; they land in the wrapper's `companion object`, a separate name
-scope from the wrapper's own instance members.
-
-## Settable handle-typed properties
-
-A C# property whose type is itself a bound class (for example `Nickname Favourite { get; set; }`)
-renders as a Kotlin `var`, just like a primitive or string property. A property carries exactly one
-`NullableAttribute` in C# metadata, so its getter and setter always agree on the same type
-([ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md)):
 
 ```kotlin
-// build/nuget-interop/kotlin/nativeMain/sample/nullability/NicknameBook.kt (real generated output)
 var favourite: Nickname?
-  get() {
-    val fn = requireNotNull(NicknameBookBindings.favouriteGetterFn) { /* ... */ }
-    val ptr: COpaquePointer? = fn.invoke(handle.require("NicknameBook"))
-    return ptr?.let { Nickname(it) }
-  }
-  set(value) {
-    val fn = requireNotNull(NicknameBookBindings.favouriteSetterFn) { /* ... */ }
-    fn.invoke(handle.require("NicknameBook"), value?.handle?.require("Nickname"))
-  }
-
 var primary: Nickname
-  get() {
-    val fn = requireNotNull(NicknameBookBindings.primaryGetterFn) { /* ... */ }
-    val ptr: COpaquePointer? = fn.invoke(handle.require("NicknameBook"))
-    return Nickname(requireNotNull(ptr) {
-      "NicknameBook.Primary returned null, but the C# API annotates it non-null."
-    })
-  }
-  set(value) {
-    val fn = requireNotNull(NicknameBookBindings.primarySetterFn) { /* ... */ }
-    fn.invoke(handle.require("NicknameBook"), value.handle.require("Nickname"))
-  }
 ```
 
-Before ADR-053 this was a hard Kotlin type-system constraint: a `var`'s getter and setter must share
-one type, but a blanket policy made object *returns* nullable (`Foo?`) and object *parameters*
-non-null (`Foo`), so there was no single type a handle-typed `var` could declare, and the registration
-filter (`bridgeableRegistrables`) never emitted a setter slot for one, however mutable the C# property
-actually was. Now that nullability is read from the property's own `NullableAttribute` instead of a
-fixed per-position policy, getter and setter always agree, and a settable property (of any bridgeable
-type) always gets both a `PropertyGetter` and `PropertySetter` registration slot.
+Because a property carries exactly one nullability annotation, its Kotlin getter and setter
+always agree on the same type, so a settable handle-typed property is never forced to a read-only
+`val` the way a mismatched getter/setter pair would be.
 
 ## Limitations
 
-- `Nullable<T>` value-typed instance properties/parameters (`int?`, `CatMood?`) are deferred; they
-  carry no `NullableAttribute` (see
-  [ADR-053](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md)
-  Decision 3). The wire format is settled ([ADR-056](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md)'s
-  out-pointer convention), so this needs no new ADR.
-- Struct-typed instance properties and methods are supported (getter as out-pointers, setter as
-  decomposed arguments); see [C# structs](structs.md).
-- Unsupported instance-method overloads are diagnosed independently. Other bridgeable siblings
-  remain available.
+- `Nullable<T>` value-typed instance properties and parameters (`int?`, `CatMood?`) are not yet
+  supported.
+- Struct-typed instance properties and methods are supported; see [C# structs](structs.md).
 
 <seealso>
     <category ref="related">
@@ -259,9 +93,7 @@ type) always gets both a `PropertyGetter` and `PropertySetter` registration slot
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/051-csharp-objects-as-opaque-handles.md">ADR-051: C# objects as opaque handles</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/052-csharp-instance-constructors-in-kotlin.md">ADR-052: C# instance constructors in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/056-csharp-structs-in-kotlin.md">ADR-056: C# structs (value types) in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/057-csharp-overload-sets-in-kotlin.md">ADR-057: C# overload sets in Kotlin</a>
     </category>
 </seealso>
