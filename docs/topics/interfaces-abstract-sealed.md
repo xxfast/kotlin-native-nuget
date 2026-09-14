@@ -3807,6 +3807,9 @@ A top-level interface's bridge state name is unaffected (`PetBridgeState`).
     nested interface used only as a <b>parameter</b> type gets no bridge plan at all, and passing a
     C# implementation at that position crashes the host process with an unlocated Kotlin
     <code>NullPointerException</code>, no diagnostic naming the cause. See
+    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
+</warning>
+
 ## Nested types under a sealed or interface owner {id="nested-types-under-a-sealed-or-interface-owner"}
 
 A sealed base, a sealed arm, and any `interface` owner (eligible or ineligible sealed interface
