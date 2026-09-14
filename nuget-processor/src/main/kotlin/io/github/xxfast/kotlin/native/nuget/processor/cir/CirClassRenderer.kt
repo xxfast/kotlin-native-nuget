@@ -735,10 +735,13 @@ internal fun StringBuilder.renderDispose(
       appendLine("            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);")
       appendLine("            NugetAsyncCallback callback = null!;")
       appendLine("            GCHandle callbackHandle = default;")
-      appendLine("            IntPtr drainJobHandle = IntPtr.Zero;")
+      // ADR-025 amendment: the drain job is launched `ATOMIC` and an idle scope completes it
+      // before `Drain` has returned the handle, the same ADR-019 window `NugetJobCell` closes for
+      // the suspend call sites. The callback used to dispose a still-zero local and leak the job.
+      appendLine("            var job = new NugetJobCell();")
       appendLine("            callback = (resultPtr, errorPtr, isCancelled, userData) =>")
       appendLine("            {")
-      appendLine("                NugetJobNative.Dispose(drainJobHandle);")
+      appendLine("                job.CompleteFromCallback();")
       appendLine("                callbackHandle.Free();")
       appendLine("                TaskCompletionSource<bool> t = tcs;")
       appendLine("                NugetScopeNative.Dispose(scopeHandle);")
@@ -750,9 +753,10 @@ internal fun StringBuilder.renderDispose(
       appendLine("            };")
       appendLine("            callbackHandle = GCHandle.Alloc(callback);")
       appendLine(
-        "            drainJobHandle = NugetScopeNative.Drain(scopeHandle, " +
+        "            IntPtr drainJobHandle = NugetScopeNative.Drain(scopeHandle, " +
             "NugetThunks.NugetAsyncCallbackPtr, GCHandle.ToIntPtr(callbackHandle));"
       )
+      appendLine("            job.PublishFromCaller(drainJobHandle, default);")
       appendLine("            return tcs.Task;")
       appendLine("        }")
     }

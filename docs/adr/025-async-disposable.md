@@ -404,3 +404,30 @@ await service3.DisposeAsync(); // waits for both nap1 and nap2
 - `IAsyncDisposable` for abstract class hierarchies with suspend methods.
 - `DisposeAsync()` for `KotlinSuspendFunc<T>` / `KotlinSuspendAction` suspend lambda wrappers.
 - Top-level suspend functions have no class scope and no `DisposeAsync()` path — callers use `CancellationToken` (ADR-022) for lifecycle control.
+
+## Amendments after implementation (2026-09-14)
+
+**The drain had ADR-019's ordering hole.** `DrainAndDisposeAsync` as shipped (the sketch above)
+disposed a `drainJobHandle` local that the caller only assigns once `NugetScopeNative.Drain` has
+returned. `nuget_scope_drain` launches the drain job `ATOMIC` on `Dispatchers.Default`, and a scope
+with no live children (the normal case: the awaited call has already finished) completes and fires
+the completion callback before that P/Invoke returns. The callback then disposed `IntPtr.Zero`
+(`nuget_job_dispose` returns early on null) and the drain job's own `StableRef` was never released.
+
+This is the leak behind the ADR-120 harness's "flaky" rows. Five first-attempt CI failures between
+2026-09-10 and 2026-09-14, on macOS and Windows, all a delta of exactly +1 over ten crossings, all on
+rows that `await using` a suspending sealed arm (`Suspend_ReturningTheNullableSealedBase` four times,
+`Flow_OnASealedArm_EnumeratedToCompletion` once), never on a synchronous row. Measured with a
+tight loop of idle drains: roughly one leak per hundred, +58 over 5000.
+
+**The fix** is the same `NugetJobCell` ADR-019's amendment introduced for the suspend call sites,
+which this drain site had missed. The callback calls `CompleteFromCallback()`, the caller calls
+`PublishFromCaller(drainJobHandle, default)` once `Drain` returns, and whichever arrives second
+disposes the job handle, exactly once. The drain takes no `CancellationToken`, so the registration
+half of the cell is `default`. Rendered by `CirClassRenderer.renderDispose`, which the ADR-118
+suspending sealed arm reuses, so both the class and the arm route are covered by the one change. No
+ABI change.
+
+Verified: a new harness row, `DisposeAsync_IdleScopeDrainCompletesBeforeNativeReturns_ReturnsToBaseline`
+(5000 idle drains), red before the fix and green four runs out of four after, alongside the two rows
+that flaked on CI.

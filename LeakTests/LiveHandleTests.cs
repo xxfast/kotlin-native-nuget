@@ -746,6 +746,28 @@ public class LiveHandleTests
         });
     }
 
+    // Row 9i. The ADR-025 drain has the same ADR-019 ordering hole the suspend call sites had:
+    // `nuget_scope_drain` launches its job `ATOMIC` on `Dispatchers.Default`, and a scope with no
+    // live children (the normal case, the awaited call has already finished) completes and fires
+    // the completion callback before the `Drain` P/Invoke has returned the job handle. The
+    // callback then disposed a still-zero `drainJobHandle` local and the drain job's own
+    // `StableRef` leaked. That is the +1 Rows 9f and 8e went red with on CI, five first attempts
+    // over four days, both OSes, never on a synchronous row. One suspend call per iteration so
+    // the scope exists (a scope-less `DisposeAsync` skips the drain), then `await using` drains
+    // it idle. Measured at roughly one leak per thousand drains, hence 5000.
+    [Fact]
+    public async Task DisposeAsync_IdleScopeDrainCompletesBeforeNativeReturns_ReturnsToBaseline()
+    {
+        using var factory = new JobFactory();
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                await using Job.Running finished = factory.Running(100);
+                Assert.Null(await finished.NextOrNullLaterAsync());
+            },
+            iterations: 5000);
+    }
+
     // Row 9g. The throw path of the same route, which no row covered for a suspend call at all
     // (the only `Throws` row before this one is the synchronous `Archive` at the bottom). When the
     // body throws, no result is minted and the ADR-128/130 error envelope crosses instead, so this
