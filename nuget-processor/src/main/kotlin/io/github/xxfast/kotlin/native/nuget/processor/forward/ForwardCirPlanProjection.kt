@@ -718,7 +718,10 @@ internal object ForwardCirPlanProjection {
    */
   private fun ForwardCallablePlan.interfaceCleanup(parameter: ForwardPublicParameter): String? {
     if (!parameter.type.isInterfaceInput()) return null
-    return "if (${parameter.csharpName}Owned) { " +
+    // ADR-135: the same zero guard `collectionCleanup` carries, for the same reason. This
+    // `finally` is also reached by a throw from the mint itself, where the handle is still Zero,
+    // and `nuget_dispose` is not null-safe.
+    return "if (${parameter.csharpName}Owned && ${parameter.csharpName}Handle != IntPtr.Zero) { " +
         "NugetMarshal.Dispose(${parameter.csharpName}Handle); }"
   }
 

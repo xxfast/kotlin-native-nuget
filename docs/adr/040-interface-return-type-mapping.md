@@ -937,7 +937,10 @@ C#" item (N function pointers for a non-subscription parameter).
 - The backing `sealed class Foo : IFoo` plus `foo_*` dispatch and `foo_dispose` exports, for the
   interface set chosen by **sub-decision C** (recommended: reachability-driven, i.e. only interfaces
   that appear in a planned return position – the original "proactively for every public interface" is
-  no longer the recommendation now that ADR-066 exists).
+  no longer the recommendation now that ADR-066 exists). **Amended 2026-09-14:**
+  [ADR-135](135-interface-parameter-reachability.md) widens "reachability" to a parameter position
+  and an ADR-132 extension receiver too, not only a return; an interface reachable only that way now
+  gets the same backing wrapper and, since ADR-084, a bridge plan.
 - A named `SKIPPED_*` diagnostic for every interface position that stays out of scope, replacing
   today's verified silence.
 

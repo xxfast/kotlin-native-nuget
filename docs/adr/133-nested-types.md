@@ -314,6 +314,10 @@ type gets no wrapper and no bridge plan; passing a C# implementation at that pos
 host with an unlocated Kotlin `NullPointerException`, no diagnostic. See ADR-084's 2026-09-13
 amendment for the full finding.
 
+**Amended 2026-09-14, closed by [ADR-135](135-interface-parameter-reachability.md):** a
+parameter-only or receiver-only interface, nested or top-level, now gets a wrapper and a bridge
+plan the same as a return-reachable one, and a failed mint no longer crashes the host.
+
 Fixtures: `nested/Aviary.kt` (`currentKeeperLater`, `keepers()`), `nested/AviaryRoutes.kt`
 (`anyKeeperLater`, top-level), `cat/Pet.kt` (`strayPetLater`, top-level interface). Tests:
 `NestedTypesTests.cs` reflection facts, four Tier 1 cells, `LiveHandleTests.cs` Row 9h

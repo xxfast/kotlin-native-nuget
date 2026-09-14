@@ -10,7 +10,7 @@ Kotlin's three flavours of inheritance each get a distinct C# shape: `interface`
 | **eligible** `sealed interface` (no type parameters, every subclass a `class`/`object` nested in the interface **or declared beside it**, with no other superclass, no sub-interface, and no second sealed-interface parent) | `abstract class` | same shape as `sealed class` above; no C# interface is declared for it, see [Sealed interfaces](#sealed-interfaces), [ADR-112](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/112-sealed-interface-mapping.md), widened by [ADR-125](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/125-sealed-interface-sibling-arms.md) |
 | **ineligible** `sealed interface` | `interface` (`I`-prefixed) | stays on the ordinary interface route; every member typed with it skips named (`SKIPPED_SEALED_POSITION`), and the declaration itself gets `SKIPPED_INELIGIBLE_SEALED_INTERFACE` naming every disqualifying subclass, see [Sealed interfaces](#sealed-interfaces), [ADR-112](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/112-sealed-interface-mapping.md) |
 | interface-typed return (method result or property) | `IFoo` / `IFoo?` | backed by a generated `sealed class Foo : IFoo`, see [ADR-040](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md) |
-| interface-typed parameter, a C# class implementing `IFoo` | accepted, no `_handle` needed | dispatched through a per-interface bridge factory, see [ADR-084](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md) |
+| interface-typed parameter, property setter, or extension receiver, a C# class implementing `IFoo` | accepted, no `_handle` needed | dispatched through a per-interface bridge factory, generated whether the interface is also returned somewhere or reachable **only** at one of these positions (nested or top-level), see [Implementing a Kotlin interface in C#](#implementing-a-kotlin-interface-in-c), [ADR-084](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md), [ADR-135](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/135-interface-parameter-reachability.md) |
 | a property of a sealed subclass, any shape a class property supports (nullable enum, nullable reference, `Boolean`, collections, `var`, `Duration`/`Uuid`/value classes/interfaces) | the same shape an ordinary class property gets | planned by [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)'s property plan, same as any class, since [ADR-111](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/111-sealed-subclass-properties-on-the-property-plan.md); see [Every property shape on a sealed subclass](#every-property-shape-on-a-sealed-subclass) |
 | a public method a sealed subclass **itself declares** (including its own `override fun`), any shape a class method supports | the same shape an ordinary class method gets, exported `${sealed}_${sub}_${name}[_n]` | planned by [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)'s callable plan, same as any class, since [ADR-116](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/116-sealed-subclass-methods-on-the-callable-plan.md); declared-only. A declared `suspend fun` also binds, as `Task<T> XxxAsync` off the arm's own export prefix, with overloads numbered `_2` on both the entry point and the private extern, see [ADR-118](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/118-suspend-route-sealed-arm-owners-and-overload-numbering.md); returning the sealed base itself (plain or nullable) instead of an arm binds as `Task<Base>`/`Task<Base?>` completing through `Base.FromHandle`, see [A `suspend fun` returning the sealed base](#sealed-method-suspend-base-generated-c) ([ADR-131](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/131-suspend-route-sealed-base-return.md)). A declared `Flow<T>`/`StateFlow<T>` member (property or method return) also binds now, as `KotlinFlow<T>`/`KotlinStateFlow<T>` off the arm's own export prefix, through the same collect/value thunks the ordinary-class route uses, see [ADR-124](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/124-flow-route-sealed-arm-owners.md). A declared lambda-parameter method (`Func<>`/`Action<>`) also binds now, re-keyed onto the arm's own export prefix through the same per-call callback thunk the ordinary-class route uses, see [Lambda parameters on a sealed arm](#sealed-lambda-generated-c). A declared stored-callback (`addX`/`removeX`, ADR-037) or interface-bridge (`addX`/`removeX`, ADR-039) pair also binds now, the same `IDisposable` subscription an ordinary class's pair returns, see [Stored-callback and interface-bridge pairs on a sealed arm](#sealed-callback-pair-generated-c); a generic method and a `suspend` lambda parameter are still a named skip; and the base's own declared `abstract`/`open` `val`/`var`/`fun`, `virtual` on the base so a consumer can read it without pattern-matching to an arm, see [Methods on a sealed subclass](#methods-on-a-sealed-subclass). An `override fun` whose base member the base's own plan declined (e.g. behind an opt-in marker) owes its own [ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md) omitting overloads too, since nothing on the base carries them, see [An override of a base member the base declined to plan](#sealed-method-declined-base-overload) |
 | property whose own type is a sealed class (bare, nullable, or a collection component, read-only or `var`) | the sealed base | materialised through `<Base>.FromHandle(...)`, see [Sealed types as property types](#sealed-types-as-property-types), [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md) |
@@ -3801,14 +3801,82 @@ different nested interfaces that happen to share the simple name `Keeper`, gener
 ([ADR-084](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md)).
 A top-level interface's bridge state name is unaffected (`PetBridgeState`).
 
-<warning>
-    <p>A C#-implemented interface's bridge state and factory are generated only for an interface
-    reachable at a <b>return</b> position (<code>CirTranslator.interfaceBackingClasses</code>). A
-    nested interface used only as a <b>parameter</b> type gets no bridge plan at all, and passing a
-    C# implementation at that position crashes the host process with an unlocated Kotlin
-    <code>NullPointerException</code>, no diagnostic naming the cause. See
-    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
-</warning>
+## An interface reachable only at a parameter position {id="an-interface-reachable-only-at-a-parameter-position"}
+
+An interface never returned anywhere, only ever taken as a parameter, a property setter, or an
+[ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md)
+extension receiver, still gets the full ADR-084 treatment: a backing wrapper, dispatch exports, and
+a bridge factory, nested or top-level alike
+([ADR-135](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/135-interface-parameter-reachability.md)).
+
+From `test-library/src/nativeMain/kotlin/.../nested/CatteryDesk.kt`, `Boarding.Clerk` is never
+returned, only taken by `fileVia`:
+
+```kotlin
+object Boarding {
+  interface Clerk {
+    fun stamp(): String
+  }
+
+  fun fileVia(clerk: Clerk): String = "${clerk.stamp()} filed at boarding"
+}
+```
+
+### Generated C# {id="parameter-only-generated-c"}
+
+From `Interop.cs`, `boarding_clerk_bridge_create` exists even though `Boarding.Clerk` has no
+`current*()`-style return anywhere:
+
+```C#
+internal sealed class BoardingClerkBridgeState : NugetBridgeState
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "boarding_clerk_bridge_create")]
+    private static extern IntPtr Native_Create(IntPtr stampPtr, IntPtr stampCtx, IntPtr releasePtr, IntPtr releaseCtx, IntPtr token, out IntPtr error);
+}
+```
+
+### Using it from C# {id="parameter-only-using-it-from-c"}
+
+From `IntegrationTests/InterfaceParameterTests.cs`:
+
+```C#
+private sealed class DeskClerk : Boarding.IClerk
+{
+    public string Stamp() => "stamped";
+    public void Dispose() { }
+}
+
+[Fact]
+public void ParameterOnlyNestedInterface_CSharpImplementation_IsCalledBackFromKotlin()
+{
+    var clerk = new DeskClerk();
+
+    Assert.Equal("stamped filed at boarding", Boarding.FileVia(clerk));
+}
+```
+
+An interface whose bridge still plans to `null`, one with a member outside ADR-084's v1 slot
+vocabulary (a `var` property, for instance), fails with a managed `NotSupportedException` naming
+the C# type instead of crashing the host, at every position:
+
+```C#
+private sealed class ClawMarks : IScratchLog
+{
+    public int Scratches { get; set; } = 7;
+    public void Dispose() { }
+}
+
+[Fact]
+public void UnbridgeableInterface_CSharpImplementation_ThrowsNotSupported()
+{
+    var log = new ClawMarks();
+
+    NotSupportedException ex =
+        Assert.Throws<NotSupportedException>(() => CatteryDesk.CountScratches(log));
+
+    Assert.Contains("ClawMarks", ex.Message);
+}
+```
 
 ## Nested types under a sealed or interface owner {id="nested-types-under-a-sealed-or-interface-owner"}
 
@@ -3924,12 +3992,12 @@ public void NestedClass_UnderAnEligibleSealedInterface_IsDeclaredUnderTheAbstrac
 
 ## Limitations
 
-- A C#-implemented interface's bridge factory only ever gets `val` getters and `Unit`/primitive/`Boolean`/enum/`String`/`String?`-returning methods of arity 0-2. An interface with a `var` property, an object- or collection-typed member, a `suspend` member, an undeclared enum member (under a still-deferred nested-owner shape, or outside the export scope), or generics plans **no factory at all**, silently: `NugetMarshal.HandleOf` keeps the old `NotSupportedException` for it, with no diagnostic naming why.
+- A C#-implemented interface's bridge factory only ever gets `val` getters and `Unit`/primitive/`Boolean`/enum/`String`/`String?`-returning methods of arity 0-2. An interface with a `var` property, an object- or collection-typed member, a `suspend` member, an undeclared enum member (under a still-deferred nested-owner shape, or outside the export scope), or generics plans **no factory at all**: `NugetMarshal.HandleOf` throws `NotSupportedException` naming the C# type ([ADR-135](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/135-interface-parameter-reachability.md) closed the crash this used to cause), but nothing names which member disqualified the interface or why, at build time or at the throw. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - A C#-implemented object's bridge is released only when Kotlin's GC actually collects it, on a later collection round; there is no deterministic, prompt release comparable to `IDisposable`.
 - Kotlin-side `===` on a C#-implemented object's bridge is not preserved across repeated crossings of the same C# instance: each crossing builds a new bridge object. C#-side identity (`Assert.Same` on the object read back from Kotlin) is preserved via a token probe.
 - An interface member whose own return type is another interface or a class handle (chained resolution) is not supported.
 - Interfaces with generic type parameters, suspend interface members, and `Flow`/`StateFlow`-valued interface members are not supported as return positions.
-- A backing class and its dispatch exports are only generated for interfaces that actually appear in a planned return position; an interface only ever used as an `add`/`remove` subscription parameter (like `ICatEventListener`, see [Lambdas and callbacks](lambdas-and-callbacks.md)) does not get one.
+- A backing class and its dispatch exports are generated for an interface reachable at a return, parameter, property-setter, or [ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md) extension-receiver position ([ADR-135](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/135-interface-parameter-reachability.md)); an interface only ever used as an `add`/`remove` subscription parameter (like `ICatEventListener`, see [Lambdas and callbacks](lambdas-and-callbacks.md)) still does not get one, since that route never enters this walk at all. Whether an extension **property**'s receiver needs the same walk has no fixture either way.
 - Object identity is not preserved across reads of a **Kotlin-backed** interface-typed property: two reads produce two distinct C# wrapper instances over the same Kotlin object (each disposes independently). A **C#-implemented** object read back is the one exception, see above.
 - A sealed type in the export scope now binds at every position: property, callable return, and callable/constructor parameter (bare, nullable, or a collection component, read-only or mutable), see [Sealed types as property types](#sealed-types-as-property-types), [A class method returning a sealed base](#a-class-method-returning-a-sealed-base), and [A sealed type at a parameter position](#a-sealed-type-at-a-parameter-position). An **eligible** `sealed interface` binds the same way, whether its arms are nested or declared beside it, see [Sealed interfaces](#sealed-interfaces). A value class whose underlying type is sealed also binds the same way, at a property, callable, or `List<T>` component position, see [Value classes: Over a sealed type](value-classes.md#over-a-sealed-type). An extension function's **receiver** typed as a sealed base now binds too, see [Extensions: Sealed receivers](extensions.md#sealed-receivers). What still does not bind: an extension **property** with a sealed receiver, an **ineligible** sealed interface at any position, and a sealed class **outside the export scope**. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - A `sealed interface` still refuses an arm that is an `enum class` (a C# enum can only extend an integral type, `CS1008`) or that implements more than one sealed interface (C# single inheritance), regardless of where the arm is declared. See [An enum arm keeps the interface ineligible](#sealed-interface-enum-arm), [ADR-125](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/125-sealed-interface-sibling-arms.md).
@@ -4018,5 +4086,6 @@ public void Observation_WorksWithPatternMatching()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/131-suspend-route-sealed-base-return.md">ADR-131: Suspend route: a sealed base at a return reads through FromHandle</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md">ADR-133: Nested types</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/134-nested-types-under-deferred-owners.md">ADR-134: Nested types under deferred owners</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/135-interface-parameter-reachability.md">ADR-135: Interface parameter positions join the ADR-084 bridge reachability set</a>
     </category>
 </seealso>

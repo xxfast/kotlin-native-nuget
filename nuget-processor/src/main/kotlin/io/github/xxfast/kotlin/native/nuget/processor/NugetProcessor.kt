@@ -65,7 +65,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addValueClassExpor
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiRole
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardNativeCall
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanner
@@ -1153,8 +1155,9 @@ class NugetProcessor(
     )
 
     // ADR-040 sub-decision C.1 (reachability-driven): a Kotlin interface gets a concrete backing
-    // class + `foo_*` dispatch exports only when it actually appears in a planned return position
-    // (method result, property type — including nullable) among the *ordinary* plans built above.
+    // class + `foo_*` dispatch exports only when it actually appears in a planned *position*
+    // (method result, property type, method parameter, extension receiver, including nullable)
+    // among the *ordinary* plans built above.
     // Computed before the interface's own members are planned, so there is no ordering cycle: an
     // interface's own members never mention that same interface as their receiver's result type.
     fun BridgeType.interfaceQualifiedNameOrNull(): String? {
@@ -1162,12 +1165,32 @@ class NugetProcessor(
       return (unwrapped as? BridgeType.Interface)?.qualifiedName
     }
 
+    // ADR-135's open question, settled by reading the planner: an ADR-132 extension receiver is
+    // NOT in `publicSignature.parameters` (`ForwardCallablePlanner` builds `declared` from the
+    // value parameters alone and carries the receiver as a separate RECEIVER-role ABI slot), so a
+    // receiver-only interface needs this walk over the native calls or it stays unbridged.
+    fun List<ForwardNativeCall>.receiverInterfaceQualifiedNames(): List<String> = flatMap { call ->
+      call.parameters
+        .filter { parameter -> parameter.role == ForwardAbiRole.RECEIVER }
+        .mapNotNull { parameter -> parameter.transfer.type.interfaceQualifiedNameOrNull() }
+    }
+
+    // ADR-135: the walk covers parameter positions too, which is what ADR-084's Detection rule
+    // always claimed ("reachable at a return or parameter position") but the return-only walk
+    // never did. Without it, a C# class implementing a parameter-only interface reaches
+    // `NugetBridge.HandleFor`'s NotSupportedException arm at runtime instead of a bridge.
     val reachableInterfaceNames: Set<String> = buildSet {
       ordinaryCatalog.plans.forEach { plan ->
         plan.publicSignature.result.interfaceQualifiedNameOrNull()?.let(::add)
+        plan.publicSignature.parameters.forEach { parameter ->
+          parameter.type.interfaceQualifiedNameOrNull()?.let(::add)
+        }
+        plan.nativeExports.receiverInterfaceQualifiedNames().forEach(::add)
       }
       ordinaryCatalog.propertyPlans.forEach { plan ->
         plan.type.interfaceQualifiedNameOrNull()?.let(::add)
+        // Same receiver reasoning for an extension property over an interface receiver.
+        plan.calls().receiverInterfaceQualifiedNames().forEach(::add)
       }
     }
     val reachableInterfaces: List<KSClassDeclaration> = interfaces

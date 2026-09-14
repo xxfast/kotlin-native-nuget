@@ -275,6 +275,48 @@ public class LiveHandleTests
         });
     }
 
+    // Row 6c. ADR-135: the same ADR-084 transfer handle, minted for an interface reached only at a
+    // PARAMETER position. No new handle kind, so the lifecycle Row 6 measures is the one this has
+    // to land on once the reachability walk is widened. The row exists because that widening is
+    // what first makes a StableRef get minted here at all, and a fix that mints without disposing
+    // is indistinguishable from a working one on the IntegrationTests side.
+    private sealed class DeskClerk : Boarding.IClerk
+    {
+        public string Stamp() => "stamped";
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void ParameterOnlyInterface_Argument_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            var clerk = new DeskClerk();
+            Assert.Equal("stamped filed at boarding", Boarding.FileVia(clerk));
+        });
+    }
+
+    // Row 6d. The fault-injection twin, and the reason ADR-135 asks for a row rather than reusing
+    // Row 6: an interface with a `var` member plans to null, so `NugetBridge.HandleFor` throws
+    // before any handle is minted. The `finally` still runs, and today it disposes `IntPtr.Zero`
+    // with no zero guard, which kills the process. This row pins that a FAILED mint neither leaks
+    // nor disposes anything. The throw is asserted inside `AssertNoLeak`, not around it.
+    private sealed class ClawMarks : IScratchLog
+    {
+        public int Scratches { get; set; } = 7;
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void UnbridgeableInterface_Argument_ThrowsAndReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            var log = new ClawMarks();
+            Assert.Throws<NotSupportedException>(() => CatteryDesk.CountScratches(log));
+        });
+    }
+
     // Row 7. Flow enumerated to completion: per-item box disposed by the enumerator, job handle
     // disposed when the flow completes.
     [Fact]

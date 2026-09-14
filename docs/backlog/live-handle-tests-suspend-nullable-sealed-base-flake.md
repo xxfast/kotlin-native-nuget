@@ -1,10 +1,12 @@
-# `LiveHandleTests.Suspend_ReturningTheNullableSealedBase_ReturnsToBaseline` fails intermittently, leaking one handle.
+# The sealed-family `LiveHandleTests` rows fail intermittently, leaking one handle.
 
 **VERIFIED by execution** for the failure itself: this row failed with "expected 0 live handles after
 10 crossings, got 1 (delta 1)" in one checkout, and reproduced when run in isolation there, so it is
 not the shared-process flake CLAUDE.md already documents for `LeakTests`. The same row passed 36/36
 in a sibling checkout's `verify` in the same hour, so the failure is intermittent rather than
-deterministic, not a permanent regression.
+deterministic, not a permanent regression. The leak is not pinned to one row either: on the ADR-135
+lane, `Flow_OnASealedArm_EnumeratedToCompletion_ReturnsToBaseline` reported the same `got 1 (delta 1)`
+on one run and a re-run was 38/38 clean, with no code change between the two.
 
 **Inferred, not confirmed**, for the cause: either the null arm or the base-typed wrapper return on
 the ADR-131 suspend sealed-base route mints a `StableRef` the disposer never sees, or the row is
