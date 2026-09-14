@@ -378,6 +378,98 @@ class Tier1ReachabilityClosureTest {
     )
   }
 
+  // ADR-066 edge A, the deferred-owner form: `Season` is an `enum class`, which ADR-133/134 will
+  // not let own a nested declaration, and `Almanac` is the only thing anything references. The
+  // climb is still what admits `Season`, and admitting `Season` is what puts `Almanac` on the
+  // `nestedCandidates` walk that names the skip.
+  private val deferredOwnerDependencyJar: File = Tier1DependencyLibrary.compile(
+    """
+    package dep.deferred
+
+    enum class Season {
+      WINTER;
+
+      class Almanac(val n: Int)
+    }
+    """.trimIndent(),
+    fileName = "Season.kt",
+  )
+
+  private val deferredOwnerFixture: String = """
+    package tier1.reachabilityclosure.deferred
+
+    import dep.deferred.Season
+
+    class Newsroom {
+      fun almanac(): Season.Almanac = Season.Almanac(1)
+    }
+  """.trimIndent()
+
+  /**
+   * The climb at `ForwardReachabilityClosure.kt:285` is unconditional on purpose, and this is the
+   * cell that pins why: gating it on "is the owner declarable" would look like a no-op (the nested
+   * type is deferred either way) while actually deleting the only carrier of the nested type's
+   * named skip. Admitting `Season` costs nothing false -- it is a real, usable C# enum -- and it
+   * is what makes `Almanac` reachable as a `nestedCandidate`, so the author gets
+   * `SKIPPED_NESTED_DECLARATION` naming the type and the reason instead of silence.
+   */
+  @Test
+  fun `a deferred owner reached only through its nested type is still admitted, so the skip stays named`() {
+    val result = Tier1Harness.run(
+      deferredOwnerFixture,
+      processorOptions = mapOf(
+        "nuget.includePackages" to "tier1.reachabilityclosure.deferred,dep.deferred",
+      ),
+      libraries = listOf(deferredOwnerDependencyJar),
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+
+    // The owner nothing returns is admitted, and it is a real usable C# type on its own.
+    assertTrue(
+      Regex("""^ {4}public enum Season\b""", RegexOption.MULTILINE)
+        .containsMatchIn(result.generatedCSharp),
+      "expected the deferred owner `Season` to still be declared as an enum; generatedCSharp=" +
+          "${result.generatedCSharp.lines().filter { it.contains("Season") }}",
+    )
+    assertFalse(
+      result.generatedCSharp.contains("Almanac"),
+      "expected the deferred nested type to be absent from the generated C#; generatedCSharp=" +
+          "${result.generatedCSharp.lines().filter { it.contains("Almanac") }}",
+    )
+    assertFalse(
+      "export_newsroom_almanac" in result.generated,
+      "expected the member returning the deferred nested type to bind nothing; generated:\n" +
+          result.generated,
+    )
+
+    // The whole point of the climb: the skip is named, not silent.
+    val skip: String = requireNotNull(
+      result.kspWarnings.firstOrNull {
+        it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
+            it.contains("dep.deferred.Season.Almanac")
+      },
+    ) {
+      "expected a SKIPPED_NESTED_DECLARATION naming dep.deferred.Season.Almanac, which only the " +
+          "owner's admission can carry; kspWarnings=${result.kspWarnings}"
+    }
+    assertTrue(
+      skip.contains("enum class"),
+      "expected the skip to name the enum-owner reason; got: $skip",
+    )
+
+    val manifest: String = result.kspWarnings
+      .first { it.contains(ForwardDiagnosticKind.INFO_EXPORTED_FROM_DEPENDENCY.name) }
+    assertTrue(
+      manifest.contains("dep.deferred.Season"),
+      "expected the manifest to name the admitted owner; got: $manifest",
+    )
+    assertFalse(
+      manifest.contains("dep.deferred.Season.Almanac"),
+      "expected the deferred nested type to stay out of `admitted`; got: $manifest",
+    )
+  }
+
   /**
    * Negative cell, same shape with `dep.edge` OUT of scope. The remedy has to stay the SCOPE one:
    * the nested gate must not shadow the refusal the closure already recorded, because
