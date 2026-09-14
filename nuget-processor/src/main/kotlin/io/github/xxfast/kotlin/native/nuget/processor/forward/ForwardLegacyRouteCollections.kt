@@ -406,16 +406,20 @@ internal fun ForwardLegacyReturnShape.Interface.declaredCsharpType(): String =
   if (nullable) "${type.csharpType}?" else type.csharpType
 
 /**
- * ...and the expression the completion READS the awaited handle back with: the ADR-040 backing
- * wrapper, which is the only type that has a handle constructor (`new IKeeper(ptr)` is CS0144).
- * It converts implicitly to the declared interface, so the two spellings coexist in one statement.
+ * ...and the expression the completion READS the awaited handle back with: ADR-136's resolve-then-
+ * wrap, the same expression the synchronous plan return uses, against the completion's own handle
+ * local. A handle over a C#-implemented pet resolves to the caller's original object; anything else
+ * falls back to the ADR-040 backing wrapper, which is the only type that has a handle constructor
+ * (`new IKeeper(ptr)` is CS0144). Both spellings convert implicitly to the declared interface, so
+ * they coexist in one statement.
  *
  * A nullable return is guarded on the wire pointer first, for the shipped nullable-object arm's
  * reason: `new Wrapper(IntPtr.Zero)` would hand out a live wrapper over a null handle.
  */
-internal fun ForwardLegacyReturnShape.Interface.legacyInterfaceRead(handle: String): String =
-  if (nullable) "$handle == IntPtr.Zero ? null : new ${type.backingType}($handle)"
-  else "new ${type.backingType}($handle)"
+internal fun ForwardLegacyReturnShape.Interface.legacyInterfaceRead(handle: String): String {
+  val read: String = interfaceReturnExpression(type.csharpType, type.backingType, handle)
+  return if (nullable) "$handle == IntPtr.Zero ? null : $read" else read
+}
 
 /**
  * ADR-123: the same read as a named `Func<IntPtr, T>` argument, for the flow routes.
@@ -448,16 +452,23 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementInterface(
 
 /**
  * The element materialiser an interface element needs, in the same `read:` slot ADR-123 added for
- * a collection element. Without it the stream is read through `NugetMarshal.FromHandle<T>`, which
- * has no factory for an interface and falls through to its `Activator.CreateInstance` branch: the
- * wrong spelling COMPILES and dies at the first emission.
+ * a collection element. ADR-136: it reads with the same resolve-then-wrap expression as every
+ * other interface read, so a stored C#-implemented element is emitted as the caller's own object.
+ * Without it the stream is read through `NugetMarshal.FromHandle<T>`, which has no factory for an
+ * interface and falls through to its `Activator.CreateInstance` branch: the wrong spelling
+ * COMPILES and dies at the first emission.
  */
 internal fun legacyInterfaceElementReadArgument(
   type: BridgeType.Interface,
   nullable: Boolean,
-): String =
-  if (nullable) "read: static h => h == IntPtr.Zero ? null : new ${type.backingType}(h)"
-  else "read: static h => new ${type.backingType}(h)"
+): String {
+  val read: String = interfaceReturnExpression(type.csharpType, type.backingType, "h")
+  return if (nullable) {
+    "read: static h => h == IntPtr.Zero ? null : $read"
+  } else {
+    "read: static h => $read"
+  }
+}
 
 private fun BridgeType.Collection.nestedKinds(): Sequence<CollectionKind> = sequence {
   yield(kind)

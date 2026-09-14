@@ -1033,3 +1033,8 @@ back over `Task<IPet>` or through a `Flow<IPet>` therefore never round-trips to 
 instance the way a synchronous return does. See [ADR-084](084-csharp-implemented-interfaces.md)'s
 2026-09-13 amendment for the fuller finding (including a return-reachability gap in the bridge plan
 itself, unrelated to this pointer).
+
+**Amended 2026-09-14, closed by [ADR-136](136-csharp-identity-on-async-interface-reads.md):** the
+suspend and Flow reads now resolve a returned handle back to its original C#-implemented instance
+first, the same as the sync return; only a collection element and a sealed read still always
+construct the wrapper.

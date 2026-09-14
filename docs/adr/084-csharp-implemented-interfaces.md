@@ -541,6 +541,10 @@ C#-implemented object returned through `Task<T>` or a `Flow<T>` never round-trip
 instance. Not a regression, a pre-existing asymmetry the new fixture happened to make visible for
 interfaces specifically.
 
+**Amended 2026-09-14, closed by [ADR-136](136-csharp-identity-on-async-interface-reads.md):** the
+suspend and Flow routes now resolve to the original C#-implemented instance first, the same as the
+sync return.
+
 Fixtures: `nested/Aviary.kt`'s `Registry` object (the collision pair, and the return that makes it
 reachable). Tests: `NestedTypesTests.cs` reflection facts asserting distinct generated names, Tier 1.
 Verify: green, 1793 / 0 / 0, 36; processor 834.

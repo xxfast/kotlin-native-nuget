@@ -317,6 +317,45 @@ public class LiveHandleTests
         });
     }
 
+    // Row 6e. ADR-136: a C#-implemented `IPet` stored by Kotlin and read back over the SUSPEND
+    // route. The handle the completion is handed is a transfer StableRef over the bridge, and the
+    // read resolves it to the original `Dog` instead of wrapping it, so the resolve is what has to
+    // release that handle now (on the sync route the consumer's `using` on the wrapper did it, and
+    // here there is no wrapper to dispose). A resolve that returns the object and forgets the
+    // handle leaks exactly once per completion while `Assert.Same` stays green.
+    [Fact]
+    public async Task SuspendReturn_ResolvedCSharpInterface_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var sitter = new PetSitter();
+            using IPet rex = new Dog("Rex");
+            sitter.Take(rex);
+
+            IPet later = await sitter.HandBackLaterAsync();
+            Assert.Equal("Woof!", later.Speak());
+        });
+    }
+
+    // Row 6f. The Flow twin of Row 6e: one handle per emission, resolved per element rather than
+    // per completion. Separate row because the freeing site is the `KotlinFlow<T>` `read:`
+    // delegate, not the completion callback, and the enumerator's own box/job handles ride along
+    // (a resolve that leaks here scales with elements, not with calls).
+    [Fact]
+    public async Task FlowElement_ResolvedCSharpInterface_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var sitter = new PetSitter();
+            using IPet rex = new Dog("Rex");
+            sitter.Take(rex);
+
+            var seen = new List<IPet>();
+            await foreach (IPet pet in sitter.Wards()) seen.Add(pet);
+            Assert.Equal("Woof!", Assert.Single(seen).Speak());
+        });
+    }
+
     // Row 7. Flow enumerated to completion: per-item box disposed by the enumerator, job handle
     // disposed when the flow completes.
     [Fact]

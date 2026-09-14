@@ -3733,6 +3733,42 @@ internal sealed class PetBridgeState : NugetBridgeState
 
 `NugetMarshal.TryResolveCSharp` (used by every interface-typed return and getter shown above) probes a returned handle's `nuget_csharp_token` before constructing a fresh wrapper, so a stored C#-implemented object handed back to C# resolves to the **original instance**: `Assert.Same(dog, oreo.Friend)` holds. This is C#-side identity only. Passing the same `Dog` to Kotlin twice builds two separate bridge objects, one per crossing, so Kotlin-side `===` on the underlying bridge is not preserved, the same way identity is not preserved across two reads of a Kotlin-backed interface return (see the note above).
 
+The same resolve holds on the two async reads of an interface: a `suspend fun` completion and a
+`Flow<T>` element read both spell the same `TryResolveCSharp(...) ? csharpOriginal : new Wrapper(...)`
+expression against their own handle local, so a stored C#-implemented object handed back over
+`Task<T>` or through a `Flow<T>` also resolves to the original instance rather than a fresh wrapper
+over its own bridge. From `Interop.cs`:
+
+```C#
+t.SetResult((NugetMarshal.TryResolveCSharp(resultPtr, out global::TestLibrary.Cat.IPet csharpOriginal) ? csharpOriginal : new global::TestLibrary.Cat.Pet(resultPtr)));
+```
+
+```C#
+read: static h => (NugetMarshal.TryResolveCSharp(h, out global::TestLibrary.Cat.IPet csharpOriginal) ? csharpOriginal : new global::TestLibrary.Cat.Pet(h))
+```
+
+From `IntegrationTests/BidirectionalTests.cs`:
+
+```C#
+[Fact]
+public async Task StoredCSharpPet_RoundTripsToTheOriginalInstance_OverTask()
+{
+    using var sitter = new PetSitter();
+    using IPet dog = new Dog("Rex");
+
+    sitter.Take(dog);
+
+    IPet later = await sitter.HandBackLaterAsync();
+
+    Assert.Same(dog, later);
+    Assert.Equal("Woof!", later.Speak());
+}
+```
+
+`TryResolveCSharp` disposes the transfer handle it resolves, so the handle Kotlin minted for the
+completion or the emission is freed on the read; a consumer disposes their own `dog`, not a wrapper
+over it.
+
 <note>
     <p>An <code>internal IntPtr NugetHandle</code> member on the generated <code>IFoo</code> was considered instead of the reflective helper, and rejected: <code>Interop.cs</code> compiles into the consumer assembly, so an abstract member would break any consumer-written <code>IFoo</code> implementer with <code>CS0535</code>.</p>
 </note>
@@ -3999,6 +4035,7 @@ public void NestedClass_UnderAnEligibleSealedInterface_IsDeclaredUnderTheAbstrac
 - Interfaces with generic type parameters, suspend interface members, and `Flow`/`StateFlow`-valued interface members are not supported as return positions.
 - A backing class and its dispatch exports are generated for an interface reachable at a return, parameter, property-setter, or [ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md) extension-receiver position ([ADR-135](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/135-interface-parameter-reachability.md)); an interface only ever used as an `add`/`remove` subscription parameter (like `ICatEventListener`, see [Lambdas and callbacks](lambdas-and-callbacks.md)) still does not get one, since that route never enters this walk at all. Whether an extension **property**'s receiver needs the same walk has no fixture either way.
 - Object identity is not preserved across reads of a **Kotlin-backed** interface-typed property: two reads produce two distinct C# wrapper instances over the same Kotlin object (each disposes independently). A **C#-implemented** object read back is the one exception, see above.
+- The identity resolve on a `suspend fun` completion or a `Flow<T>` element ([ADR-136](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/136-csharp-identity-on-async-interface-reads.md)) has no fixture at its **nullable** arm; a generic function's own `FromHandle<TResult>` route still always constructs a fresh wrapper, since no interface fixture reaches it. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - A sealed type in the export scope now binds at every position: property, callable return, and callable/constructor parameter (bare, nullable, or a collection component, read-only or mutable), see [Sealed types as property types](#sealed-types-as-property-types), [A class method returning a sealed base](#a-class-method-returning-a-sealed-base), and [A sealed type at a parameter position](#a-sealed-type-at-a-parameter-position). An **eligible** `sealed interface` binds the same way, whether its arms are nested or declared beside it, see [Sealed interfaces](#sealed-interfaces). A value class whose underlying type is sealed also binds the same way, at a property, callable, or `List<T>` component position, see [Value classes: Over a sealed type](value-classes.md#over-a-sealed-type). An extension function's **receiver** typed as a sealed base now binds too, see [Extensions: Sealed receivers](extensions.md#sealed-receivers). What still does not bind: an extension **property** with a sealed receiver, an **ineligible** sealed interface at any position, and a sealed class **outside the export scope**. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).
 - A `sealed interface` still refuses an arm that is an `enum class` (a C# enum can only extend an integral type, `CS1008`) or that implements more than one sealed interface (C# single inheritance), regardless of where the arm is declared. See [An enum arm keeps the interface ineligible](#sealed-interface-enum-arm), [ADR-125](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/125-sealed-interface-sibling-arms.md).
 - An eligible sealed interface arm's **extra interfaces** (e.g. `class Odd : Kind, CharSequence`) are dropped silently: the arm stays eligible, but the generated class declares only its sealed base, with no interface list and no diagnostic naming the loss. See [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md).

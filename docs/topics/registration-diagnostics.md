@@ -257,6 +257,16 @@ neither leaks nor disposes anything, asserting the throw inside `AssertNoLeak` r
 it. See [Implementing a Kotlin interface in C#: An interface reachable only at a parameter
 position](interfaces-abstract-sealed.md#an-interface-reachable-only-at-a-parameter-position).
 
+**Row 6e**, `SuspendReturn_ResolvedCSharpInterface_ReturnsToBaseline`, and **Row 6f**,
+`FlowElement_ResolvedCSharpInterface_ReturnsToBaseline`, cover the two async reads
+[ADR-136](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/136-csharp-identity-on-async-interface-reads.md)
+gave the same resolve-then-wrap identity the synchronous return already had: a `suspend fun`
+completion and a `Flow<T>` element, each handing back a stored C#-implemented `IPet`. Since
+`NugetMarshal.TryResolveCSharp` now disposes the transfer handle Kotlin minted for the crossing, the
+freeing site moves from the consumer's `using` to the read itself; both rows pin that the handle
+count still returns to baseline with the free happening there instead. See
+[Interfaces, abstract classes and sealed classes: Lifetime and identity](interfaces-abstract-sealed.md#lifetime-and-identity).
+
 Rows 8g through 8j cover every route with a handle-passed callback payload, now that
 [ADR-036](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md)'s
 2026-09-11 ownership amendment gives the C# side sole ownership of the free (see

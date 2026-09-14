@@ -1368,10 +1368,19 @@ internal object ForwardCirPlanProjection {
  * it in the generated backing class. A Kotlin-backed handle carries no token, so the wrapper
  * construction is unchanged; a bridge handle resolves to the original C#-implemented instance, so
  * `Assert.Same(dog, oreo.ClosestFriend())` holds and no read round-trips through two bridges.
+ *
+ * ADR-136: [handle] names the local the read is spelled against, so the suspend completion
+ * (`resultPtr`) and the `Flow` element delegate (`h`) share this one expression instead of spelling
+ * a bare wrapper construction. `TryResolveCSharp` disposes the resolved transfer handle itself, so
+ * every route frees what Kotlin minted for the crossing.
  */
-internal fun interfaceReturnExpression(csharpType: String, backingType: String): String =
-  "(NugetMarshal.TryResolveCSharp(nativeResult, out $csharpType csharpOriginal) " +
-      "? csharpOriginal : new $backingType(nativeResult))"
+internal fun interfaceReturnExpression(
+  csharpType: String,
+  backingType: String,
+  handle: String = "nativeResult",
+): String =
+  "(NugetMarshal.TryResolveCSharp($handle, out $csharpType csharpOriginal) " +
+      "? csharpOriginal : new $backingType($handle))"
 
 /**
  * ADR-088: resolve the fresh transfer GCHandle Kotlin returned, then free it. `Target!` is safe by

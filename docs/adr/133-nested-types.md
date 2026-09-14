@@ -307,6 +307,10 @@ already-shipped collection- and sealed-return reads; a C#-implemented object ret
 or through a `Flow<T>` never round-trips to the original instance the way the sync return does. See
 [ADR-084](084-csharp-implemented-interfaces.md)'s 2026-09-13 amendment.
 
+**Amended 2026-09-14, closed by [ADR-136](136-csharp-identity-on-async-interface-reads.md):** the
+suspend and Flow reads fixed here now resolve to the original C#-implemented instance first, the
+same as the sync return.
+
 **Return-reachability, verified.** [ADR-084](084-csharp-implemented-interfaces.md)'s bridge plan
 (state class + C#-implementable factory) is built only from interfaces reachable at a *return*
 position (`CirTranslator.interfaceBackingClasses`). A nested interface used only as a *parameter*

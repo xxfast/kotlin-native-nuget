@@ -243,8 +243,10 @@ public static Task<global::TestLibrary.Cat.IPet> StrayPetLaterAsync(Cancellation
 public Task<global::TestLibrary.Nested.Aviary.IKeeper> CurrentKeeperLaterAsync(CancellationToken cancellationToken = default)
 ```
 
-Both complete by constructing the backing wrapper internally (`t.SetResult(new global::TestLibrary.Nested.Aviary.Keeper(resultPtr))`),
-but the public signature and the awaited value are typed with the interface.
+Both complete the same way the synchronous interface return does: resolve the handle back to a
+stored C#-implemented original first, and only construct the backing wrapper when there is none
+(`t.SetResult((NugetMarshal.TryResolveCSharp(resultPtr, out IKeeper o) ? o : new Keeper(resultPtr)))`).
+The public signature and the awaited value are typed with the interface either way.
 
 Using it, from `IntegrationTests/NestedTypesTests.cs`:
 
@@ -257,12 +259,10 @@ public async Task TopLevelInterface_ReturnedFromASuspendFunction_IsTypedAsTheInt
 }
 ```
 
-<note>
-    <p>Unlike the synchronous interface return, this completion does not resolve back to a stored
-    C#-implemented original first (<code>NugetMarshal.TryResolveCSharp</code>): it always constructs
-    a fresh wrapper. A C#-implemented interface handed back over a <code>suspend fun</code> does not
-    round-trip to the original C# instance the way a plain method return does.</p>
-</note>
+A `Dog` stored via a C# implementation and handed back over a `suspend fun` returns the caller's own
+instance, the same identity guarantee the synchronous return gives; see
+[Interfaces, abstract classes and sealed classes](interfaces-abstract-sealed.md) for the full
+round-trip example.
 
 `LeakTests/LiveHandleTests.cs` row 9h, `Suspend_ReturningAnInterface_ReturnsToBaseline`, proves the
 completion's minted wrapper handle returns to baseline.
@@ -639,15 +639,18 @@ public KotlinFlow<global::TestLibrary.Nested.Aviary.IKeeper> Keepers()
         throw new ObjectDisposedException(nameof(Aviary));
     return new KotlinFlow<global::TestLibrary.Nested.Aviary.IKeeper>((onNext, onComplete, onError, userData) =>
         Native_KeepersCollect(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),
-        read: static h => new global::TestLibrary.Nested.Aviary.Keeper(h));
+        read: static h => (NugetMarshal.TryResolveCSharp(h, out global::TestLibrary.Nested.Aviary.IKeeper csharpOriginal) ? csharpOriginal : new global::TestLibrary.Nested.Aviary.Keeper(h)));
 }
 ```
 
 The explicit `read` delegate is what makes this work: `KotlinFlow<T>`'s default materialisation
 (`NugetMarshal.FromHandle<T>`'s `Activator` branch) cannot construct an interface, so every
-interface-element `Flow<T>` needs this per-member `read` callback constructing the backing wrapper,
-the same mechanism [collection elements on `Flow`](#collection-elements-on-flow-stateflow-and-their-method-returns)
-use for their own element type.
+interface-element `Flow<T>` needs this per-member `read` callback, the same mechanism
+[collection elements on `Flow`](#collection-elements-on-flow-stateflow-and-their-method-returns) use
+for their own element type. The delegate resolves a stored C#-implemented original first
+(`NugetMarshal.TryResolveCSharp`), the same as every other interface read, and only constructs the
+backing wrapper when there is none; see
+[Interfaces, abstract classes and sealed classes: Lifetime and identity](interfaces-abstract-sealed.md#lifetime-and-identity).
 
 Using it, from `IntegrationTests/NestedTypesTests.cs`:
 
