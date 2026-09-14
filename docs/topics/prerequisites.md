@@ -13,6 +13,14 @@
   `nuget-plugin/src/main/kotlin/io/github/xxfast/kotlin/native/nuget/NugetTooling.kt`), and both
   only run when a dependency is declared. See [Gradle tasks](gradle-tasks.md).
 
+  <note>
+    <p>
+      If a .NET SDK is present, `packNuget` also runs `nugetCompileInterop`, which compiles the
+      generated C# bindings before packing and fails the build on a compiler error. Without the
+      SDK, this check is skipped with a warning and publishing proceeds as before.
+    </p>
+  </note>
+
 ## C# side (consumer)
 
 - [.NET SDK](https://dotnet.microsoft.com/download) 8.0+

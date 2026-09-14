@@ -82,7 +82,9 @@ build/nuget/MyCatLib.1.0.0.nupkg
 ```
 
 (the staged, unzipped contents sit alongside it at `build/nuget/MyCatLib.1.0.0/`). No .NET SDK is
-required for this step.
+required for this step: if `dotnet` happens to be on `PATH`, `packNuget` also compiles the
+generated bindings first and fails on a C# error; if it is not, that check is skipped with a
+warning. See [Gradle tasks](gradle-tasks.md#nugetcompileinterop).
 
 ## 5. Consume it from C#
 
