@@ -268,17 +268,40 @@ internal fun mapPackageToNamespace(
  *
  * A NESTED interface carries its owner chain and is qualified exactly as the classifier qualifies
  * an interface at a member position: bare `IKeeper` names nothing at namespace scope (CS0246).
- * A TOP-LEVEL one keeps the shipped bare `I$simpleName`, byte for byte -- `PetBox<T> where T :
- * IPet` is the shipped spelling, and a cross-namespace top-level bound (which that spelling also
- * gets wrong) is a separate, pre-existing defect this does not widen into.
+ *
+ * Amended 2026-09-14: a TOP-LEVEL bound is qualified too. The bare `I$simpleName` it used to keep
+ * only resolves when the bound's own package maps to the same namespace as the file the bound is
+ * printed into, which is issue #41's disproved assumption: `nested.PetCrate<T : cat.Pet>` emitted
+ * `where T : IPet` into `TestLibrary.Nested`, whose only usings are `System` ones (`CirRenderer`),
+ * and `Interop.cs` failed CS0246. Qualifying unconditionally is the one rule every other render
+ * site follows; a bound position is a type reference, so `global::` is legal there.
  */
 internal fun KSClassDeclaration.legacyBoundInterfaceCsName(context: NugetContext): String {
   val simpleName: String = simpleName.asString()
-  if (parentDeclaration == null || context.rootNamespace.isEmpty()) return "I$simpleName"
+  if (context.rootNamespace.isEmpty()) return "I$simpleName"
   val namespace: String = mapPackageToNamespace(
     packageName.asString(), context.rootPackage, context.rootNamespace,
   )
   return "global::$namespace.${nestedInterfaceCsName()}"
+}
+
+/**
+ * The class-bound twin of [legacyBoundInterfaceCsName] (`class CatCrate<T : Cat>` -> `where T :
+ * global::TestLibrary.Cat.Cat`). Same defect, same rule: the bare simple name the generic routes
+ * used to print resolves only inside the bound's own namespace, so a cross-package or nested
+ * bound named nothing (CS0246, or CS0118 when a sibling namespace shares the simple name).
+ *
+ * A Kotlin builtin bound (`T : Comparable<T>`, `T : Number`) keeps the shipped simple name rather
+ * than going through the user-type speller, which refuses a builtin package outright (ADR-123).
+ * That spelling is its own pre-existing defect; this does not widen into it.
+ */
+internal fun legacyBoundClassCsName(type: KSType, context: NugetContext): String {
+  val declaration: KSDeclaration = type.expandAliases().declaration
+  val qualifiedName: String = declaration.qualifiedName?.asString() ?: ""
+  if (qualifiedName.startsWith("kotlin.") || qualifiedName.startsWith("kotlinx.")) {
+    return declaration.simpleName.asString()
+  }
+  return qualifiedElementCsType(type, context)
 }
 
 /**

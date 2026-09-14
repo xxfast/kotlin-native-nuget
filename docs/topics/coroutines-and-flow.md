@@ -19,7 +19,7 @@ Kotlin coroutines map onto .NET's own async model: `suspend fun` becomes `async`
 | `MutableStateFlow<T>` (declared publicly) | `KotlinMutableStateFlow<T> : KotlinStateFlow<T>` | settable `.Value`, keyed on the declared type, [ADR-071](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/071-mutable-stateflow-mapping.md) |
 | `StateFlow<T?>` (nullable element) | `KotlinStateFlow<T?>` | `.Value` and each emission are `T?`, [ADR-067](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/067-nullable-stateflow-mapping.md) |
 | `StateFlow<T>?` (nullable member) | `KotlinStateFlow<T>?` | presence-probed; `null` before the member exists, [ADR-067](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/067-nullable-stateflow-mapping.md) |
-| `suspend fun` returning `StateFlow<T>` | `Task<KotlinStateFlow<T>>` | outer suspend kept as `Task`, not collapsed to a sync return; class methods only, [ADR-068](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/068-suspend-returning-stateflow.md) |
+| `suspend fun` returning `StateFlow<T>` | `Task<KotlinStateFlow<T>>` | outer suspend kept as `Task`, not collapsed to a sync return; class methods only; an interface element type is spelled and read with the interface, see [`StateFlow<T>` element type is an interface](#suspend-stateflow-interface-element), [ADR-068](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/068-suspend-returning-stateflow.md) |
 | a class, `object`, sealed base, or sealed arm parameter on `Flow`/`StateFlow`/`suspend` | the mapped C# type, passed as `x._handle` | spelled exactly as the return position on the same member; see [Handle parameters on `Flow`, `StateFlow`, and `suspend` members](#handle-parameters-on-flow-stateflow-and-suspend-members), [ADR-122](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/122-handle-parameters-on-the-legacy-routes.md) |
 | `List<T>` / `Set<T>` / `Map<K, V>` element on a `Flow`/`StateFlow` property or method return | `KotlinFlow<IReadOnlyList<T>>` / `KotlinStateFlow<IReadOnlyList<T>>` / `IReadOnlySet<T>` / `IReadOnlyDictionary<K, V>` | spelled and read exactly as the property and suspend-return routes; any other generic element is a named skip, see [Collection elements on `Flow`, `StateFlow`, and their method returns](#collection-elements-on-flow-stateflow-and-their-method-returns), [ADR-123](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/123-collection-elements-on-the-flow-routes.md) |
 
@@ -1214,6 +1214,61 @@ public async Task AwaitPlaymateReport_ValueReturnsFreshDisposableWrapper_OreoGre
     <code>StateFlow&lt;T&gt;</code> (no parent scope) is deferred.</p>
 </note>
 
+### `StateFlow<T>` element type is an interface {id="suspend-stateflow-interface-element"}
+
+The element of a `suspend fun` returning `StateFlow<T>` can itself be an interface, and it is spelled
+and read with the interface, the same as the plain [`suspend fun` returning an
+interface](#suspend-fun-returning-an-interface) and the [`Flow<T>` interface
+element](#flow-t-of-an-interface-element-type) above, not the ADR-040 backing wrapper. From
+`test-library/src/nativeMain/kotlin/.../nested/Aviary.kt`:
+
+```kotlin
+suspend fun keeperReport(): StateFlow<Keeper> {
+  yield()
+  return onDuty
+}
+
+/** Parameter half of [keeperReport]: stores a keeper (a C# one included) as the current value. */
+fun book(keeper: Keeper) {
+  onDuty.value = keeper
+}
+```
+
+Generated C#:
+
+```C#
+public Task<KotlinStateFlow<global::TestLibrary.Nested.Aviary.IKeeper>> KeeperReportAsync(CancellationToken cancellationToken = default)
+{
+    // ... standard suspend-StateFlow completion wiring ...
+    t.SetResult(new KotlinStateFlow<global::TestLibrary.Nested.Aviary.IKeeper>(
+        (flowOnNext, flowOnComplete, flowOnError, flowUserData) =>
+            NugetStateFlowNative.Collect(flowHandle, collectScope, flowOnNext, flowOnComplete, flowOnError, flowUserData),
+        () => NugetStateFlowNative.Value(flowHandle),
+        flowHandle,
+        read: static h => (NugetMarshal.TryResolveCSharp(h, out global::TestLibrary.Nested.Aviary.IKeeper csharpOriginal) ? csharpOriginal : new global::TestLibrary.Nested.Aviary.Keeper(h))));
+}
+```
+
+The same explicit `read:` delegate the `Flow<T>` interface element needs applies here too: it resolves
+a stored C#-implemented original first, and only constructs the backing wrapper when there is none.
+
+Using it, from `IntegrationTests/InterfaceSpellingSiteTests.cs`:
+
+```C#
+[Fact]
+public async Task KeeperReport_ResolvesAStoredCSharpKeeperToTheOriginalInstance()
+{
+    using var aviary = new Aviary("Mylo");
+    using Aviary.IKeeper booked = new DutyKeeper();
+    aviary.Book(booked);
+
+    using KotlinStateFlow<Aviary.IKeeper> report = await aviary.KeeperReportAsync();
+
+    Assert.Same(booked, report.Value);
+    Assert.Equal("the C# keeper reporting", report.Value.Greet());
+}
+```
+
 ## Collection parameters on `Flow`, `StateFlow`, and `suspend` members
 
 A `List`/`Set`/`Map` parameter on a `Flow`-returning, `StateFlow`-returning, or `suspend` member crosses as the real collection type, never `IntPtr`. From `test-library/src/nativeMain/kotlin/.../cat/TreatBoard.kt`:
@@ -1581,7 +1636,6 @@ Hot streams and several `Flow` positions are not yet supported (ROADMAP Phase 6)
 - A `suspend fun` returning a nullable collection (`List<T>?`), a collection of a sealed base (`List<Shape>`), or any other generic type (`Pair`, `Result<T>`, `Flow<T>`): absent and named `SKIPPED_UNSUPPORTED_RETURN` ([ADR-119](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/119-collection-returns-on-the-legacy-suspend-route.md))
 - Reassigning the whole `MutableStateFlow<T>` member itself (a `var` member, not just its `.value`)
 - Top-level `suspend fun` returning `StateFlow<T>` (no parent class scope; class methods only in v1)
-- A `suspend fun` returning `StateFlow<Interface>` still completes typed with the ADR-040 backing wrapper, not the interface, unlike the plain interface suspend return and the `Flow<Interface>` element above, which this feature fixed; the interface-return classification did not reach this route (ROADMAP Phase 4)
 - `StateFlow<T>` as a function parameter or as a generic type argument
 - `suspend fun` returning a nullable `StateFlow<T?>` / `StateFlow<T>?`, and nullable `StateFlow` as a function parameter or generic type argument
 - `Boolean?` / `Char?` value elements on a nullable `StateFlow` (the same width fragility as ADR-061)

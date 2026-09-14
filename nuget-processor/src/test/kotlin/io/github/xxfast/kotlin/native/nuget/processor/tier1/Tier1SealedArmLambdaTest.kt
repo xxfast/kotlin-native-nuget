@@ -263,7 +263,9 @@ class Tier1SealedArmLambdaTest {
     val idle: String = armBody(result.generatedCSharp, "Idle")
 
     assertTrue(
-      idle.contains("public IDisposable AddWatcher(IFeedWatcher listener)"),
+      idle.contains(
+        "public IDisposable AddWatcher(global::Interop.IFeedWatcher listener)",
+      ),
       "expected the bridge subscription member on the Idle arm; got: " +
           "${csharpLinesFor(result, "AddWatcher")}",
     )

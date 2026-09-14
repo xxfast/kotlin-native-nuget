@@ -155,7 +155,15 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       appendLine("                        (flowOnNext, flowOnComplete, flowOnError, flowUserData) =>")
       appendLine("                            NugetStateFlowNative.Collect(flowHandle, collectScope, flowOnNext, flowOnComplete, flowOnError, flowUserData),")
       appendLine("                        () => NugetStateFlowNative.Value(flowHandle),")
-      append("                        flowHandle));")
+      // ADR-123's `read:` slot, fourth ctor argument (trailing optional, `CirFlowRenderer`): an
+      // interface element materialises each `.Value` through the ADR-136 resolve-then-wrap
+      // expression instead of the default `FromHandle<T>`, which has no factory for an interface.
+      if (method.flowElementRead != null) {
+        appendLine("                        flowHandle,")
+        append("                        ${method.flowElementRead}));")
+      } else {
+        append("                        flowHandle));")
+      }
     }
 
     // ADR-119: a collection result is a handle to the boxed wire container, read back through the

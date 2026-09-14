@@ -267,6 +267,16 @@ freeing site moves from the consumer's `using` to the read itself; both rows pin
 count still returns to baseline with the free happening there instead. See
 [Interfaces, abstract classes and sealed classes: Lifetime and identity](interfaces-abstract-sealed.md#lifetime-and-identity).
 
+**Row 6g**, `SuspendStateFlowOfInterface_ValueReads_ReturnToBaseline`, is a `suspend fun` returning
+`StateFlow<Interface>`, the newest of the interface-element async reads: three handles ride on one
+call and each is freed at a different place, the awaited `StateFlow`'s own `StableRef` (owned by the
+returned `KotlinStateFlow<T>`, released by the consumer's `using`), the `nuget_stateflow_value` read
+per `.Value`, and the ADR-136 resolve of a stored C# keeper. Unlike the other async rows, which read
+one handle per completion or per emission, this one reads a fresh element handle per `.Value` on a
+holder that outlives the call, so a value read that forgets its handle would leak per read rather
+than per call. See [Coroutines and Flow: `StateFlow<T>` element type is an
+interface](coroutines-and-flow.md#suspend-stateflow-interface-element).
+
 Rows 8g through 8j cover every route with a handle-passed callback payload, now that
 [ADR-036](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md)'s
 2026-09-11 ownership amendment gives the C# side sole ownership of the free (see

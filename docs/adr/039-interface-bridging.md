@@ -4,6 +4,15 @@
 
 Accepted
 
+> **Amended (2026-09-14).** The `AddListener(ICatEventListener listener)` shape shown throughout
+> this ADR spelled the listener parameter bare, which only compiled because every fixture pair sat
+> in the same package as its interface. A nested or cross-package listener is CS0246. The listener
+> parameter is now always fully qualified (`global::TestLibrary.Cat.ICatEventListener`), the same
+> qualify-everywhere rule issue #41 applies elsewhere. See [Lambdas and callbacks: C# implementing a
+> Kotlin interface as a
+> parameter](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/topics/lambdas-and-callbacks.md#c-implementing-a-kotlin-interface-as-a-parameter),
+> discovered alongside [ADR-133](133-nested-types.md).
+
 ## Context
 
 ADR-036 introduced reverse interop for single-lambda parameters (`(T) -> R`) and explicitly deferred

@@ -352,10 +352,10 @@ class CatEventSource(val name: String) {
 }
 ```
 
-`AddListener` takes the generated `ICatEventListener` interface and bridges each method as its own function pointer (N pointers for an N-method interface), returning an `IDisposable` the same way a stored callback does:
+`AddListener` takes the generated `ICatEventListener` interface and bridges each method as its own function pointer (N pointers for an N-method interface), returning an `IDisposable` the same way a stored callback does. The listener parameter is always spelled fully qualified, `global::Namespace.IFoo`, the same qualify-everywhere rule [#41](https://github.com/xxfast/kotlin-native-nuget/issues/41) applies to every other render site, so a nested or a cross-package listener interface binds the same way a same-namespace one does:
 
 ```C#
-public IDisposable AddListener(ICatEventListener listener)
+public IDisposable AddListener(global::TestLibrary.Cat.ICatEventListener listener)
 {
     if (_handle == IntPtr.Zero) throw new ObjectDisposedException(nameof(CatEventSource));
     NugetObjectVoidCallback onMeowCb = (IntPtr arg0Ptr, IntPtr _) =>

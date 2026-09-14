@@ -9,7 +9,7 @@ Generic classes and functions cross the bridge through a type-erased native laye
 | `class X : GenericBase<Arg>(...)` | `class X : GenericBase<Arg>` | subclassing an exported generic base spells the closed type argument; an `open` generic base renders `virtual Dispose()`; a subclass overload of a name it also inherits from the base stays a single declared member, the inherited one is not re-declared, see [ADR-101](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/101-unexported-supertype-skip.md) |
 | nullable property (`val x: T?`) | `T?` | a `null` read surfaces as `null`, or `default(T)` at a value-type instantiation, see [ADR-083](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/083-nullable-collection-components.md) |
 | `fun <T> f()` | typed variants | runtime dispatch via `NugetMarshal` |
-| `<T : Bound>` constraint | `where T : ...` | see [ADR-015](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/015-generic-type-constraint-mapping.md) |
+| `<T : Bound>` constraint | `where T : ...` | a bound declared in another package is spelled fully qualified, `where T : global::Namespace.Bound`, see [A generic bound from another package](#a-generic-bound-from-another-package), [ADR-015](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/015-generic-type-constraint-mapping.md) |
 | `out T` / `in T` variance | `out T` / `in T` | see [ADR-016](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/016-generic-variance-mapping.md) |
 | `inline fun` | regular method | see [ADR-017](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/017-inline-function-mapping.md) |
 | `inline fun <reified T>` | typed variants | reified type parameters |
@@ -44,6 +44,14 @@ class PetBox<T : Pet>(val value: T) {
     require(value.name.isNotBlank()) { "PetBox needs a named pet" }
   }
 }
+```
+
+A generic bound declared in another package, from `test-library/src/nativeMain/kotlin/.../nested/Crates.kt`:
+
+```kotlin
+class PetCrate<T : Pet>(val value: T)
+
+class CatCrate<T : Cat>(val value: T)
 ```
 
 A class extending an exported generic base, from `test-library/src/nativeMain/kotlin/.../parcel/Parcel.kt`:
@@ -174,6 +182,53 @@ public class PetBox<T> : IDisposable, INugetHandle where T : IPet
     public T Value => NugetMarshal.FromHandle<T>(PetBoxNative.Get_value(_handle));
 
     public void Dispose() { /* ... */ }
+}
+```
+
+### A generic bound from another package {id="a-generic-bound-from-another-package"}
+
+`PetBox<T : Pet>` above is declared beside its own bound, so the bare `where T : IPet` it renders
+never exercises qualification. `PetCrate`/`CatCrate` are declared in a different package from `Pet`
+and `Cat`, and the bound, interface or class, is spelled fully qualified instead of bare, the same
+qualify-everywhere rule [#41](https://github.com/xxfast/kotlin-native-nuget/issues/41) applies at
+every other render site:
+
+```C#
+public class PetCrate<T> : IDisposable, INugetHandle where T : global::TestLibrary.Cat.IPet
+{
+    internal IntPtr _handle;
+
+    IntPtr INugetHandle.Handle => _handle;
+
+    public PetCrate(T value)
+    {
+        IntPtr handle = PetCrateNative.Create_object(((INugetHandle)value!).Handle, out IntPtr error);
+        /* ... */
+    }
+
+    public T Value => NugetMarshal.FromHandle<T>(PetCrateNative.Get_value(_handle));
+
+    public void Dispose() { /* ... */ }
+}
+
+public class CatCrate<T> : IDisposable, INugetHandle where T : global::TestLibrary.Cat.Cat
+{
+    /* ... same shape, class bound instead of interface ... */
+}
+```
+
+Using it, from `IntegrationTests/InterfaceSpellingSiteTests.cs`:
+
+```C#
+[Fact]
+public void PetCrate_BoundIsTheQualifiedInterface_AndAcceptsACat()
+{
+    using var oreo = new Cat("Oreo", 9);
+    using var crate = new PetCrate<Cat>(oreo);
+
+    Assert.Equal("Oreo", crate.Value.Name);
+    Type[] constraints = typeof(PetCrate<>).GetGenericArguments()[0].GetGenericParameterConstraints();
+    Assert.Contains(typeof(IPet), constraints);
 }
 ```
 

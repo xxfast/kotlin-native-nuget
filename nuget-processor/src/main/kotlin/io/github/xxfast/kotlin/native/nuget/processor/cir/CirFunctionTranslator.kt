@@ -749,17 +749,15 @@ internal fun translateGenericFunction(
       val resolved = bound.resolve()
       val qualifiedName: String? =
         resolved.declaration.qualifiedName?.asString()
-      val simpleName: String =
-        resolved.declaration.simpleName.asString()
-
       val declaration: KSClassDeclaration? = resolved.declaration as? KSClassDeclaration
       val isInterface: Boolean = declaration?.classKind == ClassKind.INTERFACE
 
       when {
         qualifiedName == "kotlin.Any" -> null
-        // ADR-133: nested carries the chain, top-level keeps the shipped bare `I$simpleName`.
+        // ADR-133, amended 2026-09-14: every bound carries its owner chain and its namespace,
+        // nested or not. A bare bound only resolves in the bound's own namespace.
         isInterface && declaration != null -> declaration.legacyBoundInterfaceCsName(context)
-        else -> simpleName
+        else -> legacyBoundClassCsName(resolved, context)
       }
     } ?: emptyList()
 

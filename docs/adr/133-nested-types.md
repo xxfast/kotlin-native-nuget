@@ -299,6 +299,15 @@ completion and the `Flow` element sites both read the classifier's `csharpType` 
 is load-bearing byte-identity for the pre-existing `PetBox<T>` fixture. A cross-namespace top-level
 interface bound is still spelled wrong; pre-existing, unrelated to nesting, tracked on the ROADMAP.
 
+**Amended 2026-09-14, closed.** This paragraph's cross-namespace top-level bound is now qualified,
+along with two related bare or wrapper spellings found alongside it: the ADR-039 add/remove pair
+site's listener parameter, and the legacy `suspend fun` returning `StateFlow<Interface>` route's
+element, which spelled the ADR-040 backing wrapper and passed no `read:`. See [Generics: A generic
+bound from another package](../topics/generics.md#a-generic-bound-from-another-package), [Lambdas
+and callbacks: C# implementing a Kotlin interface as a
+parameter](../topics/lambdas-and-callbacks.md), and [Coroutines and Flow: `StateFlow<T>` element
+type is an interface](../topics/coroutines-and-flow.md#suspend-stateflow-interface-element).
+
 **Identity asymmetry, inherited from ADR-040/ADR-084, not introduced here.** The sync plan route
 resolves a returned handle back to its original C#-implemented instance first
 (`NugetMarshal.TryResolveCSharp`) and only wraps when there is no original to resolve to. The

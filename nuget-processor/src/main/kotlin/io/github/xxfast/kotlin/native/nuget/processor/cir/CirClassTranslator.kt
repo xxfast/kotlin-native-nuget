@@ -814,7 +814,9 @@ internal fun translateClass(
 
   val interfaceBridgeMembers: List<CirInterfaceBridgeMethod> = interfaceBridgePairs
     .mapNotNull { (addMethod, removeMethod) ->
-      translateInterfaceBridgeMethod(addMethod, removeMethod, libraryName, prefix, name, tracker)
+      translateInterfaceBridgeMethod(
+        addMethod, removeMethod, libraryName, prefix, name, tracker, classifier, context,
+      )
     }
 
   // ADR-090: planned members come off the catalog (overload numbering makes the plan symbol
@@ -1039,15 +1041,15 @@ internal fun translateGenericClass(
     val bounds: List<String> = param.bounds.toList().mapNotNull { bound ->
       val resolved = bound.resolve()
       val qualifiedName: String? = resolved.declaration.qualifiedName?.asString()
-      val simpleName: String = resolved.declaration.simpleName.asString()
       val declaration: KSClassDeclaration? = resolved.declaration as? KSClassDeclaration
       val isInterface: Boolean = declaration?.classKind == ClassKind.INTERFACE
 
       when {
         qualifiedName == "kotlin.Any" -> null
-        // ADR-133: nested carries the chain, top-level keeps the shipped bare `I$simpleName`.
+        // ADR-133, amended 2026-09-14: every bound carries its owner chain and its namespace,
+        // nested or not. A bare bound only resolves in the bound's own namespace.
         isInterface && declaration != null -> declaration.legacyBoundInterfaceCsName(context)
-        else -> simpleName
+        else -> legacyBoundClassCsName(resolved, context)
       }
     }
 
@@ -1684,7 +1686,16 @@ internal fun suspendMembers(
     val flowElementTypeResolved: KSType? = returnType?.arguments?.firstOrNull()?.type?.resolve()
     // v1 scope (ADR-068): nullable element/member is deferred; mirror ADR-065's plain (non-null)
     // shape only.
-    val flowCsElementType: String = qualifiedElementCsType(flowElementTypeResolved, context)
+    // ADR-040 / ADR-133 amendment (2026-09-14): an interface element is DECLARED with the
+    // projected interface and READ through the backing wrapper, the same split the property
+    // `Flow`/`StateFlow` route takes. Without it this site spelled the wrapper at a declared
+    // position, which ADR-040 says no consumer ever sees, and read every `.Value` through
+    // `FromHandle<T>` (no factory for an interface: the ADR-136 resolve of a stored C#
+    // implementation never fired). A class element keeps `qualifiedElementCsType` byte for byte.
+    val flowElementInterface: BridgeType.Interface? =
+      classifier.legacyFlowElementInterface(flowElementTypeResolved)
+    val flowCsElementType: String = flowElementInterface?.csharpType
+      ?: qualifiedElementCsType(flowElementTypeResolved, context)
 
     // ADR-114: a collection parameter takes the public collection type with an IntPtr native
     // slot; every other parameter keeps mapParamType's shipped spelling.
@@ -1721,6 +1732,10 @@ internal fun suspendMembers(
       body = "",
       isAsync = true,
       asyncReturnType = asyncReturnType,
+      // The `read:` the awaited `KotlinStateFlow<T>` is constructed with (ADR-123's slot,
+      // ADR-136's expression). Null for a class element, which keeps the ctor's default read.
+      flowElementRead = flowElementInterface
+        ?.let { iface -> legacyInterfaceElementReadArgument(iface, false) },
     )
 
     listOf(nativeImport, asyncMethod)
@@ -1963,7 +1978,8 @@ internal fun translateSealedClass(
             // `ObjectDisposedException(nameof(...))`, where the base's name compiles (the arm is
             // nested inside it) and misnames the owner of the handle that was disposed.
             translateInterfaceBridgeMethod(
-              addMethod, removeMethod, libraryName, subPrefix, subName, tracker,
+              addMethod, removeMethod, libraryName, subPrefix, subName, tracker, classifier,
+              context,
             )
           }
 
@@ -3085,6 +3101,11 @@ private fun translateInterfaceBridgeMethod(
   classPrefix: String,
   className: String,
   tracker: CollectionHelperTracker,
+  // Issue #41: the listener parameter and every callback argument are type references into a file
+  // whose only usings are `System` ones, so both need the one qualifier. The classifier spells the
+  // listener interface (owner-chained and `global::`-qualified); the context spells the arguments.
+  classifier: ForwardBridgeTypeClassifier,
+  context: NugetContext,
 ): CirInterfaceBridgeMethod? {
   val addMethodName: String = addMethod.simpleName.asString()
   val removeMethodName: String = removeMethod.simpleName.asString()
@@ -3098,7 +3119,15 @@ private fun translateInterfaceBridgeMethod(
 
   val ifaceDecl = ifaceParam.type.resolve().expandAliases().declaration as? KSClassDeclaration ?: return null
   val ifaceName: String = ifaceDecl.simpleName.asString()
-  val interfaceCsName: String = "I$ifaceName"
+  // ADR-133 amendment (2026-09-14): the projected interface name, owner-chained and qualified.
+  // The bare `I$ifaceName` this used to print only resolved because every shipped pair fixture
+  // sits beside its own top-level listener: a nested listener is declared `Aviary.IWatcher` and a
+  // cross-package one lives in another namespace, so the bare name failed CS0246 at both.
+  // An out-of-scope listener (no C# declaration at all) still falls back to the bare name; the
+  // named skip for that shape needs the gate `exports/InterfaceBridgeExports.kt` applies, and is
+  // tracked in `docs/backlog/add-remove-subscription-route-silently-mis-handles.md`.
+  val interfaceCsName: String =
+    classifier.legacyFlowElementInterface(ifaceParam.type.resolve())?.csharpType ?: "I$ifaceName"
 
   val ifaceMethods: List<KSFunctionDeclaration> = ifaceDecl.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -3163,11 +3192,13 @@ private fun translateInterfaceBridgeMethod(
         val isEnum: Boolean = (pType.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
         val isPrimitive: Boolean = pQualified.startsWith("kotlin.") && pSimple != "String"
         val csType: String = when {
-          isEnum -> pSimple
+          isEnum -> qualifiedElementCsType(pType, context)
           pSimple == "Boolean" -> "bool"
           isPrimitive -> KOTLIN_TO_CSHARP_PARAM[pSimple] ?: pSimple
           pSimple == "String" -> "string"
-          else -> pSimple
+          // Issue #41 again, one level down: the unmarshal declares a local of the argument's own
+          // type, which the ADR-037 stored-callback sibling already qualifies (`csParamType`).
+          else -> qualifiedElementCsType(pType, context)
         }
         when {
           isEnum -> append("$csType arg$i = ($csType)arg${i}Ord; ")

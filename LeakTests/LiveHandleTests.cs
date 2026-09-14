@@ -39,6 +39,14 @@ public class LiveHandleTests
         public void Dispose() { }
     }
 
+    // A C#-side nested-interface implementation for the StateFlow-of-interface row: `Book` crosses
+    // it into Kotlin over the ADR-084 bridge and every `.Value` read resolves it back.
+    private sealed class BookedKeeper : Aviary.IKeeper
+    {
+        public string Greet() => "booked";
+        public void Dispose() { }
+    }
+
     /// <summary>
     /// Settle until the live count stops moving, not for a fixed number of rounds. The ADR-084
     /// cleaner frees handles asynchronously, so releases owed by earlier work land mid-window and
@@ -353,6 +361,30 @@ public class LiveHandleTests
             var seen = new List<IPet>();
             await foreach (IPet pet in sitter.Wards()) seen.Add(pet);
             Assert.Equal("Woof!", Assert.Single(seen).Speak());
+        });
+    }
+
+    // Row 6g. The `suspend fun` returning `StateFlow<Interface>` read (site (b) of the interface
+    // spelling sweep). Three handles ride on one call and each is freed at a different place: the
+    // awaited StateFlow's own StableRef (owned by the returned `KotlinStateFlow<T>`, released by
+    // the consumer's `using`), the `nuget_stateflow_value` read per `.Value`, and the ADR-136
+    // resolve of the stored C# keeper. The other async rows all read a handle per completion or
+    // per emission; this one reads a fresh element handle per `.Value` on a holder that outlives
+    // the call, so a value read that forgets its handle leaks per read rather than per call.
+    //
+    // Mylo books a C# keeper and then checks the roster twice.
+    [Fact]
+    public async Task SuspendStateFlowOfInterface_ValueReads_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var aviary = new Aviary("Mylo");
+            using Aviary.IKeeper booked = new BookedKeeper();
+            aviary.Book(booked);
+
+            using KotlinStateFlow<Aviary.IKeeper> report = await aviary.KeeperReportAsync();
+            Assert.Equal("booked", report.Value.Greet());
+            Assert.Equal("booked", report.Value.Greet());
         });
     }
 
