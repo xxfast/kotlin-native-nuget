@@ -328,6 +328,76 @@ From each root declaration, and transitively from each admitted declaration:
 Only **public** declarations are followed and admitted (`internal` is resolvable cross-module and
 correctly reported (**verified**), so this filter is real work, not a no-op).
 
+> **Amendment (2026-09-13, the owner-chain and nested-member edges).** Two rows join the table
+> above, closing the gap [ADR-133](133-nested-types.md) recorded in its Consequences: a nested
+> dependency type only ever reached C# by riding its owner's own, separate admission, and a declared
+> nested type's own member types were never walked.
+>
+> | Edge | Followed | Note |
+> |---|---|---|
+> | Enclosing declaration of a nested type | yes | climbs to `parentDeclaration` before the nested test, recursively, so the outermost owner is reached at any depth; a sealed arm nested in its base reaches the base by the same edge |
+> | Member types of a declared nested type | yes | descends into every public nested `class`/`object`/`interface`/`enum class` whose `nestedDeclarationDeferral()` is null; the descent itself only inspects one nesting level directly, but since it calls the same member-walk function on what it finds, an arbitrarily deep chain is covered by that recursion, not by a hard-coded depth |
+>
+> **Mechanism (Verified in source, `NugetProcessor.kt`, `ForwardReachabilityClosure.kt`,
+> `ForwardBridgeTypeClassifier.kt`).** In `visitDeclaration`,
+> `(parentDeclaration as? KSClassDeclaration)?.let(::visitDeclaration)` now runs **unconditionally**,
+> ahead of the nested test and regardless of what that test later decides: even a nested candidate
+> ADR-133 still defers (an `inner class`, a generic, an `enum class`/`interface`/sealed owner)
+> climbs and admits its owner, a dead admission with no consumer of the nested type itself and no
+> fixture pinning it. The nested declaration itself still gets **no admission record and no
+> bucket**: ADR-133's owner walk remains the sole declarer, so `INFO_EXPORTED_FROM_DEPENDENCY` keeps
+> naming owners only, never a nested type. `walkClassMembers` separately descends one level into
+> every already-admitted owner's public, non-deferred nested declarations and calls itself on each,
+> which is what reaches a nested type's own member types at any depth; the descent filters
+> `classKind in NESTED_DECLARATION_KINDS` **before** `getVisibility()` (`NugetProcessor.kt:150-153`),
+> because an enum entry read from a klib throws `Internal KSP Error` out of `getVisibility()`, and an
+> admitted cross-module `enum class` now has its `declarations` inspected by this walk.
+>
+> **Refusal propagation.** A nested candidate the closure refuses because its owner itself carries a
+> scope refusal (`exclude("pkg.Owner")` naming the owner, or the owner's package out of scope) now
+> records that owner's refusal reason against the nested name too, instead of the generic
+> `NESTED_DECLARATION` marker; `NESTED_DECLARATION` survives as the fallback for every other nested
+> candidate (owner admitted, or module-local, or carrying no record). The classifier's three nested
+> gates (class, enum, interface) consult this ahead of their own nested test, so a nested dependency
+> type outside the scope reports `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` naming the `include(...)`
+> remedy that repairs the build, not the nested wording's "move it to the top level", which cannot.
+> The enum branch previously lacked this scope check entirely (it tested nestedness alone) and now
+> matches the class/interface branches, so an excluded or cross-module-disabled dependency enum
+> nested under an in-scope owner gets the exclude/cross-module hint instead of a stale `include(...)`
+> suggestion that cannot work for it either.
+>
+> **Diagnostics.** The `include(...)` hint's package name is now derived by a dedicated
+> `String.dependencyPackageName()` (`ForwardDiagnostic.kt`) rather than a bare
+> `substringBeforeLast('.')`: for a nested qualified name (`dep.edge.Ledger.Entry`) the bare
+> `substringBeforeLast` produced `dep.edge.Ledger`, naming no package that exists, since edge A now
+> lets a hint reach a nested name for real rather than only in theory. The new helper drops trailing
+> capitalised segments (Kotlin type names are capitalised, package segments are not) so the hint
+> names `dep.edge`. The `UNDECLARED_CLASS` hint is rewritten for the same reason `ADR-133`'s pointer
+> below already gives: since a nested class or object **is** now declared as a C# nested type when
+> its owner chain allows it, reaching this hint means this particular shape is deferred, not that
+> nesting itself is fatal, so the hint no longer says "a nested class or object is never declared in
+> C#" and instead points at the `SKIPPED_NESTED_DECLARATION` warning on the declaration for the
+> specific reason.
+>
+> **Fixture.** `test-models/Almanac.kt` (`Almanac { class Page }`, returned by nothing but
+> `Newsroom.page(): Almanac.Page`) and `Broadcast.Schedule.timetable(): Timetable` (a new top-level
+> `Timetable`, referenced nowhere else) are the two positive cells;
+> `Tier1ReachabilityClosureTest.kt` adds the pure form (`dep.edge.Ledger.Entry`/`dep.edge.Stamp`, no
+> member returning `Ledger`) in both an admitted and an out-of-scope configuration.
+> `IntegrationTests/ReachabilityNestedEdgeTests.cs` pins both edges from the C# side. No handle mint,
+> no new marshalling, no `LiveHandleTests` row.
+>
+> **Consequences.** Additive: a dependency owner can now be declared with no member of the exporting
+> module returning it, purely because a nested type of it is referenced, which is the same C# a
+> consumer needs anyway (the nested block lives inside the owner's). Inferred, not fixture-verified:
+> edge A is unconditional, so a nested type ADR-133 still defers (an `inner class`, generic,
+> `enum class`/`interface`/sealed owner) still climbs and admits its owner regardless, a dead
+> admission with no consumer of the nested type at all. The `include(...)` hint's UNDECLARED_CLASS
+> wording is corrected by this amendment, but a sibling reason sentence for the
+> `SKIPPED_NESTED_DECLARATION` diagnostic itself, a KDoc comment on that diagnostic kind, and a
+> classifier code comment were not reached by the same pass and still describe nesting the way it
+> worked before ADR-133; see ROADMAP.md Phase 4.
+
 ### 3. Admission predicate
 
 A discovered declaration is admitted iff **all** hold:
@@ -436,6 +506,10 @@ the *root* callable's own return/parameter type is unexportable does the callabl
 > still-deferred owner shape gets no such free ride and keeps skipping exactly as this amendment
 > describes. Nothing admits the *owner* on the strength of a member naming only its nested type, so
 > that case is still refused; see [ADR-133](133-nested-types.md)'s Consequences.
+>
+> **Closed (2026-09-13 amendment, see section 2 above).** The last sentence above no longer holds:
+> the closure now climbs from a nested reference to its owner and admits the owner on that strength
+> alone, so `Newsroom.page(): Almanac.Page` admits `Almanac` with no other member returning it.
 
 ### 5. Namespacing: no new rule
 

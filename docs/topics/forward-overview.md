@@ -282,12 +282,14 @@ the file and line of the Kotlin declaration that was skipped, something the reve
 `RirDiagnostic` cannot carry, since it works from compiled metadata rather than source. See each
 forward page's own **Limitations** section for which named diagnostic fires where.
 
-A nested `class`, `object`, `interface`, or `enum class` under a non-generic, non-`inner` `class` or
-`object` owner is declared as a real C# nested type, `Outer.Nested`, at any depth
-([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md));
+A nested `class`, `object`, `interface`, `enum class`, or `value class` under a non-generic,
+non-`inner` `class` or `object` owner, an `interface` owner, or a sealed base/arm owner is declared as
+a real C# nested type, `Outer.Nested`, at any depth
+([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md),
+[ADR-134](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/134-nested-types-under-deferred-owners.md));
 see [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects). A nested
-declaration under a still-deferred owner shape (an `inner class`, a generic, `enum class`,
-`interface`, or sealed base/arm owner) still skips named, `SKIPPED_NESTED_DECLARATION` at the
+declaration under a still-deferred owner shape (an `inner class`, a generic, or an `enum class`
+owner) still skips named, `SKIPPED_NESTED_DECLARATION` at the
 declaration, and a member typed with it skips `SKIPPED_UNSUPPORTED_TYPE` naming `UNDECLARED_CLASS`/
 `UNDECLARED_ENUM`/`UNDECLARED_INTERFACE` instead of being spelled as a dangling reference; see
 [Enums: Nested enums](enums.md#nested-enums-skip-named) and [Interfaces, abstract and sealed classes: Nested
@@ -363,6 +365,38 @@ silently with no `Interop.cs` in the package:
 When at least one dependency-module type *is* admitted, the closure also emits one aggregate
 `INFO_EXPORTED_FROM_DEPENDENCY` line per KSP run rather than one line per type, naming the whole
 admitted set.
+
+The closure follows two more edges through a nested type, closing a gap
+[ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md) left
+when it shipped nested-type declaration with no closure change of its own. A member returning or
+taking a nested type climbs to its owner first, so a dependency member naming only `Almanac.Page`
+admits `Almanac` even when nothing anywhere returns `Almanac` itself; and once a nested type is
+declared under an admitted owner, the closure also walks *its own* member types, so
+`Broadcast.Schedule.timetable(): Timetable` admits the top-level dependency type `Timetable` on the
+strength of a member declared two levels down. Neither edge gives the nested type its own admission
+record: the owner is what the manifest and the generated C# name, exactly as
+[Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects) describes.
+
+From `Interop.cs`, `Almanac` is declared at namespace level with `Page` nested inside it even though
+no member anywhere returns `Almanac`, and `Timetable` is declared at namespace level even though the
+only member naming it is two levels down, on `Broadcast.Schedule`:
+
+```C#
+public class Almanac : IDisposable, INugetHandle
+{
+    // ...
+
+    public class Page : IDisposable, INugetHandle
+    {
+        // ...
+    }
+}
+
+public class Timetable : IDisposable, INugetHandle
+{
+    // ...
+}
+```
 
 ### Duplicate-type hazard across two published packages {id="duplicate-type-hazard"}
 

@@ -4,10 +4,10 @@ Kotlin extension functions and properties don't have a native C# analog (C# has 
 
 | Kotlin | C# | Notes |
 |---|---|---|
-| extension function | static method | true C# extension method (`this` parameter); receiver may also be an eligible sealed base, see [Sealed receivers](#sealed-receivers) below, nullable (`Cat?`), rendered `this Cat? receiver` with a null receiver crossing as `IntPtr.Zero`, see [Nullable receivers](#nullable-receivers) below, a bare interface, see [Interface receivers](#interface-receivers) below, or a nullable value class, see [Value-class receivers](#value-class-receivers) below; a has-value fan-out receiver (`Int?`, `Enum?`, `Instant?`, `Duration?`, a `Primitive`/`Enum`-underlying value class `?`) skips named `RECEIVER_FAN_OUT` instead, see [Limitations](#limitations) below ([ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md)) |
-| extension property | static accessor | receiver may also be an eligible sealed base, see [Sealed receivers](#sealed-receivers) below; see [ADR-013](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md) |
+| extension function | static method | true C# extension method (`this` parameter); receiver may also be an eligible sealed base, see [Sealed receivers](#sealed-receivers) below, nullable (`Cat?`), rendered `this Cat? receiver` with a null receiver crossing as `IntPtr.Zero`, see [Nullable receivers](#nullable-receivers) below, a bare interface, see [Interface receivers](#interface-receivers) below, a nullable value class, see [Value-class receivers](#value-class-receivers) below, or a nested class, binding under the receiver's own owner chain the same way its members do, see [Nested receivers](#nested-receivers) below; a has-value fan-out receiver (`Int?`, `Enum?`, `Instant?`, `Duration?`, a `Primitive`/`Enum`-underlying value class `?`) skips named `RECEIVER_FAN_OUT` instead, see [Limitations](#limitations) below ([ADR-132](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md), [ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)) |
+| extension property | static accessor | receiver may also be an eligible sealed base, see [Sealed receivers](#sealed-receivers) below, or a nested class, see [Nested receivers](#nested-receivers) below; see [ADR-013](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/013-extension-property-mapping.md), [ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md) |
 | extension function return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, …) | matching C# return type | same cascade as a class-method return via the shared plan, see Return marshalling below and [Classes and objects](classes-and-objects.md) |
-| two or more same-named extension functions | one C# overload set | numbered native export/extern name, unnumbered public name, counter scoped per (package, name), receiver-agnostic; see [Method overloads](#method-overloads) below ([ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md)) |
+| two or more same-named extension functions | one C# overload set | numbered native export/extern name, unnumbered public name, counter scoped per (package, name), receiver-agnostic among top-level receivers; a nested-class receiver's own owner chain joins the scope, see [Method overloads](#method-overloads) below ([ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md), [ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)) |
 | extension function with a trailing run of defaulted parameters | omitting overload per suffix length | receiver is not a plan parameter and always survives truncation; see Method default parameters below ([ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)) |
 | unexported-receiver `{Receiver}Extensions` class (`String`, a primitive, any stdlib type) | one class per declaring package's namespace | functions and properties on the same receiver in the same package share one class; a different package never merges into it; an exported receiver keeps its own namespace instead, see Namespace placement below ([ADR-126](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/126-extension-class-per-declaring-package.md)) |
 
@@ -565,15 +565,82 @@ public void Area_SealedReceiverExtensionProperty_BindsOnThePayloadFreeArm()
 }
 ```
 
+## Nested receivers
+
+An extension function's or extension property's receiver may also be a nested class (see
+[Nested types](classes-and-objects.md#nested-classes-and-objects)). It binds under the receiver's
+own owner chain, the same way a member of that receiver does: `fun Aviary.Perch.summarize()` exports
+as `aviary_perch_summarize`, not the bare `perch_summarize` a top-level `Perch`, or another owner's
+own nested `Perch`, could also claim. The generated extension class is named for the whole chain and
+stays at namespace level (`AviaryPerchExtensions`, not `Aviary.PerchExtensions`), since C# forbids
+nesting an extension class (CS1109), the same rule a nested enum's extension class already follows
+([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)).
+
+### Kotlin {id="nested-receiver-kotlin"}
+
+From `test-library/src/nativeMain/kotlin/.../nested/Aviary.kt`:
+
+```kotlin
+fun Aviary.Perch.summarize(): String = "perch@$height (ext)"
+
+val Aviary.Perch.isHigh: Boolean get() = height > 5
+```
+
+### Generated C# {id="nested-receiver-generated-c"}
+
+From `Interop.cs`:
+
+```C#
+public static partial class AviaryPerchExtensions
+{
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "aviary_perch_summarize")]
+    private static extern IntPtr Native_Summarize(IntPtr receiver, out IntPtr error);
+
+    public static string Summarize(this global::TestLibrary.Nested.Aviary.Perch receiver)
+    {
+        IntPtr nativeResult = Native_Summarize(receiver._handle, out IntPtr error);
+        if (error != IntPtr.Zero)
+        {
+            throw NugetErrorNative.BuildException(error);
+        }
+        return Marshal.PtrToStringUTF8(nativeResult)!;
+    }
+
+    [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "aviary_perch_get_isHigh")]
+    [return: MarshalAs(UnmanagedType.I1)]
+    private static extern bool Native_AviaryPerchGetIsHigh(IntPtr receiver, out IntPtr error);
+
+    public static bool GetIsHigh(this global::TestLibrary.Nested.Aviary.Perch receiver) { /* ... */ }
+}
+```
+
+### Using it from C# {id="nested-receiver-using-it-from-c"}
+
+From `IntegrationTests/NestedTypesTests.cs`:
+
+```C#
+using var aviary = new Aviary("Oreo");
+using var perch = aviary.PerchAt(9);
+
+Assert.Equal("perch@9 (ext)", perch.Summarize());
+Assert.True(perch.GetIsHigh());
+```
+
 ## Method overloads
 
 Two or more same-named extension functions generate one natural C# overload set, the same
 [ADR-090](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/090-ordinary-class-method-overloads.md)
 numbering template a class method uses, extended to this route by
 [ADR-095](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/095-static-route-overloads.md).
-The symbol key is `$package.$name`, which does **not** include the receiver, so the counter is
-receiver-agnostic: two same-named extensions on *different* receivers in one package number off the
-same sequence, even though their C exports would never have collided on their own.
+The symbol key is `$package.$name`, which does **not** include the receiver itself, so among
+top-level receivers the counter is receiver-agnostic: two same-named extensions on *different*
+top-level receivers in one package number off the same sequence, even though their C exports would
+never have collided on their own. A nested receiver's *owner chain* does scope the counter, though
+(empty for a top-level receiver, so the rule above is unchanged): two nested receivers under
+different owners, `Coop.Inner.describe` and `Roost.Inner.describe`, each export unsuffixed
+(`coop_inner_describe`/`roost_inner_describe`) rather than sharing one sequence, since their chained
+symbols were never going to collide either
+([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)).
 
 ### Kotlin {id="overloads-kotlin"}
 
@@ -757,6 +824,10 @@ An extension **function**'s receiver whose wire is a has-value fan-out pair (`In
 crossing: the plan model admits only one RECEIVER-role slot and it must come first, and a fan-out
 receiver would need two. The same type binds fine as an ordinary *parameter*.
 
+A `typealias` receiver binds, but its C entry point is derived from the alias's own name rather than
+the expanded type's owner chain, so an alias for a nested type does not get the chained entry point
+described above.
+
 See [Publishing Kotlin to C#: Diagnostics](forward-overview.md#diagnostics) for the full diagnostic
 model.
 
@@ -866,5 +937,6 @@ public void Toy_Tags_ReturnsMarshalledStringElements()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md">ADR-105: Sealed types at property positions</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/126-extension-class-per-declaring-package.md">ADR-126: One Extensions class per declaring package</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md">ADR-132: Extension receiver shapes</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md">ADR-133: Nested types</a>
     </category>
 </seealso>

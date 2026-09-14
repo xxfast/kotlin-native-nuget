@@ -52,16 +52,27 @@ class CirRenderer {
   }
 }
 
+/**
+ * ADR-133/ADR-134: the declarations nested inside [declaration], whatever owner kind it is. A
+ * missing arm here is SILENT: a nested enum under that owner keeps its declaration and loses the
+ * namespace-level extension class its properties are read through (CS1109 forbids nesting one).
+ */
+private fun nestedDeclarationsOf(declaration: CirDeclaration): List<CirDeclaration> =
+  when (declaration) {
+    is CirClass -> declaration.nestedDeclarations
+    is CirObject -> declaration.nestedDeclarations
+    // ADR-134's new owner kinds. A sealed base owns both its own children and every arm's.
+    is CirInterface -> declaration.nestedDeclarations
+    is CirSealedClass ->
+      declaration.nestedDeclarations + declaration.subclasses.flatMap { it.nestedDeclarations }
+    else -> emptyList()
+  }
+
 /** ADR-133: every nested `CirEnum` under [declaration], at any depth. */
-private fun nestedEnumsOf(declaration: CirDeclaration): List<CirEnum> = when (declaration) {
-  is CirClass -> declaration.nestedDeclarations.flatMap { nested ->
+private fun nestedEnumsOf(declaration: CirDeclaration): List<CirEnum> =
+  nestedDeclarationsOf(declaration).flatMap { nested ->
     listOfNotNull(nested as? CirEnum) + nestedEnumsOf(nested)
   }
-  is CirObject -> declaration.nestedDeclarations.flatMap { nested ->
-    listOfNotNull(nested as? CirEnum) + nestedEnumsOf(nested)
-  }
-  else -> emptyList()
-}
 
 /**
  * ADR-133: the one dispatch over [CirDeclaration], called at namespace level and recursively from

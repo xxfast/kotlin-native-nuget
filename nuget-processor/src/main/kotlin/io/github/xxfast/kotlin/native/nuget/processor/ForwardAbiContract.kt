@@ -85,7 +85,9 @@ internal data class ForwardAbiCollision(
         owners.joinToString("\n") { owner -> "  - ${owner.render()}" }
 
   val hint: String
-    get() = "The C entry point is derived from the unqualified simple name; rename one " +
+    get() = "The C entry point is derived from the declaration's own enclosing chain of simple " +
+        "names, never its package (ADR-133), so two same-named declarations in different " +
+        "packages collide; rename one " +
         "declaration. [${signatures.joinToString(", ")}]"
 
   fun message(): String = "$reason\n$hint"

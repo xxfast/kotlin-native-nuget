@@ -13,7 +13,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.NESTED_DECLARATION_KINDS
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.nestedDeclarationDeferral
 
 /**
  * Which root-declaration bucket a discovered dependency-module declaration lands in — mirroring
@@ -49,9 +51,13 @@ internal enum class ForwardAdmissionRefusal {
   CROSS_MODULE_ADMISSION_DISABLED,
   EXPECT_IN_DEPENDENCY,
 
-  /** A declaration nested inside another dependency declaration: undeclarable rather than out of
-   *  scope, so no `include(...)` can bring it in. Recorded for completeness; the classifier tests
-   *  nestedness ahead of its dependency route, so nothing consumes it in practice. */
+  /** A declaration nested inside another dependency declaration: not admitted by the closure
+   *  itself, because ADR-133's owner walk is the sole declarer of a nested type and the owner is
+   *  the admission record. Since the ADR-066 amendment the closure first climbs to the owner, so
+   *  this refusal means "declared, if at all, by that owner's walk", and it is recorded only when
+   *  the owner carries no refusal of its own; when the owner IS refused (an `exclude(...)` naming
+   *  it, or a package outside the scope), the owner's refusal is propagated onto the nested name
+   *  instead, so the classifier can state the remedy that actually applies. */
   NESTED_DECLARATION,
 }
 
@@ -143,8 +149,10 @@ internal class ForwardReachabilityClosure(
     visitType(prop.type.resolve())
   }
 
-  /** Primary-constructor parameters, declared public properties, declared public methods, and a
-   *  companion object's own members — every position ADR-066's edge table names. */
+  /** Primary-constructor parameters, declared public properties, declared public methods, a
+   *  companion object's own members, and — since the ADR-066 amendment — the members of every
+   *  nested declaration ADR-133 declares under this one: every position ADR-066's edge table
+   *  names. */
   private fun walkClassMembers(cls: KSClassDeclaration) {
     cls.primaryConstructor?.parameters?.forEach { parameter -> visitType(parameter.type.resolve()) }
     cls.declarations.filterIsInstance<KSPropertyDeclaration>()
@@ -157,6 +165,25 @@ internal class ForwardReachabilityClosure(
     cls.declarations.filterIsInstance<KSClassDeclaration>()
       .firstOrNull { declaration -> declaration.isCompanionObject }
       ?.let(::walkClassMembers)
+    // ADR-066 amendment, edge B: a nested declaration ADR-133 declares under this one is part of
+    // the exported surface, so the types ITS members are spelled with have to be admitted too.
+    // Without this, `Broadcast.Schedule.timetable(): Timetable` leaves `Timetable` neither
+    // admitted nor refused, and the member skips advising an `include(...)` for a package that is
+    // already in scope. One level only: this function recurses, so depth is covered once each.
+    //
+    // Gated on `nestedDeclarationDeferral() == null` so the closure never admits a dependency type
+    // on behalf of a nested declaration ADR-133 will not declare (that would put dead entries in
+    // the INFO_EXPORTED_FROM_DEPENDENCY manifest and dead types in the generated C#).
+    //
+    // Kind before visibility, verified (NugetProcessor.kt:150-153): `getVisibility()` on an enum
+    // entry read from a dependency klib/jar throws `Internal KSP Error`, and this walk now reaches
+    // the `declarations` of an admitted cross-module `enum class`.
+    cls.declarations.filterIsInstance<KSClassDeclaration>()
+      .filter { declaration -> declaration.classKind in NESTED_DECLARATION_KINDS }
+      .filter { declaration -> declaration.getVisibility() == Visibility.PUBLIC }
+      .filter { declaration -> !declaration.isCompanionObject }
+      .filter { declaration -> declaration.nestedDeclarationDeferral() == null }
+      .forEach(::walkClassMembers)
   }
 
   /** An edge target: unwraps alias expansion, terminates at an intrinsic (walking the type
@@ -245,11 +272,31 @@ internal class ForwardReachabilityClosure(
     // The carve-out is a sealed subclass: ADR-009 declares it nested under its base, which is
     // exactly how `nestedCsName` spells it, so the `getSealedSubclasses()` walk below must keep
     // admitting one. A companion object is likewise declared, as its owner's statics (ADR-013).
+    //
+    // ADR-066 amendment, edge A: before any of that, climb to the enclosing declaration. A nested
+    // type is only ever spelled `Owner.Nested`, so a member returning one is a reference to the
+    // owner as much as to the nested type, and until this edge existed an owner NOTHING returned
+    // was never admitted at all — `Newsroom.page(): Almanac.Page` left `Almanac` undeclared and
+    // `page()` skipped. The visited-set above makes the recursion safe (the owner's own
+    // `getSealedSubclasses()`/nested walk comes straight back here and returns), and it reaches
+    // the outermost owner at any depth. A sealed arm nested in its base reaches the base by this
+    // same edge and is then admitted by the SEALED_SUBCLASS carve-out below, so an arm-only
+    // reference no longer depends on some other member returning the base.
+    val owner: KSClassDeclaration? = classDeclaration.parentDeclaration as? KSClassDeclaration
+    owner?.let(::visitDeclaration)
+
     val isUndeclaredNested: Boolean = classDeclaration.parentDeclaration != null &&
         !classDeclaration.isCompanionObject &&
         !classDeclaration.isSealedSubclass()
     if (isUndeclaredNested) {
-      refused[qualifiedName] = ForwardAdmissionRefusal.NESTED_DECLARATION
+      // The owner's own refusal, when it has one, is the refusal the author can act on: an
+      // `exclude("pkg.Owner")` naming the owner by qualified name refuses only the owner, and
+      // `NESTED_DECLARATION`'s "undeclarable" reading would hide that with a remedy (move it to
+      // the top level) that repairs nothing. Falls back to NESTED_DECLARATION when the owner was
+      // admitted, or is module-local, or carries no record.
+      val ownerQualifiedName: String? = owner?.qualifiedName?.asString()
+      refused[qualifiedName] = ownerQualifiedName?.let(refused::get)
+        ?: ForwardAdmissionRefusal.NESTED_DECLARATION
       return
     }
 

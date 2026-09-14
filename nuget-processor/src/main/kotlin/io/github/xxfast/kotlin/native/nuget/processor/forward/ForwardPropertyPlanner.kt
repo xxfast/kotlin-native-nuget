@@ -9,6 +9,7 @@ import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
 /**
@@ -287,7 +288,17 @@ internal class ForwardPropertyPlanner(
           receiverType is BridgeType.Primitive ||
           receiverType == BridgeType.String ||
           isSupportedValueClass
-    val receiverName: String = receiver.declaration.simpleName.asString()
+    // ADR-133 amendment: the receiver spelled with its enclosing chain (`Aviary.Perch`), both in
+    // the plan symbol and -- lowercased and `_`-joined by `nativePrefix()` -- in the entry point.
+    // The symbol is spelled a second time in `CirTranslator` to look this plan back up, so the two
+    // MUST move together: a mismatch makes the extension property vanish from `Interop.cs` with no
+    // diagnostic at all (the lookup falls through to `emptyList()`). Both are byte-identical to the
+    // bare simple name for a top-level receiver, and both fall back to it for a receiver whose
+    // declaration is not a class.
+    val receiverName: String = (receiver.declaration as? KSClassDeclaration)?.nestedCsName()
+      ?: receiver.declaration.simpleName.asString()
+    val receiverPrefix: String = (receiver.declaration as? KSClassDeclaration)?.nativePrefix()
+      ?: receiver.declaration.simpleName.asString().lowercase()
     val name: String = prop.simpleName.asString()
     // ADR-064's position coverage: the receiver is the last position that used to vanish silently.
     // Nothing legacy-routes an extension property by receiver, so unlike `recordDropped` there is
@@ -307,8 +318,8 @@ internal class ForwardPropertyPlanner(
       position = ForwardPropertyPosition.EXTENSION,
       receiver = ForwardPropertyReceiver.Value(receiverType),
       prop = prop,
-      getExport = "${receiverName.lowercase()}_get_${toCName(name)}",
-      setExport = "${receiverName.lowercase()}_set_${toCName(name)}",
+      getExport = "${receiverPrefix}_get_${toCName(name)}",
+      setExport = "${receiverPrefix}_set_${toCName(name)}",
     )
   }
 

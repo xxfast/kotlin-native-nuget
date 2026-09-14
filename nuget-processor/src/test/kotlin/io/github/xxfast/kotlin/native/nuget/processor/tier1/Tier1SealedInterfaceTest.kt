@@ -505,12 +505,22 @@ class Tier1SealedInterfaceTest {
       "expected no nested skip for the arm the parent already refused; " +
           "kspWarnings=${result.kspWarnings}",
     )
+    // ADR-134: an INELIGIBLE sealed interface still renders as `public interface ITone`, which is
+    // now an admitted nested-type owner, so the non-arm is DECLARED inside that block instead of
+    // skipped. The control it exists for is unchanged and still by supertype, not by enclosing
+    // declaration: the arm `Pitch` is refused with the hierarchy, this sibling is not.
     assertTrue(
-      result.kspWarnings.any {
+      result.kspWarnings.none {
         it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
             it.contains("tier1.sealedinterface.nestedarm.Tone.Helper")
       },
-      "expected a nested non-arm to keep its nested skip; kspWarnings=${result.kspWarnings}",
+      "expected no nested skip for a non-arm under an admitted interface owner; " +
+          "kspWarnings=${result.kspWarnings}",
+    )
+    assertTrue(
+      result.generatedCSharp.contains("public class Helper"),
+      "expected the nested non-arm to be declared inside the interface block; csharp=" +
+          "${result.generatedCSharp.lines().filter { it.contains("Helper") }}",
     )
   }
 

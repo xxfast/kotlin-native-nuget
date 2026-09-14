@@ -490,3 +490,46 @@ No mapping decision and no diagnostic: a null plan stays silent here, as it alre
 object and collection members. Pinned by two `Tier1InterfaceBridgeFactoryTest` cells (`Kettle` with
 a nested `Whistle` gets no factory on either half; `Stove` with a top-level `Heat` gets a qualified
 one on both).
+
+## Amendment (2026-09-13): bridge state names come from the owner chain; wrappers are return-reachability-driven
+
+[ADR-133](133-nested-types.md) added nested interfaces to the export set, and the bridge plan's
+`stateClassName` (`ForwardInterfaceBridgePlanner`) named its `NugetBridgeState` subclass from the
+interface's bare simple name alone (`"${simpleName}BridgeState"`). Two nested interfaces sharing a
+simple name under different owners (`Aviary.Keeper`, `Registry.Keeper`) therefore both name
+`KeeperBridgeState`, rendered into the one root-namespace `CirBridgeHelper`: two classes with the
+same name (CS0101) and two `keeperImpl` pattern variables in one block (CS0128). `packNuget` never
+caught it, since it does not compile the generated bindings; only verify's `GeneratedBindingsCheck`
+does. `stateClassName` now derives from the interface's owner chain plus `BridgeState`
+(`AviaryKeeperBridgeState`, `RegistryKeeperBridgeState`), and the `HandleFor` pattern variable it
+introduces derives from the same name. A top-level interface's state class name is unchanged
+(`PetBridgeState`), and a pre-existing internal nested interface's state class was incidentally
+renamed as a result (`ListenerBridgeState` → `NestedListenerOwnerListenerBridgeState`), harmless
+since the type is `internal`.
+
+**Verified: the bridge plan is return-reachability-driven, not implements-driven.**
+`CirTranslator.interfaceBackingClasses`, the list this ADR's bridge plan is built from, is the
+**return**-reachable subset of interfaces: an interface used only as a *parameter* type (e.g.
+`fun greetVia(keeper: Keeper)` with no corresponding `fun currentKeeper(): Keeper`) gets no backing
+wrapper and therefore no bridge plan at all. The expected failure mode for passing a C#
+implementation at that parameter position would be `NugetBridge.HandleFor`'s
+`NotSupportedException` arm; measured instead, the process dies with an unlocated native Kotlin
+`NullPointerException`, with no diagnostic distinguishing it from any other native crash. This is
+measured against `Registry.Keeper` in the ADR-133 fixture, which needed its own `currentKeeper()`
+return added specifically to get a bridge plan and make the collision cell (above) reachable at all;
+with only `greetVia`, the collision never happened because neither interface had a bridge. Fixing
+this needs a return-reachability edge from "parameter position" the same way ADR-066 lacks one for
+nested-type declaration reachability; tracked on the ROADMAP.
+
+**Identity, unchanged but newly contrasted.** The sync return route
+(`NugetMarshal.TryResolveCSharp`) is still the only read that resolves a returned handle back to a
+stored C#-implemented original before falling back to `new Wrapper(ptr)`. The legacy suspend and
+Flow routes fixed for a nested interface by ADR-133's 2026-09-13 amendment always construct the
+wrapper, the same as every other non-sync read (a collection element, a sealed return); a
+C#-implemented object returned through `Task<T>` or a `Flow<T>` never round-trips to the original
+instance. Not a regression, a pre-existing asymmetry the new fixture happened to make visible for
+interfaces specifically.
+
+Fixtures: `nested/Aviary.kt`'s `Registry` object (the collision pair, and the return that makes it
+reachable). Tests: `NestedTypesTests.cs` reflection facts asserting distinct generated names, Tier 1.
+Verify: green, 1793 / 0 / 0, 36; processor 834.

@@ -203,6 +203,17 @@ promoted from `private` to `internal`) out of the sealed route entirely: a plain
 nests in the generated C# the same way a sealed arm always has, at any depth. The sealed route itself
 is unchanged; it is now one caller of the shared mechanism rather than the mechanism's only caller.
 
+### Pointer (2026-09-13): a sealed base or arm may now own its own nested declaration
+
+[ADR-134](134-nested-types-under-deferred-owners.md) admits a sealed base and a sealed arm as nesting
+owners in their own right, not only as something ADR-133's shared mechanism is borrowed for: a plain
+`class`/`object`/`interface`/`enum class`/`value class` declared beside the arms binds through the
+same `nestedDeclarations` slot this ADR's blocks already render (`Purr.Detail` beside `On`/`Off`), and
+one declared inside an arm binds inside that arm's own block (`Purr.On.Trace`). An ADR-112 *eligible*
+sealed interface owns its nested declarations the same way, under the `public abstract class` it
+renders as. `FromHandle` and the discriminator are unaffected; a nested declaration is not itself a
+subclass, so it never appears in the `switch`.
+
 ## Consequences
 
 - Sealed hierarchies are type-safe and pattern-matchable in C#

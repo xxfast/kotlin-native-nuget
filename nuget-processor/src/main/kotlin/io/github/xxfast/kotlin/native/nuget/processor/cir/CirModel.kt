@@ -24,6 +24,10 @@ data class CirInterface(
   val typeParameters: List<CirTypeParameter> = emptyList(),
   val properties: List<CirInterfaceProperty>,
   val methods: List<CirInterfaceMethod>,
+  // ADR-134: a nested type declared inside a Kotlin `interface` is declared inside the generated
+  // `public interface I<Name>` block, which is where Kotlin's own scope puts it. The ADR-040
+  // backing wrapper beside it declares nothing: one Kotlin type, one C# declaration.
+  val nestedDeclarations: List<CirDeclaration> = emptyList(),
 ) : CirDeclaration
 
 data class CirInterfaceProperty(
@@ -141,6 +145,11 @@ data class CirSealedClass(
    * it already inherits it in Kotlin.
    */
   val methods: List<CirMethod> = emptyList(),
+  /**
+   * ADR-134: a type declared inside the sealed base in Kotlin, rendered inside the same
+   * `public abstract class` block ADR-009 owns -- after the arm blocks, before `Native_GetType`.
+   */
+  val nestedDeclarations: List<CirDeclaration> = emptyList(),
 ) : CirDeclaration
 
 data class CirSealedSubclass(
@@ -207,6 +216,11 @@ data class CirSealedSubclass(
    * subclass and CS0549 on every `virtual` member the arm needs. A final arm is unchanged.
    */
   val isOpen: Boolean = false,
+  /**
+   * ADR-134: a type declared inside the *arm* in Kotlin (`Purr.On.Trace`), rendered inside the
+   * arm's own block -- a different function from the base's, which is why it needs its own slot.
+   */
+  val nestedDeclarations: List<CirDeclaration> = emptyList(),
 )
 
 data class CirObject(

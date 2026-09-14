@@ -4,6 +4,11 @@
 
 Accepted (2026-09-13)
 
+> **Amended below (2026-09-13).** An extension function or property whose receiver is a
+> nested type now binds under the receiver's own owner chain, the same way a member of that
+> receiver already does, closing the gap this ADR's Consequences and the ROADMAP had left open. See
+> "Amendment (2026-09-13): extension receivers join the owner chain".
+
 ## Context
 
 A public Kotlin `class`, `object`, `interface`, or `enum class` declared inside another class was not
@@ -113,7 +118,9 @@ A nested class crosses exactly as a top-level class: `outer_nested_create` mints
 on the qualified name. A nested object is a static class with `outer_defaults_*` static exports. A
 nested enum crosses by ordinal, `outer_kind_get_prop(ordinal)`, with its extension class hoisted to
 namespace level. A nested interface follows ADR-040 unchanged (`outer_listener_*` dispatch exports),
-its `I`-prefix rule fixed to the last segment. No new marshalling, no new handle kind, no
+its `I`-prefix rule fixed to the last segment. **This "unchanged" claim held only for the
+plan-driven sync route**; the legacy `suspend`/`Flow` routes did not, see the 2026-09-13 amendment
+below. No new marshalling, no new handle kind, no
 `LeakTests/LiveHandleTests.cs` mint path beyond Row 1's (Row 1a pins a nested class mints and releases
 through the same `NugetHandles` route Row 1 measures for a top-level class).
 
@@ -171,6 +178,14 @@ shape (`Box<T>`, `enum class Season`, `interface Cage`, `inner class Guest` unde
   sites still spell the `I$simpleName` shape unfixed; the CS0542 arm of the owner-scope collision and
   the value-class/sealed/companion owner-scope arms have no fixture. Recorded as Phase 4 ROADMAP
   items.
+
+  **(2026-09-13) Closed** by [ADR-066](066-forward-export-reachability-closure.md)'s 2026-09-13
+  amendment: the closure gained both edges this bullet named, so `Almanac.Page`
+  (`Newsroom.page(): Almanac.Page`, nothing else returning `Almanac`) and
+  `Broadcast.Schedule.timetable(): Timetable` now admit their owner and their own dependency
+  respectively. The extension-receiver, legacy-route `I$simpleName`, and owner-scope-collision
+  fixture gaps this bullet also named are untouched by that amendment and remain open, still on
+  ROADMAP Phase 4.
 - Cost: about 20 source files (collection, classifier, diagnostics wording, `CirTypeMapping.kt`,
   `CirModel.kt`, four renderers, `CirClassTranslator.kt`, `CirTranslator.kt`, two planners, five export
   generators); `ForwardReachabilityClosure.kt` itself is not one of them. Plus one fixture file, one
@@ -188,6 +203,18 @@ shape (`Box<T>`, `enum class Season`, `interface Cage`, `inner class Guest` unde
   byte-identical.
 - Verify: green, 1787 / 0 / 0, 35 (IntegrationTests/LeakTests side); processor 828.
 
+### Pointer (2026-09-13): three more deferred owners are now admitted
+
+[ADR-134](134-nested-types-under-deferred-owners.md) narrows the deferred owner set above to exactly
+`enum class`, generic, and `inner class`: an `interface` owner (including an ADR-112 *ineligible*
+sealed interface), a sealed base or arm owner (including an ADR-112 *eligible* sealed interface), and
+a nested `value class` candidate under any admitted owner are all declared now. The interface `I`-prefix
+rule this ADR fixed to the last enclosing segment only is itself superseded: ADR-134 puts `I` on
+**every** enclosing interface segment (`ICage.Bar`), except an eligible sealed interface segment,
+which renders as the abstract class and carries no `I` at all. Everything else this ADR shipped
+(the owner-walk mechanism, the translators, the `nativePrefix()` chain, `OBJECT_POSITION`, the
+owner-scope collision check) is unchanged and reused as-is by ADR-134's newly admitted owners.
+
 ## Inferred claims (not independently re-spiked for this reconciliation, unchanged from the design)
 
 1. No CS0108 for a nested type's own `Native_*` externs shadowing an owner's same-named externs (no
@@ -199,3 +226,95 @@ shape (`Box<T>`, `enum class Season`, `interface Cage`, `inner class Guest` unde
    PascalCased member of its owner) are genuine C# compile errors: not spiked against `dotnet` in
    this reconciliation, Kotlin permits both shapes so a wrong inference fails loud in the consumer's
    build rather than silently.
+
+## Amendment (2026-09-13): extension receivers join the owner chain
+
+The Consequences section above named the gap: an extension function or property whose receiver is
+a nested type still spelled the bare simple name, unlike a member of that same receiver, which
+already chained through `nativePrefix()`/`nestedCsName()`. `fun Aviary.Perch.summarize()` exported
+as `perch_summarize` into a bare `PerchExtensions`, the same C symbol and class name a top-level
+`Perch`, or another owner's nested `Perch`, would also claim.
+
+**Measured, not the predicted failure mode.** The ROADMAP line this amendment closes predicted the
+collision "fails loudly as a forward ABI mismatch." It does not: the duplicate is absorbed silently
+by the pre-existing ADR-095 overload-numbering suffix, so the second owner's extension ships as
+`inner_describe_2` and which of the two owners keeps the unsuffixed `inner_describe` is unpinned
+(presumably visit order). An untouched declaration's published ABI can move when an unrelated type
+is added elsewhere, with no diagnostic at all. That is the actual defect, and a stronger argument
+for chaining than a hard error would have been.
+
+**Fix.** An extension receiver now keys on `nestedCsName()` (a class) instead of the bare
+`simpleName`, at the three sites that must all spell the plan symbol identically (`CirTranslator`'s
+function and property receiver grouping, `ForwardPropertyPlanner`, and `ExtensionPropertyExports`,
+the third site the original draft undercounted as two): the plan/export/`@CName` prefix now runs
+through `nativePrefix()` the same way a member's does (`aviary_perch_summarize`,
+`aviary_perch_get_isHigh`). The generated C# extension class is chain-named at namespace level
+(`AviaryPerchExtensions`), never nested in its owner, since CS1109 still forbids nesting an
+extension class, the same rule the enum extension class already used. Both are byte-identical to
+the pre-existing shape for a top-level receiver, whose chain is empty.
+
+**The ADR-095 overload counter's scope grows by exactly the receiver's *owner* chain, not the
+receiver itself.** `Coop.Inner.describe` and `Roost.Inner.describe` export under different prefixes
+now (`coop_inner_describe`/`roost_inner_describe`) and so must not share one counter, or the second
+takes a gratuitous `_2` no collision requires; the scope stops short of the receiver itself, so a
+same-owner receiver's own overloads keep numbering exactly as shipped (`Mitten.pat`,
+`Mitten.pat(style)`, `Tomcat.pat` stay `mitten_pat`/`mitten_pat_2`/`tomcat_pat_3`).
+`ForwardAbiContract.hint` was reworded from "derived from the unqualified simple name" to "derived
+from the declaration's own enclosing chain of simple names, never its package" to match.
+
+**Residual, not fixed here.** A typealias extension receiver still keeps the alias's own lowercased
+name in the C entry point while the C# extension class spells the expanded type, the pre-existing
+asymmetry this amendment does not move; harmless while every nested type is reachable without going
+through an alias, tracked on the ROADMAP.
+
+Tests: `NestedTypesTests.ExtensionOnANestedReceiver_BindsUnderTheOwnerChain` (xUnit); Tier 1 gains a
+single-receiver cell and a two-owner cell (`Coop.Inner`/`Roost.Inner`) pinning both the chained
+symbols and the distinct `{Chain}Extensions` classes. No new handle kind, no new marshalling.
+Verify: green, 1788 / 0 / 0, 35.
+
+## Amendment (2026-09-13): the legacy suspend and Flow routes now spell a nested interface with the interface
+
+"A nested interface follows ADR-040 unchanged" (Bridge mechanism, above) held for the plan-driven
+sync route only. The legacy `suspend`/`Flow` routes spelled an interface return with the
+[ADR-040](040-interface-return-type-mapping.md) *backing wrapper* instead of the interface, nested
+or top-level. (The ROADMAP line this amendment replaces cited `CirClassTranslator.kt` ~:1040 and
+`CirFunctionTranslator.kt` ~:751; those lines are actually where a nested interface's generic-type
+bound is spelled `I$simpleName`, a related but distinct defect fixed by the Generic bounds
+paragraph below. The wrapper-spelling defect this amendment fixes lives at the suspend-completion
+and `Flow`-element construction sites, elsewhere in the same two files.) `suspend fun currentKeeperLater(): Keeper`
+completed as `Task<Aviary.Keeper>` rather than `Task<Aviary.IKeeper>`, and `fun keepers(): Flow<Keeper>`
+constructed its element the same way, which additionally fails to compile at all, since
+`NugetMarshal.FromHandle<T>`'s `Activator` branch cannot construct an interface. No fixture existed
+in this shape, nested or top-level, until now: every suspend/Flow return in the fixture set was a
+class or a sealed arm.
+
+**Fix.** `ForwardLegacyReturnShape.Interface(type, nullable)` is a new case in `legacyReturnShape`,
+mirroring [ADR-131](131-suspend-route-sealed-base-return.md)'s `Discriminated`; the suspend
+completion and the `Flow` element sites both read the classifier's `csharpType` (the interface) and
+`backingType` (the ADR-040 wrapper, used only to construct the value: `new Aviary.Keeper(resultPtr)`,
+`read: static h => new Aviary.Keeper(h)`).
+
+**Generic bounds.** A nested interface used as a generic type bound is now qualified
+(`where T : global::Interop.Owner.IKeeper`); a top-level interface bound stays bare (`IPet`), which
+is load-bearing byte-identity for the pre-existing `PetBox<T>` fixture. A cross-namespace top-level
+interface bound is still spelled wrong; pre-existing, unrelated to nesting, tracked on the ROADMAP.
+
+**Identity asymmetry, inherited from ADR-040/ADR-084, not introduced here.** The sync plan route
+resolves a returned handle back to its original C#-implemented instance first
+(`NugetMarshal.TryResolveCSharp`) and only wraps when there is no original to resolve to. The
+suspend and Flow reads fixed here always construct the wrapper (`new Wrapper(ptr)`), the same as the
+already-shipped collection- and sealed-return reads; a C#-implemented object returned over `Task<T>`
+or through a `Flow<T>` never round-trips to the original instance the way the sync return does. See
+[ADR-084](084-csharp-implemented-interfaces.md)'s 2026-09-13 amendment.
+
+**Return-reachability, verified.** [ADR-084](084-csharp-implemented-interfaces.md)'s bridge plan
+(state class + C#-implementable factory) is built only from interfaces reachable at a *return*
+position (`CirTranslator.interfaceBackingClasses`). A nested interface used only as a *parameter*
+type gets no wrapper and no bridge plan; passing a C# implementation at that position crashes the
+host with an unlocated Kotlin `NullPointerException`, no diagnostic. See ADR-084's 2026-09-13
+amendment for the full finding.
+
+Fixtures: `nested/Aviary.kt` (`currentKeeperLater`, `keepers()`), `nested/AviaryRoutes.kt`
+(`anyKeeperLater`, top-level), `cat/Pet.kt` (`strayPetLater`, top-level interface). Tests:
+`NestedTypesTests.cs` reflection facts, four Tier 1 cells, `LiveHandleTests.cs` Row 9h
+(`Suspend_ReturningAnInterface_ReturnsToBaseline`). Verify: green, 1793 / 0 / 0, 36; processor 834.

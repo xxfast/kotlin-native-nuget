@@ -9,6 +9,7 @@ import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedInterfaceCsName
 
 /**
@@ -72,10 +73,19 @@ internal data class ForwardBridgeInterfacePlan(
   val csName: String,
   /** `pet_bridge_create`. */
   val exportName: String,
-  /** `PetBridgeState`. */
+  /** `PetBridgeState`, or `AviaryKeeperBridgeState` for a nested interface (ADR-133). */
   val stateClassName: String,
   val slots: List<ForwardBridgeSlot>,
 )
+
+/**
+ * The `is` pattern variable `NugetBridge.HandleFor` binds this interface's implementation to
+ * (`petImpl`, `aviaryKeeperImpl`). Derived from [ForwardBridgeInterfacePlan.stateClassName] rather
+ * than from the simple name so the two cannot drift: every arm of `HandleFor` lives in ONE C#
+ * block, so two owners' same-simple-name nested interfaces declared `keeperImpl` twice (CS0128).
+ */
+internal fun ForwardBridgeInterfacePlan.bridgeImplVariable(): String =
+  stateClassName.removeSuffix("BridgeState").lowercase() + "Impl"
 
 internal object ForwardInterfaceBridgePlanner {
   private val IGNORED_FUNCTIONS: Set<String> = setOf("equals", "hashCode", "toString", "<init>")
@@ -112,7 +122,12 @@ internal object ForwardInterfaceBridgePlanner {
       // ADR-133: `Aviary.IKeeper`, and the bridge export carries the chain like every other.
       csName = iface.nestedInterfaceCsName(),
       exportName = "${iface.nativePrefix()}_bridge_create",
-      stateClassName = "${simpleName}BridgeState",
+      // ADR-133: the enclosing chain, flattened. Every state class is rendered into the ROOT
+      // namespace's one `CirBridgeHelper`, so two owners' same-simple-name nested interfaces
+      // (`Aviary.Keeper` and `Registry.Keeper`) both emitted `KeeperBridgeState`: CS0101, plus two
+      // `keeperImpl` pattern variables in one `HandleFor` block (CS0128). A top-level interface
+      // has no chain and keeps its shipped `PetBridgeState` byte for byte.
+      stateClassName = "${iface.nestedCsName().replace(".", "")}BridgeState",
       slots = slots,
     )
   }

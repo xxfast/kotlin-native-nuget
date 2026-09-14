@@ -70,9 +70,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCNameExports
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwnerRange
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwners
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
@@ -127,8 +125,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
 // intentionally contain such declarations and generation must keep succeeding.
 /** The nested declaration kinds [ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION] names. An
  *  `annotation class` is excluded: it is not declared in C# wherever it lives, and
- *  [ForwardDiagnosticKind.SKIPPED_ANNOTATION_CLASS] already says so. */
-private val NESTED_DECLARATION_KINDS: Set<ClassKind> = setOf(
+ *  [ForwardDiagnosticKind.SKIPPED_ANNOTATION_CLASS] already says so. Shared with the ADR-066
+ *  reachability closure, whose edge-B descent walks exactly the kinds ADR-133 can declare. */
+internal val NESTED_DECLARATION_KINDS: Set<ClassKind> = setOf(
   ClassKind.CLASS,
   ClassKind.OBJECT,
   ClassKind.INTERFACE,
@@ -178,17 +177,17 @@ private fun KSClassDeclaration.enclosingClassChain(): List<KSClassDeclaration> =
 internal fun KSClassDeclaration.unsupportedNestedOwnerReason(): String? = when {
   classKind == ClassKind.ENUM_CLASS ->
     "an `enum class` owner has no C# declaration block to nest a type into"
-  classKind == ClassKind.INTERFACE ->
-    "an `interface` owner declares no nested types in the generated C#"
-  classKind != ClassKind.CLASS && classKind != ClassKind.OBJECT ->
-    "only a `class` or `object` owner carries nested declarations"
+  // ADR-134: an `interface` owner and a sealed base/arm owner are admitted, so their arms are
+  // gone from here. The kind arm admits INTERFACE beside CLASS and OBJECT; the generic arm below
+  // is what keeps a variant type parameter's scope free of nested types (C# spec 19.4.9).
+  classKind != ClassKind.CLASS && classKind != ClassKind.OBJECT &&
+      classKind != ClassKind.INTERFACE ->
+    "only a `class`, `object` or `interface` owner carries nested declarations"
   typeParameters.isNotEmpty() ->
     "a generic owner's nested type is itself generic in C# (`Owner<T>.Nested`)"
   modifiers.contains(Modifier.INNER) ->
     "an `inner class` owner needs the outer instance to construct"
   isValueClass() -> "a `value class` owner has no nested-type slot"
-  modifiers.contains(Modifier.SEALED) || isSealedSubclass() ->
-    "a sealed base or sealed arm owner has no nested-declaration slot (ADR-009 owns that block)"
   isCompanionObject -> "a companion object is folded into its owner's statics (ADR-013)"
   else -> null
 }
@@ -198,7 +197,6 @@ internal fun KSClassDeclaration.unsupportedNestedCandidateReason(): String? = wh
   modifiers.contains(Modifier.INNER) ->
     "an `inner class` needs the outer instance its constructor takes"
   typeParameters.isNotEmpty() -> "a generic nested type is deferred"
-  isValueClass() -> "a nested `value class` is deferred"
   modifiers.contains(Modifier.SEALED) ->
     "a nested sealed hierarchy is deferred (its arms would have to nest twice)"
   else -> null
@@ -960,7 +958,7 @@ class NugetProcessor(
     // generators and the CIR translator exactly like a top-level one.
     val declaredClasses: List<KSClassDeclaration> =
       rootClasses + dependenciesIn(ForwardReachabilityBucket.CLASS)
-    val valueClasses: List<KSClassDeclaration> =
+    val declaredValueClasses: List<KSClassDeclaration> =
       rootValueClasses + dependenciesIn(ForwardReachabilityBucket.VALUE_CLASS)
     val sealedClasses: List<KSClassDeclaration> =
       rootSealedClasses + dependenciesIn(ForwardReachabilityBucket.SEALED_CLASS)
@@ -980,8 +978,8 @@ class NugetProcessor(
     // a companion object (ADR-013 folds it into its owner's statics), and an arm of an ineligible
     // sealed interface (ADR-112 warns once for the whole hierarchy).
     val nestedCandidates: List<KSClassDeclaration> =
-      (declaredClasses + valueClasses + sealedClasses + declaredObjects + declaredInterfaces +
-          declaredEnums)
+      (declaredClasses + declaredValueClasses + sealedClasses + declaredObjects +
+          declaredInterfaces + declaredEnums)
         .flatMap { owner -> owner.nestedClassDeclarations() }
         .filter { it.getVisibility() == Visibility.PUBLIC }
         .filter { !it.isCompanionObject }
@@ -1049,7 +1047,15 @@ class NugetProcessor(
     )
 
     val allClasses: List<KSClassDeclaration> =
-      declaredClasses + nestedDeclared.filter { it.classKind == ClassKind.CLASS }
+      // ADR-134: a nested `value class` is a CLASS too, and belongs to the value-class bucket
+      // below. Declaring it here as well would emit a handle class beside the record struct.
+      declaredClasses +
+          nestedDeclared.filter { it.classKind == ClassKind.CLASS && !it.isValueClass() }
+    // ADR-134: the nested `value class` candidate, declared as a nested `readonly record struct`
+    // under any admitted owner. One list from here on, so the KotlinPoet exports, the plan catalog
+    // and the CIR translator cannot disagree about which value classes exist.
+    val valueClasses: List<KSClassDeclaration> =
+      declaredValueClasses + nestedDeclared.filter { it.isValueClass() }
     val objects: List<KSClassDeclaration> =
       declaredObjects + nestedDeclared.filter { it.classKind == ClassKind.OBJECT }
     val enums: List<KSClassDeclaration> =
@@ -1269,13 +1275,12 @@ class NugetProcessor(
       effectiveInclude,
     )
 
-    val cNameWrappers: ForwardCNameExports = generateCNameWrappers(
+    val cNameExports: FileSpec = generateCNameWrappers(
       functions, genericFunctions, extensionFunctions, extensionProperties,
       classes, genericClasses, enums, sealedClasses, objects, properties,
       valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
       exportedObjectHandles, forwardClassifier,
     )
-    val cNameExports: FileSpec = cNameWrappers.file
     val bindings: CsharpBindings = generateCSharpBindings(
       functions, genericFunctions, extensionFunctions, extensionProperties,
       allClasses, enums, interfaces, sealedClasses, objects, properties,
@@ -1294,11 +1299,8 @@ class NugetProcessor(
     val ordinaryContracts: List<ForwardAbiSignature> = ForwardAbiContract.csharp(bindings.cir)
     // ADR-117: which Kotlin declaration composed each export, so a duplicate entry point names its
     // owners rather than only the mangled C symbol.
-    val exportOwners: ForwardExportOwners = ForwardExportOwners.build(
-      cNameExports,
-      cNameWrappers.ranges,
-      callableCatalog,
-    )
+    val exportOwners: ForwardExportOwners =
+      ForwardExportOwners.build(cNameExports, callableCatalog)
     val legacyContracts: ForwardAbiLegacyContracts = ForwardAbiContract.csharpLegacy(
       bindings.rendered,
       ordinaryContracts.map { signature -> signature.exportName }.toSet(),
@@ -1485,7 +1487,7 @@ class NugetProcessor(
     exportedTypes: Set<String>,
     // ADR-114: the legacy Flow/suspend export builders classify their own generic parameters.
     forwardClassifier: ForwardBridgeTypeClassifier,
-  ): ForwardCNameExports {
+  ): FileSpec {
     val builder: FileSpec.Builder = FileSpec
       .builder("io.github.xxfast.kotlin.native.nuget.generated", "CNameExports")
       .addImport("kotlinx.cinterop", "asStableRef")
@@ -1520,60 +1522,40 @@ class NugetProcessor(
         .build()
     )
 
-    val exportOwnerRanges: MutableList<ForwardExportOwnerRange> = mutableListOf()
-
-    // ADR-117: the coarse half of the export-owner index. Every per-declaration loop body below
-    // records the `members` range it added, so an export composed by a legacy route (which holds
-    // no plan and carries no tag) can still name the top-level declaration it came from. A tagged
-    // `FunSpec` inside one of these ranges wins over the range.
-    fun attributing(declaration: KSDeclaration, block: () -> Unit) {
-      val from: Int = builder.members.size
-      block()
-      exportOwnerRanges += ForwardExportOwnerRange(from, builder.members.size, declaration)
-    }
-
     functions.forEach { func ->
-      attributing(func) {
-        // ADR-095: node identity, not a name-derived symbol — top-level overloads number per
-        // (package, name), so the n-th namesake's plan is keyed `..._$n`.
-        // ADR-096: plural — a defaulted top-level function also carries its synthesized omitting
-        // overloads on the same node.
-        val planned: List<ForwardCallablePlan> = callableCatalog.plansFor(func)
-        // ADR-064: the import goes behind the gate, never ahead of it. A skipped function used to
-        // leave a line importing a symbol the generated file never mentions. The legacy route
-        // imports its own, after its own early returns.
-        if (planned.isNotEmpty()) {
-          builder.addImport(func.packageName.asString(), func.simpleName.asString())
-          planned.forEach { builder.addForwardKotlinPlanExport(it) }
-        } else {
-          builder.addFunctionExports(func)
-        }
+      // ADR-095: node identity, not a name-derived symbol — top-level overloads number per
+      // (package, name), so the n-th namesake's plan is keyed `..._$n`.
+      // ADR-096: plural — a defaulted top-level function also carries its synthesized omitting
+      // overloads on the same node.
+      val planned: List<ForwardCallablePlan> = callableCatalog.plansFor(func)
+      // ADR-064: the import goes behind the gate, never ahead of it. A skipped function used to
+      // leave a line importing a symbol the generated file never mentions. The legacy route
+      // imports its own, after its own early returns.
+      if (planned.isNotEmpty()) {
+        builder.addImport(func.packageName.asString(), func.simpleName.asString())
+        planned.forEach { builder.addForwardKotlinPlanExport(it) }
+      } else {
+        builder.addFunctionExports(func)
       }
     }
 
     genericFunctions.forEach { func ->
       // The import lives inside addGenericFunctionExports, behind its own gate (ADR-064).
-      attributing(func) {
-        builder.addGenericFunctionExports(func)
-      }
+      builder.addGenericFunctionExports(func)
     }
 
     classes.forEach {
-      attributing(it) {
-        builder.addClassExports(it, callableCatalog, forwardClassifier, exportedTypes)
-      }
+      builder.addClassExports(it, callableCatalog, forwardClassifier, exportedTypes)
     }
-    classes.forEach { attributing(it) { builder.addCompanionExports(it, callableCatalog) } }
-    genericClasses.forEach { attributing(it) { builder.addGenericClassExports(it) } }
-    enums.forEach { attributing(it) { builder.addEnumExports(it) } }
+    classes.forEach { builder.addCompanionExports(it, callableCatalog) }
+    genericClasses.forEach { builder.addGenericClassExports(it) }
+    enums.forEach { builder.addEnumExports(it) }
     sealedClasses.forEach {
-      attributing(it) { builder.addSealedClassExports(it, callableCatalog, context.exportMarkers) }
+      builder.addSealedClassExports(it, callableCatalog, context.exportMarkers)
     }
-    objects.forEach { attributing(it) { builder.addObjectExports(it, callableCatalog) } }
-    valueClasses.forEach { attributing(it) { builder.addValueClassExports(it, callableCatalog) } }
-    reachableInterfaces.forEach {
-      attributing(it) { builder.addInterfaceExports(it, callableCatalog) }
-    }
+    objects.forEach { builder.addObjectExports(it, callableCatalog) }
+    valueClasses.forEach { builder.addValueClassExports(it, callableCatalog) }
+    reachableInterfaces.forEach { builder.addInterfaceExports(it, callableCatalog) }
     // ADR-084 stage 1: the per-interface bridge factory, projected from the same slot plan the C#
     // `{Iface}BridgeState` is projected from (see `ForwardInterfaceBridgePlanner`).
     val bridgePlans: List<ForwardBridgeInterfacePlan> =
@@ -1786,18 +1768,14 @@ class NugetProcessor(
     suspendFunctions.forEach { func ->
       // The import lives inside addSuspendFunctionExports, behind its legacy-refusal gates
       // (ADR-064): a refused suspend function used to leave a dead import behind.
-      attributing(func) {
-        builder.addSuspendFunctionExports(func, forwardClassifier)
-      }
+      builder.addSuspendFunctionExports(func, forwardClassifier)
     }
 
     classes.forEach { cls ->
-      attributing(cls) {
-        val hasSuspendMethods: Boolean = cls.getAllFunctions()
-          .any { it.modifiers.contains(Modifier.SUSPEND) }
-        if (hasSuspendMethods) {
-          builder.addSuspendClassMethodExports(cls, forwardClassifier, callableCatalog)
-        }
+      val hasSuspendMethods: Boolean = cls.getAllFunctions()
+        .any { it.modifiers.contains(Modifier.SUSPEND) }
+      if (hasSuspendMethods) {
+        builder.addSuspendClassMethodExports(cls, forwardClassifier, callableCatalog)
       }
     }
 
@@ -1809,15 +1787,13 @@ class NugetProcessor(
       val sealedPrefix: String = sealed.simpleName.asString().lowercase()
       sealed.getSealedSubclasses().forEach { subclass ->
         if (!subclass.declaresSuspendMember()) return@forEach
-        attributing(subclass) {
-          builder.addSuspendClassMethodExports(
-            cls = subclass,
-            classifier = forwardClassifier,
-            callableCatalog = callableCatalog,
-            prefix = "${sealedPrefix}_${subclass.simpleName.asString().lowercase()}",
-            declaredOnly = true,
-          )
-        }
+        builder.addSuspendClassMethodExports(
+          cls = subclass,
+          classifier = forwardClassifier,
+          callableCatalog = callableCatalog,
+          prefix = "${sealedPrefix}_${subclass.simpleName.asString().lowercase()}",
+          declaredOnly = true,
+        )
       }
     }
 
@@ -1838,15 +1814,13 @@ class NugetProcessor(
         val armFlowMethods: List<KSFunctionDeclaration> =
           subclass.forwardArmFlowMethods(forwardClassifier)
         if (armFlowProperties.isEmpty() && armFlowMethods.isEmpty()) return@forEach
-        attributing(subclass) {
-          armFlowProperties.forEach { prop ->
-            builder.addFlowPropertyExports(prop, subQualifiedName, armPrefix, forwardClassifier)
-          }
-          armFlowMethods.forEach { method ->
-            builder.addFlowMethodExports(
-              method, subQualifiedName, armPrefix, forwardClassifier, callableCatalog,
-            )
-          }
+        armFlowProperties.forEach { prop ->
+          builder.addFlowPropertyExports(prop, subQualifiedName, armPrefix, forwardClassifier)
+        }
+        armFlowMethods.forEach { method ->
+          builder.addFlowMethodExports(
+            method, subQualifiedName, armPrefix, forwardClassifier, callableCatalog,
+          )
         }
       }
     }
@@ -1864,10 +1838,8 @@ class NugetProcessor(
         val armLambdaMethods: List<KSFunctionDeclaration> =
           subclass.forwardArmLambdaMethods(forwardClassifier)
         if (armLambdaMethods.isEmpty()) return@forEach
-        attributing(subclass) {
-          armLambdaMethods.forEach { method ->
-            builder.addLambdaParamMethodExport(method, subQualifiedName, armPrefix)
-          }
+        armLambdaMethods.forEach { method ->
+          builder.addLambdaParamMethodExport(method, subQualifiedName, armPrefix)
         }
       }
     }
@@ -1888,13 +1860,11 @@ class NugetProcessor(
         val bridgePairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
           subclass.forwardArmInterfaceBridgePairs(forwardClassifier)
         if (storedPairs.isEmpty() && bridgePairs.isEmpty()) return@forEach
-        attributing(subclass) {
-          storedPairs.forEach { (addMethod, removeMethod) ->
-            builder.addStoredCallbackExports(addMethod, removeMethod, subQualifiedName, armPrefix)
-          }
-          bridgePairs.forEach { (addMethod, removeMethod) ->
-            builder.addInterfaceBridgeExports(addMethod, removeMethod, subQualifiedName, armPrefix)
-          }
+        storedPairs.forEach { (addMethod, removeMethod) ->
+          builder.addStoredCallbackExports(addMethod, removeMethod, subQualifiedName, armPrefix)
+        }
+        bridgePairs.forEach { (addMethod, removeMethod) ->
+          builder.addInterfaceBridgeExports(addMethod, removeMethod, subQualifiedName, armPrefix)
         }
       }
     }
@@ -1902,22 +1872,18 @@ class NugetProcessor(
     properties.forEach { prop ->
       // The import lives inside addPropertyExports, behind the plan gate (ADR-064), so the gate
       // and the import cannot drift apart.
-      attributing(prop) {
-        builder.addPropertyExports(prop, callableCatalog)
-      }
+      builder.addPropertyExports(prop, callableCatalog)
     }
 
     extensionFunctions.forEach { func ->
       // The import lives inside addExtensionFunctionExports, behind the plan gate (ADR-064).
-      attributing(func) {
-        builder.addExtensionFunctionExports(func, callableCatalog)
-      }
+      builder.addExtensionFunctionExports(func, callableCatalog)
     }
 
     // The import lives inside addExtensionPropertyExports, behind the plan gate: adding it here
     // left a dead import for every dropped extension property.
     extensionProperties.forEach { prop ->
-      attributing(prop) { builder.addExtensionPropertyExports(prop, callableCatalog) }
+      builder.addExtensionPropertyExports(prop, callableCatalog)
     }
 
 
@@ -1946,7 +1912,7 @@ class NugetProcessor(
 
     // ADR-127: `nuget_stateflow_collect` / `nuget_stateflow_value` moved to the runtime klib.
 
-    return ForwardCNameExports(builder.build(), exportOwnerRanges)
+    return builder.build()
   }
 
 }

@@ -18,10 +18,14 @@ import kotlin.test.assertTrue
  * name, which ADR-117 would otherwise turn into an entry-point collision between `Outer.Nested` and
  * a top-level `Nested`).
  *
- * [deferredSource] is the other half and is not a copy of the old skip test: ADR-133 keeps
- * `SKIPPED_NESTED_DECLARATION` for exactly the owner shapes it defers (generic owner, `enum class`
- * owner, `interface` owner, `inner class`), so the named skip has to survive for those and only
- * those. A fix that declares everything nested passes every presence cell above and fails here.
+ * ADR-134 moves three of ADR-133's deferred owners into the admitted set ([admittedSource]): an
+ * `interface` owner, a sealed base owner (a sealed class **or** an ADR-112 eligible sealed
+ * interface), a sealed *arm* owner, and the nested `value class` candidate.
+ *
+ * [deferredSource] is the other half and is not a copy of the old skip test: ADR-134 keeps
+ * `SKIPPED_NESTED_DECLARATION` permanently for exactly three owner shapes (generic owner,
+ * `enum class` owner, `inner class`), so the named skip has to survive for those and only those. A
+ * fix that declares everything nested passes every presence cell above and fails here.
  *
  * Oreo supervises from the top perch; Mylo runs the registry two levels down.
  */
@@ -91,12 +95,73 @@ class Tier1NestedTypesTest {
       class Almanac(val year: Int)
     }
 
-    interface Cage {
-      class Bar(val gauge: Int)
-    }
-
     class Host(val name: String) {
       inner class Guest(val visits: Int)
+    }
+  """.trimIndent()
+
+  /**
+   * ADR-134's admitted owner kinds, one declaration per cell, each with a member returning it.
+   *
+   * `Cage` is the ADR-133 reversal: an `interface` owner declares its child inside
+   * `public interface ICage`, and the `I` attaches to every interface segment of the chain.
+   * `Signal` carries both sealed owners (the base, beside the arms, and the arm `On`). `Pulse` is
+   * the gate-order cell: an ADR-112 **eligible** sealed interface renders as `public abstract class
+   * Pulse`, so its child belongs there and nowhere else — the owner walk tests `INTERFACE` before
+   * it tests sealed, and if the interface arm claims `Pulse` its child lands in a `CirInterface`
+   * slot the sealed renderer never reads and is lost with no diagnostic at all. `Crate.Weight` is
+   * the nested `value class`.
+   *
+   * Member names are `barAt`/`detailOf`/`traceOf`/`weightOf`, not `bar`/`detail`/`trace`/`weight`:
+   * the latter PascalCase onto their own nested type's name, which is CS0102 and is pinned by the
+   * owner-scope collision cell below, so it would make every cell here red for the wrong reason.
+   */
+  private val admittedSource: String = """
+    package tier1.nestedowners
+
+    interface Cage {
+      class Bar(val gauge: Int)
+      fun barAt(): Bar
+    }
+
+    class WireCage(val gauge: Int) : Cage {
+      override fun barAt(): Cage.Bar = Cage.Bar(gauge)
+    }
+
+    sealed class Signal {
+      class Detail(val text: String)
+
+      data class On(val level: Int) : Signal() {
+        class Trace(val at: Int)
+        fun traceOf(): Trace = Trace(level)
+      }
+
+      data object Off : Signal()
+
+      fun detailOf(): Detail = Detail("signal")
+    }
+
+    sealed interface Pulse {
+      class X(val beats: Int)
+
+      data class Beat(val bpm: Int) : Pulse {
+        fun xOf(): X = X(bpm)
+      }
+
+      data object Flat : Pulse
+    }
+
+    class Crate(val id: String) {
+      // `@JvmInline` is a requirement of this JVM harness only (Kotlin/Native takes a bare
+      // `value class`, as `test-library`'s `CatId` and `Hamper.Weight` do); `Modifier.VALUE` is
+      // what the processor reads either way.
+      @JvmInline
+      value class Weight(val grams: Int) {
+        fun isHeavy(): Boolean = grams > 1000
+      }
+
+      fun weightOf(): Weight = Weight(id.length)
+      fun gramsOf(weight: Weight): Int = weight.grams
     }
   """.trimIndent()
 
@@ -239,10 +304,8 @@ class Tier1NestedTypesTest {
     val warnings: List<String> = result.kspWarnings
       .filter { it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) }
     listOf(
-      // generic owner: `Box<T>.Lid` is a generic nested type in C#
+      // generic owner: `Box<T>.Lid` is a generic nested type in C#, one per `T`
       "tier1.nesteddeferred.Box.Lid",
-      // interface owner: an interface has no C# declaration block to nest into here
-      "tier1.nesteddeferred.Cage.Bar",
       // inner class: its constructor needs the outer instance
       "tier1.nesteddeferred.Host.Guest",
     ).forEach { declaration ->
@@ -251,7 +314,7 @@ class Tier1NestedTypesTest {
         "expected $declaration to still skip named; warnings=$warnings",
       )
     }
-    listOf("Lid", "Bar", "Guest").forEach { name ->
+    listOf("Lid", "Guest").forEach { name ->
       assertFalse(
         result.generatedCSharp.contains(name),
         "expected no declaration of, or dangling reference to, $name; csharp=" +
@@ -386,5 +449,479 @@ class Tier1NestedTypesTest {
     assertContains(result.generatedCSharp, "public static class Marker")
     assertContains(result.generated, "export_owner_get_label")
     assertContains(result.generated, "export_plain_get_tag")
+  }
+
+  /**
+   * ADR-133 amendment, single receiver: an extension whose **receiver is a nested type** binds
+   * under the enclosing chain, like every member of that type already does.
+   *
+   * This is the discriminating cell, because it is red on its own: the member route puts
+   * `Nested.describe()` behind `owner_nested_describe`, while an extension on the same receiver
+   * takes `receiver.simpleName.lowercase()` and lands behind `nested_summarize` in a class called
+   * `NestedExtensions`. Nothing fails today for one owner -- it simply binds under a name that
+   * belongs to whichever `Nested` got there first, which is why the collision cell below exists.
+   *
+   * The C# receiver *type* is already spelled `Owner.Nested` (it goes through the same nested
+   * name mapping as any other position), so a fix that only renames the class must keep that
+   * spelling: it is asserted here rather than assumed.
+   *
+   * Oreo takes the high perch; the extension agrees with him.
+   */
+  @Test
+  fun `an extension on a nested receiver binds under the owner chain`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.nestedextension
+
+      class Owner(val name: String) {
+        class Nested(val height: Int) {
+          fun describe(): String = "nested@" + height
+        }
+
+        fun makeNested(height: Int): Nested = Nested(height)
+      }
+
+      fun Owner.Nested.summarize(): String = "nested@" + height + " (ext)"
+      val Owner.Nested.isHigh: Boolean get() = height > 5
+      """.trimIndent(),
+      fileName = "NestedExtension.kt",
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val kotlin: String = result.generated
+    listOf(
+      "@CName(\"owner_nested_summarize\")",
+      "@CName(\"owner_nested_get_isHigh\")",
+      // The control: the member route on the same receiver, which already chains.
+      "@CName(\"owner_nested_describe\")",
+    ).forEach { export ->
+      assertContains(kotlin, export, message = "expected $export; generated=$kotlin")
+    }
+    assertFalse(
+      kotlin.contains("@CName(\"nested_summarize\")") ||
+          kotlin.contains("@CName(\"nested_get_isHigh\")"),
+      "expected no unchained extension entry point (ADR-117 collision risk); generated=$kotlin",
+    )
+
+    val csharp: String = result.generatedCSharp
+    // CS1109 forbids nesting an extension class, so the chain travels into the *name*, exactly as
+    // ADR-133 already does for a nested enum's `OwnerKindExtensions`.
+    assertContains(csharp, "public static partial class OwnerNestedExtensions")
+    assertFalse(
+      csharp.contains("class NestedExtensions"),
+      "expected no bare-simple-name extension class; csharp=" +
+          "${csharp.lines().filter { it.contains("Extensions") }}",
+    )
+    listOf(
+      Regex("""Summarize\(this global::[\w.]*Owner\.Nested receiver\)"""),
+      // ADR-013 spells an extension property as `Get{Name}`.
+      Regex("""GetIsHigh\(this global::[\w.]*Owner\.Nested receiver\)"""),
+    ).forEach { signature ->
+      assertTrue(
+        signature.containsMatchIn(csharp),
+        "expected a signature matching $signature; csharp=" +
+            "${csharp.lines().filter { it.contains("Summarize") || it.contains("IsHigh") }}",
+      )
+    }
+  }
+
+  /**
+   * ADR-133 amendment, two owners: the reason the unchained name is a bug and not a naming taste.
+   *
+   * `Coop.Inner` and `Roost.Inner` are distinct C# types, and their members already export
+   * distinctly (`coop_inner_get_depth` / `roost_inner_get_depth`). Their *extensions* both derive
+   * `inner_describe` today.
+   *
+   * Measured, 2026-09-13, and **not** what this cell was written to expect: the round does not
+   * fail with `ERROR_C_ENTRY_POINT_COLLISION`. The duplicate is absorbed silently by the numbering
+   * suffix, so the two extensions ship as `@CName("inner_describe")` and
+   * `@CName("inner_describe_2")` -- which of the two owners gets the unsuffixed symbol is not
+   * pinned here (presumably visit order), i.e. the published ABI of an untouched declaration can
+   * move when an unrelated type is added elsewhere. That is a stronger argument for chaining than
+   * the predicted hard error was, and it is why the collision assertion below is kept even though
+   * it is green today:
+   * after the fix it must *stay* green for the right reason (no duplicate to absorb), not because
+   * the suffix hid one.
+   *
+   * After the chain is applied each takes its own symbol and its own `{Chain}Extensions` class.
+   *
+   * Functions only, no extension property: two same-package nested `Inner`s sharing an extension
+   * *property* name trip a different guard (the ADR-074 duplicate-symbol `require` in the property
+   * catalog), which would make this cell red for a second reason and hide the first.
+   *
+   * Mylo's coop and Oreo's roost each get their own `describe`.
+   */
+  @Test
+  fun `two owners' nested receivers take distinct extension symbols and classes`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.nestedextcollision
+
+      class Coop(val name: String) {
+        class Inner(val depth: Int)
+      }
+
+      class Roost(val name: String) {
+        class Inner(val depth: Int)
+      }
+
+      fun Coop.Inner.describe(): String = "coop@" + depth
+      fun Roost.Inner.describe(): String = "roost@" + depth
+      """.trimIndent(),
+      fileName = "NestedExtensionCollision.kt",
+    )
+
+    assertFalse(
+      result.kspErrors.any {
+        it.contains(ForwardDiagnosticKind.ERROR_C_ENTRY_POINT_COLLISION.name)
+      },
+      "two nested receivers under different owners must not claim one C entry point; " +
+          "kspErrors=${result.kspErrors}",
+    )
+    val kotlin: String = result.generated
+    listOf(
+      "@CName(\"coop_inner_describe\")",
+      "@CName(\"roost_inner_describe\")",
+    ).forEach { export ->
+      assertContains(kotlin, export, message = "expected $export; generated=$kotlin")
+    }
+
+    val csharp: String = result.generatedCSharp
+    assertContains(csharp, "public static partial class CoopInnerExtensions")
+    assertContains(csharp, "public static partial class RoostInnerExtensions")
+    assertFalse(
+      csharp.contains("class InnerExtensions"),
+      "expected no shared bare-simple-name extension class; csharp=" +
+          "${csharp.lines().filter { it.contains("Extensions") }}",
+    )
+  }
+
+  /**
+   * ADR-040 x ADR-019 x ADR-084, all reachable from one fixture: an **interface** returned on the
+   * legacy suspend route, the same interface as a `Flow` element, a second nested interface with
+   * the same simple name under a different owner, and a generic bound on a nested interface.
+   *
+   * Its own source string, not the shared [source]: these cells need coroutines and a second
+   * `Keeper`, and appending them to the fixture every other cell brace-matches through would make
+   * five unrelated tests move for reasons that have nothing to do with them.
+   *
+   * Oreo's keeper arrives later; Mylo's keeps the registry.
+   */
+  private val asyncSource: String = """
+    package tier1.nestedasync
+
+    import kotlinx.coroutines.flow.Flow
+    import kotlinx.coroutines.flow.flowOf
+
+    class Owner(val name: String) {
+      interface Keeper {
+        fun greet(): String
+      }
+
+      fun greetVia(keeper: Keeper): String = keeper.greet()
+      fun currentKeeper(): Keeper = object : Keeper {
+        override fun greet(): String = "hi from " + name
+      }
+      suspend fun currentKeeperLater(): Keeper = currentKeeper()
+      fun keepers(): Flow<Keeper> = flowOf(currentKeeper(), currentKeeper())
+      val label: String = "owner"
+    }
+
+    object Registry {
+      interface Keeper {
+        fun greet(): String
+      }
+
+      fun greetVia(keeper: Keeper): String = keeper.greet()
+      fun currentKeeper(): Keeper = object : Keeper {
+        override fun greet(): String = "registry keeper"
+      }
+      fun label(): String = "registry"
+    }
+
+    interface Pet {
+      fun speak(): String
+    }
+
+    fun strayPet(): Pet = object : Pet {
+      override fun speak(): String = "Mrrp?"
+    }
+
+    suspend fun strayPetLater(): Pet = strayPet()
+
+    class Aviary<T : Owner.Keeper>(val item: T) {
+      fun greetItem(): String = item.greet()
+    }
+  """.trimIndent()
+
+  @Test
+  fun `a suspend function returning an interface is typed with the interface, not the wrapper`() {
+    val result = Tier1Harness.run(
+      asyncSource,
+      fileName = "Async.kt",
+      // Load-bearing: `Tier1Harness` puts only `kotlin-stdlib` on the KSP `libraries` path
+      // (`coroutinesOnCompileClasspath` governs the *compile* step alone), so without this a
+      // `Flow` return resolves to `<ERROR TYPE: Flow>` and every Flow member drops.
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val csharp: String = result.generatedCSharp
+    // ADR-040: a consumer never sees the ADR-040 backing wrapper at a declared position. The
+    // legacy suspend route spells its completion result with `nestedCsName()`, which for an
+    // interface is exactly that wrapper (`Task<Owner.Keeper>` + `new Owner.Keeper(resultPtr)`),
+    // and spells it bare, without `global::`.
+    assertContains(
+      csharp,
+      "public Task<global::Interop.Owner.IKeeper> CurrentKeeperLaterAsync(",
+      message = "expected the interface spelling on the member suspend route; csharp=" +
+          "${csharp.lines().filter { it.contains("CurrentKeeperLater") }}",
+    )
+    // The top-level route (CirFunctionTranslator) has the same defect, and a top-level interface
+    // is where ADR-040's own `Task<IPet>` example lives, so an owner-chain-only fix is not enough.
+    assertContains(
+      csharp,
+      "public static Task<global::Interop.IPet> StrayPetLaterAsync(",
+      message = "expected the interface spelling on the top-level suspend route; csharp=" +
+          "${csharp.lines().filter { it.contains("StrayPetLater") }}",
+    )
+    // The completion reads the handle through the wrapper -- that part is correct, it is the
+    // declared type that must be the interface.
+    val wrapperTypedTaskLines: List<String> = csharp.lines()
+      .filter { it.contains("Task<") && it.contains("Keeper") || it.contains("Task<Pet>") }
+    assertFalse(
+      csharp.contains("Task<global::Interop.Owner.Keeper>") ||
+          csharp.contains("Task<Owner.Keeper>") ||
+          csharp.contains("Task<Pet>"),
+      "expected no wrapper-typed Task; csharp=$wrapperTypedTaskLines",
+    )
+  }
+
+  @Test
+  fun `a Flow whose element is an interface is typed with the interface`() {
+    val result = Tier1Harness.run(
+      asyncSource,
+      fileName = "Async.kt",
+      // Load-bearing: `Tier1Harness` puts only `kotlin-stdlib` on the KSP `libraries` path
+      // (`coroutinesOnCompileClasspath` governs the *compile* step alone), so without this a
+      // `Flow` return resolves to `<ERROR TYPE: Flow>` and every Flow member drops.
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    val csharp: String = result.generatedCSharp
+    // `qualifiedElementCsType` spells a Flow element with the wrapper too. Worse than a cosmetic
+    // difference: the stream is read through `NugetMarshal.FromHandle<T>`, whose Activator branch
+    // cannot construct an interface, so the corrected spelling needs an explicit read lambda.
+    //
+    // Measured 2026-09-13, and the reason this cell first read as an environment disagreement:
+    // the harness call above omitted `libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore)`,
+    // and `Tier1Harness` only ever puts `kotlin-stdlib` on the KSP `libraries` path -- its
+    // `coroutinesOnCompileClasspath` flag governs the *compile* step, not resolution. `Flow` was
+    // therefore `<ERROR TYPE: Flow>` to KSP and EVERY Flow member dropped, `Flow<String>`
+    // included, with the generic `SKIPPED_UNSUPPORTED_TYPE ... its UNSUPPORTED type combination
+    // is not supported` that names neither the Flow nor its element. With coroutines on the KSP
+    // path the harness agrees with the real test-library build, which emits the wrapper spelling
+    // `public KotlinFlow<global::TestLibrary.Nested.Aviary.Keeper> Keepers()` this cell is about.
+    assertContains(
+      csharp,
+      "KotlinFlow<global::Interop.Owner.IKeeper> Keepers(",
+      message = "expected the interface element spelling; csharp=" +
+          "${csharp.lines().filter { it.contains("Keepers") }} warnings=${result.kspWarnings}",
+    )
+  }
+
+  @Test
+  fun `each owner's interface bridge state is named for its chain`() {
+    val result = Tier1Harness.run(
+      asyncSource,
+      fileName = "Async.kt",
+      // Load-bearing: `Tier1Harness` puts only `kotlin-stdlib` on the KSP `libraries` path
+      // (`coroutinesOnCompileClasspath` governs the *compile* step alone), so without this a
+      // `Flow` return resolves to `<ERROR TYPE: Flow>` and every Flow member drops.
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    val csharp: String = result.generatedCSharp
+    // ADR-084 names the state class from the simple name alone and renders every one of them into
+    // the ROOT namespace's CirBridgeHelper, so `Owner.Keeper` and `Registry.Keeper` both emit
+    // `KeeperBridgeState` (CS0101) plus two `keeperImpl` pattern variables in one block (CS0128).
+    // Both are at a parameter position, so both plans are real.
+    listOf("OwnerKeeperBridgeState", "RegistryKeeperBridgeState").forEach { state ->
+      assertContains(
+        csharp,
+        "internal sealed class $state : NugetBridgeState",
+        message = "expected $state; csharp=${csharp.lines().filter { it.contains("BridgeState") }}",
+      )
+    }
+    assertFalse(
+      csharp.contains("class KeeperBridgeState"),
+      "expected no bare-simple-name bridge state (CS0101 between the two owners); csharp=" +
+          "${csharp.lines().filter { it.contains("BridgeState") }}",
+    )
+    // The pattern variable in `HandleFor` is derived from the same name, so two bare `keeperImpl`
+    // declarations land in one block (CS0128). A top-level interface keeps its bare spelling:
+    // Tier1InterfaceBridgeFactoryTest pins `PetBridgeState` / `petImpl` and must stay green.
+    assertFalse(
+      Regex("""\bkeeperImpl\b""").findAll(csharp).count() > 0,
+      "expected no bare `keeperImpl` pattern variable (CS0128, see comment above); csharp=" +
+          "${csharp.lines().filter { it.contains("Impl") }}",
+    )
+    assertContains(csharp, "internal sealed class PetBridgeState : NugetBridgeState")
+  }
+
+  @Test
+  fun `a generic bound on a nested interface carries the owner chain`() {
+    val result = Tier1Harness.run(
+      asyncSource,
+      fileName = "Async.kt",
+      // Load-bearing: `Tier1Harness` puts only `kotlin-stdlib` on the KSP `libraries` path
+      // (`coroutinesOnCompileClasspath` governs the *compile* step alone), so without this a
+      // `Flow` return resolves to `<ERROR TYPE: Flow>` and every Flow member drops.
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    val csharp: String = result.generatedCSharp
+    // The legacy bound spellers build "I" + simpleName, which for a nested interface is a bare
+    // `IKeeper` at namespace scope: CS0246, nothing in that scope is called that.
+    assertContains(
+      csharp,
+      "where T : global::Interop.Owner.IKeeper",
+      message = "expected the bound to carry the chain; csharp=" +
+          "${csharp.lines().filter { it.contains("where T") }}",
+    )
+  }
+
+  // --- ADR-134: the owner kinds ADR-133 deferred and this ADR admits ---
+
+  @Test
+  fun `an interface owner declares its nested type inside the I-prefixed interface block`() {
+    val result = Tier1Harness.run(admittedSource, fileName = "Owners.kt")
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val csharp: String = result.generatedCSharp
+    assertContains(
+      blockBody(csharp, "public interface ICage"),
+      "public class Bar",
+      message = "expected Bar inside the ICage block; csharp=$csharp",
+    )
+    // ADR-134's one reversal of ADR-133: the `I` is on every interface segment of the chain, so
+    // the child is `ICage.Bar`. The child itself is a class and keeps its bare name.
+    assertFalse(
+      csharp.contains("IBar"),
+      "expected the child of an interface to keep its own name; csharp=" +
+          "${csharp.lines().filter { it.contains("Bar") }}",
+    )
+  }
+
+  @Test
+  fun `a sealed base and a sealed arm each declare their nested types in their own block`() {
+    val result = Tier1Harness.run(admittedSource, fileName = "Owners.kt")
+
+    val csharp: String = result.generatedCSharp
+    val signal: String = blockBody(csharp, "public abstract class Signal")
+    assertContains(
+      signal,
+      "public class Detail",
+      message = "expected Detail beside the arms in the sealed base's block; signal=$signal",
+    )
+    // The arm's block is rendered by a different function from the base's, so a base-only
+    // implementation passes the assertion above and loses Trace.
+    assertContains(
+      blockBody(signal, "class On"),
+      "public class Trace",
+      message = "expected Trace inside the arm's block; signal=$signal",
+    )
+  }
+
+  @Test
+  fun `an eligible sealed interface owns its nested type as the abstract class, never losing it`() {
+    val result = Tier1Harness.run(admittedSource, fileName = "Owners.kt")
+
+    val csharp: String = result.generatedCSharp
+    // The gate-order cell, and the one failure mode in ADR-134 that is SILENT if wrong: the owner
+    // walk tests `INTERFACE` before it tests sealed, and an ADR-112 eligible sealed interface is
+    // collected as a sealed base and rendered `public abstract class Pulse`. If the relaxed
+    // interface arm claims it, `X` is partitioned into a `CirInterface` slot the sealed renderer
+    // never reads: no twin, no CS0101, no diagnostic, just gone.
+    assertContains(
+      blockBody(csharp, "public abstract class Pulse"),
+      "public class X",
+      message = "expected X declared under the abstract class the eligible sealed interface " +
+          "renders as; csharp=$csharp",
+    )
+    assertFalse(
+      csharp.contains("IPulse"),
+      "expected no `IPulse` anywhere (issue #54); csharp=" +
+          "${csharp.lines().filter { it.contains("IPulse") }}",
+    )
+  }
+
+  @Test
+  fun `a nested value class is declared as a nested record struct`() {
+    val result = Tier1Harness.run(admittedSource, fileName = "Owners.kt")
+
+    assertContains(
+      blockBody(result.generatedCSharp, "public class Crate"),
+      "public readonly record struct Weight",
+      message = "expected the nested value class as a nested record struct; " +
+          "csharp=${result.generatedCSharp}",
+    )
+  }
+
+  @Test
+  fun `every admitted owner's nested export prefix is the enclosing chain`() {
+    val result = Tier1Harness.run(admittedSource, fileName = "Owners.kt")
+
+    val kotlin: String = result.generated
+    listOf(
+      // interface owner
+      "@CName(\"cage_bar_create\")",
+      // sealed base owner
+      "@CName(\"signal_detail_create\")",
+      // sealed arm owner: base + arm + child, three segments
+      "@CName(\"signal_on_trace_create\")",
+      // eligible sealed interface owner
+      "@CName(\"pulse_x_create\")",
+      // nested value class: no handle, but its members carry the chain
+      "@CName(\"crate_weight_isHeavy\")",
+    ).forEach { export ->
+      assertContains(kotlin, export, message = "expected $export; generated=$kotlin")
+    }
+    assertFalse(
+      listOf(
+        "\"bar_create\"",
+        "\"detail_create\"",
+        "\"trace_create\"",
+        "\"x_create\"",
+        "\"weight_isHeavy\"",
+      ).any { kotlin.contains("@CName($it)") },
+      "expected no unchained entry point (ADR-117 collision risk); generated=$kotlin",
+    )
+  }
+
+  @Test
+  fun `no nested type of an admitted owner is also emitted at namespace level, and none skips`() {
+    val result = Tier1Harness.run(admittedSource, fileName = "Owners.kt")
+
+    val csharp: String = result.generatedCSharp
+    listOf("Bar", "Detail", "Trace", "X", "Weight").forEach { name ->
+      val namespaceLevelDeclaration = Regex(
+        """^ {4}public (?:sealed )?(?:readonly )?(?:record )?(?:static )?""" +
+            """(?:class|struct|enum|interface) $name\b""",
+        RegexOption.MULTILINE,
+      )
+      assertFalse(
+        namespaceLevelDeclaration.containsMatchIn(csharp),
+        "expected no namespace-level twin of $name (CS0101); csharp=" +
+            "${csharp.lines().filter { it.contains(name) }}",
+      )
+    }
+    assertFalse(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
+            it.contains("tier1.nestedowners")
+      },
+      "expected no nested-declaration skip for an admitted owner; warnings=${result.kspWarnings}",
+    )
   }
 }

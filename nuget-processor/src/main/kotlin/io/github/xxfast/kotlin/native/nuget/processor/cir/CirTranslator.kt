@@ -329,7 +329,8 @@ internal fun translate(
   groupByNamespaceAndFile(genericFunctions).forEach { (key, funcs) ->
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
-    val members: List<CirMember> = funcs.flatMap { translateGenericFunction(it, context.libraryName) }
+    val members: List<CirMember> =
+      funcs.flatMap { translateGenericFunction(it, context.libraryName, context) }
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
 
@@ -391,8 +392,18 @@ internal fun translate(
     enums.filter { isOwnedBy(owner, it) }.forEach { enum ->
       add(translateEnum(enum, context.libraryName))
     }
+    // ADR-134: a nested `value class` is declared as a nested `readonly record struct`. Its
+    // members already export under the whole chain (`nativePrefix()`) and every type position
+    // already spelled `Owner.Tag`; only the declaration was missing (CS0426 until now).
+    valueClasses.filter { isOwnedBy(owner, it) }.forEach { cls ->
+      add(translateValueClass(cls, context.libraryName, logger, context, callableCatalog))
+    }
     interfaces.filter { isOwnedBy(owner, it) }.forEach { iface ->
-      add(translateInterface(iface, interfaceDeclarationCatalog, logger))
+      add(
+        translateInterface(iface, interfaceDeclarationCatalog, logger)
+          // ADR-134: an interface owner carries children at any depth, exactly as a class does.
+          .copy(nestedDeclarations = translateNestedOf(iface)),
+      )
       // ADR-040's backing wrapper nests BESIDE its interface (`Owner.Listener : IListener`)
       // rather than at namespace root, which is the caveat ADR-133 closes.
       interfaceBackingClasses
@@ -424,12 +435,14 @@ internal fun translate(
   genericClasses.forEach { cls ->
     namespaces.addDeclaration(
       namespaceOf(cls.packageName.asString()),
-      translateGenericClass(cls, context.libraryName, logger),
+      translateGenericClass(cls, context.libraryName, logger, context),
     )
     needsMarshalHelper = true
   }
 
-  valueClasses.forEach { cls ->
+  // ADR-134: a nested value class is declared by the owner walk above and nowhere else; a
+  // namespace-level twin would be CS0101 against it (the issue #54/#110 lesson).
+  valueClasses.filter { !it.isNestedDeclaration() }.forEach { cls ->
     namespaces.addDeclaration(
       namespaceOf(cls.packageName.asString()),
       translateValueClass(cls, context.libraryName, logger, context, callableCatalog),
@@ -446,7 +459,9 @@ internal fun translate(
   interfaces.filter { !it.isNestedDeclaration() }.forEach { iface ->
     namespaces.addDeclaration(
       namespaceOf(iface.packageName.asString()),
-      translateInterface(iface, interfaceDeclarationCatalog, logger),
+      translateInterface(iface, interfaceDeclarationCatalog, logger)
+        // ADR-134: the interface block owns its nested declarations (`ICage.Bar`).
+        .copy(nestedDeclarations = translateNestedOf(iface)),
     )
   }
 
@@ -506,6 +521,10 @@ internal fun translate(
       namespaceOf(sealed.packageName.asString()),
       translateSealedClass(
         sealed, context, tracker, callableCatalog, classifier, exportedTypes, logger,
+        // ADR-134: the base and each arm are owners. The walk is passed in rather than rebuilt
+        // there, so a nested declaration under a sealed owner goes through exactly the same
+        // translation an ordinary owner's does.
+        nestedOf = ::translateNestedOf,
       ),
     )
   }
@@ -532,17 +551,27 @@ internal fun translate(
       namespaceOf(declaring.packageName.asString())
     }
 
+  // ADR-133 amendment: an extension receiver keys on its whole enclosing chain (`Aviary.Perch`),
+  // which is both the class-name stem and -- spelled identically by `ForwardPropertyPlanner` --
+  // the middle of an extension property's plan symbol. A top-level receiver keys on its own simple
+  // name exactly as before.
+  fun KSDeclaration.extensionReceiverKey(): String =
+    (this as? KSClassDeclaration)?.nestedCsName() ?: simpleName.asString()
+
   // The function and property loops below MUST key identically, or one package's extension
   // functions and its extension properties on the same receiver land in two different classes.
   val extensionsByReceiver: Map<Pair<String, String>, List<KSFunctionDeclaration>> =
     extensionFunctions.groupBy { func ->
       val receiver: KSDeclaration = func.extensionReceiver!!.resolve().expandAliases().declaration
-      extensionNamespace(receiver, func) to receiver.simpleName.asString()
+      extensionNamespace(receiver, func) to receiver.extensionReceiverKey()
     }
 
   extensionsByReceiver.forEach { (key, funcs) ->
     val (namespace, receiverName) = key
-    val className: String = "${receiverName}Extensions"
+    // ADR-133 amendment: CS1109 forbids nesting an extension class, so a nested receiver's
+    // chain travels into the *name* instead, exactly as a nested enum's `AviaryKindExtensions`
+    // already does (`CirEnumRenderer`). Unchanged for a top-level receiver, whose key has no dot.
+    val className: String = "${receiverName.replace(".", "")}Extensions"
 
     val members: List<CirMember> = funcs.flatMap { func ->
       // ADR-095: node identity, same reason as the top-level walk above. Extension plan symbols are
@@ -579,12 +608,15 @@ internal fun translate(
   val extensionPropsByReceiver: Map<Pair<String, String>, List<KSPropertyDeclaration>> =
     extensionProperties.groupBy { prop ->
       val receiver: KSDeclaration = prop.extensionReceiver!!.resolve().expandAliases().declaration
-      extensionNamespace(receiver, prop) to receiver.simpleName.asString()
+      extensionNamespace(receiver, prop) to receiver.extensionReceiverKey()
     }
 
   extensionPropsByReceiver.forEach { (key, props) ->
     val (namespace, receiverName) = key
-    val className: String = "${receiverName}Extensions"
+    // ADR-133 amendment: CS1109 forbids nesting an extension class, so a nested receiver's
+    // chain travels into the *name* instead, exactly as a nested enum's `AviaryKindExtensions`
+    // already does (`CirEnumRenderer`). Unchanged for a top-level receiver, whose key has no dot.
+    val className: String = "${receiverName.replace(".", "")}Extensions"
 
     val members: List<CirMember> = props.flatMap { prop ->
       val symbol: String =

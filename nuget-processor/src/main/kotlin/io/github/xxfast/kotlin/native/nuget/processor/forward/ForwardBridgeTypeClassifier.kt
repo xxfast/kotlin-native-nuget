@@ -173,18 +173,22 @@ internal class ForwardBridgeTypeClassifier(
       // and all — leaves a dangling reference the consumer cannot compile (CS0426/CS0234). Skip
       // named instead, exactly as the class branch below does for an unexported handle.
       if (qualifiedName !in context.exportedObjectHandles) {
-        // A nested enum is never declarable, in either module: `rootEnums` filters
-        // `parentDeclaration == null` and the reachability closure refuses to admit a nested
-        // dependency enum for the same reason. The `include(...)` hint would therefore be actively
-        // wrong for it, so the nested test runs FIRST and only a *top-level* cross-module enum
-        // (ADR-066's `containingFile == null` signal, as used by the class branch) takes the
-        // scope-widening route.
-        val isNested: Boolean = classDeclaration.parentDeclaration != null
+        // A nested enum ADR-133 cannot declare is not out of scope but undeclarable, and the
+        // `include(...)` hint would be actively wrong for it, so the nested test runs ahead of the
+        // scope-widening route — but only for a nested enum the closure did NOT refuse on scope
+        // grounds (see [scopeRefusal]): when the enum, or its owner, is outside the export scope,
+        // widening the scope is exactly the fix and the nested wording would hide it.
+        val scopeRefusal: ForwardAdmissionRefusal? = scopeRefusal(qualifiedName)
+        val isNested: Boolean = classDeclaration.parentDeclaration != null && scopeRefusal == null
         if (!isNested && classDeclaration.containingFile == null) {
           return BridgeType.Unsupported(
             qualifiedName,
             "declared in a dependency module whose package is outside the export scope",
             isUnexportedDependency = true,
+            // The class and interface branches always passed the closure's refusal here; the enum
+            // branch dropped it, so an excluded or cross-module-disabled enum was told to widen
+            // the scope, the one remedy that cannot work for it.
+            unexportedDependencyRefusal = scopeRefusal,
           )
         }
         return BridgeType.Unsupported(
@@ -266,9 +270,16 @@ internal class ForwardBridgeTypeClassifier(
       // A sealed subclass is not nested in this sense (ADR-009 declares it under its base, which
       // is exactly how every reference spells it) and neither is a companion object (ADR-013 folds
       // it into its owner's statics), so both are left to the membership test.
+      //
+      // ADR-066 amendment: "FIRST" now means first among the UNDECLARABLE cases only. A nested
+      // declaration the closure refused on SCOPE grounds — its own package outside the scope, or
+      // its owner excluded by name — takes the dependency route below, because `include(...)` is
+      // what repairs that build and "move it to the top level of its file" repairs nothing in a
+      // module the author does not own.
       val isUndeclaredNested: Boolean = classDeclaration.parentDeclaration != null &&
           !classDeclaration.isCompanionObject &&
-          !classDeclaration.isSealedSubclass()
+          !classDeclaration.isSealedSubclass() &&
+          scopeRefusal(qualifiedName) == null
       if (isUndeclaredNested) {
         return BridgeType.Unsupported(
           qualifiedName,
@@ -354,6 +365,21 @@ internal class ForwardBridgeTypeClassifier(
   }
 
   /**
+   * ADR-066 amendment: the closure's refusal for this name when it is a refusal an author can act
+   * on by changing the export SCOPE, rather than the "declared by its owner's walk, if at all"
+   * marker. The class, enum and interface membership gates consult this ahead of their nested
+   * test, so a nested dependency declaration outside the scope reports the `include(...)` remedy
+   * that repairs the build instead of a move-to-the-top-level one that cannot.
+   *
+   * [ForwardAdmissionRefusal.NESTED_DECLARATION] is deliberately the only value filtered out: it
+   * is the closure saying "not admitted here, ask ADR-133's owner walk", which is precisely what
+   * the nested gates already report.
+   */
+  private fun scopeRefusal(qualifiedName: String): ForwardAdmissionRefusal? =
+    context.refusedDependencyTypes[qualifiedName]
+      ?.takeIf { refusal -> refusal != ForwardAdmissionRefusal.NESTED_DECLARATION }
+
+  /**
    * ADR-040: an interface at an ordinary (non ADR-039 add/remove-pair) position. Mirrors the
    * [ObjectHandle] membership check exactly, but the public spelling is `I$simpleName` (the
    * projected interface) and the construction spelling is `$simpleName` (the generated backing
@@ -365,8 +391,10 @@ internal class ForwardBridgeTypeClassifier(
       // Issue #54, the enum branch's rule verbatim: `rootInterfaces` filters
       // `parentDeclaration == null`, so a *nested* interface is undeclarable in either module and
       // the `include(...)` hint would be actively wrong for it. The nested test therefore runs
-      // FIRST, and only a top-level cross-module interface takes the scope-widening route.
-      if (declaration.parentDeclaration != null) {
+      // FIRST, and only a top-level cross-module interface takes the scope-widening route — with
+      // the ADR-066 amendment's one exception, shared with the class and enum branches: a nested
+      // interface the closure refused on SCOPE grounds wants the scope remedy, not this one.
+      if (declaration.parentDeclaration != null && scopeRefusal(qualifiedName) == null) {
         return BridgeType.Unsupported(
           qualifiedName,
           "a nested interface is never declared as a C# interface",

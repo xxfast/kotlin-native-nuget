@@ -27,3 +27,12 @@ fun strayPet(): Pet = object : Pet {
   override fun fetch(item: String): String = "eyes the $item warily but doesn't fetch it"
   override fun nap() = Unit
 }
+
+// ADR-040 at the TOP-LEVEL legacy suspend route (CirFunctionTranslator): the same defect as
+// `Aviary.currentKeeperLater`, but with a top-level interface, where ADR-040's own example spells
+// the position `IPet`. The completion callback spells it with the backing wrapper instead
+// (`Task<Pet>` + `new Pet(resultPtr)`), so the signature has to become `Task<global::TestLibrary.
+// Cat.IPet>`. `strayPet()` above is the synchronous control that already binds correctly.
+//
+// Whiskers the Stray keeps Oreo and Mylo waiting at the cat flap before ambling in.
+suspend fun strayPetLater(): Pet = strayPet()

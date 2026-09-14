@@ -597,6 +597,24 @@ public class LiveHandleTests
         });
     }
 
+    // Row 9h. A suspend call whose result is an *interface*. No interface-return suspend row
+    // existed at all: Rows 9d/9e return a class and a sealed base, both of which the completion
+    // constructs directly. An interface return puts a second object in play -- the ADR-040 backing
+    // wrapper the completion mints around `resultPtr` and hands out as `IKeeper` -- so a
+    // completion that constructs the wrapper without taking ownership of the handle, or reads the
+    // handle a second time on the way to choosing a spelling, leaks per call while the functional
+    // cells (which assert only `Greet()`) stay green. Pattern of Row 9e.
+    [Fact]
+    public async Task Suspend_ReturningAnInterface_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var aviary = new Aviary("Oreo");
+            using Aviary.IKeeper keeper = await aviary.CurrentKeeperLaterAsync();
+            Assert.Equal("hi from Oreo", keeper.Greet());
+        });
+    }
+
     // Row 9f. The nullable twin. Both branches inside one crossing: the null return mints no
     // handle at all (a guard that releases something it never received goes negative here), and
     // the arm return goes through the same discriminated read as Row 9e.

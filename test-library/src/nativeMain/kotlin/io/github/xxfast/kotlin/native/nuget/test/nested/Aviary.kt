@@ -1,5 +1,8 @@
 package io.github.xxfast.kotlin.native.nuget.test.nested
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
+
 /**
  * ADR-133 fixture: every nested declaration kind under an exported **class** owner, declared in C#
  * as a real nested type (`Aviary.Perch`, `Aviary.Defaults`, `Aviary.Kind`, `Aviary.IKeeper`),
@@ -103,6 +106,36 @@ class Aviary(val name: String) {
     override fun greet(): String = "hi from $name"
   }
 
+  /**
+   * ADR-040 x ADR-019: the **legacy suspend route** at an interface return position. The
+   * synchronous [currentKeeper] above pins the plain route; this one travels the completion
+   * callback, which spells its result with the ADR-040 *backing wrapper* (`Task<Aviary.Keeper>`,
+   * `t.SetResult(new Aviary.Keeper(resultPtr))`) where ADR-040 says a consumer never sees the
+   * wrapper at a declared position. The signature must be
+   * `Task<global::TestLibrary.Nested.Aviary.IKeeper>`.
+   *
+   * No fixture existed in this shape at all, nested or top-level, which is how the wrong spelling
+   * survived: every suspend return in the repo today is a class or a sealed arm.
+   *
+   * Oreo waits, radiating impatience, while the keeper works the treat cupboard open.
+   */
+  suspend fun currentKeeperLater(): Keeper = currentKeeper()
+
+  /**
+   * The **Flow element** half of the same seam (`qualifiedElementCsType`): the element of a
+   * `Flow<Keeper>` is spelled with the backing wrapper too, and the stream is read through
+   * `NugetMarshal.FromHandle<T>`, whose Activator branch cannot construct an interface -- so the
+   * wrong spelling compiles and fails at the first emission. Two elements, so an implementation
+   * that reads only the first is distinguishable from one that reads the stream.
+   *
+   * Mylo supervises both keepers, in order, from the cardboard box.
+   */
+  fun keepers(): Flow<Keeper> = flowOf(namedKeeper("first"), namedKeeper("second"))
+
+  private fun namedKeeper(which: String): Keeper = object : Keeper {
+    override fun greet(): String = "$which keeper of $name"
+  }
+
   /** Depth-2 return position. */
   fun inner(depth: Int): Middle.Inner = Middle.Inner(depth)
 
@@ -127,9 +160,69 @@ object Registry {
     fun describe(): String = "entry#$id"
   }
 
+  /**
+   * The **collision** half of ADR-084: a second nested interface whose simple name is `Keeper`,
+   * exactly like [Aviary.Keeper]. The bridge plan names its state class from the simple name alone
+   * (`stateClassName = "${simpleName}BridgeState"`, ForwardInterfaceBridgePlanner) and renders it
+   * into the ROOT namespace's `CirBridgeHelper`, so two owners' `Keeper`s emit two
+   * `KeeperBridgeState` classes (CS0101) and two `keeperImpl` pattern variables in one block
+   * (CS0128). The name has to come from the enclosing chain -- `AviaryKeeperBridgeState` and
+   * `RegistryKeeperBridgeState` -- leaving a top-level interface's `PetBridgeState` unchanged.
+   */
+  interface Keeper {
+    fun greet(): String
+  }
+
+  /**
+   * Parameter position: this is what a C# implementation of `Registry.IKeeper` is handed to, so
+   * the bridge is exercised at runtime and not merely declared.
+   */
+  fun greetVia(keeper: Keeper): String = "${keeper.greet()} @ registry"
+
+  /**
+   * Return position, and it is load-bearing (measured 2026-09-13, not what ADR-084's prose
+   * suggests): `CirTranslator.interfaceBackingClasses` is the **return**-reachable subset, and the
+   * ADR-084 bridge plan is built from exactly that list. With `greetVia` alone, `Registry.Keeper`
+   * got no backing wrapper and therefore no bridge at all -- `NugetBridge.HandleFor` ended at its
+   * `NotSupportedException` arm and the process died with a native `kotlin.NullPointerException`
+   * before it -- so the second `KeeperBridgeState` never existed and the collision cell was
+   * vacuous. With a return position both owners plan, and the two `KeeperBridgeState` classes in
+   * one root-namespace helper are the CS0101 this fixture is for.
+   */
+  fun currentKeeper(): Keeper = object : Keeper {
+    override fun greet(): String = "the registry keeper"
+  }
+
   /** Return position: mints the nested handle from the static owner (`lookup`, not `entry`: CS0102). */
   fun lookup(id: Int): Entry = Entry(id)
 
   /** Control. */
   fun label(): String = "registry"
 }
+
+/**
+ * ADR-133 amendment: an extension whose **receiver is a nested type** must bind under the owner
+ * chain, exactly as the member route already does.
+ *
+ * [Aviary.Perch.summarize] is the member route's twin: `Perch.describe()` exports as
+ * `aviary_perch_describe`, so this one has to export as `aviary_perch_summarize` and land in the
+ * chain-named `AviaryPerchExtensions`, not the bare `perch_summarize` / `PerchExtensions` the
+ * unchained name produces today. The bare name is not merely inconsistent: it is the same C symbol
+ * a top-level `Perch`, or any other owner's nested `Perch`, would claim. Measured 2026-09-13: that
+ * duplicate does **not** raise `ERROR_C_ENTRY_POINT_COLLISION`; it is absorbed silently by the
+ * numbering suffix, so a second owner's extension ships as `inner_describe_2` and one of the two
+ * owners' published symbols moves when the other is added. `Tier1NestedTypesTest` pins that.
+ *
+ * Fresh names on purpose: `Perch` already has a member `describe()`, and an extension called
+ * `describe` would be shadowed in Kotlin *and* collide on `aviary_perch_describe` once the chain
+ * is applied, so the cell would go red for the wrong reason.
+ *
+ * [Aviary.Perch.isHigh] is the property half: ADR-013 spells an extension property as
+ * `GetIsHigh(this Aviary.Perch)`, and its export must chain to `aviary_perch_get_isHigh`.
+ *
+ * Oreo only respects a perch above five; Mylo is content at ground level.
+ */
+fun Aviary.Perch.summarize(): String = "perch@$height (ext)"
+
+/** The extension-property half of the same rule (ADR-013: `GetIsHigh`). */
+val Aviary.Perch.isHigh: Boolean get() = height > 5

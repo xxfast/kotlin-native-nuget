@@ -32,8 +32,23 @@ class Broadcast {
   /** Cross-module, nested: refused by the closure, so never declared; `band` skips named. */
   enum class AdBand { AM, FM }
 
-  /** Cross-module, nested `CLASS`: admitted by the closure today, flattened to root `Schedule`. */
-  class Schedule(val slot: Int)
+  /**
+   * Cross-module, nested `CLASS`: declared under its owner since ADR-133.
+   *
+   * Since the ADR-066 amendment it also carries **edge (B): the walk into a declared nested type's
+   * own member types**. [timetable] returns the top-level dependency class [Timetable], which no
+   * other member anywhere references. `walkClassMembers(Broadcast)` descends into ctor parameters,
+   * own properties, own functions and the companion only, so before the amendment `Timetable` is
+   * never visited at all: neither admitted nor refused. The owner walk still declares `Schedule`,
+   * and `timetable` skips as `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` advising an `include(...)` for
+   * `...test.models` -- a package already in scope, so the remedy is not merely stale but actively
+   * wrong (adding it changes nothing).
+   */
+  class Schedule(val slot: Int) {
+
+    /** Edge (B): the only reference to [Timetable] anywhere in the fixture. */
+    fun timetable(): Timetable = Timetable(slot * 2)
+  }
 
   /** Cross-module, nested `OBJECT`: the kind a class-only closure fix would still leak. */
   object Defaults
@@ -44,3 +59,12 @@ class Broadcast {
   /** Control: must survive the gate. */
   val station: String = "Radio Mylo 101.1"
 }
+
+/**
+ * Edge (B)'s dependency type: top level, in the same already-in-scope package as [Broadcast], and
+ * reachable only through [Broadcast.Schedule.timetable]. Nothing else in the fixture mentions it,
+ * so its presence in C# is proof the closure descended into a declared nested type's own members.
+ *
+ * Oreo schedules his zoomies by it; Mylo ignores every slot but dinner.
+ */
+class Timetable(val slots: Int)

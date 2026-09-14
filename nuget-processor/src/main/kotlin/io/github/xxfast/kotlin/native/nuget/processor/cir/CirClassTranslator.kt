@@ -62,6 +62,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementR
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
+import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredCsharpType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementInterface
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyInterfaceElementReadArgument
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyInterfaceRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
@@ -1025,6 +1029,9 @@ internal fun translateGenericClass(
   cls: KSClassDeclaration,
   libraryName: String,
   logger: KSPLogger,
+  // ADR-133: a bound on a NESTED interface has to carry the owner chain, and only the context
+  // knows the namespace to qualify it with.
+  context: NugetContext,
 ): CirGenericClass {
   val name: String = cls.simpleName.asString()
   val prefix: String = cls.nativePrefix()
@@ -1033,13 +1040,13 @@ internal fun translateGenericClass(
       val resolved = bound.resolve()
       val qualifiedName: String? = resolved.declaration.qualifiedName?.asString()
       val simpleName: String = resolved.declaration.simpleName.asString()
-      val isInterface: Boolean = resolved.declaration is KSClassDeclaration &&
-          (resolved.declaration as KSClassDeclaration).classKind ==
-          ClassKind.INTERFACE
+      val declaration: KSClassDeclaration? = resolved.declaration as? KSClassDeclaration
+      val isInterface: Boolean = declaration?.classKind == ClassKind.INTERFACE
 
       when {
         qualifiedName == "kotlin.Any" -> null
-        isInterface -> "I$simpleName"
+        // ADR-133: nested carries the chain, top-level keeps the shipped bare `I$simpleName`.
+        isInterface && declaration != null -> declaration.legacyBoundInterfaceCsName(context)
         else -> simpleName
       }
     }
@@ -1153,8 +1160,17 @@ internal fun flowProperty(
   val flowElementCollection: BridgeType.Collection? =
     classifier.legacyFlowElementCollection(propTypeResolved)
   if (flowElementCollection != null) tracker.trackCollection(flowElementCollection)
+  // ADR-040: an interface element is DECLARED with the projected interface and READ through the
+  // backing wrapper, the same split the suspend route takes. Deliberately not applied to a
+  // settable MutableStateFlow property: its write path spells `v._handle`, which the projection
+  // does not carry, and no fixture exercises that combination.
+  val flowElementInterface: BridgeType.Interface? =
+    if (isMutableStateFlowProperty) null
+    else classifier.legacyFlowElementInterface(flowElementTypeResolved)
   val flowElementType: String? = when {
     flowElementCollection != null -> flowElementCollection.forwardPublicCsharpType()
+    flowElementInterface != null ->
+      flowElementInterface.csharpType + if (isNullableElement) "?" else ""
     // ADR-066: qualified, not by simple name: an admitted dependency-module element type is
     // not guaranteed to share this class's own namespace.
     isFlowType || isStateFlowType ->
@@ -1162,8 +1178,10 @@ internal fun flowProperty(
 
     else -> null
   }
-  val flowElementRead: String? =
-    flowElementCollection?.let { collection -> legacyFlowElementReadArgument(collection) }
+  val flowElementRead: String? = flowElementCollection
+    ?.let { collection -> legacyFlowElementReadArgument(collection) }
+    ?: flowElementInterface
+      ?.let { iface -> legacyInterfaceElementReadArgument(iface, isNullableElement) }
   if (isFlowType || isStateFlowType) {
     tracker.needsFlow = true
     tracker.needsAsync = true
@@ -1338,11 +1356,20 @@ internal fun flowMembers(
     val flowElementCollection: BridgeType.Collection? =
       classifier.legacyFlowElementCollection(returnType)
     if (flowElementCollection != null) tracker.trackCollection(flowElementCollection)
+    // ADR-040: the sibling property branch's rule -- an interface element is declared with the
+    // projection and read through the backing wrapper, and the held MutableStateFlow route (which
+    // writes `v._handle`) keeps the shipped spelling.
+    val flowElementInterface: BridgeType.Interface? =
+      if (isHeldMutableStateFlow) null
+      else classifier.legacyFlowElementInterface(flowElementTypeResolved)
     // ADR-066: qualified, not by simple name, see the sibling property branch above for why.
     val flowCsElementType: String = flowElementCollection?.forwardPublicCsharpType()
+      ?: flowElementInterface?.let { it.csharpType + if (isNullableElement) "?" else "" }
       ?: qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
-    val flowElementRead: String? =
-      flowElementCollection?.let { collection -> legacyFlowElementReadArgument(collection) }
+    val flowElementRead: String? = flowElementCollection
+      ?.let { collection -> legacyFlowElementReadArgument(collection) }
+      ?: flowElementInterface
+        ?.let { iface -> legacyInterfaceElementReadArgument(iface, isNullableElement) }
 
     // ADR-114: a collection parameter takes the public collection type with an IntPtr native
     // slot; every other parameter keeps mapParamType's shipped spelling.
@@ -1567,6 +1594,9 @@ internal fun suspendMembers(
     val asyncReturnType: String = when {
       isUnit -> ""
       collectionReturn != null -> collectionReturn.forwardPublicCsharpType()
+      // ADR-040: the projected interface, already `global::`-qualified and owner-chained by the
+      // classifier. `nestedCsName()` below would spell the backing wrapper here.
+      returnShape is ForwardLegacyReturnShape.Interface -> returnShape.declaredCsharpType()
       else -> {
         // ADR-118: a nested sealed arm is declared inside its base (ADR-009), so the bare simple
         // name is unresolvable at namespace scope (CS0246). `nestedCsName()` walks class parents
@@ -1621,6 +1651,11 @@ internal fun suspendMembers(
           csharpType = asyncReturnType.removeSuffix("?"),
           nullable = returnShape.nullable,
         )
+
+        // ADR-040: the declared type above is the interface, so the read has to name the backing
+        // wrapper itself rather than be spelled off `asyncReturnType` the way the sealed arm is.
+        // Without this the renderer's `else` arm would emit `new ...IKeeper(resultPtr)` (CS0144).
+        is ForwardLegacyReturnShape.Interface -> returnShape.legacyInterfaceRead("resultPtr")
 
         // `Refused` already returned above; `Plain` keeps the renderer's shipped spelling.
         ForwardLegacyReturnShape.Plain, is ForwardLegacyReturnShape.Refused -> null
@@ -1707,6 +1742,11 @@ internal fun translateSealedClass(
   // logger to say so when it is not.
   exportedTypes: Set<String>,
   logger: KSPLogger,
+  // ADR-134: the owner walk, supplied by `CirTranslator` so the base and each arm can carry the
+  // nested declarations Kotlin declares inside them. Required rather than defaulted: a default
+  // would silently declare none for a future caller that forgot to pass it, which is the one
+  // failure mode of this feature that emits neither a twin nor a diagnostic.
+  nestedOf: (KSClassDeclaration) -> List<CirDeclaration>,
 ): CirSealedClass {
   val libraryName: String = context.libraryName
   val name: String = cls.simpleName.asString()
@@ -1947,6 +1987,8 @@ internal fun translateSealedClass(
         isDataClass = isDataClass,
         isNested = isNested,
         isOpen = isOpenArm,
+        // ADR-134: the arm is an owner in its own right (`Purr.On.Trace`).
+        nestedDeclarations = nestedOf(subclass),
       )
     }
     .toList()
@@ -1958,6 +2000,10 @@ internal fun translateSealedClass(
     subclasses = subclasses,
     properties = baseProperties,
     methods = baseMethods,
+    // ADR-134: a type declared beside the arms, in the block ADR-009 owns. An ADR-112 eligible
+    // sealed interface arrives here too, which is why its children must never be routed to the
+    // interface slot instead: nothing would read them.
+    nestedDeclarations = nestedOf(cls),
   )
 }
 

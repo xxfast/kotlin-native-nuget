@@ -8,11 +8,13 @@ Kotlin coroutines map onto .NET's own async model: `suspend fun` becomes `async`
 | `suspend fun` returning `T?` | `async` / `Task<T?>` | nullable string, object, and primitive returns, [ADR-019](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/019-suspend-function-mapping.md) |
 | `suspend fun` returning `List<T>` / `Set<T>` / `Map<K, V>` | `Task<IReadOnlyList<T>>` / `Task<IReadOnlySet<T>>` / `Task<IReadOnlyDictionary<K, V>>` | spelled and read exactly as the property route spells the same type; any other generic return is a named skip, see [`suspend fun` returning a collection](#suspend-fun-returning-a-collection), [ADR-119](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/119-collection-returns-on-the-legacy-suspend-route.md) |
 | `suspend fun` returning a sealed base or eligible sealed interface base, plain or nullable | `Task<Base>` / `Task<Base?>` | completes through the generated `Base.FromHandle(resultPtr)` discriminator rather than a constructor, on a class, a sealed arm, or a top-level function; an ineligible sealed type is a named skip, see [A `suspend fun` returning the sealed base](interfaces-abstract-sealed.md#sealed-method-suspend-base-generated-c), [ADR-131](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/131-suspend-route-sealed-base-return.md) |
+| `suspend fun` returning an interface type, top-level or nested | `Task<IFoo>` | typed with the interface itself, the same as the synchronous return; see [`suspend fun` returning an interface](#suspend-fun-returning-an-interface), [ADR-040](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md), [ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md) |
 | `suspend () -> R` lambda | `KotlinSuspendFunc<R>` / `Task<R>` | [ADR-020](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/020-suspend-lambda-mapping.md) |
 | structured concurrency | honoured on `Dispose()` | [ADR-021](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/021-structured-concurrency.md) |
 | coroutine cancellation | `CancellationToken` | [ADR-022](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/022-cancellation-token-support.md) |
 | in-flight async drain | `IAsyncDisposable` | graceful drain, [ADR-025](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/025-async-disposable.md) |
 | `Flow<T>` | `IAsyncEnumerable<T>` | cold streams, [ADR-026](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/026-flow-mapping.md) |
+| `Flow<T>` of an interface element type | `KotlinFlow<IFoo>` | element read through the interface, same as any other `Flow` element; see [`Flow<T>` of an interface element type](#flow-t-of-an-interface-element-type), [ADR-040](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md), [ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md) |
 | `StateFlow<T>` (incl. `MutableStateFlow<T>` narrowed via `.asStateFlow()`) | `KotlinStateFlow<T>` | hot, always-current-value; get-only `.Value` + `IAsyncEnumerable<T>`, [ADR-065](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/065-stateflow-mapping.md) |
 | `MutableStateFlow<T>` (declared publicly) | `KotlinMutableStateFlow<T> : KotlinStateFlow<T>` | settable `.Value`, keyed on the declared type, [ADR-071](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/071-mutable-stateflow-mapping.md) |
 | `StateFlow<T?>` (nullable element) | `KotlinStateFlow<T?>` | `.Value` and each emission are `T?`, [ADR-067](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/067-nullable-stateflow-mapping.md) |
@@ -214,6 +216,56 @@ nothing native. The same shape works on an ordinary class, on a
     unaffected: it has its own mapping below.</p>
 </note>
 
+## `suspend fun` returning an interface {id="suspend-fun-returning-an-interface"}
+
+An interface-typed `suspend` return, top-level or [nested](interfaces-abstract-sealed.md#nested-interfaces-skip-named),
+completes with the interface itself, the same type the synchronous return uses
+([ADR-040](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md)),
+not the generated backing wrapper. From `test-library/src/nativeMain/kotlin/.../cat/Pet.kt`:
+
+```kotlin
+suspend fun strayPetLater(): Pet = strayPet()
+```
+
+and, for a nested interface, from `test-library/src/nativeMain/kotlin/.../nested/Aviary.kt`:
+
+```kotlin
+suspend fun currentKeeperLater(): Keeper = currentKeeper()
+```
+
+Generated C#:
+
+```C#
+public static Task<global::TestLibrary.Cat.IPet> StrayPetLaterAsync(CancellationToken cancellationToken = default)
+```
+
+```C#
+public Task<global::TestLibrary.Nested.Aviary.IKeeper> CurrentKeeperLaterAsync(CancellationToken cancellationToken = default)
+```
+
+Both complete by constructing the backing wrapper internally (`t.SetResult(new global::TestLibrary.Nested.Aviary.Keeper(resultPtr))`),
+but the public signature and the awaited value are typed with the interface.
+
+Using it, from `IntegrationTests/NestedTypesTests.cs`:
+
+```C#
+[Fact]
+public async Task TopLevelInterface_ReturnedFromASuspendFunction_IsTypedAsTheInterface()
+{
+    using IPet stray = await PetKt.StrayPetLaterAsync();
+    Assert.Equal("Mrrp?", stray.Speak());
+}
+```
+
+<note>
+    <p>Unlike the synchronous interface return, this completion does not resolve back to a stored
+    C#-implemented original first (<code>NugetMarshal.TryResolveCSharp</code>): it always constructs
+    a fresh wrapper. A C#-implemented interface handed back over a <code>suspend fun</code> does not
+    round-trip to the original C# instance the way a plain method return does.</p>
+</note>
+
+`LeakTests/LiveHandleTests.cs` row 9h, `Suspend_ReturningAnInterface_ReturnsToBaseline`, proves the
+completion's minted wrapper handle returns to baseline.
 
 ## `suspend () -> R` lambdas
 
@@ -563,6 +615,55 @@ public KotlinFlow<global::TestLibrary.Models.TopStory> Stream()
         throw new ObjectDisposedException(nameof(Newsroom));
     return new KotlinFlow<global::TestLibrary.Models.TopStory>((onNext, onComplete, onError, userData) =>
         Native_StreamCollect(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData));
+}
+```
+
+### `Flow<T>` of an interface element type {id="flow-t-of-an-interface-element-type"}
+
+A `Flow<T>` element typed with an interface is spelled and read with the interface itself, the same
+type a method returning that interface directly uses, not the ADR-040 backing wrapper: reading a
+`KotlinFlow<T>`'s element via the generated wrapper cannot construct an interface, so the wrong
+spelling compiles but fails at the first emission. From
+`test-library/src/nativeMain/kotlin/.../nested/Aviary.kt`:
+
+```kotlin
+fun keepers(): Flow<Keeper> = flowOf(namedKeeper("first"), namedKeeper("second"))
+```
+
+Generated C#:
+
+```C#
+public KotlinFlow<global::TestLibrary.Nested.Aviary.IKeeper> Keepers()
+{
+    if (_handle == IntPtr.Zero)
+        throw new ObjectDisposedException(nameof(Aviary));
+    return new KotlinFlow<global::TestLibrary.Nested.Aviary.IKeeper>((onNext, onComplete, onError, userData) =>
+        Native_KeepersCollect(_handle, GetOrCreateScope(), onNext, onComplete, onError, userData),
+        read: static h => new global::TestLibrary.Nested.Aviary.Keeper(h));
+}
+```
+
+The explicit `read` delegate is what makes this work: `KotlinFlow<T>`'s default materialisation
+(`NugetMarshal.FromHandle<T>`'s `Activator` branch) cannot construct an interface, so every
+interface-element `Flow<T>` needs this per-member `read` callback constructing the backing wrapper,
+the same mechanism [collection elements on `Flow`](#collection-elements-on-flow-stateflow-and-their-method-returns)
+use for their own element type.
+
+Using it, from `IntegrationTests/NestedTypesTests.cs`:
+
+```C#
+[Fact]
+public async Task NestedInterface_AsAFlowElement_IsTypedAsTheInterface_AndEveryElementReads()
+{
+    using var aviary = new Aviary("Oreo");
+    var greetings = new List<string>();
+    await foreach (Aviary.IKeeper keeper in aviary.Keepers())
+    {
+        greetings.Add(keeper.Greet());
+        keeper.Dispose();
+    }
+
+    Assert.Equal(new List<string> { "first keeper of Oreo", "second keeper of Oreo" }, greetings);
 }
 ```
 
@@ -1477,6 +1578,7 @@ Hot streams and several `Flow` positions are not yet supported (ROADMAP Phase 6)
 - A `suspend fun` returning a nullable collection (`List<T>?`), a collection of a sealed base (`List<Shape>`), or any other generic type (`Pair`, `Result<T>`, `Flow<T>`): absent and named `SKIPPED_UNSUPPORTED_RETURN` ([ADR-119](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/119-collection-returns-on-the-legacy-suspend-route.md))
 - Reassigning the whole `MutableStateFlow<T>` member itself (a `var` member, not just its `.value`)
 - Top-level `suspend fun` returning `StateFlow<T>` (no parent class scope; class methods only in v1)
+- A `suspend fun` returning `StateFlow<Interface>` still completes typed with the ADR-040 backing wrapper, not the interface, unlike the plain interface suspend return and the `Flow<Interface>` element above, which this feature fixed; the interface-return classification did not reach this route (ROADMAP Phase 4)
 - `StateFlow<T>` as a function parameter or as a generic type argument
 - `suspend fun` returning a nullable `StateFlow<T?>` / `StateFlow<T>?`, and nullable `StateFlow` as a function parameter or generic type argument
 - `Boolean?` / `Char?` value elements on a nullable `StateFlow` (the same width fragility as ADR-061)
@@ -1513,6 +1615,7 @@ rather than the raw `Function1`/`Result` this generated before
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/022-cancellation-token-support.md">ADR-022: CancellationToken support</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/025-async-disposable.md">ADR-025: AsyncDisposable</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/026-flow-mapping.md">ADR-026: Flow mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/040-interface-return-type-mapping.md">ADR-040: Interface return type mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md">ADR-064: Forward unsupported-declaration diagnostics</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/065-stateflow-mapping.md">ADR-065: StateFlow mapping</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md">ADR-066: Forward export reachability closure</a>
@@ -1525,5 +1628,7 @@ rather than the raw `Function1`/`Result` this generated before
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/122-handle-parameters-on-the-legacy-routes.md">ADR-122: Handle parameters on the legacy Flow and suspend routes</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/123-collection-elements-on-the-flow-routes.md">ADR-123: Collection elements on the Flow and StateFlow routes</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/131-suspend-route-sealed-base-return.md">ADR-131: Suspend route: a sealed base at a return reads through FromHandle</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/084-csharp-implemented-interfaces.md">ADR-084: C#-implemented Kotlin interfaces</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md">ADR-133: Nested types</a>
     </category>
 </seealso>
