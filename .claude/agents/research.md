@@ -130,6 +130,8 @@ Report your findings as:
 4. **ADR recommendation**: whether the decision is non-trivial enough to warrant an ADR, and if so, what alternatives were considered
 5. **Scope**: what receiver/return types are supported in v1 vs deferred
 
+Then write the same findings to `docs/research/roadmap/<slug>.md` (the slug the main thread gives you, or the item's branch slug), in the format `docs/research/roadmap/README.md` prescribes. Every `file:line` you cite goes in the memo, labelled verified or inferred, along with the files an implementation would touch and every open what-question. The memo outlives your report: a later feature-design run starts from it and skips research entirely, so a claim missing from the memo is a claim that gets re-researched or, worse, never checked. Do not edit `docs/adr/README.md`; the documenter owns the ledger.
+
 ## Your time budget
 
 You are normally given a time budget. Run `date` when you start and check it again before opening any new expensive line of investigation, not only at the end. At the deadline:
