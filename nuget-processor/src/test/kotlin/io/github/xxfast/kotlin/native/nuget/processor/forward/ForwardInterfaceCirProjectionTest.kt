@@ -90,7 +90,9 @@ class ForwardInterfaceCirProjectionTest {
     assertTrue(method.body.contains("IntPtr petHandle = IntPtr.Zero;"))
     assertTrue(method.body.contains("bool petOwned = false;"))
     assertTrue(method.body.contains("petHandle = NugetMarshal.HandleOf(pet, out petOwned);"))
-    assertTrue(method.body.contains("if (petOwned) { NugetMarshal.Dispose(petHandle); }"))
+    assertTrue(
+      method.body.contains("if (petOwned && petHandle != IntPtr.Zero) { NugetMarshal.Dispose(petHandle); }"),
+    )
   }
 
   private fun classMethodPlan(

@@ -432,7 +432,10 @@ public void InterfaceReceiver_CSharpImplementedDog_DispatchesBackIntoCSharp()
         The C#-implemented case mints a transfer <code>StableRef</code> per crossing, since the
         bridge object has no <code>_handle</code> of its own. <code>LeakTests/LiveHandleTests.cs</code>
         row 6b, <code>InterfaceReceiverExtension_CSharpImplementedPet_ReleasesTransferHandle</code>,
-        proves it returns to baseline. A nullable interface receiver (<code>Pet?</code>) and the
+        proves it returns to baseline. This binds even when the receiver interface is never
+        returned and never a declared parameter anywhere else, since
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/135-interface-parameter-reachability.md">ADR-135</a>
+        widened the bridge reachability walk to cover a RECEIVER-role slot too. A nullable interface receiver (<code>Pet?</code>) and the
         other admitted receiver shapes (an enum, <code>Uuid</code>, <code>Instant</code>,
         <code>Duration</code>, a collection, a nullable <code>Uuid</code>/collection, and a bound
         interface) route through the identical parameter lowering but carry no dedicated fixture.
@@ -938,5 +941,6 @@ public void Toy_Tags_ReturnsMarshalledStringElements()
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/126-extension-class-per-declaring-package.md">ADR-126: One Extensions class per declaring package</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/132-extension-receiver-shapes.md">ADR-132: Extension receiver shapes</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md">ADR-133: Nested types</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/135-interface-parameter-reachability.md">ADR-135: Interface parameter positions join the ADR-084 bridge reachability set</a>
     </category>
 </seealso>

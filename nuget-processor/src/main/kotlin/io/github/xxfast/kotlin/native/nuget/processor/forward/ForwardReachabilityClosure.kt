@@ -282,6 +282,11 @@ internal class ForwardReachabilityClosure(
     // the outermost owner at any depth. A sealed arm nested in its base reaches the base by this
     // same edge and is then admitted by the SEALED_SUBCLASS carve-out below, so an arm-only
     // reference no longer depends on some other member returning the base.
+    //
+    // Unconditional on purpose, including when ADR-133/134 defers the owner (`enum class`,
+    // generic, `inner class`): the owner's admission is what puts the nested type on
+    // `NugetProcessor`'s `nestedCandidates` walk, so it is the sole carrier of that type's named
+    // `SKIPPED_NESTED_DECLARATION`, and the admitted owner is a real usable C# type either way.
     val owner: KSClassDeclaration? = classDeclaration.parentDeclaration as? KSClassDeclaration
     owner?.let(::visitDeclaration)
 

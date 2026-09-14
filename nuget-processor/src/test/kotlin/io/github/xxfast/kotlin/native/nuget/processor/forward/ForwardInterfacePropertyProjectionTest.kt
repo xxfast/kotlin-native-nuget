@@ -113,7 +113,9 @@ class ForwardInterfacePropertyProjectionTest {
       setter.contains("IntPtr valueHandle = IntPtr.Zero;") &&
           setter.contains("bool valueOwned = false;") &&
           setter.contains("valueHandle = NugetMarshal.HandleOfOrZero(value, out valueOwned);") &&
-          setter.contains("if (valueOwned) { NugetMarshal.Dispose(valueHandle); }"),
+          setter.contains(
+            "if (valueOwned && valueHandle != IntPtr.Zero) { NugetMarshal.Dispose(valueHandle); }",
+          ),
       "expected the nullable setter to lower through the shared HandleOf reflective helper with " +
           "a null guard, not a direct ._handle read; got: $setter",
     )
@@ -145,7 +147,9 @@ class ForwardInterfacePropertyProjectionTest {
     val setter: String = requireNotNull(property.setter) { "expected a setter body" }
     assertTrue(
       setter.contains("valueHandle = NugetMarshal.HandleOf(value, out valueOwned);") &&
-          setter.contains("if (valueOwned) { NugetMarshal.Dispose(valueHandle); }") &&
+          setter.contains(
+            "if (valueOwned && valueHandle != IntPtr.Zero) { NugetMarshal.Dispose(valueHandle); }",
+          ) &&
           !setter.contains("value != null"),
       "expected a plain HandleOf lowering with no null guard for a non-nullable interface " +
           "property; got: $setter",

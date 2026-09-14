@@ -39,6 +39,14 @@ public class LiveHandleTests
         public void Dispose() { }
     }
 
+    // A C#-side nested-interface implementation for the StateFlow-of-interface row: `Book` crosses
+    // it into Kotlin over the ADR-084 bridge and every `.Value` read resolves it back.
+    private sealed class BookedKeeper : Aviary.IKeeper
+    {
+        public string Greet() => "booked";
+        public void Dispose() { }
+    }
+
     /// <summary>
     /// Settle until the live count stops moving, not for a fixed number of rounds. The ADR-084
     /// cleaner frees handles asynchronously, so releases owed by earlier work land mid-window and
@@ -272,6 +280,111 @@ public class LiveHandleTests
         {
             using IPet rex = new Dog("Rex");
             Assert.Equal("Rex has 4 legs and says Woof!", rex.Describe());
+        });
+    }
+
+    // Row 6c. ADR-135: the same ADR-084 transfer handle, minted for an interface reached only at a
+    // PARAMETER position. No new handle kind, so the lifecycle Row 6 measures is the one this has
+    // to land on once the reachability walk is widened. The row exists because that widening is
+    // what first makes a StableRef get minted here at all, and a fix that mints without disposing
+    // is indistinguishable from a working one on the IntegrationTests side.
+    private sealed class DeskClerk : Boarding.IClerk
+    {
+        public string Stamp() => "stamped";
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void ParameterOnlyInterface_Argument_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            var clerk = new DeskClerk();
+            Assert.Equal("stamped filed at boarding", Boarding.FileVia(clerk));
+        });
+    }
+
+    // Row 6d. The fault-injection twin, and the reason ADR-135 asks for a row rather than reusing
+    // Row 6: an interface with a `var` member plans to null, so `NugetBridge.HandleFor` throws
+    // before any handle is minted. The `finally` still runs, and today it disposes `IntPtr.Zero`
+    // with no zero guard, which kills the process. This row pins that a FAILED mint neither leaks
+    // nor disposes anything. The throw is asserted inside `AssertNoLeak`, not around it.
+    private sealed class ClawMarks : IScratchLog
+    {
+        public int Scratches { get; set; } = 7;
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void UnbridgeableInterface_Argument_ThrowsAndReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            var log = new ClawMarks();
+            Assert.Throws<NotSupportedException>(() => CatteryDesk.CountScratches(log));
+        });
+    }
+
+    // Row 6e. ADR-136: a C#-implemented `IPet` stored by Kotlin and read back over the SUSPEND
+    // route. The handle the completion is handed is a transfer StableRef over the bridge, and the
+    // read resolves it to the original `Dog` instead of wrapping it, so the resolve is what has to
+    // release that handle now (on the sync route the consumer's `using` on the wrapper did it, and
+    // here there is no wrapper to dispose). A resolve that returns the object and forgets the
+    // handle leaks exactly once per completion while `Assert.Same` stays green.
+    [Fact]
+    public async Task SuspendReturn_ResolvedCSharpInterface_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var sitter = new PetSitter();
+            using IPet rex = new Dog("Rex");
+            sitter.Take(rex);
+
+            IPet later = await sitter.HandBackLaterAsync();
+            Assert.Equal("Woof!", later.Speak());
+        });
+    }
+
+    // Row 6f. The Flow twin of Row 6e: one handle per emission, resolved per element rather than
+    // per completion. Separate row because the freeing site is the `KotlinFlow<T>` `read:`
+    // delegate, not the completion callback, and the enumerator's own box/job handles ride along
+    // (a resolve that leaks here scales with elements, not with calls).
+    [Fact]
+    public async Task FlowElement_ResolvedCSharpInterface_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var sitter = new PetSitter();
+            using IPet rex = new Dog("Rex");
+            sitter.Take(rex);
+
+            var seen = new List<IPet>();
+            await foreach (IPet pet in sitter.Wards()) seen.Add(pet);
+            Assert.Equal("Woof!", Assert.Single(seen).Speak());
+        });
+    }
+
+    // Row 6g. The `suspend fun` returning `StateFlow<Interface>` read (site (b) of the interface
+    // spelling sweep). Three handles ride on one call and each is freed at a different place: the
+    // awaited StateFlow's own StableRef (owned by the returned `KotlinStateFlow<T>`, released by
+    // the consumer's `using`), the `nuget_stateflow_value` read per `.Value`, and the ADR-136
+    // resolve of the stored C# keeper. The other async rows all read a handle per completion or
+    // per emission; this one reads a fresh element handle per `.Value` on a holder that outlives
+    // the call, so a value read that forgets its handle leaks per read rather than per call.
+    //
+    // Mylo books a C# keeper and then checks the roster twice.
+    [Fact]
+    public async Task SuspendStateFlowOfInterface_ValueReads_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var aviary = new Aviary("Mylo");
+            using Aviary.IKeeper booked = new BookedKeeper();
+            aviary.Book(booked);
+
+            using KotlinStateFlow<Aviary.IKeeper> report = await aviary.KeeperReportAsync();
+            Assert.Equal("booked", report.Value.Greet());
+            Assert.Equal("booked", report.Value.Greet());
         });
     }
 
@@ -631,6 +744,28 @@ public class LiveHandleTests
             using Job? next = await oreo.NextOrNullLaterAsync();
             Assert.Equal(13, Assert.IsType<Job.Done>(next).Code);
         });
+    }
+
+    // Row 9i. The ADR-025 drain has the same ADR-019 ordering hole the suspend call sites had:
+    // `nuget_scope_drain` launches its job `ATOMIC` on `Dispatchers.Default`, and a scope with no
+    // live children (the normal case, the awaited call has already finished) completes and fires
+    // the completion callback before the `Drain` P/Invoke has returned the job handle. The
+    // callback then disposed a still-zero `drainJobHandle` local and the drain job's own
+    // `StableRef` leaked. That is the +1 Rows 9f and 8e went red with on CI, five first attempts
+    // over four days, both OSes, never on a synchronous row. One suspend call per iteration so
+    // the scope exists (a scope-less `DisposeAsync` skips the drain), then `await using` drains
+    // it idle. Measured at roughly one leak per thousand drains, hence 5000.
+    [Fact]
+    public async Task DisposeAsync_IdleScopeDrainCompletesBeforeNativeReturns_ReturnsToBaseline()
+    {
+        using var factory = new JobFactory();
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                await using Job.Running finished = factory.Running(100);
+                Assert.Null(await finished.NextOrNullLaterAsync());
+            },
+            iterations: 5000);
     }
 
     // Row 9g. The throw path of the same route, which no row covered for a suspend call at all

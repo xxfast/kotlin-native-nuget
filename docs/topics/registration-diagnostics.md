@@ -242,6 +242,41 @@ crossing since the bridge object has no `_handle` of its own, so the receiver ne
 gave the receiver the shared prelude/cleanup pipeline for the first time. See
 [Extensions: Interface receivers](extensions.md#interface-receivers).
 
+**Row 6c**, `ParameterOnlyInterface_Argument_ReturnsToBaseline`, is the same ADR-084 transfer
+handle again, minted for an interface reached only at a parameter position
+([ADR-135](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/135-interface-parameter-reachability.md)
+widened the reachability walk to cover this position at all). No new handle kind: the row exists
+because the widening is what first makes a `StableRef` get minted here, and a fix that mints
+without disposing would be invisible to `IntegrationTests` alone.
+
+**Row 6d**, `UnbridgeableInterface_Argument_ThrowsAndReturnsToBaseline`, is the fault-injection
+twin: an interface with a `var` member plans to `null`, so `NugetBridge.HandleFor` throws before
+any handle is minted. Before ADR-135's throw-safety fix the `finally` still ran and disposed
+`IntPtr.Zero` with no zero guard, crashing the process; this row pins that a **failed** mint
+neither leaks nor disposes anything, asserting the throw inside `AssertNoLeak` rather than around
+it. See [Implementing a Kotlin interface in C#: An interface reachable only at a parameter
+position](interfaces-abstract-sealed.md#an-interface-reachable-only-at-a-parameter-position).
+
+**Row 6e**, `SuspendReturn_ResolvedCSharpInterface_ReturnsToBaseline`, and **Row 6f**,
+`FlowElement_ResolvedCSharpInterface_ReturnsToBaseline`, cover the two async reads
+[ADR-136](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/136-csharp-identity-on-async-interface-reads.md)
+gave the same resolve-then-wrap identity the synchronous return already had: a `suspend fun`
+completion and a `Flow<T>` element, each handing back a stored C#-implemented `IPet`. Since
+`NugetMarshal.TryResolveCSharp` now disposes the transfer handle Kotlin minted for the crossing, the
+freeing site moves from the consumer's `using` to the read itself; both rows pin that the handle
+count still returns to baseline with the free happening there instead. See
+[Interfaces, abstract classes and sealed classes: Lifetime and identity](interfaces-abstract-sealed.md#lifetime-and-identity).
+
+**Row 6g**, `SuspendStateFlowOfInterface_ValueReads_ReturnToBaseline`, is a `suspend fun` returning
+`StateFlow<Interface>`, the newest of the interface-element async reads: three handles ride on one
+call and each is freed at a different place, the awaited `StateFlow`'s own `StableRef` (owned by the
+returned `KotlinStateFlow<T>`, released by the consumer's `using`), the `nuget_stateflow_value` read
+per `.Value`, and the ADR-136 resolve of a stored C# keeper. Unlike the other async rows, which read
+one handle per completion or per emission, this one reads a fresh element handle per `.Value` on a
+holder that outlives the call, so a value read that forgets its handle would leak per read rather
+than per call. See [Coroutines and Flow: `StateFlow<T>` element type is an
+interface](coroutines-and-flow.md#suspend-stateflow-interface-element).
+
 Rows 8g through 8j cover every route with a handle-passed callback payload, now that
 [ADR-036](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md)'s
 2026-09-11 ownership amendment gives the C# side sole ownership of the free (see
@@ -388,6 +423,7 @@ go red, not just pass by construction.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/120-live-stableref-counter-and-leak-harness.md">ADR-120: Live StableRef counter and leak harness</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/121-kotlin-object-collectability-after-last-dispose.md">ADR-121: Kotlin object collectability after the last dispose</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md">ADR-127: `nuget-runtime` Kotlin/Native library</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/135-interface-parameter-reachability.md">ADR-135: Interface parameter positions join the ADR-084 bridge reachability set</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/129-nuget-runtime-version-export.md">ADR-129: A 67th runtime export, `nuget_runtime_version`</a>
     </category>
 </seealso>

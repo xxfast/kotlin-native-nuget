@@ -18,6 +18,14 @@ import java.util.zip.ZipOutputStream
 
 private val NATIVE_EXTENSIONS = setOf("dll", "dylib", "so")
 
+// The .cs files packNuget stages into contentFiles/cs/any/, in staging order. Deduped by file
+// name - if the same name appears in more than one source dir, the last one wins (matches
+// copyTo's overwrite = true applied in iteration order). ADR-138: nugetCompileInterop compiles
+// exactly this set, so the check and the pack can never disagree about what ships.
+internal fun generatedCsFiles(dirs: Iterable<File>): List<File> = dirs
+  .flatMap { dir -> dir.listFiles()?.filter { it.extension == "cs" } ?: emptyList() }
+  .distinctBy { it.name }
+
 abstract class PackNugetTask : DefaultTask() {
   @get:Input
   abstract val packageId: Property<String>
@@ -91,12 +99,7 @@ abstract class PackNugetTask : DefaultTask() {
     val contentDir = File(nupkgDir, "contentFiles/cs/any")
     contentDir.mkdirs()
 
-    // Merge .cs files from every generatedCsDirs entry. Dedupe by file name — if the same name
-    // appears in more than one source dir, the last one wins (matches copyTo's overwrite = true
-    // applied in iteration order).
-    val csFiles: List<File> = generatedCsDirs.files
-      .flatMap { dir -> dir.listFiles()?.filter { it.extension == "cs" } ?: emptyList() }
-      .distinctBy { it.name }
+    val csFiles: List<File> = generatedCsFiles(generatedCsDirs.files)
 
     for (csFile in csFiles) {
       csFile.copyTo(File(contentDir, csFile.name), overwrite = true)

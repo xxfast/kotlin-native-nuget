@@ -1,7 +1,10 @@
 package io.github.xxfast.kotlin.native.nuget.test.nested
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.yield
 
 /**
  * ADR-133 fixture: every nested declaration kind under an exported **class** owner, declared in C#
@@ -71,6 +74,20 @@ class Aviary(val name: String) {
     fun greet(): String
   }
 
+  /**
+   * Site (a) of the interface-spelling sweep: the listener interface of an ADR-039 add/remove pair
+   * ([PerchWatch]), nested so that the pair site's bare `I$simpleName` names nothing.
+   *
+   * Unit-returning and property-less on purpose: the pair route's generated Kotlin bridge object
+   * gives every override a Unit block body and implements no properties, so [Keeper] (which
+   * returns a `String`) cannot travel it. Two arities, so an arity-0 slot and an arity-1 slot are
+   * both proven.
+   */
+  interface Watcher {
+    fun onLand(perch: String)
+    fun onFlyOff()
+  }
+
   /** Depth-2 owner: [Middle.Inner] is two levels in, so the prefix chain has three segments. */
   class Middle {
     class Inner(val depth: Int) {
@@ -135,6 +152,35 @@ class Aviary(val name: String) {
   private fun namedKeeper(which: String): Keeper = object : Keeper {
     override fun greet(): String = "$which keeper of $name"
   }
+
+  /**
+   * Site (b) of the interface-spelling sweep: a `suspend fun` returning `StateFlow<Interface>`.
+   *
+   * ADR-133's amendment moved the plain-async branch and the `Flow` element read onto the
+   * qualified interface spelling ([currentKeeperLater], [keepers]); `suspendStateFlowMembers`
+   * still spells its element with the ADR-040 backing **wrapper** and passes no `read:`, so the
+   * consumer is handed `Task<KotlinStateFlow<Aviary.Keeper>>` where ADR-040 says no consumer ever
+   * sees the wrapper at a declared position. The signature must be
+   * `Task<KotlinStateFlow<global::TestLibrary.Nested.Aviary.IKeeper>>`, and, since ADR-136, the
+   * element read must resolve a C#-implemented keeper back to the original instance instead of
+   * wrapping it, which is what [book] sets up.
+   *
+   * A real `yield()`, so the outer suspend is not vestigial. This is the only `StateFlow` of an
+   * interface in the repository; the composition simply had no fixture.
+   *
+   * Oreo waits by the treat cupboard for whoever is on duty.
+   */
+  suspend fun keeperReport(): StateFlow<Keeper> {
+    yield()
+    return onDuty
+  }
+
+  /** Parameter half of [keeperReport]: stores a keeper (a C# one included) as the current value. */
+  fun book(keeper: Keeper) {
+    onDuty.value = keeper
+  }
+
+  private val onDuty: MutableStateFlow<Keeper> = MutableStateFlow(namedKeeper("on duty"))
 
   /** Depth-2 return position. */
   fun inner(depth: Int): Middle.Inner = Middle.Inner(depth)

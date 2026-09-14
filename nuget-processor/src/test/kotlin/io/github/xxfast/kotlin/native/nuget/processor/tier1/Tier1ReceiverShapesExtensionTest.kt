@@ -70,7 +70,10 @@ class Tier1ReceiverShapesExtensionTest {
     // Same prelude/cleanup pair the interface argument position already emits
     // (`Tier1InterfaceBridgeFactoryTest`: `petHandle = NugetMarshal.HandleOf(pet, out petOwned);`).
     assertContains(cs, "NugetMarshal.HandleOf(receiver, out receiverOwned)")
-    assertContains(cs, "if (receiverOwned) { NugetMarshal.Dispose(receiverHandle); }")
+    assertContains(
+      cs,
+      "if (receiverOwned && receiverHandle != IntPtr.Zero) { NugetMarshal.Dispose(receiverHandle); }",
+    )
   }
 
   @Test

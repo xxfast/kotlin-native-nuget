@@ -394,6 +394,11 @@ such a position (reusing ADR-066's reachability computation). The ADR-039 `add*/
 unchanged in v1 and converges on the factory in a later commit (its pair detection keeps the
 `IDisposable` subscription surface, but the bridge construction can share the factory slots).
 
+**Amended 2026-09-14:** this rule was aspirational until [ADR-135](135-interface-parameter-reachability.md);
+see this ADR's own 2026-09-13 amendment below for what actually shipped in the meantime. As of
+ADR-135 the rule is true: `reachableInterfaceNames` walks parameter positions and RECEIVER-role ABI
+slots too, not only returns.
+
 ### Scope
 
 **In v1 (per staged plan below):** methods of arity 0-2 with `Unit`, primitive, `Boolean`, enum,
@@ -521,6 +526,12 @@ with only `greetVia`, the collision never happened because neither interface had
 this needs a return-reachability edge from "parameter position" the same way ADR-066 lacks one for
 nested-type declaration reachability; tracked on the ROADMAP.
 
+**Amended 2026-09-14, closed by [ADR-135](135-interface-parameter-reachability.md):** the walk now
+covers parameter positions and RECEIVER-role ABI slots, and a failed mint's `finally` no longer
+disposes `IntPtr.Zero`. A C# implementation at a parameter-only, nested, top-level, or
+receiver-only position now bridges; an interface whose bridge plans to `null` throws a managed
+`NotSupportedException` naming the C# type instead of crashing the host.
+
 **Identity, unchanged but newly contrasted.** The sync return route
 (`NugetMarshal.TryResolveCSharp`) is still the only read that resolves a returned handle back to a
 stored C#-implemented original before falling back to `new Wrapper(ptr)`. The legacy suspend and
@@ -529,6 +540,10 @@ wrapper, the same as every other non-sync read (a collection element, a sealed r
 C#-implemented object returned through `Task<T>` or a `Flow<T>` never round-trips to the original
 instance. Not a regression, a pre-existing asymmetry the new fixture happened to make visible for
 interfaces specifically.
+
+**Amended 2026-09-14, closed by [ADR-136](136-csharp-identity-on-async-interface-reads.md):** the
+suspend and Flow routes now resolve to the original C#-implemented instance first, the same as the
+sync return.
 
 Fixtures: `nested/Aviary.kt`'s `Registry` object (the collision pair, and the return that makes it
 reachable). Tests: `NestedTypesTests.cs` reflection facts asserting distinct generated names, Tier 1.

@@ -490,7 +490,11 @@ internal object ForwardCirPropertyProjection {
   private fun ForwardPropertyPlan.setterCleanup(): String? = when (val value = type.unwrapNullable()) {
     // Only a minted bridge handle is disposed: a Kotlin-backed wrapper's `_handle` belongs to that
     // wrapper, and `owned` is how HandleOf reports which of the two it returned.
-    is BridgeType.Interface -> "if (valueOwned) { NugetMarshal.Dispose(valueHandle); }"
+    // ADR-135: the same zero guard the collection arm below carries. A throw from the mint in
+    // `setterPrelude` reaches this `finally` with the handle still Zero, and `nuget_dispose` is
+    // not null-safe.
+    is BridgeType.Interface ->
+      "if (valueOwned && valueHandle != IntPtr.Zero) { NugetMarshal.Dispose(valueHandle); }"
     is BridgeType.Collection -> {
       val native: String = when (value.kind) {
         CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "NugetListNative"

@@ -465,6 +465,47 @@ class NugetPlugin : Plugin<Project> {
             task.dependsOn(kspTask)
           }
 
+        // Hoisted above both register calls so packNuget and nugetCompileInterop share one
+        // resolved-version provider and one shims dir: the check must compile exactly the files,
+        // at exactly the package versions, the pack ships.
+        val nugetGenerateShims: TaskProvider<NugetGenerateShimsTask>? =
+          if (boundDeps.isEmpty()) null
+          else project.tasks.named("nugetGenerateShims", NugetGenerateShimsTask::class.java)
+
+        val resolvedVersions: Provider<Map<String, String>> = if (boundDeps.isEmpty()) {
+          project.provider { emptyMap() }
+        } else {
+          val boundIds: Set<String> = boundDeps.map { it.id }.toSet()
+          project.tasks.named("nugetRestore", NugetRestoreTask::class.java)
+            .flatMap { restore ->
+              restore.assetsFile.map { assetsFile ->
+                deriveResolvedVersions(assetsFile.asFile.readText(), boundIds)
+              }
+            }
+        }
+
+        // ADR-138: the generated C# ships as source and is compiled in the consumer's build, so
+        // nothing in packNuget can reject a binding that does not compile. This sibling task
+        // (the nugetReportDiagnostics precedent) compiles the same files with dotnet first, and
+        // skips with a warning when no .NET SDK is installed.
+        val compileInterop: TaskProvider<NugetCompileInteropTask> = project.tasks
+          .register("nugetCompileInterop", NugetCompileInteropTask::class.java) { task ->
+            task.group = "nuget"
+            task.description =
+              "Compiles the generated C# bindings with dotnet before packNuget stages them"
+            task.generatedCsDirs.from(kspOutputDir)
+            task.projectDir.set(project.layout.buildDirectory.dir("nuget-compile"))
+            task.dotnetSearchPath.set(project.providers.environmentVariable("PATH"))
+            task.dependencySources.set(extension.dependencies.mapNotNull { it.source }.distinct())
+            task.dependencyVersions.set(resolvedVersions)
+            task.dependsOn(kspTask)
+
+            if (nugetGenerateShims != null) {
+              task.generatedCsDirs.from(nugetGenerateShims.flatMap { it.csharpOutputDir })
+              task.dependsOn(nugetGenerateShims)
+            }
+          }
+
         project.tasks.register("packNuget", PackNugetTask::class.java)
           .configure { task ->
             task.group = "nuget"
@@ -494,26 +535,12 @@ class NugetPlugin : Plugin<Project> {
 
             task.dependsOn(kspTask)
             task.dependsOn(reportDiagnostics)
+            task.dependsOn(compileInterop)
+            task.dependencyVersions.set(resolvedVersions)
 
-            if (boundDeps.isNotEmpty()) {
-              val nugetGenerateShims: TaskProvider<NugetGenerateShimsTask> =
-                project.tasks.named("nugetGenerateShims", NugetGenerateShimsTask::class.java)
-              val nugetRestore: TaskProvider<NugetRestoreTask> =
-                project.tasks.named("nugetRestore", NugetRestoreTask::class.java)
-
-              val boundIds: Set<String> = boundDeps.map { it.id }.toSet()
-
+            if (nugetGenerateShims != null) {
               task.generatedCsDirs.from(nugetGenerateShims.flatMap { it.csharpOutputDir })
-              task.dependencyVersions.set(
-                nugetRestore.flatMap { restore ->
-                  restore.assetsFile.map { assetsFile ->
-                    deriveResolvedVersions(assetsFile.asFile.readText(), boundIds)
-                  }
-                }
-              )
               task.dependsOn(nugetGenerateShims)
-            } else {
-              task.dependencyVersions.set(emptyMap())
             }
           }
       }

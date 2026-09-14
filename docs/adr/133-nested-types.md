@@ -299,6 +299,15 @@ completion and the `Flow` element sites both read the classifier's `csharpType` 
 is load-bearing byte-identity for the pre-existing `PetBox<T>` fixture. A cross-namespace top-level
 interface bound is still spelled wrong; pre-existing, unrelated to nesting, tracked on the ROADMAP.
 
+**Amended 2026-09-14, closed.** This paragraph's cross-namespace top-level bound is now qualified,
+along with two related bare or wrapper spellings found alongside it: the ADR-039 add/remove pair
+site's listener parameter, and the legacy `suspend fun` returning `StateFlow<Interface>` route's
+element, which spelled the ADR-040 backing wrapper and passed no `read:`. See [Generics: A generic
+bound from another package](../topics/generics.md#a-generic-bound-from-another-package), [Lambdas
+and callbacks: C# implementing a Kotlin interface as a
+parameter](../topics/lambdas-and-callbacks.md), and [Coroutines and Flow: `StateFlow<T>` element
+type is an interface](../topics/coroutines-and-flow.md#suspend-stateflow-interface-element).
+
 **Identity asymmetry, inherited from ADR-040/ADR-084, not introduced here.** The sync plan route
 resolves a returned handle back to its original C#-implemented instance first
 (`NugetMarshal.TryResolveCSharp`) and only wraps when there is no original to resolve to. The
@@ -307,12 +316,20 @@ already-shipped collection- and sealed-return reads; a C#-implemented object ret
 or through a `Flow<T>` never round-trips to the original instance the way the sync return does. See
 [ADR-084](084-csharp-implemented-interfaces.md)'s 2026-09-13 amendment.
 
+**Amended 2026-09-14, closed by [ADR-136](136-csharp-identity-on-async-interface-reads.md):** the
+suspend and Flow reads fixed here now resolve to the original C#-implemented instance first, the
+same as the sync return.
+
 **Return-reachability, verified.** [ADR-084](084-csharp-implemented-interfaces.md)'s bridge plan
 (state class + C#-implementable factory) is built only from interfaces reachable at a *return*
 position (`CirTranslator.interfaceBackingClasses`). A nested interface used only as a *parameter*
 type gets no wrapper and no bridge plan; passing a C# implementation at that position crashes the
 host with an unlocated Kotlin `NullPointerException`, no diagnostic. See ADR-084's 2026-09-13
 amendment for the full finding.
+
+**Amended 2026-09-14, closed by [ADR-135](135-interface-parameter-reachability.md):** a
+parameter-only or receiver-only interface, nested or top-level, now gets a wrapper and a bridge
+plan the same as a return-reachable one, and a failed mint no longer crashes the host.
 
 Fixtures: `nested/Aviary.kt` (`currentKeeperLater`, `keepers()`), `nested/AviaryRoutes.kt`
 (`anyKeeperLater`, top-level), `cat/Pet.kt` (`strayPetLater`, top-level interface). Tests:

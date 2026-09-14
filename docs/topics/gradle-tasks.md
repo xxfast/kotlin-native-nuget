@@ -12,8 +12,9 @@ Registered when `nuget { publish { } }` is set **and** the Kotlin Multiplatform 
 
 | Task | Description | Depends on |
 |---|---|---|
-| `packNuget` | Packages the Kotlin/Native shared library as a NuGet package | the shared-lib link tasks, `kspKotlin{Target}`, `nugetReportDiagnostics`, `nugetGenerateShims` (only if the project also binds a dependency), and `nugetSnapshotVersion`/`nugetSnapshotVersionProps` (only when `snapshot = true`) |
+| `packNuget` | Packages the Kotlin/Native shared library as a NuGet package | the shared-lib link tasks, `kspKotlin{Target}`, `nugetReportDiagnostics`, `nugetCompileInterop`, `nugetGenerateShims` (only if the project also binds a dependency), and `nugetSnapshotVersion`/`nugetSnapshotVersionProps` (only when `snapshot = true`) |
 | `nugetReportDiagnostics` | Reports declarations the forward bridge could not generate | `kspKotlin{Target}` |
+| `nugetCompileInterop` | Compiles the generated C# bindings with dotnet before packNuget stages them | `kspKotlin{Target}`, `nugetGenerateShims` (only if the project also binds a dependency) |
 
 `packNuget` writes the staged package to `build/nuget/{packageId}.{version}/` and the zipped
 `.nupkg` to `build/nuget/{packageId}.{version}.nupkg`. It reads the C# KSP generates at
@@ -28,6 +29,51 @@ a dependency, merges the reverse-direction C# shims from `nugetGenerateShims` in
 is visible on every `packNuget`, not only the first. It is never up to date itself. See
 [Forward overview](forward-overview.md#where-these-messages-appear) and
 [ADR-100](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/100-forward-diagnostic-delivery.md).
+
+### `nugetCompileInterop` {id="nugetcompileinterop"}
+
+`nugetCompileInterop` writes a throwaway `interop-check.csproj` to `build/nuget-compile/`, with one
+`<Compile Include>` per file `packNuget` would stage (the KSP-generated `Interop.cs`, plus any
+reverse-direction shims from `nugetGenerateShims`) and one exact-version `PackageReference` per
+bound dependency:
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>12.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="/path/to/build/generated/ksp/macosArm64/macosArm64Main/resources/Interop.cs" />
+    <!-- one line per generated or shim .cs file -->
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="MimeMapping" Version="[4.0.0]" />
+    <PackageReference Include="TestDependency" Version="[1.0.0-fixture.1789351141258]" />
+  </ItemGroup>
+</Project>
+```
+
+It then runs `dotnet build` against it. If a generated file does not compile, `packNuget` fails
+with the compiler's own output, for example:
+
+```
+[nuget] The generated C# bindings do not compile (dotnet build exit code 1). This is a generator
+defect: the package would fail in every consumer's build. Compiler output:
+.../Interop.cs(29579,59): error CS0101: The namespace 'TestLibrary' already contains a definition for 'Cat'
+Build FAILED.
+```
+
+When `dotnet` is not found on `PATH`, the task logs a warning and returns without writing or
+compiling anything, so publishing a Kotlin/Native library still needs no .NET SDK. See
+[Prerequisites](prerequisites.md) and
+[ADR-138](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/138-pack-time-interop-compile-check.md).
 
 Registered only when `nuget { publish { snapshot = true } }` is set:
 

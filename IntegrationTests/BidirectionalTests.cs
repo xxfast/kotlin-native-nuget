@@ -113,6 +113,46 @@ public class BidirectionalTests
         Assert.Same(dog, oreo.Friend);
     }
 
+    // ADR-136: the same facet, read back over the two async routes. The sync return above resolves
+    // the bridge token to the original `Dog`; the suspend completion and the Flow element read
+    // construct a fresh backing wrapper instead, so `Assert.Same` is the whole point of these two.
+    // `Speak()` alongside it proves the resolved object still dispatches (a resolve that handed
+    // back the wrong object, or a disposed one, would not answer "Woof!").
+    //
+    // `PetSitter` rather than `Cat` because `Cat` extends `Animal`, and a suspend or Flow member on
+    // a class with a Kotlin superclass does not compile today (a separate generator bug). Rex gets
+    // dropped off at the sitter and has to come home as the same dog.
+    [Fact]
+    public async Task StoredCSharpPet_RoundTripsToTheOriginalInstance_OverTask()
+    {
+        using var sitter = new PetSitter();
+        using IPet dog = new Dog("Rex");
+
+        sitter.Take(dog);
+        Assert.Equal("Rex", sitter.WardName());
+
+        IPet later = await sitter.HandBackLaterAsync();
+
+        Assert.Same(dog, later);
+        Assert.Equal("Woof!", later.Speak());
+    }
+
+    [Fact]
+    public async Task StoredCSharpPet_RoundTripsToTheOriginalInstance_OverFlow()
+    {
+        using var sitter = new PetSitter();
+        using IPet dog = new Dog("Rex");
+
+        sitter.Take(dog);
+
+        var seen = new List<IPet>();
+        await foreach (IPet pet in sitter.Wards()) seen.Add(pet);
+
+        IPet only = Assert.Single(seen);
+        Assert.Same(dog, only);
+        Assert.Equal("Woof!", only.Speak());
+    }
+
     [Fact]
     public void RepeatedCrossings_ResolveToTheOneCSharpInstance()
     {

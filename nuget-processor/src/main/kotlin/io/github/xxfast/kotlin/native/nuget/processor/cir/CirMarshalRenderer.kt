@@ -512,8 +512,14 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("                owned = false;")
   appendLine("                return wrapper.Handle;")
   appendLine("            }")
+  // ADR-135: `owned` is assigned only *after* a handle was actually minted. The inner HandleOf
+  // throws NotSupportedException for a C# object implementing no bridgeable Kotlin interface, and
+  // the call site reads `owned` in its `finally`: assigning it first meant a failed mint ran
+  // `NugetMarshal.Dispose(IntPtr.Zero)`, whose non-nullable `COpaquePointer` export took the host
+  // down with a Kotlin NullPointerException instead of surfacing the managed throw.
+  appendLine("            IntPtr handle = HandleOf(value);")
   appendLine("            owned = true;")
-  appendLine("            return HandleOf(value);")
+  appendLine("            return handle;")
   appendLine("        }")
   appendLine()
   appendLine("        internal static IntPtr HandleOfOrZero(object? value, out bool owned)")

@@ -93,7 +93,11 @@ class Tier1InterfaceBridgeFactoryTest {
     // ROADMAP:130: the transfer handle is disposed in a `finally`, so the locals are declared
     // before the `try` and the extraction is an assignment.
     assertContains(cs, "petHandle = NugetMarshal.HandleOf(pet, out petOwned);")
-    assertContains(cs, "if (petOwned) { NugetMarshal.Dispose(petHandle); }")
+    // ADR-135: the zero guard, because a throw from the mint reaches this `finally` too.
+    assertContains(
+      cs,
+      "if (petOwned && petHandle != IntPtr.Zero) { NugetMarshal.Dispose(petHandle); }",
+    )
     // A Kotlin-backed wrapper's own `_handle` is never disposed by the call site.
     assertContains(cs, "owned = false;")
   }

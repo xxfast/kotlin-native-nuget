@@ -343,8 +343,8 @@ correctly reported (**verified**), so this filter is real work, not a no-op).
 > `(parentDeclaration as? KSClassDeclaration)?.let(::visitDeclaration)` now runs **unconditionally**,
 > ahead of the nested test and regardless of what that test later decides: even a nested candidate
 > ADR-133 still defers (an `inner class`, a generic, an `enum class`/`interface`/sealed owner)
-> climbs and admits its owner, a dead admission with no consumer of the nested type itself and no
-> fixture pinning it. The nested declaration itself still gets **no admission record and no
+> climbs and admits its owner. That is deliberate, not an oversight (see the 2026-09-14 amendment
+> below). The nested declaration itself still gets **no admission record and no
 > bucket**: ADR-133's owner walk remains the sole declarer, so `INFO_EXPORTED_FROM_DEPENDENCY` keeps
 > naming owners only, never a nested type. `walkClassMembers` separately descends one level into
 > every already-admitted owner's public, non-deferred nested declarations and calls itself on each,
@@ -389,14 +389,26 @@ correctly reported (**verified**), so this filter is real work, not a no-op).
 >
 > **Consequences.** Additive: a dependency owner can now be declared with no member of the exporting
 > module returning it, purely because a nested type of it is referenced, which is the same C# a
-> consumer needs anyway (the nested block lives inside the owner's). Inferred, not fixture-verified:
-> edge A is unconditional, so a nested type ADR-133 still defers (an `inner class`, generic,
-> `enum class`/`interface`/sealed owner) still climbs and admits its owner regardless, a dead
-> admission with no consumer of the nested type at all. The `include(...)` hint's UNDECLARED_CLASS
+> consumer needs anyway (the nested block lives inside the owner's). Edge A is unconditional, and
+> the 2026-09-14 amendment below settles why that is the right behaviour for a deferred owner.
+> The `include(...)` hint's UNDECLARED_CLASS
 > wording is corrected by this amendment, but a sibling reason sentence for the
 > `SKIPPED_NESTED_DECLARATION` diagnostic itself, a KDoc comment on that diagnostic kind, and a
 > classifier code comment were not reached by the same pass and still describe nesting the way it
 > worked before ADR-133; see ROADMAP.md Phase 4.
+
+> **Amendment (2026-09-14, the deferred-owner climb is not a dead admission).** Decided: gate
+> nothing. When the owner is one ADR-133/134 defers (`enum class`, generic, `inner class`), the
+> climb's admission is the **only** carrier of the nested type's named skip: an admitted owner is
+> what puts its nested declarations on `NugetProcessor`'s `nestedCandidates` walk, which is where
+> `SKIPPED_NESTED_DECLARATION` is emitted, so gating the climb would silently drop the one
+> diagnostic that names the deferred type and its reason. The admission is not dead either way:
+> the owner is a real, usable C# type (`public enum Season`), reached exactly as a reference to
+> `Season.Almanac` implies. Pinned by `Tier1ReachabilityClosureTest.kt`'s
+> `a deferred owner reached only through its nested type is still admitted, so the skip stays
+> named` (`dep.deferred.Season.Almanac`: the enum is declared, `Almanac` is absent from the
+> generated C#, the member binds nothing, the skip names the type, and the manifest names the
+> owner only), and by a comment at the climb itself.
 
 ### 3. Admission predicate
 
