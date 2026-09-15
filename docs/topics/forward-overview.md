@@ -141,7 +141,12 @@ rules.
 
 Not every Kotlin construct can be expressed as C#. When the generator meets one it cannot bridge,
 it names the member and the reason, at the author's own Kotlin source, rather than emitting invalid
-Kotlin or a C# API whose signature lies about its contract. Every diagnostic carries a
+Kotlin or a C# API whose signature lies about its contract. A member the compiler itself wrote, not
+the author, is filtered out before any of this reporting runs and never appears as a diagnostic:
+that covers `equals`/`hashCode`/`toString`, a data class's `copy`/`componentN`, a hidden-deprecated
+member, and a compiler plugin's synthesized surface such as kotlinx.serialization's
+`Companion.serializer()`
+([#235](https://github.com/xxfast/kotlin-native-nuget/issues/235)). Every diagnostic carries a
 `ForwardDiagnosticKind` whose name encodes its severity:
 
 - **`SKIPPED_*`**: the member is warned about and omitted entirely from the generated C# API.

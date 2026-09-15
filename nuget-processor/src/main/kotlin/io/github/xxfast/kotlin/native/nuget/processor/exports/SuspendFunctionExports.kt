@@ -95,7 +95,7 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
   val suspendMethods: List<KSFunctionDeclaration> = cls.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { it.modifiers.contains(Modifier.SUSPEND) }
-    .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
+    .filter { method -> !method.isCompilerOwnedMember(cls) }
     // ADR-118: declared-only for a sealed arm. Without it a base `open suspend fun` no arm
     // overrides exports once per arm under the arm's prefix, with `overloadSuffix` answering ""
     // on its lenient path; `ForwardAbiContract.kotlin` filters Kotlin exports down to the C#

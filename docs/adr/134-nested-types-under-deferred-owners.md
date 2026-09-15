@@ -280,3 +280,7 @@ no `SKIPPED_*` diagnostic either.
 `:test-models` carries the fixture: `@Serializable data class Carton` and
 `@Serializable value class CartonTag`, both reached from `Newsroom`, so the data-class and
 value-class owner arms of the original report are both covered one klib boundary away.
+
+Amended by ADR-066's 2026-09-15 amendment (issue #235): the `$` rule above is now the
+backstop of a four-rule compiler-owned predicate that every member walk shares, so no route reaches
+a synthesized declaration rather than only this one declining to declare it.

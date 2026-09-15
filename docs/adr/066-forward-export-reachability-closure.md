@@ -979,3 +979,59 @@ first:**
   path's *other* assumptions (e.g. recovering component order from the primary constructor) hold for
   a klib-sourced declaration; the primary constructor is verified to be fully readable, so this is
   low-risk but unproven end-to-end.
+
+## Amendment (2026-09-15): the closure never walks a compiler-owned member
+
+Issue #235. ADR-134's #223 amendment stopped the closure *declaring* kotlinx.serialization's
+synthesized surface. It did not stop it *reaching* it. `Companion.serializer()` still walked, still
+planned, and still reported `SKIPPED_UNSUPPORTED_RETURN`: one unactionable line per `@Serializable`
+type, thirty of them on the reporting consumer. The advice cannot be followed, because nobody wrote
+the declaration it names. A build log line that cannot be acted on trains people to ignore the
+channel that carries the real API gaps.
+
+`$serializer` and `Companion.serializer` are one category, so they get one predicate. A member is
+compiler-owned when any of these holds:
+
+1. It is a member of the language: `Any`'s three, the constructor, a data class's `copy` and
+   `componentN`.
+2. Its origin is `Origin.SYNTHETIC`, which is what KSP says about a member it synthesized in-module.
+3. It carries `@Deprecated(level = DeprecationLevel.HIDDEN)`. The compiler kept it on the ABI and
+   took it out of the source language, so nothing can call it by name and nothing should bridge it.
+   General and plugin-agnostic. The default level is `WARNING`, so an absent `level` argument is not
+   hidden.
+4. Its signature is spelled in a compiler plugin's runtime, on an owner the plugin marked: a member
+   of a `@kotlinx.serialization.Serializable` type, or of that type's companion, whose return type or
+   any parameter type lives under `kotlinx.serialization.`. For a nested declaration, its supertypes
+   are read instead of its signature.
+
+Rule 4 is not general and the KDoc says so. Across a klib boundary a synthesized member carries no
+signal at all: verified on the `:test-models` fixture, `Carton.Companion.serializer` is
+`Origin.KOTLIN_LIB`, at `NonExistLocation`, with no annotations and no containing file, byte
+identical to a member a person wrote. Its signature plus the owner's `@Serializable` marker is the
+only handle KSP offers. A second compiler plugin needs a second clause. The alternative, matching the
+name `serializer`, is what the issue explicitly rules out and would refuse a hand-written member of
+that name on an unrelated type.
+
+Nothing in-module needs rule 4: an in-module `@Serializable` type shows KSP no `$serializer`, no
+`serializer()` and no synthesized `Companion` at all, because the serialization plugin lowers in IR,
+after KSP runs. Every line this issue reported therefore came across a klib boundary.
+
+Rule 3 is the one that generalizes, and it is what would have caught this class without knowing the
+plugin: verified, `Carton.$serializer` carries
+`@Deprecated("This synthesized declaration should not be used directly", level = DeprecationLevel.HIDDEN)`
+as well as the `kotlinx.serialization.internal.GeneratedSerializer` supertype, so the nested
+declaration is refused twice over, and would still be refused if it were renamed.
+
+#223's `$` rule stays, as a backstop rather than as the primary signal: it is the cheapest of the
+four to answer and it is the one that keeps `Interop.cs` parsing.
+
+The predicate lives in `exports/Helpers.kt` as `isCompilerOwnedMember` (function and property
+overloads) and `isCompilerOwnedDeclaration`, and every member walk in the processor calls it: the
+closure's own `walkClassMembers`, every `ForwardCallablePlanner` entry builder, every
+`ForwardPropertyPlanner` property walk, the interface-bridge planner, the legacy export builders and
+the CIR translators. The closure applies it *before* visiting the member's types, so no dependency
+type is ever admitted on behalf of a declaration no route will export.
+
+No diagnostic. The filter runs ahead of skip reporting, so a compiler-owned member is not a dropped
+callable and never becomes a `SKIPPED_*` line. The invariant behind that: a diagnostic may only
+describe something the consumer can act on.

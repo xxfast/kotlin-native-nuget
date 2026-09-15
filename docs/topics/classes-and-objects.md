@@ -302,7 +302,9 @@ accessor differently instead (`perchAt`).
 
 A `@Serializable` class exports the same as any other class. kotlinx.serialization's
 compiler-generated `$serializer` nested object is never declared in C#, since `$` isn't a legal C#
-identifier there; it has no members you'd want to call, so skipping it costs nothing.
+identifier there; it has no members you'd want to call, so skipping it costs nothing. Nothing about
+it appears in the build log either: a member the compiler wrote, a hidden-deprecated member or the
+serialization plugin's `serializer()`, is never reported as skipped.
 
 ### An `object` at a member position stays CS0722 {id="nested-object-position"}
 
