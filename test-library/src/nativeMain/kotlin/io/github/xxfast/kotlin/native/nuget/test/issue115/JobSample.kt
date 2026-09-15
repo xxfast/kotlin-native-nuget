@@ -452,6 +452,27 @@ sealed class Job {
      */
     suspend fun nap(): String = "napping"
   }
+
+  /**
+   * Issue #230: a `data class` arm whose constructor parameters are themselves flows, declared
+   * **last** so every arm above keeps the discriminator ordinal it ships with.
+   *
+   * The arm's own `component1()` and `component2()` return those flows, so before the arm flow
+   * selector applied the synthetic-member filter every other member route applies, both crossed as
+   * `public KotlinFlow<string> Component1()` / `public KotlinStateFlow<int> Component2()` beside
+   * the properties they duplicate. The absence assertion lives in
+   * `IntegrationTests/SealedArmFlowComponentTests.cs`.
+   *
+   * A `Flow` cannot be passed in, so the constructor itself is unrouted and the arm carries only
+   * its internal handle constructor: [JobFactory.purring] is the way in, which is exactly the
+   * shape `WARNING_NO_PUBLIC_CONSTRUCTOR` describes.
+   *
+   * Mylo, folded on the windowsill, rumbling.
+   */
+  data class Purring(
+    val purrs: Flow<String>,
+    val loudness: StateFlow<Int>,
+  ) : Job()
 }
 
 /**
@@ -467,6 +488,18 @@ class JobFactory {
 
   /** ADR-124: the flow-only arm, reached the same way [running] reaches the suspending one. */
   fun watching(id: String): Job.Watching = Job.Watching(id)
+
+  /**
+   * Issue #230: the only way into [Job.Purring], whose own constructor takes flows and so has no
+   * C# binding. Both flows are finite and fixed, so the C# side can assert their values.
+   */
+  fun purring(): Job.Purring = Job.Purring(
+    purrs = flow {
+      emit("rumble")
+      emit("rumble rumble")
+    },
+    loudness = MutableStateFlow(7),
+  )
 
   /**
    * The same nested `data class` arm return as [running], on the **suspend** route: it binds as

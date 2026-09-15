@@ -271,12 +271,7 @@ internal fun KSClassDeclaration.forwardArmCallbackCandidates(): List<KSFunctionD
     .filter { !it.returnsForwardFlow() }
     // A data class's generated `copy` can carry a lambda-typed parameter; the ordinary route
     // excludes those members upstream and so does the plan, so this route must not claim them.
-    .filter { method ->
-      val name: String = method.simpleName.asString()
-      val isDataClassMethod: Boolean = modifiers.contains(Modifier.DATA) &&
-          (name == "copy" || name.startsWith("component"))
-      name !in setOf("equals", "hashCode", "toString", "<init>") && !isDataClassMethod
-    }
+    .filter { method -> !method.isForwardSyntheticMember(this) }
     .toList()
 
 /**

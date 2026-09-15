@@ -136,12 +136,7 @@ internal fun FileSpec.Builder.addClassExports(
 
   val allRegularMethods: List<KSFunctionDeclaration> = cls.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter {
-      val methodName: String = it.simpleName.asString()
-      val isDataClassMethod: Boolean = cls.modifiers.contains(Modifier.DATA) &&
-          (methodName == "copy" || methodName.startsWith("component"))
-      methodName !in listOf("equals", "hashCode", "toString", "<init>") && !isDataClassMethod
-    }
+    .filter { method -> !method.isForwardSyntheticMember(cls) }
     .filter { !it.modifiers.contains(Modifier.SUSPEND) }
     .filter { method ->
       method.isForwardMemberOf(cls, superClass) && !method.modifiers.contains(Modifier.ABSTRACT)

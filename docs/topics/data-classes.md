@@ -1,7 +1,9 @@
 # Data classes
 
 A Kotlin `data class` becomes a regular C# `class`, not a `record class`. Its `Equals`,
-`GetHashCode`, `ToString`, and `Copy` behave exactly as Kotlin's `data class` does.
+`GetHashCode`, `ToString`, and `Copy` behave exactly as Kotlin's `data class` does. Kotlin's own
+`componentN()` destructuring functions are never exported, including on a `Flow`/`StateFlow`-typed
+constructor parameter.
 
 For this declaration in `Toy.kt`:
 
