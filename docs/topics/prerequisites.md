@@ -4,21 +4,16 @@
 
 - JDK 17+
 - Gradle, via the included wrapper (`./gradlew`)
-- [.NET SDK](https://dotnet.microsoft.com/download) 8.0+, **only if you bind a NuGet package into
-  Kotlin** (`nuget { dependencies { dependency(...) { bind { ... } } } }`).
-
-  Publishing Kotlin to NuGet needs no .NET SDK. `packNuget` writes the `.nupkg` itself with
-  `java.util.zip` and never shells out to `dotnet`. Only `nugetRestore` and `nugetExtractApi`
-  invoke `dotnet` (both require it via `requireDotnet()` in
-  `nuget-plugin/src/main/kotlin/io/github/xxfast/kotlin/native/nuget/NugetTooling.kt`), and both
-  only run when a dependency is declared. See [Gradle tasks](gradle-tasks.md).
+- [.NET SDK](https://dotnet.microsoft.com/download) 8.0+, only if you bind a NuGet package into
+  Kotlin (`nuget { dependencies { dependency(...) { bind { ... } } } }`). Publishing needs no
+  .NET SDK: `packNuget` writes the `.nupkg` itself.
 
   <note>
     <p>
-      If a .NET SDK is present, `packNuget` also runs `nugetCompileInterop`, which compiles the
-      generated C# bindings before packing and fails the build on a compiler error. Without the
-      SDK, this check is skipped with a warning and publishing proceeds as before. If the
-      SDK on `PATH` is present but cannot run, the check is skipped the same way.
+      If a .NET SDK is on <code>PATH</code>, <code>packNuget</code> also compiles the generated C#
+      bindings before packing and fails the build on a compiler error. Without the SDK (or one
+      that can't run), this check is skipped with a warning and publishing proceeds as before. See
+      <a href="gradle-tasks.md#nugetcompileinterop">Gradle tasks</a>.
     </p>
   </note>
 
@@ -30,8 +25,8 @@
 brew install dotnet
 ```
 
-That's it. Bindings are pre-generated at Kotlin compile time via KSP, so the consumer needs no
-additional tooling.
+Bindings are pre-generated at Kotlin compile time via KSP, so the consumer needs no additional
+tooling.
 
 ## Compatibility
 
@@ -46,10 +41,7 @@ supported.
 ## Supported native targets
 
 The plugin maps Kotlin/Native targets to NuGet runtime identifiers (RIDs), used for the
-`runtimes/{rid}/native/` package layout. The map lives as `KONAN_TO_RID` in
-`nuget-plugin/src/main/kotlin/io/github/xxfast/kotlin/native/nuget/NugetPlugin.kt`, keyed on
-`KonanTarget.name`; the table below uses the Gradle DSL target names you actually write inside
-`kotlin { }`:
+`runtimes/{rid}/native/` package layout:
 
 | Kotlin target | RID           | Exercised in CI |
 |----------------|---------------|:----------------:|
@@ -59,7 +51,6 @@ The plugin maps Kotlin/Native targets to NuGet runtime identifiers (RIDs), used 
 | `linuxX64`     | `linux-x64`   | No               |
 | `linuxArm64`   | `linux-arm64` | No               |
 
-A native target outside this table is skipped with a warning, and if no configured target is
-supported, the plugin skips the whole project for that build. See
-[Getting started](getting-started.md) for target configuration and
-[Gradle tasks](gradle-tasks.md) for what runs where.
+A target outside this table is skipped with a warning, and if no configured target is supported,
+the plugin skips the whole project for that build. See [Getting started](getting-started.md) for
+target configuration.

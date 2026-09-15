@@ -411,7 +411,7 @@ each package would silently declare its own unrelated C# copy of the same Kotlin
 ([ADR-109](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/109-duplicate-type-hazard.md)).
 The plugin closes that visibility gap: every forward publisher's `include`/`exclude`/`rootPackage`
 predicate is lowered into a `nuget.publishedScopes` KSP option (see
-[The nuget {} DSL](nuget-dsl.md#cross-module-export-closure) for the wire format), and the processor
+[The nuget {} DSL](nuget-dsl.md#cross-module-export-closure)), and the processor
 matches every admitted dependency type against every *other* publisher's scope, by package, since a
 cross-module declaration carries no module identity. A match warns with
 `WARNING_DUPLICATED_DEPENDENCY_TYPE`. Nothing is skipped and the generated output does not change,

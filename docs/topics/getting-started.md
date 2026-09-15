@@ -4,23 +4,6 @@ This walks through publishing a Kotlin/Native library as a NuGet package and con
 C# project, end to end. It mirrors `test-library/build.gradle.kts` and the `IntegrationTests`
 project in this repo, read those alongside this page for a working reference.
 
-<note>
-    <p><b>Upgrading to 0.6.0.</b> Every top-level function's generated C# name is now
-    <code>PascalCase</code>, matching every other forward position. A Kotlin <code>fun add(a: Int,
-    b: Int)</code> is now called as <code>Arithmetic.Add(3, 4)</code>, not
-    <code>Arithmetic.add(3, 4)</code>. This applies to a plain top-level function, an <code>actual
-    fun</code>, an overload set, a default-parameter overload, and a nullable-primitive return; the
-    native export and the registration contract are unchanged, so only a consumer-side rename and
-    rebuild is needed. See <a href="top-level-declarations.md">Top-level declarations</a> and
-    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/110-top-level-function-pascal-case.md">ADR-110</a>.
-    A Kotlin parameter literally named <code>handle</code>, <code>receiver</code>,
-    <code>value</code>, <code>errorOut</code>, or <code>valueOut</code> now renders with a
-    trailing underscore on the C# side (<code>value_</code>, and so on), so a named-argument call
-    site using one of those spellings needs the renamed form too. See
-    <a href="primitives-and-strings.md">Primitives and strings</a> and
-    <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md">ADR-062</a>.</p>
-</note>
-
 ## 1. Apply the plugin
 
 ```kotlin
@@ -49,7 +32,7 @@ kotlin {
 ```
 
 Targets outside the supported set are skipped with a warning; see
-[Prerequisites](prerequisites.md) for the full target → RID table.
+[Prerequisites](prerequisites.md) for the full target to RID table.
 
 ## 3. Configure the package
 
@@ -82,9 +65,8 @@ build/nuget/MyCatLib.1.0.0.nupkg
 ```
 
 (the staged, unzipped contents sit alongside it at `build/nuget/MyCatLib.1.0.0/`). No .NET SDK is
-required for this step: if `dotnet` happens to be on `PATH`, `packNuget` also compiles the
-generated bindings first and fails on a C# error; if it is not, that check is skipped with a
-warning. See [Gradle tasks](gradle-tasks.md#nugetcompileinterop).
+required for this step; see [Prerequisites](prerequisites.md) for what it does when one is
+present.
 
 ## 5. Consume it from C#
 

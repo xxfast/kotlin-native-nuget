@@ -1,8 +1,6 @@
 # The nuget {} DSL
 
-Reference for the `nuget {}` extension, read from `NugetExtension.kt`, `NugetPublishConfig.kt`,
-`NugetDependency.kt`, `NugetDependencyScope.kt`, and `NugetBindConfig.kt` in
-`nuget-plugin/src/main/kotlin/io/github/xxfast/kotlin/native/nuget/`.
+Reference for the `nuget {}` extension.
 
 ## `nuget { }`
 
@@ -48,34 +46,24 @@ nuget {
 
 ### Snapshot versioning
 
-With `snapshot = true`, every `packNuget` run produces a fresh, immutable package identity instead
-of reusing `version` as-is, so a .NET consumer's next restore always sees a new version and never
-serves NuGet's cached copy of the previous build:
+With `snapshot = true`, every `packNuget` run mints a fresh, immutable version instead of reusing
+`version` as-is, so a .NET consumer's next restore always sees a new version and never serves
+NuGet's cached copy of the previous build:
 
 ```kotlin
 nuget {
   publish {
-    packageId = "MyCatLib"
-    version = "1.0.0"
-    authors = "yourname"
-    description = "My Kotlin/Native library"
-    rootPackage = "com.example.cats"
+    // packageId, version, authors, description, rootPackage as above
     snapshot = true
   }
 }
 ```
 
-`packNuget` then depends on two extra tasks: `nugetSnapshotVersion` mints
-`1.0.0-snapshot.<epochMillis>` at execution time, and `nugetSnapshotVersionProps` writes an MSBuild
-props file pinning it under a property name derived from `packageId`. MSBuild property names
-cannot contain dots or start with a digit, so the id is sanitized: every character outside
-`[A-Za-z0-9_]` is dropped, a leading digit gets a `_` prefix, and `Version` is appended
-(`MyCatLib` becomes `MyCatLibVersion`, `PeopleInSpace.Kotlin` becomes `PeopleInSpaceKotlinVersion`).
-
+The minted version (`1.0.0-snapshot.<epochMillis>`) is pinned in an MSBuild props file under a
+property name derived from `packageId`: every character outside `[A-Za-z0-9_]` is dropped, a
+leading digit gets a `_` prefix, and `Version` is appended (`MyCatLib` becomes `MyCatLibVersion`).
 See [Publish a Kotlin/Native library as NuGet](publish-kotlin-library-as-nuget.md) for the full
-local-iteration flow and the consumer-side props import, and
-[ADR-092](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/092-snapshot-versioning-dsl.md)
-for the version-ordering and property-naming rationale.
+local-iteration flow and the consumer-side props import.
 
 ### Multi-RID packages
 
@@ -95,45 +83,37 @@ nuget {
 ```
 
 A typical two-host CI flow: a Windows leg runs `packNuget` and uploads its staged `runtimes/`
-folder as an artifact, then a macOS leg downloads that artifact into a local directory, points
-`prebuiltRuntimes` at it, and runs `packNuget` itself, once, producing a single package with both
-RIDs (for example `osx-arm64` and `win-x64`).
+folder as an artifact, then a macOS leg downloads it, points `prebuiltRuntimes` at it, and runs
+`packNuget` itself, producing one package with both RIDs.
 
 <note>
 <p>A target whose link task is disabled on the packing host (say <code>mingwX64</code> declared but
-not linkable here) is excluded from the locally linked set at configuration time, with a lifecycle
-log naming the RID and pointing at <code>prebuiltRuntimes</code> as the way to still ship it. With
-every local link disabled and <code>prebuiltRuntimes</code> set, the host still gets a
-<code>packNuget</code> task: a pack-only host is a supported shape, not just a linking one.</p>
+not linkable here) is excluded from the locally linked set, with a lifecycle log naming the RID and
+pointing at <code>prebuiltRuntimes</code> as the way to still ship it. A host with every local link
+disabled and <code>prebuiltRuntimes</code> set still gets a <code>packNuget</code> task: a
+pack-only host is a supported shape.</p>
 </note>
 
 `packNuget` validates the merge rather than silently dropping anything:
 
 - A locally linked RID with no `.dll`/`.dylib`/`.so` to copy fails the build naming the RID and the
-  directory scanned: the link task ran and produced nothing, which is a broken build, not a
-  host limitation.
-- A `prebuiltRuntimes` directory with no RID subdirectories at all, or a RID subdirectory whose
-  `native/` folder is missing or empty, fails naming the expected layout
+  directory scanned.
+- A `prebuiltRuntimes` directory with no RID subdirectories, or a RID subdirectory whose `native/`
+  folder is missing or empty, fails naming the expected layout
   (`<prebuiltRuntimes>/<rid>/native/*.dll|*.dylib|*.so`).
 - The same RID arriving both locally linked and prebuilt fails naming both sources: pick one
-  producer per RID, either by disabling the local link or dropping the RID from the prebuilt tree.
-- A prebuilt RID name this plugin version does not know how to build is a warning only, not an
-  error: the RID set NuGet accepts is open, and the tree may come from a newer plugin.
-
-See
-[ADR-093](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/093-multi-rid-package-inputs.md)
-for the full validation semantics and the alternatives considered.
+  producer per RID.
+- A prebuilt RID name this plugin version does not know how to build is a warning only, since the
+  RID set NuGet accepts is open and the tree may come from a newer plugin.
 
 ### Export scoping
 
-By default `NugetProcessor` bridges every public declaration in the module. `include`/`exclude` on
-`publish {}` scope that down, mirroring `bind { include/exclude }` on the reverse side: a package
-prefix match (`pkg == p || pkg.startsWith("$p.")`), with `exclude` always winning over `include`.
-`exclude` additionally matches a qualified declaration name and everything nested under it
-([#53](https://github.com/xxfast/kotlin-native-nuget/issues/53)): `exclude("com.contoso.api.Shape")`
-drops the `Shape` class (and, for a sealed base, its subclasses) from the export set, so a member
-that references it is skipped with a named diagnostic and the rest of the package still bridges.
-`include` stays package-level.
+By default `NugetProcessor` bridges every public declaration in the module. `include`/`exclude`
+scope that down: a package prefix match (`pkg == p || pkg.startsWith("$p.")`), with `exclude`
+always winning over `include`. `exclude` additionally matches a qualified declaration name and
+everything nested under it: `exclude("com.contoso.api.Shape")` drops the `Shape` class (and, for a
+sealed base, its subclasses) from the export set, so a member that references it is skipped with a
+named diagnostic and the rest of the package still bridges. `include` stays package-level.
 
 ```kotlin
 nuget {
@@ -147,36 +127,25 @@ nuget {
 }
 ```
 
-<note>
-<p>When <code>include</code> is empty, the effective include set defaults to <code>rootPackage</code> if
-set, otherwise to everything (today's behaviour with no scoping configured at all). This makes
-<code>rootPackage</code> a scoping knob, not just a renaming one: a public declaration outside
-<code>rootPackage</code> is no longer bridged unless named explicitly in <code>include</code>.</p>
-</note>
-
-The corollary is that a bare `include("kotlin")` bridges nothing, since nothing in your module lives
-under `kotlin`. That used to be silent: `packNuget` stayed green and shipped a package with no
-`Interop.cs`. Since [#55](https://github.com/xxfast/kotlin-native-nuget/issues/55) a scope that admits
-none of the module's public declarations warns once with `SKIPPED_ALL_DECLARATIONS`, naming the scope
-and the packages it dropped, and every `include(...)` hint names the full line with your own packages
-kept in it.
+When `include` is empty, the effective include set defaults to `rootPackage` if set, otherwise to
+everything. This makes `rootPackage` a scoping knob, not just a renaming one: a public declaration
+outside `rootPackage` is not bridged unless named explicitly in `include`. A scope that admits none
+of the module's public declarations (for example a stray `include("kotlin")`) warns once with
+`SKIPPED_ALL_DECLARATIONS` instead of silently shipping a package with no `Interop.cs`.
 
 A package that is only reached via `dependencies { dependency(...) { bind { } } }` (the reverse
-stub packages generated for a consumed C# dependency) is always exported regardless of `include`/
-`exclude`, since a module that both publishes forward and consumes a NuGet dependency needs those
-bound types reachable from its own forward return types to keep compiling.
-
-See [ADR-063](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/063-forward-declaration-level-export-scoping.md)
-for the full predicate and the `rootPackage` behaviour-change rationale.
+stub packages generated for a consumed C# dependency) is always exported regardless of
+`include`/`exclude`, since a module that both publishes forward and consumes a NuGet dependency
+needs those bound types reachable from its own forward return types to keep compiling.
 
 ### Cross-module export closure
 
 `include`/`exclude`/`rootPackage` also decide what crosses a Gradle module boundary. The export set
-is a **reachability closure** from the module's own admitted declarations (the roots above): the
-processor walks return types, parameter types, property types, type arguments of an admitted carrier
-(`Flow<T>`, `List<T>`/`Set<T>`/`Map<K,V>`), sealed subclasses, and primary-constructor parameter
-types, and admits every discovered declaration through the *same* `include`/`exclude`/`rootPackage`
-predicate, whether it lives in this module or in a dependency module pulled in with
+is a reachability closure from the module's own admitted declarations: the processor walks return
+types, parameter types, property types, type arguments of an admitted carrier (`Flow<T>`,
+`List<T>`/`Set<T>`/`Map<K,V>`), sealed subclasses, and primary-constructor parameter types, and
+admits every discovered declaration through the same `include`/`exclude`/`rootPackage` predicate,
+whether it lives in this module or in a dependency module pulled in with
 `implementation(project(":models"))`. No separate DSL verb is needed: a `:models` module under the
 same `rootPackage` is admitted automatically.
 
@@ -192,126 +161,41 @@ nuget {
 }
 ```
 
-A reachable dependency-module type that the closure refuses to admit is skipped with
-`SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`, and the hint names the reason the closure actually refused it
-rather than always pointing at `include(...)`:
-
-- simply outside the effective include set: the full `include(...)` line that would admit it (the
-  current scope first, since an explicit `include` replaces the `rootPackage` default);
-- excluded by your own `exclude(...)`: `"dep.models" is excluded by exclude("dep.models") in
-  nuget { publish { } }, so a callable reaching dep.models.TopStory is skipped by design; remove
-  the exclude to export it here (include(...) cannot override an exclude)`, since `exclude` is
-  tested before `include` and no `include` can win against one;
-- cross-module admission off (neither `rootPackage` nor `include` set): `no rootPackage or
-  include is set, so nuget { publish { } } never crosses the module boundary and
-  dep.models.TopStory stays out of the export set; set rootPackage(...) or list your own packages
-  alongside "dep.models" in include(...)`;
-- an `expect` declaration inside the dependency itself: naming the type and saying its
-  actualization lives in that dependency module and cannot be brought into scope with
-  `include(...)` at all.
-
-Either way generation continues rather than silently dropping the member or leaking an unusable
-handle. When at least one type is admitted from a dependency module, the processor also emits one
-`INFO_EXPORTED_FROM_DEPENDENCY` line per KSP run, naming the whole admitted set, since a per-type
-warning would be noise at this scale.
+A dependency-module type the closure refuses to admit is skipped, and the diagnostic names the
+actual reason (outside the effective include set, excluded, cross-module admission off entirely,
+or an `expect` declaration whose actualization lives in the dependency and can't be brought into
+scope at all) with an actionable fix for each. See
+[Publishing Kotlin to C#](forward-overview.md#where-these-messages-appear) for the full set of
+messages.
 
 A dependency type nested inside another declaration (`Broadcast.Schedule`) is declared nested under
-its owner, `Broadcast.Schedule`, exactly like a module-local nested type, once the *owner* itself
-(`Broadcast`) is admitted; the closure never gives the nested type a bucket of its own, since
-[ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md)'s
-owner walk is the sole declarer.
-The owner no longer has to be admitted through some *other* member: a member naming only the nested
-type climbs the owner chain first, so `Newsroom.page(): Almanac.Page` admits `Almanac` even when
-nothing anywhere returns `Almanac` itself, and the closure also walks a declared nested type's own
-member types, so `Broadcast.Schedule.timetable(): Timetable` admits the top-level dependency type
-`Timetable` on the strength of a member declared two levels down. Either way the manifest and the
-generated C# name the owner, never the nested type, since the nested type still gets no admission
-record of its own. A dependency type nested under a still-deferred owner shape (an `inner class`, a
-generic, an `enum class`, an `interface`, or a sealed base/arm) is refused admission outright and
-skips named with `SKIPPED_NESTED_DECLARATION` on the declaration and `UNDECLARED_CLASS`/
-`UNDECLARED_ENUM`/`UNDECLARED_INTERFACE` on any member typed with it, the same as a module-local one
-under the same deferred shape; see [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects).
-(`Broadcast`) is admitted through an ordinary member-type edge; the closure takes no direct part in
-declaring the nested type itself
-([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md),
-[ADR-134](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/134-nested-types-under-deferred-owners.md)).
-A dependency member naming only the nested type, with no other member reaching its owner, still
-admits nothing: there is no edge from "a member returns a nested type" to "admit its owner." A
-dependency type nested under a still-deferred owner shape (an `inner class`, a generic, or an `enum
-class` owner) is refused admission outright and skips named with
-`SKIPPED_NESTED_DECLARATION` on the declaration and `UNDECLARED_CLASS`/`UNDECLARED_ENUM`/
-`UNDECLARED_INTERFACE` on any member typed with it, the same as a module-local one under the same
-deferred shape; see [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects).
+its owner in the generated C#, exactly like a module-local nested type, once the owner
+(`Broadcast`) is admitted. A member naming only the nested type still admits the owner (climbing the
+chain first), and a declared nested type's own member types are walked too, so
+`Broadcast.Schedule.timetable(): Timetable` admits the top-level dependency type `Timetable` on the
+strength of a member declared two levels down. A dependency type nested under a still-deferred owner
+shape (`inner class`, a generic, an `enum class`, an `interface`, or a sealed base/arm) is refused
+admission outright, the same as a module-local one under the same deferred shape; see
+[Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects).
 
-<note>
-<p>Every cross-namespace type reference in the generated <code>Interop.cs</code> is emitted
-<code>global::Namespace.Name</code>-qualified, not by its bare simple name, so the file compiles
-with no <code>using</code> needed regardless of how many packages a namespace-crossing constructor,
-property, list element, or <code>Copy</code> call touches. With two exported packages under
-different namespaces:</p>
-</note>
+Every cross-namespace type reference in the generated `Interop.cs` is `global::Namespace.Name`
+qualified, so the file compiles with no `using` needed regardless of how many packages a
+namespace-crossing member touches:
 
 ```C#
 public Issue41Bundle(IReadOnlyList<global::TestLibrary.Issue41.Issue41Thing> things, global::TestLibrary.Issue41.Issue41Thing one)
 ```
 
-```C#
-public IReadOnlyList<global::TestLibrary.Issue41.Issue41Thing> Things
-```
-
-<note>
-<p>With neither <code>rootPackage</code> nor <code>include</code> set, the closure never crosses a
-module boundary at all: an empty effective include set means "everything" for the module's own
-files (unchanged from ADR-063) but "nothing" for a dependency module, otherwise a project with no
-scoping configured would pull in every reachable type from every dependency on the classpath,
-including <code>kotlinx.coroutines</code> and <code>kotlin.*</code> themselves.</p>
-</note>
-
 <warning>
 <p>Two published packages that each independently admit the same dependency type get two unrelated
-C# types for one Kotlin type (<code>PackageA.Models.Foo</code> and <code>PackageB.Models.Foo</code>),
-with no conversion between them: two published packages are two separate Kotlin/Native runtimes in
-the consumer's process, so a handle minted in one is meaningless to the other's exports. Since
-<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/109-duplicate-type-hazard.md">ADR-109</a>
-this is no longer silent: the build warns with <code>WARNING_DUPLICATED_DEPENDENCY_TYPE</code>, and
-the type still exports. The remedy is structural, not a shared models package: publish a single
-umbrella module that depends on both, or <code>exclude("&lt;pkg&gt;")</code> from one of the
-publishers. See <a href="forward-overview.md#duplicate-type-hazard">Publishing Kotlin to C#</a> for
-the rendered message and
-<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/109-duplicate-type-hazard.md">ADR-109</a>
-for the mechanism.</p>
+C# types for one Kotlin type, with no conversion between them: two published packages are two
+separate Kotlin/Native runtimes in the consumer's process, so a handle minted in one is meaningless
+to the other's exports. The build warns with <code>WARNING_DUPLICATED_DEPENDENCY_TYPE</code> and the
+type still exports. The remedy is structural: publish a single umbrella module that depends on
+both, or <code>exclude("&lt;pkg&gt;")</code> from one of the publishers. See
+<a href="forward-overview.md#duplicate-type-hazard">Publishing Kotlin to C#</a> for the rendered
+message.</p>
 </warning>
-
-### `nuget.publishedScopes`
-
-The plugin registers `nuget.publishedScopes` as a lazy KSP option `Provider<String>`, resolved after
-every project in the build is evaluated: it walks `rootProject.allprojects`, keeps every project with
-this plugin applied and `publish {}` configured, and encodes each one's *effective* `include`/`exclude`
-scope (the explicit `include(...)` list when non-empty, else `[rootPackage]`) as one entry per
-publisher, `;`-joined, **including the current project itself** (so the single-publisher real build
-still exercises the plumbing end to end). The wire format:
-
-```
-<packageId>:<include1|include2>:<exclude1|exclude2>;<packageId>:<include1|include2>:<exclude1|exclude2>
-```
-
-Entries `;`-separated, fields `:`-separated, lists `|`-separated. The processor drops the entry whose
-`packageId` equals its own `nuget.namespace` before matching, so a publisher never warns about its own
-scope. A publisher with neither `rootPackage` nor `include` set has no effective include to encode and
-is treated as unknown by every other publisher's matcher, a documented gap rather than a false
-positive. This option is plumbing for
-<a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/109-duplicate-type-hazard.md">ADR-109</a>'s
-duplicate-type warning; it is not part of the public DSL surface and has no `nuget {}` block equivalent
-to set directly.
-
-Deferred, each needing its own decision: supertype edges (an admitted class implementing an admitted
-interface does not gain `: IFoo` in C#), cross-module generic classes, and cross-module
-`suspend`/`Flow`-returning members on an admitted dependency type (a root may still return
-`Flow<DepType>`; it's the dependency type's *own* suspend/`Flow` members that are skipped).
-
-See
-[ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md)
-for the full admission and edge-walking rules.
 
 ## `dependencies { }`
 
@@ -358,8 +242,8 @@ Configures `NugetBindConfig`. Declaring `bind {}` at all is what triggers `nuget
 
 `include`/`exclude` match a C# namespace exactly, or any of its sub-namespaces (`ns == filter` or
 `ns.startsWith("$filter.")`); when both match the same namespace, `exclude` wins. `alias` maps one
-specific C# namespace to a Kotlin package, overriding both `packageName` and the id-derived
-default for that namespace only.
+specific C# namespace to a Kotlin package, overriding both `packageName` and the id-derived default
+for that namespace only.
 
 ```kotlin
 dependency("TestDependency", version = "1.0.0") {
@@ -371,11 +255,6 @@ dependency("TestDependency", version = "1.0.0") {
 }
 ```
 
-Only one `bind { }` block is supported per dependency (a second call overwrites the first).
-
-See
-[ADR-044](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/044-nuget-dependency-dsl.md)
-for the DSL's design rationale, and
-[ADR-047](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/047-per-package-namespace-filters-at-reader-cli.md)
-for the include/exclude filter semantics. For what actually gets bound once a namespace is
-included, see [Consuming C# in Kotlin](reverse-overview.md).
+Only one `bind { }` block is supported per dependency (a second call overwrites the first). For
+what actually gets bound once a namespace is included, see
+[Consuming C# in Kotlin](reverse-overview.md).
