@@ -32,6 +32,42 @@ fun toCSharpName(cname: String): String {
   return cname
 }
 
+/** Every run of characters a C# identifier cannot contain: `.`, `-`, space, and the rest. */
+private val NON_CSHARP_IDENTIFIER = Regex("[^A-Za-z0-9_]+")
+
+/**
+ * The single place a *file-derived* name becomes a C# identifier (issue #233).
+ *
+ * ADR-007 names a file's static holder class after the file stem, and a Kotlin file stem is not a
+ * C# identifier: `Hub.mingw.kt` emitted `public static partial class Hub.mingw`, which C# reads as
+ * a qualified name, so one dot produced 19 errors that cascaded to the end of `Interop.cs`.
+ * Platform-suffixed files (`Foo.ios.kt`, `Foo.mingw.kt`) are the standard KMP layout for `actual`
+ * declarations, so this is the normal case, not an exotic one.
+ *
+ * The rule is structural, never a list of known suffixes: split on every run of characters outside
+ * `[A-Za-z0-9_]`, keep the first segment verbatim, uppercase each following segment's first
+ * character, join. `Hub.mingw` -> `HubMingw`, `Net.io.core` -> `NetIoCore`, `foo-bar` -> `fooBar`.
+ * A leading digit takes a `_` prefix, and the result is passed through [toCSharpName] so a stem
+ * that spells a C# keyword becomes a verbatim identifier. An already-legal name is a fixed point,
+ * so no existing generated name moves.
+ *
+ * PascalCase segments rather than `_` separators: `Hub_mingw` is Kotlin's own JVM facade rule, and
+ * it was considered, but ADR-110 already made PascalCase the forward spelling of every C# name, so
+ * the file-derived one matches its neighbours. Stripping everything after the first dot was also
+ * considered and rejected: `Hub.kt` commonly sits beside `Hub.mingw.kt`, and silently merging two
+ * files into one class trades a loud parse error for a quiet one.
+ */
+internal fun String.csharpIdentifier(): String {
+  val segments: List<String> = split(NON_CSHARP_IDENTIFIER).filter { it.isNotEmpty() }
+  val joined: String = if (segments.isEmpty()) {
+    "_"
+  } else {
+    segments.first() +
+      segments.drop(1).joinToString("") { it.replaceFirstChar { char -> char.uppercase() } }
+  }
+  return toCSharpName(if (joined.first().isDigit()) "_$joined" else joined)
+}
+
 /**
  * The name of the ADR-024 exception slot every synchronous C# import and wrapper body declares as
  * its trailing `out IntPtr error`. Named once here so the rename rule below cannot drift from the

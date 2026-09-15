@@ -4,6 +4,11 @@ Kotlin top-level functions, properties, and `const val`s don't belong to any cla
 generator groups them by source file: every `.kt` file gets its own `static` C# class named after
 the file, with `PascalCase` members.
 
+A file stem that isn't already a legal C# identifier is sanitised into one: `Hub.mingw.kt` (the
+platform-suffixed file of a KMP `expect`/`actual` pair) becomes `HubMingw`, not `Hub.mingw`, which
+C# can't parse as a class name. An `actual` declaration still lands on its `expect`'s file class
+rather than its own; see the `expect`/`actual` note below.
+
 `Properties.kt`:
 
 ```kotlin
