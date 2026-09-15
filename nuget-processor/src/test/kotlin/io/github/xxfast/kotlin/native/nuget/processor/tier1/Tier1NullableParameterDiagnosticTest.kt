@@ -77,6 +77,25 @@ class Tier1NullableParameterDiagnosticTest {
   }
 
   @Test
+  fun `shorter HubWithEvents arities bind and the events arity stays absent`() {
+    val result = Tier1Harness.run(source)
+
+    val cs: String = result.generatedCSharp
+    assertTrue(
+      cs.contains("HubWithEvents()"),
+      "expected the zero-arg omitting overload; generated C#:\n$cs",
+    )
+    assertTrue(
+      cs.contains("HubWithEvents(global::Interop.Settings settings)"),
+      "expected the Settings omitting overload; generated C#:\n$cs",
+    )
+    assertFalse(
+      cs.contains("events"),
+      "the events arity stays absent; generated C#:\n$cs",
+    )
+  }
+
+  @Test
   fun `a nullable return keeps the return-position skip and its unnamed hint`() {
     val result = Tier1Harness.run(source)
 

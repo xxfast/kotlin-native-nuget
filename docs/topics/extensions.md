@@ -205,6 +205,22 @@ paw.Knead(3);
 paw.Knead(3, "sofa");
 ```
 
+A trailing default the bridge cannot carry costs only that arity.
+
+```kotlin
+fun Logger.call(level: Int = 0, events: Flow<Int>? = null): String =
+  "$tag calls $level/${events?.toString() ?: "-"}"
+```
+
+```C#
+using var logger = new Logger("Mylo");
+logger.Call();
+logger.Call(3);
+```
+
+The events arity does not exist. See
+[Method default parameters](classes-and-objects.md#method-default-parameters).
+
 ## Return values
 
 An extension function's return goes through the same marshalling as a class method's (see

@@ -14,8 +14,9 @@ namespace IntegrationTests;
 /// both null-carrying spellings cross on each route.
 /// </para>
 /// <para>
-/// The diagnostic half of the issue is <c>HubWithEvents</c>, absent by design and asserted by
-/// reflection: the KSP-side wording is pinned by
+/// ADR-149 is the diagnostic half's arity question: a trailing defaulted <c>Flow</c> costs only
+/// the arities that still carry it. <c>HubWithEvents()</c> and <c>HubWithEvents(Settings)</c>
+/// bind; the events arity stays absent. The KSP-side wording is still pinned by
 /// <c>Tier1NullableParameterDiagnosticTest</c>.
 /// </para>
 /// <para>
@@ -105,13 +106,233 @@ public class Issue131Tests
         Assert.Equal("[Oreo] still here", logger.Log("still here"));
     }
 
-    // ---- The refusal arm: absent, never present-and-broken. ----
+    // ---- ADR-149: supported arities of a partially unsupported signature. ----
 
     [Fact]
-    public void AFlowParameter_LeavesTheWholeFunctionAbsent()
+    public void HubWithEvents_OmittingEveryDefault_UsesTheKotlinDefault()
     {
-        MethodInfo[] methods = typeof(HubSample).GetMethods();
+        using Hub hub = HubSample.HubWithEvents();
 
-        Assert.DoesNotContain(methods, method => method.Name == "HubWithEvents");
+        Assert.Equal("0/none/-", hub.Describe());
+    }
+
+    [Fact]
+    public void HubWithEvents_OmittingTheFlow_UsesTheKotlinDefault()
+    {
+        using var settings = new Settings(3);
+
+        using Hub hub = HubSample.HubWithEvents(settings);
+
+        Assert.Equal("3/none/-", hub.Describe());
+    }
+
+    [Fact]
+    public void HubWithEvents_LeavesOnlyTheUnsupportedArityAbsent()
+    {
+        MethodInfo[] methods = typeof(HubSample).GetMethods()
+            .Where(method => method.Name == "HubWithEvents")
+            .ToArray();
+
+        Assert.Contains(methods, method => method.GetParameters().Length == 0);
+        Assert.Contains(methods, method =>
+            method.GetParameters() is [{ ParameterType.Name: "Settings" }]);
+        Assert.DoesNotContain(methods, method =>
+            method.GetParameters().Any(parameter => parameter.Name == "events"));
+    }
+
+    [Fact]
+    public void HubWithLoggerAndEvents_OmittingEveryDefault_UsesTheKotlinDefaults()
+    {
+        using Hub hub = HubSample.HubWithLoggerAndEvents();
+
+        Assert.Equal("0/none/feed", hub.Describe());
+    }
+
+    [Fact]
+    public void HubWithLoggerAndEvents_OmittingLoggerAndEvents_UsesTheKotlinDefaults()
+    {
+        using var settings = new Settings(3);
+
+        using Hub hub = HubSample.HubWithLoggerAndEvents(settings);
+
+        Assert.Equal("3/none/feed", hub.Describe());
+    }
+
+    [Fact]
+    public void HubWithLoggerAndEvents_OmittingOnlyEvents_Binds()
+    {
+        using var settings = new Settings(3);
+        using var logger = new Logger("Oreo");
+
+        using Hub hub = HubSample.HubWithLoggerAndEvents(settings, logger);
+
+        Assert.Equal("3/Oreo/feed", hub.Describe());
+    }
+
+    [Fact]
+    public void HubWithLoggerAndEvents_LeavesOnlyTheUnsupportedArityAbsent()
+    {
+        MethodInfo[] methods = typeof(HubSample).GetMethods()
+            .Where(method => method.Name == "HubWithLoggerAndEvents")
+            .ToArray();
+
+        Assert.Contains(methods, method => method.GetParameters().Length == 0);
+        Assert.Contains(methods, method =>
+            method.GetParameters() is [{ ParameterType.Name: "Settings" }]);
+        Assert.Contains(methods, method =>
+            method.GetParameters() is
+                [{ ParameterType.Name: "Settings" }, { ParameterType.Name: "Logger" }]);
+        Assert.DoesNotContain(methods, method =>
+            method.GetParameters().Any(parameter => parameter.Name == "events"));
+    }
+
+    [Fact]
+    public void Sill_OmittingEveryDefault_UsesTheKotlinDefaults()
+    {
+        using var sill = new Sill();
+
+        Assert.Equal("0/-", sill.Describe());
+    }
+
+    [Fact]
+    public void Sill_OmittingTheFlow_UsesTheKotlinDefault()
+    {
+        using var settings = new Settings(3);
+
+        using var sill = new Sill(settings);
+
+        Assert.Equal("3/-", sill.Describe());
+    }
+
+    [Fact]
+    public void Sill_LeavesOnlyTheUnsupportedArityAbsent()
+    {
+        ConstructorInfo[] constructors = typeof(Sill).GetConstructors();
+
+        Assert.NotNull(typeof(Sill).GetConstructor(Type.EmptyTypes));
+        Assert.NotNull(typeof(Sill).GetConstructor([typeof(Settings)]));
+        Assert.DoesNotContain(constructors, constructor =>
+            constructor.GetParameters().Any(parameter => parameter.Name == "events"));
+    }
+
+    [Fact]
+    public void DeskOpen_OmittingEveryDefault_UsesTheKotlinDefaults()
+    {
+        using var desk = new Desk("Oreo");
+
+        Assert.Equal("Oreo desk 0/-", desk.Open());
+    }
+
+    [Fact]
+    public void DeskOpen_OmittingTheFlow_UsesTheKotlinDefault()
+    {
+        using var desk = new Desk("Oreo");
+        using var settings = new Settings(3);
+
+        Assert.Equal("Oreo desk 3/-", desk.Open(settings));
+    }
+
+    [Fact]
+    public void DeskOpen_LeavesOnlyTheUnsupportedArityAbsent()
+    {
+        Assert.DoesNotContain(
+            typeof(Desk).GetMethods(),
+            method => method.Name == "Open" &&
+                method.GetParameters().Any(parameter => parameter.Name == "events"));
+    }
+
+    [Fact]
+    public void SwitchboardPatch_OmittingEveryDefault_UsesTheKotlinDefaults()
+    {
+        Assert.Equal("patch 0/-", Switchboard.Patch());
+    }
+
+    [Fact]
+    public void SwitchboardPatch_OmittingTheFlow_UsesTheKotlinDefault()
+    {
+        Assert.Equal("patch 3/-", Switchboard.Patch(3));
+    }
+
+    [Fact]
+    public void SwitchboardPatch_LeavesOnlyTheUnsupportedArityAbsent()
+    {
+        Assert.DoesNotContain(
+            typeof(Switchboard).GetMethods(),
+            method => method.Name == "Patch" &&
+                method.GetParameters().Any(parameter => parameter.Name == "events"));
+    }
+
+    [Fact]
+    public void WindowOf_OmittingEveryDefault_UsesTheKotlinDefaults()
+    {
+        Assert.Equal("window 0/-", Window.Of());
+    }
+
+    [Fact]
+    public void WindowOf_OmittingTheFlow_UsesTheKotlinDefault()
+    {
+        using var settings = new Settings(3);
+
+        Assert.Equal("window 3/-", Window.Of(settings));
+    }
+
+    [Fact]
+    public void WindowOf_LeavesOnlyTheUnsupportedArityAbsent()
+    {
+        Assert.DoesNotContain(
+            typeof(Window).GetMethods(),
+            method => method.Name == "Of" &&
+                method.GetParameters().Any(parameter => parameter.Name == "events"));
+    }
+
+    [Fact]
+    public void LoggerCall_OmittingEveryDefault_UsesTheKotlinDefaults()
+    {
+        using var logger = new Logger("Mylo");
+
+        Assert.Equal("Mylo calls 0/-", logger.Call());
+    }
+
+    [Fact]
+    public void LoggerCall_OmittingTheFlow_UsesTheKotlinDefault()
+    {
+        using var logger = new Logger("Oreo");
+
+        Assert.Equal("Oreo calls 3/-", logger.Call(3));
+    }
+
+    [Fact]
+    public void LoggerCall_LeavesOnlyTheUnsupportedArityAbsent()
+    {
+        Assert.DoesNotContain(
+            typeof(LoggerExtensions).GetMethods(),
+            method => method.Name == "Call" &&
+                method.GetParameters().Any(parameter => parameter.Name == "events"));
+    }
+
+    [Fact]
+    public void ShiftNightWatch_OmittingEveryDefault_UsesTheKotlinDefaults()
+    {
+        using var night = new Shift.Night(cat: "Oreo");
+
+        Assert.Equal("Oreo watches 0/-", night.Watch());
+    }
+
+    [Fact]
+    public void ShiftNightWatch_OmittingTheFlow_UsesTheKotlinDefault()
+    {
+        using var night = new Shift.Night(cat: "Oreo");
+        using var settings = new Settings(3);
+
+        Assert.Equal("Oreo watches 3/-", night.Watch(settings));
+    }
+
+    [Fact]
+    public void ShiftNightWatch_LeavesOnlyTheUnsupportedArityAbsent()
+    {
+        Assert.DoesNotContain(
+            typeof(Shift.Night).GetMethods(),
+            method => method.Name == "Watch" &&
+                method.GetParameters().Any(parameter => parameter.Name == "events"));
     }
 }
