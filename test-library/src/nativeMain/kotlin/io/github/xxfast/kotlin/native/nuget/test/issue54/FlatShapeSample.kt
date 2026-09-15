@@ -1,5 +1,8 @@
 package io.github.xxfast.kotlin.native.nuget.test.issue54
 
+import io.github.xxfast.kotlin.native.nuget.test.models.CatteryInternalApi
+import io.github.xxfast.kotlin.native.nuget.test.models.Grooming
+
 /**
  * Fixture for the **sibling sealed subclass** bug: a sealed subclass declared *beside* its sealed
  * base rather than inside it. [Label] is a subclass of [FlatShape], but it is a top-level
@@ -49,6 +52,23 @@ package io.github.xxfast.kotlin.native.nuget.test.issue54
 sealed class FlatShape {
   /** Nested control: Oreo, curled, described by one non-null `Int`. */
   data class Circle(val radius: Int) : FlatShape()
+
+  /**
+   * Issue #222's negative cell: an arm whose constructor genuinely cannot be exported, because
+   * `grooming` is typed with the `@RequiresOptIn`-marked [Grooming] (the `GroomingPlan` shape,
+   * ADR-115/ADR-128). So this arm keeps only its internal handle constructor, and must say so with
+   * `WARNING_NO_PUBLIC_CONSTRUCTOR` rather than dropping silently, exactly as a non-subclass type
+   * already does.
+   *
+   * Not a `val`, deliberately: the marked type stays confined to the constructor, so the cell is
+   * about the constructor alone and not about a marked property beside it. [level] is a plain
+   * `Int`, so the arm is still a usable type once a factory hands one over.
+   */
+  @OptIn(CatteryInternalApi::class)
+  class Groomed(grooming: Grooming) : FlatShape() {
+    /** Bridgeable payload, so the arm is observable even with no way to construct it. */
+    val level: Int = grooming.ordinal
+  }
 }
 
 /**
@@ -80,6 +100,22 @@ class FlatShapeFactory {
 
   /** Sealed base at a class-method return: the discriminator has to pick an arm. */
   fun of(radius: Int): FlatShape = if (radius > 0) FlatShape.Circle(radius) else Label("flat")
+
+  /**
+   * Issue #222: the sealed base at a **parameter** position, so a C#-constructed
+   * `new FlatShape.Circle(3)` has somewhere to go. The sibling arms answer too, which is what makes
+   * the returned number say which arm arrived rather than only that the call compiled.
+   */
+  fun area(shape: FlatShape): Int = when (shape) {
+    is FlatShape.Circle -> shape.radius * shape.radius
+    is FlatShape.Groomed -> -shape.level
+    is Label -> shape.text.length
+    Loaf -> 0
+  }
+
+  /** The only way to hold a [FlatShape.Groomed], since its constructor cannot be exported. */
+  @OptIn(CatteryInternalApi::class)
+  fun groomed(): FlatShape.Groomed = FlatShape.Groomed(Grooming.WEEKLY)
 
   /**
    * Return position for the sibling `object` subclass, spelled as its own concrete type. This is

@@ -157,6 +157,21 @@ data class CirSealedSubclass(
   val nativePrefix: String,
   val properties: List<CirProperty>,
   /**
+   * ADR-148: the arm's own public constructors, projected from the ADR-062 callable plan the way
+   * an ordinary [CirClass]'s [CirClass.constructor] / [CirClass.secondaryConstructors] are. Empty
+   * for an `object` arm, for an abstract intermediate arm, and for an arm whose every constructor
+   * the planner refused -- the last of which also carries [remarks] and a
+   * `WARNING_NO_PUBLIC_CONSTRUCTOR`. The internal handle constructor is rendered regardless and is
+   * not one of these.
+   */
+  val constructors: List<CirConstructor> = emptyList(),
+  /**
+   * ADR-148: the consumer-facing twin of `WARNING_NO_PUBLIC_CONSTRUCTOR` for an arm, the same
+   * prose [CirClass.remarks] carries for an ordinary class. Null whenever the arm either exports a
+   * constructor or never declared a public one (an `object` arm declares none).
+   */
+  val remarks: String? = null,
+  /**
    * ADR-116: the arm's own declared member functions, projected from the ADR-062 callable plan the
    * way an ordinary [CirClass]'s methods are. Empty for an arm that declares none. A `suspend`
    * member rides [asyncMembers] (ADR-118), a `Flow`-returning one [flowMembers] (ADR-124), and a

@@ -182,6 +182,24 @@ public class LiveHandleTests
         });
     }
 
+    // Row 1c. Issue #222: a sealed subclass's exported constructor. A new mint path, because
+    // before #222 no arm had a public constructor at all, and it is the one that chains
+    // `: base(IntPtr.Zero)` and then stores the handle on the *base*, so a release wired to the
+    // arm instead of the inherited field would show up here and nowhere else. Oreo takes a
+    // twelve-minute nap fifty times and wakes up every time.
+    [Fact]
+    public void SealedSubclassConstructor_UsingDispose_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            // Named argument on purpose: `int` converts to `IntPtr` implicitly and the generated
+            // internal handle constructor compiles into this assembly, so a positional `Deep(12)`
+            // binds to that instead and dereferences pointer 12.
+            using var deep = new Nap.Deep(minutes: 12);
+            Assert.Equal(12, deep.Minutes);
+        });
+    }
+
     // Row 2. String parameter and string return on the ordinary route: no StableRef at all
     // (UTF-8 wire), so the count must not move even once.
     [Fact]

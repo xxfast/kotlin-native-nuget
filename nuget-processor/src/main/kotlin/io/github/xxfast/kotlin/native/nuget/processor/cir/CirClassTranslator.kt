@@ -1986,10 +1986,40 @@ internal fun translateSealedClass(
       val callbackMembers: List<CirMember> =
         perCallCallbackMembers + storedCallbackMembers + interfaceBridgeMembers
 
+      // ADR-148: the arm's own public constructors, off the same catalog query and the same
+      // projection `translateClass` runs for an ordinary class, so the extern suffix, the error
+      // slot and the ADR-091 omitting overloads are an ordinary class's. An `object` arm plans
+      // none (the planner only collects kind `CLASS`), so the query answers empty and the arm
+      // renders exactly as it shipped.
+      val constructorPlans: List<ForwardCallablePlan> =
+        subQualifiedName?.let { callableCatalog.constructors(it) } ?: emptyList()
+      val armConstructors: List<CirConstructor> = constructorPlans.map { plan ->
+        tracker.trackPlan(plan)
+        val suffix: String = plan.invocation.symbol.substringAfterLast('.').removePrefix("<init>")
+        ForwardCirPlanProjection.constructor(plan, suffix)
+      }
+      // ADR-148: the same gate `translateClass` applies, one level in. An arm whose every public
+      // constructor was refused is kept (a Kotlin factory still hands one over) and says so, in
+      // the build log and in the arm's own `<remarks>`, instead of dropping silently.
+      val armNoPublicConstructor: Boolean = subclass.classKind == ClassKind.CLASS &&
+          !subclass.modifiers.contains(Modifier.ABSTRACT) &&
+          armConstructors.isEmpty() &&
+          subclass.hasPublicConstructor()
+      val armRemarks: String? = if (armNoPublicConstructor) {
+        noPublicConstructorRemark(
+          subName,
+          warnNoPublicConstructor(subclass, "$name.$subName", callableCatalog, logger),
+        )
+      } else {
+        null
+      }
+
       CirSealedSubclass(
         name = subName,
         nativePrefix = subPrefix,
         properties = properties,
+        constructors = armConstructors,
+        remarks = armRemarks,
         methods = methods,
         asyncMembers = asyncMembers,
         flowMembers = flowMembers,

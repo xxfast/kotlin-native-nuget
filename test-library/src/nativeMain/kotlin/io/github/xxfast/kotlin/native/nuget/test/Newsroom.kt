@@ -122,6 +122,22 @@ class Newsroom {
   fun deepNap(): Nap.Deep = Nap.Deep(720)
 
   /**
+   * Issue #222, the round trip: C# constructs a [Nap.Deep] with `new Nap.Deep(minutes: 12)` and
+   * hands it straight back, so Kotlin reads the value the consumer chose. The parameter is the
+   * **arm**, not the base, because the arm is the spelling that has no public constructor today.
+   */
+  fun napMinutes(nap: Nap.Deep): Int = nap.minutes
+
+  /**
+   * Issue #222, base-typed parameter: a C#-constructed arm must also pass where the sealed base is
+   * expected. [Nap.Zoomies] is the control, the one arm a consumer could already obtain.
+   */
+  fun describe(nap: Nap): String = when (nap) {
+    is Nap.Deep -> "deep:${nap.minutes}"
+    Nap.Zoomies -> "zoomies"
+  }
+
+  /**
    * Undeclared-enum gate, shape (c): a *top-level* enum in the never-admitted `dev.other.core`,
    * the `containingFile == null` half of the gate. Must skip with
    * `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` naming `include("dev.other.core")`, exactly as [sponsor]

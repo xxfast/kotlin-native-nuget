@@ -68,6 +68,13 @@ class Tier1SiblingSealedSubclassTest {
     assertContains(cs, "        public sealed class Circle : Shape")
   }
 
+  /**
+   * ADR-148 amended this cell. Issue #110's point was that the arm is declared **once**, through
+   * the sealed route, and that has not moved: the handle constructor is still `internal` and the
+   * discriminator still mints through it. What changed is that the arm now also exports its own
+   * public constructor, under the sealed prefix (`shape_label_create`, pinned by the export test
+   * below), which is what makes the arm constructible from C# at all.
+   */
   @Test
   fun `a sibling sealed subclass is constructed only through the sealed route`() {
     val result = run()
@@ -76,9 +83,11 @@ class Tier1SiblingSealedSubclassTest {
     val cs: String = result.generatedCSharp
 
     assertContains(cs, "internal Label(IntPtr handle) : base(handle)")
-    assertFalse(
-      cs.contains("public Label("),
-      "expected no public constructor on a sealed subclass; generated=$cs",
+    assertContains(cs, "public Label(string text) : base(IntPtr.Zero)")
+    assertEquals(
+      1,
+      Regex(Regex.escape("public Label(")).findAll(cs).count(),
+      "expected exactly one public Label constructor; generated=$cs",
     )
     assertContains(cs, "=> new Label(handle),")
   }
