@@ -22,6 +22,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmLambdaMe
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
+import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardSyntheticMember
 import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsHeldMutableStateFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
@@ -746,12 +747,7 @@ internal fun translateClass(
   val filteredMethods: List<KSFunctionDeclaration> = allMethods
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { method ->
-      val methodName: String = method.simpleName.asString()
-      val isDataClassMethod: Boolean = isDataClass &&
-          (methodName == "copy" || methodName.startsWith("component"))
-      val isSkipped: Boolean = methodName in listOf("equals", "hashCode", "toString", "<init>") ||
-          isDataClassMethod
-      if (isSkipped) return@filter false
+      if (method.isForwardSyntheticMember(cls)) return@filter false
 
       // ADR-114: a Flow-returning or suspend member with a generic parameter this route cannot
       // marshal is dropped on both halves. `NugetProcessor` names it once. ADR-119: likewise a
@@ -1921,6 +1917,9 @@ internal fun translateSealedClass(
         // belongs to no arm.
         .filter { it.parentDeclaration == subclass }
         .filter { it.modifiers.contains(Modifier.SUSPEND) }
+        // Issue #230: the same synthetic-member filter the arm's flow selector applies. No
+        // synthesized member is `suspend` today; the two selectors agreeing is the point.
+        .filter { method -> !method.isForwardSyntheticMember(subclass) }
         // ADR-114: the refusal `translateClass` applies upstream of its own projection. Both
         // halves must agree, or a C# import arrives with no Kotlin export behind it.
         .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }

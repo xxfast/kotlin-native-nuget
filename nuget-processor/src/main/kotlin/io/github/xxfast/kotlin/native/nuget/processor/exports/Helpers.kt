@@ -5,6 +5,7 @@ import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.Modifier
 import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FunSpec
@@ -186,3 +187,22 @@ internal val NUGET_RUNTIME_MEMBERS: List<String> = listOf(
   "instantFromDotNetTicks",
   "durationFromDotNetTicks",
 )
+
+/**
+ * The members Kotlin synthesizes on a declaration, which no forward route exports: `Any`'s three,
+ * the constructor, and a data class's `copy` and `componentN` operators. `copy` is projected
+ * separately as C#'s `Copy`, and `componentN` has no C# meaning at all (issue #230).
+ *
+ * One named predicate for every route that selects members off [owner], because the five inline
+ * copies of this rule did not agree: the arm flow selector had no copy, so a `Flow`-typed data
+ * class parameter's `componentN` reached both halves as a worse-named duplicate of its property.
+ */
+internal fun KSFunctionDeclaration.isForwardSyntheticMember(owner: KSClassDeclaration): Boolean {
+  val name: String = simpleName.asString()
+  if (name in FORWARD_SYNTHETIC_MEMBERS) return true
+  return owner.modifiers.contains(Modifier.DATA) &&
+      (name == "copy" || name.startsWith("component"))
+}
+
+private val FORWARD_SYNTHETIC_MEMBERS: Set<String> =
+  setOf("equals", "hashCode", "toString", "<init>")

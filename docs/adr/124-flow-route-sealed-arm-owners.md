@@ -379,3 +379,19 @@ amendment block, ADR-118's Consequences placeholder.
   > **Note (2026-09-13):** superseded by [ADR-117](117-forward-abi-collision-names-owning-declarations.md)'s
   > same-day amendment. The arm's flow exports now carry their own owner tag like every other
   > `exports/` route, and the `attributing(subclass)` range this bullet describes has been deleted.
+
+## Amendment (2026-09-15): the arm flow selector applies the synthetic-member filter
+
+Issue [#230](https://github.com/xxfast/kotlin-native-nuget/issues/230). `forwardArmFlowMethods` was
+the one member selector with no copy of the data-class synthetic filter. Every other route carried
+its own inline copy, so a `componentN()` was filtered before skip reporting. This one was not, and a
+`data class` arm whose constructor parameter is a `Flow<T>` or `StateFlow<T>` exported that
+parameter's component on both halves: `public KotlinFlow<T> ComponentN()` in C#, and
+`@CName("<base>_<arm>_componentN_collect")` in Kotlin. A component of any other type was already
+gone, because it never reached this selector, which is why the leak looked type-specific.
+
+The rule is now one named predicate, `isForwardSyntheticMember`, and the arm flow selector reads it
+like the ordinary class route, the arm callback route and the arm suspend selector do. No new
+diagnostic: a compiler-synthesized member is filtered, not skipped, exactly as the other fifteen
+components already were. `Job.Purring` in `test-library` is the fixture, with the absence assertion
+in `IntegrationTests/SealedArmFlowComponentTests.cs`.

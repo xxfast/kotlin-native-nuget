@@ -88,6 +88,9 @@ internal fun KSClassDeclaration.forwardArmFlowMethods(
   .filter { it.parentDeclaration == this }
   .filter { !it.modifiers.contains(Modifier.SUSPEND) }
   .filter { it.returnsForwardFlow() }
+  // Issue #230: the synthetic-member filter every other member route applies. A `Flow`-typed
+  // data class parameter's `componentN` is a duplicate of the property, on both halves.
+  .filter { method -> !method.isForwardSyntheticMember(this) }
   // ADR-114 / ADR-119 / ADR-123: the three refusals the ordinary route applies upstream of its own
   // projection. Both halves must agree, or a C# import arrives with no Kotlin export behind it.
   .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
