@@ -1,7 +1,8 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 class CirRenderer {
-  fun render(file: CirFile): String = renderFile(file).withUtf8StringParameters()
+  fun render(file: CirFile): String =
+    renderFile(file).withUtf8StringParameters().checkSpellableInCSharp()
 
   private fun renderFile(file: CirFile): String = buildString {
     appendLine("#nullable enable")
@@ -122,4 +123,34 @@ internal fun StringBuilder.renderNestedDeclarations(declarations: List<CirDeclar
     appendLine()
     append(buildString { renderDeclaration(declaration, nested = true) }.indentNestedBody())
   }
+}
+
+// Issue #223: `$` is legal in C# source only inside an interpolated string, so string literals are
+// stripped before the scan. A `$` anywhere else is an identifier no C# compiler can read, whatever
+// route emitted it.
+private val CSHARP_STRING_LITERAL = Regex("[@\\$]?\"(?:[^\"\\\\]|\\\\.)*\"")
+
+private val CSHARP_DOLLAR_IDENTIFIER = Regex("[\\w\\$]*\\$[\\w\\$]*")
+
+/**
+ * Issue #223: the single structural guard that no emitted identifier contains `$`.
+ *
+ * kotlinx.serialization's compiler plugin synthesizes a nested `$serializer` object on every
+ * `@Serializable` declaration, and the ADR-134 nested-declaration walk used to declare it. The walk
+ * refuses synthetic declarations now; this check is what makes any OTHER route reaching such a name
+ * fail at generation time rather than in the consumer's `dotnet build`, where it reads as six parse
+ * errors per site with nothing naming the Kotlin declaration behind them.
+ */
+private fun String.checkSpellableInCSharp(): String {
+  val offending: String? = lineSequence()
+    .map { line -> CSHARP_STRING_LITERAL.replace(line, "") }
+    .firstNotNullOfOrNull { line -> CSHARP_DOLLAR_IDENTIFIER.find(line)?.value }
+
+  check(offending == null) {
+    "Generated C# declares the identifier `$offending`, which contains a '\$'. A name that " +
+      "cannot be spelled in C# is a generator defect: the declaration behind it is " +
+      "compiler-synthesized and must not be walked, and must not be renamed into something legal."
+  }
+
+  return this
 }

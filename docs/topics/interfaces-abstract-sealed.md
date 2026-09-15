@@ -293,11 +293,32 @@ A subclass declared *inside* the sealed base stays nested (`Observation.Alive`);
 namespace level instead (`public sealed class Label : FlatShape`, not `FlatShape.Label`): match on
 the bare name in a `switch`, not the nested spelling.
 
-Every arm has only an `internal` handle constructor: a consumer can never `new` one directly, only
-receive one from Kotlin or a pattern match. On .NET 7+, `IntPtr` is `nint`, and an `int` converts
-to it implicitly, so `new Purr.On(9)` **compiles** and binds to that internal constructor, treating
-`9` as a native address; the first call through it access-violates instead of failing to build.
-Never construct a sealed arm directly.
+A `class`-kind arm whose public constructor parameters are all bridgeable exports that constructor
+too, spelled exactly like an ordinary class with the same parameters and chaining into the
+inherited handle:
+
+```kotlin
+sealed class Nap {
+  data class Deep(val minutes: Int) : Nap()
+  data object Zoomies : Nap()
+}
+```
+
+```C#
+public Deep(int minutes) : base(IntPtr.Zero)
+{
+    IntPtr handle = Native_Create(minutes, out IntPtr error);
+    // ...
+    _handle = handle;
+}
+```
+
+`new Nap.Deep(minutes: 12)` then works like any other constructed object, at an arm-typed or a
+base-typed parameter. An `object`/`data object` arm, like `Zoomies`, is unchanged: Kotlin gives it
+no public constructor to export, so it stays reachable only from Kotlin. An arm whose every
+constructor is refused, for example one whose sole parameter is an opt-in-marked type, keeps only
+its `internal` handle constructor and warns `WARNING_NO_PUBLIC_CONSTRUCTOR`, the same as a
+non-subclass class with [no reachable constructor](classes-and-objects.md#no-public-constructor).
 
 A `data class`/`data object` arm gets `Equals`/`GetHashCode`/`ToString` the same as any
 [data class](data-classes.md); compare two reads of the same singleton arm with `Equals`, not
@@ -552,9 +573,12 @@ A sealed base, a sealed arm, and any `interface` owner can nest their own plain
   parameter typed with it is skipped.
 - An eligible sealed interface arm's own extra interfaces (`class Odd : Kind, CharSequence`) are
   dropped silently from the generated class.
-- A sealed arm's only constructor is `internal`; an `int`-convertible literal implicitly converts
-  to `IntPtr` (`nint` on .NET 7+), so `new Base.Arm(9)` compiles and access-violates at runtime
-  instead of failing to build. Never construct a sealed arm directly.
+- An `object` arm, or a `class`-kind arm whose every constructor is refused, has only the
+  `internal` handle constructor; an `int`-convertible literal implicitly converts to `IntPtr`
+  (`nint` on .NET 7+) there, so `new Base.Arm(9)` compiles and access-violates at runtime instead
+  of failing to build. A `class`-kind arm with bridgeable constructor parameters exports a real
+  public constructor instead; see
+  [Sealed classes and interfaces](#sealed-classes-and-interfaces).
 - `interface Derived : Base` does not carry `Base`'s members onto `IDerived`; a `var` interface
   property always renders `{ get; }` only on the generated interface, even when an implementing
   class's own property has a setter.

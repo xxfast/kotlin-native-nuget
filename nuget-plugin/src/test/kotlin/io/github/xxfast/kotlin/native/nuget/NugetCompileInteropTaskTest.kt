@@ -6,6 +6,7 @@ import org.gradle.api.Task
 import org.gradle.api.internal.project.ProjectInternal
 import org.gradle.testfixtures.ProjectBuilder
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
+import org.junit.jupiter.api.Assumptions
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
@@ -188,6 +189,129 @@ class NugetCompileInteropTaskTest {
       File(out, "interop-check.csproj").exists(),
       "the skip must not write a csproj it never builds",
     )
+  }
+
+  @Test
+  fun `a global json above the scratch dir cannot pick the sdk the check builds with`() {
+    // Skipped when the .NET SDK is absent, exactly as the task itself skips.
+    findExecutable("dotnet") ?: return
+
+    // The pin no machine satisfies, the shape a consumer uses for their own app (issue #224).
+    val consumer: File = tempDir("compile-interop-globaljson")
+    File(consumer, "global.json").writeText("""{"sdk":{"version":"1.0.0"}}""")
+    val out = File(consumer, "build/nuget-compile")
+    out.mkdirs()
+
+    val sources: File = tempDir("compile-interop-globaljson-src")
+    File(sources, "Interop.cs").writeText("namespace Sample { public class Ok { } }")
+
+    val task: NugetCompileInteropTask = compileTask()
+    task.generatedCsDirs.from(sources)
+    task.projectDir.set(out)
+    task.dependencyVersions.set(emptyMap())
+    task.dependencySources.set(emptyList())
+
+    task.compile()
+
+    assertTrue(File(out, "global.json").exists(), "the check must write its own SDK selection")
+    assertTrue(File(out, "NuGet.config").exists(), "the check must write its own feed selection")
+    assertTrue(File(out, "interop-check.csproj").exists(), "the check must write its csproj")
+    assertTrue(
+      File(out, "bin/Debug/net8.0/interop-check.dll").exists(),
+      "the check must have compiled under an installed SDK, not the pin above it",
+    )
+  }
+
+  @Test
+  fun `a Directory Build props above the scratch dir cannot relax the check`() {
+    // Skipped when the .NET SDK is absent, exactly as the task itself skips.
+    findExecutable("dotnet") ?: return
+
+    // The marker target is what actually discriminates: `NoWarn` cannot suppress an error, so the
+    // property group alone would leave CS0101 in place whether or not the props file was imported.
+    // The error fires before compilation, so an imported props file replaces CS0101 with the
+    // marker.
+    val consumer: File = tempDir("compile-interop-dirprops")
+    File(consumer, "Directory.Build.props").writeText(
+      """
+      <Project>
+        <PropertyGroup>
+          <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+          <NoWarn>CS0101</NoWarn>
+        </PropertyGroup>
+        <Target Name="ConsumerPropsImported" BeforeTargets="PrepareForBuild">
+          <Error Text="NUGET_CONSUMER_PROPS_IMPORTED" />
+        </Target>
+      </Project>
+      """.trimIndent()
+    )
+    val out = File(consumer, "build/nuget-compile")
+    out.mkdirs()
+
+    val sources: File = tempDir("compile-interop-dirprops-src")
+    File(sources, "Bad.cs").writeText(
+      """
+      namespace Sample
+      {
+          public class Duplicate { }
+          public class Duplicate { }
+      }
+      """.trimIndent()
+    )
+
+    val task: NugetCompileInteropTask = compileTask()
+    task.generatedCsDirs.from(sources)
+    task.projectDir.set(out)
+    task.dependencyVersions.set(emptyMap())
+    task.dependencySources.set(emptyList())
+
+    val failure: GradleException = assertFailsWith<GradleException> { task.compile() }
+    assertContains(
+      failure.message.orEmpty(),
+      "CS0101",
+      message = "the check must still reject the duplicate type",
+    )
+    assertFalse(
+      failure.message.orEmpty().contains("NUGET_CONSUMER_PROPS_IMPORTED"),
+      "a consumer's Directory.Build.props must not be imported by the check",
+    )
+  }
+
+  @Test
+  fun `an sdk that cannot run skips the check instead of building`() {
+    // A shell script cannot stand in for dotnet.exe on Windows.
+    Assumptions.assumeFalse(
+      System.getProperty("os.name").startsWith("Windows", ignoreCase = true),
+      "needs a shell script as the dotnet executable",
+    )
+
+    val bin: File = tempDir("compile-interop-badsdk-bin")
+    val marker = File(bin, "built.marker")
+    val fake = File(bin, "dotnet")
+    fake.writeText(
+      """
+      #!/bin/sh
+      if [ "${'$'}1" = "build" ]; then touch "${marker.absolutePath}"; fi
+      echo "the SDK could not be resolved" 1>&2
+      exit 155
+      """.trimIndent()
+    )
+    fake.setExecutable(true)
+
+    val out: File = tempDir("compile-interop-badsdk-out")
+    val sources: File = tempDir("compile-interop-badsdk-src")
+    File(sources, "Interop.cs").writeText("namespace Sample { public class Ok { } }")
+
+    val task: NugetCompileInteropTask = compileTask()
+    task.generatedCsDirs.from(sources)
+    task.dotnetSearchPath.set(bin.absolutePath)
+    task.projectDir.set(out)
+    task.dependencyVersions.set(emptyMap())
+    task.dependencySources.set(emptyList())
+
+    task.compile()
+
+    assertFalse(marker.exists(), "an unusable SDK must not reach dotnet build")
   }
 
   @Test

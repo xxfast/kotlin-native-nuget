@@ -265,6 +265,10 @@ combination fails generation (`ERROR_CSHARP_SIGNATURE_COLLISION`) instead of emi
 Avoid naming an accessor the same as its nested return type (`fun perch(): Perch`); name the
 accessor differently instead (`perchAt`).
 
+A `@Serializable` class exports the same as any other class. kotlinx.serialization's
+compiler-generated `$serializer` nested object is never declared in C#, since `$` isn't a legal C#
+identifier there; it has no members you'd want to call, so skipping it costs nothing.
+
 ### An `object` at a member position stays CS0722 {id="nested-object-position"}
 
 A Kotlin `object`, nested or top-level, renders as a C# **static** class, and C# forbids a static
@@ -301,10 +305,12 @@ Purr.On on = Assert.IsType<Purr.On>(purr);
 using Purr.On.Trace trace = on.TraceOf();
 ```
 
-A sealed arm's only constructor is `internal Arm(IntPtr handle)`. In .NET 7+, `IntPtr` is `nint`,
-and an `int` converts to it implicitly, so `new Purr.On(9)` **compiles**, binding to that internal
-handle constructor with `9` as a fabricated address, and access-violates on first use instead of
-failing to build. Always obtain a sealed arm from a factory method or a pattern match, never `new`.
+A sealed arm's `internal Arm(IntPtr handle)` constructor still exists beside any exported public
+one. `Purr.On`'s own `level: Int` constructor parameter is bridgeable, so `On` also exports a public
+constructor, and `new Purr.On(9)` resolves to it rather than to the internal one; see
+[Interfaces, abstract classes, and sealed classes: Sealed classes and
+interfaces](interfaces-abstract-sealed.md#sealed-classes-and-interfaces) for the general rule and
+its refused-arm exception.
 
 ## Limitations
 

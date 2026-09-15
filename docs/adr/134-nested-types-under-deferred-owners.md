@@ -249,3 +249,34 @@ gains a cell flipping `Tone.Helper` (a plain nested class under an **ineligible*
    .lowercase()}"`, unchanged by this ADR) still agrees with a nested-declaration child's own prefix
    for a **sibling**-declared arm that itself owns a nested type; no fixture cell exercises a nested
    declaration under a sibling arm specifically (only the nested-arm cell, `Purr.On.Trace`, shipped).
+
+## Amendment (2026-09-15): a compiler-synthesized nested declaration is never walked
+
+Issue #223. This ADR's walk reaches every public nested declaration under an admitted owner. Some
+of those are not written by anyone. kotlinx.serialization's compiler plugin synthesizes a nested
+`$serializer` object on every `@Serializable` declaration, and the walk declared it as
+`public static class $serializer` inside the owner. `$` is not a legal C# identifier character, so
+`Interop.cs` stopped parsing: six diagnostics per site, 144 errors across 24 owners in the report.
+
+Two rules follow.
+
+1. The walk filters compiler-synthesized declarations before it declares one or descends into it.
+   The filter sits in `nestedClassDeclarations()` rather than at the candidate funnel, because the
+   walk also feeds the ADR-066 reachability closure, which must not admit dependency types on a
+   synthetic declaration's behalf.
+2. No identifier containing `$` is rendered, from any route. `CirRenderer.render` checks the
+   rendered file and fails the build naming the identifier. `$` is legal C# only inside an
+   interpolated string, so string literals are stripped before the scan.
+
+The signal is the name, not `KSClassDeclaration.origin`. Verified against the fixture: KSP reports
+`Carton.$serializer` as `Origin.KOTLIN_LIB`, the same origin as the `@Serializable` class that owns
+it, so origin cannot separate the two across a klib boundary. A `$` in a simple name can only have
+been synthesized, since Kotlin source cannot declare one.
+
+Not sanitized to `_serializer`, and not special-cased by name. The object is empty and nobody asked
+for it; the correct behaviour is to not walk it, silently. It is not a consumer API gap, so it gets
+no `SKIPPED_*` diagnostic either.
+
+`:test-models` carries the fixture: `@Serializable data class Carton` and
+`@Serializable value class CartonTag`, both reached from `Newsroom`, so the data-class and
+value-class owner arms of the original report are both covered one klib boundary away.

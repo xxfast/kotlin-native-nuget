@@ -17,7 +17,8 @@
     <p>
       If a .NET SDK is present, `packNuget` also runs `nugetCompileInterop`, which compiles the
       generated C# bindings before packing and fails the build on a compiler error. Without the
-      SDK, this check is skipped with a warning and publishing proceeds as before.
+      SDK, this check is skipped with a warning and publishing proceeds as before. If the
+      SDK on `PATH` is present but cannot run, the check is skipped the same way.
     </p>
   </note>
 

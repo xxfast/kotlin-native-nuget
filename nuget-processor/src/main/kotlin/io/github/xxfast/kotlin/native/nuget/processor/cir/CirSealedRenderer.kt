@@ -100,6 +100,9 @@ private fun sealedSubclassBlock(
   // arm sees none of them, where `new` would be CS0109 instead, so both are keyed off `isNested`.
   val baseExternNames: Set<String> =
     if (subclass.isNested) sealed.ordinaryNativeImports().map { it.name }.toSet() else emptySet()
+  // ADR-148: the arm's own `<remarks>`, the twin of `WARNING_NO_PUBLIC_CONSTRUCTOR`, rendered at
+  // the arm's declaration depth exactly as `renderClass` renders an ordinary class's.
+  renderRemarks(subclass.remarks, indent = "        ")
   appendLine(
     "        public ${sealedModifier}class ${subclass.name} : ${sealed.name}$asyncDisposable"
   )
@@ -112,6 +115,23 @@ private fun sealedSubclassBlock(
   appendLine("            {")
   appendLine("            }")
   appendLine()
+  // ADR-148: the arm's public constructors, through the same `renderConstructorMember` an
+  // ordinary class's go through, re-indented one level like every other member of an arm.
+  // `hasSuperClass = true`: the handle field is the sealed base's `internal IntPtr _handle`, which
+  // a nested arm assigns directly and a sibling arm assigns because it is in the same file.
+  subclass.constructors.forEach { ctor ->
+    append(
+      buildString {
+        renderConstructorMember(
+          libraryName = sealed.libraryName,
+          nativePrefix = subclass.nativePrefix,
+          className = subclass.name,
+          ctor = ctor,
+          hasSuperClass = true,
+        )
+      }.indentNestedBody(),
+    )
+  }
   if (subclass.hasSuspendMethods) {
     append(buildString { renderGetOrCreateScope() }.indentNestedBody())
     appendLine()

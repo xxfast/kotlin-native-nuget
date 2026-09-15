@@ -6,6 +6,7 @@
 // cross correctly).
 plugins {
   alias(libs.plugins.kotlinMultiplatform)
+  alias(libs.plugins.kotlinSerialization)
 }
 
 kotlin {
@@ -13,6 +14,9 @@ kotlin {
   macosArm64()
 
   sourceSets {
+    nativeMain.dependencies {
+      api(libs.kotlinx.serialization.core)
+    }
     nativeTest.dependencies {
       implementation(libs.kotlin.test)
     }

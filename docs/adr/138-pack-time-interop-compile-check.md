@@ -432,3 +432,41 @@ Three seams, all on the plugin's JVM tests plus one line in verify:
   here; the warning is the v1 answer.
 - Does the check belong on the `check` lifecycle task as well as on `packNuget`? Harmless either
   way; left out to keep the wiring to one `dependsOn`.
+
+## Amendment (2026-09-15): the check is hermetic and an unusable SDK is an environment skip
+
+`interop-check.csproj` lives in `build/nuget-compile/`, inside the consumer's tree. MSBuild walks up
+from the project directory to find `global.json`, `Directory.Build.props`, `Directory.Build.targets`
+and `Directory.Packages.props`, so the consumer's own build configuration decided what the check
+did. A project pinning .NET 8 for its sample app, on a machine with only .NET 10, made `packNuget`
+fail with `dotnet build` exit code 155. Reported as [issue #224](https://github.com/xxfast/kotlin-native-nuget/issues/224).
+
+Exit code 155 is the dotnet host failing to load a command. No C# was parsed. The task still said
+"This is a generator defect: the package would fail in every consumer's build", which was false on
+both counts.
+
+The scratch directory stays where it is. The check now writes its own configuration beside the
+csproj:
+
+- `global.json` containing `{}`. The nearest `global.json` wins with no merging, and an empty one
+  selects the latest installed SDK. A pin above the scratch directory no longer reaches the check,
+  and no SDK version has to be discovered.
+- `NuGet.config` clearing the source list and adding `nuget.org`, passed as
+  `-p:RestoreConfigFile=<path>`. A consumer's feeds and package source mapping are not consulted.
+  `RestoreSources` in the csproj still replaces that source list outright when a dependency declares
+  a feed, which is the behaviour the original design wanted.
+- `-p:ImportDirectoryBuildProps=false -p:ImportDirectoryBuildTargets=false
+  -p:ImportDirectoryPackagesProps=false` on the `dotnet build` command line, so no props or targets
+  file above the scratch directory can change the verdict.
+
+Before the build, the task runs `dotnet --version` with the working directory set to the scratch
+directory, so the probe resolves the SDK exactly as the build will. A non-zero exit means the
+toolchain cannot run. That warns and returns, in the same voice as the existing "dotnet is not on
+PATH" skip, and publishing proceeds. There is no output parsing. Only a non-zero exit from
+`dotnet build` itself reaches the generator-defect exception, whose wording is unchanged.
+
+This supersedes the acceptance above (see the "Inferred, not proven by a fresh-machine run" note)
+of an SDK-class failure as "a loud failure, not a silent wrong verdict" for the case where the
+toolchain cannot run at all. That case is now an environment skip. A restore failure raised by the
+compiler run itself, such as an unreachable feed or a missing package, still fails the pack as
+before.

@@ -60,6 +60,13 @@ bound dependency:
 </Project>
 ```
 
+Beside the csproj it also writes a `global.json` containing `{}` and a `NuGet.config` that clears
+the package sources and adds `nuget.org`, and it builds with
+`-p:ImportDirectoryBuildProps=false -p:ImportDirectoryBuildTargets=false -p:ImportDirectoryPackagesProps=false`
+and `-p:RestoreConfigFile` pointing at that config. The check therefore picks its own SDK and feeds:
+a `global.json`, `Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props` or
+`NuGet.config` anywhere above `build/nuget-compile/` cannot change its result.
+
 It then runs `dotnet build` against it. If a generated file does not compile, `packNuget` fails
 with the compiler's own output, for example:
 
@@ -71,7 +78,9 @@ Build FAILED.
 ```
 
 When `dotnet` is not found on `PATH`, the task logs a warning and returns without writing or
-compiling anything, so publishing a Kotlin/Native library still needs no .NET SDK. See
+compiling anything, so publishing a Kotlin/Native library still needs no .NET SDK. An SDK that is on
+`PATH` but cannot run (`dotnet --version` fails) skips the check with the same kind of warning,
+rather than reporting a compile failure. See
 [Prerequisites](prerequisites.md) and
 [ADR-138](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/138-pack-time-interop-compile-check.md).
 

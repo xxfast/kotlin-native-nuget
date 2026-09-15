@@ -801,8 +801,12 @@ Fires for every skip reason a constructor can go for, including a legacy-route d
 reaches `droppedCallables` on its own (no legacy route re-emits a constructor, so that family was
 silent in every channel before this amendment). A sealed type at a parameter position used to be
 one such reason, see [A sealed type at a parameter position now binds](#sealed-position-now-binds)
-below. Not fired for an abstract class or the interface-return backing wrapper, neither of which is
-handle-less by accident. See
+below. Also fires for a sealed subclass arm of kind `class` whose every constructor is refused, the
+same reasons and the same `<remarks>` twin as a non-subclass type
+([ADR-148](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/148-sealed-subclass-constructors.md)),
+see [Interfaces, abstract classes, and sealed classes: Sealed classes and
+interfaces](interfaces-abstract-sealed.md#sealed-classes-and-interfaces). Not fired for an abstract
+class or the interface-return backing wrapper, neither of which is handle-less by accident. See
 [Classes and objects: No public constructor](classes-and-objects.md#no-public-constructor) for the
 full `Issue56Failure` shape.
 

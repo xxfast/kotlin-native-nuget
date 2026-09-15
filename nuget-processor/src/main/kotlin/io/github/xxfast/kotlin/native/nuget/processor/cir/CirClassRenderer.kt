@@ -374,8 +374,33 @@ private fun StringBuilder.renderLegacyPropertyNativeImports(cls: CirClass, prop:
 // Emits the [DllImport] for a constructor's native create entry point plus the
 // C# constructor itself. Used for the primary and every secondary (ADR-034).
 private fun StringBuilder.renderClassConstructor(cls: CirClass, ctor: CirConstructor) {
-  renderDllImport(cls.constructorNativeImport(ctor))
-  renderConstructor(cls.name, ctor, cls.superClass != null, cls.hasSuspendMethods)
+  renderConstructorMember(
+    libraryName = cls.libraryName,
+    nativePrefix = cls.nativePrefix,
+    className = cls.name,
+    ctor = ctor,
+    hasSuperClass = cls.superClass != null,
+    hasSuspendMethods = cls.hasSuspendMethods,
+  )
+}
+
+/**
+ * ADR-148: the extern plus the constructor, addressed by the strings rather than by a [CirClass],
+ * so an ADR-009 sealed arm renders its public constructors through the same two lines an ordinary
+ * class does. An arm always passes `hasSuperClass = true`: its handle lives on the generated
+ * sealed base, which is exactly why `: base(IntPtr.Zero)` then `_handle = handle;` is the shape it
+ * needs.
+ */
+internal fun StringBuilder.renderConstructorMember(
+  libraryName: String,
+  nativePrefix: String,
+  className: String,
+  ctor: CirConstructor,
+  hasSuperClass: Boolean,
+  hasSuspendMethods: Boolean = false,
+) {
+  renderDllImport(constructorNativeImport(libraryName, nativePrefix, ctor))
+  renderConstructor(className, ctor, hasSuperClass, hasSuspendMethods)
 }
 
 private fun StringBuilder.renderLegacyMethodNativeImport(cls: CirClass, method: CirMethod) {

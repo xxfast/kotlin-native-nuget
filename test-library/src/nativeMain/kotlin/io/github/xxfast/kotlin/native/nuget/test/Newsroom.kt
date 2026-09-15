@@ -5,6 +5,8 @@ import dev.other.core.Airwave
 import io.github.xxfast.kotlin.native.nuget.test.models.Almanac
 import io.github.xxfast.kotlin.native.nuget.test.models.Broadcast
 import io.github.xxfast.kotlin.native.nuget.test.models.Byline
+import io.github.xxfast.kotlin.native.nuget.test.models.Carton
+import io.github.xxfast.kotlin.native.nuget.test.models.CartonTag
 import io.github.xxfast.kotlin.native.nuget.test.models.Nap
 import io.github.xxfast.kotlin.native.nuget.test.models.StoryCode
 import io.github.xxfast.kotlin.native.nuget.test.models.StoryUri
@@ -120,10 +122,36 @@ class Newsroom {
   fun deepNap(): Nap.Deep = Nap.Deep(720)
 
   /**
+   * Issue #222, the round trip: C# constructs a [Nap.Deep] with `new Nap.Deep(minutes: 12)` and
+   * hands it straight back, so Kotlin reads the value the consumer chose. The parameter is the
+   * **arm**, not the base, because the arm is the spelling that has no public constructor today.
+   */
+  fun napMinutes(nap: Nap.Deep): Int = nap.minutes
+
+  /**
+   * Issue #222, base-typed parameter: a C#-constructed arm must also pass where the sealed base is
+   * expected. [Nap.Zoomies] is the control, the one arm a consumer could already obtain.
+   */
+  fun describe(nap: Nap): String = when (nap) {
+    is Nap.Deep -> "deep:${nap.minutes}"
+    Nap.Zoomies -> "zoomies"
+  }
+
+  /**
    * Undeclared-enum gate, shape (c): a *top-level* enum in the never-admitted `dev.other.core`,
    * the `containingFile == null` half of the gate. Must skip with
    * `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` naming `include("dev.other.core")`, exactly as [sponsor]
    * does for a class, instead of being spelled as an undeclared C# enum reference.
    */
   fun airwave(): Airwave = Airwave.FM
+
+  /**
+   * Issue #223: reaches a `@Serializable` data class, whose compiler-synthesized nested
+   * `$serializer` object the nested-declaration walk must never declare. The class itself is a
+   * normal export, so this member also pins that refusing the synthetic one costs nothing real.
+   */
+  fun carton(): Carton = Carton("cardboard box, size L", 4)
+
+  /** The `value class` arm of the same cell, unwrapped to a C# `string` as usual. */
+  fun cartonTag(): CartonTag = CartonTag("oreo-approved")
 }

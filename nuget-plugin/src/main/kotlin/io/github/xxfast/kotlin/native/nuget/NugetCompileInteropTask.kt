@@ -24,6 +24,29 @@ import javax.inject.Inject
 private const val NUGET_ORG_FEED = "https://api.nuget.org/v3/index.json"
 
 /**
+ * ADR-138 amendment: an empty `global.json` beside the check's csproj. MSBuild takes the nearest
+ * `global.json` and does not merge it with the ones above, and an empty one selects the latest
+ * installed SDK, so a consumer pinning an SDK for their own app cannot decide which SDK compiles
+ * the generated bindings.
+ */
+internal const val HERMETIC_GLOBAL_JSON = "{}"
+
+/**
+ * ADR-138 amendment: the `NuGet.config` the check restores with, passed as `RestoreConfigFile` so a
+ * consumer's own config (extra feeds, package source mapping) is never consulted. `RestoreSources`
+ * in the csproj replaces this source list outright when a dependency declares a feed; this config
+ * is what a forward-only project restores the `net8.0` targeting pack from.
+ */
+internal fun hermeticNugetConfig(): String = """
+  |<configuration>
+  |  <packageSources>
+  |    <clear />
+  |    <add key="nuget.org" value="$NUGET_ORG_FEED" />
+  |  </packageSources>
+  |</configuration>
+""".trimMargin().trim()
+
+/**
  * ADR-138: the throwaway csproj `nugetCompileInterop` builds. Its property set is
  * `GeneratedBindingsCheck/GeneratedBindingsCheck.csproj`'s, verbatim, plus `AllowUnsafeBlocks`
  * (which a real consumer gets from the package's own `build/<id>.targets`, and this project has no
@@ -82,8 +105,10 @@ internal fun generateCheckCsproj(
 /**
  * ADR-138: compiles the generated C# bindings with `dotnet build` before `packNuget` stages them,
  * so a binding that does not compile fails the author's pack instead of every consumer's build.
- * Skips with a warning when `dotnet` is absent, because publishing is documented as needing no
- * .NET SDK.
+ * Skips with a warning when `dotnet` is absent, or when the SDK on PATH cannot run, because
+ * publishing is documented as needing no .NET SDK. The check owns its own SDK and feed selection
+ * (an empty `global.json`, a cleared `NuGet.config`, and the three `ImportDirectory*` switches), so
+ * nothing a consumer keeps above `build/nuget-compile/` changes its verdict.
  */
 @DisableCachingByDefault(
   because = "dotnet build manages its own obj/ and bin/ state and resolves packages through the " +
@@ -143,13 +168,59 @@ abstract class NugetCompileInteropTask : DefaultTask() {
       generateCheckCsproj(csFiles, dependencyVersions.get(), dependencySources.get())
     )
 
+    // The scratch dir sits inside the consumer's tree, so the check writes its own SDK and feed
+    // selection next to the csproj rather than inheriting whatever is above it.
+    File(dir, "global.json").writeText(HERMETIC_GLOBAL_JSON)
+    val nugetConfig = File(dir, "NuGet.config")
+    nugetConfig.writeText(hermeticNugetConfig())
+
+    // Runs from the scratch dir so it resolves the SDK exactly as the build below will. A non-zero
+    // exit means the toolchain cannot run at all, which is an environment problem and not a verdict
+    // on the generated C#.
+    val probeOut = ByteArrayOutputStream()
+    val probeErr = ByteArrayOutputStream()
+    val probe: ExecResult = execOps.exec { spec ->
+      spec.commandLine(dotnet, "--version")
+      spec.workingDir = dir
+      spec.standardOutput = probeOut
+      spec.errorOutput = probeErr
+      spec.isIgnoreExitValue = true
+    }
+
+    if (probe.exitValue != 0) {
+      val probeOutput: String =
+        (probeOut.toString().trimEnd() + "\n" + probeErr.toString().trimEnd()).trim()
+      logger.warn(
+        "w: [nuget] The .NET SDK on PATH could not be used (dotnet --version exit code " +
+          "${probe.exitValue}), so the generated C# bindings were not compiled before packing. " +
+          "A binding that does not compile will only surface in a consumer's build. Install the " +
+          ".NET SDK 8.0 or later from https://dot.net/download to check at pack. dotnet said:\n" +
+          probeOutput
+      )
+      return
+    }
+
     // Both streams are captured: the C# compiler writes `error CS....` and `Build FAILED.` to
     // stdout, not stderr, so a stderr-only capture (NugetRestoreTask's) would report a failure
     // with no errors in it.
     val stdout = ByteArrayOutputStream()
     val stderr = ByteArrayOutputStream()
     val result: ExecResult = execOps.exec { spec ->
-      spec.commandLine(dotnet, "build", csproj.absolutePath, "--nologo", "-v", "quiet")
+      spec.commandLine(
+        dotnet,
+        "build",
+        csproj.absolutePath,
+        "--nologo",
+        "-v",
+        "quiet",
+        "-p:RestoreConfigFile=${nugetConfig.absolutePath}",
+        // A consumer's Directory.Build.props / .targets / Directory.Packages.props above the
+        // scratch dir must not be able to change what the check accepts or rejects.
+        "-p:ImportDirectoryBuildProps=false",
+        "-p:ImportDirectoryBuildTargets=false",
+        "-p:ImportDirectoryPackagesProps=false",
+      )
+      spec.workingDir = dir
       spec.standardOutput = stdout
       spec.errorOutput = stderr
       spec.isIgnoreExitValue = true

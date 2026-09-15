@@ -79,6 +79,13 @@ internal fun FileSpec.Builder.addSealedClassExports(
     val subPrefix: String = "${prefix}_${subName.lowercase()}"
     val isDataClass: Boolean = subclass.modifiers.contains(Modifier.DATA)
 
+    // ADR-148: the arm's public constructors, off the same catalog query and the same emitter an
+    // ordinary class's go through (`ClassExports`). An `object` arm plans none, so this is empty
+    // for one and the arm's exports are byte-identical to what shipped.
+    callableCatalog.constructors(subQualifiedName).forEach { plan ->
+      addForwardKotlinPlanExport(plan)
+    }
+
     addFunction(
       FunSpec.builder("export_${subPrefix}_dispose")
         .addAnnotation(

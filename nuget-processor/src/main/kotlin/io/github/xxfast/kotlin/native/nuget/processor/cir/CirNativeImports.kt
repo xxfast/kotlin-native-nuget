@@ -29,6 +29,9 @@ internal fun CirClass.ordinaryNativeImports(): List<CirDllImport> = buildList {
  */
 internal fun CirSealedSubclass.ordinaryNativeImports(libraryName: String): List<CirDllImport> =
   buildList {
+    // ADR-148: the arm's `_create` externs, off the same rule an ordinary class's come from.
+    constructors.forEach { ctor -> add(constructorNativeImport(libraryName, nativePrefix, ctor)) }
+
     properties
       .filterNot { property -> property.usesLegacyNativeImport() }
       .forEach { property -> addAll(propertyNativeImports(libraryName, nativePrefix, property)) }
@@ -53,7 +56,19 @@ internal fun CirSealedClass.ordinaryNativeImports(): List<CirDllImport> = buildL
   methods.forEach { method -> add(methodNativeImport(libraryName, nativePrefix, method)) }
 }
 
-internal fun CirClass.constructorNativeImport(ctor: CirConstructor): CirDllImport = CirDllImport(
+internal fun CirClass.constructorNativeImport(ctor: CirConstructor): CirDllImport =
+  constructorNativeImport(libraryName, nativePrefix, ctor)
+
+/**
+ * ADR-148: the same import, addressed by the two strings a [CirClass] would have supplied, so an
+ * ADR-009 sealed subclass mints its `_create` extern through this one rule instead of a second
+ * hand-written copy. The mirror of [propertyNativeImports]'s own ADR-111 split.
+ */
+internal fun constructorNativeImport(
+  libraryName: String,
+  nativePrefix: String,
+  ctor: CirConstructor,
+): CirDllImport = CirDllImport(
   libraryName = libraryName,
   entryPoint = "${nativePrefix}_create${ctor.nativeSuffix}",
   returnType = "IntPtr",

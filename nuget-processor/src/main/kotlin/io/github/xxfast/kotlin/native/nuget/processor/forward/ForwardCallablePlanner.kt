@@ -12,6 +12,7 @@ import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.symbol.KSAnnotated
+import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
@@ -631,6 +632,28 @@ internal class ForwardCallablePlanner(
         }
       }
       classes.forEach { cls -> addAll(constructorEntries(cls)) }
+      // ADR-148: the constructor half of ADR-111/ADR-116. A sealed subclass of kind `CLASS` is
+      // absent from `classes` (ADR-009 / issue #54), so its public constructors were never
+      // collected and every arm shipped with only its internal handle constructor. They plan
+      // through the very same `constructorEntries` an ordinary class's do, under the arm's own
+      // `${sealed}_${arm}` export prefix (the one its properties and methods already use), so the
+      // ABI, the overload numbering, the ADR-115 marker gate and the ADR-105 sealed-parameter
+      // rewrite are an ordinary class's by construction. `copy` is deliberately off: the sealed
+      // route emits a data arm's `copy` nowhere, and an entry no C# member reads would be an
+      // export with no import.
+      sealedClasses.forEach { sealed ->
+        sealed.getSealedSubclasses()
+          .filter { sub -> sub.classKind == ClassKind.CLASS }
+          .forEach { sub ->
+            addAll(
+              constructorEntries(
+                sub,
+                prefix = "${sealed.nativePrefix()}_${sub.simpleName.asString().lowercase()}",
+                copy = false,
+              )
+            )
+          }
+      }
       // ADR-095: top-level and extension overloads number per (package, name), the extension one
       // deliberately receiver-agnostic because its plan symbol is (`fun Cat.pat()` then
       // `fun Dog.pat()` in one package are one counter). Both counters live here rather than in the
@@ -1382,10 +1405,19 @@ internal class ForwardCallablePlanner(
     }
   }
 
-  private fun constructorEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
+  private fun constructorEntries(
+    cls: KSClassDeclaration,
+    // ADR-148: the export prefix, supplied rather than derived, because a sealed arm's is the
+    // base's plus its own simple name and a *sibling* arm's `nativePrefix()` does not compose that
+    // (`label`, not `flatshape_label`). Everything else about an arm's constructors is an ordinary
+    // class's, so the prefix is the only seam.
+    prefix: String = cls.nativePrefix(),
+    // ADR-148: whether a `data` class also gets its `copy`. False on a sealed arm: the sealed
+    // route renders no `Copy` member, so the entry would plan an export nothing imports.
+    copy: Boolean = true,
+  ): List<ForwardCallableCatalogEntry> {
     if (cls.modifiers.contains(Modifier.ABSTRACT)) return emptyList()
     val owner: String = cls.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = cls.nativePrefix()
     val result = BridgeType.ObjectHandle(owner)
     val constructors: List<KSFunctionDeclaration> = cls.getConstructors()
       .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -1438,7 +1470,7 @@ internal class ForwardCallablePlanner(
           )
         }
       }
-      if (cls.modifiers.contains(Modifier.DATA) && primary != null) {
+      if (copy && cls.modifiers.contains(Modifier.DATA) && primary != null) {
         val receiver = ForwardReceiver.Handle(result)
         val markedCopyParameter: String? = primary.parameters
           .firstNotNullOfOrNull { parameter ->
