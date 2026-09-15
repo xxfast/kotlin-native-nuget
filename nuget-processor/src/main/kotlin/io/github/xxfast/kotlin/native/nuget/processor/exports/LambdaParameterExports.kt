@@ -271,7 +271,7 @@ internal fun KSClassDeclaration.forwardArmCallbackCandidates(): List<KSFunctionD
     .filter { !it.returnsForwardFlow() }
     // A data class's generated `copy` can carry a lambda-typed parameter; the ordinary route
     // excludes those members upstream and so does the plan, so this route must not claim them.
-    .filter { method -> !method.isForwardSyntheticMember(this) }
+    .filter { method -> !method.isCompilerOwnedMember(this) }
     .toList()
 
 /**

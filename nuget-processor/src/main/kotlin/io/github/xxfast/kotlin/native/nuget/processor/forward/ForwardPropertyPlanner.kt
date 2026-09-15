@@ -10,6 +10,7 @@ import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
+import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
 /**
@@ -132,6 +133,7 @@ internal class ForwardPropertyPlanner(
     val prefix: String = sealed.nativePrefix()
     return sealed.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { prop -> !prop.isCompilerOwnedMember(sealed) }
       .filter { prop -> prop.parentDeclaration == sealed }
       .mapNotNull { prop ->
         propertyPlan(
@@ -165,6 +167,7 @@ internal class ForwardPropertyPlanner(
       "${sealed.nativePrefix()}_${subclass.simpleName.asString().lowercase()}"
     return subclass.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { prop -> !prop.isCompilerOwnedMember(subclass) }
       .filter { prop -> prop.isForwardPlannableMemberOf(subclass, superClass = sealed) }
       .mapNotNull { prop ->
         propertyPlan(
@@ -187,6 +190,8 @@ internal class ForwardPropertyPlanner(
     val superClass: KSClassDeclaration? = cls.forwardSuperClass(classifier.exportedObjectHandles)
     return cls.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
+      // Issue #235: a compiler plugin's property (`descriptor` and friends) never plans.
+      .filter { prop -> !prop.isCompilerOwnedMember(cls) }
       .filter { prop -> prop.isForwardPlannableMemberOf(cls, superClass) }
       .mapNotNull { prop ->
         propertyPlan(
@@ -213,6 +218,7 @@ internal class ForwardPropertyPlanner(
     val prefix: String = iface.nativePrefix()
     return iface.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { prop -> !prop.isCompilerOwnedMember(iface) }
       .filter { prop -> prop.parentDeclaration == iface }
       .mapNotNull { prop ->
         propertyPlan(
@@ -234,6 +240,7 @@ internal class ForwardPropertyPlanner(
     val prefix: String = cls.nativePrefix()
     return companion.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { prop -> !prop.isCompilerOwnedMember(companion) }
       .filter { !it.modifiers.contains(Modifier.CONST) }
       .mapNotNull { prop ->
         val name: String = prop.simpleName.asString()

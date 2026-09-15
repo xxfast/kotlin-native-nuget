@@ -1,11 +1,14 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
 import com.google.devtools.ksp.symbol.ClassKind
+import com.google.devtools.ksp.symbol.KSAnnotated
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
+import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
+import com.google.devtools.ksp.symbol.Origin
 import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FunSpec
@@ -189,20 +192,132 @@ internal val NUGET_RUNTIME_MEMBERS: List<String> = listOf(
 )
 
 /**
- * The members Kotlin synthesizes on a declaration, which no forward route exports: `Any`'s three,
- * the constructor, and a data class's `copy` and `componentN` operators. `copy` is projected
- * separately as C#'s `Copy`, and `componentN` has no C# meaning at all (issue #230).
+ * Whether this member belongs to the compiler rather than to the person who wrote [owner], so no
+ * forward route may declare it, plan it, or walk the types it is spelled with (issue #235).
  *
- * One named predicate for every route that selects members off [owner], because the five inline
- * copies of this rule did not agree: the arm flow selector had no copy, so a `Flow`-typed data
- * class parameter's `componentN` reached both halves as a worse-named duplicate of its property.
+ * Four rules, in the order they are cheapest to answer:
+ *
+ * 1. **The language's own members.** `Any`'s three, the constructor, and a data class's `copy` and
+ *    `componentN` operators. `copy` is projected separately as C#'s `Copy`, and `componentN` has no
+ *    C# meaning at all (issue #230).
+ * 2. **[Origin.SYNTHETIC].** What KSP says about a member it synthesized itself, in-module.
+ * 3. **A hidden deprecation.** `@Deprecated(level = DeprecationLevel.HIDDEN)` means the compiler
+ *    removed the member from the source language: nothing can call it by name, so nothing should
+ *    bridge it. General and plugin-agnostic. The default level is `WARNING`, so an absent `level`
+ *    argument is deliberately NOT hidden.
+ * 4. **A signature spelled in a compiler plugin's runtime**, on an owner the plugin marked. A
+ *    member of a `@kotlinx.serialization.Serializable` type (or of that type's companion) whose
+ *    return type or any parameter type lives under `kotlinx.serialization.` was written by the
+ *    serialization plugin, not by a person.
+ *
+ * Rule 4 is honestly narrow, and deliberately not a name check: `Companion.serializer()` carries no
+ * annotation, no [Origin] of its own and no location once it crosses a klib boundary (verified: KSP
+ * reports it `KOTLIN_LIB` at `NonExistLocation`, byte-identical to a hand-written member), so its
+ * signature plus the owner's `@Serializable` marker is the only handle KSP offers. There is no
+ * plugin-agnostic signal to generalize it with. A second plugin needs a second clause here.
+ *
+ * One named predicate for every route that selects members off [owner], because the inline copies
+ * of rule 1 did not agree: the arm flow selector had no copy, so a `Flow`-typed data class
+ * parameter's `componentN` reached both halves as a worse-named duplicate of its property.
  */
-internal fun KSFunctionDeclaration.isForwardSyntheticMember(owner: KSClassDeclaration): Boolean {
+internal fun KSFunctionDeclaration.isCompilerOwnedMember(owner: KSClassDeclaration): Boolean {
   val name: String = simpleName.asString()
-  if (name in FORWARD_SYNTHETIC_MEMBERS) return true
-  return owner.modifiers.contains(Modifier.DATA) &&
-      (name == "copy" || name.startsWith("component"))
+  if (name in LANGUAGE_OWNED_MEMBERS) return true
+  if (owner.modifiers.contains(Modifier.DATA) && (name == "copy" || name.startsWith("component"))) {
+    return true
+  }
+  if (origin == Origin.SYNTHETIC) return true
+  if (isHiddenByDeprecation()) return true
+  if (!owner.isCompilerPluginMarkedOwner()) return false
+  val signatureTypes: List<KSType?> =
+    listOf(returnType?.resolve()) + parameters.map { parameter -> parameter.type.resolve() }
+  return signatureTypes.any { type -> type.isPluginRuntimeType() }
 }
 
-private val FORWARD_SYNTHETIC_MEMBERS: Set<String> =
+/**
+ * The property half of [isCompilerOwnedMember]. Same four rules, minus the ones that cannot apply:
+ * a property has no `<init>`, and a data class's `componentN` is a function. Rule 4 is what keeps
+ * `KSerializer.descriptor` off the property routes when a serializer-ish owner is walked.
+ */
+internal fun KSPropertyDeclaration.isCompilerOwnedMember(owner: KSClassDeclaration): Boolean {
+  if (origin == Origin.SYNTHETIC) return true
+  if (isHiddenByDeprecation()) return true
+  if (!owner.isCompilerPluginMarkedOwner()) return false
+  return type.resolve().isPluginRuntimeType()
+}
+
+/**
+ * The declaration half of [isCompilerOwnedMember]: whether a nested declaration was written by a
+ * compiler plugin rather than by a person.
+ *
+ * Keeps issue #223's `$` rule as the backstop (a `$` cannot appear in a Kotlin *simple* name that
+ * anyone wrote, and C# cannot spell one either, which is the CS1056 in that issue), and adds the
+ * same hidden-deprecation and plugin-runtime rules the member predicate uses, so
+ * kotlinx.serialization's `Carton.$serializer` would still be refused if it were ever renamed:
+ * verified, it carries `@Deprecated(level = DeprecationLevel.HIDDEN)` AND extends
+ * `kotlinx.serialization.internal.GeneratedSerializer`.
+ */
+internal fun KSClassDeclaration.isCompilerOwnedDeclaration(): Boolean {
+  if ('$' in simpleName.asString()) return true
+  if (origin == Origin.SYNTHETIC) return true
+  if (isHiddenByDeprecation()) return true
+  val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return false
+  if (!owner.isCompilerPluginMarkedOwner()) return false
+  return superTypes.any { superType -> superType.resolve().isPluginRuntimeType() }
+}
+
+/**
+ * `@Deprecated(level = DeprecationLevel.HIDDEN)`: the compiler kept the member on the ABI but took
+ * it out of the source language. Read off `arguments`, so an omitted `level` (default `WARNING`)
+ * answers false. The argument's value comes back differently depending on where the annotation was
+ * read from (a `KSType`, the enum entry's own `KSClassDeclaration`, or a rendered string), so all
+ * three shapes reduce to the entry's simple name.
+ */
+private fun KSAnnotated.isHiddenByDeprecation(): Boolean = annotations
+  .filter { annotation ->
+    val name: String? = annotation.annotationType.resolve().declaration.qualifiedName?.asString()
+    name == DEPRECATED_ANNOTATION
+  }
+  .any { annotation ->
+    val level: Any? = annotation.arguments
+      .firstOrNull { argument -> argument.name?.asString() == "level" }
+      ?.value
+    val name: String? = when (level) {
+      null -> null
+      is KSType -> level.declaration.simpleName.asString()
+      is KSClassDeclaration -> level.simpleName.asString()
+      else -> level.toString().substringAfterLast('.')
+    }
+    name == "HIDDEN"
+  }
+
+/**
+ * Whether this declaration, or the class it is the companion of, carries a compiler plugin's
+ * marker.
+ */
+private fun KSClassDeclaration.isCompilerPluginMarkedOwner(): Boolean {
+  if (carriesPluginMarker()) return true
+  if (!isCompanionObject) return false
+  return (parentDeclaration as? KSClassDeclaration)?.carriesPluginMarker() == true
+}
+
+private fun KSClassDeclaration.carriesPluginMarker(): Boolean = annotations.any { annotation ->
+  val name: String? = annotation.annotationType.resolve().declaration.qualifiedName?.asString()
+  name in PLUGIN_MARKER_ANNOTATIONS
+}
+
+private fun KSType?.isPluginRuntimeType(): Boolean {
+  val qualifiedName: String = this?.declaration?.qualifiedName?.asString() ?: return false
+  return PLUGIN_RUNTIME_PACKAGES.any { prefix -> qualifiedName.startsWith(prefix) }
+}
+
+private val LANGUAGE_OWNED_MEMBERS: Set<String> =
   setOf("equals", "hashCode", "toString", "<init>")
+
+private const val DEPRECATED_ANNOTATION: String = "kotlin.Deprecated"
+
+/** The annotations a compiler plugin puts on a type to claim it. One entry per supported plugin. */
+private val PLUGIN_MARKER_ANNOTATIONS: Set<String> = setOf("kotlinx.serialization.Serializable")
+
+/** The runtime packages those plugins spell their generated signatures with. */
+private val PLUGIN_RUNTIME_PACKAGES: List<String> = listOf("kotlinx.serialization.")

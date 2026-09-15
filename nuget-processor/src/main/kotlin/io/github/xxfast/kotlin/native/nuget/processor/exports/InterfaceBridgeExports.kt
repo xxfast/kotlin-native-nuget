@@ -41,7 +41,7 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
 
   val ifaceMethods: List<KSFunctionDeclaration> = ifaceDecl.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
+    .filter { method -> !method.isCompilerOwnedMember(ifaceDecl) }
     .toList()
 
   if (ifaceMethods.isEmpty()) return

@@ -44,7 +44,36 @@ run() {
     exit 1
   fi
 
+  # Issue #235: a diagnostic may only ever describe something the consumer can act on. Nobody
+  # wrote `Carton.Companion.serializer` or `Carton.$serializer`; the kotlinx.serialization compiler
+  # plugin did, on a `@Serializable` type in `:test-models`. Grepped on the real packNuget console
+  # rather than in a unit test because the plugin only runs in a real build: KSP shows nothing at
+  # all for an in-module `@Serializable` type, so this surface exists solely across a klib boundary.
+  if grep -q '\[nuget:.*serializer' "$log"; then
+    echo "FAIL ($label): a diagnostic names a compiler-synthesized serialization declaration." >&2
+    grep '\[nuget:.*serializer' "$log" >&2
+    exit 1
+  fi
+
   grep "\[nuget:SKIPPED_INHERITED_MEMBER\].*$DECLARATION" "$log" | head -1
+}
+
+# Issue #223, the other half of the same root cause: `$` is not a legal C# identifier character, so
+# a declared `$serializer` is six compiler diagnostics per site. Pinned by absence, on the generated
+# file rather than the console.
+assert_no_synthesized_serializer_in_interop() {
+  local found
+  found="$(find "$ROOT/test-library/build/generated/ksp" -name Interop.cs -print 2>/dev/null)"
+  if [ -z "$found" ]; then
+    echo "FAIL: no generated Interop.cs under test-library/build/generated/ksp to inspect." >&2
+    exit 1
+  fi
+  if echo "$found" | tr '\n' '\0' | xargs -0 grep -l 'serializer' 2>/dev/null | grep -q .; then
+    echo "FAIL: a generated Interop.cs declares a compiler-synthesized serializer." >&2
+    echo "$found" | tr '\n' '\0' | xargs -0 grep -n 'serializer' >&2
+    exit 1
+  fi
+  echo "==> confirmed: no synthesized serializer in any generated Interop.cs"
 }
 
 LOG_DIR="$(mktemp -d)"
@@ -62,5 +91,7 @@ if grep -q 'kspKotlin.* UP-TO-DATE\|kspKotlin.* FROM-CACHE' "$LOG_DIR/run2.log";
 else
   echo "note: run 2 re-executed the KSP task, so the cached-build path was not exercised here" >&2
 fi
+
+assert_no_synthesized_serializer_in_interop
 
 echo "OK: forward diagnostics reach the console on both a fresh and an incremental packNuget"

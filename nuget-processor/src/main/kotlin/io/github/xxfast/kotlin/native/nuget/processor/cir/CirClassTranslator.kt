@@ -21,8 +21,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMeth
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmLambdaMethods
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmInterfaceBridgePairs
+import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
-import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardSyntheticMember
 import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsHeldMutableStateFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
@@ -747,7 +747,7 @@ internal fun translateClass(
   val filteredMethods: List<KSFunctionDeclaration> = allMethods
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { method ->
-      if (method.isForwardSyntheticMember(cls)) return@filter false
+      if (method.isCompilerOwnedMember(cls)) return@filter false
 
       // ADR-114: a Flow-returning or suspend member with a generic parameter this route cannot
       // marshal is dropped on both halves. `NugetProcessor` names it once. ADR-119: likewise a
@@ -1919,7 +1919,7 @@ internal fun translateSealedClass(
         .filter { it.modifiers.contains(Modifier.SUSPEND) }
         // Issue #230: the same synthetic-member filter the arm's flow selector applies. No
         // synthesized member is `suspend` today; the two selectors agreeing is the point.
-        .filter { method -> !method.isForwardSyntheticMember(subclass) }
+        .filter { method -> !method.isCompilerOwnedMember(subclass) }
         // ADR-114: the refusal `translateClass` applies upstream of its own projection. Both
         // halves must agree, or a C# import arrives with no Kotlin export behind it.
         .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
@@ -2496,7 +2496,7 @@ private fun typeParameterMethods(
 
   return iface.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { it.simpleName.asString() !in setOf("equals", "hashCode", "toString", "<init>") }
+    .filter { method -> !method.isCompilerOwnedMember(iface) }
     .filter { method -> method.parentDeclaration == iface }
     .mapNotNull { method ->
       val returnName: String? = method.returnType?.resolve()?.expandAliases()
@@ -2592,6 +2592,7 @@ internal fun translateInterfaceBackingClass(
 
   val properties: List<CirProperty> = iface.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { property -> !property.isCompilerOwnedMember(iface) }
     .filter { prop -> prop.parentDeclaration == iface }
     .mapNotNull { prop ->
       val symbol = "$ifaceQualified.${prop.simpleName.asString()}"
@@ -2604,7 +2605,7 @@ internal fun translateInterfaceBackingClass(
 
   val methods: List<CirMethod> = iface.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { it.simpleName.asString() !in setOf("equals", "hashCode", "toString", "<init>") }
+    .filter { method -> !method.isCompilerOwnedMember(iface) }
     .filter { method -> method.parentDeclaration == iface }
     .mapNotNull { method ->
       val symbol = "$ifaceQualified.${method.simpleName.asString()}"
@@ -3160,7 +3161,7 @@ private fun translateInterfaceBridgeMethod(
 
   val ifaceMethods: List<KSFunctionDeclaration> = ifaceDecl.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { it.simpleName.asString() !in listOf("equals", "hashCode", "toString", "<init>") }
+    .filter { method -> !method.isCompilerOwnedMember(ifaceDecl) }
     .toList()
 
   tracker.needsSubscription = true

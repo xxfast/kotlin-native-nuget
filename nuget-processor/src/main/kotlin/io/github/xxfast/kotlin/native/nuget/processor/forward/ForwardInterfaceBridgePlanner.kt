@@ -11,6 +11,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedInterfaceCsName
+import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
 
 /**
  * ADR-084 stage 1: the single ordered slot list for one Kotlin interface a C# class may implement.
@@ -88,8 +89,6 @@ internal fun ForwardBridgeInterfacePlan.bridgeImplVariable(): String =
   stateClassName.removeSuffix("BridgeState").lowercase() + "Impl"
 
 internal object ForwardInterfaceBridgePlanner {
-  private val IGNORED_FUNCTIONS: Set<String> = setOf("equals", "hashCode", "toString", "<init>")
-
   /**
    * Returns the bridge plan for [iface], or `null` when any member falls outside the stage-1 slot
    * vocabulary (`var` properties, object/collection slots, suspend members, generics). A `null`
@@ -108,10 +107,11 @@ internal object ForwardInterfaceBridgePlanner {
     val slots: MutableList<ForwardBridgeSlot> = mutableListOf()
     iface.getAllProperties()
       .filter { property -> property.getVisibility() == Visibility.PUBLIC }
+      .filter { property -> !property.isCompilerOwnedMember(iface) }
       .forEach { property -> slots.add(slotOf(property, classifier) ?: return null) }
     iface.getAllFunctions()
       .filter { function -> function.getVisibility() == Visibility.PUBLIC }
-      .filter { function -> function.simpleName.asString() !in IGNORED_FUNCTIONS }
+      .filter { function -> !function.isCompilerOwnedMember(iface) }
       .forEach { function -> slots.add(slotOf(function, classifier) ?: return null) }
     if (slots.isEmpty()) return null
 

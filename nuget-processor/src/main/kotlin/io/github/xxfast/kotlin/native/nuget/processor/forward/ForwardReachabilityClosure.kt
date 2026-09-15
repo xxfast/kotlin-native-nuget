@@ -15,6 +15,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.NESTED_DECLARATION_KINDS
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedDeclaration
+import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
 import io.github.xxfast.kotlin.native.nuget.processor.nestedDeclarationDeferral
 
 /**
@@ -155,12 +157,18 @@ internal class ForwardReachabilityClosure(
    *  names. */
   private fun walkClassMembers(cls: KSClassDeclaration) {
     cls.primaryConstructor?.parameters?.forEach { parameter -> visitType(parameter.type.resolve()) }
+    // Issue #235: a compiler-owned member is filtered BEFORE its types are visited, so the closure
+    // never admits a type on behalf of a declaration no route will ever export. Without this the
+    // surface stays reachable even once every route refuses it, which is how `$serializer` came
+    // back through the return position after #223 guarded the nested route.
     cls.declarations.filterIsInstance<KSPropertyDeclaration>()
       .filter { property -> property.getVisibility() == Visibility.PUBLIC }
+      .filter { property -> !property.isCompilerOwnedMember(cls) }
       .forEach(::walkProperty)
     cls.getAllFunctions()
       .filter { function -> function.getVisibility() == Visibility.PUBLIC }
       .filter { function -> function.parentDeclaration == cls }
+      .filter { function -> !function.isCompilerOwnedMember(cls) }
       .forEach(::walkFunction)
     cls.declarations.filterIsInstance<KSClassDeclaration>()
       .firstOrNull { declaration -> declaration.isCompanionObject }
@@ -179,6 +187,7 @@ internal class ForwardReachabilityClosure(
     // entry read from a dependency klib/jar throws `Internal KSP Error`, and this walk now reaches
     // the `declarations` of an admitted cross-module `enum class`.
     cls.declarations.filterIsInstance<KSClassDeclaration>()
+      .filter { declaration -> !declaration.isCompilerOwnedDeclaration() }
       .filter { declaration -> declaration.classKind in NESTED_DECLARATION_KINDS }
       .filter { declaration -> declaration.getVisibility() == Visibility.PUBLIC }
       .filter { declaration -> !declaration.isCompanionObject }

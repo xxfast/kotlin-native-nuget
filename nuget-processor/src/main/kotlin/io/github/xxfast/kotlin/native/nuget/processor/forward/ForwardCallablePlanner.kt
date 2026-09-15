@@ -22,6 +22,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallback
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyFlowReturn
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericReturnRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyLambdaParameter
+import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
 import io.github.xxfast.kotlin.native.nuget.processor.bridgeParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
@@ -890,6 +891,7 @@ internal class ForwardCallablePlanner(
     return cls.getAllFunctions()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.simpleName.asString() !in excluded }
+      .filter { method -> !method.isCompilerOwnedMember(cls) }
       .map { method ->
         val name: String = method.simpleName.asString()
         // ADR-064 (ROADMAP line 77), amended by ADR-066 and narrowed by ADR-082: the supertype
@@ -953,7 +955,7 @@ internal class ForwardCallablePlanner(
     val receiverType: BridgeType = BridgeType.ObjectHandle(ifaceName)
     val methods: List<KSFunctionDeclaration> = iface.getAllFunctions()
       .filter { method -> method.getVisibility() == Visibility.PUBLIC }
-      .filter { method -> method.simpleName.asString() !in setOf("equals", "hashCode", "toString", "<init>") }
+      .filter { method -> !method.isCompilerOwnedMember(iface) }
       .filter { method -> method.parentDeclaration == iface }
       .toList()
 
@@ -1013,12 +1015,8 @@ internal class ForwardCallablePlanner(
     )
     val methods: List<KSFunctionDeclaration> = cls.getAllFunctions()
       .filter { method -> method.getVisibility() == Visibility.PUBLIC }
-      .filter { method ->
-        val name: String = method.simpleName.asString()
-        val isDataClassMethod: Boolean = cls.modifiers.contains(Modifier.DATA) &&
-            (name == "copy" || name.startsWith("component"))
-        name !in setOf("equals", "hashCode", "toString", "<init>") && !isDataClassMethod
-      }
+      // Issue #235: one shared predicate, so no route can reach a member a compiler plugin wrote.
+      .filter { method -> !method.isCompilerOwnedMember(cls) }
       // Shared with `CirClassTranslator` and `ForwardPropertyPlanner`: a defaulted interface
       // member the class does not override still binds here, because the C# class declares that
       // interface and must carry the member (`ForwardClassMembership.kt`).
@@ -1157,9 +1155,7 @@ internal class ForwardCallablePlanner(
     val receiverType: BridgeType = BridgeType.ObjectHandle(owner)
     val methods: List<KSFunctionDeclaration> = sealed.getAllFunctions()
       .filter { method -> method.getVisibility() == Visibility.PUBLIC }
-      .filter { method ->
-        method.simpleName.asString() !in setOf("equals", "hashCode", "toString", "<init>")
-      }
+      .filter { method -> !method.isCompilerOwnedMember(sealed) }
       // Declared-only: `Any`'s members fall out here, and so does anything an (unexported) base of
       // the sealed class itself might carry, which has no C# carrier of its own either way.
       .filter { method -> method.parentDeclaration == sealed }
@@ -1283,12 +1279,7 @@ internal class ForwardCallablePlanner(
     val receiverType: BridgeType = BridgeType.ObjectHandle(owner)
     val methods: List<KSFunctionDeclaration> = subclass.getAllFunctions()
       .filter { method -> method.getVisibility() == Visibility.PUBLIC }
-      .filter { method ->
-        val name: String = method.simpleName.asString()
-        val isDataClassMethod: Boolean = subclass.modifiers.contains(Modifier.DATA) &&
-            (name == "copy" || name.startsWith("component"))
-        name !in setOf("equals", "hashCode", "toString", "<init>") && !isDataClassMethod
-      }
+      .filter { method -> !method.isCompilerOwnedMember(subclass) }
       // Declared-only (ADR-116): `Any`'s members and a base `open fun` the arm does not override
       // both fall out here, so the sealed route's own `_equals`/`_hashcode`/`_tostring` exports
       // and the deferred base-type item stay untouched.
@@ -1697,7 +1688,7 @@ internal class ForwardCallablePlanner(
     val members: List<KSFunctionDeclaration> = obj.getAllFunctions()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.parentDeclaration == obj }
-      .filter { it.simpleName.asString() !in setOf("equals", "hashCode", "toString", "<init>") }
+      .filter { member -> !member.isCompilerOwnedMember(obj) }
       .toList()
 
     fun entryFor(function: KSFunctionDeclaration, omitted: Int): ForwardCallableCatalogEntry {
@@ -1740,7 +1731,8 @@ internal class ForwardCallablePlanner(
     val occurrences: MutableMap<String, Int> = mutableMapOf()
     val members: List<KSFunctionDeclaration> = companion.getAllFunctions()
       .filter { it.getVisibility() == Visibility.PUBLIC }
-      .filter { it.simpleName.asString() !in setOf("equals", "hashCode", "toString", "<init>") }
+      // Issue #235: `Companion.serializer()` never becomes an entry, so it never becomes a skip.
+      .filter { member -> !member.isCompilerOwnedMember(companion) }
       .toList()
 
     fun entryFor(function: KSFunctionDeclaration, omitted: Int): ForwardCallableCatalogEntry {

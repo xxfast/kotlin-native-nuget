@@ -44,7 +44,7 @@ internal fun FileSpec.Builder.addInterfaceExports(
 
   iface.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { it.simpleName.asString() !in setOf("equals", "hashCode", "toString", "<init>") }
+    .filter { method -> !method.isCompilerOwnedMember(iface) }
     .filter { method -> method.parentDeclaration == iface }
     .forEach { method ->
       val planned: ForwardCallablePlan? =
