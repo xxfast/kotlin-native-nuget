@@ -51,16 +51,20 @@ jobs:
         run: |
           ./gradlew \
             :nuget-processor:publishAllPublicationsToLocalTestRepository \
+            :nuget-runtime:publishAllPublicationsToLocalTestRepository \
             :nuget-plugin:publishAllPublicationsToLocalTestRepository
-          ./gradlew -p smoke-test verifyProcessorResolvesByCoordinate
+          ./gradlew -p smoke-test verifyProcessorResolvesByCoordinate verifyRuntimeResolvesByCoordinate
 
-      # No automaticRelease: both deployments wait for a manual "Publish" at central.sonatype.com.
+      # No automaticRelease: every deployment waits for a manual "Publish" at central.sonatype.com.
       # `nuget-plugin` is an included build, so it is a separate Central deployment from
-      # `nuget-processor` and needs its own approval.
+      # `nuget-processor` and `nuget-runtime`, and needs its own approval. The runtime ships here
+      # too (ADR-127): the plugin resolves `io.github.xxfast:nuget-runtime:<version>` by coordinate
+      # in every consumer, so a release without it does not resolve outside this repository.
       - name: Publish to Maven Central
         run: >
           ./gradlew --no-configuration-cache
           :nuget-processor:publishToMavenCentral
+          :nuget-runtime:publishToMavenCentral
           :nuget-plugin:publishToMavenCentral
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
