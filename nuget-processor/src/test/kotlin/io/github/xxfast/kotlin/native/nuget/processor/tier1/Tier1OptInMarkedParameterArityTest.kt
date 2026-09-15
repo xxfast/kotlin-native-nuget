@@ -136,14 +136,20 @@ class Tier1OptInMarkedParameterArityTest {
       "schedule(" in result.generated,
       "requirement 4: the function half, not just constructors; generated:\n${result.generated}",
     )
-    // The four function routes gate their omitting overloads on the DECLARED entry having planned,
-    // and the declared entry classifies every parameter, so a marked parameter type stops the
-    // synthesis one step earlier than it does for constructors. Only `schedule` itself is named.
-    assertEquals(
-      1,
-      optInWarnings(result).count { it.contains("tier1.optin.arity.schedule") },
-      "kspWarnings=${result.kspWarnings}",
-    )
+    // ADR-149: one skip per numbered arity, matching `GroomingPlan.<init>` / `.<init>_2` /
+    // `.<init>_3`. A marked parameter type still poisons every suffix via `droppedOptInMarker`.
+    // The trailing `:` is load-bearing: `schedule` is a prefix of `schedule_2`.
+    listOf(
+      "tier1.optin.arity.schedule:",
+      "tier1.optin.arity.schedule_2:",
+      "tier1.optin.arity.schedule_3:",
+    ).forEach { symbol ->
+      assertEquals(
+        1,
+        optInWarnings(result).count { it.contains(symbol) },
+        "expected `$symbol` skipped exactly once; kspWarnings=${result.kspWarnings}",
+      )
+    }
   }
 
   @Test

@@ -666,8 +666,9 @@ internal class ForwardCallablePlanner(
       // ADR-096: the omitting overloads, appended after *every* declared entry of this counter
       // scope so declared exports keep their numbers, since the synthesized pass advances the same
       // counter.
-      functions.forEachIndexed { index, function ->
-        if (topLevel[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
+      // ADR-149: synthesis proceeds even when the declared entry is Skipped; `planOrSkip` on the
+      // truncated list is the judge.
+      functions.forEach { function ->
         val defaults: List<Boolean> = topLevelDefaultFlags(function)
         repeat(defaults.trailingCount()) { omitted ->
           add(
@@ -684,8 +685,9 @@ internal class ForwardCallablePlanner(
         )
       }
       addAll(extensions)
-      extensionFunctions.forEachIndexed { index, function ->
-        if (extensions[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
+      // ADR-149: synthesis proceeds even when the declared entry is Skipped; `planOrSkip` on the
+      // truncated list is the judge.
+      extensionFunctions.forEach { function ->
         repeat(function.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
           add(
             extensionEntry(
@@ -1092,14 +1094,15 @@ internal class ForwardCallablePlanner(
       addAll(declared)
       // ADR-096: the omitting overloads, appended after every declared entry of this
       // per-(class, name) counter scope so declared exports keep their numbers.
-      methods.forEachIndexed { index, method ->
-        if (declared[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
+      // ADR-149: synthesis proceeds even when the declared entry is Skipped; `planOrSkip` on the
+      // truncated list is the judge.
+      methods.forEach { method ->
         // ADR-096 amendment (2026-09-11): keyed on the C# fact, not on Kotlin's `override`. When a
         // generated base class declares the member it also carries the member's omitting overload,
         // which the generated subclass inherits, so synthesizing here would be a duplicate. When
         // ADR-101 drops the base there is no such carrier and the subclass owes the overload
         // itself, or the consumer's short call is CS1501.
-        if (isCsharpOverride(method)) return@forEachIndexed
+        if (isCsharpOverride(method)) return@forEach
         repeat(memberDefaultFlags(method).trailingCount()) { omitted ->
           add(entryFor(method, omitted + 1).synthesized())
         }
@@ -1215,8 +1218,9 @@ internal class ForwardCallablePlanner(
       addAll(declared)
       // ADR-096: the base is the carrier, so it owes its own omitting overloads; every arm that
       // overrides the member inherits them.
-      methods.forEachIndexed { index, method ->
-        if (declared[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
+      // ADR-149: synthesis proceeds even when the declared entry is Skipped; `planOrSkip` on the
+      // truncated list is the judge.
+      methods.forEach { method ->
         repeat(method.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
           add(entryFor(method, omitted + 1).synthesized())
         }
@@ -1347,8 +1351,9 @@ internal class ForwardCallablePlanner(
       addAll(declared)
       // ADR-096, as `classEntries` does it: the omitting overloads follow every declared entry of
       // this counter scope so declared exports keep their numbers.
-      methods.forEachIndexed { index, method ->
-        if (declared[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
+      // ADR-149: synthesis proceeds even when the declared entry is Skipped; `planOrSkip` on the
+      // truncated list is the judge.
+      methods.forEach { method ->
         // ADR-116 amendment (2026-09-11, narrowed 2026-09-13): keyed on the C# fact, exactly as
         // `classEntries` is since ADR-096's own amendment. Skipping every Kotlin `override` was
         // only ever right because the sealed C# base carried nothing; now that it carries its
@@ -1357,7 +1362,7 @@ internal class ForwardCallablePlanner(
         // interface member, or of a base member the base's own plan declined, has no carrier at
         // all, and the arm owes the overload itself or the consumer's short call is CS1501.
         val overridee: KSNode? = method.findOverridee()
-        if (overridee != null && overridee in plannedBaseMembers) return@forEachIndexed
+        if (overridee != null && overridee in plannedBaseMembers) return@forEach
         // ADR-116 amendment (2026-09-13): the flags come through the override chain, as
         // `classEntries` already reads them. Kotlin forbids an override from restating a default,
         // so the arm's own parameters all report `false` and only the overridee carries the bit.
@@ -1715,8 +1720,9 @@ internal class ForwardCallablePlanner(
         members.map { member -> entryFor(member, 0) }
       addAll(declared)
       // ADR-096: omitting overloads, appended after the declared pass of this per-object counter.
-      members.forEachIndexed { index, member ->
-        if (declared[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
+      // ADR-149: synthesis proceeds even when the declared entry is Skipped; `planOrSkip` on the
+      // truncated list is the judge.
+      members.forEach { member ->
         repeat(member.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
           add(entryFor(member, omitted + 1).synthesized())
         }
@@ -1756,8 +1762,9 @@ internal class ForwardCallablePlanner(
       val declared: List<ForwardCallableCatalogEntry> = members.map { member -> entryFor(member, 0) }
       addAll(declared)
       // ADR-096: omitting overloads, appended after the declared pass of this per-companion counter.
-      members.forEachIndexed { index, member ->
-        if (declared[index] !is ForwardCallableCatalogEntry.Planned) return@forEachIndexed
+      // ADR-149: synthesis proceeds even when the declared entry is Skipped; `planOrSkip` on the
+      // truncated list is the judge.
+      members.forEach { member ->
         repeat(member.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
           add(entryFor(member, omitted + 1).synthesized())
         }

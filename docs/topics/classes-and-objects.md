@@ -147,6 +147,20 @@ using var carrier = new Carrier("Mylo's crate");  // both size and padded defaul
 Assert.Single(typeof(Kennel).GetConstructors());
 ```
 
+A trailing default the bridge cannot carry costs only the arities that still have it.
+
+```kotlin
+class Sill(val settings: Settings = Settings(), events: Flow<Int>? = null)
+```
+
+```C#
+using var sill = new Sill();
+using var settings = new Settings(3);
+using var withLevel = new Sill(settings);
+```
+
+The constructor that would still take `events` does not exist.
+
 ### Generated C# {id="ctordefaults-generated-c"}
 
 Every constructor overload, synthesized or not, carries the same `out IntPtr error` shape as any
@@ -180,6 +194,27 @@ class Announcer(val prefix: String) {
 using var announcer = new Announcer("Oreo");
 Assert.Equal("Oreo: morning", announcer.Announce("morning")); // loud defaults to false
 ```
+
+A trailing default the bridge cannot carry costs only the overloads that still have that
+parameter. Shorter fully-bridgeable overloads still bind; the unsupported arity stays a named skip.
+
+```kotlin
+class Desk(val name: String) {
+  fun open(settings: Settings = Settings(), events: Flow<Int>? = null): String =
+    "$name desk ${settings.level}/${events?.toString() ?: "-"}"
+}
+```
+
+```C#
+using var desk = new Desk("Oreo");
+desk.Open();
+using var settings = new Settings(3);
+desk.Open(settings);
+```
+
+`desk.Open(settings, events)` does not exist. The build still warns `SKIPPED_UNSUPPORTED_INPUT`
+naming `events`. The same cut applies to constructors, top-level functions, `object` and companion
+members, and extensions.
 
 An `override` does not synthesize its own omitting overload when its C# base already carries one:
 the override just inherits it through ordinary C# inheritance. When there is no C# base to

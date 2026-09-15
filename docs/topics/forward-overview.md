@@ -916,8 +916,12 @@ names the parameter, a return-position one keeps `SKIPPED_UNSUPPORTED_RETURN` an
 
 ```
 [nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping io.github.xxfast.kotlin.native.nuget.test.issue131.hubWithEvents: its parameter `events` has a nullable type with no supported wire. the nullable parameter `events` has no wire at an input position; expose a non-nullable wrapper, or a separate has-value/value pair, instead
-    at .../issue131/HubSample.kt:47
+    at .../issue131/HubSample.kt:62
 ```
+
+That skip is the arity that still carries `events`. The shorter overloads that omit it still bind:
+`HubWithEvents()` and `HubWithEvents(Settings)`. See
+[Function default parameters](top-level-declarations.md#function-default-parameters).
 
 An extension receiver counts as an input position too, unnamed, since it has no author-written
 parameter name. A nullable exported class handle at a parameter position was never actually

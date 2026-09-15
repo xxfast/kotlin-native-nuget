@@ -972,6 +972,9 @@ issue's author lost `hub()` and `hub(settings)` too. That is a mapping decision 
 unsupported signature bind at its supported arities?") with an export-numbering consequence, and it
 is tracked separately.
 
+**Closed by [ADR-149](149-supported-arities-of-a-partially-unsupported-signature.md):** those shorter
+arities now bind; the arity that still carries `events` stays this named skip.
+
 ## Amendment (2026-09-10): the reason sentence lives on the reason
 
 Judgement: an **amendment**, not a new ADR. It closes the ROADMAP Phase 3 item

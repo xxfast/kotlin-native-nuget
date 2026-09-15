@@ -113,6 +113,24 @@ string greeting = WhiskersSample.Hail("Oreo"); // loud omitted; Kotlin supplies 
 string booking = WhiskersSample.Book("Oreo", 3, "Bristol");
 ```
 
+A trailing default the bridge cannot carry costs only the arities that still have it. Shorter
+fully-bridgeable overloads still bind; the unsupported arity stays a named skip. See
+[Method default parameters](classes-and-objects.md#method-default-parameters).
+
+```kotlin
+fun hubWithEvents(settings: Settings = Settings(), events: Flow<Int>? = null): Hub =
+  Hub(settings, null, events?.toString())
+```
+
+```C#
+using Hub a = HubSample.HubWithEvents();
+using var settings = new Settings(3);
+using Hub b = HubSample.HubWithEvents(settings);
+```
+
+`HubSample.HubWithEvents(settings, events)` does not exist. The build still warns
+`SKIPPED_UNSUPPORTED_INPUT` naming `events`.
+
 Synthesized overloads are numbered after every declared overload, using the same counter as
 [method overloads](#method-overloads) above.
 

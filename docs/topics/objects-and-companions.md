@@ -115,5 +115,20 @@ string oneFlavour = Kibble.Scoop("tuna"); // "2 scoops of tuna"; scoops defaults
 ```
 
 Only a *trailing* run of defaults gets an omitting overload: a defaulted parameter followed by a
-non-defaulted one does not, so pass it explicitly. See the method default parameters section of
-[Classes and objects](classes-and-objects.md) for the full rule.
+non-defaulted one does not, so pass it explicitly. A trailing default the bridge cannot carry
+costs only that arity.
+
+```kotlin
+object Switchboard {
+  fun patch(level: Int = 0, events: Flow<Int>? = null): String =
+    "patch $level/${events?.toString() ?: "-"}"
+}
+```
+
+```C#
+Switchboard.Patch();
+Switchboard.Patch(3);
+```
+
+The events arity does not exist. See
+[Method default parameters](classes-and-objects.md#method-default-parameters) for the full rule.
