@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import com.google.devtools.ksp.processing.KSPLogger
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
+import io.github.xxfast.kotlin.native.nuget.processor.csharpIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBoundInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
@@ -58,8 +59,8 @@ private fun emitCsharpNameCollisions(
         kind = ForwardDiagnosticKind.ERROR_CSHARP_NAME_COLLISION,
         symbol = function,
         declaration = "$className.$collision",
-        reason = "the top-level property '$collision' in the same file already claims that C# " +
-            "name, and C# cannot declare a property and a method with one name (CS0102)",
+        reason = "the top-level property '$collision' on the same file class already claims " +
+            "that C# name, and C# cannot declare a property and a method with one name (CS0102)",
         hint = "rename the Kotlin function '${function.simpleName.asString()}'; a top-level " +
             "function renders PascalCase in C# (ADR-110)",
       ),
@@ -171,15 +172,20 @@ internal fun translate(
   fun expectFileNameOrNull(declaration: KSDeclaration): String? =
     expects.fileNameOrNull(declaration)
 
+  // Issue #233: the resolved stem is sanitised here, at the grouping *key*, not at the render
+  // site. Both halves of ADR-007's holder (functions and properties) key off the same sanitised
+  // name, so a file's members stay in one holder, and `resolveStaticClassName` only ever compares
+  // legal identifiers. The expect-derived name (ADR-074 Decision 3) goes through the same call,
+  // since an `expect` may live in a dotted file too.
   fun groupByNamespaceAndFile(
     funcs: List<KSFunctionDeclaration>,
   ): Map<Pair<String, String>, List<KSFunctionDeclaration>> =
     funcs.groupBy { func ->
       val namespace: String = namespaceOf(func.packageName.asString())
-      val fileName: String = expectFileNameOrNull(func)
+      val stem: String = expectFileNameOrNull(func)
         ?: func.containingFile?.fileName?.removeSuffix(".kt")
         ?: context.className
-      namespace to fileName
+      namespace to stem.csharpIdentifier()
     }
 
   fun groupPropertiesByNamespaceAndFile(
@@ -187,10 +193,10 @@ internal fun translate(
   ): Map<Pair<String, String>, List<KSPropertyDeclaration>> =
     props.groupBy { prop ->
       val namespace: String = namespaceOf(prop.packageName.asString())
-      val fileName: String = expectFileNameOrNull(prop)
+      val stem: String = expectFileNameOrNull(prop)
         ?: prop.containingFile?.fileName?.removeSuffix(".kt")
         ?: context.className
-      namespace to fileName
+      namespace to stem.csharpIdentifier()
     }
 
   // ADR-110: a top-level function renders PascalCase, so `fun beam()` in `Beam.kt` wants the member

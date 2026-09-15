@@ -95,3 +95,77 @@ The existing `Kt`-suffix remedy is reused as-is for this case: the whole file cl
 `GreetingKt`, every member of that file moves with it, and an `INFO_FILE_CLASS_RENAMED` diagnostic
 notes the rename and the call site (`GreetingKt.Greeting(...)`). The native `@CName` export is
 unaffected either way. See ADR-110's Decision for the full mechanism.
+
+## Amendment (2026-09-15): a file-derived class name is sanitised
+
+The decision above took the file stem verbatim. A Kotlin file stem is not a C# identifier.
+`Hub.mingw.kt` emitted `public static partial class Hub.mingw`, which C# reads as a qualified
+name: one dot, 19 parse errors, and every declaration after it parsed in the wrong context, so the
+last error is a `CS1022` at the final line of `Interop.cs` (issue #233).
+
+Platform-suffixed file names (`Foo.ios.kt`, `Foo.mingw.kt`, `Foo.android.kt`) are the standard KMP
+layout for `actual` declarations, so this is the normal case for a multiplatform consumer, not an
+exotic one. It stayed hidden because no fixture anywhere in the repository used a dotted stem.
+
+### The rule
+
+A file-derived name now goes through `String.csharpIdentifier()` (`Reserved.kt`), applied once at
+the grouping key in `CirTranslator.groupByNamespaceAndFile` and
+`groupPropertiesByNamespaceAndFile`, so a file's functions and its properties land on one holder
+and `resolveStaticClassName` only ever compares legal identifiers.
+
+The rule is structural, never a list of known platform suffixes. Split the stem on every run of
+characters outside `[A-Za-z0-9_]`, keep the first segment verbatim, uppercase each following
+segment's first character, join. Prefix `_` if the result starts with a digit. Pass the result
+through `toCSharpName` so a stem spelling a C# keyword becomes a verbatim identifier.
+
+| stem | holder |
+|---|---|
+| `Hub` | `Hub` |
+| `Hub.mingw` | `HubMingw` |
+| `Net.io.core` | `NetIoCore` |
+| `foo-bar` | `fooBar` |
+| `9lives` | `_9lives` |
+
+An already-legal stem is a fixed point, so no existing generated name moves.
+
+### Why PascalCase segments and not `Hub_mingw`
+
+`Hub_mingw` is Kotlin's own rule: the JVM facade for `Hub.mingw.kt` is `Hub_mingwKt`. It was
+considered, and it is defensible. PascalCase wins because [ADR-110](110-top-level-function-pascal-case.md)
+already made PascalCase the forward spelling of every C# name the generator emits, so the
+file-derived one reads like its neighbours rather than like a JVM artefact.
+
+### Why not strip the suffix
+
+Mapping `Hub.mingw` to `Hub` was rejected. `Hub.kt` commonly sits beside `Hub.mingw.kt` holding the
+`expect` and its own helpers, and merging two files into one class silently is worse than the parse
+error, which at least fails loudly. `@file:JvmName` was also rejected as a workaround: it is a JVM
+annotation with no meaning for a native target.
+
+### Interaction with ADR-074 Decision 3
+
+Unchanged, and it still wins. A genuine top-level `actual` takes its holder name from the `expect`'s
+file, so `Hub.mingw.kt`'s `actual fun` lands on `Hub`, and the sanitiser never sees the per-target
+stem. The sanitiser is what makes the fix hold when that lookup does not apply: a top-level function
+with no `expect` at all, or an `actual` whose `expect` did not match by signature.
+
+### Known edge: two files can now share a holder
+
+`HubMingw.kt` and `Hub.mingw.kt` in one package both sanitise to `HubMingw`. This is harmless while
+their members differ, and Kotlin already forbids two identical top-level signatures in one package.
+Where a member name does repeat across the two, ADR-110's existing CS0102 guard
+(`ERROR_CSHARP_NAME_COLLISION`) fires and names `HubMingw.Status`, because that check is keyed on
+the file-class key, which is the sanitised one. Verified by a Tier 1 cell. No new check was built
+for the merge, and the collision message now reads "on the same file class" rather than "in the same
+file", which is no longer true of a merged holder.
+
+### This is new machinery
+
+Issue #233 states that `csharpIdentifier()` already existed from ADR-110 and was merely not called
+on this path. That is wrong: there was no `csharpIdentifier()` anywhere in `nuget-processor/src/main`
+before this amendment. The function is new, and `Reserved.kt` is where it lives, next to
+`toCSharpName`, as the single place a file-derived name becomes an identifier.
+
+The file stem never feeds a `@CName` export name (exports derive from the Kotlin declaration name
+via `toCName`), so the native side of the ABI is untouched by this change.
