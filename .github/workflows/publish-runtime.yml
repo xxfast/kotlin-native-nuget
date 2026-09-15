@@ -1,0 +1,59 @@
+name: Publish runtime
+
+# One-off recovery: `0.7.0` was tagged before release.yml published `nuget-runtime`, and a
+# tag-triggered run uses the workflow file at the tag, so the fixed release.yml cannot reach that
+# tag. This checks out the tag's tree and publishes only the runtime at that version.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish the runtime for (must match gradle.properties there)'
+        required: true
+
+jobs:
+  publish-runtime:
+    name: Publish nuget-runtime
+    runs-on: macos-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Verify the tag matches gradle.properties
+        run: |
+          version="$(grep '^version=' gradle.properties | cut -d= -f2)"
+          if [ "${{ inputs.tag }}" != "$version" ]; then
+            echo "::error::tag '${{ inputs.tag }}' does not match gradle.properties version '$version'"
+            exit 1
+          fi
+          echo "Publishing nuget-runtime $version"
+
+      - name: Runtime tests
+        run: ./gradlew :nuget-runtime:allTests
+
+      - name: Verify the consumer path
+        run: |
+          ./gradlew \
+            :nuget-processor:publishAllPublicationsToLocalTestRepository \
+            :nuget-runtime:publishAllPublicationsToLocalTestRepository \
+            :nuget-plugin:publishAllPublicationsToLocalTestRepository
+          ./gradlew -p smoke-test verifyRuntimeResolvesByCoordinate
+
+      - name: Publish to Maven Central
+        run: ./gradlew --no-configuration-cache :nuget-runtime:publishToMavenCentral
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_KEY_SECRET }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_KEY_PASSWORD }}
