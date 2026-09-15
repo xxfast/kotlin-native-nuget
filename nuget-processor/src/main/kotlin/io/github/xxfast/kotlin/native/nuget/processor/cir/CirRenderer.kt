@@ -143,6 +143,9 @@ private val CSHARP_DOLLAR_IDENTIFIER = Regex("[\\w\\$]*\\$[\\w\\$]*")
  */
 private fun String.checkSpellableInCSharp(): String {
   val offending: String? = lineSequence()
+    // ADR-150: a `///` doc comment carries the author's prose, where `$` is legal C# and common
+    // (a KDoc that quotes a Kotlin template, `"${'$'}name"`, is prose, not an identifier).
+    .filterNot { line -> line.trimStart().startsWith("//") }
     .map { line -> CSHARP_STRING_LITERAL.replace(line, "") }
     .firstNotNullOfOrNull { line -> CSHARP_DOLLAR_IDENTIFIER.find(line)?.value }
 

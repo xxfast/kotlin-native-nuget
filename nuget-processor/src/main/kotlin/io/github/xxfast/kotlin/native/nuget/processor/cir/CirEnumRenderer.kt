@@ -6,10 +6,12 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
  * extension methods in a nested class) and is emitted by `renderNamespace`'s post-pass.
  */
 internal fun StringBuilder.renderEnum(enum: CirEnum, nested: Boolean = false) {
+  renderDoc(enum.doc)
   appendLine("    public enum ${enum.name}")
   appendLine("    {")
 
   for (entry in enum.entries) {
+    renderDoc(entry.doc, "        ")
     appendLine("        ${entry.name} = ${entry.ordinal},")
   }
 

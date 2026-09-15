@@ -19,7 +19,9 @@ Complete.
 Complete.
 
 ## Phase 4: Rich type support
-- [ ] **KDoc on an exported Kotlin declaration becomes an XML doc comment on its generated C# declaration (`<summary>`, `<param>`, `<returns>`, `<exception>`), so the author's docs reach the consumer's IDE.** `renderRemarks` and `GeneratedBindingsCheck`'s `GenerateDocumentationFile` are the sink and the guard already; `expect`-side KDoc rides `ExpectIndex`. Reverse half (`lib/<tfm>/*.xml` → KDoc) is a later item. ([details](docs/backlog/kdoc-to-csharp-xml-docs.md))
+- [ ] Deferred v1 scope of the KDoc-to-XML-doc-comment mapping ([ADR-150](docs/adr/150-kdoc-to-csharp-xml-docs.md)): later paragraphs to `<remarks>`, `[links]`/backticks as `<c>`, and `@property`/`@constructor`/`@see`.
+- [ ] A Kotlin `object`'s own property has no C# surface at all: `CirObject` carries `methods` only (`cir/CirModel.kt`), so `object Jar { val count }` generates nothing; pre-existing, now pinned by a Tier 1 cell asserting the absence. Discovered alongside [ADR-150](docs/adr/150-kdoc-to-csharp-xml-docs.md).
+- [ ] `ExpectIndex.docOrNull`'s top-level `expect fun` arm has no fixture pairing a documented top-level `expect fun` with an `actual`, unlike the `expect class` case the KDoc fixture covers. Discovered alongside [ADR-150](docs/adr/150-kdoc-to-csharp-xml-docs.md).
 - [ ] Deferred by decision 2026-09-14: `Enum`, `Uuid`, `Instant`, `Duration`, and the nullable spellings of `String`/`Uuid`/a value class, still skip named `SKIPPED_UNSUPPORTED_PROPERTY` at an extension-**property** receiver, though the shared lowering already has every arm; admitting them is fixtures plus one `when` arm each. ADR-132 parity.
 - [ ] Verified by a Tier 1 probe, pre-existing: `NugetMarshal` and the ADR-084 bridge helpers are emitted only when `needsCoreMarshal` sees a top-level function/class/object/sealed class, so a package holding only an interface plus an extension over it renders C# calling `NugetMarshal.HandleOf` without ever declaring `NugetMarshal` itself. ([details](docs/backlog/needscoremarshal-blind-to-interface-and-extension-only-packages.md))
 - [ ] Cosmetic, pre-existing: an extension-property getter body renders its first statement on the brace line (`{            IntPtr nativeResult = ...`) because the projection passes `leadingNewline = false`; the newly scoped interface-receiver getter bodies inherit it. Discovered alongside [ADR-132](docs/adr/132-extension-receiver-shapes.md)'s 2026-09-14 amendment.
@@ -180,6 +182,7 @@ Mirror of Phase 4: generics, collections, delegates, and the C#-specific surface
 - [ ] Map delegate parameters (`Func<>` / `Action<>` / custom delegates) → Kotlin function types (builds directly on the ADR-036 reverse machinery, direction inverted)
 - [ ] Map default parameter values → Kotlin default arguments (constants are in metadata)
 - [ ] Map C# extension methods → Kotlin extension functions
+- [ ] Reverse mirror of [ADR-150](docs/adr/150-kdoc-to-csharp-xml-docs.md): a NuGet package's `lib/<tfm>/*.xml` documentation file becomes KDoc on the generated Kotlin bindings; `NugetMetadataReader` has no XML handling today.
 - [ ] Map indexers → Kotlin `operator fun get`/`set`
 - [ ] Map operator overloads → Kotlin operator functions (where a Kotlin operator exists; skip + warn otherwise per ADR-043 diagnostics)
 - [ ] Map `params` arrays → `vararg`
@@ -252,6 +255,7 @@ Fallout from [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) (reve
 - [ ] **Add an end-to-end `scripts/verify-incremental-regeneration.sh` backstop for KSP incremental correctness.** ([details](docs/backlog/add-end-end-scripts-verify-incremental-regeneration.md))
 - [ ] **The reverse interop output directory does not clean orphaned files from a prior run** ([details](docs/backlog/reverse-interop-output-directory-does-clean-orphaned.md))
 - [ ] **One fatal forward diagnostic still lives outside `ForwardDiagnosticKind`.** ([details](docs/backlog/one-fatal-forward-diagnostic-still-lives-outside.md))
+- [ ] `scripts/verify-forward-diagnostics.sh`'s guard against `serializer` appearing in generated `Interop.cs` matches raw text, so any KDoc in `test-library` mentioning the word, even in prose, trips it; the guard should match the member spelling, not prose. Discovered alongside [ADR-150](docs/adr/150-kdoc-to-csharp-xml-docs.md).
 - [ ] **`CirClass.hasInternalHandleConstructor` (`CirModel.kt:57`) is dead configurability.** It defaults to `true` and no production code path ever sets it to anything else; only two test call sites touch it. Not a bug, noticed while reading `CirClassTranslator.kt` for the reference-nullability constructor-collision fix. Worth either wiring a real caller or removing the parameter.
 - [ ] **KotlinPoet's `addCode(String)` parses `%` as a format placeholder even on the no-varargs overload.** ([details](docs/backlog/kotlinpoet-s-addcode-string-parses-format-placeholder.md))
 - [ ] **Nothing checks that two packaged targets generate the same C# API, and after [ADR-074](docs/adr/074-expect-actual-declarations.md) they can legitimately differ.** ([details](docs/backlog/nothing-checks-two-packaged-targets-generate-same.md))

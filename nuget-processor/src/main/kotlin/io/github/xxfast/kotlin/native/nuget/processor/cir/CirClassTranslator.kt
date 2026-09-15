@@ -15,7 +15,11 @@ import com.google.devtools.ksp.symbol.KSTypeArgument
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Variance
 import com.google.devtools.ksp.symbol.Visibility
+import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.cirDoc
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKdoc
+import io.github.xxfast.kotlin.native.nuget.processor.forward.toCirDoc
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMethods
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmLambdaMethods
@@ -477,6 +481,8 @@ internal fun translateClass(
   // inherited-but-unimplemented interface property (ADR-075 amendment 2026-09-11): the C# type has
   // to come off the same plan `IFoo` is projected from, or the two spellings drift into CS0738.
   interfaceDeclarationCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanCatalog(emptyList()),
+  // ADR-150: an `actual` class carries no KDoc of its own; the author wrote it on the `expect`.
+  expects: ExpectIndex = ExpectIndex(),
 ): CirClass {
   val name: String = cls.simpleName.asString()
   val prefix: String = cls.nativePrefix()
@@ -1020,6 +1026,7 @@ internal fun translateClass(
           qualified in FLOW_TYPES || qualified in STATE_FLOW_TYPES
         },
     remarks = remarks,
+    doc = cls.forwardKdoc(expects)?.toCirDoc(),
   )
 }
 
@@ -1629,6 +1636,15 @@ internal fun suspendMembers(
     val taskReturnType: String = if (isUnit) "Task" else "Task<$asyncReturnType>"
 
     val asyncMethod = CirMethod(
+      // ADR-150: the suspend function's own KDoc, on its `Async` projection. `@return` documents
+      // the awaited value, which is what the `Task<T>` yields.
+      // ADR-150: the rendered `Async` signature ends in `CancellationToken cancellationToken`
+      // (ADR-023), which is a parameter of the C# member and therefore needs a tag of its own the
+      // moment any other parameter has one (CS1573, fatal under `GeneratedBindingsCheck`).
+      doc = method.forwardKdoc()?.toCirDoc(
+        methodParams.map { it.name } + ASYNC_CANCELLATION_PARAMETER,
+        hasResult = !isUnit,
+      ),
       name = "${csMethodName}Async",
       nativeName = nativeStem,
       returnType = taskReturnType,
@@ -1721,6 +1737,12 @@ internal fun suspendMembers(
     val asyncReturnType = "KotlinStateFlow<$flowCsElementType>"
 
     val asyncMethod = CirMethod(
+      // ADR-150: the suspend function's own KDoc, on its `Async` projection. `@return` documents
+      // the awaited value, which is what the `Task<T>` yields.
+      doc = method.forwardKdoc()?.toCirDoc(
+        methodParams.map { it.name } + ASYNC_CANCELLATION_PARAMETER,
+        hasResult = true,
+      ),
       name = "${csMethodName}Async",
       nativeName = nativeStem,
       returnType = "Task<$asyncReturnType>",
@@ -2014,6 +2036,7 @@ internal fun translateSealedClass(
       }
 
       CirSealedSubclass(
+        doc = subclass.forwardKdoc()?.toCirDoc(),
         name = subName,
         nativePrefix = subPrefix,
         properties = properties,
@@ -2039,6 +2062,7 @@ internal fun translateSealedClass(
     .toList()
 
   return CirSealedClass(
+    doc = cls.forwardKdoc()?.toCirDoc(),
     name = name,
     libraryName = libraryName,
     nativePrefix = prefix,
@@ -2163,6 +2187,7 @@ internal fun translateObject(
     libraryName = libraryName,
     nativePrefix = prefix,
     methods = methods,
+    doc = obj.forwardKdoc()?.toCirDoc(),
   )
 }
 
@@ -2425,7 +2450,11 @@ internal fun translateInterface(
     // `hasSetter` deliberately stays at its default: ADR-113 leaves a `var` interface property
     // rendering `{ get; }`, since `{ get; set; }` would be CS0535 against an implementing class
     // whose own setter ADR-075 dropped.
-    CirInterfaceProperty(plan.publicName, ForwardCirPropertyProjection.publicType(plan))
+    CirInterfaceProperty(
+      plan.publicName,
+      ForwardCirPropertyProjection.publicType(plan),
+      doc = plan.doc?.toCirDoc(),
+    )
   }
   val properties: List<CirInterfaceProperty> =
     plannedProperties + typeParameterProperties(iface, typeParamNames, plannedProperties)
@@ -2438,6 +2467,7 @@ internal fun translateInterface(
       parameters = plan.publicSignature.parameters.map { parameter ->
         CirParameter(parameter.csharpName, parameter.type.forwardPublicCsharpType())
       },
+      doc = plan.publicSignature.cirDoc(),
     )
   }
 
@@ -2446,7 +2476,9 @@ internal fun translateInterface(
 
   emitInterfaceNameCollisions(interfaceName, iface, propertyPlans, methodPlans, logger)
 
-  return CirInterface(interfaceName, typeParams, properties, methods)
+  return CirInterface(
+    interfaceName, typeParams, properties, methods, doc = iface.forwardKdoc()?.toCirDoc(),
+  )
 }
 
 /**
@@ -2632,6 +2664,7 @@ internal fun translateInterfaceBackingClass(
 internal fun translateEnum(
   enum: KSClassDeclaration,
   libraryName: String,
+  expects: ExpectIndex = ExpectIndex(),
 ): CirEnum {
   val name: String = enum.simpleName.asString()
   val entries: List<CirEnumEntry> = enum.declarations
@@ -2644,7 +2677,7 @@ internal fun translateEnum(
       val entryName: String = entry.simpleName.asString()
       val csEntryName: String = entryName.split("_")
         .joinToString("") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
-      CirEnumEntry(csEntryName, index)
+      CirEnumEntry(csEntryName, index, doc = entry.forwardKdoc()?.toCirDoc())
     }
     .toList()
 
@@ -2678,6 +2711,7 @@ internal fun translateEnum(
     csName = enum.nestedCsName(),
     entries = entries,
     properties = properties,
+    doc = enum.forwardKdoc(expects)?.toCirDoc(),
   )
 }
 
@@ -2798,6 +2832,7 @@ internal fun translateValueClass(
     constructors = constructors,
     properties = properties,
     methods = methods,
+    doc = cls.forwardKdoc()?.toCirDoc(),
   )
 }
 
@@ -3265,3 +3300,10 @@ private fun translateInterfaceBridgeMethod(
     entries = entries,
   )
 }
+
+/**
+ * ADR-150: the generator's own trailing parameter on every `Async` projection (ADR-023). It is a
+ * C# parameter like any other as far as the XML-doc pass is concerned, so it takes an (empty) tag
+ * whenever the author documented any of the declared ones.
+ */
+private const val ASYNC_CANCELLATION_PARAMETER: String = "cancellationToken"

@@ -129,7 +129,8 @@ reaches C#. Nothing about discrimination, enum ordinals, or value-class unwrappi
   type that was never generated; redirect to a type you declare and export instead.
 - Cross-module (klib) `expect`/`actual` isn't supported: the `expect` and its `actual` must share a
   module.
-- KDoc and annotations declared on the `expect` side don't reach the generated C#.
+- Annotations declared on the `expect` side don't reach the generated C#. KDoc does: see
+  [Documentation comments](documentation-comments.md#expectactual).
 - `expect annotation class` never binds; there is no C# projection of a Kotlin annotation class
   regardless of `expect`/`actual`.
 - Two packaged targets can legitimately produce different C# if their actuals diverge beyond the

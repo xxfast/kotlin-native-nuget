@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDoc
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirConstructor
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMember
@@ -71,6 +72,7 @@ internal object ForwardCirPlanProjection {
       nativeReturnType = nativeReturnType,
       nativeName = propName,
       getter = expression,
+      doc = plan.publicSignature.cirDoc(),
     )
   }
 
@@ -114,6 +116,7 @@ internal object ForwardCirPlanProjection {
       body = expression,
       isSyncErrorCheckEnabled = plan.errorSlot != null,
       nativeParameters = nativeParams,
+      doc = plan.publicSignature.cirDoc(),
     )
   }
 
@@ -154,7 +157,13 @@ internal object ForwardCirPlanProjection {
     val needsCustomParams: Boolean =
       plan.publicSignature.parameters.any { parameter -> !parameter.type.isTrivialInput() }
     if (!needsCustomParams) {
-      return CirConstructor(parameters = publicParams, body = "", hasErrorCheck = true, nativeSuffix = nativeSuffix)
+      return CirConstructor(
+        parameters = publicParams,
+        body = "",
+        hasErrorCheck = true,
+        nativeSuffix = nativeSuffix,
+        doc = plan.publicSignature.cirDoc(),
+      )
     }
     val prelude: List<ForwardCirHandleStep> =
       plan.publicSignature.parameters.mapNotNull { parameter ->
@@ -182,6 +191,7 @@ internal object ForwardCirPlanProjection {
       hasErrorCheck = false,
       nativeSuffix = nativeSuffix,
       nativeParameters = plan.nativeInCirParameters(nativeCall.parameters),
+      doc = plan.publicSignature.cirDoc(),
     )
   }
 
@@ -229,6 +239,7 @@ internal object ForwardCirPlanProjection {
         isStatic = true,
         isSyncErrorCheckEnabled = !result.hasCustomBody && plan.errorSlot != null,
         hasCustomBody = result.hasCustomBody,
+        doc = plan.publicSignature.cirDoc(),
       ),
     )
   }
@@ -344,6 +355,7 @@ internal object ForwardCirPlanProjection {
         parameters = publicParams,
         body = body,
         isStatic = true,
+        doc = plan.publicSignature.cirDoc(),
       ),
     )
   }
@@ -407,6 +419,7 @@ internal object ForwardCirPlanProjection {
       extraNativeParams = plan.nativeOutDeclarationParameters(nativeCall),
       hasCustomBody = result.hasCustomBody,
       nativeParameters = nativeParams,
+      doc = plan.publicSignature.cirDoc(),
     )
   }
 
@@ -466,6 +479,7 @@ internal object ForwardCirPlanProjection {
       isExtension = true,
       isSyncErrorCheckEnabled = !result.hasCustomBody && plan.errorSlot != null,
       hasCustomBody = result.hasCustomBody,
+      doc = plan.publicSignature.cirDoc(),
     )
     return listOf(nativeImport, wrapper)
   }
@@ -1425,6 +1439,20 @@ internal val ForwardPublicSignature.csharpName: String get() = toCSharpName(name
 
 /** The C# spelling of a public parameter, at both its declaration and every use site. */
 internal val ForwardPublicParameter.csharpName: String get() = name.csharpParameterName()
+
+/**
+ * ADR-150: this signature's KDoc as the C# tags of the member being rendered: `@param` entries
+ * re-keyed to the C# parameter spellings the renderer prints, `<returns>` dropped on a `void`
+ * member, everything else as parsed.
+ */
+internal fun ForwardPublicSignature.cirDoc(): CirDoc? {
+  val kdoc: ForwardKdoc = doc ?: return null
+  val named: Map<String, String> = parameters
+    .mapNotNull { parameter -> kdoc.params[parameter.name]?.let { parameter.csharpName to it } }
+    .toMap()
+  return kdoc.copy(params = named)
+    .toCirDoc(parameters.map { it.csharpName }, hasResult = result != BridgeType.Unit)
+}
 
 /**
  * The same escape for an ABI slot's name. Generator-minted slots (`handle`, `value`, `receiver`,

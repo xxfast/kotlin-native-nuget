@@ -18,6 +18,14 @@
          IntegrationTests/TestResults/**/coverage.cobertura.xml without
          passing the settings file on the command line. -->
     <RunSettingsFilePath>$(MSBuildProjectDirectory)/coverlet.runsettings</RunSettingsFilePath>
+    <!-- ADR-150: the generated bindings are compiled from source here, so /doc makes the compiler
+         emit their XML doc comments into IntegrationTests.xml next to the test host, which is what
+         XmlDocTests.cs reads. CS1591 is muted because most generated public members carry no doc
+         comment by design; CS1570/CS1572/CS1573/CS1574 stay unmuted so a malformed or mismatched
+         generated comment shows up as a warning here and as an error in GeneratedBindingsCheck,
+         which treats warnings as errors. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

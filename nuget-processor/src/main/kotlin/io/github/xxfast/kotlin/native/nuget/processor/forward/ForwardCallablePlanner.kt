@@ -6,6 +6,7 @@ import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSNode
+import com.google.devtools.ksp.symbol.Origin
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeParameter
@@ -826,6 +827,7 @@ internal class ForwardCallablePlanner(
         // Underlying property name used by the Kotlin emitter to unbox: `Owner(args).prop`.
         invocationReceiver = underlyingPropName,
         includeError = true,
+        doc = ctor.forwardKdoc(expects).forParameters(ctor.parameters),
       )
     }
   }
@@ -867,6 +869,7 @@ internal class ForwardCallablePlanner(
         // Property getter: export name contains `_get_`; emitter uses bare member access.
         valueClassProperty = true,
         node = prop,
+        doc = prop.forwardKdoc(expects),
       )
     }
     .toList()
@@ -931,6 +934,7 @@ internal class ForwardCallablePlanner(
             // The symbol carries the overload suffix; the Kotlin call site must not.
             member = name,
             node = method,
+            doc = method.forwardKdoc(expects).forParameters(method.parameters),
           )
         }
       }
@@ -980,6 +984,7 @@ internal class ForwardCallablePlanner(
           result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
           node = method,
+          doc = method.forwardKdoc(expects).forParameters(method.parameters),
         )
       }
     }.nameUnroutedPositions { skipped ->
@@ -1083,6 +1088,7 @@ internal class ForwardCallablePlanner(
           isVirtual = isVirtual,
           node = method,
           droppedOptInMarker = droppedOptInMarker(method.parameters, omitted),
+          doc = method.forwardKdoc(expects).forParameters(method.parameters.dropLast(omitted)),
         )
       }
     }
@@ -1204,6 +1210,7 @@ internal class ForwardCallablePlanner(
           isVirtual = isVirtual,
           node = method,
           droppedOptInMarker = droppedOptInMarker(method.parameters, omitted),
+          doc = method.forwardKdoc(expects).forParameters(method.parameters.dropLast(omitted)),
         )
       }
     }
@@ -1332,6 +1339,7 @@ internal class ForwardCallablePlanner(
           isVirtual = isVirtual,
           node = method,
           droppedOptInMarker = droppedOptInMarker(method.parameters, omitted),
+          doc = method.forwardKdoc(expects).forParameters(method.parameters.dropLast(omitted)),
         )
       }
     }
@@ -1493,6 +1501,7 @@ internal class ForwardCallablePlanner(
             result = result,
             origin = ForwardCallableOrigin.COPY,
             node = primary,
+            doc = primary.forwardKdoc(expects).forParameters(primary.parameters),
           )
         )
       }
@@ -1617,6 +1626,8 @@ internal class ForwardCallablePlanner(
       target = owner,
       node = constructor,
       droppedOptInMarker = droppedOptInMarker(constructor.parameters, omitted),
+      doc = constructor.forwardKdoc(expects)
+        .forParameters(constructor.parameters.dropLast(omitted)),
     )
       // ADR-064 amendment (2026-09-13): no legacy route re-emits a CONSTRUCTOR (measured cell 24:
       // a secondary taking a lambda, a Flow or a generic type beside a bindable primary vanished
@@ -1826,6 +1837,7 @@ internal class ForwardCallablePlanner(
       member = member,
       node = function,
       droppedOptInMarker = droppedOptInMarker(function.parameters, omitted),
+      doc = function.forwardKdoc(expects).forParameters(function.parameters.dropLast(omitted)),
     )
   }
 
@@ -2097,6 +2109,7 @@ internal class ForwardCallablePlanner(
       member = functionName,
       node = function,
       droppedOptInMarker = droppedOptInMarker(function.parameters, omitted),
+      doc = function.forwardKdoc(expects).forParameters(function.parameters.dropLast(omitted)),
     )
       // ADR-064 amendment (2026-09-13): no legacy route is keyed to an extension for any of these
       // reasons (measured cells 6a/6b/13c/18c/22c; `translateExtensionFunction` has no caller at
@@ -2155,6 +2168,9 @@ internal class ForwardCallablePlanner(
     // Issue #128: [droppedOptInMarker] for the parameters this entry omits, since [parameters]
     // above is already truncated and cannot show them.
     droppedOptInMarker: String? = null,
+    // ADR-150: the author's KDoc, already keyed by the bridge parameter names in [parameters] and
+    // already stripped of an omitting overload's dropped `@param`s.
+    doc: ForwardKdoc? = null,
   ): ForwardCallableCatalogEntry {
     // ADR-115: the author's own signal, checked before any type is looked at -- nothing about the
     // declaration is unsupported, it is simply not part of the exported surface. One check for
@@ -2316,6 +2332,7 @@ internal class ForwardCallablePlanner(
         result = effectiveResult,
         isOverride = isOverride,
         isVirtual = isVirtual,
+        doc = doc,
       ),
       evaluation = ForwardEvaluation.EXACTLY_ONCE,
       nativeExports = listOf(nativeCall),
@@ -3581,6 +3598,36 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
  * (`receiverParameter`, `errorParameter`, the ADR-061 out-slot) pass their literal names straight
  * through, which is exactly what makes the shift injective against them.
  */
+/**
+ * ADR-150: the KDoc this declaration exports, or null.
+ *
+ * Only an `Origin.KOTLIN` declaration's `docString` is read: a SYNTHETIC member (an enum's
+ * `values`/`valueOf`/`entries`, an object's implicit constructor) reports its *owner's* comment on
+ * KSP 2.3.10 (verified), so reading it would put the type's summary on every helper it generates.
+ * An `actual` carries no KDoc at all, so the paired `expect` is consulted through [ExpectIndex].
+ */
+internal fun KSDeclaration.forwardKdoc(expects: ExpectIndex = ExpectIndex()): ForwardKdoc? {
+  if (origin != Origin.KOTLIN) return null
+  return parseKdoc(docString ?: expects.docOrNull(this))
+}
+
+/**
+ * ADR-150: re-keys `@param` entries from the Kotlin parameter names the author wrote to the bridge
+ * names the plan carries (`bridgeName()` respells a C#-owned name), and drops the entries of the
+ * trailing parameters an ADR-096/091 omitting overload does not declare. A `@param` naming nothing
+ * in [parameters] is dropped, which is what keeps a CS1572 off the generated file.
+ */
+private fun ForwardKdoc?.forParameters(parameters: List<KSValueParameter>): ForwardKdoc? {
+  val doc: ForwardKdoc = this ?: return null
+  return doc.copy(
+    params = parameters
+      .mapNotNull { parameter ->
+        doc.params[parameter.name?.asString()]?.let { text -> parameter.bridgeName() to text }
+      }
+      .toMap(),
+  )
+}
+
 private fun KSValueParameter.bridgeName(): String =
   (name?.asString() ?: "_").bridgeParameterName()
 

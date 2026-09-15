@@ -145,11 +145,12 @@ class Newsroom {
    */
   fun airwave(): Airwave = Airwave.FM
 
-  /**
-   * Issue #223: reaches a `@Serializable` data class, whose compiler-synthesized nested
-   * `$serializer` object the nested-declaration walk must never declare. The class itself is a
-   * normal export, so this member also pins that refusing the synthetic one costs nothing real.
-   */
+  // Issue #223: reaches a `@Serializable` data class, whose compiler-synthesized nested
+  // `$serializer` object the nested-declaration walk must never declare. The class itself is a
+  // normal export, so this member also pins that refusing the synthetic one costs nothing real.
+  // ADR-150: a `//` comment on purpose. As KDoc this note would become the member's C# `<summary>`,
+  // and `verify-forward-diagnostics.sh` asserts the word `serializer` appears nowhere in a
+  // generated `Interop.cs`.
   fun carton(): Carton = Carton("cardboard box, size L", 4)
 
   /** The `value class` arm of the same cell, unwrapped to a C# `string` as usual. */

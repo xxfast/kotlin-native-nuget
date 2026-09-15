@@ -1,5 +1,22 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+/**
+ * ADR-150: the Kotlin-exception to C#-exception table, shared by the `BuildMapped` switch this file
+ * renders and by the `<exception cref>` an author's `@throws` becomes. One table, so the documented
+ * exception is always the one the consumer actually catches. Iteration order is the switch's
+ * rendered order. Anything absent is a `KotlinException`.
+ */
+internal val KOTLIN_EXCEPTION_TYPES: Map<String, String> = linkedMapOf(
+  "kotlin.IllegalArgumentException" to "KotlinArgumentException",
+  "kotlin.IllegalStateException" to "KotlinInvalidOperationException",
+  "kotlin.NoSuchElementException" to "KotlinInvalidOperationException",
+  "kotlin.ConcurrentModificationException" to "KotlinInvalidOperationException",
+  "kotlin.UnsupportedOperationException" to "KotlinNotSupportedException",
+  "kotlin.ClassCastException" to "KotlinInvalidCastException",
+  "kotlin.ArithmeticException" to "KotlinArithmeticException",
+  "kotlin.NumberFormatException" to "KotlinFormatException",
+)
+
 internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("    internal static class NugetErrorNative")
   appendLine("    {")
@@ -59,22 +76,10 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("        private static Exception BuildMapped(string kotlinType, string message, string stackTrace, Exception? inner) =>")
   appendLine("            kotlinType switch")
   appendLine("            {")
-  appendLine("                \"kotlin.IllegalArgumentException\" =>")
-  appendLine("                    new KotlinArgumentException(kotlinType, message, stackTrace, inner),")
-  appendLine("                \"kotlin.IllegalStateException\" =>")
-  appendLine("                    new KotlinInvalidOperationException(kotlinType, message, stackTrace, inner),")
-  appendLine("                \"kotlin.NoSuchElementException\" =>")
-  appendLine("                    new KotlinInvalidOperationException(kotlinType, message, stackTrace, inner),")
-  appendLine("                \"kotlin.ConcurrentModificationException\" =>")
-  appendLine("                    new KotlinInvalidOperationException(kotlinType, message, stackTrace, inner),")
-  appendLine("                \"kotlin.UnsupportedOperationException\" =>")
-  appendLine("                    new KotlinNotSupportedException(kotlinType, message, stackTrace, inner),")
-  appendLine("                \"kotlin.ClassCastException\" =>")
-  appendLine("                    new KotlinInvalidCastException(kotlinType, message, stackTrace, inner),")
-  appendLine("                \"kotlin.ArithmeticException\" =>")
-  appendLine("                    new KotlinArithmeticException(kotlinType, message, stackTrace, inner),")
-  appendLine("                \"kotlin.NumberFormatException\" =>")
-  appendLine("                    new KotlinFormatException(kotlinType, message, stackTrace, inner),")
+  for ((kotlinType, csharpType) in KOTLIN_EXCEPTION_TYPES) {
+    appendLine("                \"$kotlinType\" =>")
+    appendLine("                    new $csharpType(kotlinType, message, stackTrace, inner),")
+  }
   appendLine("                _ => new KotlinException(kotlinType, message, stackTrace, inner)")
   appendLine("            };")
   appendLine("    }")
