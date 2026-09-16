@@ -446,6 +446,47 @@ class Tier1CompileCellsTest {
   }
 
   /**
+   * `ForwardPropertyPlanner.componentDescription()`'s `!keyOk && !valueOk` arm: a `Map` whose key
+   * AND value both fail `isWrappableComponent()` (a nullable nested collection fails as a
+   * collection, and again as a nullable key), so the diagnostic must name both sides.
+   */
+  @Test
+  fun `class property with Map of nested-collection key and value has no setter and names both types`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.moodmapboth
+
+      class Box {
+        var scores: Map<List<String>?, List<String>?> = emptyMap()
+      }
+      """.trimIndent()
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected export_box_get_scores to compile; got: ${result.compileErrors}",
+    )
+    assertTrue(
+      "export_box_get_scores" in result.generated,
+      "expected the getter export to still be generated; generated=${result.generated}",
+    )
+    assertTrue(
+      "export_box_set_scores" !in result.generated,
+      "expected no setter export (neither the key nor the value is a wrappable map component); " +
+          "generated=${result.generated}",
+    )
+    assertTrue(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) &&
+            it.contains("key type Collection?") &&
+            it.contains("and value type Collection?")
+      },
+      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming both Box.scores's key and value " +
+          "types; kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
    * ADR-075: the `Visit(patient, symptoms, notes)` data-class primary constructor from the
    * shipped fixture only ever runs through the real `packNuget`/konanc pipeline, never through
    * this JVM-only harness — so this is the fast regression guard for the *general callable*

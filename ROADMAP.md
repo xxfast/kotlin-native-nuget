@@ -1,6 +1,6 @@
 # Roadmap
 
-Open work only, one line per item. Detail lives behind the links: long investigation writeups in [docs/backlog/](docs/backlog/), shipped work in [FEATURES.md](FEATURES.md) and the ADRs in [docs/adr/](docs/adr/), and the full pre-slim-down roadmap (every completed item's writeup, plus historical notes like the `MVP.md` provenance) in the [archive](docs/roadmap-archive.md), a verbatim snapshot taken 2026-08-31.
+Open work only, one line per item. Detail lives behind the links: long investigation writeups in [docs/backlog/](docs/backlog/), shipped work in [FEATURES.md](FEATURES.md) and the ADRs in [docs/adr/](docs/adr/), the completed [forward marshalling centralization migration](MIGRATION.md), and the full pre-slim-down roadmap (every completed item's writeup, plus historical notes like the `MVP.md` provenance) in the [archive](docs/roadmap-archive.md), a verbatim snapshot taken 2026-08-31.
 
 Maintenance rules:
 - One line per item. If an item needs more than two sentences, put the detail in `docs/backlog/<slug>.md` and link it as `([details](docs/backlog/<slug>.md))`.
@@ -226,13 +226,6 @@ Mirror of Phase 7, composed with its machinery.
 Everything but the C# twin has shipped: bullets 1 to 3 in [ADR-127](docs/adr/127-nuget-runtime-library.md) (the `nuget_*` ABI now lives in a versioned `nuget-runtime` Kotlin/Native library the plugin adds as `api` and `export()`s on every `SharedLibrary`, and the generator emits only the per-declaration part), a 67th export `nuget_runtime_version` ([ADR-129](docs/adr/129-nuget-runtime-version-export.md)), the runtime's `nuget_*` exports verified on the Windows (mingwX64) leg (ADR-127), the reverse bridge's error envelope folded onto the runtime's own `NugetError` ([ADR-130](docs/adr/130-reverse-error-envelope-on-runtime.md)), and the generator adopting the runtime's `launchForCSharp`/`collectForCSharp` helpers in its four suspend/Flow emitter templates ([ADR-128](docs/adr/128-launch-for-csharp-runtime-helper.md)). What remains is the C# twin of the runtime as a NuGet package, blocked on the compiled-assembly packaging decision.
 
 - [ ] The C# twin: `Interop.cs`'s roughly 1.8k fixed lines as a runtime NuGet package. Blocked on a per-library `DllImportResolver` (every `DllImport` names its library at compile time and one .NET process can host several Kotlin libraries); decide together with the opt-in compiled-assembly packaging mode under Future Improvements.
-
-## Post-migration hardening
-
-Follow-up work from the completed [forward marshalling centralization migration](MIGRATION.md).
-
-- [ ] **Coverage gaps in the collection-property-setter diagnostic path, named but not chased while building ADR-075** ([details](docs/backlog/coverage-gaps-collection-property-setter-diagnostic-path.md))
-- [ ] **Make list-input eligibility match element marshalling.** ([details](docs/backlog/make-list-input-eligibility-match-element-marshalling.md))
 
 ## Tooling & Test Integrity
 

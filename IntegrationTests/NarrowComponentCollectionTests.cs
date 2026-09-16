@@ -16,7 +16,9 @@ namespace IntegrationTests;
 /// Cells: <c>Chart</c> is signed at a <c>List</c> position, <c>Weigh</c> is unsigned-widest at a
 /// <c>Set</c> position, <c>Census</c> is narrow in both slots of a <c>Map</c> with the unsigned one
 /// in the KEY slot, <c>Trail</c> is the nullable spelling that the shared predicate admits for
-/// free, <c>Initials</c> is the <c>Char</c> write side and <c>Marks</c> the <c>Char</c> read side.
+/// free, <c>Initials</c> is the <c>Char</c> write side and <c>Marks</c> the <c>Char</c> read side,
+/// <c>Tally</c> is unsigned narrow at a <c>List</c> position and <c>Offsets</c> is signed narrow at
+/// a <c>List</c> position, the two bare cells ADR-098 left uncovered.
 ///
 /// Every numeric assertion pins a value that a widening or a sign error would visibly break:
 /// <c>short.MaxValue</c>, a negative <c>short</c>, <c>ulong.MaxValue</c>. Every <c>Char</c>
@@ -36,6 +38,33 @@ public class NarrowComponentCollectionTests
         string chart = readings.Chart(new short[] { 1, -2, short.MaxValue });
 
         Assert.Equal("1,-2,32767", chart);
+    }
+
+    [Fact]
+    public void Readings_Tally_ListOfUIntParameter_RoundTripsEveryElement()
+    {
+        using var readings = new Readings();
+
+        // Unsigned narrow at a List position, the cell ADR-098 left bare: Weigh proves unsigned at
+        // Set and Census proves unsigned at a Map key, neither of which reaches List's own
+        // predicate branch. uint.MaxValue would come back negative through a signed-int wire, and
+        // 0u is the cell a sign-extension bug still passes by accident.
+        string tally = readings.Tally(new[] { uint.MaxValue, 0u });
+
+        Assert.Equal("4294967295,0", tally);
+    }
+
+    [Fact]
+    public void Readings_Offsets_ListOfByteParameter_RoundTripsEveryElement()
+    {
+        using var readings = new Readings();
+
+        // Signed narrow at a List position beside Tally's unsigned one. Census proves signed narrow
+        // but only in a Map value slot, not List. Kotlin's Byte is C#'s sbyte, not byte; sbyte.MinValue
+        // and sbyte.MaxValue bracket the range and -1 catches a wire that treats it as unsigned.
+        string offsets = readings.Offsets(new[] { sbyte.MinValue, (sbyte)-1, sbyte.MaxValue });
+
+        Assert.Equal("-128,-1,127", offsets);
     }
 
     [Fact]
