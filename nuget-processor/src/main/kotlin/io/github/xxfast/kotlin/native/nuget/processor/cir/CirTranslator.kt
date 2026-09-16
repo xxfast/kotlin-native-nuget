@@ -135,7 +135,9 @@ internal fun translate(
   // list has to come from a catalog that is unconditional too.
   interfaceDeclarationCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanCatalog(emptyList()),
 ): CirFile {
-  val (genericClasses, regularClasses) = classes.partition { it.typeParameters.isNotEmpty() }
+  // ADR-147: no split any more. A generic class is an ordinary class with type parameters, and
+  // goes through `translateClass` and the ADR-062 plan like every other class.
+  val regularClasses: List<KSClassDeclaration> = classes
 
   val exportedTypes: Set<String> = buildSet {
     classes.forEach { add(it.qualifiedName?.asString() ?: "") }
@@ -438,14 +440,6 @@ internal fun translate(
     )
   }
 
-  genericClasses.forEach { cls ->
-    namespaces.addDeclaration(
-      namespaceOf(cls.packageName.asString()),
-      translateGenericClass(cls, context.libraryName, logger, context),
-    )
-    needsMarshalHelper = true
-  }
-
   // ADR-134: a nested value class is declared by the owner walk above and nowhere else; a
   // namespace-level twin would be CS0101 against it (the issue #54/#110 lesson).
   valueClasses.filter { !it.isNestedDeclaration() }.forEach { cls ->
@@ -485,7 +479,7 @@ internal fun translate(
       .getOrPut(namespaceOf(declaration.packageName.asString())) { mutableSetOf() }
       .add(declaration.nestedCsName())
   }
-  (regularClasses + genericClasses + valueClasses + enums + objects).forEach { decl ->
+  (regularClasses + valueClasses + enums + objects).forEach { decl ->
     recordExistingTypeName(decl)
   }
   sealedClasses.forEach { sealed ->
@@ -836,8 +830,12 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
   .flatMap { namespace ->
     namespace.declarations.flatMap { declaration ->
       when (declaration) {
+        // ADR-147: an open generic wrapper registers nothing -- `typeof(Crate<>)` is not the
+        // closed type an erased path asks for, and the entry would never match.
         is CirClass ->
-          if (declaration.hasInternalHandleConstructor && !declaration.isAbstract) {
+          if (declaration.hasInternalHandleConstructor && !declaration.isAbstract &&
+            declaration.typeParameters.isEmpty()
+          ) {
             listOf(CirFactoryEntry("${namespace.name}.${declaration.name}"))
           } else {
             emptyList()

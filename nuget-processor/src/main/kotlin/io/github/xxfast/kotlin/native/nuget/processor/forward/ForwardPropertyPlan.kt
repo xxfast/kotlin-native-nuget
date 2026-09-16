@@ -119,6 +119,10 @@ internal data class ForwardPropertyPlan(
       // ADR-106: valid at a property, getter and setter alike, over the String wire.
       BridgeType.Uuid -> Unit
 
+      // ADR-147: valid at a generic class's property, getter-only (the planner refuses the
+      // setter, so a plan carrying one never reaches here).
+      is BridgeType.TypeParameter -> Unit
+
       // ADR-077 sub-item 2: a value-class property is valid exactly when its underlying is.
       is BridgeType.ValueClass -> validateType(type.underlying)
       is BridgeType.Nullable -> validateType(type.type)

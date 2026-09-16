@@ -86,7 +86,9 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       // ADR-075: a nullable collection has no element-type restriction on the read side --
       // `nullableHandleBody` already returns Kotlin `null` for a null result before ever building
       // a `StableRef`, the same route a nullable `ObjectHandle`/`Interface` getter takes.
-      is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> {
+      // ADR-083/147: `T?` ships the null pointer for null, the retained box otherwise.
+      is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
+      is BridgeType.TypeParameter -> {
         // ADR-081: a value-class component is projected to its underlying before boxing, with the
         // whole chain `?.`-guarded so a null property value still ships a null pointer.
         val boxed: String = if (inner is BridgeType.Collection) {
@@ -156,7 +158,9 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       )
     }
 
-    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> {
+    // ADR-147: a `T` getter mints the same `NugetHandles.retain` box.
+    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
+    is BridgeType.TypeParameter -> {
       // ADR-081: read side of a collection property whose component is a value class -- box a copy
       // projected to the underlying, the shape a C# per-element re-wrap can read.
       val boxed: String =

@@ -14,7 +14,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFlowHelper
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFuncHelper
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFuncNativeHelper
-import io.github.xxfast.kotlin.native.nuget.processor.cir.CirGenericClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirInterface
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirInterfaceBridgeMethod
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirJobHelper
@@ -40,7 +39,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClass
 internal enum class ForwardAbiLegacyRoute {
   GENERIC_FUNCTION,
   GENERIC_EXTENSION_FUNCTION,
-  GENERIC_CLASS,
   SEALED_CLASS,
   SUSPEND_FUNCTION,
   SUSPEND_METHOD,
@@ -93,7 +91,6 @@ internal object ForwardAbiLegacyRoutes {
       }
 
       is CirBridgeHelper -> add(ForwardAbiLegacyRoute.INTERFACE_BRIDGE_FACTORY)
-      is CirGenericClass -> add(ForwardAbiLegacyRoute.GENERIC_CLASS)
       is CirSealedClass -> {
         add(ForwardAbiLegacyRoute.SEALED_CLASS)
         // ADR-118: an arm's `suspend fun` rides the same legacy suspend route an ordinary class's

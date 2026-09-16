@@ -91,6 +91,9 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
   declaredOnly: Boolean = false,
 ) {
   val qualifiedName: String = cls.qualifiedName?.asString() ?: return
+  // ADR-147: the suspend route spells `asStableRef<Crate>()`, which does not compile for a generic
+  // owner. Refused there, on both halves, until the route learns the applied receiver spelling.
+  if (cls.typeParameters.isNotEmpty()) return
 
   val suspendMethods: List<KSFunctionDeclaration> = cls.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }

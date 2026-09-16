@@ -1,144 +1,5 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
-/**
- * The per-width constructor exports an unconstrained generic class emits on the Kotlin side, in the
- * order `GenericClassExports` writes them: entry-point suffix to the C# parameter type of the value
- * being constructed. The `object` fallback (a handle to an already-bridged reference) is appended
- * separately because its dispatch is a reflection lookup rather than a `typeof(T)` comparison.
- */
-private val GENERIC_CREATE_WIDTHS: List<Pair<String, String>> = listOf(
-  "string" to "string",
-  "byte" to "sbyte",
-  "ubyte" to "byte",
-  "short" to "short",
-  "ushort" to "ushort",
-  "int" to "int",
-  "uint" to "uint",
-  "long" to "long",
-  "ulong" to "ulong",
-  "float" to "float",
-  "double" to "double",
-  "bool" to "bool",
-)
-
-internal fun StringBuilder.renderGenericClass(cls: CirGenericClass) {
-  val typeParams: String = cls.typeParameters.joinToString(", ") { it.name }
-
-  val isConstrained: Boolean = cls.typeParameters.any { it.bounds.isNotEmpty() }
-
-  appendLine("    internal static class ${cls.name}Native")
-  appendLine("    {")
-
-  if (cls.hasPublicConstructor) {
-    // An unconstrained type parameter admits the primitive widths too, and each one is a separate
-    // Kotlin export carrying this class's own native prefix. Declaring them here rather than
-    // reaching for a shared helper is what keeps the constructor bound to its own class: the handle
-    // that comes back is a StableRef to an instance of *this* class, which this class's
-    // `_get_value` export downcasts.
-    if (!isConstrained) {
-      GENERIC_CREATE_WIDTHS.forEach { (suffix, type) ->
-        appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_create_$suffix\")]")
-        appendLine("        internal static extern IntPtr Create_$suffix($type value, out IntPtr error);")
-        appendLine()
-      }
-    }
-    appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_create_object\")]")
-    appendLine("        internal static extern IntPtr Create_object(IntPtr value, out IntPtr error);")
-    appendLine()
-  }
-
-  for (prop in cls.properties) {
-    appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_get_${prop.nativeName}\")]")
-    appendLine("        internal static extern ${prop.nativeReturnType} Get_${prop.nativeName}(IntPtr handle);")
-    appendLine()
-  }
-
-  if (cls.disposable) {
-    appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_dispose\")]")
-    appendLine("        internal static extern void Dispose(IntPtr handle);")
-  }
-
-  appendLine("    }")
-  appendLine()
-
-  val whereClause: String = cls.typeParameters
-    .filter { it.bounds.isNotEmpty() }
-    .joinToString(" ") { param ->
-      "where ${param.name} : ${param.bounds.joinToString(", ")}"
-    }
-
-  val whereStr: String = if (whereClause.isNotEmpty()) " $whereClause" else ""
-  appendLine("    public class ${cls.name}<$typeParams> : IDisposable, INugetHandle$whereStr")
-  appendLine("    {")
-  appendLine("        internal IntPtr _handle;")
-  appendLine()
-  appendLine("        IntPtr INugetHandle.Handle => _handle;")
-  appendLine()
-
-  if (cls.hasPublicConstructor) {
-    appendLine("        public ${cls.name}(${cls.typeParameters[0].name} value)")
-    appendLine("        {")
-    if (isConstrained) {
-      // ADR-094: the bound is a Kotlin interface whose only implementations are generated wrappers,
-      // so the cast succeeds wherever the old `field!` read did.
-      appendLine("            IntPtr handle = ${cls.name}Native.Create_object(((INugetHandle)value!).Handle, out IntPtr error);")
-      appendLine("            if (error != IntPtr.Zero)")
-      appendLine("            {")
-      appendLine("                throw NugetErrorNative.BuildException(error);")
-      appendLine("            }")
-      appendLine("            _handle = handle;")
-    } else {
-      val param: String = cls.typeParameters[0].name
-      appendLine("            IntPtr error;")
-      appendLine("            IntPtr handle;")
-      GENERIC_CREATE_WIDTHS.forEachIndexed { index, (suffix, type) ->
-        val branch: String = if (index == 0) "if" else "else if"
-        appendLine("            $branch (typeof($param) == typeof($type)) handle = ${cls.name}Native.Create_$suffix(($type)(object)value!, out error);")
-      }
-      appendLine("            else")
-      appendLine("            {")
-      appendLine("                if (value is not INugetHandle wrapper) throw new NotSupportedException($\"Cannot create ${cls.name}<{typeof($param).Name}>\");")
-      appendLine("                handle = ${cls.name}Native.Create_object(wrapper.Handle, out error);")
-      appendLine("            }")
-      appendLine()
-      appendLine("            if (error != IntPtr.Zero)")
-      appendLine("            {")
-      appendLine("                throw NugetErrorNative.BuildException(error);")
-      appendLine("            }")
-      appendLine("            _handle = handle;")
-    }
-    appendLine("        }")
-    appendLine()
-  }
-
-  appendLine("        internal ${cls.name}(IntPtr handle)")
-  appendLine("        {")
-  appendLine("            _handle = handle;")
-  appendLine("        }")
-  appendLine()
-
-  for (prop in cls.properties) {
-    appendLine("        public ${prop.type} ${prop.name} => ${prop.getter};")
-    appendLine()
-  }
-
-  if (cls.disposable) {
-    // ADR-101 amendment (2026-09-11): `virtual` only when the Kotlin class is `open`, so a final
-    // generic class renders byte-identically to what shipped.
-    val virtual: String = if (cls.isOpen) "virtual " else ""
-    appendLine("        public ${virtual}void Dispose()")
-    appendLine("        {")
-    appendLine("            if (_handle != IntPtr.Zero)")
-    appendLine("            {")
-    appendLine("                ${cls.name}Native.Dispose(_handle);")
-    appendLine("                _handle = IntPtr.Zero;")
-    appendLine("            }")
-    appendLine("        }")
-  }
-
-  appendLine("    }")
-}
-
 internal fun StringBuilder.renderInterface(iface: CirInterface) {
   val typeParamStr: String = if (iface.typeParameters.isNotEmpty()) {
     val params: String = iface.typeParameters.joinToString(", ") { param ->
@@ -194,7 +55,91 @@ internal fun StringBuilder.renderStaticClass(cls: CirStaticClass) {
   appendLine("    }")
 }
 
+/**
+ * ADR-147: a `[DllImport]` may not be declared inside a generic type (CS7042), so a generic
+ * carrier's externs are hoisted into a sibling non-generic `{Name}Native` static class and each
+ * in-class declaration becomes a plain forwarding method with the identical signature. The class
+ * body is rendered by the ordinary path first and rewritten afterwards, so a generic class and an
+ * ordinary one cannot drift: there is exactly one renderer, and the hoist is a mechanical move.
+ */
 internal fun StringBuilder.renderClass(cls: CirClass) {
+  if (cls.typeParameters.isEmpty()) {
+    renderClassDeclaration(cls)
+    return
+  }
+  val body: String = StringBuilder().apply { renderClassDeclaration(cls) }.toString()
+  val hoisted: HoistedDllImports = hoistDllImports(body, "${cls.name}Native")
+  if (hoisted.imports.isNotEmpty()) {
+    appendLine("    internal static class ${cls.name}Native")
+    appendLine("    {")
+    hoisted.imports.forEach { import -> append(import) }
+    appendLine("    }")
+    appendLine()
+  }
+  append(hoisted.body)
+}
+
+/**
+ * The externs lifted out of a generic class's body, and the body with forwarders in their place.
+ */
+private class HoistedDllImports(val body: String, val imports: List<String>)
+
+private val DLL_IMPORT_ATTRIBUTE = Regex("""^\s*\[DllImport\(""")
+private val EXTERN_DECLARATION =
+  Regex("""^(\s*)(?:private|internal|public) (?:new )?static extern (\S+) (\w+)\((.*)\);$""")
+
+private fun hoistDllImports(body: String, nativeClass: String): HoistedDllImports {
+  val lines: List<String> = body.lines()
+  val kept: MutableList<String> = mutableListOf()
+  val imports: MutableList<String> = mutableListOf()
+  var index = 0
+  while (index < lines.size) {
+    val line: String = lines[index]
+    if (!DLL_IMPORT_ATTRIBUTE.containsMatchIn(line)) {
+      kept.add(line)
+      index++
+      continue
+    }
+    // The block is the attribute(s) plus exactly one extern declaration; everything between is a
+    // `[return: MarshalAs(...)]` this renderer emitted itself.
+    val block: MutableList<String> = mutableListOf(line)
+    var cursor: Int = index + 1
+    while (cursor < lines.size && EXTERN_DECLARATION.find(lines[cursor]) == null) {
+      block.add(lines[cursor])
+      cursor++
+    }
+    check(cursor < lines.size) { "Unterminated DllImport block while hoisting out of $nativeClass" }
+    val declaration = requireNotNull(EXTERN_DECLARATION.find(lines[cursor])) {
+      "DllImport block in $nativeClass has no extern declaration"
+    }
+    val (indent, returnType, name, parameters) = declaration.destructured
+    block.add("$indent    internal static extern $returnType $name($parameters);")
+    imports.add(block.joinToString("\n", postfix = "\n") { entry -> "    $entry" } + "\n")
+    kept.add(
+      "${indent}private static $returnType $name($parameters) => " +
+          "$nativeClass.$name(${forwardedArguments(parameters)});",
+    )
+    index = cursor + 1
+  }
+  return HoistedDllImports(kept.joinToString("\n"), imports)
+}
+
+/** `out IntPtr error, [MarshalAs(UnmanagedType.U2)] char c` -> `out error, c`. */
+private fun forwardedArguments(parameters: String): String {
+  if (parameters.isBlank()) return ""
+  return parameters.split(',').joinToString(", ") { parameter ->
+    val trimmed: String = parameter.trim()
+    val name: String = trimmed.substringAfterLast(' ')
+    val modifier: String = when {
+      trimmed.startsWith("out ") -> "out "
+      trimmed.startsWith("ref ") -> "ref "
+      else -> ""
+    }
+    "$modifier$name"
+  }
+}
+
+private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
   val abstract: String = if (cls.isAbstract) "abstract " else ""
   val sealedModifier: String = if (cls.isSealed) "sealed " else ""
 
@@ -216,10 +161,22 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
     " : " + (cls.interfaces + disposables + "INugetHandle").distinct().joinToString(", ")
   }
 
+  // ADR-147: the generic carrier. `Crate<T>` plus one `where T : Bound` per bounded parameter,
+  // after the base list, which is where C# wants it.
+  val typeParameters: String =
+    if (cls.typeParameters.isEmpty()) ""
+    else cls.typeParameters.joinToString(", ", prefix = "<", postfix = ">") { it.name }
+  val constraints: String = cls.typeParameters
+    .filter { it.bounds.isNotEmpty() }
+    .joinToString(" ") { param -> "where ${param.name} : ${param.bounds.joinToString(", ")}" }
+  val whereClause: String = if (constraints.isEmpty()) "" else " $constraints"
+
   // ADR-150: `<summary>` first, then ADR-064's `<remarks>`.
   renderDoc(cls.doc)
   renderRemarks(cls.remarks)
-  appendLine("    public $sealedModifier${abstract}class ${cls.name}$implements")
+  appendLine(
+    "    public $sealedModifier${abstract}class ${cls.name}$typeParameters$implements$whereClause",
+  )
   appendLine("    {")
 
   if (cls.superClass == null) {

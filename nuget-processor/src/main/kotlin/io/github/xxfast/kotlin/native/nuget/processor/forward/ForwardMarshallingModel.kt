@@ -259,6 +259,26 @@ internal sealed interface BridgeType {
 
   /** A collection whose component type was lost during classification. */
   data class RawCollection(val kind: CollectionKind) : BridgeType
+
+  /**
+   * ADR-147: a class type parameter (`T`) at a top-level position on a generic class's member.
+   *
+   * Wire-identical to [ObjectHandle]: one opaque boxed handle, whatever `T` is instantiated to.
+   * Out of Kotlin it is `NugetHandles.retain(value)`; into Kotlin it is
+   * `pointer.asStableRef<Any>().get()` (or the bound, when one is declared). On the C# side the
+   * public spelling is the type parameter's own name, and the lowering is
+   * `NugetMarshal.Wrap<T>(value, out owned)` in (with the ADR-099 owned dispose in a `finally`)
+   * and `NugetMarshal.FromHandle<T>(handle)` out.
+   *
+   * @param name the type parameter's simple name, which is also its C# spelling.
+   * @param boundQualifiedName the first upper bound's Kotlin FQCN when it is not `kotlin.Any`,
+   *   used for the Kotlin-side `asStableRef<Bound>()` decode and for the applied receiver
+   *   spelling. `null` for an unconstrained parameter.
+   */
+  data class TypeParameter(
+    val name: kotlin.String,
+    val boundQualifiedName: kotlin.String? = null,
+  ) : BridgeType
 }
 
 internal enum class PrimitiveKind {
@@ -510,6 +530,13 @@ internal data class ForwardInvocation(
    * channel already wraps it in. A `Result.failure(e)` then reaches C# exactly as `throw e` would.
    */
   val unwrapsKotlinResult: Boolean = false,
+  /**
+   * ADR-147: the fully applied Kotlin spelling of a generic owner (`io.pkg.Crate<Any?>`), used by
+   * the Kotlin emitter wherever it names the owner as a *type*: the receiver read
+   * (`handle.asStableRef<Crate<Any?>>()`) and the constructor call. Null for an ordinary class,
+   * where the bare qualified name off [symbol] (or [target]) is already a legal type.
+   */
+  val ownerType: String? = null,
 )
 
 internal data class ForwardResultConvention(
@@ -700,6 +727,8 @@ internal object ForwardCallablePlanValidator {
       BridgeType.Uuid,
       is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
       is BridgeType.Interface, is BridgeType.BoundInterface,
+        // ADR-147: a class type parameter, valid at every top-level position over the boxed wire.
+      is BridgeType.TypeParameter,
         -> Unit
 
       is BridgeType.ValueClass -> validateType(type.underlying, "$position value-class underlying type")
@@ -753,11 +782,13 @@ internal object ForwardCallablePlanValidator {
       ForwardConversion.ENUM_TO_ORDINAL
     }
 
-    is BridgeType.ObjectHandle, is BridgeType.Interface -> if (flow == ForwardFlow.INTO_KOTLIN) {
-      ForwardConversion.HANDLE_TO_STABLE_REF
-    } else {
-      ForwardConversion.STABLE_REF_TO_HANDLE
-    }
+    // ADR-147: a `T` position crosses as the same StableRef handle an object does.
+    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.TypeParameter ->
+      if (flow == ForwardFlow.INTO_KOTLIN) {
+        ForwardConversion.HANDLE_TO_STABLE_REF
+      } else {
+        ForwardConversion.STABLE_REF_TO_HANDLE
+      }
 
     // ADR-088: a GCHandle, never a StableRef — the two directions are the reverse pipeline's
     // helpers, not the forward StableRef pair.

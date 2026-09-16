@@ -40,16 +40,20 @@ class Tier1GenericBaseOverloadTest {
     )
 
     val cs: String = result.generatedCSharp
+    // ADR-147: two now. `Crate<T>` carries its own `Describe(T tag)` on the generic carrier, and
+    // `LabelledCrate` still declares exactly its own `Describe(int tag)`; the substituted
+    // `describe(String)` is inherited through `: Crate<string>`, never re-declared.
     val describes: Int = cs.split("public string Describe(").size - 1
     assertEquals(
-      1,
-      describes,
-      "the subclass must render exactly one Describe, its own Int overload; got: $cs",
+      2, describes,
+      "the base declares Describe(T) and the subclass Describe(int); got: $cs",
     )
+    assertContains(cs, "public string Describe(T tag)")
     assertContains(cs, "public string Describe(int tag)")
     assertFalse(
       "Describe(string" in cs,
-      "the substituted String overload has no C# carrier and must not be rendered; got: $cs",
+      "the substituted String overload is inherited from Crate<string>, never re-declared; " +
+          "got: $cs",
     )
     assertFalse(
       "override string Describe" in cs,

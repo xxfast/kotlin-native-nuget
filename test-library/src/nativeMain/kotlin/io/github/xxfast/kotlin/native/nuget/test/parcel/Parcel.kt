@@ -30,6 +30,23 @@ class NamedParcel(name: String) : Parcel<String>(name) {
  */
 open class Crate<T>(val item: T) {
   fun describe(tag: T): String = "$tag:$item"
+
+  /**
+   * ADR-147: `T` at a parameter *and* at the return, so the boxed-handle wire has to cross in both
+   * directions on one call. A primitive instantiation pays a box mint per argument; an exported
+   * class instantiation borrows the wrapper's own handle and mints nothing on the way in.
+   *
+   * Oreo always picks the treat you offer him over the one already in the crate.
+   */
+  fun pick(other: T): T = other
+
+  /**
+   * ADR-147: no `T` anywhere. The generic class is on the ADR-062 callable plan now, so an
+   * ordinary position binds on it exactly as it does on a non-generic class.
+   *
+   * Mylo cannot read the label either, but he does like to sit on it.
+   */
+  fun label(prefix: String, count: Int): String = "$prefix-$count:$item"
 }
 
 /**

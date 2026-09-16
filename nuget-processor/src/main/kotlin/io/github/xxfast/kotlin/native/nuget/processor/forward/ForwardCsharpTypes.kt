@@ -45,6 +45,8 @@ internal fun BridgeType.forwardPublicCsharpType(): String = when (this) {
     CollectionKind.MUTABLE_SET -> "ISet<${requireNotNull(element).forwardPublicCsharpType()}>"
   }
 
+  // ADR-147: a type parameter's public C# spelling is its own name, on the generic carrier.
+  is BridgeType.TypeParameter -> name
   is BridgeType.Nullable -> "${type.forwardPublicCsharpType()}?"
   else -> error("Forward CIR direct-value projection cannot render public type $this")
 }

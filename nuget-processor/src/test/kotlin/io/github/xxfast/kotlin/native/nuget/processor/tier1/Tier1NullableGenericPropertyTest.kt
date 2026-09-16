@@ -33,20 +33,30 @@ class Tier1NullableGenericPropertyTest {
     )
 
     val kotlin: String = result.generated
+    // ADR-147: the ADR-062 property plan's own nullable-handle body, which returns Kotlin null
+    // before it ever mints a StableRef. Same null-pointer wire, one route fewer.
     assertContains(
       kotlin,
-      "get().previous?.let { NugetHandles.retain(it) }",
+      "val result = handle.asStableRef<tier1.nullablegenericproperty.Slot<Any>>().get().previous",
     )
+    assertContains(kotlin, "if (result == null) null else NugetHandles.retain(result)")
     assertFalse(
       kotlin.contains("get().previous!!"),
       "the forcing read is what NPE'd; generated=$kotlin",
     )
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "internal static extern IntPtr Get_previous(IntPtr handle);")
+    // ADR-147: on the plan, so the getter carries the ADR-032 error slot every other one has.
+    // ADR-147: hoisted out of the generic carrier (CS7042), forwarded back into it.
+    assertContains(
+      cs,
+      "internal static extern IntPtr Native_Get_previous(IntPtr handle, out IntPtr error);",
+    )
+    assertContains(cs, "=> SlotNative.Native_Get_previous(handle, out error);")
     // NugetMarshal.FromHandle already returns `default!` for IntPtr.Zero, so the C# read needs no
     // guard of its own -- only the `T?` spelling that says a null can arrive.
-    assertContains(cs, "public T? Previous => NugetMarshal.FromHandle<T>(SlotNative.Get_previous(_handle));")
+    assertContains(cs, "public T? Previous")
+    assertContains(cs, "return NugetMarshal.FromHandle<T>(nativeResult);")
   }
 
   @Test
@@ -70,10 +80,12 @@ class Tier1NullableGenericPropertyTest {
     assertContains(kotlin, "@CName(\"crate_get_value\")")
     assertContains(
       kotlin,
-      "get().value?.let { NugetHandles.retain(it) }",
+      "NugetHandles.retain(handle.asStableRef<tier1.nonnullgenericproperty.Crate<Any>>()" +
+          ".get().value)",
     )
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "public T Value => NugetMarshal.FromHandle<T>(CrateNative.Get_value(_handle));")
+    assertContains(cs, "public T Value")
+    assertContains(cs, "return NugetMarshal.FromHandle<T>(nativeResult);")
   }
 }

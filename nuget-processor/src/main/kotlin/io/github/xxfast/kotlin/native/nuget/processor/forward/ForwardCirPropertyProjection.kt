@@ -247,7 +247,9 @@ internal object ForwardCirPropertyProjection {
     val callArgs: String = listOf(args, "out IntPtr error").filter { it.isNotBlank() }.joinToString(", ")
     when (val value = type.unwrapNullable()) {
       BridgeType.String -> appendLine("            IntPtr nativeResult = $native($callArgs);")
-      is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
+      // ADR-147: a `T` getter reads the same boxed-handle wire.
+      is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
+      is BridgeType.TypeParameter ->
         appendLine("            IntPtr nativeResult = $native($callArgs);")
 
       // ADR-107: the error envelope's pointer. ONE call, deliberately: the export mints a
@@ -292,6 +294,9 @@ internal object ForwardCirPropertyProjection {
           "            return nativeResult == IntPtr.Zero ? null : " +
               "${inner.handleReconstruction()};",
         )
+        // ADR-083/147: `FromHandle<T>` answers `default!` for the null pointer itself.
+        is BridgeType.TypeParameter ->
+          append("            return NugetMarshal.FromHandle<${inner.name}>(nativeResult);")
         // ADR-040: construct via the backing wrapper class, not the interface spelling.
         is BridgeType.Interface -> append(
           "            return nativeResult == IntPtr.Zero ? null : " +
@@ -328,6 +333,9 @@ internal object ForwardCirPropertyProjection {
         append("            return NugetErrorNative.BuildException(nativeResult);")
 
       is BridgeType.ObjectHandle -> append("            return ${value.handleReconstruction()};")
+      // ADR-147: read the box back and dispose it, whatever `T` was instantiated to.
+      is BridgeType.TypeParameter ->
+        append("            return NugetMarshal.FromHandle<${value.name}>(nativeResult);")
       is BridgeType.Interface ->
         append("            return ${interfaceReturnExpression(value.csharpType(), value.backingType)};")
 
@@ -594,8 +602,8 @@ internal object ForwardCirPropertyProjection {
   private fun BridgeType.wireType(): ForwardAbiWireType = when (val type = unwrapNullable()) {
     BridgeType.Unit -> ForwardAbiWireType.VOID
     BridgeType.Char -> ForwardAbiWireType.CHAR16
-    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
-      ForwardAbiWireType.POINTER
+    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
+    is BridgeType.Collection, is BridgeType.TypeParameter -> ForwardAbiWireType.POINTER
 
     is BridgeType.Enum -> ForwardAbiWireType.INT32
     // ADR-076: wires as its own INT64 tick representation, same as a Primitive(LONG).
@@ -637,6 +645,8 @@ internal object ForwardCirPropertyProjection {
     is BridgeType.Enum -> this.csharpType
     // ADR-066: mirrors `BridgeType.Enum.csharpType` — the classifier already qualified this.
     is BridgeType.ObjectHandle -> csharpType
+    // ADR-147: the type parameter's own name, on the generic carrier.
+    is BridgeType.TypeParameter -> name
     // ADR-040: the public C# spelling is the projected interface, never the backing class.
     is BridgeType.Interface -> csharpType
     // The public C# spelling is the value class itself (e.g. `ChartId`), never its underlying

@@ -106,7 +106,6 @@ internal fun StringBuilder.renderDeclaration(declaration: CirDeclaration, nested
     is CirStaticClass -> renderStaticClass(declaration)
     is CirInterface -> renderInterface(declaration)
     is CirClass -> renderClass(declaration)
-    is CirGenericClass -> renderGenericClass(declaration)
     is CirEnum -> renderEnum(declaration, nested = nested)
     is CirSealedClass -> renderSealedClass(declaration)
     is CirObject -> renderObject(declaration)

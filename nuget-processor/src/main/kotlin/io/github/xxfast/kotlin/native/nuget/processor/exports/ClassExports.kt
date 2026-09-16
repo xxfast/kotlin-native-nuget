@@ -12,6 +12,7 @@ import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
@@ -49,6 +50,14 @@ internal fun KSFunctionDeclaration.hasLegacyFlowReturn(): Boolean {
 internal fun KSFunctionDeclaration.hasLegacyLambdaParameter(): Boolean = parameters.any { param ->
   param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in LAMBDA_TYPES
 }
+
+/**
+ * ADR-147: whether this member belongs to ANY specialized legacy route rather than to the ADR-062
+ * plan. Every one of them spells the receiver as the bare owner name, so a generic owner's member
+ * is refused on both halves through this one predicate instead of three parallel tests.
+ */
+internal fun KSFunctionDeclaration.isForwardLegacyRoute(): Boolean =
+  isForwardLegacyAsyncRoute() || hasLegacyLambdaParameter()
 
 /**
  * Generates @CName bridge exports for classes: dispose, planned constructors/properties/methods,
@@ -109,6 +118,11 @@ internal fun FileSpec.Builder.addClassExports(
     // Issue #121: the planner declined, but a decline is not always an invitation. A marked
     // declaration must reach neither artifact, so the legacy arms below never run for one.
     if (prop.isOptInRefused(classifier.exportMarkers)) return@forEach
+    // ADR-147: every specialized legacy route spells the receiver as the bare owner name
+    // (`asStableRef<Crate>()`), which does not compile for a generic class. Refused on a generic
+    // owner, on BOTH halves, rather than emitting a member one half declares and the other does
+    // not (the ADR-055 contract would then fail the whole build).
+    if (cls.typeParameters.isNotEmpty()) return@forEach
     // Named specialized-protocol property adapters (lambda / suspend-lambda / Flow).
     val propTypeResolved: KSType = prop.type.resolve().expandAliases()
     val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"
@@ -140,6 +154,14 @@ internal fun FileSpec.Builder.addClassExports(
     .filter { !it.modifiers.contains(Modifier.SUSPEND) }
     .filter { method ->
       method.isForwardMemberOf(cls, superClass) && !method.modifiers.contains(Modifier.ABSTRACT)
+    }
+    // ADR-147: every specialized legacy route spells the receiver as the bare owner name
+    // (`asStableRef<Crate>()`), which does not compile for a generic class. Refused on a generic
+    // owner, on BOTH halves, rather than emitting a member one half declares and the other does
+    // not (the ADR-055 contract would then fail the whole build).
+    .filter { method ->
+      cls.typeParameters.isEmpty() ||
+          !(method.hasLegacyFlowReturn() || method.hasLegacyLambdaParameter())
     }
     .toList()
 

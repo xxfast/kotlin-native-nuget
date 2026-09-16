@@ -197,7 +197,9 @@ internal class ForwardPropertyPlanner(
         propertyPlan(
           symbol = "$owner.${prop.simpleName.asString()}",
           position = ForwardPropertyPosition.CLASS,
-          receiver = ForwardPropertyReceiver.Handle(owner),
+          // ADR-147: a generic owner is read back fully applied (`Crate<Any?>`); the bare
+          // qualified name is not a legal type argument to `asStableRef`.
+          receiver = ForwardPropertyReceiver.Handle(cls.forwardOwnerTypeName() ?: owner),
           prop = prop,
           getExport = "${cls.nativePrefix()}_get_${prop.simpleName.asString()}",
           setExport = "${cls.nativePrefix()}_set_${prop.simpleName.asString()}",
@@ -341,10 +343,12 @@ internal class ForwardPropertyPlanner(
       underlying is BridgeType.String || underlying is BridgeType.Primitive ||
           underlying is BridgeType.Enum || underlying is BridgeType.ObjectHandle
 
+    // ADR-147: an extension property over a bare `T` receiver is not a generic-class member and
+    // has no carrier to hang off; refused as it is today.
     BridgeType.Char, BridgeType.Unit, BridgeType.Instant, BridgeType.Duration, BridgeType.Throwable,
     BridgeType.Uuid, is BridgeType.Enum, is BridgeType.BoundInterface, is BridgeType.Collection,
     is BridgeType.SpecializedProtocol, is BridgeType.RawKSType, is BridgeType.Unsupported,
-    is BridgeType.RawCollection -> false
+    is BridgeType.TypeParameter, is BridgeType.RawCollection -> false
   }
 
   private fun propertyPlan(
@@ -455,6 +459,22 @@ internal class ForwardPropertyPlanner(
           componentDescription = type.diagnosticTypeName(),
           reason = "C# cannot construct a Kotlin ${type.diagnosticTypeName()}; the error " +
               "envelope carries a snapshot out of Kotlin only",
+        ),
+      )
+      return null
+    }
+    // ADR-147 v1: `var item: T` binds get-only. The write side would have to mint a box per
+    // assignment and dispose it after the native call, which no property setter shape carries
+    // today; refused here, named, rather than emitting a setter that cannot marshal.
+    if (type.unwrapNullable() is BridgeType.TypeParameter) {
+      droppedSetters.add(
+        ForwardDroppedPropertySetter(
+          symbol = symbol,
+          node = prop,
+          publicName = publicName,
+          componentDescription = type.diagnosticTypeName(),
+          reason = "a type-parameter property binds read-only in v1; the write side has no " +
+              "boxing step (ADR-147)",
         ),
       )
       return null
@@ -644,6 +664,10 @@ internal class ForwardPropertyPlanner(
     is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
     is BridgeType.Interface -> true
 
+    // ADR-147: a `T` getter reads the boxed handle back through `NugetMarshal.FromHandle<T>`, the
+    // decode the generic-class getter has always used. The setter is refused just below.
+    is BridgeType.TypeParameter -> true
+
     // ADR-107: a Throwable property reads as the same error envelope a throw writes; the getter is
     // the only shape (the setter is refused in `collectionSetterOrNull`).
     BridgeType.Throwable -> true
@@ -708,6 +732,8 @@ internal class ForwardPropertyPlanner(
     BridgeType.Throwable -> false
     // ADR-106: `List<Uuid>` is deferred for the same reason, and skips named here.
     BridgeType.Uuid -> false
+    // ADR-147 v1: `List<T>` is deferred, the same nesting rule `isBridgeableComponent` applies.
+    is BridgeType.TypeParameter -> false
     BridgeType.Unit, is BridgeType.BoundInterface, is BridgeType.SpecializedProtocol,
     is BridgeType.RawCollection, is BridgeType.RawKSType, is BridgeType.Unsupported -> false
   }
@@ -736,8 +762,9 @@ internal class ForwardPropertyPlanner(
   private fun BridgeType.wireType(): ForwardAbiWireType = when (val type = unwrapNullable()) {
     BridgeType.Unit -> ForwardAbiWireType.VOID
     BridgeType.Char -> ForwardAbiWireType.CHAR16
-    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
-      ForwardAbiWireType.POINTER
+    // ADR-147: the boxed handle a `T` getter mints.
+    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
+    is BridgeType.Collection, is BridgeType.TypeParameter -> ForwardAbiWireType.POINTER
 
     // ADR-107: the pointer to the `StableRef<NugetError>` envelope `buildError` produced, exactly
     // the value an `errorOut` slot carries.

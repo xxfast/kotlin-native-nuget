@@ -874,12 +874,14 @@ the same location `logger.error` attaches the diagnostic to; it is not a third d
 Every `@CName` export, on every route, names its exact owning declaration; there is no route left
 that can only point at a class-level range. An ordinary declaration (a constructor, a top-level
 function, a class method or property, a `suspend` method) names itself, with parameter types and
-`file:line`, as above. A **generated** member, one Kotlin itself never declares, such as the
-`IDisposable.Dispose()` every class gets for free, a sealed discriminator, a data-class `equals` /
-`hashCode` / `toString`, or a generic class's per-variant `_create_<suffix>`, names the class (or
-sealed arm, or generic class) that owns it plus a role in parentheses, since several such members
-can share one class or arm. `fun dispose()` on an exported class is this shape: it collides with the
-always-generated `Dispose`, and the message names the method plus the generated member's role
+`file:line`, as above; this includes a generic class's own declared methods and constructor
+([ADR-147](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/147-generic-class-methods.md)),
+which collide the same way an ordinary class's do. A **generated** member, one Kotlin itself never
+declares, such as the `IDisposable.Dispose()` every class gets for free, a sealed discriminator, or
+a data-class `equals` / `hashCode` / `toString`, names the class (or sealed arm) that owns it plus a
+role in parentheses, since several such members can share one class or arm. `fun dispose()` on an
+exported class is this shape: it collides with the always-generated `Dispose`, and the message
+names the method plus the generated member's role
 ([ADR-117](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/117-forward-abi-collision-names-owning-declarations.md)'s
 2026-09-13 amendment):
 
@@ -888,16 +890,6 @@ always-generated `Dispose`, and the message names the method plus the generated 
     at .../Closer.kt:4
   - tier1.abicollision.dispose.Closer (generated Dispose)
     at .../Closer.kt:3
-```
-
-A generic class's own role names *which* variant collided, since a dozen primitive variants share
-one class:
-
-```
-  - tier1.abicollision.generic.oreo.Box (generic create variant: string)
-    at .../A.kt:3
-  - tier1.abicollision.generic.mylo.Box (generic create variant: string)
-    at .../B.kt:3
 ```
 
 The hint is always the same: rename one of the colliding declarations. The prefix scheme itself

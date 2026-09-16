@@ -147,7 +147,10 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
       )
     }
 
-    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> {
+    // ADR-147: a `T` result is minted by the same `NugetHandles.retain`; C# reads it back with
+    // `NugetMarshal.FromHandle<T>`.
+    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
+    is BridgeType.TypeParameter -> {
       // ADR-081: a collection with a value-class component boxes a projected copy of itself, so the
       // per-element boxes carry the underlying rather than the value class.
       val boxed: String =
@@ -698,7 +701,9 @@ private fun addNullableResult(
     // `nullableHandleResultBody` returns Kotlin null before it ever builds a StableRef, so the
     // null pointer is the null. ADR-081's per-element projection is `?.`-lifted so a null result
     // never dereferences, exactly as the ADR-075 getter does it.
-    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> {
+    // ADR-147: `T?` rides the same null-pointer-then-handle body.
+    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
+    is BridgeType.TypeParameter -> {
       val boxed: String =
         if (type is BridgeType.Collection) {
           collectionResultProjection(invocation, type, nullable = true)
@@ -906,6 +911,18 @@ private fun receiverExpression(receiver: ForwardAbiParameter): String {
   return if (lowered.startsWith("if (")) "($lowered)" else lowered
 }
 
+/**
+ * ADR-147: the Kotlin type a receiver handle is read back as. `asStableRef` takes a *type*
+ * argument, so a generic owner must be fully applied (`Crate<Any?>`, `Kennel<Pet>`): the bare
+ * qualified name does not compile, and a star projection makes every `T`-typed parameter `Nothing`.
+ * The planner stores that applied spelling; everything else keeps the bare qualified name.
+ */
+private fun ForwardCallablePlan.ownerTypeName(): String =
+  invocation.ownerType ?: invocation.symbol.substringBeforeLast('.')
+
+/** ADR-147: the bound a `T` box is read back as, `Any` when the parameter is unconstrained. */
+private fun BridgeType.TypeParameter.stableRefTypeName(): String = boundQualifiedName ?: "Any"
+
 private fun invocationExpression(
   plan: ForwardCallablePlan,
   receiver: ForwardAbiParameter?,
@@ -917,8 +934,7 @@ private fun invocationExpression(
     plan.invocation.member ?: plan.invocation.symbol.substringAfterLast('.')
   return when (plan.invocation.origin) {
     ForwardCallableOrigin.CLASS -> {
-      val owner: String = plan.invocation.symbol.substringBeforeLast('.')
-      "handle.asStableRef<$owner>().get().$functionName($arguments)"
+      "handle.asStableRef<${plan.ownerTypeName()}>().get().$functionName($arguments)"
     }
 
     ForwardCallableOrigin.EXTENSION -> "${receiverExpression(requireNotNull(receiver))}.$functionName($arguments)"
@@ -926,10 +942,12 @@ private fun invocationExpression(
     ForwardCallableOrigin.OBJECT, ForwardCallableOrigin.COMPANION ->
       "${requireNotNull(plan.invocation.target)}.$functionName($arguments)"
 
-    ForwardCallableOrigin.CONSTRUCTOR -> "${requireNotNull(plan.invocation.target)}($arguments)"
+    // ADR-147: a generic owner is constructed fully applied (`Crate<Any?>(item)`), so the handle
+    // the caller gets back is the type `asStableRef<Crate<Any?>>()` reads.
+    ForwardCallableOrigin.CONSTRUCTOR ->
+      "${plan.invocation.ownerType ?: requireNotNull(plan.invocation.target)}($arguments)"
     ForwardCallableOrigin.COPY -> {
-      val owner: String = plan.invocation.symbol.substringBeforeLast('.')
-      "handle.asStableRef<$owner>().get().copy($arguments)"
+      "handle.asStableRef<${plan.ownerTypeName()}>().get().copy($arguments)"
     }
 
     ForwardCallableOrigin.VALUE_CLASS ->
@@ -943,7 +961,9 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
 
   // ADR-106: a Uuid parameter arrives as its hex-dash text, parsed by `loweredArgument`.
   BridgeType.String, BridgeType.Uuid -> kotlinType("String")
-  is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> cOpaquePointer
+  // ADR-147: the boxed handle `NugetMarshal.Wrap<T>` minted.
+  is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
+  is BridgeType.TypeParameter -> cOpaquePointer
   // ADR-088: the transfer GCHandle the C# wrapper allocated.
   is BridgeType.BoundInterface -> cOpaquePointer
   // ADR-077 sub-item 1: a value class crosses as its underlying wire value, so the export's
@@ -951,8 +971,8 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
   is BridgeType.ValueClass -> kotlinInputType(type.underlying, wireType)
   is BridgeType.Nullable -> when (val inner = type.type) {
     BridgeType.String, BridgeType.Uuid -> kotlinType("String").copy(nullable = true)
-    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
-      cOpaquePointer.copy(nullable = true)
+    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
+    is BridgeType.TypeParameter -> cOpaquePointer.copy(nullable = true)
 
     // ADR-077 sub-item 3: the underlying (String today) with the outer nullability re-applied.
     is BridgeType.ValueClass ->
@@ -1116,6 +1136,12 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
     is BridgeType.Interface ->
       "${parameter.name}.asStableRef<${type.qualifiedName}>().get()"
 
+    // ADR-147: the box holds whatever `T` was instantiated to, read back as the declared bound
+    // (`Any` when the parameter is unconstrained), which is the type the member's `T` accepts
+    // under the erased receiver spelling.
+    is BridgeType.TypeParameter ->
+      "${parameter.name}.asStableRef<${type.stableRefTypeName()}>().get()"
+
     // ADR-088: the reverse pipeline's own resolver. It frees the incoming transfer handle and
     // returns the ORIGINAL Kotlin object on a token-probe hit; otherwise it wraps the handle in
     // the ADR-070 `{Iface}Handle`, whose cleaner owns it from here on.
@@ -1137,6 +1163,10 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
 
       is BridgeType.Interface ->
         "${parameter.name}?.asStableRef<${inner.qualifiedName}>()?.get()"
+
+      // ADR-083/147: a null `T?` arrives as the null pointer and stays Kotlin null.
+      is BridgeType.TypeParameter ->
+        "${parameter.name}?.asStableRef<${inner.stableRefTypeName()}>()?.get()"
 
       is BridgeType.Primitive ->
         "if (${parameter.name}HasValue) ${parameter.name} else null"

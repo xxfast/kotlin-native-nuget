@@ -963,6 +963,8 @@ internal fun BridgeType.diagnosticTypeName(): String = when (this) {
   is BridgeType.Collection -> "Collection"
   is BridgeType.Nullable -> "${type.diagnosticTypeName()}?"
   is BridgeType.SpecializedProtocol -> name
+  // ADR-147: the parameter's own name, which is how the author spelled it.
+  is BridgeType.TypeParameter -> name
   is BridgeType.RawCollection -> "Collection"
   is BridgeType.RawKSType -> rendered
   is BridgeType.Unsupported -> rendered
