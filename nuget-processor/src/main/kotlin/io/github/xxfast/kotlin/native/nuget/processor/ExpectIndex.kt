@@ -67,6 +67,38 @@ internal class ExpectIndex(declarations: List<KSDeclaration> = emptyList()) {
     return expect?.containingFile?.fileName?.removeSuffix(".kt")
   }
 
+  /**
+   * ADR-150: the KDoc of the `expect` half of [declaration], because an `actual` reports
+   * `docString == null` (verified on KSP 2.3.10, ADR-074 point 4) and the author writes the doc on
+   * the `expect`.
+   *
+   * The index holds top-level declarations only, so a *member* of an `expect class` is found by
+   * walking the indexed class's own declarations: by signature for a function, by simple name for
+   * anything else.
+   */
+  fun docOrNull(declaration: KSDeclaration): String? {
+    if (!declaration.isActual) return null
+    val parent: KSClassDeclaration? = declaration.parentDeclaration as? KSClassDeclaration
+    if (parent == null) {
+      val expect: KSDeclaration? =
+        if (declaration is KSFunctionDeclaration) functionOrNull(declaration)
+        else byName[declaration.qualifiedName?.asString()].orEmpty().firstOrNull()
+      return expect?.docString
+    }
+    val expectClass: KSClassDeclaration = classOrNull(parent.qualifiedName?.asString())
+      ?: return null
+    val name: String = declaration.simpleName.asString()
+    val members: List<KSDeclaration> =
+      expectClass.declarations.filter { it.simpleName.asString() == name }.toList()
+    val member: KSDeclaration? =
+      if (declaration is KSFunctionDeclaration) {
+        members.filterIsInstance<KSFunctionDeclaration>().singleOrNull { it.matches(declaration) }
+      } else {
+        members.singleOrNull()
+      }
+    return member?.docString
+  }
+
   private fun KSFunctionDeclaration.matches(actual: KSFunctionDeclaration): Boolean {
     if (parameters.size != actual.parameters.size) return false
     return parameters.zip(actual.parameters).all { (expected, declared) ->

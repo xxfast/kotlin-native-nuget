@@ -152,10 +152,12 @@ internal fun StringBuilder.renderInterface(iface: CirInterface) {
     "<$params>"
   } else ""
 
+  renderDoc(iface.doc)
   appendLine("    public interface ${iface.name}$typeParamStr : IDisposable")
   appendLine("    {")
 
   for (prop in iface.properties) {
+    renderDoc(prop.doc, "        ")
     if (prop.hasSetter) {
       appendLine("        ${prop.type} ${prop.name} { get; set; }")
     } else {
@@ -168,6 +170,7 @@ internal fun StringBuilder.renderInterface(iface: CirInterface) {
   }
 
   for (method in iface.methods) {
+    renderDoc(method.doc, "        ")
     val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
     appendLine("        ${method.returnType} ${method.name}($paramStr);")
   }
@@ -213,6 +216,8 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
     " : " + (cls.interfaces + disposables + "INugetHandle").distinct().joinToString(", ")
   }
 
+  // ADR-150: `<summary>` first, then ADR-064's `<remarks>`.
+  renderDoc(cls.doc)
   renderRemarks(cls.remarks)
   appendLine("    public $sealedModifier${abstract}class ${cls.name}$implements")
   appendLine("    {")
@@ -421,6 +426,7 @@ internal fun StringBuilder.renderConstructor(
   hasSuperClass: Boolean = false,
   hasSuspendMethods: Boolean = false,
 ) {
+  renderDoc(ctor.doc, "        ")
   val paramStr: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
   val paramNames: String = ctor.parameters.joinToString(", ") { it.name }
   val nativeCallArgs: String = if (paramNames.isEmpty()) "out IntPtr error" else "$paramNames, out IntPtr error"
@@ -450,6 +456,9 @@ internal fun StringBuilder.renderConstructor(
 }
 
 internal fun StringBuilder.renderProperty(prop: CirProperty) {
+  // ADR-150: above the abstract early return, so both spellings carry the doc. ADR-075's
+  // getter/setter pair is one C# property, so it gets one `<summary>`.
+  renderDoc(prop.doc, "        ")
   val static: String = if (prop.isStatic) "static " else ""
   // ADR-075 amendment (2026-09-10): an abstract property is declaration-only, so it takes none of
   // the body-shaped arms below. `isVirtual` is deliberately ignored: `abstract virtual` is CS0503,
@@ -563,6 +572,8 @@ internal fun StringBuilder.renderDllImport(import: CirDllImport) {
 }
 
 internal fun StringBuilder.renderMethod(method: CirMethod, className: String = "") {
+  // ADR-150: above the async/flow/sync-error dispatch, so all four branches carry the same doc.
+  renderDoc(method.doc, "        ")
   if (method.isAsync) {
     renderAsyncMethod(method, className)
     return

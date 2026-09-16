@@ -34,6 +34,7 @@
         <toc-element topic="lambdas-and-callbacks.md"/>
         <toc-element topic="exceptions.md"/>
         <toc-element topic="coroutines-and-flow.md"/>
+        <toc-element topic="documentation-comments.md"/>
     </toc-element>
     <toc-element topic="reverse-overview.md">
         <toc-element topic="declaring-dependencies.md"/>

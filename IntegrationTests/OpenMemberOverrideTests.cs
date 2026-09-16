@@ -9,7 +9,7 @@ namespace IntegrationTests;
 ///
 /// `Bed` declares `open val softness`, `open var occupant`, `open fun fluff()`, plus a final
 /// `val brand` and a final `describe()` as controls. `Hammock` overrides the three open ones.
-/// Existing fixtures only ever reach `virtual` through the `override && !final` arm
+/// Existing fixtures only ever reach `virtual` through the `override &amp;&amp; !final` arm
 /// (`Animal.vibe` overriding `Pet.vibe`), so a *declared* `open` member has no coverage.
 ///
 /// The compile is the real proof; the reflection facts make the rule visible. `IsVirtual` is

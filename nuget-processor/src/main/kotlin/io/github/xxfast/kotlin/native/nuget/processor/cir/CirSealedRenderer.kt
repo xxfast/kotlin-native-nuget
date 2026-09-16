@@ -13,6 +13,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
  * C# types.
  */
 internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
+  renderDoc(sealed.doc)
   appendLine("    public abstract class ${sealed.name} : IDisposable, INugetHandle")
   appendLine("    {")
   appendLine("        internal IntPtr _handle;")
@@ -102,6 +103,7 @@ private fun sealedSubclassBlock(
     if (subclass.isNested) sealed.ordinaryNativeImports().map { it.name }.toSet() else emptySet()
   // ADR-148: the arm's own `<remarks>`, the twin of `WARNING_NO_PUBLIC_CONSTRUCTOR`, rendered at
   // the arm's declaration depth exactly as `renderClass` renders an ordinary class's.
+  renderDoc(subclass.doc, "        ")
   renderRemarks(subclass.remarks, indent = "        ")
   appendLine(
     "        public ${sealedModifier}class ${subclass.name} : ${sealed.name}$asyncDisposable"

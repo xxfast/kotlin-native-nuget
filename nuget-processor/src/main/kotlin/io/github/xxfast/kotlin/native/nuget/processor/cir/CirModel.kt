@@ -2,6 +2,27 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
 
+/**
+ * ADR-150: the C# XML doc comment of one generated declaration, in tag slots, as plain text.
+ *
+ * Built once per declaration (from `ForwardKdoc`) and rendered by `renderDoc`, which is the only
+ * place any of this becomes markup.
+ */
+data class CirDoc(
+  val summary: String? = null,
+  val params: List<CirDocParam> = emptyList(),
+  val returns: String? = null,
+  val throws: List<CirDocThrows> = emptyList(),
+)
+
+/**
+ * [text] is empty for a parameter the author did not document; the tag is still required (CS1573).
+ */
+data class CirDocParam(val name: String, val text: String)
+
+/** [cref] is a C# exception type this generator itself emits, so it always resolves (CS1574). */
+data class CirDocThrows(val cref: String, val text: String)
+
 data class CirFile(
   val usings: List<String> = listOf("System", "System.Runtime.InteropServices"),
   val namespaces: List<CirNamespace>,
@@ -28,18 +49,24 @@ data class CirInterface(
   // `public interface I<Name>` block, which is where Kotlin's own scope puts it. The ADR-040
   // backing wrapper beside it declares nothing: one Kotlin type, one C# declaration.
   val nestedDeclarations: List<CirDeclaration> = emptyList(),
+  // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
+  val doc: CirDoc? = null,
 ) : CirDeclaration
 
 data class CirInterfaceProperty(
   val name: String,
   val type: String,
   val hasSetter: Boolean = false,
+  // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
+  val doc: CirDoc? = null,
 )
 
 data class CirInterfaceMethod(
   val name: String,
   val returnType: String,
   val parameters: List<CirParameter>,
+  // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
+  val doc: CirDoc? = null,
 )
 
 data class CirClass(
@@ -79,6 +106,10 @@ data class CirClass(
   // uses. Text, not markup: `renderRemarks` owns the XML escaping, because the detail names
   // Kotlin constructors as `<init>`.
   val remarks: String? = null,
+  // ADR-150: the author's KDoc, as plain text in tag slots. Null when the declaration has none,
+  // when it is `@suppress`ed, or when the doc came from a non-KOTLIN origin. `renderDoc` owns the
+  // escaping, the same way `renderRemarks` does.
+  val doc: CirDoc? = null,
   // ADR-133: public nested `class`/`object`/`interface`/`enum` declared inside this type,
   // rendered inside its block exactly as ADR-009 renders a sealed arm. Empty for a declaration
   // with no nested declarations, which keeps every construction site intact.
@@ -96,6 +127,8 @@ data class CirValueClass(
   val constructors: List<CirValueClassConstructor> = emptyList(),
   val properties: List<CirProperty>,
   val methods: List<CirMethod>,
+  // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
+  val doc: CirDoc? = null,
 ) : CirDeclaration
 
 data class CirValueClassConstructor(
@@ -124,6 +157,10 @@ data class CirEnum(
   val csName: String = name,
   val entries: List<CirEnumEntry>,
   val properties: List<CirEnumProperty> = emptyList(),
+  // ADR-150: the author's KDoc, as plain text in tag slots. Null when the declaration has none,
+  // when it is `@suppress`ed, or when the doc came from a non-KOTLIN origin. `renderDoc` owns the
+  // escaping, the same way `renderRemarks` does.
+  val doc: CirDoc? = null,
 ) : CirDeclaration
 
 data class CirSealedClass(
@@ -150,6 +187,8 @@ data class CirSealedClass(
    * `public abstract class` block ADR-009 owns -- after the arm blocks, before `Native_GetType`.
    */
   val nestedDeclarations: List<CirDeclaration> = emptyList(),
+  // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
+  val doc: CirDoc? = null,
 ) : CirDeclaration
 
 data class CirSealedSubclass(
@@ -236,6 +275,8 @@ data class CirSealedSubclass(
    * arm's own block -- a different function from the base's, which is why it needs its own slot.
    */
   val nestedDeclarations: List<CirDeclaration> = emptyList(),
+  // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
+  val doc: CirDoc? = null,
 )
 
 data class CirObject(
@@ -245,6 +286,8 @@ data class CirObject(
   val methods: List<CirMember>,
   // ADR-133: an `object` owner carries nested declarations too (`Registry.Entry`).
   val nestedDeclarations: List<CirDeclaration> = emptyList(),
+  // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
+  val doc: CirDoc? = null,
 ) : CirDeclaration
 
 enum class CirVariance { INVARIANT, COVARIANT, CONTRAVARIANT }
@@ -414,6 +457,8 @@ data class CirCallbackDelegateHelper(
 data class CirEnumEntry(
   val name: String,
   val ordinal: Int,
+  // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
+  val doc: CirDoc? = null,
 )
 
 data class CirEnumProperty(
@@ -586,6 +631,10 @@ data class CirMethod(
   // [CirClass.methodNativeImport]; static/extension methods build their own [CirDllImport]
   // directly and ignore this field.
   val nativeParameters: List<CirParameter>? = null,
+  // ADR-150: the author's KDoc, as plain text in tag slots. Null when the declaration has none,
+  // when it is `@suppress`ed, or when the doc came from a non-KOTLIN origin. `renderDoc` owns the
+  // escaping, the same way `renderRemarks` does.
+  val doc: CirDoc? = null,
 ) : CirMember
 
 /**
@@ -664,6 +713,8 @@ data class CirProperty(
   // then emits both DllImports in place of the single one. False everywhere else: the top-level
   // property path expresses the same shape through [extraNatives].
   val isNullablePrimitiveTwoCall: Boolean = false,
+  // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
+  val doc: CirDoc? = null,
 ) : CirMember
 
 data class CirExtraNative(
@@ -688,6 +739,8 @@ data class CirConstructor(
   // public `IReadOnlyList<T>` type). Null (the default) keeps deriving the DllImport 1:1 from
   // [parameters], the existing behavior for every plain (cast-only) parameter shape.
   val nativeParameters: List<CirParameter>? = null,
+  // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
+  val doc: CirDoc? = null,
 )
 
 data class CirParameter(

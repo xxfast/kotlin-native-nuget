@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 internal fun StringBuilder.renderObject(obj: CirObject) {
+  renderDoc(obj.doc)
   appendLine("    public static class ${obj.name}")
   appendLine("    {")
 
@@ -20,6 +21,7 @@ internal fun StringBuilder.renderValueClass(cls: CirValueClass) {
   // ADR-035: hand-written record struct so the primary constructor's `init` runs
   // across the bridge. The underlying is a get-only property assigned from a
   // validating CreateChecked* helper, blocking object-initializer / `with` bypass.
+  renderDoc(cls.doc)
   appendLine("    public readonly record struct ${cls.name}")
   appendLine("    {")
   appendLine("        public ${cls.underlyingType} ${cls.underlyingName} { get; }")
@@ -98,12 +100,14 @@ private fun StringBuilder.renderValueClassCreateChecked(
 private fun StringBuilder.renderValueClassMembers(cls: CirValueClass) {
   cls.properties.forEach { prop ->
     renderDllImport(cls.propertyNativeImport(prop))
+    renderDoc(prop.doc, "        ")
     appendLine("        public ${prop.type} ${prop.name} => ${prop.getter};")
     appendLine()
   }
 
   cls.methods.forEach { method ->
     renderDllImport(cls.methodNativeImport(method))
+    renderDoc(method.doc, "        ")
     val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
     if (method.returnType == "void") {
       appendLine("        public void ${method.name}($paramStr) => ${method.body};")

@@ -463,6 +463,12 @@ internal data class ForwardPublicSignature(
    */
   val isOverride: Boolean = false,
   val isVirtual: Boolean = false,
+  /**
+   * ADR-150: the author's KDoc, parsed once at planning time, with `@param` entries keyed by the
+   * *bridge* parameter name and the omitted trailing parameters of a synthesized overload already
+   * removed. The planner is the only place that holds both the declaration and the omitted count.
+   */
+  val doc: ForwardKdoc? = null,
 )
 
 /** Symbol-level invocation information. Renderers decide syntax later. */

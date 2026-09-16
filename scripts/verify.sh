@@ -72,6 +72,13 @@ echo "==> Forward diagnostic delivery (scripts/verify-forward-diagnostics.sh)"
 echo "==> Check generated bindings compile as a consumer (net8.0, warnings as errors)"
 dotnet build GeneratedBindingsCheck
 
+# ADR-150: the fixture's KDoc must reach the documentation XML a consumer's compiler emits, not
+# just the text of Interop.cs. One entry is enough here; IntegrationTests/XmlDocTests.cs asserts the
+# whole tag mapping.
+echo "==> Generated bindings carry XML doc comments (ADR-150)"
+grep -q '<member name="M:TestLibrary.Kdoc.BoardingDesk.Book(System.Int32,System.String)">' \
+  GeneratedBindingsCheck/obj/Debug/net8.0/GeneratedBindingsCheck.xml
+
 echo "==> C# consumer tests (dotnet test in IntegrationTests)"
 cd "$ROOT/IntegrationTests"
 dotnet test

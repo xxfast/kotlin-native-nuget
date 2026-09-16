@@ -66,6 +66,7 @@ internal object ForwardCirPropertyProjection {
       nativeImport(call, libraryName, listOf(CirParameter("receiver", nativeReceiver)), plan)
     }
     val getter = CirMethod(
+      doc = plan.doc?.toCirDoc(),
       name = "Get${plan.publicName}",
       returnType = plan.type.csharpType(),
       nativeReturnType = plan.getter.calls().first().result.csharpWireType(),
@@ -112,6 +113,8 @@ internal object ForwardCirPropertyProjection {
       isVirtual = isVirtual,
       isAbstract = isAbstract,
       hasSyncErrorOut = true,
+      // ADR-150: ADR-075's getter/setter pair is one C# property, so it carries one doc block.
+      doc = plan.doc?.toCirDoc(),
     )
   }
 

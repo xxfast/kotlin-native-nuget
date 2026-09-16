@@ -397,6 +397,7 @@ internal class ForwardPropertyPlanner(
     )
     return ForwardPropertyPlan(
       symbol = symbol,
+      doc = prop.forwardKdoc(),
       position = position,
       receiver = receiver,
       kotlinName = name,
