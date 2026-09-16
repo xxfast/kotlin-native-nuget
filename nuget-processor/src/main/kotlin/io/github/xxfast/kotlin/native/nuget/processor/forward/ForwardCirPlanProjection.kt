@@ -170,9 +170,12 @@ internal object ForwardCirPlanProjection {
         plan.collectionPrelude(parameter)
           ?: plan.interfacePrelude(parameter)
           ?: plan.boundInterfacePrelude(parameter)
+          ?: plan.typeParameterPrelude(parameter)
       }
     val cleanup: List<String> =
-      plan.publicSignature.parameters.mapNotNull { plan.collectionCleanup(it) ?: plan.interfaceCleanup(it) }
+      plan.publicSignature.parameters.mapNotNull {
+        plan.collectionCleanup(it) ?: plan.interfaceCleanup(it) ?: plan.typeParameterCleanup(it)
+      }
     val argumentList: List<String> = plan.publicSignature.parameters.flatMap { plan.callArgument(it) }
     val callArgs: String = (argumentList + "out IntPtr error").joinToString(", ")
     val body: String = forwardCirHandleScope(
@@ -576,6 +579,8 @@ internal object ForwardCirPlanProjection {
       // ADR-103: TimeSpan has one tick domain, so the plain `.Ticks` is unambiguous.
       BridgeType.Duration -> listOf("${parameter.csharpName}.Ticks")
       is BridgeType.ObjectHandle -> listOf("${parameter.csharpName}._handle")
+      // ADR-147: the box [typeParameterPrelude] minted; the `finally` disposes it when owned.
+      is BridgeType.TypeParameter -> listOf("${parameter.csharpName}Box")
       // ADR-040 sub-decision B: an interface-typed parameter's public static type is `IFoo`, which
       // does not carry `._handle` (that is only true of the generated `Foo` backing class). The
       // one shared reflective helper extracts it regardless of which concrete type implements
@@ -609,6 +614,8 @@ internal object ForwardCirPlanProjection {
         BridgeType.Uuid -> listOf("${parameter.csharpName}?.ToString()")
         is BridgeType.ObjectHandle -> listOf("${parameter.csharpName}?._handle ?? IntPtr.Zero")
         is BridgeType.Interface -> listOf("${parameter.csharpName}Handle")
+        // ADR-083/147: `Wrap<T>` already maps a null to `IntPtr.Zero`, so `T?` needs no guard.
+        is BridgeType.TypeParameter -> listOf("${parameter.csharpName}Box")
 
         is BridgeType.Primitive -> listOf(
           "${parameter.csharpName}.HasValue", "${parameter.csharpName}.GetValueOrDefault()",
@@ -740,6 +747,32 @@ internal object ForwardCirPlanProjection {
   }
 
   /**
+   * ADR-147: a `T` argument is boxed before the call. `Wrap<T>` reports whether it MINTED the box
+   * (a primitive, a char, a string) or contributed a live wrapper's own `_handle`; only a minted
+   * box is disposed, which is ADR-099's ownership rule verbatim.
+   */
+  private fun ForwardCallablePlan.typeParameterPrelude(
+    parameter: ForwardPublicParameter,
+  ): ForwardCirHandleStep? {
+    val type: BridgeType.TypeParameter =
+      parameter.type.unwrapNullable() as? BridgeType.TypeParameter ?: return null
+    val name: String = parameter.csharpName
+    val wrap = "NugetMarshal.Wrap<${type.name}>($name!, out"
+    return ForwardCirHandleStep(
+      flat = "IntPtr ${name}Box = $wrap bool ${name}Owned);",
+      declarations = listOf("IntPtr ${name}Box = IntPtr.Zero;", "bool ${name}Owned = false;"),
+      statement = "${name}Box = $wrap ${name}Owned);",
+    )
+  }
+
+  /** ADR-099/147: dispose only a box this call site minted, and only once it exists. */
+  private fun ForwardCallablePlan.typeParameterCleanup(parameter: ForwardPublicParameter): String? {
+    if (parameter.type.unwrapNullable() !is BridgeType.TypeParameter) return null
+    return "if (${parameter.csharpName}Owned && ${parameter.csharpName}Box != IntPtr.Zero) { " +
+        "NugetMarshal.Dispose(${parameter.csharpName}Box); }"
+  }
+
+  /**
    * ADR-088: a bound C# interface argument crosses as a fresh transfer GCHandle. There is
    * deliberately no matching cleanup: the RECEIVING side owns it. Kotlin's `nuget{Iface}Value`
    * either frees the handle itself (token-probe hit, the value was a Kotlin object all along) or
@@ -826,9 +859,14 @@ internal object ForwardCirPlanProjection {
         collectionPrelude(parameter)
           ?: interfacePrelude(parameter)
           ?: boundInterfacePrelude(parameter)
+          ?: typeParameterPrelude(parameter)
       }
     val cleanup: List<String> =
-      parameters.mapNotNull { parameter -> collectionCleanup(parameter) ?: interfaceCleanup(parameter) }
+      parameters.mapNotNull { parameter ->
+        collectionCleanup(parameter)
+          ?: interfaceCleanup(parameter)
+          ?: typeParameterCleanup(parameter)
+      }
     val argumentList: List<String> =
       listOfNotNull(receiverArgument) + parameters.flatMap { parameter -> callArgument(parameter) }
     val callArguments: String = (argumentList + nativeOutParameters(nativeCall) + "out IntPtr error").joinToString(", ")
@@ -840,6 +878,20 @@ internal object ForwardCirPlanProjection {
         nativeReturnType = "IntPtr",
         body = checkedPointerBody(
           nativeName, callArguments, "return ${result.handleReconstruction()};", prelude, cleanup,
+        ),
+      )
+
+      // ADR-147: `FromHandle<T>` reads the box back and disposes it, the same decode the generic
+      // property getter has always used.
+      is BridgeType.TypeParameter -> CirResultProjection(
+        returnType = result.name,
+        nativeReturnType = "IntPtr",
+        body = checkedPointerBody(
+          nativeName,
+          callArguments,
+          "return NugetMarshal.FromHandle<${result.name}>(nativeResult);",
+          prelude,
+          cleanup,
         ),
       )
 
@@ -938,6 +990,20 @@ internal object ForwardCirPlanProjection {
             nativeName,
             callArguments,
             "return nativeResult == IntPtr.Zero ? null : ${type.handleReconstruction()};",
+            prelude,
+            cleanup,
+          ),
+        )
+
+        // ADR-083/147: `FromHandle<T>` already answers `default!` for the null pointer, which is
+        // the null of whatever `T` was instantiated to.
+        is BridgeType.TypeParameter -> CirResultProjection(
+          returnType = "${type.name}?",
+          nativeReturnType = "IntPtr",
+          body = checkedPointerBody(
+            nativeName,
+            callArguments,
+            "return NugetMarshal.FromHandle<${type.name}>(nativeResult);",
             prelude,
             cleanup,
           ),
@@ -1352,8 +1418,10 @@ internal object ForwardCirPlanProjection {
     // ADR-076: DateTimeOffset is a C# value type, same as Enum/ValueClass.
     // ADR-103: so is TimeSpan.
     // ADR-106: Guid is a C# value type too, so `Uuid?` renders Nullable<Guid> ("Guid?").
+    // ADR-147: an unconstrained `T` can be instantiated at a value type, so `T` and `T?` are
+    // distinct overloads and the trailing "?" must not be stripped before comparing signatures.
     BridgeType.Unit, is BridgeType.Primitive, BridgeType.Char, BridgeType.Instant,
-    BridgeType.Duration, BridgeType.Uuid,
+    BridgeType.Duration, BridgeType.Uuid, is BridgeType.TypeParameter,
     is BridgeType.Enum, is BridgeType.ValueClass -> false
 
     else -> error("Forward CIR direct-value projection cannot classify public type $this")

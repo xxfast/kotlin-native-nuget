@@ -97,29 +97,71 @@ Variance declared on a **class's** own type parameter, as opposed to an interfac
 does not support variance on classes. The class still generates and works, just without `out`/`in`
 on its type parameter.
 
+## Methods on a generic class
+
+A public method declared on a generic class binds as an instance method on the C# generic carrier,
+`T` positions included, the same [ADR-062](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/062-forward-callable-plan.md)
+plan an ordinary class's methods bind on:
+
+```kotlin
+open class Crate<T>(val item: T) {
+  fun describe(tag: T): String = "$tag:$item"
+  fun pick(other: T): T = other
+  fun label(prefix: String, count: Int): String = "$prefix-$count:$item"
+}
+```
+
+```C#
+using var crate = new Crate<int>(3);
+Assert.Equal("7:3", crate.Describe(7));
+Assert.Equal(7, crate.Pick(7));
+Assert.Equal("lot-2:3", crate.Label("lot", 2));
+```
+
+A position that never mentions `T` (`Label` above) binds exactly as it would on a non-generic
+class. A position that does (`Describe`, `Pick`) crosses as the same boxed handle a `T`-typed
+property already uses: a value type pays one box mint and dispose per call, an exported class
+instantiation borrows the argument's own live handle and mints nothing on the way in.
+
+`T` is admitted only at a top-level position: a parameter, a return, a constructor parameter, or a
+property getter, optionally nullable. It is refused, named, everywhere else: nested in a
+collection or lambda (`List<T>`, `(T) -> Unit`, `Flow<T>`), a `var` property's setter
+(`var item: T` renders a get-only `T Item`), a `suspend fun`, a `Flow`/`StateFlow` member, a
+stored-callback member, and the method's own type parameter (`fun <R> map(f: (T) -> R): R`). A
+type parameter declared on an `interface` rather than a `class` is unaffected by this and keeps
+its own, unrelated named refusal.
+
 ## Subclassing a generic base
 
-A class extending an exported generic base spells the closed type argument, and inherits members
-from that closed base:
+A class extending an exported generic base spells the closed type argument, and inherits members,
+including methods, from that closed base:
 
 ```kotlin
 open class Parcel<T>(val value: T)
 
 class NamedParcel(name: String) : Parcel<String>(name)
+
+class LabelledCrate(item: String) : Crate<String>(item) {
+  fun describe(tag: Int): String = "#$tag:$item"
+}
 ```
 
 ```C#
 using var parcel = new NamedParcel("Oreo");
 Assert.Equal("Oreo", parcel.Value); // inherited from Parcel<string>
 Assert.IsAssignableFrom<Parcel<string>>(parcel);
+
+var labelled = new LabelledCrate("apple");
+Assert.Equal("#7:apple", labelled.Describe(7));        // its own declared overload
+Assert.Equal("ripe:apple", labelled.Describe("ripe"));  // inherited from Crate<string>
 ```
 
-Because `Parcel` is declared `open`, its generated `Dispose()` is `virtual` so `NamedParcel` can
-override it.
-
-A generic base class's own **functions**, as opposed to properties, never get a C# member: only a
-subclass's own declared function does. If you need a method on the closed type, declare it directly
-on the subclass rather than relying on the generic base.
+Because `Parcel` and `Crate` are declared `open`, their generated `Dispose()` is `virtual` so a
+subclass can override it. A subclass declaring its own overload of a name it also inherits from
+the generic base keeps exactly its own declared member; the base's substituted overload is not
+re-declared alongside it, and C# overload resolution then picks between the two exactly as Kotlin
+does. Generic **subclasses** (`class Sub<T> : Base<T>(...)`) are not supported yet; declare the
+member directly on the closed subclass instead.
 
 ## Generic functions
 
@@ -166,8 +208,8 @@ IReadOnlyList<string> names = TypeAliases.DefaultNames();
 ## Limitations
 
 A generic class declared in a dependency module and reachable through the
-[export closure](nuget-dsl.md) still routes to the legacy generic protocol, which has never been
-exercised across a module boundary; it is skipped rather than generated.
+[export closure](nuget-dsl.md) has never been exercised across a module boundary; if you hit this,
+declare the generic class in the publishing module itself instead.
 
 <seealso>
     <category ref="related">
@@ -175,5 +217,8 @@ exercised across a module boundary; it is skipped rather than generated.
         <a href="value-classes.md">Value classes</a>
         <a href="nuget-dsl.md">The nuget {} DSL</a>
         <a href="expect-actual.md">expect/actual declarations</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/147-generic-class-methods.md">ADR-147: Generic class methods</a>
     </category>
 </seealso>

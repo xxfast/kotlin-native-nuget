@@ -8,6 +8,7 @@ using TestLibrary.Issue127;
 using TestLibrary.Issue131;
 using TestLibrary.Models;
 using TestLibrary.Nested;
+using TestLibrary.Parcel;
 using TestLibrary.Routes;
 
 namespace LeakTests;
@@ -856,6 +857,43 @@ public class LiveHandleTests
         await AssertNoLeakAsync(
             async () => Assert.Equal(2, await KeywordRoutesSample.FetchAsync(1, cts.Token)),
             iterations: 5000);
+    }
+
+    // Row 10. ADR-147: a `T` parameter and a `T` return on a generic-class method. `Wrap<int>`
+    // mints one `nuget_wrap_int` box per T argument, the Kotlin export borrows it, and the C#
+    // `finally` disposes it; the `String` return of Describe mints nothing; the `T` return of Pick
+    // mints one retain that `FromHandle<int>` unwraps and disposes. The constructor's `T` argument
+    // is the same box shape, which is new under ADR-147 sub-option (b): a primitive used to be
+    // passed by value through `crate_create_int`.
+    // Ledger per iteration: wrap +1/-1 (ctor), crate_create +1, wrap +1/-1 (Describe),
+    // wrap +1/-1 and retain +1/-1 (Pick), crate_dispose -1. Net zero.
+    [Fact]
+    public void GenericClassMethod_BoxedTypeParameter_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var crate = new Crate<int>(3);
+            Assert.Equal("7:3", crate.Describe(7));
+            Assert.Equal(7, crate.Pick(7));
+        });
+    }
+
+    // Row 10a. The other half of the `T` wire, which Row 10 cannot reach: an exported class at
+    // `T`. `Wrap<Cat>` contributes the wrapper's own live handle with `owned = false`, so the
+    // ctor and the parameter mint *nothing* and the `finally` must not dispose anything either;
+    // the `T` return of Pick still mints one retain, which becomes the `picked` wrapper's handle
+    // and is released by its own `using`. A double-free here reads as a negative delta, an
+    // over-owned box as a positive one.
+    [Fact]
+    public void GenericClassMethod_ExportedClassTypeParameter_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var oreo = new Cat("Oreo", 9);
+            using var crate = new Crate<Cat>(oreo);
+            using Cat picked = crate.Pick(oreo);
+            Assert.Equal("Oreo", picked.Name);
+        });
     }
 
     /// <summary>

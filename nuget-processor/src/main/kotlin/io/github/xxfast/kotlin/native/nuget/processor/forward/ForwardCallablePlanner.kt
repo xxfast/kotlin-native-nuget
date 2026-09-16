@@ -1035,6 +1035,8 @@ internal class ForwardCallablePlanner(
       .toSet()
 
     val owner: String = cls.qualifiedName?.asString() ?: className
+    // ADR-147: null for an ordinary class, `io.pkg.Crate<Any?>` for a generic one.
+    val ownerType: String? = cls.forwardOwnerTypeName()
     // ADR-090: overload numbering, the scheme `valueClassMethodEntries` uses (itself ADR-034's
     // secondary-constructor scheme). Counted over the *declared plannable* members in
     // `getAllFunctions()` order — the counter increments before the structural check, so a
@@ -1082,6 +1084,7 @@ internal class ForwardCallablePlanner(
           },
           result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
+          ownerType = ownerType,
           // The symbol carries the overload suffix; the Kotlin call site must not.
           member = name,
           isOverride = isOverride,
@@ -1500,6 +1503,7 @@ internal class ForwardCallablePlanner(
             },
             result = result,
             origin = ForwardCallableOrigin.COPY,
+            ownerType = cls.forwardOwnerTypeName(),
             node = primary,
             doc = primary.forwardKdoc(expects).forParameters(primary.parameters),
           )
@@ -1624,6 +1628,9 @@ internal class ForwardCallablePlanner(
       result = result,
       origin = ForwardCallableOrigin.CONSTRUCTOR,
       target = owner,
+      // ADR-147: `Crate<Any?>(item)`, so the constructed instance is the type the receiver read
+      // back and every `T`-typed constructor parameter accepts its decoded box.
+      ownerType = cls?.forwardOwnerTypeName(),
       node = constructor,
       droppedOptInMarker = droppedOptInMarker(constructor.parameters, omitted),
       doc = constructor.forwardKdoc(expects)
@@ -2158,6 +2165,8 @@ internal class ForwardCallablePlanner(
     result: BridgeType,
     origin: ForwardCallableOrigin,
     target: String? = null,
+    // ADR-147: the applied Kotlin spelling of a generic owner, null for an ordinary class.
+    ownerType: String? = null,
     invocationReceiver: String? = null,
     includeError: Boolean = true,
     valueClassProperty: Boolean = false,
@@ -2325,6 +2334,7 @@ internal class ForwardCallablePlanner(
         target = if (valueClassProperty) "$target#property" else target,
         member = member,
         unwrapsKotlinResult = unwrapsKotlinResult,
+        ownerType = ownerType,
       ),
       publicSignature = ForwardPublicSignature(
         name = publicName,
@@ -2463,7 +2473,8 @@ internal class ForwardCallablePlanner(
       )
     )
 
-    is BridgeType.ObjectHandle, is BridgeType.Interface -> listOf(
+    // ADR-147: a `T` parameter rides the identical boxed StableRef wire a handle does.
+    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.TypeParameter -> listOf(
       ForwardAbiParameter(
         name = name,
         wireType = ForwardAbiWireType.POINTER,
@@ -2555,7 +2566,8 @@ internal class ForwardCallablePlanner(
         )
       )
 
-      is BridgeType.ObjectHandle, is BridgeType.Interface -> listOf(
+      // ADR-147: `T?` rides the null pointer on the same slot, ADR-083's shape.
+      is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.TypeParameter -> listOf(
         ForwardAbiParameter(
           name = name,
           wireType = ForwardAbiWireType.POINTER,
@@ -2820,7 +2832,9 @@ internal class ForwardCallablePlanner(
       helperRequirements = setOf(ForwardHelperRequirement.DURATION),
     )
 
-    is BridgeType.ObjectHandle, is BridgeType.Interface -> handleResultShape(this)
+    // ADR-147: a `T` result is minted by `NugetHandles.retain` like any other handle.
+    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.TypeParameter ->
+      handleResultShape(this)
     // ADR-088: gated on the manifest's Kotlin-implementability flag. Without a
     // `mint{Iface}Bridge`, a plain Kotlin implementation returned here has nothing to become on
     // the C# side, and v1 refuses to emit a route that works for one origin and traps for the
@@ -2876,7 +2890,9 @@ internal class ForwardCallablePlanner(
       helperRequirements = setOf(ForwardHelperRequirement.UTF8),
     )
 
-    is BridgeType.ObjectHandle, is BridgeType.Interface -> handleResultShape(BridgeType.Nullable(type))
+    // ADR-147: `T?` out is the null pointer, then the handle.
+    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.TypeParameter ->
+      handleResultShape(BridgeType.Nullable(type))
     // ADR-061 (2026-09-16 amendment): the nullable ObjectHandle shape above, verbatim. The
     // collection handle is a StableRef on the same POINTER slot, so a null pointer already means
     // Kotlin null and no has-value channel is needed. The component gate is the non-nullable
@@ -3245,7 +3261,8 @@ internal class ForwardCallablePlanner(
     // ADR-040 sub-decision B: an interface-typed parameter is plannable — the C# lowering routes
     // through NugetMarshal.HandleOf (ForwardCirPlanProjection.callArgument), which throws
     // NotSupportedException at runtime for a C#-implemented (non-Kotlin-backed) IFoo.
-    is BridgeType.ObjectHandle, is BridgeType.Interface -> null
+    // ADR-147: `NugetMarshal.Wrap<T>` boxes whatever `T` was instantiated to.
+    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.TypeParameter -> null
     // ADR-088: admissible at a parameter position regardless of `implementable` — the incoming
     // GCHandle only needs `nuget{Iface}Value`, which every manifest-listed interface has. Only a
     // RETURN of a plain Kotlin implementation needs the mint.
@@ -3268,6 +3285,8 @@ internal class ForwardCallablePlanner(
     // side of this same ADR.
     is BridgeType.Nullable -> when (val inner = type) {
       BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Primitive,
+      // ADR-147: `Wrap<T>` maps a null `T` to `IntPtr.Zero` already.
+      is BridgeType.TypeParameter,
       // ADR-133: an interface parameter is already plannable non-null (ADR-040 sub-decision B,
       // `NugetMarshal.HandleOf`), and the nullable C# lowering is the same helper's
       // `HandleOfOrZero` (ForwardCirPlanProjection). Without this a nullable interface
@@ -3401,6 +3420,9 @@ internal class ForwardCallablePlanner(
     is BridgeType.Enum,
     is BridgeType.ObjectHandle,
     is BridgeType.Interface,
+      // ADR-147: like ObjectHandle, a type parameter always builds its own tagged transfer at its
+      // call site (the boxed-handle wire), so it never reaches this untagged pass-through.
+    is BridgeType.TypeParameter,
       // ADR-088: like ObjectHandle/Interface, a bound interface always builds its own tagged
       // ForwardTransfer at its call site rather than reaching this untagged pass-through.
     is BridgeType.BoundInterface,
@@ -3509,6 +3531,9 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   // ADR-088: "bound interfaces as collection components" is on this ADR's own deferred list, for
   // the same reason -- the wrap/box helpers have no route for a GCHandle element.
   // ADR-103: "Duration as a collection element" is deferred for the identical reason.
+  // ADR-147 v1: a type parameter binds at a top-level position only. `List<T>` would need a
+  // per-element box the write side has no arm for, so it skips named here instead.
+  is BridgeType.TypeParameter,
   is BridgeType.Interface, is BridgeType.BoundInterface, BridgeType.Instant, BridgeType.Duration,
   is BridgeType.RawCollection, is BridgeType.RawKSType, is BridgeType.SpecializedProtocol,
   is BridgeType.Unsupported,
@@ -3786,6 +3811,11 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
   } else {
     (element ?: key ?: value)?.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
   }
+
+  // ADR-147 v1: only reached from a position a `T` cannot bind at (nested in a collection, a
+  // lambda or a value class); a top-level `T` plans a shape and never asks. UNSUPPORTED rather
+  // than the silent TYPE_PARAMETER deferral, which is reserved for a reason with a legacy route.
+  is BridgeType.TypeParameter -> ForwardPlanSkipReason.UNSUPPORTED
 
   is BridgeType.RawCollection -> ForwardPlanSkipReason.COLLECTION
   is BridgeType.Enum -> ForwardPlanSkipReason.ENUM

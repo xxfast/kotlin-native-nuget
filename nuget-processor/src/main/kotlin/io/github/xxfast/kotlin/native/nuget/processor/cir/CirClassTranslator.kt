@@ -29,6 +29,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMem
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
 import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsHeldMutableStateFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
+import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardLegacyRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
@@ -466,6 +467,49 @@ private fun forwardBaseSpelling(
   return "$baseName<${spelled.joinToString(", ")}>"
 }
 
+/**
+ * ADR-147: a class's own type parameters, projected for the C# carrier. Lifted verbatim out of the
+ * retired `translateGenericClass`, including the ADR-133 nested-bound qualification and the
+ * dropped-variance INFO: a generic class is an ordinary class with this list filled now, so the
+ * projection has to run on the ordinary path.
+ */
+internal fun KSClassDeclaration.cirTypeParameters(
+  logger: KSPLogger,
+  context: NugetContext,
+): List<CirTypeParameter> = typeParameters.map { param ->
+  val bounds: List<String> = param.bounds.toList().mapNotNull { bound ->
+    val resolved = bound.resolve()
+    val qualifiedName: String? = resolved.declaration.qualifiedName?.asString()
+    val declaration: KSClassDeclaration? = resolved.declaration as? KSClassDeclaration
+    val isInterface: Boolean = declaration?.classKind == ClassKind.INTERFACE
+
+    when {
+      qualifiedName == "kotlin.Any" -> null
+      isInterface && declaration != null -> declaration.legacyBoundInterfaceCsName(context)
+      else -> legacyBoundClassCsName(resolved, context)
+    }
+  }
+
+  if (param.variance != Variance.INVARIANT) {
+    ForwardDiagnosticSink.emit(
+      listOf(
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.INFO_DROPPED_VARIANCE,
+          symbol = this,
+          declaration = "${simpleName.asString()}<${param.name.asString()}>",
+          reason = "variance '${param.variance}' on this generic class type parameter is " +
+              "dropped; C# does not support variance on classes",
+          hint = "the member still binds; declare the parameter invariant if the dropped " +
+              "variance was load-bearing",
+        ),
+      ),
+      logger,
+    )
+  }
+
+  CirTypeParameter(param.name.asString(), bounds)
+}
+
 internal fun translateClass(
   cls: KSClassDeclaration,
   libraryName: String,
@@ -655,6 +699,11 @@ internal fun translateClass(
       // the identical property for a sealed arm. It owns its own detection and its own ADR-123
       // element refusal, and answers null for every other type, so the lambda arms below are
       // reached exactly as before.
+      // ADR-147: the C# half of the generic-owner refusal the Kotlin property loop makes. Every
+      // legacy property arm below bakes `asStableRef<Crate>()` into its export, which does not
+      // compile for a generic owner, so neither half emits one.
+      if (cls.typeParameters.isNotEmpty()) return@mapNotNull null
+
       if (propTypeResolved.isForwardFlowType()) {
         return@mapNotNull flowProperty(prop, name, context, classifier, tracker)
       }
@@ -764,6 +813,10 @@ internal fun translateClass(
         return@filter false
       }
       if (classifier.legacyRefusedReturn(method) != null) return@filter false
+
+      // ADR-147: the C# half of the same refusal the Kotlin export builders make for a generic
+      // owner. A generic class's suspend / Flow / lambda-parameter members are deferred, named.
+      if (cls.typeParameters.isNotEmpty() && method.isForwardLegacyRoute()) return@filter false
 
       method.isForwardMemberOf(cls, superClassDeclaration)
     }
@@ -1002,6 +1055,8 @@ internal fun translateClass(
 
   return CirClass(
     name = name,
+    // ADR-147: empty for an ordinary class; `Crate<T>` fills it and renders as the carrier.
+    typeParameters = cls.cirTypeParameters(logger, context),
     libraryName = libraryName,
     nativePrefix = prefix,
     constructor = cirConstructor,
@@ -1027,87 +1082,6 @@ internal fun translateClass(
         },
     remarks = remarks,
     doc = cls.forwardKdoc(expects)?.toCirDoc(),
-  )
-}
-
-internal fun translateGenericClass(
-  cls: KSClassDeclaration,
-  libraryName: String,
-  logger: KSPLogger,
-  // ADR-133: a bound on a NESTED interface has to carry the owner chain, and only the context
-  // knows the namespace to qualify it with.
-  context: NugetContext,
-): CirGenericClass {
-  val name: String = cls.simpleName.asString()
-  val prefix: String = cls.nativePrefix()
-  val typeParams: List<CirTypeParameter> = cls.typeParameters.map { param ->
-    val bounds: List<String> = param.bounds.toList().mapNotNull { bound ->
-      val resolved = bound.resolve()
-      val qualifiedName: String? = resolved.declaration.qualifiedName?.asString()
-      val declaration: KSClassDeclaration? = resolved.declaration as? KSClassDeclaration
-      val isInterface: Boolean = declaration?.classKind == ClassKind.INTERFACE
-
-      when {
-        qualifiedName == "kotlin.Any" -> null
-        // ADR-133, amended 2026-09-14: every bound carries its owner chain and its namespace,
-        // nested or not. A bare bound only resolves in the bound's own namespace.
-        isInterface && declaration != null -> declaration.legacyBoundInterfaceCsName(context)
-        else -> legacyBoundClassCsName(resolved, context)
-      }
-    }
-
-    if (param.variance != Variance.INVARIANT) {
-      ForwardDiagnosticSink.emit(
-        listOf(
-          ForwardDiagnostic(
-            kind = ForwardDiagnosticKind.INFO_DROPPED_VARIANCE,
-            symbol = cls,
-            declaration = "${cls.simpleName.asString()}<${param.name.asString()}>",
-            reason = "variance '${param.variance}' on this generic class type parameter is " +
-                "dropped; C# does not support variance on classes",
-            hint = "the member still binds; declare the parameter invariant if the dropped " +
-                "variance was load-bearing",
-          ),
-        ),
-        logger,
-      )
-    }
-
-    CirTypeParameter(param.name.asString(), bounds)
-  }
-
-  val properties: List<CirProperty> = cls.getAllProperties()
-    .filter { it.getVisibility() == Visibility.PUBLIC }
-    .map { prop ->
-      val propName: String = prop.simpleName.asString()
-      val csPropName: String = propName.replaceFirstChar { it.uppercase() }
-
-      // ADR-083: a nullable property reads back as the null pointer, so surface it as `T?`. C# 9
-      // allows `T?` on an unconstrained type parameter; a value-type instantiation still collapses
-      // it to `default(T)`, which is what the Zero branch of NugetMarshal.FromHandle returns.
-      val isNullable: Boolean = prop.type.resolve().isMarkedNullable
-
-      CirProperty(
-        name = csPropName,
-        type = if (isNullable) "${typeParams.first().name}?" else typeParams.first().name,
-        nativeReturnType = "IntPtr",
-        nativeName = propName,
-        getter = "NugetMarshal.FromHandle<${typeParams.first().name}>(${name}Native.Get_$propName(_handle))",
-        setter = null,
-      )
-    }
-    .toList()
-
-  return CirGenericClass(
-    name = name,
-    typeParameters = typeParams,
-    libraryName = libraryName,
-    nativePrefix = prefix,
-    properties = properties,
-    hasPublicConstructor = true,
-    // ADR-101 amendment (2026-09-11): `open` reaches the generic route too, so a subclass closing
-    // this class over a concrete type can `override` its `Dispose`.
-    isOpen = cls.modifiers.contains(Modifier.OPEN),
   )
 }
 

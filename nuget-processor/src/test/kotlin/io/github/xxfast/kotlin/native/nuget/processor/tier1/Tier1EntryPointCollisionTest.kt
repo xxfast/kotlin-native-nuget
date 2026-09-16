@@ -347,15 +347,13 @@ class Tier1EntryPointCollisionTest {
     assertTrue(
       result.kspErrors.any { message ->
         message.contains(ForwardDiagnosticKind.ERROR_C_ENTRY_POINT_COLLISION.name) &&
-            message.contains("box_create_string") &&
-            message.contains(
-              "tier1.abicollision.generic.oreo.Box (generic create variant: string)",
-            ) &&
-            message.contains(
-              "tier1.abicollision.generic.mylo.Box (generic create variant: string)",
-            )
+            // ADR-147: one boxed `box_create` per generic class now, owned by the constructor
+            // declaration itself rather than by a per-width create variant.
+            message.contains("box_create") &&
+            message.contains("tier1.abicollision.generic.oreo.Box(T)") &&
+            message.contains("tier1.abicollision.generic.mylo.Box(T)")
       },
-      "expected a collision naming both generic create variants by role; " +
+      "expected a collision naming both generic constructors by role; " +
           "kspErrors=${result.kspErrors}",
     )
     assertTrue(

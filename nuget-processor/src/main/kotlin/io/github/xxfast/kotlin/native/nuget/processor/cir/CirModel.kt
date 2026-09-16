@@ -71,6 +71,12 @@ data class CirInterfaceMethod(
 
 data class CirClass(
   val name: String,
+  /**
+   * ADR-147: the class's own declared type parameters, empty for an ordinary class. A generic
+   * class is an ordinary [CirClass] with this list filled: it renders `Crate<T>` plus a `where`
+   * clause per bounded parameter, and its members carry `T` at every position the plan admitted.
+   */
+  val typeParameters: List<CirTypeParameter> = emptyList(),
   val libraryName: String,
   val nativePrefix: String,
   val constructor: CirConstructor?,
@@ -297,19 +303,6 @@ data class CirTypeParameter(
   val bounds: List<String> = emptyList(),
   val variance: CirVariance = CirVariance.INVARIANT,
 )
-
-data class CirGenericClass(
-  val name: String,
-  val typeParameters: List<CirTypeParameter>,
-  val libraryName: String,
-  val nativePrefix: String,
-  val properties: List<CirProperty>,
-  val disposable: Boolean = true,
-  val hasPublicConstructor: Boolean = true,
-  // ADR-101 amendment (2026-09-11): an `open` generic class can be a base, and a derived class
-  // always renders `public override void Dispose()`, so this one renders `virtual` (CS0506).
-  val isOpen: Boolean = false,
-) : CirDeclaration
 
 data class CirMarshalHelper(
   val libraryName: String,

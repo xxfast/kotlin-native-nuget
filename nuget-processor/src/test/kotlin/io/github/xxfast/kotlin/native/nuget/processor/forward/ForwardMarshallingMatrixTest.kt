@@ -670,6 +670,7 @@ class ForwardMarshallingMatrixTest {
     is BridgeType.ValueClass -> "ValueClass"
     is BridgeType.Collection -> "Collection(${type.kind})"
     is BridgeType.Nullable -> "Nullable(${typeLabel(type.type)})"
+    is BridgeType.TypeParameter -> "TypeParameter"
     is BridgeType.SpecializedProtocol -> "SpecializedProtocol"
     is BridgeType.RawKSType -> "RawKSType"
     is BridgeType.Unsupported -> "Unsupported"

@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeArgument
 import com.google.devtools.ksp.symbol.KSTypeParameter
@@ -73,11 +74,25 @@ internal class ForwardBridgeTypeClassifier(
 
   private fun classifyNonNullable(type: KSType): BridgeType {
     val declaration = type.declaration
+    // ADR-147: a *class's* type parameter is a first-class kind now, carrying its declared bound
+    // so both halves can spell the boxed wire. Scoped to a class deliberately: an interface's own
+    // type parameter (issue #112) and a function's own keep the named legacy refusal, because
+    // neither route spells an applied receiver and both have their own open questions.
     if (declaration is KSTypeParameter) {
-      return BridgeType.Unsupported(
-        declaration.simpleName.asString(),
-        "type parameters require the named generic legacy route",
-      )
+      val owner: KSDeclaration? = declaration.parentDeclaration
+      val onGenericClass: Boolean =
+        owner is KSClassDeclaration && owner.classKind == ClassKind.CLASS
+      return if (onGenericClass) {
+        BridgeType.TypeParameter(
+          declaration.simpleName.asString(),
+          declaration.forwardBoundQualifiedName(),
+        )
+      } else {
+        BridgeType.Unsupported(
+          declaration.simpleName.asString(),
+          "type parameters require the named generic legacy route",
+        )
+      }
     }
 
     val classDeclaration: KSClassDeclaration = declaration as? KSClassDeclaration
@@ -590,3 +605,32 @@ internal fun KSType.toBridgeType(context: ForwardBridgeTypeContext): BridgeType 
  */
 internal fun KSClassDeclaration.isValueClass(): Boolean =
   modifiers.contains(Modifier.VALUE) || modifiers.contains(Modifier.INLINE)
+
+/**
+ * ADR-147: the first upper bound's Kotlin FQCN, or null when the parameter is unconstrained.
+ * `kotlin.Any` is not a bound for this purpose: it is what an unconstrained parameter's implicit
+ * `Any?` resolves to, and `asStableRef<Any>()` is already the unconstrained decode.
+ */
+internal fun KSTypeParameter.forwardBoundQualifiedName(): String? = bounds.toList()
+  .firstNotNullOfOrNull { bound ->
+    bound.resolve().declaration.qualifiedName?.asString()?.takeIf { name -> name != "kotlin.Any" }
+  }
+
+/**
+ * ADR-147: the fully applied Kotlin spelling of a generic owner (`io.pkg.Crate<Any?>`,
+ * `io.pkg.Kennel<io.pkg.Pet>`), one erased argument per declared type parameter, or null for an
+ * ordinary class. `asStableRef` takes a type argument, so the bare qualified name does not compile
+ * for a generic owner and a star projection would type every `T` parameter as `Nothing`.
+ */
+internal fun KSClassDeclaration.forwardOwnerTypeName(): String? {
+  if (typeParameters.isEmpty()) return null
+  val owner: String = qualifiedName?.asString() ?: return null
+  // `Any`, not `Any?`: the erased argument is what every member's `T` position substitutes to, and
+  // `NugetHandles.retain` takes a non-null `Any`, so `Crate<Any?>` makes a `val item: T` getter
+  // `retain(Any?)`, which does not compile. A declared-nullable position (`val value: T?`, a `T?`
+  // parameter) still substitutes to `Any?` on its own and keeps its null-pointer route.
+  val arguments: String = typeParameters.joinToString(", ") { parameter ->
+    parameter.forwardBoundQualifiedName() ?: "Any"
+  }
+  return "$owner<$arguments>"
+}

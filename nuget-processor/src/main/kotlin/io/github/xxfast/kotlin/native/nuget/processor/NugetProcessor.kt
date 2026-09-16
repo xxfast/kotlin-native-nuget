@@ -43,7 +43,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmInterfac
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowProperties
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericFunctionRoute
-import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceBridgeFactoryExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceExports
@@ -1102,13 +1101,12 @@ class NugetProcessor(
       logger,
     )
 
-    val classes: List<KSClassDeclaration> = allClasses.filter { it.typeParameters.isEmpty() }
-    val genericClasses: List<KSClassDeclaration> = allClasses
-      .filter { it.typeParameters.isNotEmpty() }
+    // ADR-147: generic classes are ordinary classes now; one bucket, one route.
+    val classes: List<KSClassDeclaration> = allClasses
 
     val hasNothingToProcess: Boolean = functions.isEmpty() && genericFunctions.isEmpty() &&
         extensionFunctions.isEmpty() && extensionProperties.isEmpty() &&
-        classes.isEmpty() && genericClasses.isEmpty() && enums.isEmpty() &&
+        classes.isEmpty() && enums.isEmpty() &&
         interfaces.isEmpty() && sealedClasses.isEmpty() && objects.isEmpty() &&
         properties.isEmpty() && constProperties.isEmpty() && valueClasses.isEmpty() &&
         suspendFunctions.isEmpty()
@@ -1306,7 +1304,7 @@ class NugetProcessor(
 
     val cNameExports: FileSpec = generateCNameWrappers(
       functions, genericFunctions, extensionFunctions, extensionProperties,
-      classes, genericClasses, enums, sealedClasses, objects, properties,
+      classes, enums, sealedClasses, objects, properties,
       valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
       exportedObjectHandles, forwardClassifier,
     )
@@ -1377,7 +1375,6 @@ class NugetProcessor(
           ", ${extensionFunctions.size} extension functions" +
           ", ${extensionProperties.size} extension properties" +
           ", ${classes.size} classes" +
-          ", ${genericClasses.size} generic classes" +
           ", ${enums.size} enums" +
           ", ${interfaces.size} interfaces" +
           ", ${sealedClasses.size} sealed classes" +
@@ -1500,7 +1497,6 @@ class NugetProcessor(
     extensionFunctions: List<KSFunctionDeclaration>,
     extensionProperties: List<KSPropertyDeclaration>,
     classes: List<KSClassDeclaration>,
-    genericClasses: List<KSClassDeclaration>,
     enums: List<KSClassDeclaration>,
     sealedClasses: List<KSClassDeclaration>,
     objects: List<KSClassDeclaration>,
@@ -1577,7 +1573,6 @@ class NugetProcessor(
       builder.addClassExports(it, callableCatalog, forwardClassifier, exportedTypes)
     }
     classes.forEach { builder.addCompanionExports(it, callableCatalog) }
-    genericClasses.forEach { builder.addGenericClassExports(it) }
     enums.forEach { builder.addEnumExports(it) }
     sealedClasses.forEach {
       builder.addSealedClassExports(it, callableCatalog, context.exportMarkers)
@@ -1611,7 +1606,7 @@ class NugetProcessor(
 
     val suspendLambdaArities: MutableSet<Int> = mutableSetOf()
 
-    (classes + genericClasses).forEach { cls ->
+    classes.forEach { cls ->
       cls.getAllProperties().forEach { prop ->
         val propType: KSType = prop.type.resolve()
         if (propType.isSuspendLambdaType()) suspendLambdaArities.add(propType.suspendLambdaArity())

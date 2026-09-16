@@ -33,13 +33,19 @@ class Tier1GenericClassPrefixTest {
     )
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"crate_create_int\")")
-    assertContains(kotlin, "@CName(\"crate_create_object\")")
+    // ADR-147: one boxed constructor, not the twelve widths plus an object fallback.
+    assertContains(kotlin, "@CName(\"crate_create\")")
+    assertFalse(kotlin.contains("crate_create_int"), "the per-width create variants are gone")
+    assertFalse(kotlin.contains("crate_create_object"), "the object create fallback is gone")
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "EntryPoint = \"crate_create_int\"")
-    assertContains(cs, "internal static extern IntPtr Create_int(int value, out IntPtr error);")
-    assertContains(cs, "CrateNative.Create_int((int)(object)value!, out error)")
+    assertContains(cs, "EntryPoint = \"crate_create\"")
+    // ADR-147: CS7042 forbids a DllImport inside a generic type, so the extern lives in the
+    // sibling `CrateNative` and the carrier holds a forwarder of the identical signature.
+    assertContains(cs, "internal static class CrateNative")
+    assertContains(cs, "internal static extern IntPtr Native_Create(IntPtr")
+    assertContains(cs, "=> CrateNative.Native_Create(")
+    assertContains(cs, "NugetMarshal.Wrap<T>(")
     assertFalse(cs.contains("box_create_"), "a generic class must not bind another class's exports")
     assertFalse(cs.contains("CreateBox"), "the shared boxing constructor helper is gone")
   }

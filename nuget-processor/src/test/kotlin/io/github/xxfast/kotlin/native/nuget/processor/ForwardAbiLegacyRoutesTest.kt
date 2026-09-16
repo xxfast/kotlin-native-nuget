@@ -2,7 +2,6 @@ package io.github.xxfast.kotlin.native.nuget.processor
 
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
-import io.github.xxfast.kotlin.native.nuget.processor.cir.CirGenericClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMethod
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirNamespace
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirProperty
@@ -20,7 +19,6 @@ class ForwardAbiLegacyRoutesTest {
       setOf(
         ForwardAbiLegacyRoute.GENERIC_FUNCTION,
         ForwardAbiLegacyRoute.GENERIC_EXTENSION_FUNCTION,
-        ForwardAbiLegacyRoute.GENERIC_CLASS,
         ForwardAbiLegacyRoute.SEALED_CLASS,
         ForwardAbiLegacyRoute.SUSPEND_FUNCTION,
         ForwardAbiLegacyRoute.SUSPEND_METHOD,
@@ -90,12 +88,15 @@ class ForwardAbiLegacyRoutesTest {
                 )
               ),
             ),
-            CirGenericClass(
+            // ADR-147: a generic class is an ordinary CirClass now, on no legacy route at all.
+            CirClass(
               name = "Box",
               typeParameters = listOf(CirTypeParameter("T")),
               libraryName = "sample",
               nativePrefix = "box",
+              constructor = null,
               properties = emptyList(),
+              methods = emptyList(),
             ),
             CirSealedClass(
               name = "Result",
@@ -115,7 +116,6 @@ class ForwardAbiLegacyRoutesTest {
         ForwardAbiLegacyRoute.FLOW_PROPERTY,
         ForwardAbiLegacyRoute.LAMBDA_PROPERTY,
         ForwardAbiLegacyRoute.FLOW_METHOD,
-        ForwardAbiLegacyRoute.GENERIC_CLASS,
         ForwardAbiLegacyRoute.SEALED_CLASS,
       ),
       ForwardAbiLegacyRoutes.collect(file),

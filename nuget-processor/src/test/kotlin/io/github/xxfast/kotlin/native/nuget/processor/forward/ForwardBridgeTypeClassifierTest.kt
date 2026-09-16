@@ -279,9 +279,25 @@ class ForwardBridgeTypeClassifierTest {
   fun `classifies raw collections type parameters and named legacy protocols explicitly`() {
     assertEquals(BridgeType.RawCollection(CollectionKind.LIST), classifier.classify(type("kotlin.collections.List")))
 
-    val typeParameter = proxy<KSTypeParameter>("getSimpleName" to name("T"))
+    // ADR-147: a parameter with no owning declaration (and, in the corpus, an interface's or a
+    // function's own) keeps the named legacy refusal; only a CLASS parameter is the new kind.
+    val typeParameter = proxy<KSTypeParameter>(
+      "getSimpleName" to name("T"),
+      "getParentDeclaration" to null,
+    )
     val generic = assertIs<BridgeType.Unsupported>(classifier.classify(type(typeParameter)))
     assertEquals("type parameters require the named generic legacy route", generic.reason)
+
+    // ADR-147: the same parameter declared on a generic CLASS is a TypeParameter, unconstrained.
+    val classParameter = proxy<KSTypeParameter>(
+      "getSimpleName" to name("T"),
+      "getParentDeclaration" to classDeclaration("sample.Crate"),
+      "getBounds" to emptySequence<Nothing>(),
+    )
+    assertEquals(
+      BridgeType.TypeParameter("T"),
+      classifier.classify(type(classParameter)),
+    )
 
     assertEquals(
       BridgeType.SpecializedProtocol("flow kotlinx.coroutines.flow.Flow"),
