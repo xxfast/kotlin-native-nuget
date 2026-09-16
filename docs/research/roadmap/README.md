@@ -24,7 +24,7 @@ The files one level up in `docs/research/` are project-level research (the origi
 Each with file:line and **verified** (by reading, by spike) or **inferred**.
 
 ## Recommendation
-Narrowest option satisfying the restatement, priced in files touched. Alternatives rejected, one line each.
+The option that satisfies the restatement on the route the codebase is converging on (the end state), priced in files touched; a narrower patch on a legacy route is an alternative, not the recommendation, unless both land on the same end state. Alternatives rejected, one line each.
 
 ## Files an implementation touches
 Used to group worktrees; list processor/plugin files, fixtures, tests, leak rows, docs.
