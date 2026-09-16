@@ -134,7 +134,7 @@ generic (planned as `ForwardCallableCatalogEntry.Skipped`, **verified** at `Forw
 - `docs/backlog/translateinterface-no-bridgeability-filter.md` (`ROADMAP.md:60`): "`translateInterface`
   emits every public interface member with no bridgeability filter, so an unbridgeable interface member
   yields CS0535". **Closed** by this ADR: that is sub-problem (2) exactly.
-- `docs/roadmap-archive.md:66` records `mapInterfacePropertyType` being patched once before, for
+- `docs/archive/roadmap.md:66` records `mapInterfacePropertyType` being patched once before, for
   nullability (ADR-040 era). This ADR retires the function rather than patching it a third time.
 
 Not closed, and deliberately left open:
@@ -175,7 +175,7 @@ non-reachable interface, which is a worse regression than the bug being fixed.
 Fix sub-problem (2) only, by teaching `translateInterface` which Kotlin types are bridgeable.
 Rejected: it does not fix sub-problem (1) at all (the surviving members still render `IntPtr`), and
 it re-creates the exact class of bug the forward plan exists to prevent, a second predicate that has
-to be kept in agreement with the planner's by hand. `docs/roadmap-archive.md:120` records the last
+to be kept in agreement with the planner's by hand. `docs/archive/roadmap.md:120` records the last
 time two such predicates disagreed and the real member drop it caused.
 
 ### 4. Rename one side of the property/method name collision
@@ -445,7 +445,7 @@ satisfies the restatement.
    ADR-034's guard is signature-based and does not cover it (verified by reading all three call sites).
 3. `CirInterfaceProperty.hasSetter` is never set, so a `var` interface property renders get-only.
    Needs reconciling with ADR-075's getter/setter independence and with the CS0546 hazard recorded at
-   `docs/roadmap-archive.md:67` before it can be derived from the plan.
+   `docs/archive/roadmap.md:67` before it can be derived from the plan.
 4. An interface that is neither reachable nor implemented by any exported class now silently loses
    unbridgeable members with no diagnostic anywhere (Decision C's residual hole).
 

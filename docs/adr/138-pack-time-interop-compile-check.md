@@ -53,7 +53,7 @@ What the repository does today (every claim here is **verified by reading source
   SDK. `packNuget` writes the `.nupkg` itself with `java.util.zip` and never shells out to
   `dotnet`"; `docs/topics/getting-started.md:84-85` repeats "No .NET SDK is required for this step".
 - A `scripts/verify.sh --fast` mode was proposed and rejected (`ROADMAP.md:234`,
-  `docs/roadmap-archive.md:394`). This ADR is not that: it does not shorten verify, it moves one of
+  `docs/archive/roadmap.md:394`). This ADR is not that: it does not shorten verify, it moves one of
   verify's checks earlier, into the task every author already runs.
 - Prior art, to the depth that settles it: Kotlin Swift Export and Kotlin/Native ObjC export emit
   headers and compile nothing on the consumer side. The Kotlin CocoaPods plugin does shell out

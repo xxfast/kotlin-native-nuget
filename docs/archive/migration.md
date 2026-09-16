@@ -5,7 +5,7 @@ callable ABI plan shared by Kotlin export generation and C# CIR generation. Each
 bridge working and be independently shippable.
 
 Current status: Phases 1 through 10 complete. Ordinary synchronous forward callables are plan-only;
-specialized protocols remain on named legacy routes. See [ADR-062](docs/adr/062-forward-callable-plan.md).
+specialized protocols remain on named legacy routes. See [ADR-062](../adr/062-forward-callable-plan.md).
 
 ## Migration invariants
 
@@ -122,7 +122,7 @@ specialized protocols remain on named legacy routes. See [ADR-062](docs/adr/062-
 - [x] Remove pointer and numeric fallthroughs in favor of named KSP diagnostics.
 - [x] Keep specialized protocols behind explicit adapters rather than a catch-all fallback.
 - [x] Record the enduring architecture in an ADR referencing ADR-004, ADR-055, and ADR-061
-  ([ADR-062](docs/adr/062-forward-callable-plan.md)).
+  ([ADR-062](../adr/062-forward-callable-plan.md)).
 - [x] Run the repository workflow serially: documenter first, then refactorer.
 
 ## Test gates

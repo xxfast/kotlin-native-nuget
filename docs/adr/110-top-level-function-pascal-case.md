@@ -208,7 +208,7 @@ all untouched. This is a C#-surface-only rename.
   `ERROR_CSHARP_NAME_COLLISION` for CS0102 (build fails, naming both declarations). A third shape,
   CS0119 on a sealed-returning function whose name equals its own return type, needed a
   `global::`-qualification fix rather than a diagnostic. A Tier 1 fixture pins each of the three.
-- `MIGRATION.md` is the internal marshalling-centralization checklist, not a consumer guide. The
+- `docs/archive/migration.md` is the internal marshalling-centralization checklist, not a consumer guide. The
   0.6.0 release notes carry the entry below; if a consumer-facing migration page is added, it
   goes there too.
 

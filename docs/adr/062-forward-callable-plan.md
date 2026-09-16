@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Phase 10 of [MIGRATION.md](../../MIGRATION.md) completes the centralization: ordinary
+Accepted. Phase 10 of [MIGRATION.md](../archive/migration.md) completes the centralization: ordinary
 synchronous callables are planned once and dual-projected; specialized protocols remain on named
 legacy routes. `scripts/verify.sh` is green.
 
@@ -19,7 +19,7 @@ collection materialization, and catch-path defaults (`mapParamType` → `IntPtr`
 `"0"` for any `kotlin.*`). That duplicated logic was the root of the ADR-060 position-not-type
 defects and made ordinary sync migration incomplete.
 
-[MIGRATION.md](../../MIGRATION.md) Phases 1–9 introduced `BridgeType`, `ForwardCallablePlan` /
+[MIGRATION.md](../archive/migration.md) Phases 1–9 introduced `BridgeType`, `ForwardCallablePlan` /
 `ForwardPropertyPlan`, shadow planning, and cutover for each ordinary family. Phase 10 finishes
 totality: ordinary paths require a plan; position-level fallthroughs are deleted.
 
@@ -213,4 +213,4 @@ refuses an escaped name outright, see [ADR-090](090-ordinary-class-method-overlo
   nullable primitives
 - [ADR-055](055-forward-abi-contract-check.md) — generation-time ABI contract check
 - [ADR-061](061-method-return-marshalling.md) — method/extension returns and valueOut
-- [MIGRATION.md](../../MIGRATION.md) — phased cutover checklist
+- [MIGRATION.md](../archive/migration.md) — phased cutover checklist
