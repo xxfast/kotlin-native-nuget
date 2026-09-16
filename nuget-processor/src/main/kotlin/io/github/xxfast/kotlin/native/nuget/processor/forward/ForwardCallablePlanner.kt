@@ -2877,6 +2877,17 @@ internal class ForwardCallablePlanner(
     )
 
     is BridgeType.ObjectHandle, is BridgeType.Interface -> handleResultShape(BridgeType.Nullable(type))
+    // ADR-061 (2026-09-16 amendment): the nullable ObjectHandle shape above, verbatim. The
+    // collection handle is a StableRef on the same POINTER slot, so a null pointer already means
+    // Kotlin null and no has-value channel is needed. The component gate is the non-nullable
+    // Collection arm's, so an ineligible element/key/value still skips with its own named reason
+    // rather than reaching the validator as a built shape (ADR-066).
+    is BridgeType.Collection -> if (type.isBridgeableComponent()) {
+      handleResultShape(BridgeType.Nullable(type), ForwardHelperRequirement.COLLECTION)
+    } else {
+      null
+    }
+
     // ADR-077 sub-items 3/4: reuses the corresponding nullable pointer shape verbatim (null rides
     // the null pointer; a value class's underlying is non-nullable by construction, so there is
     // no third state), with only the transfer's type and conversion tag changed. Pointer-shaped
@@ -3755,6 +3766,14 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
     // type wins over the position. Narrow on purpose: every other nullable Unsupported keeps
     // the shipped NULLABLE wording.
     type.isUndeclared() -> requireNotNull(type.skipReason())
+    // ADR-061 (2026-09-16 amendment): `List<T>?` now has a return route, so a nullable collection
+    // whose component is ineligible was refused for the *component's* reason, not for being
+    // nullable. Attribute it there, the same way the non-nullable Collection arm below does; the
+    // NULLABLE bucket's "expose a non-nullable wrapper" hint would send the author after a fix
+    // that cannot work. A bridgeable-component nullable collection keeps NULLABLE, which is still
+    // the honest answer at the input position it can only be skipped from.
+    type is BridgeType.Collection && !type.isBridgeableComponent() ->
+      requireNotNull(type.skipReason())
     else -> ForwardPlanSkipReason.NULLABLE
   }
   // ADR-066: a bridgeable-shaped Collection (List/MutableList result, Map/Set) that still

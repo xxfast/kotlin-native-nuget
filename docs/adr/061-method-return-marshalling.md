@@ -234,3 +234,21 @@ every branch, before the new `valueOut` where applicable.
   `List` and may land together or immediately after.
 - **Not changed:** property getters keep ADR-002 two-call (idempotent, shipped); a future
   unification onto the single-call out-param is possible but out of scope.
+
+### Amendment (2026-09-16)
+
+The return matrix above admitted a non-nullable collection but never `List<T>?` / `Set<T>?` /
+`Map<K, V>?`: `ForwardCallablePlanner.nullableResultShape()` had no `BridgeType.Collection` branch,
+so every such method and extension was dropped whole with a `SKIPPED_UNSUPPORTED_RETURN` blaming a
+"NULLABLE type combination", the gap [ADR-081](081-value-class-collection-components.md) recorded
+and could not close in its own scope. It now takes the nullable object-handle route verbatim: the
+collection handle is already a `StableRef` on a POINTER slot, so a null pointer is the null, and no
+has-value channel or `valueOut` is involved. The C# side reuses the shipped materialisation behind
+one `if (handle == IntPtr.Zero) return null;` placed after the error check, the same guard the
+[ADR-075](075-collection-property-getter-setter-independence.md) getter applies. The component gate
+is the non-nullable arm's, so an ineligible element still skips under its own named reason rather
+than the generic NULLABLE one. Fixture:
+`test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/test/clinic/NullableCollectionReturnsSample.kt`,
+covering a value-class element, a bare primitive element, an object-handle map value, and the
+extension-function position, with `IntegrationTests/NullableCollectionReturnTests.cs` asserting both
+the null and populated paths.

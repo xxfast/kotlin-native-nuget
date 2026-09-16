@@ -158,6 +158,9 @@ class ForwardMarshallingMatrixTest {
     add(valid(BridgeType.Nullable(BridgeType.String), ForwardFlow.OUT_OF_KOTLIN))
     add(valid(BridgeType.Nullable(handle), ForwardFlow.INTO_KOTLIN))
     add(valid(BridgeType.Nullable(handle), ForwardFlow.OUT_OF_KOTLIN))
+    // ADR-061 (2026-09-16 amendment): `List<T>?` returns over the same POINTER slot as a nullable
+    // handle. Result position only; a nullable collection input is still skipped.
+    add(valid(BridgeType.Nullable(collectionOf(CollectionKind.LIST)), ForwardFlow.OUT_OF_KOTLIN))
     add(valid(BridgeType.Nullable(BridgeType.Primitive(PrimitiveKind.INT)), ForwardFlow.INTO_KOTLIN))
     add(valid(BridgeType.Nullable(BridgeType.Primitive(PrimitiveKind.INT)), ForwardFlow.OUT_OF_KOTLIN))
     add(
@@ -436,6 +439,19 @@ class ForwardMarshallingMatrixTest {
           ForwardOwnership.OWNED_HANDLE, ForwardConversion.STABLE_REF_TO_HANDLE,
         ),
         cleanup = listOf(ForwardCleanup("result", ForwardCleanupKind.DISPOSE_STABLE_REF)),
+      )
+
+      // ADR-061 (2026-09-16 amendment): the nullable ObjectHandle shape above with the COLLECTION
+      // helper. The collection handle is a StableRef on the same POINTER slot, so a null pointer
+      // is the null and there is no valueOut.
+      is BridgeType.Collection -> ResultShape(
+        ForwardAbiWireType.POINTER,
+        ForwardTransfer(
+          "result", type, ForwardFlow.OUT_OF_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.OWNED_HANDLE, ForwardConversion.COLLECTION_TO_HANDLE,
+        ),
+        cleanup = listOf(ForwardCleanup("result", ForwardCleanupKind.DISPOSE_STABLE_REF)),
+        helpers = setOf(ForwardHelperRequirement.COLLECTION),
       )
 
       is BridgeType.Primitive -> if (inner.kind != PrimitiveKind.BOOLEAN) {

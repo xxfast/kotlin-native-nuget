@@ -84,6 +84,17 @@ using var visit = new Visit("Mylo", new List<string> { "sneezing" }, null);
 Assert.Null(visit.Notes);
 ```
 
+A class method or extension function can return a nullable collection the same way (`fun ids():
+List<ChartId>?`); the C# return type carries the `?` and `null` means the same thing it does above,
+never an empty collection:
+
+```C#
+public IReadOnlyList<global::TestLibrary.Clinic.ChartId>? Ids()
+```
+
+This does not extend to a `suspend fun` or a `Flow`/`StateFlow` returning a nullable collection;
+those stay unsupported. See [Coroutines and Flow](coroutines-and-flow.md).
+
 ## Mutable collection properties {id="mutable-collection-properties"}
 
 A `var`-declared collection property always gets a getter. It gets a setter only when every
@@ -218,6 +229,7 @@ direction; both are handled by the generated bridge code.
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/011-collection-type-mapping.md">ADR-011: Collection type mapping</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/061-method-return-marshalling.md">ADR-061: Method return marshalling</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/073-map-and-set-parameters.md">ADR-073: Map/Set parameters</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/075-collection-property-getter-setter-independence.md">ADR-075: Collection property getter/setter independence</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/081-value-class-collection-components.md">ADR-081: Value-class collection components</a>
