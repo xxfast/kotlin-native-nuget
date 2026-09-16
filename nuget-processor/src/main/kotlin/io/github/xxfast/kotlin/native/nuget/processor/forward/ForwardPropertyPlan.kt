@@ -55,6 +55,7 @@ internal data class ForwardPropertyPlan(
     validateType(type)
     getter.calls().forEach(::validateCall)
     setter?.calls()?.forEach(::validateCall)
+    calls().flatMap { call -> call.parameters }.forEach(::validateHelper)
     // ADR-076: Instant shares the nullable-primitive LegacyTwoCall/NullableDispatch shape exactly.
     // ADR-079: so does a value class whose underlying is a Primitive or an Enum -- neither wire
     // has a spare null, so both need the out-of-band has-value channel.
@@ -87,6 +88,21 @@ internal data class ForwardPropertyPlan(
     require(call.exportName.isNotBlank()) { "Forward property plan $symbol has a blank export" }
     require(call.parameters.lastOrNull()?.role == ForwardAbiRole.ERROR) {
       "Forward property plan $symbol export ${call.exportName} must end in errorOut"
+    }
+  }
+
+  /**
+   * The callable side's pairing check ([ForwardCallablePlanValidator]'s `validateTransfer`), at
+   * every ABI slot a property plan owns: a receiver, a setter value, and the error slot. A
+   * transfer that names a conversion the plan does not claim a helper for is a plan whose
+   * [helperRequirements] was computed from something narrower than its own ABI.
+   */
+  private fun validateHelper(parameter: ForwardAbiParameter) {
+    val conversion: ForwardConversion = parameter.transfer.conversion ?: return
+    if (conversion == ForwardConversion.DIRECT) return
+    require(conversion.helper() in helperRequirements) {
+      "Forward property plan $symbol transfer ${parameter.transfer.subject} is missing helper " +
+          conversion.helper()
     }
   }
 

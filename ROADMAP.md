@@ -232,7 +232,6 @@ Everything but the C# twin has shipped: bullets 1 to 3 in [ADR-127](docs/adr/127
 Follow-up work from the completed [forward marshalling centralization migration](MIGRATION.md).
 
 - [ ] **Coverage gaps in the collection-property-setter diagnostic path, named but not chased while building ADR-075** ([details](docs/backlog/coverage-gaps-collection-property-setter-diagnostic-path.md))
-- [ ] **A property plan's `helperRequirements` is computed from the property's declared type only, ignoring its receiver's type, and nothing currently checks it.** ([details](docs/backlog/property-plan-s-helperrequirements-computed-from-property.md))
 - [ ] **Make list-input eligibility match element marshalling.** ([details](docs/backlog/make-list-input-eligibility-match-element-marshalling.md))
 
 ## Tooling & Test Integrity

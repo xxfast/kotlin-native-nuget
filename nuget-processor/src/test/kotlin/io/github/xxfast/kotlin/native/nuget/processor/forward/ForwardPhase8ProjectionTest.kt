@@ -208,6 +208,8 @@ class ForwardPhase8ProjectionTest {
       publicName = "Grade",
       type = BridgeType.Char,
       getter = ForwardPropertyGetter.Direct(call),
+      // The handle receiver and the trailing error slot both ride a StableRef.
+      helperRequirements = setOf(ForwardHelperRequirement.STABLE_REF),
     ).validate()
   }
 

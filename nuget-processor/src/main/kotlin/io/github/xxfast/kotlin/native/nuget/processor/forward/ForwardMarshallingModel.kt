@@ -807,44 +807,49 @@ internal object ForwardCallablePlanValidator {
     ForwardAbiDirection.OUT -> ForwardPassing.OUT
     ForwardAbiDirection.IN_OUT -> ForwardPassing.IN_OUT
   }
+}
 
-  private fun ForwardConversion.helper(): ForwardHelperRequirement = when (this) {
-    ForwardConversion.STRING_TO_UTF8,
-    ForwardConversion.UTF8_TO_STRING,
-      -> ForwardHelperRequirement.UTF8
+/**
+ * The generated helper a conversion needs.  Shared by both plan validators: a callable plan
+ * ([ForwardCallablePlanValidator]) and a property plan ([ForwardPropertyPlan.validate]) assert the
+ * same pairing, so the mapping lives in one place.
+ */
+internal fun ForwardConversion.helper(): ForwardHelperRequirement = when (this) {
+  ForwardConversion.STRING_TO_UTF8,
+  ForwardConversion.UTF8_TO_STRING,
+    -> ForwardHelperRequirement.UTF8
 
-    ForwardConversion.ENUM_TO_ORDINAL,
-    ForwardConversion.ORDINAL_TO_ENUM,
-      -> ForwardHelperRequirement.ENUM_ORDINAL
+  ForwardConversion.ENUM_TO_ORDINAL,
+  ForwardConversion.ORDINAL_TO_ENUM,
+    -> ForwardHelperRequirement.ENUM_ORDINAL
 
-    ForwardConversion.HANDLE_TO_STABLE_REF,
-    ForwardConversion.STABLE_REF_TO_HANDLE,
-      -> ForwardHelperRequirement.STABLE_REF
+  ForwardConversion.HANDLE_TO_STABLE_REF,
+  ForwardConversion.STABLE_REF_TO_HANDLE,
+    -> ForwardHelperRequirement.STABLE_REF
 
-    ForwardConversion.BOX_VALUE_CLASS,
-    ForwardConversion.UNBOX_VALUE_CLASS,
-      -> ForwardHelperRequirement.VALUE_CLASS
+  ForwardConversion.BOX_VALUE_CLASS,
+  ForwardConversion.UNBOX_VALUE_CLASS,
+    -> ForwardHelperRequirement.VALUE_CLASS
 
-    ForwardConversion.COLLECTION_TO_HANDLE,
-    ForwardConversion.HANDLE_TO_COLLECTION,
-      -> ForwardHelperRequirement.COLLECTION
+  ForwardConversion.COLLECTION_TO_HANDLE,
+  ForwardConversion.HANDLE_TO_COLLECTION,
+    -> ForwardHelperRequirement.COLLECTION
 
-    ForwardConversion.INSTANT_TO_TICKS,
-    ForwardConversion.TICKS_TO_INSTANT,
-      -> ForwardHelperRequirement.INSTANT
+  ForwardConversion.INSTANT_TO_TICKS,
+  ForwardConversion.TICKS_TO_INSTANT,
+    -> ForwardHelperRequirement.INSTANT
 
-    ForwardConversion.DURATION_TO_TICKS,
-    ForwardConversion.TICKS_TO_DURATION,
-      -> ForwardHelperRequirement.DURATION
+  ForwardConversion.DURATION_TO_TICKS,
+  ForwardConversion.TICKS_TO_DURATION,
+    -> ForwardHelperRequirement.DURATION
 
-    ForwardConversion.UUID_TO_STRING,
-    ForwardConversion.STRING_TO_UUID,
-      -> ForwardHelperRequirement.UUID
+  ForwardConversion.UUID_TO_STRING,
+  ForwardConversion.STRING_TO_UUID,
+    -> ForwardHelperRequirement.UUID
 
-    ForwardConversion.GC_HANDLE_TO_BOUND_VALUE,
-    ForwardConversion.BOUND_VALUE_TO_GC_HANDLE,
-      -> ForwardHelperRequirement.BOUND_INTERFACE
+  ForwardConversion.GC_HANDLE_TO_BOUND_VALUE,
+  ForwardConversion.BOUND_VALUE_TO_GC_HANDLE,
+    -> ForwardHelperRequirement.BOUND_INTERFACE
 
-    ForwardConversion.DIRECT -> error("Direct conversion does not require a helper")
-  }
+  ForwardConversion.DIRECT -> error("Direct conversion does not require a helper")
 }
