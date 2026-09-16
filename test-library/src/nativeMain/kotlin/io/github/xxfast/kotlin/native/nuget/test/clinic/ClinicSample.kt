@@ -419,14 +419,15 @@ var ChartId.symptomTags: List<String>
 /**
  * Extension-property-receiver widening, half 1 · no ADR, a clean mirror of ADR-077's parameter
  * lowering at the receiver slot. `ForwardPropertyPlanner.extensionProperty`'s `supportedReceiver`
- * check has admitted a value-class receiver only over a `Primitive`/`String` underlying
+ * check once admitted a value-class receiver only over a `Primitive`/`String` underlying
  * ([ChartId.symptomTags] above is the `String` precedent); an enum-underlying or
- * ObjectHandle-underlying receiver still hits the named `SKIPPED_UNSUPPORTED_PROPERTY` receiver
- * diagnostic and the whole property vanishes. [Dosage.label] below closes the primitive-underlying
- * cell ROADMAP.md names as untested even though `Primitive` is already in the admit list ("A
- * primitive-underlying value-class extension-property receiver is also untested, only the
- * `String`-underlying case (`ChartId`) is covered"); [Temperament.note] and [ChartRef.annotation]
- * are the two cells that do not admit at all yet. Backed by a package-level map per receiver, same
+ * ObjectHandle-underlying receiver used to hit the named `SKIPPED_UNSUPPORTED_PROPERTY` receiver
+ * diagnostic. All four underlyings bind now. [Dosage.label] below is the primitive-underlying
+ * cell ROADMAP.md once named as untested even though `Primitive` was already in the admit list;
+ * [Temperament.note] and [ChartRef.annotation] are the enum- and handle-underlying cells, and the
+ * receiver's own helpers (`VALUE_CLASS` plus `ENUM_ORDINAL` or `STABLE_REF`) are what
+ * `ForwardPropertyPlanner.helperRequirements` unions in from the receiver slot. Backed by a
+ * package-level map per receiver, same
  * shape as [chartIdSymptomTags]: a value class's structural equality (delegating to its underlying
  * value) makes it a correct map key, and for [ChartRef] specifically that equality delegates to the
  * identical [Patient] instance the StableRef returns, so keying by [ChartRef] only works because a
@@ -434,7 +435,7 @@ var ChartId.symptomTags: List<String>
  */
 private val dosageLabels: MutableMap<Dosage, String> = mutableMapOf()
 
-/** Primitive-underlying (`Double`) receiver — the ROADMAP-noted untested cell. */
+/** Primitive-underlying (`Double`) receiver: binds, the boxed double round-trips get and set. */
 var Dosage.label: String
   get() = dosageLabels[this] ?: ""
   set(value) {
@@ -443,7 +444,7 @@ var Dosage.label: String
 
 private val temperamentNotes: MutableMap<Temperament, String> = mutableMapOf()
 
-/** Enum-underlying (`Mood`) receiver — skips today via `SKIPPED_UNSUPPORTED_PROPERTY`. */
+/** Enum-underlying (`Mood`) receiver: binds, the ordinal round-trips on get and on set. */
 var Temperament.note: String
   get() = temperamentNotes[this] ?: ""
   set(value) {
@@ -452,7 +453,7 @@ var Temperament.note: String
 
 private val chartRefAnnotations: MutableMap<ChartRef, String> = mutableMapOf()
 
-/** ObjectHandle-underlying (`Patient`) receiver — skips today via `SKIPPED_UNSUPPORTED_PROPERTY`. */
+/** ObjectHandle-underlying (`Patient`) receiver: binds, its handle round-trips get and set. */
 var ChartRef.annotation: String
   get() = chartRefAnnotations[this] ?: ""
   set(value) {

@@ -47,6 +47,19 @@ class Readings {
   fun chart(samples: List<Short>): String = samples.joinToString(",")
 
   /**
+   * ADR-098 part A · `List<UInt>` parameter. Unsigned at a `List` position, the cell ADR-098 left
+   * bare: `weigh` proves unsigned at `Set` and `census` proves unsigned at a `Map` key, neither of
+   * which reaches `List`'s own predicate branch.
+   */
+  fun tally(counts: List<UInt>): String = counts.joinToString(",")
+
+  /**
+   * ADR-098 part A · `List<Byte>` parameter. Signed narrow at a `List` position beside [tally]'s
+   * unsigned one; `census` proves signed narrow but only in a `Map` value slot, not `List`.
+   */
+  fun offsets(deltas: List<Byte>): String = deltas.joinToString(",")
+
+  /**
    * ADR-098 part A · `Set<ULong>` parameter. Unsigned, so Kotlin boxes an inline class while C#
    * sends a plain `ulong`, and the widest of the six, so a wire that quietly narrowed would lose
    * `ULong.MAX_VALUE`. A `Set` position as well, so the shared predicate is proven at a second

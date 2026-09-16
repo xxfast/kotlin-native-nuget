@@ -25,6 +25,7 @@ class ForwardPropertyEmitterTest {
       outConversion = ForwardConversion.UTF8_TO_STRING,
       inConversion = ForwardConversion.STRING_TO_UTF8,
       mutable = true,
+      helpers = setOf(ForwardHelperRequirement.UTF8),
     )
 
     val kotlin = renderKotlin(plan)
@@ -48,6 +49,7 @@ class ForwardPropertyEmitterTest {
       outConversion = ForwardConversion.ENUM_TO_ORDINAL,
       inConversion = ForwardConversion.ORDINAL_TO_ENUM,
       mutable = true,
+      helpers = setOf(ForwardHelperRequirement.ENUM_ORDINAL),
     )
 
     val kotlin = renderKotlin(plan)
@@ -153,6 +155,7 @@ class ForwardPropertyEmitterTest {
       outConversion = ForwardConversion.UTF8_TO_STRING,
       inConversion = ForwardConversion.STRING_TO_UTF8,
       mutable = true,
+      helpers = setOf(ForwardHelperRequirement.UTF8),
     )
 
     val kotlin = renderKotlin(plan)
@@ -303,7 +306,9 @@ class ForwardPropertyEmitterTest {
       type = type,
       getter = ForwardPropertyGetter.Direct(getCall),
       setter = setter,
-      helperRequirements = helpers,
+      // The handle receiver and the trailing error slot both ride a StableRef, so every class
+      // property plan requires that helper on top of whatever its own type needs.
+      helperRequirements = helpers + ForwardHelperRequirement.STABLE_REF,
     ).validate()
   }
 
@@ -338,6 +343,8 @@ class ForwardPropertyEmitterTest {
       setter = ForwardPropertySetter.Direct(
         ForwardNativeCall(setExport, ForwardAbiWireType.VOID, listOf(value, error)),
       ),
+      // The Int value slot converts DIRECT; only the error slot needs a helper here.
+      helperRequirements = setOf(ForwardHelperRequirement.STABLE_REF),
     ).validate()
   }
 
@@ -399,6 +406,11 @@ class ForwardPropertyEmitterTest {
       type = type,
       getter = ForwardPropertyGetter.Direct(getCall),
       setter = setter,
+      helperRequirements = buildSet {
+        // The error slot, plus an ObjectHandle receiver when there is one.
+        add(ForwardHelperRequirement.STABLE_REF)
+        if (type == BridgeType.String) add(ForwardHelperRequirement.UTF8)
+      },
     ).validate()
   }
 

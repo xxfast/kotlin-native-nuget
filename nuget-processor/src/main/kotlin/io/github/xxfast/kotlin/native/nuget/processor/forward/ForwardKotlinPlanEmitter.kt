@@ -694,10 +694,20 @@ private fun addNullableResult(
   errorName: String,
 ) {
   when (type) {
-    is BridgeType.ObjectHandle, is BridgeType.Interface -> {
+    // ADR-061 (2026-09-16 amendment): a nullable collection rides the nullable-handle body too --
+    // `nullableHandleResultBody` returns Kotlin null before it ever builds a StableRef, so the
+    // null pointer is the null. ADR-081's per-element projection is `?.`-lifted so a null result
+    // never dereferences, exactly as the ADR-075 getter does it.
+    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection -> {
+      val boxed: String =
+        if (type is BridgeType.Collection) {
+          collectionResultProjection(invocation, type, nullable = true)
+        } else {
+          invocation
+        }
       builder.returns(cOpaquePointer.copy(nullable = true))
       builder.addCode(
-        nullableHandleResultBody(invocation, errorName),
+        nullableHandleResultBody(boxed, errorName),
         nugetHandles,
         cOpaquePointerVar,
         nugetHandles,

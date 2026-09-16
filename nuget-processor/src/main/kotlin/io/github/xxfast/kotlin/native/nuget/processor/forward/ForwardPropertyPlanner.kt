@@ -405,24 +405,7 @@ internal class ForwardPropertyPlanner(
       type = type,
       getter = getter,
       setter = setter,
-      helperRequirements = when (type.unwrapNullable()) {
-        is BridgeType.Collection -> setOf(ForwardHelperRequirement.COLLECTION)
-        BridgeType.Instant -> setOf(ForwardHelperRequirement.INSTANT)
-        BridgeType.Duration -> setOf(ForwardHelperRequirement.DURATION)
-        // ADR-106: recorded for the validator's conversion/helper pairing; no helper function is
-        // generated (the generated Kotlin spells `kotlin.uuid.Uuid` in full).
-        BridgeType.Uuid -> setOf(ForwardHelperRequirement.UUID)
-        // ADR-077: same pairing as the callable side (the value-class step plus the underlying's
-        // own helper, keyed per kind in sub-item 4).
-        is BridgeType.ValueClass -> buildSet {
-          add(ForwardHelperRequirement.VALUE_CLASS)
-          val underlying: BridgeType = (type.unwrapNullable() as BridgeType.ValueClass).underlying
-          if (underlying == BridgeType.String) add(ForwardHelperRequirement.UTF8)
-          if (underlying is BridgeType.Enum) add(ForwardHelperRequirement.ENUM_ORDINAL)
-        }
-
-        else -> emptySet()
-      },
+      helperRequirements = helperRequirements(type, receiver, getter, setter),
     ).validate()
   }
 
@@ -797,70 +780,6 @@ internal class ForwardPropertyPlanner(
     else -> wireType()
   }
 
-  private fun BridgeType.conversion(flow: ForwardFlow): ForwardConversion? = when (unwrapNullable()) {
-    BridgeType.String -> if (flow == ForwardFlow.INTO_KOTLIN) {
-      ForwardConversion.STRING_TO_UTF8
-    } else {
-      ForwardConversion.UTF8_TO_STRING
-    }
-
-    is BridgeType.Enum -> if (flow == ForwardFlow.INTO_KOTLIN) {
-      ForwardConversion.ORDINAL_TO_ENUM
-    } else {
-      ForwardConversion.ENUM_TO_ORDINAL
-    }
-
-    is BridgeType.ObjectHandle, is BridgeType.Interface -> if (flow == ForwardFlow.INTO_KOTLIN) {
-      ForwardConversion.HANDLE_TO_STABLE_REF
-    } else {
-      ForwardConversion.STABLE_REF_TO_HANDLE
-    }
-
-    // ADR-107: out only. The INTO_KOTLIN direction is unreachable -- `collectionSetterOrNull`
-    // refuses the setter before a value parameter is ever built -- and would be a lie if reached,
-    // since the envelope cannot reconstruct a typed Kotlin Throwable.
-    BridgeType.Throwable -> if (flow == ForwardFlow.INTO_KOTLIN) {
-      error("Forward property planner cannot marshal a Throwable into Kotlin")
-    } else {
-      ForwardConversion.STABLE_REF_TO_HANDLE
-    }
-
-    is BridgeType.Collection -> if (flow == ForwardFlow.INTO_KOTLIN) {
-      ForwardConversion.HANDLE_TO_COLLECTION
-    } else {
-      ForwardConversion.COLLECTION_TO_HANDLE
-    }
-
-    BridgeType.Instant -> if (flow == ForwardFlow.INTO_KOTLIN) {
-      ForwardConversion.TICKS_TO_INSTANT
-    } else {
-      ForwardConversion.INSTANT_TO_TICKS
-    }
-
-    // ADR-106: the RFC 9562 text conversion, both directions.
-    BridgeType.Uuid -> if (flow == ForwardFlow.INTO_KOTLIN) {
-      ForwardConversion.STRING_TO_UUID
-    } else {
-      ForwardConversion.UUID_TO_STRING
-    }
-
-    BridgeType.Duration -> if (flow == ForwardFlow.INTO_KOTLIN) {
-      ForwardConversion.TICKS_TO_DURATION
-    } else {
-      ForwardConversion.DURATION_TO_TICKS
-    }
-
-    // ADR-077 sub-item 2: without this branch the `else` silently tags the transfer DIRECT, and
-    // ForwardPropertyPlan.validate() never checks conversions, so nothing would catch it.
-    is BridgeType.ValueClass -> if (flow == ForwardFlow.INTO_KOTLIN) {
-      ForwardConversion.BOX_VALUE_CLASS
-    } else {
-      ForwardConversion.UNBOX_VALUE_CLASS
-    }
-
-    else -> ForwardConversion.DIRECT
-  }
-
   private companion object {
     /** The [BridgeType.SpecializedProtocol] name prefixes whose *class* properties a legacy route
      *  still re-emits, so [recordDropped] must stay silent about them there. Matches the prefixes
@@ -868,4 +787,120 @@ internal class ForwardPropertyPlanner(
     val LEGACY_ROUTED_PROTOCOLS: List<String> =
       listOf("lambda ", "suspend lambda ", "flow ", "state flow ")
   }
+}
+
+/**
+ * Every helper this plan's own ABI needs, unioned from the conversions already carried on its
+ * transfers (the receiver slot, the setter value, the error slot) so the set cannot drift from
+ * the pairing [ForwardPropertyPlan.validate] checks. Two contributions are not representable as
+ * a transfer conversion, so they are read off the types:
+ *
+ * - the getter *result*, which the ABI carries as a bare wire with no transfer of its own, so
+ *   its OUT_OF_KOTLIN conversion is asked for directly, from the same [conversion] the
+ *   transfers use.
+ * - a value class's underlying, since a value-class transfer only ever tags
+ *   BOX/UNBOX_VALUE_CLASS and says nothing about what is inside the box. This is the
+ *   receiver-side gap the plan used to have: `var Temperament.note: String` on an
+ *   enum-underlying receiver needs ENUM_ORDINAL, and only the receiver's type knows that
+ *   (`ForwardCallablePlanner` unions the same way over its inputs).
+ */
+internal fun helperRequirements(
+  type: BridgeType,
+  receiver: ForwardPropertyReceiver,
+  getter: ForwardPropertyGetter,
+  setter: ForwardPropertySetter?,
+): Set<ForwardHelperRequirement> = buildSet {
+  val transferred: List<ForwardConversion> = (getter.calls() + (setter?.calls() ?: emptyList()))
+    .flatMap { call -> call.parameters }
+    .mapNotNull { parameter -> parameter.transfer.conversion }
+    .filter { conversion -> conversion != ForwardConversion.DIRECT }
+  transferred.forEach { conversion -> add(conversion.helper()) }
+  val result: ForwardConversion? = type.conversion(ForwardFlow.OUT_OF_KOTLIN)
+  if (result != null && result != ForwardConversion.DIRECT) add(result.helper())
+  addAll(type.valueClassHelpers())
+  if (receiver is ForwardPropertyReceiver.Value) addAll(receiver.type.valueClassHelpers())
+}
+
+/**
+ * ADR-077 sub-item 4: the value-class step plus the underlying's own helper, keyed per kind, the
+ * same pairing the callable planner applies to a value-class input. Empty for everything else.
+ */
+internal fun BridgeType.valueClassHelpers(): Set<ForwardHelperRequirement> {
+  val valueClass: BridgeType.ValueClass = unwrapNullable() as? BridgeType.ValueClass
+    ?: return emptySet()
+  return buildSet {
+    add(ForwardHelperRequirement.VALUE_CLASS)
+    if (valueClass.underlying == BridgeType.String) add(ForwardHelperRequirement.UTF8)
+    if (valueClass.underlying is BridgeType.Enum) add(ForwardHelperRequirement.ENUM_ORDINAL)
+  }
+}
+
+/**
+ * The conversion a property's [BridgeType] needs to cross its wire in [flow]. Shared by the
+ * transfers the planner builds and by [helperRequirements], so a slot's conversion and the
+ * helper claimed for it can never disagree.
+ */
+internal fun BridgeType.conversion(flow: ForwardFlow): ForwardConversion? = when (unwrapNullable()) {
+  BridgeType.String -> if (flow == ForwardFlow.INTO_KOTLIN) {
+    ForwardConversion.STRING_TO_UTF8
+  } else {
+    ForwardConversion.UTF8_TO_STRING
+  }
+
+  is BridgeType.Enum -> if (flow == ForwardFlow.INTO_KOTLIN) {
+    ForwardConversion.ORDINAL_TO_ENUM
+  } else {
+    ForwardConversion.ENUM_TO_ORDINAL
+  }
+
+  is BridgeType.ObjectHandle, is BridgeType.Interface -> if (flow == ForwardFlow.INTO_KOTLIN) {
+    ForwardConversion.HANDLE_TO_STABLE_REF
+  } else {
+    ForwardConversion.STABLE_REF_TO_HANDLE
+  }
+
+  // ADR-107: out only. The INTO_KOTLIN direction is unreachable -- `collectionSetterOrNull`
+  // refuses the setter before a value parameter is ever built -- and would be a lie if reached,
+  // since the envelope cannot reconstruct a typed Kotlin Throwable.
+  BridgeType.Throwable -> if (flow == ForwardFlow.INTO_KOTLIN) {
+    error("Forward property planner cannot marshal a Throwable into Kotlin")
+  } else {
+    ForwardConversion.STABLE_REF_TO_HANDLE
+  }
+
+  is BridgeType.Collection -> if (flow == ForwardFlow.INTO_KOTLIN) {
+    ForwardConversion.HANDLE_TO_COLLECTION
+  } else {
+    ForwardConversion.COLLECTION_TO_HANDLE
+  }
+
+  BridgeType.Instant -> if (flow == ForwardFlow.INTO_KOTLIN) {
+    ForwardConversion.TICKS_TO_INSTANT
+  } else {
+    ForwardConversion.INSTANT_TO_TICKS
+  }
+
+  // ADR-106: the RFC 9562 text conversion, both directions.
+  BridgeType.Uuid -> if (flow == ForwardFlow.INTO_KOTLIN) {
+    ForwardConversion.STRING_TO_UUID
+  } else {
+    ForwardConversion.UUID_TO_STRING
+  }
+
+  BridgeType.Duration -> if (flow == ForwardFlow.INTO_KOTLIN) {
+    ForwardConversion.TICKS_TO_DURATION
+  } else {
+    ForwardConversion.DURATION_TO_TICKS
+  }
+
+  // ADR-077 sub-item 2: without this branch the `else` silently tags the transfer DIRECT, which
+  // ForwardPropertyPlan.validate() skips (a DIRECT slot needs no helper), so nothing would catch
+  // it.
+  is BridgeType.ValueClass -> if (flow == ForwardFlow.INTO_KOTLIN) {
+    ForwardConversion.BOX_VALUE_CLASS
+  } else {
+    ForwardConversion.UNBOX_VALUE_CLASS
+  }
+
+  else -> ForwardConversion.DIRECT
 }

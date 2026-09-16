@@ -320,10 +320,12 @@ class ForwardDeclarationRoutingMatrixTest {
       publicName = "Route",
       type = type,
       getter = ForwardPropertyGetter.Direct(call),
+      // STABLE_REF is unconditional: the error slot always converts through one, and so does a
+      // handle receiver where the position has one.
       helperRequirements = if (type is BridgeType.Enum) {
-        setOf(ForwardHelperRequirement.ENUM_ORDINAL)
+        setOf(ForwardHelperRequirement.STABLE_REF, ForwardHelperRequirement.ENUM_ORDINAL)
       } else {
-        emptySet()
+        setOf(ForwardHelperRequirement.STABLE_REF)
       },
     )
   }

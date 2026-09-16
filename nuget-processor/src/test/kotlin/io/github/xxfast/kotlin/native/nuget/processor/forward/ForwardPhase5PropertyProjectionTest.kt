@@ -107,6 +107,8 @@ class ForwardPhase5PropertyProjectionTest {
         value = call("counter_set_score", ForwardAbiWireType.VOID, listOf(handle, value)),
         nullValue = call("counter_set_score_null", ForwardAbiWireType.VOID, listOf(handle)),
       ),
+      // The handle receiver and the trailing error slot both ride a StableRef.
+      helperRequirements = setOf(ForwardHelperRequirement.STABLE_REF),
     ).validate()
   }
 }

@@ -256,6 +256,21 @@ public class LiveHandleTests
         });
     }
 
+    // Row 4b. Nullable collection return, populated path (ADR-061's 2026-09-16 amendment). The
+    // null pointer is the null, so the non-null branch mints exactly the same collection handle
+    // Row 4 does and the materialising loop must still dispose it. A primitive element keeps the
+    // row about the collection's own handle: there is no element wrapper for the caller to own.
+    [Fact]
+    public void NullableCollectionReturn_Populated_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var dispensary = new Dispensary(true);
+            IReadOnlySet<int>? counts = dispensary.Counts();
+            Assert.Equal(3, counts!.Count);
+        });
+    }
+
     // Row 5. Callback subscribe/unsubscribe: StableRef.create(unregister) on subscribe,
     // ref.dispose() on Dispose (StoredCallbackExports.kt:216,238).
     [Fact]

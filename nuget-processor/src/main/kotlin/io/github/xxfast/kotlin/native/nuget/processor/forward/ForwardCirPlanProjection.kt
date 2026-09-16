@@ -1059,6 +1059,17 @@ internal object ForwardCirPlanProjection {
           ),
         )
 
+        // ADR-061 (2026-09-16 amendment): the non-nullable collection body with the ADR-075
+        // null-handle guard in front of it, the same guard the nullable ObjectHandle arm above
+        // applies. A null handle is Kotlin `null`; anything else materializes unchanged.
+        is BridgeType.Collection -> CirResultProjection(
+          returnType = "${type.csharpType()}?",
+          nativeReturnType = "IntPtr",
+          body = checkedCollectionBody(
+            nativeName, callArguments, type, prelude, cleanup, nullable = true,
+          ),
+        )
+
         else -> directOrCustomResultProjection(
           result, nativeCall.result, needsCustomParams, nativeName, callArguments, prelude, cleanup,
         )
@@ -1231,10 +1242,11 @@ internal object ForwardCirPlanProjection {
     type: BridgeType.Collection,
     prelude: List<ForwardCirHandleStep> = emptyList(),
     cleanup: List<String> = emptyList(),
+    nullable: Boolean = false,
   ): String = forwardCirHandleScope(
     prelude,
     cleanup,
-    collectionMaterializingCore(nativeName, arguments, type),
+    collectionMaterializingCore(nativeName, arguments, type, nullable),
   )
 
   /** The result-side read of a collection handle: the call, the error check, and the
@@ -1247,6 +1259,7 @@ internal object ForwardCirPlanProjection {
     nativeName: String,
     arguments: String,
     type: BridgeType.Collection,
+    nullable: Boolean,
   ): String {
     val handle: String = when (type.kind) {
       CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "listHandle"
@@ -1256,6 +1269,9 @@ internal object ForwardCirPlanProjection {
     return buildString {
       appendLine("            IntPtr $handle = $nativeName($arguments);")
       appendErrorCheck()
+      // ADR-061 (2026-09-16 amendment): after the error check, so a throw is still reported as a
+      // throw rather than silently read as a null result.
+      if (nullable) appendLine("            if ($handle == IntPtr.Zero) return null;")
       val read: String = componentCollectionRead(handle, type, csharpType = { it.csharpType() })
       append("            return $read;")
     }

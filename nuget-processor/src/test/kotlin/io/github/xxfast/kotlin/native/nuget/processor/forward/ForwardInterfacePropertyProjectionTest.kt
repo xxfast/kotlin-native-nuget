@@ -58,6 +58,8 @@ class ForwardInterfacePropertyProjectionTest {
       getter = ForwardPropertyGetter.Direct(
         ForwardNativeCall("cat_get_self", ForwardAbiWireType.POINTER, listOf(handleParameter, errorParameter)),
       ),
+      // The handle receiver and the trailing error slot both ride a StableRef.
+      helperRequirements = setOf(ForwardHelperRequirement.STABLE_REF),
     ).validate()
 
     val property: CirProperty = ForwardCirPropertyProjection.classProperty(plan)
@@ -92,6 +94,8 @@ class ForwardInterfacePropertyProjectionTest {
           listOf(handleParameter, valueParameter(nullablePet), errorParameter),
         ),
       ),
+      // The handle receiver and the trailing error slot both ride a StableRef.
+      helperRequirements = setOf(ForwardHelperRequirement.STABLE_REF),
     ).validate()
 
     val property: CirProperty = ForwardCirPropertyProjection.classProperty(plan)
@@ -140,6 +144,8 @@ class ForwardInterfacePropertyProjectionTest {
           listOf(handleParameter, valueParameter(petType), errorParameter),
         ),
       ),
+      // The handle receiver and the trailing error slot both ride a StableRef.
+      helperRequirements = setOf(ForwardHelperRequirement.STABLE_REF),
     ).validate()
 
     val property: CirProperty = ForwardCirPropertyProjection.classProperty(plan)
