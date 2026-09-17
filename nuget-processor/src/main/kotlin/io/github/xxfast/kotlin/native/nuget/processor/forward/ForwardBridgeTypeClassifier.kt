@@ -144,6 +144,10 @@ internal class ForwardBridgeTypeClassifier(
     // ADR-106: kotlin.uuid.Uuid, the third known stdlib type. A plain class (not a value class),
     // so ordering against isValueClass() is irrelevant; it stays in this block by convention.
     if (qualifiedName == "kotlin.uuid.Uuid") return BridgeType.Uuid
+    // ADR-151: kotlin.ByteArray, the fourth known stdlib type, mapped to C# `byte[]` over the
+    // collection handle wire. A plain final class (UByteArray is the value class, and is out of
+    // scope), so ordering against isValueClass() below is irrelevant.
+    if (qualifiedName == "kotlin.ByteArray") return BridgeType.ByteArray
     // ADR-064 (2026-09-11): kotlin.sequences.Sequence is the first known stdlib type recognized
     // here to be *refused* rather than bound. It is an interface with one type parameter, so
     // without this line the generic-interface arm below claims it as
@@ -196,6 +200,10 @@ internal class ForwardBridgeTypeClassifier(
         val scopeRefusal: ForwardAdmissionRefusal? = scopeRefusal(qualifiedName)
         val isNested: Boolean = classDeclaration.parentDeclaration != null && scopeRefusal == null
         if (!isNested && classDeclaration.containingFile == null) {
+          // ADR-151: a stdlib type that reaches this gate is merely unmapped, not out of
+          // scope: no include(...) repairs it, so it is refused as plainly unsupported and the
+          // skip reads SKIPPED_UNSUPPORTED_TYPE with the stdlib hint.
+          if (qualifiedName.isStdlibPackage()) return unmappedStdlibType(qualifiedName)
           return BridgeType.Unsupported(
             qualifiedName,
             "declared in a dependency module whose package is outside the export scope",
@@ -308,6 +316,11 @@ internal class ForwardBridgeTypeClassifier(
       // module-local declaration that simply fell outside the ADR-063 package filter still keeps
       // the old, generic message; only the cross-module case gets the closure's own diagnostic.
       val isUnexportedDependency: Boolean = classDeclaration.containingFile == null
+      // ADR-151: same gate as the enum branch above, for the class/object fall-through this
+      // issue's `ByteArray` actually landed in.
+      if (isUnexportedDependency && qualifiedName.isStdlibPackage()) {
+        return unmappedStdlibType(qualifiedName)
+      }
       return BridgeType.Unsupported(
         qualifiedName,
         if (isUnexportedDependency) {
@@ -417,6 +430,10 @@ internal class ForwardBridgeTypeClassifier(
         )
       }
       val isUnexportedDependency: Boolean = declaration.containingFile == null
+      // ADR-151: the interface twin of the class fall-through's stdlib gate.
+      if (isUnexportedDependency && qualifiedName.isStdlibPackage()) {
+        return unmappedStdlibType(qualifiedName)
+      }
       return BridgeType.Unsupported(
         qualifiedName,
         if (isUnexportedDependency) {
@@ -634,3 +651,17 @@ internal fun KSClassDeclaration.forwardOwnerTypeName(): String? {
   }
   return "$owner<$arguments>"
 }
+
+/**
+ * ADR-151: a `kotlin.*`/`kotlinx.*` type with no first-class mapping, refused as plainly
+ * unsupported rather than as an out-of-scope dependency. Nothing third-party is in the signature
+ * and no `include(...)` can repair it, so `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` named the wrong
+ * defect; the stdlib sentence it used to carry now rides
+ * [io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipReason.UNSUPPORTED]'s
+ * hint instead.
+ */
+private fun unmappedStdlibType(qualifiedName: String): BridgeType.Unsupported =
+  BridgeType.Unsupported(
+    rendered = qualifiedName,
+    reason = "a Kotlin stdlib type with no first-class C# mapping yet",
+  )

@@ -272,6 +272,39 @@ public class LiveHandleTests
         });
     }
 
+    // Row 4c. ADR-151 ByteArray result: the materialized `byte[]` route mints one StableRef per
+    // crossing (`nuget_bytes_create` / `NugetHandles.retain`), and `NugetMarshal.ReadBytes`
+    // disposes it in its finally after the count and the memcpy. Same ownership as Row 4, with no
+    // element boxes at all, so any drift here is the array handle itself.
+    [Fact]
+    public void ByteArrayReturn_MaterializedResult_ReturnsToBaseline()
+    {
+        AssertNoLeak(() => Assert.Equal(new byte[] { 3, 2, 1 }, PayloadKt.Reverse(new byte[] { 1, 2, 3 })));
+    }
+
+    // Row 4d. ADR-151 empty ByteArray result: the zero-length branch skips the memcpy, so its
+    // handle is disposed on a different path through ReadBytes. Oreo's collar sends three bytes,
+    // Mylo's sends none, and neither may leak.
+    [Fact]
+    public void EmptyByteArrayReturn_ReturnsToBaseline()
+    {
+        AssertNoLeak(() => Assert.Empty(PayloadKt.Empty()));
+    }
+
+    // Row 3d. ADR-151 ByteArray parameter: `NugetMarshal.CreateBytes` mints the Kotlin-side array
+    // handle before the call and the shim's finally disposes it, exactly as the collection
+    // parameter rows above. The property setter takes the same row on the SETTER_VALUE slot.
+    [Fact]
+    public void ByteArrayParameter_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var payload = new Payload(7, new byte[] { 1, 2, 3 });
+            payload.Data = new byte[] { 4, 5 };
+            Assert.Equal(new byte[] { 4, 5 }, payload.Data);
+        });
+    }
+
     // Row 5. Callback subscribe/unsubscribe: StableRef.create(unregister) on subscribe,
     // ref.dispose() on Dispose (StoredCallbackExports.kt:216,238).
     [Fact]

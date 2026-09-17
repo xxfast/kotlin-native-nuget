@@ -167,14 +167,16 @@ internal object ForwardCirPlanProjection {
     }
     val prelude: List<ForwardCirHandleStep> =
       plan.publicSignature.parameters.mapNotNull { parameter ->
-        plan.collectionPrelude(parameter)
+        plan.bytesPrelude(parameter)
+          ?: plan.collectionPrelude(parameter)
           ?: plan.interfacePrelude(parameter)
           ?: plan.boundInterfacePrelude(parameter)
           ?: plan.typeParameterPrelude(parameter)
       }
     val cleanup: List<String> =
       plan.publicSignature.parameters.mapNotNull {
-        plan.collectionCleanup(it) ?: plan.interfaceCleanup(it) ?: plan.typeParameterCleanup(it)
+        plan.bytesCleanup(it) ?: plan.collectionCleanup(it) ?: plan.interfaceCleanup(it)
+          ?: plan.typeParameterCleanup(it)
       }
     val argumentList: List<String> = plan.publicSignature.parameters.flatMap { plan.callArgument(it) }
     val callArgs: String = (argumentList + "out IntPtr error").joinToString(", ")
@@ -593,6 +595,8 @@ internal object ForwardCirPlanProjection {
       // side, Kotlin-backed or not, so the handle is simply an alloc over whatever came in.
       is BridgeType.BoundInterface -> listOf("${parameter.csharpName}Handle")
       is BridgeType.Collection -> listOf("${parameter.csharpName}Handle")
+      // ADR-151: the handle [bytesPrelude] minted with `NugetMarshal.CreateBytes`.
+      BridgeType.ByteArray -> listOf("${parameter.csharpName}Handle")
       // ADR-077: the generated `readonly record struct` capitalizes the Kotlin underlying
       // property (`value` -> `Value`, CirClassTranslator); the unwrapped value is lowered to its
       // wire form per underlying (sub-item 4), and Kotlin re-wraps it on the other side.
@@ -642,6 +646,8 @@ internal object ForwardCirPlanProjection {
         // handle variable [collectionPrelude] built already folds the null check in, so the call
         // argument itself is unconditional either way.
         is BridgeType.Collection -> listOf("${parameter.csharpName}Handle")
+        // ADR-151: the prelude folds the null into `IntPtr.Zero`, same as the collection arm.
+        BridgeType.ByteArray -> listOf("${parameter.csharpName}Handle")
         // ADR-077 sub-items 3/4: null propagation into the pointer-shaped marshalling; a C# null
         // ships the null pointer (null string reference, or IntPtr.Zero for a handle underlying).
         // ADR-079: a Primitive/Enum underlying has no null pointer, so it contributes the same
@@ -684,6 +690,39 @@ internal object ForwardCirPlanProjection {
       is BridgeType.Nullable -> (type as? BridgeType.Collection)?.let { it to true }
       else -> null
     }
+
+  /**
+   * ADR-151: a `byte[]` argument crosses as one Kotlin-side handle, minted before the call by
+   * `NugetMarshal.CreateBytes` (one `nuget_bytes_create` P/Invoke that copies the pinned managed
+   * array) and disposed by [bytesCleanup] after it. `byte[]?` folds the null into `IntPtr.Zero`,
+   * exactly as [collectionPrelude] does.
+   */
+  private fun ForwardCallablePlan.bytesPrelude(
+    parameter: ForwardPublicParameter,
+  ): ForwardCirHandleStep? {
+    if (parameter.type.unwrapNullable() != BridgeType.ByteArray) return null
+    val nullable: Boolean = parameter.type is BridgeType.Nullable
+    val name: String = parameter.csharpName
+    val value: String = if (nullable) {
+      "$name != null ? NugetMarshal.CreateBytes($name) : IntPtr.Zero"
+    } else {
+      "NugetMarshal.CreateBytes($name)"
+    }
+    return ForwardCirHandleStep(
+      flat = "IntPtr ${name}Handle = $value;",
+      declarations = listOf("IntPtr ${name}Handle = IntPtr.Zero;"),
+      statement = "${name}Handle = $value;",
+    )
+  }
+
+  /** ADR-151: the mirror of [collectionCleanup], with the same unconditional zero guard (the
+   *  `finally` is reached by a throw from the mint itself, and `nuget_dispose` is not
+   *  null-safe). */
+  private fun ForwardCallablePlan.bytesCleanup(parameter: ForwardPublicParameter): String? {
+    if (parameter.type.unwrapNullable() != BridgeType.ByteArray) return null
+    return "if (${parameter.csharpName}Handle != IntPtr.Zero) { " +
+        "NugetBytesNative.Dispose(${parameter.csharpName}Handle); }"
+  }
 
   private fun ForwardCallablePlan.collectionPrelude(
     parameter: ForwardPublicParameter,
@@ -856,14 +895,16 @@ internal object ForwardCirPlanProjection {
     val nativeCall: ForwardNativeCall = singleNativeImport()
     val prelude: List<ForwardCirHandleStep> =
       parameters.mapNotNull { parameter ->
-        collectionPrelude(parameter)
+        bytesPrelude(parameter)
+          ?: collectionPrelude(parameter)
           ?: interfacePrelude(parameter)
           ?: boundInterfacePrelude(parameter)
           ?: typeParameterPrelude(parameter)
       }
     val cleanup: List<String> =
       parameters.mapNotNull { parameter ->
-        collectionCleanup(parameter)
+        bytesCleanup(parameter)
+          ?: collectionCleanup(parameter)
           ?: interfaceCleanup(parameter)
           ?: typeParameterCleanup(parameter)
       }
@@ -929,6 +970,13 @@ internal object ForwardCirPlanProjection {
         returnType = result.csharpType(),
         nativeReturnType = "IntPtr",
         body = checkedCollectionBody(nativeName, callArguments, result, prelude, cleanup),
+      )
+
+      // ADR-151: one handle out, materialized (and disposed) by `NugetMarshal.ReadBytes`.
+      BridgeType.ByteArray -> CirResultProjection(
+        returnType = result.csharpType(),
+        nativeReturnType = "IntPtr",
+        body = checkedBytesBody(nativeName, callArguments, prelude, cleanup),
       )
 
       // ADR-014 (ordinary position, ADR-066's fixture gap): always a custom body, regardless of
@@ -1136,6 +1184,13 @@ internal object ForwardCirPlanProjection {
           ),
         )
 
+        // ADR-151: the same body with the null-handle guard in front, after the error check.
+        BridgeType.ByteArray -> CirResultProjection(
+          returnType = "${type.csharpType()}?",
+          nativeReturnType = "IntPtr",
+          body = checkedBytesBody(nativeName, callArguments, prelude, cleanup, nullable = true),
+        )
+
         else -> directOrCustomResultProjection(
           result, nativeCall.result, needsCustomParams, nativeName, callArguments, prelude, cleanup,
         )
@@ -1302,6 +1357,26 @@ internal object ForwardCirPlanProjection {
     },
   )
 
+  /** ADR-151: the result-side read of a byte-array handle. `NugetMarshal.ReadBytes` counts,
+   *  allocates, copies and disposes the handle in its own `finally`, so this body is the call,
+   *  the error check, the optional null-handle guard, and the read. */
+  private fun checkedBytesBody(
+    nativeName: String,
+    arguments: String,
+    prelude: List<ForwardCirHandleStep> = emptyList(),
+    cleanup: List<String> = emptyList(),
+    nullable: Boolean = false,
+  ): String = forwardCirHandleScope(
+    prelude,
+    cleanup,
+    buildString {
+      appendLine("            IntPtr bytesHandle = $nativeName($arguments);")
+      appendErrorCheck()
+      if (nullable) appendLine("            if (bytesHandle == IntPtr.Zero) return null;")
+      append("            return NugetMarshal.ReadBytes(bytesHandle);")
+    },
+  )
+
   private fun checkedCollectionBody(
     nativeName: String,
     arguments: String,
@@ -1413,8 +1488,9 @@ internal object ForwardCirPlanProjection {
    */
   private fun BridgeType.isCSharpReferenceType(): Boolean = when (this) {
     is BridgeType.Nullable -> type.isCSharpReferenceType()
+    // ADR-151: `byte[]` is a C# array, a reference type, so `ByteArray?` renders `byte[]?`.
     BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
-    is BridgeType.BoundInterface, is BridgeType.Collection -> true
+    is BridgeType.BoundInterface, is BridgeType.Collection, BridgeType.ByteArray -> true
     // ADR-076: DateTimeOffset is a C# value type, same as Enum/ValueClass.
     // ADR-103: so is TimeSpan.
     // ADR-106: Guid is a C# value type too, so `Uuid?` renders Nullable<Guid> ("Guid?").

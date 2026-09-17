@@ -449,6 +449,9 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   ForwardPlanSkipReason.THROWABLE,
     // ADR-106: defensive, like INSTANT/DURATION.
   ForwardPlanSkipReason.UUID,
+    // ADR-151: a genuine drop with no legacy route (the deferred `List<ByteArray>` nesting), in
+    // the same "type combination is not supported" bucket the other ordinary types use.
+  ForwardPlanSkipReason.BYTE_ARRAY,
   ForwardPlanSkipReason.OBJECT,
   ForwardPlanSkipReason.STRING,
   ForwardPlanSkipReason.UNSUPPORTED,
@@ -480,8 +483,10 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   )
 }
 
-/** `kotlin`, `kotlin.*` and `kotlinx.*`: packages an export scope can never usefully admit. */
-private fun String.isStdlibPackage(): Boolean =
+/** `kotlin`, `kotlin.*` and `kotlinx.*`: packages an export scope can never usefully admit.
+ *  ADR-151: shared with the classifier, which refuses an unmapped stdlib type as plainly
+ *  unsupported rather than as an out-of-scope dependency. */
+internal fun String.isStdlibPackage(): Boolean =
   this == "kotlin" || startsWith("kotlin.") || this == "kotlinx" || startsWith("kotlinx.")
 
 /**
@@ -489,6 +494,13 @@ private fun String.isStdlibPackage(): Boolean =
  * keeps. Named so [ownsSentence] can ask "did this reason say something of its own?" without an
  * allowlist that has to be extended every time [diagnosticReason] gains an arm.
  */
+/** ADR-151: issue #55/#56's stdlib sentence, shared by the reason that owns it now
+ *  ([ForwardPlanSkipReason.UNSUPPORTED]) and the dependency reason it moved off. */
+private fun stdlibTypeHint(detail: String?): String =
+  "${detail ?: "it"} is a Kotlin stdlib type with no first-class C# mapping yet; expose a " +
+      "bridgeable type instead (include(...) is not the fix: an explicit include replaces " +
+      "the export scope rather than mapping the type)"
+
 internal fun ForwardPlanSkipReason.genericSentence(): String =
   "its $name type combination is not supported"
 
@@ -706,16 +718,15 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   scope: List<String> = emptyList(),
   parameter: String? = null,
 ): String = when (this) {
+  // ADR-151: an unmapped stdlib type no longer reaches here at all (the classifier refuses it as
+  // plainly unsupported), so this arm is about a real dependency module. The stdlib sentence moved
+  // to [ForwardPlanSkipReason.UNSUPPORTED] below; the guard stays because `refusedDependencyTypes`
+  // can still name a stdlib type the closure saw.
   ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE -> {
     val dependencyPackage: String = detail?.dependencyPackageName()
       ?: "the dependency's package"
     if (dependencyPackage.isStdlibPackage()) {
-      // Issue #55/#56: `include("kotlin")` was the hint here, and following it replaced the
-      // export scope with one nothing in the module lives under. A stdlib type wants a first-class
-      // mapping (ADR-076 `Instant`, ADR-103 `Duration`), not an export-scope change.
-      "${detail ?: "it"} is a Kotlin stdlib type with no first-class C# mapping yet; expose a " +
-          "bridgeable type instead (include(...) is not the fix: an explicit include replaces " +
-          "the export scope rather than mapping the type)"
+      stdlibTypeHint(detail)
     } else {
       // Issue #55: name the whole include line, not just the missing package. ADR-063's explicit
       // `include` replaces the `rootPackage` default, so a hint naming only the new package
@@ -726,6 +737,13 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
           "in-scope package instead"
     }
   }
+
+  // ADR-151: an unmapped `kotlin.*`/`kotlinx.*` type is unsupported, not out of scope. Issue
+  // #55/#56's sentence, moved here with it: `include("kotlin")` was the old hint, and following
+  // it replaced the export scope with one nothing in the module lives under. A stdlib type wants
+  // a first-class mapping (ADR-076 `Instant`, ADR-103 `Duration`, ADR-151 `ByteArray`).
+  ForwardPlanSkipReason.UNSUPPORTED ->
+    if (detail != null && detail.isStdlibPackage()) stdlibTypeHint(detail) else genericSkipHint
 
   // Following ADR-109's `exclude("<pkg>")` remedy lands every callable reaching the excluded type
   // here. `include(...)` is not the fix: `PackageScope.covers` tests `exclude` first, so an
@@ -934,10 +952,13 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "Kotlin implementation of it cannot be handed back to C#; take it as a parameter " +
         "instead, or return an interface the reverse bindings can bridge"
 
-  else ->
-    "expose a bridgeable adapter using only supported parameter/return shapes and export that " +
-        "instead"
+  else -> genericSkipHint
 }
+
+/** The hint every reason with nothing more specific to say keeps. */
+private const val genericSkipHint: String =
+  "expose a bridgeable adapter using only supported parameter/return shapes and export that " +
+      "instead"
 
 /**
  * A short, human-readable name for a diagnostic message; never used to drive marshalling.
@@ -954,6 +975,7 @@ internal fun BridgeType.diagnosticTypeName(): String = when (this) {
   BridgeType.Duration -> "Duration"
   BridgeType.Throwable -> "Throwable"
   BridgeType.Uuid -> "Uuid"
+  BridgeType.ByteArray -> "ByteArray"
   is BridgeType.Primitive -> kind.name.lowercase().replaceFirstChar { it.uppercase() }
   is BridgeType.Enum -> qualifiedName.substringAfterLast('.')
   is BridgeType.ObjectHandle -> qualifiedName.substringAfterLast('.')

@@ -71,7 +71,8 @@ public class Issue112Tests
     [Fact]
     public void InterfaceMethod_SkippedByThePlan_IsAbsent()
     {
-        // `fun collarTag(code: Int): ByteArray?` is unbridgeable, so it is dropped. That drop is
+        // `fun collarTag(code: Int): Sequence<Int>` is unbridgeable (ADR-064 refuses `Sequence` by
+        // name, a decision rather than a gap), so it is dropped. That drop is
         // also what keeps ADR-113's fatal CS0102 guard from firing on this hierarchy: the guard is
         // post-filter, and only one `CollarTag` member survives the plan.
         Assert.DoesNotContain(

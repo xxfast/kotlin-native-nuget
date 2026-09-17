@@ -87,6 +87,10 @@ internal class CollectionHelperTracker {
   var needsList: Boolean = false
   var needsMap: Boolean = false
   var needsSet: Boolean = false
+
+  // ADR-151: at least one planned `ByteArray` anywhere in the file, which gates NugetBytesNative
+  // and the NugetMarshal.ReadBytes/CreateBytes pair.
+  var needsBytes: Boolean = false
   var needsAsync: Boolean = false
   var needsFlow: Boolean = false
   var needsStateFlow: Boolean = false
@@ -106,6 +110,9 @@ internal class CollectionHelperTracker {
   /** Marks List/Map/Set helper needs from a planned [BridgeType] (result, parameter, or property). */
   fun trackCollection(type: BridgeType) {
     val unwrapped: BridgeType = if (type is BridgeType.Nullable) type.type else type
+    // ADR-151: a ByteArray is not a Collection, but it rides the collection wire and needs its
+    // own native class, so it is tracked on the same walk.
+    if (unwrapped == BridgeType.ByteArray) needsBytes = true
     val collection = unwrapped as? BridgeType.Collection ?: return
     when (collection.kind) {
       CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> needsList = true

@@ -65,6 +65,10 @@ class Tier1ExportScopeDiagnosticsTest {
    * asserted a diagnostic that (correctly) no longer fires. `kotlin.text.Regex` is the same shape
    * -- a stdlib class with no known-type branch and no `include(...)` that could ever admit it --
    * so the hint under test is unchanged; only the example moved.
+   *
+   * ADR-151 decision 4 changed the KIND, not the hint: nothing third-party is in this signature,
+   * so an unmapped `kotlin.*` type is now `SKIPPED_UNSUPPORTED_TYPE` instead of
+   * `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`, and the stdlib sentence moved with it.
    */
   @Test
   fun `a stdlib type gets no include hint at all`() {
@@ -81,11 +85,18 @@ class Tier1ExportScopeDiagnosticsTest {
 
     val diagnostic: String = requireNotNull(
       result.kspWarnings.firstOrNull {
-        it.contains(ForwardDiagnosticKind.SKIPPED_UNEXPORTED_DEPENDENCY_TYPE.name)
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE.name) && "Regex" in it
       },
     ) {
-      "expected a SKIPPED_UNEXPORTED_DEPENDENCY_TYPE diagnostic; kspWarnings=${result.kspWarnings}"
+      "expected a SKIPPED_UNSUPPORTED_TYPE diagnostic; kspWarnings=${result.kspWarnings}"
     }
+    // ADR-151 decision 4: the dependency-scope kind is gone for a stdlib type, not just its hint.
+    assertFalse(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNEXPORTED_DEPENDENCY_TYPE.name)
+      },
+      "expected no dependency-scope kind for a stdlib type; kspWarnings=${result.kspWarnings}",
+    )
     assertFalse(
       diagnostic.contains("add include("),
       "expected no include(...) suggestion for a stdlib type; got: $diagnostic",

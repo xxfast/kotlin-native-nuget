@@ -45,6 +45,8 @@ internal fun BridgeType.forwardPublicCsharpType(): String = when (this) {
     CollectionKind.MUTABLE_SET -> "ISet<${requireNotNull(element).forwardPublicCsharpType()}>"
   }
 
+  // ADR-151: the point of the feature -- a Kotlin ByteArray is a C# byte[], never List<sbyte>.
+  BridgeType.ByteArray -> "byte[]"
   // ADR-147: a type parameter's public C# spelling is its own name, on the generic carrier.
   is BridgeType.TypeParameter -> name
   is BridgeType.Nullable -> "${type.forwardPublicCsharpType()}?"

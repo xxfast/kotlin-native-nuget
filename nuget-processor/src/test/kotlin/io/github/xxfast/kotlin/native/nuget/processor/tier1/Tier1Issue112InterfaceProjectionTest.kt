@@ -203,10 +203,11 @@ class Tier1Issue112InterfaceProjectionTest {
 
   /**
    * The post-filter half of Decision E, spelled out on its own: issue #112's literal Kotlin has
-   * `val collarTag` next to `fun collarTag(code: Int): ByteArray?`, and that method is
-   * unbridgeable. The collision guard runs over the *projected* member lists, so the method has
-   * already dropped out and this build stays green. A pre-filter guard would turn a real
-   * reporter's working library into a build failure.
+   * `val collarTag` next to a `collarTag(code: Int)` overload, and that method is unbridgeable.
+   * ADR-151 mapped the issue's literal `ByteArray?` return, so the stand-in is now `Sequence<Int>`,
+   * which ADR-064 refuses by name as a decision rather than a gap. The collision guard runs over
+   * the *projected* member lists, so the method has already dropped out and this build stays
+   * green. A pre-filter guard would turn a real reporter's working library into a build failure.
    */
   @Test
   fun `collision guard does not fire when the colliding method is unbridgeable`() {
@@ -294,7 +295,7 @@ private val ADVERTISEMENT_FIXTURE: String = """
     val identifier: String
     val collarTag: CollarTag?
     val codes: Collection<String>
-    fun collarTag(code: Int): ByteArray?
+    fun collarTag(code: Int): Sequence<Int>
     fun describe(prefix: String): String
   }
 
@@ -303,7 +304,7 @@ private val ADVERTISEMENT_FIXTURE: String = """
     override val collarTag: CollarTag?,
   ) : Advertisement {
     override val codes: Collection<String> get() = listOf(identifier)
-    override fun collarTag(code: Int): ByteArray? = null
+    override fun collarTag(code: Int): Sequence<Int> = sequenceOf(code)
     override fun describe(prefix: String): String = "${'$'}prefix${'$'}identifier"
   }
 """.trimIndent()

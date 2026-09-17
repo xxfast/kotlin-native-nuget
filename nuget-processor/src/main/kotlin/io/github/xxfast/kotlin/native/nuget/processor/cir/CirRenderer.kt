@@ -87,6 +87,7 @@ internal fun StringBuilder.renderDeclaration(declaration: CirDeclaration, nested
   when (declaration) {
     is CirMarshalHelper -> renderMarshalHelper(declaration)
     is CirListHelper -> renderListHelper(declaration)
+    is CirBytesHelper -> renderBytesHelper(declaration)
     is CirMapHelper -> renderMapHelper(declaration)
     is CirSetHelper -> renderSetHelper(declaration)
     is CirFuncNativeHelper -> renderFuncNativeHelper(declaration)

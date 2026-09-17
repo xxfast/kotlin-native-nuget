@@ -248,8 +248,9 @@ internal object ForwardCirPropertyProjection {
     when (val value = type.unwrapNullable()) {
       BridgeType.String -> appendLine("            IntPtr nativeResult = $native($callArgs);")
       // ADR-147: a `T` getter reads the same boxed-handle wire.
+      // ADR-151: and so does a ByteArray getter.
       is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
-      is BridgeType.TypeParameter ->
+      BridgeType.ByteArray, is BridgeType.TypeParameter ->
         appendLine("            IntPtr nativeResult = $native($callArgs);")
 
       // ADR-107: the error envelope's pointer. ONE call, deliberately: the export mints a
@@ -310,6 +311,13 @@ internal object ForwardCirPropertyProjection {
               collectionMaterialize(inner),
         )
 
+        // ADR-151: the same null-handle guard, then the count-plus-memcpy read. `ReadBytes`
+        // disposes the handle in its own `finally`, so a null must never reach it.
+        BridgeType.ByteArray -> append(
+          "            if (nativeResult == IntPtr.Zero) return null;\n" +
+              "            return NugetMarshal.ReadBytes(nativeResult);",
+        )
+
         // ADR-077 sub-items 3/4: the ADR-075 null-handle guard, then the per-underlying
         // reconstruction (String and ObjectHandle underlyings both ride the IntPtr wire).
         is BridgeType.ValueClass -> append(
@@ -340,6 +348,8 @@ internal object ForwardCirPropertyProjection {
         append("            return ${interfaceReturnExpression(value.csharpType(), value.backingType)};")
 
       is BridgeType.Collection -> append(collectionMaterialize(value))
+      // ADR-151: materialize and dispose the handle the getter minted.
+      BridgeType.ByteArray -> append("            return NugetMarshal.ReadBytes(nativeResult);")
       else -> append("            return nativeResult;")
     }
   }
@@ -493,6 +503,21 @@ internal object ForwardCirPropertyProjection {
         )
       }
 
+      // ADR-151: the setter mints the Kotlin array handle before the call, the same shape the
+      // collection arm below uses, with `IntPtr.Zero` for a null value.
+      BridgeType.ByteArray -> {
+        val built: String = if (nullable) {
+          "$name != null ? NugetMarshal.CreateBytes($name) : IntPtr.Zero"
+        } else {
+          "NugetMarshal.CreateBytes($name)"
+        }
+        ForwardCirHandleStep(
+          flat = "IntPtr ${name}Handle = $built;",
+          declarations = listOf("IntPtr ${name}Handle = IntPtr.Zero;"),
+          statement = "${name}Handle = $built;",
+        )
+      }
+
       is BridgeType.Collection -> {
         val factory: String = when (value.kind) {
           CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "CreateList"
@@ -528,6 +553,10 @@ internal object ForwardCirPropertyProjection {
       // not null-safe.
       is BridgeType.Interface ->
         "if (${name}Owned && ${name}Handle != IntPtr.Zero) { NugetMarshal.Dispose(${name}Handle); }"
+      // ADR-151: the same unconditional zero guard the collection arm carries.
+      BridgeType.ByteArray ->
+        "if (${name}Handle != IntPtr.Zero) { NugetBytesNative.Dispose(${name}Handle); }"
+
       is BridgeType.Collection -> {
         val native: String = when (value.kind) {
           CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "NugetListNative"
@@ -578,6 +607,9 @@ internal object ForwardCirPropertyProjection {
       // same shape as the nullable-`Interface` arm above.
       is BridgeType.Collection -> "${name}Handle"
 
+      // ADR-151: the handle [handleStep] minted with `NugetMarshal.CreateBytes`.
+      BridgeType.ByteArray -> "${name}Handle"
+
       // ADR-077 sub-items 2/3/4: unwrap the record struct to its capitalized underlying property
       // and lower it to the wire per underlying, with null propagation for the nullable spelling
       // (a C# null ships the null pointer). The old `else -> name` fell through here and passed
@@ -603,7 +635,8 @@ internal object ForwardCirPropertyProjection {
     BridgeType.Unit -> ForwardAbiWireType.VOID
     BridgeType.Char -> ForwardAbiWireType.CHAR16
     BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
-    is BridgeType.Collection, is BridgeType.TypeParameter -> ForwardAbiWireType.POINTER
+    is BridgeType.Collection, BridgeType.ByteArray,
+    is BridgeType.TypeParameter -> ForwardAbiWireType.POINTER
 
     is BridgeType.Enum -> ForwardAbiWireType.INT32
     // ADR-076: wires as its own INT64 tick representation, same as a Primitive(LONG).
@@ -653,6 +686,9 @@ internal object ForwardCirPropertyProjection {
     // wire value: true for an extension property's receiver (ADR-075) and for an ordinary
     // value-class-typed property (ADR-077 sub-item 2).
     is BridgeType.ValueClass -> csharpType
+    // ADR-151: the public spelling is `byte[]`; `ByteArray?` renders `byte[]?` through the
+    // nullable arm above, because a C# array is a reference type.
+    BridgeType.ByteArray -> "byte[]"
     is BridgeType.Collection -> when (kind) {
       CollectionKind.LIST -> "IReadOnlyList<${requireNotNull(element).csharpType()}>"
       CollectionKind.MUTABLE_LIST -> "IList<${requireNotNull(element).csharpType()}>"

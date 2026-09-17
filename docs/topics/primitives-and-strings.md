@@ -27,6 +27,7 @@ string result = Mappings.String(); // "Kotlin/Native!"
 | `kotlin.time.Instant` | `System.DateTimeOffset` |
 | `kotlin.time.Duration` | `System.TimeSpan` |
 | `kotlin.uuid.Uuid` | `System.Guid` |
+| `ByteArray` | `byte[]` |
 
 These mappings describe Kotlin APIs exported to C#. For consuming a C# library from Kotlin,
 see [Types that cross the wire](bridgeable-subset.md#types-that-cross-the-wire); nullable value types and the
@@ -120,6 +121,34 @@ using var record = new ChipRecord(minted);
 `Instant`, `Duration`, and `Uuid` work as properties, constructor and method parameters, and
 function results. They are not supported as collection elements. For extension receiver support,
 see [Extensions](extensions.md).
+
+## ByteArray
+
+Use `byte[]` for Kotlin's `ByteArray`. A `byte[]` argument or result is always a fresh copy: nothing
+you do to it on either side reaches the other.
+
+```kotlin
+data class Payload(val code: Int, var data: ByteArray) {
+  val checksum: ByteArray? get() = if (data.isEmpty()) null else byteArrayOf(data.sum().toByte())
+}
+
+fun reverse(data: ByteArray): ByteArray = data.reversedArray()
+```
+
+```C#
+using var payload = new Payload(7, new byte[] { 1, 2, 3 });
+
+byte[] data = payload.Data; // { 1, 2, 3 }
+data[0] = 99; // does not change payload.Data; the getter handed out a fresh copy
+
+byte[] reversed = PayloadKt.Reverse(new byte[] { 1, 2, 3 }); // { 3, 2, 1 }
+```
+
+An empty `ByteArray` (`byteArrayOf()`) crosses as `Array.Empty<byte>()`, never `null`. `ByteArray?`
+becomes `byte[]?`, with `null` distinct from an empty array; `payload.Checksum` above is `null` for
+an empty payload. `ByteArray` works as a property, constructor and method parameter, and function
+result. It is not yet supported as a collection element (`List<ByteArray>`), as another array type
+(`IntArray`, `Array<T>`), or as an extension receiver.
 
 ## C# names
 

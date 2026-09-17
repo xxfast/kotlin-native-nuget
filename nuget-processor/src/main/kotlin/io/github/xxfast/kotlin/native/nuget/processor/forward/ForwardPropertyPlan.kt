@@ -110,7 +110,9 @@ internal data class ForwardPropertyPlan(
     when (type) {
       BridgeType.Unit, BridgeType.Char, BridgeType.String, BridgeType.Instant, BridgeType.Duration,
       is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
-      is BridgeType.Interface, is BridgeType.Collection -> Unit
+      is BridgeType.Interface, is BridgeType.Collection,
+        // ADR-151: valid at a property, getter and setter alike, over the collection handle wire.
+      BridgeType.ByteArray -> Unit
 
       // ADR-107: valid at a property, getter-only (the setter is refused in the planner, so a
       // plan carrying one never reaches here).

@@ -156,7 +156,11 @@ member, and a compiler plugin's synthesized surface such as kotlinx.serializatio
   `Sequence<T>` parameter or return is one of these: `kotlin.sequences.Sequence` is a named
   `Unsupported` stdlib type, so a callable using it at either position skips as
   `SKIPPED_UNSUPPORTED_TYPE` naming the callable, instead of vanishing from the generated API with
-  no diagnostic at all.
+  no diagnostic at all. Any other `kotlin.*`/`kotlinx.*` stdlib type with no first-class C#
+  mapping (see [Primitives and strings](primitives-and-strings.md) and [Collections](collections.md)
+  for what *is* mapped) skips the same way, naming the type itself; a stdlib type wants a
+  first-class mapping, not an export-scope change, so it gets no `include(...)` suggestion, unlike
+  `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` below.
 - **`INFO_*`**: the member still binds, under a documented assumption (for example, `out`/`in`
   variance on a class type parameter is dropped, but the member still generates).
 - **`ERROR_*`**: generation fails and `CNameExports.kt` (the Kotlin `@CName` export file) is never
@@ -323,8 +327,6 @@ outside the effective `include`/`rootPackage` scope is skipped, naming the exact
 
 The hint names the whole `include(...)` line, the current scope first, because an explicit `include`
 replaces the `rootPackage` default rather than adding to it ([#55](https://github.com/xxfast/kotlin-native-nuget/issues/55)).
-A `kotlin.*`/`kotlinx.*` type gets no `include(...)` suggestion at all: a stdlib type wants a
-first-class mapping, not an export-scope change, and the hint says so.
 
 `include(...)` is only ever the right fix for a type the closure simply never included. Three other
 reasons the closure can refuse a dependency type all fold into the same

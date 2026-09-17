@@ -149,8 +149,9 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
 
     // ADR-147: a `T` result is minted by the same `NugetHandles.retain`; C# reads it back with
     // `NugetMarshal.FromHandle<T>`.
+    // ADR-151: a ByteArray result is the same mint; C# reads it back with `NugetMarshal.ReadBytes`.
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
-    is BridgeType.TypeParameter -> {
+    BridgeType.ByteArray, is BridgeType.TypeParameter -> {
       // ADR-081: a collection with a value-class component boxes a projected copy of itself, so the
       // per-element boxes carry the underlying rather than the value class.
       val boxed: String =
@@ -453,7 +454,8 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
       }
     }
 
-    is BridgeType.ObjectHandle, is BridgeType.Collection -> {
+    // ADR-151: the byte array is retained whole, with no per-element projection.
+    is BridgeType.ObjectHandle, is BridgeType.Collection, BridgeType.ByteArray -> {
       // ADR-081: same projected-copy boxing as the ordinary result route above.
       val boxed: String =
         if (result is BridgeType.Collection) collectionResultProjection(invocation, result)
@@ -702,8 +704,9 @@ private fun addNullableResult(
     // null pointer is the null. ADR-081's per-element projection is `?.`-lifted so a null result
     // never dereferences, exactly as the ADR-075 getter does it.
     // ADR-147: `T?` rides the same null-pointer-then-handle body.
+    // ADR-151: and so does `ByteArray?`.
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
-    is BridgeType.TypeParameter -> {
+    BridgeType.ByteArray, is BridgeType.TypeParameter -> {
       val boxed: String =
         if (type is BridgeType.Collection) {
           collectionResultProjection(invocation, type, nullable = true)
@@ -962,8 +965,9 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
   // ADR-106: a Uuid parameter arrives as its hex-dash text, parsed by `loweredArgument`.
   BridgeType.String, BridgeType.Uuid -> kotlinType("String")
   // ADR-147: the boxed handle `NugetMarshal.Wrap<T>` minted.
+  // ADR-151: the handle `NugetMarshal.CreateBytes` minted.
   is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
-  is BridgeType.TypeParameter -> cOpaquePointer
+  BridgeType.ByteArray, is BridgeType.TypeParameter -> cOpaquePointer
   // ADR-088: the transfer GCHandle the C# wrapper allocated.
   is BridgeType.BoundInterface -> cOpaquePointer
   // ADR-077 sub-item 1: a value class crosses as its underlying wire value, so the export's
@@ -972,7 +976,7 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
   is BridgeType.Nullable -> when (val inner = type.type) {
     BridgeType.String, BridgeType.Uuid -> kotlinType("String").copy(nullable = true)
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
-    is BridgeType.TypeParameter -> cOpaquePointer.copy(nullable = true)
+    BridgeType.ByteArray, is BridgeType.TypeParameter -> cOpaquePointer.copy(nullable = true)
 
     // ADR-077 sub-item 3: the underlying (String today) with the outer nullability re-applied.
     is BridgeType.ValueClass ->
@@ -1149,6 +1153,10 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
 
     is BridgeType.Collection -> loweredCollectionExpression(parameter.name, type)
 
+    // ADR-151: the handle holds the Kotlin ByteArray `nuget_bytes_create` built from the caller's
+    // buffer, so the lowering is the plain handle read an object parameter uses.
+    BridgeType.ByteArray -> "${parameter.name}.asStableRef<kotlin.ByteArray>().get()"
+
     // ADR-077: re-wrap the underlying wire value (re-running the value class's own `init`), with
     // the underlying's own lowering composed inside the constructor call (sub-item 4).
     is BridgeType.ValueClass ->
@@ -1190,6 +1198,9 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
       // sharing the same `?.`-guarded lowering the property setter emitter uses.
       is BridgeType.Collection ->
         loweredCollectionExpression(parameter.name, inner, nullable = true)
+
+      // ADR-151: `IntPtr.Zero` arrives as a Kotlin null pointer and stays null.
+      BridgeType.ByteArray -> "${parameter.name}?.asStableRef<kotlin.ByteArray>()?.get()"
 
       // ADR-077 sub-items 3/4: `?.let` re-wraps only a non-null wire value, so a C# null arrives
       // as a genuine Kotlin null rather than a value class wrapping a default.

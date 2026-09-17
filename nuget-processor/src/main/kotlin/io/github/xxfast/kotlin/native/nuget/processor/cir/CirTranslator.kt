@@ -641,7 +641,7 @@ internal fun translate(
   if (tracker.needsFlow) tracker.needsAsync = true
 
   val needsCollectionHelpers: Boolean =
-    tracker.needsList || tracker.needsMap || tracker.needsSet ||
+    tracker.needsList || tracker.needsMap || tracker.needsSet || tracker.needsBytes ||
         tracker.lambdaArities.isNotEmpty() || tracker.needsAsync
   if (needsCollectionHelpers) {
     needsMarshalHelper = true
@@ -678,6 +678,7 @@ internal fun translate(
         includesMap = tracker.needsMap,
         includesSet = tracker.needsSet,
         includesList = tracker.needsList,
+        includesBytes = tracker.needsBytes,
         includesBridge = bridgePlans.isNotEmpty(),
         // ADR-094: the walk happens here, before the helpers are prepended, because `namespaces`
         // already pairs every wrapper declaration with the namespace that names it.
@@ -686,6 +687,7 @@ internal fun translate(
     )
     if (bridgePlans.isNotEmpty()) helpers.add(CirBridgeHelper(context.libraryName, bridgePlans))
     if (tracker.needsList) helpers.add(CirListHelper(context.libraryName))
+    if (tracker.needsBytes) helpers.add(CirBytesHelper(context.libraryName))
     if (tracker.needsMap) helpers.add(CirMapHelper(context.libraryName))
     if (tracker.needsSet) helpers.add(CirSetHelper(context.libraryName))
     if (tracker.lambdaArities.isNotEmpty()) helpers.add(CirFuncNativeHelper(context.libraryName, tracker.lambdaArities))

@@ -263,6 +263,8 @@ class ForwardSkippedCallableWarningTest {
         ForwardPlanSkipReason.THROWABLE,
         // ADR-106: defensive, like INSTANT/DURATION.
         ForwardPlanSkipReason.UUID,
+        // ADR-151: defensive at a top-level position, real for the deferred `List<ByteArray>`.
+        ForwardPlanSkipReason.BYTE_ARRAY,
         ForwardPlanSkipReason.NULLABLE,
         // ADR-132: an extension receiver whose wire is the ADR-079/080 `HasValue` + value pair.
         // Every other admitted receiver shape lowers like a parameter now; this one cannot be

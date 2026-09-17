@@ -474,6 +474,15 @@ the Proposed text:
    `SKIPPED_UNSUPPORTED_RETURN` (a "NULLABLE type combination"), and under the Tier 1 harness (no
    `rootPackage`) the non-nullable one fires `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`. Tests assert
    absence, not kind, deliberately.
+
+   **As shipped (2026-09-17, ADR-151).** Every `ByteArray?` above is historical. `kotlin.ByteArray`
+   now maps to `byte[]` at every ordinary position, so neither skip fires any more, and the
+   unbridgeable stand-in in the fixture and in the Tier 1 cells is `fun collarTag(code: Int):
+   Sequence<Int>` (ADR-064 refuses `Sequence` by name, a decision rather than a gap, so it cannot be
+   mapped out from under the fixture later). ADR-151 also retires the second half of this note: an
+   unmapped `kotlin.*` type is `SKIPPED_UNSUPPORTED_TYPE` now, not
+   `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`. The original text stays as the record of what shipped with
+   this ADR.
 7. "What breaks" understated the loss: members typed with the interface's **own type parameter**
    also dropped (`IReadable<T>` lost `T Read()`, `IWritable<T>` lost `void Write(T value)`). The
    owner decided, once this was surfaced, to keep them; see the carve-out below.

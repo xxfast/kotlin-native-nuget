@@ -345,6 +345,9 @@ internal class ForwardPropertyPlanner(
 
     // ADR-147: an extension property over a bare `T` receiver is not a generic-class member and
     // has no carrier to hang off; refused as it is today.
+    // ADR-151: an extension property over a `ByteArray` receiver is the ROADMAP:27 deferral
+    // class, the same one `Uuid`/`Instant` sit in; refused here, bound at every other position.
+    BridgeType.ByteArray,
     BridgeType.Char, BridgeType.Unit, BridgeType.Instant, BridgeType.Duration, BridgeType.Throwable,
     BridgeType.Uuid, is BridgeType.Enum, is BridgeType.BoundInterface, is BridgeType.Collection,
     is BridgeType.SpecializedProtocol, is BridgeType.RawKSType, is BridgeType.Unsupported,
@@ -676,6 +679,10 @@ internal class ForwardPropertyPlanner(
     // `Uuid?` null-pointer spelling), with the text conversion composed on each side.
     BridgeType.Uuid -> true
 
+    // ADR-151: a ByteArray property rides the collection property shapes (single-call getter,
+    // Direct setter, the null pointer for `ByteArray?`) with no component gate to apply.
+    BridgeType.ByteArray -> true
+
     // Issue #52: the read side imposes no *marshalling* restriction on a component (unlike a
     // setter), but it still has to spell one in C#; a sealed helper inside a `List` used to sail
     // through here and crash the projection, where the bare `Shape?` spelling skips named.
@@ -732,6 +739,8 @@ internal class ForwardPropertyPlanner(
     BridgeType.Throwable -> false
     // ADR-106: `List<Uuid>` is deferred for the same reason, and skips named here.
     BridgeType.Uuid -> false
+    // ADR-151 v1: `List<ByteArray>` is deferred, matching `isBridgeableComponent`.
+    BridgeType.ByteArray -> false
     // ADR-147 v1: `List<T>` is deferred, the same nesting rule `isBridgeableComponent` applies.
     is BridgeType.TypeParameter -> false
     BridgeType.Unit, is BridgeType.BoundInterface, is BridgeType.SpecializedProtocol,
@@ -763,8 +772,10 @@ internal class ForwardPropertyPlanner(
     BridgeType.Unit -> ForwardAbiWireType.VOID
     BridgeType.Char -> ForwardAbiWireType.CHAR16
     // ADR-147: the boxed handle a `T` getter mints.
+    // ADR-151: the handle to the Kotlin array, on both the getter and the setter side.
     BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
-    is BridgeType.Collection, is BridgeType.TypeParameter -> ForwardAbiWireType.POINTER
+    is BridgeType.Collection, BridgeType.ByteArray,
+    is BridgeType.TypeParameter -> ForwardAbiWireType.POINTER
 
     // ADR-107: the pointer to the `StableRef<NugetError>` envelope `buildError` produced, exactly
     // the value an `errorOut` slot carries.
@@ -899,6 +910,13 @@ internal fun BridgeType.conversion(flow: ForwardFlow): ForwardConversion? = when
     ForwardConversion.HANDLE_TO_COLLECTION
   } else {
     ForwardConversion.COLLECTION_TO_HANDLE
+  }
+
+  // ADR-151: the same handle wire, with the bytes helpers instead of the list ones.
+  BridgeType.ByteArray -> if (flow == ForwardFlow.INTO_KOTLIN) {
+    ForwardConversion.HANDLE_TO_BYTES
+  } else {
+    ForwardConversion.BYTES_TO_HANDLE
   }
 
   BridgeType.Instant -> if (flow == ForwardFlow.INTO_KOTLIN) {

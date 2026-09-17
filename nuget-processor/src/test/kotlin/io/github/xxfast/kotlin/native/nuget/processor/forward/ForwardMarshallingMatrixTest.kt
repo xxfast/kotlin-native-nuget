@@ -663,6 +663,7 @@ class ForwardMarshallingMatrixTest {
     BridgeType.Duration -> "Duration"
     BridgeType.Throwable -> "Throwable"
     BridgeType.Uuid -> "Uuid"
+    BridgeType.ByteArray -> "ByteArray"
     is BridgeType.Enum -> "Enum"
     is BridgeType.ObjectHandle -> "ObjectHandle"
     is BridgeType.Interface -> "Interface"

@@ -81,10 +81,12 @@ interface Advertisement {
 
   /**
    * The issue's literal collision: same Kotlin name as [collarTag], different namespace in Kotlin,
-   * the same member name `CollarTag` in C#. Unbridgeable (a nullable `ByteArray` return), so the
+   * the same member name `CollarTag` in C#. Unbridgeable (a `Sequence` return: ADR-064 refuses
+   * `kotlin.sequences.Sequence` by name, because a lazy sequence has no bridge shape, so this
+   * stand-in is refused by decision and cannot be mapped out from under the fixture later), so the
    * forward plan drops it and the fatal CS0102 guard must NOT fire for this hierarchy.
    */
-  fun collarTag(code: Int): ByteArray?
+  fun collarTag(code: Int): Sequence<Int>
 
   /** Bridgeable method: `string` in, `string` out. */
   fun describe(prefix: String): String
@@ -97,7 +99,7 @@ class BleAdvertisement(
 ) : Advertisement {
   override val codes: Collection<String> get() = listOf(identifier)
 
-  override fun collarTag(code: Int): ByteArray? = null
+  override fun collarTag(code: Int): Sequence<Int> = sequenceOf(code)
 
   override fun describe(prefix: String): String = "$prefix$identifier"
 }

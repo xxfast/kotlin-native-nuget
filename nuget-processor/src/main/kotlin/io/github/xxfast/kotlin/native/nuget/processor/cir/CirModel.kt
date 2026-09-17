@@ -316,6 +316,8 @@ data class CirMarshalHelper(
   val includesSet: Boolean = false,
   // ADR-099: same gate for CreateList and ReadList, both of which call into NugetListNative.
   val includesList: Boolean = false,
+  // ADR-151: the same gate for CreateBytes and ReadBytes, which call into NugetBytesNative.
+  val includesBytes: Boolean = false,
   // ADR-084: `HandleOf` falls back to `NugetBridge.HandleFor` for a value with no `_handle` (a
   // C#-implemented Kotlin interface). Gated on the same principle as includesMap/includesSet: the
   // fallback only compiles where a CirBridgeHelper was actually emitted.
@@ -357,6 +359,13 @@ internal data class CirBridgeInterface(
 }
 
 data class CirListHelper(
+  val libraryName: String,
+) : CirDeclaration
+
+/** ADR-151: `NugetBytesNative`, the three `nuget_bytes_*` imports plus `nuget_dispose`. Emitted
+ *  only when a `ByteArray` was actually planned somewhere in the file, the same gate
+ *  [CirListHelper] rides. */
+data class CirBytesHelper(
   val libraryName: String,
 ) : CirDeclaration
 

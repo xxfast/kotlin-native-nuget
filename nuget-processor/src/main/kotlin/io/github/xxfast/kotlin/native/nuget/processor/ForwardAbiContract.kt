@@ -490,6 +490,10 @@ internal object ForwardAbiContract {
  * asserts every name is present in the linked binary, which is where the two are kept honest.
  */
 internal val NUGET_RUNTIME_EXPORTS: Set<String> = setOf(
+  // ADR-151: the byte-array wire, three names plus the shared nuget_dispose below.
+  "nuget_bytes_copy",
+  "nuget_bytes_count",
+  "nuget_bytes_create",
   "nuget_csharp_token",
   "nuget_dispose",
   "nuget_error_cause_count",

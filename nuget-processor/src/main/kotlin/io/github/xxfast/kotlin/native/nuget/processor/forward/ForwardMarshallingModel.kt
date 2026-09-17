@@ -163,6 +163,19 @@ internal sealed interface BridgeType {
     val typeArguments: List<BridgeType> = emptyList(),
   ) : BridgeType
 
+  /**
+   * ADR-151: `kotlin.ByteArray`, surfacing in C# as `byte[]` (and `ByteArray?` as `byte[]?`).
+   *
+   * Wires exactly as [Collection] does: one POINTER slot holding a `StableRef` to the Kotlin
+   * array, MATERIALIZED ownership, the null pointer for `null`. The per-element `nuget_list_*`
+   * loop is replaced by `nuget_bytes_count` plus a single `nuget_bytes_copy` memcpy, so a
+   * `byte[]` is a fresh copy on every crossing and never a view into the other side's memory.
+   *
+   * A sealed variant rather than `Collection(LIST, Primitive(BYTE))` so every `when` that admits
+   * a collection has to decide about it: falling through would publish `List<sbyte>`.
+   */
+  data object ByteArray : BridgeType
+
   data class Collection(
     val kind: CollectionKind,
     val element: BridgeType? = null,
@@ -375,6 +388,12 @@ internal enum class ForwardConversion {
   COLLECTION_TO_HANDLE,
   HANDLE_TO_COLLECTION,
 
+  /** ADR-151: a Kotlin `ByteArray` -> a `StableRef` handle, out of Kotlin. */
+  BYTES_TO_HANDLE,
+
+  /** ADR-151: a `StableRef` handle -> a Kotlin `ByteArray`, into Kotlin. */
+  HANDLE_TO_BYTES,
+
   /** ADR-076: Kotlin `Instant` -> .NET ticks (`Long`), out of Kotlin. */
   INSTANT_TO_TICKS,
 
@@ -407,6 +426,9 @@ internal enum class ForwardHelperRequirement {
   VALUE_CLASS,
   COLLECTION,
   ERROR_TRANSFER,
+
+  /** ADR-151: `NugetBytesNative` plus `NugetMarshal.ReadBytes`/`CreateBytes`. */
+  BYTES,
 
   /** ADR-076: the generated `toDotNetTicks()`/`instantFromDotNetTicks()` conversion pair. */
   INSTANT,
@@ -725,6 +747,8 @@ internal object ForwardCallablePlanValidator {
       BridgeType.Throwable,
         // ADR-106: valid at every ordinary position, over the String wire.
       BridgeType.Uuid,
+        // ADR-151: valid at every ordinary position, over the collection handle wire.
+      BridgeType.ByteArray,
       is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
       is BridgeType.Interface, is BridgeType.BoundInterface,
         // ADR-147: a class type parameter, valid at every top-level position over the boxed wire.
@@ -810,6 +834,13 @@ internal object ForwardCallablePlanValidator {
       ForwardConversion.COLLECTION_TO_HANDLE
     }
 
+    // ADR-151: the collection row's handle wire, with a memcpy instead of an element loop.
+    BridgeType.ByteArray -> if (flow == ForwardFlow.INTO_KOTLIN) {
+      ForwardConversion.HANDLE_TO_BYTES
+    } else {
+      ForwardConversion.BYTES_TO_HANDLE
+    }
+
     BridgeType.Instant -> if (flow == ForwardFlow.INTO_KOTLIN) {
       ForwardConversion.TICKS_TO_INSTANT
     } else {
@@ -865,6 +896,10 @@ internal fun ForwardConversion.helper(): ForwardHelperRequirement = when (this) 
   ForwardConversion.COLLECTION_TO_HANDLE,
   ForwardConversion.HANDLE_TO_COLLECTION,
     -> ForwardHelperRequirement.COLLECTION
+
+  ForwardConversion.BYTES_TO_HANDLE,
+  ForwardConversion.HANDLE_TO_BYTES,
+    -> ForwardHelperRequirement.BYTES
 
   ForwardConversion.INSTANT_TO_TICKS,
   ForwardConversion.TICKS_TO_INSTANT,

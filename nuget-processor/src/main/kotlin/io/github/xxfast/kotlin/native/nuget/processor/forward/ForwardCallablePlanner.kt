@@ -71,6 +71,11 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  succeeds, so a skip carrying a Uuid can only be a genuine drop. */
   UUID(droppedFromCSharp = true),
 
+  /** ADR-151: `kotlin.ByteArray` binds at every ordinary top-level position, so a skip carrying
+   *  one is either defensive or the deferred nesting case (`List<ByteArray>`, whose component
+   *  helpers have no bytes arm yet). Either way a genuine drop with no legacy route. */
+  BYTE_ARRAY(droppedFromCSharp = true),
+
   /** ADR-107: `kotlin.Throwable` binds at a **property getter** and nowhere else in v1, so a
    *  callable carrying one (a method return, a parameter, a constructor argument) is a genuine
    *  drop with no legacy route -- named here rather than folded into HANDLE, whose hint would
@@ -1891,7 +1896,8 @@ internal class ForwardCallablePlanner(
           ?: ineligibleType.unexportedDependencyDetail()
           ?: ineligibleType.undeclaredTypeDetail()
           ?: ineligibleType.sealedTypeDetail()
-          ?: ineligibleType.collectionComponentDetail(),
+          ?: ineligibleType.collectionComponentDetail()
+          ?: ineligibleType.stdlibTypeDetail(),
         position = ForwardSkipPosition.INPUT,
         parameter = ineligible.first,
       )
@@ -1939,6 +1945,10 @@ internal class ForwardCallablePlanner(
       }
       if (declared.any { (_, type) -> type.unwrapNullable() is BridgeType.Collection }) {
         add(ForwardHelperRequirement.COLLECTION)
+      }
+      // ADR-151: the bytes helpers ride the collection row's slot, with their own P/Invoke class.
+      if (declared.any { (_, type) -> type.unwrapNullable() == BridgeType.ByteArray }) {
+        add(ForwardHelperRequirement.BYTES)
       }
       val resultIsInstant: Boolean = inner == BridgeType.Instant
       val hasInstantParameter: Boolean =
@@ -2230,7 +2240,8 @@ internal class ForwardCallablePlanner(
           ?: ineligibleType.unexportedDependencyDetail()
           ?: ineligibleType.undeclaredTypeDetail()
           ?: ineligibleType.sealedTypeDetail()
-          ?: ineligibleType.collectionComponentDetail(),
+          ?: ineligibleType.collectionComponentDetail()
+          ?: ineligibleType.stdlibTypeDetail(),
         position = ForwardSkipPosition.INPUT,
         parameter = ineligible.first,
       )
@@ -2267,7 +2278,8 @@ internal class ForwardCallablePlanner(
           ?: plannedResult.unexportedDependencyDetail()
           ?: plannedResult.undeclaredTypeDetail()
           ?: plannedResult.sealedTypeDetail()
-          ?: plannedResult.collectionComponentDetail(),
+          ?: plannedResult.collectionComponentDetail()
+          ?: plannedResult.stdlibTypeDetail(),
         // ADR-064 amendment (2026-09-13): the default already, stated explicitly because the
         // unrouted-position reclassification reads it — a `fun <T> f(): List<T>` and a
         // `fun f(): Flow<Int>` both have to report RETURN, and an implicit default is not
@@ -2307,6 +2319,10 @@ internal class ForwardCallablePlanner(
       }
       if (inputTypes.any { type -> type.unwrapNullable() is BridgeType.Collection }) {
         add(ForwardHelperRequirement.COLLECTION)
+      }
+      // ADR-151: the bytes helpers ride the collection row's slot, with their own P/Invoke class.
+      if (inputTypes.any { type -> type.unwrapNullable() == BridgeType.ByteArray }) {
+        add(ForwardHelperRequirement.BYTES)
       }
       if (inputTypes.any { type -> type.unwrapNullable() == BridgeType.Instant }) {
         add(ForwardHelperRequirement.INSTANT)
@@ -2522,6 +2538,21 @@ internal class ForwardCallablePlanner(
       )
     )
 
+    // ADR-151: the collection row's slot exactly, with the bytes conversion tag; the C# prelude
+    // mints the handle with `NugetMarshal.CreateBytes` and the cleanup disposes it.
+    BridgeType.ByteArray -> listOf(
+      ForwardAbiParameter(
+        name = name,
+        wireType = ForwardAbiWireType.POINTER,
+        direction = ForwardAbiDirection.IN,
+        transfer = ForwardTransfer(
+          name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_BYTES,
+        ),
+        role = role,
+      )
+    )
+
     // ADR-073: the POINTER / IN / HANDLE_TO_COLLECTION shape is the same for all six collection
     // kinds; only the C# prelude/cleanup factory and the Kotlin lowering expression are kind-aware.
     is BridgeType.Collection -> listOf(
@@ -2575,6 +2606,20 @@ internal class ForwardCallablePlanner(
           transfer = ForwardTransfer(
             name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
             ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
+          ),
+          role = role,
+        )
+      )
+
+      // ADR-151: `ByteArray?` is the same null-pointer sentinel a nullable collection rides.
+      BridgeType.ByteArray -> listOf(
+        ForwardAbiParameter(
+          name = name,
+          wireType = ForwardAbiWireType.POINTER,
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+            ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_BYTES,
           ),
           role = role,
         )
@@ -2851,6 +2896,9 @@ internal class ForwardCallablePlanner(
     // ForwardCallablePlanValidator as a built Collection shape — that error()s the whole plan
     // rather than skipping just this one callable (the archive(): List<TopStory> crash this
     // feature's fixture flushed out, predating ADR-066 but only reachable once it exists).
+    // ADR-151: one materialized handle, read back by `NugetMarshal.ReadBytes`, which disposes it.
+    BridgeType.ByteArray -> handleResultShape(this, ForwardHelperRequirement.BYTES)
+
     is BridgeType.Collection -> if (isBridgeableComponent()) {
       handleResultShape(this, ForwardHelperRequirement.COLLECTION)
     } else {
@@ -2898,6 +2946,10 @@ internal class ForwardCallablePlanner(
     // Kotlin null and no has-value channel is needed. The component gate is the non-nullable
     // Collection arm's, so an ineligible element/key/value still skips with its own named reason
     // rather than reaching the validator as a built shape (ADR-066).
+    // ADR-151: `ByteArray?` out is the null pointer, then the handle.
+    BridgeType.ByteArray ->
+      handleResultShape(BridgeType.Nullable(type), ForwardHelperRequirement.BYTES)
+
     is BridgeType.Collection -> if (type.isBridgeableComponent()) {
       handleResultShape(BridgeType.Nullable(type), ForwardHelperRequirement.COLLECTION)
     } else {
@@ -3130,6 +3182,7 @@ internal class ForwardCallablePlanner(
       ownership = ForwardOwnership.OWNED_HANDLE,
       conversion = when (type.unwrapNullable()) {
         is BridgeType.Collection -> ForwardConversion.COLLECTION_TO_HANDLE
+        BridgeType.ByteArray -> ForwardConversion.BYTES_TO_HANDLE
         else -> ForwardConversion.STABLE_REF_TO_HANDLE
       },
     ),
@@ -3271,6 +3324,9 @@ internal class ForwardCallablePlanner(
     // crashes plan validation — route it through the same skip path as any other unsupported
     // input, preferring the (element ?: key ?: value)'s own reason (e.g.
     // UNEXPORTED_DEPENDENCY_TYPE) when known.
+    // ADR-151: admitted at every parameter position; the handle is minted and disposed by C#.
+    BridgeType.ByteArray -> null
+
     is BridgeType.Collection -> collectionInputSkipReason()
 
     // ADR-077: a value class crosses as its underlying wire value, so an ordinary parameter is
@@ -3298,6 +3354,9 @@ internal class ForwardCallablePlanner(
       // ADR-080: a bare nullable enum fans out to the has-value pair with the ordinal in the
       // value slot, exactly like ADR-079's enum-underlying value class minus the box.
       is BridgeType.Enum -> null
+
+      // ADR-151: `byte[]?` rides `IntPtr.Zero`, exactly as a nullable collection does.
+      BridgeType.ByteArray -> null
 
       is BridgeType.Collection -> inner.collectionInputSkipReason()
       // ADR-077 sub-items 3/4: null rides the null pointer for the pointer-wired underlyings
@@ -3416,6 +3475,8 @@ internal class ForwardCallablePlanner(
     BridgeType.Duration,
     is BridgeType.Nullable,
     is BridgeType.Collection,
+      // ADR-151: like Collection, always tagged with its own conversion at its call site.
+    BridgeType.ByteArray,
     is BridgeType.RawCollection,
     is BridgeType.Enum,
     is BridgeType.ObjectHandle,
@@ -3509,6 +3570,10 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   // ADR-106: collection components are deferred (the component would need a `nuget_wrap_*` arm
   // over the text form), so `List<Uuid>` skips named rather than half-binding.
   BridgeType.Uuid -> false
+
+  // ADR-151 v1: `List<ByteArray>` is deferred for the same reason (the component read/write
+  // helpers have no bytes arm), so it skips named rather than half-binding.
+  BridgeType.ByteArray -> false
 
   is BridgeType.ValueClass -> underlying.isBridgeableComponent()
   is BridgeType.Nullable -> type !is BridgeType.Nullable && type != BridgeType.Unit &&
@@ -3781,6 +3846,9 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
   BridgeType.Throwable -> ForwardPlanSkipReason.THROWABLE
   // ADR-106: defensive only, like Instant/Duration -- Uuid always has a return shape.
   BridgeType.Uuid -> ForwardPlanSkipReason.UUID
+  // ADR-151: reached for real from the deferred nesting case (`List<ByteArray>`); defensive at
+  // every top-level position, where a ByteArray always has a shape.
+  BridgeType.ByteArray -> ForwardPlanSkipReason.BYTE_ARRAY
   // ADR-088: same deferred nullable position as the input side, named the same way instead of
   // reaching the generic NULLABLE bucket.
   is BridgeType.Nullable -> when {
@@ -3903,3 +3971,13 @@ internal fun BridgeType.skipDetail(): String? = optInMarkerDetail()
   ?: unexportedDependencyDetail()
   ?: undeclaredTypeDetail()
   ?: sealedTypeDetail()
+  ?: stdlibTypeDetail()
+
+/** ADR-151: the qualified name of an unmapped `kotlin.*`/`kotlinx.*` type, so
+ *  [ForwardPlanSkipReason.UNSUPPORTED]'s hint can name the type the author wrote. Last in the
+ *  chain: every flagged refusal above it (opt-in marker, typealias target, scope, nesting) is
+ *  more specific and keeps its own wording. `null` for every other type. */
+internal fun BridgeType.stdlibTypeDetail(): String? =
+  (unwrapNullable() as? BridgeType.Unsupported)
+    ?.takeIf { unsupported -> unsupported.rendered.isStdlibPackage() }
+    ?.rendered

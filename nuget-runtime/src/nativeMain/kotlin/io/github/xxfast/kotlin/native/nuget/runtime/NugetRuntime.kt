@@ -20,15 +20,21 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.time.Instant
+import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.CFunction
 import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.COpaquePointerVar
+import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.StableRef
+import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.asStableRef
+import kotlinx.cinterop.convert
 import kotlinx.cinterop.invoke
 import kotlinx.cinterop.pointed
+import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.reinterpret
+import kotlinx.cinterop.usePinned
 import kotlinx.cinterop.value
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -39,6 +45,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import platform.posix.memcpy
 
 // ADR-127: this file is the fixed block that `NugetProcessor` used to regenerate into every
 // consumer module, moved here verbatim with `internal` dropped to `public`. Every `@CName` name
@@ -152,6 +159,36 @@ public fun export_nuget_list_create(): COpaquePointer = NugetHandles.retain(muta
 @CName("nuget_list_add")
 public fun export_nuget_list_add(handle: COpaquePointer, element: COpaquePointer?) {
   handle.asStableRef<MutableList<Any?>>().get().add(element?.asStableRef<Any>()?.get())
+}
+
+/**
+ * ADR-151: mint a Kotlin `ByteArray` from the caller's buffer. The C# side passes a blittable
+ * `byte[]` the marshaller pinned for the duration of the call, so the copy has to happen here:
+ * the pin ends when this returns. `count == 0` (and a null `src`) is a real, empty value, never
+ * a null.
+ */
+@NugetRuntimeApi
+@CName("nuget_bytes_create")
+public fun export_nuget_bytes_create(src: CPointer<ByteVar>?, count: Int): COpaquePointer =
+  NugetHandles.retain(if (src == null || count == 0) ByteArray(0) else src.readBytes(count))
+
+@NugetRuntimeApi
+@CName("nuget_bytes_count")
+public fun export_nuget_bytes_count(handle: COpaquePointer): Int =
+  handle.asStableRef<ByteArray>().get().size
+
+/**
+ * ADR-151: copy the array behind [handle] into the caller's buffer, which C# sized from
+ * `nuget_bytes_count`. The `isEmpty()` guard is load-bearing, not tidiness: `addressOf(0)` on an
+ * empty `ByteArray` throws `ArrayIndexOutOfBoundsException` (verified with konanc 2.4.10), so
+ * without it an empty `byte[]` crossing out of Kotlin fails at the read.
+ */
+@NugetRuntimeApi
+@CName("nuget_bytes_copy")
+public fun export_nuget_bytes_copy(handle: COpaquePointer, dest: CPointer<ByteVar>?) {
+  val bytes: ByteArray = handle.asStableRef<ByteArray>().get()
+  if (bytes.isEmpty() || dest == null) return
+  bytes.usePinned { pinned -> memcpy(dest, pinned.addressOf(0), bytes.size.convert()) }
 }
 
 @NugetRuntimeApi

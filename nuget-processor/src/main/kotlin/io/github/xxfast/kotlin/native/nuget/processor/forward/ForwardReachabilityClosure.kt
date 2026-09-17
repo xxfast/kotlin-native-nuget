@@ -358,6 +358,9 @@ internal class ForwardReachabilityClosure(
       // ADR-106: the third known stdlib scalar; the closure must stop at it rather than walking
       // Uuid's own members as class edges.
       "kotlin.uuid.Uuid",
+      // ADR-151: the fourth known stdlib scalar. Without it the closure walks ByteArray's own
+      // members as class edges.
+      "kotlin.ByteArray",
     )
     val COLLECTION_TYPES: Set<String> = setOf(
       "kotlin.collections.List", "kotlin.collections.MutableList",

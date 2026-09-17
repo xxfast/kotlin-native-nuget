@@ -87,8 +87,10 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       // `nullableHandleBody` already returns Kotlin `null` for a null result before ever building
       // a `StableRef`, the same route a nullable `ObjectHandle`/`Interface` getter takes.
       // ADR-083/147: `T?` ships the null pointer for null, the retained box otherwise.
+      // ADR-151: `ByteArray?` too -- `NugetMarshal.ReadBytes` never sees a zero handle, the
+      // generated C# returns null before it.
       is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
-      is BridgeType.TypeParameter -> {
+      BridgeType.ByteArray, is BridgeType.TypeParameter -> {
         // ADR-081: a value-class component is projected to its underlying before boxing, with the
         // whole chain `?.`-guarded so a null property value still ships a null pointer.
         val boxed: String = if (inner is BridgeType.Collection) {
@@ -159,8 +161,9 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
     }
 
     // ADR-147: a `T` getter mints the same `NugetHandles.retain` box.
+    // ADR-151: a ByteArray getter mints one too, read back by `NugetMarshal.ReadBytes`.
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
-    is BridgeType.TypeParameter -> {
+    BridgeType.ByteArray, is BridgeType.TypeParameter -> {
       // ADR-081: read side of a collection property whose component is a value class -- box a copy
       // projected to the underlying, the shape a C# per-element re-wrap can read.
       val boxed: String =
@@ -403,6 +406,8 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
     // nullable `COpaquePointer` value -- `?.` short-circuits before `asStableRef` is ever reached
     // for a null wire value, so the property's static type stays the property's own `List<T>?`.
     is BridgeType.Collection -> loweredCollectionExpression(name, inner, nullable = true)
+    // ADR-151: `?.` short-circuits on the null wire pointer, exactly as the collection arm does.
+    BridgeType.ByteArray -> "$name?.asStableRef<kotlin.ByteArray>()?.get()"
     // ADR-077 sub-items 3/4: `?.let` re-wraps only a non-null wire value, matching the callable
     // parameter lowering in ForwardKotlinPlanEmitter.
     // ADR-079: a Primitive/Enum underlying takes the NullableDispatch route instead, whose `set`
@@ -428,6 +433,8 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
   is BridgeType.ObjectHandle -> "$name.asStableRef<${type.qualifiedName}>().get()"
   is BridgeType.Interface -> "$name.asStableRef<${type.qualifiedName}>().get()"
   is BridgeType.Collection -> loweredCollectionExpression(name, type)
+  // ADR-151: the setter value is the handle C# minted with `NugetMarshal.CreateBytes`.
+  BridgeType.ByteArray -> "$name.asStableRef<kotlin.ByteArray>().get()"
   // ADR-077 sub-items 2/4: re-wrap the raw underlying wire value, re-running the value class's
   // own `init` validation, exactly like the callable parameter lowering in
   // ForwardKotlinPlanEmitter.
@@ -449,7 +456,8 @@ private fun kotlinInputType(type: BridgeType): TypeName = when (type) {
   // value-class receiver (ADR-075) and for an ordinary value-class property's setter value
   // (ADR-077 sub-item 2).
   is BridgeType.ValueClass -> kotlinInputType(type.underlying)
-  is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection ->
+  is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
+  BridgeType.ByteArray ->
     cOpaquePointer.copy(nullable = type is BridgeType.Nullable)
 
   else -> error("Forward property emitter has no input type for $type")

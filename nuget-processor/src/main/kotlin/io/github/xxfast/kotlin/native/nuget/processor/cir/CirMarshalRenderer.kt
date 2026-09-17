@@ -338,6 +338,29 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("            throw new NotSupportedException($\"Cannot pass {typeof(T).Name} to a Kotlin collection\");")
   appendLine("        }")
   appendLine()
+  // ADR-151: gated on helper.includesBytes for the same CS0103 reason as the list/map/set bodies
+  // below -- NugetBytesNative only exists in a file that planned a ByteArray somewhere.
+  if (helper.includesBytes) {
+    appendLine("        /// <summary>Copies a Kotlin ByteArray handle into a fresh byte[], disposing the handle.</summary>")
+    appendLine("        public static byte[] ReadBytes(IntPtr handle)")
+    appendLine("        {")
+    appendLine("            try")
+    appendLine("            {")
+    appendLine("                int count = NugetBytesNative.Count(handle);")
+    appendLine("                byte[] result = new byte[count];")
+    // The Kotlin side guards `addressOf(0)` on an empty array, but skipping the call outright
+    // keeps an empty crossing to one P/Invoke instead of two.
+    appendLine("                if (count > 0) NugetBytesNative.Copy(handle, result);")
+    appendLine("                return result;")
+    appendLine("            }")
+    appendLine("            finally { NugetBytesNative.Dispose(handle); }")
+    appendLine("        }")
+    appendLine()
+    appendLine("        /// <summary>Copies a byte[] into a fresh Kotlin ByteArray, returning its handle.</summary>")
+    appendLine("        public static IntPtr CreateBytes(byte[] value) => NugetBytesNative.Create(value, value.Length);")
+    appendLine()
+  }
+
   // Gated on helper.includesList, mirroring includesSet/includesMap below: NugetListNative is only
   // emitted when the tracker actually saw a List/MutableList collection in the file, so this body
   // must not exist unconditionally.
@@ -597,6 +620,30 @@ private fun elementLoop(native: String, add: String): List<String> = listOf(
   "    finally { if (owned) $native.Dispose(element); }",
   "}",
 )
+
+/**
+ * ADR-151: the byte-array native class. Three imports plus the shared `nuget_dispose`.
+ * `Create` takes a blittable `byte[]`, which the marshaller pins for the duration of the call
+ * (no copy on this side; Kotlin copies with `readBytes`). `Copy` is `[Out]`, so the callee's
+ * `memcpy` is visible in the managed array when the call returns.
+ */
+internal fun StringBuilder.renderBytesHelper(helper: CirBytesHelper) {
+  appendLine("    internal static class NugetBytesNative")
+  appendLine("    {")
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_bytes_create\")]")
+  appendLine("        internal static extern IntPtr Create(byte[] src, int count);")
+  appendLine()
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_bytes_count\")]")
+  appendLine("        internal static extern int Count(IntPtr handle);")
+  appendLine()
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_bytes_copy\")]")
+  appendLine("        internal static extern void Copy(IntPtr handle, [Out] byte[] dest);")
+  appendLine()
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_dispose\")]")
+  appendLine("        internal static extern void Dispose(IntPtr handle);")
+  appendLine("    }")
+  appendLine()
+}
 
 internal fun StringBuilder.renderListHelper(helper: CirListHelper) {
   appendLine("    internal static class NugetListNative")
