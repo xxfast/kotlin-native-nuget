@@ -375,7 +375,8 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
     )
 
   call.parameters.forEach { parameter ->
-    // A RECEIVER role already implies index 0 on a non-constructor plan (ADR-062 validateRoles).
+    // A RECEIVER role already implies index 0 on any plan that has one (ADR-062 validateRoles),
+    // including ADR-141's inner-class constructor.
     val isReceiverSlot: Boolean = parameter.role == ForwardAbiRole.RECEIVER
     builder.addParameter(parameter.name, valueClassKotlinType(parameter, isReceiverSlot))
   }
@@ -947,8 +948,15 @@ private fun invocationExpression(
 
     // ADR-147: a generic owner is constructed fully applied (`Crate<Any?>(item)`), so the handle
     // the caller gets back is the type `asStableRef<Crate<Any?>>()` reads.
-    ForwardCallableOrigin.CONSTRUCTOR ->
-      "${plan.invocation.ownerType ?: requireNotNull(plan.invocation.target)}($arguments)"
+    // ADR-141: an `inner class` constructor carries a receiver -- the outer instance -- so the call
+    // is receiver-qualified and names the SIMPLE name (`outer...get().Guest(3)`), the only spelling
+    // Kotlin accepts there. An inner class of a generic outer is deferred, so `ownerType` is never
+    // the applied spelling on this arm.
+    ForwardCallableOrigin.CONSTRUCTOR -> {
+      val target: String = plan.invocation.ownerType ?: requireNotNull(plan.invocation.target)
+      if (receiver == null) "$target($arguments)"
+      else "${receiverExpression(receiver)}.${target.substringAfterLast('.')}($arguments)"
+    }
     ForwardCallableOrigin.COPY -> {
       "handle.asStableRef<${plan.ownerTypeName()}>().get().copy($arguments)"
     }

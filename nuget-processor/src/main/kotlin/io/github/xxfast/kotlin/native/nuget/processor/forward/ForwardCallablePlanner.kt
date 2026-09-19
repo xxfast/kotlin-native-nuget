@@ -1621,7 +1621,10 @@ internal class ForwardCallablePlanner(
       symbol = "$owner.<init>$suffix",
       publicName = publicName,
       exportName = export,
-      receiver = ForwardReceiver.Static,
+      // ADR-141: an `inner class` is constructed through its outer instance (`host.Guest(3)`), so
+      // its plan carries a receiver like an extension's -- one borrowed handle slot at index 0,
+      // named `outer`. Every other constructor keeps `Static` and renders byte-identically.
+      receiver = innerConstructorReceiver(cls),
       parameters = constructor.parameters.dropLast(omitted).map { parameter ->
         parameter.bridgeName() to classifier.classify(parameter.type.resolve())
       },
@@ -1636,6 +1639,9 @@ internal class ForwardCallablePlanner(
       doc = constructor.forwardKdoc(expects)
         .forParameters(constructor.parameters.dropLast(omitted)),
     )
+      // ADR-141: the ADR-091 truncations and ADR-034 secondaries all come through here, so each of
+      // them carries the receiver by construction -- the outer is not a plan parameter and a
+      // trailing-default truncation can never drop it.
       // ADR-064 amendment (2026-09-13): no legacy route re-emits a CONSTRUCTOR (measured cell 24:
       // a secondary taking a lambda, a Flow or a generic type beside a bindable primary vanished
       // with no diagnostic, because `WARNING_NO_PUBLIC_CONSTRUCTOR` only fires when *every*
@@ -3278,6 +3284,20 @@ internal class ForwardCallablePlanner(
     data object Static : ForwardReceiver {
       override val type: BridgeType? = null
     }
+  }
+
+  /**
+   * ADR-141: the outer instance an `inner class` constructor is called on, or
+   * [ForwardReceiver.Static] for every other class. The outer is the enclosing declaration, which
+   * is itself admitted (an inner class under a deferred owner never reaches a plan), and it
+   * crosses BORROWED: the inner instance's own Kotlin-side reference is what keeps the outer
+   * alive, not the handle.
+   */
+  private fun innerConstructorReceiver(cls: KSClassDeclaration?): ForwardReceiver {
+    if (cls == null || !cls.modifiers.contains(Modifier.INNER)) return ForwardReceiver.Static
+    val outer: String = (cls.parentDeclaration as? KSClassDeclaration)?.qualifiedName?.asString()
+      ?: return ForwardReceiver.Static
+    return ForwardReceiver.Handle(BridgeType.ObjectHandle(outer), name = "outer")
   }
 
   private fun receiverParameter(receiver: ForwardReceiver): List<ForwardAbiParameter> = when (receiver) {

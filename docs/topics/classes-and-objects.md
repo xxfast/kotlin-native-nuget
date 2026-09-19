@@ -9,7 +9,7 @@ method call crosses the bridge through that handle.
 | `class` | `class : IDisposable` |
 | constructor | `new Foo(...)` |
 | `val`/`var` property | property (get / get+set) |
-| nested `class`/`object`/`interface`/`enum class`/`value class` | nested C# type, see [Nested types](#nested-classes-and-objects) |
+| nested `class`/`object`/`interface`/`enum class`/`value class`/`inner class` | nested C# type, see [Nested types](#nested-classes-and-objects) |
 
 ```kotlin
 class Cat(
@@ -274,6 +274,7 @@ C# nested type, `Outer.Nested`.
 | `enum class` | `public enum Outer.Kind`; its extension methods go on a **top-level** `OuterKindExtensions` class, since C# forbids extension methods inside a nested class |
 | `interface` | `public interface Outer.IListener`, with its backing wrapper class nested beside it as `Outer.Listener` |
 | `value class` | `public readonly record struct Outer.Tag`, under any admitted owner |
+| `inner class` | `Outer.Nested : IDisposable`, constructor takes the outer instance first, see [Inner classes](#inner-classes) |
 
 ```kotlin
 class Aviary(val name: String) {
@@ -293,13 +294,45 @@ Assert.Equal("perch@5", perch.Describe());
 Assert.Equal(5, aviary.HeightOf(perch));
 ```
 
-An `inner class` owner, a generic owner, and an `enum class` owner have no C# equivalent for a
-nested slot and stay a named skip (`SKIPPED_NESTED_DECLARATION`). Kotlin allows a nested type
-named exactly like its owner, or like a PascalCased member of its owner (a companion's members
-included, since they fold into the owner's C# type as statics); C# does not, so that combination
-fails generation (`ERROR_CSHARP_SIGNATURE_COLLISION`) instead of emitting invalid C#. Avoid naming
-an accessor, or a companion function, the same as its nested return type (`fun perch(): Perch`);
-name it differently instead (`perchAt`).
+An `inner class`'s **own** nested types (inner-of-inner), a generic owner, and an `enum class`
+owner have no C# equivalent for a nested slot and stay a named skip
+(`SKIPPED_NESTED_DECLARATION`); see [Inner classes](#inner-classes) for what an `inner class`
+itself declares. Kotlin allows a nested type named exactly like its owner, or like a PascalCased
+member of its owner (a companion's members included, since they fold into the owner's C# type as
+statics); C# does not, so that combination fails generation (`ERROR_CSHARP_SIGNATURE_COLLISION`)
+instead of emitting invalid C#. Avoid naming an accessor, or a companion function, the same as its
+nested return type (`fun perch(): Perch`); name it differently instead (`perchAt`).
+
+### `inner class`: the constructor takes the outer instance first {id="inner-classes"}
+
+A public Kotlin `inner class` declared directly inside an admitted, non-generic, non-`inner` class
+becomes a nested C# type too, with one difference from a plain nested class: its constructor's
+first parameter is the outer instance, named `outer`.
+
+```kotlin
+class Hearth(val room: String) {
+  inner class Sunbather(val minutes: Int) {
+    val basking: String get() = "${this@Hearth.room} warms Oreo for $minutes min"
+  }
+}
+```
+
+```C#
+using var hearth = new Hearth("The bay window");
+using var sunbather = new Hearth.Sunbather(hearth, 3);
+Assert.Equal("The bay window warms Oreo for 3 min", sunbather.Basking);
+```
+
+Disposing `hearth` before `sunbather` is safe: the inner instance's own reference to its outer
+keeps the Kotlin object alive, so `sunbather.Basking` keeps reading it after `hearth.Dispose()`
+runs. A declared constructor parameter literally named `outer` renders as `outer_` in both the
+generated C# signature and the Kotlin export instead (the same shift `value` already gets on a
+property setter); a member reading `this@Hearth` needs nothing added at the ABI, since the
+reference lives entirely on the Kotlin heap.
+
+An `inner class` as an owner of its own nested types (inner-of-inner), an `inner class` under a
+sealed owner, a generic `inner class`, and an inner class of a generic outer stay a named skip
+(`SKIPPED_NESTED_DECLARATION`).
 
 A `@Serializable` class exports the same as any other class. kotlinx.serialization's
 compiler-generated `$serializer` nested object is never declared in C#, since `$` isn't a legal C#

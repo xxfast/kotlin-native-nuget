@@ -191,8 +191,11 @@ internal fun KSClassDeclaration.unsupportedNestedOwnerReason(): String? = when {
     "only a `class`, `object` or `interface` owner carries nested declarations"
   typeParameters.isNotEmpty() ->
     "a generic owner's nested type is itself generic in C# (`Owner<T>.Nested`)"
+  // ADR-141: an inner class is declared now, but its OWN nested types are not. Only another
+  // `inner class` can nest inside one (a plain nested class there is NESTED_CLASS_NOT_ALLOWED), and
+  // the receiver for that child would be the inner instance, one level up from this ADR's.
   modifiers.contains(Modifier.INNER) ->
-    "an `inner class` owner needs the outer instance to construct"
+    "an `inner class` owner's own nested types are deferred"
   isValueClass() -> "a `value class` owner has no nested-type slot"
   isCompanionObject -> "a companion object is folded into its owner's statics (ADR-013)"
   else -> null
@@ -200,8 +203,8 @@ internal fun KSClassDeclaration.unsupportedNestedOwnerReason(): String? = when {
 
 /** ADR-133: why this nested candidate itself is deferred, or null when it is declared. */
 internal fun KSClassDeclaration.unsupportedNestedCandidateReason(): String? = when {
-  modifiers.contains(Modifier.INNER) ->
-    "an `inner class` needs the outer instance its constructor takes"
+  // ADR-141: no `inner` arm here any more -- an inner class IS declared, with the outer instance as
+  // its constructor's first parameter. The owner arm above still defers an inner-of-inner.
   typeParameters.isNotEmpty() -> "a generic nested type is deferred"
   modifiers.contains(Modifier.SEALED) ->
     "a nested sealed hierarchy is deferred (its arms would have to nest twice)"

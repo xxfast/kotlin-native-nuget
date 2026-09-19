@@ -201,6 +201,37 @@ public class LiveHandleTests
         });
     }
 
+    // Row 1d. ADR-141: an `inner class` constructor, the new forward route. Unlike Row 1a it takes
+    // a borrowed outer handle in and mints a fresh one out (`hearth_sunbather_create(outer,
+    // minutes, error)`), so the borrowed receiver must not be retained a second time on the way
+    // in, and the inner must release on the way out. Either mistake is a rising count here and
+    // nowhere else. Oreo takes the hearth fifty times and gives it back fifty times.
+    [Fact]
+    public void InnerClassConstructor_UsingDispose_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var hearth = new Hearth("The bay window");
+            using var sunbather = new Hearth.Sunbather(hearth, 3);
+            Assert.Equal(3, hearth.MinutesOf(sunbather));
+        });
+    }
+
+    // Row 1e. The fault-injection half of Row 1d: `require(minutes >= 0)` inside the inner's `init`
+    // throws after the outer handle has crossed but before any inner handle exists. The outer is
+    // borrowed, so the count has to be flat; an implementation that retains the receiver on the way
+    // in and releases it only on the success path leaks exactly one handle per throw. Mylo asks for
+    // negative sunbathing fifty times and is refused every time.
+    [Fact]
+    public void InnerClassConstructor_ThrowingInit_DoesNotLeakTheOuterHandle()
+    {
+        AssertNoLeak(() =>
+        {
+            using var hearth = new Hearth("The bay window");
+            Assert.ThrowsAny<ArgumentException>(() => new Hearth.Sunbather(hearth, -1));
+        });
+    }
+
     // Row 2. String parameter and string return on the ordinary route: no StableRef at all
     // (UTF-8 wire), so the count must not move even once.
     [Fact]

@@ -41,6 +41,10 @@ shape. Pros: complete. Cons: a new CONSTRUCTOR-plan shape (receiver-first wire p
 `outer.asStableRef<Host>().get().Guest(visits)`), its own leak row (the inner instance holds
 `this@Host`), not a nesting question. Deferred to its own ADR; the skip reason already names it.
 
+**2026-09-19: shipped as [ADR-141](141-inner-class-outer-instance-constructor.md).** An `inner
+class` as a nested *candidate* is declared; an `inner class` as an *owner* of its own nested types
+stays the named skip this ADR recorded.
+
 ### 4. Nest an interface owner's children under the ADR-040 wrapper (`Cage.Bar`)
 
 Pros: no `nestedCsName()` change. Cons: the wrapper exists only when ADR-040's reachability rule

@@ -23,9 +23,13 @@ import kotlin.test.assertTrue
  * interface), a sealed *arm* owner, and the nested `value class` candidate.
  *
  * [deferredSource] is the other half and is not a copy of the old skip test: ADR-134 keeps
- * `SKIPPED_NESTED_DECLARATION` permanently for exactly three owner shapes (generic owner,
- * `enum class` owner, `inner class`), so the named skip has to survive for those and only those. A
- * fix that declares everything nested passes every presence cell above and fails here.
+ * `SKIPPED_NESTED_DECLARATION` permanently for a generic owner and an `enum class` owner, and
+ * ADR-141 keeps it for an `inner class` **owner** (inner-of-inner), so the named skip has to
+ * survive for those and only those. A fix that declares everything nested passes every presence
+ * cell above and fails here.
+ *
+ * [innerSource] is ADR-141's own half: an `inner class` is a declared C# nested type whose
+ * constructor takes the outer instance first.
  *
  * Oreo supervises from the top perch; Mylo runs the registry two levels down.
  */
@@ -102,12 +106,41 @@ class Tier1NestedTypesTest {
     }
 
     class Host(val name: String) {
-      inner class Guest(val visits: Int)
+      // ADR-141: `Guest` itself is declared now (the candidate arm is gone); `Deep` is the
+      // inner-of-inner the OWNER arm still defers, and the only shape that can reach it -- Kotlin
+      // forbids a non-inner class inside an inner class (NESTED_CLASS_NOT_ALLOWED).
+      inner class Guest(val visits: Int) {
+        inner class Deep(val depth: Int)
+      }
     }
 
     class Reader(val name: String) {
       fun sealOf(): Box.Seal = Box.Seal(true)
       fun codeOf(stamp: Season.Stamp): Int = stamp.code
+    }
+  """.trimIndent()
+
+  /**
+   * ADR-141: `Guest` is the primitive-only inner constructor, which is the silent-loss shape -- a
+   * receiver that reaches the public parameter list but not the projection's input list leaves the
+   * constructor on the trivial path and hands `Native_Create` a `Host` where an `IntPtr` slot is.
+   * `Tag` is the converted-parameter inner beside an ADR-091 trailing default, so its truncated
+   * overload has to keep the outer and nothing else.
+   */
+  private val innerSource: String = """
+    package tier1.nestedinner
+
+    class Host(val name: String) {
+      inner class Guest(val visits: Int) {
+        fun greeting(): String = this@Host.name + " welcomes guest #" + visits
+      }
+
+      inner class Tag(val text: String = "plain") {
+        fun label(): String = this@Host.name + "/" + text
+      }
+
+      fun guestAt(visits: Int): Guest = Guest(visits)
+      fun visitsOf(guest: Guest): Int = guest.visits
     }
   """.trimIndent()
 
@@ -317,15 +350,16 @@ class Tier1NestedTypesTest {
     listOf(
       // generic owner: `Box<T>.Lid` is a generic nested type in C#, one per `T`
       "tier1.nesteddeferred.Box.Lid",
-      // inner class: its constructor needs the outer instance
-      "tier1.nesteddeferred.Host.Guest",
+      // ADR-141: an `inner class` OWNER is still deferred (inner-of-inner), though the inner
+      // class itself is declared now.
+      "tier1.nesteddeferred.Host.Guest.Deep",
     ).forEach { declaration ->
       assertTrue(
         warnings.any { it.contains(declaration) },
         "expected $declaration to still skip named; warnings=$warnings",
       )
     }
-    listOf("Lid", "Guest").forEach { name ->
+    listOf("Lid", "Deep").forEach { name ->
       assertFalse(
         result.generatedCSharp.contains(name),
         "expected no declaration of, or dangling reference to, $name; csharp=" +
@@ -335,16 +369,76 @@ class Tier1NestedTypesTest {
   }
 
   @Test
+  fun `an inner class is declared, and its constructor takes the outer instance first`() {
+    val result = Tier1Harness.run(innerSource, fileName = "Inner.kt")
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    assertFalse(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
+            it.contains("tier1.nestedinner.Host.Guest")
+      },
+      "expected no nested-declaration skip for an inner class; warnings=${result.kspWarnings}",
+    )
+    assertContains(result.generated, "@CName(\"host_guest_create\")")
+    // The outer is parameter zero on the wire, borrowed, and the Kotlin call is receiver-qualified.
+    assertContains(
+      result.generated,
+      """
+      public fun export_host_guest_create(
+        outer: COpaquePointer,
+        visits: Int,
+        errorOut: COpaquePointer?,
+      ): COpaquePointer?
+      """.trimIndent(),
+    )
+    assertContains(
+      result.generated,
+      "outer.asStableRef<tier1.nestedinner.Host>().get().Guest(visits)",
+    )
+    // The C# half of the same plan: the nested declaration, the outer first and named `outer`, and
+    // the handle lowering that the trivial constructor path would have skipped (CS1503).
+    assertContains(result.generatedCSharp, "public Guest(Host outer, int visits)")
+    assertContains(
+      result.generatedCSharp,
+      "Native_Create(outer._handle, visits, out IntPtr error)",
+    )
+    assertContains(
+      result.generatedCSharp,
+      "private static extern IntPtr Native_Create(IntPtr outer, int visits, out IntPtr error);",
+    )
+  }
+
+  @Test
+  fun `an inner class omitting overload keeps the outer instance`() {
+    val result = Tier1Harness.run(innerSource, fileName = "Inner.kt")
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    // ADR-091 truncates the trailing defaulted parameter; the receiver is not a plan parameter, so
+    // it survives the truncation and the overload is `(outer)`, never `()`.
+    assertContains(
+      result.generated,
+      "public fun export_host_tag_create_2(outer: COpaquePointer, errorOut: COpaquePointer?):",
+    )
+    assertContains(
+      result.generated,
+      "outer.asStableRef<tier1.nestedinner.Host>().get().Tag()",
+    )
+    assertContains(result.generatedCSharp, "public Tag(Host outer)")
+    assertContains(result.generatedCSharp, "public Tag(Host outer, string text)")
+  }
+
+  @Test
   fun `a class nested in an enum owner is deferred, and must be named like the others`() {
     val result = Tier1Harness.run(deferredSource, fileName = "Deferred.kt")
 
     // Its own cell, because it is red for a different reason from the other three: the ADR-064
     // 2026-09-11 amendment made an `enum class` a *candidate* but never an *owner*, so the
     // declaration walk does not descend into one and `Season.Almanac` is skipped SILENTLY today,
-    // where `Box.Lid`, `Cage.Bar` and `Host.Guest` are all named. ADR-133 keeps the enum owner in
-    // the deferred set and says the deferred set stays named, so the walk has to descend into an
-    // enum owner for the diagnostic even though it never declares anything there. Worth settling in
-    // the ADR rather than inheriting the silence.
+    // where `Box.Lid`, `Cage.Bar` and `Host.Guest.Deep` are all named. ADR-133 keeps the enum
+    // owner in the deferred set and says the deferred set stays named, so the walk has to descend
+    // into an enum owner for the diagnostic even though it never declares anything there. Worth
+    // settling in the ADR rather than inheriting the silence.
     assertTrue(
       result.kspWarnings.any {
         it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
