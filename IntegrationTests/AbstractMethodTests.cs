@@ -1,4 +1,5 @@
 using System.Reflection;
+using TestLibrary.Cat;
 using TestLibrary.Garage;
 
 namespace IntegrationTests;
@@ -102,5 +103,86 @@ public class AbstractMethodTests
         using var strongRoom = new StrongRoom();
 
         Assert.IsAssignableFrom<Vault>(strongRoom);
+    }
+
+    // --- The walk spells a class-typed position, or refuses it named (Hauler) ---
+
+    /// <summary>
+    /// Cell (a): the abstract return is <c>cat.Toy</c>, exported from another namespace. A bare
+    /// <c>Toy</c> in the generated <c>TestLibrary.Garage</c> file names nothing (CS0246), so this
+    /// asserting at all means the walk spelled it fully qualified.
+    /// </summary>
+    [Fact]
+    public void Hauler_AbstractReturn_TypedWithAnExportedClassFromAnotherNamespace()
+    {
+        using var hauler = new CatHauler("H1");
+
+        using Toy cargo = hauler.Cargo();
+        using Toy viaBase = ((Hauler)hauler).Cargo();
+
+        Assert.IsType<Toy>(cargo);
+        Assert.Equal("Catnip Banana", cargo.Name);
+        Assert.Equal("Green", viaBase.Color);
+    }
+
+    [Fact]
+    public void Hauler_AbstractReturn_IsDeclaredAbstractWithTheCrossNamespaceType()
+    {
+        MethodInfo? cargo = typeof(Hauler).GetMethod("Cargo");
+
+        Assert.NotNull(cargo);
+        Assert.True(cargo!.IsAbstract);
+        Assert.Equal(typeof(Toy), cargo.ReturnType);
+    }
+
+    /// <summary>
+    /// Cell (b): the nested <c>Hitch.Pin</c> at a parameter AND at the return. The parameter arm is
+    /// a separate hand-spelling from the return arm, so the round trip is what keeps a return-only
+    /// fix red.
+    /// </summary>
+    [Fact]
+    public void Hauler_AbstractNestedTypedParameter_RoundTrips()
+    {
+        using var hauler = new CatHauler("H1");
+        using var pin = new Hitch.Pin("tow");
+
+        using Hitch.Pin latched = hauler.Latch(pin);
+        using Hitch.Pin viaBase = ((Hauler)hauler).Latch(pin);
+
+        Assert.Equal("tow-latched-to-H1", latched.Label);
+        Assert.Equal("tow-latched-to-H1", viaBase.Label);
+    }
+
+    [Fact]
+    public void Hauler_AbstractNestedTypedMethod_UsesTheNestedTypeAtBothPositions()
+    {
+        MethodInfo? latch = typeof(Hauler).GetMethod("Latch");
+        Type pin = typeof(Hitch).GetNestedType("Pin")!;
+
+        Assert.NotNull(latch);
+        Assert.True(latch!.IsAbstract);
+        Assert.Equal(pin, latch.ReturnType);
+        Assert.Equal(pin, Assert.Single(latch.GetParameters()).ParameterType);
+    }
+
+    /// <summary>
+    /// Cell (c): <c>padding()</c> returns <c>hidden.Nesting.Lining</c>, which nothing declares in
+    /// C#. No surface at all is the contract, so reflection is the only way to assert it: a bare
+    /// <c>Lining Padding()</c> would not compile, and a fully qualified one cannot exist.
+    /// </summary>
+    [Fact]
+    public void Hauler_AbstractReturn_TypedWithAnUnexportedClass_IsDroppedRatherThanSpelled()
+    {
+        Assert.Null(typeof(Hauler).GetMethod("Padding"));
+        Assert.Null(typeof(CatHauler).GetMethod("Padding"));
+    }
+
+    [Fact]
+    public void CatHauler_IsTheConcreteLeafUnderHauler()
+    {
+        Assert.True(typeof(Hauler).IsAbstract);
+        Assert.Equal(typeof(Hauler), typeof(CatHauler).BaseType);
+        Assert.False(typeof(CatHauler).IsAbstract);
+        Assert.False(typeof(CatHauler).GetMethod("Cargo")!.IsAbstract);
     }
 }

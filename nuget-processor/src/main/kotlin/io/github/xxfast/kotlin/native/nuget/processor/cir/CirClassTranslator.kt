@@ -44,6 +44,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticK
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipReason
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardSkipPosition
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isPubliclySpellable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toDiagnosticKind
@@ -240,61 +242,62 @@ private fun noPublicConstructorRemark(name: String, detail: String): String =
       "($detail). Instances come from Kotlin factories that return this type."
 
 /**
- * The classified [BridgeType] of an enum-typed position in the `abstractMethods` walk, or null when
- * the type is not an enum, which leaves every other type on the walk's own hand mapping.
+ * The named skip for an abstract member the walk drops because one of its positions has no public
+ * C# spelling, whatever the type: a nested or out-of-scope enum, class or interface, an object
+ * position, a `Throwable`, a bound interface, a sealed base with no eligible handle, a stale `T`.
  *
- * A `BridgeType.Nullable` wrapper is kept: `forwardPublicCsharpType()` renders its `?` itself, so
- * the walk never has to re-derive nullability for an enum.
- */
-private fun KSType.classifiedEnum(classifier: ForwardBridgeTypeClassifier): BridgeType? {
-  val classDeclaration = declaration as? KSClassDeclaration ?: return null
-  if (classDeclaration.classKind != ClassKind.ENUM_CLASS) return null
-  return classifier.classify(this)
-}
-
-/**
- * The classifier's refusal inside an enum position, unwrapping the nullable wrapper. Null when the
- * enum is declared, i.e. when the position is spellable.
- */
-private fun BridgeType.undeclaredEnum(): BridgeType.Unsupported? = when (this) {
-  is BridgeType.Nullable -> type.undeclaredEnum()
-  is BridgeType.Unsupported -> this
-  else -> null
-}
-
-/**
- * The named skip for an abstract member the walk drops because one of its enum positions has no C#
- * declaration. Same two reasons the classifier's enum branch distinguishes, so the text is
- * byte-identical to the planner route's: a nested or out-of-scope enum takes
- * [ForwardPlanSkipReason.UNDECLARED_ENUM] and its move-to-top-level hint, and a top-level enum in
- * a dependency module outside the export scope takes
- * [ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE] and its `include(...)` one.
+ * The wording comes off the same [ForwardPlanSkipReason] the planner route would have used, so a
+ * type refused here reads identically to the same type refused on a concrete member: a nested enum
+ * keeps [ForwardPlanSkipReason.UNDECLARED_ENUM] and its move-to-top-level hint, a dependency type
+ * outside the export scope keeps its `include(...)` one.
+ *
+ * The kind follows `toDiagnosticKind(position)` for every reason that accepts one, which keeps the
+ * shipped `UNDECLARED_ENUM` wording (`SKIPPED_UNSUPPORTED_TYPE`) and ADR-109's
+ * `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` remedy text exactly where they were. It is hardcoded
+ * positionally only for the legacy-route reasons `toDiagnosticKind()` `error()`s on
+ * (`droppedFromCSharp = false`), which a bare type at an abstract position can genuinely hold and
+ * which no other route re-emits here. That is the fork `emitInheritedAbstractPropertySkip` makes.
  *
  * Emitted rather than dropped silently: a member vanishing from an abstract base with no warning is
- * the CS0115 trap the abstract-method predicate fix just closed.
+ * the CS0115 trap the abstract-method predicate fix closed.
  */
-private fun emitAbstractMethodEnumSkip(
+private fun emitAbstractMethodSkip(
   method: KSFunctionDeclaration,
   declaration: String,
-  unsupported: BridgeType.Unsupported,
+  type: BridgeType,
+  position: ForwardSkipPosition,
   context: NugetContext,
   logger: KSPLogger,
 ) {
-  val reason: ForwardPlanSkipReason =
-    if (unsupported.isUnexportedDependency) ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE
-    else ForwardPlanSkipReason.UNDECLARED_ENUM
-  ForwardDiagnosticSink.emit(
-    listOf(
-      ForwardDiagnostic(
-        kind = reason.toDiagnosticKind(),
-        symbol = method,
-        declaration = declaration,
-        reason = reason.diagnosticReason(unsupported.rendered),
-        hint = reason.diagnosticHint(unsupported.rendered, context.includePackages),
-      ),
-    ),
-    logger,
-  )
+  val reason: ForwardPlanSkipReason = type.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
+  val detail: String? = type.skipDetail()
+  val kind: ForwardDiagnosticKind = if (reason.droppedFromCSharp) {
+    reason.toDiagnosticKind(position)
+  } else if (position == ForwardSkipPosition.INPUT) {
+    ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
+  } else {
+    ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN
+  }
+  val diagnostic: ForwardDiagnostic = if (reason.ownsSentence(detail)) {
+    ForwardDiagnostic(
+      kind = kind,
+      symbol = method,
+      declaration = declaration,
+      reason = reason.diagnosticReason(detail),
+      hint = reason.diagnosticHint(detail, context.includePackages),
+    )
+  } else {
+    val described: String = type.diagnosticTypeName()
+    ForwardDiagnostic(
+      kind = kind,
+      symbol = method,
+      declaration = declaration,
+      reason = "its type $described has no public C# spelling, so the abstract declaration " +
+          "cannot be rendered",
+      hint = "declare the member with a bridgeable type instead of $described",
+    )
+  }
+  ForwardDiagnosticSink.emit(listOf(diagnostic), logger)
 }
 
 /**
@@ -909,51 +912,46 @@ internal fun translateClass(
       if (!method.isAbstract) return@mapNotNull null
       val methodReturnTypeResolved = method.returnType?.resolve()?.expandAliases()
 
-      // The 2026-09-05 undeclared-enum gate, applied to the one route that bypassed it. This walk
-      // is the only route an inherited unimplemented member has -- `isForwardPlannableMemberOf`
-      // keeps it out of the planner, so nothing else classifies it, skips it or diagnoses it --
-      // and it spelled an enum by bare simple name at both positions. That dangles when the enum
-      // is undeclared (nothing emits `Pottery.Firing`), and drifts from `csharpTypeNameFor` when
-      // it is declared, which the classifier's own comment says must never happen.
-      val returnEnum: BridgeType? = methodReturnTypeResolved?.classifiedEnum(classifier)
-      val parameterEnums: List<BridgeType?> = method.parameters
-        .map { param -> param.type.resolve().expandAliases().classifiedEnum(classifier) }
-      val undeclaredEnum: BridgeType.Unsupported? = (listOf(returnEnum) + parameterEnums)
-        .firstNotNullOfOrNull { classified -> classified?.undeclaredEnum() }
-      if (undeclaredEnum != null) {
-        emitAbstractMethodEnumSkip(method, "$name.$methodName", undeclaredEnum, context, logger)
+      // Every position goes through the classifier now, not just the 2026-09-05 enum gate. This
+      // walk is the only route an inherited unimplemented member has --
+      // `isForwardPlannableMemberOf` keeps it out of the planner, so nothing else classifies it,
+      // skips it or diagnoses it -- and it hand-spelled every other class-typed position by its
+      // bare simple name. That dangles
+      // (CS0246) for a type declared in another namespace, for a nested type that exists only as
+      // `Owner.Part`, and for a type nothing declares at all, and it drifts from the
+      // `global::`-qualified spelling the planner gives the concrete subclass's own override.
+      //
+      // `sealedAsHandle()` is the call the planner makes, so an eligible sealed base spells its
+      // handle here too: a bodiless declaration marshals nothing, only the spelling matters.
+      val returnBridge: BridgeType = methodReturnTypeResolved
+        ?.let { classifier.classify(it).sealedAsHandle() }
+        ?: BridgeType.Unit
+      val parameterBridges: List<BridgeType> = method.parameters
+        .map { param -> classifier.classify(param.type.resolve().expandAliases()).sealedAsHandle() }
+      // ADR-147: a `T` on this class's own generic carrier is a real C# name; one re-homed from a
+      // generic base onto a non-generic subclass is not.
+      val typeParametersInScope: Set<String> =
+        cls.typeParameters.map { param -> param.name.asString() }.toSet()
+
+      if (!returnBridge.isPubliclySpellable(typeParametersInScope)) {
+        emitAbstractMethodSkip(
+          method, "$name.$methodName", returnBridge, ForwardSkipPosition.RETURN, context, logger,
+        )
+        return@mapNotNull null
+      }
+      val unspellableParameter: BridgeType? = parameterBridges
+        .firstOrNull { bridge -> !bridge.isPubliclySpellable(typeParametersInScope) }
+      if (unspellableParameter != null) {
+        emitAbstractMethodSkip(
+          method, "$name.$methodName", unspellableParameter, ForwardSkipPosition.INPUT, context,
+          logger,
+        )
         return@mapNotNull null
       }
 
-      val methodReturn: String =
-        methodReturnTypeResolved?.declaration?.simpleName?.asString() ?: "Unit"
-      val isNullableReturn: Boolean = methodReturnTypeResolved?.isMarkedNullable == true
-      val returnType: String = when {
-        // The classifier's spelling wins for an enum, nullability included.
-        returnEnum != null -> returnEnum.forwardPublicCsharpType()
-        methodReturn == "Unit" -> "void"
-        methodReturn == "String" && isNullableReturn -> "string?"
-        methodReturn == "String" -> "string"
-        methodReturn in KOTLIN_TO_CSHARP_RETURN -> {
-          val mapped = KOTLIN_TO_CSHARP_RETURN.getValue(methodReturn)
-          if (isNullableReturn && mapped != "void") "$mapped?" else mapped
-        }
-
-        isNullableReturn -> "$methodReturn?"
-        else -> methodReturn
-      }
+      val returnType: String = returnBridge.forwardPublicCsharpType()
       val methodParams: List<CirParameter> = method.parameters.mapIndexed { index, param ->
-        val resolved = param.type.resolve().expandAliases()
-        val kotlinType: String = resolved.declaration.simpleName.asString()
-        val paramEnum: BridgeType? = parameterEnums[index]
-        val isNullableString: Boolean =
-          paramEnum == null && kotlinType == "String" && resolved.isMarkedNullable
-        val paramType: String = when {
-          paramEnum != null -> paramEnum.forwardPublicCsharpType()
-          isNullableString -> "string?"
-          kotlinType in KOTLIN_TO_CSHARP_PARAM -> KOTLIN_TO_CSHARP_PARAM.getValue(kotlinType)
-          else -> kotlinType
-        }
+        val paramType: String = parameterBridges[index].forwardPublicCsharpType()
         CirParameter((param.name?.asString() ?: "_").csharpParameterName(), paramType)
       }
       CirMethod(

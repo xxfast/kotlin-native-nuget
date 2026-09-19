@@ -482,6 +482,22 @@ Not fixed, noted: the abstract path's type mapping is still by simple name, so a
 `abstract fun` using a cross-namespace or collection type renders that type unqualified. Evidence:
 `Tier1AbstractMethodTest` and the `test/garage/` fixtures (`Vehicle`/`Truck`, `Register`/`Vault`/`StrongRoom`).
 
+**2026-09-19 amendment: fixed.** The abstract method walk now routes every return and parameter
+position through the forward classifier, the same one the planner route uses, instead of hand-
+spelling a bare `KSType.simpleName`. A new `BridgeType.isPubliclySpellable(typeParametersInScope)`
+in `ForwardCsharpTypes.kt` decides, per position, whether to spell with `forwardPublicCsharpType()`
+(fully qualified for a class, a nested class through its owner, an eligible sealed base through its
+handle) or to drop the member with one named skip, reusing `ForwardPlanSkipReason` so the wording
+matches the planner route's own skip text. A nullable class parameter now keeps its `?`; a
+collection, `Instant`/`Duration`/`Uuid`, `Char` and `ByteArray` at an abstract position now spell
+their mapped C# type instead of the bare Kotlin name.
+
+One deviation from the property route's pattern: a class's own type parameter `T` **is** spelled at
+an abstract position when the declaring C# type declares it (ADR-147's generic carrier), and is
+skipped named only when an inherited `T` would land on a non-generic subclass, since that `T` is not
+a real name there either. Pinned by `Tier1AbstractMethodTest`, the `test/garage/Hauler.kt` fixture
+(`Hauler`/`CatHauler`, `Hitch.Pin`), and `IntegrationTests/AbstractMethodTests.cs`.
+
 **2026-09-13 amendment: the unexported-interface case scoped out above now renders the same
 `public abstract` declaration too, off a separately-planned catalog, with a named skip when the
 member's own type is unbridgeable.** The 2026-09-11 amendment's declaration walk reads the C# type

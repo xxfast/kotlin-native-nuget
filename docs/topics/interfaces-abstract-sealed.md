@@ -263,6 +263,28 @@ A member the planner declines to plan, for example a generic interface default t
 cannot spell abstractly, is dropped from the generated class instead of rendered `abstract`; an
 uncompilable abstract member would break every further subclass.
 
+### A class-typed abstract member {id="a-class-typed-abstract-member"}
+
+A parameter or return typed with another declared class renders fully qualified, never a bare name:
+the generated file carries only the `System` usings, so an unqualified reference would resolve to
+nothing outside the declaring class's own namespace.
+
+```kotlin
+abstract class Hauler(val plate: String) {
+  abstract fun cargo(): Toy // declared in a different package
+}
+```
+
+```C#
+public abstract class Hauler : IDisposable, INugetHandle
+{
+    public abstract global::TestLibrary.Cat.Toy Cargo();
+}
+```
+
+A type with no C# declaration at all, an unexported or nested-under-an-unexported-owner class, is
+dropped from the abstract declaration instead of spelled, named on a build warning.
+
 ## Sealed classes and interfaces
 
 `sealed class` becomes a C# `abstract class`, with each subtype its own class and a generated
