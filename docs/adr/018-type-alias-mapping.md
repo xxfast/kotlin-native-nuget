@@ -54,3 +54,15 @@ This is the same approach taken by Java interop, ObjC Export, and Swift Export. 
 - No CIR model changes needed
 - Chained aliases (`typealias A = B`, `typealias B = List<String>`) are handled by the recursive expansion
 - Type aliases for function types expand to the underlying `FunctionN` type, which then follows the existing lambda mapping (ADR-012)
+
+## Amendment (2026-09-19): an extension function's receiver now expands too
+
+`extensionEntry` and `extensionOwnerChain()` in `ForwardCallablePlanner` were two `type.resolve()`
+sites that missed the transparent-expansion rule above: an extension function whose receiver was a
+`typealias` of a nested type kept the alias's own lowercased name in the C entry point
+(`bird_sing`) while the C# extension class already spelled the expanded type
+(`AviaryBirdExtensions`). Both sites now call `expandAliases()`, matching the extension *property*
+route and a plain member, which already expanded. Closed. An external library that already ships
+an alias-receiver extension function sees its C entry point name change on upgrade; the C# surface
+is unaffected, and since the C# shim and the native library always ship together in one package, a
+consumer of that library sees nothing.

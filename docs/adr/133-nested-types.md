@@ -267,6 +267,10 @@ name in the C entry point while the C# extension class spells the expanded type,
 asymmetry this amendment does not move; harmless while every nested type is reachable without going
 through an alias, tracked on the ROADMAP.
 
+**Closed (2026-09-19).** `extensionEntry` and `extensionOwnerChain()` now call `expandAliases()`,
+so a typealias receiver's entry point matches its C# extension class the same way a genuine nested
+receiver already does; see [ADR-018](018-type-alias-mapping.md)'s 2026-09-19 amendment.
+
 Tests: `NestedTypesTests.ExtensionOnANestedReceiver_BindsUnderTheOwnerChain` (xUnit); Tier 1 gains a
 single-receiver cell and a two-owner cell (`Coop.Inner`/`Roost.Inner`) pinning both the chained
 symbols and the distinct `{Chain}Extensions` classes. No new handle kind, no new marshalling.

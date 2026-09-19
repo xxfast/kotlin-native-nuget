@@ -180,6 +180,13 @@ using var perch = aviary.PerchAt(9);
 perch.Summarize(); // "perch@9 (ext)"
 ```
 
+The same expansion applies when the receiver is spelled through a `typealias` of a nested type
+(`typealias Bird = Aviary.Bird; fun Bird.sing()`): the generated class is `AviaryBirdExtensions`,
+not `BirdExtensions`, so it never collides with an unrelated top-level `Bird`'s own extensions. This
+only changes the internal entry point the generated `Sing` method calls into, not the C# surface;
+since the C# shim and native library always ship together in one package, upgrading the plugin
+changes nothing a consumer needs to do.
+
 ## Overloads and default parameters {id="method-overloads"}
 
 Two or more same-named extensions on the same receiver render as one ordinary C# overload set,

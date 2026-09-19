@@ -24,6 +24,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyLambdaPar
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
 import io.github.xxfast.kotlin.native.nuget.processor.bridgeParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
+import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
 
@@ -2017,8 +2018,8 @@ internal class ForwardCallablePlanner(
    * receiver-agnostic within one owner by design.
    */
   private fun KSFunctionDeclaration.extensionOwnerChain(): String =
-    ((extensionReceiver?.resolve()?.declaration as? KSClassDeclaration)?.parentDeclaration
-      as? KSClassDeclaration)?.nestedCsName() ?: ""
+    ((extensionReceiver?.resolve()?.expandAliases()?.declaration as? KSClassDeclaration)
+      ?.parentDeclaration as? KSClassDeclaration)?.nestedCsName() ?: ""
 
   private fun extensionEntry(
     function: KSFunctionDeclaration,
@@ -2028,17 +2029,21 @@ internal class ForwardCallablePlanner(
     // reaches it: an extension whose parameters are all defaulted still has its receiver.
     omitted: Int = 0,
   ): ForwardCallableCatalogEntry {
+    // ADR-018: expanded once here, so every spelling taken off this receiver -- the entry-point
+    // prefix below, the owner chain, the classified wire type -- comes from the same type the C#
+    // half names (`CirTranslator` keys its extension class on `expandAliases()`).
     val receiver: KSType = requireNotNull(function.extensionReceiver) {
       "Forward extension planner received a non-extension function ${function.simpleName.asString()}"
-    }.resolve()
+    }.resolve().expandAliases()
     val receiverType: BridgeType = classifier.classify(receiver)
     val functionName: String = function.simpleName.asString()
     // ADR-133 amendment: the whole enclosing chain of the receiver, so an extension on
     // `Aviary.Perch` binds under `aviary_perch_` exactly as that type's own members already do.
     // `nativePrefix()` is byte-identical to the `simpleName.lowercase()` it replaces for a
-    // top-level receiver; the elvis covers a receiver whose declaration is not a class (a typealias
-    // keeps the alias's own name, as shipped -- the C# class name spells the expanded type, a
-    // pre-existing asymmetry this change deliberately does not move).
+    // top-level receiver; the elvis covers a receiver whose declaration is not a class (a type
+    // parameter). ADR-018: a typealias receiver is expanded above, so `typealias Bird =
+    // Aviary.Bird` binds under `aviary_bird_` exactly as the C# `AviaryBirdExtensions` class and
+    // the extension *property* route already spell it.
     val receiverPrefix: String = (receiver.declaration as? KSClassDeclaration)?.nativePrefix()
       ?: receiver.declaration.simpleName.asString().lowercase()
     // ADR-095 keeps an extension symbol receiver-agnostic (the overload counter is per package and

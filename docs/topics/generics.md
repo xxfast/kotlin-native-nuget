@@ -205,6 +205,9 @@ int score = TypeAliases.TopScore(); // Score is just Int
 IReadOnlyList<string> names = TypeAliases.DefaultNames();
 ```
 
+Erasure applies to an extension's receiver too, including a nested-type alias
+(see [Extensions: Nested receivers](extensions.md#nested-receivers)).
+
 ## Limitations
 
 A generic class declared in a dependency module and reachable through the
