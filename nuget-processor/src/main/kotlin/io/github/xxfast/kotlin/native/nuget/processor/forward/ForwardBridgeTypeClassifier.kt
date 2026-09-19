@@ -20,6 +20,12 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedInterfaceCsName
 /** The declarations whose StableRef handles are part of this forward export set. */
 internal data class ForwardBridgeTypeContext(
   val exportedObjectHandles: Set<String>,
+  /** The value classes the renderer declares as a C# `readonly record struct`, which since ADR-134
+   *  includes the nested ones under an admitted owner. Its own set rather than a widening of
+   *  [exportedObjectHandles]: that set answers "does this type have a StableRef handle", and it is
+   *  read by `forwardSuperClass` and the legacy `csTypeArguments` route, neither of which may start
+   *  seeing a struct. */
+  val exportedValueClasses: Set<String> = emptySet(),
   val rootPackage: String = "",
   val rootNamespace: String = "",
   /** ADR-074 Decision 2: `actual typealias` targets, keyed by the `expect` class's qualified name.
@@ -529,6 +535,38 @@ internal class ForwardBridgeTypeClassifier(
     qualifiedName: String,
     arguments: List<KSTypeArgument>,
   ): BridgeType {
+    // The membership gate the value-class branch never had, ahead of the underlying checks: since
+    // ADR-134 a nested value class IS declared as a `readonly record struct` under an admitted
+    // owner, so a nested one missing from `exportedValueClasses` is one the owner walk deferred (a
+    // generic or `enum class` owner) or one whose C# name collided -- and [csharpTypeNameFor]
+    // spells it `Owner.Name` regardless, leaving `Interop.cs` referring to a struct nothing
+    // declares (CS0426/CS0234). Skip named instead, exactly as the enum, interface and class
+    // branches do.
+    //
+    // Deliberately NOT the full membership test those three use: `kotlin.Result` is a top-level
+    // value class that is in no export set and must keep classifying as a `ValueClass` for
+    // ADR-108's return-position rewrite, so only a nested value class is gated here. A top-level
+    // one outside the set is spelled exactly as it was before.
+    val isUndeclaredNestedValueClass: Boolean = declaration.parentDeclaration != null &&
+        qualifiedName !in context.exportedValueClasses
+    if (isUndeclaredNestedValueClass) {
+      // ADR-066 amendment, the class branch's rule verbatim: a nested declaration the closure
+      // refused on SCOPE grounds wants `include(...)`, not "move it to the top level".
+      val scopeRefusal: ForwardAdmissionRefusal? = scopeRefusal(qualifiedName)
+      if (scopeRefusal != null) {
+        return BridgeType.Unsupported(
+          qualifiedName,
+          "declared in a dependency module whose package is outside the export scope",
+          isUnexportedDependency = true,
+          unexportedDependencyRefusal = scopeRefusal,
+        )
+      }
+      return BridgeType.Unsupported(
+        qualifiedName,
+        "a nested value class with no C# nested record struct declared for it",
+        isUndeclaredValueClass = true,
+      )
+    }
     val underlyingParam = declaration.primaryConstructor?.parameters?.singleOrNull()
       ?: return BridgeType.Unsupported(
         qualifiedName,

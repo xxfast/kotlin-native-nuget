@@ -470,6 +470,8 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   ForwardPlanSkipReason.UNDECLARED_INTERFACE,
     // The nested class/object twin of the two above, in the same bucket for the same reason.
   ForwardPlanSkipReason.UNDECLARED_CLASS,
+    // ADR-134: and the nested `value class` twin, whose record struct the same owner walk declares.
+  ForwardPlanSkipReason.UNDECLARED_VALUE_CLASS,
     // ADR-133: the object-position drop shares the bucket -- one unsupported type at every
     // position, distinguished only by its sentence and hint.
   ForwardPlanSkipReason.OBJECT_POSITION,
@@ -626,7 +628,7 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
           "`${parts?.get(1) ?: "an unexported target"}`, which is not exported"
     }
 
-    // The three that keep the reason constant: they share one diagnostic kind, so the prefix does
+    // The four that keep the reason constant: they share one diagnostic kind, so the prefix does
     // not distinguish them and the sentence has to.
     ForwardPlanSkipReason.UNDECLARED_ENUM ->
       "its enum type `${detail ?: "the enum"}` is never declared as a C# enum ($name)"
@@ -638,6 +640,10 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
     ForwardPlanSkipReason.UNDECLARED_CLASS ->
       "its type `${detail ?: "the class"}` is nested and no C# nested type is declared for it " +
           "($name)"
+
+    ForwardPlanSkipReason.UNDECLARED_VALUE_CLASS ->
+      "its value class type `${detail ?: "the value class"}` is nested and no C# nested record " +
+          "struct is declared for it ($name)"
 
     // ADR-133: the object-at-a-member-position drop. Owns its sentence so the author reads the C#
     // rule (a static type has no parameter or return position) rather than the generic combination.
@@ -718,7 +724,8 @@ private fun String.dependencyPackageName(): String {
  *   `"<expect qualified name>-><target rendered name>"`. For [ForwardPlanSkipReason.COLLECTION] it
  *   carries the offending component ("element type Collection?", "key type String?"). For
  *   [ForwardPlanSkipReason.UNDECLARED_ENUM] and
- *   [ForwardPlanSkipReason.UNDECLARED_INTERFACE] it carries the undeclared type's qualified name,
+ *   [ForwardPlanSkipReason.UNDECLARED_INTERFACE] and [ForwardPlanSkipReason.UNDECLARED_VALUE_CLASS]
+ *   it carries the undeclared type's qualified name,
  *   including when the enum is a collection component (the only extractor that descends into one).
  *   Ignored by every other reason.
  * @param scope ADR-063: the export scope's `include(...)` packages, so the suggested include
@@ -945,6 +952,19 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "reference; the SKIPPED_NESTED_DECLARATION warning on the declaration itself names which " +
         "shape rule defers it (a generic, `inner`, `value` or sealed nested type, or an owner " +
         "that cannot carry one), or move it to the top level of its file"
+  }
+
+  // Names the value class, and says record struct rather than nested type: a value class is the one
+  // nested kind that is not a handle at all, so "no C# nested type is generated for it" would read
+  // as though a class were missing. Same ADR-134 shape rule as the hint above it, and the same two
+  // remedies, because the same owner walk declares both.
+  ForwardPlanSkipReason.UNDECLARED_VALUE_CLASS -> {
+    val valueClassName: String = detail ?: "the value class"
+    "value class `$valueClassName` is nested inside another declaration and no C# `readonly " +
+        "record struct` is generated for it, so every member typed with it is skipped rather " +
+        "than emitted as a dangling reference; the SKIPPED_NESTED_DECLARATION warning on the " +
+        "declaration itself names which shape rule defers it (a generic or `enum class` owner), " +
+        "or move it to the top level of its file"
   }
 
   // ADR-133: names the object and the C# rule. Deliberately not the UNDECLARED_CLASS hint: moving

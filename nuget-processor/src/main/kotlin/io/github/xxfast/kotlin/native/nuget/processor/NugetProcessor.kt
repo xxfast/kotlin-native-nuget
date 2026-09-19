@@ -1139,9 +1139,16 @@ class NugetProcessor(
       }
       objects.forEach { obj -> obj.qualifiedName?.asString()?.let(::add) }
     }
+    // ADR-134: the value classes the renderer declares, nested ones included. Kept out of
+    // `exportedObjectHandles` above: a record struct is not a handle, and that set answers a
+    // different question for `forwardSuperClass` and the legacy `csTypeArguments` route.
+    val exportedValueClasses: Set<String> = buildSet {
+      valueClasses.forEach { cls -> cls.qualifiedName?.asString()?.let(::add) }
+    }
     val forwardClassifier = ForwardBridgeTypeClassifier(
       ForwardBridgeTypeContext(
         exportedObjectHandles = exportedObjectHandles,
+        exportedValueClasses = exportedValueClasses,
         rootPackage = context.rootPackage,
         rootNamespace = context.rootNamespace,
         actualTypeAliasTargets = actualTypeAliasTargets,

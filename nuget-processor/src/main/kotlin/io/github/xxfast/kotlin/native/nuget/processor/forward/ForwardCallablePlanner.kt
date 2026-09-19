@@ -182,6 +182,14 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  its base) and a companion object (ADR-013, its owner's statics). */
   UNDECLARED_CLASS(droppedFromCSharp = true),
 
+  /** A `value class` that no route declares as a C# `readonly record struct`: since ADR-134 a
+   *  nested one under an admitted owner IS declared, so reaching this reason means the owner walk
+   *  deferred it (a generic or `enum class` owner) or its C# name collided. The [UNDECLARED_CLASS]
+   *  twin, separate only so the hint names a record struct. Before this reason existed the member
+   *  was emitted with a dangling `Owner.Name` struct reference and no diagnostic at all, taking the
+   *  consumer's compile down with CS0426/CS0234. */
+  UNDECLARED_VALUE_CLASS(droppedFromCSharp = true),
+
   /** ADR-133: a Kotlin `object` at a parameter or return position. An object is declared in C# as
    *  a STATIC class, and a static type cannot be a parameter or return type at all (CS0722), so
    *  the member is dropped however the object is declared -- top-level or nested. Distinct from
@@ -3754,7 +3762,7 @@ internal fun BridgeType.actualTypeAliasTargetDetail(): String? =
 internal fun BridgeType.isUndeclared(): Boolean {
   val unsupported: BridgeType.Unsupported = this as? BridgeType.Unsupported ?: return false
   return unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface ||
-      unsupported.isUndeclaredClass
+      unsupported.isUndeclaredClass || unsupported.isUndeclaredValueClass
 }
 
 /** The undeclared type's qualified name, when this (possibly nullable-wrapped, possibly
@@ -3794,7 +3802,8 @@ internal fun BridgeType.undeclaredTypeDetail(): String? {
   return (candidate as? BridgeType.Unsupported)
     ?.takeIf { unsupported ->
       unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface ||
-          unsupported.isUndeclaredClass || unsupported.isObjectPosition
+          unsupported.isUndeclaredClass || unsupported.isUndeclaredValueClass ||
+          unsupported.isObjectPosition
     }
     ?.rendered
 }
@@ -3921,6 +3930,8 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
     isUndeclaredInterface -> ForwardPlanSkipReason.UNDECLARED_INTERFACE
     // ...and for a nested class or object.
     isUndeclaredClass -> ForwardPlanSkipReason.UNDECLARED_CLASS
+    // ...and for a nested value class, whose record struct is declared by the same owner walk.
+    isUndeclaredValueClass -> ForwardPlanSkipReason.UNDECLARED_VALUE_CLASS
     // ADR-133: an `object` is declared (as a C# static class) but unusable at a member position.
     isObjectPosition -> ForwardPlanSkipReason.OBJECT_POSITION
     // The closure records WHY it refused a dependency declaration; each refusal wants a

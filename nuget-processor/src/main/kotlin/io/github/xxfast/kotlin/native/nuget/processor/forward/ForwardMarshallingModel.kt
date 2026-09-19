@@ -248,6 +248,12 @@ internal sealed interface BridgeType {
    *   a nested dependency one for exactly that reason. Sealed subclasses and companion objects are
    *   not covered: ADR-009 declares the first nested under its base and ADR-013 folds the second
    *   into its owner's statics, so both really are declared.
+   * @param isUndeclaredValueClass the `value class` twin of the three flags above: since ADR-134 a
+   *   nested value class is declared as a C# `readonly record struct` under an admitted owner, so
+   *   one missing from `exportedValueClasses` is one the owner walk deferred (a generic or
+   *   `enum class` owner) or one whose C# name collided. Spelling it anyway left `Interop.cs` with
+   *   a reference to a struct nothing declares. Its own flag, not [isUndeclaredClass], because the
+   *   hint names a record struct rather than a nested type and the two remedies read differently.
    * @param optInMarker ADR-115: the fully-qualified name of the `@RequiresOptIn` marker on
    *   [rendered]'s own declaration, when it carries one. A marked type is never declared in C#, so
    *   every member typed with it skips -- with its own reason, because
@@ -264,6 +270,7 @@ internal sealed interface BridgeType {
     val isUndeclaredEnum: kotlin.Boolean = false,
     val isUndeclaredInterface: kotlin.Boolean = false,
     val isUndeclaredClass: kotlin.Boolean = false,
+    val isUndeclaredValueClass: kotlin.Boolean = false,
     /** ADR-133: a Kotlin `object` at a member type position. Declared in C# as a static class,
      *  which cannot be a parameter or return type (CS0722), wherever the object itself lives. */
     val isObjectPosition: kotlin.Boolean = false,

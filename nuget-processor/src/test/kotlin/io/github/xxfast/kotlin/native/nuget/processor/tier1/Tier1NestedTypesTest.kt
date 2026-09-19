@@ -85,6 +85,9 @@ class Tier1NestedTypesTest {
 
     class Box<T>(val item: T) {
       class Lid(val tight: Boolean)
+
+      @JvmInline
+      value class Seal(val stamped: Boolean)
     }
 
     enum class Season {
@@ -93,10 +96,18 @@ class Tier1NestedTypesTest {
       ;
 
       class Almanac(val year: Int)
+
+      @JvmInline
+      value class Stamp(val code: Int)
     }
 
     class Host(val name: String) {
       inner class Guest(val visits: Int)
+    }
+
+    class Reader(val name: String) {
+      fun sealOf(): Box.Seal = Box.Seal(true)
+      fun codeOf(stamp: Season.Stamp): Int = stamp.code
     }
   """.trimIndent()
 
@@ -347,6 +358,53 @@ class Tier1NestedTypesTest {
       "expected no declaration of Almanac; csharp=" +
           "${result.generatedCSharp.lines().filter { it.contains("Almanac") }}",
     )
+  }
+
+  /**
+   * The value-class twin of the two cells above, and the one shape that reached the *member*
+   * position with no gate at all: `ForwardBridgeTypeClassifier.valueClass()` spelled
+   * `nestedCsName()` unconditionally, so `Reader.sealOf()` was emitted as
+   * `global::Interop.Box.Seal SealOf()` against a `readonly record struct` nothing declares, and
+   * the consumer's `Interop.cs` could not compile (CS0426/CS0234). The declaration-level skip was
+   * already correct; only the member was silent.
+   */
+  @Test
+  fun `a value class nested in a deferred owner skips its members named, and is spelled nowhere`() {
+    val result = Tier1Harness.run(deferredSource, fileName = "Deferred.kt")
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    listOf(
+      "tier1.nesteddeferred.Box.Seal",
+      "tier1.nesteddeferred.Season.Stamp",
+    ).forEach { declaration ->
+      assertTrue(
+        result.kspWarnings.any {
+          it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
+              it.contains(declaration)
+        },
+        "expected $declaration to skip named at the declaration; warnings=${result.kspWarnings}",
+      )
+    }
+    listOf(
+      "tier1.nesteddeferred.Reader.sealOf" to "tier1.nesteddeferred.Box.Seal",
+      "tier1.nesteddeferred.Reader.codeOf" to "tier1.nesteddeferred.Season.Stamp",
+    ).forEach { (member, declaration) ->
+      assertTrue(
+        result.kspWarnings.any {
+          it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE.name) &&
+              it.contains(member) && it.contains("UNDECLARED_VALUE_CLASS") &&
+              it.contains(declaration)
+        },
+        "expected $member to skip named as UNDECLARED_VALUE_CLASS; warnings=${result.kspWarnings}",
+      )
+    }
+    listOf("Seal", "Stamp").forEach { name ->
+      assertFalse(
+        result.generatedCSharp.contains(name),
+        "expected no declaration of, or dangling reference to, $name; csharp=" +
+            "${result.generatedCSharp.lines().filter { it.contains(name) }}",
+      )
+    }
   }
 
   @Test

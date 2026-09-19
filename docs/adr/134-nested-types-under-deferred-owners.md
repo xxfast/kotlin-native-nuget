@@ -201,12 +201,12 @@ gains a cell flipping `Tone.Helper` (a plain nested class under an **ineligible*
 - Not closed here, and not claimed to be: the CS0542/CS0102 owner-scope collision arms under a sealed
   or value-class owner have no fixture (this ADR's own `Deferred.kt` deliberately dodges every
   collision, the same way ADR-133's did); that ROADMAP line is unchanged by this ADR.
-- A gap this ADR's own fixture surfaced, not fixed: `ForwardBridgeTypeClassifier`'s `valueClass()`
+- A gap this ADR's own fixture surfaced, not fixed here: `ForwardBridgeTypeClassifier`'s `valueClass()`
   branch has no membership/nested gate the way `interfaceType()` does, so a nested `value class`
   declared under a **still-deferred** owner (e.g. a hypothetical `Box<T>.Lid` were it a value class)
   would spell an undeclared struct name at a member position with no diagnostic at all, rather than
   the named `UNDECLARED_CLASS`/`UNDECLARED_ENUM`/`UNDECLARED_INTERFACE` skip every other undeclared
-  nested kind gets. Recorded as a Phase 4 ROADMAP item.
+  nested kind gets. Recorded as a Phase 4 ROADMAP item, closed by the 2026-09-19 amendment below.
 - A pre-existing hazard, verified while building this fixture rather than introduced by it: every
   sealed arm ADR-009 has ever generated carries only `internal Arm(IntPtr handle)`, no public
   constructor. In .NET 7+, `IntPtr` is `nint`, and `int` converts to `nint` implicitly, so
@@ -284,3 +284,30 @@ value-class owner arms of the original report are both covered one klib boundary
 Amended by ADR-066's 2026-09-15 amendment (issue #235): the `$` rule above is now the
 backstop of a four-rule compiler-owned predicate that every member walk shares, so no route reaches
 a synthesized declaration rather than only this one declining to declare it.
+
+## Amendment (2026-09-19): the `valueClass()` gate is nested-only, not the full membership test
+
+Closes the gap this ADR's Consequences section named. `ForwardBridgeTypeClassifier.valueClass()`
+now gates on a dedicated `exportedValueClasses` set (`ForwardBridgeTypeContext`, wired from
+`NugetProcessor.kt`'s `valueClasses`, nested ones included since this ADR declares them). A nested
+value class missing from that set skips named `SKIPPED_UNSUPPORTED_TYPE` (`UNDECLARED_VALUE_CLASS`)
+at the member position, with sentence and hint wording alongside `UNDECLARED_CLASS`/`UNDECLARED_ENUM`
+/`UNDECLARED_INTERFACE`, instead of spelling an undeclared `readonly record struct` name.
+
+The shipped gate is narrower than the ROADMAP item's own recommendation, which asked for the same
+full membership test `interfaceType()`/`enumType()` use. A full test rejects every value class
+outside the export set, including a top-level one, and `kotlin.Result` (ADR-108) is exactly that: a
+top-level value class in no export set, whose classification as `BridgeType.ValueClass` ADR-108's
+return-position rewrite still depends on. Verified: a full gate sends every `Result<T>` member down
+a skip. The shipped gate therefore only fires when `declaration.parentDeclaration != null`; a
+top-level value class outside the set still classifies exactly as it did before this amendment.
+
+The `inner class` owner arm this ADR's gap description carried over from the ROADMAP wording does
+not exist: Kotlin forbids a class nested inside an `inner class` ("'Class' is prohibited here"), so
+the only reachable deferred owners for a nested value class are a generic class and an `enum class`.
+
+Deferred by this amendment, not fixed, and recorded as new Phase 4 ROADMAP items: a closure-refused
+**top-level** dependency value class still spells unguarded, since the membership test that would
+close it cannot be the full test above without re-breaking `kotlin.Result`; and
+`unsupportedNestedOwnerReason()` has no arm for a nested SEALED owner, so a value class nested under
+`Owner.NestedSealed` may still be declared under an owner that is itself never declared.

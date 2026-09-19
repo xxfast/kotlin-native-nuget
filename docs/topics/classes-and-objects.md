@@ -365,11 +365,12 @@ its refused-arm exception.
   constructor on an `expect`/`actual` class gets no synthesized overload. See
   [expect/actual declarations](expect-actual.md).
 - A nested type under an owner other than the shapes covered above stays a named
-  `SKIPPED_NESTED_DECLARATION` skip. A nested `value class` under one of those still-deferred
-  owners has no such diagnostic and can emit an unusable struct name silently; avoid nesting a
-  `value class` directly inside an `inner class`, generic, or `enum class` owner. An extension
-  function or property on a nested type is not supported; declare the extension on a top-level
-  type instead.
+  `SKIPPED_NESTED_DECLARATION` skip. A member typed with a nested `value class` under a
+  still-deferred owner (a generic or `enum class` owner) skips named too
+  (`SKIPPED_UNSUPPORTED_TYPE`, reason `UNDECLARED_VALUE_CLASS`) instead of emitting an unusable
+  struct name; move the value class to the top level of its file, or to an admitted owner, to
+  bridge it. An extension function or property on a nested type is not supported; declare the
+  extension on a top-level type instead.
 
 <seealso>
     <category ref="related">

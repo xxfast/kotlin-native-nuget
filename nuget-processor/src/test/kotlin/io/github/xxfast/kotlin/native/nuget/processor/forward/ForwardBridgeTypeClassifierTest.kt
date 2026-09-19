@@ -23,6 +23,10 @@ class ForwardBridgeTypeClassifierTest {
     // branch is: only an enum the renderer actually declares may be spelled as a C# enum.
     ForwardBridgeTypeContext(
       exportedObjectHandles = setOf("sample.Patient", "sample.Record", "sample.State"),
+      // `sample.Crate.Weight` is an ADR-134 admitted NESTED value class: the value-class gate
+      // refuses a nested one only when the renderer declares no record struct for it, so one that
+      // IS declared has to keep its `Crate.Weight` spelling.
+      exportedValueClasses = setOf("sample.Record", "sample.Crate.Weight"),
     ),
   )
 
@@ -215,6 +219,51 @@ class ForwardBridgeTypeClassifierTest {
     assertEquals(
       BridgeType.ValueClass("sample.Record", BridgeType.String),
       classifier.classify(type(valueClass)),
+    )
+  }
+
+  /**
+   * The value-class twin of the enum gate above. A `value class` nested under an owner ADR-134
+   * still defers (a generic or `enum class` owner) is declared as no C# record struct at all, and
+   * `valueClass()` used to spell it anyway (`Box.Seal`), leaving `Interop.cs` with a dangling
+   * reference and the member with no diagnostic. A nested value class the renderer DOES declare
+   * keeps its binding, which is what the membership set is for.
+   */
+  @Test
+  fun `a nested value class outside the exported set is unsupported rather than spelled`() {
+    val undeclared = assertIs<BridgeType.Unsupported>(
+      classifier.classify(
+        type(
+          classDeclaration(
+            "sample.Box.Seal",
+            modifiers = setOf(Modifier.VALUE),
+            primaryConstructor = constructor(type("kotlin.Int")),
+            parentDeclaration = classDeclaration("sample.Box"),
+          ),
+        ),
+      ),
+    )
+    assertEquals(true, undeclared.isUndeclaredValueClass)
+    assertEquals(false, undeclared.isUnexportedDependency)
+    assertEquals("sample.Box.Seal", undeclared.rendered)
+
+    val declared = classifier.classify(
+      type(
+        classDeclaration(
+          "sample.Crate.Weight",
+          modifiers = setOf(Modifier.VALUE),
+          primaryConstructor = constructor(type("kotlin.Int")),
+          parentDeclaration = classDeclaration("sample.Crate"),
+        ),
+      ),
+    )
+    assertEquals(
+      BridgeType.ValueClass(
+        "sample.Crate.Weight",
+        BridgeType.Primitive(PrimitiveKind.INT),
+        csharpType = "Crate.Weight",
+      ),
+      declared,
     )
   }
 
