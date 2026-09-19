@@ -657,6 +657,15 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
     ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE ->
       "it returns a bound C# interface that Kotlin cannot implement"
 
+    // The type is what failed, so the sentence names it. Without this arm the author read
+    // "its UNSUPPORTED type combination is not supported", which names a reason constant and no
+    // type at all, while the same drop on a PROPERTY named the type. Both routes read this one
+    // sentence now ([ownsSentence] claims the property route as soon as a detail is there); a type
+    // whose refusal is about the position rather than the type carries no detail and keeps the
+    // generic sentence.
+    ForwardPlanSkipReason.UNSUPPORTED ->
+      if (detail != null) "its type `$detail` is not supported" else generic
+
     // Issue #131: guarded on the name being there, so a return-position nullable keeps the
     // shipped generic sentence.
     ForwardPlanSkipReason.NULLABLE ->

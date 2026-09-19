@@ -48,7 +48,7 @@ class Tier1NullableParameterDiagnosticTest {
 
   @Test
   fun `a nullable parameter with no wire is named an input skip, not a return one`() {
-    val result = Tier1Harness.run(source)
+    val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
 
     diagnostic(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, "hubWithEvents")
     assertTrue(
@@ -62,7 +62,7 @@ class Tier1NullableParameterDiagnosticTest {
 
   @Test
   fun `the diagnostic names the offending parameter`() {
-    val result = Tier1Harness.run(source)
+    val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
 
     val diagnostic: String =
       diagnostic(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, "hubWithEvents")
@@ -78,7 +78,7 @@ class Tier1NullableParameterDiagnosticTest {
 
   @Test
   fun `shorter HubWithEvents arities bind and the events arity stays absent`() {
-    val result = Tier1Harness.run(source)
+    val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
 
     val cs: String = result.generatedCSharp
     assertTrue(
@@ -97,7 +97,7 @@ class Tier1NullableParameterDiagnosticTest {
 
   @Test
   fun `a nullable return keeps the return-position skip and its unnamed hint`() {
-    val result = Tier1Harness.run(source)
+    val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
 
     val diagnostic: String =
       diagnostic(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN, "latest")
@@ -109,7 +109,7 @@ class Tier1NullableParameterDiagnosticTest {
 
   @Test
   fun `a nullable class handle parameter binds on the top-level and constructor routes`() {
-    val result = Tier1Harness.run(source)
+    val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     assertTrue(

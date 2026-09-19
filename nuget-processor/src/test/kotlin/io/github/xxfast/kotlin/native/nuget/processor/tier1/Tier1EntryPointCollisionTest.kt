@@ -180,9 +180,6 @@ class Tier1EntryPointCollisionTest {
           }
         """.trimIndent(),
       ),
-      // `kotlinx-coroutines-core` on the KSP *resolution* classpath, not only the compile one:
-      // without it `Flow` resolves to `<ERROR TYPE: Flow>`, the property is dropped as
-      // SKIPPED_UNSUPPORTED_PROPERTY and no `_collect` export is minted to collide.
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 

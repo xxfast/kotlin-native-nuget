@@ -165,6 +165,22 @@ internal object Tier1Harness {
       commonSourceDir.resolve(fileName).apply { writeText(kotlinSource) }
     }
 
+    // The KSP2 analysis session below resolves against `kotlinStdlib + libraries` and nothing else,
+    // so a fixture that mentions coroutines without the jar does not fail: `Flow<Int>` resolves to
+    // a KSP error type, the member is dropped as an unsupported type, and the cell goes green
+    // against a fiction. `coroutinesOnCompileClasspath` (default `true`) does not cover this: it
+    // feeds the `K2JVMCompiler` step only. A `require` rather than a default, because that flag is
+    // a compile-step seam `Tier1CoroutineFreeModuleTest` depends on, and defaulting the KSP path
+    // would change every non-coroutines cell's resolution environment silently.
+    val mentionsCoroutines: Boolean =
+      (sources.values + commonSources.values).any { "kotlinx.coroutines" in it }
+    require(!mentionsCoroutines || Tier1Classpath.kotlinxCoroutinesCore in libraries) {
+      "This fixture mentions kotlinx.coroutines but the KSP classpath has no coroutines jar, so " +
+          "every coroutines type would resolve to a KSP error type and its member would be " +
+          "silently dropped. Pass libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore). " +
+          "coroutinesOnCompileClasspath does NOT cover this: it only feeds the K2JVMCompiler step."
+    }
+
     val kotlinOutputDir: File = workDir.resolve("ksp-out").apply { mkdirs() }
     val classOutputDir: File = workDir.resolve("ksp-class-out").apply { mkdirs() }
     val resourceOutputDir: File = workDir.resolve("ksp-res-out").apply { mkdirs() }

@@ -191,13 +191,15 @@ collection kind:
     at Fixture.kt:4
 ```
 
-A property whose declared type the property planner has no getter/setter shape for is skipped the
-same way, naming the property's own type. `Cat.unsupported: Sequence<String>` is the fixture:
+A property whose declared type the property planner cannot bridge is skipped the same way, naming
+the property's own type, the same sentence a callable route prints for the same refusal.
+`Cat.unsupported: Sequence<String>` is the fixture:
 
 ```
-[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping Cat.unsupported: its type kotlin.sequences.Sequence
-    has no property getter or setter shape. expose a bridgeable property (or a getter function)
-    whose type is not kotlin.sequences.Sequence, and export that instead
+[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping Cat.unsupported: its type `kotlin.sequences.Sequence`
+    is not supported. kotlin.sequences.Sequence is a Kotlin stdlib type with no first-class C#
+    mapping yet; expose a bridgeable type instead (include(...) is not the fix: an explicit include
+    replaces the export scope rather than mapping the type)
     at Cat.kt:46
 ```
 
@@ -951,7 +953,7 @@ repository's own fixture, KSP task `UP-TO-DATE`:
 [nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.length: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
 [nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.get: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
 [nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.subSequence: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
-[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping io.github.xxfast.kotlin.native.nuget.test.cat.Cat.unsupported: its type kotlin.sequences.Sequence has no property getter or setter shape. expose a bridgeable property (or a getter function) whose type is not kotlin.sequences.Sequence, and export that instead
+[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping io.github.xxfast.kotlin.native.nuget.test.cat.Cat.unsupported: its type `kotlin.sequences.Sequence` is not supported. kotlin.sequences.Sequence is a Kotlin stdlib type with no first-class C# mapping yet; expose a bridgeable type instead (include(...) is not the fix: an explicit include replaces the export scope rather than mapping the type)
     at /Users/xxfast/Developer/XXFAST/KMP/kotlin-native-nuget/test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/test/cat/Cat.kt:46
 ```
 

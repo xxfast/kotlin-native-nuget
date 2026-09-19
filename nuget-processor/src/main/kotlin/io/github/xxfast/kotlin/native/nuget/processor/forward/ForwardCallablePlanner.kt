@@ -1884,7 +1884,7 @@ internal class ForwardCallablePlanner(
           ?: ineligibleType.undeclaredTypeDetail()
           ?: ineligibleType.sealedTypeDetail()
           ?: ineligibleType.collectionComponentDetail()
-          ?: ineligibleType.stdlibTypeDetail(),
+          ?: ineligibleType.unsupportedTypeDetail(),
         position = ForwardSkipPosition.INPUT,
         parameter = ineligible.first,
       )
@@ -2232,7 +2232,7 @@ internal class ForwardCallablePlanner(
           ?: ineligibleType.undeclaredTypeDetail()
           ?: ineligibleType.sealedTypeDetail()
           ?: ineligibleType.collectionComponentDetail()
-          ?: ineligibleType.stdlibTypeDetail(),
+          ?: ineligibleType.unsupportedTypeDetail(),
         position = ForwardSkipPosition.INPUT,
         parameter = ineligible.first,
       )
@@ -2270,7 +2270,7 @@ internal class ForwardCallablePlanner(
           ?: plannedResult.undeclaredTypeDetail()
           ?: plannedResult.sealedTypeDetail()
           ?: plannedResult.collectionComponentDetail()
-          ?: plannedResult.stdlibTypeDetail(),
+          ?: plannedResult.unsupportedTypeDetail(),
         // ADR-064 amendment (2026-09-13): the default already, stated explicitly because the
         // unrouted-position reclassification reads it — a `fun <T> f(): List<T>` and a
         // `fun f(): Flow<Int>` both have to report RETURN, and an implicit default is not
@@ -3962,13 +3962,13 @@ internal fun BridgeType.skipDetail(): String? = optInMarkerDetail()
   ?: unexportedDependencyDetail()
   ?: undeclaredTypeDetail()
   ?: sealedTypeDetail()
-  ?: stdlibTypeDetail()
+  ?: unsupportedTypeDetail()
 
-/** ADR-151: the qualified name of an unmapped `kotlin.*`/`kotlinx.*` type, so
- *  [ForwardPlanSkipReason.UNSUPPORTED]'s hint can name the type the author wrote. Last in the
- *  chain: every flagged refusal above it (opt-in marker, typealias target, scope, nesting) is
- *  more specific and keeps its own wording. `null` for every other type. */
-internal fun BridgeType.stdlibTypeDetail(): String? =
-  (unwrapNullable() as? BridgeType.Unsupported)
-    ?.takeIf { unsupported -> unsupported.rendered.isStdlibPackage() }
-    ?.rendered
+/** The rendered name of whatever the classifier refused, so [ForwardPlanSkipReason.UNSUPPORTED]'s
+ *  sentence can name the type the author wrote instead of the reason constant (and, ADR-151, so
+ *  its hint can recognise an unmapped `kotlin.*`/`kotlinx.*` type). Last in the chain: every
+ *  flagged refusal above it (opt-in marker, typealias target, scope, nesting) is more specific and
+ *  keeps its own wording. `null` for every type that is not [BridgeType.Unsupported], which is
+ *  every type whose refusal is about a position rather than the type itself. */
+internal fun BridgeType.unsupportedTypeDetail(): String? =
+  (unwrapNullable() as? BridgeType.Unsupported)?.rendered

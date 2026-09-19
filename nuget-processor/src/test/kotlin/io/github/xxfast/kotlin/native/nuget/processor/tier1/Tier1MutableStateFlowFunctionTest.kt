@@ -33,8 +33,6 @@ class Tier1MutableStateFlowFunctionTest {
         fun lastLevel(): Int = latest?.value ?: -1
       }
       """.trimIndent(),
-      // `MutableStateFlow` must resolve for the flow route to be taken at all; with only
-      // kotlin-stdlib on the KSP libraries path the member is skipped as an unsupported type.
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 

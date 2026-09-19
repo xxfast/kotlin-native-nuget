@@ -478,8 +478,6 @@ class Tier1NamedSkipDiagnosticsTest {
         val mood: StateFlow<Int> = MutableStateFlow(0)
       }
       """.trimIndent(),
-      // Without coroutines on KSP's own classpath the classifier sees `<ERROR TYPE: StateFlow>`
-      // and the fixture would prove nothing about the exclusion.
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 

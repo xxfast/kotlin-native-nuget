@@ -659,9 +659,6 @@ class Tier1NestedTypesTest {
     val result = Tier1Harness.run(
       asyncSource,
       fileName = "Async.kt",
-      // Load-bearing: `Tier1Harness` puts only `kotlin-stdlib` on the KSP `libraries` path
-      // (`coroutinesOnCompileClasspath` governs the *compile* step alone), so without this a
-      // `Flow` return resolves to `<ERROR TYPE: Flow>` and every Flow member drops.
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 
@@ -702,26 +699,10 @@ class Tier1NestedTypesTest {
     val result = Tier1Harness.run(
       asyncSource,
       fileName = "Async.kt",
-      // Load-bearing: `Tier1Harness` puts only `kotlin-stdlib` on the KSP `libraries` path
-      // (`coroutinesOnCompileClasspath` governs the *compile* step alone), so without this a
-      // `Flow` return resolves to `<ERROR TYPE: Flow>` and every Flow member drops.
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 
     val csharp: String = result.generatedCSharp
-    // `qualifiedElementCsType` spells a Flow element with the wrapper too. Worse than a cosmetic
-    // difference: the stream is read through `NugetMarshal.FromHandle<T>`, whose Activator branch
-    // cannot construct an interface, so the corrected spelling needs an explicit read lambda.
-    //
-    // Measured 2026-09-13, and the reason this cell first read as an environment disagreement:
-    // the harness call above omitted `libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore)`,
-    // and `Tier1Harness` only ever puts `kotlin-stdlib` on the KSP `libraries` path -- its
-    // `coroutinesOnCompileClasspath` flag governs the *compile* step, not resolution. `Flow` was
-    // therefore `<ERROR TYPE: Flow>` to KSP and EVERY Flow member dropped, `Flow<String>`
-    // included, with the generic `SKIPPED_UNSUPPORTED_TYPE ... its UNSUPPORTED type combination
-    // is not supported` that names neither the Flow nor its element. With coroutines on the KSP
-    // path the harness agrees with the real test-library build, which emits the wrapper spelling
-    // `public KotlinFlow<global::TestLibrary.Nested.Aviary.Keeper> Keepers()` this cell is about.
     assertContains(
       csharp,
       "KotlinFlow<global::Interop.Owner.IKeeper> Keepers(",
@@ -735,9 +716,6 @@ class Tier1NestedTypesTest {
     val result = Tier1Harness.run(
       asyncSource,
       fileName = "Async.kt",
-      // Load-bearing: `Tier1Harness` puts only `kotlin-stdlib` on the KSP `libraries` path
-      // (`coroutinesOnCompileClasspath` governs the *compile* step alone), so without this a
-      // `Flow` return resolves to `<ERROR TYPE: Flow>` and every Flow member drops.
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 
@@ -774,9 +752,6 @@ class Tier1NestedTypesTest {
     val result = Tier1Harness.run(
       asyncSource,
       fileName = "Async.kt",
-      // Load-bearing: `Tier1Harness` puts only `kotlin-stdlib` on the KSP `libraries` path
-      // (`coroutinesOnCompileClasspath` governs the *compile* step alone), so without this a
-      // `Flow` return resolves to `<ERROR TYPE: Flow>` and every Flow member drops.
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 
