@@ -1558,3 +1558,70 @@ cell pins the `UNROUTED_POSITION` sentence.
   non-compiling consumer is now a warning and no member.
 - `garage.Register.tally` gains a diagnostic it did not have before; no other shipped sample record's
   generated output changes.
+
+## Amendment (2026-09-19): `UNSUPPORTED` names the type, on both routes
+
+Judgement: an **amendment**, not a new ADR. It closes the ROADMAP Phase 4 item that a Tier 1 harness
+precondition gap let a `Flow`/`StateFlow` fixture with no coroutines jar resolve to an error type and
+silently drop the member, and, on the diagnostic itself, that the callable route printed the unnamed
+"its UNSUPPORTED type combination is not supported" sentence while the property route already named
+the type. It adds no new `ForwardDiagnosticKind` and no new `ForwardPlanSkipReason`. Status stays
+Accepted.
+
+### The gap
+
+`ForwardPlanSkipReason.UNSUPPORTED` had no arm in `diagnosticReason`, so a callable dropped for an
+unsupported type fell through to `genericSentence()`: "its UNSUPPORTED type combination is not
+supported", naming the reason constant and no type. The property route already carried a `detail`
+for the same classification (the "property route carries its reason" amendment above) and printed
+"has no property getter or setter shape" instead, so the same refusal read differently depending on
+whether it landed on a method or a property.
+
+### Decision
+
+`skipDetail()`'s last link is renamed `unsupportedTypeDetail()` (from `stdlibTypeDetail()`) and
+generalised: it now returns the rendered name of any `BridgeType.Unsupported`, not only a
+`kotlin.*`/`kotlinx.*` stdlib one. `diagnosticReason` gains an `UNSUPPORTED` arm:
+
+```kotlin
+ForwardPlanSkipReason.UNSUPPORTED ->
+  if (detail != null) "its type `$detail` is not supported" else generic
+```
+
+`ownsSentence()` already compares against `genericSentence()`, not an allowlist (the "property route
+carries its reason" amendment above), so the property route picks up the same sentence automatically
+as soon as `UNSUPPORTED` carries a detail; no property-route change was needed. A type whose refusal
+carries no detail (a position-only refusal, not a type refusal) keeps the generic sentence on both
+routes, unchanged.
+
+Two shipped sample records move, both `kotlin.sequences.Sequence`:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.issue112.BleAdvertisement.collarTag: its type `kotlin.sequences.Sequence` is not supported. ...
+[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping io.github.xxfast.kotlin.native.nuget.test.cat.Cat.unsupported: its type `kotlin.sequences.Sequence` is not supported. ...
+```
+
+### The harness half
+
+Separately, `Tier1Harness.runIn` now `require`s that a fixture mentioning `kotlinx.coroutines` passes
+`libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore)`. Before, the KSP resolution classpath
+never carried the coroutines jar by default (`coroutinesOnCompileClasspath` only ever fed the
+`K2JVMCompiler` step), so `Flow`/`StateFlow` resolved to a KSP error type, the member dropped as an
+unnamed `UNSUPPORTED` skip, and the cell stayed green without ever exercising the route it claimed
+to. The `require` message names the flag's real scope. Two existing Tier 1 test classes were silent
+victims of the gap and now pass the jar with no assertion change: `Tier1NullableParameterDiagnosticTest`
+and `Tier1SuspendOnlyFileTest`.
+
+### Testing seam
+
+`Tier1CoroutinesClasspathPreconditionTest` pins the `require` (a `Flow` fixture with no `libraries`
+fails fast at the harness, not silently at KSP). `Tier1UnsupportedTypeDiagnosticTest` pins the shared
+sentence on both the callable and property routes, and that a detail-less `UNSUPPORTED` position
+keeps the generic sentence.
+
+### Consequences of the amendment
+
+- No generated C# change: both moved records were already absent from the generated API, only their
+  build-log wording changed.
+- A Tier 1 fixture that mentions `kotlinx.coroutines` without the jar now fails at `require` instead
+  of silently asserting against a route it never exercised.

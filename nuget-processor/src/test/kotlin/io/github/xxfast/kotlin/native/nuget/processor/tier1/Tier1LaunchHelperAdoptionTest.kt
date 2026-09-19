@@ -58,7 +58,6 @@ class Tier1LaunchHelperAdoptionTest {
 
   private fun run(fixture: String): Tier1Result = Tier1Harness.run(
     fixture,
-    // `Flow` must resolve on the KSP libraries path or the flow route is never taken at all.
     libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     coroutinesOnCompileClasspath = true,
   )

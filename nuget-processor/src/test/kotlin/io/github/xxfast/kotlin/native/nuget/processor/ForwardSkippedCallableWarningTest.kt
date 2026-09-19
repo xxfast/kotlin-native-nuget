@@ -173,14 +173,20 @@ class ForwardSkippedCallableWarningTest {
         symbol = "com.example.NestedListenerOwner.attach",
         reason = ForwardPlanSkipReason.UNDECLARED_INTERFACE,
         detail = "com.example.NestedListenerOwner.Listener",
-      ) to "its interface type `com.example.NestedListenerOwner.Listener` is nested and never " +
-          "declared as a C# interface (UNDECLARED_INTERFACE)",
+      ) to "its interface type `com.example.NestedListenerOwner.Listener` is nested and no C# " +
+          "nested interface is declared for it (UNDECLARED_INTERFACE)",
       ForwardCallableCatalogEntry.Skipped(
         symbol = "com.example.Newsroom.schedule",
         reason = ForwardPlanSkipReason.UNDECLARED_CLASS,
         detail = "com.example.Newsroom.Schedule",
-      ) to "its type `com.example.Newsroom.Schedule` is a nested class or object never declared " +
-          "in C# (UNDECLARED_CLASS)",
+      ) to "its type `com.example.Newsroom.Schedule` is nested and no C# nested type is declared " +
+          "for it (UNDECLARED_CLASS)",
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Reader.sealOf",
+        reason = ForwardPlanSkipReason.UNDECLARED_VALUE_CLASS,
+        detail = "com.example.Box.Seal",
+      ) to "its value class type `com.example.Box.Seal` is nested and no C# nested record struct " +
+          "is declared for it (UNDECLARED_VALUE_CLASS)",
       ForwardCallableCatalogEntry.Skipped(
         symbol = "com.example.StoryUri.length",
         reason = ForwardPlanSkipReason.INHERITED_MEMBER,
@@ -302,6 +308,8 @@ class ForwardSkippedCallableWarningTest {
         ForwardPlanSkipReason.UNDECLARED_INTERFACE,
         // ...and the nested class/object twin of both.
         ForwardPlanSkipReason.UNDECLARED_CLASS,
+        // ADR-134: and the nested value-class twin, whose record struct the same walk declares.
+        ForwardPlanSkipReason.UNDECLARED_VALUE_CLASS,
         // ADR-133: a Kotlin `object` at a member position. Declared in C# as a static class, so
         // it is a genuine drop at every position (CS0722) and no legacy route re-emits it.
         ForwardPlanSkipReason.OBJECT_POSITION,

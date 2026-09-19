@@ -191,8 +191,11 @@ internal fun KSClassDeclaration.unsupportedNestedOwnerReason(): String? = when {
     "only a `class`, `object` or `interface` owner carries nested declarations"
   typeParameters.isNotEmpty() ->
     "a generic owner's nested type is itself generic in C# (`Owner<T>.Nested`)"
+  // ADR-141: an inner class is declared now, but its OWN nested types are not. Only another
+  // `inner class` can nest inside one (a plain nested class there is NESTED_CLASS_NOT_ALLOWED), and
+  // the receiver for that child would be the inner instance, one level up from this ADR's.
   modifiers.contains(Modifier.INNER) ->
-    "an `inner class` owner needs the outer instance to construct"
+    "an `inner class` owner's own nested types are deferred"
   isValueClass() -> "a `value class` owner has no nested-type slot"
   isCompanionObject -> "a companion object is folded into its owner's statics (ADR-013)"
   else -> null
@@ -200,8 +203,8 @@ internal fun KSClassDeclaration.unsupportedNestedOwnerReason(): String? = when {
 
 /** ADR-133: why this nested candidate itself is deferred, or null when it is declared. */
 internal fun KSClassDeclaration.unsupportedNestedCandidateReason(): String? = when {
-  modifiers.contains(Modifier.INNER) ->
-    "an `inner class` needs the outer instance its constructor takes"
+  // ADR-141: no `inner` arm here any more -- an inner class IS declared, with the outer instance as
+  // its constructor's first parameter. The owner arm above still defers an inner-of-inner.
   typeParameters.isNotEmpty() -> "a generic nested type is deferred"
   modifiers.contains(Modifier.SEALED) ->
     "a nested sealed hierarchy is deferred (its arms would have to nest twice)"
@@ -232,10 +235,37 @@ internal fun KSClassDeclaration.nestedDeclarationDeferral(): String? {
 internal fun KSClassDeclaration.nestedOwnerScopeCollision(): String? {
   val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return null
   val name: String = simpleName.asString()
-  if (owner.simpleName.asString() == name) return "its owner's own name (CS0542)"
+  // CS0542 compares the C# names, not the Kotlin ones: ADR-134 declares an `interface` owner's
+  // child inside `public interface ICage`, so `interface Cage { class Cage }` is the legal
+  // `ICage.Cage`. An ADR-112 eligible sealed interface renders as `public abstract class Beam` with
+  // no `I` (issue #54), so `Beam.Beam` is still the error this arm exists for.
+  val segments: List<String> = nestedCsName().split('.')
+  if (segments.size >= 2 && segments[segments.size - 2] == segments.last()) {
+    return "its owner's own name (CS0542)"
+  }
+  // ADR-013 folds a companion's public members into the owner's C# class as statics (`const val`
+  // included, see `CirClassTranslator`), so they share the one member-name scope the nested type is
+  // declared in: `companion object { fun config(): Config }` beside `class Config` is CS0102 just
+  // as an instance `val config` is. Static-ness is not part of a C# member name.
+  val companion: KSClassDeclaration? = owner.declarations
+    .filterIsInstance<KSClassDeclaration>()
+    .firstOrNull { it.isCompanionObject }
+  val companionMemberNames: List<String> = if (companion == null) {
+    emptyList()
+  } else {
+    companion.getAllProperties()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .map { it.simpleName.asString() }
+      .toList() +
+        companion.getAllFunctions()
+          .filter { it.getVisibility() == Visibility.PUBLIC }
+          .map { it.simpleName.asString() }
+          .toList()
+  }
   val memberNames: List<String> =
     (owner.getAllProperties().map { it.simpleName.asString() }.toList() +
-        owner.getAllFunctions().map { it.simpleName.asString() }.toList())
+        owner.getAllFunctions().map { it.simpleName.asString() }.toList() +
+        companionMemberNames)
       .map { it.replaceFirstChar { c -> c.uppercase() } }
   return if (name in memberNames) "the member `$name` of the same C# type (CS0102)" else null
 }
@@ -608,14 +638,13 @@ class NugetProcessor(
     fun isExported(declaration: KSDeclaration): Boolean {
       val pkg: String = declaration.packageName.asString()
       val qualifiedName: String? = declaration.qualifiedName?.asString()
-      fun matches(p: String) = pkg == p || pkg.startsWith("$p.")
 
       // ADR-063 "Reverse-bound packages are always in scope": checked first, before exclude and
       // before include. A module that both publishes forward and consumes via `bind {}` returns
       // reverse-bound types from its own forward code; dropping the bound stub's declaration
       // while the forward-generated C# still references it is a dangling-reference build break,
       // not a scoping choice the user asked for.
-      if (context.boundPackages.any(::matches)) return true
+      if (context.boundPackages.any { isUnderPackage(pkg, it) }) return true
       return ownScope.covers(pkg, qualifiedName)
     }
 
@@ -1140,9 +1169,16 @@ class NugetProcessor(
       }
       objects.forEach { obj -> obj.qualifiedName?.asString()?.let(::add) }
     }
+    // ADR-134: the value classes the renderer declares, nested ones included. Kept out of
+    // `exportedObjectHandles` above: a record struct is not a handle, and that set answers a
+    // different question for `forwardSuperClass` and the legacy `csTypeArguments` route.
+    val exportedValueClasses: Set<String> = buildSet {
+      valueClasses.forEach { cls -> cls.qualifiedName?.asString()?.let(::add) }
+    }
     val forwardClassifier = ForwardBridgeTypeClassifier(
       ForwardBridgeTypeContext(
         exportedObjectHandles = exportedObjectHandles,
+        exportedValueClasses = exportedValueClasses,
         rootPackage = context.rootPackage,
         rootNamespace = context.rootNamespace,
         actualTypeAliasTargets = actualTypeAliasTargets,
@@ -1233,40 +1269,49 @@ class NugetProcessor(
     val declarationPlanner = ForwardCallablePlanner(forwardClassifier, expects)
     val declarationPropertyPlanner = ForwardPropertyPlanner(forwardClassifier)
 
-    // ADR-075 amendment (2026-09-13): the UNEXPORTED interface supertypes of exported classes,
-    // planned onto the same declaration catalog. ADR-101 drops `: INesting` from the base list,
-    // but the members it declares and the class never implements still have to be spelled on the
-    // C# class itself, or the class's own generated subclass renders `public override` against
-    // nothing (CS0115 inside the generated file). Planning them here means
-    // `inheritedAbstractProperty` reads base and override off ONE plan, so the type spelling and
-    // the setter's presence cannot drift (CS1715 / CS0534 / CS0546).
+    // ADR-075 amendment (2026-09-13): the UNEXPORTED supertypes of exported classes, planned onto
+    // the same declaration catalog. ADR-101 drops `: INesting` from the base list, but the members
+    // it declares and the class never implements still have to be spelled on the C# class itself,
+    // or the class's own generated subclass renders `public override` against nothing (CS0115
+    // inside the generated file). Planning them here means `inheritedAbstractProperty` reads base
+    // and override off ONE plan, so the type spelling and the setter's presence cannot drift
+    // (CS1715 / CS0534 / CS0546).
     //
-    // Transitive on purpose (`getAllSuperTypes`): an unexported interface extending another
-    // unexported one declares the grandparent's members on the class too, and the lookup key is
-    // built from the member's own `parentDeclaration`.
+    // ADR-075 amendment (2026-09-19): an unexported abstract BASE CLASS, not only an interface.
+    // ADR-101 drops `: Cushion()` the same way and re-homes the base's members onto the exported
+    // subclass, so an unimplemented `abstract val` there needs the same plan to be spelled from,
+    // and a miss then means the planner genuinely refused the type. `kotlin.Any` yields no
+    // properties, and `interfaceProperties` keys on `parentDeclaration`, so a concrete base member
+    // planned here is simply never looked up (only an unimplemented ABSTRACT member reaches
+    // `inheritedAbstractProperty`).
     //
-    // Nothing is *rendered* for these interfaces: `translateInterface` is driven by `interfaces`
+    // Transitive on purpose (`getAllSuperTypes`): an unexported supertype extending another
+    // unexported one declares the grandparent's members on the class too, and a dropped
+    // INTERMEDIATE base (`Dinghy : Skiff : Vessel`, only `Skiff` unexported) is reached through a
+    // kept hop. The lookup key is built from the member's own `parentDeclaration`.
+    //
+    // Nothing is *rendered* for these supertypes: `translateInterface` is driven by `interfaces`
     // alone, and this catalog reaches only the C# translation, never `generateCNameWrappers` and
     // never the ADR-055 contract check, so no `DllImport` and no Kotlin export follows.
-    val unexportedSupertypeInterfaces: List<KSClassDeclaration> = allClasses
+    val unexportedSupertypes: List<KSClassDeclaration> = allClasses
       .asSequence()
       .flatMap { cls -> cls.getAllSuperTypes() }
       .map { it.declaration }
       .filterIsInstance<KSClassDeclaration>()
-      .filter { it.classKind == ClassKind.INTERFACE }
+      .filter { it.classKind == ClassKind.INTERFACE || it.classKind == ClassKind.CLASS }
       .filter { it.qualifiedName?.asString() !in exportedObjectHandles }
       .distinctBy { it.qualifiedName?.asString() }
       .toList()
     // A THIRD planner instance, for the same reason the declaration planner above is a second one:
-    // its drop channel must not be merged, or every declared member of an unexported interface the
+    // its drop channel must not be merged, or every declared member of an unexported supertype the
     // class implements concretely would be warned about on every build.
     val supertypePropertyPlanner = ForwardPropertyPlanner(forwardClassifier)
     val interfaceDeclarationCatalog = ForwardCallablePlanCatalog(
       entries = interfaces.flatMap { iface -> declarationPlanner.interfaceEntries(iface) },
       propertyPlans = interfaces.flatMap { iface ->
         declarationPropertyPlanner.interfaceProperties(iface)
-      } + unexportedSupertypeInterfaces.flatMap { iface ->
-        supertypePropertyPlanner.interfaceProperties(iface)
+      } + unexportedSupertypes.flatMap { supertype ->
+        supertypePropertyPlanner.interfaceProperties(supertype)
       },
     )
 

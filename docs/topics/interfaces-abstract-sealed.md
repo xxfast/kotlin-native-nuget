@@ -259,9 +259,60 @@ implemented on the base itself, even when that interface is never declared in C#
 unexported interface): the abstract class still declares the inherited member `public abstract`,
 so a further C# subclass compiles.
 
+The same also applies when the abstract member is inherited from an **unexported abstract base
+class** instead of an interface. `SKIPPED_UNEXPORTED_SUPERTYPE` already drops that base from the C#
+class list and re-homes its bridgeable members onto the exported subclass; an abstract member it
+never implements now renders `public abstract` on that subclass too, so a further C# or Kotlin
+`override` compiles instead of failing to build:
+
+```kotlin
+abstract class Cushion { // never exported
+  abstract val weave: String
+  abstract var loft: Int
+}
+
+abstract class Lounger : Cushion() // exported; implements neither member
+
+class Beanbag : Lounger() {
+  override val weave: String = "corduroy"
+  override var loft: Int = 4
+}
+```
+
+```C#
+public abstract class Lounger : IDisposable, INugetHandle
+{
+    public abstract string Weave { get; }
+    public abstract int Loft { get; set; }
+}
+```
+
 A member the planner declines to plan, for example a generic interface default the type mapper
-cannot spell abstractly, is dropped from the generated class instead of rendered `abstract`; an
+cannot spell abstractly, or one whose own type has no C# declaration (a nested class never exported),
+is dropped from the generated class instead of rendered `abstract`, named on a build warning; an
 uncompilable abstract member would break every further subclass.
+
+### A class-typed abstract member {id="a-class-typed-abstract-member"}
+
+A parameter or return typed with another declared class renders fully qualified, never a bare name:
+the generated file carries only the `System` usings, so an unqualified reference would resolve to
+nothing outside the declaring class's own namespace.
+
+```kotlin
+abstract class Hauler(val plate: String) {
+  abstract fun cargo(): Toy // declared in a different package
+}
+```
+
+```C#
+public abstract class Hauler : IDisposable, INugetHandle
+{
+    public abstract global::TestLibrary.Cat.Toy Cargo();
+}
+```
+
+A type with no C# declaration at all, an unexported or nested-under-an-unexported-owner class, is
+dropped from the abstract declaration instead of spelled, named on a build warning.
 
 ## Sealed classes and interfaces
 
@@ -451,6 +502,22 @@ sealed class Job {
 ```C#
 using Job job = JobSample.AnyJob(40);
 job.Kind; // "running" - dispatches to the concrete arm's own override, or the base's default
+```
+
+A default parameter that lives on an interface the sealed base overrides counts too, even though
+Kotlin forbids the base's own `override` from restating it: the base still gets the omitting
+overload, and every arm inherits it through C# inheritance.
+
+```kotlin
+interface Squishy { fun squish(factor: Double = 1.0): Double }
+sealed class Pose : Squishy {
+  override fun squish(factor: Double): Double = factor
+}
+```
+
+```C#
+pose.Squish();    // factor defaults to 1.0
+pose.Squish(2.0);
 ```
 
 #### Suspend methods on a sealed arm {id="sealed-method-suspend-generated-c"}

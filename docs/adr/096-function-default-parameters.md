@@ -186,12 +186,17 @@ Two changes, both in `classEntries` (`ForwardCallablePlanner.kt`):
   an *exported interface's* defaulted member on a base-less class, which is consistent: the
   non-overridden case already synthesizes on the class (above), and the generated interface carries
   no overload for it to collide with.
-- The default flags come from `memberDefaultFlags`, not from the override's own parameters. Kotlin
-  forbids an override from restating a default, so dropping the gate alone would have synthesized
-  nothing at all: every parameter of the override reports `hasDefault = false`. The chain is walked
-  to its root (`generateSequence { findOverridee() }.lastOrNull()`), because an intermediate
-  override in a two-deep chain reports `false` for exactly the same reason. This is the same
-  erasure that already forced the `expect`/`actual` lookups in "Defaults source" below.
+- The default flags come from `memberDefaultFlags`, not from the override's own parameters.
+  ~~Kotlin forbids an override from restating a default, so dropping the gate alone would have
+  synthesized nothing at all: every parameter of the override reports `hasDefault = false`.~~
+  **Corrected 2026-09-19**, see "Amendment (2026-09-19)" below: the raw bit is not reliably
+  `false` on an override, so this reasoning overstated the case; `memberDefaultFlags`'s walk stays
+  correct and is kept as a defensive read, not because dropping it would synthesize nothing. The
+  chain is walked to its root (`generateSequence { findOverridee() }.lastOrNull()`), because an
+  intermediate override in a two-deep chain would need it if the raw bit ever were absent there.
+  This is the same erasure that already forced the `expect`/`actual` lookups in "Defaults source"
+  below (there the raw bit genuinely is `false`, confirmed by spike, unaffected by this
+  correction).
 
 The `sealedSubclassEntries` twin ([ADR-116](116-sealed-subclass-methods.md)) keeps the old
 modifier-keyed gate; its `isOverride` is pinned `false` for a different reason (the generated sealed
@@ -390,10 +395,13 @@ each `_$n` is whatever that route's counter has reached.)
   2. *Kotlin forbids an `override` from restating defaults*, from the language documentation
      (functions.html#default-arguments), not from a compile. The exclusion is conservative either
      way: if the bit turned out to be `true` on an override, the exclusion only costs an overload.
-     **Restated 2026-09-11, now Verified and no longer conservative**: the bit is `false` on an
+     ~~**Restated 2026-09-11, now Verified and no longer conservative**: the bit is `false` on an
      override (KSP 2.3.10), which is why the 2026-09-11 amendment above has to read the flags off
-     the root overridee. Once the exclusion no longer fires for a dropped base, a wrong answer here
-     would have cost the overload outright rather than merely leaving the base's copy in place.
+     the root overridee.~~ **Corrected 2026-09-19**: this "Verified" label was never isolated from
+     the walk it justified; see "Amendment (2026-09-19)" below, which found the raw bit `true` on
+     an override by direct measurement. Once the exclusion no longer fires for a dropped base, a
+     wrong answer here would have cost the overload outright rather than merely leaving the base's
+     copy in place; that consequence is unaffected by the correction.
   3. *A top-level `expect fun`'s parameter count and order match its `actual`'s*, guaranteed by the
      language's actualization rules but not spiked (ADR-091 carries the same claim for classes); the
      one positional lookup this ADR keeps, and its parameter-count guard, rely on it.
@@ -402,3 +410,35 @@ each `_$n` is whatever that route's counter has reached.)
   only have re-confirmed current behaviour, and the two claims a build would settle (the
   `planFor` duplicate-plan crash, and unique extern naming for numbered entries) are already pinned
   to `require(planned.size <= 1)` and `overloadSuffix()` in source.
+
+## Amendment (2026-09-19): the override raw-bit claim was too broad
+
+Investigating a ROADMAP item about `sealedBaseEntries` (`ForwardCallablePlanner.kt`, which still
+reads the raw bit, unlike `classEntries`/`sealedSubclassEntries`) found that the 2026-09-11
+"Verified" claim above, that KSP reports `hasDefault = false` on every parameter of an `override`,
+was never isolated on its own. What the 2026-09-11 amendment actually verified was that
+`memberDefaultFlags(method)` **produces** `issue42derived_farewell_2`; nobody had removed the walk
+to check what the raw bit alone would have produced.
+
+Two results, both **verified by execution** on 2026-09-19, Kotlin 2.4.10 / KSP 2.3.10 (the same
+toolchain pin as the 2026-09-11 measurement, so a toolchain move does not explain the difference):
+
+- `scripts/verify.sh` passes with `sealedBaseEntries` untouched, and untouched means it still reads
+  the raw `method.parameters.map { it.hasDefault }` bit today. Four shapes confirm the raw bit is
+  `true` on an override's own parameter for a trailing default declared on the member it overrides:
+  a same-module interface default (`Pose.squish` overriding `Squishy.squish`), a klib interface
+  default (`Biscuit.fluff` overriding `dev.other.core.UnexportedFluffy.fluff`), and a klib
+  open-class default (`Burrito.tuck` overriding `dev.other.core.UnexportedQuilt.tuck`), beside a
+  base-owned control (`Pose.settle`). Fixtures:
+  `test-library/src/nativeMain/kotlin/.../issue115/PoseSample.kt`,
+  `test-library/src/nativeMain/kotlin/.../issue115/QuiltSample.kt`.
+- A spike replacing `memberDefaultFlags`'s root-overridee walk with the raw
+  `method.parameters.map { it.hasDefault }` left `:nuget-processor:test` at 926/926, including
+  `Tier1UnexportedBaseClassSkipTest`'s `api_farewell_2` pin, the exact case cited above as proof the
+  raw bit is `false`. The spike was reverted; nothing shipped from it.
+
+Inferred: the original 2026-09-11 "Verified" label likely generalised a real but narrower
+observation, the `expect`/`actual` erasure (`hasDefault = false` on the `actual`, real and handled
+separately by `topLevelDefaultFlags`), onto every `override` in general. `memberDefaultFlags`'s walk
+to the root overridee is not wrong to keep; it is a defensive read rather than the load-bearing fix
+its 2026-09-11 text describes. Nothing in this ADR's shipped mechanism changes.

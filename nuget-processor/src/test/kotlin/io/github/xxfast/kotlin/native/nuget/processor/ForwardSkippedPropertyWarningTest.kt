@@ -72,6 +72,16 @@ class ForwardSkippedPropertyWarningTest {
       warning.contains("move it to the top level"),
       "the reason's hint names the move-to-top-level fix: $warning",
     )
+    // ADR-133/134: a nested enum under a supported owner IS declared, so the hint may no longer
+    // claim nesting alone is fatal; it points at the declaration's own deferral warning instead.
+    assertFalse(
+      warning.contains("only top-level enums are"),
+      "the hint no longer claims only top-level enums are declared: $warning",
+    )
+    assertTrue(
+      warning.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name),
+      "the hint points at the declaration-level deferral warning: $warning",
+    )
     assertFalse(
       warning.contains("has no property getter"),
       "the generic property sentence is gone: $warning",

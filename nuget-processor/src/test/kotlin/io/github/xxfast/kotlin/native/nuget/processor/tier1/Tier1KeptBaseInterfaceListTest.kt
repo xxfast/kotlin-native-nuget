@@ -96,4 +96,48 @@ class Tier1KeptBaseInterfaceListTest {
           "generated C#:\n${result.generatedCSharp}",
     )
   }
+
+  /**
+   * The harder half of the same rule: the base carries an *unrelated overload* of the interface
+   * member's name. `baseClassOverridee`'s base-class fallback matched by simple name alone, so
+   * `Post.scratch()` (over `Scratchable.scratch`, arity 0) matched `Perch.scratch(Int)` and
+   * rendered `public override string Scratch()` against a base whose only `Scratch` takes an
+   * `int`: CS0115. The fallback compares signatures, with ADR-082's wildcard for a base-side type
+   * parameter.
+   *
+   * `IntegrationTests`' `InterfaceBesideBaseTests.Post_Scratch_*` is the consumer proof.
+   */
+  @Test
+  fun `an interface override beside a base-class overload of another arity renders virtual`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.ledge.overload
+
+      open class Perch {
+        fun scratch(strokes: Int): String = "Perch: ${'$'}strokes strokes"
+      }
+
+      interface Scratchable {
+        fun scratch(): String
+      }
+
+      class Post : Perch(), Scratchable {
+        override fun scratch(): String = "Oreo: scratched"
+      }
+      """.trimIndent(),
+      processorOptions = mapOf("nuget.rootPackage" to "tier1.ledge.overload"),
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    assertTrue(
+      "public virtual string Scratch()" in result.generatedCSharp,
+      "`Perch` declares no zero-arg `Scratch`, so the slot starts on `Post`; generated C#:" +
+          "\n${result.generatedCSharp}",
+    )
+    assertFalse(
+      "override string Scratch()" in result.generatedCSharp,
+      "the base's `Scratch(int)` is an unrelated overload, so an `override` here is CS0115; " +
+          "generated C#:\n${result.generatedCSharp}",
+    )
+  }
 }

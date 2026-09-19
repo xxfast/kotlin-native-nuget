@@ -61,7 +61,10 @@ class Tier1SuspendOnlyFileTest {
    */
   @Test
   fun `incremental edit of an unrelated file drops the suspend-only file's C# export`() {
-    val pass1 = Tier1Harness.run(mapOf("AsyncOnly.kt" to asyncOnlyFile, "Vet.kt" to vetFileV1))
+    val pass1 = Tier1Harness.run(
+      mapOf("AsyncOnly.kt" to asyncOnlyFile, "Vet.kt" to vetFileV1),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
     assertContains(
       pass1.generatedCSharp,
       "FetchGreetingAsync",
@@ -73,6 +76,7 @@ class Tier1SuspendOnlyFileTest {
       initial = mapOf("AsyncOnly.kt" to asyncOnlyFile, "Vet.kt" to vetFileV1),
       editedFile = "Vet.kt",
       editedContent = vetFileV2,
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 
     assertContains(
@@ -92,7 +96,10 @@ class Tier1SuspendOnlyFileTest {
    */
   @Test
   fun `incremental edit of an unrelated file drops the suspend-only file's CName export`() {
-    val pass1 = Tier1Harness.run(mapOf("AsyncOnly.kt" to asyncOnlyFile, "Vet.kt" to vetFileV1))
+    val pass1 = Tier1Harness.run(
+      mapOf("AsyncOnly.kt" to asyncOnlyFile, "Vet.kt" to vetFileV1),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
     assertContains(
       pass1.generated,
       "fetchGreeting_async",
@@ -104,6 +111,7 @@ class Tier1SuspendOnlyFileTest {
       initial = mapOf("AsyncOnly.kt" to asyncOnlyFile, "Vet.kt" to vetFileV1),
       editedFile = "Vet.kt",
       editedContent = vetFileV2,
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 
     assertContains(
@@ -123,7 +131,10 @@ class Tier1SuspendOnlyFileTest {
    */
   @Test
   fun `a module whose only declaration is a top-level suspend fun still generates output`() {
-    val result = Tier1Harness.run(mapOf("AsyncOnly.kt" to asyncOnlyFile))
+    val result = Tier1Harness.run(
+      mapOf("AsyncOnly.kt" to asyncOnlyFile),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
 
     assertTrue(
       result.generatedFiles.keys.any { it.endsWith("Interop.cs") },

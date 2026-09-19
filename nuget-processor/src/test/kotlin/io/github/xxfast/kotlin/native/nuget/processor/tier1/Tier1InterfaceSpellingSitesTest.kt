@@ -135,8 +135,6 @@ class Tier1InterfaceSpellingSitesTest {
       stateFlowSource,
       fileName = "Aviary.kt",
       processorOptions = mapOf("nuget.rootPackage" to "tier1.spell"),
-      // Same trap as `Tier1NestedTypesTest`: without coroutines on the KSP `libraries` path
-      // `StateFlow` is an error type and every member here drops silently.
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 

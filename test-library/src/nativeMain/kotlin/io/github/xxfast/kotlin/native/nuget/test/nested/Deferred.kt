@@ -35,9 +35,10 @@ package io.github.xxfast.kotlin.native.nuget.test.nested
  * skip the nested declaration this file exists to pin. Same rule as `Aviary.perchAt`.
  *
  * Deferred by ADR-134 and therefore absent here on purpose: an `enum class` owner
- * (`Season.Almanac`), a generic owner (`Box<T>.Lid`) and an `inner class` (`Host.Guest`). Those
- * stay a named `SKIPPED_NESTED_DECLARATION` permanently and live in `Tier1NestedTypesTest`'s
- * `deferredSource` only - a skip needs no consumer test.
+ * (`Season.Almanac`), a generic owner (`Box<T>.Lid`) and, per ADR-141, an `inner class` **owner**
+ * (an inner class nested inside another one). Those stay a named `SKIPPED_NESTED_DECLARATION`
+ * permanently and live in `Tier1NestedTypesTest`'s `deferredSource` only - a skip needs no consumer
+ * test. The inner class itself is declared as of ADR-141 and lives in `Inner.kt` beside this file.
  *
  * Type names dodge the process-global C entry-point space (ADR-117): `Signal` would collide with
  * `platform`'s `expect sealed class Signal` (`signal_get_type`), `Crate` with `parcel`'s generic

@@ -779,15 +779,47 @@ the author wrote.
 
 - One wrongly minted export (`labelledcrate_describe_2`) is removed; no export is minted. This
   change removes an export and mints nothing, so it carries no leak row of its own.
-- **Deferred, named, tracked on `ROADMAP.md` (Phase 4)**: `forwardTypeKey()` keys the outer
+- ~~**Deferred, named, tracked on `ROADMAP.md` (Phase 4)**: `forwardTypeKey()` keys the outer
   declaration's qualified name only, so two functions differing only in a *type argument* of the
   same outer generic type (a declared `describe(tags: List<Int>)` beside a substituted
   `describe(tags: List<String>)`) both key to `kotlin.collections.List` and the duplicate-overload
   bug this amendment fixes returns for that shape, the same limit ADR-082's `typeKey` already had
-  before this amendment shared the primitive; `baseClassOverridee`'s by-name fallback
-  (`ForwardClassMembership.kt`) is untouched and has the identical name-only shape, now
-  inconsistent with `isDeclaredBy`'s strict key for the `override`/`virtual` decision; a generic
-  base class's own declared functions are still absent from C# entirely, unrelated to this fix
-  (`translateGenericClass` projects properties only).
+  before this amendment shared the primitive~~. **Closed (2026-09-19):** `forwardTypeKey()`
+  (`ForwardClassMembership.kt`) now recurses into `KSType.arguments`, so `describe(tags: List<Int>)`
+  keys `kotlin.collections.List<kotlin.Int>` while the substituted `describe(tags: List<String>)`
+  keys `kotlin.collections.List<kotlin.String>`; the two no longer collide and the subclass renders
+  exactly its own overload, no `_2` export. `ForwardSupertypeMembers.typeKey`
+  (`ForwardCallablePlanner.kt`), which shares this primitive, had to grow with it: its wildcard now
+  matches a position that *mentions* a type parameter anywhere in its arguments
+  (`KSType.mentionsTypeParameter()`), not only a bare type-parameter position, so a value class's
+  delegated `List<T>` member still matches the supertype's substituted `List<String>` and stays
+  `INHERITED_MEMBER` (see the amendment to [ADR-082](082-value-class-inherited-members.md)). The
+  key also spells star projection and variance (`in`/`out`) for completeness; no shipped fixture
+  pins either, since a variance-only difference is not a real Kotlin overload. `baseClassOverridee`'s
+  by-name fallback (`ForwardClassMembership.kt`) had the identical name-only shape; it is fixed by
+  the 2026-09-19 amendment below.
 - Not changed: the property side of `isDeclaredBy`, the ADR-082 wildcard comparison, the ABI,
   `translateGenericClass`.
+
+### Amendment (2026-09-19): `baseClassOverridee`'s base-class fallback compares signatures
+
+The 2026-09-11 amendment above gave `baseClassOverridee` a fallback that walks the base class's
+`getAllFunctions()` **by simple name**, which was wrong for an overload and is now a signature
+comparison. **Verified by execution**: `class Post : Perch(), Scratchable` overriding
+`Scratchable.scratch()` (arity 0) matched `Perch.scratch(strokes: Int)` (arity 1) by name, so `Post`
+rendered `public override string Scratch()` against a base whose only `Scratch` takes an `int`, and
+`nugetCompileInterop` failed with `CS0115: 'Post.Scratch()': no suitable method found to override`.
+It renders `public virtual string Scratch()` now, with `Perch.Scratch(int)` unchanged.
+
+The key is **not** `isDeclaredBy`'s strict one. The base class is read unsubstituted, so
+`open class Base<T>` hands back `f(x: T)` while `class Sub : Base<String>()` declares `f(x: String)`,
+and a strict key would call a real override a fresh slot (CS0506 against a `virtual` base member,
+CS0114 otherwise). The fallback reads ADR-082's wildcard instead, hoisted out of
+`ForwardSupertypeMembers` into `ForwardClassMembership.kt` beside the strict key
+(`forwardInheritedSignatureKey()` / `admits()`, see the amendment to
+[ADR-082](082-value-class-inherited-members.md)). Properties stay name-keyed: they cannot overload.
+
+Not changed: the direct `findOverridee()` stage and its class-kind trust rule (the abstract-base
+shape, `Cat.speak` over an `Animal : Pet` that leaves `speak` abstract, still answers `override`
+through the fallback), the property fallback, the ABI (no export minted or removed),
+`translateGenericClass`.

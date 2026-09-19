@@ -20,6 +20,12 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedInterfaceCsName
 /** The declarations whose StableRef handles are part of this forward export set. */
 internal data class ForwardBridgeTypeContext(
   val exportedObjectHandles: Set<String>,
+  /** The value classes the renderer declares as a C# `readonly record struct`, which since ADR-134
+   *  includes the nested ones under an admitted owner. Its own set rather than a widening of
+   *  [exportedObjectHandles]: that set answers "does this type have a StableRef handle", and it is
+   *  read by `forwardSuperClass` and the legacy `csTypeArguments` route, neither of which may start
+   *  seeing a struct. */
+  val exportedValueClasses: Set<String> = emptySet(),
   val rootPackage: String = "",
   val rootNamespace: String = "",
   /** ADR-074 Decision 2: `actual typealias` targets, keyed by the `expect` class's qualified name.
@@ -217,7 +223,7 @@ internal class ForwardBridgeTypeClassifier(
         return BridgeType.Unsupported(
           qualifiedName,
           if (isNested) {
-            "a nested enum class is never declared as a C# enum"
+            "a nested enum class with no C# nested enum declared for it"
           } else {
             "enum class is not in the exported object-handle set"
           },
@@ -284,11 +290,12 @@ internal class ForwardBridgeTypeClassifier(
       )
     }
     if (qualifiedName !in context.exportedObjectHandles) {
-      // The enum/interface branches' rule verbatim: every root bucket filters
-      // `parentDeclaration == null`, and the reachability closure refuses to admit a nested
-      // dependency declaration, so a nested class/object is declarable in neither module and the
-      // `include(...)` hint would be actively wrong for it. The nested test therefore runs FIRST,
-      // and only a top-level cross-module declaration takes the scope-widening route below.
+      // The enum/interface branches' rule verbatim: since ADR-133/134 the owner walk is the sole
+      // declarer of a nested type, so a nested name missing from `exportedObjectHandles` is one
+      // that walk deferred (an `inner`, generic or sealed shape, or an owner that cannot carry a
+      // nested type) or one whose C# name collided, and the `include(...)` hint would be actively
+      // wrong for either. The nested test therefore runs FIRST, and only a top-level cross-module
+      // declaration takes the scope-widening route below.
       //
       // A sealed subclass is not nested in this sense (ADR-009 declares it under its base, which
       // is exactly how every reference spells it) and neither is a companion object (ADR-013 folds
@@ -307,7 +314,7 @@ internal class ForwardBridgeTypeClassifier(
         return BridgeType.Unsupported(
           qualifiedName,
           "a nested ${if (classDeclaration.classKind == ClassKind.OBJECT) "object" else "class"} " +
-              "is never declared in C#",
+              "with no C# nested type declared for it",
           isUndeclaredClass = true,
         )
       }
@@ -416,16 +423,17 @@ internal class ForwardBridgeTypeClassifier(
    */
   private fun interfaceType(declaration: KSClassDeclaration, qualifiedName: String): BridgeType {
     if (qualifiedName !in context.exportedObjectHandles) {
-      // Issue #54, the enum branch's rule verbatim: `rootInterfaces` filters
-      // `parentDeclaration == null`, so a *nested* interface is undeclarable in either module and
-      // the `include(...)` hint would be actively wrong for it. The nested test therefore runs
-      // FIRST, and only a top-level cross-module interface takes the scope-widening route — with
-      // the ADR-066 amendment's one exception, shared with the class and enum branches: a nested
-      // interface the closure refused on SCOPE grounds wants the scope remedy, not this one.
+      // Issue #54, the enum branch's rule verbatim: ADR-133/134's owner walk is the sole declarer
+      // of a nested interface, so a nested name missing here is one that walk deferred or one
+      // whose C# name collided, and the `include(...)` hint would be actively wrong for it. The
+      // nested test therefore runs FIRST, and only a top-level cross-module interface takes the
+      // scope-widening route, with the ADR-066 amendment's one exception, shared with the class
+      // and enum branches: a nested interface the closure refused on SCOPE grounds wants the scope
+      // remedy, not this one.
       if (declaration.parentDeclaration != null && scopeRefusal(qualifiedName) == null) {
         return BridgeType.Unsupported(
           qualifiedName,
-          "a nested interface is never declared as a C# interface",
+          "a nested interface with no C# nested interface declared for it",
           isUndeclaredInterface = true,
         )
       }
@@ -527,6 +535,38 @@ internal class ForwardBridgeTypeClassifier(
     qualifiedName: String,
     arguments: List<KSTypeArgument>,
   ): BridgeType {
+    // The membership gate the value-class branch never had, ahead of the underlying checks: since
+    // ADR-134 a nested value class IS declared as a `readonly record struct` under an admitted
+    // owner, so a nested one missing from `exportedValueClasses` is one the owner walk deferred (a
+    // generic or `enum class` owner) or one whose C# name collided -- and [csharpTypeNameFor]
+    // spells it `Owner.Name` regardless, leaving `Interop.cs` referring to a struct nothing
+    // declares (CS0426/CS0234). Skip named instead, exactly as the enum, interface and class
+    // branches do.
+    //
+    // Deliberately NOT the full membership test those three use: `kotlin.Result` is a top-level
+    // value class that is in no export set and must keep classifying as a `ValueClass` for
+    // ADR-108's return-position rewrite, so only a nested value class is gated here. A top-level
+    // one outside the set is spelled exactly as it was before.
+    val isUndeclaredNestedValueClass: Boolean = declaration.parentDeclaration != null &&
+        qualifiedName !in context.exportedValueClasses
+    if (isUndeclaredNestedValueClass) {
+      // ADR-066 amendment, the class branch's rule verbatim: a nested declaration the closure
+      // refused on SCOPE grounds wants `include(...)`, not "move it to the top level".
+      val scopeRefusal: ForwardAdmissionRefusal? = scopeRefusal(qualifiedName)
+      if (scopeRefusal != null) {
+        return BridgeType.Unsupported(
+          qualifiedName,
+          "declared in a dependency module whose package is outside the export scope",
+          isUnexportedDependency = true,
+          unexportedDependencyRefusal = scopeRefusal,
+        )
+      }
+      return BridgeType.Unsupported(
+        qualifiedName,
+        "a nested value class with no C# nested record struct declared for it",
+        isUndeclaredValueClass = true,
+      )
+    }
     val underlyingParam = declaration.primaryConstructor?.parameters?.singleOrNull()
       ?: return BridgeType.Unsupported(
         qualifiedName,

@@ -156,6 +156,11 @@ internal fun translate(
   val classifier: ForwardBridgeTypeClassifier = forwardClassifier ?: ForwardBridgeTypeClassifier(
     ForwardBridgeTypeContext(
       exportedObjectHandles = exportedTypes,
+      // ADR-134: the record structs this same call declares, so the fallback classifier refuses a
+      // nested value class on exactly the membership the processor's instance would.
+      exportedValueClasses = valueClasses.mapNotNullTo(mutableSetOf()) {
+        it.qualifiedName?.asString()
+      },
       rootPackage = context.rootPackage,
       rootNamespace = context.rootNamespace,
       exportMarkers = context.exportMarkers,

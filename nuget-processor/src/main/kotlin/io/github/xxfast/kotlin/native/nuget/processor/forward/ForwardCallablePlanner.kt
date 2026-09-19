@@ -9,7 +9,6 @@ import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.Origin
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
-import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.symbol.KSAnnotated
@@ -17,7 +16,6 @@ import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
-import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyFlowReturn
@@ -26,6 +24,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyLambdaPar
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
 import io.github.xxfast.kotlin.native.nuget.processor.bridgeParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
+import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
 
@@ -182,6 +181,14 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  Excludes the two nested shapes that ARE declared: a sealed subclass (ADR-009, nested under
    *  its base) and a companion object (ADR-013, its owner's statics). */
   UNDECLARED_CLASS(droppedFromCSharp = true),
+
+  /** A `value class` that no route declares as a C# `readonly record struct`: since ADR-134 a
+   *  nested one under an admitted owner IS declared, so reaching this reason means the owner walk
+   *  deferred it (a generic or `enum class` owner) or its C# name collided. The [UNDECLARED_CLASS]
+   *  twin, separate only so the hint names a record struct. Before this reason existed the member
+   *  was emitted with a dangling `Owner.Name` struct reference and no diagnostic at all, taking the
+   *  consumer's compile down with CS0426/CS0234. */
+  UNDECLARED_VALUE_CLASS(droppedFromCSharp = true),
 
   /** ADR-133: a Kotlin `object` at a parameter or return position. An object is declared in C# as
    *  a STATIC class, and a static type cannot be a parameter or return type at all (CS0722), so
@@ -350,26 +357,31 @@ internal fun List<ForwardCallableCatalogEntry>.nameUnroutedPositions(
  */
 internal class ForwardSupertypeMembers private constructor(
   private val propertyNames: Set<String>,
-  private val functions: List<Signature>,
+  private val functions: List<List<String?>>,
 ) {
-  /** [parameters] holds one key per position; `null` is a supertype type parameter (wildcard). */
-  private data class Signature(val name: String, val parameters: List<String?>)
-
   fun declares(property: KSPropertyDeclaration): Boolean =
     property.simpleName.asString() in propertyNames
 
+  /**
+   * The wildcard comparison itself lives in `ForwardClassMembership.kt` beside the strict key
+   * ([forwardInheritedSignatureKey] / [admits]), shared with `baseClassOverridee`'s base-class
+   * fallback, so the two comparisons cannot drift.
+   *
+   * The wildcard is structural, not top-level, because the key is: once `forwardTypeKey()` recurses
+   * into type arguments, a supertype's `holds(items: List<T>)` spells
+   * `kotlin.collections.List<T>` while the value class's delegated or overriding
+   * `holds(items: List<String>)` spells `kotlin.collections.List<kotlin.String>`, and a
+   * top-level-only wildcard would stop matching the two. That member would leak out of
+   * `INHERITED_MEMBER` and render a delegation forwarder. Over-matching is the direction ADR-082
+   * already chose here.
+   *
+   * Both keys now carry the extension receiver, which this comparison used to leave out: a
+   * supertype's plain `fun f(x: Int)` no longer claims a value class's own `fun String.f(x: Int)`.
+   * No shipped fixture has a supertype-declared member extension, so this moves nothing today.
+   */
   fun declares(function: KSFunctionDeclaration): Boolean {
-    val name: String = function.simpleName.asString()
-    val parameters: List<String?> = function.parameters.map { parameter ->
-      typeKey(parameter.type.resolve())
-    }
-    return functions.any { signature ->
-      signature.name == name &&
-          signature.parameters.size == parameters.size &&
-          signature.parameters.zip(parameters).all { (inherited, declared) ->
-            inherited == null || inherited == declared
-          }
-    }
+    val key: List<String> = function.forwardSignatureKey()
+    return functions.any { inherited -> inherited.admits(key) }
   }
 
   companion object {
@@ -384,26 +396,9 @@ internal class ForwardSupertypeMembers private constructor(
           }
           .toSet(),
         functions = superTypes.flatMap { superType ->
-          superType.getAllFunctions().map { function ->
-            Signature(
-              name = function.simpleName.asString(),
-              parameters = function.parameters.map { parameter ->
-                typeKey(parameter.type.resolve())
-              },
-            )
-          }
+          superType.getAllFunctions().map { function -> function.forwardInheritedSignatureKey() }
         },
       )
-    }
-
-    /**
-     * [forwardTypeKey], plus this side's wildcard: null for a type-parameter position, which the
-     * comparison treats as matching any argument type. The strict half of the spelling lives in
-     * `ForwardClassMembership.kt`, so the two comparisons cannot drift.
-     */
-    private fun typeKey(type: KSType): String? {
-      if (type.expandAliases().declaration is KSTypeParameter) return null
-      return type.forwardTypeKey()
     }
   }
 }
@@ -1371,8 +1366,8 @@ internal class ForwardCallablePlanner(
         val overridee: KSNode? = method.findOverridee()
         if (overridee != null && overridee in plannedBaseMembers) return@forEach
         // ADR-116 amendment (2026-09-13): the flags come through the override chain, as
-        // `classEntries` already reads them. Kotlin forbids an override from restating a default,
-        // so the arm's own parameters all report `false` and only the overridee carries the bit.
+        // `classEntries` already reads them. A defensive read: on KSP 2.3.10 the arm's own
+        // parameter already carries the overridee's default bit (measured 2026-09-19).
         repeat(memberDefaultFlags(method).trailingCount()) { omitted ->
           add(entryFor(method, omitted + 1).synthesized())
         }
@@ -1548,15 +1543,16 @@ internal class ForwardCallablePlanner(
    * ADR-096 amendment (2026-09-11): per-parameter "has a default" for a **class member**,
    * positionally, read through the override chain.
    *
-   * Kotlin forbids an override from restating a default, so `override fun farewell(name: String,
-   * warmly: Boolean)` reports `hasDefault = false` on every parameter and the bit survives only on
-   * the declaration that first stated it. The same erasure already forced the `expect`/`actual`
-   * lookups in [defaultFlags] and [topLevelDefaultFlags]. While the base class is exported this
-   * does not matter (the base's own C# overload is inherited); once ADR-101 drops the base the
-   * subclass has to synthesize, and the flags have to come from somewhere.
+   * Kotlin forbids an override from restating a default, but KSP still reports `hasDefault = true`
+   * on the override's own parameter (measured on Kotlin 2.4.10 / KSP 2.3.10, 2026-09-19, for a
+   * same-module interface, a klib interface and a klib open class alike). The chain walk is
+   * therefore a **defensive read**, not the thing that makes the bit appear: dropping it changes
+   * no current output. It is kept because the flags matter once ADR-101 drops the base and the
+   * subclass has to synthesize for itself, and nothing pins the raw bit as API.
    *
-   * The chain is walked to its **root**: `findOverridee()` answers the nearest declaration, and in
-   * a two-deep chain the intermediate override reports `false` for exactly the same reason.
+   * The chain is walked to its **root**, not to the nearest `findOverridee()`, so a two-deep chain
+   * still answers if an intermediate override ever did lose the bit. Unrelated to the genuine
+   * erasure on `expect`/`actual`, which [defaultFlags] and [topLevelDefaultFlags] do depend on.
    */
   private fun memberDefaultFlags(method: KSFunctionDeclaration): List<Boolean> {
     val root: KSFunctionDeclaration? = generateSequence(
@@ -1626,7 +1622,10 @@ internal class ForwardCallablePlanner(
       symbol = "$owner.<init>$suffix",
       publicName = publicName,
       exportName = export,
-      receiver = ForwardReceiver.Static,
+      // ADR-141: an `inner class` is constructed through its outer instance (`host.Guest(3)`), so
+      // its plan carries a receiver like an extension's -- one borrowed handle slot at index 0,
+      // named `outer`. Every other constructor keeps `Static` and renders byte-identically.
+      receiver = innerConstructorReceiver(cls),
       parameters = constructor.parameters.dropLast(omitted).map { parameter ->
         parameter.bridgeName() to classifier.classify(parameter.type.resolve())
       },
@@ -1641,6 +1640,9 @@ internal class ForwardCallablePlanner(
       doc = constructor.forwardKdoc(expects)
         .forParameters(constructor.parameters.dropLast(omitted)),
     )
+      // ADR-141: the ADR-091 truncations and ADR-034 secondaries all come through here, so each of
+      // them carries the receiver by construction -- the outer is not a plan parameter and a
+      // trailing-default truncation can never drop it.
       // ADR-064 amendment (2026-09-13): no legacy route re-emits a CONSTRUCTOR (measured cell 24:
       // a secondary taking a lambda, a Flow or a generic type beside a bindable primary vanished
       // with no diagnostic, because `WARNING_NO_PUBLIC_CONSTRUCTOR` only fires when *every*
@@ -1897,7 +1899,7 @@ internal class ForwardCallablePlanner(
           ?: ineligibleType.undeclaredTypeDetail()
           ?: ineligibleType.sealedTypeDetail()
           ?: ineligibleType.collectionComponentDetail()
-          ?: ineligibleType.stdlibTypeDetail(),
+          ?: ineligibleType.unsupportedTypeDetail(),
         position = ForwardSkipPosition.INPUT,
         parameter = ineligible.first,
       )
@@ -2031,8 +2033,8 @@ internal class ForwardCallablePlanner(
    * receiver-agnostic within one owner by design.
    */
   private fun KSFunctionDeclaration.extensionOwnerChain(): String =
-    ((extensionReceiver?.resolve()?.declaration as? KSClassDeclaration)?.parentDeclaration
-      as? KSClassDeclaration)?.nestedCsName() ?: ""
+    ((extensionReceiver?.resolve()?.expandAliases()?.declaration as? KSClassDeclaration)
+      ?.parentDeclaration as? KSClassDeclaration)?.nestedCsName() ?: ""
 
   private fun extensionEntry(
     function: KSFunctionDeclaration,
@@ -2042,17 +2044,21 @@ internal class ForwardCallablePlanner(
     // reaches it: an extension whose parameters are all defaulted still has its receiver.
     omitted: Int = 0,
   ): ForwardCallableCatalogEntry {
+    // ADR-018: expanded once here, so every spelling taken off this receiver -- the entry-point
+    // prefix below, the owner chain, the classified wire type -- comes from the same type the C#
+    // half names (`CirTranslator` keys its extension class on `expandAliases()`).
     val receiver: KSType = requireNotNull(function.extensionReceiver) {
       "Forward extension planner received a non-extension function ${function.simpleName.asString()}"
-    }.resolve()
+    }.resolve().expandAliases()
     val receiverType: BridgeType = classifier.classify(receiver)
     val functionName: String = function.simpleName.asString()
     // ADR-133 amendment: the whole enclosing chain of the receiver, so an extension on
     // `Aviary.Perch` binds under `aviary_perch_` exactly as that type's own members already do.
     // `nativePrefix()` is byte-identical to the `simpleName.lowercase()` it replaces for a
-    // top-level receiver; the elvis covers a receiver whose declaration is not a class (a typealias
-    // keeps the alias's own name, as shipped -- the C# class name spells the expanded type, a
-    // pre-existing asymmetry this change deliberately does not move).
+    // top-level receiver; the elvis covers a receiver whose declaration is not a class (a type
+    // parameter). ADR-018: a typealias receiver is expanded above, so `typealias Bird =
+    // Aviary.Bird` binds under `aviary_bird_` exactly as the C# `AviaryBirdExtensions` class and
+    // the extension *property* route already spell it.
     val receiverPrefix: String = (receiver.declaration as? KSClassDeclaration)?.nativePrefix()
       ?: receiver.declaration.simpleName.asString().lowercase()
     // ADR-095 keeps an extension symbol receiver-agnostic (the overload counter is per package and
@@ -2241,7 +2247,7 @@ internal class ForwardCallablePlanner(
           ?: ineligibleType.undeclaredTypeDetail()
           ?: ineligibleType.sealedTypeDetail()
           ?: ineligibleType.collectionComponentDetail()
-          ?: ineligibleType.stdlibTypeDetail(),
+          ?: ineligibleType.unsupportedTypeDetail(),
         position = ForwardSkipPosition.INPUT,
         parameter = ineligible.first,
       )
@@ -2279,7 +2285,7 @@ internal class ForwardCallablePlanner(
           ?: plannedResult.undeclaredTypeDetail()
           ?: plannedResult.sealedTypeDetail()
           ?: plannedResult.collectionComponentDetail()
-          ?: plannedResult.stdlibTypeDetail(),
+          ?: plannedResult.unsupportedTypeDetail(),
         // ADR-064 amendment (2026-09-13): the default already, stated explicitly because the
         // unrouted-position reclassification reads it — a `fun <T> f(): List<T>` and a
         // `fun f(): Flow<Int>` both have to report RETURN, and an implicit default is not
@@ -3281,6 +3287,20 @@ internal class ForwardCallablePlanner(
     }
   }
 
+  /**
+   * ADR-141: the outer instance an `inner class` constructor is called on, or
+   * [ForwardReceiver.Static] for every other class. The outer is the enclosing declaration, which
+   * is itself admitted (an inner class under a deferred owner never reaches a plan), and it
+   * crosses BORROWED: the inner instance's own Kotlin-side reference is what keeps the outer
+   * alive, not the handle.
+   */
+  private fun innerConstructorReceiver(cls: KSClassDeclaration?): ForwardReceiver {
+    if (cls == null || !cls.modifiers.contains(Modifier.INNER)) return ForwardReceiver.Static
+    val outer: String = (cls.parentDeclaration as? KSClassDeclaration)?.qualifiedName?.asString()
+      ?: return ForwardReceiver.Static
+    return ForwardReceiver.Handle(BridgeType.ObjectHandle(outer), name = "outer")
+  }
+
   private fun receiverParameter(receiver: ForwardReceiver): List<ForwardAbiParameter> = when (receiver) {
     is ForwardReceiver.Handle -> listOf(
       ForwardAbiParameter(
@@ -3763,7 +3783,7 @@ internal fun BridgeType.actualTypeAliasTargetDetail(): String? =
 internal fun BridgeType.isUndeclared(): Boolean {
   val unsupported: BridgeType.Unsupported = this as? BridgeType.Unsupported ?: return false
   return unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface ||
-      unsupported.isUndeclaredClass
+      unsupported.isUndeclaredClass || unsupported.isUndeclaredValueClass
 }
 
 /** The undeclared type's qualified name, when this (possibly nullable-wrapped, possibly
@@ -3803,7 +3823,8 @@ internal fun BridgeType.undeclaredTypeDetail(): String? {
   return (candidate as? BridgeType.Unsupported)
     ?.takeIf { unsupported ->
       unsupported.isUndeclaredEnum || unsupported.isUndeclaredInterface ||
-          unsupported.isUndeclaredClass || unsupported.isObjectPosition
+          unsupported.isUndeclaredClass || unsupported.isUndeclaredValueClass ||
+          unsupported.isObjectPosition
     }
     ?.rendered
 }
@@ -3930,6 +3951,8 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
     isUndeclaredInterface -> ForwardPlanSkipReason.UNDECLARED_INTERFACE
     // ...and for a nested class or object.
     isUndeclaredClass -> ForwardPlanSkipReason.UNDECLARED_CLASS
+    // ...and for a nested value class, whose record struct is declared by the same owner walk.
+    isUndeclaredValueClass -> ForwardPlanSkipReason.UNDECLARED_VALUE_CLASS
     // ADR-133: an `object` is declared (as a C# static class) but unusable at a member position.
     isObjectPosition -> ForwardPlanSkipReason.OBJECT_POSITION
     // The closure records WHY it refused a dependency declaration; each refusal wants a
@@ -3971,13 +3994,13 @@ internal fun BridgeType.skipDetail(): String? = optInMarkerDetail()
   ?: unexportedDependencyDetail()
   ?: undeclaredTypeDetail()
   ?: sealedTypeDetail()
-  ?: stdlibTypeDetail()
+  ?: unsupportedTypeDetail()
 
-/** ADR-151: the qualified name of an unmapped `kotlin.*`/`kotlinx.*` type, so
- *  [ForwardPlanSkipReason.UNSUPPORTED]'s hint can name the type the author wrote. Last in the
- *  chain: every flagged refusal above it (opt-in marker, typealias target, scope, nesting) is
- *  more specific and keeps its own wording. `null` for every other type. */
-internal fun BridgeType.stdlibTypeDetail(): String? =
-  (unwrapNullable() as? BridgeType.Unsupported)
-    ?.takeIf { unsupported -> unsupported.rendered.isStdlibPackage() }
-    ?.rendered
+/** The rendered name of whatever the classifier refused, so [ForwardPlanSkipReason.UNSUPPORTED]'s
+ *  sentence can name the type the author wrote instead of the reason constant (and, ADR-151, so
+ *  its hint can recognise an unmapped `kotlin.*`/`kotlinx.*` type). Last in the chain: every
+ *  flagged refusal above it (opt-in marker, typealias target, scope, nesting) is more specific and
+ *  keeps its own wording. `null` for every type that is not [BridgeType.Unsupported], which is
+ *  every type whose refusal is about a position rather than the type itself. */
+internal fun BridgeType.unsupportedTypeDetail(): String? =
+  (unwrapNullable() as? BridgeType.Unsupported)?.rendered

@@ -235,12 +235,11 @@ sealed class Job {
    * whose own plan the planner structurally declines (ADR-115 drops anything behind a
    * `@RequiresOptIn` marker), overridden on [Job.Running], which opts in rather than propagates.
    *
-   * So the C# base carries **no** `Tag` at all — neither the declared arity nor an ADR-096
-   * omitting overload — while the arm's override owes its own `Tag(string)` beside
-   * `Tag(string, string)`. Today `sealedSubclassEntries` returns early on any `override` whose
-   * overridee is declared on the sealed base, whether or not that base member ever planned, and it
-   * reads raw `hasDefault` off the override's own parameters (always `false`), so the short-arity
-   * call `running.Tag("x")` is CS1501.
+   * So the C# base carries **no** `Tag` at all (neither the declared arity nor an ADR-096
+   * omitting overload), while the arm's override owes its own `Tag(string)` beside
+   * `Tag(string, string)`. `sealedSubclassEntries` returns early only when the overridee is a
+   * member the base actually **planned**, so this arm reaches the default count and the
+   * short-arity call `running.Tag("x")` binds on it.
    *
    * [Job.Idle] deliberately does not override it: a declined base member inherited by an arm stays
    * absent on that arm too. Oreo's hallway sprints get tagged; nobody else's do.

@@ -650,8 +650,10 @@ Two root causes, both fixed in `ForwardCallablePlanner.kt`:
    existing arm/base pair exercised the gate as true. The catalog itself cannot be consulted here
    (it is mid-construction, `plansFor` requires it complete), so the entries are read directly.
 2. **The default count read the wrong parameters.** The same pass counted raw
-   `method.parameters.map { it.hasDefault }`, always `false` on every parameter of an `override`
-   (Kotlin forbids restating a default). It now reads `memberDefaultFlags(method).trailingCount()`,
+   `method.parameters.map { it.hasDefault }`, ~~always `false` on every parameter of an `override`
+   (Kotlin forbids restating a default)~~ (**corrected 2026-09-19**, see ADR-096's 2026-09-19
+   amendment: the raw bit is not reliably `false` on an override; the fix below is still correct,
+   just not for the reason originally given). It now reads `memberDefaultFlags(method).trailingCount()`,
    as `classEntries` already does for the same reason.
 
 Fixing only the gate without the default-count fix would still synthesize nothing; both changed
@@ -776,3 +778,18 @@ removal; the two `classes`-only import gates before this change; `GenericFunctio
 top-level-only call site; the `LAMBDA_TYPES`-only partition in both halves; ADR-020's Phase 6
 suspend-lambda-parameter deferral; the `nameof(className)` site in the interface-bridge renderer.
 Verified by execution: the full Tier 1 / integration / leak suite, green, 1775 / 0 / 0.
+
+## Amendment (2026-09-19): `sealedBaseEntries` needed no change
+
+A ROADMAP item claimed `sealedBaseEntries` (`ForwardCallablePlanner.kt`), unlike `classEntries` and
+`sealedSubclassEntries` above, still counts the raw `hasDefault` bit and so misses a sealed base
+member that itself overrides an interface member with a trailing default. **Verified by execution**
+on 2026-09-19 (Kotlin 2.4.10 / KSP 2.3.10, the toolchain pinned since 2026-08-01): four end-to-end
+shapes are green with `sealedBaseEntries` untouched, including a base overriding a same-module
+interface default (`Pose.squish` over `Squishy.squish`) and a base overriding a klib interface or
+open-class default (`Biscuit.fluff`, `Burrito.tuck`). The restatement this item was judged against,
+that a sealed base overriding a defaulted interface member gets an omitting overload inherited by
+every arm, was already true; `sealedBaseEntries` needed no change. See
+[ADR-096](096-function-default-parameters.md)'s 2026-09-19 amendment for the mechanism correction:
+the raw `hasDefault` bit is not reliably `false` on an `override`, contrary to what motivated the
+2026-09-13 fix above.

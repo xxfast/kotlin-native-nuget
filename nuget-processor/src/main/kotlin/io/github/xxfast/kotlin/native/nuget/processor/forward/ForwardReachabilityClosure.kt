@@ -274,9 +274,11 @@ internal class ForwardReachabilityClosure(
     // translator declares an admitted type at the namespace root under its simple name
     // (`translateClass`, `translateEnum`), while every reference to it is spelled `Outer.Inner`
     // (`nestedCsName`), so admitting one emits a `public class Inner` / `public enum Inner` that no
-    // reference resolves against (CS0426). Declining admission hands it to the classifier's
-    // membership gate instead, which skips each member named (`UNDECLARED_CLASS`,
-    // `UNDECLARED_ENUM`, `UNDECLARED_INTERFACE`).
+    // reference resolves against (CS0426). Declining admission hands it to ADR-133's owner walk
+    // instead, the sole declarer of a nested type, which declares this one as `Owner.Nested`
+    // unless it defers it; only a deferred one falls through to the classifier's membership gate,
+    // which skips each member named (`UNDECLARED_CLASS`, `UNDECLARED_ENUM`,
+    // `UNDECLARED_INTERFACE`).
     //
     // The carve-out is a sealed subclass: ADR-009 declares it nested under its base, which is
     // exactly how `nestedCsName` spells it, so the `getSealedSubclasses()` walk below must keep

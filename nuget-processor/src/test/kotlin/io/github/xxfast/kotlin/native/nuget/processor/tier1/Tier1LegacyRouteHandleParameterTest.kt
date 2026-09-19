@@ -118,8 +118,6 @@ class Tier1LegacyRouteHandleParameterTest {
     fixture,
     fileName = "Watchtower.kt",
     processorOptions = mapOf("nuget.rootPackage" to "tier1"),
-    // Without coroutines on the KSP libraries path `Flow` resolves to `<ERROR TYPE: Flow>` and
-    // none of these members would take the legacy routes at all.
     libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
   )
 

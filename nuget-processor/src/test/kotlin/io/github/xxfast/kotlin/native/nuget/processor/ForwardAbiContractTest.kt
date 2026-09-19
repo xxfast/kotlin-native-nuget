@@ -398,6 +398,42 @@ class ForwardAbiContractTest {
     assertTrue(message.contains("sample.b.Combiner.combine(String)"))
   }
 
+  /**
+   * ADR-117: two *byte-identical* legacy imports of one entry point, the shape a legacy-route
+   * declaration duplicated across two packages mints. `csharpLegacy`'s `.distinct()` collapses them
+   * (deliberately: the runtime helper imports render twice by design), so this shape never reaches
+   * `CONFLICTING_LEGACY_IMPORTS`. The detector is the Kotlin side of `assertMatches`: one `@CName`
+   * per declaration means the Kotlin half keeps its multiplicity and raises
+   * `DUPLICATE_KOTLIN_EXPORT` naming both owners. Chained here end to end, because neither half
+   * pins it alone.
+   */
+  @Test
+  fun `collapsed identical legacy imports are still caught by the Kotlin export multiplicity`() {
+    val extern = "private static extern void combine(IntPtr handle);"
+    val rendered: String =
+      legacyDeclaration("combine", extern) + legacyDeclaration("combine", extern)
+
+    val legacy: ForwardAbiLegacyContracts =
+      ForwardAbiContract.csharpLegacy(rendered, emptySet(), combineOwners)
+
+    assertEquals(emptyList(), legacy.collisions)
+    assertEquals(1, legacy.signatures.size)
+
+    // One `@CName` per declaration: the Kotlin half of a cross-package namesake does not collapse.
+    val collisions: List<ForwardAbiCollision> = ForwardAbiContract.assertMatches(
+      csharp = legacy.signatures,
+      kotlin = List(2) { legacy.signatures.single() },
+      owners = combineOwners,
+    )
+
+    val collision: ForwardAbiCollision = collisions.single()
+    assertEquals(ForwardAbiGuard.DUPLICATE_KOTLIN_EXPORT, collision.guard)
+    val message: String = collision.message()
+    assertTrue(message.contains("duplicate Kotlin export for"))
+    assertTrue(message.contains("sample.a.Combiner.combine(String)"))
+    assertTrue(message.contains("sample.b.Combiner.combine(String)"))
+  }
+
   /** No Kotlin declaration behind the entry point: the message says so instead of going silent. */
   @Test
   fun `names the generator helper when the owner index knows no declaration`() {

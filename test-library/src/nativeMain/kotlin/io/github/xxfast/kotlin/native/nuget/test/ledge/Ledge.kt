@@ -32,3 +32,34 @@ interface Groomable {
 class Ledge : Shelf(), Groomable {
   override fun groom(): String = "Mylo: groomed"
 }
+
+/**
+ * The same shape as [Shelf], with one difference that decides `override` vs `virtual`: the base
+ * carries an *unrelated overload* of the interface member's name.
+ *
+ * `baseClassOverridee`'s fallback matches a base-class function by simple name only, so
+ * [Post.scratch] (which overrides [Scratchable.scratch], arity 0) matches [Perch.scratch] (arity 1)
+ * and renders `public override string Scratch()` against a base that only has `Scratch(int)`:
+ * CS0115. The fallback needs ADR-082's wildcard signature comparison, not a name.
+ *
+ * This is a sibling of [Shelf]/[Ledge] rather than an overload added to [Shelf], because
+ * `typeof(Ledge).GetMethod("Groom")` in `InterfaceBesideBaseTests` throws `AmbiguousMatchException`
+ * the moment `Shelf` gains a second `Groom`.
+ *
+ * Oreo's scratching post: the [Perch] is what he stands on, [Scratchable] is what he does to it.
+ */
+open class Perch {
+  /** Shares a simple name with [Scratchable.scratch] and nothing else. Never overridden. */
+  fun scratch(strokes: Int): String = "Perch: $strokes strokes"
+}
+
+/** Implemented by [Post]. [Perch] knows nothing about it. */
+interface Scratchable {
+  /** Overridden by [Post]: renders `virtual`, since [Perch] has no zero-arg `scratch`. */
+  fun scratch(): String
+}
+
+/** An exported base that overloads the interface member's name at a different arity. */
+class Post : Perch(), Scratchable {
+  override fun scratch(): String = "Oreo: scratched"
+}

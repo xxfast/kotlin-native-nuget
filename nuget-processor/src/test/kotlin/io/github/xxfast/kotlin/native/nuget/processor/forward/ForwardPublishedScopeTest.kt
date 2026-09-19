@@ -63,6 +63,22 @@ class ForwardPublishedScopeTest {
     assertFalse(scope.covers("other.models", "other.models.TopStory"))
   }
 
+  /**
+   * The package half of both `include` and `exclude` is segment-bounded, the same as the
+   * qualified-name half and the same as naming's `mapPackageToNamespace`: `dep` never takes
+   * `deputy` with it, and `dep.internal` never takes `dep.internals`.
+   */
+  @Test
+  fun `include and exclude match whole segments, not string prefixes`() {
+    val scope =
+      PackageScope(include = listOf("dep"), exclude = listOf("dep.internal"))
+
+    assertFalse(scope.covers("deputy", "deputy.TopStory"))
+    assertTrue(scope.covers("dep.internals", "dep.internals.Cache"))
+    assertFalse(scope.excludes("dep.internals", null))
+    assertTrue(scope.excludes("dep.internal.deep", null))
+  }
+
   @Test
   fun `a malformed entry fails with a named error rather than being guessed at`() {
     val failure = assertFailsWith<IllegalArgumentException> {

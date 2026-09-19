@@ -80,7 +80,14 @@ internal const val CSHARP_ERROR_SLOT: String = "error"
  * names a user parameter may not keep on *either* side of the bridge: the instance receiver slot
  * (`handle`), the extension/value-class receiver slot (`receiver`), the value-class receiver slot
  * of a non-reference underlying and the property setter's argument (`value`), the ADR-024
- * exception slot (`errorOut`) and ADR-061's nullable-primitive out-slot (`valueOut`).
+ * exception slot (`errorOut`), ADR-061's nullable-primitive out-slot (`valueOut`) and ADR-141's
+ * inner-class constructor receiver (`outer`).
+ *
+ * ADR-141 recorded a declared parameter named `outer` as an unguarded CS0100 hazard. It is guarded
+ * after all, and by this set rather than by a rule of its own: the plan invariant below is that a
+ * generator slot's NAME and its role agree, so the receiver slot can only be called `outer` if
+ * `outer` is plan-owned, which shifts a user's own `outer` to `outer_` on every callable exactly
+ * as `value` already shifts.
  *
  * Unlike [CSHARP_ERROR_SLOT] these are declared by the Kotlin `@CName` emitter too, so the rename
  * has to happen once at *plan* time and be seen by both projections. See [bridgeParameterName].
@@ -91,7 +98,7 @@ internal const val CSHARP_ERROR_SLOT: String = "error"
  * construction instead of reading back as user data in a projection.
  */
 internal val PLAN_OWNED_NAMES: Set<String> =
-  setOf("handle", "receiver", "value", "errorOut", "valueOut")
+  setOf("handle", "receiver", "value", "outer", "errorOut", "valueOut")
 
 /**
  * The identifiers only the C# wrapper *body* declares: the ADR-024 exception slot, the local every

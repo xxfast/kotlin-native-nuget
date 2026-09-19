@@ -53,6 +53,55 @@ internal fun BridgeType.forwardPublicCsharpType(): String = when (this) {
   else -> error("Forward CIR direct-value projection cannot render public type $this")
 }
 
+/**
+ * True when [forwardPublicCsharpType] has an arm for this type, i.e. when a declaration-only site
+ * (the `abstractMethods` walk, which has no plan, no export and no marshalling) can spell it.
+ *
+ * Written out rather than derived by catching [forwardPublicCsharpType]'s `error()`: a predicate a
+ * new `BridgeType` variant has to be added to is the point. Two spellable types are deliberately
+ * excluded:
+ *  - [BridgeType.BoundInterface]: ADR-088 defers the position, and `skipReason()` already names it
+ *    [ForwardPlanSkipReason.BOUND_INTERFACE_POSITION]. Spelling the original bound type on an
+ *    abstract member no route can implement would promise a surface v1 does not have.
+ *  - [BridgeType.TypeParameter] whose name is not in [typeParametersInScope]: ADR-147 made a
+ *    class's own `T` a first-class spelling **on that class's generic carrier**, so `T` is a real
+ *    name inside `Crate<T>` and nowhere else. An inherited `T` re-homed onto a non-generic subclass
+ *    is the same dangling bare name every other cell here is about.
+ *
+ * @param typeParametersInScope the names of the type parameters the declaring C# type declares.
+ */
+internal fun BridgeType.isPubliclySpellable(
+  typeParametersInScope: Set<String> = emptySet(),
+): Boolean = when (this) {
+  BridgeType.Unit,
+  is BridgeType.Primitive,
+  BridgeType.Char,
+  BridgeType.String,
+  BridgeType.Instant,
+  BridgeType.Duration,
+  BridgeType.Uuid,
+  BridgeType.ByteArray,
+  is BridgeType.ObjectHandle,
+  is BridgeType.Interface,
+  is BridgeType.Enum,
+  is BridgeType.ValueClass,
+    -> true
+
+  is BridgeType.Collection -> listOfNotNull(element, key, value)
+    .all { component -> component.isPubliclySpellable(typeParametersInScope) }
+
+  is BridgeType.Nullable -> type.isPubliclySpellable(typeParametersInScope)
+  is BridgeType.TypeParameter -> name in typeParametersInScope
+
+  BridgeType.Throwable,
+  is BridgeType.BoundInterface,
+  is BridgeType.SpecializedProtocol,
+  is BridgeType.RawCollection,
+  is BridgeType.RawKSType,
+  is BridgeType.Unsupported,
+    -> false
+}
+
 /** The C# spelling of a primitive kind, shared for the same reason as the type above. */
 internal fun PrimitiveKind.forwardPublicCsharpType(): String = when (this) {
   PrimitiveKind.BOOLEAN -> "bool"

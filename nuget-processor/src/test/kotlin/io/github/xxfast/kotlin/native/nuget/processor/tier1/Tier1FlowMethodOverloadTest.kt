@@ -40,8 +40,6 @@ class Tier1FlowMethodOverloadTest {
         fun maybePlay(channel: Int): StateFlow<String>? = null
       }
       """.trimIndent(),
-      // `Flow` and `StateFlow` must resolve for the flow route to be taken at all; with only
-      // kotlin-stdlib on the KSP libraries path every method here is skipped as an unsupported type.
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 
@@ -98,8 +96,6 @@ class Tier1FlowMethodOverloadTest {
         fun play(station: String): StateFlow<String> = MutableStateFlow(station)
       }
       """.trimIndent(),
-      // `Flow` and `StateFlow` must resolve for the flow route to be taken at all; with only
-      // kotlin-stdlib on the KSP libraries path every method here is skipped as an unsupported type.
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 

@@ -125,6 +125,14 @@ internal object ForwardAbiContract {
    * it can only be a generator bug. [owners] names the Kotlin declarations behind an entry point
    * and is deliberately a separate parameter: [ForwardAbiSignature] compares with `==` below, so
    * an owner field on it would break the mismatch check.
+   *
+   * The [kotlin] side of the multiplicity check below is also **the** detector for two
+   * byte-identical legacy imports of one entry point, the shape a cross-package namesake on a
+   * legacy route mints. [csharpLegacy] collapses those with `.distinct()`, so they never reach
+   * `CONFLICTING_LEGACY_IMPORTS`; the Kotlin half does not collapse, because one `@CName` is minted
+   * per declaration, so `actual.size > 1` fires `DUPLICATE_KOTLIN_EXPORT` naming both owners. Run,
+   * not inferred: the sealed `loadstate_get_type` cell in `Tier1EntryPointCollisionTest` reaches
+   * exactly that guard, and `ForwardAbiContractTest` chains the two halves in one unit test.
    */
   fun assertMatches(
     csharp: List<ForwardAbiSignature>,
@@ -207,6 +215,15 @@ internal object ForwardAbiContract {
    * actually ships instead, which makes a renderer edit visible to the contract check by
    * construction. [ordinaryNames] drops the entry points the structural [csharp] collector already
    * covers, so a route migrating to a plan moves between the two universes automatically.
+   *
+   * The `.distinct()` below stays, and is not a gap. A runtime helper import renders twice by
+   * design: `cir/CirFunctionRenderer.kt` prints `nuget_dispose` and the `nuget_wrap_*` family once
+   * for the `Func` helper and again for the `SuspendFunc` helper, so any file with both would trip
+   * `CONFLICTING_LEGACY_IMPORTS` on imports that do not conflict. Collapsing them costs nothing,
+   * because the shape it hides (two byte-identical legacy imports of one entry point, from a
+   * cross-package namesake) is caught by the Kotlin-side multiplicity check in [assertMatches] as
+   * `DUPLICATE_KOTLIN_EXPORT`. What survives `.distinct()` here, and is reported, is the case that
+   * check cannot see: two legacy imports of one entry point whose *signatures differ*.
    */
   fun csharpLegacy(
     renderedCsharp: String,

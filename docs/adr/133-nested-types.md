@@ -225,7 +225,7 @@ owner-scope collision check) is unchanged and reused as-is by ADR-134's newly ad
 3. CS0542 (a nested type named exactly like its owner) and CS0102 (a nested type named like a
    PascalCased member of its owner) are genuine C# compile errors: not spiked against `dotnet` in
    this reconciliation, Kotlin permits both shapes so a wrong inference fails loud in the consumer's
-   build rather than silently.
+   build rather than silently. **Verified (2026-09-19)**, see "Amendment (2026-09-19)" below.
 
 ## Amendment (2026-09-13): extension receivers join the owner chain
 
@@ -266,6 +266,10 @@ from the declaration's own enclosing chain of simple names, never its package" t
 name in the C entry point while the C# extension class spells the expanded type, the pre-existing
 asymmetry this amendment does not move; harmless while every nested type is reachable without going
 through an alias, tracked on the ROADMAP.
+
+**Closed (2026-09-19).** `extensionEntry` and `extensionOwnerChain()` now call `expandAliases()`,
+so a typealias receiver's entry point matches its C# extension class the same way a genuine nested
+receiver already does; see [ADR-018](018-type-alias-mapping.md)'s 2026-09-19 amendment.
 
 Tests: `NestedTypesTests.ExtensionOnANestedReceiver_BindsUnderTheOwnerChain` (xUnit); Tier 1 gains a
 single-receiver cell and a two-owner cell (`Coop.Inner`/`Roost.Inner`) pinning both the chained
@@ -335,3 +339,34 @@ Fixtures: `nested/Aviary.kt` (`currentKeeperLater`, `keepers()`), `nested/Aviary
 (`anyKeeperLater`, top-level), `cat/Pet.kt` (`strayPetLater`, top-level interface). Tests:
 `NestedTypesTests.cs` reflection facts, four Tier 1 cells, `LiveHandleTests.cs` Row 9h
 (`Suspend_ReturningAnInterface_ReturnsToBaseline`). Verify: green, 1793 / 0 / 0, 36; processor 834.
+
+## Amendment (2026-09-19): every owner-scope collision arm is pinned; a companion gap and a false positive fixed
+
+Inferred claim 3 above (CS0542/CS0102 are genuine C# compile errors) is now verified per arm, not
+just inferred: a `dotnet build` scratch spike confirmed `class Owner { class Owner }` is CS0542,
+and a nested type colliding with a member of a sealed-base owner, a sealed-arm owner, or a
+value-class candidate is CS0102 in each case. `Tier1NestedTypesTest.kt` now reaches every arm the
+collision check has.
+
+**Companion members now count.** `nestedOwnerScopeCollision()` used to read only the owner's own
+`getAllProperties()`/`getAllFunctions()`. A companion's public members fold into the owner's C#
+class as statics (ADR-013), so they share the owner's one member-name scope too:
+`class Owner { class Config(val n: Int); companion object { fun config(): Config } }` used to emit
+`public class Config` beside `public static Config Config()` with no diagnostic, CS0102 in the
+consumer. The check now folds the companion's public properties and functions (`const val`
+included) into the same `memberNames` list, so this is `ERROR_CSHARP_SIGNATURE_COLLISION` now.
+
+**The CS0542 arm compares C# names, not Kotlin ones.** ADR-134 declares an `interface` owner's
+child inside `public interface ICage`, so `interface Cage { class Cage }` is the legal `ICage.Cage`
+(verified by the same spike), which the Kotlin-simple-name comparison flagged as a false positive.
+The arm now compares the last two segments of `nestedCsName()` instead, so it stays live for an
+eligible sealed interface with no `I` prefix (`Beam.Beam` is still CS0542) while clearing the
+interface-owner false positive.
+
+Three gaps this reconciliation left open, tracked on ROADMAP Phase 4 (discovered alongside this
+ADR): whether every collision-skipped nested type is consistently re-gated at a member typed with
+it, a nested `ICage.Cage` shadowing the namespace-level ADR-040 wrapper `Cage` inside `ICage`'s own
+body, and two cosmetic gaps in `nestedDeclarationKind()`/the CS0542 hint text.
+
+Tests: six Tier 1 cells in `Tier1NestedTypesTest.kt` (CS0542, sealed-base member, sealed-arm
+member, value-class candidate, companion member, and the interface-owner not-an-error case).

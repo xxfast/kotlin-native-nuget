@@ -47,8 +47,6 @@ class Tier1RuntimeLibraryHandoffTest {
   private fun generated(): String = Tier1Harness.run(
     fixture,
     fileName = "Depot.kt",
-    // `StateFlow` must resolve for the flow route to be taken at all; with only kotlin-stdlib on
-    // the KSP libraries path the member is skipped and the coroutine gate never opens.
     libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
   ).generated
 

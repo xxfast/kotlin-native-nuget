@@ -110,8 +110,6 @@ class Tier1LambdaTypeArgumentTest {
   private fun run(): Tier1Result = Tier1Harness.run(
     fixture,
     processorOptions = mapOf("nuget.rootPackage" to "tier1"),
-    // Without coroutines on the KSP libraries path `Flow` resolves to `<ERROR TYPE: Flow>`, and
-    // the skip cells would be asserting about an unresolved type instead of about `Flow`.
     libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
   )
 

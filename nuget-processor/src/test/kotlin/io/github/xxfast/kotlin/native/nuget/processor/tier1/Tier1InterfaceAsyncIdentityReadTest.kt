@@ -53,8 +53,6 @@ class Tier1InterfaceAsyncIdentityReadTest {
     val result = Tier1Harness.run(
       source,
       fileName = "AsyncIdentity.kt",
-      // Load-bearing: `Tier1Harness` puts only `kotlin-stdlib` on the KSP `libraries` path, so
-      // without this a `Flow` return is `<ERROR TYPE: Flow>` and every Flow member drops.
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
     )
 

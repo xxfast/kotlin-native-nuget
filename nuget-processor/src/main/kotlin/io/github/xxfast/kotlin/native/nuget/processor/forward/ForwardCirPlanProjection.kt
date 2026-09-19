@@ -153,9 +153,27 @@ internal object ForwardCirPlanProjection {
       "Forward CIR constructor projection received ${plan.invocation.origin}"
     }
     val nativeCall: ForwardNativeCall = plan.singleNativeImport()
-    val publicParams: List<CirParameter> = plan.publicParameters()
+    // ADR-141: an inner class's constructor is receiver-carrying, exactly like [extension]'s. The
+    // receiver becomes public parameter zero (`Hearth outer`) AND rides at the head of the input
+    // list every projection step below walks. Both, never only the first: with the receiver in
+    // `publicParams` alone, a primitive-only inner constructor stays on the trivial path and
+    // `renderConstructor` hands `Native_Create` the `Hearth` itself where an `IntPtr` slot is
+    // (CS1503 at the consumer's compile). Sharing the list is also what gives the receiver its
+    // `outer._handle` lowering through `callArgument`.
+    val receiver: ForwardAbiParameter? = nativeCall.parameters.firstOrNull()
+      ?.takeIf { parameter -> parameter.role == ForwardAbiRole.RECEIVER }
+    val receiverInput: List<ForwardPublicParameter> = listOfNotNull(receiver)
+      .map { parameter -> ForwardPublicParameter(parameter.name, parameter.transfer.type) }
+    val inputs: List<ForwardPublicParameter> = receiverInput + plan.publicSignature.parameters
+    val publicParams: List<CirParameter> = listOfNotNull(receiver).map { parameter ->
+      CirParameter(
+        parameter.csharpName,
+        parameter.transfer.type.csharpType(),
+        parameter.wireType.csharpType(),
+      )
+    } + plan.publicParameters()
     val needsCustomParams: Boolean =
-      plan.publicSignature.parameters.any { parameter -> !parameter.type.isTrivialInput() }
+      inputs.any { parameter -> !parameter.type.isTrivialInput() }
     if (!needsCustomParams) {
       return CirConstructor(
         parameters = publicParams,
@@ -166,7 +184,7 @@ internal object ForwardCirPlanProjection {
       )
     }
     val prelude: List<ForwardCirHandleStep> =
-      plan.publicSignature.parameters.mapNotNull { parameter ->
+      inputs.mapNotNull { parameter ->
         plan.bytesPrelude(parameter)
           ?: plan.collectionPrelude(parameter)
           ?: plan.interfacePrelude(parameter)
@@ -174,11 +192,11 @@ internal object ForwardCirPlanProjection {
           ?: plan.typeParameterPrelude(parameter)
       }
     val cleanup: List<String> =
-      plan.publicSignature.parameters.mapNotNull {
+      inputs.mapNotNull {
         plan.bytesCleanup(it) ?: plan.collectionCleanup(it) ?: plan.interfaceCleanup(it)
           ?: plan.typeParameterCleanup(it)
       }
-    val argumentList: List<String> = plan.publicSignature.parameters.flatMap { plan.callArgument(it) }
+    val argumentList: List<String> = inputs.flatMap { plan.callArgument(it) }
     val callArgs: String = (argumentList + "out IntPtr error").joinToString(", ")
     val body: String = forwardCirHandleScope(
       prelude,

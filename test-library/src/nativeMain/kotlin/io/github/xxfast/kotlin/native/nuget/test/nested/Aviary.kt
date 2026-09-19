@@ -40,9 +40,10 @@ import kotlinx.coroutines.yield
  * under it travels a different translator path from a nested declaration under a class, and an
  * implementation that only teaches `CirClass` to carry children would still lose `Registry.Entry`.
  *
- * Deferred by ADR-133 and therefore absent here on purpose: `inner class`, a generic owner, an
+ * Deferred by ADR-133 and therefore absent here on purpose: a generic owner, an
  * `enum`/`interface`/sealed owner, and a nested `value class`. Those must keep skipping named, and
- * the Tier 1 test pins that.
+ * the Tier 1 test pins that. ADR-134 has since admitted the interface and sealed owners and the
+ * nested `value class` (`Deferred.kt`), and ADR-141 the `inner class` candidate (`Inner.kt`).
  *
  * Oreo (black with the white middle) claims the highest perch in the aviary and refuses to come
  * down; Mylo (brown and creamy) supervises from the nested cardboard box underneath it.

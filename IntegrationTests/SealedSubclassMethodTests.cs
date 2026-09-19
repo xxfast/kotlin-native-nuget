@@ -37,10 +37,12 @@ namespace IntegrationTests;
 /// </para>
 /// <para>
 /// The absences are asserted by reflection because a missing member is invisible to the compiler in
-/// the other direction: <c>PickNested</c> (a nested interface, which is never declared in C#),
-/// <c>Describe</c> on <c>Running</c>, and <c>RestAsync</c> on every arm (declared-only, on the sync
-/// loop and on the suspend loop alike: an arm exports what it declares, and an inherited base body
-/// — <c>open fun describe()</c>, <c>open suspend fun rest()</c> — is not it).
+/// the other direction: <c>Describe</c> on <c>Running</c>, and <c>RestAsync</c> on every arm
+/// (declared-only, on the sync loop and on the suspend loop alike: an arm exports what it declares,
+/// and an inherited base body, <c>open fun describe()</c> or <c>open suspend fun rest()</c>, is not
+/// it). <c>PickNested</c> (a nested interface) used to be a third reflection-only absence; ADR-133
+/// inverted that, so it is asserted present instead, see
+/// <see cref="PickNested_NestedInterfaceReturnOnASealedArm_Binds"/>.
 /// </para>
 /// <para>
 /// Oreo runs the hallway; Mylo declines to and is poked about it, then settles on the windowsill
@@ -141,9 +143,9 @@ public class SealedSubclassMethodTests
     /// <c>Job.Running</c>-typed reference and answer exactly what the full-arity call with the
     /// declared default answers.
     /// <para>
-    /// This is CS1501 today — <c>sealedSubclassEntries</c> returns early on any <c>override</c>
-    /// whose overridee is declared on the sealed base, planned or not, and it reads raw
-    /// <c>hasDefault</c> off the override's parameters, which is always <c>false</c>.
+    /// <c>sealedSubclassEntries</c> returns early only for an <c>override</c> whose overridee the
+    /// base actually <em>planned</em>, so a declined base member leaves the arm to count its own
+    /// trailing defaults through <c>memberDefaultFlags</c>.
     /// </para>
     /// </summary>
     [Fact]

@@ -2,7 +2,29 @@
 
 ## Status
 
-Proposed
+Accepted. Shipped with fixture `test-library/.../nested/Inner.kt` (`Hearth`/`Sunbather`/`Cushion`,
+not this ADR's illustrative `Host`/`Guest`, which stayed the deferred inner-of-inner shape in
+`Tier1NestedTypesTest`); xunit `IntegrationTests/InnerClassTests.cs`; leak rows 1d and 1e in
+`LeakTests/LiveHandleTests.cs`. See "Corrections found during implementation" below for where this
+ADR's mechanism section disagreed with what shipped.
+
+### Corrections found during implementation
+
+1. **Consequences said a declared constructor parameter named `outer` is CS0100.** Wrong: it is
+   guarded, not merely recorded. `outer` joined `PLAN_OWNED_NAMES` (`Reserved.kt`), so
+   `bridgeParameterName()` renames a user's own `outer` to `outer_` on both sides of the bridge, the
+   same move `value` already gets. No CS0100 is reachable.
+2. **Consequences said "no released name or entry point changes."** Not quite: any existing
+   callable with a parameter literally named `outer` now renders `outer_` in the generated C# and
+   the Kotlin export. No fixture in this repository has one; a consumer's own library might.
+3. **Seam 2 said `target = cls.simpleName.asString()`.** The implementation keeps `target`
+   qualified (other routes read `invocation.target`, and ADR-147's `ownerType` fallback lives on
+   that same arm) and takes `substringAfterLast('.')` at emit time in
+   `ForwardKotlinPlanEmitter.invocationExpression()` instead. Same generated Kotlin either way.
+4. **`validateRoles` needed no change**, confirmed as shipped.
+5. **The ADR's illustrative fixture names `Host`/`Guest`; the shipped fixture is
+   `Hearth`/`Sunbather`/`Cushion`.** `Host`/`Guest` stayed free and now names the deferred
+   inner-of-inner cell in `Tier1NestedTypesTest`.
 
 ## Context
 
@@ -223,11 +245,14 @@ public Guest(Host outer, int visits)
 2. `ForwardCallablePlanner.constructorEntries()` / `constructorEntry()`: for
    `cls.modifiers.contains(Modifier.INNER)`, `receiver = ForwardReceiver.Handle(
    BridgeType.ObjectHandle(outerQualifiedName), name = "outer")` where the outer is
-   `cls.parentDeclaration as KSClassDeclaration`, and `target = cls.simpleName.asString()`
-   (`Guest`, not the qualified name, because the call is receiver-qualified). Every entry the
-   function builds (primary, secondaries, ADR-091 truncations) goes through `constructorEntry`, so
-   all of them carry the receiver by construction. The COPY entry (data class `copy`) is untouched:
-   its receiver is already the instance.
+   `cls.parentDeclaration as KSClassDeclaration`. **Corrected from what shipped:** `target` stays
+   the qualified name (`plan.invocation.target`/`ownerType`), unchanged from every other
+   constructor; other routes read that field qualified (ADR-147's `ownerType` fallback lives on
+   the same arm), so `ForwardKotlinPlanEmitter` takes `substringAfterLast('.')` at emit time
+   instead. Same generated Kotlin either way. Every entry the function builds (primary,
+   secondaries, ADR-091 truncations) goes through `constructorEntry`, so all of them carry the
+   receiver by construction. The COPY entry (data class `copy`) is untouched: its receiver is
+   already the instance.
 3. `ForwardKotlinPlanEmitter.invocationExpression()` CONSTRUCTOR arm: when `receiver != null`,
    `"${receiverExpression(receiver)}.${target}($arguments)"`; otherwise byte-identical to today.
 4. `ForwardCirPlanProjection.constructor()`: mirror `extension()`. Read the index-0 `RECEIVER` slot
@@ -242,44 +267,58 @@ public Guest(Host outer, int visits)
    plan.nativeInCirParameters(nativeCall.parameters)` already includes the receiver slot, so the
    `[DllImport]` is right either way.
 5. `CirClassTranslator.kt` ~:576 (ADR-034 identical-signature check) needs no change: the receiver
-   is prepended to every constructor of the class, so signature equality is preserved.
+   is prepended to every constructor of the class, so signature equality is preserved. **Confirmed
+   as shipped:** no change was needed here.
 6. `ForwardDiagnostic.kt`: no new kind. The `SKIPPED_NESTED_DECLARATION` hint "move it to the top
    level of its file" stays for the remaining shapes.
+7. `ForwardCallablePlanner`'s `validateRoles` (ADR-062/ADR-132): **confirmed as shipped, no change
+   needed.** The receiver still lands at index 0 of exactly one `RECEIVER` slot, the invariant the
+   existing check already enforces for an extension.
 
 ### Fixture and tests
 
-- `test-library/.../nested/Inner.kt`: the `Host`/`Guest` pair above, with `guestAt`/`visitsOf`
-  named to dodge the ADR-133 owner-scope collision rule (never `guest`). `Host`/`Guest` are the
-  names `Tier1NestedTypesTest`'s `deferredSource` already uses for the skip cell, which now flips.
-- `IntegrationTests/InnerClassTests.cs`, one sample cell:
+- `test-library/.../nested/Inner.kt`: shipped as `Hearth`/`Sunbather`/`Cushion`, not this ADR's
+  illustrative `Host`/`Guest` pair above; `Host`/`Guest` remained free and now names the deferred
+  inner-of-inner cell in `Tier1NestedTypesTest`'s `deferredSource` instead. `sunbatherAt`/
+  `minutesOf`/`cushionOf` dodge the ADR-133 owner-scope collision rule (never `sunbather`).
+- `IntegrationTests/InnerClassTests.cs`, one sample cell (fixture names, not this ADR's
+  illustrative ones):
 
 ```csharp
 [Fact]
-public void InnerClass_ConstructedWithTheOuterFirst_ReadsTheOuter()
+public void InnerClass_ConstructsWithTheOuterInstanceFirst()
 {
-    using var host = new Host("Oreo");
-    using var guest = new Host.Guest(host, 3);
+    using var hearth = new Hearth("The bay window");
+    using var sunbather = new Hearth.Sunbather(hearth, 3);
 
-    Assert.Equal(3, guest.Visits);
-    Assert.Equal("Oreo welcomes guest #3", guest.Greeting);
-    Assert.Equal(3, host.VisitsOf(guest));
-    Assert.NotNull(typeof(Host).GetNestedType("Guest"));
+    Assert.Equal(3, sunbather.Minutes);
+    Assert.Equal("sunbather@3", sunbather.Describe());
 }
 ```
 
-  plus: `host.GuestAt(2)` round-trips (a member-returned inner instance and a constructed one are
-  the same C# type), `Guest`'s constructor parameter list starts with `Host outer` (reflection),
-  and a disposed-outer cell: dispose `host`, then read `guest.Greeting` still returns the outer's
-  name (the lifetime claim above, otherwise unpinned).
-- `Tier1NestedTypesTest.kt`: `Host.Guest` moves from the deferred list to an admitted cell asserting
-  `host_guest_create` takes `outer` first and the Kotlin body spells `.get().Guest(`; the
-  `deferredSource` list shrinks to `Box.Lid` and `Season.Almanac`. A second cell keeps an inner-of-
-  inner (`inner class Guest { inner class Deep }`) a named skip through the owner arm.
-- **Leak row.** `LeakTests/LiveHandleTests.cs` gains Row 1c: `using var host = new Host("Oreo");
-  using var guest = new Host.Guest(host, 3); Assert.Equal(3, guest.Visits);` returns to baseline.
-  A new constructor route mints a handle, and the inner's Kotlin-side reference to the outer is
-  exactly the kind of retained edge this harness exists to check; Row 1a (nested class) is the
-  template.
+  plus: `hearth.SunbatherAt(2)` round-trips (a member-returned inner instance and a constructed one
+  are the same C# type), `Sunbather`'s constructor parameter list starts with `Hearth outer`
+  (reflection), a converted-parameter constructor (`Cushion(Hearth outer, string fabric)`) keeps the
+  outer first too, a `require` inside the inner's `init` throws through the receiver-carrying
+  constructor rather than returning a null handle, and a disposed-outer cell:
+  `InnerClass_OuterDisposedFirst_StillReadsTheOuter` disposes `hearth` with no `using`, then reads
+  `sunbather.Basking`, which still answers (the lifetime claim above, pinned rather than left
+  inferred).
+- `Tier1NestedTypesTest.kt`: `deferredSource`'s `Host.Guest` gains its own `inner class Deep` and
+  the named-skip assertion moves to `Host.Guest.Deep` (the inner-of-inner the owner arm still
+  defers; the `deferredSource` list is `Box.Lid` and `Host.Guest.Deep`, not this ADR's original
+  guess of `Box.Lid` and `Season.Almanac`, which is a separate enum-owner cell). A second source,
+  `innerSource`, is the admitted half: one cell asserts `host_guest_create` takes `outer` first and
+  the Kotlin body spells `outer.asStableRef<...Host>().get().Guest(visits)`, another asserts an
+  ADR-091 omitting overload keeps the outer and drops only the defaulted parameter.
+- **Leak rows.** `LeakTests/LiveHandleTests.cs` gains Row 1d and Row 1e (not Row 1c, already taken
+  by the sealed-subclass constructor). Row 1d: `using var hearth = ...; using var sunbather = new
+  Hearth.Sunbather(hearth, 3); hearth.MinutesOf(sunbather);` returns to baseline, the ADR-141
+  constructor route's happy path, Row 1a's (nested class) template. Row 1e is the fault-injection
+  half unique to a receiver-carrying constructor: `Sunbather`'s `init` throws on a negative
+  argument, after the borrowed outer handle has crossed but before any inner handle exists, and the
+  count still has to be flat, since a mistaken retain-on-the-way-in leaks exactly one handle per
+  throw.
 
 ## Scope
 
@@ -302,25 +341,31 @@ ADR-091 omitting constructors. `data inner class` rides the same plan plus the e
 
 ## Consequences
 
-- Additive: `Host.Guest` appears with `public Guest(Host outer, ...)`; no released name or entry
-  point changes (a non-inner class's plan is byte-identical, since `receiver` stays `Static`).
-- A declared constructor parameter named `outer` is now CS0100 in the generated C# and a duplicate
-  parameter in the generated Kotlin. Same class of hazard as ADR-132's `receiver`; recorded, not
-  guarded (a rename rule would need a collision check for one name).
+- Additive: `Hearth.Sunbather` appears with `public Sunbather(Hearth outer, ...)`.
+- **Corrected from Proposed:** a declared constructor parameter named `outer` is not CS0100. `outer`
+  joined `PLAN_OWNED_NAMES` (`Reserved.kt`), the same set `handle`, `receiver` and `value` already
+  belong to; `ForwardAbiParameter.bridgeParameterName()` shifts a user's own `outer` to `outer_` on
+  both sides of the bridge instead. That is a small but real, and consumer-visible, behaviour
+  change beyond "additive": any **existing** callable with a parameter literally named `outer`
+  (constructor or otherwise) now renders `outer_` in both the generated C# signature and the Kotlin
+  export where it used to render `outer`. No fixture in this repository has one today, so nothing
+  shipped renames, but a consumer's own library might.
 - `SKIPPED_NESTED_DECLARATION` survives for: an `enum class` owner, a generic owner, an `inner
-  class` **owner**, an inner class under a sealed owner, a `value class` owner, and a nested sealed
-  hierarchy candidate.
-- ROADMAP's Phase 4 inner-class line closes for the candidate half; the owner half becomes its own
-  line. FEATURES.md's class row and `docs/topics/classes-and-objects.md`'s nested-types section
-  (~:1104, "an `inner class` owner (its constructor needs the outer instance, no C# equivalent)")
-  need the documenter's pass.
-- Cost, priced: 4 source files (`NugetProcessor.kt` one arm, `ForwardCallablePlanner.kt` one
-  receiver, `ForwardKotlinPlanEmitter.kt` one arm, `ForwardCirPlanProjection.kt` one projection),
-  one new fixture file, one xunit file, one Tier 1 test file edited, one leak row, three fixture
-  comments that name inner as deferred (`Deferred.kt` ~:38, `Aviary.kt` ~:40, `ProbeOuter.kt` ~:19),
-  this ADR, one docs topic, FEATURES.md, ROADMAP.md.
+  class` **owner** (inner-of-inner), an inner class under a sealed owner, a generic inner class, an
+  inner class of a generic outer, a `value class` owner, and a nested sealed hierarchy candidate.
+- ROADMAP's Phase 4 inner-class line closed for the candidate half; the owner half (and the sealed-
+  owner, generic-inner and generic-outer shapes above) is now its own ROADMAP line pointing back at
+  this ADR's Scope section.
+- Cost, as shipped: 5 source files (`NugetProcessor.kt` one arm each on the owner and candidate
+  reasons, `Reserved.kt` one plan-owned name, `ForwardCallablePlanner.kt` one receiver helper,
+  `ForwardKotlinPlanEmitter.kt` one CONSTRUCTOR arm, `ForwardCirPlanProjection.kt` one projection),
+  one new fixture file (`Inner.kt`), one xunit file (`InnerClassTests.cs`, 8 cells), one Tier 1 test
+  file edited (two new cells plus the deferred-cell reshape), two leak rows (1d, 1e; not the one
+  originally priced, and not "1c", already taken), two fixture comments updated to say the inner
+  class candidate is no longer deferred (`Deferred.kt`, `Aviary.kt`; `ProbeOuter.kt` needed no
+  change), this ADR, one docs topic, FEATURES.md, ROADMAP.md.
 
-## Verified claims (by reading repo code, this session)
+## Verified claims (by reading repo code, at proposal time)
 
 Every seam in Context's "What the code does today" list, with the line numbers given: the two
 `Modifier.INNER` gate arms; `constructorEntry`'s `ForwardReceiver.Static`; the emitter's
@@ -333,21 +378,33 @@ compiling the generated Kotlin.
 Also verified by reading upstream source: Kotlin/Native ObjC export appends one bridge slot for an
 inner class's constructor after the value parameters (`getMethodBridge.kt`).
 
+## Verified claims (by running the implementation)
+
+The claims below were inferred at proposal time and are now verified, each by the test named:
+
+1. `outer.asStableRef<Hearth>().get().Sunbather(minutes)` is valid Kotlin. Verified: the Tier 1
+   cell `an inner class is declared, and its constructor takes the outer instance first`
+   (`Tier1NestedTypesTest.kt`) compiles the generated `CNameExports.kt`, and every
+   `IntegrationTests/InnerClassTests.cs` cell exercises the compiled call at runtime.
+2. KSP's `getConstructors()` on an inner class reports only the declared parameters, no synthetic
+   outer. Verified: the same Tier 1 cell asserts the generated export signature is exactly
+   `(outer, minutes, errorOut)`, one argument per declared parameter plus the receiver and the
+   error slot, nothing extra.
+3. `asStableRef<pkg.Hearth.Sunbather>()` accepts an inner class as a type argument. Verified: the
+   same Tier 1 cell's generated-Kotlin assertion, and every `InnerClassTests.cs` cell compiling and
+   passing against the real generated C#.
+4. An inner instance keeps its outer reachable on the Kotlin heap after the outer is disposed.
+   Verified by `InnerClass_OuterDisposedFirst_StillReadsTheOuter` (`InnerClassTests.cs`): disposes
+   `hearth` with no `using`, then reads `sunbather.Basking`, which still returns the outer's
+   constructor argument.
+
 ## Inferred claims (not run; each fails loud, none silently wrong)
 
-1. `outer.asStableRef<Host>().get().Guest(visits)` is valid Kotlin. Grounded in the official
-   `Outer().Inner()` example; if wrong, the first Tier 1 cell fails to compile `CNameExports.kt`.
-2. KSP's `getConstructors()` on an inner class reports only the declared parameters, no synthetic
-   outer (KSP is source-level; the JVM outer parameter is a bytecode artifact). If wrong, the plan
-   carries an extra parameter and the generated Kotlin call has one argument too many: compile
-   error, loud.
-3. `asStableRef<pkg.Host.Guest>()` accepts an inner class as a type argument. If wrong, compile
-   error, loud.
-4. An inner instance keeps its outer reachable on the Kotlin heap (language docs). If wrong, the
-   disposed-outer xunit cell crashes rather than passing; pinned deliberately for that reason.
-5. `NESTED_CLASS_NOT_ALLOWED` inside an inner class (Scope). Harmless either way.
-6. The JVM's outer-first constructor parameter and ObjC export's header spelling for the trailing
+1. `NESTED_CLASS_NOT_ALLOWED` inside an inner class (Scope). Still not spiked; harmless either way,
+   since the owner arm keeps deferring a non-inner class nested inside an inner class regardless of
+   which Kotlin diagnostic would fire on a hand-written attempt.
+2. The JVM's outer-first constructor parameter and ObjC export's header spelling for the trailing
    slot: prior-art colour only, nothing in the decision depends on them.
 
-No spike was run: nothing here is a metadata or marshalling claim whose failure would be silent,
-and the repo's own Tier 1 harness is the spike for claims 1 to 3 on the first implementation run.
+No spike was run for these two: neither is a metadata or marshalling claim whose failure would be
+silent.
