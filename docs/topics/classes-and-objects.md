@@ -295,10 +295,11 @@ Assert.Equal(5, aviary.HeightOf(perch));
 
 An `inner class` owner, a generic owner, and an `enum class` owner have no C# equivalent for a
 nested slot and stay a named skip (`SKIPPED_NESTED_DECLARATION`). Kotlin allows a nested type
-named exactly like its owner, or like a PascalCased member of its owner; C# does not, so that
-combination fails generation (`ERROR_CSHARP_SIGNATURE_COLLISION`) instead of emitting invalid C#.
-Avoid naming an accessor the same as its nested return type (`fun perch(): Perch`); name the
-accessor differently instead (`perchAt`).
+named exactly like its owner, or like a PascalCased member of its owner (a companion's members
+included, since they fold into the owner's C# type as statics); C# does not, so that combination
+fails generation (`ERROR_CSHARP_SIGNATURE_COLLISION`) instead of emitting invalid C#. Avoid naming
+an accessor, or a companion function, the same as its nested return type (`fun perch(): Perch`);
+name it differently instead (`perchAt`).
 
 A `@Serializable` class exports the same as any other class. kotlinx.serialization's
 compiler-generated `$serializer` nested object is never declared in C#, since `$` isn't a legal C#
@@ -341,6 +342,11 @@ using Purr purr = Deferred.PurringPurr(9);
 Purr.On on = Assert.IsType<Purr.On>(purr);
 using Purr.On.Trace trace = on.TraceOf();
 ```
+
+The owner-name collision above is checked against the generated C# name, not the Kotlin one: an
+`interface` owner gets an `I` prefix in C#, so a nested type sharing its interface owner's Kotlin
+name is legal (`interface Cage { class Cage }` declares `ICage.Cage`, two different C# names, not
+a collision).
 
 A sealed arm's `internal Arm(IntPtr handle)` constructor still exists beside any exported public
 one. `Purr.On`'s own `level: Int` constructor parameter is bridgeable, so `On` also exports a public

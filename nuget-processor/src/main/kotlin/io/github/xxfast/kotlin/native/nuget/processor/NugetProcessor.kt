@@ -232,10 +232,37 @@ internal fun KSClassDeclaration.nestedDeclarationDeferral(): String? {
 internal fun KSClassDeclaration.nestedOwnerScopeCollision(): String? {
   val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return null
   val name: String = simpleName.asString()
-  if (owner.simpleName.asString() == name) return "its owner's own name (CS0542)"
+  // CS0542 compares the C# names, not the Kotlin ones: ADR-134 declares an `interface` owner's
+  // child inside `public interface ICage`, so `interface Cage { class Cage }` is the legal
+  // `ICage.Cage`. An ADR-112 eligible sealed interface renders as `public abstract class Beam` with
+  // no `I` (issue #54), so `Beam.Beam` is still the error this arm exists for.
+  val segments: List<String> = nestedCsName().split('.')
+  if (segments.size >= 2 && segments[segments.size - 2] == segments.last()) {
+    return "its owner's own name (CS0542)"
+  }
+  // ADR-013 folds a companion's public members into the owner's C# class as statics (`const val`
+  // included, see `CirClassTranslator`), so they share the one member-name scope the nested type is
+  // declared in: `companion object { fun config(): Config }` beside `class Config` is CS0102 just
+  // as an instance `val config` is. Static-ness is not part of a C# member name.
+  val companion: KSClassDeclaration? = owner.declarations
+    .filterIsInstance<KSClassDeclaration>()
+    .firstOrNull { it.isCompanionObject }
+  val companionMemberNames: List<String> = if (companion == null) {
+    emptyList()
+  } else {
+    companion.getAllProperties()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .map { it.simpleName.asString() }
+      .toList() +
+        companion.getAllFunctions()
+          .filter { it.getVisibility() == Visibility.PUBLIC }
+          .map { it.simpleName.asString() }
+          .toList()
+  }
   val memberNames: List<String> =
     (owner.getAllProperties().map { it.simpleName.asString() }.toList() +
-        owner.getAllFunctions().map { it.simpleName.asString() }.toList())
+        owner.getAllFunctions().map { it.simpleName.asString() }.toList() +
+        companionMemberNames)
       .map { it.replaceFirstChar { c -> c.uppercase() } }
   return if (name in memberNames) "the member `$name` of the same C# type (CS0102)" else null
 }
