@@ -50,6 +50,12 @@ class Tier1ReservedParameterNamesTest {
     }
 
     class Meter(val value: String)
+
+    class Hearth(val room: String) {
+      inner class Sunbather(outer: Int) {
+        val minutes: Int = outer + room.length
+      }
+    }
   """.trimIndent()
 
   private val result: Tier1Result by lazy { Tier1Harness.run(fixture) }
@@ -210,6 +216,25 @@ class Tier1ReservedParameterNamesTest {
       result.generated,
       "public fun export_ratio_scale(`value`: Int, value_: Int): Int = " +
           "tier1.reserved.Ratio(value).scale(value_)",
+    )
+  }
+
+  /**
+   * ADR-141's outer-instance slot, the one `PLAN_OWNED_NAMES` entry no cell pinned until now: an
+   * `inner class` constructor leads with `IntPtr outer`, so a constructor parameter of the same
+   * word is CS0100 at that position and a duplicate parameter in the `@CName` export. Only the
+   * inner-class route mints the slot, so only it can collide.
+   */
+  @Test
+  fun `an inner class constructor renames a parameter that shadows the outer slot`() {
+    assertContains(
+      result.generatedCSharp,
+      "private static extern IntPtr Native_Create(IntPtr outer, int outer_, out IntPtr error);",
+    )
+    assertContains(result.generatedCSharp, "public Sunbather(Hearth outer, int outer_)")
+    assertContains(
+      result.generated,
+      "  outer: COpaquePointer,\n  outer_: Int,\n  errorOut: COpaquePointer?,\n",
     )
   }
 

@@ -254,10 +254,10 @@ class Tier1UnexportedBaseClassSkipTest {
    * inherit from, so the omitting overload has to be synthesized on the subclass itself or the
    * one-argument call is CS1501 for the consumer.
    *
-   * Cross-module on purpose: the default lives on a jar-declared base, Kotlin forbids the override
-   * from restating it, so the only place the bit survives is the overridee's parameter as KSP
-   * reports it through `findOverridee()` onto a compiled dependency. That resolution is what this
-   * cell measures.
+   * Cross-module on purpose: the default lives on a jar-declared base, so the count has to survive
+   * a compiled dependency. KSP reports the bit on the override's own parameter here (2026-09-19),
+   * and `memberDefaultFlags` also resolves it through `findOverridee()` as a defensive read. Either
+   * path answers; what this cell measures is that the overload lands on the subclass.
    */
   @Test
   fun `an override of a dropped base's defaulted member synthesizes the omitting overload`() {

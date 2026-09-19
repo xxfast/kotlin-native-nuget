@@ -32,8 +32,9 @@ package io.github.xxfast.kotlin.native.nuget.test.nested
  *
  * Member names are `sunbatherAt`/`minutesOf`/`cushionOf`, never `sunbather`/`cushion`: C# forbids a
  * member and a nested type sharing a name in the same declaring type (CS0102), the same rule as
- * `Aviary.perchAt` and `Hamper.weightOf`. No constructor parameter is named `outer` either, since
- * ADR-141 records that collision (CS0100) as a hazard and does not guard it.
+ * `Aviary.perchAt` and `Hamper.weightOf`. No constructor parameter is named `outer` here, but one
+ * would be safe: `outer` is in `PLAN_OWNED_NAMES`, so a user parameter of that name renders
+ * `outer_` the way `value` does (`Tier1ReservedParameterNamesTest`).
  *
  * Deferred by ADR-141 and therefore absent here on purpose: an `inner class` **owner**
  * (inner-of-inner), an inner class under a sealed owner, a generic inner class, and an inner class

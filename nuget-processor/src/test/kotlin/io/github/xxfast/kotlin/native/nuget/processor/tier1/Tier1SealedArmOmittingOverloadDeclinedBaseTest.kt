@@ -10,15 +10,15 @@ import kotlin.test.assertTrue
  * `override fun` of a base member the planner **structurally declined** owes its own ADR-096
  * omitting overloads.
  *
- * Two independent root causes hold the overload back today, and this fixture is shaped so that
- * fixing only one keeps it red:
- * 1. `sealedSubclassEntries` returns early whenever `method.findOverridee()?.parentDeclaration` is
- *    the sealed base. That gate keys on the Kotlin declaration graph, not on whether
- *    `sealedBaseEntries` actually produced a `Planned` entry — and here it did not, because
- *    `tag` is behind a `@RequiresOptIn` marker and ADR-115 drops it.
- * 2. The same pass counts trailing defaults with raw `hasDefault` off the **override's** own
- *    parameters, which Kotlin forbids from restating a default, so every flag reads `false`.
- *    `classEntries` already uses `memberDefaultFlags(...)` for exactly this reason.
+ * Two things had to change to make this green, and the fixture is shaped so that either one alone
+ * keeps it red:
+ * 1. `sealedSubclassEntries` used to return early whenever `method.findOverridee()` was declared on
+ *    the sealed base. That gate keyed on the Kotlin declaration graph, not on whether
+ *    `sealedBaseEntries` actually produced a `Planned` entry, and here it did not, because `tag`
+ *    is behind a `@RequiresOptIn` marker and ADR-115 drops it. It keys on `plannedBaseMembers` now.
+ * 2. The same pass counts trailing defaults through `memberDefaultFlags(...)`, as `classEntries`
+ *    does: a defensive walk of the override chain, since on KSP 2.3.10 the override's own
+ *    parameter already carries the inherited default (verified by execution, 2026-09-19).
  *
  * The marker is `WARNING` level on purpose: ADR-115 is level-independent, so the base is skipped
  * either way, and a `WARNING` marker cannot turn an opt-in propagation inside the generated

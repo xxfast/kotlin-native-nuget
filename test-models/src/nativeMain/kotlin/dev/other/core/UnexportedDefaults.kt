@@ -8,8 +8,8 @@ package dev.other.core
  * resolved out of klib metadata rather than out of source. That is the distinction the same-module
  * `Squishy`/`Pose` pins in `issue115/PoseSample.kt` cannot draw: there, KSP already reports
  * `hasDefault = true` on the override's own parameter, so the sealed base pass synthesizes its
- * ADR-096 omitting overload from the raw bit. ADR-096's 2026-09-11 verification measured `false`
- * on an override whose overridee came from a klib, which is this shape.
+ * ADR-096 omitting overload from the raw bit. This shape pins that klib metadata carries that bit
+ * onto the override the same way source does (verified by execution, 2026-09-19).
  *
  * One member only, and the sealed base overrides it, so nothing here needs ADR-101's dropped-base
  * re-homing to reach C#.

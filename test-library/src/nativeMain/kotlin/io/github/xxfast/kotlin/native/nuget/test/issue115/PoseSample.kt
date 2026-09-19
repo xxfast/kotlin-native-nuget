@@ -14,29 +14,29 @@ interface Squishy {
 }
 
 /**
- * Fixture for the ROADMAP's "sealed base member whose trailing default lives on the interface it
+ * Green pin for the ROADMAP's "sealed base member whose trailing default lives on the interface it
  * overrides" cell: `sealedBaseEntries` synthesizes its ADR-096 omitting overloads from
- * `method.parameters.map { it.hasDefault }`, the raw KSP bit, which is always `false` on an
- * `override` because Kotlin forbids an override from restating a default.
+ * `method.parameters.map { it.hasDefault }`, the raw KSP bit, and on KSP 2.3.10 that bit already
+ * reads `true` on an `override` whose overridee states the default (verified by execution,
+ * 2026-09-19).
  *
- * So [Pose.squish], which is an `override` of [Squishy.squish], produces no `Squish()` on the C#
- * base. [Pose.Croissant]'s own override produces none either: `sealedSubclassEntries` returns early
- * on any override whose overridee is a planned base member (ADR-116's "the base is the carrier"),
- * which is right, but leaves the short call with nowhere to live. `pose.Squish()` is `CS1501` /
- * `CS7036` on every static type in the hierarchy. `classEntries` (ADR-096, 2026-09-11) and
- * `sealedSubclassEntries` (ADR-116, 2026-09-13) both read defaults through the override chain with
- * `memberDefaultFlags`; the sealed base pass is the last site that does not.
+ * So [Pose.squish], an `override` of [Squishy.squish], does get its `Squish()` on the C# base, and
+ * every arm inherits it. [Pose.Croissant]'s own override synthesizes none of its own:
+ * `sealedSubclassEntries` returns early on any override whose overridee is a planned base member
+ * (ADR-116's "the base is the carrier"), so the short call lives on the base exactly once.
+ * `classEntries` (ADR-096, 2026-09-11) and `sealedSubclassEntries` (ADR-116, 2026-09-13) read the
+ * same defaults through `memberDefaultFlags`, a defensive walk of the override chain.
  *
  * ### Cells
  *
- * - [Pose.squish]: the subject. Overrides an interface member with a trailing default, so the
- *   default bit is only reachable through `findOverridee()`. The C# base owes `Squish()` beside
+ * - [Pose.squish]: the subject. Overrides an interface member with a trailing default, and KSP
+ *   carries the bit onto the override's own parameter. The C# base gets `Squish()` beside
  *   `Squish(double)`, and both arms inherit it.
- * - [Pose.settle]: the control, and the only thing here that does not depend on the fix. The base
- *   owns this default itself, so the raw bit is already `true`. It pins that a base-synthesized
- *   omitting overload renders end to end at all: no shipped fixture has had one, because
- *   [Job.tag]'s base member is ADR-115-declined. If `Settle()` is red too, the base pass never
- *   rendered its own synthesized arity and the raw-bit read is the second of two defects.
+ * - [Pose.settle]: the control, where the default needs no override chain at all. The base owns it
+ *   itself. It pins that a base-synthesized omitting overload renders end to end: no other shipped
+ *   fixture has one, because [Job.tag]'s base member is ADR-115-declined. If `Settle()` is red,
+ *   the base pass never rendered its own synthesized arity, independent of where the default
+ *   lives.
  * - [Pose.Croissant]: the arm that overrides [Pose.squish]. It must declare no `Squish()` of its
  *   own; the short call arrives by C# inheritance from the base.
  * - [Pose.Splat]: the arm that inherits [Pose.squish] unchanged, so the base's body answers and
@@ -52,7 +52,7 @@ sealed class Pose : Squishy {
    */
   override fun squish(factor: Double): Double = factor
 
-  /** Control: a trailing default the base owns itself, so the raw `hasDefault` bit is `true`. */
+  /** Control: a trailing default the base owns itself, with no override chain in the way. */
   open fun settle(steps: Int = 3): Int = steps * 2
 
   /** Oreo, curled tight. The arm that overrides [squish] with a body of its own. */

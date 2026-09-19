@@ -6,11 +6,11 @@ import dev.other.core.UnexportedQuilt
 /**
  * The klib-rooted half of the sealed-base default cell. The same-module [Pose] cells next door are
  * green: for an override of a **source** interface member KSP already reports `hasDefault = true`,
- * so `sealedBaseEntries`' raw-bit read synthesizes the omitting overload anyway. ADR-096 measured
- * the bit as `false` on an override whose overridee is resolved out of a **klib**
- * (`Issue42Derived.farewell` over `dev.other.core.UnexportedBase`), which is why `classEntries`
- * reads defaults through `memberDefaultFlags` instead. These two sealed bases put the sealed base
- * pass over that same klib boundary.
+ * so `sealedBaseEntries`' raw-bit read synthesizes the omitting overload from it. These two sealed
+ * bases put that same raw-bit read over a **klib** boundary, where the overridee is resolved out
+ * of `:test-models`' metadata rather than out of source, and pin that the bit survives it too
+ * (verified by execution, 2026-09-19; `classEntries`' `memberDefaultFlags` walk is a defensive
+ * read of the same thing).
  *
  * Two shapes, because the supertype kind is the only thing that differs and each reaches the
  * planner differently: [Biscuit] implements a klib **interface**, [Burrito] extends a klib **open

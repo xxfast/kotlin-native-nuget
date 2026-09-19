@@ -149,9 +149,9 @@ public class SealedBaseMemberTests
     /// <summary>
     /// The subject. <c>Pose.squish</c> overrides <c>Squishy.squish</c>, whose <c>factor</c> carries
     /// the default, and Kotlin forbids the override from restating it. The sealed base pass reads
-    /// the raw <c>hasDefault</c> bit off the override's own parameters, which is always
-    /// <c>false</c>, so no <c>Squish()</c> is synthesized on the C# base and none is inherited by
-    /// any arm: the short call below is CS1501/CS7036 today on every static type in the hierarchy.
+    /// the raw <c>hasDefault</c> bit off the override's own parameters, and KSP 2.3.10 reports
+    /// that bit as <c>true</c> there, so <c>Squish()</c> is synthesized on the C# base and every
+    /// arm inherits it. The short call below pins that on the static types in the hierarchy.
     /// <para>
     /// Read through the <em>base</em> static type, on the arm that overrides the member. The
     /// omitting overload must agree with the explicit-default call, and Oreo's curl must be what
@@ -243,9 +243,9 @@ public class SealedBaseMemberTests
     /// <summary>
     /// The klib-rooted twin of the <c>Pose</c> cells above. <c>Biscuit.fluff</c> overrides
     /// <c>dev.other.core.UnexportedFluffy.fluff</c>, whose <c>pats</c> carries the default and which
-    /// resolves out of <c>:test-models</c>' klib rather than out of source. That is the boundary
-    /// ADR-096 measured <c>hasDefault = false</c> across, and the sealed base pass reads that raw
-    /// bit, so this is where <c>Fluff()</c> can go missing while <c>Squish()</c> is present.
+    /// resolves out of <c>:test-models</c>' klib rather than out of source. The sealed base pass
+    /// reads the raw bit, and this pins that klib metadata carries it onto the override just as
+    /// source does, so <c>Fluff()</c> is present for the same reason <c>Squish()</c> is.
     /// <para>
     /// Through the base static type, on the arm that overrides the member. Oreo, making biscuits.
     /// </para>

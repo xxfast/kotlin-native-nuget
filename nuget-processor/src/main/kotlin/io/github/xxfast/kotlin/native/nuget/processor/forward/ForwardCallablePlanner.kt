@@ -1366,8 +1366,8 @@ internal class ForwardCallablePlanner(
         val overridee: KSNode? = method.findOverridee()
         if (overridee != null && overridee in plannedBaseMembers) return@forEach
         // ADR-116 amendment (2026-09-13): the flags come through the override chain, as
-        // `classEntries` already reads them. Kotlin forbids an override from restating a default,
-        // so the arm's own parameters all report `false` and only the overridee carries the bit.
+        // `classEntries` already reads them. A defensive read: on KSP 2.3.10 the arm's own
+        // parameter already carries the overridee's default bit (measured 2026-09-19).
         repeat(memberDefaultFlags(method).trailingCount()) { omitted ->
           add(entryFor(method, omitted + 1).synthesized())
         }
@@ -1543,15 +1543,16 @@ internal class ForwardCallablePlanner(
    * ADR-096 amendment (2026-09-11): per-parameter "has a default" for a **class member**,
    * positionally, read through the override chain.
    *
-   * Kotlin forbids an override from restating a default, so `override fun farewell(name: String,
-   * warmly: Boolean)` reports `hasDefault = false` on every parameter and the bit survives only on
-   * the declaration that first stated it. The same erasure already forced the `expect`/`actual`
-   * lookups in [defaultFlags] and [topLevelDefaultFlags]. While the base class is exported this
-   * does not matter (the base's own C# overload is inherited); once ADR-101 drops the base the
-   * subclass has to synthesize, and the flags have to come from somewhere.
+   * Kotlin forbids an override from restating a default, but KSP still reports `hasDefault = true`
+   * on the override's own parameter (measured on Kotlin 2.4.10 / KSP 2.3.10, 2026-09-19, for a
+   * same-module interface, a klib interface and a klib open class alike). The chain walk is
+   * therefore a **defensive read**, not the thing that makes the bit appear: dropping it changes
+   * no current output. It is kept because the flags matter once ADR-101 drops the base and the
+   * subclass has to synthesize for itself, and nothing pins the raw bit as API.
    *
-   * The chain is walked to its **root**: `findOverridee()` answers the nearest declaration, and in
-   * a two-deep chain the intermediate override reports `false` for exactly the same reason.
+   * The chain is walked to its **root**, not to the nearest `findOverridee()`, so a two-deep chain
+   * still answers if an intermediate override ever did lose the bit. Unrelated to the genuine
+   * erasure on `expect`/`actual`, which [defaultFlags] and [topLevelDefaultFlags] do depend on.
    */
   private fun memberDefaultFlags(method: KSFunctionDeclaration): List<Boolean> {
     val root: KSFunctionDeclaration? = generateSequence(
