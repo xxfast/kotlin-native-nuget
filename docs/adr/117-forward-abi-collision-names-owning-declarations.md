@@ -311,11 +311,14 @@ Tests:
   (would only matter for fail mode A; B does not depend on it).
 - **Inferred, not verified**: a `KSFunctionDeclaration` constructor's `qualifiedName` spelling;
   the renderer is specified to avoid it.
-- **Inferred, not spiked, and moot**: which of the three guards the cross-package sealed shape
-  hits today. Reading says `csharpLegacy`'s `.distinct()` collapses its two identical `_get_type`
-  imports and the Kotlin-side `:80` guard fires; the backlog records it as `duplicate C# import`,
-  which may predate ADR-078's collector. All three guards share one body and one index, so the
-  answer changes no output; not an open question.
+- **Verified** (was "Inferred, not spiked, and moot"; confirmed 2026-09-19 by
+  `ForwardAbiContractTest`'s `collapsed identical legacy imports are still caught by the Kotlin
+  export multiplicity` and by the guard-phrase assertion added to `Tier1EntryPointCollisionTest`'s
+  sealed cell): which of the three guards the cross-package sealed shape hits.
+  `csharpLegacy`'s `.distinct()` collapses its two identical `_get_type` imports and the Kotlin-side
+  `:80` guard (`DUPLICATE_KOTLIN_EXPORT`) fires, as the original reading predicted; the backlog
+  records it as `duplicate C# import`, which may predate ADR-078's collector. All three guards
+  share one body and one index, so the answer changes no output; not an open question.
 - **Verified by reading**: ROADMAP line 54's premise. `SuspendFunctionExports.kt` contains no
   `overloadSuffix` reference and composes `${prefix}_${cname}_async` at `:101-102` from the bare
   method name; the Tier 1 suspend cell is the runtime spike.
@@ -477,8 +480,9 @@ recorded as its own roadmap item rather than folded into this ADR's scope.
   reviewer's reminder.
 - Deferred, tracked on the roadmap (Phase 4): deleting the now-dead `attributing` range wrappers and
   `ForwardExportOwners.owner()`'s range/`ROUTE_OWNED`/`GENERATED_HELPER` fallback; the Tier 1
-  Flow-classpath footgun found while building the new cells; the `csharpLegacy` `.distinct()`
-  detection gap for two byte-identical cross-package legacy imports, named but not chased here.
+  Flow-classpath footgun found while building the new cells; ~~the `csharpLegacy` `.distinct()`
+  detection gap for two byte-identical cross-package legacy imports, named but not chased here~~
+  (resolved 2026-09-19, see the note below).
 
 > **Note (2026-09-13):** the deferred deletion above shipped in the same stack. The `attributing`
 > range wrappers in `NugetProcessor.kt`, `ForwardExportOwnerRange` and `ForwardCNameExports` are
@@ -487,3 +491,15 @@ recorded as its own roadmap item rather than folded into this ADR's scope.
 > (an `IllegalStateException` naming the entry point), pinned by `ForwardExportOwnersTest`'s two
 > cells (a tagged export resolving its own owner, and an untagged export failing by name).
 > `GENERATED_HELPER` and `owners()`'s `ifEmpty` fallback stay, for the live C#-only collision case.
+
+> **Note (2026-09-19):** the `csharpLegacy` `.distinct()` "detection gap" was never a gap; it is now
+> documented and pinned. KDoc on `csharpLegacy` and `assertMatches` (`ForwardAbiContract.kt`) names
+> the Kotlin-side multiplicity check as the detector for two byte-identical cross-package legacy
+> imports of one entry point, pinned by `ForwardAbiContractTest`'s `collapsed identical legacy
+> imports are still caught by the Kotlin export multiplicity` and by a guard-phrase assertion added
+> to `Tier1EntryPointCollisionTest`'s sealed cell. That same cell's error list carries both
+> universes at once: the class-owned raw-text `loadstate_get_type` import reaches
+> `DUPLICATE_KOTLIN_EXPORT` (the collapsed-legacy shape this note is about), while
+> `loadstate_ready_create` (the `Ready` arm's plan-derived structural constructor import, ADR-148)
+> reaches `DUPLICATE_CSHARP_IMPORT` in the same round, unasserted by name but present in
+> `kspErrors`.

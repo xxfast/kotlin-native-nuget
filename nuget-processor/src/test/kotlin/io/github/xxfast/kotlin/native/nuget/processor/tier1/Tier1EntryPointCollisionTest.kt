@@ -299,6 +299,19 @@ class Tier1EntryPointCollisionTest {
       "expected a collision naming both sealed discriminators by role; " +
           "kspErrors=${result.kspErrors}",
     )
+    // The sealed route prints its `DllImport` as raw renderer text, so `csharpLegacy` scrapes two
+    // byte-identical imports of `loadstate_get_type` and `.distinct()` collapses them: this shape
+    // never reaches `CONFLICTING_LEGACY_IMPORTS`. The Kotlin half keeps both `@CName`s, so the
+    // guard that actually fires is `DUPLICATE_KOTLIN_EXPORT`. Pinned by name here because it is
+    // the only end-to-end proof that collapsing the C# half does not lose the collision.
+    assertTrue(
+      result.kspErrors.any { message ->
+        message.contains("loadstate_get_type") &&
+            message.contains(ForwardAbiGuard.DUPLICATE_KOTLIN_EXPORT.phrase)
+      },
+      "expected the duplicate-Kotlin-export guard by name for the collapsed legacy import; " +
+          "kspErrors=${result.kspErrors}",
+    )
     assertTrue(
       result.kspErrors.any { message ->
         message.contains(ForwardDiagnosticKind.ERROR_C_ENTRY_POINT_COLLISION.name) &&
