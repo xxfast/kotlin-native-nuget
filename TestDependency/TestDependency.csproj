@@ -38,6 +38,14 @@
       (Shy), an unbound-internal-runtime-type case (Nocturnal), interface inheritance
       (ITagged : IFeedable), and one interface per Decision 6 diagnostic (IBox&lt;T&gt;,
       IWithStatics, IWithDim, IIndexedThing, IEmpty).
+      Test.Kennel.Kennel / Kitten, ADR-152 fixture (reverse Task / Task&lt;T&gt; to a Kotlin
+      suspend fun): one member per seam, non-generic Task, Task&lt;int&gt; (no conversion),
+      Task&lt;string&gt; and Task&lt;Kitten&gt; (conversion), Task&lt;string?&gt; (nullable),
+      a fault after a real await, a synchronous throw before any Task exists, already-completed
+      tasks (Task.FromResult / Task.CompletedTask), a static async method, ReadAsync beside a
+      sync Read sibling (suffix kept), an async member taking a Kotlin-implementable IFeedable
+      it uses AFTER the await, the single-byte NullableAttribute encoding (LedgerAsync), and one
+      ValueTask&lt;int&gt; that must stay skipped with a named diagnostic.
     </Description>
   </PropertyGroup>
 

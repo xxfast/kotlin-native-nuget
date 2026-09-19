@@ -300,6 +300,7 @@ private fun bridgeableStructRegistrablesCandidates(
     .filter { it.isStatic }
     .filter { isV1Bridgeable(it, boundHandleTypes) }
     .filterNot { isSkippedStructMethod(it) }
+    .filterNot { it.asyncKind != null }
     .sortedBy { it.identity() }
     .map { RirRegistrable.Method(it) }
 
@@ -307,6 +308,9 @@ private fun bridgeableStructRegistrablesCandidates(
     .filter { !it.isStatic }
     .filter { isV1Bridgeable(it, boundHandleTypes) }
     .filterNot { isSkippedStructMethod(it) }
+    // ADR-152 deferred scope: async on a struct method (reconstruct-on-call) is a named skip, not
+    // a binding, see asyncDeferredDiagnostics.
+    .filterNot { it.asyncKind != null }
     // Void instance methods are out of scope for reconstruct-on-call v1 (ADR-056 deferred).
     .filter { it.returnType !is RirVoidType }
     .sortedBy { it.identity() }
@@ -391,6 +395,9 @@ fun structReceiverAbiArgs(
 // ADR-049 Alternative 10 closed for methods-only registration, now extended to the constructor.
 sealed interface RirRegistrable {
   data class Ctor(val ctor: RirConstructor) : RirRegistrable
+
+  // ADR-152: an async method occupies TWO adjacent registration slots (Begin, then End) rather
+  // than one, in both generators, off this one shared list, see [slotCount].
   data class Method(val method: RirMethod) : RirRegistrable
 
   // Phase 9 (ROADMAP line 151, instance methods/properties — confirmed "mirror" item, no new ADR:
@@ -460,6 +467,40 @@ fun RirRegistrable.identity(): String = when (this) {
 
 fun RirRegistrable.bridgeId(): String = bridgeId(identity())
 
+// ADR-152: one registration slot. A synchronous registrable has exactly one; an async method has
+// two, Begin then End, adjacent and in that order. Both generators expand the SHARED
+// bridgeableRegistrables list through this function rather than re-deriving "is this one slot or
+// two", which is the same anti-drift rule the ordered list itself exists for: a disagreement here
+// misaligns every pointer past the async member, which is memory corruption with no error.
+enum class RirSlotRole {
+  SYNC,
+  ASYNC_BEGIN,
+  ASYNC_END,
+}
+
+// The name fragment a slot contributes to its Kotlin `...Fn` var and its C# `..._Thunk`, empty
+// for a synchronous slot, so no existing generated name moves.
+val RirSlotRole.nameSuffix: String
+  get() = when (this) {
+    RirSlotRole.SYNC -> ""
+    RirSlotRole.ASYNC_BEGIN -> "Begin"
+    RirSlotRole.ASYNC_END -> "End"
+  }
+
+fun RirRegistrable.slotRoles(): List<RirSlotRole> =
+  if (this is RirRegistrable.Method && method.asyncKind != null)
+    listOf(RirSlotRole.ASYNC_BEGIN, RirSlotRole.ASYNC_END)
+  else listOf(RirSlotRole.SYNC)
+
+// The registration's true slot count: what both `slotCount` arguments and both register-export
+// parameter lists are built from (ADR-054's contract check compares exactly this number).
+fun List<RirRegistrable>.slotCount(): Int = sumOf { it.slotRoles().size }
+
+// Renders one text fragment per registration SLOT, in slot order, for a generator that used to
+// map one fragment per registrable.
+fun <T> List<RirRegistrable>.mapSlots(transform: (RirRegistrable, RirSlotRole) -> T): List<T> =
+  flatMap { r -> r.slotRoles().map { role -> transform(r, role) } }
+
 // Phase 9 (ROADMAP line 151): v1-bridgeable instance methods on a bound class — mirrors
 // bridgeableStaticMethods, but for `!isStatic` methods.
 fun bridgeableInstanceMethods(
@@ -496,6 +537,10 @@ fun bridgeableInterfaceRegistrables(
 ): List<RirRegistrable> {
   val methods: List<RirRegistrable> = iface.methods
     .filterNot { it.isStatic }
+    // ADR-152 deferred scope: an async member on a bound INTERFACE is entangled with Phase 13 (a
+    // Kotlin class implementing that interface would need the inverse slot), so it is a named skip
+    // here, see asyncDeferredDiagnostics.
+    .filterNot { it.asyncKind != null }
     .filter { isV1Bridgeable(it, boundHandleTypes, boundInterfaceTypes) }
     .sortedBy { it.identity() }
     .map { RirRegistrable.Method(it) }
@@ -699,6 +744,7 @@ private fun bridgeableRegistrablesCandidates(
     cls, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions,
   )
     .filterNot { it.name in collidingNames }
+    .filterNot { isDeferredAsync(cls, it) }
 
   val properties: List<RirProperty> =
     bridgeableProperties(cls, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions)
@@ -734,7 +780,8 @@ private fun bridgeableRegistrablesCandidates(
   val staticMethods: List<RirRegistrable> = canonical(
     bridgeableStaticMethods(
       cls, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions,
-    ),
+    )
+      .filterNot { isDeferredAsync(cls, it) },
     RirMethod::identity,
   )
     .map { RirRegistrable.Method(it) }
@@ -770,6 +817,43 @@ fun arityLimitDiagnostics(
       val arity: Int = r.abiArity(structs, receiverArity = 1, ctorOutArity = 0)
       if (arity <= ABI_ARITY_CEILING) null else arityLimitDiagnostic(cls.name, r, arity)
     }
+
+// ADR-152 deferred scope: an async member on a GENERIC class definition is skipped (its witness
+// thunk carries an extra indirection per instantiation that the Begin/End pair is not designed
+// for). Async on an ordinary bound class is the feature and is never skipped here.
+private fun isDeferredAsync(cls: RirClass, method: RirMethod): Boolean =
+  method.asyncKind != null && cls.typeParameters.isNotEmpty()
+
+// ADR-152: one named `info_async_not_yet_mapped` per async member the GENERATOR (not the reader)
+// declines: a struct method, a bound-interface member, or a member of a generic class definition.
+// The reader already names the shapes it declines itself (ValueTask, `Task<T>?`, async parameters);
+// this is the plugin-side half, so nothing async is ever dropped silently.
+fun asyncDeferredDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> =
+  rir.assemblies.flatMap { assembly ->
+    assembly.namespaces.flatMap { namespace ->
+      namespace.types.flatMap { type ->
+        val deferred: List<Pair<String, RirMethod>> = when (type) {
+          is RirClass ->
+            if (type.typeParameters.isEmpty()) emptyList()
+            else type.methods.filter { it.asyncKind != null }.map { "generic class" to it }
+
+          is RirStruct -> type.methods.filter { it.asyncKind != null }.map { "struct" to it }
+          is RirInterface -> type.methods.filter { it.asyncKind != null }.map { "interface" to it }
+          else -> emptyList()
+        }
+        deferred.map { (owner, method) ->
+          assembly.packageId to RirDiagnostic(
+            kind = RirDiagnosticKind.INFO_ASYNC_NOT_YET_MAPPED,
+            typeName = type.name,
+            memberName = method.name,
+            memberSignature = method.identity(),
+            reason = "an async member on a $owner is not mapped yet (ADR-152 deferred scope)",
+            hint = "Call this member from C#, or expose a non-async wrapper on an ordinary class.",
+          )
+        }
+      }
+    }
+  }
 
 // ADR-052 "shared bridgeable ordering", extended by Phase 9 line 151 and ADR-059 Decision 5a: the
 // constructor pointer (if any) first, then bridgeable static methods, then bridgeable instance
@@ -944,7 +1028,11 @@ private fun RirRegistrable.contractSignature(structs: Map<RirTypeKey, RirStruct>
     is RirRegistrable.Ctor -> ctor.identity() + ":ctor(" +
         ctor.parameters.joinToString(",") { it.type.signaturePart(structs) } + ")"
 
-    is RirRegistrable.Method -> method.identity() + ":method:${method.name}(" +
+    // ADR-152: an async method carries an `async:` prefix, so a package that changes `T Foo()`
+    // into `Task<T> Foo()` drifts the hash even though name, parameters and AWAITED type are all
+    // unchanged, the slot count changes from one to two and the wire shape changes completely.
+    is RirRegistrable.Method -> (if (method.asyncKind != null) "async:" else "") +
+        method.identity() + ":method:${method.name}(" +
         method.parameters.joinToString(",") { it.type.signaturePart(structs) } +
         "):" + method.returnType.signaturePart(structs)
 

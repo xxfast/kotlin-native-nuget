@@ -21,6 +21,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirParameter
 import io.github.xxfast.kotlin.native.nuget.rir.RirPrimitiveType
 import io.github.xxfast.kotlin.native.nuget.rir.RirProperty
 import io.github.xxfast.kotlin.native.nuget.rir.RirRegistrable
+import io.github.xxfast.kotlin.native.nuget.rir.RirSlotRole
 import io.github.xxfast.kotlin.native.nuget.rir.RirStringType
 import io.github.xxfast.kotlin.native.nuget.rir.RirStruct
 import io.github.xxfast.kotlin.native.nuget.rir.RirStructShape
@@ -33,6 +34,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.abiArgs
 import io.github.xxfast.kotlin.native.nuget.rir.abiOutArgs
 import io.github.xxfast.kotlin.native.nuget.rir.abiReturnType
 import io.github.xxfast.kotlin.native.nuget.rir.arityLimitDiagnostics
+import io.github.xxfast.kotlin.native.nuget.rir.asyncDeferredDiagnostics
 import io.github.xxfast.kotlin.native.nuget.rir.boundGenericClassDefinitions
 import io.github.xxfast.kotlin.native.nuget.rir.boundHandleTypes
 import io.github.xxfast.kotlin.native.nuget.rir.boundInterfaceTypes
@@ -52,9 +54,12 @@ import io.github.xxfast.kotlin.native.nuget.rir.isNullable
 import io.github.xxfast.kotlin.native.nuget.rir.isHandleBacked
 import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgeContractHash
 import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgePlan
+import io.github.xxfast.kotlin.native.nuget.rir.mapSlots
+import io.github.xxfast.kotlin.native.nuget.rir.nameSuffix
 import io.github.xxfast.kotlin.native.nuget.rir.parseInterfaceRef
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import io.github.xxfast.kotlin.native.nuget.rir.registrationExportName
+import io.github.xxfast.kotlin.native.nuget.rir.slotCount
 import io.github.xxfast.kotlin.native.nuget.rir.structArityLimitDiagnostics
 import io.github.xxfast.kotlin.native.nuget.rir.structContractHash
 import io.github.xxfast.kotlin.native.nuget.rir.structReceiverAbiArgs
@@ -581,7 +586,7 @@ fun generateKotlinStubs(
                 instancePropertyGetters, staticPropertyGetters, propertySetterNames,
                 assembly.packageId, namespace.name, enumPkgs, structPkgs, handlePkgs, structs,
                 qualifiedTypeNames, supertypeNames, overrideMethodNames, overridePropertyNames,
-                genericDefs,
+                genericDefs, interfacePkgs,
               ),
             )
           )
@@ -882,10 +887,15 @@ internal fun canonicalPrimitiveName(name: String): String = when (name) {
 // up, before this list is used to render anything.
 internal fun genericDefinitionRegistrables(cls: RirClass): List<RirRegistrable> {
   val ctor: List<RirRegistrable> = cls.constructors.map { RirRegistrable.Ctor(it) }
+  // ADR-152 deferred scope: a generic-class witness thunk carries an extra indirection per
+  // instantiation, so an async member on one is a named skip (asyncDeferredDiagnostics), never a
+  // half-built Begin/End pair.
   val staticMethods: List<RirRegistrable> =
-    cls.methods.filter { it.isStatic }.map { RirRegistrable.Method(it) }
+    cls.methods.filter { it.isStatic }.filter { it.asyncKind == null }
+      .map { RirRegistrable.Method(it) }
   val instanceMethods: List<RirRegistrable> =
-    cls.methods.filterNot { it.isStatic }.map { RirRegistrable.Method(it) }
+    cls.methods.filterNot { it.isStatic }.filter { it.asyncKind == null }
+      .map { RirRegistrable.Method(it) }
   val instanceProperties: List<RirRegistrable> = cls.properties.filterNot { it.isStatic }
     .flatMap { p ->
       if (p.isReadOnly) listOf(RirRegistrable.PropertyGetter(p))
@@ -1683,6 +1693,37 @@ private fun handleImports(
   .map { (pkg, name) -> "import $pkg.$name" }
   .distinct()
   .sorted()
+
+// ADR-070 / ADR-152: the same import line, for an INTERFACE-typed member reference declared in
+// another Kotlin package. A pre-existing gap: `handleImports` above only ever saw
+// RirObjectHandleType, so a bound member taking (or returning) an interface from a different C#
+// namespace rendered a bare unqualified name with no import and did not compile. No fixture had
+// that shape until ADR-152's `Kennel.BoardAsync(IFeedable)`, where the interface lives in
+// `Test.Menagerie` and the class in `Test.Kennel`.
+private fun interfaceImports(
+  interfaceTypes: List<RirInterfaceType>,
+  interfacePkgs: Map<RirTypeKey, String>,
+  kotlinPkg: String,
+): List<String> = interfaceTypes
+  .mapNotNull { type ->
+    val pkg: String? = interfacePkgs[RirTypeKey(type.namespace, type.name)]
+    if (pkg == null || pkg == kotlinPkg) null else "import $pkg.${type.name}"
+  }
+  .distinct()
+  .sorted()
+
+private fun referencedInterfaceTypes(
+  methods: List<RirMethod>,
+  ctors: List<RirConstructor>,
+  properties: List<RirProperty>,
+): List<RirInterfaceType> = (
+    methods.flatMap { method ->
+      listOfNotNull(method.returnType as? RirInterfaceType) +
+          method.parameters.mapNotNull { it.type as? RirInterfaceType }
+    } +
+        ctors.flatMap { ctor -> ctor.parameters.mapNotNull { it.type as? RirInterfaceType } } +
+        properties.mapNotNull { it.type as? RirInterfaceType }
+    ).distinct()
 
 // The bound-class-handle-typed references a stub file needs an `import <pkg>.<ClassName>` line
 // for: every method/ctor/property top-level RirObjectHandleType, mirroring referencedEnumTypes.
@@ -2801,11 +2842,15 @@ private fun structComponentReads(
 private fun methodParamCfnTypes(
   method: RirMethod,
   structs: Map<RirTypeKey, RirStruct>,
+  // ADR-152: an async Begin slot carries the receiver and the in-args but none of the return's
+  // out-pointers, those belong to its End slot, which is where the result is read.
+  includeOutArgs: Boolean = true,
 ): List<String> {
   val receiverCfnType: String? = if (!method.isStatic) "COpaquePointer?" else null
   val inCfnTypes: List<String> = abiArgs(method.parameters, structs).map { cfnType(it.type) }
   val outCfnTypes: List<String> =
-    abiOutArgs(method.returnType, structs).map { cfnOutPointerType(it.type) }
+    if (!includeOutArgs) emptyList()
+    else abiOutArgs(method.returnType, structs).map { cfnOutPointerType(it.type) }
   return listOfNotNull(receiverCfnType) + inCfnTypes + outCfnTypes
 }
 
@@ -2874,7 +2919,7 @@ private fun bindingsFileContent(
   // pointer first (if any), then method pointers — so the register signature/body below can
   // never drift out of sync with the C# ModuleInitializer's pointer-argument order
   // (NugetGenerateShimsTask consumes the exact same ordered list).
-  val fnVars: String = registrables.joinToString("\n\n") { r ->
+  val fnVars: String = registrables.mapSlots { r, role ->
     when (r) {
       is RirRegistrable.Ctor -> {
         val paramCfnTypes: String =
@@ -2886,11 +2931,30 @@ private fun bindingsFileContent(
       }
 
       is RirRegistrable.Method -> {
-        val paramCfnTypes: String =
-          (methodParamCfnTypes(r.method, structs) + ERR_CFN_TYPE).joinToString(", ")
-        val retCfnType: String = cfnType(abiReturnType(r.method.returnType, structs))
+        // ADR-152: the Begin slot's type is the sync parameter list plus the completion callback
+        // and its ctx, returning Unit; the End slot takes the task handle (plus any struct
+        // out-pointers) and carries the sync return type.
+        val paramCfnTypes: String = when (role) {
+          RirSlotRole.ASYNC_BEGIN -> (
+              methodParamCfnTypes(r.method, structs, includeOutArgs = false) +
+                  listOf("COpaquePointer?", "COpaquePointer?") + ERR_CFN_TYPE
+              ).joinToString(", ")
+
+          RirSlotRole.ASYNC_END -> (
+              listOf("COpaquePointer?") +
+                  abiOutArgs(r.method.returnType, structs).map { cfnOutPointerType(it.type) } +
+                  ERR_CFN_TYPE
+              ).joinToString(", ")
+
+          RirSlotRole.SYNC ->
+            (methodParamCfnTypes(r.method, structs) + ERR_CFN_TYPE).joinToString(", ")
+        }
+        val retCfnType: String =
+          if (role == RirSlotRole.ASYNC_BEGIN) "Unit"
+          else cfnType(abiReturnType(r.method.returnType, structs))
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
-            "internal var ${r.method.name.toMethodCamelCase()}${r.method.bridgeSuffix()}Fn: " +
+            "internal var ${r.method.name.toMethodCamelCase()}${r.method.bridgeSuffix()}" +
+            "${role.nameSuffix}Fn: " +
             "CPointer<CFunction<($paramCfnTypes) -> $retCfnType>>? = null"
       }
       // Phase 9 (ROADMAP line 151): a getter thunk takes the receiver only and returns the
@@ -2922,16 +2986,17 @@ private fun bindingsFileContent(
             "CPointer<CFunction<($paramCfnTypes) -> Unit>>? = null"
       }
     }
-  }
+  }.joinToString("\n\n")
 
   // ADR-054: pointer parameters are nullable (a stale caller passing fewer args than declared
   // leaves the tail argument registers unpopulated — see checkContract below, which reads only
   // slotCount/contractHash and returns before either storing or dereferencing any pointer here).
-  val regParams: String = registrables.joinToString(",\n  ") { r ->
+  val regParams: String = registrables.mapSlots { r, role ->
     when (r) {
       is RirRegistrable.Ctor -> "ctor${r.ctor.bridgeSuffix()}Ptr: COpaquePointer?"
       is RirRegistrable.Method ->
-        "${r.method.name.toMethodCamelCase()}${r.method.bridgeSuffix()}Ptr: COpaquePointer?"
+        "${r.method.name.toMethodCamelCase()}${r.method.bridgeSuffix()}${role.nameSuffix}Ptr: " +
+            "COpaquePointer?"
 
       is RirRegistrable.PropertyGetter ->
         "${r.property.name.toMethodCamelCase()}GetterPtr: COpaquePointer?"
@@ -2939,12 +3004,12 @@ private fun bindingsFileContent(
       is RirRegistrable.PropertySetter ->
         "${r.property.name.toMethodCamelCase()}SetterPtr: COpaquePointer?"
     }
-  }
+  }.joinToString(",\n  ")
 
   // Each pointer is requireNotNull'd only AFTER checkContract has already agreed the counts/hash
   // match — a null here past that point is a generator bug, not a legitimate mismatch, hence the
   // fail-fast rather than a silent skip.
-  val regBody: String = registrables.joinToString("\n  ") { r ->
+  val regBody: String = registrables.mapSlots { r, role ->
     when (r) {
       is RirRegistrable.Ctor -> "$objectName.ctor${r.ctor.bridgeSuffix()}Fn = " +
           "requireNotNull(ctor${r.ctor.bridgeSuffix()}Ptr) " +
@@ -2952,7 +3017,7 @@ private fun bindingsFileContent(
 
       is RirRegistrable.Method -> {
         val name: String = r.method.name.toMethodCamelCase()
-        val internalName: String = name + r.method.bridgeSuffix()
+        val internalName: String = name + r.method.bridgeSuffix() + role.nameSuffix
         "$objectName.${internalName}Fn = requireNotNull(${internalName}Ptr) " +
             "{ \"$exportName passed a null $name thunk pointer.\" }.reinterpret()"
       }
@@ -2969,9 +3034,10 @@ private fun bindingsFileContent(
             "{ \"$exportName passed a null $name setter thunk pointer.\" }.reinterpret()"
       }
     }
-  }
+  }.joinToString("\n  ")
 
-  val expectedSlots: Int = registrables.size
+  // ADR-152: slots, not registrables, an async method occupies two of them (Begin, End).
+  val expectedSlots: Int = registrables.slotCount()
   val expectedHash: Long = contractHash(cls, registrables, structs)
 
   return """
@@ -3041,6 +3107,7 @@ private fun stubFileContent(
   overrideMethodNames: Set<String> = emptySet(),
   overridePropertyNames: Set<String> = emptySet(),
   genericDefs: Map<RirTypeKey, RirClass> = emptyMap(),
+  interfacePkgs: Map<RirTypeKey, String> = emptyMap(),
 ): String {
   val hasHandle: Boolean = staticMethods.any { method ->
     isHandleLike(method.returnType) || method.parameters.any { p -> isHandleLike(p.type) }
@@ -3062,7 +3129,7 @@ private fun stubFileContent(
       instancePropertyGetters, staticPropertyGetters, propertySetterNames, packageId,
       namespaceName, enumPkgs, structPkgs, handlePkgs, structs,
       qualifiedTypeNames, interfaceSupertypeNames, overrideMethodNames, overridePropertyNames,
-      genericDefs,
+      genericDefs, interfacePkgs,
     )
   }
 
@@ -3086,6 +3153,13 @@ private fun stubFileContent(
   // every stub body now goes through it.
   val imports: MutableList<String> =
     mutableListOf("import kotlinx.cinterop.invoke", "import $INTERNAL_PKG.nugetCall")
+  // ADR-152: a `suspend fun` stub awaits through nugetAwaitTask and names the task handle's type.
+  if (staticMethods.any { it.asyncKind != null }) {
+    imports.add("import $INTERNAL_PKG.nugetAwaitTask")
+    if ("import kotlinx.cinterop.COpaquePointer" !in imports) {
+      imports.add("import kotlinx.cinterop.COpaquePointer")
+    }
+  }
   // ADR-072: a static method/property returning a bound-class-handle, interface, or generic
   // instantiation declares `val ptr: COpaquePointer? = ...` (buildStubMethod's
   // RirObjectHandleType/RirInterfaceType/RirGenericInstanceType branches). This object-shape
@@ -3260,6 +3334,7 @@ private fun classWrapperContent(
   overrideMethodNames: Set<String> = emptySet(),
   overridePropertyNames: Set<String> = emptySet(),
   genericDefs: Map<RirTypeKey, RirClass> = emptyMap(),
+  interfacePkgs: Map<RirTypeKey, String> = emptyMap(),
 ): String {
   val allMethods: List<RirMethod> = staticMethods + instanceMethods
   val methodsHaveString: Boolean =
@@ -3308,6 +3383,9 @@ private fun classWrapperContent(
   val hasInterfaceParam: Boolean =
     methodsHaveInterfaceParam || ctorsHaveInterfaceParam || settablePropertiesHaveInterfaceParam
   if (hasInterfaceParam) imports.add("import $INTERNAL_PKG.nugetTransferScope")
+  // ADR-152: a `suspend fun` stub awaits through nugetAwaitTask (COpaquePointer is already
+  // imported unconditionally on this path, for the wrapper's own handle).
+  if (allMethods.any { it.asyncKind != null }) imports.add("import $INTERNAL_PKG.nugetAwaitTask")
   if (hasStringReturn) {
     imports.add("import $INTERNAL_PKG.freeManagedString")
     imports.add("import kotlinx.cinterop.ByteVar")
@@ -3378,6 +3456,11 @@ private fun classWrapperContent(
   imports.addAll(
     handleImports(
       referencedHandleTypes(allMethods, ctors, allPropertyGetters), handlePkgs, kotlinPkg,
+    )
+  )
+  imports.addAll(
+    interfaceImports(
+      referencedInterfaceTypes(allMethods, ctors, allPropertyGetters), interfacePkgs, kotlinPkg,
     )
   )
 
@@ -3667,6 +3750,21 @@ private fun buildConstructHelper(
   """.trimMargin()
 }
 
+// ADR-152: the Kotlin member name for a (possibly async) C# method. A trailing `Async` is dropped
+// (the exact inverse of ADR-019, which appends it) UNLESS the declaring type already has a
+// method whose C# name equals the stripped name (the ubiquitous `Read` / `ReadAsync` pairing).
+// Kotlin cannot overload on `suspend` alone, so an unconditional strip would turn that pairing
+// into an ERROR_KOTLIN_SIGNATURE_COLLISION. Synchronous methods are untouched: a sync `FooAsync`
+// (a C# method that merely looks async) keeps its name, because only the async shape earns the
+// rename.
+internal fun kotlinMemberName(cls: RirClass, method: RirMethod): String {
+  if (method.asyncKind == null) return method.name.toMethodCamelCase()
+  val stripped: String = method.name.removeSuffix("Async")
+  val keep: Boolean =
+    stripped == method.name || stripped.isEmpty() || cls.methods.any { it.name == stripped }
+  return if (keep) method.name.toMethodCamelCase() else stripped.toMethodCamelCase()
+}
+
 private fun buildStubMethod(
   cls: RirClass,
   method: RirMethod,
@@ -3677,9 +3775,19 @@ private fun buildStubMethod(
   isOverride: Boolean = false,
   genericDefs: Map<RirTypeKey, RirClass> = emptyMap(),
 ): String {
-  val name: String = method.name.toMethodCamelCase()
-  val fnVar: String =
-    "${bindingsObjectName(cls.name)}.$name${method.bridgeSuffix()}Fn"
+  // ADR-152: an async member's Kotlin name drops a trailing `Async` (the exact inverse of
+  // ADR-019, which appends it) unless the declaring type already has a method with the stripped
+  // name, Kotlin cannot overload on `suspend` alone, so stripping `ReadAsync` beside an existing
+  // `Read` would be an ERROR_KOTLIN_SIGNATURE_COLLISION.
+  val name: String = kotlinMemberName(cls, method)
+  val isAsync: Boolean = method.asyncKind != null
+  val fnKeyword: String = if (isAsync) "suspend fun" else "fun"
+  // The registration var names keep the C# member's own name (never the stripped one), so a
+  // `Read`/`ReadAsync` pair cannot collide on a var, and the two async slots are `...BeginFn` and
+  // `...EndFn` in that order.
+  val fnBase: String =
+    "${bindingsObjectName(cls.name)}.${method.name.toMethodCamelCase()}${method.bridgeSuffix()}"
+  val fnVar: String = "${fnBase}Fn"
   // ADR-056/059: a struct component can itself be (or contain, at any nesting depth) a string —
   // memScoped is needed whenever ANY leaf crossing as a string argument requires it, not just a
   // direct top-level string parameter.
@@ -3722,7 +3830,36 @@ private fun buildStubMethod(
   // site owns and frees after the invoke (wrapInvoke's nugetTransferScope).
   val hasInterfaceParam: Boolean = method.parameters.any { it.type is RirInterfaceType }
   val invokeCall: String =
-    wrapInvoke(invokeArgs, hasStringParam, hasInterfaceParam)
+    if (isAsync) wrapInvoke("task", hasStringArg = false, hasInterfaceArg = false, callee = "end")
+    else wrapInvoke(invokeArgs, hasStringParam, hasInterfaceParam)
+
+  // ADR-152: the prologue every branch below shares. Synchronously, one registered thunk; for an
+  // async member, BOTH slots, then the suspension itself, `nugetAwaitTask` starts the C# task
+  // through `Begin` and resumes with the task's GCHandle, which `End` (the ordinary sync return
+  // half, unchanged) unwraps. The stub deliberately names no kotlinx.coroutines symbol: it
+  // compiles from nativeMain, which cannot see the runtime's coroutines `api` (ADR-130).
+  val beginCall: String = wrapInvoke(
+    (listOfNotNull(receiverArg) + paramArgs + listOf("callback", "ctx")).joinToString(", "),
+    hasStringParam,
+    hasInterfaceParam,
+    callee = "begin",
+  )
+  val preludeLines: List<String> = if (!isAsync) listOf(
+    "val fn = requireNotNull($fnVar) {",
+    "  $failMsg",
+    "}",
+  ) else listOf(
+    "val begin = requireNotNull(${fnBase}BeginFn) {",
+    "  $failMsg",
+    "}",
+    "val end = requireNotNull(${fnBase}EndFn) {",
+    "  $failMsg",
+    "}",
+    "val task: COpaquePointer = nugetAwaitTask { callback, ctx ->",
+    "  $beginCall",
+    "}",
+  )
+  val prelude: String = preludeLines.joinToString("\n") { "  $it" }
 
   val nullMsg: String = "${cls.name}.${method.name} returned null" +
       ", expected a non-null string pointer"
@@ -3734,10 +3871,8 @@ private fun buildStubMethod(
   // String.prependIndent() call, rather than baking one specific nesting depth into this function.
   val rendered: String = when (val retType = method.returnType) {
     is RirVoidType -> """
-      |fun $name($params)$retSuffix {
-      |  val fn = requireNotNull($fnVar) {
-      |    $failMsg
-      |  }
+      |$fnKeyword $name($params)$retSuffix {
+      |$prelude
       |  $invokeCall
       |}
     """.trimMargin()
@@ -3746,10 +3881,8 @@ private fun buildStubMethod(
     // `?: error(...)`. A non-null-annotated return (including an oblivious one) keeps the existing
     // ADR-048 fail-fast error() fallback.
     is RirStringType -> if (retType.nullable) """
-      |fun $name($params)$retSuffix {
-      |  val fn = requireNotNull($fnVar) {
-      |    $failMsg
-      |  }
+      |$fnKeyword $name($params)$retSuffix {
+      |$prelude
       |  val resultPtr = $invokeCall
       |    ?: return null
       |  val result = resultPtr.reinterpret<ByteVar>().toKString()
@@ -3757,10 +3890,8 @@ private fun buildStubMethod(
       |  return result
       |}
     """.trimMargin() else """
-      |fun $name($params)$retSuffix {
-      |  val fn = requireNotNull($fnVar) {
-      |    $failMsg
-      |  }
+      |$fnKeyword $name($params)$retSuffix {
+      |$prelude
       |  val resultPtr = $invokeCall
       |    ?: error("$nullMsg")
       |  val result = resultPtr.reinterpret<ByteVar>().toKString()
@@ -3774,18 +3905,14 @@ private fun buildStubMethod(
     // member in the failure message — a null arriving where the metadata says non-null is a
     // bridge-invariant violation, not a legitimate value (ADR-053 Decision 1a's fail-fast guard).
     is RirObjectHandleType -> if (retType.nullable) """
-      |fun $name($params)$retSuffix {
-      |  val fn = requireNotNull($fnVar) {
-      |    $failMsg
-      |  }
+      |$fnKeyword $name($params)$retSuffix {
+      |$prelude
       |  val ptr: COpaquePointer? = $invokeCall
       |  return ptr?.let { ${retType.name}(it) }
       |}
     """.trimMargin() else """
-      |fun $name($params)$retSuffix {
-      |  val fn = requireNotNull($fnVar) {
-      |    $failMsg
-      |  }
+      |$fnKeyword $name($params)$retSuffix {
+      |$prelude
       |  val ptr: COpaquePointer? = $invokeCall
       |  return ${retType.name}(requireNotNull(ptr) {
       |    "$nonNullHandleMsg"
@@ -3798,18 +3925,14 @@ private fun buildStubMethod(
     // actually be — the wire carries no type tag), which upcasts to the declared interface type.
     // Otherwise byte-identical to the handle-return branch above.
     is RirInterfaceType -> if (retType.nullable) """
-      |fun $name($params)$retSuffix {
-      |  val fn = requireNotNull($fnVar) {
-      |    $failMsg
-      |  }
+      |$fnKeyword $name($params)$retSuffix {
+      |$prelude
       |  val ptr: COpaquePointer? = $invokeCall
       |  return ptr?.let { nuget${retType.name}Value(it) }
       |}
     """.trimMargin() else """
-      |fun $name($params)$retSuffix {
-      |  val fn = requireNotNull($fnVar) {
-      |    $failMsg
-      |  }
+      |$fnKeyword $name($params)$retSuffix {
+      |$prelude
       |  val ptr: COpaquePointer? = $invokeCall
       |  return nuget${retType.name}Value(requireNotNull(ptr) {
       |    "$nonNullHandleMsg"
@@ -3820,10 +3943,8 @@ private fun buildStubMethod(
     // The ordinal comes back from C#, where an enum is not a closed set, so it is bounds-checked
     // through the shared nugetEnumEntry helper rather than indexed straight into `entries`.
     is RirEnumType -> """
-      |fun $name($params)$retSuffix {
-      |  val fn = requireNotNull($fnVar) {
-      |    $failMsg
-      |  }
+      |$fnKeyword $name($params)$retSuffix {
+      |$prelude
       |  return nugetEnumEntry(${retType.name}.entries, $invokeCall, "${retType.name}")
       |}
     """.trimMargin()
@@ -3840,20 +3961,28 @@ private fun buildStubMethod(
       }
       val outArgs: List<AbiArg> = abiOutArgs(retType, structs)
       val outPtrArgs: List<String> = outArgs.map { "${it.name}.ptr" }
+      // ADR-152: an async member reads its struct out-pointers from the End slot, whose only
+      // in-argument is the task handle the await resumed with.
       val fullInvokeArgs: String =
-        (listOfNotNull(receiverArg) + paramArgs + outPtrArgs).joinToString(", ")
+        (if (isAsync) listOf("task") else listOfNotNull(receiverArg) + paramArgs)
+            .plus(outPtrArgs).joinToString(", ")
       // ADR-059: each LEAF is read back through structComponentReads' recursive use of
       // componentRead — the SAME per-type conversion a top-level return of that leaf's type
       // already uses — instead of the raw `.value`, which is only correct for the pass-through
       // primitives (int/long/float/double).
       val read: ComponentRead = structComponentReads(struct, outArgs.iterator(), structs)
       buildString {
-        appendLine("fun $name($params)$retSuffix = memScoped {")
-        appendLine("  val fn = requireNotNull($fnVar) {")
-        appendLine("    $failMsg")
-        appendLine("  }")
+        appendLine("$fnKeyword $name($params)$retSuffix = memScoped {")
+        appendLine(prelude)
         outArgs.forEach { arg -> appendLine("  val ${arg.name} = alloc<${cVarType(arg.type)}>()") }
-        appendLine("  ${wrapInvoke(fullInvokeArgs, hasStringArg = false, hasInterfaceArg = false)}")
+        appendLine(
+          "  " + wrapInvoke(
+            fullInvokeArgs,
+            hasStringArg = false,
+            hasInterfaceArg = false,
+            callee = if (isAsync) "end" else "fn",
+          ),
+        )
         read.statements.forEach { appendLine("  $it") }
         appendLine("  ${read.expression}")
         append("}")
@@ -3864,10 +3993,8 @@ private fun buildStubMethod(
       val isChar: Boolean = retType.name == "char"
       val returnExpr: String = if (isChar) "$invokeCall.toInt().toChar()" else invokeCall
       """
-        |fun $name($params)$retSuffix {
-        |  val fn = requireNotNull($fnVar) {
-        |    $failMsg
-        |  }
+        |$fnKeyword $name($params)$retSuffix {
+        |$prelude
         |  return $returnExpr
         |}
       """.trimMargin()
@@ -3886,18 +4013,14 @@ private fun buildStubMethod(
       // branch above does (`${retType.name}(requireNotNull(ptr) {...})`), or this does not
       // typecheck.
       if (retType.nullable) """
-        |fun $name($params)$retSuffix {
-        |  val fn = requireNotNull($fnVar) {
-        |    $failMsg
-        |  }
+        |$fnKeyword $name($params)$retSuffix {
+        |$prelude
         |  val ptr: COpaquePointer? = $invokeCall
         |  return ptr?.let { $simpleName(NugetObjectHandle(it), $witness) }
         |}
       """.trimMargin() else """
-        |fun $name($params)$retSuffix {
-        |  val fn = requireNotNull($fnVar) {
-        |    $failMsg
-        |  }
+        |$fnKeyword $name($params)$retSuffix {
+        |$prelude
         |  val ptr: COpaquePointer? = $invokeCall
         |  return $simpleName(NugetObjectHandle(requireNotNull(ptr) {
         |    "$nonNullHandleMsg"
@@ -4219,14 +4342,31 @@ private fun nugetKotlinErrorsActual(): String = """
   |package $INTERNAL_PKG
   |
   |import io.github.xxfast.kotlin.native.nuget.runtime.NugetError
+  |import io.github.xxfast.kotlin.native.nuget.runtime.awaitForKotlin
   |import io.github.xxfast.kotlin.native.nuget.runtime.buildError
   |import kotlin.experimental.ExperimentalNativeApi
   |import kotlinx.cinterop.COpaquePointer
   |import kotlinx.cinterop.StableRef
   |import kotlinx.cinterop.asStableRef
+  |import kotlinx.cinterop.invoke
   |
   |internal actual fun nugetKotlinError(t: Throwable): COpaquePointer =
   |  StableRef.create(buildError(t)).asCPointer()
+  |
+  |// ADR-152: one line of delegation to the runtime's awaitForKotlin. `release` is only ever
+  |// reached on the cancel-then-complete path, where the coroutine was cancelled before the C#
+  |// task completed and nobody will ever call the member's End thunk: the task's GCHandle then has
+  |// no other owner, and the already-registered freeGcHandle thunk is what frees it.
+  |internal actual suspend fun nugetAwaitTask(
+  |  begin: (callback: COpaquePointer, ctx: COpaquePointer) -> Unit,
+  |): COpaquePointer = awaitForKotlin(
+  |  release = { task ->
+  |    requireNotNull(freeGcHandleFn) {
+  |      NugetRegistry.notRegistered("<runtime>", "")
+  |    }.invoke(task)
+  |  },
+  |  begin = begin,
+  |)
   |
   |private tailrec fun NugetError.at(index: Int): NugetError =
   |  if (index == 0) this else cause!!.at(index - 1)
@@ -4611,6 +4751,17 @@ private fun nugetRuntimeContent(): String = """
   |// accessor exports in NugetKotlinErrors.kt under mingwMain/posixMain, where the runtime IS
   |// visible. Every call site keeps calling nugetKotlinError(t) unchanged.
   |internal expect fun nugetKotlinError(t: Throwable): COpaquePointer
+  |
+  |// ADR-152: the reverse async crossing, across the SAME source-set seam and for the same reason.
+  |// `awaitForKotlin` lives in the runtime klib (it owns the cancellable suspension), which is
+  |// declared `api` on the PER-TARGET source set, so this
+  |// shared nativeMain file can only `expect` it; the `actual` sits next to nugetKotlinError in
+  |// mingwMain/posixMain. [begin] receives the shared completion callback and the opaque ctx to
+  |// hand straight to the member's Begin thunk; the result is the completed C# Task's GCHandle,
+  |// which the member's End thunk unwraps.
+  |internal expect suspend fun nugetAwaitTask(
+  |  begin: (callback: COpaquePointer, ctx: COpaquePointer) -> Unit,
+  |): COpaquePointer
   |
   |// ADR-086: the OUT-direction lowering for a handle-backed bridge slot (a bound-object or
   |// bound-interface return or getter). Always a FRESH transfer handle, which the C# bridge member
@@ -5885,7 +6036,11 @@ internal fun diagnosticWarnings(rir: RirFile): List<String> {
           }
       }
     }
-  return (fromReader + fromCollisions + fromArityLimits + fromAmbiguousGenericConstructors)
+  // ADR-152: the plugin-side half of the async skips (struct methods, bound-interface members,
+  // generic-class members), so a deferred async shape the reader let through is still named.
+  val fromDeferredAsync: List<Pair<String, RirDiagnostic>> = asyncDeferredDiagnostics(rir)
+  return (fromReader + fromCollisions + fromArityLimits + fromAmbiguousGenericConstructors +
+      fromDeferredAsync)
     .map { (packageId, diagnostic) -> formatDiagnostic(packageId, diagnostic) }
 }
 

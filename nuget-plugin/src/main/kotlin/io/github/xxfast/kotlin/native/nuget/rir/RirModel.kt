@@ -147,6 +147,19 @@ data class RirStructComponent(
   val type: RirTypeRef,
 )
 
+// ADR-152: the asynchrony of a C# member, an enum rather than a boolean so `ValueTask` lands later
+// as one more value (plus `.AsTask()` in the generated Begin thunk) with no JSON contract change.
+// Absent (`null`) for every ordinary synchronous member, which is every member the reader emitted
+// before ADR-152.
+@Serializable
+enum class RirAsyncKind {
+  @SerialName("task")
+  TASK,
+}
+
+// ADR-152: for an async method, [returnType] is the AWAITED type (RirVoidType for a non-generic
+// `Task`), and the method binds as a Kotlin `suspend fun` over two adjacent registration slots
+// (Begin, then End) instead of one.
 @Serializable
 data class RirMethod(
   val name: String,
@@ -154,6 +167,7 @@ data class RirMethod(
   val parameters: List<RirParameter> = emptyList(),
   val isStatic: Boolean = false,
   val managedSignature: String = "",
+  val asyncKind: RirAsyncKind? = null,
 )
 
 @Serializable

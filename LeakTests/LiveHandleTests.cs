@@ -6,6 +6,7 @@ using TestLibrary.Issue115;
 using TestLibrary.Issue126;
 using TestLibrary.Issue127;
 using TestLibrary.Issue131;
+using TestLibrary.Kennel;
 using TestLibrary.Models;
 using TestLibrary.Nested;
 using TestLibrary.Parcel;
@@ -1009,5 +1010,47 @@ public class LiveHandleTests
         {
             NugetMarshal.Factories[typeof(TopStory)] = original;
         }
+    }
+
+    // Row 9. ADR-152: the reverse async crossing. Each awaited call mints a pending-continuation
+    // StableRef through `NugetHandles.retain` (open question 3: counted on purpose, so this row
+    // can exist at all) plus a GCHandle on the C# Task, and both have to be gone once the
+    // continuation resumed: the ctx in the completion callback, the Task handle in `End`'s
+    // `finally`. The first reverse-side handles `nuget_live_handles` has ever counted, so a
+    // non-zero delta here is unambiguous: nothing else in this assembly mints one.
+    [Fact]
+    public async Task ReverseAsync_AwaitedCall_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            Assert.Equal("Oreo & Mylo", await KennelSample.KennelNameAsync());
+        });
+    }
+
+    // Row 9a. The already-completed task (Task.FromResult), driven in a tight loop INSIDE one
+    // Kotlin coroutine. Separate row from 9 because the leak it can find is different: when the
+    // completion callback lands before `suspendCancellableCoroutine`'s block returns, the ctx is
+    // released on a path that row 9's genuinely-delayed task almost never takes, and at this
+    // iteration count a per-call leak on that path is a five-figure delta rather than a rounding
+    // error.
+    [Fact]
+    public async Task ReverseAsync_AlreadyCompletedTask_TightLoop_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () => Assert.Equal(7 * 1_000, await KennelSample.SeatedRepeatedlyAsync(1_000)),
+            iterations: 5);
+    }
+
+    // Row 9b. The faulting task. The fault path never reaches `End`'s success return, so the Task
+    // GCHandle is freed in its `finally` or not at all, and the ctx is released by a callback that
+    // fired for a task that threw. A channel that only cleans up on success leaks exactly here,
+    // and nowhere in rows 9 or 9a.
+    [Fact]
+    public async Task ReverseAsync_FaultedTask_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            Assert.StartsWith("System.InvalidOperationException|", await KennelSample.OreoEscapesAsync());
+        });
     }
 }

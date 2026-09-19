@@ -78,11 +78,68 @@ Because a property carries exactly one nullability annotation, its Kotlin getter
 always agree on the same type, so a settable handle-typed property is never forced to a read-only
 `val` the way a mismatched getter/setter pair would be.
 
+## Async methods {id="async-methods"}
+
+A `Task`- or `Task<T>`-returning method, instance or static, becomes a Kotlin `suspend fun`
+returning `Unit` or `T`:
+
+```C#
+// TestDependency/Kennel.cs
+public class Kennel
+{
+    public async Task NapAsync() => await Task.Delay(10);
+
+    public async Task<int> CountAsync()
+    {
+        await Task.Delay(10);
+        return 2;
+    }
+}
+```
+
+```kotlin
+val kennel = Kennel()
+kennel.nap()         // suspend fun nap()
+kennel.count()       // suspend fun count(): Int
+```
+
+A trailing `Async` is dropped, unless the declaring type also has a method whose C# name equals the
+stripped name, in which case the `Async`-suffixed name is kept so the two don't collide (Kotlin
+can't overload on `suspend` alone):
+
+```C#
+public string Read() => "the kennel ledger";
+public async Task<string> ReadAsync() => "the kennel ledger, read slowly";
+```
+
+```kotlin
+kennel.read()        // fun read(): String
+kennel.readAsync()   // suspend fun readAsync(): String
+```
+
+A faulted task surfaces as a catchable `NugetManagedException` carrying the *original* .NET
+exception type, never `AggregateException`:
+
+```kotlin
+try {
+  kennel.escape("Oreo")
+} catch (e: NugetManagedException) {
+  e.managedType   // "System.InvalidOperationException"
+  e.message       // "Oreo slipped the latch"
+}
+```
+
+The completion runs on a .NET thread-pool thread, never inline on the thread that started the
+call. Cancelling the Kotlin coroutine (e.g. its enclosing scope) stops the Kotlin side from
+waiting, but doesn't cancel the C# task; its result, once it arrives, is discarded.
+
 ## Limitations
 
 - `Nullable<T>` value-typed instance properties and parameters (`int?`, `CatMood?`) are not yet
   supported.
 - Struct-typed instance properties and methods are supported; see [C# structs](structs.md).
+- `ValueTask`/`ValueTask<T>` methods, and an async method on a bound interface, a struct, or a
+  generic class, don't bind yet; see [The bridgeable subset](bridgeable-subset.md).
 
 <seealso>
     <category ref="related">
@@ -95,5 +152,6 @@ always agree on the same type, so a settable handle-typed property is never forc
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/051-csharp-objects-as-opaque-handles.md">ADR-051: C# objects as opaque handles</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/057-csharp-overload-sets-in-kotlin.md">ADR-057: C# overload sets in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/152-task-to-suspend-fun.md">ADR-152: Reverse Task/Task&lt;T&gt; to suspend fun</a>
     </category>
 </seealso>

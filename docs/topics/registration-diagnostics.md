@@ -120,15 +120,17 @@ library predates that export, the line instead reads
 There is no per-call trace: every diagnostic on this page is registration-granularity, checked once
 per bound type at process start, not on the bridge-call path.
 
-## Checking for a forward handle leak
+## Checking for a handle leak
 
 `NugetMarshal.LiveHandles`, generated into the same shim, reports how many Kotlin `StableRef`
-handles the forward bridge (a Kotlin object passed to C#) currently holds. It's `internal`, so code
-you write in the same consuming assembly can read it: snapshot the count, run the operation you
-suspect leaks, then compare. `NugetBridge.GcCollect()` (also internal, in the same shim) forces a
-pending release round before you re-read the count, since a release lands on a later GC cycle, not
-promptly. The count is process-global, so isolate the check from anything else running in the
-process that crosses a handle at the same time.
+handles are currently retained: originally the forward bridge only (a Kotlin object passed to C#),
+and, since a reverse `suspend fun` call retains a pending-continuation handle for the duration of
+the await (see [Async methods](instance-members.md#async-methods)), the reverse bridge too. It's
+`internal`, so code you write in the same consuming assembly can read it: snapshot the count, run
+the operation you suspect leaks, then compare. `NugetBridge.GcCollect()` (also internal, in the
+same shim) forces a pending release round before you re-read the count, since a release lands on a
+later GC cycle, not promptly. The count is process-global, so isolate the check from anything else
+running in the process that crosses a handle at the same time.
 
 ## Forward direction has no registration step
 
