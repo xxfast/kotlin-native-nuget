@@ -229,6 +229,16 @@ design.
 
 ## Consequences
 
+- **Amendment (2026-09-19):** `ForwardSupertypeMembers.typeKey` (`ForwardCallablePlanner.kt`) used
+  to wildcard only when a colliding position *was* a bare type parameter. Once
+  [ADR-101](101-unexported-supertype-skip.md)'s 2026-09-19 fix made `forwardTypeKey()` recurse into
+  type arguments (`List<T>` and `List<String>` now key apart), the wildcard had to become structural
+  to keep matching: it wildcards a position that *mentions* a type parameter anywhere in its
+  arguments (`KSType.mentionsTypeParameter()`), not only a position that *is* one, so a value
+  class's delegated `List<T>` member still matches a supertype's substituted `List<String>` and
+  stays `INHERITED_MEMBER` rather than leaking a delegation forwarder. The residual limitation
+  named above (a same-arity overload whose colliding position mentions a supertype type parameter
+  over-drops conservatively) is unchanged in kind, now reached by a wider set of positions.
 - ROADMAP Phase 4's "decide whether `getAllFunctions()` supertype members are in the export set"
   closes as decided-no; ADR-064's carried-forward scope note resolves here.
 - `StoryUri` (`test-models/.../StoryUri.kt`) and `Tier1NamedSkipDiagnosticsTest` become the

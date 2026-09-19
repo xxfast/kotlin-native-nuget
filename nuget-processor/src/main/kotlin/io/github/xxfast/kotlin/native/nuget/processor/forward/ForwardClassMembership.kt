@@ -10,7 +10,10 @@ import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSTypeArgument
+import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.Modifier
+import com.google.devtools.ksp.symbol.Variance
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 
 /**
@@ -435,16 +438,59 @@ internal fun KSFunctionDeclaration.forwardSignatureKey(): List<String> =
       parameters.map { parameter -> parameter.type.resolve().forwardTypeKey() }
 
 /**
- * One type position, as a comparable string: the alias-expanded declaration's qualified name plus
- * nullability. A type *parameter* spells as its own simple name, so `T` and `kotlin.String` differ,
- * which is exactly what makes a substituted member distinguishable from a declared one.
+ * One type position, as a comparable string: the alias-expanded declaration's qualified name, its
+ * type arguments, and nullability. A type *parameter* spells as its own simple name, so `T` and
+ * `kotlin.String` differ, which is exactly what makes a substituted member distinguishable from a
+ * declared one.
+ *
+ * The arguments are part of the key because the outer declaration alone is not an identity: a
+ * subclass declaring `describe(tags: List<Int>)` beside the base's substituted
+ * `describe(tags: List<String>)` spelled `kotlin.collections.List` both times, so the substituted
+ * member matched the declared list and ADR-101's duplicate overload returned one level down (a
+ * second `Describe(IReadOnlyList<string>)` on the subclass plus a spurious `_2` export). Kotlin and
+ * C# both accept that overload pair, so the declared one is fully bindable; only the key was wrong.
+ *
+ * ADR-082's supertype-member wildcard layers on top of this and has to stay in step: a position
+ * that *mentions* a type parameter anywhere in its arguments wildcards there, see
+ * [mentionsTypeParameter] and `ForwardSupertypeMembers`.
  */
 internal fun KSType.forwardTypeKey(): String {
   val expanded: KSType = expandAliases()
   val declaration: KSDeclaration = expanded.declaration
   val name: String = declaration.qualifiedName?.asString() ?: declaration.simpleName.asString()
+  val arguments: String =
+    if (expanded.arguments.isEmpty()) ""
+    else expanded.arguments.joinToString(",", "<", ">") { it.forwardTypeKey() }
   val nullable: Boolean = isMarkedNullable || expanded.isMarkedNullable
-  return if (nullable) "$name?" else name
+  return if (nullable) "$name$arguments?" else "$name$arguments"
+}
+
+/**
+ * One type argument of [forwardTypeKey]: a star projection has no type and spells `*`, anything
+ * else spells its variance keyword (when not invariant) followed by the argument type's own key,
+ * which carries the argument's nullability along with it.
+ */
+private fun KSTypeArgument.forwardTypeKey(): String {
+  val resolved: KSType = type?.resolve() ?: return "*"
+  val prefix: String = when (variance) {
+    Variance.COVARIANT -> "out "
+    Variance.CONTRAVARIANT -> "in "
+    else -> ""
+  }
+  return prefix + resolved.forwardTypeKey()
+}
+
+/**
+ * Whether this type is a type parameter, or has one anywhere in its type arguments. ADR-082's
+ * wildcard question, asked structurally so that a supertype's `List<T>` keeps matching a subtype's
+ * `List<String>` now that [forwardTypeKey] tells the two apart.
+ */
+internal fun KSType.mentionsTypeParameter(): Boolean {
+  val expanded: KSType = expandAliases()
+  if (expanded.declaration is KSTypeParameter) return true
+  return expanded.arguments.any { argument ->
+    argument.type?.resolve()?.mentionsTypeParameter() == true
+  }
 }
 
 private fun KSDeclaration.hasImplementation(): Boolean = when (this) {

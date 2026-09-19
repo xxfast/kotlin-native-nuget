@@ -9,7 +9,6 @@ import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.Origin
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
-import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.symbol.KSAnnotated
@@ -17,7 +16,6 @@ import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
-import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyFlowReturn
@@ -397,12 +395,20 @@ internal class ForwardSupertypeMembers private constructor(
     }
 
     /**
-     * [forwardTypeKey], plus this side's wildcard: null for a type-parameter position, which the
-     * comparison treats as matching any argument type. The strict half of the spelling lives in
-     * `ForwardClassMembership.kt`, so the two comparisons cannot drift.
+     * [forwardTypeKey], plus this side's wildcard: null for a position that *mentions* a type
+     * parameter, which the comparison treats as matching any argument type. The strict half of the
+     * spelling lives in `ForwardClassMembership.kt`, so the two comparisons cannot drift.
+     *
+     * The wildcard is structural, not top-level, because the key is: once [forwardTypeKey] recurses
+     * into type arguments, a supertype's `holds(items: List<T>)` spells
+     * `kotlin.collections.List<T>` while the value class's delegated or overriding
+     * `holds(items: List<String>)` spells `kotlin.collections.List<kotlin.String>`, and a
+     * top-level-only wildcard would stop matching the two. That member would leak out of
+     * `INHERITED_MEMBER` and render a delegation forwarder. Over-matching is the direction ADR-082
+     * already chose here.
      */
     private fun typeKey(type: KSType): String? {
-      if (type.expandAliases().declaration is KSTypeParameter) return null
+      if (type.mentionsTypeParameter()) return null
       return type.forwardTypeKey()
     }
   }

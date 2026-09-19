@@ -779,14 +779,25 @@ the author wrote.
 
 - One wrongly minted export (`labelledcrate_describe_2`) is removed; no export is minted. This
   change removes an export and mints nothing, so it carries no leak row of its own.
-- **Deferred, named, tracked on `ROADMAP.md` (Phase 4)**: `forwardTypeKey()` keys the outer
+- ~~**Deferred, named, tracked on `ROADMAP.md` (Phase 4)**: `forwardTypeKey()` keys the outer
   declaration's qualified name only, so two functions differing only in a *type argument* of the
   same outer generic type (a declared `describe(tags: List<Int>)` beside a substituted
   `describe(tags: List<String>)`) both key to `kotlin.collections.List` and the duplicate-overload
   bug this amendment fixes returns for that shape, the same limit ADR-082's `typeKey` already had
-  before this amendment shared the primitive; `baseClassOverridee`'s by-name fallback
-  (`ForwardClassMembership.kt`) is untouched and has the identical name-only shape, now
-  inconsistent with `isDeclaredBy`'s strict key for the `override`/`virtual` decision; a generic
+  before this amendment shared the primitive~~. **Closed (2026-09-19):** `forwardTypeKey()`
+  (`ForwardClassMembership.kt`) now recurses into `KSType.arguments`, so `describe(tags: List<Int>)`
+  keys `kotlin.collections.List<kotlin.Int>` while the substituted `describe(tags: List<String>)`
+  keys `kotlin.collections.List<kotlin.String>`; the two no longer collide and the subclass renders
+  exactly its own overload, no `_2` export. `ForwardSupertypeMembers.typeKey`
+  (`ForwardCallablePlanner.kt`), which shares this primitive, had to grow with it: its wildcard now
+  matches a position that *mentions* a type parameter anywhere in its arguments
+  (`KSType.mentionsTypeParameter()`), not only a bare type-parameter position, so a value class's
+  delegated `List<T>` member still matches the supertype's substituted `List<String>` and stays
+  `INHERITED_MEMBER` (see the amendment to [ADR-082](082-value-class-inherited-members.md)). The
+  key also spells star projection and variance (`in`/`out`) for completeness; no shipped fixture
+  pins either, since a variance-only difference is not a real Kotlin overload. `baseClassOverridee`'s
+  by-name fallback (`ForwardClassMembership.kt`) is untouched and has the identical name-only shape,
+  now inconsistent with `isDeclaredBy`'s strict key for the `override`/`virtual` decision; a generic
   base class's own declared functions are still absent from C# entirely, unrelated to this fix
   (`translateGenericClass` projects properties only).
 - Not changed: the property side of `isDeclaredBy`, the ADR-082 wildcard comparison, the ABI,
