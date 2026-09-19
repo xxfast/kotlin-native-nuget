@@ -168,6 +168,11 @@ data class RirMethod(
   val isStatic: Boolean = false,
   val managedSignature: String = "",
   val asyncKind: RirAsyncKind? = null,
+  // ADR-153: the index in the C# parameter list where a single elided `CancellationToken` sat, so
+  // the shim can put `cts.Token` back at exactly that position. The parameter itself is absent
+  // from [parameters] (the bridge owns the token, the caller never supplies one), and null means
+  // the method takes no token, which is every method the reader emitted before ADR-153.
+  val cancellationToken: Int? = null,
 )
 
 @Serializable
@@ -346,6 +351,19 @@ enum class RirDiagnosticKind {
 
   @SerialName("info_async_not_yet_mapped")
   INFO_ASYNC_NOT_YET_MAPPED,
+
+  // ADR-153: a `CancellationToken` the bridge cannot own on the member's behalf: a SYNC method
+  // taking one, two or more tokens, a `CancellationToken?`, or a token on a constructor or
+  // property. Named, because the alternative these used to get
+  // (skipped_unbound_type_reference) tells the user to bind the BCL, which never helps.
+  @SerialName("info_cancellation_token_not_yet_mapped")
+  INFO_CANCELLATION_TOKEN_NOT_YET_MAPPED,
+
+  // ADR-153: `FooAsync()` beside `FooAsync(CancellationToken)`. With the token elided both project
+  // to the same Kotlin signature, so the token-less sibling is dropped and the token overload
+  // kept. Informational: the surface is unchanged from the consumer's side.
+  @SerialName("info_cancellation_overload_folded")
+  INFO_CANCELLATION_OVERLOAD_FOLDED,
 
   // ADR-053: an oblivious (un-annotated) reference type binds non-null in Kotlin — this is an
   // informational signal, not a skip, since the member is still bridged. One assembly-level

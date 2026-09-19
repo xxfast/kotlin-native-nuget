@@ -2949,8 +2949,12 @@ private fun bindingsFileContent(
           RirSlotRole.SYNC ->
             (methodParamCfnTypes(r.method, structs) + ERR_CFN_TYPE).joinToString(", ")
         }
+        // ADR-153: a token-taking Begin hands back the CancellationTokenSource's GCHandle, so its
+        // slot returns COpaquePointer? where ADR-152's returns Unit. Per method, never per build:
+        // the two shapes coexist in one class.
         val retCfnType: String =
-          if (role == RirSlotRole.ASYNC_BEGIN) "Unit"
+          if (role == RirSlotRole.ASYNC_BEGIN)
+            (if (r.method.cancellationToken != null) "COpaquePointer?" else "Unit")
           else cfnType(abiReturnType(r.method.returnType, structs))
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
             "internal var ${r.method.name.toMethodCamelCase()}${r.method.bridgeSuffix()}" +
@@ -3857,6 +3861,10 @@ private fun buildStubMethod(
     "}",
     "val task: COpaquePointer = nugetAwaitTask { callback, ctx ->",
     "  $beginCall",
+    // ADR-153: the lambda's value is the CancellationTokenSource handle the Begin thunk minted.
+    // A member without a token has a `void` Begin, so it says so explicitly rather than letting
+    // the block's last expression decide.
+  ) + (if (method.cancellationToken == null) listOf("  null") else emptyList()) + listOf(
     "}",
   )
   val prelude: String = preludeLines.joinToString("\n") { "  $it" }
@@ -4358,12 +4366,20 @@ private fun nugetKotlinErrorsActual(): String = """
   |// task completed and nobody will ever call the member's End thunk: the task's GCHandle then has
   |// no other owner, and the already-registered freeGcHandle thunk is what frees it.
   |internal actual suspend fun nugetAwaitTask(
-  |  begin: (callback: COpaquePointer, ctx: COpaquePointer) -> Unit,
+  |  begin: (callback: COpaquePointer, ctx: COpaquePointer) -> COpaquePointer?,
   |): COpaquePointer = awaitForKotlin(
   |  release = { task ->
   |    requireNotNull(freeGcHandleFn) {
   |      NugetRegistry.notRegistered("<runtime>", "")
   |    }.invoke(task)
+  |  },
+  |  // ADR-153: `cancelled` picks the C# arm: true queues Cancel() on the thread pool (the
+  |  // coroutine was cancelled), false disposes the source (the ordinary exit). The runtime
+  |  // guarantees exactly one of the two per minted handle.
+  |  cancel = { source, cancelled ->
+  |    requireNotNull(releaseCancellationFn) {
+  |      NugetRegistry.notRegistered("<runtime>", "")
+  |    }.invoke(source, if (cancelled) 1 else 0)
   |  },
   |  begin = begin,
   |)
@@ -4484,6 +4500,14 @@ private fun nugetRuntimeContent(): String = """
   |internal var managedErrorMessageFn:
   |  CPointer<CFunction<(COpaquePointer) -> COpaquePointer?>>? = null
   |
+  |// ADR-153: the bridge-owned CancellationTokenSource's release slot (`cancel` is 1 to queue a
+  |// Cancel(), 0 to dispose), and the kind accessor the throw site below reads.
+  |internal var releaseCancellationFn:
+  |  CPointer<CFunction<(COpaquePointer, Int) -> Unit>>? = null
+  |
+  |internal var managedErrorKindFn:
+  |  CPointer<CFunction<(COpaquePointer) -> Int>>? = null
+  |
   |/**
   | * ADR-104: a managed (C#) exception that crossed the reverse bridge. [managedType] is the .NET
   | * type's full name (e.g. `System.ArgumentException`) and [message] is its `Message`, both
@@ -4516,10 +4540,20 @@ private fun nugetRuntimeContent(): String = """
   |// Reads the envelope, releases everything it owns (both strings and the GCHandle), then throws.
   |// Never returns, so a call site can read it as the end of the error path.
   |internal fun nugetThrowManagedError(err: COpaquePointer): Nothing {
+  |  // ADR-153: read the kind BEFORE the handle is freed. 1 is a cancellation, decided on the C#
+  |  // side with `is OperationCanceledException`, which is the only test that also catches a user
+  |  // subclass. 0 (and an unregistered accessor) is every other managed throw.
+  |  val kind: Int = managedErrorKindFn?.invoke(err) ?: 0
   |  val managedType: String? = nugetManagedErrorText(managedErrorTypeFn, err)
   |  val message: String? = nugetManagedErrorText(managedErrorMessageFn, err)
   |  freeGcHandleFn?.invoke(err)
-  |  throw NugetManagedException(managedType ?: "System.Exception", message)
+  |  val managed = NugetManagedException(managedType ?: "System.Exception", message)
+  |  // The stdlib type IS kotlinx's CancellationException on Kotlin/Native (a typealias), so the
+  |  // awaiting coroutine ends the way a cancelled Deferred.await() does, and nothing is lost: the
+  |  // ADR-104 envelope rides as the cause. One throw site serves every thunk, so a SYNCHRONOUS
+  |  // call that throws an OperationCanceledException maps the same way.
+  |  if (kind == 1) throw kotlin.coroutines.cancellation.CancellationException(message, managed)
+  |  throw managed
   |}
   |
   |/**
@@ -4539,8 +4573,9 @@ private fun nugetRuntimeContent(): String = """
   |}
   |
   |// ADR-054: slotCount/contractHash are the same two leading scalars every register export gains
-  |// (slotCount is always 5 here: ADR-104 grew the runtime shim from the free/weaken/resolve
-  |// thunks to those plus the two managed-error accessors). The pointer parameters are nullable so
+  |// (slotCount is always 7 here: ADR-104 grew the runtime shim from the free/weaken/resolve
+  |// thunks to those plus the two managed-error accessors, and ADR-153 added the cancellation
+  |// release slot and the error-kind accessor). The pointer parameters are nullable so
   |// a stale caller passing zero args (pre-ADR-054) is read-only-safe up to the checkContract
   |// call, which never touches them before deciding to proceed.
   |@OptIn(ExperimentalNativeApi::class)
@@ -4553,13 +4588,15 @@ private fun nugetRuntimeContent(): String = """
   |  resolveGcHandlePtr: COpaquePointer?,
   |  managedErrorTypePtr: COpaquePointer?,
   |  managedErrorMessagePtr: COpaquePointer?,
+  |  releaseCancellationPtr: COpaquePointer?,
+  |  managedErrorKindPtr: COpaquePointer?,
   |) {
   |  NugetRegistry.checkContract(
   |    qualifiedType = "<runtime>",
   |    packageId = "",
   |    slotCount = slotCount,
   |    contractHash = contractHash,
-  |    expectedSlots = 5,
+  |    expectedSlots = 7,
   |    expectedHash = ${NUGET_RUNTIME_CONTRACT_HASH}L,
   |  )
   |  freeGcHandleFn = requireNotNull(freeGcHandlePtr) {
@@ -4577,7 +4614,13 @@ private fun nugetRuntimeContent(): String = """
   |  managedErrorMessageFn = requireNotNull(managedErrorMessagePtr) {
   |    "nuget_runtime_register passed a null managedErrorMessage thunk pointer."
   |  }.reinterpret()
-  |  NugetRegistry.record("<runtime>", 5)
+  |  releaseCancellationFn = requireNotNull(releaseCancellationPtr) {
+  |    "nuget_runtime_register passed a null releaseCancellation thunk pointer."
+  |  }.reinterpret()
+  |  managedErrorKindFn = requireNotNull(managedErrorKindPtr) {
+  |    "nuget_runtime_register passed a null managedErrorKind thunk pointer."
+  |  }.reinterpret()
+  |  NugetRegistry.record("<runtime>", 7)
   |}
   |
   |// ADR-089: the reuse table's key. Identity, never `equals` — a Kotlin data class implementing a
@@ -4759,8 +4802,11 @@ private fun nugetRuntimeContent(): String = """
   |// mingwMain/posixMain. [begin] receives the shared completion callback and the opaque ctx to
   |// hand straight to the member's Begin thunk; the result is the completed C# Task's GCHandle,
   |// which the member's End thunk unwraps.
+  |// ADR-153: [begin] also returns the GCHandle of the CancellationTokenSource its Begin thunk
+  |// minted (null for a member that takes no token), which the runtime owns and releases exactly
+  |// once, cancelling it if this coroutine was cancelled first.
   |internal expect suspend fun nugetAwaitTask(
-  |  begin: (callback: COpaquePointer, ctx: COpaquePointer) -> Unit,
+  |  begin: (callback: COpaquePointer, ctx: COpaquePointer) -> COpaquePointer?,
   |): COpaquePointer
   |
   |// ADR-086: the OUT-direction lowering for a handle-backed bridge slot (a bound-object or

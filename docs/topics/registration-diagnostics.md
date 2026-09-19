@@ -94,8 +94,8 @@ since some test runners (xunit v2 included) don't capture stdout/stderr.
 [nuget:shim] register enter Test.Enums.CatMoodService -> nuget_sample_enums_cat_mood_service_register(7 slots) dll=sample
 [nuget] registered Test.Enums.CatMoodService (7 slots) [1/7]
 [nuget:shim] register ok    Test.Enums.CatMoodService
-[nuget:shim] register enter <runtime> -> nuget_runtime_register(5 slots) dll=sample
-[nuget] registered <runtime> (5 slots) [2/7]
+[nuget:shim] register enter <runtime> -> nuget_runtime_register(7 slots) dll=sample
+[nuget] registered <runtime> (7 slots) [2/7]
 [nuget:shim] register ok    <runtime>
 ```
 
@@ -131,6 +131,11 @@ the operation you suspect leaks, then compare. `NugetBridge.GcCollect()` (also i
 same shim) forces a pending release round before you re-read the count, since a release lands on a
 later GC cycle, not promptly. The count is process-global, so isolate the check from anything else
 running in the process that crosses a handle at the same time.
+
+For a [cancellation-token-taking async call](instance-members.md#async-cancellation), this count
+only proves the pending-continuation and `Task` handles came back to baseline: the bridge-owned
+`CancellationTokenSource` is a plain .NET `GCHandle`, not one of the Kotlin `StableRef`s
+`nuget_live_handles` counts, so it can't tell you whether that handle itself was released.
 
 ## Forward direction has no registration step
 

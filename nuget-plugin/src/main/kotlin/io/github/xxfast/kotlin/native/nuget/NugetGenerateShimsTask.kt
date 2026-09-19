@@ -1060,10 +1060,14 @@ private fun registrationFileContent(
   // ADR-054: IoGithubXxfast.KotlinNativeNuget carries NugetTrace, referenced by the
   // [ModuleInitializer] below in every generated {Type}Registration.cs.
   // ADR-152: `Task` and `NugetTasks.Attach` are named by every async method's Begin/End pair.
+  // ADR-153: a token-taking Begin names CancellationTokenSource, which lives one namespace up.
   val asyncUsings: List<String> =
-    if (registrables.any { it is RirRegistrable.Method && it.method.asyncKind != null })
-      listOf("System.Threading.Tasks")
-    else emptyList()
+    (if (registrables.any { it is RirRegistrable.Method && it.method.cancellationToken != null })
+      listOf("System.Threading")
+    else emptyList()) +
+        if (registrables.any { it is RirRegistrable.Method && it.method.asyncKind != null })
+          listOf("System.Threading.Tasks")
+        else emptyList()
 
   val usings: String = (
       listOf(
@@ -1144,7 +1148,8 @@ private fun registrationFileContent(
             (listOfNotNull(selfParamType, paramTypes.ifEmpty { null }) + ERR_OUT_ABI)
               .joinToString(", ")
         }
-        val slotRetType: String = if (role == RirSlotRole.ASYNC_BEGIN) "void" else retType
+        val slotRetType: String =
+          if (role == RirSlotRole.ASYNC_BEGIN) asyncBeginAbiType(r.method) else retType
         val fnTypeParams: String = "$allParamTypes, $slotRetType"
         "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)" +
             "(&${r.method.name}${r.method.bridgeSuffix()}${role.nameSuffix}_Thunk)"
@@ -1714,7 +1719,13 @@ private fun buildAsyncBeginThunkMethod(
       .joinToString(", ")
 
   val paramBindings: List<ParamBinding> = method.parameters.map { paramBinding(it, structs) }
-  val callArgs: String = paramBindings.joinToString(", ") { it.expression }
+  // ADR-153: the elided token goes back in at the index the reader recorded, which is an index
+  // into the C# parameter list, not into the Kotlin one. Appending it instead would marshal the
+  // remaining arguments into the wrong slots for every mid-position token.
+  val callArgExpressions: MutableList<String> = paramBindings.map { it.expression }.toMutableList()
+  val tokenIndex: Int? = method.cancellationToken
+  if (tokenIndex != null) callArgExpressions.add(tokenIndex, "cts.Token")
+  val callArgs: String = callArgExpressions.joinToString(", ")
   val receiverLine: String? =
     if (method.isStatic) null
     else "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
@@ -1722,12 +1733,29 @@ private fun buildAsyncBeginThunkMethod(
     if (method.isStatic) "${cls.name}.${method.name}($callArgs)"
     else "receiver.${method.name}($callArgs)"
 
+  // ADR-153: the source is minted BEFORE the call (the callee needs the token) but its GCHandle
+  // is allocated LAST, after Attach has succeeded: everything above can throw, and a handle
+  // allocated earlier would leak on that path with nobody on the Kotlin side to release it.
+  val hasToken: Boolean = method.cancellationToken != null
+  val sourceLine: String? =
+    if (hasToken) "CancellationTokenSource cts = new CancellationTokenSource();" else null
+  val handoffLines: List<String> =
+    if (hasToken) listOf("return GCHandle.ToIntPtr(GCHandle.Alloc(cts));") else emptyList()
+
   val bodyLines: List<String> = listOfNotNull(receiverLine) +
       paramBindings.flatMap { it.declarationLines } +
-      listOf("Task task = $callExpr;", "NugetTasks.Attach(task, callback, ctx);")
+      listOfNotNull(sourceLine) +
+      listOf("Task task = $callExpr;", "NugetTasks.Attach(task, callback, ctx);") +
+      handoffLines
 
-  return errorChannelThunk("void", thunkName, paramList, bodyLines)
+  return errorChannelThunk(asyncBeginAbiType(method), thunkName, paramList, bodyLines)
 }
+
+// ADR-153: a token-taking Begin returns the CancellationTokenSource's GCHandle, so its ABI return
+// type is IntPtr where ADR-152's is void. Shared with the ModuleInitializer's delegate* type,
+// which has to agree with the thunk or the CLR reads a return value that was never written.
+internal fun asyncBeginAbiType(method: RirMethod): String =
+  if (method.cancellationToken != null) "IntPtr" else "void"
 
 // ADR-152: the `End` half. The ordinary synchronous return thunk with the task's GCHandle in place
 // of the receiver and `GetAwaiter().GetResult()` as the call expression, which rethrows the
@@ -2307,23 +2335,26 @@ private fun nugetRuntimeRegistrationContent(
   |            EntryPoint = "nuget_runtime_register")]
   |        private static extern void nuget_runtime_register(int slotCount, long contractHash,
   |            IntPtr freeGcHandlePtr, IntPtr weakenGcHandlePtr, IntPtr resolveGcHandlePtr,
-  |            IntPtr managedErrorTypePtr, IntPtr managedErrorMessagePtr);
+  |            IntPtr managedErrorTypePtr, IntPtr managedErrorMessagePtr,
+  |            IntPtr releaseCancellationPtr, IntPtr managedErrorKindPtr);
   |
   |        [ModuleInitializer]
   |        internal static unsafe void Initialize()
   |        {
   |            NugetTrace.Write(
-  |                "register enter <runtime> -> nuget_runtime_register(5 slots) dll=$nativeLibraryName");
+  |                "register enter <runtime> -> nuget_runtime_register(7 slots) dll=$nativeLibraryName");
   |            try
   |            {
   |                nuget_runtime_register(
-  |                    5,
+  |                    7,
   |                    ${NUGET_RUNTIME_CONTRACT_HASH}L,
   |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, void>)(&FreeGcHandle_Thunk),
   |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&WeakenGcHandle_Thunk),
   |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&ResolveGcHandle_Thunk),
   |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&ManagedErrorType_Thunk),
-  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&ManagedErrorMessage_Thunk));
+  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&ManagedErrorMessage_Thunk),
+  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, int, void>)(&ReleaseCancellation_Thunk),
+  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, int>)(&ManagedErrorKind_Thunk));
   |            }
   |            catch (DllNotFoundException e)
   |            {
@@ -2394,6 +2425,48 @@ private fun nugetRuntimeRegistrationContent(
   |            catch (Exception)
   |            {
   |                return IntPtr.Zero;
+  |            }
+  |        }
+  |
+  |        // ADR-153, slot 6: release a bridge-owned CancellationTokenSource handle, exactly once.
+  |        // cancel == 0 is the ordinary exit (the task finished, or Kotlin never cancelled), so
+  |        // the source is disposed. cancel == 1 is the awaiting coroutine being cancelled: the
+  |        // Cancel() is QUEUED, never run here, because Cancel() runs every token registration
+  |        // inline on its caller and can throw AggregateException, and the caller here is a
+  |        // kotlinx invokeOnCancellation handler, which must be fast and must not throw. That arm
+  |        // deliberately does not dispose: a Dispose racing the queued Cancel throws
+  |        // ObjectDisposedException (both arms spike-verified).
+  |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+  |        private static void ReleaseCancellation_Thunk(IntPtr handle, int cancel)
+  |        {
+  |            GCHandle h = GCHandle.FromIntPtr(handle);
+  |            CancellationTokenSource cts = (CancellationTokenSource)h.Target!;
+  |            h.Free();
+  |            if (cancel == 0)
+  |            {
+  |                cts.Dispose();
+  |                return;
+  |            }
+  |            ThreadPool.UnsafeQueueUserWorkItem(
+  |                static s => { try { s.Cancel(); } catch (AggregateException) { } },
+  |                cts,
+  |                preferLocal: false);
+  |        }
+  |
+  |        // ADR-153, slot 7: 0 = other, 1 = cancellation. An `is` test rather than a Kotlin-side
+  |        // name match, because a cancelled task rethrows TaskCanceledException,
+  |        // OperationCanceledException OR a user subclass of it (spike-verified), and only the
+  |        // type test catches all three. Later kinds are more values, not more slots.
+  |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+  |        private static int ManagedErrorKind_Thunk(IntPtr err)
+  |        {
+  |            try
+  |            {
+  |                return GCHandle.FromIntPtr(err).Target is OperationCanceledException ? 1 : 0;
+  |            }
+  |            catch (Exception)
+  |            {
+  |                return 0;
   |            }
   |        }
   |    }
