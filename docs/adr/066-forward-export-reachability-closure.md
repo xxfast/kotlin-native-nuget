@@ -396,6 +396,11 @@ correctly reported (**verified**), so this filter is real work, not a no-op).
 > `SKIPPED_NESTED_DECLARATION` diagnostic itself, a KDoc comment on that diagnostic kind, and a
 > classifier code comment were not reached by the same pass and still describe nesting the way it
 > worked before ADR-133; see ROADMAP.md Phase 4.
+>
+> **Amendment (2026-09-19): the residual above is closed.** All nine strings describing nesting the
+> pre-ADR-133 way (the `UNDECLARED_CLASS`/`UNDECLARED_INTERFACE`/`UNDECLARED_ENUM` reason sentences
+> and hints, `SKIPPED_NESTED_DECLARATION`'s KDoc, and the classifier's class/interface/enum-branch
+> comments) now match ADR-133/134's actual rule; wording only, no behaviour change.
 
 > **Amendment (2026-09-14, the deferred-owner climb is not a dead admission).** Decided: gate
 > nothing. When the owner is one ADR-133/134 defers (`enum class`, generic, `inner class`), the

@@ -173,14 +173,14 @@ class ForwardSkippedCallableWarningTest {
         symbol = "com.example.NestedListenerOwner.attach",
         reason = ForwardPlanSkipReason.UNDECLARED_INTERFACE,
         detail = "com.example.NestedListenerOwner.Listener",
-      ) to "its interface type `com.example.NestedListenerOwner.Listener` is nested and never " +
-          "declared as a C# interface (UNDECLARED_INTERFACE)",
+      ) to "its interface type `com.example.NestedListenerOwner.Listener` is nested and no C# " +
+          "nested interface is declared for it (UNDECLARED_INTERFACE)",
       ForwardCallableCatalogEntry.Skipped(
         symbol = "com.example.Newsroom.schedule",
         reason = ForwardPlanSkipReason.UNDECLARED_CLASS,
         detail = "com.example.Newsroom.Schedule",
-      ) to "its type `com.example.Newsroom.Schedule` is a nested class or object never declared " +
-          "in C# (UNDECLARED_CLASS)",
+      ) to "its type `com.example.Newsroom.Schedule` is nested and no C# nested type is declared " +
+          "for it (UNDECLARED_CLASS)",
       ForwardCallableCatalogEntry.Skipped(
         symbol = "com.example.StoryUri.length",
         reason = ForwardPlanSkipReason.INHERITED_MEMBER,

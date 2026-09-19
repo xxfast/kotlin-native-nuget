@@ -217,7 +217,7 @@ internal class ForwardBridgeTypeClassifier(
         return BridgeType.Unsupported(
           qualifiedName,
           if (isNested) {
-            "a nested enum class is never declared as a C# enum"
+            "a nested enum class with no C# nested enum declared for it"
           } else {
             "enum class is not in the exported object-handle set"
           },
@@ -284,11 +284,12 @@ internal class ForwardBridgeTypeClassifier(
       )
     }
     if (qualifiedName !in context.exportedObjectHandles) {
-      // The enum/interface branches' rule verbatim: every root bucket filters
-      // `parentDeclaration == null`, and the reachability closure refuses to admit a nested
-      // dependency declaration, so a nested class/object is declarable in neither module and the
-      // `include(...)` hint would be actively wrong for it. The nested test therefore runs FIRST,
-      // and only a top-level cross-module declaration takes the scope-widening route below.
+      // The enum/interface branches' rule verbatim: since ADR-133/134 the owner walk is the sole
+      // declarer of a nested type, so a nested name missing from `exportedObjectHandles` is one
+      // that walk deferred (an `inner`, generic or sealed shape, or an owner that cannot carry a
+      // nested type) or one whose C# name collided, and the `include(...)` hint would be actively
+      // wrong for either. The nested test therefore runs FIRST, and only a top-level cross-module
+      // declaration takes the scope-widening route below.
       //
       // A sealed subclass is not nested in this sense (ADR-009 declares it under its base, which
       // is exactly how every reference spells it) and neither is a companion object (ADR-013 folds
@@ -307,7 +308,7 @@ internal class ForwardBridgeTypeClassifier(
         return BridgeType.Unsupported(
           qualifiedName,
           "a nested ${if (classDeclaration.classKind == ClassKind.OBJECT) "object" else "class"} " +
-              "is never declared in C#",
+              "with no C# nested type declared for it",
           isUndeclaredClass = true,
         )
       }
@@ -416,16 +417,17 @@ internal class ForwardBridgeTypeClassifier(
    */
   private fun interfaceType(declaration: KSClassDeclaration, qualifiedName: String): BridgeType {
     if (qualifiedName !in context.exportedObjectHandles) {
-      // Issue #54, the enum branch's rule verbatim: `rootInterfaces` filters
-      // `parentDeclaration == null`, so a *nested* interface is undeclarable in either module and
-      // the `include(...)` hint would be actively wrong for it. The nested test therefore runs
-      // FIRST, and only a top-level cross-module interface takes the scope-widening route — with
-      // the ADR-066 amendment's one exception, shared with the class and enum branches: a nested
-      // interface the closure refused on SCOPE grounds wants the scope remedy, not this one.
+      // Issue #54, the enum branch's rule verbatim: ADR-133/134's owner walk is the sole declarer
+      // of a nested interface, so a nested name missing here is one that walk deferred or one
+      // whose C# name collided, and the `include(...)` hint would be actively wrong for it. The
+      // nested test therefore runs FIRST, and only a top-level cross-module interface takes the
+      // scope-widening route, with the ADR-066 amendment's one exception, shared with the class
+      // and enum branches: a nested interface the closure refused on SCOPE grounds wants the scope
+      // remedy, not this one.
       if (declaration.parentDeclaration != null && scopeRefusal(qualifiedName) == null) {
         return BridgeType.Unsupported(
           qualifiedName,
-          "a nested interface is never declared as a C# interface",
+          "a nested interface with no C# nested interface declared for it",
           isUndeclaredInterface = true,
         )
       }

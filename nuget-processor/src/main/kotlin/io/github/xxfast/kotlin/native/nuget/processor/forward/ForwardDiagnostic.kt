@@ -191,17 +191,23 @@ internal enum class ForwardDiagnosticKind(
    *  member is dropped for the same one reason, and only the hint differs. */
   SKIPPED_OPT_IN_MARKER(ForwardDiagnosticSeverity.WARNING),
 
-  /** A public declaration nested inside an exported class-like declaration: a `class`, `object`,
-   *  `interface` or `enum class`. Every root bucket in `NugetProcessor` filters
-   *  `parentDeclaration == null` and the ADR-066 closure refuses to admit a nested dependency
-   *  declaration, so nothing is ever generated for one; it used to vanish in total silence, with
-   *  only the members typed with it saying anything at all. This names the declaration itself,
-   *  once, where it is declared. Sealed subclasses (ADR-009, declared nested under their base) and
-   *  companion objects (ADR-013, their owner's statics) are excluded: those ARE declared.
+  /** A public declaration nested inside an exported class-like declaration (a `class`, `object`,
+   *  `interface` or `enum class`) that ADR-133/134 **defers**: `nestedDeclarationDeferral()`
+   *  returns a reason for it, because the candidate is `inner`, generic or a nested sealed
+   *  hierarchy, or some owner in its chain cannot carry a nested type (an `enum class`, generic,
+   *  `inner` or `value class` owner, a companion, or a kind other than class/object/interface).
+   *  Every other nested declaration IS declared, as `Owner.Nested`, so this warning fires only for
+   *  a deferred shape; the message carries the deferral reason, so the author reads which rule
+   *  defers this one rather than a blanket "nested types are not supported". Sealed subclasses
+   *  (ADR-009, declared nested under their base) and companion objects (ADR-013, their owner's
+   *  statics) are excluded: those ARE declared, by their own routes.
+   *
+   *  A nested name C# cannot carry for a different reason is a different kind: a name collision
+   *  with its owner is `ERROR_CSHARP_SIGNATURE_COLLISION`.
    *
    *  The declaration-level twin of the member-level `UNDECLARED_CLASS`/`UNDECLARED_ENUM`/
-   *  `UNDECLARED_INTERFACE` skips, and deliberately both: a nested declaration nothing references
-   *  would otherwise produce no output and no diagnostic whatsoever. */
+   *  `UNDECLARED_INTERFACE` skips, and deliberately both: a deferred nested declaration nothing
+   *  references would otherwise produce no output and no diagnostic whatsoever. */
   SKIPPED_NESTED_DECLARATION(ForwardDiagnosticSeverity.WARNING),
 
   /** ADR-112: a `sealed interface` whose hierarchy the ADR-009 sealed-class route cannot carry:
@@ -626,11 +632,11 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       "its enum type `${detail ?: "the enum"}` is never declared as a C# enum ($name)"
 
     ForwardPlanSkipReason.UNDECLARED_INTERFACE ->
-      "its interface type `${detail ?: "the interface"}` is nested and never declared as a C# " +
-          "interface ($name)"
+      "its interface type `${detail ?: "the interface"}` is nested and no C# nested interface is " +
+          "declared for it ($name)"
 
     ForwardPlanSkipReason.UNDECLARED_CLASS ->
-      "its type `${detail ?: "the class"}` is a nested class or object never declared in C# " +
+      "its type `${detail ?: "the class"}` is nested and no C# nested type is declared for it " +
           "($name)"
 
     // ADR-133: the object-at-a-member-position drop. Owns its sentence so the author reads the C#
@@ -898,18 +904,25 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   ForwardPlanSkipReason.UNDECLARED_ENUM -> {
     val enumName: String = detail ?: "the enum"
     "enum `$enumName` is not in the export set, so it is never declared as a C# enum and every " +
-        "member typed with it is skipped rather than emitted as a dangling reference; a nested " +
-        "enum class is never declared (only top-level enums are), so move it to the top level of " +
-        "its file, or, if it already is top level, bring its package into the export scope"
+        "member typed with it is skipped rather than emitted as a dangling reference; if it is " +
+        "nested, the SKIPPED_NESTED_DECLARATION warning on the declaration itself names which " +
+        "shape rule defers it (an `enum class`, generic or `inner` owner, for instance), so " +
+        "move it to the top level of its file, or, if it already is top level, bring its package " +
+        "into the export scope"
   }
 
   // Names the interface, for the reason above, and says nested explicitly: unlike the enum flag
   // this one covers exactly one shape, so the hint does not have to hedge about export scope.
+  // Mirrors the UNDECLARED_CLASS hint below, for the same ADR-133/134 reason: a nested interface
+  // under a supported owner IS declared, so reaching this hint means this particular one is
+  // deferred, and the declaration's own warning is where the specific shape rule is named.
   ForwardPlanSkipReason.UNDECLARED_INTERFACE -> {
     val interfaceName: String = detail ?: "the interface"
-    "interface `$interfaceName` is nested inside a class, and a nested interface is never " +
-        "declared as a C# interface (only top-level ones are), so every member typed with it is " +
-        "skipped rather than emitted as a dangling reference; move it to the top level of its file"
+    "interface `$interfaceName` is nested inside another declaration and no C# nested interface " +
+        "is generated for it, so every member typed with it is skipped rather than emitted as a " +
+        "dangling reference; the SKIPPED_NESTED_DECLARATION warning on the declaration itself " +
+        "names which shape rule defers it (a generic, `inner` or sealed nested type, or an owner " +
+        "that cannot carry one), or move it to the top level of its file"
   }
 
   // Names the class or object, for the reason above. Since ADR-133 a nested class or object IS
