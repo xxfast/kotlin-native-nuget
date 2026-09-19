@@ -1075,11 +1075,10 @@ class CirOrdinaryRendererTest {
   }
 
   /**
-   * ADR-066 §5 amendment, the CORRECTION cell — **RED** until `CirTypeMapping.kt` ~:195 uses the
-   * segment-bounded "outside root" test that admission already uses (`PackageScope.covers`,
-   * `NugetProcessor.kt` ~:488: `pkg == p || pkg.startsWith("$p.")`).
+   * ADR-066 §5 amendment, the CORRECTION cell: `mapPackageToNamespace` asks the segment-bounded
+   * `isUnderPackage` that admission asks too (`PackageScope.covers`, `NugetProcessor.isExported`).
    *
-   * `com.examples.x` is not under `com.example` — `examples` is a different segment — so it is an
+   * `com.examples.x` is not under `com.example` (`examples` is a different segment), so it is an
    * out-of-root package and must render its full path. The unbounded `startsWith` strips the
    * literal prefix `com.example`, leaves `s.x`, and renders the mangled `Clinic.S.X`: a namespace
    * built out of half a package segment, which no admission decision agrees with.

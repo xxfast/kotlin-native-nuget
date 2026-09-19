@@ -608,14 +608,13 @@ class NugetProcessor(
     fun isExported(declaration: KSDeclaration): Boolean {
       val pkg: String = declaration.packageName.asString()
       val qualifiedName: String? = declaration.qualifiedName?.asString()
-      fun matches(p: String) = pkg == p || pkg.startsWith("$p.")
 
       // ADR-063 "Reverse-bound packages are always in scope": checked first, before exclude and
       // before include. A module that both publishes forward and consumes via `bind {}` returns
       // reverse-bound types from its own forward code; dropping the bound stub's declaration
       // while the forward-generated C# still references it is a dangling-reference build break,
       // not a scoping choice the user asked for.
-      if (context.boundPackages.any(::matches)) return true
+      if (context.boundPackages.any { isUnderPackage(pkg, it) }) return true
       return ownScope.covers(pkg, qualifiedName)
     }
 

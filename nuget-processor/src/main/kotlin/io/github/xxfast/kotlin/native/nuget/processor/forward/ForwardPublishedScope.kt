@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.isUnderPackage
+
 /**
  * ADR-063's export predicate as a value: the `include`/`exclude` pair, with the exact matching
  * rules `NugetProcessor.isExported` applies — `exclude` wins, by package prefix *or* by qualified
@@ -21,14 +23,14 @@ data class PackageScope(
    * this first.
    */
   fun excludes(packageName: String, qualifiedName: String?): Boolean = exclude.any { prefix ->
-    packageName == prefix || packageName.startsWith("$prefix.") ||
-        (qualifiedName != null && (qualifiedName == prefix || qualifiedName.startsWith("$prefix.")))
+    isUnderPackage(packageName, prefix) ||
+        (qualifiedName != null && isUnderPackage(qualifiedName, prefix))
   }
 
   fun covers(packageName: String, qualifiedName: String?): Boolean {
     if (excludes(packageName, qualifiedName)) return false
     if (include.isEmpty()) return true
-    return include.any { prefix -> packageName == prefix || packageName.startsWith("$prefix.") }
+    return include.any { prefix -> isUnderPackage(packageName, prefix) }
   }
 }
 

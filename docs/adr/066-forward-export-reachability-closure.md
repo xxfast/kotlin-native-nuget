@@ -585,6 +585,10 @@ A Swift-Export-style `flattenPackage` alias is noted as future work, not v1.
 > A human can revert to (ii) by editing the third table row and `CirTypeMapping.kt`'s
 > `mapPackageToNamespace`. See ROADMAP.md and FEATURES.md for the fixture and mapping-table update
 > this amendment shipped with.
+>
+> **Closed (2026-09-19).** The segment-bounded test this amendment inlined into `mapPackageToNamespace`
+> was one of six hand-copied instances; a shared `isUnderPackage(packageName, prefix)` in
+> `PackageNames.kt` now backs admission and naming alike, so they cannot drift again.
 
 ### 6. Blast-radius reporting
 
