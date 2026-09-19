@@ -302,18 +302,20 @@ private fun emitAbstractMethodSkip(
 
 /**
  * ADR-075 amendment (2026-09-13): the named skip for an inherited-but-unimplemented property whose
- * own planner refused it, when the declaring interface is UNEXPORTED. Always null: the point is the
+ * own planner refused it, when the declaring supertype is UNEXPORTED. Always null: the point is the
  * diagnostic, the member is still dropped.
  *
- * Restricted to an interface owner outside the export set, the exact set of owners
- * `NugetProcessor` plans onto the declaration catalog, so a miss there is a genuine planner
- * refusal and nothing else. Two cells deliberately stay silent:
- *  - an EXPORTED interface owner, as before: `IFoo` did not declare the member either, and its own
- *    planner already warned about it once.
- *  - an unexported abstract BASE CLASS owner, which also re-homes unplanned abstract members onto
- *    this walk. Its members are not planned anywhere, so a miss there says nothing about
- *    bridgeability and the classification below would invent a reason for a perfectly ordinary
- *    `String`.
+ * Restricted to an owner outside the export set, the exact set of owners `NugetProcessor` plans
+ * onto the declaration catalog, so a miss there is a genuine planner refusal and nothing else. An
+ * EXPORTED owner deliberately stays silent, as before: `IFoo` (or the base class) did not declare
+ * the member either, and its own planner already warned about it once.
+ *
+ * ADR-075 amendment (2026-09-19): an unexported abstract BASE CLASS owner is no longer refused
+ * outright. It re-homes unplanned abstract members onto this walk exactly as an unexported
+ * interface does, and `NugetProcessor` now plans it onto the same declaration catalog, so a miss
+ * here means the planner refused the type rather than that nothing was ever planned. Without it a
+ * supported `String` vanished with no diagnostic and the concrete Kotlin subclass's `override`
+ * was CS0115.
  *
  * The kind is hardcoded rather than taken from `reason.toDiagnosticKind()`: the property kind is
  * positional (it names *where* the drop happened, see `warnDroppedForwardProperties`), and
@@ -323,14 +325,12 @@ private fun emitInheritedAbstractPropertySkip(
   prop: KSPropertyDeclaration,
   propName: String,
   name: String,
-  owner: KSClassDeclaration,
   qualified: String,
   exportedTypes: Set<String>,
   classifier: ForwardBridgeTypeClassifier,
   context: NugetContext,
   logger: KSPLogger,
 ): CirProperty? {
-  if (owner.classKind != ClassKind.INTERFACE) return null
   if (qualified in exportedTypes) return null
   // The same classification the property planner refused the member on (`sealedAsHandle()` is the
   // call `propertyPlan` makes), so the wording is the planner route's, not a second opinion.
@@ -377,10 +377,16 @@ private fun emitInheritedAbstractPropertySkip(
  * here exactly as an exported interface's is. Without it the member vanished while the concrete
  * Kotlin subclass still rendered `public override`: CS0115 in the generated file itself.
  *
- * Null when the declaring interface's own planner skipped the member (so `IFoo` does not declare
- * it either) or the parent is not a class declaration. A miss on an unexported interface owner is
- * named at [name] rather than dropped silently, since there is no `IFoo` declaration carrying the
- * author's member anywhere else.
+ * ADR-075 amendment (2026-09-19): an unexported abstract BASE CLASS owner takes the same route.
+ * ADR-101 drops `: Cushion()` and re-homes its members onto the exported subclass, so an
+ * unimplemented `abstract val` there is a fresh abstract slot on that subclass, spelled from the
+ * same plan. `isAbstract = true` with `setter` following the plan is right for a base-class owner
+ * too: the dropped base has no C# class to carry the member.
+ *
+ * Null when the declaring supertype's own planner skipped the member (so neither `IFoo` nor the
+ * dropped base declares it either) or the parent is not a class declaration. A miss on an
+ * unexported owner is named at [name] rather than dropped silently, since there is no other
+ * declaration carrying the author's member anywhere.
  */
 private fun inheritedAbstractProperty(
   prop: KSPropertyDeclaration,
@@ -396,7 +402,7 @@ private fun inheritedAbstractProperty(
   val qualified: String = owner.qualifiedName?.asString() ?: return null
   val plan: ForwardPropertyPlan = interfaceDeclarationCatalog.propertyFor("$qualified.$propName")
     ?: return emitInheritedAbstractPropertySkip(
-      prop, propName, name, owner, qualified, exportedTypes, classifier, context, logger,
+      prop, propName, name, qualified, exportedTypes, classifier, context, logger,
     )
   return CirProperty(
     name = plan.publicName,
@@ -678,11 +684,12 @@ internal fun translateClass(
         )
       }
       // ADR-075 amendment (2026-09-11): a property this class inherits from an interface
-      // (2026-09-13: exported or not) and does not implement. `isForwardPlannableMemberOf` keeps
-      // it out of the planner (nothing to dispatch to), so it takes the declaration walk the
-      // abstract *method* mirror takes: an abstract C# property, no body, no export, no
-      // `DllImport`. Without it the generated `Bird : IFeathered` is CS0535 and a consumer
-      // subclass's `override` is CS0115.
+      // (2026-09-13: exported or not; 2026-09-19: or from an unexported abstract BASE CLASS,
+      // whose members ADR-101 re-homes here) and does not implement.
+      // `isForwardPlannableMemberOf` keeps it out of the planner (nothing to dispatch to), so it
+      // takes the declaration walk the abstract *method* mirror takes: an abstract C# property, no
+      // body, no export, no `DllImport`. Without it the generated `Bird : IFeathered` is CS0535
+      // and a consumer subclass's `override` is CS0115.
       if (prop.parentDeclaration != cls && prop.isAbstract()) {
         return@mapNotNull inheritedAbstractProperty(
           prop, propName, name, interfaceDeclarationCatalog, exportedTypes, classifier, context,

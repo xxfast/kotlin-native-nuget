@@ -259,8 +259,37 @@ implemented on the base itself, even when that interface is never declared in C#
 unexported interface): the abstract class still declares the inherited member `public abstract`,
 so a further C# subclass compiles.
 
+The same also applies when the abstract member is inherited from an **unexported abstract base
+class** instead of an interface. `SKIPPED_UNEXPORTED_SUPERTYPE` already drops that base from the C#
+class list and re-homes its bridgeable members onto the exported subclass; an abstract member it
+never implements now renders `public abstract` on that subclass too, so a further C# or Kotlin
+`override` compiles instead of failing to build:
+
+```kotlin
+abstract class Cushion { // never exported
+  abstract val weave: String
+  abstract var loft: Int
+}
+
+abstract class Lounger : Cushion() // exported; implements neither member
+
+class Beanbag : Lounger() {
+  override val weave: String = "corduroy"
+  override var loft: Int = 4
+}
+```
+
+```C#
+public abstract class Lounger : IDisposable, INugetHandle
+{
+    public abstract string Weave { get; }
+    public abstract int Loft { get; set; }
+}
+```
+
 A member the planner declines to plan, for example a generic interface default the type mapper
-cannot spell abstractly, is dropped from the generated class instead of rendered `abstract`; an
+cannot spell abstractly, or one whose own type has no C# declaration (a nested class never exported),
+is dropped from the generated class instead of rendered `abstract`, named on a build warning; an
 uncompilable abstract member would break every further subclass.
 
 ### A class-typed abstract member {id="a-class-typed-abstract-member"}

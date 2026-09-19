@@ -1233,40 +1233,49 @@ class NugetProcessor(
     val declarationPlanner = ForwardCallablePlanner(forwardClassifier, expects)
     val declarationPropertyPlanner = ForwardPropertyPlanner(forwardClassifier)
 
-    // ADR-075 amendment (2026-09-13): the UNEXPORTED interface supertypes of exported classes,
-    // planned onto the same declaration catalog. ADR-101 drops `: INesting` from the base list,
-    // but the members it declares and the class never implements still have to be spelled on the
-    // C# class itself, or the class's own generated subclass renders `public override` against
-    // nothing (CS0115 inside the generated file). Planning them here means
-    // `inheritedAbstractProperty` reads base and override off ONE plan, so the type spelling and
-    // the setter's presence cannot drift (CS1715 / CS0534 / CS0546).
+    // ADR-075 amendment (2026-09-13): the UNEXPORTED supertypes of exported classes, planned onto
+    // the same declaration catalog. ADR-101 drops `: INesting` from the base list, but the members
+    // it declares and the class never implements still have to be spelled on the C# class itself,
+    // or the class's own generated subclass renders `public override` against nothing (CS0115
+    // inside the generated file). Planning them here means `inheritedAbstractProperty` reads base
+    // and override off ONE plan, so the type spelling and the setter's presence cannot drift
+    // (CS1715 / CS0534 / CS0546).
     //
-    // Transitive on purpose (`getAllSuperTypes`): an unexported interface extending another
-    // unexported one declares the grandparent's members on the class too, and the lookup key is
-    // built from the member's own `parentDeclaration`.
+    // ADR-075 amendment (2026-09-19): an unexported abstract BASE CLASS, not only an interface.
+    // ADR-101 drops `: Cushion()` the same way and re-homes the base's members onto the exported
+    // subclass, so an unimplemented `abstract val` there needs the same plan to be spelled from,
+    // and a miss then means the planner genuinely refused the type. `kotlin.Any` yields no
+    // properties, and `interfaceProperties` keys on `parentDeclaration`, so a concrete base member
+    // planned here is simply never looked up (only an unimplemented ABSTRACT member reaches
+    // `inheritedAbstractProperty`).
     //
-    // Nothing is *rendered* for these interfaces: `translateInterface` is driven by `interfaces`
+    // Transitive on purpose (`getAllSuperTypes`): an unexported supertype extending another
+    // unexported one declares the grandparent's members on the class too, and a dropped
+    // INTERMEDIATE base (`Dinghy : Skiff : Vessel`, only `Skiff` unexported) is reached through a
+    // kept hop. The lookup key is built from the member's own `parentDeclaration`.
+    //
+    // Nothing is *rendered* for these supertypes: `translateInterface` is driven by `interfaces`
     // alone, and this catalog reaches only the C# translation, never `generateCNameWrappers` and
     // never the ADR-055 contract check, so no `DllImport` and no Kotlin export follows.
-    val unexportedSupertypeInterfaces: List<KSClassDeclaration> = allClasses
+    val unexportedSupertypes: List<KSClassDeclaration> = allClasses
       .asSequence()
       .flatMap { cls -> cls.getAllSuperTypes() }
       .map { it.declaration }
       .filterIsInstance<KSClassDeclaration>()
-      .filter { it.classKind == ClassKind.INTERFACE }
+      .filter { it.classKind == ClassKind.INTERFACE || it.classKind == ClassKind.CLASS }
       .filter { it.qualifiedName?.asString() !in exportedObjectHandles }
       .distinctBy { it.qualifiedName?.asString() }
       .toList()
     // A THIRD planner instance, for the same reason the declaration planner above is a second one:
-    // its drop channel must not be merged, or every declared member of an unexported interface the
+    // its drop channel must not be merged, or every declared member of an unexported supertype the
     // class implements concretely would be warned about on every build.
     val supertypePropertyPlanner = ForwardPropertyPlanner(forwardClassifier)
     val interfaceDeclarationCatalog = ForwardCallablePlanCatalog(
       entries = interfaces.flatMap { iface -> declarationPlanner.interfaceEntries(iface) },
       propertyPlans = interfaces.flatMap { iface ->
         declarationPropertyPlanner.interfaceProperties(iface)
-      } + unexportedSupertypeInterfaces.flatMap { iface ->
-        supertypePropertyPlanner.interfaceProperties(iface)
+      } + unexportedSupertypes.flatMap { supertype ->
+        supertypePropertyPlanner.interfaceProperties(supertype)
       },
     )
 

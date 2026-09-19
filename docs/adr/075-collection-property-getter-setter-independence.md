@@ -524,9 +524,8 @@ nested class classifies as `ForwardPlanSkipReason.UNDECLARED_CLASS`, so the mess
 `SKIPPED_UNSUPPORTED_PROPERTY` rather than read off `reason.toDiagnosticKind()`: that helper `error()`s
 on the legacy-route reasons (`GENERIC`, `FLOW_PROTOCOL`, `CALLBACK_PROTOCOL`, …) a property can
 genuinely hold, and the kind here is positional (it names where the drop happened), not
-reason-derived. An unexported abstract **base class** owner is deliberately left silent by this same
-miss site: its members are not planned anywhere, so a miss there says nothing about bridgeability and
-would invent a reason for an ordinary type.
+reason-derived. An unexported abstract **base class** owner was left unhandled by this same miss
+site at the time of this amendment; closed by the 2026-09-19 amendment below.
 
 Pinned by `Tier1AbstractUnexportedInterfacePropertyTest`, the fixture `hidden/Nesting.kt`
 (unexported: `val material: String`, `var height: Int`, `val lining: Nesting.Lining` where `Lining`
@@ -540,3 +539,41 @@ No export, handle kind or ABI change; `LiveHandleTests` gains no row. Still open
 not exercised by a fixture): whether KSP's `getAllProperties()` surfaces an abstract `val` from an
 interface declared in a separate **dependency module** the same way it does for the same-module case
 this fixture covers (Tier 1 here uses two same-module packages only).
+
+**2026-09-19 amendment (abstract base-class property): the same shape now also renders on an
+unexported abstract BASE CLASS owner, closing the "deliberately left silent" gap the 2026-09-13
+amendment above named.** That gap was real: an unexported interface's inherited member had a
+declaration catalog to be planned onto, but an unexported abstract base class's members were
+planned nowhere, so `inheritedAbstractProperty`'s miss arm refused every base-class owner outright
+(`owner.classKind != ClassKind.INTERFACE`) and the member reached C# nowhere. A **supported** type
+was not merely undiagnosed: the subclass's own `override` still rendered `public override` against
+a `Lounger` that declared no `Weave`/`Loft` at all, `CS0115` in the generated file itself, worse than
+the wording "drops silently" suggested.
+
+The fix widens the same planning move the interface case already made: the ADR-113 declaration
+catalog's `unexportedSupertypeInterfaces` (`NugetProcessor.kt`) is renamed `unexportedSupertypes` and
+its `classKind == ClassKind.INTERFACE` filter widens to also admit `ClassKind.CLASS`.
+`getAllSuperTypes()` is already transitive, so a dropped **intermediate** base in a chain (`Dinghy :
+Skiff : Vessel`, only `Skiff` unexported) plans `Skiff` too, verified by a Tier 1 cell.
+`emitInheritedAbstractPropertySkip`'s owner-kind guard is deleted outright: the `qualified in
+exportedTypes` guard immediately below it already keeps an *exported* owner silent (its own
+class/interface declaration names the member), so the deleted guard was refusing every base-class
+owner, not narrowing to a genuinely different case.
+
+Result: `Lounger` (`test-library/.../test/lounge/Lounger.kt`, base `Cushion` in
+`test-library/.../hidden/Cushion.kt`, outside the export root) now declares `public abstract string
+Weave { get; }` and `public abstract int Loft { get; set; }` itself, so `Beanbag : Lounger`'s
+`override`s bind; `Cushion.stuffing`, typed with an undeclared nested class, gets one named
+`SKIPPED_UNSUPPORTED_PROPERTY` at `Lounger.stuffing` instead of vanishing. `Cushion.squish` was
+already the control proving the abstract **method** walk had no such guard (F3 in the research memo
+this amendment closes): properties and methods no longer disagree on the same base. No export, no
+`DllImport`, no leak row: the dropped base mints nothing, and `Beanbag`'s own getter, setter and
+method exports are ordinary routes already covered in kind. Pinned by
+`Tier1AbstractUnexportedBasePropertyTest.kt` and `IntegrationTests/AbstractUnexportedBasePropertyTests.cs`
+(the latter including a pure C# `PaperBeanbag : Lounger` subclass, proving the declaration is
+overridable from C#, not only from a further Kotlin subclass).
+
+Deferred, not exercised: a cross-module (klib) unexported abstract base is assumed to behave like the
+same-module case, no cell proves it; a dropped intermediate base whose abstract property
+re-declares one the *kept* exported base also declares abstract renders `abstract` without
+`override`, hiding the kept base's member (`CS0108` warning, compiles). Both tracked on `ROADMAP.md`.
