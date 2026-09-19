@@ -235,6 +235,8 @@ nuget {
         alias("Test.Boxes", "test.boxes")
         include("Test.Infirmary")
         alias("Test.Infirmary", "test.infirmary")
+        include("Test.Kennel")
+        alias("Test.Kennel", "test.kennel")
       }
     }
   }

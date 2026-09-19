@@ -168,7 +168,7 @@ Mirror of Phase 3. Moves the reverse bridge beyond v1 static methods: C# objects
 - [ ] Raising the 22-argument ceiling: pass a pointer to a packed scratch buffer once a member's flattened arity exceeds 22, instead of skipping the member. Sketched, not decided: needs its own call on buffer ownership, layout, and alignment (deferred by [ADR-059](docs/adr/059-nested-struct-components-in-kotlin.md) Decision 5d)
 - [ ] `Nullable<T>` components, including a nullable *nested* struct (e.g. `Profile?` inside `Litter`): the existing struct out-pointer + `byte hasValue` format (see the `Nullable<T>` value types item above) extends to it without a new wire format, but it stays its own ROADMAP slice (deferred by [ADR-059](docs/adr/059-nested-struct-components-in-kotlin.md) Scope)
 - [ ] Class-typed (handle) components inside a struct: deferred on semantics, not cost. ([details](docs/backlog/class-typed-handle-components-inside-struct-deferred.md))
-- [ ] **A bound class returning an interface declared in a different bound namespace generates non-compiling Kotlin.** ([details](docs/backlog/bound-class-returning-interface-declared-different-bound.md))
+- [ ] **A bound class returning an interface declared in a different bound namespace generates non-compiling Kotlin.** Fixed for the **parameter** position by [ADR-152](docs/adr/152-task-to-suspend-fun.md) (`Kennel.BoardAsync(IFeedable)`, cross-namespace); the **return** position is unverified, no fixture exercises it. ([details](docs/backlog/bound-class-returning-interface-declared-different-bound.md))
 
 ## Phase 10: Reverse rich type support
 
@@ -207,10 +207,11 @@ per-type contract hash again.
 
 Mirror of Phase 6.
 
-- [ ] Map `Task` / `Task<T>` → `suspend fun` (mirror of ADR-019; completion callback over the ABI, no CLR hosting needed per ADR-041)
-- [ ] Wire coroutine cancellation → `CancellationToken` (mirror of ADR-022, direction inverted)
+- [ ] Wire coroutine cancellation → `CancellationToken`, and map `TaskCanceledException` → `CancellationException` (mirror of ADR-022, direction inverted; [ADR-152](docs/adr/152-task-to-suspend-fun.md) left the seam open: `awaitForKotlin` is already cancellable, `Begin` is where a `CancellationTokenSource` handle would be minted, and `invokeOnCancellation` is unused)
 - [ ] Map `IAsyncEnumerable<T>` → `Flow<T>` (mirror of ADR-026)
 - [ ] Map C# events → Kotlin (`Flow<T>` or listener + `Cleaner`-scoped subscription; no forward-direction mirror exists – needs ADR, builds on ADR-037 stored-callback machinery)
+- [ ] `ValueTask` / `ValueTask<T>` → `suspend fun`: named skip `info_async_not_yet_mapped` today; additive on top of [ADR-152](docs/adr/152-task-to-suspend-fun.md), one `RirAsyncKind` value plus `.AsTask()` in `Begin`.
+- [ ] Async on a struct method, a bound interface member, or a generic class (witness thunks) is a named skip (`asyncDeferredDiagnostics`); `Task` at a parameter, property, constructor, or type-argument position, and a `Task<T>?` return, are reader-side `info_async_not_yet_mapped`. Deferred by [ADR-152](docs/adr/152-task-to-suspend-fun.md).
 
 ## Phase 13: Reverse bidirectional – implementing C# contracts in Kotlin
 
@@ -219,7 +220,7 @@ Mirror of Phase 7, composed with its machinery.
 - [ ] Pass Kotlin lambdas where a C# API stores the delegate (lifetime beyond the call – mirror of ADR-037)
 - [ ] Kotlin subclassing C# **classes** – explicitly deferred, revisit only with a concrete use case (synthesis D5, Swift-export precedent)
 - [ ] **Collection-typed slots for a Kotlin-implemented C# interface.** ([details](docs/backlog/collection-typed-slots-kotlin-implemented-c-interface.md))
-- [ ] **`Task`-typed members on a Kotlin-implemented C# interface.** Deferred to compose with Phase 12's reverse async work; a `Task`/`Task<T>`-returning interface member is out of the v1 slot vocabulary and named-skipped.
+- [ ] **`Task`-typed members on a Kotlin-implemented C# interface.** Deferred to compose with [ADR-152](docs/adr/152-task-to-suspend-fun.md)'s reverse async work; a `Task`/`Task<T>`-returning interface member is out of the v1 slot vocabulary and named-skipped.
 - [ ] **Whether Kotlin frees an ADR-088 bound-interface transfer `GCHandle` when the callee throws is unverified either way.** ([details](docs/backlog/whether-kotlin-frees-adr-088-bound-interface.md))
 
 ## Phase 14: Runtime library – ship the fixed `nuget_*` ABI once
@@ -234,6 +235,8 @@ Fallout from [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) (reve
 
 **Rejected: a `scripts/verify.sh --fast` mode.** Measurement killed the premise (verify is 38s clean, 18s warm) and a fast mode would sanction exactly the stale-state phantoms this section exists to prevent. Do not re-add it; full writeup in the [archive](docs/archive/roadmap.md).
 
+- [ ] `NugetMetadataReader/Program.cs`'s `IsAsyncType` (`Program.cs:2452`) matches `AsyncTypeNames` by `StartsWith`, so a user type merely named with an async type name as a prefix (e.g. `System.Threading.Tasks.TaskExtras`) would be misclassified as async. Harmless today (no such fixture type exists). Discovered alongside [ADR-152](docs/adr/152-task-to-suspend-fun.md), inferred by reading, not reproduced.
+- [ ] `asyncDeferredDiagnostics`'s generic-class arm (`RirBridging.kt`) has no fixture: no async member on a generic class exists in `TestDependency` today, so that arm is cold code, exercised by no test. Discovered alongside [ADR-152](docs/adr/152-task-to-suspend-fun.md).
 - [ ] **`NugetPlugin.kt`'s `packNuget` `afterEvaluate` block computes a local `baseName` that is never read afterwards** ([details](docs/backlog/nugetplugin-kt-s-packnuget-afterevaluate-block-computes.md))
 - [ ] **`PackNugetTask.kt`'s `generatedCsDirs` merge silently drops a missing directory with `?: emptyList()`** ([details](docs/backlog/packnugettask-kt-s-generatedcsdirs-merge-packnugettask-kt.md))
 - [ ] **An interface with a member outside ADR-084's v1 slot vocabulary silently gets no bridge factory at all** ([details](docs/backlog/interface-var-property-any-other-member-outside.md))

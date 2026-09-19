@@ -225,8 +225,11 @@ Static and instance methods and properties bind on classes the same way; see
 [Static classes and methods](static-classes-and-methods.md). Struct members bind under their own
 rules; see [C# structs](structs.md).
 
-- `async`/`Task`-returning methods (`Task`, `Task<T>`, `ValueTask`, `ValueTask<T>`,
-  `IAsyncEnumerable<T>`) don't bind. This applies on classes and interfaces alike.
+- `Task`- and `Task<T>`-returning methods bind as a Kotlin `suspend fun`; see
+  [Instance members](instance-members.md#async-methods).
+- `ValueTask`, `ValueTask<T>`, and `IAsyncEnumerable<T>` don't bind yet. An `async` method on a
+  struct, on a bound interface, or on a generic class also doesn't bind yet: each is skipped with
+  its own diagnostic rather than silently dropped.
 - An indexer (`this[int]`) doesn't bind, on a class or an interface.
 - An `event` member doesn't bind, on a class or an interface.
 
@@ -318,5 +321,6 @@ build, a contract mismatch at process startup) rather than an extraction-time sk
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/089-bridge-reuse-per-kotlin-object.md">ADR-089: Bridge reuse per Kotlin object</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/104-reverse-thunk-error-channel.md">ADR-104: Reverse thunk error channel</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/072-closed-constructed-generics-in-kotlin.md">ADR-072: Closed constructed generics from C# in Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/152-task-to-suspend-fun.md">ADR-152: Reverse Task/Task&lt;T&gt; to suspend fun</a>
     </category>
 </seealso>
