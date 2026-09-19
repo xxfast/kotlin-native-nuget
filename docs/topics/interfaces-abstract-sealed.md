@@ -453,6 +453,22 @@ using Job job = JobSample.AnyJob(40);
 job.Kind; // "running" - dispatches to the concrete arm's own override, or the base's default
 ```
 
+A default parameter that lives on an interface the sealed base overrides counts too, even though
+Kotlin forbids the base's own `override` from restating it: the base still gets the omitting
+overload, and every arm inherits it through C# inheritance.
+
+```kotlin
+interface Squishy { fun squish(factor: Double = 1.0): Double }
+sealed class Pose : Squishy {
+  override fun squish(factor: Double): Double = factor
+}
+```
+
+```C#
+pose.Squish();    // factor defaults to 1.0
+pose.Squish(2.0);
+```
+
 #### Suspend methods on a sealed arm {id="sealed-method-suspend-generated-c"}
 
 A `suspend fun` an arm declares binds like an ordinary class's suspend method, as `Task<T>
