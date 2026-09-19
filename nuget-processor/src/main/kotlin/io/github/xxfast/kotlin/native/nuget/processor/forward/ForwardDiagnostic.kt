@@ -763,10 +763,18 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // Following ADR-109's `exclude("<pkg>")` remedy lands every callable reaching the excluded type
   // here. `include(...)` is not the fix: `PackageScope.covers` tests `exclude` first, so an
   // include can never override one.
+  //
+  // [dependencyPackageName] rather than a bare `substringBeforeLast('.')`, matching the two hints
+  // beside it: a package-level `exclude("dep.models")` propagates onto the nested
+  // `dep.models.Broadcast.AdBand` through its owner, and the old spelling quoted
+  // `exclude("dep.models.Broadcast")`, an entry the author never wrote. The shape this spelling
+  // gets wrong is the reverse one: a TYPE-level `exclude("dep.models.Broadcast")` (issue #53),
+  // where the owner really was the entry and the hint now points a segment too high. The hint
+  // cannot tell them apart, because [ForwardCallableCatalogEntry.Skipped] carries only the
+  // rendered type name and not the exclude entry that matched it; carrying that entry through
+  // `detail` is the real fix.
   ForwardPlanSkipReason.EXCLUDED_DEPENDENCY_TYPE -> {
-    val excluded: String = detail
-      ?.let { qualifiedName -> qualifiedName.substringBeforeLast('.', qualifiedName) }
-      ?: "its package"
+    val excluded: String = detail?.dependencyPackageName() ?: "its package"
     "\"$excluded\" is excluded by exclude(\"$excluded\") in nuget { publish { } }, so a callable " +
         "reaching ${detail ?: "it"} is skipped by design; remove the exclude to export it here " +
         "(include(...) cannot override an exclude)"

@@ -402,6 +402,21 @@ correctly reported (**verified**), so this filter is real work, not a no-op).
 > and hints, `SKIPPED_NESTED_DECLARATION`'s KDoc, and the classifier's class/interface/enum-branch
 > comments) now match ADR-133/134's actual rule; wording only, no behaviour change.
 
+> **Amendment (2026-09-19): the enum and interface scope-refusal hint branches are pinned.** The
+> "Refusal propagation" paragraph above's enum/interface parity had no fixture; four
+> `Tier1ExcludedDependencyTypeHintTest.kt` cells now cover a dependency enum, a nested dependency
+> enum, and a dependency interface refused by `EXCLUDED_BY_CONFIG` or
+> `CROSS_MODULE_ADMISSION_DISABLED`. Pinning the nested enum surfaced one real bug: the
+> `EXCLUDED_DEPENDENCY_TYPE` hint still spelled its package with a bare `substringBeforeLast('.')`
+> instead of the `dependencyPackageName()` helper the "Diagnostics" paragraph above already gave the
+> other two hints, so a package-level `exclude("dep.models")` propagated onto a nested
+> `dep.models.Broadcast.AdBand` read back as `exclude("dep.models.Broadcast")`, an entry nobody
+> wrote. Fixed to use `dependencyPackageName()`. The reverse shape, a type-level
+> `exclude("dep.models.Broadcast")` ([#53](https://github.com/xxfast/kotlin-native-nuget/issues/53)),
+> now reads the wrong package for a nested type instead, because `ForwardCallableCatalogEntry.
+> Skipped` carries only the rendered type name and not which exclude entry matched it; tracked in
+> ROADMAP.md Phase 4.
+
 > **Amendment (2026-09-14, the deferred-owner climb is not a dead admission).** Decided: gate
 > nothing. When the owner is one ADR-133/134 defers (`enum class`, generic, `inner class`), the
 > climb's admission is the **only** carrier of the nested type's named skip: an admitted owner is
