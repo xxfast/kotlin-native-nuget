@@ -14,6 +14,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -475,6 +476,124 @@ class NugetExtractApiIntegrationTest {
       },
       "non-generic Task must not be reported as an unbound type reference",
     )
+  }
+
+  /**
+   * ADR-153: the REAL reader again, for the same CLAUDE.md reason. Everything asserted here is
+   * about metadata the C# compiler wrote: `CancellationToken` is a `TypeReference` into another
+   * assembly, `CancellationToken?` is a `GENERICINST Nullable<...>` that never reaches the same
+   * decode branch, and a defaulted token differs only in its `Param` row. A hand-built `RirClass`
+   * proves none of that.
+   */
+  @Test
+  fun `metadata reader elides a single CancellationToken from an async method`() {
+    val dotnet: String = findDotnet() ?: return
+
+    val source: String = """
+      using System.Threading;
+      using System.Threading.Tasks;
+
+      namespace Probe.Cancel;
+
+      public sealed class Kennel
+      {
+          public Kennel() { }
+          public Kennel(CancellationToken ct) { }
+          public Task<int> StayAsync(string name, CancellationToken ct) => Task.FromResult(0);
+          public Task<int> DawdleAsync(CancellationToken ct = default) => Task.FromResult(9);
+          public Task BoltAsync() => Task.CompletedTask;
+          public Task<int> FetchAsync(CancellationToken ct, int count) => Task.FromResult(count);
+          public Task<int> CallAsync() => CallAsync(CancellationToken.None);
+          public Task<int> CallAsync(CancellationToken ct) => Task.FromResult(1);
+          public int Wait(CancellationToken ct) => 0;
+          public Task<int> TwiceAsync(CancellationToken a, CancellationToken b) =>
+              Task.FromResult(2);
+          public Task<int> MaybeAsync(CancellationToken? ct) => Task.FromResult(3);
+      }
+    """.trimIndent()
+
+    val dll: File = compileFixture(dotnet, source, "CancelReaderFixture")
+    val toolDir: File = Files.createTempDirectory("NugetMetadataReader-cancel-fixture").toFile()
+    unpackMetadataReader(toolDir, javaClass.classLoader)
+    val root: JsonObject = Json.parseToJsonElement(
+      runMetadataReader(dotnet, toolDir, mapOf("CancelFixture" to listOf(dll.absolutePath))),
+    ).jsonObject
+
+    val type: JsonObject = root.type("Probe.Cancel", "Kennel")
+    val methods: List<JsonObject> = type.getValue("methods").jsonArray.map { it.jsonObject }
+    fun method(name: String): JsonObject = methods.single {
+      it.getValue("name").jsonPrimitive.content == name
+    }
+
+    fun token(name: String): Int? = method(name)["cancellationToken"]?.jsonPrimitive?.intOrNull
+    fun parameters(name: String): List<String> =
+      method(name).getValue("parameters").jsonArray.map {
+        it.jsonObject.getValue("name").jsonPrimitive.content
+      }
+
+    // The index is the C# one, where the shim puts `cts.Token` back in; the parameter itself is
+    // gone from the list Kotlin binds.
+    assertEquals(1, token("StayAsync"))
+    assertEquals(listOf("name"), parameters("StayAsync"))
+    // A default value changes only the Param row, so the reader does not need to read it.
+    assertEquals(0, token("DawdleAsync"))
+    assertEquals(emptyList(), parameters("DawdleAsync"))
+    // Any position, not just last.
+    assertEquals(0, token("FetchAsync"))
+    assertEquals(listOf("count"), parameters("FetchAsync"))
+    // The control: no token, no index at all (ADR-152's shape, untouched).
+    assertEquals(null, token("BoltAsync"))
+
+    // The fold: after elision both CallAsync overloads are `suspend fun call()`, which does not
+    // compile in the consumer. The token overload is the one kept.
+    assertEquals(
+      1,
+      methods.count { it.getValue("name").jsonPrimitive.content == "CallAsync" },
+      "the token-less sibling must be folded away, not emitted beside the token overload",
+    )
+    assertEquals(0, token("CallAsync"))
+
+    val diagnostics: List<JsonObject> = root.getValue("assemblies").jsonArray.single().jsonObject
+      .getValue("diagnostics").jsonArray.map { it.jsonObject }
+    assertTrue(
+      diagnostics.any {
+        it.getValue("kind").jsonPrimitive.content == "info_cancellation_overload_folded" &&
+            it.getValue("memberName").jsonPrimitive.content == "CallAsync"
+      },
+      "the dropped sibling must say so by name, found: " + diagnostics.map {
+        it.getValue("memberName").jsonPrimitive.content to it.getValue("kind").jsonPrimitive.content
+      },
+    )
+
+    // Deferred shapes keep a NAMED skip, never the old "bind System.Private.CoreLib" advice.
+    listOf("Wait", "TwiceAsync", "MaybeAsync").forEach { member ->
+      assertTrue(
+        methods.none { it.getValue("name").jsonPrimitive.content == member },
+        "`$member` is out of ADR-153's scope and must not bind",
+      )
+      assertTrue(
+        diagnostics.any {
+          it.getValue("kind").jsonPrimitive.content == "info_cancellation_token_not_yet_mapped" &&
+              it.getValue("memberName").jsonPrimitive.content == member
+        },
+        "`$member` must be skipped with info_cancellation_token_not_yet_mapped, found: " +
+            diagnostics.map {
+              it.getValue("memberName").jsonPrimitive.content to
+                  it.getValue("kind").jsonPrimitive.content
+            },
+      )
+    }
+    assertTrue(
+      diagnostics.none {
+        it.getValue("kind").jsonPrimitive.content == "skipped_unbound_type_reference" &&
+            it.getValue("memberName").jsonPrimitive.content == "Wait"
+      },
+      "a CancellationToken is not an unbound type reference; that hint tells the user to bind " +
+          "the BCL",
+    )
+
+    // A token on a constructor is out of scope too: only the parameterless ctor survives.
+    assertEquals(1, type.getValue("constructors").jsonArray.size)
   }
 
   @Test

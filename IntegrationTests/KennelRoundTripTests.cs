@@ -137,4 +137,89 @@ public class KennelRoundTripTests
     [Fact]
     public async Task Board_KotlinImplementedInterface_UsedAfterTheAwait() =>
         Assert.Equal("boarded Nibbles the goat with 4 legs~1", await KennelSample.BoardNibblesAsync());
+
+    // ----------------------------------------------------------------------------------------
+    // ADR-153: cancellation, in both directions, which are NOT the same mechanism.
+    //
+    //   Kotlin cancels -> the bridge cancels the CancellationToken it supplied -> C# is told to
+    //                     stop. `End` is never reached, so nothing is mapped and the ONLY
+    //                     observable is C#-side state, read back off the same object.
+    //   C# cancels     -> the task ends Canceled, `End` rethrows, and the mapping turns that into
+    //                     a Kotlin CancellationException carrying the NugetManagedException.
+    //
+    // The two token-taking members that must stay SKIPPED (the sync `Wait(CancellationToken)` and
+    // the two-token `HerdAsync`) cannot be asserted from here: their absence is a property of the
+    // generated Kotlin surface, pinned by the `info_cancellation_token_not_yet_mapped` diagnostic
+    // on the generator side. If they ever bind, KennelSample.kt is where it shows.
+    // ----------------------------------------------------------------------------------------
+
+    // KOTLIN CANCELS, via withTimeout. Three facts in one string, in order: the Kotlin wait ended
+    // (it did not hang on a method that waits forever), C# SAW the cancellation on its token, and
+    // it saw it exactly once. Only the first of those is true today, which is the feature: a
+    // bridge that supplies a token it never cancels passes the first and fails the other two.
+    [Fact]
+    public async Task Stay_CoroutineTimeout_CancelsTheCSharpToken() =>
+        Assert.Equal("true|true|1", await KennelSample.StayTimesOutAsync());
+
+    // The same cancellation from `job.cancel()` on another coroutine, so the thunk that cancels
+    // the token is entered from a thread the CLR did not create (ADR-153's inferred claim C,
+    // silent if wrong on the happy path and a crash if wrong at all).
+    [Fact]
+    public async Task Stay_JobCancel_CancelsTheCSharpToken() =>
+        Assert.Equal("true|1", await KennelSample.StayJobCancelledAsync());
+
+    // A method that IGNORES its token: the Kotlin wait still ends promptly (C# is never obliged
+    // to stop), and the C# work still runs to completion afterwards. Both halves, because "ended
+    // promptly" alone is also what a dropped call looks like.
+    [Fact]
+    public async Task Dawdle_IgnoredToken_KotlinResumesAndTheCSharpWorkRunsOn() =>
+        Assert.Equal("true|true", await KennelSample.DawdleIgnoresTheTokenAsync());
+
+    // C# CANCELS ITSELF, Kotlin did not: the only path that reaches the mapping site at all, so
+    // this row is the feature and not an edge case. Today it arrives as a plain
+    // NugetManagedException and is not caught as a CancellationException at all. The cause is
+    // asserted rather than the type alone: the mapping must not lose `managedType`.
+    [Fact]
+    public async Task Bolt_CSharpSelfCancel_SurfacesAsCancellationExceptionWithTheManagedCause() =>
+        Assert.StartsWith(
+            "System.Threading.Tasks.TaskCanceledException|",
+            await KennelSample.BoltSurfacesAsCancellationAsync());
+
+    // The same self-cancel through a user SUBCLASS of OperationCanceledException. This is the row
+    // that decides the mapping's implementation: a Kotlin-side name match over the two well-known
+    // type names is green on Bolt and red here, an `is OperationCanceledException` test on the C#
+    // side is green on both.
+    [Fact]
+    public async Task Scarper_UserOceSubclass_SurfacesAsCancellationException() =>
+        Assert.Equal("Test.Kennel.BoltedException|Oreo scarpered", await KennelSample.ScarperSurfacesAsCancellationAsync());
+
+    // The SYNC route: one managed-throw site serves every thunk, so an OperationCanceledException
+    // out of an ordinary (non-async, token-less) call maps too. Pinned as a decision, not left as
+    // an accident of where the mapping happens to live.
+    [Fact]
+    public async Task Startle_SynchronousOce_SurfacesAsCancellationException() =>
+        Assert.Equal(
+            "System.OperationCanceledException|Mylo startled off the sill",
+            await KennelSample.StartleSurfacesAsCancellationAsync());
+
+    // The token in a MID position, with a string that needs conversion on one side and an int
+    // that does not on the other. An implementation that assumes "the token is last" marshals the
+    // count into the string slot, which is a wrong answer here rather than a compile error.
+    [Fact]
+    public async Task Fetch_TokenInAMiddlePosition_MarshalsTheRemainingArgumentsInOrder() =>
+        Assert.Equal("Mouse x3", await KennelSample.FetchWithAMidTokenAsync());
+
+    // The `CallAsync()` / `CallAsync(CancellationToken)` fold: after elision both project to
+    // `suspend fun call()`, which does not compile in the consumer, so the reader keeps one. This
+    // row says WHICH one, and it must be the token overload: keeping the token-less sibling also
+    // compiles, also binds, and ships the feature with no effect on the commonest .NET shape.
+    [Fact]
+    public async Task Call_OverloadPair_KeepsTheTokenOverload() =>
+        Assert.Equal("called with a token", await KennelSample.CallKeepsTheTokenOverloadAsync());
+
+    // A `= default` token. The bridge always supplies its own, so the default is never consulted;
+    // this pins that `Optional, HasDefault` on the Param row does not change the decision to bind.
+    [Fact]
+    public async Task Doze_DefaultedToken_StillBindsWithTheTokenElided() =>
+        Assert.Equal(6, await KennelSample.DozeWithADefaultTokenAsync());
 }

@@ -1,6 +1,13 @@
 package io.github.xxfast.kotlin.native.nuget.test.kennel
 
 import io.github.xxfast.kotlin.native.nuget.internal.NugetManagedException
+import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import test.kennel.Kennel
 import test.menagerie.IFeedable
 
@@ -122,6 +129,158 @@ suspend fun boardNibbles(): String = Kennel().use { kennel ->
   val goat = Nibbles()
   val boarded = kennel.board(goat)
   "$boarded~${goat.meals}"
+}
+
+// ADR-153: the cancellation half. Two directions meet on these rows and they are NOT the same
+// mechanism:
+//
+//   Kotlin cancels  -> the bridge cancels the CancellationToken it supplied -> C# is told to stop.
+//                      `End` is never called on this path, so nothing is mapped: the coroutine
+//                      ends on its OWN cancellation and the only observable is C#-side state.
+//   C# cancels      -> the task ends Canceled, `End` rethrows, and the mapping turns that into a
+//                      CancellationException whose `cause` is the NugetManagedException.
+//
+// So each row below names which of the two it stands on, and the Kotlin-cancels rows read state
+// back off the C# object rather than trusting that the wait ended.
+
+/** How long to wait for the queued C#-side `Cancel()` to land before reading its effect. */
+private val SETTLE = 200.milliseconds
+
+/** The shortest wait that reliably reaches the suspension inside the C# method. */
+private val IMPATIENT = 50.milliseconds
+
+/** Longer than `DawdleAsync`'s own 300ms, so the row can see it finish after being cancelled. */
+private val PATIENT = 500.milliseconds
+
+/**
+ * `managedType|message` for a cancellation mapped out of C#: the ADR-104 envelope rides as the
+ * `cause`, so nothing is lost by the mapping. A missing or wrong cause is reported rather than
+ * thrown, because a cast failure here would surface as an unrelated Kotlin exception in the test.
+ */
+private fun describeCancellation(e: CancellationException): String {
+  val cause = e.cause
+  if (cause !is NugetManagedException) return "cause=${cause?.toString() ?: "<null>"}"
+  return "${cause.managedType}|${e.message}"
+}
+
+/**
+ * KOTLIN CANCELS, through `withTimeout`. `stay` waits forever on its token, so the only way this
+ * returns is the bridge cancelling the token it supplied. `stayCancelled` is read off the SAME C#
+ * object afterwards: without it, a bridge that cancels nothing looks identical from here, because
+ * the coroutine ends on its own timeout either way.
+ */
+suspend fun stayTimesOut(): String = Kennel().use { kennel ->
+  val result: Int? = withTimeoutOrNull(IMPATIENT) { kennel.stay("Oreo") }
+  delay(SETTLE)
+  "${result == null}|${kennel.stayCancelled}|${kennel.stayCancellations}"
+}
+
+/**
+ * KOTLIN CANCELS, through `job.cancel()` from another coroutine, so the thunk that cancels the
+ * token is entered from a thread the CLR did not create and did not previously call (ADR-153's
+ * inferred claim C). Same C#-side assertion as [stayTimesOut]; different cancelling thread.
+ */
+suspend fun stayJobCancelled(): String = Kennel().use { kennel ->
+  coroutineScope {
+    val job = launch { kennel.stay("Mylo") }
+    delay(IMPATIENT)
+    job.cancelAndJoin()
+  }
+  delay(SETTLE)
+  "${kennel.stayCancelled}|${kennel.stayCancellations}"
+}
+
+/**
+ * KOTLIN CANCELS a method that IGNORES its token. The wait must still end promptly (the coroutine
+ * resumes with its own exception; C# is never obliged to stop), and the C# work runs on to
+ * completion afterwards. Both halves in one row, because "ends promptly" alone would also be true
+ * of a bridge that dropped the call on the floor.
+ */
+suspend fun dawdleIgnoresTheToken(): String = Kennel().use { kennel ->
+  val result: Int? = withTimeoutOrNull(IMPATIENT) { kennel.dawdle() }
+  delay(PATIENT)
+  "${result == null}|${kennel.dawdleCompleted}"
+}
+
+/**
+ * C# CANCELS ITSELF and Kotlin does not: the one path on which `End` is reached with a cancelled
+ * task, and therefore the only path where the mapping runs at all. `TaskCanceledException`, the
+ * shape a name match would catch.
+ */
+suspend fun boltSurfacesAsCancellation(): String = Kennel().use { kennel ->
+  try {
+    kennel.bolt()
+    NO_THROW
+  } catch (e: CancellationException) {
+    describeCancellation(e)
+  }
+}
+
+/**
+ * The same self-cancel ending in a USER SUBCLASS of `OperationCanceledException`. A Kotlin-side
+ * `when (managedType)` over the two well-known names leaves this one an ordinary
+ * [NugetManagedException], so it is caught here as one and reported, rather than escaping.
+ */
+suspend fun scarperSurfacesAsCancellation(): String = Kennel().use { kennel ->
+  try {
+    kennel.scarper("Oreo")
+    NO_THROW
+  } catch (e: CancellationException) {
+    describeCancellation(e)
+  } catch (e: NugetManagedException) {
+    "unmapped|${describe(e)}"
+  }
+}
+
+/**
+ * The SYNC route: one managed-throw site serves every thunk, so an `OperationCanceledException`
+ * out of an ordinary call maps too. Pins that as a decision rather than an accident.
+ */
+suspend fun startleSurfacesAsCancellation(): String = Kennel().use { kennel ->
+  try {
+    kennel.startle().toString()
+  } catch (e: CancellationException) {
+    describeCancellation(e)
+  }
+}
+
+/**
+ * The token in a MID position, between a `String` that needs conversion and an `Int` that does
+ * not. An implementation that assumes the token is last shifts one of them into the other's slot.
+ */
+suspend fun fetchWithAMidToken(): String = Kennel().use { it.fetch("Mouse", 3) }
+
+/**
+ * The `CallAsync()` / `CallAsync(CancellationToken)` fold. The two C# bodies answer differently,
+ * so this is the row that says WHICH sibling survived; a fold that kept the token-less one still
+ * compiles and still binds.
+ */
+suspend fun callKeepsTheTokenOverload(): String = Kennel().use { it.call() }
+
+/** A `= default` token: still elided, still bound, the default never consulted. */
+suspend fun dozeWithADefaultToken(): Int = Kennel().use { it.doze(3) }
+
+/**
+ * Leak driver, CANCELLED path: [times] cancelled calls on ONE receiver, so the CTS handle minted
+ * per call is released by the `invokeOnCancellation` handler [times] times over. Returns the C#
+ * count so a run where nothing was actually cancelled cannot pass as a clean one.
+ */
+suspend fun stayCancelledRepeatedly(times: Int): Int = Kennel().use { kennel ->
+  repeat(times) { withTimeoutOrNull(IMPATIENT) { kennel.stay("Oreo") } }
+  delay(SETTLE)
+  kennel.stayCancellations
+}
+
+/**
+ * Leak driver, COMPLETED path, already-completed task: the ADR-019 race with a CTS handle riding
+ * on it. The completion can land before `suspendCancellableCoroutine`'s block returns, which is
+ * the window in which the handle is minted but not yet stored (ADR-153's inferred claim B), so a
+ * miss there leaks one .NET handle per call and one Kotlin `ctx` per call.
+ */
+suspend fun pounceRepeatedly(times: Int): Int = Kennel().use { kennel ->
+  var total = 0
+  repeat(times) { total += kennel.pounce(2) }
+  total
 }
 
 /**

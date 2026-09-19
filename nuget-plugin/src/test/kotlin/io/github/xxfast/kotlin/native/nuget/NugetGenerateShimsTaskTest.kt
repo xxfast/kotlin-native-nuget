@@ -1544,7 +1544,7 @@ class NugetGenerateShimsTaskTest {
   }
 
   @Test
-  fun `NugetRuntimeRegistration cs gains leading slotCount 5 and a contractHash literal`() {
+  fun `NugetRuntimeRegistration cs gains leading slotCount 7 and a contractHash literal`() {
     val files: List<GeneratedFile> = generateCSharpShims(templateWithCtorRir, "sample")
     val runtimeShim: GeneratedFile = requireNotNull(
       files.find { it.relativePath.endsWith("NugetRuntimeRegistration.cs") }
@@ -1559,9 +1559,14 @@ class NugetGenerateShimsTaskTest {
       runtimeShim.content,
       "IntPtr managedErrorTypePtr, IntPtr managedErrorMessagePtr",
     )
+    // ADR-153: the cancellation release slot and the error-kind accessor.
+    assertContains(
+      runtimeShim.content,
+      "IntPtr releaseCancellationPtr, IntPtr managedErrorKindPtr",
+    )
     assertTrue(
-      Regex("nuget_runtime_register\\(\\s*5,\\s*-?\\d+L,").containsMatchIn(runtimeShim.content),
-      "ADR-054/089/104: nuget_runtime_register must be called with slotCount=5 and a Long " +
+      Regex("nuget_runtime_register\\(\\s*7,\\s*-?\\d+L,").containsMatchIn(runtimeShim.content),
+      "ADR-054/089/104/153: nuget_runtime_register must be called with slotCount=7 and a Long " +
           "contractHash literal, got:\n${runtimeShim.content}",
     )
   }
@@ -1645,7 +1650,7 @@ class NugetGenerateShimsTaskTest {
 
     assertContains(
       runtimeShim.content,
-      "register enter <runtime> -> nuget_runtime_register(5 slots) dll=sample",
+      "register enter <runtime> -> nuget_runtime_register(7 slots) dll=sample",
       message = "ADR-089/104: the shared runtime registers free + weaken + resolve + the two " +
           "managed-error accessors",
     )

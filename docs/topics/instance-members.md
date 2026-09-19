@@ -130,8 +130,74 @@ try {
 ```
 
 The completion runs on a .NET thread-pool thread, never inline on the thread that started the
-call. Cancelling the Kotlin coroutine (e.g. its enclosing scope) stops the Kotlin side from
-waiting, but doesn't cancel the C# task; its result, once it arrives, is discarded.
+call. A task that ends *cancelled* is different from an ordinary fault: see
+[Cancellation](#async-cancellation) below.
+
+## Cancellation {id="async-cancellation"}
+
+An async method with exactly one `CancellationToken` parameter, at any position, binds with the
+token elided; the bridge supplies it, so cancelling the Kotlin side that's awaiting the call
+actually tells the C# work to stop:
+
+```C#
+// TestDependency/Kennel.cs
+public async Task<int> StayAsync(string name, CancellationToken ct)
+{
+    try { await Task.Delay(Timeout.Infinite, ct); return name.Length; }
+    catch (OperationCanceledException) { StayCancelled = true; throw; }
+}
+```
+
+```kotlin
+val kennel = Kennel()
+withTimeoutOrNull(50.milliseconds) { kennel.stay("Oreo") }  // suspend fun stay(name: String): Int
+delay(200.milliseconds)         // give the queued C# cancel a beat to land
+kennel.stayCancelled            // true: StayAsync's token really was cancelled
+```
+
+This covers `withTimeout`/`withTimeoutOrNull`, `job.cancel()`, and disposing an enclosing
+`coroutineScope`, the same as any other coroutine cancellation. A `= default` value on the
+parameter makes no difference; the bridge always supplies its own token, never the default.
+A method that ignores its token behaves as before: the Kotlin wait still ends promptly, but the
+C# work runs to completion regardless.
+
+A C# task that ends cancelled (`OperationCanceledException` or any subtype, including
+`TaskCanceledException`, thrown from a sync **or** async call) surfaces as stdlib
+`kotlin.coroutines.cancellation.CancellationException` instead of `NugetManagedException`, with
+the original `NugetManagedException` riding as `cause`:
+
+```C#
+public async Task BoltAsync()
+{
+    using CancellationTokenSource own = new();
+    Task running = Task.Delay(Timeout.Infinite, own.Token);
+    own.Cancel();          // C# cancels itself; Kotlin never touched this token
+    await running;
+}
+```
+
+```kotlin
+try {
+  kennel.bolt()
+} catch (e: CancellationException) {
+  val cause = e.cause as NugetManagedException
+  cause.managedType   // "System.Threading.Tasks.TaskCanceledException"
+}
+```
+
+This is the one case worth being careful with: a `CancellationException` thrown into a coroutine
+that Kotlin itself never cancelled ends that coroutine silently, without failing its parent, the
+same footgun a manually-thrown `CancellationException` is anywhere in kotlinx. Catch it explicitly,
+as above, around any call whose C# side might cancel itself.
+
+Two C# overloads that differ only by a trailing `CancellationToken` (`FooAsync()` and
+`FooAsync(CancellationToken)`) both elide to the same `suspend fun foo()`; the reader keeps the
+token-taking overload and drops the other, so a consumer only ever sees one `foo()`.
+
+A **sync** method taking a token, a method taking two or more tokens, a nullable
+`CancellationToken?`, or a token on a constructor or property, is not bound; it's a named
+diagnostic (`info_cancellation_token_not_yet_mapped`) rather than the generic
+`skipped_unbound_type_reference` hint.
 
 ## Limitations
 
@@ -140,6 +206,8 @@ waiting, but doesn't cancel the C# task; its result, once it arrives, is discard
 - Struct-typed instance properties and methods are supported; see [C# structs](structs.md).
 - `ValueTask`/`ValueTask<T>` methods, and an async method on a bound interface, a struct, or a
   generic class, don't bind yet; see [The bridgeable subset](bridgeable-subset.md).
+- A sync method taking a `CancellationToken`, a method taking more than one, a nullable
+  `CancellationToken?`, and a token on a constructor or property are not yet bound.
 
 <seealso>
     <category ref="related">
@@ -153,5 +221,6 @@ waiting, but doesn't cancel the C# task; its result, once it arrives, is discard
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/053-nullable-reference-types-in-kotlin.md">ADR-053: Nullable reference types in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/057-csharp-overload-sets-in-kotlin.md">ADR-057: C# overload sets in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/152-task-to-suspend-fun.md">ADR-152: Reverse Task/Task&lt;T&gt; to suspend fun</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/153-reverse-cancellation-token.md">ADR-153: Reverse cancellation token</a>
     </category>
 </seealso>

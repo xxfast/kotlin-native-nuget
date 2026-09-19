@@ -46,7 +46,16 @@
       sync Read sibling (suffix kept), an async member taking a Kotlin-implementable IFeedable
       it uses AFTER the await, the single-byte NullableAttribute encoding (LedgerAsync), and one
       ValueTask&lt;int&gt; that must stay skipped with a named diagnostic.
-    </Description>
+      Test.Kennel.Kennel, ADR-153 additions (CancellationToken): a token-honouring member with
+      observable C#-side state (StayAsync / StayCancelled / StayCancellations), a token-ignoring
+      one (DawdleAsync), a `= default` token (DozeAsync), a token in a MID position beside a
+      string and an int (FetchAsync), an already-completed token task (PounceAsync), the
+      CallAsync() / CallAsync(CancellationToken) overload pair that folds to the token overload,
+      two C#-side self-cancels (BoltAsync ending in TaskCanceledException, ScarperAsync in a user
+      OperationCanceledException subclass), a sync OCE throw (Startle), and the two shapes that
+      must stay skipped with info_cancellation_token_not_yet_mapped: a sync token-taking method
+      (Wait) and a two-token one (HerdAsync).
+</Description>
   </PropertyGroup>
 
   <!--

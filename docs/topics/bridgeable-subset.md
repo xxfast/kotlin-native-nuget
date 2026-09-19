@@ -226,10 +226,14 @@ Static and instance methods and properties bind on classes the same way; see
 rules; see [C# structs](structs.md).
 
 - `Task`- and `Task<T>`-returning methods bind as a Kotlin `suspend fun`; see
-  [Instance members](instance-members.md#async-methods).
+  [Instance members](instance-members.md#async-methods). A single trailing or mid-position
+  `CancellationToken` parameter elides, with cancellation of the Kotlin side reaching the C# token;
+  see [Cancellation](instance-members.md#async-cancellation).
 - `ValueTask`, `ValueTask<T>`, and `IAsyncEnumerable<T>` don't bind yet. An `async` method on a
   struct, on a bound interface, or on a generic class also doesn't bind yet: each is skipped with
-  its own diagnostic rather than silently dropped.
+  its own diagnostic rather than silently dropped. A sync method taking a token, a method taking
+  more than one, a nullable `CancellationToken?`, and a token on a constructor or property don't
+  bind either.
 - An indexer (`this[int]`) doesn't bind, on a class or an interface.
 - An `event` member doesn't bind, on a class or an interface.
 
@@ -278,6 +282,11 @@ try {
 
 `NugetManagedException` carries the .NET type's full name and its `Message`, verbatim, and nothing
 else: no stack trace and no `InnerException`/cause chain today.
+
+An `OperationCanceledException` (or any subtype, including `TaskCanceledException`) is the one
+exception mapped differently: it surfaces as stdlib `CancellationException` with the
+`NugetManagedException` as `cause`, not as a plain `NugetManagedException`; see
+[Cancellation](instance-members.md#async-cancellation).
 
 <note>
 <p>An exception thrown by a Kotlin implementation of a C# interface (see
