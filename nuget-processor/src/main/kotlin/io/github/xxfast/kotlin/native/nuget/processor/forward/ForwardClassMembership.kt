@@ -349,8 +349,18 @@ internal fun KSClassDeclaration.forwardSupertypeNames(): Set<String> =
  * API, Inferred). The answer is trusted only when it lands on a class, because a base class that
  * does not redeclare the member leaves it abstract and the overridee is then the interface
  * declaration, which says nothing about what the base class renders. The fallback walks the base
- * class's own visible members by simple name, which answers that shape too, and answers `Ledge`
- * correctly either way: `Shelf` declares no `groom` under any name.
+ * class's own visible members, which answers that shape too, and answers `Ledge` correctly either
+ * way: `Shelf` declares no `groom` under any name.
+ *
+ * The function fallback compares *signatures*, not simple names. A name was wrong the moment the
+ * base overloaded the interface member's name at another arity: `class Post : Perch(), Scratchable`
+ * overriding `Scratchable.scratch()` matched `Perch.scratch(Int)` and rendered
+ * `public override string Scratch()` against a base whose only `Scratch` takes an `int`, CS0115.
+ * The comparison carries ADR-082's wildcard ([forwardInheritedSignatureKey]) rather than the strict
+ * key `isDeclaredBy` uses, because the base is read *unsubstituted*: `open class Base<T>` hands
+ * back `f(x: T)` while the subclass declares `f(x: String)`, and a strict key would call a real
+ * override `virtual` (CS0506 against a `virtual` base member, CS0114 otherwise). Properties stay
+ * name-keyed: Kotlin properties cannot overload, so for them the name is the signature.
  */
 internal fun KSDeclaration.baseClassOverridee(
   superClass: KSClassDeclaration?,
@@ -369,8 +379,11 @@ internal fun KSDeclaration.baseClassOverridee(
     is KSPropertyDeclaration ->
       superClass.getAllProperties().firstOrNull { it.simpleName.asString() == name }
 
-    is KSFunctionDeclaration ->
-      superClass.getAllFunctions().firstOrNull { it.simpleName.asString() == name }
+    is KSFunctionDeclaration -> {
+      val key: List<String> = forwardSignatureKey()
+      superClass.getAllFunctions()
+        .firstOrNull { inherited -> inherited.forwardInheritedSignatureKey().admits(key) }
+    }
 
     else -> null
   }
@@ -436,6 +449,38 @@ internal fun KSFunctionDeclaration.forwardSignatureKey(): List<String> =
   listOf(simpleName.asString()) +
       listOfNotNull(extensionReceiver?.resolve()?.forwardTypeKey()) +
       parameters.map { parameter -> parameter.type.resolve().forwardTypeKey() }
+
+/**
+ * [forwardSignatureKey] read from the *inherited* side: the same positions, with a position that
+ * mentions a type parameter spelled `null`, which [admits] treats as matching any type
+ * (ADR-082's wildcard).
+ *
+ * The wildcard belongs to whichever side is read unsubstituted. `open class Base<T>` spells its own
+ * `f(x: T)` and `holds(xs: List<T>)` regardless of what `class Sub : Base<String>()` writes, so a
+ * strict comparison would call `Sub.f(x: String)` a fresh slot; a supertype in
+ * `ForwardSupertypeMembers` spells its members the same way. Both read this key and compare it
+ * against the subject's strict [forwardSignatureKey], so the two comparisons cannot drift.
+ */
+internal fun KSFunctionDeclaration.forwardInheritedSignatureKey(): List<String?> =
+  listOf<String?>(simpleName.asString()) +
+      listOfNotNull(extensionReceiver?.resolve()).map { it.forwardWildcardTypeKey() } +
+      parameters.map { parameter -> parameter.type.resolve().forwardWildcardTypeKey() }
+
+/**
+ * [forwardTypeKey], wildcarded: `null` for a position that *mentions* a type parameter anywhere in
+ * its arguments, see [mentionsTypeParameter].
+ */
+internal fun KSType.forwardWildcardTypeKey(): String? =
+  if (mentionsTypeParameter()) null else forwardTypeKey()
+
+/**
+ * ADR-082's match rule, this side inherited: equal arity, and each position either wildcarded here
+ * or equal to the declared one. The name sits in position 0 of both keys and is never wildcarded,
+ * so it has to match like any other position.
+ */
+internal fun List<String?>.admits(declared: List<String>): Boolean =
+  size == declared.size &&
+      zip(declared).all { (inherited, own) -> inherited == null || inherited == own }
 
 /**
  * One type position, as a comparable string: the alias-expanded declaration's qualified name, its

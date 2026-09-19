@@ -348,26 +348,31 @@ internal fun List<ForwardCallableCatalogEntry>.nameUnroutedPositions(
  */
 internal class ForwardSupertypeMembers private constructor(
   private val propertyNames: Set<String>,
-  private val functions: List<Signature>,
+  private val functions: List<List<String?>>,
 ) {
-  /** [parameters] holds one key per position; `null` is a supertype type parameter (wildcard). */
-  private data class Signature(val name: String, val parameters: List<String?>)
-
   fun declares(property: KSPropertyDeclaration): Boolean =
     property.simpleName.asString() in propertyNames
 
+  /**
+   * The wildcard comparison itself lives in `ForwardClassMembership.kt` beside the strict key
+   * ([forwardInheritedSignatureKey] / [admits]), shared with `baseClassOverridee`'s base-class
+   * fallback, so the two comparisons cannot drift.
+   *
+   * The wildcard is structural, not top-level, because the key is: once `forwardTypeKey()` recurses
+   * into type arguments, a supertype's `holds(items: List<T>)` spells
+   * `kotlin.collections.List<T>` while the value class's delegated or overriding
+   * `holds(items: List<String>)` spells `kotlin.collections.List<kotlin.String>`, and a
+   * top-level-only wildcard would stop matching the two. That member would leak out of
+   * `INHERITED_MEMBER` and render a delegation forwarder. Over-matching is the direction ADR-082
+   * already chose here.
+   *
+   * Both keys now carry the extension receiver, which this comparison used to leave out: a
+   * supertype's plain `fun f(x: Int)` no longer claims a value class's own `fun String.f(x: Int)`.
+   * No shipped fixture has a supertype-declared member extension, so this moves nothing today.
+   */
   fun declares(function: KSFunctionDeclaration): Boolean {
-    val name: String = function.simpleName.asString()
-    val parameters: List<String?> = function.parameters.map { parameter ->
-      typeKey(parameter.type.resolve())
-    }
-    return functions.any { signature ->
-      signature.name == name &&
-          signature.parameters.size == parameters.size &&
-          signature.parameters.zip(parameters).all { (inherited, declared) ->
-            inherited == null || inherited == declared
-          }
-    }
+    val key: List<String> = function.forwardSignatureKey()
+    return functions.any { inherited -> inherited.admits(key) }
   }
 
   companion object {
@@ -382,34 +387,9 @@ internal class ForwardSupertypeMembers private constructor(
           }
           .toSet(),
         functions = superTypes.flatMap { superType ->
-          superType.getAllFunctions().map { function ->
-            Signature(
-              name = function.simpleName.asString(),
-              parameters = function.parameters.map { parameter ->
-                typeKey(parameter.type.resolve())
-              },
-            )
-          }
+          superType.getAllFunctions().map { function -> function.forwardInheritedSignatureKey() }
         },
       )
-    }
-
-    /**
-     * [forwardTypeKey], plus this side's wildcard: null for a position that *mentions* a type
-     * parameter, which the comparison treats as matching any argument type. The strict half of the
-     * spelling lives in `ForwardClassMembership.kt`, so the two comparisons cannot drift.
-     *
-     * The wildcard is structural, not top-level, because the key is: once [forwardTypeKey] recurses
-     * into type arguments, a supertype's `holds(items: List<T>)` spells
-     * `kotlin.collections.List<T>` while the value class's delegated or overriding
-     * `holds(items: List<String>)` spells `kotlin.collections.List<kotlin.String>`, and a
-     * top-level-only wildcard would stop matching the two. That member would leak out of
-     * `INHERITED_MEMBER` and render a delegation forwarder. Over-matching is the direction ADR-082
-     * already chose here.
-     */
-    private fun typeKey(type: KSType): String? {
-      if (type.mentionsTypeParameter()) return null
-      return type.forwardTypeKey()
     }
   }
 }

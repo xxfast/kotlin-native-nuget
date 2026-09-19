@@ -239,6 +239,18 @@ design.
   stays `INHERITED_MEMBER` rather than leaking a delegation forwarder. The residual limitation
   named above (a same-arity overload whose colliding position mentions a supertype type parameter
   over-drops conservatively) is unchanged in kind, now reached by a wider set of positions.
+- **Amendment (2026-09-19), same day, one step further:** the comparison itself moved out of
+  `ForwardSupertypeMembers` into `ForwardClassMembership.kt`, beside the strict key it wildcards
+  (`KSFunctionDeclaration.forwardInheritedSignatureKey()`, `KSType.forwardWildcardTypeKey()`,
+  `List<String?>.admits(List<String>)`). It has a second consumer now:
+  [ADR-101](101-unexported-supertype-skip.md)'s `baseClassOverridee` reads a base class
+  unsubstituted for the `override`/`virtual` decision and needs exactly this wildcard, so one
+  spelling serves both and the two cannot drift. `ForwardSupertypeMembers` keeps its own supertype
+  walk and its property name set; only the function comparison is shared. One behaviour change
+  falls out: both keys now carry the extension receiver, which this comparison used to leave out,
+  so a supertype's plain `fun f(x: Int)` no longer claims a value class's own
+  `fun String.f(x: Int)`. No shipped or fixture supertype declares a member extension, so nothing
+  moves today.
 - ROADMAP Phase 4's "decide whether `getAllFunctions()` supertype members are in the export set"
   closes as decided-no; ADR-064's carried-forward scope note resolves here.
 - `StoryUri` (`test-models/.../StoryUri.kt`) and `Tier1NamedSkipDiagnosticsTest` become the
