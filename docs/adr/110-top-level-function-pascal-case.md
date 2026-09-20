@@ -225,3 +225,74 @@ all untouched. This is a C#-surface-only rename.
 > PascalCase name equals its own file class (`fun greeting()` in `Greeting.kt`) still binds, under
 > a renamed `Kt`-suffixed class (`GreetingKt.Greeting(...)`), with an `INFO_FILE_CLASS_RENAMED`
 > note.
+
+## Amendment (2026-09-20): an `object`'s own properties join its methods on the static class
+
+An `object`'s own `val`/`var` properties reach C# as static properties on the same static class
+its methods already land on (ROADMAP Phase 4, "object properties"). Before this, `CirObject`
+carried methods only; `object Jar { val count: Int }` generated nothing on either side of the
+bridge, and nothing said so.
+
+**Mechanism.** A new `ForwardPropertyPosition.OBJECT`, receiver `ForwardPropertyReceiver.Static(owner)`
+(the same static-owner receiver a companion property already uses; there is no singleton handle on
+the wire), exports `${nativePrefix}_get_/_set_$name` with ADR-117 owner tags. The planned property is
+projected into `CirObject`'s existing `methods: List<CirMember>` — no `CirObject` field, no CIR model
+change; everything downstream already accepts a `CirProperty`/`CirConst` in that list. `OBJECT` is a
+new position rather than a reuse of `COMPANION` so that a `Flow`/`StateFlow`/lambda-typed object
+property is *named* skipped rather than silently dropped (see Consequences). All type coverage — the
+ADR-075 getter/setter independence, nullable fan-out, enums, collections, and handle-typed properties
+(a fresh owned wrapper per read) — comes from the one shared property plan every other static and
+instance position already uses.
+
+**`const val`.** Renders `public const int Capacity = 12;`, exactly like a companion `const val`.
+This exposed and fixed a pre-existing bug: `extractConstValue` (`cir/CirTranslator.kt`) found a
+`const val`'s literal by regex over the *whole source file*, matching the first declaration with that
+bare name. A second object (or companion) in the same file with a same-named `const val` therefore
+silently rendered the first one's value. The search now starts at the declaration's own file
+location; a declaration with no location (a klib dependency) keeps the old, first-match behaviour, so
+a klib `const val` on an object is still out of scope for this fix.
+
+**Inherited members flatten, properties and methods alike.** `object Jar : Base("x")` exposes
+`Jar.Origin` for `Base`'s own `origin` property and `Jar.Restock()` for `Base`'s own method: a C#
+static class can neither extend a class nor implement an interface, so an inherited member has no
+other carrier, and the class route's own `isForwardPlannableMemberOf` predicate (superclass = null)
+already does this re-homing for every other base-less owner. Object methods used to be declared-only;
+they now flatten too. `kotlin.Any`'s members stay excluded, as everywhere else.
+
+**Every dropped supertype relation is named.** A new WARNING reuses the existing
+`SKIPPED_UNEXPORTED_SUPERTYPE` kind (no new kind): the object renders as a static class that "cannot
+extend"/"cannot implement" the declared supertype, its members still bind as statics, and the hint
+says the `is`/`as` relation and any dispatch through the supertype are gone. Unlike the class-route
+use of this kind, this fires **whether or not the supertype is itself exported** — a static class has
+no base-list slot for *any* supertype, not only an out-of-scope one. Sealed `object` arms (ADR-009,
+declared as a real `sealed class` extending its base) and `kotlin.Any` are excluded.
+
+**Fatal name collision.** `val count` beside `fun count()` on one object — declared or inherited —
+renders one C# name (`Count`) twice and fails the build with `ERROR_CSHARP_NAME_COLLISION` (CS0102),
+naming the owner and both Kotlin declarations, the same fatal treatment this ADR's own top-level-name
+collision gets and ADR-113 gives an interface. This is a knowing, accepted cost: a library with this
+shape built silently before this amendment (the property was simply absent) and fails after it.
+
+**`Flow`/`StateFlow`/lambda-typed object properties** are a named `SKIPPED_UNSUPPORTED_PROPERTY` skip:
+no static-owner adapter exists to re-emit them the way the class route's adapters do. Fixing this
+also exposed and closed a pre-existing, unrelated silent drop: `recordDropped`'s exemption for these
+protocol types previously covered every position except `EXTENSION`, so a companion or a top-level
+`Flow`/`StateFlow`/lambda property vanished from C# with no diagnostic at all, for the same "no
+adapter" reason. The exemption is now `position == CLASS` only, so a library with such a companion or
+top-level property now sees a warning it never saw before.
+
+**`lateinit var` read before assignment** reaches C# as a `KotlinException` through the ordinary error
+envelope; `UninitializedPropertyAccessException` is not in the ADR-029 mapping table, so it surfaces
+as the base type.
+
+**Leak coverage.** `LiveHandleTests.cs` gains row 11 (`ObjectHandleProperty_StaticGetter_ReturnsToBaseline`)
+and row 11a (`ObjectCollectionProperty_StaticGetter_ReturnsToBaseline`): the first coverage of any
+static-getter handle mint at all (a companion or top-level getter had none either).
+
+**Cosmetic, known and not tracked further.** A generated `object`'s body no longer ends with a blank
+line before its closing brace; every other container (class, interface, file static class) still
+does.
+
+**Declined, not deferred:** a member extension property declared inside an object (no route for a
+member extension's two receivers); a klib-declared object's `const val` keeps the pre-existing
+first-match literal lookup (no file location to anchor to).

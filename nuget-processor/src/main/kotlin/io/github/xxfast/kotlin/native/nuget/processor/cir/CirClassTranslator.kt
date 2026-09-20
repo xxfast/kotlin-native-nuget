@@ -61,6 +61,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSupertypeNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedSubclass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverride
 import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesBaseClassMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionRead
@@ -2158,27 +2159,177 @@ internal fun translateObject(
   // this function's call site / ADR-060 cells 1 & 25.
   // ADR-095: members come off the catalog (per-object overload numbering; see `addObjectExports`).
   // This also picks up the planner's `parentDeclaration == obj` filter, which this walk never had.
+  // The Kotlin spelling behind each rendered C# member name, so the CS0102 guard below can name
+  // the two declarations the author has to choose between rather than only the C# name they share.
+  val kotlinSpellings: MutableMap<String, MutableList<String>> = mutableMapOf()
+  fun record(csharpName: String, kotlinSpelling: String) {
+    kotlinSpellings.getOrPut(csharpName) { mutableListOf() }.add(kotlinSpelling)
+  }
+
   val methods: List<CirMember> = callableCatalog
     .objectMethods(obj.qualifiedName?.asString() ?: name)
     .flatMap { planned ->
       tracker.trackPlan(planned)
-      ForwardCirPlanProjection.static(planned, libraryName)
+      val members: List<CirMember> = ForwardCirPlanProjection.static(planned, libraryName)
+      val kotlinName: String = planned.invocation.member
+        ?: planned.invocation.symbol.substringAfterLast('.')
+      members.filterIsInstance<CirMethod>().forEach { record(it.name, "fun $kotlinName()") }
+      members
     }
 
+  // ROADMAP Phase 4: a `const val` on an object renders as a C# `const`, exactly as a companion's
+  // does. Without this an object declaring nothing but consts rendered a completely empty static
+  // class.
+  val consts: List<CirMember> = obj.getAllProperties()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { it.modifiers.contains(Modifier.CONST) }
+    .mapNotNull { prop ->
+      translateConstProperty(prop)
+        ?.also { record(it.name, "const val ${prop.simpleName.asString()}") }
+    }
+    .toList()
+
+  // ROADMAP Phase 4: the object's own planned properties, projected off the SAME plan the Kotlin
+  // `@CName` half reads (`addObjectExports`). `CirObject.methods` is a `List<CirMember>`, so the
+  // `CirDllImport` + `CirProperty` nodes `staticProperty` returns need no CIR model change: the
+  // renderer, the ABI contract and the legacy-route scan already read them from this list.
+  val properties: List<CirMember> = obj.getAllProperties()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { !it.modifiers.contains(Modifier.CONST) }
+    .flatMap { prop ->
+      val symbol: String = "${obj.qualifiedName?.asString() ?: name}.${prop.simpleName.asString()}"
+      val planned: ForwardPropertyPlan? = callableCatalog.propertyFor(symbol)
+      if (planned != null) {
+        tracker.trackProperty(planned)
+        val keyword: String = if (planned.setter != null) "var" else "val"
+        record(planned.publicName, "$keyword ${planned.kotlinName}")
+        ForwardCirPropertyProjection.staticProperty(planned, libraryName)
+      } else {
+        emptyList()
+      }
+    }
+    .toList()
+
+  val members: List<CirMember> = consts + properties + methods
+
   emitCsharpSignatureCollisions(
-    methods = methods.filterIsInstance<CirMethod>(),
+    methods = members.filterIsInstance<CirMethod>(),
     container = name,
     symbol = obj,
     logger = logger,
   )
+  emitObjectNameCollisions(members, name, obj, kotlinSpellings, logger)
+  emitObjectDroppedSupertypes(obj, name, logger)
 
   return CirObject(
     name = name,
     libraryName = libraryName,
     nativePrefix = prefix,
-    methods = methods,
+    methods = members,
     doc = obj.forwardKdoc(expects)?.toCirDoc(),
   )
+}
+
+/**
+ * ROADMAP Phase 4: an `object` renders as a C# **static class**, which can neither extend a class
+ * nor implement an interface, so every supertype the author declared is silently dropped from the
+ * generated declaration. `object TreatPantry : Stockroom("kitchen"), Labelled` used to render a
+ * plain `public static class TreatPantry` with nothing said about either name.
+ *
+ * Reuses the class route's [ForwardDiagnosticKind.SKIPPED_UNEXPORTED_SUPERTYPE] kind and sink (one
+ * WARNING per dropped supertype, owner = the object). The reason differs from the class route's --
+ * here the supertype is usually *exported* and still cannot be named, because the C# shape is a
+ * static class, not because the type is missing -- but what is lost is the same thing that kind
+ * exists for: the `is`/`as` relation, while the members stay reachable.
+ *
+ * A sealed `object` arm is excluded: the ADR-009 route declares it as a real `sealed class`
+ * extending its base, so its supertype is not dropped at all.
+ */
+private fun emitObjectDroppedSupertypes(
+  obj: KSClassDeclaration,
+  name: String,
+  logger: KSPLogger,
+) {
+  if (obj.isSealedSubclass()) return
+  val supertypes: List<KSClassDeclaration> = obj.superTypes
+    .map { reference -> reference.resolve().declaration }
+    .filterIsInstance<KSClassDeclaration>()
+    .filter { supertype -> supertype.qualifiedName?.asString() != "kotlin.Any" }
+    .toList()
+  if (supertypes.isEmpty()) return
+  ForwardDiagnosticSink.emit(
+    supertypes.map { supertype ->
+      val simpleName: String = supertype.simpleName.asString()
+      val supertypeName: String = supertype.qualifiedName?.asString() ?: simpleName
+      val relation: String =
+        if (supertype.classKind == ClassKind.INTERFACE) "implement" else "extend"
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNEXPORTED_SUPERTYPE,
+        symbol = obj,
+        declaration = "$name : $simpleName",
+        reason = "object `$name` is generated as the C# static class `$name`, which cannot " +
+            "$relation '$supertypeName', so that supertype is dropped from the generated " +
+            "declaration; $name's own and inherited public members are still bound, as statics " +
+            "on `$name`",
+        hint = "nothing callable is lost, but C# sees no relation between $name and " +
+            "$simpleName, so `is`/`as` against $simpleName and any dispatch through it are gone; " +
+            "declare a class with a private constructor and a singleton instance instead if the " +
+            "consumer needs to pass it as a $simpleName",
+      )
+    },
+    logger,
+  )
+}
+
+/**
+ * ADR-110's CS0102 guard at its second site, the `object` static class (ROADMAP Phase 4).
+ *
+ * `object Jar { val count: Int; fun count(): Int }` is legal Kotlin and renders `Count { get; }`
+ * beside `Count()` on one static class, which C# refuses. Fatal rather than a skip, for ADR-110's
+ * own reason: a planned member is projected into BOTH halves and ADR-055's contract requires it in
+ * each, so it cannot be exported from Kotlin and quietly dropped from the C#.
+ *
+ * A library with this shape built before this guard existed -- the property was simply absent --
+ * and fails after it. That is the knowing cost recorded in the ADR-110 amendment.
+ */
+private fun emitObjectNameCollisions(
+  members: List<CirMember>,
+  objectName: String,
+  obj: KSClassDeclaration,
+  // Every Kotlin declaration behind a rendered C# name, in declaration order. The message names
+  // them: `const val TREAT_COUNT` and `fun treatCount()` both render `TreatCount`, and the C# name
+  // alone is not something the author can search their own source for.
+  kotlinSpellings: Map<String, List<String>>,
+  logger: KSPLogger,
+) {
+  // A `const` collides with a method on exactly the same CS0102 grounds a property does.
+  val valueNames: Set<String> = buildSet {
+    members.filterIsInstance<CirProperty>().forEach { add(it.name) }
+    members.filterIsInstance<CirConst>().forEach { add(it.name) }
+  }
+  members.filterIsInstance<CirMethod>()
+    .map { method -> method.name }
+    .filter { name -> name in valueNames }
+    .distinct()
+    .forEach { collision ->
+      val declarations: String = kotlinSpellings[collision].orEmpty()
+        .joinToString(" and ") { spelling -> "`$spelling`" }
+      ForwardDiagnosticSink.emit(
+        listOf(
+          ForwardDiagnostic(
+            kind = ForwardDiagnosticKind.ERROR_CSHARP_NAME_COLLISION,
+            symbol = obj,
+            declaration = "$objectName.$collision",
+            reason = "object $objectName declares $declarations, which both render the C# name " +
+                "'$collision', and C# cannot declare a property and a method with one name on " +
+                "the static class an object becomes (CS0102)",
+            hint = "rename one of them on object $objectName; a property, a `const val` and a " +
+                "function all render PascalCase in C# (ADR-110)",
+          ),
+        ),
+        logger,
+      )
+    }
 }
 
 internal fun translateCompanionProperty(

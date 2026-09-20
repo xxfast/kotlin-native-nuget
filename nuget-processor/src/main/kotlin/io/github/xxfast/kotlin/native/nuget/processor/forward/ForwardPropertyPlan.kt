@@ -1,7 +1,15 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
-/** The declaration position determines the receiver and export naming, not marshalling semantics. */
-internal enum class ForwardPropertyPosition { CLASS, TOP_LEVEL, EXTENSION, COMPANION }
+/**
+ * The declaration position determines the receiver and export naming, not marshalling semantics.
+ *
+ * [OBJECT] (ADR-075's positions list, ROADMAP Phase 4): an `object`'s own property, a static
+ * position planned by the same `propertyPlan` [COMPANION] uses, so getter/setter independence
+ * applies unchanged. It is a position of its own rather than a reuse of [COMPANION] because no
+ * legacy adapter re-emits a flow, state-flow or lambda typed property for a static owner, so it
+ * must NOT inherit the silence `ForwardPropertyPlanner.recordDropped` grants a class property.
+ */
+internal enum class ForwardPropertyPosition { CLASS, TOP_LEVEL, EXTENSION, COMPANION, OBJECT }
 
 internal sealed interface ForwardPropertyReceiver {
   data class Handle(val owner: String) : ForwardPropertyReceiver

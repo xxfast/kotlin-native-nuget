@@ -670,9 +670,9 @@ class Tier1KdocXmlDocTest {
     val generated: String = Tier1Harness.run(families).generatedCSharp
     assertDocuments(generated, "The registry of perches.", "PerchRegistry")
     assertDocuments(generated, "Finds one.", "Find")
-    // The object's `val count` has no C# surface at all today (`CirObject` carries methods only),
-    // which is a pre-existing gap, not a doc one: there is no declaration to document.
-    assertFalse(generated.contains("How many are registered."), generated)
+    // ROADMAP Phase 4: the object's `val count` is now a static C# property, and it carries its
+    // KDoc through the same `plan.doc` path a class property's does.
+    assertDocuments(generated, "How many are registered.", "Count")
   }
 
   @Test

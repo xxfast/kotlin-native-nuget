@@ -42,6 +42,57 @@ Object methods are PascalCased and their returns marshalled exactly like class m
     ("does not contain a definition") that would point at the real cause.</p>
 </note>
 
+## Object properties
+
+An `object`'s own `val`/`var` properties bind as static properties on its static class, at the same
+type coverage a companion property already has: nullable primitives, enums, collections, and
+handle-typed properties.
+
+```kotlin
+object TreatPantry : Stockroom("kitchen"), Labelled {
+  const val CAPACITY: Int = 12
+  override val label: String = "treats"
+  var count: Int = 4
+  val flavours: List<String> get() = listOf("tuna", "salmon")
+  val favourite: Cat = Cat("Oreo", 9)
+}
+
+open class Stockroom(val origin: String) {
+  fun restock(): Int = origin.length
+}
+```
+
+```C#
+int capacity = TreatPantry.Capacity;             // 12, a real C# const
+TreatPantry.Count = 11;                          // process-global: there is one TreatPantry
+int count = TreatPantry.Count;                   // 11
+
+IReadOnlyList<string> flavours = TreatPantry.Flavours;
+
+using Cat favourite = TreatPantry.Favourite;      // a fresh owned wrapper on every read
+
+string origin = TreatPantry.Origin;               // inherited from Stockroom, flattened onto the static class
+int restocked = TreatPantry.Restock();
+```
+
+A `val` renders get-only, a `var` renders `get`/`set`. A member the object only *inherits* — a base
+class property or method it does not redeclare — is flattened directly onto the static class,
+methods included: a C# static class cannot extend or implement anything, so an inherited member has
+no other place to live. The relation itself is gone: `TreatPantry` cannot be used as a `Stockroom` or
+an `ILabelled`, only through its own flattened members, and a `SKIPPED_UNEXPORTED_SUPERTYPE` warning
+names each dropped supertype at build time (this fires for every declared supertype, whether or not
+it is itself exported, because the C# shape has no base list to put it in).
+
+Declaring a property and a function that render the same C# name on one object — `val count` beside
+`fun count()`, or an inherited method colliding with a declared property — fails the build with
+`ERROR_CSHARP_NAME_COLLISION` (CS0102), naming both Kotlin declarations; rename one of them.
+
+An `Int?`-style nullable property round-trips its null branch the same way a class property does. A
+`lateinit var` read before it is assigned surfaces in C# as a `KotlinException`, not a crash. A
+`Flow`/`StateFlow`/lambda-typed object property has no static-owner adapter, so it generates no C#
+member at all and is named with a `SKIPPED_UNSUPPORTED_PROPERTY` warning instead of vanishing
+silently.
+
 ## Companion objects
 
 A companion's members are static members on the enclosing class itself:
