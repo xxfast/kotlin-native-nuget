@@ -153,6 +153,158 @@ public class BidirectionalTests
         Assert.Equal("Woof!", only.Speak());
     }
 
+    // ---------------------------------------------------------------------------------------
+    // The NULLABLE arms of the same two reads (`legacyInterfaceRead` and
+    // `legacyInterfaceElementReadArgument`). A `suspend fun f(): Pet?` binds as `Task<IPet?>` and a
+    // `StateFlow<Pet?>` as `KotlinStateFlow<IPet?>`; null has to cross as null, and a non-null
+    // C#-implemented value has to keep ADR-136's identity rule through the nullable read. The
+    // sitter is empty until Rex is dropped off, which is the whole point: an empty basket is
+    // `null`, a full one is the same dog.
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task NullableSuspendInterface_NobodyDroppedOff_CrossesAsNull()
+    {
+        using var sitter = new PetSitter();
+
+        // Suspend member read: the completion is handed IntPtr.Zero and must not probe the bridge.
+        Assert.Null(await sitter.HandBackLaterOrNullAsync());
+
+        // Element read, both call sites: property and non-suspend method.
+        Assert.Null(sitter.Watching.Value);
+        using KotlinStateFlow<IPet?> now = sitter.WatchingNow();
+        Assert.Null(now.Value);
+
+        // Top-level suspend read (the other `legacyInterfaceRead` call site).
+        Assert.Null(await PetKt.StrayPetLaterOrNullAsync(false));
+    }
+
+    [Fact]
+    public async Task NullableSuspendInterface_StoredCSharpPet_IsTheOriginalInstance()
+    {
+        using var sitter = new PetSitter();
+        using IPet rex = new Dog("Rex");
+
+        sitter.Take(rex);
+
+        IPet? later = await sitter.HandBackLaterOrNullAsync();
+        Assert.Same(rex, later);
+        Assert.Equal("Woof!", later!.Speak());
+
+        Assert.Same(rex, sitter.Watching.Value);
+        using KotlinStateFlow<IPet?> now = sitter.WatchingNow();
+        Assert.Same(rex, now.Value);
+
+        // The same `_read` delegate on the COLLECT path rather than the `.Value` path. A StateFlow
+        // never completes, so the first replayed element is taken and the enumerator is dropped;
+        // the token is a hang guard, not part of the fact.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await foreach (IPet? seen in sitter.Watching.WithCancellation(cts.Token))
+        {
+            Assert.Same(rex, seen);
+            break;
+        }
+    }
+
+    [Fact]
+    public async Task NullableSuspendInterface_KotlinPet_IsAWorkingWrapper()
+    {
+        using var sitter = new PetSitter();
+        using IPet stray = PetKt.StrayPet();
+
+        sitter.Take(stray);
+
+        IPet? later = await sitter.HandBackLaterOrNullAsync();
+        Assert.NotNull(later);
+        // ADR-005: a Kotlin-backed pet is a fresh wrapper per read, so identity is NOT expected -
+        // what must hold is that the wrapper dispatches.
+        Assert.Equal("Mrrp?", later!.Speak());
+        Assert.Equal("Whiskers the Stray", later.Name);
+        later.Dispose();
+
+        IPet? found = await PetKt.StrayPetLaterOrNullAsync(true);
+        Assert.NotNull(found);
+        Assert.Equal("Mrrp?", found!.Speak());
+        found.Dispose();
+
+        IPet? watched = sitter.Watching.Value;
+        Assert.NotNull(watched);
+        Assert.Equal("Mrrp?", watched!.Speak());
+        watched.Dispose();
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // A PLAIN `Flow<T?>`, the same nullable element on the route that is NOT a StateFlow. Only
+    // StateFlow used to compute `isNullableElement`: the binding declared a non-null element, the
+    // Kotlin half boxed `null as Any`, and the first null emission faulted the stream instead of
+    // arriving as an item. The element nullability is now threaded through the Flow route too.
+    // Three element kinds because the gap was per route, not per element type.
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task NullablePlainFlow_InterfaceElement_YieldsNullInTheMiddleAndCompletes()
+    {
+        using var window = new PassersBy();
+
+        var seen = new List<IPet?>();
+        await foreach (IPet? pet in window.PetsPassingBy()) seen.Add(pet);
+
+        Assert.Equal(3, seen.Count);
+        Assert.NotNull(seen[0]);
+        Assert.Null(seen[1]);
+        Assert.NotNull(seen[2]);
+        Assert.Equal("Mrrp?", seen[0]!.Speak());
+        Assert.Equal("Mrrp?", seen[2]!.Speak());
+        seen[0]!.Dispose();
+        seen[2]!.Dispose();
+    }
+
+    [Fact]
+    public async Task NullablePlainFlow_StringElement_YieldsNullInTheMiddleAndCompletes()
+    {
+        using var window = new PassersBy();
+
+        var seen = new List<string?>();
+        await foreach (string? remark in window.RemarksPassingBy()) seen.Add(remark);
+
+        Assert.Equal(new string?[] { "a tail", null, "a shadow" }, seen);
+    }
+
+    [Fact]
+    public async Task NullablePlainFlow_IntElement_YieldsNullInTheMiddleAndCompletes()
+    {
+        using var window = new PassersBy();
+
+        var seen = new List<int?>();
+        await foreach (int? naps in window.NapsPassingBy()) seen.Add(naps);
+
+        Assert.Equal(new int?[] { 1, null, 3 }, seen);
+    }
+
+    // The control for the ERROR path, alongside the three facts above. While the nullable element
+    // was dropped, a null emission killed the stream with `KotlinException : Kotlin error`: no
+    // Kotlin type, no message. That is not the Flow callback losing detail -- it is the honest
+    // rendering of a Kotlin NullPointerException, whose own `message` is null and whose type is
+    // absent from the mapping table. A flow that fails with a NAMED exception carrying a message
+    // keeps both across the very same `onError` callback, which is what this pins.
+    [Fact]
+    public async Task PlainFlow_ThatThrows_KeepsTheKotlinTypeAndMessage()
+    {
+        using var window = new PassersBy();
+
+        var seen = new List<string>();
+        KotlinInvalidOperationException ex =
+            await Assert.ThrowsAsync<KotlinInvalidOperationException>(async () =>
+            {
+                await foreach (string remark in window.BoomsPassingBy()) seen.Add(remark);
+            });
+
+        // The emission before the throw still arrived: the failure is mid-stream, not at start.
+        Assert.Equal(new[] { "a tail" }, seen);
+        Assert.Equal("boom", ex.Message);
+        Assert.Equal("kotlin.IllegalStateException", ex.KotlinType);
+    }
+
     [Fact]
     public void RepeatedCrossings_ResolveToTheOneCSharpInstance()
     {

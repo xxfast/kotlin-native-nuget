@@ -10,6 +10,7 @@ started. `Flow<T>` becomes `IAsyncEnumerable<T>`, and `StateFlow<T>` adds a sync
 | `suspend fun` | `async Task<T>`, suffixed `Async` |
 | `suspend (A) -> R` lambda | `KotlinSuspendFunc<A, R>` with `InvokeAsync` |
 | `Flow<T>` | `KotlinFlow<T> : IAsyncEnumerable<T>` |
+| `Flow<T?>` | `KotlinFlow<T?>`, a `null` emission is a genuine item |
 | `StateFlow<T>` | `KotlinStateFlow<T> : KotlinFlow<T>`, adds a synchronous `.Value` |
 | `MutableStateFlow<T>` (declared, not narrowed to `StateFlow<T>`) | `KotlinMutableStateFlow<T> : KotlinStateFlow<T>`, `.Value` is settable |
 | coroutine cancellation | `CancellationToken` |
@@ -99,6 +100,16 @@ public static Task<global::TestLibrary.Cat.IPet> StrayPetLaterAsync(Cancellation
 The result is typed with the interface itself, the same as a synchronous interface return, and
 resolves back to the caller's own instance if a C# type implemented that interface. See
 [Interfaces, abstract classes and sealed classes](interfaces-abstract-sealed.md).
+
+A nullable interface return (`suspend fun handBackLaterOrNull(): Pet?`) carries its `?` the same way
+a nullable primitive or object return does:
+
+```C#
+public Task<global::TestLibrary.Cat.IPet?> HandBackLaterOrNullAsync(CancellationToken cancellationToken = default)
+```
+
+`null` crosses as `null`, checked before the identity probe runs, and a non-null, C#-implemented
+result still resolves back to the caller's own instance.
 
 ## `suspend fun` returning `StateFlow<T>`
 
@@ -232,6 +243,37 @@ the Kotlin flow from the start. `WithCancellation` stops the enumeration early.
 An element type that is an interface, or a `List<T>`/`Set<T>`/`Map<K, V>`, is spelled and read
 exactly like the same type at a property or `suspend` return, described above.
 
+### Nullable element `Flow<T?>` {id="flow-nullable-element"}
+
+A nullable element carries its `?` onto `KotlinFlow<T?>`, and a `null` emission is a genuine item,
+not the end of the stream:
+
+```kotlin
+fun petsPassingBy(): Flow<Pet?> = flow {
+  emit(strayPet())
+  emit(null)
+  emit(strayPet())
+}
+fun napsPassingBy(): Flow<Int?> = flowOf(1, null, 3)
+```
+
+```C#
+public KotlinFlow<global::TestLibrary.Cat.IPet?> PetsPassingBy()
+public KotlinFlow<int?> NapsPassingBy()
+```
+
+```C#
+using var window = new PassersBy();
+var seen = new List<int?>();
+await foreach (int? naps in window.NapsPassingBy()) seen.Add(naps);
+// seen: [1, null, 3]
+```
+
+An interface element still resolves a stored C#-implemented instance the same way the non-null form
+does; only a genuinely absent element is `null`. This is the element's own nullability
+(`Flow<T?>`); the whole stream being absent (`Flow<T>?`) is a different, unsupported shape, see
+Limitations.
+
 ## `StateFlow<T>`
 
 ```kotlin
@@ -303,8 +345,9 @@ public KotlinStateFlow<string>? MaybeMood { get; }  // null until the member exi
 ```
 
 A `null` element crossing `await foreach` is a genuine emission, not the end of the stream. Writing
-a nullable element or a nullable member, and a `suspend fun` returning `StateFlow<T?>` or
-`StateFlow<T>?`, are not supported.
+a nullable element or a nullable member is not supported. A `suspend fun` returning `StateFlow<T?>`
+is not supported either: that route reads its element through a shared export with no null arm and
+is skipped with a diagnostic naming the member.
 
 ## Parameters on `Flow`, `StateFlow`, and `suspend` members
 
@@ -340,8 +383,9 @@ members.
   at all) is not supported.
 - `StateFlow<T>` or `Flow<T>` as a function parameter, or as a generic type argument, is not
   supported.
-- A nullable `Flow<T>?`, and a `Pair`, a nullable collection (`List<T>?`), or a collection of a
-  sealed base as a `Flow`/`StateFlow` element, are not supported.
+- A nullable `Flow<T>?` (the whole stream absent, as opposed to a nullable *element* `Flow<T?>`,
+  which is supported), and a `Pair`, a nullable collection (`List<T>?`), or a collection of a sealed
+  base as a `Flow`/`StateFlow` element, are not supported.
 - `Boolean?` / `Char?` value elements on a nullable `StateFlow` are not supported.
 - A `suspend inline fun <reified T> Receiver.f(...): Result<T>` extension has no bridge at all:
   `inline` plus `reified` erase at the native boundary, and `suspend` needs a concrete

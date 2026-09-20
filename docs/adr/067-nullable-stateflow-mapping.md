@@ -441,3 +441,16 @@ coverage today; confirm it before a future feature assumes it is verified (ROADM
 - **`suspend fun` returning a nullable StateFlow**, **nullable StateFlow as a parameter / generic
   type argument** — mirror the corresponding non-nullable StateFlow deferrals (ADR-065) and the Flow
   nullable-member item (ROADMAP line 120).
+
+**2026-09-20 amendment: `suspend fun (): StateFlow<T?>` is now a named skip, not silently bound
+non-null.** ADR-068's suspend-StateFlow route reads its element once through the module-wide
+`nuget_stateflow_value` export, which is `NugetHandles.retain(flow.value as Any)` with no null arm
+and no `try`: a null `.Value` would throw out of that `@CName` export, aborting the process rather
+than faulting a channel the way the property/method routes' per-member exports can. `legacyReturnShape`
+(`forward/ForwardLegacyRouteCollections.kt` ~:242) now refuses a nullable StateFlow element on this
+route (`SKIPPED_UNSUPPORTED_RETURN`, both halves) instead of hard-coding `isNullableElement = false`
+and binding a `KotlinStateFlow<T>` that would crash on the first absent value. Binding it for real
+needs a nullable-aware `nuget_stateflow_value` (widen its return to carry a null arm, mirroring what
+this ADR already did for the per-member `_value` export). Unaffected: the property and non-suspend
+method routes' nullable element (this ADR) and a plain `Flow<T?>`'s nullable element (ADR-065's
+2026-09-20 amendment) both bind today.

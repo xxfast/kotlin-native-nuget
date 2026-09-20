@@ -36,3 +36,12 @@ fun strayPet(): Pet = object : Pet {
 //
 // Whiskers the Stray keeps Oreo and Mylo waiting at the cat flap before ambling in.
 suspend fun strayPetLater(): Pet = strayPet()
+
+// The NULLABLE twin at the TOP-LEVEL suspend route (`CirFunctionTranslator`'s call into
+// `legacyInterfaceRead`), so the nullable arm is proven at both of its call sites and not only on
+// `PetSitter`. Deliberately has NO suspension point: the body can complete before the P/Invoke
+// returns, which is the shape that leaks per-thousand rather than per-call, and the leak harness
+// hammers it in a tight loop for exactly that reason.
+//
+// Some nights Whiskers the Stray shows up at Oreo and Mylo's flap; some nights nobody does.
+suspend fun strayPetLaterOrNull(found: Boolean): Pet? = if (found) strayPet() else null

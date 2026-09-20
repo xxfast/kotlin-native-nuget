@@ -9,3 +9,11 @@ element on the `Flow`/`StateFlow` routes by routing it around `FromHandle<T>` en
 per-member `Func<IntPtr, T>` read delegate, rather than adding a branch to `FromHandle<T>` itself.
 A bare enum element (`StateFlow<Mood>`) is unaffected and stays admitted-but-broken at runtime; this
 item stays open.
+
+2026-09-20: the same hole covers a sealed-base element, a value-class element, and the plain
+`Flow<T>` shape (not only `StateFlow<T>`), since all of them reach `FromHandle<T>`/`Materialize<T>`
+the same way an enum element does. Unlike the nullable-element and nullable-arm gaps this feature
+closed for `Flow`/`StateFlow`, none of these element kinds are named skips today: each one binds
+(compiles, generates a plausible C# signature) and only faults at the first emission or `.Value`
+read, `NotSupportedException` out of the generic unwrap. Verified by reading, not reproduced by a
+new fixture.

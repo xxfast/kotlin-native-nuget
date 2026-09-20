@@ -1160,10 +1160,15 @@ internal fun flowProperty(
   val flowElementTypeResolved: KSType? = if (isFlowType || isStateFlowType) {
     propTypeResolved.arguments.firstOrNull()?.type?.resolve()
   } else null
-  // ADR-067: nullable element (`StateFlow<T?>`) and nullable member (`StateFlow<T>?`) are only
-  // threaded for StateFlow; nullable Flow is out of scope (ADR-065 deferred).
-  val isNullableElement: Boolean =
-    isStateFlowType && flowElementTypeResolved?.isMarkedNullable == true
+  // ADR-067, widened 2026-09-20: a nullable ELEMENT is threaded on BOTH flow shapes. It used to be
+  // `isStateFlowType && ...`, which left a plain `Flow<T?>` declared as a non-null `KotlinFlow<T>`
+  // while the Kotlin half boxed `value as Any`, so the first null emission faulted the stream
+  // (measured: `KotlinException` out of `MoveNextAsync`) instead of arriving as null -- a silent
+  // nullability drop, the worst of the three possible outcomes. The element wire is identical on
+  // the two shapes (one `StableRef` handle per item, `IntPtr.Zero` for null), so this reuses
+  // ADR-067's encoding rather than inventing a second one. A nullable MEMBER (`StateFlow<T>?`) is
+  // still StateFlow-only: it is the `_has_value` two-call pattern, which plain Flow has no half of.
+  val isNullableElement: Boolean = flowElementTypeResolved?.isMarkedNullable == true
   val isNullableMember: Boolean = isStateFlowType && propTypeResolved.isMarkedNullable
   // ADR-071: a genuinely DECLARED MutableStateFlow<T> (not narrowed through .asStateFlow())
   // gains a settable `.Value` -- gated on the exact declared type, a non-nullable
@@ -1360,10 +1365,10 @@ internal fun flowMembers(
     val returnQualified: String? = returnType?.declaration?.qualifiedName?.asString()
     val isStateFlowMethod: Boolean = returnQualified in STATE_FLOW_TYPES
     val flowElementTypeResolved: KSType? = returnType?.arguments?.firstOrNull()?.type?.resolve()
-    // ADR-067: nullable element/member threading mirrors the sibling property branch above;
-    // nullable Flow stays out of scope (ADR-065 deferred).
-    val isNullableElement: Boolean =
-      isStateFlowMethod && flowElementTypeResolved?.isMarkedNullable == true
+    // ADR-067 (widened 2026-09-20): nullable ELEMENT threading mirrors the sibling property branch
+    // above -- both flow shapes, since the per-item wire is the same handle either way. A nullable
+    // MEMBER stays StateFlow-only (the `_has_value` probe has no plain-Flow half).
+    val isNullableElement: Boolean = flowElementTypeResolved?.isMarkedNullable == true
     val isNullableMember: Boolean = isStateFlowMethod && returnType?.isMarkedNullable == true
     // ADR-071: mirrors the sibling property branch above -- a genuinely DECLARED
     // MutableStateFlow<T> function return (not narrowed to StateFlow<T>) gains a settable
@@ -1576,8 +1581,11 @@ internal fun suspendMembers(
   // ADR-068: a `suspend fun` returning StateFlow<T>/MutableStateFlow<T> is peeled into its own
   // bucket BEFORE the plain-async path below claims it -- that path would otherwise resolve the
   // return type's simple name "StateFlow" through KOTLIN_TO_CSHARP_PARAM (a miss) and emit an
-  // undefined-type `Task<StateFlow>`. `suspend fun` returning plain Flow<T> stays on the
-  // (separately deferred) legacy plain-async path.
+  // undefined-type `Task<StateFlow>`. A `suspend fun` returning a plain `Flow<T>` reaches neither
+  // bucket: `legacyReturnShape`'s final branch refuses it by name (it is a generic return that is
+  // not a supported collection), so both halves drop it and `NugetProcessor` reports it as a
+  // SKIPPED_UNSUPPORTED_RETURN. (The earlier wording here -- "stays on the legacy plain-async
+  // path" -- described a route it has never taken.)
   val (stateFlowMethods, plainMethods) = suspendMethods.partition { method ->
     val returnQualified: String? = method.returnType?.resolve()?.expandAliases()
       ?.declaration?.qualifiedName?.asString()
@@ -1718,7 +1726,13 @@ internal fun suspendMembers(
     val returnType = method.returnType?.resolve()?.expandAliases()
     val flowElementTypeResolved: KSType? = returnType?.arguments?.firstOrNull()?.type?.resolve()
     // v1 scope (ADR-068): nullable element/member is deferred; mirror ADR-065's plain (non-null)
-    // shape only.
+    // shape only. The `false` passed to `legacyInterfaceElementReadArgument` below is safe rather
+    // than optimistic: since 2026-09-20 `legacyReturnShape` REFUSES a nullable element on this
+    // bucket by name, so a `suspend fun (): StateFlow<T?>` never reaches this loop at all. It has
+    // to be refused, not threaded: this bucket reads through the module-wide
+    // `nuget_stateflow_value`, which boxes `value as Any` with no null arm and no `try`, so a null
+    // would throw out of a `@CName` export. The ADR-065 property/method routes thread it because
+    // they own per-member exports they can widen to `COpaquePointer?`.
     // ADR-040 / ADR-133 amendment (2026-09-14): an interface element is DECLARED with the
     // projected interface and READ through the backing wrapper, the same split the property
     // `Flow`/`StateFlow` route takes. Without it this site spelled the wrapper at a declared

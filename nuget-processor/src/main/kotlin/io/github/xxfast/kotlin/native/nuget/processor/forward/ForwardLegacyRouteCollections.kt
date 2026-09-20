@@ -231,6 +231,17 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
   // even though the ADR-065 property and method routes now bind one. Refused, not half-bound.
   if (expanded.declaration.qualifiedName?.asString() in STATE_FLOW_TYPES) {
     val element: KSType? = expanded.arguments.firstOrNull()?.type?.resolve()
+    // 2026-09-20: a NULLABLE element is refused here for the same reason a collection element is,
+    // and more sharply. This bucket reads through the module-wide `nuget_stateflow_value`, which
+    // is `NugetHandles.retain(flow.value as Any)` with no null arm and no `try` around it: a null
+    // `.Value` would throw *out of a `@CName` export*, which aborts the process rather than
+    // faulting a channel. The ADR-065 property/method routes now thread a nullable element
+    // (ADR-067's encoding, per-member exports they can widen to `COpaquePointer?`); this one
+    // cannot without widening a shared runtime export's return type, so it skips NAMED instead of
+    // binding a `KotlinStateFlow<T>` that dies on the first absent value.
+    if (element?.isMarkedNullable == true) {
+      return ForwardLegacyReturnShape.Refused(expanded.legacyDescription())
+    }
     return if (legacyFlowElementShape(element) is ForwardLegacyFlowElementShape.Plain) {
       ForwardLegacyReturnShape.Plain
     } else {

@@ -122,13 +122,13 @@ Flow / StateFlow element (`read:` argument to `KotlinFlow<T>` / `KotlinStateFlow
 read: static h => (NugetMarshal.TryResolveCSharp(h, out global::TestLibrary.Cat.IPet csharpOriginal) ? csharpOriginal : new global::TestLibrary.Cat.Pet(h))
 ```
 
-**Inferred (not compiled yet):** the nullable-element form
-`static h => h == IntPtr.Zero ? null : (TryResolveCSharp(...) ? csharpOriginal : new Pet(h))`
+~~Inferred (not compiled yet):~~ **Compiled 2026-09-20 (see amendment below):** the nullable-element
+form `static h => h == IntPtr.Zero ? null : (TryResolveCSharp(...) ? csharpOriginal : new Pet(h))`
 compiles against `Func<IntPtr, IPet?>`. The same conditional shape already compiles on the sync
 nullable return (`docs/topics/interfaces-abstract-sealed.md:3437`), and the inner conditional's
 natural type is `IPet` (the wrapper converts implicitly to the interface, not the reverse), so the
 only new element is being the body of a `static` lambda; `out` declarations are legal in lambda
-bodies. If this is wrong it fails at `GeneratedBindingsCheck`, not silently.
+bodies.
 
 ### Ownership
 
@@ -202,3 +202,24 @@ wanted, but the top-level `Pet` pair is the minimum.
   gets the resolving read for free once it takes the `flowElementRead` path; the generic-function
   route's `FromHandle<TResult>` (`CirFunctionRenderer.kt:286`) does not resolve and has no
   interface fixture, left with Alternative 2.
+
+**2026-09-20 amendment: the nullable arms are now fixture-covered, and the "Inferred (not compiled
+yet)" paragraph above is compiled.** `PetSitter` gained `handBackLaterOrNull(): Pet?` (suspend) and
+`watching`/`watchingNow(): StateFlow<Pet?>` (property and method element), and top-level `Pet.kt`
+gained `strayPetLaterOrNull(found: Boolean): Pet?`, so both nullable spellings from the "Generated
+C#, after" section now compile under `GeneratedBindingsCheck` and round-trip: `null` crosses as
+`null`, and a stored C#-implemented `Dog` still resolves to the original instance through the
+nullable arm (`Assert.Same`), exactly as the non-null arm does. The nullable-element form is reached
+only by `StateFlow<IFoo?>` (property and non-suspend method); a plain `Flow<IFoo?>` used to take a
+different, non-null read (fixed separately by [ADR-065](065-stateflow-mapping.md)'s 2026-09-20
+amendment, not by this ADR's `interfaceReturnExpression` change) and now reaches the same resolving
+arm as `StateFlow<IFoo?>` because `isNullableElement` is no longer StateFlow-only. Pinned by a
+second `Tier1InterfaceAsyncIdentityReadTest` cell (nullable spellings) and the new
+`Tier1NullablePlainFlowElementTest`. `LeakTests/LiveHandleTests.cs` gained five rows for the
+nullable arms, between rows 6f and 6g: `NullableSuspendReturn_NullResult_ReturnsToBaseline`,
+`NullableSuspendReturn_ResolvedCSharpInterface_ReturnsToBaseline`,
+`NullableStateFlowInterfaceElement_ValueAndCollect_ReturnsToBaseline`,
+`NullableTopLevelSuspendInterface_TightLoop_ReturnsToBaseline` (2000 iterations on the
+no-suspension-point route, the shape that leaks per-thousand rather than per-call), and
+`NullablePlainFlowInterfaceElement_Collected_ReturnsToBaseline`. Verify green:
+`:nuget-processor:test` 968/0; IntegrationTests 2001/0, LeakTests 63/0.
