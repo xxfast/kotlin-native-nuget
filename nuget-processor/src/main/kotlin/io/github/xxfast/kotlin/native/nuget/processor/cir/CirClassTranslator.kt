@@ -56,6 +56,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.droppedBaseChain
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticTypeName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ownsSentence
+import io.github.xxfast.kotlin.native.nuget.processor.forward.escalatedForStrictDependencyTypes
 import io.github.xxfast.kotlin.native.nuget.processor.forward.sealedAsHandle
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipDetail
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipReason
@@ -298,14 +299,14 @@ private fun emitAbstractMethodSkip(
     ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
   } else {
     ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN
-  }
+  }.escalatedForStrictDependencyTypes(reason, context.strictDependencyTypes)
   val diagnostic: ForwardDiagnostic = if (reason.ownsSentence(detail)) {
     ForwardDiagnostic(
       kind = kind,
       symbol = method,
       declaration = declaration,
       reason = reason.diagnosticReason(detail),
-      hint = reason.diagnosticHint(detail, context.includePackages),
+      hint = reason.diagnosticHint(detail, excludeEntries = context.excludePackages),
       owner = owner,
       member = method.simpleName.asString(),
     )
@@ -367,11 +368,15 @@ private fun emitInheritedAbstractPropertySkip(
   val detail: String? = type.skipDetail()
   val diagnostic: ForwardDiagnostic = if (reason?.ownsSentence(detail) == true) {
     ForwardDiagnostic(
-      kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+      // ADR-154 §6: the re-homed abstract PROPERTY takes the same reason-keyed escalation the
+      // planner routes do, so strict mode's "every dependency type is admitted or excluded by
+      // name" has no hole on this route either.
+      kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY
+        .escalatedForStrictDependencyTypes(reason, context.strictDependencyTypes),
       symbol = prop,
       declaration = "$name.$propName",
       reason = reason.diagnosticReason(detail),
-      hint = reason.diagnosticHint(detail, context.includePackages),
+      hint = reason.diagnosticHint(detail, excludeEntries = context.excludePackages),
       owner = owner,
       member = propName,
     )

@@ -85,6 +85,16 @@ data class NugetContext(
   val className: String,
   val includePackages: List<String> = emptyList(),
   val excludePackages: List<String> = emptyList(),
+  /** ADR-154: the additive `admit(...)` entries — qualified type names and/or package prefixes
+   *  — which admit a DEPENDENCY-module declaration into ADR-066's closure and do nothing else.
+   *  They never pick roots, never replace the `rootPackage` default, and are matched with the
+   *  exact `isUnderPackage` rule `exclude` uses (issue #53). Empty is the shipped default. */
+  val admit: List<String> = emptyList(),
+  /** ADR-154 §6: opt-in. Escalates a dependency-scope skip the author can act on (refusal
+   *  `NOT_INCLUDED` or `CROSS_MODULE_ADMISSION_DISABLED`) from a warning to an error, on both the
+   *  callable and the property route. An `exclude(...)`-caused skip stays a warning: the author
+   *  already declared that omission deliberate. */
+  val strictDependencyTypes: Boolean = false,
   val boundPackages: List<String> = emptyList(),
   /** ADR-088: the bound C# interfaces the plugin's `bound-types.json` manifest declares, keyed by
    *  the generated Kotlin stub's qualified name. Empty when nothing is bound, or when the option

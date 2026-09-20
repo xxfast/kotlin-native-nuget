@@ -413,3 +413,11 @@ from the already-filtered `allDeclarations`.
 > ADR-066 reachability closure uses the same declaration-level predicate. `include` stays
 > package-level; a per-declaration opt-in has no use case yet. The "per-declaration opt-out
 > annotation" deferred above is now partly covered from the build script side.
+
+> **Amendment (2026-09-20, refs [ADR-154](154-forward-dependency-type-admission.md)):** this ADR's
+> `include`/`rootPackage` mechanism is unchanged. [ADR-154](154-forward-dependency-type-admission.md)
+> adds a second, additive verb, `admit(...)`, that separates `include`'s two jobs for the
+> cross-module case: `include`/`rootPackage` still pick roots for the module's own files and still
+> admit a dependency package wholesale, while `admit` only ever adds per-type or per-package
+> admission into [ADR-066](066-forward-export-reachability-closure.md)'s closure, never picks roots,
+> and never replaces the `rootPackage` default this ADR established.

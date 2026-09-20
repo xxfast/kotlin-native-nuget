@@ -60,7 +60,9 @@ class ForwardSkippedCallableWarningTest {
       ),
     )
 
-    warnDroppedForwardCallables(catalog, logger, scope = listOf("com.example"))
+    // ADR-154: the slot that carried the `include(...)` scope now carries the author's own
+    // `exclude(...)` entries, so the hint can quote the entry that matched (ROADMAP line 37).
+    warnDroppedForwardCallables(catalog, logger, excludeEntries = listOf("dep.models"))
 
     val warning: String = logger.warnings.single()
     assertTrue(

@@ -43,6 +43,13 @@ class NugetProcessorProvider : SymbolProcessorProvider {
         ?.split(",")?.filter { it.isNotBlank() } ?: emptyList(),
       boundPackages = environment.options["nuget.boundPackages"]
         ?.split(",")?.filter { it.isNotBlank() } ?: emptyList(),
+      // ADR-154: the additive dependency-admission entries. Absent option (an older plugin against
+      // this processor) reads as empty, which is exactly the pre-ADR-154 behaviour.
+      admit = environment.options["nuget.admit"]
+        ?.split(",")?.filter { it.isNotBlank() } ?: emptyList(),
+      // ADR-154 §6: anything but a literal "true" keeps the warn-and-skip default, so a missing or
+      // malformed option can never fail a build that used to pass.
+      strictDependencyTypes = environment.options["nuget.strictDependencyTypes"] == "true",
       boundInterfaces = boundInterfaces,
       publishedScopes = publishedScopes,
       // ADR-115 amendment: the markers this publisher waives. Trusted unvalidated: a name that

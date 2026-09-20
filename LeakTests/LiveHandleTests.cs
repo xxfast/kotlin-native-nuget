@@ -1,6 +1,8 @@
 using Test.Menagerie;
 using TestLibrary;
+using TestLibrary.Admission;
 using TestLibrary.Cat;
+using TestLibrary.Dev.Other.Bytype;
 using TestLibrary.Clinic;
 using TestLibrary.Dispenser;
 using TestLibrary.Issue115;
@@ -1387,5 +1389,24 @@ public class LiveHandleTests
     public void ObjectCollectionProperty_StaticGetter_ReturnsToBaseline()
     {
         AssertNoLeak(() => Assert.Equal(new[] { "tuna", "salmon" }, TreatPantry.Flavours));
+    }
+
+    // Row 12. ADR-154: the admitted-dependency-class route. `dev.other.bytype.Waterbowl` reaches
+    // C# through `admit("dev.other.bytype.Waterbowl")` alone — no `include(...)` entry covers its
+    // package — and it is a handle type, so every `Storeroom.Bowl()` mints a StableRef that the
+    // wrapper's `Dispose` has to release. A klib type admitted BY NAME takes a different planning
+    // path from a module-local class and from the `include`-admitted `dev.other.admitted.Billboard`
+    // (which mints no handle in any existing row), so a missing release on the per-type admission
+    // route is invisible everywhere else in this file. The String read is in the window on purpose:
+    // it is the member that survived while its siblings were dropped, and it boxes on the way out.
+    [Fact]
+    public void AdmittedDependencyClass_ReturnedHandle_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var storeroom = new Storeroom("Oreo");
+            using Waterbowl bowl = storeroom.Bowl();
+            Assert.Equal("Oreo's bowl", bowl.Label);
+        });
     }
 }

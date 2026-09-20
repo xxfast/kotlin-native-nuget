@@ -3966,10 +3966,23 @@ internal fun BridgeType.unwrapNullable(): BridgeType = if (this is BridgeType.Nu
 /** ADR-066: the qualified name to feed the `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` hint, when this
  *  (possibly nullable-wrapped) type is the direct reason a callable was dropped because it is a
  *  reachable-but-out-of-scope dependency type. `null` for every other skip reason. */
-internal fun BridgeType.unexportedDependencyDetail(): String? =
-  (unwrapNullable() as? BridgeType.Unsupported)
+internal fun BridgeType.unexportedDependencyDetail(): String? {
+  // ADR-154 §5: descends one collection level, exactly as [undeclaredTypeDetail] and
+  // [sealedTypeDetail] do. Without it, `fun levels(): List<LogLevel>` carried NO detail and the
+  // hint printed its literal `"the dependency's package"` fallback — a remedy naming no package
+  // and no type (research spike 1b). The element is the type that was refused; the `List` never
+  // was. The `dependency's package` fallback below is now unreachable from a collection position.
+  val unwrapped: BridgeType = unwrapNullable()
+  val candidate: BridgeType = when (unwrapped) {
+    is BridgeType.Collection ->
+      (unwrapped.element ?: unwrapped.key ?: unwrapped.value)?.unwrapNullable() ?: unwrapped
+
+    else -> unwrapped
+  }
+  return (candidate as? BridgeType.Unsupported)
     ?.takeIf { unsupported -> unsupported.isUnexportedDependency }
     ?.rendered
+}
 
 /** ADR-074: the `expect` name and its erased-to target, when this (possibly nullable-wrapped)
  *  type is the direct reason a callable was dropped because its `actual typealias` target is

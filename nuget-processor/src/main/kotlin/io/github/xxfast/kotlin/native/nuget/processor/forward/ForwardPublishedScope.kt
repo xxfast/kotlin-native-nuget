@@ -12,6 +12,25 @@ import io.github.xxfast.kotlin.native.nuget.processor.isUnderPackage
  * publisher's scope, arriving as text over a KSP option instead of as this module's own options.
  * The one thing that must NOT be shared is the empty-include reading; see [PublishedScope].
  */
+/**
+ * The one by-package-or-by-qualified-name matcher, shared by `exclude` (issue #53) and by ADR-154's
+ * additive `admit` (§1: "the exact rule `exclude` uses today"). Returns the entry that matched, so
+ * a hint can name it, and `null` for none.
+ *
+ * An EMPTY list matches nothing, which is the whole reason `admit` does not reuse
+ * [PackageScope.covers]: `covers` reads an empty include as "everything" (`:32`), and an
+ * `admit`-only configuration would then admit every reachable klib declaration and walk the whole
+ * compile classpath — ADR-066 Alternative 3, silently. `any {}` over an empty list is `false`, so
+ * the asymmetry is structural here rather than a condition someone can forget.
+ */
+internal fun List<String>.matchesDeclaration(
+  packageName: String,
+  qualifiedName: String?,
+): String? = firstOrNull { entry ->
+  isUnderPackage(packageName, entry) ||
+      (qualifiedName != null && isUnderPackage(qualifiedName, entry))
+}
+
 data class PackageScope(
   val include: List<String>,
   val exclude: List<String>,
@@ -22,10 +41,8 @@ data class PackageScope(
    * opposite hints, and `include(...)` cannot override an exclude precisely because [covers] tests
    * this first.
    */
-  fun excludes(packageName: String, qualifiedName: String?): Boolean = exclude.any { prefix ->
-    isUnderPackage(packageName, prefix) ||
-        (qualifiedName != null && isUnderPackage(qualifiedName, prefix))
-  }
+  fun excludes(packageName: String, qualifiedName: String?): Boolean =
+    exclude.matchesDeclaration(packageName, qualifiedName) != null
 
   fun covers(packageName: String, qualifiedName: String?): Boolean {
     if (excludes(packageName, qualifiedName)) return false
