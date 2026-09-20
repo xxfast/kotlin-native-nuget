@@ -23,8 +23,18 @@ internal fun StringBuilder.renderEnum(enum: CirEnum, nested: Boolean = false) {
   }
 }
 
+/**
+ * ADR-132 (2026-09-20): `partial`, and load-bearing. An enum that has properties of its own already
+ * owns a `{Enum}Extensions` class here, while *any* extension declared over that enum -- function
+ * or property -- merges into a static class of the same name in the same namespace
+ * (`CirTranslator`'s extension loops, rendered `public static partial class` by
+ * `CirClassRenderer`). Two declarations of one class with only one of them `partial` is CS0260,
+ * which fails the whole `Interop.cs` compile. Latent since ADR-132 shipped the enum receiver on
+ * the extension-FUNCTION route: nothing in the fixture set declared an extension over an enum
+ * until `Mood.rallyCry()` / `Mood.emoji` did.
+ */
 internal fun StringBuilder.renderEnumExtensions(enum: CirEnum) {
-  appendLine("    public static class ${enum.csName.replace(".", "")}Extensions")
+  appendLine("    public static partial class ${enum.csName.replace(".", "")}Extensions")
   appendLine("    {")
 
   for (prop in enum.properties) {

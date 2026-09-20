@@ -432,6 +432,12 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
   BridgeType.Duration -> "durationFromDotNetTicks($name)"
   is BridgeType.ObjectHandle -> "$name.asStableRef<${type.qualifiedName}>().get()"
   is BridgeType.Interface -> "$name.asStableRef<${type.qualifiedName}>().get()"
+  // ADR-088 / ADR-132 (2026-09-20): a bound C# interface receiver is read back through the reverse
+  // pipeline's own `nuget{Iface}Value`, the SAME helper the callable route's bound-interface
+  // parameter uses -- it decides between a token-probe hit (a Kotlin object all along, GCHandle
+  // freed there) and wrapping the handle in an ADR-070 wrapper whose cleaner frees it. Kotlin takes
+  // ownership, so there is deliberately nothing for the C# side to dispose.
+  is BridgeType.BoundInterface -> "${type.valueHelper()}($name)"
   is BridgeType.Collection -> loweredCollectionExpression(name, type)
   // ADR-151: the setter value is the handle C# minted with `NugetMarshal.CreateBytes`.
   BridgeType.ByteArray -> "$name.asStableRef<kotlin.ByteArray>().get()"
@@ -456,8 +462,9 @@ private fun kotlinInputType(type: BridgeType): TypeName = when (type) {
   // value-class receiver (ADR-075) and for an ordinary value-class property's setter value
   // (ADR-077 sub-item 2).
   is BridgeType.ValueClass -> kotlinInputType(type.underlying)
+  // ADR-088: the bound-interface transfer GCHandle is the same opaque pointer slot.
   is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
-  BridgeType.ByteArray ->
+  is BridgeType.BoundInterface, BridgeType.ByteArray ->
     cOpaquePointer.copy(nullable = type is BridgeType.Nullable)
 
   else -> error("Forward property emitter has no input type for $type")

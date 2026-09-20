@@ -146,4 +146,17 @@ public class ExtensionFunctionTests
     // `CatId`. Only the `CatId?` overload is emitted, so from C# the call goes through a `CatId?`
     // local (the two tests above); the asymmetry is documented in ADR-132 rather than papered over
     // with a forwarding non-null overload. A test asserting the non-null call site was deleted here.
+
+    // ADR-132 listed `Enum` among the receivers the function route binds "by construction, no
+    // fixture", and nothing in test-library declared one until now. This is that missing fixture,
+    // and it is the control for the extension-PROPERTY parity item beside it: `Mood` has a property
+    // of its own (`description`), so the generator already emits a `MoodExtensions` class for the
+    // enum, and any extension over `Mood` has to merge into that same class rather than declare a
+    // second one. If this goes red on a build with no extension PROPERTY over an enum, the defect
+    // is older than the parity item.
+    [Fact]
+    public void MoodReceiver_RallyCry_BindsAnExtensionFunctionOverAnEnum()
+    {
+        Assert.Equal("grumpy cats of the world, unite", Mood.Grumpy.RallyCry());
+    }
 }

@@ -330,16 +330,55 @@ internal class ForwardPropertyPlanner(
    * `Nullable(ObjectHandle)` ride the same single POINTER / `HANDLE_TO_STABLE_REF` slot the bare
    * handle receiver already uses, so both renderers lower them through the arms the setter
    * *value* has always owned.
-   * Everything else stays a named `SKIPPED_UNSUPPORTED_PROPERTY` through `droppedReceivers`: an
-   * `Enum` / `Instant` / `Duration` / `Uuid` receiver and the remaining nullable spellings have no
-   * fixture and no demand yet, and a `Nullable(Primitive)` receiver would need the multi-slot
-   * has-value fan-out this route cannot represent (one `valueParameter` mints exactly one slot).
+   *
+   * ADR-132 amendment (2026-09-20): receiver parity with the extension **function** route. `Enum`
+   * (INT32 ordinal), `Uuid` (hex-dash text), `Instant`/`Duration` (INT64 ticks), `String?`/`Uuid?`
+   * and a nullable value class over a `String` or object-handle underlying (all three riding their
+   * null in-band), plus the two handle-MINTING receivers `Collection` (a Kotlin list/map/set
+   * StableRef built for the crossing) and `BoundInterface` (ADR-088's transfer GCHandle) all bind
+   * here now, through the same lowering pair the setter value uses.
+   *
+   * What stays a named `SKIPPED_UNSUPPORTED_PROPERTY` through `droppedReceivers`, and why: every
+   * has-value fan-out shape (`Nullable(Primitive)`, `Nullable(Enum)`, `Nullable(Instant)`,
+   * `Nullable(Duration)`, and a nullable value class over a `Primitive`/`Enum` underlying) needs a
+   * second adjacent slot for the has-value flag, and a receiver is exactly one slot (one
+   * `valueParameter`) -- admitting them would mint one slot and silently lose the null.
    */
   private fun BridgeType.isSupportedReceiver(): Boolean = when (this) {
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Primitive,
     BridgeType.String -> true
 
-    is BridgeType.Nullable -> type is BridgeType.ObjectHandle || type is BridgeType.Interface
+    // ADR-132 amendment: the converting by-value receivers. Each crosses as exactly one wire slot
+    // (`int` ordinal, hex-dash text, `long` ticks) and the shared `inputLowering` /
+    // `inputArgument` pair already owns both halves of the conversion.
+    BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid, is BridgeType.Enum -> true
+
+    // ADR-088: a bound C# interface receiver crosses as a fresh transfer GCHandle that KOTLIN
+    // takes ownership of (`nuget{Iface}Value` frees it on a token-probe hit or hands it to the
+    // ADR-070 wrapper's cleaner), exactly as it does at an ordinary parameter position.
+    is BridgeType.BoundInterface -> true
+
+    // ADR-075: the C# side builds a Kotlin collection for the crossing and disposes it in the
+    // getter's/setter's own `finally`. Gated on the same INTO_KOTLIN component predicate the
+    // collection *setter value* uses, not on the read-side `isReadable()`: a receiver is an input.
+    is BridgeType.Collection -> isSetterEligible()
+
+    // ADR-132 amendment: the nullable spellings whose wire has a spare null to ride -- a null
+    // string pointer for `String?`/`Uuid?`/`ValueClass(String)?`, `IntPtr.Zero` for a handle. A
+    // `Primitive`/`Enum`-underlying value class is deliberately NOT here: that is the fan-out
+    // class, and `inputLowering`'s nullable value-class arm re-wraps it unconditionally (correct
+    // for the `NullableDispatch` setter value, which is non-null by construction; a silent loss of
+    // null at a receiver).
+    is BridgeType.Nullable -> when (val inner: BridgeType = type) {
+      is BridgeType.ObjectHandle, is BridgeType.Interface, BridgeType.String,
+      BridgeType.Uuid -> true
+
+      is BridgeType.ValueClass ->
+        inner.underlying is BridgeType.String || inner.underlying is BridgeType.ObjectHandle
+
+      else -> false
+    }
+
     // ADR-075: a value class crosses the bridge as its own underlying value (ADR-014), the same
     // wire shape its own declared members already use (`ForwardCallablePlanner.valueClassEntries`).
     // The receiver admits every underlying `isPlannable` admits at an ordinary position (ADR-077's
@@ -352,11 +391,10 @@ internal class ForwardPropertyPlanner(
 
     // ADR-147: an extension property over a bare `T` receiver is not a generic-class member and
     // has no carrier to hang off; refused as it is today.
-    // ADR-151: an extension property over a `ByteArray` receiver is the ROADMAP:27 deferral
-    // class, the same one `Uuid`/`Instant` sit in; refused here, bound at every other position.
+    // ADR-151: a `ByteArray` receiver is still refused -- it is not in the ADR-132 function-route
+    // receiver set either, so admitting it here would be a new position, not parity.
     BridgeType.ByteArray,
-    BridgeType.Char, BridgeType.Unit, BridgeType.Instant, BridgeType.Duration, BridgeType.Throwable,
-    BridgeType.Uuid, is BridgeType.Enum, is BridgeType.BoundInterface, is BridgeType.Collection,
+    BridgeType.Char, BridgeType.Unit, BridgeType.Throwable,
     is BridgeType.SpecializedProtocol, is BridgeType.RawKSType, is BridgeType.Unsupported,
     is BridgeType.TypeParameter, is BridgeType.RawCollection -> false
   }
@@ -655,10 +693,21 @@ internal class ForwardPropertyPlanner(
     name, type.inputWireType(), ForwardAbiDirection.IN,
     ForwardTransfer(
       name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
-      ForwardOwnership.BORROWED, type.conversion(ForwardFlow.INTO_KOTLIN)
+      type.inputOwnership(), type.conversion(ForwardFlow.INTO_KOTLIN)
     ),
     role,
   )
+
+  /**
+   * ADR-088: a bound C# interface arrives as a transfer GCHandle that **Kotlin** owns -- nothing on
+   * the C# side frees it after the call, which is why `boundInterfacePrelude` emits no cleanup --
+   * so the transfer is MATERIALIZED, matching the callable route's own bound-interface parameter
+   * (`ForwardCallablePlanner`'s `BoundInterface` input arm). Every other input slot the property
+   * route owns is BORROWED: the caller keeps whatever it passed.
+   */
+  private fun BridgeType.inputOwnership(): ForwardOwnership =
+    if (unwrapNullable() is BridgeType.BoundInterface) ForwardOwnership.MATERIALIZED
+    else ForwardOwnership.BORROWED
 
   private fun errorParameter(): ForwardAbiParameter = ForwardAbiParameter(
     "errorOut", ForwardAbiWireType.POINTER, ForwardAbiDirection.OUT,
@@ -787,6 +836,12 @@ internal class ForwardPropertyPlanner(
     // ADR-107: the pointer to the `StableRef<NugetError>` envelope `buildError` produced, exactly
     // the value an `errorOut` slot carries.
     BridgeType.Throwable -> ForwardAbiWireType.POINTER
+
+    // ADR-088 / ADR-132 (2026-09-20): a bound C# interface receiver crosses as the transfer
+    // GCHandle pointer, the same POINTER slot the callable route's bound-interface parameter uses.
+    // Only reachable from an extension-property RECEIVER: a property *typed* as a bound interface
+    // is refused by `isPlannable` before a wire type is ever asked for.
+    is BridgeType.BoundInterface -> ForwardAbiWireType.POINTER
 
     // ADR-106: the getter ships the hex-dash text over the same runtime-owned pointer a String
     // getter uses; `inputWireType()` below overrides it to STRING on the setter side.
@@ -917,6 +972,15 @@ internal fun BridgeType.conversion(flow: ForwardFlow): ForwardConversion? = when
     ForwardConversion.HANDLE_TO_COLLECTION
   } else {
     ForwardConversion.COLLECTION_TO_HANDLE
+  }
+
+  // ADR-088 / ADR-132 (2026-09-20): in only. A bound C# interface reaches this route at an
+  // extension-property RECEIVER and nowhere else (`isPlannable` refuses the type itself), so the
+  // OUT_OF_KOTLIN direction is unreachable rather than unimplemented.
+  is BridgeType.BoundInterface -> if (flow == ForwardFlow.INTO_KOTLIN) {
+    ForwardConversion.GC_HANDLE_TO_BOUND_VALUE
+  } else {
+    error("Forward property planner cannot marshal a bound interface out of Kotlin")
   }
 
   // ADR-151: the same handle wire, with the bytes helpers instead of the list ones.

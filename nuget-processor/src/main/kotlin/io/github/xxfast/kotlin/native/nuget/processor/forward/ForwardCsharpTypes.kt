@@ -102,6 +102,30 @@ internal fun BridgeType.isPubliclySpellable(
     -> false
 }
 
+/**
+ * True when this type crosses an IN slot on the **nullable** string wire, i.e. the C# call site
+ * passes a `string?` expression into it. The wire type alone (`ForwardAbiWireType.STRING`) carries
+ * no nullability, so a `DllImport` parameter spelled bare `string` takes a CS8604 under
+ * `<Nullable>enable</Nullable>` + `<TreatWarningsAsErrors>` -- the settings
+ * `NugetCompileInteropTask` builds the generated file with -- even though the marshalling is
+ * identical either way.
+ *
+ * Three shapes qualify, and they are the same three on both routes:
+ *  - `String?` (ADR-043), whose argument is the nullable value itself;
+ *  - `Uuid?` (ADR-106), whose argument is `x?.ToString()`;
+ *  - a nullable value class over a `String` underlying (ADR-077 sub-items 3/4), whose argument is
+ *    `x?.Value`. An `ObjectHandle` underlying stays on the plain `IntPtr` wire and does not.
+ *
+ * Shared deliberately: the callable route (`ForwardCirPlanProjection.nativeCsharpType`) had the
+ * rule and the property route (`ForwardCirPropertyProjection.extension`'s receiver import) did not,
+ * which is exactly how an extension property over a `String?` receiver failed to compile.
+ */
+internal fun BridgeType.isNullableStringWire(): Boolean {
+  val inner: BridgeType = (this as? BridgeType.Nullable)?.type ?: return false
+  return inner == BridgeType.String || inner == BridgeType.Uuid ||
+      (inner as? BridgeType.ValueClass)?.underlying == BridgeType.String
+}
+
 /** The C# spelling of a primitive kind, shared for the same reason as the type above. */
 internal fun PrimitiveKind.forwardPublicCsharpType(): String = when (this) {
   PrimitiveKind.BOOLEAN -> "bool"

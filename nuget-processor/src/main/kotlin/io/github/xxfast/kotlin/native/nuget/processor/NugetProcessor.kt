@@ -425,9 +425,14 @@ internal fun warnDroppedForwardExtensionReceivers(
       declaration = dropped.symbol,
       reason = "its extension receiver type ${dropped.receiverDescription} is not a supported " +
           "extension-property receiver",
+      // ADR-132 (2026-09-20): the list tracks `ForwardPropertyPlanner.isSupportedReceiver`, which
+      // now reaches extension-function receiver parity. What is left out is the has-value fan-out
+      // class (`Int?`, `Mood?`, `Instant?`, a nullable value class over a primitive or enum
+      // underlying): a receiver is exactly one ABI slot and those need two.
       hint = "declare the property on a class, interface, nullable class, nullable interface, " +
-          "String, primitive, or value class receiver, or expose a top-level getter function " +
-          "instead",
+          "String, nullable String, primitive, enum, Uuid, nullable Uuid, Instant, Duration, " +
+          "collection, bound C# interface, value class, or nullable value class over a String or " +
+          "class underlying receiver, or expose a top-level getter function instead",
     )
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)

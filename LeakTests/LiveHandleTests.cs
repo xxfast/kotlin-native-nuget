@@ -1,3 +1,4 @@
+using Test.Menagerie;
 using TestLibrary;
 using TestLibrary.Cat;
 using TestLibrary.Clinic;
@@ -500,6 +501,67 @@ public class LiveHandleTests
         {
             using IPet rex = new Dog("Rex");
             Assert.Equal("Rex/4/Woof!", rex.GetSummary());
+        });
+    }
+
+    // Row 6i. ADR-132 parity at the extension-PROPERTY receiver: a COLLECTION receiver. This is the
+    // first receiver shape on either route whose C# prelude *builds* a Kotlin object for the
+    // crossing - `NugetListNative` mints one StableRef for the list and the `finally` has to
+    // dispose it. Unlike Rows 6b/6h the mint is unconditional (there is no "the object already has
+    // a handle" branch), so a getter body rendered without a handle scope leaks exactly once per
+    // read, and IntegrationTests still reads the right name every time.
+    //
+    // Oreo, Mylo and the neighbour's Whiskers, counted fifty times over.
+    [Fact]
+    public void CollectionReceiverExtensionProperty_ReleasesTheListHandle()
+    {
+        AssertNoLeak(() =>
+        {
+            var basket = new List<string> { "Oreo", "Mylo", "Whiskers" };
+            Assert.Equal("Whiskers", basket.GetLongestName());
+        });
+    }
+
+    // Row 6j. The setter half of the same shape, and the other half of Row 6h's receiver: a `var`
+    // of NULLABLE-PRIMITIVE type over an INTERFACE receiver. The setter's has-value fan-out arm is
+    // a different body from the getter's, with its own receiver mint (`HandleOf` on a
+    // C#-implemented `Pet`) and its own `finally`. Both branches of the fan-out run here, because a
+    // null value takes the arm that skips the value slot and could just as easily skip the
+    // receiver's dispose.
+    [Fact]
+    public void InterfaceReceiverExtensionPropertySetter_CSharpImplementedPet_ReleasesTransferHandle()
+    {
+        AssertNoLeak(() =>
+        {
+            using IPet rex = new Dog("Rex");
+            rex.SetNapQuota(2);
+            Assert.Equal(2, rex.GetNapQuota());
+            rex.SetNapQuota(null);
+        });
+    }
+
+    // Row 6k. The BOUND-INTERFACE receiver (ADR-088). Caveat, stated rather than left implied: the
+    // handle minted on the C# side for this shape is a managed `GCHandle`, and this harness counts
+    // Kotlin `StableRef`s (`NugetMarshal.LiveHandles`), so the row can only observe the Kotlin half
+    // - the wrapper StableRef the ADR-070 cleaner owns, and any StableRef minted by a token-probe
+    // hit. A pure GCHandle leak on the C# side would leave this row green. It is here because the
+    // Kotlin half is real and because a receiver-position regression that mints a wrapper per
+    // crossing without ever releasing it is exactly what it would catch.
+    private sealed class LeakGoat : IFeedable
+    {
+        public string Describe() => "Nibbles the C#-side goat";
+        public int Legs => 4;
+        public void Feed(string food) { }
+        public string? Nickname { get; set; }
+    }
+
+    [Fact]
+    public void BoundInterfaceReceiverExtensionProperty_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            IFeedable nibbles = new LeakGoat();
+            Assert.Equal("Nibbles the C#-side goat needs 4 bowls", nibbles.GetFeedingNote());
         });
     }
 

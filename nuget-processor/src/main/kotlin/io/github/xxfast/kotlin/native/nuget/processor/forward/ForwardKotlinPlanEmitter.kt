@@ -1014,7 +1014,7 @@ private fun errorHandlingUnitBody(invocation: String, errorName: String): String
  * reverse bindings and this forward output compile into the same module. Fully qualified rather
  * than imported, matching how the plan emitter already names every other cross-package symbol.
  */
-private fun BridgeType.BoundInterface.valueHelper(): String =
+internal fun BridgeType.BoundInterface.valueHelper(): String =
   "${qualifiedName.substringBeforeLast('.')}.nuget${qualifiedName.substringAfterLast('.')}Value"
 
 private fun BridgeType.BoundInterface.handleOutExpression(invocation: String): String =

@@ -556,20 +556,10 @@ internal object ForwardCirPlanProjection {
     .filter { parameter -> parameter.direction == ForwardAbiDirection.IN }
     .map { native -> CirParameter(native.csharpName, native.nativeCsharpType()) }
 
-  private fun ForwardAbiParameter.nativeCsharpType(): String {
-    val type: BridgeType = transfer.type
-    // ADR-077 sub-items 3/4: a nullable value class with a *String* underlying rides the nullable
-    // string wire, so the DllImport parameter must be `string?` for the same CS8604 reason as a
-    // nullable String. An ObjectHandle underlying stays on the plain IntPtr wire.
-    // ADR-106: a `Uuid?` argument rides the same nullable string wire (the C# side passes
-    // `x?.ToString()`), so its DllImport parameter must be `string?` for the same CS8604 reason.
-    val isNullableStringWire: Boolean = type is BridgeType.Nullable &&
-        (
-            type.type == BridgeType.String || type.type == BridgeType.Uuid ||
-                (type.type as? BridgeType.ValueClass)?.underlying == BridgeType.String
-            )
-    return if (isNullableStringWire) "string?" else wireType.csharpType()
-  }
+  // ADR-077 sub-items 3/4 / ADR-106: the nullable-string-wire rule lives in `isNullableStringWire`,
+  // shared with the property route's receiver import (ADR-132 2026-09-20) rather than copied.
+  private fun ForwardAbiParameter.nativeCsharpType(): String =
+    if (transfer.type.isNullableStringWire()) "string?" else wireType.csharpType()
 
   /** A parameter shape whose native ABI representation is identical to its public C# type — no
    * cast, fan-out, or prelude/cleanup statement required at the call site, so it can still flow

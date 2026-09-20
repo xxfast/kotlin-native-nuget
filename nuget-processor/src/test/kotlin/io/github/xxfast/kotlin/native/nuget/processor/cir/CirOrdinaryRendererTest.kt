@@ -835,7 +835,7 @@ class CirOrdinaryRendererTest {
     assertContains(rendered, "public enum Mood")
     assertContains(rendered, "Calm = 0,")
     assertContains(rendered, "Anxious = 1,")
-    assertContains(rendered, "public static class MoodExtensions")
+    assertContains(rendered, "public static partial class MoodExtensions")
     assertContains(
       rendered,
       "private static extern IntPtr Native_GetLabel(int ordinal);",

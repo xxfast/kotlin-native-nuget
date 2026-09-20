@@ -111,6 +111,9 @@ parameter position already ships, with no receiver-specific code:
   parameter lowering, one slot. Routed by construction, no fixture: nothing in `test-library`
   declares any of these at a receiver position, so the claim rests on the parameter position being
   fixture-verified and the receiver now sharing its code path exactly.
+  **Amended 2026-09-20** (below): `Enum` gets a fixture on this route too (`fun Mood.rallyCry()`),
+  added as the control for a pre-existing `CS0260` defect the same amendment closes on the
+  extension-**property** route.
 - Of these, only `Nullable(String)`, `Nullable(Uuid)`, and `Nullable(Collection)` are admitted
   nullable forms that route the same way (also no fixture). `Nullable(Enum)`, `Nullable(Instant)`,
   and `Nullable(Duration)` are **not** among the routed shapes: each is a has-value fan-out and
@@ -160,6 +163,8 @@ either side, so it gets no row.
   extension properties onto this same lowering is a separate, unstarted item (ROADMAP Phase 4).
   **Amended 2026-09-14** (below): `val Pet.x` and `val Cat?.x` now bind; `Enum`, `Uuid`,
   `Instant`, `Duration`, and the remaining nullable spellings stay a named skip.
+  **Amended 2026-09-20** (below): that narrowing is mostly lifted; `Nullable(Collection)` and
+  `Nullable(BoundInterface)` remain refused, for different reasons stated there.
 - `ForwardCirPropertyProjection.kt`'s own receiver-argument `when` (~lines 58-70) still has an
   `else -> "receiver"` pass-through mirroring the one this ADR removed from the callable route.
   It is unreachable today only because the property planner's `supportedReceiver` gate above never
@@ -183,9 +188,10 @@ either side, so it gets no row.
   (`fun Int?.orZero()` Tier 1 control).
 
 **Inferred, not verified by a fixture or a build:**
-- `Nullable(Interface)`, `Nullable(ValueClass(ObjectHandle))`, `Enum`, `Uuid`, `Instant`,
-  `Duration`, `Collection`, `BoundInterface`, and the admitted `Nullable(String)`,
-  `Nullable(Uuid)`, and `Nullable(Collection)` forms bind correctly at the receiver position.
+- `Nullable(Interface)`, `Nullable(ValueClass(ObjectHandle))`, `Enum` (**amended 2026-09-20**:
+  now fixture-verified, `fun Mood.rallyCry()`), `Uuid`, `Instant`, `Duration`, `Collection`,
+  `BoundInterface`, and the admitted `Nullable(String)`, `Nullable(Uuid)`, and
+  `Nullable(Collection)` forms bind correctly at the receiver position.
   Rests entirely on the parameter position being fixture-verified and the receiver now sharing
   that exact code path (`ForwardPublicParameter` reused verbatim).
 - That a has-value fan-out receiver would have thrown out of `validateRoles` rather than rendering
@@ -224,7 +230,8 @@ demand for them yet; the `SKIPPED_UNSUPPORTED_PROPERTY` hint text
 nullable interface, String, primitive, or value class receiver, or expose a top-level getter
 function instead". A has-value fan-out receiver (`Int?`-style) is refused the same way the
 function-receiver route refuses it: the property route mints exactly one slot per receiver and a
-fan-out needs two.
+fan-out needs two. **Amended 2026-09-20** (below): this narrowing is lifted, and folded into the
+same change, a `Collection` receiver and a bound C# interface receiver also bind.
 
 **Fixture-verified:** `val Pet.summary`, `val Cat?.nameOrStray`
 (`test-library/.../cat/CatExtensions.kt`), and a receiver-only interface, `val Sitter.address`
@@ -235,3 +242,78 @@ with no fixture backing a runtime `var` over that shape, it is a Tier 1 compile 
 (`Tier1ReceiverShapesExtensionPropertyTest.kt`). `LeakTests/LiveHandleTests.cs` gained Row 6h,
 mirroring Row 6b for the getter route: the C#-implemented receiver's transfer handle returns to
 baseline. The nullable handle receiver mints nothing on either side, so it gets no row.
+
+## Amendment (2026-09-20): extension properties reach full receiver parity with extension functions
+
+The 2026-09-14 amendment above left `Enum`, `Uuid`, `Instant`, `Duration`, and the remaining
+nullable spellings narrower on the extension-**property** route "no fixture or demand for them
+yet". `ForwardPropertyPlanner.isSupportedReceiver()` now admits all of them: `Enum`, `Uuid`,
+`Instant`, `Duration`, `Nullable(String)`, `Nullable(Uuid)`, and `Nullable(ValueClass)` over a
+`String` or `ObjectHandle` underlying. Folded into the same change by the human maintainer, two
+receivers ADR-132's own function-receiver set already admits but the property gate had never been
+asked to carry: a `Collection` receiver (`val List<String>.longestName`) and a bound C# interface
+receiver from a NuGet dependency (ADR-088, `val IFeedable.feedingNote`).
+
+Fixture: `test-library/.../cat/ReceiverParityExtensions.kt`, one declaration per receiver
+mechanism so a fixture that happened to pick the cheapest shape at each seam could not hide a gap:
+enum ordinal (`val Mood.emoji`), converting text (`val Uuid.shortForm`, and `var Uuid.nickname` for
+the setter-carries-the-receiver-too case), converting 64-bit (`val Instant.epochDay`, tested
+against a **non-UTC** `DateTimeOffset` so a wall-clock read would be a whole day off), non-converting
+64-bit (`val Duration.wholeHours`), null-in-band-by-reference (`val String?.orPlaceholder`,
+`val CatId?.display`, `val ChartRef?.patientName`), a `var` of nullable-primitive type over an
+**interface** receiver (`var Pet.napQuota: Int?`), a collection receiver
+(`val List<String>.longestName`), and a bound-interface receiver (`val IFeedable.feedingNote`).
+Tests: `IntegrationTests/ExtensionPropertyTests.cs`, Tier 1
+`Tier1ReceiverShapesExtensionPropertyTest.kt`.
+
+**Three pre-existing defects, none introduced by this change, surfaced and closed by this fixture**
+(all verified by a failing build first):
+
+1. **CS0260**, shipped since this ADR's original 2026-09-13 decision on the extension-**function**
+   route: `CirEnumRenderer` rendered `{Enum}Extensions` non-`partial` whenever the enum has its own
+   properties, colliding with the merged extension class the moment any extension (function or
+   property) targets that enum. No fixture had ever declared one; `Mood` (which has a `description`
+   property) now does, on both routes (`fun Mood.rallyCry()` is the function-route control), and
+   `CirEnumRenderer` now always renders `partial`.
+2. **CS0103**, this change's own defect: the `NullableDispatch` setter arm
+   (`ForwardCirPropertyProjection.kt`) built its body outside the handle scope, so
+   `var Pet.napQuota: Int?` over an interface receiver referenced an undeclared `receiverHandle`.
+   Invisible to Tier 1, which compiles the Kotlin half only.
+3. **CS0103**, this change's own defect: `CollectionHelperTracker.trackProperty`
+   (`cir/CirTypeMapping.kt`) tracked a property's declared *type* but never its *receiver*, so
+   `val List<String>.longestName` disposed its handle through a `NugetListNative` helper the file
+   never emitted.
+
+Also: the nullable string-wire receiver import (`String?`, `Uuid?`, and a `String`-underlying
+value class receiver, all of which need `string?` rather than bare `string` under
+`<Nullable>enable</Nullable>`) is now spelled through one shared predicate,
+`BridgeType.isNullableStringWire()` (`forward/ForwardCsharpTypes.kt` ~:122), used by both the
+callable route and the property route, closing the gap between them at the receiver position.
+
+**Refused, by decision, not merely deferred:**
+- A has-value fan-out receiver (`Int?`, `Mood?`, `Instant?`, `Duration?`, or a nullable value class
+  over a `Primitive`/`Enum` underlying) stays refused: the property route mints exactly one ABI
+  slot per receiver, and admitting these would silently drop the null rather than fail loudly. Own
+  ROADMAP line; `RECEIVER_FAN_OUT` unchanged.
+- `Nullable(Collection)` stays refused, by an explicit allowlist rather than a wire limitation.
+  This is the one shape where the property gate is narrower than the function-receiver route,
+  which has no receiver allowlist for a nullable collection; no fixture exercises
+  `Nullable(Collection)` at either position.
+- `Nullable(BoundInterface)` stays refused, and this **is** parity: ADR-088 refuses a nullable
+  bound interface at every position, not only here.
+- `ByteArray` and `Char` receivers stay refused; neither is in this ADR's own function-receiver
+  set either.
+
+**Leak harness.** `LeakTests/LiveHandleTests.cs` gained three rows: 6i,
+`CollectionReceiverExtensionProperty_ReleasesTheListHandle` (the C# prelude *builds* a Kotlin list
+`StableRef` for the crossing, unconditionally, and the getter's handle scope disposes it); 6j,
+`InterfaceReceiverExtensionPropertySetter_CSharpImplementedPet_ReleasesTransferHandle` (the other
+half of Row 6h's receiver, now exercised through the `NullableDispatch` setter arm bug 2 fixed);
+and 6k, `BoundInterfaceReceiverExtensionProperty_ReturnsToBaseline`. Row 6k is a smoke test, not a
+leak pin, stated rather than left implied: the harness counts Kotlin `StableRef`s
+(`NugetMarshal.LiveHandles`), but the bound-interface receiver crossing mints a C# `GCHandle`,
+which Kotlin frees (immediately on a token-probe hit, otherwise through the `IFeedableHandle`
+cleaner), neither object is a `StableRef`, so a pure `GCHandle` leak on the C# side would leave
+this row green. That is shipped ADR-088 parameter-position behaviour, not new here. The seven
+scalar-ish receivers (`Enum`, `Uuid`, `Instant`, `Duration`, `String?`, `Uuid?`, and a `String`- or
+`ObjectHandle`-underlying value class, nullable) mint no handle on either side and get no row.

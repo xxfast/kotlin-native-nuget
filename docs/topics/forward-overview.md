@@ -274,17 +274,17 @@ cross-package one does not, and is not yet named either, see
 [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)).
 
 The same kind also fires when an extension property's *receiver* type, not its declared type, is
-what the planner can't wire. `String`, a primitive, `ObjectHandle` classes, an eligible sealed base
-(see [Extensions: Sealed receivers](extensions.md#sealed-receivers)), and a value class over any of
-the four underlyings admitted at ordinary positions (`String`, a primitive, an enum, or
-`ObjectHandle`) are the supported receivers; anything else warns and the property is dropped
-entirely, naming the receiver rather than the property's own (usually fine) type:
+what the planner can't wire. See [Extensions: Supported receivers](extensions.md#supported-receivers)
+for the full admitted set; a receiver outside it warns and the property is dropped entirely, naming
+the receiver rather than the property's own (usually fine) type:
 
 ```
 [nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping tier1.skipreceiver.Box.label: its extension receiver
     type generic declaration tier1.skipreceiver.Box is not a supported extension-property receiver.
-    declare the property on a class, String, primitive, or value class receiver, or expose a
-    top-level getter function instead
+    declare the property on a class, interface, nullable class, nullable interface, String,
+    nullable String, primitive, enum, Uuid, nullable Uuid, Instant, Duration, collection, bound C#
+    interface, value class, or nullable value class over a String or class underlying receiver, or
+    expose a top-level getter function instead
     at <file>:<line>
 ```
 
