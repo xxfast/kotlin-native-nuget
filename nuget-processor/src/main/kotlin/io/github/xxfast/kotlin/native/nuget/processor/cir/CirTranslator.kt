@@ -408,11 +408,11 @@ internal fun translate(
     // members already export under the whole chain (`nativePrefix()`) and every type position
     // already spelled `Owner.Tag`; only the declaration was missing (CS0426 until now).
     valueClasses.filter { isOwnedBy(owner, it) }.forEach { cls ->
-      add(translateValueClass(cls, context.libraryName, logger, context, callableCatalog))
+      add(translateValueClass(cls, context.libraryName, logger, context, callableCatalog, expects))
     }
     interfaces.filter { isOwnedBy(owner, it) }.forEach { iface ->
       add(
-        translateInterface(iface, interfaceDeclarationCatalog, logger)
+        translateInterface(iface, interfaceDeclarationCatalog, logger, expects)
           // ADR-134: an interface owner carries children at any depth, exactly as a class does.
           .copy(nestedDeclarations = translateNestedOf(iface)),
       )
@@ -428,7 +428,7 @@ internal fun translate(
     }
     objects.filter { isOwnedBy(owner, it) }.forEach { obj ->
       add(
-        translateObject(obj, context.libraryName, callableCatalog, tracker, logger)
+        translateObject(obj, context.libraryName, callableCatalog, tracker, logger, expects)
           .copy(nestedDeclarations = translateNestedOf(obj)),
       )
     }
@@ -449,7 +449,7 @@ internal fun translate(
   valueClasses.filter { !it.isNestedDeclaration() }.forEach { cls ->
     namespaces.addDeclaration(
       namespaceOf(cls.packageName.asString()),
-      translateValueClass(cls, context.libraryName, logger, context, callableCatalog),
+      translateValueClass(cls, context.libraryName, logger, context, callableCatalog, expects),
     )
   }
 
@@ -463,7 +463,7 @@ internal fun translate(
   interfaces.filter { !it.isNestedDeclaration() }.forEach { iface ->
     namespaces.addDeclaration(
       namespaceOf(iface.packageName.asString()),
-      translateInterface(iface, interfaceDeclarationCatalog, logger)
+      translateInterface(iface, interfaceDeclarationCatalog, logger, expects)
         // ADR-134: the interface block owns its nested declarations (`ICage.Bar`).
         .copy(nestedDeclarations = translateNestedOf(iface)),
     )
@@ -529,6 +529,7 @@ internal fun translate(
         // there, so a nested declaration under a sealed owner goes through exactly the same
         // translation an ordinary owner's does.
         nestedOf = ::translateNestedOf,
+        expects = expects,
       ),
     )
   }
@@ -536,7 +537,7 @@ internal fun translate(
   objects.filter { !it.isNestedDeclaration() }.forEach { obj ->
     namespaces.addDeclaration(
       namespaceOf(obj.packageName.asString()),
-      translateObject(obj, context.libraryName, callableCatalog, tracker, logger)
+      translateObject(obj, context.libraryName, callableCatalog, tracker, logger, expects)
         .copy(nestedDeclarations = translateNestedOf(obj)),
     )
   }

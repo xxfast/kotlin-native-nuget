@@ -10,8 +10,9 @@ import com.google.devtools.ksp.symbol.KSTypeArgument
  * ADR-074 / ADR-091 / ADR-096: the index of every `expect` declaration in the compilation, keyed by
  * qualified name.
  *
- * The `actual` is the export root (ADR-074) but is metadata-poor: no KDoc, no annotations, and no
- * parameter defaults, because Kotlin forbids an `actual` from restating one. `findExpects()` is
+ * The `actual` is the export root (ADR-074) but is metadata-poor: normally no KDoc (one written on
+ * the `actual` *is* reported, and wins, but authors write it on the `expect`), no annotations, and
+ * no parameter defaults, because Kotlin forbids an `actual` from restating one. `findExpects()` is
  * Verified empty on KSP 2.3.10, so the qualified name is the only available link back to the
  * `expect` half.
  *
@@ -37,19 +38,23 @@ internal class ExpectIndex(declarations: List<KSDeclaration> = emptyList()) {
     byName[qualifiedName].orEmpty().filterIsInstance<KSClassDeclaration>().singleOrNull()
 
   /**
-   * ADR-096: the single `expect fun` that [actual] actualizes, matched on parameter count, then
-   * positional parameter names, then positional parameter types. Extensions are excluded: their
-   * receiver is not part of this comparison, so admitting them could match the wrong declaration.
+   * ADR-096: the single `expect fun` that [actual] actualizes, matched on the extension receiver,
+   * then parameter count, then positional parameter names, then positional parameter types.
+   *
+   * The receiver is part of the comparison rather than a reason to bail out: an extension used to
+   * resolve to `null` here, which cost a documented `expect fun Foo.bar()` its KDoc. Comparing the
+   * rendered receiver (absent matches only absent) keeps the property that motivated the original
+   * exclusion -- a non-extension never matches an extension of the same qualified name, and an
+   * extension never matches one on a different receiver.
    *
    * Ambiguity resolves to `null` rather than to a guess, because a wrong match hands one overload's
    * defaults to another and emits an omitting overload whose Kotlin call site does not compile.
    */
   fun functionOrNull(actual: KSFunctionDeclaration): KSFunctionDeclaration? {
-    if (actual.extensionReceiver != null) return null
     val candidates: List<KSFunctionDeclaration> = byName[actual.qualifiedName?.asString()]
       .orEmpty()
       .filterIsInstance<KSFunctionDeclaration>()
-      .filter { it.extensionReceiver == null && it.matches(actual) }
+      .filter { it.matches(actual) }
     return candidates.singleOrNull()
   }
 
@@ -68,17 +73,26 @@ internal class ExpectIndex(declarations: List<KSDeclaration> = emptyList()) {
   }
 
   /**
-   * ADR-150: the KDoc of the `expect` half of [declaration], because an `actual` reports
-   * `docString == null` (verified on KSP 2.3.10, ADR-074 point 4) and the author writes the doc on
-   * the `expect`.
+   * ADR-150: the KDoc of the `expect` half of [declaration], consulted because the author normally
+   * writes the doc on the `expect` and leaves the `actual` bare.
+   *
+   * Not because an `actual` *cannot* report one: measured 2026-09-20 on mingwX64, an `actual` that
+   * carries its own KDoc reports it, and the caller's `docString ?: docOrNull(this)` then prefers
+   * the `actual`'s text. Both arms are live; ADR-150's "always null today" reading is stale.
    *
    * The index holds top-level declarations only, so a *member* of an `expect class` is found by
    * walking the indexed class's own declarations: by signature for a function, by simple name for
    * anything else.
    */
   fun docOrNull(declaration: KSDeclaration): String? {
-    if (!declaration.isActual) return null
     val parent: KSClassDeclaration? = declaration.parentDeclaration as? KSClassDeclaration
+    // An enum ENTRY of an `actual enum class` is not itself marked `actual` (measured: KSP reports
+    // `isActual == false` on it), so gating on the declaration alone lost every entry's KDoc. A
+    // member of an `actual` owner is resolved through that owner below, where the match is by
+    // signature for a function and by simple name otherwise, so a platform-only member simply
+    // finds nothing.
+    val declarationOrOwnerIsActual: Boolean = declaration.isActual || parent?.isActual == true
+    if (!declarationOrOwnerIsActual) return null
     if (parent == null) {
       val expect: KSDeclaration? =
         if (declaration is KSFunctionDeclaration) functionOrNull(declaration)
@@ -100,12 +114,20 @@ internal class ExpectIndex(declarations: List<KSDeclaration> = emptyList()) {
   }
 
   private fun KSFunctionDeclaration.matches(actual: KSFunctionDeclaration): Boolean {
+    if (receiverRendering() != actual.receiverRendering()) return false
     if (parameters.size != actual.parameters.size) return false
     return parameters.zip(actual.parameters).all { (expected, declared) ->
       expected.name?.asString() == declared.name?.asString() &&
           expected.type.resolve().render() == declared.type.resolve().render()
     }
   }
+
+  /**
+   * The extension receiver as part of a signature, or `null` for a non-extension. Rendered the same
+   * way every other position is, so an alias receiver compares identically on both halves.
+   */
+  private fun KSFunctionDeclaration.receiverRendering(): String? =
+    extensionReceiver?.resolve()?.render()
 
   /**
    * A structural name for a type, deliberately not [KSType.toString], which is not specified to be

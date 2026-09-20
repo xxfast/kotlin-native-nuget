@@ -40,7 +40,7 @@ public string Book(int nights)
 The second overload above is [the omitting overload](top-level-declarations.md#function-default-parameters)
 `suite`'s default synthesizes; it keeps the doc but drops the `<param>` it has no parameter for.
 
-## What carries a doc comment
+## What carries a doc comment {id="what-carries-a-doc-comment"}
 
 Every generated declaration that mirrors a documented Kotlin one: a class, object, interface (and
 its members), enum (and a documented entry), sealed base and arm, value class, constructor
@@ -119,8 +119,12 @@ same declaration.
 
 ## `expect`/`actual` {id="expectactual"}
 
-KDoc written on an `expect` declaration reaches the generated C#, even though the `actual` Kotlin
-compiles against typically carries none of its own:
+KDoc written on an `expect` declaration reaches the generated C#, for every family the
+[list above](#what-carries-a-doc-comment) covers — not only a class, as below, but also a member
+of an `expect class`, a top-level `expect val`, an `expect object`/`interface`/`sealed
+class`/`value class`, and an enum entry. If the `actual` itself carries its own KDoc, that wins
+instead; most authors write the one shared doc on the `expect` and leave the `actual` bare, which
+is why the example below documents only the `expect` side.
 
 ```kotlin
 /** Oreo's sunny window perch. */

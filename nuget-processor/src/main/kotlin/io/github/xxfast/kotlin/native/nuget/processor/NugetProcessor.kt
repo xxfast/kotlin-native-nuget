@@ -1188,7 +1188,7 @@ class NugetProcessor(
       ),
     )
     val forwardPlanner = ForwardCallablePlanner(forwardClassifier, expects)
-    val forwardPropertyPlanner = ForwardPropertyPlanner(forwardClassifier)
+    val forwardPropertyPlanner = ForwardPropertyPlanner(forwardClassifier, expects)
     val ordinaryCatalog: ForwardCallablePlanCatalog = forwardPlanner.catalog(
       classes, functions, extensionFunctions, objects, properties, extensionProperties, valueClasses,
       sealedClasses,
@@ -1267,7 +1267,7 @@ class NugetProcessor(
     // deliberately NOT merged below, or every reachable interface's skip would be reported twice
     // (a reachable interface is planned by both).
     val declarationPlanner = ForwardCallablePlanner(forwardClassifier, expects)
-    val declarationPropertyPlanner = ForwardPropertyPlanner(forwardClassifier)
+    val declarationPropertyPlanner = ForwardPropertyPlanner(forwardClassifier, expects)
 
     // ADR-075 amendment (2026-09-13): the UNEXPORTED supertypes of exported classes, planned onto
     // the same declaration catalog. ADR-101 drops `: INesting` from the base list, but the members
@@ -1305,7 +1305,7 @@ class NugetProcessor(
     // A THIRD planner instance, for the same reason the declaration planner above is a second one:
     // its drop channel must not be merged, or every declared member of an unexported supertype the
     // class implements concretely would be warned about on every build.
-    val supertypePropertyPlanner = ForwardPropertyPlanner(forwardClassifier)
+    val supertypePropertyPlanner = ForwardPropertyPlanner(forwardClassifier, expects)
     val interfaceDeclarationCatalog = ForwardCallablePlanCatalog(
       entries = interfaces.flatMap { iface -> declarationPlanner.interfaceEntries(iface) },
       propertyPlans = interfaces.flatMap { iface ->

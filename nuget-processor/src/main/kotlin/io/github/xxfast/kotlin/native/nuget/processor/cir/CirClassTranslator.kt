@@ -985,6 +985,7 @@ internal fun translateClass(
     tracker = tracker,
     callableCatalog = callableCatalog,
     context = context,
+    expects = expects,
   )
 
   // ADR-124: the whole flow projection lives in one function now, so a sealed arm gets
@@ -1530,6 +1531,9 @@ internal fun suspendMembers(
   tracker: CollectionHelperTracker,
   callableCatalog: ForwardCallablePlanCatalog,
   context: NugetContext,
+  // ADR-150: the expect index, so a documented suspend member of an `expect class` keeps its
+  // summary; a bare `forwardKdoc()` here could never reach the expect half.
+  expects: ExpectIndex = ExpectIndex(),
 ): List<CirMember> {
   // ADR-068: a `suspend fun` returning StateFlow<T>/MutableStateFlow<T> is peeled into its own
   // bucket BEFORE the plain-async path below claims it -- that path would otherwise resolve the
@@ -1620,7 +1624,7 @@ internal fun suspendMembers(
       // ADR-150: the rendered `Async` signature ends in `CancellationToken cancellationToken`
       // (ADR-023), which is a parameter of the C# member and therefore needs a tag of its own the
       // moment any other parameter has one (CS1573, fatal under `GeneratedBindingsCheck`).
-      doc = method.forwardKdoc()?.toCirDoc(
+      doc = method.forwardKdoc(expects)?.toCirDoc(
         methodParams.map { it.name } + ASYNC_CANCELLATION_PARAMETER,
         hasResult = !isUnit,
       ),
@@ -1718,7 +1722,7 @@ internal fun suspendMembers(
     val asyncMethod = CirMethod(
       // ADR-150: the suspend function's own KDoc, on its `Async` projection. `@return` documents
       // the awaited value, which is what the `Task<T>` yields.
-      doc = method.forwardKdoc()?.toCirDoc(
+      doc = method.forwardKdoc(expects)?.toCirDoc(
         methodParams.map { it.name } + ASYNC_CANCELLATION_PARAMETER,
         hasResult = true,
       ),
@@ -1759,6 +1763,9 @@ internal fun translateSealedClass(
   // would silently declare none for a future caller that forgot to pass it, which is the one
   // failure mode of this feature that emits neither a twin nor a diagnostic.
   nestedOf: (KSClassDeclaration) -> List<CirDeclaration>,
+  // ADR-150: the expect index. A bare `forwardKdoc()` here cannot reach the `expect` half,
+  // so a documented `expect` declaration of this family rendered with no summary at all.
+  expects: ExpectIndex = ExpectIndex(),
 ): CirSealedClass {
   val libraryName: String = context.libraryName
   val name: String = cls.simpleName.asString()
@@ -1935,6 +1942,7 @@ internal fun translateSealedClass(
         tracker = tracker,
         callableCatalog = callableCatalog,
         context = context,
+        expects = expects,
       )
 
       // ADR-124: the arm's declared Flow/StateFlow-returning methods, on the same legacy route
@@ -2015,7 +2023,7 @@ internal fun translateSealedClass(
       }
 
       CirSealedSubclass(
-        doc = subclass.forwardKdoc()?.toCirDoc(),
+        doc = subclass.forwardKdoc(expects)?.toCirDoc(),
         name = subName,
         nativePrefix = subPrefix,
         properties = properties,
@@ -2041,7 +2049,7 @@ internal fun translateSealedClass(
     .toList()
 
   return CirSealedClass(
-    doc = cls.forwardKdoc()?.toCirDoc(),
+    doc = cls.forwardKdoc(expects)?.toCirDoc(),
     name = name,
     libraryName = libraryName,
     nativePrefix = prefix,
@@ -2137,6 +2145,9 @@ internal fun translateObject(
   callableCatalog: ForwardCallablePlanCatalog,
   tracker: CollectionHelperTracker,
   logger: KSPLogger,
+  // ADR-150: the expect index. A bare `forwardKdoc()` here cannot reach the `expect` half,
+  // so a documented `expect` declaration of this family rendered with no summary at all.
+  expects: ExpectIndex = ExpectIndex(),
 ): CirObject {
   val name: String = obj.simpleName.asString()
   val prefix: String = obj.nativePrefix()
@@ -2166,7 +2177,7 @@ internal fun translateObject(
     libraryName = libraryName,
     nativePrefix = prefix,
     methods = methods,
-    doc = obj.forwardKdoc()?.toCirDoc(),
+    doc = obj.forwardKdoc(expects)?.toCirDoc(),
   )
 }
 
@@ -2404,6 +2415,9 @@ internal fun translateInterface(
   iface: KSClassDeclaration,
   callableCatalog: ForwardCallablePlanCatalog,
   logger: KSPLogger,
+  // ADR-150: the expect index. A bare `forwardKdoc()` here cannot reach the `expect` half,
+  // so a documented `expect` declaration of this family rendered with no summary at all.
+  expects: ExpectIndex = ExpectIndex(),
 ): CirInterface {
   val name: String = iface.simpleName.asString()
   val interfaceName: String = "I$name"
@@ -2456,7 +2470,7 @@ internal fun translateInterface(
   emitInterfaceNameCollisions(interfaceName, iface, propertyPlans, methodPlans, logger)
 
   return CirInterface(
-    interfaceName, typeParams, properties, methods, doc = iface.forwardKdoc()?.toCirDoc(),
+    interfaceName, typeParams, properties, methods, doc = iface.forwardKdoc(expects)?.toCirDoc(),
   )
 }
 
@@ -2656,7 +2670,7 @@ internal fun translateEnum(
       val entryName: String = entry.simpleName.asString()
       val csEntryName: String = entryName.split("_")
         .joinToString("") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
-      CirEnumEntry(csEntryName, index, doc = entry.forwardKdoc()?.toCirDoc())
+      CirEnumEntry(csEntryName, index, doc = entry.forwardKdoc(expects)?.toCirDoc())
     }
     .toList()
 
@@ -2700,6 +2714,9 @@ internal fun translateValueClass(
   logger: KSPLogger,
   context: NugetContext,
   callableCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanCatalog(emptyList()),
+  // ADR-150: the expect index. A bare `forwardKdoc()` here cannot reach the `expect` half,
+  // so a documented `expect` declaration of this family rendered with no summary at all.
+  expects: ExpectIndex = ExpectIndex(),
 ): CirValueClass {
   val name: String = cls.simpleName.asString()
   val qualifiedName: String = cls.qualifiedName?.asString() ?: name
@@ -2811,7 +2828,7 @@ internal fun translateValueClass(
     constructors = constructors,
     properties = properties,
     methods = methods,
-    doc = cls.forwardKdoc()?.toCirDoc(),
+    doc = cls.forwardKdoc(expects)?.toCirDoc(),
   )
 }
 

@@ -442,3 +442,22 @@ observation, the `expect`/`actual` erasure (`hasDefault = false` on the `actual`
 separately by `topLevelDefaultFlags`), onto every `override` in general. `memberDefaultFlags`'s walk
 to the root overridee is not wrong to keep; it is a defensive read rather than the load-bearing fix
 its 2026-09-11 text describes. Nothing in this ADR's shipped mechanism changes.
+
+## Amendment (2026-09-20): `ExpectIndex.functionOrNull` now compares the extension receiver
+
+[ADR-150](150-kdoc-to-csharp-xml-docs.md)'s KDoc-lookup fix needed `functionOrNull` to resolve a
+documented `expect fun Foo.bar()` to its own KDoc. The matcher this ADR shipped could never do
+that: it excluded every extension outright, on the reasoning that "their receiver is not part of
+this comparison, so admitting them could match the wrong declaration." `functionOrNull` now
+compares the rendered extension receiver as part of the signature match, alongside parameter count,
+names, and types; an absent receiver matches only an absent receiver, so a non-extension can never
+resolve to an extension of the same qualified name, or the reverse.
+
+Measured, this widens nothing this ADR governs: **the extension route still never reads
+`expectsByName`/`ExpectIndex` for `hasDefault`.** `topLevelDefaultFlags` stays the sole index
+caller for defaults, and only on the top-level route ("Defaults source" above, unchanged). An
+`expect fun SunSpot.stretchFor(minutes: Int = 5)` still generates exactly one export — no `_2`, no
+omitting overload — pinned by the Tier 1 cell `an expect extension's default parameter does not add
+an omitting overload`. Wiring the index into extension defaults is still a deliberate v1 boundary,
+now for a narrower reason than before: not because the receiver can't be matched (it can, as of
+this amendment), but because no route has been written to consult it for defaults.

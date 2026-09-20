@@ -7,6 +7,7 @@ import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
+import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
@@ -79,6 +80,12 @@ internal data class ForwardDroppedExtensionReceiver(
 /** Builds the property slice while leaving unsupported/specialized properties on their named legacy paths. */
 internal class ForwardPropertyPlanner(
   private val classifier: ForwardBridgeTypeClassifier,
+  /**
+   * ADR-150: the same index the callable planner holds. Without it a documented top-level
+   * `expect val`, and a documented property of an `expect class`, rendered undocumented — the
+   * `actual` this planner sees normally carries no KDoc of its own.
+   */
+  private val expects: ExpectIndex = ExpectIndex(),
 ) {
   private val droppedSetters: MutableList<ForwardDroppedPropertySetter> = mutableListOf()
   private val dropped: MutableList<ForwardDroppedProperty> = mutableListOf()
@@ -404,7 +411,7 @@ internal class ForwardPropertyPlanner(
     )
     return ForwardPropertyPlan(
       symbol = symbol,
-      doc = prop.forwardKdoc(),
+      doc = prop.forwardKdoc(expects),
       position = position,
       receiver = receiver,
       kotlinName = name,

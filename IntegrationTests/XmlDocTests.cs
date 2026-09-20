@@ -189,6 +189,82 @@ public class XmlDocTests
     }
 
     [Fact]
+    public void Basking_OverloadedExpectFuns_EachTakeTheirOwnExpectsDoc()
+    {
+        Assert.Contains("Oreo basks on ", SunSpotKt.Basking("Oreo"));
+        Assert.Contains("basked 5 min on ", SunSpotKt.Basking(5));
+
+        // The pair is the discriminating cell: same parameter count, different parameter types and
+        // names, distinct summaries. A lookup keyed by name alone, or by count alone, puts one
+        // overload's text on the other; an ambiguous no-match leaves both undocumented.
+        XElement byCat = Required($"M:{Ns}.SunSpotKt.Basking(System.String)");
+        Assert.Equal("Finds where a cat is basking.", Tag(byCat, "summary"));
+        Assert.Equal("which cat", Param(byCat, "cat"));
+        Assert.Equal("the sunny spot", Tag(byCat, "returns"));
+
+        XElement byMinutes = Required($"M:{Ns}.SunSpotKt.Basking(System.Int32)");
+        Assert.Equal("Finds who has basked this long.", Tag(byMinutes, "summary"));
+        Assert.Equal("how long", Param(byMinutes, "minutes"));
+        Assert.Equal("who was found", Tag(byMinutes, "returns"));
+    }
+
+    [Fact]
+    public void SunSpotWarmth_ExpectClassProperty_CarriesTheExpectsSummary()
+    {
+        using var perch = new SunSpot();
+        Assert.Contains("toasty on ", perch.Warmth);
+
+        Assert.Equal(
+            "How warm the perch is right now.",
+            Tag(Required($"P:{Ns}.SunSpot.Warmth"), "summary"));
+    }
+
+    [Fact]
+    public void BaskingTag_TopLevelExpectVal_CarriesTheExpectsSummary()
+    {
+        Assert.StartsWith("perch-", SunSpotKt.BaskingTag);
+
+        Assert.Equal(
+            "The label stitched onto Oreo's favourite perch.",
+            Tag(Required($"P:{Ns}.SunSpotKt.BaskingTag"), "summary"));
+    }
+
+    [Fact]
+    public void SunnyNapMinutes_NullablePrimitiveReturn_IsStillDocumented()
+    {
+        // Deliberately NOT an `expect`: this isolates the nullable-primitive top-level route from
+        // the expect index, so a red here is about the route carrying no doc at all.
+        Assert.Equal((int?)14, SunSpotKt.SunnyNapMinutes());
+
+        XElement member = Required($"M:{Ns}.SunSpotKt.SunnyNapMinutes");
+        Assert.Equal(
+            "How many minutes Mylo napped in the sun, when anyone was counting.",
+            Tag(member, "summary"));
+        Assert.Equal("the minutes, or null when nobody kept count", Tag(member, "returns"));
+    }
+
+    [Fact]
+    public void Stretch_ExpectExtensionFunction_CarriesTheExpectsSummary()
+    {
+        using var perch = new SunSpot();
+        Assert.Contains("stretched out on ", perch.Stretch());
+
+        XElement member = Required($"M:{Ns}.SunSpotExtensions.Stretch({Ns}.SunSpot)");
+        Assert.Equal("Stretches out across the whole spot.", Tag(member, "summary"));
+        Assert.Equal("how the stretch went", Tag(member, "returns"));
+    }
+
+    [Fact]
+    public void SunLounge_ExpectObject_CarriesTheExpectsSummary()
+    {
+        Assert.Equal(2, SunLounge.Loungers());
+
+        Assert.Equal(
+            "Where the whole household suns itself.",
+            Tag(Required($"T:{Ns}.SunLounge"), "summary"));
+    }
+
+    [Fact]
     public void Guest_Property_CarriesItsOwnSummary()
     {
         using var desk = new BoardingDesk("Oreo");

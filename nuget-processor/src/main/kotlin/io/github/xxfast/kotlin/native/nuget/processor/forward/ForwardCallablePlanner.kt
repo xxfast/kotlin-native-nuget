@@ -704,7 +704,7 @@ internal class ForwardCallablePlanner(
       classes.forEach { cls -> addAll(companionEntries(cls)) }
       valueClasses.forEach { cls -> addAll(valueClassEntries(cls)) }
     }
-    val planner = ForwardPropertyPlanner(classifier)
+    val planner = ForwardPropertyPlanner(classifier, expects)
     val propertyPlans: List<ForwardPropertyPlan> = planner.catalog(
       classes, properties, extensionProperties, sealedClasses,
     )
@@ -1837,6 +1837,10 @@ internal class ForwardCallablePlanner(
         result = result,
         member = member,
         node = function,
+        // ADR-150: this route carried no doc at all, so EVERY top-level `fun f(): Int?` (also
+        // `Instant?`, `Duration?`, `Enum?`, a fan-out value class) rendered undocumented, whether
+        // or not it was an `expect`.
+        doc = function.forwardKdoc(expects).forParameters(function.parameters.dropLast(omitted)),
       )
     }
     return planOrSkip(
@@ -1870,6 +1874,9 @@ internal class ForwardCallablePlanner(
     // ADR-095: the two-call route numbers like every other, so its plan carries the bare name too.
     member: String? = null,
     node: KSNode? = null,
+    // ADR-150: and it carries a doc like every other, on the same `publicSignature` slot the CIR
+    // projection already reads (`staticLegacyTwoCall` renders `plan.publicSignature.cirDoc()`).
+    doc: ForwardKdoc? = null,
   ): ForwardCallableCatalogEntry {
     val inner: BridgeType = result.type
     require(
@@ -2009,6 +2016,7 @@ internal class ForwardCallablePlanner(
         name = publicName,
         parameters = declared.map { (name, type) -> ForwardPublicParameter(name, type) },
         result = result,
+        doc = doc,
       ),
       evaluation = ForwardEvaluation.LEGACY_TWO_CALL,
       nativeExports = listOf(presence, value),
@@ -3727,7 +3735,7 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
  * KSP 2.3.10 (verified), so reading it would put the type's summary on every helper it generates.
  * An `actual` carries no KDoc at all, so the paired `expect` is consulted through [ExpectIndex].
  */
-internal fun KSDeclaration.forwardKdoc(expects: ExpectIndex = ExpectIndex()): ForwardKdoc? {
+internal fun KSDeclaration.forwardKdoc(expects: ExpectIndex): ForwardKdoc? {
   if (origin != Origin.KOTLIN) return null
   return parseKdoc(docString ?: expects.docOrNull(this))
 }
