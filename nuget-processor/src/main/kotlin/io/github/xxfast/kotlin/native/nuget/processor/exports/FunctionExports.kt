@@ -1,11 +1,13 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_TO_CSHARP_PARAM
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
@@ -27,7 +29,47 @@ internal fun KSFunctionDeclaration.hasLegacyGenericReturnRoute(): Boolean {
   val returnDecl: KSClassDeclaration = returnType.declaration as? KSClassDeclaration ?: return false
   val qualified: String? = returnDecl.qualifiedName?.asString()
   if (qualified in FLOW_TYPES || qualified in STATE_FLOW_TYPES) return false
+  // ROADMAP Phase 4 (2026-09-20), the general form of the ADR-064 amendment above: a *collection*
+  // return belongs to the ADR-062 plan route and to nothing else. It is a generic declaration with
+  // arguments, so it passed the test below whenever the plan SKIPPED it -- and `translateFunction`
+  // then rendered the pre-ADR-062 `isListReturnType`/`isMapReturnType`/`isSetReturnType` branches,
+  // which spell a component by its Kotlin SIMPLE NAME and drop its own type arguments. Measured
+  // 2026-09-20: `fun f(): List<ByteArray>` emitted `IReadOnlyList<ByteArray>` reading
+  // `FromHandle<ByteArray>`, and `fun g(): List<List<ByteArray>>` emitted `IReadOnlyList<List>` --
+  // both CS0246 in the consumer, both carrying the `SKIPPED_UNSUPPORTED_TYPE` warning that says
+  // they were dropped. Not ByteArray-specific: any component the plan refuses (`List<Instant>`,
+  // `List<Uuid>`, `List<Sequence<Int>>`) took the same fall-through. Skip means absent.
+  if (qualified in LEGACY_UNROUTED_COLLECTIONS) return false
+  // The same hole one position over: this route's C# half spells every parameter through
+  // `mapParamType`, whose fall-through is a public `IntPtr` (issue #126's class, which ADR-122
+  // fixed on the async routes only). A plan skip caused by a PARAMETER left the return route open,
+  // so `fun f(p: List<ByteArray?>): List<Int>` rendered `IReadOnlyList<int> MissingSignals(IntPtr
+  // signals)`: a member no consumer can call, for a declaration the build said it dropped.
+  if (!parameters.all { it.type.resolve().expandAliases().isLegacyGenericRouteParameter() }) {
+    return false
+  }
   return returnDecl.typeParameters.isNotEmpty() && returnType.arguments.isNotEmpty()
+}
+
+/**
+ * The collection declarations the ADR-062 plan route owns outright. Spelled as qualified names
+ * rather than reached through `BridgeType` because this predicate runs on both halves before any
+ * classifier is in scope.
+ */
+private val LEGACY_UNROUTED_COLLECTIONS: Set<String> = setOf(
+  "kotlin.collections.List", "kotlin.collections.MutableList",
+  "kotlin.collections.Map", "kotlin.collections.MutableMap",
+  "kotlin.collections.Set", "kotlin.collections.MutableSet",
+)
+
+/**
+ * Whether `translateFunction` can actually spell this parameter: one of the 13 `mapParamType`
+ * entries, or an enum (which it renders as the public enum over an `int` native slot). Everything
+ * else is `mapParamType`'s `IntPtr` fall-through.
+ */
+private fun KSType.isLegacyGenericRouteParameter(): Boolean {
+  if (declaration.simpleName.asString() in KOTLIN_TO_CSHARP_PARAM) return true
+  return (declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
 }
 
 /**

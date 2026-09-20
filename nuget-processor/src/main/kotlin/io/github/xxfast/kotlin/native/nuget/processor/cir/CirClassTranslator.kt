@@ -70,7 +70,12 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesBaseClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyDiscriminatedRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyFlowElementShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesCsharpType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesElementReadArgument
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementReadArgument
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
@@ -1195,8 +1200,16 @@ internal fun flowProperty(
   val flowElementInterface: BridgeType.Interface? =
     if (isMutableStateFlowProperty) null
     else classifier.legacyFlowElementInterface(flowElementTypeResolved)
+  // ROADMAP Phase 4 (ADR-151 amendment): a bare `ByteArray` element is `byte[]`, read through the
+  // same per-member `read:` seam a collection element uses. It has to be decided here because
+  // `qualifiedElementCsType` below crashes the processor on a Kotlin builtin (ADR-123's guard).
+  val flowElementBytes: Boolean =
+    classifier.legacyFlowElementShape(flowElementTypeResolved) is
+        ForwardLegacyFlowElementShape.Bytes
+  if (flowElementBytes) tracker.needsBytes = true
   val flowElementType: String? = when {
     flowElementCollection != null -> flowElementCollection.forwardPublicCsharpType()
+    flowElementBytes -> legacyBytesCsharpType(isNullableElement)
     flowElementInterface != null ->
       flowElementInterface.csharpType + if (isNullableElement) "?" else ""
     // ADR-066: qualified, not by simple name: an admitted dependency-module element type is
@@ -1210,6 +1223,7 @@ internal fun flowProperty(
     ?.let { collection -> legacyFlowElementReadArgument(collection) }
     ?: flowElementInterface
       ?.let { iface -> legacyInterfaceElementReadArgument(iface, isNullableElement) }
+    ?: legacyBytesElementReadArgument(isNullableElement).takeIf { flowElementBytes }
   if (isFlowType || isStateFlowType) {
     tracker.needsFlow = true
     tracker.needsAsync = true
@@ -1390,14 +1404,22 @@ internal fun flowMembers(
     val flowElementInterface: BridgeType.Interface? =
       if (isHeldMutableStateFlow) null
       else classifier.legacyFlowElementInterface(flowElementTypeResolved)
+    // ROADMAP Phase 4: the sibling property branch's bytes arm, for a
+    // `fun ticks(): Flow<ByteArray>`.
+    val flowElementBytes: Boolean =
+      classifier.legacyFlowElementShape(flowElementTypeResolved) is
+          ForwardLegacyFlowElementShape.Bytes
+    if (flowElementBytes) tracker.needsBytes = true
     // ADR-066: qualified, not by simple name, see the sibling property branch above for why.
     val flowCsElementType: String = flowElementCollection?.forwardPublicCsharpType()
+      ?: legacyBytesCsharpType(isNullableElement).takeIf { flowElementBytes }
       ?: flowElementInterface?.let { it.csharpType + if (isNullableElement) "?" else "" }
       ?: qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
     val flowElementRead: String? = flowElementCollection
       ?.let { collection -> legacyFlowElementReadArgument(collection) }
       ?: flowElementInterface
         ?.let { iface -> legacyInterfaceElementReadArgument(iface, isNullableElement) }
+      ?: legacyBytesElementReadArgument(isNullableElement).takeIf { flowElementBytes }
 
     // ADR-114: a collection parameter takes the public collection type with an IntPtr native
     // slot; every other parameter keeps mapParamType's shipped spelling.
@@ -1618,6 +1640,9 @@ internal fun suspendMembers(
     val collectionReturn: BridgeType.Collection? =
       (returnShape as? ForwardLegacyReturnShape.Marshalled)?.type
     if (collectionReturn != null) tracker.trackCollection(collectionReturn)
+    // ROADMAP Phase 4: `suspend fun snapshot(): ByteArray` is `Task<byte[]>`, read with
+    // `NugetMarshal.ReadBytes` off the awaited handle (the Kotlin half already retains the array).
+    if (returnShape is ForwardLegacyReturnShape.Bytes) tracker.needsBytes = true
 
     // ADR-114: a collection parameter takes the public collection type with an IntPtr native
     // slot; every other parameter keeps mapParamType's shipped spelling.
@@ -1628,6 +1653,8 @@ internal fun suspendMembers(
     val asyncReturnType: String = when {
       isUnit -> ""
       collectionReturn != null -> collectionReturn.forwardPublicCsharpType()
+      returnShape is ForwardLegacyReturnShape.Bytes ->
+        legacyBytesCsharpType(returnShape.nullable)
       // ADR-040: the projected interface, already `global::`-qualified and owner-chained by the
       // classifier. `nestedCsName()` below would spell the backing wrapper here.
       returnShape is ForwardLegacyReturnShape.Interface -> returnShape.declaredCsharpType()
@@ -1699,6 +1726,12 @@ internal fun suspendMembers(
         // wrapper itself rather than be spelled off `asyncReturnType` the way the sealed arm is.
         // Without this the renderer's `else` arm would emit `new ...IKeeper(resultPtr)` (CS0144).
         is ForwardLegacyReturnShape.Interface -> returnShape.legacyInterfaceRead("resultPtr")
+
+        // ROADMAP Phase 4: the awaited handle IS the bytes handle, so the read is the standalone
+        // `ReadBytes`, which copies and disposes it. The renderer's `else` would have emitted
+        // `new byte[](resultPtr)`.
+        is ForwardLegacyReturnShape.Bytes ->
+          legacyBytesRead("resultPtr", returnShape.nullable)
 
         // `Refused` already returned above; `Plain` keeps the renderer's shipped spelling.
         ForwardLegacyReturnShape.Plain, is ForwardLegacyReturnShape.Refused -> null

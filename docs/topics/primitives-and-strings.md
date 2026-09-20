@@ -147,8 +147,10 @@ byte[] reversed = PayloadKt.Reverse(new byte[] { 1, 2, 3 }); // { 3, 2, 1 }
 An empty `ByteArray` (`byteArrayOf()`) crosses as `Array.Empty<byte>()`, never `null`. `ByteArray?`
 becomes `byte[]?`, with `null` distinct from an empty array; `payload.Checksum` above is `null` for
 an empty payload. `ByteArray` works as a property, constructor and method parameter, and function
-result. It is not yet supported as a collection element (`List<ByteArray>`), as another array type
-(`IntArray`, `Array<T>`), or as an extension receiver.
+result, and as a `List` element or a `Map` value (`List<ByteArray>` is `IReadOnlyList<byte[]>`, see
+[Collections](collections.md)). It is not supported as a `Set` element or a `Map` key, since arrays
+compare by identity and every crossing copies, so a lookup could never succeed, nor as another array
+type (`IntArray`, `Array<T>`), nor as an extension receiver.
 
 ## C# names
 

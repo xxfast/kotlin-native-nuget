@@ -1142,6 +1142,19 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "receiver $nonNull"
   }
 
+  // ROADMAP Phase 4 (ADR-151 amendment): since a `ByteArray` binds as a `List` element and as a
+  // `Map` VALUE, the only shapes that still reach this reason are the two DECLINED equality slots,
+  // so the hint says WHY rather than sending the author to write an adapter that would behave
+  // exactly as badly.
+  ForwardPlanSkipReason.BYTE_ARRAY ->
+    "a `ByteArray` cannot be a `Set` element or a `Map` key: arrays compare by identity in " +
+        "Kotlin and in C# alike, and every crossing of this bridge copies, so the `byte[]` a " +
+        "caller holds is never the array the Kotlin container hashed and no membership test or " +
+        "lookup could ever succeed. use a `List<ByteArray>` if order (not uniqueness) is what " +
+        "you need, or key the map by a `String` or a value class over one, such as a hex or " +
+        "Base64 digest. a `ByteArray` binds everywhere else: at a `List`/`MutableList` element, " +
+        "a `Map`/`MutableMap` VALUE, and at any ordinary parameter, return or property"
+
   else -> genericSkipHint
 }
 

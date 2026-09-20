@@ -174,9 +174,46 @@ internal sealed interface ForwardLegacyReturnShape {
     val nullable: Boolean,
   ) : ForwardLegacyReturnShape
 
+  /**
+   * ROADMAP Phase 4 (ADR-151 amendment): a bare `ByteArray` at a suspend return.
+   *
+   * It carries no type arguments, so it used to reach [Plain] and the route spelled the awaited
+   * result with `nestedCsName()` -- `Task<ByteArray>`, against a C# type nothing declares (CS0246
+   * in every consumer, ADR-123 / issue #127's shape one position over). The WIRE was already
+   * right: the Kotlin half boxes the result with `NugetHandles.retain(result)`, and for a
+   * `ByteArray` that StableRef *is* the handle `NugetMarshal.ReadBytes` expects, the same handle
+   * `nuget_bytes_create` mints. So only the C# spelling and the read had to change, and no new
+   * export exists for this.
+   *
+   * [nullable] carries the `?` from the declaration, so the completion guards a null result
+   * pointer before reading, exactly as the shipped nullable-object arm does.
+   */
+  data class Bytes(val nullable: Boolean) : ForwardLegacyReturnShape
+
   /** Any other generic return, named so the skip diagnostic can quote it. */
   data class Refused(val description: String) : ForwardLegacyReturnShape
 }
+
+/**
+ * ROADMAP Phase 4: the C# type a bare-`ByteArray` async position is DECLARED with, and the
+ * expression that reads its handle back. Shared by the suspend routes and the flow routes so the
+ * four call sites cannot drift.
+ */
+internal fun legacyBytesCsharpType(nullable: Boolean): String =
+  if (nullable) "byte[]?" else "byte[]"
+
+/**
+ * `NugetMarshal.ReadBytes(h)`, which copies the Kotlin array out and disposes the handle in its own
+ * `finally`. A nullable position is guarded on the wire pointer first: the Kotlin half sends `null`
+ * as a null result pointer, and `ReadBytes(IntPtr.Zero)` would call `nuget_bytes_count` on it.
+ */
+internal fun legacyBytesRead(handle: String, nullable: Boolean): String =
+  if (nullable) "$handle == IntPtr.Zero ? null : NugetMarshal.ReadBytes($handle)"
+  else "NugetMarshal.ReadBytes($handle)"
+
+/** [legacyBytesRead] in the ADR-123 `read:` slot the flow routes hand their enumerator. */
+internal fun legacyBytesElementReadArgument(nullable: Boolean): String =
+  "read: static h => ${legacyBytesRead("h", nullable)}"
 
 /**
  * Classifies one suspend member's return. Only a *generic* return is classified at all, so every
@@ -221,6 +258,14 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
   }
   if (classified is BridgeType.Interface) {
     return ForwardLegacyReturnShape.Interface(classified, expanded.isMarkedNullable)
+  }
+
+  // ROADMAP Phase 4 / ADR-151: a bare `ByteArray` carries no type arguments, so it reached the
+  // `Plain` early return below and the route spelled the awaited result `nestedCsName()` --
+  // `public Task<ByteArray> SnapshotAsync(...)` against a C# type nothing declares (measured
+  // 2026-09-20). Decided here, ahead of that fall-through.
+  if (classified == BridgeType.ByteArray) {
+    return ForwardLegacyReturnShape.Bytes(expanded.isMarkedNullable)
   }
 
   if (expanded.arguments.isEmpty()) return ForwardLegacyReturnShape.Plain
@@ -290,6 +335,18 @@ internal sealed interface ForwardLegacyFlowElementShape {
   /** A collection the ordinary route's wire container and helpers already cover. */
   data class Marshalled(val type: BridgeType.Collection) : ForwardLegacyFlowElementShape
 
+  /**
+   * ROADMAP Phase 4 (ADR-151 amendment): a bare `ByteArray` element, the return shape's twin.
+   *
+   * This one did not merely lie, it HARD-CRASHED the processor: `qualifiedElementCsType` runs a
+   * Kotlin builtin through the *user-type* namespace mapping, and ADR-123's guard there turns that
+   * into an `IllegalStateException` that takes `packNuget` down with it. The wire needed nothing:
+   * `FlowExports` already boxes each emission with `NugetHandles.retain(value as Any)`, which for
+   * a `ByteArray` is exactly the handle `ReadBytes` consumes. It rides ADR-123's per-member `read:`
+   * seam, the same one a collection element uses.
+   */
+  data class Bytes(val nullable: Boolean) : ForwardLegacyFlowElementShape
+
   /** Any other generic element, named so the skip diagnostic can quote it. */
   data class Refused(val description: String) : ForwardLegacyFlowElementShape
 }
@@ -307,6 +364,19 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
   type: KSType?,
 ): ForwardLegacyFlowElementShape {
   val expanded: KSType = type?.expandAliases() ?: return ForwardLegacyFlowElementShape.Plain
+
+  // ROADMAP Phase 4 / ADR-151: a bare `ByteArray` element has no type arguments, so it reached the
+  // `Plain` early return and both halves spelled it with `qualifiedElementCsType` -- the user-type
+  // speller, which for a Kotlin builtin HARD-CRASHES the processor and therefore `packNuget`
+  // ("Kotlin builtin kotlin.ByteArray reached the user-type C# speller", ADR-123). Decided here,
+  // ahead of that fall-through.
+  val classified: BridgeType = classify(expanded).let {
+    if (it is BridgeType.Nullable) it.type else it
+  }
+  if (classified == BridgeType.ByteArray) {
+    return ForwardLegacyFlowElementShape.Bytes(expanded.isMarkedNullable)
+  }
+
   if (expanded.arguments.isEmpty()) return ForwardLegacyFlowElementShape.Plain
 
   val collection: BridgeType.Collection? = classify(type) as? BridgeType.Collection

@@ -395,3 +395,9 @@ before and after.
 2. **No route reaches `legacyRouteParameters` other than the four named call sites.** Verified by
    reading the call sites that exist today; a fifth added later would inherit the fix silently,
    which is the intended direction, but a fifth that builds its parameters by hand would not.
+
+> **Pointer (2026-09-20):** [ADR-151](151-bytearray-mapping.md) found the same defect class one
+> layer down, in the pre-ADR-062 legacy list/map/set *return* branches (`CirFunctionTranslator.kt`),
+> which this ADR did not touch. Those branches inspected only the return, so a skip caused by a
+> parameter left the route open and rendered that parameter as a public `IntPtr`. Closed with a
+> `check(...)` regression guard, pinned by `tier1/Tier1SkipMeansAbsentTest.kt`.

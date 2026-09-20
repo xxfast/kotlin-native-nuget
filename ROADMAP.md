@@ -19,7 +19,6 @@ Complete.
 Complete.
 
 ## Phase 4: Rich type support
-- [ ] `ByteArray` as a collection component (`List<ByteArray>`, `Map<String, ByteArray>`) is deferred by [ADR-151](docs/adr/151-bytearray-mapping.md): the component read/write helpers are typed on the element `BridgeType` and would need a `ByteArray` arm each. Today a callable reaching one skips `SKIPPED_UNSUPPORTED_TYPE` via the new `ForwardPlanSkipReason.BYTE_ARRAY`.
 - [ ] Deferred by [ADR-136](docs/adr/136-csharp-identity-on-async-interface-reads.md): the generic-function route's `FromHandle<TResult>` (`cir/CirFunctionRenderer.kt` ~:286) still constructs a fresh wrapper rather than resolving a stored C#-implemented original, since no interface fixture reaches that route; `List<Interface>` also stays refused (ADR-040 scope, unchanged).
 - [ ] `nugetCompileInterop` skips silently when `dotnet` is absent; an opt-in strict mode should fail `packNuget` instead of warning, for a CI that forgot to install the SDK. Discovered alongside [ADR-138](docs/adr/138-pack-time-interop-compile-check.md).
 - [ ] `nugetCompileInterop` is not wired into Gradle's `check` lifecycle, only into `packNuget`. Discovered alongside [ADR-138](docs/adr/138-pack-time-interop-compile-check.md).

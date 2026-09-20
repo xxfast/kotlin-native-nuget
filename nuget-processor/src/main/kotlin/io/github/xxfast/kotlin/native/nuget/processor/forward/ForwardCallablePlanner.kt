@@ -2029,7 +2029,8 @@ internal class ForwardCallablePlanner(
         add(ForwardHelperRequirement.COLLECTION)
       }
       // ADR-151: the bytes helpers ride the collection row's slot, with their own P/Invoke class.
-      if (declared.any { (_, type) -> type.unwrapNullable() == BridgeType.ByteArray }) {
+      // ROADMAP Phase 4: recursive, for the reason the input-side twin is.
+      if (declared.any { (_, type) -> type.containsByteArray() }) {
         add(ForwardHelperRequirement.BYTES)
       }
       val resultIsInstant: Boolean = inner == BridgeType.Instant
@@ -2418,7 +2419,9 @@ internal class ForwardCallablePlanner(
         add(ForwardHelperRequirement.COLLECTION)
       }
       // ADR-151: the bytes helpers ride the collection row's slot, with their own P/Invoke class.
-      if (inputTypes.any { type -> type.unwrapNullable() == BridgeType.ByteArray }) {
+      // ROADMAP Phase 4: recursive, because a `List<ByteArray>` parameter needs `CreateBytes` per
+      // element just as a bare `ByteArray` parameter needs it once.
+      if (inputTypes.any { type -> type.containsByteArray() }) {
         add(ForwardHelperRequirement.BYTES)
       }
       if (inputTypes.any { type -> type.unwrapNullable() == BridgeType.Instant }) {
@@ -3535,8 +3538,10 @@ internal class ForwardCallablePlanner(
   }
 
   private fun BridgeType.Collection.collectionInputSkipReason(): ForwardPlanSkipReason? = when {
-    !isBridgeableComponent() ->
-      (element ?: key ?: value)?.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
+    // ROADMAP Phase 4: one attribution rule, shared with the result side -- `skipReason()`'s own
+    // Collection arm names the component that failed (and the DECLINED bytes slots) rather than
+    // the first slot that happens to be populated.
+    !isBridgeableComponent() -> skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
 
     // ADR-073: map/set inputs are admitted only for components the write side can box
     // (isWrappableComponent). ADR-083: the *key* additionally has to be non-nullable -- a C#
@@ -3682,15 +3687,19 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   // over the text form), so `List<Uuid>` skips named rather than half-binding.
   BridgeType.Uuid -> false
 
-  // ADR-151 v1: `List<ByteArray>` is deferred for the same reason (the component read/write
-  // helpers have no bytes arm), so it skips named rather than half-binding.
-  BridgeType.ByteArray -> false
+  // ROADMAP Phase 4 (ADR-151 amendment): a `ByteArray` component crosses as its own StableRef
+  // handle in the pointer-shaped slot every component already uses -- the ADR-099 nested-collection
+  // arm, one handle kind over. C# reads `NugetMarshal.ReadBytes(h)` and writes
+  // `NugetMarshal.CreateBytes(x)`; Kotlin casts `it as kotlin.ByteArray` on the way in and boxes
+  // the container untouched on the way out. No new runtime export. The `Set` element and the `Map`
+  // KEY slots stay refused: see [declinesByteArrayComponent].
+  BridgeType.ByteArray -> true
 
   is BridgeType.ValueClass -> underlying.isBridgeableComponent()
   is BridgeType.Nullable -> type !is BridgeType.Nullable && type != BridgeType.Unit &&
       type.isBridgeableComponent()
 
-  is BridgeType.Collection -> {
+  is BridgeType.Collection -> if (declinesByteArrayComponent()) false else {
     val isMap: Boolean = kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
     if (isMap) {
       key?.isBridgeableComponent() == true && value?.isBridgeableComponent() == true
@@ -3714,6 +3723,48 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   is BridgeType.RawCollection, is BridgeType.RawKSType, is BridgeType.SpecializedProtocol,
   is BridgeType.Unsupported,
     -> false
+}
+
+/**
+ * ROADMAP Phase 4: whether a `ByteArray` appears anywhere in this type, nested components included.
+ * ADR-151 tested only the top level (`unwrapNullable() == ByteArray`), which was right while a
+ * component could not be one; now `List<ByteArray>` needs the same `ForwardHelperRequirement.BYTES`
+ * on the plan as a bare `ByteArray` does. (The C# helper EMISSION is tracker-derived and already
+ * recursive, `CollectionHelperTracker.trackCollection`; this is the plan's own honest spelling of
+ * what it converts.)
+ */
+internal fun BridgeType.containsByteArray(): Boolean {
+  val type: BridgeType = unwrapNullable()
+  return when (type) {
+    BridgeType.ByteArray -> true
+    is BridgeType.Collection ->
+      listOfNotNull(type.element, type.key, type.value).any { it.containsByteArray() }
+
+    else -> false
+  }
+}
+
+/**
+ * ROADMAP Phase 4, the ADR-151 amendment's DECLINED list (not a deferral): the two component slots
+ * a `ByteArray` must never occupy, whichever gate is asking.
+ *
+ * A `Set` element and a `Map` KEY are both equality slots, and an array compares by IDENTITY in
+ * Kotlin and in C# alike. Every crossing of this bridge copies, so the `byte[]` a C# caller holds
+ * is never the `ByteArray` instance the Kotlin container hashed: `set.Contains(bytes)` and
+ * `map[bytes]` would compile, run, and silently never match. Binding them would be a trap dressed
+ * as a feature, so they skip named with the hint that says why and what to use instead.
+ *
+ * The `List`/`MutableList` element and the `Map`/`MutableMap` VALUE slots carry no equality
+ * contract, so they bind.
+ */
+internal fun BridgeType.Collection.declinesByteArrayComponent(): Boolean = when (kind) {
+  CollectionKind.MAP, CollectionKind.MUTABLE_MAP ->
+    key?.unwrapNullable() == BridgeType.ByteArray
+
+  CollectionKind.SET, CollectionKind.MUTABLE_SET ->
+    element?.unwrapNullable() == BridgeType.ByteArray
+
+  CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> false
 }
 
 /**
@@ -3750,6 +3801,12 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   // the C# side pinned to that width by `[MarshalAs(UnmanagedType.U2)]`.
   BridgeType.Char -> true
 
+  // ROADMAP Phase 4 (ADR-151 amendment): the write side mints one `nuget_bytes_create` handle per
+  // element through the `Select` projection, so `Wrap<T>` is only ever instantiated at `T = IntPtr`
+  // (or `IntPtr?`) -- a branch it already has. `nuget_list_add`/`nuget_map_put` then store the
+  // DEREFERENCED object, which is the real `ByteArray`, and the fill loop disposes the box it owns.
+  BridgeType.ByteArray -> true
+
   // ADR-105 scope (d): every handle boxes through `CreateList`/`CreateMap`/`CreateSet`, which end
   // in `Wrap<T>`'s `if (value is INugetHandle wrapper)` arm -- a runtime type test, so an abstract
   // C# base satisfies it exactly as a concrete wrapper does. A *discriminated* handle (an ADR-009
@@ -3775,7 +3832,7 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   // same CreateList/CreateSet/CreateMap the outer one uses and read back through the matching
   // Read* helper. Recursive, so depth 3 is the same code as depth 1. The map-key rule mirrors the
   // top-level one: a C# Dictionary cannot hold a null key.
-  is BridgeType.Collection -> {
+  is BridgeType.Collection -> if (declinesByteArrayComponent()) false else {
     val isMap: Boolean = kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
     if (isMap) {
       key?.let { it !is BridgeType.Nullable && it.isWrappableComponent() } == true &&
@@ -4041,10 +4098,23 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
   // Collection); an unsupported element/key/value attributes to that component's own reason
   // (e.g. UNEXPORTED_DEPENDENCY_TYPE) instead of the generic COLLECTION bucket, which
   // `toDiagnosticKind()` reserves for the genuinely input-position case.
-  is BridgeType.Collection -> if (isBridgeableComponent()) {
-    ForwardPlanSkipReason.COLLECTION
-  } else {
-    (element ?: key ?: value)?.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
+  is BridgeType.Collection -> when {
+    // ROADMAP Phase 4: the DECLINED bytes slots. Their component passes `isBridgeableComponent()`
+    // on its own (a `ByteArray` binds as a `List` element), so the failing-component search below
+    // would find nothing and fall back to whichever slot is first. Named here instead, so the
+    // author reads "BYTE_ARRAY" and gets the identity-versus-copy hint.
+    declinesByteArrayComponent() -> ForwardPlanSkipReason.BYTE_ARRAY
+    isBridgeableComponent() -> ForwardPlanSkipReason.COLLECTION
+    // ROADMAP Phase 4: the component that actually FAILED, not whichever slot is listed first.
+    // `Map<String, Sequence<Int>>` used to report `STRING` -- naming the one component that was
+    // fine -- and sent the author after a fix that cannot work (measured 2026-09-20 on
+    // `Map<String, ByteArray>`). The old `element ?: key ?: value` order stays as the fallback, for
+    // a collection whose components were all dropped at classification.
+    else -> listOfNotNull(element, key, value)
+      .firstOrNull { component -> !component.isBridgeableComponent() }
+      ?.skipReason()
+      ?: (element ?: key ?: value)?.skipReason()
+      ?: ForwardPlanSkipReason.UNSUPPORTED
   }
 
   // ADR-147 v1: only reached from a position a `T` cannot bind at (nested in a collection, a

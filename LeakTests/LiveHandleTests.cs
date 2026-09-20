@@ -339,6 +339,84 @@ public class LiveHandleTests
         });
     }
 
+    // Row 4e. `ByteArray` as a collection COMPONENT at a return (ROADMAP Phase 4, the position
+    // ADR-151 deferred). Every element mints its own StableRef inside `nuget_list_get`, exactly
+    // as a standalone `byte[]` return does, and `NugetMarshal.ReadBytes` disposes each one after
+    // its memcpy. N elements per crossing instead of one, so a missing per-element dispose shows
+    // up here N times faster than on Row 4c.
+    [Fact]
+    public void ListOfByteArrayReturn_ElementHandlesDisposed_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            IReadOnlyList<byte[]> chunks = PayloadKt.BurstChunks(new byte[] { 1, 2, 3, 4, 5 }, 2);
+            Assert.Equal(3, chunks.Count);
+        });
+    }
+
+    // Row 3e. The same component at a PARAMETER: `CreateBytes` mints one handle per element before
+    // the `Add`, and the fill loop must dispose each owned box right after storing it, plus the
+    // list's own handle in the shim's finally. Two ownership rules on one crossing.
+    [Fact]
+    public void ListOfByteArrayParameter_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            byte[] spliced = PayloadKt.SpliceBursts(
+                new[] { new byte[] { 1, 2 }, Array.Empty<byte>(), new byte[] { 0x00, 0xFF } });
+            // 2 + 0 + 2. The row's point is the handle accounting; the length check is only here so
+            // a crossing that quietly dropped an element could not pass by leaking nothing.
+            Assert.Equal(4, spliced.Length);
+        });
+    }
+
+    // Row 4f. The MAP VALUE slot, both directions on one call: a bytes handle per value on the way
+    // in (disposed after `Put`) and a fresh one per value on the way out (disposed by `ReadBytes`).
+    // The key is a string, so any drift here is the value slot's.
+    [Fact]
+    public void MapOfByteArrayValues_RoundTrip_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            IReadOnlyDictionary<string, byte[]> rewound = PayloadKt.RewindCollars(
+                new Dictionary<string, byte[]> { ["oreo"] = new byte[] { 1, 2, 3 }, ["mylo"] = new byte[] { 4 } });
+            Assert.Equal(new byte[] { 3, 2, 1 }, rewound["oreo"]);
+        });
+    }
+
+    // Row 4g. NULLABLE components, both directions. The null element rides a null pointer, which
+    // nothing may dispose and nothing may leak: on the read side `ReadBytes` is skipped entirely
+    // for that slot, on the write side `Wrap` must report the zero handle as unowned. A row that
+    // only crossed non-null elements could not tell either mistake apart from correct code.
+    [Fact]
+    public void NullableByteArrayElements_BothDirections_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            IReadOnlyList<byte[]?> signals = PayloadKt.PatchySignals();
+            Assert.Null(signals[1]);
+
+            IReadOnlyList<int> missing = PayloadKt.MissingSignals(
+                new List<byte[]?> { new byte[] { 1 }, null, Array.Empty<byte>(), null });
+            Assert.Equal(new[] { 1, 3 }, missing);
+        });
+    }
+
+    // Row 3f. THROW PATH on the write side: a `null` inside a NON-null `List<byte[]>` argument
+    // blows up mid-fill (a NullReferenceException off `value.Length`, or an ArgumentNullException
+    // if the arm guards instead - the exception type is the implementer's, so this asserts only
+    // that it throws). The elements already minted before the throw, and the half-built list's own
+    // handle, must still be released: the leak counter is the assertion here, not the exception.
+    [Fact]
+    public void NullInsideANonNullListOfByteArray_ThrowsMidFill_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            Assert.ThrowsAny<Exception>(() =>
+                PayloadKt.SpliceBursts(new List<byte[]> { new byte[] { 1, 2 }, null!, new byte[] { 3 } }));
+        });
+    }
+
     // Row 5. Callback subscribe/unsubscribe: StableRef.create(unregister) on subscribe,
     // ref.dispose() on Dispose (StoredCallbackExports.kt:216,238).
     [Fact]

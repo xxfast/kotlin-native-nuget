@@ -346,3 +346,10 @@ Everything else is verified by source reading, with the file and line inline.
 1. **`FromHandle<T>` fails a collection `T` with `NotSupportedException` from `Materialize<T>`.**
    Read off `cir/CirMarshalRenderer.kt:129-132`; not run, because the shipped generator never
    produced a compiling collection-element member to run it against.
+
+> **Pointer (2026-09-20):** [ADR-151](151-bytearray-mapping.md) hit this ADR's `check` from the
+> other side: `kotlin.ByteArray` had no route at the Flow element position, so a `Flow<ByteArray>`
+> element fell through to the user-type speller and the `check` fired as a `packNuget` crash
+> instead of a named skip. A bare `suspend fun (): ByteArray` had the mirror gap on the suspend
+> return and rendered an undeclared `Task<ByteArray>` (CS0246). Both now route through ADR-151's
+> `ByteArray` component and bare shapes, so the `check` never fires for `ByteArray` again.

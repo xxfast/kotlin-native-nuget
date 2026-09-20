@@ -139,8 +139,9 @@ bare enum via its `int` ordinal (see [Enums](enums.md#as-a-collection-component)
 any of the above underlyings (see [Value classes](value-classes.md#as-a-collection-component)); a
 sealed base, which boxes as an object handle the same way a concrete class does (see
 [Interfaces, abstract classes, and sealed classes](interfaces-abstract-sealed.md#a-sealed-type-at-a-parameter-position));
-and a `List`/`Map`/`Set` itself, nested at arbitrary depth. This applies uniformly to parameters,
-method and property returns, and [collection property setters](#mutable-collection-properties).
+a `ByteArray`, as `byte[]` (see below); and a `List`/`Map`/`Set` itself, nested at arbitrary depth.
+This applies uniformly to parameters, method and property returns, and
+[collection property setters](#mutable-collection-properties).
 
 A nullable spelling of any of those (`Map<String, Int?>`, `Set<String?>`, `List<Mood?>`,
 `List<Short?>`, `List<List<String?>>`) is also supported: a `null` element, set member, or map value
@@ -149,7 +150,73 @@ rides a null pointer in that component's slot, both reading and writing.
 Two shapes are not supported and fail with a named `SKIPPED_UNSUPPORTED_INPUT` diagnostic rather than
 binding incorrectly: a **nullable nested collection** (`List<List<String>?>`), and a plain interface
 component. A nullable map **key** (`Map<String?, Int>`) is also unsupported at a parameter position,
-since a C# `Dictionary` can't hold a null key.
+since a C# `Dictionary` can't hold a null key. A `ByteArray` is unsupported as a `Set` element or a
+map **key**, for the reason given below.
+
+### ByteArray as a collection component {id="bytearray-as-a-collection-component"}
+
+A `ByteArray` binds as a `List`/`MutableList` element and as a `Map`/`MutableMap` **value**, spelled
+`byte[]`, at every position a component reaches: parameter, return, property getter and setter,
+constructor parameter, and nested (`List<List<ByteArray>>`).
+
+```kotlin
+fun burstChunks(data: ByteArray, size: Int): List<ByteArray> =
+  data.toList().chunked(size).map { it.toByteArray() }
+
+fun rewindCollars(bursts: Map<String, ByteArray>): Map<String, ByteArray> =
+  bursts.mapValues { (_, burst) -> burst.reversedArray() }
+```
+
+```C#
+IReadOnlyList<byte[]> chunks = PayloadKt.BurstChunks(new byte[] { 1, 2, 3 }, 2);
+// [[1, 2], [3]]
+
+IReadOnlyDictionary<string, byte[]> rewound = PayloadKt.RewindCollars(
+    new Dictionary<string, byte[]> { ["oreo"] = new byte[] { 1, 2, 3 } });
+// rewound["oreo"] is [3, 2, 1]
+```
+
+Each element is a fresh copy per crossing, exactly as a standalone `byte[]` is. A `null` element
+(`List<ByteArray?>`) is supported in both directions and rides the null pointer in that slot:
+
+```kotlin
+fun patchySignals(): List<ByteArray?> = listOf(
+  byteArrayOf(1, 2),
+  null,
+  byteArrayOf(),
+  byteArrayOf(0x00, 0xFF.toByte()),
+)
+```
+
+```C#
+IReadOnlyList<byte[]?> signals = PayloadKt.PatchySignals();
+// [ [1, 2], null, [], [0, 255] ]
+```
+
+The same component binds on the legacy `suspend`/`Flow` routes:
+
+```kotlin
+suspend fun bursts(): List<ByteArray> { /* ... */ }
+suspend fun snapshot(): ByteArray { /* ... */ }
+val pulses: Flow<ByteArray> = flowOf(byteArrayOf(1), byteArrayOf(0x7F, 0xFF.toByte()))
+```
+
+```C#
+public Task<IReadOnlyList<byte[]>> BurstsAsync(CancellationToken cancellationToken = default)
+public Task<byte[]> SnapshotAsync(CancellationToken cancellationToken = default)
+public KotlinFlow<byte[]> Pulses { get; }
+```
+
+A bare `ByteArray` (no surrounding collection) binds the same way a component does, straight to
+`Task<byte[]>` and `KotlinFlow<byte[]>`; see [Coroutines and Flow](coroutines-and-flow.md). A bare
+`ByteArray` **parameter** on a `Flow`-, `StateFlow`-, or `suspend`-returning member is not
+supported.
+
+A `Set<ByteArray>` element and a `Map<ByteArray, V>` **key** are deliberately not supported: arrays
+compare by identity in Kotlin and in C# alike, and every crossing copies, so the `byte[]` you hold is
+never the array the Kotlin container hashed and no membership test or lookup could ever succeed. Use
+a `List<ByteArray>` when you want order, or key the map by a `String` (or a value class over one)
+such as a hex or Base64 digest.
 
 ### Narrow primitives and Char as collection components {id="narrow-primitives-and-char-as-collection-components"}
 

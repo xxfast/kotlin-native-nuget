@@ -157,6 +157,11 @@ internal fun isMutableStateFlowElementSupported(elementType: KSType?): Boolean {
   val declaration = elementType?.expandAliases()?.declaration ?: return false
   val simpleName: String = declaration.simpleName.asString()
   if (KOTLIN_TO_CSHARP_PARAM.containsKey(simpleName)) return true
+  // ROADMAP Phase 4: `kotlin.ByteArray` is a `CLASS`, so it would fall into the handle arm below --
+  // but it crosses as a *bytes* handle (`nuget_bytes_create`/`ReadBytes`), not as the `v._handle`
+  // an exported wrapper carries, and the ADR-071 write seam has no arm that mints one. Its READ
+  // side binds (ADR-151 amendment), through the read-only `KotlinStateFlow<byte[]>` mapping.
+  if (declaration.qualifiedName?.asString() == "kotlin.ByteArray") return false
   val classDeclaration: KSClassDeclaration = declaration as? KSClassDeclaration ?: return false
   if (classDeclaration.classKind == ClassKind.ENUM_CLASS) return false
   return classDeclaration.classKind == ClassKind.CLASS ||

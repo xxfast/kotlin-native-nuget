@@ -384,10 +384,84 @@ historical text and gains an "as shipped" note like ADR-106's.
 
 ### Deferred
 
-- Collections of `ByteArray` (`List<ByteArray>`, `Map<String, ByteArray>`): the component
-  read/write helpers need a `ByteArray` arm each.
+- ~~Collections of `ByteArray` (`List<ByteArray>`, `Map<String, ByteArray>`): the component
+  read/write helpers need a `ByteArray` arm each.~~ Shipped 2026-09-20; see the amendment below.
 - `UByteArray` (a value class over `ByteArray`, ADR-103 ordering trap applies), `IntArray`,
   `Array<T>` and the other primitive arrays: same wire, `sizeof`-aware `memcpy`, a follow-up.
 - `ByteArray` as an extension-property receiver (the ROADMAP:27 deferral class).
 - Reverse direction (`byte[]` in a NuGet API): the mirror of this ADR.
 - Zero-copy `Span<byte>`/`Memory<byte>` views: `usePinned` cannot hand an address across calls.
+
+## Amendment (2026-09-20): `ByteArray` as a collection component
+
+A `ByteArray` component crosses as its own `StableRef` handle in the pointer-shaped slot every
+component already uses (the ADR-099 nested-collection arm, one handle kind over). **No new runtime
+export.**
+
+- C# writes `NugetMarshal.CreateBytes(x)` per element through the existing `Select` projection;
+  `Wrap<IntPtr>` reports `owned = true` for that handle and the fill loop disposes it right after
+  `Add`/`Put` has dereferenced it into the Kotlin container.
+- C# reads `NugetMarshal.ReadBytes(h)` per element, which copies the bytes out and disposes the
+  per-element box in its own `finally`. The box is a `StableRef` to the `ByteArray`: `nuget_list_get`
+  and the map/set readers mint it with the same `NugetHandles.retain` that `nuget_bytes_create` uses.
+- Kotlin casts `it as kotlin.ByteArray` on the way in and boxes the container untouched on the way
+  out (`componentNeedsProjection()` stays `false` for bytes, `componentNeedsWireProjection()`
+  becomes `true`, the same split ADR-099 made).
+- A **nullable** component writes as `IntPtr?`, not `IntPtr` with a zero sentinel. That is
+  load-bearing: `Wrap<IntPtr>(IntPtr.Zero)` reports `owned = true` and the fill loop would then call
+  `Dispose(IntPtr.Zero)`, whose non-nullable `COpaquePointer` export takes the host process down.
+  `Wrap<IntPtr?>(null)` returns at its `value == null` guard with `owned = false` instead.
+- Arbitrary nesting (`List<List<ByteArray>>`) follows from the recursion, with no further arm.
+- The legacy async routes share the component gates, so `suspend fun (): List<ByteArray>` and
+  `Flow<List<ByteArray>>` open with them. A **bare** `ByteArray` at those two positions binds as
+  `Task<byte[]>` and `KotlinFlow<byte[]>` through the same `ReadBytes`: the Kotlin half already
+  boxes the result with `NugetHandles.retain`, so only the C# spelling and read had to change.
+  `MutableStateFlow<ByteArray>` keeps the read-only `KotlinStateFlow<byte[]>` mapping: its ADR-071
+  write seam has no arm that mints a bytes handle.
+
+**Declined, not deferred:** a `Set<ByteArray>` element and a `ByteArray` **map key**. Both are
+equality slots, and an array compares by identity in Kotlin and in C# alike; every crossing of this
+bridge copies, so `set.Contains(bytes)` and `map[bytes]` would compile, run, and silently never
+match. They stay `ForwardPlanSkipReason.BYTE_ARRAY` skips, with a hint that says so and points at a
+`List` or a `String`/value-class key.
+
+**Still not supported:** a bare `ByteArray` parameter on a `Flow`-, `StateFlow`-, or
+`suspend`-returning member (only the return/element position opened here); `suspend fun ():
+StateFlow<ByteArray>` (the shared `nuget_stateflow_value` export has no per-member projection seam,
+[ADR-123](123-collection-elements-on-the-flow-routes.md)). The `StateFlow<ByteArray>` **property**
+route itself binds.
+
+**Known imprecise hint.** A parameter the legacy generic route now refuses reclassifies with the
+`UNROUTED_POSITION` `GENERIC` sentence ("binds at a top-level function return ... but not at this
+position"), even though the position is a parameter and the type is not generic. Strictly better
+than the silent public `IntPtr` it replaces, but the wording should eventually name the parameter
+case directly.
+
+### Three pre-existing defects, fixed along the way
+
+- `Flow<ByteArray>` on a class **crashed** `packNuget` outright (`IllegalStateException: Kotlin
+  builtin kotlin.ByteArray reached the user-type C# speller`), not a skip. Dated pointer in
+  [ADR-123](123-collection-elements-on-the-flow-routes.md).
+- A bare `suspend fun (): ByteArray` bound silently to `Task<ByteArray>`, a C# type nothing
+  declares (CS0246 in every consumer's build). Same ADR-123 pointer.
+- General, not `ByteArray`-specific: `hasLegacyGenericReturnRoute()` (`exports/FunctionExports.kt`)
+  was `true` for any generic return, so a collection return the ADR-062 plan skipped was still
+  emitted by the pre-ADR-062 list/map/set branches in `cir/CirFunctionTranslator.kt`, spelling the
+  component by Kotlin simple name and dropping its type arguments (`IReadOnlyList<ByteArray>`,
+  `IReadOnlyList<List>`; `List<Instant>`, `List<Uuid>`, `List<Sequence<Int>>` took the same path).
+  It also inspected only the *return*, so a skip caused by a *parameter* left the route open and
+  degraded that parameter to a public `IntPtr`. The route now refuses a collection return and any
+  parameter it cannot spell, and the dead branches carry a `check(...)` that fails the build if the
+  gate regresses; pinned by `tier1/Tier1SkipMeansAbsentTest.kt`. Issue #126's class, which
+  [ADR-122](122-handle-parameters-on-the-legacy-routes.md) fixed on the async routes only; dated
+  pointer added there.
+- The collection skip reason named whichever component came first, not the one that actually
+  failed (`Map<String, ByteArray>` was reported as `STRING`); it now names the failing component.
+
+### Leak coverage
+
+Five new `LeakTests/LiveHandleTests.cs` rows, after Row 3d/4c/4d: `ListOfByteArrayParameter_
+ReturnsToBaseline` (3e), `NullInsideANonNullListOfByteArray_ThrowsMidFill_ReturnsToBaseline` (3f,
+the throw-mid-fill path), `ListOfByteArrayReturn_ElementHandlesDisposed_ReturnsToBaseline` (4e),
+`MapOfByteArrayValues_RoundTrip_ReturnsToBaseline` (4f), and
+`NullableByteArrayElements_BothDirections_ReturnsToBaseline` (4g).
