@@ -288,6 +288,13 @@ the receiver rather than the property's own (usually fine) type:
     at <file>:<line>
 ```
 
+A **has-value fan-out** receiver (`Int?`, `Enum?`, `Instant?`, `Duration?`, or a nullable
+primitive/enum-underlying value class) is a distinct refusal from `Box<Int>` above: it reads the
+`RECEIVER_FAN_OUT` reason's own sentence instead, on both the extension-function route
+(`SKIPPED_UNSUPPORTED_INPUT`) and the extension-property route (`SKIPPED_UNSUPPORTED_PROPERTY`); see
+[Extensions: Supported receivers](extensions.md#supported-receivers) for the message and the two
+remedies.
+
 The message names the declaration, the reason, an actionable hint, and, when KSP can resolve it,
 the file and line of the Kotlin declaration that was skipped, something the reverse direction's
 `RirDiagnostic` cannot carry, since it works from compiled metadata rather than source. See each

@@ -60,7 +60,13 @@ internal enum class ForwardDiagnosticKind(
   /** A parameter (or extension receiver) whose type has no input wire: `Map`/`Set` (and mutable
    *  variants), for which no `CreateMap`/`CreateSet` helper exists (ROADMAP line 78), and, since
    *  issue #131, a nullable type with no input wire, which used to render as
-   *  [SKIPPED_UNSUPPORTED_RETURN]. */
+   *  [SKIPPED_UNSUPPORTED_RETURN].
+   *
+   *  ADR-064 amendment (2026-09-20): "no input wire" is not the whole story at the RECEIVER. A
+   *  has-value fan-out receiver (`Int?`, `Mood?`, `Instant?`, `Duration?`, a nullable value class
+   *  over a primitive/enum underlying) HAS an input wire; it is a two-slot one, and a receiver is
+   *  exactly one slot. That drop keeps this kind (the position is still the input one) and carries
+   *  its own sentence and hint off [ForwardPlanSkipReason.RECEIVER_FAN_OUT]. */
   SKIPPED_UNSUPPORTED_INPUT(ForwardDiagnosticSeverity.WARNING),
 
   /** A *return* whose type has no return wire, e.g. a nullable one with nowhere to put the
@@ -404,6 +410,13 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   ForwardPlanSkipReason.COLLECTION -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
   // ADR-132: always an input-position skip by construction — the extension receiver, which the
   // planner treats as input zero — so it is fixed rather than reading [position].
+  //
+  // ADR-064 amendment (2026-09-20): the kind stays, and a dedicated `SKIPPED_UNSUPPORTED_RECEIVER`
+  // was declined. The reason has exactly one remedy, which is this file's own rule for "same kind,
+  // own sentence" (the `UNDECLARED_*` family), and a new kind would rename what a consumer reads
+  // out of `NugetDiagnostics.json`. The extension-PROPERTY route reports the same reason under
+  // `SKIPPED_UNSUPPORTED_PROPERTY` for the same ADR-064 rule: the kind names where the drop
+  // happened.
   ForwardPlanSkipReason.RECEIVER_FAN_OUT -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
   ForwardPlanSkipReason.NULLABLE ->
     if (position == ForwardSkipPosition.INPUT) ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
@@ -678,6 +691,18 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
     ForwardPlanSkipReason.UNSUPPORTED ->
       if (detail != null) "its type `$detail` is not supported" else generic
 
+    // ADR-064 amendment (2026-09-20) / ADR-132: the receiver SHAPE is what failed, not the type.
+    // `Int?` is bridgeable everywhere else, so the generic sentence ("its RECEIVER_FAN_OUT type
+    // combination is not supported") named a reason constant, never named the receiver, and read
+    // as a claim about the type. Keeps the `(RECEIVER_FAN_OUT)` tag for the same reason the
+    // `UNDECLARED_*` sentences do: the kind is shared with other producers and the docs tell
+    // readers to search for that string. Both routes read this one sentence (the extension
+    // PROPERTY planner records the same reason), so they cannot drift.
+    ForwardPlanSkipReason.RECEIVER_FAN_OUT ->
+      "its extension receiver ${detail?.let { "`$it`" } ?: "type"} crosses the bridge as a " +
+          "has-value flag plus a value (two slots), and an extension receiver can carry only " +
+          "one ($name)"
+
     // Issue #131: guarded on the name being there, so a return-position nullable keeps the
     // shipped generic sentence.
     ForwardPlanSkipReason.NULLABLE ->
@@ -727,6 +752,10 @@ private fun String.dependencyPackageName(): String {
  *   [ForwardPlanSkipReason.UNDECLARED_INTERFACE] and [ForwardPlanSkipReason.UNDECLARED_VALUE_CLASS]
  *   it carries the undeclared type's qualified name,
  *   including when the enum is a collection component (the only extractor that descends into one).
+ *   ADR-064 amendment (2026-09-20): for [ForwardPlanSkipReason.RECEIVER_FAN_OUT] it carries the
+ *   RENDERED extension receiver type (`Int?`, `Mood?`, `Dosage?`), which the hint also reads the
+ *   non-null spelling off (`removeSuffix("?")`); an extension symbol does not name its receiver,
+ *   so without it the message cannot say which declaration position failed.
  *   Ignored by every other reason.
  * @param scope ADR-063: the export scope's `include(...)` packages, so the suggested include
  *   line keeps the author's own packages listed beside the missing one. Read only by
@@ -1001,6 +1030,21 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "no mint{Interface}Bridge exists for this bound interface (ADR-085 inadmissible), so a " +
         "Kotlin implementation of it cannot be handed back to C#; take it as a parameter " +
         "instead, or return an interface the reverse bindings can bridge"
+
+  // ADR-064 amendment (2026-09-20) / ADR-132: the two remedies that exist, parameter FIRST. Every
+  // fan-out shape is by definition one that DOES bind at an ordinary parameter (that position is
+  // what fans it into the ADR-079/080 has-value + value pair), so moving it off the receiver keeps
+  // what the declaration means; the non-null receiver is second because it changes the meaning.
+  // The non-null clause is truthful on both routes: the callable route binds every non-null twin
+  // (ADR-132), and the property route binds `Enum`/`Instant`/`Duration` since its 2026-09-20
+  // receiver-parity amendment.
+  ForwardPlanSkipReason.RECEIVER_FAN_OUT -> {
+    val receiver: String = detail?.let { "`$it`" } ?: "the receiver type"
+    val nonNull: String = detail?.removeSuffix("?")?.let { "`$it`" } ?: "its non-null type"
+    "$receiver binds as an ordinary parameter, so declare a top-level function that takes it as " +
+        "a parameter instead of as the receiver; or declare the extension on the non-null " +
+        "receiver $nonNull"
+  }
 
   else -> genericSkipHint
 }

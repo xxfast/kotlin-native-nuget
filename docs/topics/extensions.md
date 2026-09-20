@@ -57,9 +57,18 @@ TestLibrary.Reserved.StringExtensions.Tag("Oreo", "Mylo"); // a different packag
 | Nullable collection, nullable bound C# interface | yes | no |
 | Generic type, unexported (non-stdlib, non-dependency) type, `ByteArray`, `Char` | no | no |
 
-A receiver in a "no" cell is dropped with a named diagnostic
-(`SKIPPED_UNSUPPORTED_PROPERTY` for a property, `RECEIVER_FAN_OUT` for the fan-out function case).
-Declare a top-level function taking the value as a parameter instead
+A receiver in a "no" cell is dropped with a named diagnostic: `SKIPPED_UNSUPPORTED_INPUT` for a
+function, `SKIPPED_UNSUPPORTED_PROPERTY` for a property. The has-value fan-out shape (`Int?`,
+`Enum?`, `Instant?`, `Duration?`, or a nullable primitive/enum-underlying value class) prints the
+same reason and remedy under either kind, naming the receiver and both fixes:
+
+```
+its extension receiver `Int?` crosses the bridge as a has-value flag plus a value (two slots), and
+an extension receiver can carry only one (RECEIVER_FAN_OUT). `Int?` binds as an ordinary parameter,
+so declare a top-level function that takes it as a parameter instead of as the receiver; or declare
+the extension on the non-null receiver `Int`
+```
+
 (see [Publishing Kotlin to C#: Diagnostics](forward-overview.md#diagnostics)).
 An extension property typed `Flow`, `StateFlow`, or a lambda is skipped the same way, even on an
 otherwise-supported receiver.
@@ -70,8 +79,7 @@ same way they do everywhere else (see
 bound C# interface (see
 [The bridgeable subset](bridgeable-subset.md#exposing-a-c-interface-in-your-own-kotlin-api)) still
 works as a function *parameter*, just not as a receiver at either position. A has-value fan-out
-shape (`Int?`, `Enum?`, `Instant?`, `Duration?`, or a nullable primitive/enum-underlying value
-class) only works as a function *parameter*, never as a receiver at either position, because a
+shape only works as a function *parameter*, never as a receiver at either position, because a
 receiver is exactly one ABI slot and a fan-out needs two (see the table above).
 
 ### Nullable receivers

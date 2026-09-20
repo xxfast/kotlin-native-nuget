@@ -204,6 +204,16 @@ class ForwardSkippedCallableWarningTest {
         symbol = "com.example.Api.provide",
         reason = ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE,
       ) to "it returns a bound C# interface that Kotlin cannot implement",
+      // ADR-064 amendment (2026-09-20): the twelfth, a receiver whose SHAPE is what failed. The
+      // type is bridgeable at a parameter, so the generic sentence this table's own `assertFalse`
+      // rejects was wrong on both counts.
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.orZero",
+        reason = ForwardPlanSkipReason.RECEIVER_FAN_OUT,
+        detail = "Int?",
+        position = ForwardSkipPosition.INPUT,
+      ) to "its extension receiver `Int?` crosses the bridge as a has-value flag plus a value " +
+          "(two slots), and an extension receiver can carry only one (RECEIVER_FAN_OUT)",
     )
 
     val logger = RecordingLogger()
