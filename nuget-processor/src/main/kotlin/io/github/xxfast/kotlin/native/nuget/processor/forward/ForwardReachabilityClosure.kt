@@ -90,6 +90,16 @@ internal class ForwardReachabilityClosure(
   /** The `exclude` half of that same predicate, so a refusal can name the author's own
    *  `exclude(...)` instead of telling them to add an `include(...)` that cannot override it. */
   private val isExcluded: (KSDeclaration) -> Boolean = { false },
+  /** ADR-154: the ADMISSION predicate, asked of a cross-module (klib) declaration only. Until
+   *  this parameter existed, [isExported] answered both questions — which of the module's own
+   *  files are roots, and which dependency declarations may be admitted — and the only admission
+   *  unit was therefore a package prefix the author also had to make a root selector (issue #247).
+   *
+   *  The module-local branch deliberately keeps [isExported], so an additive `admit(...)` can
+   *  never resurrect an own-module declaration `include`/`exclude` filtered out of the root scan.
+   *  Defaulted to [isExported] so the pre-ADR-154 construction (and every test that builds this
+   *  closure directly) behaves exactly as before. */
+  private val isAdmitted: (KSDeclaration) -> Boolean = isExported,
   /** ADR-066 admission rule 4: with neither `rootPackage` nor `include` set, the closure must not
    *  cross the module boundary at all (or it would walk straight into `kotlinx-coroutines`). An
    *  empty effective include set means "admit everything" for the module's own files (ADR-063),
@@ -265,7 +275,10 @@ internal class ForwardReachabilityClosure(
       refused[qualifiedName] = ForwardAdmissionRefusal.CROSS_MODULE_ADMISSION_DISABLED
       return
     }
-    if (!isExported(classDeclaration)) {
+    // ADR-154: the admission predicate, not the roots predicate. `include(...)` still admits by
+    // package here (its first disjunct IS `isExported`); `admit(...)` adds the per-type and
+    // per-prefix entries on top.
+    if (!isAdmitted(classDeclaration)) {
       refused[qualifiedName] = ForwardAdmissionRefusal.NOT_INCLUDED
       return
     }

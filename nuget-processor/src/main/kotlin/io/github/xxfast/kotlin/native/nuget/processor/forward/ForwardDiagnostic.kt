@@ -209,6 +209,19 @@ internal enum class ForwardDiagnosticKind(
    *  the misleading `SKIPPED_UNSUPPORTED_TYPE` this case used to fall through to. */
   SKIPPED_UNEXPORTED_DEPENDENCY_TYPE(ForwardDiagnosticSeverity.WARNING),
 
+  /** ADR-154 §6: the same condition under the opt-in `strictDependencyTypes = true`, where the
+   *  author has asked to decide every dependency type once, by name. Fatal, so `process()` returns
+   *  before `CNameExports.kt` is written and the build stops at the KSP round rather than shipping
+   *  a C# surface with a hole in it.
+   *
+   *  Deliberately NOT keyed on this kind anywhere: the escalation is keyed on
+   *  [ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE] /
+   *  [ForwardPlanSkipReason.CROSS_MODULE_DISABLED_DEPENDENCY_TYPE], because the same refusal at a
+   *  PROPERTY position reports under [SKIPPED_UNSUPPORTED_PROPERTY] (ADR-154, verified by spike),
+   *  so a kind-keyed escalation would silently miss half the surface. An
+   *  `exclude(...)`-caused skip is a different reason constant and stays a warning. */
+  ERROR_UNEXPORTED_DEPENDENCY_TYPE(ForwardDiagnosticSeverity.ERROR),
+
   /** ADR-066: the closure's blast-radius manifest — emitted once per KSP run (not once per
    *  admitted type, which would be noise at scale), aggregating every dependency-module type the
    *  closure admitted into the export set. */
@@ -618,6 +631,35 @@ private fun stdlibTypeHint(detail: String?): String =
       "bridgeable type instead (include(...) is not the fix: an explicit include replaces " +
       "the export scope rather than mapping the type)"
 
+/**
+ * ADR-154 §6: under the opt-in `strictDependencyTypes = true`, a dependency-scope skip the author
+ * can act on becomes an error; everything else keeps the kind it already had.
+ *
+ * The two escalated reasons are exactly the two refusals `admit(...)` (or `rootPackage`) repairs:
+ * `NOT_INCLUDED` and `CROSS_MODULE_ADMISSION_DISABLED`. `EXCLUDED_DEPENDENCY_TYPE` is left alone on
+ * purpose — the author already declared that omission deliberate, and escalating it would make
+ * strict mode unsatisfiable for any dependency the build genuinely amputates.
+ * `EXPECT_DEPENDENCY_TYPE` is left alone because no scope entry of this module can repair it at
+ * all.
+ *
+ * Applied to the KIND rather than inside [toDiagnosticKind] so the property route (whose kind is
+ * positional, `SKIPPED_UNSUPPORTED_PROPERTY`, and never derived from the reason) escalates through
+ * the same one rule.
+ */
+internal fun ForwardDiagnosticKind.escalatedForStrictDependencyTypes(
+  reason: ForwardPlanSkipReason?,
+  strict: Boolean,
+): ForwardDiagnosticKind = if (strict && reason in STRICT_DEPENDENCY_TYPE_REASONS) {
+  ForwardDiagnosticKind.ERROR_UNEXPORTED_DEPENDENCY_TYPE
+} else {
+  this
+}
+
+private val STRICT_DEPENDENCY_TYPE_REASONS: Set<ForwardPlanSkipReason> = setOf(
+  ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE,
+  ForwardPlanSkipReason.CROSS_MODULE_DISABLED_DEPENDENCY_TYPE,
+)
+
 internal fun ForwardPlanSkipReason.genericSentence(): String =
   "its $name type combination is not supported"
 
@@ -836,6 +878,32 @@ private fun String.dependencyPackageName(): String {
 }
 
 /**
+ * ADR-154: the name an `admit(...)` entry has to carry for this refused type — the package
+ * segments plus the OUTERMOST type segment, so a nested refusal names its owner.
+ *
+ * Load-bearing, not cosmetic. `admit("dep.edge.Ledger.Entry")` does **not** repair a nested
+ * refusal: the closure admits `Entry`, then climbs to its owner (`ForwardReachabilityClosure`'s
+ * ADR-066 amendment, edge A), asks the same matcher about `dep.edge.Ledger` — for which the
+ * longer entry is not a prefix, so `isUnderPackage` is false both ways — refuses the owner
+ * `NOT_INCLUDED`, and propagates that refusal straight back onto `Entry`. The author pastes the
+ * line and reads the identical warning. `admit("dep.edge.Ledger")` admits the owner and, through
+ * the same `startsWith("dep.edge.Ledger.")` clause, the nested type with it, which is exactly
+ * ADR-154 §3's "lets ADR-133's owner walk declare its nested types".
+ *
+ * `exclude(...)` is the opposite and keeps the full name: the closure tests `isExcluded` on the
+ * declaration itself, before the owner climb, so a nested exclude entry does bite.
+ *
+ * Same capitalised-segment convention as [dependencyPackageName] and for the same reason: by the
+ * time a hint is built, a rendered qualified name is all there is.
+ */
+private fun String.dependencyAdmitName(): String {
+  val segments: List<String> = split('.')
+  val firstTypeIndex: Int =
+    segments.indexOfFirst { segment -> segment.firstOrNull()?.isUpperCase() == true }
+  return if (firstTypeIndex < 0) this else segments.take(firstTypeIndex + 1).joinToString(".")
+}
+
+/**
  * ADR-064: an actionable per-reason hint, kept alongside the mapping above it documents.
  *
  * @param detail ADR-066: the unexported dependency type's qualified name
@@ -853,17 +921,20 @@ private fun String.dependencyPackageName(): String {
  *   non-null spelling off (`removeSuffix("?")`); an extension symbol does not name its receiver,
  *   so without it the message cannot say which declaration position failed.
  *   Ignored by every other reason.
- * @param scope ADR-063: the export scope's `include(...)` packages, so the suggested include
- *   line keeps the author's own packages listed beside the missing one. Read only by
- *   [ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE].
+ * ADR-154 removed the `scope` parameter (ADR-063's `include(...)` packages): the un-admitted hint
+ * is now the additive `admit("<qualified type>")`, which by construction does not need the author's
+ * whole export scope echoed back at it. Nothing else ever read it.
  * @param parameter issue #131: the offending parameter's name, when the skip is at an input
  *   position and the input is a named parameter rather than an extension receiver. Read only by
  *   [ForwardPlanSkipReason.NULLABLE], whose shipped sentence could not say which position failed.
  */
 internal fun ForwardPlanSkipReason.diagnosticHint(
   detail: String? = null,
-  scope: List<String> = emptyList(),
   parameter: String? = null,
+  /** ROADMAP line 37: the author's own `exclude(...)` entries, so
+   *  [ForwardPlanSkipReason.EXCLUDED_DEPENDENCY_TYPE] can quote the entry that matched instead of
+   *  a package derived from the type name. Empty keeps the derived-package wording. */
+  excludeEntries: List<String> = emptyList(),
 ): String = when (this) {
   // ADR-151: an unmapped stdlib type no longer reaches here at all (the classifier refuses it as
   // plainly unsupported), so this arm is about a real dependency module. The stdlib sentence moved
@@ -874,14 +945,26 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
       ?: "the dependency's package"
     if (dependencyPackage.isStdlibPackage()) {
       stdlibTypeHint(detail)
+    } else if (detail == null) {
+      // ADR-154: no type name in hand (the classifier flagged the position, not a named type), so
+      // neither verb can be spelled with an argument. Never the old literal placeholder, which
+      // rendered as `include("...", "the dependency's package")` — a line matching no package at
+      // all (research spike 1b, the `List<LogLevel>` case, now fixed at its source in
+      // `unexportedDependencyDetail`).
+      "admit the dependency type by qualified name with admit(\"<qualified type>\") in " +
+          "nuget { publish { } }, or expose a type from an in-scope package instead"
     } else {
-      // Issue #55: name the whole include line, not just the missing package. ADR-063's explicit
-      // `include` replaces the `rootPackage` default, so a hint naming only the new package
-      // walks the author into an empty export set.
-      val packages: String = (scope + dependencyPackage).distinct().joinToString { "\"$it\"" }
-      "add include($packages) to nuget { publish { } } (an explicit include replaces the " +
-          "rootPackage default, so keep your own packages listed), or expose a type from an " +
-          "in-scope package instead"
+      // ADR-154 §5: the hint is the ADDITIVE verb. `include(...)` is deliberately absent: an
+      // explicit include replaces the `rootPackage` default (#55/#60), so the old hint had to
+      // spell the author's whole export scope back at them and one mistyped entry emptied it.
+      // `admit` adds one entry, admits that one declaration (never its package, ADR-154 §3), and
+      // cannot change which of the module's OWN files are exported.
+      // The admit argument is the OUTERMOST type ([dependencyAdmitName]); the exclude argument
+      // stays the full name, because exclude is tested on the declaration itself.
+      "add admit(\"${detail.dependencyAdmitName()}\") to nuget { publish { } } to export it " +
+          "(admit is additive and dependency-only; it takes a package prefix such as " +
+          "\"$dependencyPackage\" too), or exclude(\"$detail\") to record the omission as " +
+          "deliberate"
     }
   }
 
@@ -906,10 +989,24 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // rendered type name and not the exclude entry that matched it; carrying that entry through
   // `detail` is the real fix.
   ForwardPlanSkipReason.EXCLUDED_DEPENDENCY_TYPE -> {
-    val excluded: String = detail?.dependencyPackageName() ?: "its package"
-    "\"$excluded\" is excluded by exclude(\"$excluded\") in nuget { publish { } }, so a callable " +
-        "reaching ${detail ?: "it"} is skipped by design; remove the exclude to export it here " +
-        "(include(...) cannot override an exclude)"
+    // ROADMAP line 37 / issue #53: the entry the author actually wrote, matched with the same
+    // `isUnderPackage` rule (and the same first-match order) the closure refused the type on. The
+    // shipped hint derived a PACKAGE from the type name, so a type-level `exclude("dep.Broadcast")`
+    // was quoted back as `exclude("dep")` and a nested `dep.Broadcast.AdBand` as
+    // `exclude("dep.Broadcast")` — in both cases an entry that appears nowhere in the build file.
+    // Falls back to the derived package only when no entry matched (a refusal recorded by some
+    // other route), which is the shipped wording.
+    val matched: String? = detail
+      ?.let { type -> excludeEntries.matchesDeclaration(type.dependencyPackageName(), type) }
+    val excluded: String = matched ?: detail?.dependencyPackageName() ?: "its package"
+    val subject: String = when {
+      matched == null -> "\"$excluded\""
+      matched == detail -> "`$matched`, excluded by name,"
+      else -> "\"$matched\", the package it is in,"
+    }
+    "$subject is excluded by exclude(\"$excluded\") in nuget { publish { } }, so a callable " +
+        "reaching ${detail ?: "it"} is skipped by design; remove that exclude entry to export it " +
+        "here (neither include(...) nor admit(...) can override an exclude)"
   }
 
   ForwardPlanSkipReason.EXPECT_DEPENDENCY_TYPE ->
@@ -917,15 +1014,16 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "lives in that module and cannot be brought into scope with include(...); expose a " +
         "type you declare instead"
 
-  ForwardPlanSkipReason.CROSS_MODULE_DISABLED_DEPENDENCY_TYPE -> {
-    val dependencyPackage: String = detail?.dependencyPackageName()
-      ?: "the dependency's package"
-    "no rootPackage or include is set, so nuget { publish { } } never crosses the module " +
-        "boundary and ${detail ?: "the type"} stays out of the export set; set rootPackage(...) " +
-        "or list your own packages alongside \"$dependencyPackage\" in include(...) " +
-        "(include(...) on its own replaces the everything-in-this-module default and would " +
-        "drop your own files)"
-  }
+  ForwardPlanSkipReason.CROSS_MODULE_DISABLED_DEPENDENCY_TYPE ->
+    // ADR-154 §2: `admit(...)` now opens admission rule 4's gate on its own, so the remedy is one
+    // additive entry rather than an `include(...)` line that also replaces the
+    // everything-in-this-module default and silently drops the author's own files. The old
+    // `"the dependency's package"` fallback is gone with it: with no type name in hand, the line
+    // names the verb and nothing it cannot spell.
+    "no rootPackage, include or admit entry is set, so nuget { publish { } } never crosses the " +
+        "module boundary and ${detail ?: "the type"} stays out of the export set; add " +
+        "admit(${detail?.let { "\"${it.dependencyAdmitName()}\"" } ?: "\"<qualified type>\""}) " +
+        "to nuget { publish { } } (additive and dependency-only), or set rootPackage"
 
   ForwardPlanSkipReason.ACTUAL_TYPEALIAS_TARGET -> {
     val parts: List<String>? = detail?.split("->", limit = 2)?.takeIf { it.size == 2 }

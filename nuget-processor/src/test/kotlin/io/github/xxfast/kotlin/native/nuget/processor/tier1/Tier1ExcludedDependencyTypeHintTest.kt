@@ -76,7 +76,7 @@ class Tier1ExcludedDependencyTypeHintTest {
       "expected the author's own exclude named as the cause; got: $warning",
     )
     assertTrue(
-      "remove the exclude" in warning,
+      "remove that exclude" in warning,
       "expected the only remedy that works; got: $warning",
     )
   }
@@ -169,7 +169,7 @@ class Tier1ExcludedDependencyTypeHintTest {
       "expected the author's own exclude named as the cause; got: $warning",
     )
     assertTrue(
-      "remove the exclude" in warning,
+      "remove that exclude" in warning,
       "expected the only remedy that works; got: $warning",
     )
   }
@@ -202,7 +202,7 @@ class Tier1ExcludedDependencyTypeHintTest {
     val warning: String = gateSkip(runGate(excludedOptions), "Tuner.band")
 
     assertTrue(
-      "remove the exclude" in warning,
+      "remove that exclude" in warning,
       "expected the exclude route, not the nested-declaration one; got: $warning",
     )
     assertTrue(
@@ -224,7 +224,7 @@ class Tier1ExcludedDependencyTypeHintTest {
       "include(...) cannot override an exclude, so it must not be the hint; got: $excluded",
     )
     assertTrue(
-      """exclude("dep.models")""" in excluded && "remove the exclude" in excluded,
+      """exclude("dep.models")""" in excluded && "remove that exclude" in excluded,
       "expected the author's own exclude named as the cause; got: $excluded",
     )
 

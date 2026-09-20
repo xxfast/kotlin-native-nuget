@@ -199,6 +199,23 @@ nuget {
     // negative case for `Newsroom.sponsor`/`airwave`, `CatCam.onSponsor`, `Issue42Api` and
     // `Issue42Derived`, and the two packages now differ by exactly one segment.
     include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.admitted")
+    // ADR-154: `admit(...)` is ADDITIVE and dependency-only — it never picks roots and never
+    // replaces anything, so `include(...)` above is deliberately untouched. Entries take the same
+    // matcher `exclude` uses: a qualified type name, or a package prefix.
+    //
+    // By NAME: `dev.other.bytype` is in no include list. Admitting `Waterbowl` admits that one
+    // declaration; its sibling `Rimguard` and the top-level value class `Eartag` stay refused, so
+    // the members mentioning them skip named (with a `add admit("...")` hint) and the class is
+    // kept. That is the whole per-type unit, in one package.
+    admit(
+      "dev.other.bytype.Bedding",
+      "dev.other.bytype.PurrLevel",
+      "dev.other.bytype.Waterbowl",
+    )
+    // By PACKAGE PREFIX: the other arm of the same matcher, naming no type at all. Never
+    // `admit("dev.other")` — that would also admit `dev.other.core`, the load-bearing negative
+    // fixture for ADR-066.
+    admit("dev.other.bykind")
     // ADR-115 amendment: one waived marker, so this build shows both halves of the feature. Every
     // other `@RequiresOptIn` marker in `issue113/` stays unlisted and keeps being dropped.
     exportMarkers("io.github.xxfast.kotlin.native.nuget.test.issue113.ExperimentalDiet")

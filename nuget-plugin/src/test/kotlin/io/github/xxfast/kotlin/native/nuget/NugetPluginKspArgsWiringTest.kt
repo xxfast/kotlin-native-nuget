@@ -86,6 +86,92 @@ class NugetPluginKspArgsWiringTest {
     assertEquals("", args["nuget.includePackages"])
     assertEquals("", args["nuget.excludePackages"])
     assertEquals("", args["nuget.exportMarkers"])
+    // ADR-154: both new options are present and inert. A missing option would read as "absent"
+    // in the processor too, but an explicitly empty one is what proves the plugin lowered them.
+    assertEquals("", args["nuget.admit"])
+    assertEquals("false", args["nuget.strictDependencyTypes"])
+  }
+
+  /**
+   * ADR-154: `publish { admit(...) }` is ADDITIVE and dependency-only, so it rides the same
+   * comma-joined channel `include`/`exclude` do and — unlike `include` — leaves `nuget.rootPackage`
+   * and `nuget.includePackages` byte-identical to what they would have been without it. Both arms
+   * of the one matcher are exercised: a qualified type name and a package prefix.
+   */
+  @Test
+  fun `publish admit is wired as a comma-joined KSP arg without touching include`() {
+    val project: Project = buildProjectWithSharedLib()
+
+    project.extensions.getByType(NugetExtension::class.java).publish {
+      packageId = "TestLibrary"
+      version = "1.0.0"
+      authors = "Test Author"
+      description = "Test description"
+      rootPackage = "com.contoso.api"
+      admit("io.ktor.http.Url")
+      admit("co.touchlab.kermit.Severity", "io.ktor.client.plugins.logging")
+    }
+
+    project.evaluate()
+
+    val args: Map<String, String> = project.extensions
+      .getByType(KspExtension::class.java).arguments
+
+    assertEquals(
+      "io.ktor.http.Url,co.touchlab.kermit.Severity,io.ktor.client.plugins.logging",
+      args["nuget.admit"],
+    )
+    assertEquals("com.contoso.api", args["nuget.rootPackage"])
+    assertEquals("", args["nuget.includePackages"])
+  }
+
+  /** ADR-154 §6: the opt-in strictness flag, lowered as a plain boolean string. */
+  @Test
+  fun `publish strictDependencyTypes is wired as a boolean KSP arg`() {
+    val project: Project = buildProjectWithSharedLib()
+
+    project.extensions.getByType(NugetExtension::class.java).publish {
+      packageId = "TestLibrary"
+      version = "1.0.0"
+      authors = "Test Author"
+      description = "Test description"
+      strictDependencyTypes = true
+    }
+
+    project.evaluate()
+
+    assertEquals(
+      "true",
+      project.extensions.getByType(KspExtension::class.java)
+        .arguments["nuget.strictDependencyTypes"],
+    )
+  }
+
+  /**
+   * ADR-154's documented gap, pinned so it is a decision and not a surprise: ADR-109's
+   * cross-publisher scopes are lowered BY PACKAGE (a klib declaration carries no module identity),
+   * so a by-name `admit` entry in another publisher's scope is invisible to the duplicate-type
+   * warning. The `publishedScopes` entry must therefore stay exactly `<id>:<include>:<exclude>`.
+   */
+  @Test
+  fun `admit entries do not leak into the ADR-109 published scopes`() {
+    val project: Project = buildProjectWithSharedLib()
+
+    project.extensions.getByType(NugetExtension::class.java).publish {
+      packageId = "TestLibrary"
+      version = "1.0.0"
+      authors = "Test Author"
+      description = "Test description"
+      rootPackage = "com.contoso.api"
+      admit("io.ktor.http.Url")
+    }
+
+    project.evaluate()
+
+    val scopes: String = project.extensions.getByType(KspExtension::class.java)
+      .arguments.getValue("nuget.publishedScopes")
+
+    assertEquals("TestLibrary:com.contoso.api:", scopes)
   }
 
   /**

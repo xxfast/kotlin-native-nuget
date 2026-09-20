@@ -37,13 +37,15 @@ class ForwardSkippedPropertyWarningTest {
 
   private fun warn(
     dropped: ForwardDroppedProperty,
-    scope: List<String> = emptyList(),
+    // ADR-154: the slot that used to carry the `include(...)` scope now carries the author's own
+    // `exclude(...)` entries (ROADMAP line 37).
+    excludeEntries: List<String> = emptyList(),
   ): String {
     val logger = RecordingLogger()
     warnDroppedForwardProperties(
       ForwardCallablePlanCatalog(entries = emptyList(), droppedProperties = listOf(dropped)),
       logger,
-      scope,
+      excludeEntries,
     )
     return logger.warnings.single()
   }
@@ -89,7 +91,7 @@ class ForwardSkippedPropertyWarningTest {
   }
 
   @Test
-  fun `an out-of-scope dependency property names the whole include line`() {
+  fun `an out-of-scope dependency property names the additive admit line`() {
     val warning: String = warn(
       ForwardDroppedProperty(
         symbol = "app.Newsroom.sponsor",
@@ -98,16 +100,21 @@ class ForwardSkippedPropertyWarningTest {
         reason = ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE,
         detail = "dep.Advert",
       ),
-      scope = listOf("app"),
     )
 
     assertTrue(
       warning.contains("is declared in a dependency module outside the export scope"),
       "the reason's sentence says out of scope, not unsupported: $warning",
     )
+    // ADR-154 §5: the property route reads the SAME hint the callable route does, and it is the
+    // additive one. Both routes share one arm, so they cannot drift.
     assertTrue(
-      warning.contains("include(\"app\", \"dep\")"),
-      "the hint names the author's own package beside the missing one: $warning",
+      warning.contains("""add admit("dep.Advert")"""),
+      "the hint names the additive admit line: $warning",
+    )
+    assertFalse(
+      warning.contains("include("),
+      "an additive verb needs no replacement line: $warning",
     )
   }
 

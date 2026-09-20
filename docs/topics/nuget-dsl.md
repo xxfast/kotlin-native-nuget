@@ -28,6 +28,8 @@ the DSL itself enforces they're set, but `packNuget` fails once it reads an unse
 | `rootPackage` | `String?` | yes | the Kotlin package the generated C# namespaces are rooted at; sub-packages map relative to it. Also the default export scope: see below |
 | `include(vararg packages: String)` | function | no | empty; when set, only these package prefixes (and their sub-packages) are bridged |
 | `exclude(vararg packages: String)` | function | no | empty; a package prefix or a qualified declaration name (a class, object, sealed base, or top-level function, plus everything nested under it); applied after `include`, and always wins over it |
+| `admit(vararg types: String)` | function | no | empty; additively admits a dependency-module type into [the cross-module export closure](#cross-module-export-closure) by qualified name or package prefix, without touching `include`/`rootPackage`; see below |
+| `strictDependencyTypes` | `Boolean` | no | `false`; when `true`, an un-admitted dependency type in a public signature fails the build (`ERROR_UNEXPORTED_DEPENDENCY_TYPE`) instead of warning; see below |
 | `snapshot` | `Boolean` | no | `false`; when `true`, `packNuget` mints `<version>-snapshot.<epochMillis>` at execution time instead of using `version` literally, and always writes an MSBuild props file. Requires `packageId` and a non-blank `version` |
 | `versionPropsFile` | `File?` | no | `null`; only consulted when `snapshot` is `true`. Default `<rootProject>/build/<packageId>Versions.props` |
 | `prebuiltRuntimes` | `File?` | no | `null`; a directory laid out `<rid>/native/*.{dll,dylib,so}`, exactly the `runtimes/` tree `packNuget` stages, merged with the RIDs this host links itself into one package |
@@ -140,14 +142,15 @@ needs those bound types reachable from its own forward return types to keep comp
 
 ### Cross-module export closure
 
-`include`/`exclude`/`rootPackage` also decide what crosses a Gradle module boundary. The export set
-is a reachability closure from the module's own admitted declarations: the processor walks return
-types, parameter types, property types, type arguments of an admitted carrier (`Flow<T>`,
+`include`/`exclude`/`rootPackage`/`admit` decide what crosses a Gradle module boundary. The export
+set is a reachability closure from the module's own admitted declarations: the processor walks
+return types, parameter types, property types, type arguments of an admitted carrier (`Flow<T>`,
 `List<T>`/`Set<T>`/`Map<K,V>`), sealed subclasses, and primary-constructor parameter types, and
-admits every discovered declaration through the same `include`/`exclude`/`rootPackage` predicate,
+admits every discovered declaration through the same predicate: `include`/`rootPackage` for a whole
+package, or an additive `admit` entry for one type or package, minus anything `exclude` names,
 whether it lives in this module or in a dependency module pulled in with
-`implementation(project(":models"))`. No separate DSL verb is needed: a `:models` module under the
-same `rootPackage` is admitted automatically.
+`implementation(project(":models"))`. A `:models` module under the same `rootPackage` is admitted
+automatically, with no extra config.
 
 ```kotlin
 nuget {
@@ -161,10 +164,66 @@ nuget {
 }
 ```
 
+`include(...)` widens admission by whole package, which is right when your own API genuinely
+reaches most of a dependency's models. For a single third-party type (a ktor `Url`, a kermit
+`Severity`) that would mean owning and versioning a whole package you don't control just to
+reach one class or enum. `admit(vararg types: String)` is the finer-grained, additive alternative:
+it takes a qualified type name or a package prefix, the same matcher `exclude` uses, adds entries
+to the closure's admission predicate only, and never picks roots or replaces the `rootPackage`
+default the way an explicit `include` does.
+
+```kotlin
+nuget {
+  publish {
+    packageId = "TestLibrary"
+    rootPackage = "io.github.xxfast.kotlin.native.nuget.test"
+    // admit ONE type by name: only Url itself is admitted, not io.ktor.http.
+    admit("io.ktor.http.Url")
+    // admit a whole package by prefix: the other arm of the same matcher.
+    admit("co.touchlab.kermit")
+  }
+}
+```
+
+Admitting a type admits only that declaration, not its package: a sibling type or a member typed
+with something you didn't also `admit` still skips named, with a hint that says
+`add admit("<qualified type>")`, never `include(...)` (an additive verb has no replacement trap to
+word around). `exclude` still wins over `admit` the same way it wins over `include`. Use `include`
+to widen a whole dependency package your own API is built around; use `admit` to pull in one or a
+few specific types from a package you otherwise leave alone; use `exclude` to record either
+omission as deliberate.
+
+Admitting a **nested** type (`admit("dep.edge.Ledger.Entry")`) doesn't work: the closure climbs
+from a nested declaration to its owner before admitting anything, so that entry refuses `Ledger`
+and the refusal propagates onto `Entry`. Admit the outermost type instead
+(`admit("dep.edge.Ledger")`), which also declares `Entry` as its nested type once `Ledger` is
+admitted. `exclude`, by contrast, is tested on the declaration itself before that climb, so it
+still takes the full nested name (`exclude("dep.edge.Ledger.Entry")`).
+
+By default an un-admitted dependency type is a warning plus a named skip (below). Set
+`strictDependencyTypes = true` to fail the build instead, once every dependency type reached by a
+public signature is either admitted or excluded by name:
+
+```kotlin
+nuget {
+  publish {
+    rootPackage = "com.example.sdk"
+    admit("io.ktor.http.Url")
+    strictDependencyTypes = true
+  }
+}
+```
+
+Under `strictDependencyTypes`, a type the closure refused because it was never admitted, or
+because `admit`/`include`/`rootPackage` are all unset so the closure never crosses the module
+boundary at all, becomes `ERROR_UNEXPORTED_DEPENDENCY_TYPE` and stops the build. A type refused
+because you `exclude`d it stays a warning: that omission is already deliberate, so escalating it
+would make strict mode unsatisfiable for any dependency the build genuinely amputates.
+
 A dependency-module type the closure refuses to admit is skipped, and the diagnostic names the
-actual reason (outside the effective include set, excluded, cross-module admission off entirely,
-or an `expect` declaration whose actualization lives in the dependency and can't be brought into
-scope at all) with an actionable fix for each. See
+actual reason (not admitted, excluded, cross-module admission off entirely, or an `expect`
+declaration whose actualization lives in the dependency and can't be brought into scope at all)
+with an actionable fix for each. See
 [Publishing Kotlin to C#](forward-overview.md#where-these-messages-appear) for the full set of
 messages.
 
