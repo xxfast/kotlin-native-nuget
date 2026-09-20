@@ -53,34 +53,37 @@ with one experimental change: immediately after `classifier.classify(prop.type.r
 public global::TestLibrary.Issue54.Shape Shape
 {
     get
-    {            IntPtr nativeResult = Native_Get_shape(_handle, out IntPtr error);
-    if (error != IntPtr.Zero) { throw NugetErrorNative.BuildException(error); }
-    return new global::TestLibrary.Issue54.Shape(nativeResult);          // <-- CS0144
+    {
+        IntPtr nativeResult = Native_Get_shape(_handle, out IntPtr error);
+        if (error != IntPtr.Zero) { throw NugetErrorNative.BuildException(error); }
+        return new global::TestLibrary.Issue54.Shape(nativeResult);          // <-- CS0144
     }
 }
 
 public global::TestLibrary.Issue54.Shape? Maybe
 {
     get
-    {            IntPtr nativeResult = Native_Get_maybe(_handle, out IntPtr error);
-    if (error != IntPtr.Zero) { throw NugetErrorNative.BuildException(error); }
-    return nativeResult == IntPtr.Zero ? null : new global::TestLibrary.Issue54.Shape(nativeResult); // <-- CS0144
+    {
+        IntPtr nativeResult = Native_Get_maybe(_handle, out IntPtr error);
+        if (error != IntPtr.Zero) { throw NugetErrorNative.BuildException(error); }
+        return nativeResult == IntPtr.Zero ? null : new global::TestLibrary.Issue54.Shape(nativeResult); // <-- CS0144
     }
 }
 
 public IReadOnlyList<global::TestLibrary.Issue54.Shape> Shapes
 {
     get
-    {            IntPtr nativeResult = Native_Get_shapes(_handle, out IntPtr error);
-    if (error != IntPtr.Zero) { throw NugetErrorNative.BuildException(error); }
-    int count = NugetListNative.Count(nativeResult);
-    var result = new List<global::TestLibrary.Issue54.Shape>(count);
-    for (int i = 0; i < count; i++)
     {
-        result.Add(NugetMarshal.FromHandle<global::TestLibrary.Issue54.Shape>(NugetListNative.Get(nativeResult, i)));
-    }
-    NugetListNative.Dispose(nativeResult);
-    return result.AsReadOnly();
+        IntPtr nativeResult = Native_Get_shapes(_handle, out IntPtr error);
+        if (error != IntPtr.Zero) { throw NugetErrorNative.BuildException(error); }
+        int count = NugetListNative.Count(nativeResult);
+        var result = new List<global::TestLibrary.Issue54.Shape>(count);
+        for (int i = 0; i < count; i++)
+        {
+            result.Add(NugetMarshal.FromHandle<global::TestLibrary.Issue54.Shape>(NugetListNative.Get(nativeResult, i)));
+        }
+        NugetListNative.Dispose(nativeResult);
+        return result.AsReadOnly();
     }
 }
 ```

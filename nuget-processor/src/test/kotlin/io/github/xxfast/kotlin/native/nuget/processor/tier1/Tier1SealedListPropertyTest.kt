@@ -42,11 +42,12 @@ class Tier1SealedListPropertyTest {
       |            public IReadOnlyList<global::Interop.Item> Items
       |            {
       |                get
-      |                {                IntPtr nativeResult = Native_Get_items(_handle, out IntPtr error);
-      |                if (error != IntPtr.Zero)
       |                {
-      |                    throw NugetErrorNative.BuildException(error);
-      |                }
+      |                    IntPtr nativeResult = Native_Get_items(_handle, out IntPtr error);
+      |                    if (error != IntPtr.Zero)
+      |                    {
+      |                        throw NugetErrorNative.BuildException(error);
+      |                    }
       """.trimMargin(),
     )
     assertContains(
@@ -84,12 +85,13 @@ class Tier1SealedListPropertyTest {
       |            public bool Refreshing
       |            {
       |                get
-      |                {                bool nativeResult = Native_Get_refreshing(_handle, out IntPtr error);
-      |                if (error != IntPtr.Zero)
       |                {
-      |                    throw NugetErrorNative.BuildException(error);
-      |                }
-      |                return nativeResult;
+      |                    bool nativeResult = Native_Get_refreshing(_handle, out IntPtr error);
+      |                    if (error != IntPtr.Zero)
+      |                    {
+      |                        throw NugetErrorNative.BuildException(error);
+      |                    }
+      |                    return nativeResult;
       """.trimMargin(),
     )
     assertContains(

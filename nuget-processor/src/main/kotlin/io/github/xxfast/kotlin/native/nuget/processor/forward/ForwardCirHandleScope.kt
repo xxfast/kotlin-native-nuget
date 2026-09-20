@@ -31,15 +31,17 @@ internal fun forwardCirHandleScope(
   cleanup: List<String>,
   core: String,
   indent: String = "            ",
-  leadingNewline: Boolean = true,
 ): String {
-  val lead: String = if (leadingNewline) "\n" else ""
+  // ROADMAP:29: every renderer that consumes a body writes `{${body}`, so a body always leads with
+  // a newline and its opening brace stays alone on its line. The lead used to be optional
+  // (`leadingNewline = false`), which is how the property accessors and the custom constructor came
+  // to render their first statement on the brace line.
   if (cleanup.isEmpty()) {
-    return lead + prelude.joinToString("") { step -> "$indent${step.flat}\n" } + core
+    return "\n" + prelude.joinToString("") { step -> "$indent${step.flat}\n" } + core
   }
   val inner = "$indent    "
   return buildString {
-    append(lead)
+    append("\n")
     prelude.flatMap { step -> step.declarations }.forEach { line -> appendLine("$indent$line") }
     appendLine("${indent}try")
     appendLine("$indent{")

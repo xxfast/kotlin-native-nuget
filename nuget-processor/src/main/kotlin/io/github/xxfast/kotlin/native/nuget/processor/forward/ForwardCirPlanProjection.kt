@@ -201,7 +201,6 @@ internal object ForwardCirPlanProjection {
     val body: String = forwardCirHandleScope(
       prelude,
       cleanup,
-      leadingNewline = false,
       core = buildString {
         appendLine("            IntPtr handle = Native_Create$nativeSuffix($callArgs);")
         appendErrorCheck()

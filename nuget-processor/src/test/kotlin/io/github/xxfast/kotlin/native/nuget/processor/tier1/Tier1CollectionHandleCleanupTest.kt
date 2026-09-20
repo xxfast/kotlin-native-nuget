@@ -122,20 +122,22 @@ class Tier1CollectionHandleCleanupTest {
     assertContains(
       cs,
       """
-      |            IntPtr valueHandle = IntPtr.Zero;
-      |            try
+      |            set
       |            {
-      |                valueHandle = NugetMarshal.CreateList(value);
-      |                Native_Set_tags(_handle, valueHandle, out IntPtr error);
-      |                if (error != IntPtr.Zero)
+      |                IntPtr valueHandle = IntPtr.Zero;
+      |                try
       |                {
-      |                    throw NugetErrorNative.BuildException(error);
+      |                    valueHandle = NugetMarshal.CreateList(value);
+      |                    Native_Set_tags(_handle, valueHandle, out IntPtr error);
+      |                    if (error != IntPtr.Zero)
+      |                    {
+      |                        throw NugetErrorNative.BuildException(error);
+      |                    }
       |                }
-      |            }
-      |            finally
-      |            {
-      |                if (valueHandle != IntPtr.Zero) { NugetListNative.Dispose(valueHandle); }
-      |            }
+      |                finally
+      |                {
+      |                    if (valueHandle != IntPtr.Zero) { NugetListNative.Dispose(valueHandle); }
+      |                }
       """.trimMargin(),
     )
   }

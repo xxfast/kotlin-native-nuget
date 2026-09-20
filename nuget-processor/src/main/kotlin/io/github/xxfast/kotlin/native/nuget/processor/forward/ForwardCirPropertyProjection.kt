@@ -7,6 +7,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMethod
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirParameter
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirProperty
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirVisibility
+import io.github.xxfast.kotlin.native.nuget.processor.cir.indentNestedBody
 
 /** C# projection for the planned property path. */
 internal object ForwardCirPropertyProjection {
@@ -105,8 +106,13 @@ internal object ForwardCirPropertyProjection {
       nativeReturnType = directGetter.result.csharpWireType(),
       nativeSetterType = if (plan.setter != null) setterNativeType(plan.type) else directGetter.result.csharpWireType(),
       nativeName = plan.kotlinName,
-      getter = getterBody(plan, receiver),
-      setter = plan.setter?.let { setterBody(plan, receiver) },
+      // ROADMAP:29: the bodies are baked at the method position's depth (the brace at column 8,
+      // statements at 12), which is what the extension `CirMethod` pair renders at. A property
+      // accessor's brace sits one level deeper (column 12, and 16 inside a sealed arm, which
+      // `CirSealedRenderer` reaches by composing this same shift again), so the shared body is
+      // moved in one level here rather than threaded as an indent through every helper below.
+      getter = getterBody(plan, receiver).indentNestedBody(),
+      setter = plan.setter?.let { setterBody(plan, receiver).indentNestedBody() },
       extraNatives = classExtraNatives(plan),
       isStatic = isStatic,
       isOverride = isOverride,
@@ -198,7 +204,6 @@ internal object ForwardCirPropertyProjection {
       prelude = listOfNotNull(receiverStep),
       cleanup = listOfNotNull(receiverCleanup),
       core = core,
-      leadingNewline = false,
     )
   }
 
@@ -222,7 +227,6 @@ internal object ForwardCirPropertyProjection {
           nativeName(plan, setter.call),
           args(plan.type.inputArgument("value")),
         ),
-        leadingNewline = false,
       )
 
       is ForwardPropertySetter.NullableDispatch -> buildString {
@@ -419,8 +423,11 @@ internal object ForwardCirPropertyProjection {
       inner is BridgeType.Enum -> "(${inner.csharpType()})value"
       else -> "value"
     }
+    // ROADMAP:29: no leading `appendLine()` here. [forwardCirHandleScope] owns the newline that
+    // keeps the opening brace alone on its line; emitting a second one put a blank line after the
+    // brace of every nullable-primitive getter.
     return buildString {
-      appendLine(); appendLine("            bool hasValue = $presence($presenceArgs);"); appendErrorCheck(this)
+      appendLine("            bool hasValue = $presence($presenceArgs);"); appendErrorCheck(this)
       appendLine("            if (!hasValue) return null;")
       appendLine("            ${inner.wireType().csharpWireType()} value = $value($valueArgs);")
       appendLine("            if (error2 != IntPtr.Zero)"); appendLine("            {")

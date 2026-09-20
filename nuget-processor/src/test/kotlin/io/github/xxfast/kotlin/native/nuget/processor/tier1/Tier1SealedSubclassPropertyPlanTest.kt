@@ -111,12 +111,13 @@ class Tier1SealedSubclassPropertyPlanTest {
       |            public global::Interop.Friend? Friend
       |            {
       |                get
-      |                {                IntPtr nativeResult = Native_Get_friend(_handle, out IntPtr error);
-      |                if (error != IntPtr.Zero)
       |                {
-      |                    throw NugetErrorNative.BuildException(error);
-      |                }
-      |                return nativeResult == IntPtr.Zero ? null : new global::Interop.Friend(nativeResult);
+      |                    IntPtr nativeResult = Native_Get_friend(_handle, out IntPtr error);
+      |                    if (error != IntPtr.Zero)
+      |                    {
+      |                        throw NugetErrorNative.BuildException(error);
+      |                    }
+      |                    return nativeResult == IntPtr.Zero ? null : new global::Interop.Friend(nativeResult);
       """.trimMargin(),
     )
   }
@@ -157,12 +158,13 @@ class Tier1SealedSubclassPropertyPlanTest {
       |            public override string Id
       |            {
       |                get
-      |                {                IntPtr nativeResult = Native_Get_id(_handle, out IntPtr error);
-      |                if (error != IntPtr.Zero)
       |                {
-      |                    throw NugetErrorNative.BuildException(error);
-      |                }
-      |                return Marshal.PtrToStringUTF8(nativeResult)!;
+      |                    IntPtr nativeResult = Native_Get_id(_handle, out IntPtr error);
+      |                    if (error != IntPtr.Zero)
+      |                    {
+      |                        throw NugetErrorNative.BuildException(error);
+      |                    }
+      |                    return Marshal.PtrToStringUTF8(nativeResult)!;
       """.trimMargin(),
     )
   }
@@ -200,7 +202,9 @@ class Tier1SealedSubclassPropertyPlanTest {
       result.generatedCSharp,
       """
       |                set
-      |                {                Native_Set_counter(_handle, value, out IntPtr error);
+      |                {
+      |                    Native_Set_counter(_handle, value, out IntPtr error);
+      |                    if (error != IntPtr.Zero)
       """.trimMargin(),
     )
   }
