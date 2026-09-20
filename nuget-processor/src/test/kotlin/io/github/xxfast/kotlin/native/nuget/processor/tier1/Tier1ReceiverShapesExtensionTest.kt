@@ -109,7 +109,10 @@ class Tier1ReceiverShapesExtensionTest {
       "a fan-out receiver must not render an export at all",
     )
     assertFalse(
-      result.generatedCSharp.contains("OrZero"),
+      // Word-bounded, accessor prefixes included (the same shape at the property position renders
+      // `GetOrZero`): the marshal helper is declared even for a module that exports nothing
+      // (ADR-129 amendment), and it declares `HandleOfOrZero`, which a bare `contains` now matches.
+      Regex("\\b(Get|Set)?OrZero\\b").containsMatchIn(result.generatedCSharp),
       "a fan-out receiver must not render a C# binding at all",
     )
     assertTrue(

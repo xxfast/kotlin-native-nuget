@@ -276,3 +276,39 @@ at all.
 - Deferred: a public C# `Version` member, a version in the `EntryPointNotFoundException` path,
   the reverse trace line carrying the version (blocked on the `nativeMain` visibility spike),
   and any always-on skew check (bullet 5).
+
+## Amendments
+
+### 2026-09-20 amendment (ROADMAP Phase 4, `needsCoreMarshal`)
+
+The Context bullet "Every forward helper class in `Interop.cs` is gated" is no longer true of the
+core helpers. `needsCoreMarshal` (`CirTranslator.kt`) was an allow-list of four declaration kinds
+out of the thirteen `translate` receives (top-level function, class, object, sealed class), and it
+gated `NugetMarshal`/`NugetErrorNative`, not only the per-feature helpers this ADR's `NugetRuntime`
+was carefully placed outside of. A module (not a package: `translate` runs once per module, one
+`Interop.cs` per compilation) built only out of the other nine kinds still rendered
+`NugetMarshal.HandleOf`/`NugetErrorNative.BuildException` calls and declared neither of those
+classes anywhere in the same file, a `CS0103` for every consumer. Six shapes were confirmed broken
+by running them against unmodified `main` and are pinned in the new
+`tier1/Tier1CoreHelpersAlwaysEmittedTest.kt` (8 cells, invariant "referenced implies declared"): an
+interface plus an extension function over it, an interface plus an extension property over it, a
+stdlib-receiver extension (`val String.shout`), a top-level `val`/`var` alone, a generic function
+alone (`fun <T> pick(x: T): T`), and a `@JvmInline value class` with a checked constructor.
+
+The gate existed so a C# import would never name a `nuget_*` export with no Kotlin declaration
+behind it (ADR-078). ADR-127 moved those particular exports into the `nuget-runtime` klib every
+consumer links, and `ForwardAbiContract` filters `NUGET_RUNTIME_EXPORTS` out of the comparison
+before it runs, so the reason the gate existed is gone. Widening the allow-list was rejected: the
+next of the thirteen kind lists to go unlisted would repeat the same bug, and an allow-list that
+already needs nine of thirteen entries to be complete is an allow-list in name only. Instead
+`needsCoreMarshal` is deleted outright: `NugetMarshal`, `NugetErrorNative` and the public
+`KotlinException`/`IKotlinException` types are now emitted for every module that emits
+`Interop.cs` at all, the same unconditional placement this ADR already used for `NugetRuntime`.
+The per-feature helpers (list, map, set, bytes, func, async, flow, bridge) keep their own tracker
+flags and are unaffected.
+
+Accepted consequence, a human decision made at the gate rather than a side effect: an enum-only or
+const-only module now also gets `NugetMarshal` and the public `KotlinException`/`IKotlinException`
+types, declared but unused. `Tier1RuntimeVersionTest`'s enum-only fixture, which used to assert
+`NugetMarshal` absent, is re-pinned to assert it present, alongside the same cell in
+`Tier1CoreHelpersAlwaysEmittedTest.kt`.

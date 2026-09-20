@@ -278,7 +278,6 @@ internal fun translate(
   }
 
   val namespaces: MutableList<CirNamespace> = mutableListOf()
-  var needsMarshalHelper: Boolean = false
   val tracker = CollectionHelperTracker()
 
   // ADR-110: top-level functions render PascalCase, so a function can now claim a C# name that a
@@ -645,20 +644,6 @@ internal fun translate(
 
   if (tracker.needsFlow) tracker.needsAsync = true
 
-  val needsCollectionHelpers: Boolean =
-    tracker.needsList || tracker.needsMap || tracker.needsSet || tracker.needsBytes ||
-        tracker.lambdaArities.isNotEmpty() || tracker.needsAsync
-  if (needsCollectionHelpers) {
-    needsMarshalHelper = true
-  }
-
-  val needsCoreMarshal: Boolean =
-    functions.isNotEmpty() || classes.isNotEmpty() ||
-        objects.isNotEmpty() || sealedClasses.isNotEmpty()
-  if (needsCoreMarshal) {
-    needsMarshalHelper = true
-  }
-
   // ADR-084 stage 1: every interface with a C# backing wrapper (i.e. reachable at a return or
   // parameter position) that plans cleanly gets a bridge factory, so a C# class implementing it can
   // be passed to Kotlin. An interface with an out-of-scope member plans to null and simply gets no
@@ -676,95 +661,110 @@ internal fun translate(
     )
   }
 
-  if (needsMarshalHelper) {
-    val helpers: MutableList<CirDeclaration> = mutableListOf(
-      CirMarshalHelper(
+  // ADR-129 (2026-09-20 amendment): the core helpers are emitted for every module that emits
+  // `Interop.cs` at all. They used to sit behind `needsMarshalHelper`, an allow-list of four
+  // declaration kinds (top-level function, class, object, sealed class) out of the thirteen
+  // `translate` receives. Every module built only out of the other nine -- an interface plus
+  // an extension over it, a top-level property, a generic function, a value class -- still
+  // rendered `NugetMarshal.HandleOf` and `NugetErrorNative.BuildException` calls, and then
+  // declared neither: CS0103 for the consumer, invisible to the forward ABI contract (which
+  // only reports a C# import with no Kotlin export). The gate's original reason (ADR-078: do not
+  // import a `nuget_*` name with no Kotlin export behind it) died with ADR-127, which moved those
+  // exports into the `nuget-runtime` klib that every consumer links and that `ForwardAbiContract`
+  // filters out of the comparison. An enum-only or const-only module now gains `NugetMarshal`
+  // and the public `KotlinException` surface too; that is accepted, and is what keeps this a
+  // deletion rather than a longer list to forget. The per-feature flags below (`includesList`,
+  // `needsAsync`, `bridgePlans`, ...) are untouched.
+  val helpers: MutableList<CirDeclaration> = mutableListOf(
+    CirMarshalHelper(
+      context.libraryName,
+      includesMap = tracker.needsMap,
+      includesSet = tracker.needsSet,
+      includesList = tracker.needsList,
+      includesBytes = tracker.needsBytes,
+      includesBridge = bridgePlans.isNotEmpty(),
+      // ADR-094: the walk happens here, before the helpers are prepended, because `namespaces`
+      // already pairs every wrapper declaration with the namespace that names it.
+      factories = factoryEntries(namespaces),
+    ),
+  )
+  if (bridgePlans.isNotEmpty()) helpers.add(CirBridgeHelper(context.libraryName, bridgePlans))
+  if (tracker.needsList) helpers.add(CirListHelper(context.libraryName))
+  if (tracker.needsBytes) helpers.add(CirBytesHelper(context.libraryName))
+  if (tracker.needsMap) helpers.add(CirMapHelper(context.libraryName))
+  if (tracker.needsSet) helpers.add(CirSetHelper(context.libraryName))
+  if (tracker.lambdaArities.isNotEmpty()) helpers.add(CirFuncNativeHelper(context.libraryName, tracker.lambdaArities))
+  if (tracker.suspendLambdaArities.isNotEmpty()) helpers.add(
+    CirSuspendFuncNativeHelper(
+      context.libraryName,
+      tracker.suspendLambdaArities
+    )
+  )
+  if (tracker.needsAsync) helpers.add(CirAsyncHelper(context.libraryName))
+  if (tracker.needsAsync) helpers.add(CirScopeHelper(context.libraryName))
+  if (tracker.needsAsync) helpers.add(CirJobHelper(context.libraryName))
+  helpers.add(CirErrorHelper(context.libraryName))
+  if (tracker.needsFlow) {
+    helpers.add(
+      CirFlowHelper(
         context.libraryName,
-        includesMap = tracker.needsMap,
-        includesSet = tracker.needsSet,
-        includesList = tracker.needsList,
-        includesBytes = tracker.needsBytes,
-        includesBridge = bridgePlans.isNotEmpty(),
-        // ADR-094: the walk happens here, before the helpers are prepended, because `namespaces`
-        // already pairs every wrapper declaration with the namespace that names it.
-        factories = factoryEntries(namespaces),
+        includesStateFlow = tracker.needsStateFlow,
+        includesMutableStateFlow = tracker.needsMutableStateFlow,
       ),
     )
-    if (bridgePlans.isNotEmpty()) helpers.add(CirBridgeHelper(context.libraryName, bridgePlans))
-    if (tracker.needsList) helpers.add(CirListHelper(context.libraryName))
-    if (tracker.needsBytes) helpers.add(CirBytesHelper(context.libraryName))
-    if (tracker.needsMap) helpers.add(CirMapHelper(context.libraryName))
-    if (tracker.needsSet) helpers.add(CirSetHelper(context.libraryName))
-    if (tracker.lambdaArities.isNotEmpty()) helpers.add(CirFuncNativeHelper(context.libraryName, tracker.lambdaArities))
-    if (tracker.suspendLambdaArities.isNotEmpty()) helpers.add(
-      CirSuspendFuncNativeHelper(
-        context.libraryName,
-        tracker.suspendLambdaArities
-      )
-    )
-    if (tracker.needsAsync) helpers.add(CirAsyncHelper(context.libraryName))
-    if (tracker.needsAsync) helpers.add(CirScopeHelper(context.libraryName))
-    if (tracker.needsAsync) helpers.add(CirJobHelper(context.libraryName))
-    helpers.add(CirErrorHelper(context.libraryName))
-    if (tracker.needsFlow) {
-      helpers.add(
-        CirFlowHelper(
-          context.libraryName,
-          includesStateFlow = tracker.needsStateFlow,
-          includesMutableStateFlow = tracker.needsMutableStateFlow,
-        ),
-      )
-    }
-    if (tracker.needsSuspendStateFlow) {
-      helpers.add(CirStateFlowHandleHelper(context.libraryName))
-    }
-    if (tracker.callbackDelegates.isNotEmpty()) {
-      helpers.add(CirCallbackDelegateHelper(tracker.callbackDelegates.distinctBy { it.name }))
-    }
-    if (tracker.needsSubscription) {
-      helpers.add(CirSubscriptionHelper(context.libraryName))
-    }
+  }
+  if (tracker.needsSuspendStateFlow) {
+    helpers.add(CirStateFlowHandleHelper(context.libraryName))
+  }
+  if (tracker.callbackDelegates.isNotEmpty()) {
+    helpers.add(CirCallbackDelegateHelper(tracker.callbackDelegates.distinctBy { it.name }))
+  }
+  if (tracker.needsSubscription) {
+    helpers.add(CirSubscriptionHelper(context.libraryName))
+  }
 
-    val rootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
+  val rootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
 
-    if (rootIdx >= 0) {
-      val root: CirNamespace = namespaces[rootIdx]
-      namespaces[rootIdx] = root.copy(declarations = helpers + root.declarations)
+  if (rootIdx >= 0) {
+    val root: CirNamespace = namespaces[rootIdx]
+    namespaces[rootIdx] = root.copy(declarations = helpers + root.declarations)
+  } else {
+    namespaces.add(0, CirNamespace(context.rootNamespace, helpers))
+  }
+
+  if (tracker.lambdaArities.isNotEmpty()) {
+    val helperNs: String = context.rootNamespace
+    val funcHelper = CirFuncHelper(context.libraryName, tracker.lambdaArities, helperNs)
+    val funcRootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
+
+    if (funcRootIdx >= 0) {
+      val root: CirNamespace = namespaces[funcRootIdx]
+      namespaces[funcRootIdx] = root.copy(declarations = listOf(funcHelper) + root.declarations)
     } else {
-      namespaces.add(0, CirNamespace(context.rootNamespace, helpers))
-    }
-
-    if (tracker.lambdaArities.isNotEmpty()) {
-      val helperNs: String = context.rootNamespace
-      val funcHelper = CirFuncHelper(context.libraryName, tracker.lambdaArities, helperNs)
-      val rootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
-
-      if (rootIdx >= 0) {
-        val root: CirNamespace = namespaces[rootIdx]
-        namespaces[rootIdx] = root.copy(declarations = listOf(funcHelper) + root.declarations)
-      } else {
-        namespaces.add(CirNamespace(context.rootNamespace, listOf(funcHelper)))
-      }
-    }
-
-    if (tracker.suspendLambdaArities.isNotEmpty()) {
-      val helperNs: String = context.rootNamespace
-      val suspendFuncHelper = CirSuspendFuncHelper(context.libraryName, tracker.suspendLambdaArities, helperNs)
-      val rootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
-
-      if (rootIdx >= 0) {
-        val root: CirNamespace = namespaces[rootIdx]
-        namespaces[rootIdx] = root.copy(declarations = listOf(suspendFuncHelper) + root.declarations)
-      } else {
-        namespaces.add(CirNamespace(context.rootNamespace, listOf(suspendFuncHelper)))
-      }
+      namespaces.add(CirNamespace(context.rootNamespace, listOf(funcHelper)))
     }
   }
 
-  // ADR-129: deliberately OUTSIDE the `needsMarshalHelper` gate above. Every other helper exists
-  // only when something marshals through it; this one carries `nuget_runtime_version`, which a
-  // scalar-only library must import too, so that "which runtime is in this binary" has an answer
-  // for every consumer rather than only for the ones that happen to pass a string.
+  if (tracker.suspendLambdaArities.isNotEmpty()) {
+    val helperNs: String = context.rootNamespace
+    val suspendFuncHelper = CirSuspendFuncHelper(context.libraryName, tracker.suspendLambdaArities, helperNs)
+    val suspendRootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
+
+    if (suspendRootIdx >= 0) {
+      val root: CirNamespace = namespaces[suspendRootIdx]
+      namespaces[suspendRootIdx] =
+        root.copy(declarations = listOf(suspendFuncHelper) + root.declarations)
+    } else {
+      namespaces.add(CirNamespace(context.rootNamespace, listOf(suspendFuncHelper)))
+    }
+  }
+
+  // ADR-129: `nuget_runtime_version` must be importable by every library, including a scalar-only
+  // one that marshals nothing, so that "which runtime is in this binary" has an answer for every
+  // consumer rather than only for the ones that happen to pass a string. This used to be the one
+  // helper emitted outside the `needsMarshalHelper` gate; that gate is gone (ADR-129's 2026-09-20
+  // amendment), so the core helpers above are unconditional too and this block stays separate only
+  // because it prepends last (i.e. `NugetRuntime` renders first in the root namespace).
   val runtimeHelper = CirRuntimeHelper(context.libraryName)
   val runtimeRootIdx: Int = namespaces.indexOfFirst { it.name == context.rootNamespace }
   if (runtimeRootIdx >= 0) {

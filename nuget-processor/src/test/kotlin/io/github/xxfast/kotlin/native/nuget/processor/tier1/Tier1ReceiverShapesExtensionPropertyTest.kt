@@ -132,12 +132,6 @@ class Tier1ReceiverShapesExtensionPropertyTest {
       }
 
       val Sitter.address: String get() = "at ${'$'}{house()}"
-
-      // Unrelated to [Sitter], and only here because `NugetMarshal` itself is emitted off a
-      // top-level function / class / object / sealed class being present
-      // (`CirTranslator.needsCoreMarshal`). A package of interfaces and extensions alone renders
-      // C# that calls helpers it never declares.
-      fun frontDoor(): String = "open"
       """.trimIndent(),
     )
 
@@ -146,6 +140,11 @@ class Tier1ReceiverShapesExtensionPropertyTest {
       result.generatedCSharp,
       "internal sealed class SitterBridgeState : NugetBridgeState",
     )
+    // ROADMAP line 28: this fixture used to carry an unrelated `fun frontDoor(): String` purely to
+    // open `CirTranslator.needsCoreMarshal`. Without it the module rendered `NugetMarshal.HandleOf`
+    // calls and declared none of the helpers behind them.
+    assertContains(result.generatedCSharp, "internal static class NugetMarshal")
+    assertContains(result.generatedCSharp, "internal static class NugetErrorNative")
   }
 
   /**
@@ -170,7 +169,10 @@ class Tier1ReceiverShapesExtensionPropertyTest {
       "a fan-out receiver must not render an export at all",
     )
     assertFalse(
-      result.generatedCSharp.contains("OrZero"),
+      // Word-bounded, accessor prefixes included (this route would render `GetOrZero`): the marshal
+      // helper is declared even for a module that exports nothing (ADR-129 amendment), and it
+      // declares `HandleOfOrZero`, which a bare `contains("OrZero")` now matches.
+      Regex("\\b(Get|Set)?OrZero\\b").containsMatchIn(result.generatedCSharp),
       "a fan-out receiver must not render a C# binding at all",
     )
     assertTrue(

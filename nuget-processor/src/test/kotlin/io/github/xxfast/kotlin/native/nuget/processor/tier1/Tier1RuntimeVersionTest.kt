@@ -6,14 +6,18 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * ADR-129: `NugetRuntime` is the only helper in `Interop.cs` that is emitted unconditionally. Every
- * other one sits inside `CirTranslator`'s `needsMarshalHelper` gate, so a library that marshals
- * nothing would otherwise have no way to say which `nuget-runtime` its binary carries.
+ * ADR-129: `NugetRuntime` is emitted for every library, so one that marshals nothing still
+ * has a way to say which `nuget-runtime` its binary carries.
  *
- * The enum-only fixture is the load-bearing one: `needsCoreMarshal` is
- * `functions.isNotEmpty() || classes.isNotEmpty() || objects... || sealedClasses...`, so an enum on
- * its own is the shape that leaves the gate shut. (ADR-129's §4 table says "one top-level scalar
- * function"; that shape opens the gate through `needsCoreMarshal` and would have proved nothing.)
+ * The enum-only fixture is the load-bearing one: it is the shape that marshals nothing at
+ * all, which is where an emission rule keyed off "does this module marshal anything" shows
+ * itself. (ADR-129's §4 table says "one top-level scalar function"; that shape marshals
+ * a string and would have proved nothing.) Since ROADMAP line 28 this no longer proves
+ * `NugetRuntime` is emitted ALONE: the `needsCoreMarshal` gate it used to be the exception to
+ * was an allow-list of declaration kinds that left whole module shapes calling `NugetMarshal`
+ * without declaring it, so the core helpers are now unconditional too and this fixture gets
+ * them. `Tier1CoreHelpersAlwaysEmittedTest` owns that invariant; the subject here stays
+ * `NugetRuntime` itself, its env-check-before-P/Invoke order and its single emission.
  */
 class Tier1RuntimeVersionTest {
 
@@ -38,10 +42,14 @@ class Tier1RuntimeVersionTest {
       "EntryPoint = \"nuget_runtime_version\"",
       message = "expected the 67th runtime export to be imported; generatedCSharp:\n$csharp",
     )
-    assertTrue(
-      "internal static class NugetMarshal" !in csharp,
-      "the fixture must genuinely leave `needsMarshalHelper` shut, otherwise this test proves " +
-          "nothing about the gate; generatedCSharp:\n$csharp",
+    // ROADMAP line 28: this fixture used to pin `NugetMarshal` ABSENT, which is what made it the
+    // gate's negative case. The core helpers no longer depend on the module's declaration kinds, so
+    // an enum-only module carries them too, unused; the fixture stays marshal-free by construction
+    // (an enum renders as a C# `enum` plus ordinal bridges and calls no helper).
+    assertContains(
+      csharp,
+      "internal static class NugetMarshal",
+      message = "expected the now-unconditional core marshal helper; generatedCSharp:\n$csharp",
     )
   }
 
