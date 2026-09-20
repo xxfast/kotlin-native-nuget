@@ -412,9 +412,12 @@ data class CirJobHelper(
 ) : CirDeclaration
 
 /**
- * ADR-129: the always-emitted runtime helper. Unlike every other helper here it is added OUTSIDE
- * `needsMarshalHelper`, because the `nuget_runtime_version` import must exist for every library,
- * including a scalar-only one that needs no marshalling at all.
+ * ADR-129: the runtime helper, carrying `nuget_runtime_version`. Emitted for every library,
+ * including a scalar-only one that needs no marshalling at all. It was once the only helper added
+ * outside `CirTranslator`'s `needsMarshalHelper` gate; the 2026-09-20 amendment deleted that gate,
+ * so the core helpers ([CirMarshalHelper], [CirErrorHelper]) are now unconditional alongside it,
+ * and only the per-feature helpers (list, map, set, bytes, func, async, flow, bridge) stay
+ * flag-gated.
  */
 data class CirRuntimeHelper(
   val libraryName: String,

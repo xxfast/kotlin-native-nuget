@@ -141,7 +141,9 @@ Alternative 1. Forward-only. Always compiled in.
   `NugetProcessor.kt:1657-1669`), which is the same relationship `nuget_dispose` already relies on.
   **Wrong; see "Amendments after implementation" below.** The counter is emitted unconditionally
   from `NugetProcessor.kt` (`addNugetHandlesCounter()`), not gated by `needsHelpers`; the C# import
-  stays under `needsCoreMarshal`.
+  stays under `needsCoreMarshal`. (2026-09-20: `needsCoreMarshal` no longer exists, per
+  [ADR-129](129-nuget-runtime-version-export.md)'s 2026-09-20 amendment, so the C# `LiveHandles`
+  import is unconditional too now, because its host `NugetMarshal` is.)
 - **Verified** by konanc spike (Kotlin/Native 2.4.10 prebuilt, `-produce library`, macOS arm64
   host): `kotlin.concurrent.AtomicLong` needs **no** opt-in; `incrementAndGet`/`decrementAndGet`/
   `.value` compile clean with only the `ExperimentalForeignApi` + `ExperimentalNativeApi` opt-ins
