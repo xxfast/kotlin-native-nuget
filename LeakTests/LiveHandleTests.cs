@@ -465,6 +465,124 @@ public class LiveHandleTests
         });
     }
 
+    // Row 6e-null. The NULL half of Row 6e: a nullable suspend interface return that completes with
+    // `IntPtr.Zero`. Kotlin mints no result handle here, so the only handles in flight are the
+    // callback `GCHandle` and the job cell, and this row is what says the null path frees those
+    // anyway. A completion path that only disposes its bookkeeping on the non-null branch leaks
+    // exactly on the branch no other row walks.
+    //
+    // Nobody drops a cat off, fifty nights running.
+    [Fact]
+    public async Task NullableSuspendReturn_NullResult_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var sitter = new PetSitter();
+            Assert.Null(await sitter.HandBackLaterOrNullAsync());
+            Assert.Null(await PetKt.StrayPetLaterOrNullAsync(false));
+        });
+    }
+
+    // Row 6e-resolved. Row 6e through the NULLABLE read: the same transfer handle, but the read now
+    // tests the pointer before probing the bridge. The handle still has to be released by the
+    // resolve, and a nullable read that returns the original and forgets the handle leaks once per
+    // completion with `Assert.Same` staying green, exactly as on the non-null arm.
+    [Fact]
+    public async Task NullableSuspendReturn_ResolvedCSharpInterface_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var sitter = new PetSitter();
+            using IPet rex = new Dog("Rex");
+            sitter.Take(rex);
+
+            IPet? later = await sitter.HandBackLaterOrNullAsync();
+            Assert.Same(rex, later);
+            Assert.Equal("Woof!", later!.Speak());
+        });
+    }
+
+    // Row 6f-null. The nullable ELEMENT arm on a `StateFlow<Pet?>`, both of the ways it is read:
+    // `.Value` (a fresh element handle per read, on a holder that outlives the call) and one
+    // collected emission. The null read mints nothing, the resolved read mints a transfer handle
+    // the `read:` delegate must free, and the property and the method are separate generated call
+    // sites over the same underlying flow, so all four reads ride in one crossing.
+    [Fact]
+    public async Task NullableStateFlowInterfaceElement_ValueAndCollect_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var sitter = new PetSitter();
+            Assert.Null(sitter.Watching.Value);
+
+            using IPet rex = new Dog("Rex");
+            sitter.Take(rex);
+            Assert.Same(rex, sitter.Watching.Value);
+
+            using KotlinStateFlow<IPet?> now = sitter.WatchingNow();
+            Assert.Same(rex, now.Value);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await foreach (IPet? seen in sitter.Watching.WithCancellation(cts.Token))
+            {
+                Assert.Same(rex, seen);
+                break;
+            }
+        });
+    }
+
+    // Row 6f-race. The TIGHT LOOP row. `strayPetLaterOrNull` is a `suspend fun` with no suspension
+    // point, so the coroutine can finish and invoke the completion callback before the P/Invoke
+    // that started it has returned its job handle to C#. A job cell freed on the wrong side of that
+    // race, or a result handle retained by a completion that beat its own registration, leaks on a
+    // fraction of calls: it reads as +1 per thousand, not +1 per call, so fifty crossings cannot
+    // see it. Both branches alternate so the null path shares the same window.
+    //
+    // Oreo and Mylo check the cat flap two thousand times in a row.
+    [Fact]
+    public async Task NullableTopLevelSuspendInterface_TightLoop_ReturnsToBaseline()
+    {
+        int round = 0;
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                bool found = (round++ % 2) == 0;
+                IPet? stray = await PetKt.StrayPetLaterOrNullAsync(found);
+                if (found)
+                {
+                    Assert.NotNull(stray);
+                    stray!.Dispose();
+                }
+                else
+                {
+                    Assert.Null(stray);
+                }
+            },
+            iterations: 2000);
+    }
+
+    // Row 6f-plain. The same nullable element on a PLAIN `Flow<Pet?>` rather than a StateFlow: one
+    // handle per emission, and the null emission in the middle must mint and free nothing. Its own
+    // row because the freeing site is the flow enumerator's `read:` delegate and a null element on
+    // that route is not threaded today (the consumer-side fact in `BidirectionalTests` measures
+    // what it does); whatever makes that fact green has to keep the count flat here too.
+    [Fact]
+    public async Task NullablePlainFlowInterfaceElement_Collected_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var window = new PassersBy();
+
+            var seen = new List<IPet?>();
+            await foreach (IPet? pet in window.PetsPassingBy()) seen.Add(pet);
+
+            Assert.Equal(3, seen.Count);
+            Assert.Null(seen[1]);
+            seen[0]!.Dispose();
+            seen[2]!.Dispose();
+        });
+    }
+
     // Row 6g. The `suspend fun` returning `StateFlow<Interface>` read (site (b) of the interface
     // spelling sweep). Three handles ride on one call and each is freed at a different place: the
     // awaited StateFlow's own StableRef (owned by the returned `KotlinStateFlow<T>`, released by

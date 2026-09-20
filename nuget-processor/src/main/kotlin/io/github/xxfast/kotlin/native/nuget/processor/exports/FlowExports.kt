@@ -153,8 +153,12 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
   val flowElementType: KSType? = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
   val flowElementQualified: String =
     flowElementType?.declaration?.qualifiedName?.asString() ?: "kotlin.Any"
-  // ADR-067: nullable element/member threading is StateFlow-only; nullable Flow stays deferred.
-  val elementNullable: Boolean = isStateFlowProperty && flowElementType?.isMarkedNullable == true
+  // ADR-067, widened 2026-09-20: a nullable ELEMENT is threaded on both flow shapes, the C# half's
+  // matching change. A plain `Flow<T?>` used to box `value as Any` here, which throws on the first
+  // null emission and reaches the consumer as `onError` -- a stream that dies instead of yielding
+  // null. Null now crosses as a null item pointer, the encoding `StateFlow<T?>` already used.
+  // A nullable MEMBER (`StateFlow<T>?`) stays StateFlow-only: it is the `_has_value` probe pair.
+  val elementNullable: Boolean = flowElementType?.isMarkedNullable == true
   val memberNullable: Boolean = isStateFlowProperty && propTypeResolved.isMarkedNullable
   // ADR-123: a collection element crosses as the ordinary route's boxed wire container, so a
   // component that projects at the seam (a value class to its underlying, an enum to its
@@ -262,8 +266,9 @@ internal fun FileSpec.Builder.addFlowMethodExports(
   val flowElementType: KSType? = returnType?.arguments?.firstOrNull()?.type?.resolve()
   val flowElementQualified: String =
     flowElementType?.declaration?.qualifiedName?.asString() ?: "kotlin.Any"
-  // ADR-067: nullable element/member threading is StateFlow-only; nullable Flow stays deferred.
-  val elementNullable: Boolean = isStateFlowMethod && flowElementType?.isMarkedNullable == true
+  // ADR-067 (widened 2026-09-20): nullable ELEMENT threading on both flow shapes, mirroring the
+  // property half above; a nullable MEMBER stays StateFlow-only.
+  val elementNullable: Boolean = flowElementType?.isMarkedNullable == true
   val memberNullable: Boolean = isStateFlowMethod && returnType?.isMarkedNullable == true
   // ADR-123: the element-side twin of the parameter lowering below -- a collection element
   // leaves per-element projected, exactly as the ordinary route's collection result does.
@@ -431,7 +436,8 @@ private fun memberAccessor(receiver: String, memberNullable: Boolean): String =
   if (memberNullable) "$receiver?" else receiver
 
 // ADR-067: the collected/read item expression -- a null-guarded box when the element itself is
-// nullable (`StateFlow<T?>`), else the original unguarded `value as Any` box (ADR-065 unchanged).
+// nullable (`StateFlow<T?>` and, since 2026-09-20, `Flow<T?>`), else the original unguarded
+// `value as Any` box (ADR-065 unchanged).
 // ADR-123: a collection element is boxed per-element projected, so a value class leaves as its
 // underlying and an enum as its ordinal, exactly as the ordinary route's collection result does.
 // The two are exclusive: a nullable collection element is refused before either half sees it.

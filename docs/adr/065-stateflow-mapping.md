@@ -484,3 +484,19 @@ This is the exact hazard the task flagged.
 - **`StateFlow<T>` as a function parameter** (C# → Kotlin) and **as a generic type argument**
   (`Box<StateFlow<String>>`) — deferred, mirroring the corresponding Flow items (ROADMAP lines
   113-114).
+
+**2026-09-20 amendment: a plain `Flow<T?>` nullable element now binds too, not only
+`StateFlow<T?>`.** `isNullableElement` (`CirClassTranslator.kt:1132`/`:1332`) was StateFlow-only
+(`isStateFlowType && element.isMarkedNullable`) because ADR-067 only asked for the StateFlow shape;
+a plain `Flow<T?>` bound as a non-null `KotlinFlow<T>` and the shared `itemBoxExpr`
+(`FlowExports.kt`) boxed every emission with `value as Any`, so a null emission threw a Kotlin
+`NullPointerException` out of the collect body instead of crossing as `null`. Fixed by computing
+element nullability generically at both call sites (property and method), so `Flow<T?>` now binds
+`KotlinFlow<T?>` the same way `StateFlow<T?>` binds `KotlinStateFlow<T?>` — verified for an
+interface element, `String?`, and `Int?` (`test-library/.../cat/PassersBy.kt`,
+`IntegrationTests/BidirectionalTests.cs`). Unaffected by this fix: a nullable **member**
+(`Flow<T>?`, the whole stream absent — the ROADMAP's "Map nullable `Flow<T>?`" item) is still
+unbound, and ADR-068's `suspend
+fun` returning `StateFlow<T>` still reads its element through the module-wide
+`nuget_stateflow_value` export, which has no null arm and is refused (not bound) for a nullable
+element as of the same date (see ADR-067's Consequences).
