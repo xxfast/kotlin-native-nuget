@@ -2,6 +2,7 @@
 
 package io.github.xxfast.kotlin.native.nuget.runtime
 
+import kotlin.concurrent.AtomicReference
 import kotlin.coroutines.resume
 import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -59,20 +60,44 @@ private val TASK_COMPLETED: COpaquePointer = staticCFunction(::nugetTaskComplete
  *
  * The `ctx` handle is minted with [NugetHandles.retain], so an in-flight reverse await is visible
  * in `nuget_live_handles` (ADR-120) and a leak on either path is observable.
+ *
+ * ADR-153: [begin] also returns the `GCHandle` of the `CancellationTokenSource` its `Begin` thunk
+ * minted, or null for a member that takes no token (and for any throw, since the handle is minted
+ * last). That handle is owned here and released through [cancel] EXACTLY once: the
+ * `invokeOnCancellation` handler releases it with `cancelled = true` (the C# side queues
+ * `Cancel()`), the `finally` releases it with `cancelled = false` (the C# side disposes it).
+ * Whichever swaps the cell first owns it, so correctness does not depend on which runs first, and
+ * a double free of a .NET `GCHandle` is impossible.
  */
 @NugetRuntimeApi
 public suspend fun awaitForKotlin(
   release: (task: COpaquePointer) -> Unit,
-  begin: (callback: COpaquePointer, ctx: COpaquePointer) -> Unit,
-): COpaquePointer = suspendCancellableCoroutine { continuation ->
-  val ctx: COpaquePointer = NugetHandles.retain(NugetPendingTask(continuation, release))
+  cancel: (source: COpaquePointer, cancelled: Boolean) -> Unit,
+  begin: (callback: COpaquePointer, ctx: COpaquePointer) -> COpaquePointer?,
+): COpaquePointer {
+  val source: AtomicReference<COpaquePointer?> = AtomicReference(null)
   try {
-    begin(TASK_COMPLETED, ctx)
-  } catch (e: Throwable) {
-    // Deliberately broad: whatever `begin` threw (the ADR-104 NugetManagedException for a
-    // synchronous managed throw, or a Kotlin-side failure before the call), the callback will
-    // never fire, so this is the only path on which `ctx` can be released.
-    NugetHandles.release(ctx)
-    throw e
+    return suspendCancellableCoroutine { continuation ->
+      val ctx: COpaquePointer = NugetHandles.retain(NugetPendingTask(continuation, release))
+      try {
+        source.value = begin(TASK_COMPLETED, ctx)
+      } catch (e: Throwable) {
+        // Deliberately broad: whatever `begin` threw (the ADR-104 NugetManagedException for a
+        // synchronous managed throw, or a Kotlin-side failure before the call), the callback will
+        // never fire, so this is the only path on which `ctx` can be released. No source handle
+        // exists on this path: the C# thunk mints it last and returns IntPtr.Zero when it throws.
+        NugetHandles.release(ctx)
+        throw e
+      }
+      // Registered AFTER `begin`, which is safe because a handler registered on an already
+      // cancelled continuation fires immediately (ADR-153 claim A, covered by AwaitForKotlinTest).
+      continuation.invokeOnCancellation {
+        val owned: COpaquePointer? = source.getAndSet(null)
+        if (owned != null) cancel(owned, true)
+      }
+    }
+  } finally {
+    val owned: COpaquePointer? = source.getAndSet(null)
+    if (owned != null) cancel(owned, false)
   }
 }

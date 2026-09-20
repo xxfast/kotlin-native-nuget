@@ -348,13 +348,13 @@ class NugetKotlinBridgeGenerationTest {
   }
 
   @Test
-  fun `the shared runtime registration grows to five slots and moves its contract hash`() {
+  fun `the shared runtime registration grows to seven slots and moves its contract hash`() {
     val runtime: GeneratedFile = generateKotlinStubs(rir)
       .single { it.relativePath.endsWith("/NugetRuntime.kt") }
 
-    assertContains(runtime.content, "expectedSlots = 5,")
+    assertContains(runtime.content, "expectedSlots = 7,")
     assertContains(runtime.content, "expectedHash = ${NUGET_RUNTIME_CONTRACT_HASH}L,")
-    assertContains(runtime.content, "NugetRegistry.record(\"<runtime>\", 5)")
+    assertContains(runtime.content, "NugetRegistry.record(\"<runtime>\", 7)")
     assertContains(runtime.content, "weakenGcHandleFn = requireNotNull(weakenGcHandlePtr)")
     assertContains(runtime.content, "resolveGcHandleFn = requireNotNull(resolveGcHandlePtr)")
     // ADR-104: the two managed-error accessors Kotlin reads a caught exception through.
@@ -362,6 +362,11 @@ class NugetKotlinBridgeGenerationTest {
     assertContains(
       runtime.content, "managedErrorMessageFn = requireNotNull(managedErrorMessagePtr)",
     )
+    // ADR-153: the two slots the cancellation half added.
+    assertContains(
+      runtime.content, "releaseCancellationFn = requireNotNull(releaseCancellationPtr)",
+    )
+    assertContains(runtime.content, "managedErrorKindFn = requireNotNull(managedErrorKindPtr)")
     // The hash pin: both halves bake THIS literal, and it is no longer the 1-slot one.
     assertEquals(
       fnv1a64(
@@ -369,7 +374,9 @@ class NugetKotlinBridgeGenerationTest {
             "weakenGcHandle(handle:COpaquePointer):COpaquePointer;" +
             "resolveGcHandle(handle:COpaquePointer):COpaquePointer;" +
             "managedErrorType(err:COpaquePointer):COpaquePointer;" +
-            "managedErrorMessage(err:COpaquePointer):COpaquePointer"
+            "managedErrorMessage(err:COpaquePointer):COpaquePointer;" +
+            "releaseCancellation(source:COpaquePointer,cancel:Int):Unit;" +
+            "managedErrorKind(err:COpaquePointer):Int"
       ),
       NUGET_RUNTIME_CONTRACT_HASH,
     )

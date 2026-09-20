@@ -1053,4 +1053,54 @@ public class LiveHandleTests
             Assert.StartsWith("System.InvalidOperationException|", await KennelSample.OreoEscapesAsync());
         });
     }
+
+    // Rows 9j to 9l. ADR-153: the reverse async crossing with a bridge-owned
+    // CancellationTokenSource riding on it. (Labelled 9j onward because the forward suspend rows
+    // already own 9b to 9i; these three sit with the reverse rows above.)
+    //
+    // WHAT THESE ROWS CAN AND CANNOT SEE. `nuget_live_handles` counts Kotlin StableRefs only, and
+    // the CTS handle is a .NET GCHandle: it is NOT counted here, on either path. So these rows
+    // prove the `ctx` (pending-continuation) and Task-handle baseline on the cancellation paths,
+    // and they say nothing about whether the CTS handle itself was freed exactly once. That half
+    // lives in the runtime's AwaitForKotlinTest with a counting fake, and a C#-side handle counter
+    // is a deferred ROADMAP item (ADR-153 open question 6). Worth having anyway: the cancelled
+    // path frees the ctx from a DIFFERENT place than every row above it (the coroutine's own
+    // cancellation, with `End` never called), which is precisely where a ctx can be dropped.
+
+    // Row 9j. The CANCELLED path: the Kotlin wait ends on its own cancellation and `End` is never
+    // called, so the ctx released by rows 9/9a/9b in the completion callback has to be released by
+    // `resume`'s onCancellation here instead. A channel that only cleans up when a completion
+    // arrives leaks exactly one ctx per cancelled call. The returned count is asserted so a run in
+    // which nothing was actually cancelled cannot pass as a clean one.
+    [Fact]
+    public async Task ReverseAsync_CancelledTokenCall_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () => Assert.Equal(20, await KennelSample.StayCancelledRepeatedlyAsync(20)),
+            iterations: 3);
+    }
+
+    // Row 9k. The COMPLETED path of the same token-taking route: the coroutine is never cancelled,
+    // so the CTS handle is released by the `finally` rather than the cancellation handler, and the
+    // ctx and Task handle go exactly as in row 9. Here as the control for 9j: a delta on both rows
+    // is the ordinary async route, a delta on 9j alone is the cancellation path.
+    [Fact]
+    public async Task ReverseAsync_CompletedTokenCall_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () => Assert.Equal(6, await KennelSample.DozeWithADefaultTokenAsync()));
+    }
+
+    // Row 9l. An ALREADY-COMPLETED token-taking task, tight loop inside one Kotlin coroutine. The
+    // race class ADR-019 has bitten three times now: the completion callback can land before
+    // `suspendCancellableCoroutine`'s block returns, which is the window in which the CTS handle
+    // is minted but not yet stored (ADR-153's inferred claim B, unrun). If the claim is wrong the
+    // .NET handle leaks (invisible here) and the ctx released on that ordering may go with it,
+    // which IS visible, at a five-figure delta rather than a rounding error.
+    [Fact]
+    public async Task ReverseAsync_AlreadyCompletedTokenCall_TightLoop_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () => Assert.Equal(2 * 2_000, await KennelSample.PounceRepeatedlyAsync(2_000)),
+            iterations: 3);
+    }
 }

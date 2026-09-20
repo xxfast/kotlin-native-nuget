@@ -67,6 +67,10 @@ public class Kennel
 {
     private const int Delay = 10;
 
+    // Long enough that a Kotlin `withTimeoutOrNull` around `DawdleAsync` is guaranteed to give up
+    // first, so the row proves the Kotlin wait ends promptly while the C# work runs on.
+    private const int Dawdle = 300;
+
     /// <summary>Non-generic <c>Task</c>, genuinely asynchronous (<c>Task.Delay</c>).</summary>
     public async Task NapAsync() => await Task.Delay(Delay);
 
@@ -174,4 +178,154 @@ public class Kennel
     /// <c>info_async_not_yet_mapped</c> diagnostic, never bound and never silently dropped.
     /// </summary>
     public ValueTask<int> PurrsAsync() => ValueTask.FromResult(3);
+
+    // ----------------------------------------------------------------------------------------
+    // ADR-153: the CancellationToken half. Cancelling the Kotlin coroutine has to reach the token
+    // the bridge supplies here, and a task that ends CANCELLED has to surface in Kotlin as a
+    // CancellationException rather than NugetManagedException. Every member below is one seam of
+    // that, and the observable state (StayCancelled / StayCancellations / DawdleCompleted) exists
+    // because "the Kotlin wait ended" proves only that Kotlin stopped waiting: it says nothing
+    // about whether C# was ever told to stop. Oreo stays until told otherwise, Mylo dawdles.
+    // ----------------------------------------------------------------------------------------
+
+    /// <summary>True once <see cref="StayAsync"/> has SEEN a cancellation on its token.</summary>
+    public bool StayCancelled { get; private set; }
+
+    /// <summary>How many <see cref="StayAsync"/> calls saw their token cancelled.</summary>
+    public int StayCancellations { get; private set; }
+
+    /// <summary>True once a <see cref="DawdleAsync"/> call ran to completion, cancelled or not.</summary>
+    public bool DawdleCompleted { get; private set; }
+
+    /// <summary>
+    /// HONOURS the token: waits forever until the bridge-owned <c>CancellationTokenSource</c> is
+    /// cancelled, then records that it was told to stop before rethrowing. The recording is the
+    /// point: without it a bridge that never cancels anything looks identical from Kotlin, because
+    /// the coroutine ends on its own cancellation either way. Token LAST, the common .NET shape.
+    /// </summary>
+    public async Task<int> StayAsync(string name, CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            return name.Length;
+        }
+        catch (OperationCanceledException)
+        {
+            StayCancelled = true;
+            StayCancellations++;
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// IGNORES the token, and takes a while. The Kotlin wait must still end promptly on cancel
+    /// (the coroutine resumes with its own exception, the C# work is simply not obliged to stop),
+    /// and <see cref="DawdleCompleted"/> is how the test sees that C# carried on regardless.
+    /// </summary>
+    public async Task<int> DawdleAsync(CancellationToken ct)
+    {
+        await Task.Delay(Dawdle);
+        DawdleCompleted = true;
+        return 9;
+    }
+
+    /// <summary>
+    /// A <c>= default</c> token. The default is irrelevant to the bridge (it always supplies its
+    /// own), so this row exists to pin that <c>Optional, HasDefault</c> on the Param row does not
+    /// change the decision, and that the method still binds with the token elided.
+    /// </summary>
+    public async Task<int> DozeAsync(int minutes, CancellationToken ct = default)
+    {
+        await Task.Delay(Delay, ct);
+        return minutes * 2;
+    }
+
+    /// <summary>
+    /// The token in a MID position, between a parameter that needs conversion (<c>string</c>) and
+    /// one that does not (<c>int</c>). The shim inserts <c>cts.Token</c> at the C# index while the
+    /// Kotlin stub passes its two remaining arguments in their own order, so an implementation
+    /// that assumes "the token is last" marshals <c>count</c> into the string slot.
+    /// </summary>
+    public async Task<string> FetchAsync(string toy, CancellationToken ct, int count)
+    {
+        await Task.Delay(Delay, ct);
+        return $"{toy} x{count}";
+    }
+
+    /// <summary>
+    /// Already completed BEFORE <c>Begin</c> returns, and token-taking: the ADR-019 race class
+    /// with a CTS handle riding on it. The completion callback can land before
+    /// <c>suspendCancellableCoroutine</c>'s block returns, which is exactly the window in which
+    /// the CTS handle is minted but not yet stored (ADR-153's inferred claim B).
+    /// </summary>
+    public Task<int> PounceAsync(int height, CancellationToken ct) => Task.FromResult(height);
+
+    /// <summary>
+    /// The <c>FooAsync()</c> / <c>FooAsync(CancellationToken)</c> pair every .NET library ships.
+    /// After elision both project to <c>suspend fun call()</c>, so the reader folds them and KEEPS
+    /// the token overload. The two bodies return DIFFERENT strings on purpose: a fold that kept
+    /// the wrong sibling still compiles, still binds, and is only visible here.
+    /// </summary>
+    public Task<string> CallAsync() => Task.FromResult("called without a token");
+
+    /// <inheritdoc cref="CallAsync()"/>
+    public Task<string> CallAsync(CancellationToken ct) => Task.FromResult("called with a token");
+
+    /// <summary>
+    /// CANCELS ITSELF: Kotlin never cancels anything, and this still ends
+    /// <c>TaskStatus.Canceled</c> with a <c>TaskCanceledException</c>. The only path on which the
+    /// mapping site is reached at all (a Kotlin-side cancel never calls <c>End</c>), so this is
+    /// the feature's main row, not an edge case.
+    /// </summary>
+    public async Task BoltAsync()
+    {
+        using CancellationTokenSource own = new();
+        Task running = Task.Delay(Timeout.Infinite, own.Token);
+        own.Cancel();
+        await running;
+    }
+
+    /// <summary>
+    /// The same self-cancel, ending in a USER SUBCLASS of <c>OperationCanceledException</c> rather
+    /// than <c>TaskCanceledException</c>. A Kotlin-side name match over the two well-known names
+    /// leaves this one an ordinary <c>NugetManagedException</c> and the test goes red here and
+    /// nowhere else, which is the whole argument for an <c>is</c> test on the C# side.
+    /// </summary>
+    public async Task ScarperAsync(string name)
+    {
+        await Task.Yield();
+        throw new BoltedException($"{name} scarpered");
+    }
+
+    /// <summary>
+    /// SYNC, no token, throws an <c>OperationCanceledException</c>. There is one managed-throw
+    /// site in the generated Kotlin, so the mapping applies to ordinary calls too: this row says
+    /// whether that was a decision or an accident.
+    /// </summary>
+    public int Startle() => throw new OperationCanceledException("Mylo startled off the sill");
+
+    /// <summary>
+    /// SYNC and token-taking: OUT of scope, must be absent from the Kotlin surface with the named
+    /// <c>info_cancellation_token_not_yet_mapped</c> diagnostic rather than the misleading
+    /// <c>skipped_unbound_type_reference</c> hint that tells the user to bind the BCL.
+    /// </summary>
+    public int Wait(CancellationToken ct) => 0;
+
+    /// <summary>
+    /// TWO tokens: also out of scope (the bridge owns exactly one source, and picking one of two
+    /// would be a guess), same named diagnostic, also absent from Kotlin.
+    /// </summary>
+    public async Task<int> HerdAsync(CancellationToken first, CancellationToken second)
+    {
+        await Task.Delay(Delay);
+        return 2;
+    }
 }
+
+/// <summary>
+/// A user subclass of <see cref="OperationCanceledException"/>, which a cancelled <c>async</c>
+/// method rethrows verbatim (verified by spike, ADR-153). Deliberately <c>internal</c>: it is a
+/// throw shape, not bound surface, so it must not turn up as a bound type in the Kotlin bindings.
+/// </summary>
+internal sealed class BoltedException(string message) : OperationCanceledException(message);

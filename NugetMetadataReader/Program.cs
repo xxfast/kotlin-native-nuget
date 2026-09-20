@@ -1688,6 +1688,17 @@ internal static class AssemblyExtractor
             }
         }
 
+        // ADR-153: `FooAsync()` beside `FooAsync(CancellationToken)`, the pair every .NET library
+        // ships. With the token elided both project to the same Kotlin `suspend fun`, which does
+        // not compile in the consumer (Kotlin has no overload on `suspend` and the reverse
+        // pipeline has no collision detector). The token overload is kept, because it is the one
+        // the bridge can actually cancel.
+        //
+        // This is a POST-PASS over the mapped list rather than a rule inside TryMapMethod: the
+        // decision needs both siblings, and TryMapMethod sees one member at a time. It sits after
+        // every member has mapped independently, so no admissibility rule moves.
+        FoldCancellationOverloads(methods, diagnostics, typeName);
+
         // --- Constructors (ADR-052) ---
         var constructors = new List<RirConstructor>();
 
@@ -2009,6 +2020,20 @@ internal static class AssemblyExtractor
                     hint: "Take the awaited value as the constructor parameter instead."), null);
             }
 
+            // ADR-153: a token on a CONSTRUCTOR outlives the call, so there is no coroutine whose
+            // cancellation the bridge could drive it from. Named skip, like the sync case.
+            if (paramTypeRef is RirCancellationTokenType)
+            {
+                return (null, new RirDiagnostic(
+                    kind: CancellationTokenDiagnostics.Kind,
+                    typeName: typeName,
+                    memberName: ".ctor",
+                    memberSignature: BuildSignatureString(mr, methodDef, ".ctor"),
+                    reason: "a CancellationToken on a constructor is not mapped in v1 (ADR-153): " +
+                        "the token outlives the call, so no awaiting coroutine owns it",
+                    hint: CancellationTokenDiagnostics.Hint), null);
+            }
+
             int seq = i + 1;
             string paramName = "arg" + i;
             ParameterHandle paramHandle = default;
@@ -2229,6 +2254,39 @@ internal static class AssemblyExtractor
             returnTypeRef = asyncReturn.Awaited;
         }
 
+        // ADR-153: exactly one plain CancellationToken, on an async method, at any position, is
+        // elided and supplied by the bridge. Everything else is a named skip: a SYNC method has
+        // no cancellable Kotlin wait to hang the source off, and with two tokens picking one
+        // would be a guess. The index recorded is the C# one, which is where the shim puts
+        // `cts.Token` back.
+        var tokenIndices = new List<int>();
+        for (int i = 0; i < sig.ParameterTypes.Length; i++)
+        {
+            if (sig.ParameterTypes[i].TypeRef is RirCancellationTokenType) tokenIndices.Add(i);
+        }
+
+        int? cancellationToken = null;
+        if (tokenIndices.Count > 0)
+        {
+            if (tokenIndices.Count > 1 || asyncKind is null)
+            {
+                var fullSig = BuildSignatureString(mr, methodDef, methodName);
+                return (null, new RirDiagnostic(
+                    kind: CancellationTokenDiagnostics.Kind,
+                    typeName: typeName,
+                    memberName: methodName,
+                    memberSignature: fullSig,
+                    reason: tokenIndices.Count > 1
+                        ? $"takes {tokenIndices.Count} CancellationTokens; the bridge owns exactly " +
+                          "one source per call, so which one it would cancel is a guess (ADR-153)"
+                        : "a SYNCHRONOUS method taking a CancellationToken is not mapped in v1 " +
+                          "(ADR-153): there is no cancellable Kotlin wait to drive the token from",
+                    hint: CancellationTokenDiagnostics.Hint), null);
+            }
+
+            cancellationToken = tokenIndices[0];
+        }
+
         // Map parameters.
         var parameters = new List<RirParameter>();
 
@@ -2236,6 +2294,10 @@ internal static class AssemblyExtractor
         {
             var paramTypeRef = sig.ParameterTypes[i].TypeRef;
             if (paramTypeRef is null) return (null, null, null); // should have been caught above
+
+            // The elided token: absent from the Kotlin surface entirely, so it contributes no
+            // parameter, no nullability resolution and no name.
+            if (paramTypeRef is RirCancellationTokenType) continue;
 
             // ADR-152: the async shape is admitted at the method RETURN position only. A
             // `Task`-typed parameter has no `suspend fun` meaning on the Kotlin side.
@@ -2295,7 +2357,8 @@ internal static class AssemblyExtractor
             : null;
 
         var managedSignature = BuildManagedSignature(mr, typeHandle, methodHandle);
-        return (new RirMethod(methodName, returnTypeRef, parameters, isStatic, managedSignature, asyncKind),
+        return (new RirMethod(methodName, returnTypeRef, parameters, isStatic, managedSignature,
+                asyncKind, cancellationToken),
             null, obliviousDiagnostic);
     }
 
@@ -2349,6 +2412,20 @@ internal static class AssemblyExtractor
                 reason: "an async type is mapped at the method return position only (ADR-152); " +
                     "here it is a property type",
                 hint: "Expose a `Task`-returning method instead of a `Task`-typed property."));
+        }
+
+        // ADR-153: same for a `CancellationToken`-typed property. It is a token the caller would
+        // have to own, which is the deferred "caller-supplied cancellation handle" item.
+        if (t.TypeRef is RirCancellationTokenType)
+        {
+            return (null, new RirDiagnostic(
+                kind: CancellationTokenDiagnostics.Kind,
+                typeName: typeName,
+                memberName: propName,
+                memberSignature: propName,
+                reason: "a CancellationToken-typed property is not mapped in v1 (ADR-153): the " +
+                    "bridge owns a token per async call, not per object",
+                hint: CancellationTokenDiagnostics.Hint));
         }
 
         return (t.TypeRef, null);
@@ -2435,6 +2512,56 @@ internal static class AssemblyExtractor
         var parameterTypes = string.Join(",", signature.ParameterTypes);
         var returnType = isConstructor ? "System.Void" : signature.ReturnType;
         return $"{kind}|{receiver}|{declaringType}|{methodName}|({parameterTypes})|{returnType}";
+    }
+
+    /// <summary>
+    /// ADR-153: drops a token-less sibling of a token-taking async overload, in place, and records
+    /// one info diagnostic per drop. Identity is the CLR one (receiver, declaring type, name,
+    /// parameter types, return type) with every <c>CancellationToken</c> parameter removed, so a
+    /// pair matches exactly when it would collide in Kotlin after elision.
+    /// </summary>
+    private static void FoldCancellationOverloads(
+        List<RirMethod> methods, List<RirDiagnostic> diagnostics, string typeName)
+    {
+        var tokenKeys = new HashSet<string>(
+            methods.Where(m => m.CancellationToken is not null)
+                .Select(m => FoldKey(m.ManagedSignature)),
+            StringComparer.Ordinal);
+
+        if (tokenKeys.Count == 0) return;
+
+        var dropped = methods
+            .Where(m => m.CancellationToken is null && tokenKeys.Contains(FoldKey(m.ManagedSignature)))
+            .ToList();
+
+        foreach (var method in dropped)
+        {
+            diagnostics.Add(new RirDiagnostic(
+                kind: "info_cancellation_overload_folded",
+                typeName: typeName,
+                memberName: method.Name,
+                memberSignature: method.ManagedSignature,
+                reason: "this overload and its `CancellationToken`-taking sibling both project to " +
+                    "the same Kotlin `suspend fun` once the token is elided (ADR-153); the token " +
+                    "overload is kept, because it is the one the bridge can cancel",
+                hint: "Nothing to do: the surviving binding calls the token overload with a " +
+                    "bridge-owned token."));
+            methods.Remove(method);
+        }
+    }
+
+    private static string FoldKey(string managedSignature)
+    {
+        var fields = managedSignature.Split('|');
+        if (fields.Length < 5) return managedSignature;
+        var parameters = fields[4].Trim('(', ')');
+        var remaining = parameters.Length == 0
+            ? Array.Empty<string>()
+            : parameters.Split(',')
+                .Where(p => p != "System.Threading.CancellationToken")
+                .ToArray();
+        fields[4] = "(" + string.Join(",", remaining) + ")";
+        return string.Join("|", fields);
     }
 
     private static void ValidateManagedSignatures(string typeName, IEnumerable<string> signatures)
@@ -3223,6 +3350,12 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         if (fullName == "System.Threading.Tasks.Task")
             return new TypeRefOrDiag(new RirAsyncType(RirVoidType.Instance), null, fullName);
 
+        // ADR-153: a CancellationToken is not an unbound handle either. Admissibility is a
+        // property of the whole member (exactly one, on an async method), not of the type, so the
+        // decoder hands back a marker and TryMapMethod decides.
+        if (fullName == "System.Threading.CancellationToken")
+            return new TypeRefOrDiag(RirCancellationTokenType.Instance, null, fullName);
+
         if (fullName == "System.Threading.Tasks.ValueTask")
             return new TypeRefOrDiag(null,
                 new PendingDiagnostic(
@@ -3248,6 +3381,9 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
             fullName);
     }
 
+    private static PendingDiagnostic CancellationTokenPending(string reason) =>
+        new(CancellationTokenDiagnostics.Kind, reason, CancellationTokenDiagnostics.Hint);
+
     // TypeSpec — instantiated or modified types (generic instantiations, arrays, etc.).
     public TypeRefOrDiag GetTypeFromSpecification(
         MetadataReader mr, object? genericContext, TypeSpecificationHandle handle, byte rawTypeKind)
@@ -3262,6 +3398,15 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
     public TypeRefOrDiag GetGenericInstantiation(TypeRefOrDiag genericType, ImmutableArray<TypeRefOrDiag> typeArguments)
     {
         var rawName = genericType.RawTypeName;
+
+        // ADR-153: `CancellationToken?` is `Nullable<CancellationToken>`, a GENERICINST that never
+        // reaches the plain TypeReference branch (spike-verified). It is out of scope, but it is
+        // out of scope AS A TOKEN, so it gets the token diagnostic rather than the generic one,
+        // which would otherwise blame the BCL for not being a bound assembly.
+        if (typeArguments.Any(a => a.TypeRef is RirCancellationTokenType))
+            return new TypeRefOrDiag(null, CancellationTokenPending(
+                $"`{rawName}` wraps a CancellationToken; only a plain, non-nullable token is " +
+                    "mapped in v1 (ADR-153)"), rawName);
 
         // ADR-152: `Task<T>` with one admissible argument becomes the reader-internal async
         // wrapper, which `TryMapMethod` unwraps after nullability resolution. Every other async
@@ -3677,7 +3822,8 @@ internal sealed class RirMethod
         IReadOnlyList<RirParameter> parameters,
         bool isStatic,
         string managedSignature,
-        string? asyncKind = null)
+        string? asyncKind = null,
+        int? cancellationToken = null)
     {
         Name = name;
         ReturnType = returnType;
@@ -3685,6 +3831,7 @@ internal sealed class RirMethod
         IsStatic = isStatic;
         ManagedSignature = managedSignature;
         AsyncKind = asyncKind;
+        CancellationToken = cancellationToken;
     }
 
     public string Name { get; }
@@ -3701,6 +3848,14 @@ internal sealed class RirMethod
     /// <c>RirModel.kt</c>) so <c>ValueTask</c> lands later as one more value, not a contract change.
     /// </summary>
     public string? AsyncKind { get; }
+
+    /// <summary>
+    /// ADR-153: the index in the C# parameter list where a single elided
+    /// <c>CancellationToken</c> sat, or null when the method takes none. The token is absent from
+    /// <see cref="Parameters"/>: the bridge owns it, the Kotlin caller never supplies one, and the
+    /// generated C# shim inserts <c>cts.Token</c> back at exactly this index.
+    /// </summary>
+    public int? CancellationToken { get; }
 }
 
 internal sealed class RirProperty
@@ -3770,6 +3925,33 @@ internal sealed class RirVoidType : RirTypeRef
 {
     public static readonly RirVoidType Instance = new();
     private RirVoidType() { }
+}
+
+/// <summary>
+/// ADR-153: a reader-internal marker for <c>System.Threading.CancellationToken</c>. It never
+/// reaches <c>reverse-ir.json</c>: an admissible one is elided from the parameter list and
+/// recorded as <c>RirMethod.CancellationToken</c> (the C# index the shim puts <c>cts.Token</c>
+/// back at), and every other position is a named skip. A marker rather than a real
+/// <c>RirTypeRef</c> subtype, so no exhaustive <c>when</c> over the Kotlin model moves.
+/// </summary>
+internal sealed class RirCancellationTokenType : RirTypeRef
+{
+    public static readonly RirCancellationTokenType Instance = new();
+    private RirCancellationTokenType() { }
+}
+
+/// <summary>
+/// ADR-153: the one named diagnostic every out-of-scope token position shares. Named, because the
+/// diagnostic these used to get (<c>skipped_unbound_type_reference</c>) tells the reader's user to
+/// bind System.Private.CoreLib, which never makes a token bind.
+/// </summary>
+internal static class CancellationTokenDiagnostics
+{
+    internal const string Kind = "info_cancellation_token_not_yet_mapped";
+
+    internal const string Hint =
+        "Expose an async (`Task`/`Task<T>`-returning) overload taking exactly one plain " +
+        "`CancellationToken`; the bridge owns the token and supplies it.";
 }
 
 /// <summary>

@@ -1031,7 +1031,12 @@ private fun RirRegistrable.contractSignature(structs: Map<RirTypeKey, RirStruct>
     // ADR-152: an async method carries an `async:` prefix, so a package that changes `T Foo()`
     // into `Task<T> Foo()` drifts the hash even though name, parameters and AWAITED type are all
     // unchanged, the slot count changes from one to two and the wire shape changes completely.
+    // ADR-153: `ct<index>:` after it, so a package that adds a CancellationToken to an existing
+    // async method drifts the hash: the Begin thunk's return type changes from void to IntPtr,
+    // and moving the token between two positions changes which argument lands in which slot,
+    // neither of which is visible in the name, the remaining parameters or the awaited type.
     is RirRegistrable.Method -> (if (method.asyncKind != null) "async:" else "") +
+        (method.cancellationToken?.let { "ct$it:" } ?: "") +
         method.identity() + ":method:${method.name}(" +
         method.parameters.joinToString(",") { it.type.signaturePart(structs) } +
         "):" + method.returnType.signaturePart(structs)
@@ -1099,12 +1104,17 @@ internal fun fnv1a64(s: String): Long {
 // ADR-104: two more slots joined (managedErrorType/managedErrorMessage), the accessors Kotlin
 // reads a caught managed exception's GCHandle through. The free path reuses freeGcHandle, so no
 // third slot was needed.
+// ADR-153: two more (releaseCancellation/managedErrorKind), taking the shared runtime from 5 slots
+// to 7. A consumer whose C# shim predates this and whose native library does not (or the other way
+// round) fails at startup with the ADR-054 message instead of mis-assigning pointers.
 val NUGET_RUNTIME_CONTRACT_HASH: Long = fnv1a64(
   "runtime:freeGcHandle(handle:COpaquePointer):Unit;" +
       "weakenGcHandle(handle:COpaquePointer):COpaquePointer;" +
       "resolveGcHandle(handle:COpaquePointer):COpaquePointer;" +
       "managedErrorType(err:COpaquePointer):COpaquePointer;" +
-      "managedErrorMessage(err:COpaquePointer):COpaquePointer"
+      "managedErrorMessage(err:COpaquePointer):COpaquePointer;" +
+      "releaseCancellation(source:COpaquePointer,cancel:Int):Unit;" +
+      "managedErrorKind(err:COpaquePointer):Int"
 )
 
 // Shared registration export-name derivation (ADR-048's naming contract, which ADR-049's C# side
