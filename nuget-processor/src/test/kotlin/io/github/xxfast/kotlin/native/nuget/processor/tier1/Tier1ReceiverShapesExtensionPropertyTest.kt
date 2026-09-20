@@ -181,4 +181,30 @@ class Tier1ReceiverShapesExtensionPropertyTest {
     )
   }
 
+  /**
+   * ROADMAP line 29: an accessor body opens on its own line, like every other generated body. The
+   * projection used to pass `leadingNewline = false`, so the first statement shared the brace line
+   * (`{            IntPtr receiverHandle = ...`). The assertion is whole-file because the helper
+   * that produced it is shared by every planned property accessor and by the custom constructor
+   * body, so an accessor left behind anywhere in this fixture fails here too.
+   */
+  @Test
+  fun `no generated statement shares a line with an opening brace`() {
+    val result = Tier1Harness.run(source)
+
+    // `{ NugetMarshal.Dispose(handle); }` is the one legitimate same-line body and it carries
+    // exactly one space; two or more spaces before a statement is this defect's signature.
+    val offenders: List<String> =
+      Regex("""\{ {2,}\S.*""").findAll(result.generatedCSharp).map { match -> match.value }.toList()
+
+    assertTrue(offenders.isEmpty(), "statements sharing an opening-brace line: $offenders")
+    assertContains(
+      result.generatedCSharp,
+      """
+      |        public static string GetSummary(this global::Interop.IPet receiver)
+      |        {
+      |            IntPtr receiverHandle = IntPtr.Zero;
+      """.trimMargin(),
+    )
+  }
 }

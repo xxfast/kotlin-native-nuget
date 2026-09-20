@@ -404,8 +404,10 @@ internal fun StringBuilder.renderConstructor(
     appendLine("            _handle = handle;")
     appendLine("        }")
   } else {
-    appendLine("        {")
-    appendLine("            ${ctor.body}")
+    // ROADMAP:29: the body already carries its own leading newline and its own indent, exactly like
+    // a method body (`renderMethod`), so it is appended to the brace rather than indented again --
+    // the second indent put the first statement at column 24 and left the rest at 12.
+    appendLine("        {${ctor.body}")
     appendLine("        }")
   }
 
