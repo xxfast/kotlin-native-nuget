@@ -584,7 +584,7 @@ class CirOrdinaryRendererTest {
       constructor = null,
       properties = emptyList(),
       methods = emptyList(),
-      remarks = "skipped <init> & <clinit>",
+      remarks = listOf("skipped <init> & <clinit>"),
     )
 
     val rendered: String = render(cls)
@@ -614,7 +614,7 @@ class CirOrdinaryRendererTest {
     val rendered: String = render(cls)
 
     assertFalse(rendered.contains("///"), "expected no doc comment; got: $rendered")
-    assertEquals(rendered, render(cls.copy(remarks = null)))
+    assertEquals(rendered, render(cls.copy(remarks = emptyList())))
   }
 
   @Test

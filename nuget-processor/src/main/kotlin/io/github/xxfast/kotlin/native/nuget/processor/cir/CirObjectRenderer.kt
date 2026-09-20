@@ -37,11 +37,17 @@ internal fun StringBuilder.renderValueClass(cls: CirValueClass) {
   renderDoc(cls.doc)
   appendLine("    public readonly record struct ${cls.name}")
   appendLine("    {")
+  // ADR-150 amendment: the underlying property is written here rather than projected as a
+  // `CirProperty`, so its KDoc rides `underlyingDoc` and is rendered at this one site.
+  renderDoc(cls.underlyingDoc, "        ")
   appendLine("        public ${cls.underlyingType} ${cls.underlyingName} { get; }")
   appendLine()
 
   cls.constructors.forEach { ctor ->
     val paramStr: String = renderValueClassCreateChecked(cls, ctor)
+    // ADR-150 amendment: the doc belongs on the public constructor, not on the private
+    // `CreateChecked` helper above it, which is the surface a C# caller never sees.
+    renderDoc(ctor.doc, "        ")
     appendLine("        public ${cls.name}($paramStr)")
     appendLine("        {")
     appendLine("            ${cls.underlyingName} = ${ctor.body};")
@@ -59,11 +65,19 @@ internal fun StringBuilder.renderValueClass(cls: CirValueClass) {
 // one stays deferred). Its secondaries run in Kotlin and delegate to that positional constructor,
 // rebuilding the handle the export minted: `: this(new Cat(CreateChecked_2(name)))`.
 private fun StringBuilder.renderReferenceValueClass(cls: CirValueClass) {
+  // ADR-150 amendment: this shape rendered NO class doc at all before (the early return in
+  // `renderValueClass` skipped `renderDoc`), so a reference-underlying value class silently lost
+  // its `<summary>`. Fixed here, together with the underlying property's only legal spelling.
+  renderDoc(cls.recordHeaderDoc())
   appendLine("    public readonly record struct ${cls.name}(${cls.underlyingType} ${cls.underlyingName})")
   appendLine("    {")
 
   cls.constructors.forEach { ctor ->
     val paramStr: String = renderValueClassCreateChecked(cls, ctor)
+    // ADR-150 amendment: only the SECONDARIES reach here. ADR-035 leaves a reference-underlying
+    // value class's primary to the positional record header, so its `@constructor` has no
+    // constructor surface of its own and stays unrendered.
+    renderDoc(ctor.doc, "        ")
     appendLine("        public ${cls.name}($paramStr) : this(${ctor.body})")
     appendLine("        {")
     appendLine("        }")
@@ -73,6 +87,25 @@ private fun StringBuilder.renderReferenceValueClass(cls: CirValueClass) {
   renderValueClassMembers(cls)
 
   appendLine("    }")
+}
+
+/**
+ * ADR-150 amendment: the type doc of a reference-underlying value class, with the underlying
+ * property's summary folded in as the record header's one `<param>`.
+ *
+ * That is the ONLY legal spelling for a positional record's property: a `<summary>` cannot attach
+ * to it (there is no declaration to attach to), while a `<param name="Underlying">` on the type
+ * is accepted and is copied by the compiler onto the type, onto the synthesized constructor and
+ * onto the property itself (verified 2026-09-20). The three ways that fails are all fatal under
+ * `GeneratedBindingsCheck`: a name that is not the positional parameter is CS1572, a second tag
+ * for the same name is CS1571, and tagging none of several positional parameters while tagging
+ * one is CS1573. There is exactly one positional parameter here, and the guard below refuses to
+ * add a tag the class doc already carries, so none of the three is reachable.
+ */
+private fun CirValueClass.recordHeaderDoc(): CirDoc? {
+  val summary: CirDocText = underlyingDoc?.summary ?: return doc
+  if (doc?.params.orEmpty().any { it.name == underlyingName }) return doc
+  return (doc ?: CirDoc()).copy(params = listOf(CirDocParam(underlyingName, summary)))
 }
 
 /**

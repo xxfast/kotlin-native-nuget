@@ -51,6 +51,9 @@ internal object ForwardCirPlanProjection {
       // parameter imports as `int` and is passed as `(int)name`, matching the Kotlin export.
       nativeParameters = plan.nativeInCirParameters(nativeCall.parameters),
       nativeArguments = plan.publicSignature.parameters.flatMap { plan.callArgument(it) },
+      // ADR-150 amendment: the same `cirDoc()` every other planned callable projects, so a value
+      // class's constructor documents itself exactly as an ordinary class's does.
+      doc = plan.publicSignature.cirDoc(),
     )
   }
 

@@ -26,6 +26,7 @@ import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.ksp.writeTo
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirRenderer
+import io.github.xxfast.kotlin.native.nuget.processor.cir.resolveDocLinks
 import io.github.xxfast.kotlin.native.nuget.processor.cir.NugetContext
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
@@ -1532,7 +1533,10 @@ class NugetProcessor(
       interfaceDeclarationCatalog,
     )
 
-    val csharp: String = renderer.render(cirFile)
+    // ADR-150 amendment: the one place a KDoc `[link]` can be checked against the types this file
+    // really declares, which is what keeps a CS1574 out of a consumer's build. Post-pass, so no
+    // planner, projection or renderer signature knows about link resolution at all.
+    val csharp: String = renderer.render(cirFile.resolveDocLinks())
 
     val file = codeGenerator.createNewFile(
       dependencies = deps,

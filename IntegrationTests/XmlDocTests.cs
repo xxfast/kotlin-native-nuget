@@ -95,13 +95,79 @@ public class XmlDocTests
     }
 
     [Fact]
-    public void Book_LaterParagraphIsDroppedFromTheSummary()
+    public void Book_LaterParagraphs_BecomeParasOfOneRemarksAndLeaveTheSummaryAlone()
     {
         using var desk = new BoardingDesk("Mylo");
         Assert.Equal("Mylo/sunny/1", desk.Book(1));
 
         XElement member = Required($"M:{Ns}.BoardingDesk.Book(System.Int32,System.String)");
-        Assert.DoesNotContain("dropped in v1", member.Value);
+
+        // Paragraph one stays the whole summary; <remarks> is what the rest is for.
+        Assert.Equal("Books a stay for the cat.", Tag(member, "summary"));
+        Assert.DoesNotContain("sleeps through", Tag(member, "summary")!);
+
+        // One <remarks> per member, never two, so ADR-064's generator remark has somewhere to sit.
+        XElement remarks = Assert.Single(member.Elements("remarks"));
+        XElement[] paras = remarks.Elements("para").ToArray();
+        Assert.Equal(2, paras.Length);
+        Assert.Contains("the cat sleeps through", paras[0].Value);
+        Assert.StartsWith("The reference reads", paras[1].Value.TrimStart());
+    }
+
+    [Fact]
+    public void Book_TypeLinkResolves_WhileAParameterLinkFallsBackToInlineCode()
+    {
+        using var desk = new BoardingDesk("Mylo");
+        Assert.Equal("Mylo/sunny/2", desk.Book(2));
+
+        XElement member = Required($"M:{Ns}.BoardingDesk.Book(System.Int32,System.String)");
+        XElement para = Assert.Single(member.Elements("remarks")).Elements("para").First();
+
+        // [Snooze] names a type this generated file really declares, so it becomes a navigable
+        // cref. The compiler rewrites a cref it resolved into a documentation ID, which is the
+        // proof that it resolved rather than merely being spelled.
+        Assert.Equal(
+            $"T:{Ns}.Snooze",
+            (string?)Assert.Single(para.Descendants("see")).Attribute("cref"));
+
+        // [nights] names a parameter, which has no cref spelling the bridge can resolve, so it
+        // keeps the author's Kotlin spelling inside <c> rather than guessing "Nights".
+        Assert.Equal("nights", Assert.Single(para.Descendants("c")).Value);
+    }
+
+    [Fact]
+    public void Book_BacktickSpan_BecomesInlineCodeWithItsAngleBracketsAndAmpersandEscaped()
+    {
+        using var desk = new BoardingDesk("Oreo");
+        Assert.Equal("Oreo/sunny/1", desk.Book(1));
+
+        XElement member = Required($"M:{Ns}.BoardingDesk.Book(System.Int32,System.String)");
+        XElement para = Assert.Single(member.Elements("remarks")).Elements("para").Last();
+
+        // A raw `<` or `&` in a doc comment is CS1570 (fatal under GeneratedBindingsCheck), so this
+        // text can only arrive escaped; that the file parses at all is half the assertion and the
+        // round-tripped value is the other half.
+        Assert.Equal("Pair<Oreo & Mylo>", Assert.Single(para.Descendants("c")).Value);
+    }
+
+    [Fact]
+    public void Book_FencedBlock_BecomesACodeElementWithoutItsLanguageTag()
+    {
+        using var desk = new BoardingDesk("Oreo");
+        Assert.Equal("Oreo/suite/2", desk.Book(2, "suite"));
+
+        XElement member = Required($"M:{Ns}.BoardingDesk.Book(System.Int32,System.String)");
+        XElement remarks = Assert.Single(member.Elements("remarks"));
+
+        XElement code = Assert.Single(remarks.Elements("code"));
+        Assert.Equal(
+            "val reference = desk.book(nights = 2) // Oreo & Mylo <both>",
+            code.Value.Trim());
+
+        // The fence's `kotlin` language tag is a markdown affordance, not documentation text, and
+        // the fence markers themselves must not survive as literal prose.
+        Assert.DoesNotContain("kotlin", remarks.Value);
+        Assert.DoesNotContain("```", remarks.Value);
     }
 
     [Fact]
@@ -138,13 +204,96 @@ public class XmlDocTests
         Assert.Throws<KotlinException>(() => desk.Rehome(" "));
 
         XElement member = Required($"M:{Ns}.BoardingDesk.Rehome(System.String)");
-        Assert.Equal("where the cat goes", Param(member, "home"));
+
+        // The @param section here runs through a blank line (see the tag-section test below), so
+        // its text is the whole section, not the first line of it.
+        Assert.Equal("where the cat goes once the sunbeam moves", Param(member, "home"));
 
         XElement exception = Assert.Single(member.Elements("exception"));
         Assert.Equal("T:TestLibrary.KotlinException", (string?)exception.Attribute("cref"));
-        // The unmapped Kotlin type survives as a plain-text prefix, not a <c> span (v1 drops inline
-        // markup), so the consumer still sees which Kotlin exception the author named.
+        // The unmapped Kotlin type survives as a plain-text prefix, not a <c> span, so the consumer
+        // still sees which Kotlin exception the author named.
         Assert.Equal("RuntimeException: when the boarding desk is closed", exception.Value.Trim());
+    }
+
+    [Fact]
+    public void Rehome_TagSectionWithABlankLine_StaysInTheTagAndOutOfTheRemarks()
+    {
+        using var desk = new BoardingDesk("Oreo");
+        Assert.Equal("Oreo moved to the airing cupboard", desk.Rehome("the airing cupboard"));
+
+        XElement member = Required($"M:{Ns}.BoardingDesk.Rehome(System.String)");
+
+        // A blank line inside a tag section continues that section; the section ends at the next
+        // tag. Text after the blank line is @param text, never a body paragraph.
+        Assert.Equal("where the cat goes once the sunbeam moves", Param(member, "home"));
+        Assert.DoesNotContain(
+            "sunbeam",
+            string.Concat(member.Elements("remarks").Select(remarks => remarks.Value)));
+
+        // And the tag that follows the blank line is still parsed as a tag.
+        Assert.Equal(
+            "RuntimeException: when the boarding desk is closed",
+            Assert.Single(member.Elements("exception")).Value.Trim());
+    }
+
+    [Fact]
+    public void Rehome_See_IsASeealsoWhenItResolves_AndARemarkWhenItDoesNot()
+    {
+        using var desk = new BoardingDesk("Mylo");
+        Assert.Equal("Mylo moved to the sunroom", desk.Rehome("the sunroom"));
+
+        XElement member = Required($"M:{Ns}.BoardingDesk.Rehome(System.String)");
+
+        // @see SunSpot resolves to a type this file declares, so it is a real <seealso cref>; the
+        // compiler rewriting it into a documentation ID is the proof it resolved.
+        Assert.Equal(
+            $"T:{Ns}.SunSpot",
+            (string?)Assert.Single(member.Elements("seealso")).Attribute("cref"));
+
+        // @see book names a member, which has no resolvable cref spelling yet, so it closes the
+        // remarks as prose instead of being dropped on the floor.
+        XElement seeAlso = Assert.Single(Assert.Single(member.Elements("remarks")).Elements("para"));
+        Assert.StartsWith("See also:", seeAlso.Value.Trim());
+        Assert.Equal("book", Assert.Single(seeAlso.Descendants("c")).Value);
+    }
+
+    [Fact]
+    public void FoodBowl_PropertyTag_DocumentsTheCsharpPropertyAndTheConstructorParameter()
+    {
+        using var bowl = new KdocFoodBowl("tuna", 2);
+        Assert.Equal("tuna", bowl.Flavour);
+        Assert.Equal(2, bowl.Scoops);
+
+        Assert.Equal(
+            "The bowl Mylo empties in one sitting.",
+            Tag(Required($"T:{Ns}.KdocFoodBowl"), "summary"));
+
+        // A constructor property reports no docString of its own, so this text can only have come
+        // from the class-level @property tag.
+        Assert.Equal(
+            "what Mylo is eating",
+            Tag(Required($"P:{Ns}.KdocFoodBowl.Flavour"), "summary"));
+
+        XElement ctor = Required($"M:{Ns}.KdocFoodBowl.#ctor(System.String,System.Int32)");
+        Assert.Equal("Fills the bowl for one sitting.", Tag(ctor, "summary"));   // @constructor
+        Assert.Equal("what Mylo is eating", Param(ctor, "flavour"));             // @property fallback
+        Assert.Equal("how many scoops went in", Param(ctor, "scoops"));          // class-level @param
+
+        // The class-level @param documents the constructor parameter only: it is not a property
+        // summary, so Scoops keeps no documentation entry at all.
+        Assert.Null(Member($"P:{Ns}.KdocFoodBowl.Scoops"));
+    }
+
+    [Fact]
+    public void FoodBowl_PropertyWithItsOwnKdoc_OutranksThePropertyTag()
+    {
+        using var bowl = new KdocFoodBowl("chicken", 3);
+        Assert.True(bowl.Rinsed);
+
+        XElement member = Required($"P:{Ns}.KdocFoodBowl.Rinsed");
+        Assert.Equal("Whether Oreo licked it clean first.", Tag(member, "summary"));
+        Assert.DoesNotContain("hosed down", member.Value);
     }
 
     [Fact]

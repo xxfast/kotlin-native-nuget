@@ -1087,7 +1087,7 @@ internal fun translateClass(
             prop.type.resolve().expandAliases().declaration.qualifiedName?.asString()
           qualified in FLOW_TYPES || qualified in STATE_FLOW_TYPES
         },
-    remarks = remarks,
+    remarks = listOfNotNull(remarks),
     doc = cls.forwardKdoc(expects)?.toCirDoc(),
   )
 }
@@ -2029,7 +2029,7 @@ internal fun translateSealedClass(
         nativePrefix = subPrefix,
         properties = properties,
         constructors = armConstructors,
-        remarks = armRemarks,
+        remarks = listOfNotNull(armRemarks),
         methods = methods,
         asyncMembers = asyncMembers,
         flowMembers = flowMembers,
@@ -2980,6 +2980,11 @@ internal fun translateValueClass(
     properties = properties,
     methods = methods,
     doc = cls.forwardKdoc(expects)?.toCirDoc(),
+    // ADR-150 amendment: the underlying property is never a `CirProperty` -- both value-class
+    // shapes render it themselves -- so it needs its own slot to be documented at all.
+    // `forwardKdoc()` gives it the precedence every other property has: its own KDoc first, then
+    // the class comment's `@property <name>` text, then nothing.
+    underlyingDoc = underlyingProp.forwardKdoc(expects)?.toCirDoc(),
   )
 }
 

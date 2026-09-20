@@ -171,9 +171,9 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
     .joinToString(" ") { param -> "where ${param.name} : ${param.bounds.joinToString(", ")}" }
   val whereClause: String = if (constraints.isEmpty()) "" else " $constraints"
 
-  // ADR-150: `<summary>` first, then ADR-064's `<remarks>`.
-  renderDoc(cls.doc)
-  renderRemarks(cls.remarks)
+  // ADR-150 amendment: one `<remarks>` for both halves -- the author's KDoc paragraphs, then
+  // ADR-064's generated prose as the last `<para>`.
+  renderDoc(cls.doc, generated = cls.remarks)
   appendLine(
     "    public $sealedModifier${abstract}class ${cls.name}$typeParameters$implements$whereClause",
   )

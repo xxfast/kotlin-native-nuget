@@ -837,7 +837,14 @@ internal class ForwardCallablePlanner(
         // Underlying property name used by the Kotlin emitter to unbox: `Owner(args).prop`.
         invocationReceiver = underlyingPropName,
         includeError = true,
-        doc = ctor.forwardKdoc(expects).forParameters(ctor.parameters),
+        // ADR-150 amendment: a value class's primary constructor carries no `docString` of its
+        // own either, so it reads the class comment's `@constructor`/`@param`/`@property` tags
+        // exactly as an ordinary class's does. `forParameters` then keeps a `@property` naming a
+        // body property out of the parameter list (a `<param>` for a non-parameter is CS1572).
+        doc = (
+            ctor.forwardKdoc(expects)
+              ?: ctor.primaryConstructorKdoc(cls, expects, withSummary = true)
+            ).forParameters(ctor.parameters),
       )
     }
   }
@@ -1515,7 +1522,12 @@ internal class ForwardCallablePlanner(
             origin = ForwardCallableOrigin.COPY,
             ownerType = cls.forwardOwnerTypeName(),
             node = primary,
-            doc = primary.forwardKdoc(expects).forParameters(primary.parameters),
+            // ADR-150 amendment: `copy` takes the primary's `<param>` texts but never its
+            // `@constructor` summary -- "Fills the bowl" does not describe a copy.
+            doc = (
+                primary.forwardKdoc(expects)
+                  ?: primary.primaryConstructorKdoc(cls, expects, withSummary = false)
+                ).forParameters(primary.parameters),
           )
         )
       }
@@ -1647,8 +1659,13 @@ internal class ForwardCallablePlanner(
       ownerType = cls?.forwardOwnerTypeName(),
       node = constructor,
       droppedOptInMarker = droppedOptInMarker(constructor.parameters, omitted),
-      doc = constructor.forwardKdoc(expects)
-        .forParameters(constructor.parameters.dropLast(omitted)),
+      // ADR-150 amendment: a primary constructor carries no `docString` of its own, so its
+      // `<summary>` and `<param>` set come off the class comment's `@constructor`/`@param`/
+      // `@property` tags. A secondary constructor documents itself and never reaches the fallback.
+      doc = (
+          constructor.forwardKdoc(expects)
+            ?: constructor.primaryConstructorKdoc(cls, expects, withSummary = true)
+          ).forParameters(constructor.parameters.dropLast(omitted)),
     )
       // ADR-141: the ADR-091 truncations and ADR-034 secondaries all come through here, so each of
       // them carries the receiver by construction -- the outer is not a plan parameter and a
@@ -3765,6 +3782,61 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
 internal fun KSDeclaration.forwardKdoc(expects: ExpectIndex): ForwardKdoc? {
   if (origin != Origin.KOTLIN) return null
   return parseKdoc(docString ?: expects.docOrNull(this))
+    ?: (this as? KSPropertyDeclaration)?.propertyTagKdoc(expects)
+}
+
+/**
+ * ADR-150 amendment: a constructor property (`class Bowl(val flavour: String)`) reports
+ * `docString == null` through KSP (spike 2, 2026-09-20, confirming ADR-150's spike 1 finding 4),
+ * and its text lives on the CLASS comment as `@property flavour`. This is the one place that is
+ * read, so all four property call sites inherit it.
+ *
+ * Own KDoc wins: an inline `/** own */ val name` DOES report a `docString` (spike 2), so the
+ * caller reaching here has already established the property documents nothing itself.
+ *
+ * `@property` only, never the class-level `@param`: a `@param` documents the *constructor
+ * parameter*, and putting it on the property would document a member the author never described.
+ */
+private fun KSPropertyDeclaration.propertyTagKdoc(expects: ExpectIndex): ForwardKdoc? {
+  val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return null
+  val text: String = owner.classLevelKdoc(expects)?.properties?.get(simpleName.asString())
+    ?: return null
+  return ForwardKdoc(summary = text)
+}
+
+/**
+ * ADR-150 amendment: the class's own comment, parsed for the tags that document a *different*
+ * declaration (`@property`, `@constructor`, and the class-level `@param` of the primary
+ * constructor). Never the constructor's own `docString`: an implicit primary is SYNTHETIC and
+ * reports the whole class comment (ADR-150 spike 1 finding 3).
+ */
+private fun KSClassDeclaration.classLevelKdoc(expects: ExpectIndex): ForwardKdoc? {
+  if (origin != Origin.KOTLIN) return null
+  return parseKdoc(docString ?: expects.docOrNull(this))
+}
+
+/**
+ * ADR-150 amendment: the doc of a primary constructor, which carries none of its own (verified:
+ * a declared primary reports `docString == null`, an implicit one is SYNTHETIC). `@constructor` is
+ * its summary and the class-level `@param` tags are its parameters, with `@property` as the
+ * fallback text for a same-named constructor parameter -- most authors document a `val` parameter
+ * once, with `@property`, and without the fallback the C# constructor stays undocumented.
+ *
+ * `forParameters` then drops every name that is not a parameter of the rendered overload, which is
+ * what keeps a CS1572 (and a `@property` for a body property) off the generated file.
+ */
+private fun KSFunctionDeclaration.primaryConstructorKdoc(
+  cls: KSClassDeclaration?,
+  expects: ExpectIndex,
+  withSummary: Boolean,
+): ForwardKdoc? {
+  if (cls == null || this != cls.primaryConstructor) return null
+  val classDoc: ForwardKdoc = cls.classLevelKdoc(expects) ?: return null
+  val params: Map<String, String> =
+    classDoc.params + classDoc.properties.filterKeys { it !in classDoc.params }
+  val summary: String? = classDoc.constructor.takeIf { withSummary }
+  if (summary == null && params.isEmpty()) return null
+  return ForwardKdoc(summary = summary, params = params)
 }
 
 /**

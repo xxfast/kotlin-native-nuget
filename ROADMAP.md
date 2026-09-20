@@ -19,7 +19,6 @@ Complete.
 Complete.
 
 ## Phase 4: Rich type support
-- [ ] Deferred v1 scope of the KDoc-to-XML-doc-comment mapping ([ADR-150](docs/adr/150-kdoc-to-csharp-xml-docs.md)): later paragraphs to `<remarks>`, `[links]`/backticks as `<c>`, and `@property`/`@constructor`/`@see`.
 - [ ] `ByteArray` as a collection component (`List<ByteArray>`, `Map<String, ByteArray>`) is deferred by [ADR-151](docs/adr/151-bytearray-mapping.md): the component read/write helpers are typed on the element `BridgeType` and would need a `ByteArray` arm each. Today a callable reaching one skips `SKIPPED_UNSUPPORTED_TYPE` via the new `ForwardPlanSkipReason.BYTE_ARRAY`.
 - [ ] **Only the all-constructors-skipped case reaches `Interop.cs` as a `<remarks>`; a dropped property, method or top-level function leaves no trace in the generated file, so a consumer meets the hole at the call site with `NugetDiagnostics.json` nowhere in reach. Emit the per-declaration reason the JSON already carries at or next to the affected type, widening [ADR-064](docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s `CirClass.remarks` to `CirProperty`/`CirMethod`/`CirStaticClass`.** [#249](https://github.com/xxfast/kotlin-native-nuget/issues/249)
 - [ ] Inferred: the nullable arms of `legacyInterfaceRead` and `legacyInterfaceElementReadArgument` are uncovered by any fixture, since no interface at a suspend return or `Flow` element in `test-library` is nullable. Discovered alongside [ADR-136](docs/adr/136-csharp-identity-on-async-interface-reads.md).

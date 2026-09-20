@@ -82,7 +82,13 @@ What this settles, all **verified**:
 4. `@property`/`@constructor` text lives on the **class** `docString`; the constructor property
    (`Foo.name`) and the declared primary constructor both report `null`.
 5. The `actual` reports `null` everywhere and the `expect` (common source root) carries the text,
-   on the class and on its members. Re-confirms ADR-074 point 4.
+   on the class and on its members. Re-confirms ADR-074 point 4. **Corrected 2026-09-20**: this is
+   false for a member that has its own KDoc. Measured on the shipping mingwX64 build:
+   `PlatformApi.beaconLabel`/`nuzzle(String, Boolean)` (`PlatformApiMingw.kt:31-41`) carry ADR-091/
+   096 KDoc written directly on the `actual` and render that text; only the bare `actual fun
+   nuzzle(count: Int, prefix: String)` on the same file falls back to the expect's. Both arms of
+   `docString ?: expects.docOrNull(this)` are live; "the `actual` reports `null` everywhere" only
+   holds for a member the author left undocumented on that side.
 6. A `KOTLIN_LIB` declaration reports `null` even when its source had KDoc. Verified for a JVM jar
    dependency (the Tier 1 stand-in for ADR-066's closure); **inferred** for a real Kotlin/Native
    klib: Kotlin/Native embeds KDoc in a klib only under `-Xexport-kdoc`, and nothing in the KSP
@@ -253,8 +259,9 @@ class and a top-level `expect fun`. A member of an `expect class` is not indexed
 function, the paired expect's `docString`; for a member, `classOrNull(parent qualified name)`
 then a walk of its `declarations` matched by simple name and the existing `matches` rule (**inferred**
 that `matches` compares an `expect` member and its `actual` member equal; it is written for the
-top-level case). Resolution: the `actual`'s own `docString` when non-null (always null today),
-else the expect's, else none.
+top-level case). Resolution: the `actual`'s own `docString` when non-null, else the expect's, else
+none. **Corrected 2026-09-20**: "(always null today)" was wrong; see spike 1 finding 5's
+correction above -- an `actual` with its own KDoc keeps it, and only a bare `actual` falls back.
 
 **Dependency declarations.** Render undocumented. Verified for a jar, inferred for a klib (spike 1
 finding 6). Stated as a limit in the topic page.
@@ -357,6 +364,119 @@ any other and is a fatal CS1573 without a tag once a declared parameter has one.
    render time).
 4. Every generated exception type is visible by simple name from every generated member. If wrong,
    CS1574 fails `GeneratedBindingsCheck` loudly, not silently; the `global::` spelling is the fix.
+
+## Amendment (2026-09-20): the deferred inline and tag scope
+
+Alternative 4 is now taken, on the mechanism unchanged: no new field appears anywhere that is not
+additive, and every existing render call site keeps working. `CirDoc`'s text slots (`summary`,
+`params[].text`, `returns`, `throws[].text`) become `List<CirDocInline>` (`Text`, `Code`, `Link`,
+`TypeRef`); `renderDoc` (`cir/CirDocRenderer.kt`) remains the single escaping sink and now escapes
+each segment before wrapping it, so a code span holding `Pair<A & B>` renders
+`<c>Pair&lt;A &amp; B&gt;</c>`, never escaped-then-wrapped-again.
+
+**`<remarks>`, one per member.** Body paragraphs after the first render as `<para>` children of one
+`<remarks>`; an unresolved `@see` closes the same element as a final `<para>See also:
+<c>target</c></para>`; ADR-064's generated no-public-constructor prose, when present, is always the
+*last* `<para>`. When only that generated text exists, the output stays the byte-identical
+three-line block ADR-064 shipped, so none of its tests moved. Element order overall: `<summary>`,
+`<remarks>`, `<param>`, `<returns>`, `<exception>`, `<seealso>`.
+
+**Fenced code blocks are kept, not dropped.** The memo that preceded this amendment recommended
+dropping a fenced block outright; the shipped behavior reverses that. A fence becomes a `<code>`
+element, a direct child of `<remarks>` (or of `<summary>` when the fence sits in the comment's
+first paragraph), content escaped verbatim, the fence's language tag (`` ```kotlin ``) discarded.
+A fence found *inside* a tag section (`@param`, `@throws`, …) is still dropped: a `<code>` there
+would document the wrong member, and recognising the fence at all is required so the inline
+tokenizer never mistakes it for a backtick span.
+
+**Type links resolve against the finished file, once, in `cir/CirDocLinks.kt`.**
+`CirFile.resolveDocLinks()` runs where `CirRenderer` is handed the assembled file and indexes every
+non-generic type the file itself declares (class, interface, enum, object, value class, sealed
+base and arm, including ADR-133 nesting and issue #54's nested-arm scoping, ADR-105), keyed by simple name,
+by dotted nested path, and -- for an interface -- additionally by the Kotlin name under its
+ADR-040 `I` prefix (`IPerchable` indexed under both `IPerchable` and `Perchable`). A key two
+declarations claim is dropped rather than guessed at. A KDoc `[Link]` becomes a real
+`<see cref="global::...">` only on a unique hit; every other link -- unresolved, a member, a
+parameter, or a generic type (not indexed at all) -- renders `<c>` with the author's own spelling.
+This is the permanent design, not a v1 shortcut: an unresolvable `cref` is CS1574 in a consumer's
+build of a file they cannot edit, so the rule is resolve-or-fall-back, never emit on a guess.
+`@see` follows the same index: a resolved target is `<seealso cref>`, an unresolved one is the
+closing `See also:` paragraph above.
+
+**Inline tokenizing (`forward/ForwardKdocInline.kt`), Dokka's rules.** A backtick run of length N
+closes on the next run of the same length; an unbalanced run and any brackets inside a span are
+literal. `[target]` and `[label][target]` are links only when `target` is dotted-identifier shaped
+(`[1, 2]` and `[see below]` stay prose); `\[` is a literal bracket. `[label](url)` is left literal
+on purpose -- an `<see href>` is deferred, and half-recognising it would print the label as `<c>`
+and the URL as plain text, which is worse than leaving both as written.
+
+**`@property` / `@constructor` / class-level `@param`.** A constructor property and a declared
+primary constructor both report `docString == null` through KSP (re-confirms spike 1 finding 4;
+re-verified by the amendment spike, KSP, 2026-09-20), so their text has nowhere to come from but
+the class's own comment. `@property name text` becomes the `<summary>` of the same-named C#
+property, only when that property has no KDoc of its own (own KDoc wins, verified by the same
+amendment spike: an inline `/** own */ val name` does report a `docString`); it doubles as the
+fallback `<param>` text for the
+same-named primary-constructor parameter when the class carries no `@param` for it. `@constructor
+text` is the primary constructor's `<summary>`, and the class-level `@param` tags are its
+`<param>` set; both are read from the class's `docString`, never the constructor's own (an
+implicit primary is `SYNTHETIC` and reports the whole class comment -- reading it directly would
+put the class summary on every implicit constructor). `Copy()` (ADR-008) takes the parameter tags
+only, never the `@constructor` summary. The existing `forParameters` all-or-none rule then applies
+unchanged, including on an ADR-091/096 omitting overload.
+
+**Value classes, folded into the same mechanism.** For a VALUE-underlying value class
+(`cir/CirObjectRenderer.kt` `renderValueClass`), `@constructor` documents the hand-written public
+constructor the generator writes around the validating `CreateChecked` helper (a Kotlin author
+sees this as `value class Weight(val grams: Int)`'s primary), and the underlying property gets its
+own `underlyingDoc` slot (its own KDoc if the property has any, else `@property`), rendered once at
+that one site since the underlying is written directly rather than projected as an ordinary
+`CirProperty`. For a REFERENCE-underlying value class (ADR-035's positional
+`readonly record struct Tagged(Blanket Cat)` shape) the only legal spelling is one
+`<param name="Cat">` on the record type itself, which the C# compiler copies to the type, to the
+synthesized primary constructor, and to the positional property's `<summary>` all at once (spiked
+2026-09-20 against `GeneratedBindingsCheck`'s exact property set: 0 warnings; a wrong parameter
+name is CS1572, a second tag for the same name is CS1571, tagging one of several positional
+parameters while leaving another untagged is CS1573 -- none reachable here, because there is
+exactly one positional parameter and the renderer refuses to add a second `<param>` the class doc
+already carries). A pre-existing bug is fixed alongside: this shape previously rendered *no* class
+`<summary>` at all, because `renderValueClass`'s early return for the reference-underlying branch
+skipped `renderDoc(cls.doc)` entirely.
+
+**Declined, not deferred** (recorded here so nobody re-proposes them without the reason):
+- Markdown `[label](url)` stays literal prose. Half-recognising it would print the label as `<c>`
+  and the URL as plain text, which reads worse than the untouched original; pinned by
+  `ForwardKdocInlineTest`.
+- A fenced block inside a tag section (`@param`, `@throws`, …) is dropped, not rendered. A
+  `<code>` there would attach to the wrong member's documentation.
+- A member link (`[book]`, `[BoardingDesk.book]`) and a parameter link (`[nights]`) never become a
+  `cref`. A member needs an overload-qualified spelling (an ambiguous one is CS0419, fatal) and a
+  parameter needs `<paramref>`, which needs the per-overload parameter set (CS1734 on an omitting
+  overload); both stay `<c>` with the author's own spelling.
+
+**Scope note.** Visual Studio's Quick Info is not verified to show `<remarks>` (this is carried
+over unverified, from memory, not re-checked in this amendment); write "doc comment" or "XML
+documentation" for what `<remarks>` delivers, never "tooltip".
+
+**No handle, no `LiveHandleTests` row.** This amendment is compile-time text over the same members
+ADR-150 already documents; it mints no handle and changes no ABI.
+
+**Amendment spike, C#, 2026-09-20**, scratch `net8.0` classlib with `GeneratedBindingsCheck`'s
+exact property block (`GenerateDocumentationFile`, `TreatWarningsAsErrors`, `NoWarn CS1591`,
+`Nullable enable`, `LangVersion 12.0`): `global::` crefs to a nested class, an interface, an enum,
+a `readonly record struct`, and a static class all compile clean, as do `<seealso cref>`, several
+`<para>` inside one `<remarks>`, a `<code>` under both `<remarks>` and `<summary>`, and `<c>`
+inside `<param>`/`<returns>`/`<exception>`; the compiler rewrites every resolved cref into a
+`T:Namespace.Type` documentation id, which is what the test suite asserts to prove resolution
+happened rather than merely being spelled correctly. A bare cref to a *generic* type is CS1574,
+confirming the no-generics rule for the link index. Two `<remarks>` elements on one member also
+compiled clean (moot under the one-`<remarks>`-per-member design actually shipped).
+
+Verification added: `forward/ForwardKdocInlineTest.kt` (the tokenizer), `cir/CirDocRendererTest.kt`
+(escaping and the value-class-constructor indent case ADR-150 originally promised and never got),
+`cir/CirDocLinksTest.kt` (resolution against a hand-built `CirFile`), `Tier1KdocXmlDocTest.kt`
+(structural cells for the new tag shapes), and `IntegrationTests/XmlDocTests.cs` (`BoardingDesk`,
+`KdocFoodBowl`), which reads the real documentation XML the consumer build emits, seam by seam.
 
 ## Amendment (2026-09-20): the expect's KDoc reaches every declaration family
 
