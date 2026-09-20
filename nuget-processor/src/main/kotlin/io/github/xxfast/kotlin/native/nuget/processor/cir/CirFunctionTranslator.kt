@@ -18,6 +18,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesCsharpType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyDiscriminatedRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
@@ -132,12 +134,28 @@ internal fun translateFunction(
   val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
 
   val qualifiedReturnName: String? = returnDecl?.qualifiedName?.asString()
+  // ROADMAP Phase 4 (2026-09-20): the six branches below are UNREACHABLE and kept only as a live
+  // assertion. `translateFunction` has one caller, `translateSpecializedFunction`, and its gate
+  // `hasLegacyGenericReturnRoute()` now refuses a collection return outright -- collection returns
+  // belong to the ADR-062 plan route and to nothing else. They used to render here whenever the
+  // plan SKIPPED one, spelling a component by its Kotlin simple name (`IReadOnlyList<ByteArray>`,
+  // `IReadOnlyList<List>`) beside the warning that said the member was dropped. Failing loudly
+  // beats silently re-emitting that if the gate ever regresses.
   val isListReturnType: Boolean = qualifiedReturnName == "kotlin.collections.List"
   val isMutableListReturnType: Boolean = qualifiedReturnName == "kotlin.collections.MutableList"
   val isMapReturnType: Boolean = qualifiedReturnName == "kotlin.collections.Map"
   val isMutableMapReturnType: Boolean = qualifiedReturnName == "kotlin.collections.MutableMap"
   val isSetReturnType: Boolean = qualifiedReturnName == "kotlin.collections.Set"
   val isMutableSetReturnType: Boolean = qualifiedReturnName == "kotlin.collections.MutableSet"
+  check(
+    !isListReturnType && !isMutableListReturnType && !isMapReturnType &&
+        !isMutableMapReturnType && !isSetReturnType && !isMutableSetReturnType
+  ) {
+    "Forward CIR reached the legacy collection-return route for " +
+        "'${func.simpleName.asString()}': collection returns are plan-owned (ADR-062), and a " +
+        "collection return the plan skipped must be ABSENT, not re-emitted with a simple-name " +
+        "component spelling"
+  }
   val isLambdaReturnType: Boolean = qualifiedReturnName in LAMBDA_TYPES
 
   if (isLambdaReturnType) {
@@ -658,6 +676,8 @@ internal fun translateSuspendFunction(
   val collectionReturn: BridgeType.Collection? =
     (returnShape as? ForwardLegacyReturnShape.Marshalled)?.type
   if (collectionReturn != null) tracker.trackCollection(collectionReturn)
+  // ROADMAP Phase 4: the class route's bytes arm, for a top-level `suspend fun f(): ByteArray`.
+  if (returnShape is ForwardLegacyReturnShape.Bytes) tracker.needsBytes = true
 
   val cname: String = toCName(func.simpleName.asString())
   // ADR-110: escape after the case change, so `suspend fun lock()` renders `LockAsync`.
@@ -672,6 +692,8 @@ internal fun translateSuspendFunction(
   val asyncReturnType: String = when {
     isUnit -> ""
     collectionReturn != null -> collectionReturn.forwardPublicCsharpType()
+    // ROADMAP Phase 4: `Task<byte[]>`, the class route's own line.
+    returnShape is ForwardLegacyReturnShape.Bytes -> legacyBytesCsharpType(returnShape.nullable)
     // ADR-040: the class route's own line -- the projected interface, not the backing wrapper
     // `nestedCsName()` would spell below. `strayPetLater()` is `Task<IPet>`, ADR-040's own example.
     returnShape is ForwardLegacyReturnShape.Interface -> returnShape.declaredCsharpType()
@@ -729,6 +751,9 @@ internal fun translateSuspendFunction(
       // ADR-040: the backing wrapper, for the class route's reason -- the declared type is now
       // the interface, and only the wrapper has a handle constructor.
       is ForwardLegacyReturnShape.Interface -> returnShape.legacyInterfaceRead("resultPtr")
+
+      // ROADMAP Phase 4: `NugetMarshal.ReadBytes(resultPtr)`, the class route's own line.
+      is ForwardLegacyReturnShape.Bytes -> legacyBytesRead("resultPtr", returnShape.nullable)
 
       ForwardLegacyReturnShape.Plain, is ForwardLegacyReturnShape.Refused -> null
     },

@@ -375,6 +375,8 @@ members.
 
 - `SharedFlow<T>` (hot, multi-subscriber) is not supported.
 - `StateFlow<SomeEnum>` / `MutableStateFlow<SomeEnum>`: `.Value` has no enum reader.
+- `MutableStateFlow<ByteArray>` surfaces as read-only `KotlinStateFlow<byte[]>`, not
+  `KotlinMutableStateFlow<byte[]>`: `.Value` is not settable for a `ByteArray` element.
 - `CompareAndSet`, `Update`, `Emit`, `TryEmit`, `ReplayCache`, and `SubscriptionCount` on
   `MutableStateFlow<T>` are not exposed.
 - A nullable-element or nullable-member `MutableStateFlow` write, and a `suspend fun` returning
@@ -390,6 +392,12 @@ members.
 - A `suspend inline fun <reified T> Receiver.f(...): Result<T>` extension has no bridge at all:
   `inline` plus `reified` erase at the native boundary, and `suspend` needs a concrete
   continuation type. It is skipped with a diagnostic naming the extension.
+- A bare `ByteArray` **parameter** on a `Flow`-, `StateFlow`-, or `suspend`-returning member is not
+  supported, even though a `ByteArray` return or `Flow` element is (see
+  [Collections](collections.md#bytearray-as-a-collection-component)). Pass it as a `List<ByteArray>`
+  of one, or split it onto a separate ordinary member.
+- `suspend fun (): StateFlow<ByteArray>` has no binding: the shared `nuget_stateflow_value` export
+  has no per-member projection seam for a `ByteArray`. A `StateFlow<ByteArray>` **property** binds.
 
 `Flow`, `StateFlow`, and `suspend` dispatch are AOT- and trim-safe; see
 [Publishing Kotlin to C#: AOT and trimming](forward-overview.md#aot-and-trimming).

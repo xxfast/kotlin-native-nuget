@@ -279,7 +279,10 @@ class ForwardSkippedCallableWarningTest {
         ForwardPlanSkipReason.THROWABLE,
         // ADR-106: defensive, like INSTANT/DURATION.
         ForwardPlanSkipReason.UUID,
-        // ADR-151: defensive at a top-level position, real for the deferred `List<ByteArray>`.
+        // ADR-151: defensive at a top-level position, where a ByteArray always has a shape.
+        // ROADMAP Phase 4 (the ADR-151 amendment): its only *real* producers now are the two
+        // DECLINED equality slots -- a `Set<ByteArray>` element and a `Map<ByteArray, V>` key --
+        // since every other component position binds. Still a genuine drop with no legacy route.
         ForwardPlanSkipReason.BYTE_ARRAY,
         ForwardPlanSkipReason.NULLABLE,
         // ADR-132: an extension receiver whose wire is the ADR-079/080 `HasValue` + value pair.

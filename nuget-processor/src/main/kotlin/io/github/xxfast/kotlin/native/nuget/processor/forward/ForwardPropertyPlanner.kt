@@ -903,6 +903,9 @@ internal class ForwardPropertyPlanner(
    * planning it would only defer the failure to the renderer.
    */
   private fun BridgeType.Collection.isReadable(): Boolean {
+    // ROADMAP Phase 4: the `Set` element and `Map` KEY slots a `ByteArray` is declined at, the same
+    // rule `isBridgeableComponent` applies -- identity equality against a copied array.
+    if (declinesByteArrayComponent()) return false
     val isMap: Boolean = kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
     return if (isMap) {
       key?.isReadableComponent() == true && value?.isReadableComponent() == true
@@ -928,8 +931,10 @@ internal class ForwardPropertyPlanner(
     BridgeType.Throwable -> false
     // ADR-106: `List<Uuid>` is deferred for the same reason, and skips named here.
     BridgeType.Uuid -> false
-    // ADR-151 v1: `List<ByteArray>` is deferred, matching `isBridgeableComponent`.
-    BridgeType.ByteArray -> false
+    // ROADMAP Phase 4 (ADR-151 amendment): a `ByteArray` component reads back through
+    // `NugetMarshal.ReadBytes(h)` -- the per-element box IS the bytes handle -- so the property
+    // projection can spell it (`byte[]`), matching `isBridgeableComponent`.
+    BridgeType.ByteArray -> true
     // ADR-147 v1: `List<T>` is deferred, the same nesting rule `isBridgeableComponent` applies.
     is BridgeType.TypeParameter -> false
     BridgeType.Unit, is BridgeType.BoundInterface, is BridgeType.SpecializedProtocol,

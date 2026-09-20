@@ -122,6 +122,12 @@ private fun componentReadExpression(
   if (component is BridgeType.Collection) {
     return componentCollectionRead(handle, component, csharpType, depth)
   }
+  // ROADMAP Phase 4 (ADR-151 amendment): the per-element box IS a StableRef to the `ByteArray`
+  // (`nuget_list_get` and the map/set readers all mint one with the same `NugetHandles.retain` that
+  // `nuget_bytes_create` uses), so the read is the standalone one, and it disposes that box in its
+  // own `finally`. Decided BEFORE `componentWireCsharpType` below, which would otherwise hand this
+  // handle to `FromHandle<IntPtr>` -- a spelling that compiles and throws at the first element.
+  if (component == BridgeType.ByteArray) return "NugetMarshal.ReadBytes($handle)"
   val wireType: String = componentWireCsharpType(component, csharpType)
   val raw: String = "NugetMarshal.FromHandle<$wireType>($handle)"
   // ADR-097: a bare enum crossed as its int ordinal, so the cast back to the C# enum is the whole
@@ -150,6 +156,14 @@ private fun componentWireCsharpType(
   // every other component already uses.
   if (component is BridgeType.Collection) return "IntPtr"
   val suffix: String = if (component is BridgeType.Nullable) "?" else ""
+  // ROADMAP Phase 4 (ADR-151 amendment): a bytes component crosses as its own handle, in the same
+  // pointer-shaped slot. The nullable spelling is `IntPtr?` rather than `IntPtr` with a zero
+  // sentinel, and that is load-bearing: `Wrap<IntPtr>(IntPtr.Zero)` reports `owned = true` and the
+  // fill loop would then call `Dispose(IntPtr.Zero)`, whose non-nullable `COpaquePointer` export
+  // takes the host process down. `Wrap<IntPtr?>(null)` returns at its `value == null` guard with
+  // `owned = false` instead, and a present value still reaches the `IntPtr` branch through
+  // `Nullable.GetUnderlyingType`.
+  if (component.unwrapNullable() == BridgeType.ByteArray) return "IntPtr$suffix"
   if (component.componentEnum() != null) return "int$suffix"
   val valueClass: BridgeType.ValueClass =
     component.componentValueClass() ?: return csharpType(component)
@@ -172,6 +186,18 @@ private fun componentWireExpression(
     val factory: String = collectionFactory(component.kind)
     val argument: String = collectionCreateArgument(access, component, depth + 1, csharpType)
     return "NugetMarshal.$factory($argument)"
+  }
+  // ROADMAP Phase 4 (ADR-151 amendment): one `nuget_bytes_create` handle per element, minted here
+  // and owned by this call site -- `Wrap` reports `owned = true` for it and the fill loop disposes
+  // it right after `Add`/`Put` has dereferenced it into the Kotlin container. The nullable arm
+  // projects `IntPtr?` so a null element never becomes an owned zero handle (see
+  // [componentWireCsharpType]).
+  if (component.unwrapNullable() == BridgeType.ByteArray) {
+    return if (component is BridgeType.Nullable) {
+      "$access == null ? (IntPtr?)null : NugetMarshal.CreateBytes($access)"
+    } else {
+      "NugetMarshal.CreateBytes($access)"
+    }
   }
   if (component.componentEnum() != null) {
     return if (component is BridgeType.Nullable) {
@@ -227,7 +253,8 @@ internal fun BridgeType.componentNeedsProjection(): Boolean = when {
  * hands the inner container over untouched unless a leaf converts.
  */
 private fun BridgeType.componentNeedsWireProjection(): Boolean =
-  this is BridgeType.Collection || componentNeedsProjection()
+  this is BridgeType.Collection || unwrapNullable() == BridgeType.ByteArray ||
+      componentNeedsProjection()
 
 /**
  * ADR-099, read side: one nested component read back through the `ReadList`/`ReadSet`/`ReadMap`
