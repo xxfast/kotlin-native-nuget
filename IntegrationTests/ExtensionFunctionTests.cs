@@ -1,5 +1,6 @@
 using TestLibrary;
 using TestLibrary.Cat;
+using TestLibrary.Kdoc;
 
 namespace IntegrationTests;
 
@@ -118,6 +119,21 @@ public class ExtensionFunctionTests
     {
         CatId? id = null;
         Assert.Equal("anonymous", id.OrAnonymous());
+    }
+
+    // ADR-096/ADR-074: `expect fun SunSpot.stretchFor(minutes: Int = 5)` declares its default on
+    // the `expect` half only, because Kotlin forbids the `actual` from restating one. The extension
+    // route reads the exported declaration's own `hasDefault` bits and never consults the expect
+    // index (ADR-096: "class/object/companion/extension read the exported declaration's own bit
+    // only"), so exactly ONE overload is generated and the C# caller always supplies `minutes`.
+    // The parameterless call is deliberately absent, not forgotten: a `perch.StretchFor()` here
+    // would be CS1501. The generator-side proof of the absence is the Tier 1 cell
+    // `an expect extension's default parameter does not add an omitting overload`.
+    [Fact]
+    public void SunSpot_StretchFor_TakesItsMinutesFromTheCaller()
+    {
+        using var perch = new SunSpot();
+        Assert.Contains("stretched 7 min on ", perch.StretchFor(7));
     }
 
     // ADR-132 sub-decision (a), settled with a standalone `dotnet build` probe (2026-09-13):

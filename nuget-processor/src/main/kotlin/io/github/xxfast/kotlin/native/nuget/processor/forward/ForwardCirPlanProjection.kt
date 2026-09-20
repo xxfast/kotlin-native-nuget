@@ -502,7 +502,9 @@ internal object ForwardCirPlanProjection {
       isExtension = true,
       isSyncErrorCheckEnabled = !result.hasCustomBody && plan.errorSlot != null,
       hasCustomBody = result.hasCustomBody,
-      doc = plan.publicSignature.cirDoc(),
+      // ADR-150: the `this` receiver is a C# parameter of this member but not of the plan, so it
+      // has to be named here or a documented parameter beside it is CS1573.
+      doc = plan.publicSignature.cirDoc(listOf(receiverParam.name)),
     )
     return listOf(nativeImport, wrapper)
   }
@@ -1623,13 +1625,23 @@ internal val ForwardPublicParameter.csharpName: String get() = name.csharpParame
  * re-keyed to the C# parameter spellings the renderer prints, `<returns>` dropped on a `void`
  * member, everything else as parsed.
  */
-internal fun ForwardPublicSignature.cirDoc(): CirDoc? {
+internal fun ForwardPublicSignature.cirDoc(
+  // ADR-150: C# parameters of the rendered member that the *plan* does not carry, in the order
+  // they are declared — today the extension route's generated `this` receiver. `toCirDoc` is
+  // all-or-none (once one `@param` matches, every parameter needs a tag), so leaving the receiver
+  // out of this list made a documented `fun Foo.bar(x: Int)` render `<param name="x">` and nothing
+  // for `receiver`: CS1573, fatal under `GeneratedBindingsCheck`. The suspend `Async` route already
+  // solved the same problem for its `cancellationToken` slot the same way.
+  leadingParameters: List<String> = emptyList(),
+): CirDoc? {
   val kdoc: ForwardKdoc = doc ?: return null
   val named: Map<String, String> = parameters
     .mapNotNull { parameter -> kdoc.params[parameter.name]?.let { parameter.csharpName to it } }
     .toMap()
-  return kdoc.copy(params = named)
-    .toCirDoc(parameters.map { it.csharpName }, hasResult = result != BridgeType.Unit)
+  return kdoc.copy(params = named).toCirDoc(
+    leadingParameters + parameters.map { it.csharpName },
+    hasResult = result != BridgeType.Unit,
+  )
 }
 
 /**

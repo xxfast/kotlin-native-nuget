@@ -357,3 +357,61 @@ any other and is a fatal CS1573 without a tag once a declared parameter has one.
    render time).
 4. Every generated exception type is visible by simple name from every generated member. If wrong,
    CS1574 fails `GeneratedBindingsCheck` loudly, not silently; the `global::` spelling is the fix.
+
+## Amendment (2026-09-20): the expect's KDoc reaches every declaration family
+
+The ROADMAP item this amendment closes only asked for a fixture pinning the top-level `expect fun`
+arm (which was already correct, just unasserted). Reading `ExpectIndex.docOrNull`'s callers turned
+up four more call sites that never received a real index at all, plus two unrelated pre-existing
+bugs the new fixture surfaced. All fixed, all **Verified** by `scripts/verify.sh` (green: 2001
+IntegrationTests, 58 LeakTests, `GeneratedBindingsCheck` clean).
+
+**The empty-index default was the root cause.** `forwardKdoc(expects: ExpectIndex = ExpectIndex())`
+defaulted to an empty index, so any call site that forgot the argument silently lost every expect's
+doc. The default is gone; the compiler now enumerates every caller (ten sites), each passing a real
+index.
+
+**Fixed call sites:**
+
+- `forward/ForwardPropertyPlanner.kt` never took an index at all. A documented top-level `expect
+  val` and a documented property of an `expect class` rendered undocumented. The planner now takes
+  `expects: ExpectIndex` and every construction site passes the real one.
+- Several bare `forwardKdoc()` calls in `cir/CirClassTranslator.kt` (class-level summaries for
+  `expect object`, `expect interface`, `expect sealed class`, `expect value class`, enum `ENTRIES`,
+  and a plain `suspend` member) lost their expect summaries the same way. Each family now has a
+  Tier 1 cell; a sealed **arm** can never itself be `expect` (Kotlin declares arms only on the
+  `actual` side), and the `suspend fun` returning `StateFlow<T>` site (ADR-068) now passes the
+  index but has no fixture yet, so it is unverified rather than confirmed broken.
+- `topLevelNullablePrimitivePlan` carried no doc field at all, so every top-level `fun f(): Int?`
+  (and the `Instant?`/`Duration?`/nullable-enum/nullable-value-class shapes on the same route) was
+  undocumented, `expect` or not. Fixed.
+- `ExpectIndex.functionOrNull` returned `null` for every extension, so a documented `expect fun
+  Foo.bar()` rendered undocumented. It now compares the rendered extension receiver as part of the
+  signature match (absent receiver only matches absent receiver), so a documented extension keeps
+  its doc and can never be confused with a non-extension of the same name. This does not widen the
+  generated API: an extension's default parameters still come from the extension's own `hasDefault`
+  bits, never from the index (see the dated note on
+  [ADR-096](096-function-default-parameters.md)).
+
+**Two pre-existing bugs found by the new fixture, both fixed:**
+
+- An enum **entry** belonging to an `actual enum class` reports `isActual == false` on itself in
+  KSP (only the enclosing class reports `isActual == true`), so `docOrNull`'s origin gate rejected
+  every entry's lookup. The gate now also admits a member whose *parent* is `actual`.
+- A documented extension function with a `@param` tag rendered `<param>` for its declared
+  parameters but nothing for the generated `this` receiver parameter — fatal `CS1573` under
+  `GeneratedBindingsCheck`'s warnings-as-errors, because `toCirDoc` was all-or-none across the
+  parameter list. `ForwardPublicSignature.cirDoc(leadingParameters)` now names the receiver
+  parameter too, the same way the `Async` route already names its trailing `cancellationToken`
+  slot.
+
+Fixtures: `test-library/src/nativeMain/kotlin/.../test/kdoc/SunSpot.kt` (plus `SunSpotMingw.kt` /
+`SunSpotMacos.kt`), `IntegrationTests/XmlDocTests.cs` (six new facts alongside
+`SunSpot_ActualIsBare_*`), `IntegrationTests/ExtensionFunctionTests.cs`
+(`SunSpot_StretchFor_TakesItsMinutesFromTheCaller`, proving the single generated overload still
+compiles and runs under `GeneratedBindingsCheck`'s warnings-as-errors), and `Tier1KdocXmlDocTest.kt`
+(whose `an expect extension's default parameter does not add an omitting overload` cell is what
+pins the receiver's own empty `<param name="receiver"></param>` tag). No `LiveHandleTests` row:
+every fixed route is static or a borrowed-receiver read, and mints no handle. Only the object and
+enum-entry Tier 1 cells were measured red before the fix; the other families were red by
+construction, since their only doc source was a call site that was handed an empty index.
