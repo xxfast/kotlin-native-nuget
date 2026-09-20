@@ -71,31 +71,50 @@ class Tier1Issue112InterfaceProjectionTest {
   }
 
   /**
-   * Decision C: the omission is silent. The class route already fired `SKIPPED_UNSUPPORTED_*` for
-   * `codes` and `collarTag(code)`, so a second diagnostic naming the same Kotlin declaration is
-   * duplicate noise. Asserted as "exactly the class's own skips, no more".
+   * Decision C said the omission is silent, because the class route already fires
+   * `SKIPPED_UNSUPPORTED_*` for `codes` and `collarTag(code)` and a second line naming the same
+   * Kotlin declaration reads as duplicate noise.
+   *
+   * **ADR-064 amendment (issue #249) revises that to "once per OWNER, never twice per owner".** A
+   * different owner is a different hole: a consumer holding an `IAdvertisement` never sees the
+   * class's line, and since issue #249 each diagnostic also becomes a `<remarks>` paragraph on its
+   * own generated declaration, so suppressing the interface's copy would leave `IAdvertisement`
+   * the one shape that cannot say what it lost. The measured case this closes is next door:
+   * `Pounceable.rankTargets` (a `Map<String?, Int>` parameter on an interface NOTHING implements)
+   * produced zero records in any channel at all.
+   *
+   * What must still never happen is the same declaration named twice for one owner, which is what
+   * the per-owner counts below pin: a REACHABLE interface is planned into both catalogs under one
+   * symbol, and the symbol guard in `NugetProcessor` keeps that to one line.
    */
   @Test
-  fun `skipped interface members are omitted without a second diagnostic`() {
+  fun `a skipped interface member is named once per owner, on the class and on the interface`() {
     val result = Tier1Harness.run(ADVERTISEMENT_FIXTURE, fileName = "Issue112Sample.kt")
 
     val codesSkips: List<String> = result.kspWarnings.filter { "codes" in it }
     assertEquals(
       1,
-      codesSkips.size,
-      "expected exactly one skip naming `codes`, the class route's own; kspWarnings=$codesSkips",
+      codesSkips.count { "BleAdvertisement.codes" in it },
+      "expected exactly one skip naming the CLASS's hole; kspWarnings=$codesSkips",
     )
-    assertTrue(
-      codesSkips.single().contains("BleAdvertisement.codes"),
-      "expected the surviving skip to name the class, not the interface; " +
-          "got=${codesSkips.single()}",
+    assertEquals(
+      1,
+      codesSkips.count { "Advertisement.codes" in it && "BleAdvertisement.codes" !in it },
+      "expected exactly one skip naming the INTERFACE's own hole (issue #249); " +
+          "kspWarnings=$codesSkips",
     )
 
     val methodSkips: List<String> = result.kspWarnings.filter { "collarTag" in it }
     assertEquals(
       1,
-      methodSkips.size,
-      "expected exactly one skip naming `collarTag`; kspWarnings=$methodSkips",
+      methodSkips.count { "BleAdvertisement.collarTag" in it },
+      "expected exactly one skip naming the class's collarTag hole; kspWarnings=$methodSkips",
+    )
+    assertEquals(
+      1,
+      methodSkips.count { "Advertisement.collarTag" in it && "BleAdvertisement" !in it },
+      "expected exactly one skip naming the interface's own collarTag hole; " +
+          "kspWarnings=$methodSkips",
     )
   }
 

@@ -380,6 +380,9 @@ each segment before wrapping it, so a code span holding `Pair<A & B>` renders
 *last* `<para>`. When only that generated text exists, the output stays the byte-identical
 three-line block ADR-064 shipped, so none of its tests moved. Element order overall: `<summary>`,
 `<remarks>`, `<param>`, `<returns>`, `<exception>`, `<seealso>`.
+**Pointer (2026-09-20):** ADR-064's later issue #249 amendment generalizes this "generated
+paragraphs last" rule from the one no-public-constructor kind to every member-level skip that has
+an owner; author paragraphs still always come first in the one `<remarks>` element.
 
 **Fenced code blocks are kept, not dropped.** The memo that preceded this amendment recommended
 dropping a fenced block outright; the shipped behavior reverses that. A fence becomes a `<code>`

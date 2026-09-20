@@ -1,6 +1,8 @@
 using System.Xml.Linq;
 using TestLibrary;
 using TestLibrary.Kdoc;
+using TestLibrary.Objectprops;
+using TestLibrary.Skipremarks;
 
 namespace IntegrationTests;
 
@@ -55,7 +57,13 @@ public class XmlDocTests
                 "\n  ",
                 Doc.Descendants("member")
                     .Select(member => (string?)member.Attribute("name"))
-                    .Where(entry => entry is not null && entry.Contains(Ns))));
+                    .Where(entry => entry is not null && entry.Contains(NamespaceOf(name)))));
+
+    /// <summary>
+    /// Which fixture namespace a miss should list. A red entry in the skip-remarks namespace is
+    /// useless if the message enumerates the KDoc one instead.
+    /// </summary>
+    private static string NamespaceOf(string name) => name.Contains(SkipNs) ? SkipNs : Ns;
 
     private static string? Tag(XElement member, string tag) =>
         member.Element(tag)?.Value.Trim();
@@ -294,6 +302,251 @@ public class XmlDocTests
         XElement member = Required($"P:{Ns}.KdocFoodBowl.Rinsed");
         Assert.Equal("Whether Oreo licked it clean first.", Tag(member, "summary"));
         Assert.DoesNotContain("hosed down", member.Value);
+    }
+
+    // --- Issue #249 / ADR-064: a member the bridge dropped is named in the generated file itself,
+    // on the declaration that would have declared it. The fixture is
+    // `test-library/src/nativeMain/.../test/skipremarks/`, one owner seam per test; the seam is the
+    // same IntegrationTests.xml these KDoc tests read, because a `<remarks>` is a doc comment and
+    // reflection cannot see one. No LeakTests row: this is compile-time text, no handle is minted.
+
+    /// <summary>The isolated fixture package for the skip remarks, one namespace of its own.</summary>
+    private const string SkipNs = "TestLibrary.Skipremarks";
+
+    /// <summary>The single remarks block of a documented entry. Two would be a defect on its own.</summary>
+    private static XElement Remarks(string name) =>
+        Assert.Single(Required(name).Elements("remarks"));
+
+    /// <summary>Whatever the file says about an entry, or nothing at all when it has no entry.</summary>
+    private static string Says(string name) => Member(name)?.Value ?? string.Empty;
+
+    [Fact]
+    public void ClawStrip_DroppedPropertyAndMethod_AreBothNamedOnTheOwningClass()
+    {
+        using var strip = new ClawStrip("Oreo");
+        Assert.Equal("Oreo shreds the sisal", strip.Shred());
+        Assert.Equal(40, strip.Height);
+
+        XElement remarks = Remarks($"T:{SkipNs}.ClawStrip");
+
+        // The whole point: kind code plus the KOTLIN spelling of the member that is not there.
+        Assert.Contains("SKIPPED_UNSUPPORTED_PROPERTY", remarks.Value);
+        Assert.Contains("weave", remarks.Value);
+        Assert.Contains("SKIPPED_UNSUPPORTED_INPUT", remarks.Value);
+        Assert.Contains("rankPerches", remarks.Value);
+
+        // The C# name never existed, so naming it would send a consumer looking for a member that
+        // was never generated under that spelling either.
+        Assert.DoesNotContain("RankPerches", remarks.Value);
+
+        // Honesty, both halves (ADR-064's "honest skip"): named as dropped AND genuinely absent,
+        // beside survivors that are present and unnamed.
+        Assert.Null(typeof(ClawStrip).GetProperty("Weave"));
+        Assert.Null(typeof(ClawStrip).GetMethod("RankPerches"));
+        Assert.NotNull(typeof(ClawStrip).GetProperty("Height"));
+        Assert.DoesNotContain("shred", remarks.Value);
+        Assert.DoesNotContain("height", remarks.Value);
+    }
+
+    [Fact]
+    public void ClawStrip_DroppedSetter_IsNamedOnTheSurvivingPropertyNotTheClass()
+    {
+        // ADR-075 getter/setter independence: the member SURVIVES read-only, so this is the one
+        // per-member remark in the feature -- there is a C# property to hang it on.
+        using var strip = new ClawStrip("Mylo");
+        Assert.Null(strip.LastTumble);
+
+        System.Reflection.PropertyInfo property =
+            typeof(ClawStrip).GetProperty("LastTumble")
+            ?? throw new Xunit.Sdk.XunitException("LastTumble must survive get-only, not vanish");
+        Assert.True(property.CanRead);
+        Assert.False(property.CanWrite, "ADR-107 refuses the setter; the getter is the survivor");
+
+        XElement remarks = Remarks($"P:{SkipNs}.ClawStrip.LastTumble");
+        Assert.Contains("lastTumble", remarks.Value);
+        Assert.Contains("setter", remarks.Value);
+
+        // A surviving member is not a hole in the class, so the class must not report it as one:
+        // that would be the lie the "something the consumer could expect is absent" gate exists to
+        // stop.
+        Assert.DoesNotContain("lastTumble", Remarks($"T:{SkipNs}.ClawStrip").Value);
+    }
+
+    [Fact]
+    public void KibbleBin_DroppedMethod_IsNamedOnTheObjectsStaticClass()
+    {
+        Assert.Equal("one scoop for Mylo", KibbleBin.Scoop());
+
+        XElement remarks = Remarks($"T:{SkipNs}.KibbleBin");
+        Assert.Contains("SKIPPED_UNSUPPORTED_INPUT", remarks.Value);
+        Assert.Contains("tallyShelves", remarks.Value);
+        Assert.Null(typeof(KibbleBin).GetMethod("TallyShelves"));
+    }
+
+    [Fact]
+    public void TreatPantry_DroppedStateFlowProperty_IsNamedOnTheObjectsStaticClass()
+    {
+        // The PROPERTY twin of KibbleBin's dropped method, and the seam where two features meet:
+        // an object's properties bind as statics (ROADMAP Phase 4), a StateFlow among them is a
+        // named skip because no adapter exists on a static owner, and issue #249 says that skip is
+        // named on the type that lost it. The object walk was the one walk added without an owner
+        // scope, so this paragraph was recorded and never attached.
+        Assert.Equal(4, TreatPantry.Count);
+
+        XElement remarks = Remarks("T:TestLibrary.Objectprops.TreatPantry");
+        XElement[] paras = remarks.Elements("para").ToArray();
+
+        // The author's own prose keeps the front of the block; this generator appends, never
+        // interleaves. The count is not pinned: the KDoc paragraphs are the author's to edit.
+        Assert.True(
+            paras.Length >= 2,
+            $"expected author prose plus the generated paragraph, got {paras.Length}");
+        Assert.DoesNotContain("SKIPPED_", paras[0].Value);
+        Assert.Contains("SKIPPED_UNSUPPORTED_PROPERTY", paras[^1].Value);
+        Assert.Contains("level", paras[^1].Value);
+
+        // The honest-skip pair: named as dropped AND genuinely absent, beside a survivor.
+        Assert.Null(typeof(TreatPantry).GetProperty("Level"));
+        Assert.NotNull(typeof(TreatPantry).GetProperty("Count"));
+    }
+
+    [Fact]
+    public void Pounceable_DroppedMember_IsNamedOnTheInterface()
+    {
+        // Nothing implements it (as with IPerchable), so the generated shape is the observable.
+        Assert.NotNull(typeof(IPounceable).GetMethod("Pounce"));
+        Assert.Null(typeof(IPounceable).GetMethod("RankTargets"));
+
+        XElement remarks = Remarks($"T:{SkipNs}.IPounceable");
+        Assert.Contains("SKIPPED_UNSUPPORTED_INPUT", remarks.Value);
+        Assert.Contains("rankTargets", remarks.Value);
+    }
+
+    [Fact]
+    public void Scamper_DroppedArmMember_IsNamedOnThatArmAndNowhereElse()
+    {
+        using var dash = new Scamper.Dash(12);
+        Assert.Equal("12 metres flat out", dash.Speed());
+        using var skid = new Scamper.Skid(3);
+        Assert.Equal("3 tiles of skid", skid.Stop());
+
+        // The remark must land on the arm that lost the member...
+        XElement remarks = Remarks($"T:{SkipNs}.Scamper.Dash");
+        Assert.Contains("SKIPPED_UNSUPPORTED_INPUT", remarks.Value);
+        Assert.Contains("rankRoutes", remarks.Value);
+
+        // ...and on neither the sealed base nor the clean sibling arm. Attaching to the wrong
+        // owner is this feature's one silent failure: everything still compiles and the text is
+        // still true of something.
+        Assert.DoesNotContain("rankRoutes", Says($"T:{SkipNs}.Scamper"));
+        Assert.DoesNotContain("rankRoutes", Says($"T:{SkipNs}.Scamper.Skid"));
+        Assert.Null(typeof(Scamper.Dash).GetMethod("RankRoutes"));
+    }
+
+    [Fact]
+    public void Gantry_DroppedNestedMember_IsNamedOnTheNestedClassNotTheOuter()
+    {
+        using var gantry = new Gantry("Mylo");
+        Assert.Equal("Mylo surveys the room", gantry.Survey());
+        using var rung = new Gantry.Rung(3);
+        Assert.Equal("perched at 3", rung.Perch());
+
+        XElement remarks = Remarks($"T:{SkipNs}.Gantry.Rung");
+        Assert.Contains("rankHeights", remarks.Value);
+
+        // The outer type declared nothing that was dropped, so it says nothing.
+        Assert.DoesNotContain("rankHeights", Says($"T:{SkipNs}.Gantry"));
+        Assert.Null(typeof(Gantry.Rung).GetMethod("RankHeights"));
+    }
+
+    [Fact]
+    public void TopLevelFunction_DroppedBesideASurvivor_IsNamedOnItsFileClass()
+    {
+        // ADR-007 renamed the file class (the class ClawStrip took the bare name), so the holder
+        // the consumer greps is ClawStripKt.
+        Assert.Equal(2, ClawStripKt.CountStrips());
+
+        XElement remarks = Remarks($"T:{SkipNs}.ClawStripKt");
+        Assert.Contains("SKIPPED_UNSUPPORTED_INPUT", remarks.Value);
+        Assert.Contains("sortStrips", remarks.Value);
+        Assert.Null(typeof(ClawStripKt).GetMethod("SortStrips"));
+        Assert.DoesNotContain("countStrips", remarks.Value);
+    }
+
+    [Fact]
+    public void CatFlap_FileWithEveryDeclarationDropped_StillRendersAHolderCarryingOnlyTheRemark()
+    {
+        // Issue #249's headline case. The 2026-09-07 "an absent declaration leaves no husk"
+        // amendment elides an empty static class; this item amends it for exactly the case where
+        // the husk has something to say, because a husk WITH a reason is no longer
+        // indistinguishable from "members still to come".
+        Type holder = typeof(ClawStrip).Assembly
+            .GetTypes()
+            .SingleOrDefault(type => type.Name == "CatFlap" && type.Namespace == SkipNs)
+            ?? throw new Xunit.Sdk.XunitException(
+                $"no {SkipNs}.CatFlap: a file whose only top-level function was dropped must still "
+                + "render its holder to carry the remark");
+
+        // Only the remark: the drop must not be smuggled back in under any spelling.
+        Assert.Empty(holder.GetMethods(
+            System.Reflection.BindingFlags.Public
+            | System.Reflection.BindingFlags.Static
+            | System.Reflection.BindingFlags.DeclaredOnly));
+
+        XElement remarks = Remarks($"T:{SkipNs}.CatFlap");
+        Assert.Contains("SKIPPED_UNSUPPORTED_INPUT", remarks.Value);
+        Assert.Contains("latchFlap", remarks.Value);
+
+        // A file with nothing declared and nothing dropped still renders no holder: the husk
+        // fixtures next door keep pinning that half, and this assertion keeps the two apart.
+        Assert.Empty(remarks.Elements("para"));
+    }
+
+    [Fact]
+    public void Radiator_AuthorParagraphsComeFirst_AndTheGeneratedSkipComesLast()
+    {
+        using var radiator = new Radiator("sunroom");
+        Assert.Equal(21, radiator.Warmth());
+
+        // One <remarks> whatever it is made of (ADR-150 amendment), author prose first, this
+        // generator's own paragraph last.
+        XElement remarks = Remarks($"T:{SkipNs}.Radiator");
+        XElement[] paras = remarks.Elements("para").ToArray();
+        Assert.Equal(2, paras.Length);
+        Assert.Contains("author prose", paras[0].Value);
+        Assert.Contains("thermalMap", paras[1].Value);
+        Assert.Contains("SKIPPED_UNSUPPORTED_PROPERTY", paras[1].Value);
+
+        Assert.Equal("Warms Oreo from below and Mylo from above.", Tag(remarks.Parent!, "summary"));
+        Assert.Null(typeof(Radiator).GetProperty("ThermalMap"));
+    }
+
+    [Fact]
+    public void GeneratedRemarks_ShipNoProducerPathsHintsOrFileNames()
+    {
+        // The reason a remark carries the diagnostic's KIND and REASON rather than its formatted
+        // `message`: the message embeds `at <absolute path>:<line>` and an author-only hint, and
+        // every consumer of the package would read both in a tooltip.
+        string[] generated = Doc
+            .Descendants("member")
+            .Where(member => ((string?)member.Attribute("name"))?.Contains(SkipNs) == true)
+            .SelectMany(member => member.Elements("remarks"))
+            .Select(remarks => remarks.Value)
+            .ToArray();
+
+        // Sweeping every remark in the namespace only proves anything once a generated one is in
+        // the pile: the author's own <remarks> on Radiator would otherwise carry this test alone.
+        Assert.Contains(generated, remarks => remarks.Contains("SKIPPED_"));
+        string all = string.Concat(generated);
+
+        Assert.DoesNotContain(":\\", all);          // a Windows producer path
+        Assert.DoesNotContain(":/", all);           // and the forward-slashed spelling KSP emits
+        Assert.DoesNotContain(" at /", all);        // a POSIX one
+        Assert.DoesNotContain(".kt", all);          // the fixture's own source files
+        Assert.DoesNotMatch(@" at \S+\.kt:\d+", all);
+        Assert.DoesNotContain("ClawStrip.kt", all);
+        Assert.DoesNotContain("CatFlap.kt", all);
+        Assert.DoesNotContain("expose a bridgeable", all);   // the author-facing hint
     }
 
     [Fact]

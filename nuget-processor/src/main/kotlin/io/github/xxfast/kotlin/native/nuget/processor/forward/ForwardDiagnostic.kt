@@ -2,6 +2,8 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.FileLocation
+import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import java.util.Collections
 
@@ -23,8 +25,96 @@ internal data class ForwardDiagnostic(
   val declaration: String,
   val reason: String,
   val hint: String,
+  /**
+   * ADR-064 amendment (issue #249): the generated C# declaration this skip leaves a hole in, so
+   * `CirFile.withSkipRemarks` can name the member on it as a `<remarks>` paragraph. Deliberately
+   * carries no default: a producer states either an owner or `null` ("no C# declaration could carry
+   * this"), because a defaulted owner is a producer nobody wired, which is the drift ADR-064 has
+   * been amended ten times to close.
+   *
+   * Set by the producer, never derived from [declaration] (a display string spelled differently per
+   * producer) and never from `symbol.parentDeclaration` (an inherited member walked through
+   * `getAllFunctions()` reports the SUPERTYPE, while the C# hole is on the class being translated).
+   */
+  val owner: ForwardDiagnosticOwner?,
+  /**
+   * The Kotlin simple name of the member the hole is about (`weave`, never `Weave`, and never the
+   * overload-suffixed catalog symbol). Null when [owner] is null, or when the skip is about the
+   * owner itself rather than one of its members.
+   */
+  val member: String? = null,
   val signature: String = "",
 )
+
+/**
+ * ADR-064 amendment (issue #249): where a skipped member's `<remarks>` paragraph belongs, in KOTLIN
+ * spelling. The C# name is resolved once, in the post-pass, with the same namespace mapping the
+ * translator uses: a producer has the Kotlin declaration in hand and nothing else, and the two
+ * halves cannot drift while only one of them names C#.
+ */
+internal sealed interface ForwardDiagnosticOwner {
+
+  /** The Kotlin package of the owning declaration, mapped to a C# namespace by the post-pass. */
+  val packageName: String
+
+  /**
+   * A class, object, interface, value class, sealed base or sealed arm, as the chain of Kotlin
+   * simple names from the outermost declaration inward (`["Gantry", "Rung"]`,
+   * `["Scamper", "Dash"]`). Built from the KSP parent chain, so two nested `Entry` types under
+   * different owners can never cross-attach.
+   */
+  data class Type(
+    override val packageName: String,
+    val path: List<String>,
+  ) : ForwardDiagnosticOwner
+
+  /**
+   * ADR-007's file-named static class, keyed by the same (package, file stem) pair the translator
+   * groups top-level declarations by. The `Kt` suffix is a C# rename the post-pass resolves.
+   */
+  data class FileClass(
+    override val packageName: String,
+    val fileStem: String,
+  ) : ForwardDiagnosticOwner
+
+  /**
+   * ADR-075's partial skip: the member SURVIVES (a property whose setter alone was refused), so the
+   * paragraph goes on the generated C# property rather than on its type. Naming it on the type
+   * would report a member as absent that a consumer can call.
+   */
+  data class Property(
+    /**
+     * The declaration the property is rendered on: a [Type], or a [FileClass] for a top-level
+     * property.
+     */
+    val container: ForwardDiagnosticOwner,
+    /** The generated C# property name (`LastTumble`), which is what the post-pass matches on. */
+    val publicName: String,
+  ) : ForwardDiagnosticOwner {
+    override val packageName: String get() = container.packageName
+  }
+}
+
+/**
+ * The owner of a member declared in [this], built from the KSP parent chain. Companion members are
+ * folded onto the owning class (ADR-013 renders them as its statics), which is where their C# hole
+ * is.
+ */
+internal fun KSClassDeclaration.forwardDiagnosticOwner(): ForwardDiagnosticOwner.Type {
+  val path: MutableList<String> = mutableListOf()
+  var current: KSDeclaration? = this
+  while (current is KSClassDeclaration) {
+    if (!current.isCompanionObject) path.add(0, current.simpleName.asString())
+    current = current.parentDeclaration
+  }
+  return ForwardDiagnosticOwner.Type(packageName.asString(), path)
+}
+
+/** The ADR-007 file holder a top-level declaration would have been declared on. */
+internal fun KSDeclaration.forwardFileClassOwner(): ForwardDiagnosticOwner.FileClass? {
+  val stem: String = containingFile?.fileName?.removeSuffix(".kt") ?: return null
+  return ForwardDiagnosticOwner.FileClass(packageName.asString(), stem)
+}
 
 internal enum class ForwardDiagnosticSeverity { WARNING, INFO, ERROR }
 
@@ -363,6 +453,12 @@ internal object ForwardDiagnosticSink {
             kind = diagnostic.kind,
             declaration = diagnostic.declaration,
             message = message,
+            // Issue #249: the raw parts, so the generated `<remarks>` can be built from the same
+            // recorded list `NugetDiagnostics.json` is written from without ever shipping
+            // [message], which embeds the author-facing hint and an absolute source path.
+            owner = diagnostic.owner,
+            member = diagnostic.member,
+            reason = diagnostic.reason,
           )
         }
       }

@@ -24,7 +24,19 @@ namespace IntegrationTests;
 /// The generated <c>Interop.cs</c> compiles into <c>IntegrationTests.dll</c>, so that assembly is
 /// the haystack for every absence assertion (precedent: <c>Issue42Tests</c>).
 ///
-/// Oreo scans the empty treat bag. Mylo pings back. Only one of them makes it to C#.
+/// <para>
+/// ADR-064's amendment for issue #249 AMENDS the rule these cells pin, and they are flipped with
+/// it. "Indistinguishable from a class whose members are merely still to come" is exactly what
+/// stops being true once the holder SAYS why it is empty: a file whose every declaration was
+/// dropped is the one place a consumer can be told at all, so the holder survives carrying nothing
+/// but its <c>&lt;remarks&gt;</c>. The half that still holds -- nothing declared and nothing
+/// dropped means still no holder -- has no fixture here (every file in this pack that declares
+/// nothing also drops something), so it is pinned in Tier 1 instead, by
+/// <c>Tier1EmptyStaticClassElisionTest</c>'s quiet-file cell.
+/// </para>
+///
+/// Oreo scans the empty treat bag. Mylo pings back. Both of them make the generated file now, but
+/// only one of them is callable.
 /// </summary>
 public class EmptyStaticClassTests
 {
@@ -34,12 +46,16 @@ public class EmptyStaticClassTests
         typeof(HuskMixed).Assembly.GetTypes();
 
     [Fact]
-    public void HuskOnly_EveryDeclarationSkipped_EmitsNoStaticClass()
+    public void HuskOnly_EveryDeclarationSkipped_KeepsAHolderThatCarriesOnlyTheRemark()
     {
-        // The red assertion. Today the husk is generated as an empty static class.
-        var husks = Emitted.Where(t => t.Name == "HuskOnly").ToList();
+        // Issue #249: the holder is kept, because it is the only place `scan`'s absence can reach
+        // a consumer -- but it carries no member of any kind, which is the half of the original
+        // rule that never changed.
+        var husk = Assert.Single(Emitted.Where(t => t.Name == "HuskOnly"));
 
-        Assert.Empty(husks);
+        Assert.Equal("TestLibrary.Husk", husk.Namespace);
+        Assert.Empty(husk.GetMethods(
+            BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly));
     }
 
     [Fact]
@@ -77,28 +93,29 @@ public class EmptyStaticClassTests
     [Fact]
     public void HuskNamespace_HoldsNothingButTheMixedFile()
     {
-        // Namespace-level sweep: whatever else the husk elision does, `TestLibrary.Husk` must end
-        // up containing exactly one type. Name-agnostic, so a renamed stub cannot slip through.
+        // Namespace-level sweep: whatever else the husk rule does, `TestLibrary.Husk` must end up
+        // containing exactly these two holders and nothing invented beside them. Name-agnostic, so
+        // a renamed stub cannot slip through.
         var inHusk = Emitted
             .Where(t => t.Namespace == "TestLibrary.Husk")
             .Select(t => t.Name)
             .OrderBy(n => n)
             .ToList();
 
-        Assert.Equal(new[] { "HuskMixed" }, inHusk);
+        Assert.Equal(new[] { "HuskMixed", "HuskOnly" }, inHusk);
     }
 
     [Fact]
-    public void ChaffNamespace_LeftWithNoDeclarations_IsDroppedEntirely()
+    public void ChaffNamespace_HoldsOnlyTheHolderThatExplainsItself()
     {
-        // The other half of the fix: an elided static class that was the namespace's only
-        // occupant takes the namespace with it. Nothing may live in `TestLibrary.Chaff`, and no
-        // type may be named `ChaffOnly`.
-        var inChaff = Emitted
-            .Where(t => t.Namespace == "TestLibrary.Chaff" || t.Name == "ChaffOnly")
-            .Select(t => t.FullName)
-            .ToList();
+        // `chaff/ChaffOnly.kt` is the only file in its package and every declaration in it was
+        // dropped, so before issue #249 the namespace went with the husk. It is kept now, for the
+        // one reason a namespace is ever worth keeping around an empty type: the type says why it
+        // is empty. Nothing else lives there and nothing is callable on it.
+        var chaff = Assert.Single(Emitted.Where(t => t.Namespace == "TestLibrary.Chaff"));
 
-        Assert.Empty(inChaff);
+        Assert.Equal("ChaffOnly", chaff.Name);
+        Assert.Empty(chaff.GetMethods(
+            BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly));
     }
 }

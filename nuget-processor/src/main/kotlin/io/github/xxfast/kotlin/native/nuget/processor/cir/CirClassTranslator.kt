@@ -40,6 +40,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPlanProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPropertyProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardDiagnosticOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardFileClassOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
@@ -171,6 +174,10 @@ private fun keepsSupertype(
         declaration = "$name : $simpleName",
         reason = reason,
         hint = hint,
+        // Issue #249 v1: no member is missing -- the class exports, with its base list shortened
+        // (an interface's defaulted members still bind on it; a base class's are re-homed onto
+        // it). What C# loses is a TYPE relation, which the memo lists as its own later cell.
+        owner = null,
       ),
     ),
     logger,
@@ -224,6 +231,11 @@ private fun warnNoPublicConstructor(
         hint = "the type is kept because instances can still come from Kotlin factories that " +
             "return it (a top-level function, or a companion factory); expose one, or change " +
             "the constructor parameters to types the bridge can express",
+        // Issue #249: deliberately ownerless. This kind ALREADY has a consumer-facing twin --
+        // `noPublicConstructorRemark`, the `<remarks>` ADR-064's 2026-09-10 amendment shipped --
+        // which this translator attaches directly. Giving it an owner too would render the same
+        // hole twice, in two wordings, on one class.
+        owner = null,
       ),
     ),
     logger,
@@ -269,6 +281,9 @@ private fun emitAbstractMethodSkip(
   position: ForwardSkipPosition,
   context: NugetContext,
   logger: KSPLogger,
+  // Issue #249: the class being translated, which for a re-homed abstract member is NOT the
+  // declaring supertype the node points at.
+  owner: ForwardDiagnosticOwner?,
 ) {
   val reason: ForwardPlanSkipReason = type.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
   val detail: String? = type.skipDetail()
@@ -286,6 +301,8 @@ private fun emitAbstractMethodSkip(
       declaration = declaration,
       reason = reason.diagnosticReason(detail),
       hint = reason.diagnosticHint(detail, context.includePackages),
+      owner = owner,
+      member = method.simpleName.asString(),
     )
   } else {
     val described: String = type.diagnosticTypeName()
@@ -296,6 +313,8 @@ private fun emitAbstractMethodSkip(
       reason = "its type $described has no public C# spelling, so the abstract declaration " +
           "cannot be rendered",
       hint = "declare the member with a bridgeable type instead of $described",
+      owner = owner,
+      member = method.simpleName.asString(),
     )
   }
   ForwardDiagnosticSink.emit(listOf(diagnostic), logger)
@@ -331,6 +350,9 @@ private fun emitInheritedAbstractPropertySkip(
   classifier: ForwardBridgeTypeClassifier,
   context: NugetContext,
   logger: KSPLogger,
+  // Issue #249: the class being translated, not `prop.parentDeclaration` (the supertype that
+  // declared it): the C# hole is on the class that re-homes the member.
+  owner: ForwardDiagnosticOwner?,
 ): CirProperty? {
   if (qualified in exportedTypes) return null
   // The same classification the property planner refused the member on (`sealedAsHandle()` is the
@@ -345,6 +367,8 @@ private fun emitInheritedAbstractPropertySkip(
       declaration = "$name.$propName",
       reason = reason.diagnosticReason(detail),
       hint = reason.diagnosticHint(detail, context.includePackages),
+      owner = owner,
+      member = propName,
     )
   } else {
     val described: String = type.diagnosticTypeName()
@@ -355,6 +379,8 @@ private fun emitInheritedAbstractPropertySkip(
       reason = "its type $described has no property getter or setter shape",
       hint = "expose a bridgeable property (or a getter function) whose type is not $described, " +
           "and export that instead",
+      owner = owner,
+      member = propName,
     )
   }
   ForwardDiagnosticSink.emit(listOf(diagnostic), logger)
@@ -398,12 +424,14 @@ private fun inheritedAbstractProperty(
   classifier: ForwardBridgeTypeClassifier,
   context: NugetContext,
   logger: KSPLogger,
+  // Issue #249: the class whose generated type re-homes this inherited member.
+  diagnosticOwner: ForwardDiagnosticOwner?,
 ): CirProperty? {
   val owner: KSClassDeclaration = prop.parentDeclaration as? KSClassDeclaration ?: return null
   val qualified: String = owner.qualifiedName?.asString() ?: return null
   val plan: ForwardPropertyPlan = interfaceDeclarationCatalog.propertyFor("$qualified.$propName")
     ?: return emitInheritedAbstractPropertySkip(
-      prop, propName, name, qualified, exportedTypes, classifier, context, logger,
+      prop, propName, name, qualified, exportedTypes, classifier, context, logger, diagnosticOwner,
     )
   return CirProperty(
     name = plan.publicName,
@@ -511,6 +539,9 @@ internal fun KSClassDeclaration.cirTypeParameters(
               "dropped; C# does not support variance on classes",
           hint = "the member still binds; declare the parameter invariant if the dropped " +
               "variance was load-bearing",
+          // Nothing generated loses a member here (a note, or an ERROR_* that fails the
+          // build before anything is read), so there is no owner to name it on.
+          owner = null,
         ),
       ),
       logger,
@@ -653,6 +684,9 @@ internal fun translateClass(
           hint = "rename or remove the duplicate constructor, change one parameter's type so " +
               "the rendered C# signatures differ, or remove the default value whose synthesized " +
               "omitting overload collides (ADR-091)",
+          // Nothing generated loses a member here (a note, or an ERROR_* that fails the
+          // build before anything is read), so there is no owner to name it on.
+          owner = null,
         ),
       ),
       logger,
@@ -694,7 +728,7 @@ internal fun translateClass(
       if (prop.parentDeclaration != cls && prop.isAbstract()) {
         return@mapNotNull inheritedAbstractProperty(
           prop, propName, name, interfaceDeclarationCatalog, exportedTypes, classifier, context,
-          logger,
+          logger, cls.forwardDiagnosticOwner(),
         )
       }
       // Issue #121: the planner declined, but a decline is not always an invitation. A marked
@@ -748,6 +782,8 @@ internal fun translateClass(
               symbol = prop,
               declaration = "$name.$propName",
               typeArgument = unnameableTypeArgument.typeArgument,
+              owner = cls.forwardDiagnosticOwner(),
+              member = propName,
             ),
           ),
           logger,
@@ -944,6 +980,7 @@ internal fun translateClass(
       if (!returnBridge.isPubliclySpellable(typeParametersInScope)) {
         emitAbstractMethodSkip(
           method, "$name.$methodName", returnBridge, ForwardSkipPosition.RETURN, context, logger,
+          cls.forwardDiagnosticOwner(),
         )
         return@mapNotNull null
       }
@@ -952,7 +989,7 @@ internal fun translateClass(
       if (unspellableParameter != null) {
         emitAbstractMethodSkip(
           method, "$name.$methodName", unspellableParameter, ForwardSkipPosition.INPUT, context,
-          logger,
+          logger, cls.forwardDiagnosticOwner(),
         )
         return@mapNotNull null
       }
@@ -1868,6 +1905,9 @@ internal fun translateSealedClass(
                   symbol = prop,
                   declaration = "$subName.$propName",
                   typeArgument = unnameableTypeArgument.typeArgument,
+                  // ADR-009: the arm is its own C# declaration, so the hole is on the arm.
+                  owner = subclass.forwardDiagnosticOwner(),
+                  member = propName,
                 ),
               ),
               logger,
@@ -2133,6 +2173,8 @@ internal fun emitCsharpSignatureCollisions(
             hint = "rename one overload, change a parameter's type so the rendered C# " +
                 "signatures differ, or remove the default value whose synthesized overload " +
                 "collides (ADR-096)",
+            // ERROR_*: the build fails before anything generated is read.
+            owner = null,
           ),
         ),
         logger,
@@ -2275,6 +2317,9 @@ private fun emitObjectDroppedSupertypes(
             "$simpleName, so `is`/`as` against $simpleName and any dispatch through it are gone; " +
             "declare a class with a private constructor and a singleton instance instead if the " +
             "consumer needs to pass it as a $simpleName",
+        // Issue #249: a whole-type skip stays ownerless, like the class route's dropped supertype:
+        // no generated member is missing, so there is no paragraph to attach.
+        owner = null,
       )
     },
     logger,
@@ -2325,6 +2370,8 @@ private fun emitObjectNameCollisions(
                 "the static class an object becomes (CS0102)",
             hint = "rename one of them on object $objectName; a property, a `const val` and a " +
                 "function all render PascalCase in C# (ADR-110)",
+            // Issue #249: fatal, so no C# is generated to carry a remark.
+            owner = null,
           ),
         ),
         logger,
@@ -2739,6 +2786,8 @@ private fun emitInterfaceNameCollisions(
           reason = "the interface property '${property.kotlinName}' already claims that C# name, " +
               "and C# cannot declare a property and a method with one name (CS0102)",
           hint = "rename the Kotlin function '$kotlinName' or the property it collides with",
+          // ERROR_*: the build fails, so nothing generated is ever read.
+          owner = null,
         ),
       ),
       logger,
@@ -2952,6 +3001,8 @@ internal fun translateValueClass(
               "declare two methods with the same signature (ADR-034)",
           hint = "rename one overload, or change a parameter's type so the rendered C# " +
               "signatures differ",
+          // ERROR_*: the build fails before anything generated is read.
+          owner = null,
         ),
       ),
       logger,

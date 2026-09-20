@@ -1748,3 +1748,153 @@ sentence for a `RECEIVER_FAN_OUT` entry carrying `detail = "Int?"`.
   calling `RECEIVER_FAN_OUT` a diagnostic kind: it is a reason rendered under two existing kinds.
 - No fixture in `test-library` declares a fan-out receiver, so no shipped `NugetDiagnostics.json`
   content changes.
+
+## Amendment (2026-09-20): every member-level skip is named on its owner in the generated C#
+
+Issue [#249](https://github.com/xxfast/kotlin-native-nuget/issues/249), split out of #247. Lifts the
+2026-09-10 amendment (which gave `WARNING_NO_PUBLIC_CONSTRUCTOR` a consumer-facing `<remarks>`) from
+one kind to **every** diagnostic that has a C# owner.
+
+Before this, a dropped property, method or top-level function left no trace in `Interop.cs` at all:
+the producer's build log and `NugetDiagnostics.json` named it, and a consumer of the NuGet package
+reads neither. They met the hole at the call site.
+
+### Decision
+
+- `ForwardDiagnostic` carries an explicit `owner: ForwardDiagnosticOwner?` and `member: String?`.
+  `owner` has **no default**, so every producer states either an owner or `null` and the compiler
+  enumerates the sites; a defaulted owner is a producer nobody wired.
+- `ForwardDiagnosticOwner` is Kotlin-spelled: `Type(packageName, path)` (the chain of Kotlin simple
+  names, built from the KSP parent chain -- never from the `declaration` display string, which is
+  spelled differently per producer, and never from `symbol.parentDeclaration`, which for an
+  inherited member walked via `getAllFunctions()` is the SUPERTYPE rather than the class whose C#
+  type has the hole), `FileClass(packageName, fileStem)` for ADR-007's holder, and
+  `Property(container, publicName)` for ADR-075's partial skip.
+- Owners are stamped **per walk**, in `ForwardCallablePlanner.catalog` and `ForwardPropertyPlanner`,
+  not per skip site: the walk is the only place that knows the class being planned. Giving `owner`
+  no default turned every existing `ForwardDiagnostic(...)` construction that omitted it into a
+  compile error, which is what the sites were actually counted by: the compiler enumerated **36
+  producer sites across 5 files** (`NugetProcessor.kt`, `cir/CirClassTranslator.kt`,
+  `cir/CirFunctionTranslator.kt`, `cir/CirTranslator.kt`, `cir/CirTypeMapping.kt`; a 6th file,
+  `forward/ForwardDiagnostic.kt`, only declares the data class and constructs nothing, so it is not
+  itself a producer). The research memo that preceded this amendment had estimated roughly 16 from a
+  `kind = ForwardDiagnosticKind.` grep; the real count, once nothing could compile without an
+  explicit answer, was more than double that.
+- `CirFile.withSkipRemarks(records, namespaceOf)` is a pure post-pass in `cir/CirSkipRemarks.kt`,
+  run by `NugetProcessor` between `translate` and `render`, fed from the same recorded list
+  `NugetDiagnostics.json` is written from -- so the file and the JSON cannot name different members.
+  The research memo worried that an in-translate producer (the CIR translators' own
+  `logger.warn`/`logger.error` sites, as opposed to the pre-translate planner sites) might reach the
+  post-pass but miss the JSON, or vice versa; that risk never existed, because
+  `renderForwardDiagnosticsJson` runs *after* `generateCSharpBindings` (`NugetProcessor.kt:1573` vs
+  `:1480`), so every producer, in-translate or not, is already recorded by the time the JSON is
+  written. "One list, two renderings" was literally true from the start.
+  `NugetDiagnostics.json` itself is **unchanged**: `ForwardDiagnosticRecord` gained `owner`, `member`
+  and the unformatted `reason`, but `renderForwardDiagnosticsJson` still serializes only the same
+  four fields (`severity`, `kind`, `declaration`, `message`) `NugetReportDiagnosticsTask` already
+  parses; the new fields exist only to feed the post-pass. The translator never reads the sink. The
+  gate is `owner != null`, **not** the `SKIPPED_` prefix: ADR-075's setter skip is a
+  `SKIPPED_UNSUPPORTED_INPUT` for a property that still exists. The post-pass also **dedupes by
+  `(owner, member, kind)`**: ADR-149 synthesizes an omitting overload even when the declared entry
+  itself was `Skipped`, so one dropped top-level function with two defaulted parameters recorded the
+  same drop two or three times before this filter, which would have rendered the same paragraph
+  repeated in one `<remarks>`.
+- `remarks: List<String>` exists on every owner kind (`CirClass`, `CirSealedSubclass`,
+  `CirSealedClass`, `CirObject`, `CirValueClass`, `CirInterface`, `CirStaticClass`) and on
+  `CirProperty` for the one per-member case. `renderDoc` takes it as its third argument, so a member
+  still renders exactly one `<remarks>`: author paragraphs first, generated ones last (ADR-150).
+- The paragraph is the KIND, the raw `reason`, and the **Kotlin** member name. Never the formatted
+  `message` (it embeds `at <absolute path>:<line>`), never the `hint` (author-facing), never a C#
+  name the member never had.
+
+### Declined, not deferred: which diagnostics stay ownerless
+
+Not every diagnostic has an owner, and each `null` site is a considered decision rather than a gap
+this amendment forgot:
+
+- **Constructors are never stamped.** `constructorEntries(cls)` (the call site at
+  `ForwardCallablePlanner.kt:669`) is deliberately not run through `.ownedBy(...)`, unlike every
+  other per-owner walk. `WARNING_NO_PUBLIC_CONSTRUCTOR` already renders its own class-level
+  `<remarks>` (the 2026-09-10 amendment) naming every skipped constructor and its reason; stamping
+  an owner on the individual per-constructor `SKIPPED_*` too would render the same hole twice, in
+  two wordings, on one class. A constructor set that is only *partially* refused, and a data class's
+  auto-generated `copy()` (filtered out of `classEntries` entirely by `isCompilerOwnedMember`, so it
+  is planned and possibly skipped on its own separate route) both still produce a build-log line and
+  a `NugetDiagnostics.json` record; neither gets a `<remarks>` paragraph.
+- **A whole-TYPE skip stays ownerless**, because nothing *generated* lost a member: for
+  `SKIPPED_ANNOTATION_CLASS` and `SKIPPED_NESTED_DECLARATION` the declaration itself never reaches
+  C# at all, so there is no surviving type to hang prose on; `SKIPPED_UNEXPORTED_SUPERTYPE` leaves
+  the class standing and only drops one entry from its base list, not a member; and
+  `SKIPPED_INELIGIBLE_SEALED_INTERFACE` still declares a bare `I<Name>` nothing exported can be
+  typed with. All four are diagnosed about the TYPE or its shape, never about one of its members, so
+  none of them fits the per-member paragraph this amendment adds.
+- **Extensions stay ownerless.** The natural owner of a dropped extension function or property would
+  be its `{Receiver}Extensions` static class, but that class may exist *only because of* the
+  dropped extension (the same husk problem the file-class case solves for a top-level declaration,
+  left open here). Deferred rather than fixed in this amendment.
+- **A skipped entry with no KSP node gets no remark.** `member` is read off the node's own
+  `simpleName`; a `Skipped` entry recorded with `node = null` (no single `KSNode` cleanly represents
+  the skip) has no name to put in a paragraph, so `CirFile.withSkipRemarks` drops it via the same
+  `member ?: return null` guard that drops a null `owner`.
+
+One consequence of widening past constructors and whole-type skips: the ADR-082
+`CharSequence by value` value class (`StoryUri`, the fixture [Publishing Kotlin to
+C#](../topics/forward-overview.md) already shows emitting three build-log `SKIPPED_INHERITED_MEMBER`
+lines for `length`, `get` and `subSequence`) now also carries three generated `<remarks>` paragraphs
+on the type itself, one per inherited member ADR-082 ratified as permanently unsupported.
+
+### The husk rule is amended with it
+
+The 2026-09-07 amendment ("an absent declaration leaves no husk") elided a `CirStaticClass` with no
+members, which for issue #249's headline case (a file whose every top-level declaration was dropped)
+deleted the only place the skip could have been reported. That amendment's objection was that a husk
+is indistinguishable from "members still to come" -- which stops being true once the husk says why
+it is empty. So `withoutEmptyStaticClasses` moved out of `translate` into the processor, runs
+**after** `withSkipRemarks`, and spares a holder that carries a remark. A file with nothing declared
+and nothing dropped still renders no holder;
+`Tier1EmptyStaticClassElisionTest`'s quiet-file cell is what pins that half now.
+
+**This overrides the research memo, on purpose.** The memo that preceded this amendment recommended
+the opposite for exactly this case ("v1 stays traceless for the fully-skipped file," on the grounds
+that re-admitting an empty public type is an API-surface decision that deserves its own yes). At the
+implementation gate the human decided the other way: a husk that says why it is empty is worth
+shipping, because it is issue #249's own headline example and the alternative leaves that exact case
+unanswered. Anyone re-reading the memo after this amendment should not re-import its "stay
+traceless" recommendation; the shipped behaviour is the opposite, decided deliberately, not an
+oversight.
+
+### The interface producer hole, fixed here
+
+`Pounceable.rankTargets(Map<String?, Int>)` on an interface produced **zero** records in any channel:
+`translateInterface` dropped it from `IPounceable` silently, and the interface declaration catalog's
+drops were filtered to `UNROUTED_POSITION` only (its property drops were built and thrown away
+entirely). Widened to every `droppedFromCSharp` reason, plus the property channel, under the
+existing symbol guard. Both call sites of `ForwardCallablePlanner.interfaceEntries(...)` in
+`NugetProcessor.kt` now stamp `iface.forwardDiagnosticOwner()` on their result: the first, scoped to
+`reachableInterfaces` (an interface something actually returns), feeds `callableCatalog`; the
+second, scoped to every exported `interface` regardless of reachability or implementation, feeds
+`interfaceDeclarationCatalog` (ADR-113's separate catalog that keeps `IFoo` populated even for an
+interface nothing returns). `Pounceable` is only ever caught by the second one, since nothing
+returns it. Reported per OWNER: an implementing class keeps its own line (ADR-113), and the interface gets its own,
+because a consumer holding an `IFoo` never sees the class's. One declaration and owner pair is still
+never printed twice -- a reachable interface is planned into both catalogs under one symbol, which
+the symbol guard collapses. The ADR-040 backing wrapper (`CirClass(isSealed = true)`, generated
+under the same Kotlin name as the interface it wraps) never takes a paragraph of its own: it would
+say the same thing twice, on two C# types, for one Kotlin declaration, so the post-pass skips it
+whenever the owning declaration is a wrapper rather than the interface itself.
+
+### Consequences of the amendment
+
+- The generated C# gains doc comments only; no ABI, export, handle or member changes.
+- Three consumer pins were inverted with the husk rule (`EmptyStaticClassTests`), and
+  `Tier1Issue112InterfaceProjectionTest`'s "silently omitted" cell became "named once per owner".
+- "This unbridgeable type must not appear in the generated C#" assertions now read through
+  `withoutDocComments()`: a `<remarks>` naming a Kotlin type is escaped prose, not a reference, and
+  cannot dangle (a `cref` could, which is what `resolveDocLinks` is for).
+
+The post-pass therefore does **not** synthesise the holder for that case: the one `translate` built
+is still standing when the pass runs, carrying the exact name `resolveStaticClassName` gave it, so
+no naming rule is re-derived anywhere. It keeps one narrow synthesis fallback, for an owner no
+`translate` loop ever grouped because the declaration never reached `translate` at all -- an
+ADR-115 opt-in-marked top-level function is filtered out before collection, so a file holding only
+one leaves no husk to attach to.

@@ -452,6 +452,10 @@ the read-modify-write idiom; do not special-case mutable kinds in the predicate.
 - The temporary handle built by `CreateList`/`CreateMap`/`CreateSet` in a setter body leaks if the Kotlin
   setter throws, exactly as it does for a collection parameter today (ROADMAP's open `try`/`finally` item).
   This change inherits that bug; it does not introduce or fix it.
+- **Pointer (2026-09-20):** the surviving read-only property this ADR describes is also where
+  [ADR-064](064-forward-unsupported-declaration-diagnostics.md)'s 2026-09-20 amendment (issue #249)
+  hangs its one per-member `<remarks>` paragraph, instead of on the owning class: the property still
+  exists, so naming the drop on the class would report a member as absent that C# can still call.
 
 ## Inferred claims in this ADR
 

@@ -232,7 +232,7 @@ class Tier1OptInMarkerSkipTest {
           "scope can admit a marked type; got: $blamed",
     )
     assertFalse(
-      "HouseRules" in result.generatedCSharp,
+      "HouseRules" in result.generatedCSharp.withoutDocComments(),
       "a marked class is never declared; generated C#:\n${result.generatedCSharp}",
     )
     assertTrue(

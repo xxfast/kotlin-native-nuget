@@ -92,6 +92,10 @@ sealed interface CirDeclaration
 data class CirStaticClass(
   val name: String,
   val members: List<CirMember>,
+  // ADR-064 amendment (issue #249): generated prose for this declaration's single `<remarks>`,
+  // one paragraph per member the bridge dropped from it. Attached by `CirFile.withSkipRemarks`
+  // after translation, never during it; text, not markup (`renderDoc` escapes).
+  val remarks: List<String> = emptyList(),
 ) : CirDeclaration
 
 data class CirInterface(
@@ -105,6 +109,9 @@ data class CirInterface(
   val nestedDeclarations: List<CirDeclaration> = emptyList(),
   // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
   val doc: CirDoc? = null,
+  // ADR-064 amendment (issue #249): generated `<remarks>` prose, one paragraph per member the
+  // bridge dropped from this declaration. Attached by `CirFile.withSkipRemarks` after translation.
+  val remarks: List<String> = emptyList(),
 ) : CirDeclaration
 
 data class CirInterfaceProperty(
@@ -204,6 +211,9 @@ data class CirValueClass(
    * positional property itself (verified 2026-09-20; see `renderReferenceValueClass`).
    */
   val underlyingDoc: CirDoc? = null,
+  // ADR-064 amendment (issue #249): generated `<remarks>` prose, one paragraph per member the
+  // bridge dropped from this declaration. Attached by `CirFile.withSkipRemarks` after translation.
+  val remarks: List<String> = emptyList(),
 ) : CirDeclaration
 
 data class CirValueClassConstructor(
@@ -272,6 +282,9 @@ data class CirSealedClass(
   val nestedDeclarations: List<CirDeclaration> = emptyList(),
   // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
   val doc: CirDoc? = null,
+  // ADR-064 amendment (issue #249): generated `<remarks>` prose, one paragraph per member the
+  // bridge dropped from this declaration. Attached by `CirFile.withSkipRemarks` after translation.
+  val remarks: List<String> = emptyList(),
 ) : CirDeclaration
 
 data class CirSealedSubclass(
@@ -371,6 +384,9 @@ data class CirObject(
   val nestedDeclarations: List<CirDeclaration> = emptyList(),
   // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
   val doc: CirDoc? = null,
+  // ADR-064 amendment (issue #249): generated `<remarks>` prose, one paragraph per member the
+  // bridge dropped from this declaration. Attached by `CirFile.withSkipRemarks` after translation.
+  val remarks: List<String> = emptyList(),
 ) : CirDeclaration
 
 enum class CirVariance { INVARIANT, COVARIANT, CONTRAVARIANT }
@@ -797,6 +813,10 @@ data class CirProperty(
   val isNullablePrimitiveTwoCall: Boolean = false,
   // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
   val doc: CirDoc? = null,
+  // ADR-064 amendment (issue #249): the ONE per-member remark in the feature -- ADR-075's
+  // partial skip, where the setter alone was refused and the property survives read-only, so the
+  // paragraph belongs on the property a consumer can still call rather than on its type.
+  val remarks: List<String> = emptyList(),
 ) : CirMember
 
 data class CirExtraNative(
