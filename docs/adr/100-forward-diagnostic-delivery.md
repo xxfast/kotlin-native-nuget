@@ -335,3 +335,12 @@ So: **keep `:349` open, rewrite its body, do not tick it, and do not open a seco
 rewritten body should say that the producers and their Tier 1 coverage exist (ADR-064), that the
 remaining gap is delivery to a console a consumer actually reads plus the twice-run end-to-end
 fixture, and that ADR-100 owns it.
+
+### `NugetReportDiagnosticsTask.report()` stays at 0/10 JVM unit coverage, deliberately
+
+Moved here from `ROADMAP.md` 2026-09-20, since it is a standing constraint and not open work.
+`report()` is exercised only by a real Gradle build in `scripts/verify-forward-diagnostics.sh`, never
+by a JVM unit test. That is not a gap to close: faking it in a JVM test would recreate the trap this
+ADR was written to close, since `Tier1Harness` injects its own `RecordingKSPLogger` straight past the
+production transport, which is why the existing sink test stayed green while the transport it claimed
+to prove was broken end to end. A future coverage sweep should not "fix" this method's number.
