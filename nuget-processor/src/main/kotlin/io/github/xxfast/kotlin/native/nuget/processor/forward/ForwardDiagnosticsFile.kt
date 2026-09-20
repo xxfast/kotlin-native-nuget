@@ -14,6 +14,16 @@ internal data class ForwardDiagnosticRecord(
   val kind: ForwardDiagnosticKind,
   val declaration: String,
   val message: String,
+  /**
+   * ADR-064 amendment (issue #249): the skip's owner, member name and raw reason sentence, kept
+   * unformatted so `CirFile.withSkipRemarks` can render the consumer-facing `<remarks>` paragraph
+   * from the same list this file is written from. None of the three is serialized below:
+   * `NugetReportDiagnosticsTask` parses four fields, and a fifth is additive later if a consumer
+   * ever needs it.
+   */
+  val owner: ForwardDiagnosticOwner? = null,
+  val member: String? = null,
+  val reason: String = "",
 )
 
 /**

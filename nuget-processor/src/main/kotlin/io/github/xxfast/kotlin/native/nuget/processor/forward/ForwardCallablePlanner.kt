@@ -288,8 +288,33 @@ internal sealed interface ForwardCallableCatalogEntry {
      * carry the same reason and the same position, and the author's remedy differs.
      */
     val structural: Boolean = false,
-  ) : ForwardCallableCatalogEntry
+    /**
+     * ADR-064 amendment (issue #249): the generated C# declaration this drop leaves a hole in.
+     * Stamped by [ForwardCallablePlanner.catalog]'s per-owner walk rather than per skip site: the
+     * walk is the only place that knows the class being planned, which for an inherited member is
+     * not what [node]'s parent reports.
+     */
+    val owner: ForwardDiagnosticOwner? = null,
+  ) : ForwardCallableCatalogEntry {
+
+    /** The Kotlin simple name of the dropped member, never the overload-suffixed [symbol]. */
+    val memberName: String?
+      get() = (node as? KSDeclaration)?.simpleName?.asString()
+  }
 }
+
+/**
+ * Issue #249: stamp one owner onto every skipped entry a per-owner walk produced. A `Planned` entry
+ * needs none: it has a C# member of its own and nothing to report.
+ */
+internal fun List<ForwardCallableCatalogEntry>.ownedBy(
+  owner: ForwardDiagnosticOwner?,
+): List<ForwardCallableCatalogEntry> = map { entry -> entry.ownedBy(owner) }
+
+internal fun ForwardCallableCatalogEntry.ownedBy(
+  owner: ForwardDiagnosticOwner?,
+): ForwardCallableCatalogEntry =
+  if (this is ForwardCallableCatalogEntry.Skipped) copy(owner = owner) else this
 
 /**
  * ADR-064 amendment (2026-09-13): the deferral reasons whose legacy route exists only at *some*
@@ -608,7 +633,11 @@ internal class ForwardCallablePlanner(
     sealedClasses: List<KSClassDeclaration> = emptyList(),
   ): ForwardCallablePlanCatalog {
     val entries: List<ForwardCallableCatalogEntry> = buildList {
-      classes.forEach { cls -> addAll(classEntries(cls)) }
+      // Issue #249: every walk below stamps the C# owner of what it planned onto its skips, so a
+      // dropped member can be named on the declaration that would have declared it. Constructors
+      // are deliberately unstamped: ADR-064's WARNING_NO_PUBLIC_CONSTRUCTOR remark already names
+      // that hole on the class, and a paragraph per refused `<init>` would say it twice.
+      classes.forEach { cls -> addAll(classEntries(cls).ownedBy(cls.forwardDiagnosticOwner())) }
       // ADR-116: the method half of ADR-111. A sealed subclass is deliberately absent from
       // `classes` (ADR-009 / issue #54), so its declared member functions have to be planned from
       // the sealed base, under the same `${sealed}_${sub}` prefix the property getters already use.
@@ -616,7 +645,8 @@ internal class ForwardCallablePlanner(
         // ADR-116 amendment (2026-09-11): the base's own declared members first, so an arm's
         // projection can ask whether the C# base already carries the signature it is about to
         // spell (`override` when it matches, nothing at all when the arm declares none).
-        val base: List<ForwardCallableCatalogEntry> = sealedBaseEntries(sealed)
+        val base: List<ForwardCallableCatalogEntry> =
+          sealedBaseEntries(sealed).ownedBy(sealed.forwardDiagnosticOwner())
         addAll(base)
         // ADR-116 amendment (2026-09-13): *which* base members actually planned, as the ADR-096
         // synthesis gate on the arms. A base member the planner declined (an opt-in marker, an
@@ -630,7 +660,10 @@ internal class ForwardCallablePlanner(
           .mapNotNull { entry -> entry.node }
           .toSet()
         sealed.getSealedSubclasses().forEach { sub ->
-          addAll(sealedSubclassEntries(sealed, sub, plannedBaseMembers))
+          addAll(
+            sealedSubclassEntries(sealed, sub, plannedBaseMembers)
+              .ownedBy(sub.forwardDiagnosticOwner()),
+          )
         }
       }
       classes.forEach { cls -> addAll(constructorEntries(cls)) }
@@ -663,6 +696,8 @@ internal class ForwardCallablePlanner(
       val topLevelOccurrences: MutableMap<String, Int> = mutableMapOf()
       val topLevel: List<ForwardCallableCatalogEntry> = functions.map { function ->
         topLevelEntry(function, overloadSuffix(topLevelOccurrences, function))
+          // Issue #249: per declaration, not per walk -- one call to `catalog` covers every file.
+          .ownedBy(function.forwardFileClassOwner())
       }
       addAll(topLevel)
       // ADR-096: the omitting overloads, appended after *every* declared entry of this counter
@@ -676,7 +711,7 @@ internal class ForwardCallablePlanner(
           add(
             topLevelEntry(
               function, overloadSuffix(topLevelOccurrences, function), omitted = omitted + 1,
-            ).synthesized()
+            ).synthesized().ownedBy(function.forwardFileClassOwner())
           )
         }
       }
@@ -710,9 +745,13 @@ internal class ForwardCallablePlanner(
           )
         }
       }
-      objects.forEach { obj -> addAll(objectEntries(obj)) }
-      classes.forEach { cls -> addAll(companionEntries(cls)) }
-      valueClasses.forEach { cls -> addAll(valueClassEntries(cls)) }
+      objects.forEach { obj -> addAll(objectEntries(obj).ownedBy(obj.forwardDiagnosticOwner())) }
+      // ADR-013 renders a companion's members as the owning class's statics, so the hole is on the
+      // class -- which is what `forwardDiagnosticOwner()` returns for a companion.
+      classes.forEach { cls -> addAll(companionEntries(cls).ownedBy(cls.forwardDiagnosticOwner())) }
+      valueClasses.forEach { cls ->
+        addAll(valueClassEntries(cls).ownedBy(cls.forwardDiagnosticOwner()))
+      }
     }
     val planner = ForwardPropertyPlanner(classifier, expects)
     val propertyPlans: List<ForwardPropertyPlan> = planner.catalog(

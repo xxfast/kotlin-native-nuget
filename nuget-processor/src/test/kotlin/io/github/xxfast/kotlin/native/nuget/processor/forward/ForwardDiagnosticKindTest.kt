@@ -68,6 +68,7 @@ class ForwardDiagnosticKindTest {
       declaration = "Sample.thing",
       reason = "reason",
       hint = "hint.",
+      owner = null,
     )
     val warned = skipped.copy(kind = ForwardDiagnosticKind.WARNING_DUPLICATED_DEPENDENCY_TYPE)
 

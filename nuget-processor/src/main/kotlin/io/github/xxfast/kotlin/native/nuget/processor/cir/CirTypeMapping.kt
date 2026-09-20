@@ -12,6 +12,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.CollectionKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyReceiver
@@ -524,10 +525,16 @@ internal fun lambdaTypeArgumentDiagnostic(
   symbol: KSNode?,
   declaration: String,
   typeArgument: String,
+  // Issue #249: this route emits no member at all, so the member really is absent from the
+  // generated C# and its owner has a hole worth naming.
+  owner: ForwardDiagnosticOwner?,
+  member: String?,
 ): ForwardDiagnostic = ForwardDiagnostic(
   kind = kind,
   symbol = symbol,
   declaration = declaration,
+  owner = owner,
+  member = member,
   reason = "its lambda type argument `$typeArgument` has no C# spelling: a lambda argument must " +
       "be a primitive, String, or an exported class, object or enum that is declared in C#, and " +
       "a type carrying its own type arguments (Flow<T>, a collection, another lambda, a generic " +

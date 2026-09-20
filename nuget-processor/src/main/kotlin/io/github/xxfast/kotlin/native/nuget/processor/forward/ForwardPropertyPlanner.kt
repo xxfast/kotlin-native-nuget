@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
@@ -32,7 +33,15 @@ internal data class ForwardDroppedPropertySetter(
    * box; the property still survives read-only, which is what this record means.
    */
   val reason: String? = null,
-)
+  /**
+   * ADR-064 amendment (issue #249): the declaration the surviving C# property is rendered on, so
+   * the remark can be attached to the PROPERTY (`Property(owner, publicName)`) rather than to its
+   * type -- the member still exists, get-only.
+   */
+  val owner: ForwardDiagnosticOwner? = null,
+) {
+  val memberName: String? get() = (node as? KSDeclaration)?.simpleName?.asString()
+}
 
 /**
  * A property whose declared type [ForwardPropertyPlanner.isPlannable] rejects outright, so the
@@ -63,7 +72,11 @@ internal data class ForwardDroppedProperty(
    *  dependency type to `include(...)`, the opt-in marker, the sealed base. See
    *  [BridgeType.skipDetail]. */
   val detail: String? = null,
-)
+  /** ADR-064 amendment (issue #249): the declaration this whole-property drop leaves a hole in. */
+  val owner: ForwardDiagnosticOwner? = null,
+) {
+  val memberName: String? get() = (node as? KSDeclaration)?.simpleName?.asString()
+}
 
 /**
  * An extension property whose *receiver* type has no supported wire shape, so the whole property is
@@ -100,6 +113,24 @@ internal class ForwardPropertyPlanner(
    */
   private val expects: ExpectIndex = ExpectIndex(),
 ) {
+  /**
+   * Issue #249: the declaration whose properties are being planned right now, stamped onto every
+   * drop this walk records. A field rather than a parameter threaded through `propertyPlan` and
+   * `collectionSetterOrNull`: planning is strictly sequential, and the alternative is an owner
+   * argument on six private functions that only the diagnostics read.
+   */
+  private var ownerScope: ForwardDiagnosticOwner? = null
+
+  private fun <T> inOwner(owner: ForwardDiagnosticOwner?, body: () -> T): T {
+    val previous: ForwardDiagnosticOwner? = ownerScope
+    ownerScope = owner
+    try {
+      return body()
+    } finally {
+      ownerScope = previous
+    }
+  }
+
   private val droppedSetters: MutableList<ForwardDroppedPropertySetter> = mutableListOf()
   private val dropped: MutableList<ForwardDroppedProperty> = mutableListOf()
   private val droppedReceivers: MutableList<ForwardDroppedExtensionReceiver> = mutableListOf()
@@ -125,22 +156,42 @@ internal class ForwardPropertyPlanner(
     objects: List<KSClassDeclaration> = emptyList(),
   ): List<ForwardPropertyPlan> = buildList {
     classes.forEach { cls ->
-      addAll(classProperties(cls))
-      addAll(companionProperties(cls))
+      // ADR-013: a companion's properties render as the class's statics, so both walks share the
+      // class as their C# owner.
+      inOwner(cls.forwardDiagnosticOwner()) {
+        addAll(classProperties(cls))
+        addAll(companionProperties(cls))
+      }
     }
-    objects.forEach { obj -> addAll(objectProperties(obj)) }
+    // Issue #249 + ROADMAP Phase 4: the object walk needs its own owner scope for the same reason
+    // the class walk has one. Its drops are real since the Phase 4 item made a Flow, StateFlow or
+    // lambda property on a static owner a NAMED skip, and an ownerless record reaches
+    // `NugetDiagnostics.json` but never `CirFile.withSkipRemarks`, so the generated
+    // `public static class` said nothing about the member it lost. The owner is the OBJECT, never
+    // the member's `parentDeclaration`: this walk flattens inherited members (`superClass = null`),
+    // and the C# hole for an inherited `val` is on the object's static class, not on the supertype
+    // that declared it.
+    objects.forEach { obj ->
+      inOwner(obj.forwardDiagnosticOwner()) { addAll(objectProperties(obj)) }
+    }
     // ADR-111: a sealed subclass is reached only through its base (`classes` excludes it by
     // `isSealedSubclass`), so nothing double-plans.
     sealed.forEach { base ->
       // ADR-111 amendment (2026-09-11): the base's own declared properties first, so an arm can
       // ask the catalog whether the base already carries the member it is about to project.
-      addAll(sealedBaseProperties(base))
+      inOwner(base.forwardDiagnosticOwner()) { addAll(sealedBaseProperties(base)) }
       base.getSealedSubclasses().forEach { subclass ->
-        addAll(sealedSubclassProperties(base, subclass))
+        inOwner(subclass.forwardDiagnosticOwner()) {
+          addAll(sealedSubclassProperties(base, subclass))
+        }
       }
     }
-    topLevel.forEach { prop -> topLevelProperty(prop)?.let(::add) }
-    extensions.forEach { prop -> extensionProperty(prop)?.let(::add) }
+    topLevel.forEach { prop ->
+      inOwner(prop.forwardFileClassOwner()) { topLevelProperty(prop)?.let(::add) }
+    }
+    // An extension property's holder is `{Receiver}Extensions`, which a dropped one may have been
+    // the only member of, so it stays ownerless (see `warnDroppedForwardExtensionReceivers`).
+    extensions.forEach { prop -> inOwner(null) { extensionProperty(prop)?.let(::add) } }
   }
 
   /**
@@ -242,21 +293,23 @@ internal class ForwardPropertyPlanner(
   fun interfaceProperties(iface: KSClassDeclaration): List<ForwardPropertyPlan> {
     val owner: String = iface.qualifiedName?.asString() ?: return emptyList()
     val prefix: String = iface.nativePrefix()
-    return iface.getAllProperties()
-      .filter { it.getVisibility() == Visibility.PUBLIC }
-      .filter { prop -> !prop.isCompilerOwnedMember(iface) }
-      .filter { prop -> prop.parentDeclaration == iface }
-      .mapNotNull { prop ->
-        propertyPlan(
-          symbol = "$owner.${prop.simpleName.asString()}",
-          position = ForwardPropertyPosition.CLASS,
-          receiver = ForwardPropertyReceiver.Handle(owner),
-          prop = prop,
-          getExport = "${prefix}_get_${prop.simpleName.asString()}",
-          setExport = "${prefix}_set_${prop.simpleName.asString()}",
-        )
-      }
-      .toList()
+    return inOwner(iface.forwardDiagnosticOwner()) {
+      iface.getAllProperties()
+        .filter { it.getVisibility() == Visibility.PUBLIC }
+        .filter { prop -> !prop.isCompilerOwnedMember(iface) }
+        .filter { prop -> prop.parentDeclaration == iface }
+        .mapNotNull { prop ->
+          propertyPlan(
+            symbol = "$owner.${prop.simpleName.asString()}",
+            position = ForwardPropertyPosition.CLASS,
+            receiver = ForwardPropertyReceiver.Handle(owner),
+            prop = prop,
+            getExport = "${prefix}_get_${prop.simpleName.asString()}",
+            setExport = "${prefix}_set_${prop.simpleName.asString()}",
+          )
+        }
+        .toList()
+    }
   }
 
   private fun companionProperties(cls: KSClassDeclaration): List<ForwardPropertyPlan> {
@@ -293,8 +346,9 @@ internal class ForwardPropertyPlanner(
    *
    * Inherited members FLATTEN (`superClass = null`, the class route's own predicate): a C# static
    * class cannot extend anything, so an inherited `val` has no other carrier and would otherwise be
-   * unreachable. This is deliberately asymmetric with object *methods*, which stay declared-only
-   * (`ForwardCallablePlanner.objectEntries`); the two should be lifted together one day.
+   * unreachable. Object *methods* flatten on the same predicate
+   * (`ForwardCallablePlanner.objectEntries`), so the two walks are symmetric; the asymmetry this
+   * comment used to describe was lifted with them.
    */
   private fun objectProperties(obj: KSClassDeclaration): List<ForwardPropertyPlan> {
     val owner: String = obj.qualifiedName?.asString() ?: return emptyList()
@@ -482,7 +536,9 @@ internal class ForwardPropertyPlanner(
     val optInMarker: String? = prop.optInMarker(classifier.exportMarkers)
     if (optInMarker != null) {
       dropped.add(
-        ForwardDroppedProperty(symbol, prop, typeDescription = "", optInMarker = optInMarker),
+        ForwardDroppedProperty(
+          symbol, prop, typeDescription = "", optInMarker = optInMarker, owner = ownerScope,
+        ),
       )
       return null
     }
@@ -552,6 +608,7 @@ internal class ForwardPropertyPlanner(
           symbol = symbol,
           node = prop,
           publicName = publicName,
+          owner = ownerScope,
           componentDescription = type.diagnosticTypeName(),
           reason = "it overrides a read-only property of the exported base class " +
               "${readOnlyBase.simpleName.asString()}; C# cannot add a set accessor to an " +
@@ -569,6 +626,7 @@ internal class ForwardPropertyPlanner(
           symbol = symbol,
           node = prop,
           publicName = publicName,
+          owner = ownerScope,
           componentDescription = type.diagnosticTypeName(),
           reason = "C# cannot construct a Kotlin ${type.diagnosticTypeName()}; the error " +
               "envelope carries a snapshot out of Kotlin only",
@@ -585,6 +643,7 @@ internal class ForwardPropertyPlanner(
           symbol = symbol,
           node = prop,
           publicName = publicName,
+          owner = ownerScope,
           componentDescription = type.diagnosticTypeName(),
           reason = "a type-parameter property binds read-only in v1; the write side has no " +
               "boxing step (ADR-147)",
@@ -611,6 +670,7 @@ internal class ForwardPropertyPlanner(
           symbol = symbol,
           node = prop,
           publicName = publicName,
+          owner = ownerScope,
           componentDescription = collection.componentDescription { isWrappableComponent() },
         ),
       )
@@ -724,6 +784,7 @@ internal class ForwardPropertyPlanner(
         // parameter or return position would have been skipped on, so it takes the same reason.
         reason = type.skipReason(),
         detail = type.skipDetail(),
+        owner = ownerScope,
       )
     )
   }

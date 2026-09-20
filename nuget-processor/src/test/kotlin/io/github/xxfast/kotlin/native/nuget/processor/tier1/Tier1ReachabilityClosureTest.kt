@@ -433,7 +433,7 @@ class Tier1ReachabilityClosureTest {
           "${result.generatedCSharp.lines().filter { it.contains("Season") }}",
     )
     assertFalse(
-      result.generatedCSharp.contains("Almanac"),
+      result.generatedCSharp.withoutDocComments().contains("Almanac"),
       "expected the deferred nested type to be absent from the generated C#; generatedCSharp=" +
           "${result.generatedCSharp.lines().filter { it.contains("Almanac") }}",
     )

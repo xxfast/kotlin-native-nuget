@@ -319,3 +319,16 @@ internal object Tier1Harness {
     K2JVMCompiler().exec(collector, Services.EMPTY, arguments)
   }
 }
+
+/**
+ * The generated C# with its XML doc comments stripped.
+ *
+ * ADR-064 amendment (issue #249): a `<remarks>` paragraph naming a member the bridge DROPPED spells
+ * that member's Kotlin name, and sometimes its Kotlin type, as escaped prose. That is text, not a
+ * reference: it resolves nothing, declares nothing and cannot dangle (a `cref` would, which is why
+ * `resolveDocLinks` exists). Every "this unbridgeable type must not appear in the generated C#"
+ * assertion means the CODE, so it reads through here.
+ */
+internal fun String.withoutDocComments(): String = lines()
+  .filterNot { line -> line.trimStart().startsWith("///") }
+  .joinToString("\n")

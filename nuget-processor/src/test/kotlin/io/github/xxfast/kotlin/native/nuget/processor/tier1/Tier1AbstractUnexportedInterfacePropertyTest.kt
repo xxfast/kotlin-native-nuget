@@ -123,7 +123,7 @@ class Tier1AbstractUnexportedInterfacePropertyTest {
 
     // The unbridgeable slot reaches neither class.
     assertFalse(
-      "Lining" in csharp,
+      "Lining" in csharp.withoutDocComments(),
       "a nested-class-typed property is unbridgeable: no member may be rendered for it on the " +
           "abstract class or the subclass; generatedCSharp:\n$csharp",
     )

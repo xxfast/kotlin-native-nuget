@@ -27,6 +27,9 @@ import com.squareup.kotlinpoet.ksp.writeTo
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirRenderer
 import io.github.xxfast.kotlin.native.nuget.processor.cir.resolveDocLinks
+import io.github.xxfast.kotlin.native.nuget.processor.cir.withSkipRemarks
+import io.github.xxfast.kotlin.native.nuget.processor.cir.withoutEmptyStaticClasses
+import io.github.xxfast.kotlin.native.nuget.processor.cir.mapPackageToNamespace
 import io.github.xxfast.kotlin.native.nuget.processor.cir.NugetContext
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
@@ -73,6 +76,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ownedBy
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardDiagnosticOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardFileClassOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwners
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipReason
@@ -287,6 +294,10 @@ internal fun warnDroppedForwardCallables(
       // a sixth special case here.
       reason = dropped.reason.diagnosticReason(dropped.detail, dropped.parameter),
       hint = dropped.reason.diagnosticHint(dropped.detail, scope, dropped.parameter),
+      // Issue #249: stamped on the catalog entry by the walk that planned it, so an inherited
+      // member's owner is the class being planned rather than the supertype its node reports.
+      owner = dropped.owner,
+      member = dropped.memberName,
     )
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)
@@ -323,6 +334,9 @@ internal fun warnUnroutedGenericFunctions(
           .diagnosticReason(ForwardPlanSkipReason.GENERIC.name),
         hint = ForwardPlanSkipReason.UNROUTED_POSITION
           .diagnosticHint(ForwardPlanSkipReason.GENERIC.name),
+        // A top-level declaration, so the hole is on its ADR-007 file holder.
+        owner = function.forwardFileClassOwner(),
+        member = function.simpleName.asString(),
       )
     }
   ForwardDiagnosticSink.emit(diagnostics, logger)
@@ -345,6 +359,13 @@ internal fun warnDroppedForwardPropertySetters(
           (dropped.reason ?: "the ${dropped.componentDescription} cannot be written into a " +
           "Kotlin collection"),
       hint = "the C# property ${dropped.publicName} is read-only",
+      // Issue #249: the property SURVIVES read-only, so the remark belongs on the generated C#
+      // property and never on its type -- a type-level "not available" paragraph would report a
+      // member as absent that a consumer can call.
+      owner = dropped.owner?.let { container ->
+        ForwardDiagnosticOwner.Property(container, dropped.publicName)
+      },
+      member = dropped.memberName,
     )
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)
@@ -371,6 +392,8 @@ internal fun warnDroppedForwardProperties(
         declaration = dropped.symbol,
         reason = ForwardPlanSkipReason.OPT_IN_MARKER.diagnosticReason(dropped.optInMarker),
         hint = ForwardPlanSkipReason.OPT_IN_MARKER.diagnosticHint(dropped.optInMarker),
+        owner = dropped.owner,
+        member = dropped.memberName,
       )
     } else if (dropped.boundInterface) {
       ForwardDiagnostic(
@@ -380,6 +403,8 @@ internal fun warnDroppedForwardProperties(
         reason = "the bound C# interface ${dropped.typeDescription} is not marshalled at a " +
             "property position",
         hint = ForwardPlanSkipReason.BOUND_INTERFACE_POSITION.diagnosticHint(),
+        owner = dropped.owner,
+        member = dropped.memberName,
       )
     } else if (dropped.reason?.ownsSentence(dropped.detail) == true) {
       // ADR-064's 2026-09-11 amendment: the reason the property planner classified already has a
@@ -396,6 +421,8 @@ internal fun warnDroppedForwardProperties(
         declaration = dropped.symbol,
         reason = dropped.reason.diagnosticReason(dropped.detail),
         hint = dropped.reason.diagnosticHint(dropped.detail, scope),
+        owner = dropped.owner,
+        member = dropped.memberName,
       )
     } else {
       ForwardDiagnostic(
@@ -405,6 +432,8 @@ internal fun warnDroppedForwardProperties(
         reason = "its type ${dropped.typeDescription} has no property getter or setter shape",
         hint = "expose a bridgeable property (or a getter function) whose type is not " +
             "${dropped.typeDescription}, and export that instead",
+        owner = dropped.owner,
+        member = dropped.memberName,
       )
     }
   }
@@ -437,6 +466,9 @@ internal fun warnDroppedForwardExtensionReceivers(
         declaration = dropped.symbol,
         reason = dropped.reason.diagnosticReason(dropped.detail),
         hint = dropped.reason.diagnosticHint(dropped.detail),
+        // Issue #249: no owner. The C# hole would be on the `{Receiver}Extensions` static class,
+        // which may never be generated at all, so there is nothing to attach a paragraph to.
+        owner = null,
       )
     } else {
       ForwardDiagnostic(
@@ -456,6 +488,9 @@ internal fun warnDroppedForwardExtensionReceivers(
             "String, nullable String, primitive, enum, Uuid, nullable Uuid, Instant, Duration, " +
             "collection, bound C# interface, value class, or nullable value class over a String " +
             "or class underlying receiver, or expose a top-level getter function instead",
+        // Issue #249: no owner. The C# hole would be on the `{Receiver}Extensions` static class,
+        // which may never be generated at all, so there is nothing to attach a paragraph to.
+        owner = null,
       )
     }
   }
@@ -488,6 +523,10 @@ internal fun warnRefusedLegacyRouteMembers(
     member: KSFunctionDeclaration,
     declaration: String,
     refused: String,
+    // Issue #249: the declaration being walked, never `member.parentDeclaration` -- this walk is
+    // over `getAllFunctions()`, so an inherited member reports the supertype while the C# hole is
+    // on the class (or arm) whose generated type would have carried it.
+    owner: ForwardDiagnosticOwner?,
   ): ForwardDiagnostic = ForwardDiagnostic(
     kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
     symbol = member,
@@ -499,12 +538,15 @@ internal fun warnRefusedLegacyRouteMembers(
         "a class/object/sealed-type handle, but not $refused",
     hint = "pass a class, object or sealed type, a List/Set/Map, or a primitive/String, or " +
         "expose the values as separate parameters",
+    owner = owner,
+    member = member.simpleName.asString(),
   )
 
   fun refusedReturn(
     member: KSFunctionDeclaration,
     declaration: String,
     refused: String,
+    owner: ForwardDiagnosticOwner?,
   ): ForwardDiagnostic = ForwardDiagnostic(
     kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
     symbol = member,
@@ -515,6 +557,8 @@ internal fun warnRefusedLegacyRouteMembers(
     reason = "a suspend member can return, and a Flow or StateFlow element can be, a " +
         "List/Set/Map, but not the generic type $refused",
     hint = "return a non-nullable List/Set/Map, or a non-generic type",
+    owner = owner,
+    member = member.simpleName.asString(),
   )
 
   // ADR-123: the property half of the same refusal. A flow property has no `KSFunctionDeclaration`
@@ -524,34 +568,41 @@ internal fun warnRefusedLegacyRouteMembers(
     property: KSPropertyDeclaration,
     declaration: String,
     refused: String,
+    owner: ForwardDiagnosticOwner?,
   ): ForwardDiagnostic = ForwardDiagnostic(
     kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
     symbol = property,
     declaration = declaration,
     reason = "a Flow or StateFlow element can be a List/Set/Map, but not the generic type $refused",
     hint = "make the element a non-nullable List/Set/Map, or a non-generic type",
+    owner = owner,
+    member = property.simpleName.asString(),
   )
 
   fun MutableList<ForwardDiagnostic>.nameRefused(
     member: KSFunctionDeclaration,
     declaration: String,
+    owner: ForwardDiagnosticOwner?,
   ) {
     val parameter: String? = classifier.legacyRefusedParameter(member.parameters)
     if (parameter != null) {
-      add(refusedParameter(member, declaration, parameter))
+      add(refusedParameter(member, declaration, parameter, owner))
       return
     }
     val returned: String = classifier.legacyRefusedReturn(member) ?: return
-    add(refusedReturn(member, declaration, returned))
+    add(refusedReturn(member, declaration, returned, owner))
   }
 
   val diagnostics: List<ForwardDiagnostic> = buildList {
     classes.forEach { cls ->
       val owner: String = cls.simpleName.asString()
+      val ownerDeclaration: ForwardDiagnosticOwner = cls.forwardDiagnosticOwner()
       cls.getAllFunctions()
         .filter { method -> method.getVisibility() == Visibility.PUBLIC }
         .filter { method -> method.isForwardLegacyAsyncRoute() }
-        .forEach { method -> nameRefused(method, "$owner.${method.simpleName.asString()}") }
+        .forEach { method ->
+          nameRefused(method, "$owner.${method.simpleName.asString()}", ownerDeclaration)
+        }
       // ADR-123: a Flow/StateFlow *property* whose element cannot cross. Both halves drop it
       // silently, exactly as they drop a method, so this walk is the only thing that names it.
       cls.getAllProperties()
@@ -561,7 +612,7 @@ internal fun warnRefusedLegacyRouteMembers(
             classifier.legacyRefusedFlowElement(property.type.resolve()) ?: return@forEach
           add(
             refusedFlowProperty(
-              property, "$owner.${property.simpleName.asString()}", refused,
+              property, "$owner.${property.simpleName.asString()}", refused, ownerDeclaration,
             ),
           )
         }
@@ -570,6 +621,8 @@ internal fun warnRefusedLegacyRouteMembers(
       val sealedName: String = sealed.simpleName.asString()
       sealed.getSealedSubclasses().forEach { subclass ->
         val owner: String = "$sealedName.${subclass.simpleName.asString()}"
+        // ADR-009 declares an arm under its base, nested or not, so the arm is its own C# owner.
+        val ownerDeclaration: ForwardDiagnosticOwner = subclass.forwardDiagnosticOwner()
         subclass.getAllFunctions()
           .filter { method -> method.getVisibility() == Visibility.PUBLIC }
           // Declared-only, as everywhere else on the sealed route.
@@ -578,7 +631,9 @@ internal fun warnRefusedLegacyRouteMembers(
           // on an arm now, so both halves drop a refused member silently and this walk is the only
           // thing left that names it.
           .filter { method -> method.isForwardLegacyAsyncRoute() }
-          .forEach { method -> nameRefused(method, "$owner.${method.simpleName.asString()}") }
+          .forEach { method ->
+            nameRefused(method, "$owner.${method.simpleName.asString()}", ownerDeclaration)
+          }
         // ADR-124: and the arm's flow *properties*, whose refused element has no
         // `KSFunctionDeclaration` to hang a return diagnostic on. All-properties, ADR-111's rule.
         subclass.getAllProperties()
@@ -588,13 +643,15 @@ internal fun warnRefusedLegacyRouteMembers(
               classifier.legacyRefusedFlowElement(property.type.resolve()) ?: return@forEach
             add(
               refusedFlowProperty(
-                property, "$owner.${property.simpleName.asString()}", refused,
+                property, "$owner.${property.simpleName.asString()}", refused, ownerDeclaration,
               ),
             )
           }
       }
     }
-    suspendFunctions.forEach { func -> nameRefused(func, func.simpleName.asString()) }
+    suspendFunctions.forEach { func ->
+      nameRefused(func, func.simpleName.asString(), func.forwardFileClassOwner())
+    }
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)
 }
@@ -726,6 +783,22 @@ class NugetProcessor(
               .diagnosticReason(declaration.optInMarker(context.exportMarkers)),
             hint = ForwardPlanSkipReason.OPT_IN_MARKER
               .diagnosticHint(declaration.optInMarker(context.exportMarkers)),
+            // Issue #249: a marked top-level function or property leaves a hole in its ADR-007
+            // file holder and is named there. A marked TYPE has no C# owner at all -- nothing is
+            // generated for it and nothing else lost a member -- so it stays ownerless.
+            // An EXTENSION is ownerless for the same reason a dropped extension receiver is: its
+            // holder is `{Receiver}Extensions`, which this declaration may have been the only
+            // member of.
+            owner = when (declaration) {
+              is KSFunctionDeclaration ->
+                declaration.forwardFileClassOwner().takeIf { declaration.extensionReceiver == null }
+
+              is KSPropertyDeclaration ->
+                declaration.forwardFileClassOwner().takeIf { declaration.extensionReceiver == null }
+
+              else -> null
+            },
+            member = declaration.simpleName.asString(),
           )
         },
       logger,
@@ -761,6 +834,9 @@ class NugetProcessor(
             hint = "an explicit include replaces the rootPackage default rather than adding to " +
                 "it: list your own package(s) in include(...) as well, or drop include(...) to " +
                 "fall back to rootPackage",
+            // Build configuration, not a member: no `Interop.cs` is generated at all here, so
+            // there is no declaration to carry a remark.
+            owner = null,
           ),
         ),
         logger,
@@ -917,6 +993,9 @@ class NugetProcessor(
               "annotation, so nothing is generated for it",
           hint = "usages of it on exported declarations are unaffected. Make it internal, or " +
               "exclude(...) its package, if the warning is unwanted",
+          // A whole-type skip: nothing is generated for the annotation and no other declaration
+          // lost a member, so there is no owner to name it on.
+          owner = null,
         )
       },
       logger,
@@ -958,6 +1037,8 @@ class NugetProcessor(
                 reachability.admitted.keys.sorted().joinToString(", "),
             hint = "these are generated exactly like module-local types; " +
                 "narrow with exclude(...) if any of them should not be part of the public API",
+            // Nothing is skipped: a run-level manifest of what WAS exported.
+            owner = null,
           ),
         ),
         logger,
@@ -1005,6 +1086,9 @@ class NugetProcessor(
                   "both, or add exclude(\"$pkg\") to nuget { publish { } } here so only " +
                   "${scope.packageId} declares it (callables reaching it are then skipped with " +
                   "${ForwardDiagnosticKind.SKIPPED_UNEXPORTED_DEPENDENCY_TYPE.name})",
+              // Nothing is skipped and the generated output is byte-identical (the verb says so),
+              // so there is no hole to report on a declaration.
+              owner = null,
             )
           }
       }
@@ -1084,6 +1168,8 @@ class NugetProcessor(
               "${nestedCollisions.getValue(name)}",
           hint = "rename the nested declaration, or the colliding member, so the two names " +
               "differ after PascalCasing",
+          // ERROR_*: the build fails, so no consumer ever reads a generated file for it.
+          owner = null,
         )
       }
 
@@ -1106,6 +1192,10 @@ class NugetProcessor(
           reason = "nested ${nested.nestedDeclarationKind()} `$name` is not declared in C#: " +
               "${nested.nestedDeclarationDeferral()}",
           hint = "move it to the top level of its file",
+          // A whole-declaration skip (ADR-133 defers the nested TYPE, not a member of one): the
+          // owner would be the enclosing type, and the memo's deferred list keeps it there until
+          // a fixture asks for it.
+          owner = null,
         )
       },
       logger,
@@ -1154,6 +1244,9 @@ class NugetProcessor(
                 "beside it, with no other superclass, no sub-interface and no second sealed " +
                 "interface; an enum can never be a subclass (ADR-125). Or declare it as a " +
                 "sealed class",
+            // The interface IS declared (as `I<Name>`); what is missing is the discriminator, and
+            // every member typed with it is named on its own owner by its own position skip.
+            owner = null,
           )
         },
       logger,
@@ -1266,7 +1359,12 @@ class NugetProcessor(
       .filter { iface -> iface.qualifiedName?.asString() in reachableInterfaceNames }
 
     val interfaceEntries: List<ForwardCallableCatalogEntry> = reachableInterfaces.flatMap { iface ->
-      forwardPlanner.interfaceEntries(iface)
+      // Issue #249: a REACHABLE interface's entries are stamped here too, not only on the
+      // declaration catalog. This catalog is the one that reports for a reachable interface (the
+      // declaration catalog's copy carries the same symbol and is suppressed by the symbol guard
+      // below), so leaving it unstamped would silently leave `IFoo` with no `<remarks>` in exactly
+      // the shape a consumer meets: an interface something returns.
+      forwardPlanner.interfaceEntries(iface).ownedBy(iface.forwardDiagnosticOwner())
     }
     val interfacePropertyPlans: List<ForwardPropertyPlan> = reachableInterfaces.flatMap { iface ->
       forwardPropertyPlanner.interfaceProperties(iface)
@@ -1336,12 +1434,19 @@ class NugetProcessor(
     // class implements concretely would be warned about on every build.
     val supertypePropertyPlanner = ForwardPropertyPlanner(forwardClassifier, expects)
     val interfaceDeclarationCatalog = ForwardCallablePlanCatalog(
-      entries = interfaces.flatMap { iface -> declarationPlanner.interfaceEntries(iface) },
+      // Issue #249: the interface is the C# owner of whatever `IFoo` loses.
+      entries = interfaces.flatMap { iface ->
+        declarationPlanner.interfaceEntries(iface).ownedBy(iface.forwardDiagnosticOwner())
+      },
       propertyPlans = interfaces.flatMap { iface ->
         declarationPropertyPlanner.interfaceProperties(iface)
       } + unexportedSupertypes.flatMap { supertype ->
         supertypePropertyPlanner.interfaceProperties(supertype)
       },
+      // `docs/backlog/interface-own-dropped-member-diagnosed-nowhere.md`: this planner's own drop
+      // channel was built and thrown away, so an interface property `IFoo` silently lost was
+      // named in no channel at all.
+      droppedProperties = declarationPropertyPlanner.droppedProperties,
     )
 
     warnDroppedForwardCallables(callableCatalog, logger, effectiveInclude)
@@ -1359,18 +1464,37 @@ class NugetProcessor(
     // an interface that is merely implemented would be named nowhere -- and `classEntries`
     // deliberately defers to the declaration rather than warning once per implementing class.
     // `interfaceDeclarationCatalog` plans every interface, so it is the one producer that sees
-    // them all. Narrowed to the new reason on purpose: that catalog's drop channel is otherwise
-    // unmerged by design (a reachable interface is planned twice), and widening it would report
-    // every other drop of every interface a second time.
+    // them all.
+    //
+    // Issue #249 widened this from `UNROUTED_POSITION` to every genuine drop, which is the
+    // backlog item `interface-own-dropped-member-diagnosed-nowhere.md`: `Pounceable.rankTargets`
+    // (`Map<String?, Int>`, ADR-083) was dropped from `IPounceable` by `translateInterface` with
+    // ZERO records in any channel -- no console line, no JSON entry, and so no remark either. The
+    // narrowing this replaces was about double reporting, which the symbol filter below handles:
+    // a REACHABLE interface is planned into both catalogs under the SAME symbol, so it is named
+    // once. An implementing CLASS reports under its own symbol and keeps doing so -- a different
+    // owner is a different hole, and ADR-113's re-report is what a consumer of the class reads.
     val warnedCallableSymbols: Set<String> =
       callableCatalog.droppedCallables.map { it.symbol }.toSet()
     warnDroppedForwardCallables(
       ForwardCallablePlanCatalog(
         entries = interfaceDeclarationCatalog.entries.filter { entry ->
           entry is ForwardCallableCatalogEntry.Skipped &&
-              entry.reason == ForwardPlanSkipReason.UNROUTED_POSITION &&
+              entry.reason.droppedFromCSharp &&
               entry.symbol !in warnedCallableSymbols
         },
+      ),
+      logger,
+      effectiveInclude,
+    )
+    // The property half of the same hole, under the same symbol guard.
+    val warnedPropertySymbols: Set<String> =
+      callableCatalog.droppedProperties.map { it.symbol }.toSet()
+    warnDroppedForwardProperties(
+      ForwardCallablePlanCatalog(
+        entries = emptyList(),
+        droppedProperties = interfaceDeclarationCatalog.droppedProperties
+          .filter { dropped -> dropped.symbol !in warnedPropertySymbols },
       ),
       logger,
       effectiveInclude,
@@ -1510,7 +1634,7 @@ class NugetProcessor(
     // ADR-113: shapes the `IFoo` declarations only; see the construction site.
     interfaceDeclarationCatalog: ForwardCallablePlanCatalog,
   ): CsharpBindings {
-    val cirFile: CirFile = translate(
+    val translated: CirFile = translate(
       context,
       logger,
       functions,
@@ -1532,6 +1656,21 @@ class NugetProcessor(
       forwardClassifier,
       interfaceDeclarationCatalog,
     )
+
+    // ADR-064 amendment (issue #249): every member-level skip, named on the declaration it left a
+    // hole in, from the SAME recorded list `NugetDiagnostics.json` is written from -- so the two
+    // cannot name different members. A pure post-pass, beside the ADR-150 link resolver below.
+    //
+    // The ADR-064 husk sweep (2026-09-07, "an absent declaration leaves no husk") runs AFTER it
+    // rather than inside `translate`, and spares a holder that carries a remark: a husk with a
+    // REASON is no longer indistinguishable from "members still to come", which was that
+    // amendment's whole objection. A file with nothing declared and nothing dropped still renders
+    // no holder.
+    val cirFile: CirFile = translated
+      .withSkipRemarks(ForwardDiagnosticSink.recorded()) { pkg ->
+        mapPackageToNamespace(pkg, context.rootPackage, context.rootNamespace)
+      }
+      .withoutEmptyStaticClasses()
 
     // ADR-150 amendment: the one place a KDoc `[link]` can be checked against the types this file
     // really declares, which is what keeps a CS1574 out of a consumer's build. Post-pass, so no
@@ -1562,6 +1701,8 @@ class NugetProcessor(
           declaration = collision.declaration,
           reason = collision.reason,
           hint = collision.hint,
+          // ERROR_*: the round fails before `CNameExports.kt` is written.
+          owner = null,
         )
       },
       logger,

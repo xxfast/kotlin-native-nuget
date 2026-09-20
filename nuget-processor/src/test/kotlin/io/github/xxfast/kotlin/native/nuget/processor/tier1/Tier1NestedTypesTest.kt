@@ -361,7 +361,7 @@ class Tier1NestedTypesTest {
     }
     listOf("Lid", "Deep").forEach { name ->
       assertFalse(
-        result.generatedCSharp.contains(name),
+        result.generatedCSharp.withoutDocComments().contains(name),
         "expected no declaration of, or dangling reference to, $name; csharp=" +
             "${result.generatedCSharp.lines().filter { it.contains(name) }}",
       )
@@ -448,7 +448,7 @@ class Tier1NestedTypesTest {
           "kspWarnings=${result.kspWarnings}",
     )
     assertFalse(
-      result.generatedCSharp.contains("Almanac"),
+      result.generatedCSharp.withoutDocComments().contains("Almanac"),
       "expected no declaration of Almanac; csharp=" +
           "${result.generatedCSharp.lines().filter { it.contains("Almanac") }}",
     )
@@ -494,7 +494,7 @@ class Tier1NestedTypesTest {
     }
     listOf("Seal", "Stamp").forEach { name ->
       assertFalse(
-        result.generatedCSharp.contains(name),
+        result.generatedCSharp.withoutDocComments().contains(name),
         "expected no declaration of, or dangling reference to, $name; csharp=" +
             "${result.generatedCSharp.lines().filter { it.contains(name) }}",
       )

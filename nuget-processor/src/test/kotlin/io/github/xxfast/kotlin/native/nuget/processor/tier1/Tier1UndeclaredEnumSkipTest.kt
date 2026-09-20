@@ -277,7 +277,7 @@ class Tier1UndeclaredEnumSkipTest {
       "expected Newsroom.airwave to be absent; generated=${result.generated}",
     )
     assertFalse(
-      result.generatedCSharp.contains("Airwave"),
+      result.generatedCSharp.withoutDocComments().contains("Airwave"),
       "expected no reference to the unadmitted dependency enum; " +
           "generatedCSharp=${result.generatedCSharp.lines().filter { it.contains("Airwave") }}",
     )

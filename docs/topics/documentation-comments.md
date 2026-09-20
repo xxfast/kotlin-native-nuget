@@ -261,6 +261,63 @@ public class SunSpot : IDisposable, INugetHandle
 
 See [expect/actual declarations](expect-actual.md) for how the two sides otherwise relate.
 
+## Dropped declarations {id="dropped-declarations"}
+
+A property, method, or top-level function the forward bridge cannot express (see [Publishing Kotlin
+to C#: Skipped declarations](forward-overview.md#skipped-declarations-show-up-on-the-generated-type))
+still shows up in `Interop.cs`: as a `<remarks>` paragraph on the type that would have declared it,
+naming the Kotlin member, the diagnostic kind, and why. There is no `CirProperty`/`CirMethod` for a
+dropped member to attach text to, so the paragraph lands on the owner instead, alongside any author
+KDoc (author paragraphs always come first):
+
+```kotlin
+class ClawStrip(val name: String) {
+  fun shred(): String = "$name shreds the sisal"
+
+  /** Dropped whole: `kotlin.sequences.Sequence` has no C# mapping. */
+  val weave: Sequence<String> get() = sequenceOf("sisal", "jute")
+
+  /** Dropped whole: a nullable `Map` key has no C# wire. */
+  fun rankPerches(scores: Map<String?, Int>): Int = scores.size
+}
+```
+
+```C#
+/// <remarks>
+/// <para>Not generated from Kotlin `rankPerches`: its COLLECTION type combination is not supported (SKIPPED_UNSUPPORTED_INPUT).</para>
+/// <para>Not generated from Kotlin `weave`: its type `kotlin.sequences.Sequence` is not supported (SKIPPED_UNSUPPORTED_PROPERTY).</para>
+/// </remarks>
+public class ClawStrip : IDisposable, INugetHandle
+{
+    // shred() and its constructor bind normally; weave and rankPerches do not exist here
+}
+```
+
+A file whose *every* top-level declaration was dropped still gets its ADR-007 static holder class,
+carrying nothing but the remark, rather than disappearing along with its members:
+
+```kotlin
+// the only declaration in CatFlap.kt
+fun latchFlap(litters: List<List<String>?>): Int = litters.size
+```
+
+```C#
+/// <remarks>
+/// Not generated from Kotlin `latchFlap`: its COLLECTION type combination is not supported (SKIPPED_UNSUPPORTED_INPUT).
+/// </remarks>
+public static partial class CatFlap
+{
+}
+```
+
+When only a property's setter is dropped, the property survives read-only, so the remark goes on
+the C# property itself ("Kotlin `lastTumble`: its setter is not generated because …") instead of on
+the class, since the member is not actually absent. The remark never repeats the build-log message
+verbatim: it never includes the author-facing hint or a source file path, so nothing about where the
+Kotlin was declared ships to a consumer. See
+[ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
+2026-09-20 amendment for the full mechanism.
+
 ## No separate documentation file to pack
 
 The generated shim ships as source (see [Publishing Kotlin to C#](forward-overview.md)), so there

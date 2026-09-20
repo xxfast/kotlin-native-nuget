@@ -9,6 +9,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericReturnRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.legacyGenericRouteParameterIndex
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardDiagnosticOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardFileClassOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
@@ -156,6 +159,9 @@ internal fun translateFunction(
             symbol = func,
             declaration = func.simpleName.asString(),
             typeArgument = unnameableTypeArgument.typeArgument,
+            // A top-level function, so the hole is on its ADR-007 file holder.
+            owner = func.forwardFileClassOwner(),
+            member = func.simpleName.asString(),
           ),
         ),
         logger,
@@ -594,6 +600,9 @@ internal fun translateFunction(
               "(not an exported class/object/enum and not a supported primitive/collection)",
           hint = "expose a bridgeable wrapper type instead, or add '$qualifiedReturnType' to " +
               "the export set",
+          // A top-level function, so the hole is on its ADR-007 file holder.
+          owner = func.forwardFileClassOwner(),
+          member = func.simpleName.asString(),
         ),
       ),
       logger,

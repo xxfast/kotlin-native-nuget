@@ -13,7 +13,7 @@ internal fun StringBuilder.renderInterface(iface: CirInterface) {
     "<$params>"
   } else ""
 
-  renderDoc(iface.doc)
+  renderDoc(iface.doc, generated = iface.remarks)
   appendLine("    public interface ${iface.name}$typeParamStr : IDisposable")
   appendLine("    {")
 
@@ -45,6 +45,7 @@ internal fun StringBuilder.renderInterface(iface: CirInterface) {
 }
 
 internal fun StringBuilder.renderStaticClass(cls: CirStaticClass) {
+  renderDoc(generated = cls.remarks)
   appendLine("    public static partial class ${cls.name}")
   appendLine("    {")
 
@@ -417,7 +418,7 @@ internal fun StringBuilder.renderConstructor(
 internal fun StringBuilder.renderProperty(prop: CirProperty) {
   // ADR-150: above the abstract early return, so both spellings carry the doc. ADR-075's
   // getter/setter pair is one C# property, so it gets one `<summary>`.
-  renderDoc(prop.doc, "        ")
+  renderDoc(prop.doc, "        ", generated = prop.remarks)
   val static: String = if (prop.isStatic) "static " else ""
   // ADR-075 amendment (2026-09-10): an abstract property is declaration-only, so it takes none of
   // the body-shaped arms below. `isVirtual` is deliberately ignored: `abstract virtual` is CS0503,

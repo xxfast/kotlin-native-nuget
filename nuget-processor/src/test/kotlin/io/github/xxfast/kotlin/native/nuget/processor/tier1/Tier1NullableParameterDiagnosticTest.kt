@@ -90,7 +90,7 @@ class Tier1NullableParameterDiagnosticTest {
       "expected the Settings omitting overload; generated C#:\n$cs",
     )
     assertFalse(
-      cs.contains("events"),
+      cs.withoutDocComments().contains("events"),
       "the events arity stays absent; generated C#:\n$cs",
     )
   }

@@ -64,6 +64,8 @@ private fun emitCsharpNameCollisions(
             "that C# name, and C# cannot declare a property and a method with one name (CS0102)",
         hint = "rename the Kotlin function '${function.simpleName.asString()}'; a top-level " +
             "function renders PascalCase in C# (ADR-110)",
+        // ERROR_*: the build fails before anything generated is read.
+        owner = null,
       ),
     ),
     logger,
@@ -272,6 +274,10 @@ internal fun translate(
               "called, and C# cannot declare a member named like its enclosing type (CS0542)",
           hint = "call it as $resolved.${csharpMemberName(claimant)}(...); the native export " +
               "name is unchanged (ADR-007, ADR-110)",
+          // Nothing is skipped: the function binds, on a renamed holder. The remark channel is
+          // for absences, and this note deliberately does NOT feed the file-holder name the
+          // post-pass resolves (the two rules are independent).
+          owner = null,
         ),
       ),
       logger,
@@ -509,6 +515,8 @@ internal fun translate(
                 "existing C# type of the same name in namespace '$namespace' (ADR-040)",
             hint = "rename the Kotlin interface, or the colliding declaration, so the generated " +
                 "backing class name is unique",
+            // ERROR_*: the build fails before anything generated is read.
+            owner = null,
           ),
         ),
         logger,
@@ -793,7 +801,10 @@ internal fun translate(
     if ("System.Collections.Generic" !in usings) usings.add("System.Collections.Generic")
   }
 
-  return CirFile(usings = usings, namespaces = namespaces.withoutEmptyStaticClasses())
+  // ADR-064 amendment (issue #249): the husk sweep moved OUT of here, to the processor, so it runs
+  // after `withSkipRemarks` and can spare a holder that carries a remark. Translation returns what
+  // the declarations produced, husks included.
+  return CirFile(usings = usings, namespaces = namespaces)
 }
 
 /**
@@ -811,12 +822,22 @@ internal fun translate(
  * [CirStaticClass] carries nothing but its members (helpers such as `CirMarshalHelper` and
  * `CirFuncHelper` are their own declaration types), so an empty member list means an empty class
  * with no content to lose.
+ *
+ * ADR-064 amendment (issue #249) narrows that last sentence and moves the call site: a holder with
+ * [CirStaticClass.remarks] DOES have content -- the reason it is empty -- and issue #249's headline
+ * case (a file whose every top-level declaration was dropped) is exactly the shape that needs to
+ * say so. The sweep therefore runs in `NugetProcessor`, after `withSkipRemarks`, and spares a
+ * holder that carries a remark. A file with nothing declared and nothing dropped is unchanged: no
+ * members, no remarks, no holder, and no namespace if it held nothing else.
  */
+internal fun CirFile.withoutEmptyStaticClasses(): CirFile =
+  copy(namespaces = namespaces.withoutEmptyStaticClasses())
+
 private fun List<CirNamespace>.withoutEmptyStaticClasses(): List<CirNamespace> = this
   .map { namespace ->
     namespace.copy(
       declarations = namespace.declarations
-        .filterNot { it is CirStaticClass && it.members.isEmpty() },
+        .filterNot { it is CirStaticClass && it.members.isEmpty() && it.remarks.isEmpty() },
     )
   }
   .filter { it.declarations.isNotEmpty() }

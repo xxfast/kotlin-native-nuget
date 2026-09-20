@@ -1,7 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 internal fun StringBuilder.renderObject(obj: CirObject) {
-  renderDoc(obj.doc)
+  renderDoc(obj.doc, generated = obj.remarks)
   appendLine("    public static class ${obj.name}")
   appendLine("    {")
 
@@ -34,7 +34,7 @@ internal fun StringBuilder.renderValueClass(cls: CirValueClass) {
   // ADR-035: hand-written record struct so the primary constructor's `init` runs
   // across the bridge. The underlying is a get-only property assigned from a
   // validating CreateChecked* helper, blocking object-initializer / `with` bypass.
-  renderDoc(cls.doc)
+  renderDoc(cls.doc, generated = cls.remarks)
   appendLine("    public readonly record struct ${cls.name}")
   appendLine("    {")
   // ADR-150 amendment: the underlying property is written here rather than projected as a
@@ -68,7 +68,7 @@ private fun StringBuilder.renderReferenceValueClass(cls: CirValueClass) {
   // ADR-150 amendment: this shape rendered NO class doc at all before (the early return in
   // `renderValueClass` skipped `renderDoc`), so a reference-underlying value class silently lost
   // its `<summary>`. Fixed here, together with the underlying property's only legal spelling.
-  renderDoc(cls.recordHeaderDoc())
+  renderDoc(cls.recordHeaderDoc(), generated = cls.remarks)
   appendLine("    public readonly record struct ${cls.name}(${cls.underlyingType} ${cls.underlyingName})")
   appendLine("    {")
 
@@ -146,7 +146,7 @@ private fun StringBuilder.renderValueClassCreateChecked(
 private fun StringBuilder.renderValueClassMembers(cls: CirValueClass) {
   cls.properties.forEach { prop ->
     renderDllImport(cls.propertyNativeImport(prop))
-    renderDoc(prop.doc, "        ")
+    renderDoc(prop.doc, "        ", generated = prop.remarks)
     appendLine("        public ${prop.type} ${prop.name} => ${prop.getter};")
     appendLine()
   }

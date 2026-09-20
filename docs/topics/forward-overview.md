@@ -973,6 +973,19 @@ speaks during a task action was silent on every build after the first. Nothing a
 declarations are skipped, or their severity, changed; only delivery did.</p>
 </note>
 
+### Skipped declarations show up on the generated type {id="skipped-declarations-show-up-on-the-generated-type"}
+
+`NugetDiagnostics.json` and the Gradle log above are the library *author's* view, at build time. A
+consumer who only has the `.nupkg` never sees either. Since
+[ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
+2026-09-20 amendment (issue [#249](https://github.com/xxfast/kotlin-native-nuget/issues/249)), a
+dropped property, method, or top-level function is also named on the generated type itself, as a
+`<remarks>` paragraph carrying the Kotlin member name, the diagnostic kind, and the reason, so it
+shows up in the consumer's own IDE tooltip. See
+[Documentation comments: Dropped declarations](documentation-comments.md#dropped-declarations) for
+the generated shape. The paragraph never repeats the build-log line verbatim: no source file path,
+no author-facing hint, since those would ship the producer's own file tree to a consumer.
+
 ## Limitations
 
 <note>
