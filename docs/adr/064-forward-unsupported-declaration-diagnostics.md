@@ -1625,3 +1625,126 @@ keeps the generic sentence.
   build-log wording changed.
 - A Tier 1 fixture that mentions `kotlinx.coroutines` without the jar now fails at `require` instead
   of silently asserting against a route it never exercised.
+
+## Amendment (2026-09-20): `RECEIVER_FAN_OUT` owns its sentence and hint, on both routes
+
+Judgement: an **amendment**, not a new ADR. This closes the ROADMAP Phase 4 item "`RECEIVER_FAN_OUT`
+renders through the `SKIPPED_UNSUPPORTED_INPUT` sentence, ... the wrong remedy for `Int?`". It adds
+no new `ForwardDiagnosticKind` and no new `ForwardPlanSkipReason`; only `diagnosticReason` and
+`diagnosticHint` gain an arm each, following this ADR's own "same kind, own sentence" rule. Status
+stays Accepted.
+
+### The gap
+
+A Kotlin author who writes `fun Int?.orZero(): Int` or `val Int?.orZero: Int` gets a skip warning
+that could not tell them what failed or what to do about it, on either route:
+
+- **Callable route.** `planOrSkip` returned `Skipped(symbol, RECEIVER_FAN_OUT)` with no `detail`, so
+  `RECEIVER_FAN_OUT` had no arm in `diagnosticReason`/`diagnosticHint` and fell through to the
+  generic pair: `its RECEIVER_FAN_OUT type combination is not supported. expose a bridgeable
+  adapter using only supported parameter/return shapes and export that instead`. The sentence names
+  a reason constant, not the receiver (an extension symbol carries no receiver of its own), and the
+  hint sends the author to redesign parameter/return shapes for a type that is already bridgeable at
+  a parameter.
+- **Extension-property route.** `ForwardPropertyPlanner` never classified this refusal as
+  `RECEIVER_FAN_OUT` at all; every refused receiver, fan-out or not, printed one fixed pair under
+  `SKIPPED_UNSUPPORTED_PROPERTY`: `its extension receiver type Int? is not a supported
+  extension-property receiver. declare the property on a class, interface, ..., or expose a
+  top-level getter function instead`. That sentence cannot say why `Int?` is refused when
+  "primitive" and "nullable class" are both in the very list it prints, and could not distinguish a
+  fan-out receiver from an unrelated one such as `Box<Int>` (a generic declaration, still refused
+  this way and unaffected by this amendment).
+
+### Decision
+
+One reason, one sentence and hint, read by both routes. `ForwardCallableCatalogEntry.Skipped` and
+the new `ForwardDroppedExtensionReceiver.reason`/`.detail` (defaulted, so every other property
+refusal is unaffected) both carry `detail = <rendered receiver type>` (`Int?`, `Mood?`, `Dosage?`)
+and route through the same `diagnosticReason`/`diagnosticHint` arms:
+
+```
+its extension receiver `Int?` crosses the bridge as a has-value flag plus a value (two slots), and
+an extension receiver can carry only one (RECEIVER_FAN_OUT). `Int?` binds as an ordinary parameter,
+so declare a top-level function that takes it as a parameter instead of as the receiver; or declare
+the extension on the non-null receiver `Int`
+```
+
+Shipped, quoted verbatim from the Tier 1 pins:
+
+```
+[nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping tier1.receiverfanoutmessage.orZero: its extension
+    receiver `Int?` crosses the bridge as a has-value flag plus a value (two slots), and an
+    extension receiver can carry only one (RECEIVER_FAN_OUT). `Int?` binds as an ordinary
+    parameter, so declare a top-level function that takes it as a parameter instead of as the
+    receiver; or declare the extension on the non-null receiver `Int`
+
+[nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping tier1.propreceiverfanoutmessage.Int.orZero: its
+    extension receiver `Int?` crosses the bridge as a has-value flag plus a value (two slots), and
+    an extension receiver can carry only one (RECEIVER_FAN_OUT). `Int?` binds as an ordinary
+    parameter, so declare a top-level function that takes it as a parameter instead of as the
+    receiver; or declare the extension on the non-null receiver `Int`
+```
+
+The kind stays each route's own position kind, per this ADR's rule that a kind names *where* the
+drop happened: the identical Kotlin shape reports `SKIPPED_UNSUPPORTED_INPUT` on the
+extension-function route and `SKIPPED_UNSUPPORTED_PROPERTY` on the extension-property route, reading
+one sentence. `NugetProcessor.warnDroppedForwardExtensionReceivers` branches on
+`dropped.reason?.ownsSentence(dropped.detail) == true` before falling back to the shipped generic
+receiver pair, the same shape `warnDroppedForwardProperties` already uses for a classified property
+drop.
+
+The parameter remedy is stated first, deliberately: every fan-out shape is by definition one that
+*does* bind at an ordinary parameter (that position is exactly what fans it into the ADR-079/080
+has-value-plus-value pair), so moving it off the receiver preserves what the declaration means. The
+non-null-receiver remedy is stated second because it changes the declaration's meaning, and is
+truthful on both routes as shipped: the callable route binds every non-null twin (ADR-132), and the
+property route binds `Enum`/`Instant`/`Duration` since its own 2026-09-20 receiver-parity amendment.
+The literal `(RECEIVER_FAN_OUT)` tag is kept in the sentence, the same convention the `UNDECLARED_*`
+family follows, since the kind is shared with other producers and [Extensions: Supported
+receivers](../topics/extensions.md#supported-receivers) tells a reader to search the build log for
+that string.
+
+**Declined: a dedicated `SKIPPED_UNSUPPORTED_RECEIVER` kind.** One reason has one remedy here, which
+is this ADR's own "same kind, own sentence" rule working as intended; a new kind would be the only
+way to unify the `SKIPPED_UNSUPPORTED_INPUT`/`SKIPPED_UNSUPPORTED_PROPERTY` split between the two
+routes, and that split is this ADR's deliberate "kind names where the drop happened" design, not a
+defect. A dedicated kind would also change `NugetDiagnostics.json` kind names for any consumer
+filtering on them, for no reader-facing gain. Not taken.
+
+### A pre-existing duplicate-warning bug, fixed alongside
+
+`fun Int?.withDefault(a: Int = 0)` printed two warnings, once naming `withDefault` and once naming
+the ADR-096-synthesized omitting overload `withDefault_2`, because a `Skipped` entry passed through
+overload synthesis unchanged with no dedupe on the dropped-callables path. The receiver is never
+truncated by that synthesis (only trailing defaulted *parameters* are), so every synthesized omitting
+overload of a fan-out receiver would skip for the identical reason as the declared entry. The
+synthesis loop in `ForwardCallablePlanner.kt` now skips synthesizing an omitting overload at all when
+the declared extension entry is `Skipped(RECEIVER_FAN_OUT)`; a single declaration now prints a single
+warning.
+
+Narrow side effect, stated rather than left implied: a *synthesized* omitting overload of a later,
+same-owner-chain namesake declaration now gets a lower `@CName` number than it would have (e.g.
+`string_f_4` becomes `string_f_3`), because the skipped synthesized entries this change removes no
+longer consume a number in that counting pass. A *declared* entry's number is assigned in an earlier
+pass and is unaffected, the C# public name carries no numeric suffix either way, and both the Kotlin
+`@CName` and the C# `Interop.cs` halves regenerate together from the same run, so nothing can observe
+one half's numbering without the other's. No shipped fixture declares this combination.
+
+### Testing seam
+
+`Tier1ReceiverShapesExtensionTest.kt` and `Tier1ReceiverShapesExtensionPropertyTest.kt` each pin the
+whole sentence-plus-hint string for `Int?`, and separately for `Mood?` (bare enum) and `Dosage?`
+(value class over a primitive), proving `detail` renders per-shape rather than a hardcoded `Int?`.
+`Tier1ReceiverShapesExtensionTest` also pins the duplicate-warning fix: `fun
+Int?.withDefault(a: Int = 0)` prints exactly one warning, naming the declared function and not the
+synthesized `withDefault_2`. `ForwardSkippedCallableWarningTest` gained one table row asserting the
+sentence for a `RECEIVER_FAN_OUT` entry carrying `detail = "Int?"`.
+
+### Consequences of the amendment
+
+- No generated C# change and no new diagnostic kind: only the `RECEIVER_FAN_OUT` message text moves,
+  on both routes, and a synthesis-path duplicate warning is fixed.
+- `docs/topics/extensions.md` and `docs/adr/132-extension-receiver-shapes.md` are updated to stop
+  calling `RECEIVER_FAN_OUT` a diagnostic kind: it is a reason rendered under two existing kinds.
+- No fixture in `test-library` declares a fan-out receiver, so no shipped `NugetDiagnostics.json`
+  content changes.

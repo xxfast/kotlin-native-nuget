@@ -548,4 +548,88 @@ class Tier1ReceiverShapesExtensionPropertyTest {
     assertContains(cs, "RallyCry(this global::Interop.Mood receiver)")
     assertContains(cs, "GetEmoji(this global::Interop.Mood receiver)")
   }
+
+  /**
+   * ROADMAP Phase 4 / ADR-064 amendment: the property route reads the same fan-out sentence and
+   * hint the extension-FUNCTION route reads, under its own position kind
+   * (`SKIPPED_UNSUPPORTED_PROPERTY`, which still names where the drop happened). Its shipped pair
+   * could not explain why `Int?` is refused while "primitive" and "nullable class" are both on the
+   * supported list it printed, and never mentioned that `Int?` is perfectly fine as a parameter.
+   */
+  @Test
+  fun `a fan-out property receiver names the receiver type, its shape, and both remedies`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.propreceiverfanoutmessage
+
+      val Int?.orZero: Int get() = this ?: 0
+      """.trimIndent(),
+    )
+
+    val warning: String = result.kspWarnings.single { it.contains("orZero") }
+    assertContains(
+      warning,
+      "[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name}] Skipping " +
+          "tier1.propreceiverfanoutmessage.Int.orZero: " +
+          "its extension receiver `Int?` crosses the bridge as a has-value flag plus a value " +
+          "(two slots), and an extension receiver can carry only one (RECEIVER_FAN_OUT). " +
+          "`Int?` binds as an ordinary parameter, so declare a top-level function that takes it " +
+          "as a parameter instead of as the receiver; or declare the extension on the non-null " +
+          "receiver `Int`",
+    )
+    // The shipped receiver pair, which every NON-fan-out refused receiver still keeps
+    // (`Tier1NamedSkipDiagnosticsTest`'s `Box<Int>.label`).
+    assertFalse(
+      warning.contains("is not a supported extension-property receiver"),
+      "a fan-out receiver must not fall back to the generic receiver sentence; got: $warning",
+    )
+    assertFalse(
+      warning.contains("or expose a top-level getter function instead"),
+      "a fan-out receiver must not fall back to the generic receiver hint; got: $warning",
+    )
+  }
+
+  /**
+   * The non-primitive spellings, same as the extension-function cell: the receiver name in the
+   * sentence and in the non-null clause is rendered off the receiver's own type. The non-null
+   * clause is truthful on this route only since the 2026-09-20 receiver-parity amendment admitted
+   * a bare `Enum` receiver here.
+   */
+  @Test
+  fun `a fan-out enum and value-class property receiver each name themselves`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.propreceiverfanoutkinds
+
+      enum class Mood { HAPPY, SAD }
+
+      @JvmInline
+      value class Dosage(val mg: Int)
+
+      val Mood?.loud: String get() = if (this == Mood.HAPPY) "!" else "."
+
+      val Dosage?.orZero: Int get() = this?.mg ?: 0
+      """.trimIndent(),
+    )
+
+    val mood: String = result.kspWarnings.single { it.contains("Mood.loud") }
+    assertContains(
+      mood,
+      "its extension receiver `Mood?` crosses the bridge as a has-value flag plus a value " +
+          "(two slots), and an extension receiver can carry only one (RECEIVER_FAN_OUT). " +
+          "`Mood?` binds as an ordinary parameter, so declare a top-level function that takes it " +
+          "as a parameter instead of as the receiver; or declare the extension on the non-null " +
+          "receiver `Mood`",
+    )
+
+    val dosage: String = result.kspWarnings.single { it.contains("Dosage.orZero") }
+    assertContains(
+      dosage,
+      "its extension receiver `Dosage?` crosses the bridge as a has-value flag plus a value " +
+          "(two slots), and an extension receiver can carry only one (RECEIVER_FAN_OUT). " +
+          "`Dosage?` binds as an ordinary parameter, so declare a top-level function that takes " +
+          "it as a parameter instead of as the receiver; or declare the extension on the " +
+          "non-null receiver `Dosage`",
+    )
+  }
 }

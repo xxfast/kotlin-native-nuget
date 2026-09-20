@@ -143,7 +143,9 @@ input-position by construction (the receiver is always input zero). **Inferred**
 gate, such a receiver would have crashed the processor with an uncaught `validateRoles` exception
 rather than merely rendering wrong code, since no fixture ever reached this path before this
 change. Pinned by a Tier 1 control, `fun Int?.orZero()`, in `Tier1ReceiverShapesExtensionTest.kt`:
-no export, no C# binding, a warning naming `orZero`.
+no export, no C# binding, a warning naming `orZero`. (Sentence and hint since
+[ADR-064](064-forward-unsupported-declaration-diagnostics.md)'s amendment of 2026-09-20, which
+also gave the extension-property route the same reason and sentence.)
 
 **Leak harness.** The C#-implemented interface receiver mints a transfer `StableRef` per crossing
 (ADR-084 stage 3) that the old `else` arm never disposed (it bypassed `interfaceCleanup` entirely,
@@ -294,7 +296,10 @@ callable route and the property route, closing the gap between them at the recei
 - A has-value fan-out receiver (`Int?`, `Mood?`, `Instant?`, `Duration?`, or a nullable value class
   over a `Primitive`/`Enum` underlying) stays refused: the property route mints exactly one ABI
   slot per receiver, and admitting these would silently drop the null rather than fail loudly. Own
-  ROADMAP line; `RECEIVER_FAN_OUT` unchanged.
+  ROADMAP line; `RECEIVER_FAN_OUT` unchanged. **Dated pointer (2026-09-20):** the reason's rendered
+  sentence and hint are not unchanged, only the admission decision is; both routes now name the
+  receiver and offer the parameter/non-null-receiver remedies, see [ADR-064](064-forward-unsupported-declaration-diagnostics.md)'s
+  same-dated amendment.
 - `Nullable(Collection)` stays refused, by an explicit allowlist rather than a wire limitation.
   This is the one shape where the property gate is narrower than the function-receiver route,
   which has no receiver allowlist for a nullable collection; no fixture exercises

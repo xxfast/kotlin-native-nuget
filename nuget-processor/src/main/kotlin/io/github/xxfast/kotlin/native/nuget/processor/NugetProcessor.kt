@@ -419,21 +419,44 @@ internal fun warnDroppedForwardExtensionReceivers(
   logger: KSPLogger,
 ) {
   val diagnostics: List<ForwardDiagnostic> = catalog.droppedExtensionReceivers.map { dropped ->
-    ForwardDiagnostic(
-      kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
-      symbol = dropped.node,
-      declaration = dropped.symbol,
-      reason = "its extension receiver type ${dropped.receiverDescription} is not a supported " +
-          "extension-property receiver",
-      // ADR-132 (2026-09-20): the list tracks `ForwardPropertyPlanner.isSupportedReceiver`, which
-      // now reaches extension-function receiver parity. What is left out is the has-value fan-out
-      // class (`Int?`, `Mood?`, `Instant?`, a nullable value class over a primitive or enum
-      // underlying): a receiver is exactly one ABI slot and those need two.
-      hint = "declare the property on a class, interface, nullable class, nullable interface, " +
-          "String, nullable String, primitive, enum, Uuid, nullable Uuid, Instant, Duration, " +
-          "collection, bound C# interface, value class, or nullable value class over a String or " +
-          "class underlying receiver, or expose a top-level getter function instead",
-    )
+    if (dropped.reason?.ownsSentence(dropped.detail) == true) {
+      // ADR-064 amendment (2026-09-20): exactly the shape `warnDroppedForwardProperties` already
+      // uses for a classified property drop. The planner named the refusal
+      // (`RECEIVER_FAN_OUT`), that reason owns a sentence and a remedy that agree with each other,
+      // and the shipped pair below contradicts both: it lists "primitive" and "nullable class" as
+      // supported without explaining `Int?`, and its "top-level getter function" remedy hides the
+      // simpler one (take the value as an ordinary parameter).
+      //
+      // The KIND stays this route's position kind, per ADR-064's rule that a kind names WHERE the
+      // drop happened: the identical Kotlin shape reports `SKIPPED_UNSUPPORTED_INPUT` on the
+      // extension-function route and `SKIPPED_UNSUPPORTED_PROPERTY` here, reading one sentence.
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+        symbol = dropped.node,
+        declaration = dropped.symbol,
+        reason = dropped.reason.diagnosticReason(dropped.detail),
+        hint = dropped.reason.diagnosticHint(dropped.detail),
+      )
+    } else {
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+        symbol = dropped.node,
+        declaration = dropped.symbol,
+        reason = "its extension receiver type ${dropped.receiverDescription} is not a supported " +
+            "extension-property receiver",
+        // ADR-132 (2026-09-20): the list tracks `ForwardPropertyPlanner.isSupportedReceiver`, which
+        // now reaches extension-function receiver parity. What is left out is the has-value fan-out
+        // class (`Int?`, `Mood?`, `Instant?`, a nullable value class over a primitive or enum
+        // underlying): a receiver is exactly one ABI slot and those need two. That class no longer
+        // reaches this hint at all -- it takes the named branch above -- so what lands here is a
+        // receiver this route has no lowering for at any width (a raw generic `Box<Int>`, a type
+        // parameter, a `Char`).
+        hint = "declare the property on a class, interface, nullable class, nullable interface, " +
+            "String, nullable String, primitive, enum, Uuid, nullable Uuid, Instant, Duration, " +
+            "collection, bound C# interface, value class, or nullable value class over a String " +
+            "or class underlying receiver, or expose a top-level getter function instead",
+      )
+    }
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)
 }

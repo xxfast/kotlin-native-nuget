@@ -689,7 +689,17 @@ internal class ForwardCallablePlanner(
       addAll(extensions)
       // ADR-149: synthesis proceeds even when the declared entry is Skipped; `planOrSkip` on the
       // truncated list is the judge.
-      extensionFunctions.forEach { function ->
+      //
+      // ADR-064 amendment (2026-09-20): with one exception, the RECEIVER. Truncation drops trailing
+      // PARAMETERS, so a parameter-type skip can genuinely be rescued by an omitting overload and
+      // has to be re-judged; the receiver is never truncated (see [extensionEntry]'s `omitted`), so
+      // every omitting overload of a fan-out receiver skips for the identical reason and the author
+      // read the same drop once per overload (`f` and `f_2`) for a single declaration they wrote.
+      extensionFunctions.forEachIndexed { index, function ->
+        val declared: ForwardCallableCatalogEntry? = extensions.getOrNull(index)
+        if (declared is ForwardCallableCatalogEntry.Skipped &&
+          declared.reason == ForwardPlanSkipReason.RECEIVER_FAN_OUT
+        ) return@forEachIndexed
         repeat(function.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
           add(
             extensionEntry(
@@ -2072,9 +2082,11 @@ internal class ForwardCallablePlanner(
     // ADR-095 keeps an extension symbol receiver-agnostic (the overload counter is per package and
     // name, not per receiver). ADR-133 amendment: the receiver's enclosing-owner chain joins it,
     // because that chain now scopes the counter, so two nested receivers under different owners can
-    // both take the unsuffixed name -- and a symbol is what `droppedCallables` and the diagnostics
-    // de-duplicate on. Empty for a top-level receiver, so every shipped extension symbol is
-    // unchanged.
+    // both take the unsuffixed name -- and the symbol identifies the dropped callable in
+    // `droppedCallables` and in the diagnostic. Duplicates are prevented upstream instead, by not
+    // synthesizing omitting overloads for a skipped declared entry (the synthesis loop's
+    // `RECEIVER_FAN_OUT` guard, ~:692). Empty for a top-level receiver, so every shipped extension
+    // symbol is unchanged.
     val ownerChain: String = function.extensionOwnerChain()
     val symbol: String = if (ownerChain.isEmpty()) {
       "${function.packageName.asString()}.$functionName$suffix"
@@ -2116,9 +2128,17 @@ internal class ForwardCallablePlanner(
     // validation outright (an exception out of the processor, not a diagnostic). Supporting it
     // needs a multi-slot receiver in the model, which no fixture asks for; until then it is
     // dropped by name rather than crashing the build.
-    if (receiverType.sealedAsHandle().isHasValueFanOutInput()) {
+    val wireReceiverType: BridgeType = receiverType.sealedAsHandle()
+    if (wireReceiverType.isHasValueFanOutInput()) {
       return ForwardCallableCatalogEntry.Skipped(
         symbol, ForwardPlanSkipReason.RECEIVER_FAN_OUT, node = function,
+        // ADR-064 amendment (2026-09-20): the rendered receiver type, which the reason's own
+        // sentence and hint name. The symbol cannot supply it (an extension symbol is
+        // receiver-agnostic by ADR-095), so without this slot the message named no type at all.
+        detail = wireReceiverType.diagnosticTypeName(),
+        // The receiver is input zero, which is what the kind already says; carried so the two
+        // agree rather than relying on the fixed mapping.
+        position = ForwardSkipPosition.INPUT,
       )
     }
 

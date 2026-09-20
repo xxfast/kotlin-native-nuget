@@ -75,6 +75,19 @@ internal data class ForwardDroppedExtensionReceiver(
   val symbol: String,
   val node: KSNode?,
   val receiverDescription: String,
+  /**
+   * ADR-064 amendment (2026-09-20): the planner's own classification of *why* the receiver was
+   * refused, when it has a name the diagnostic can read a sentence and a hint off
+   * ([ForwardPlanSkipReason.RECEIVER_FAN_OUT], the one shape this route shares verbatim with the
+   * extension-FUNCTION route). Null for every other refused receiver, which keeps the shipped
+   * "not a supported extension-property receiver" pair: that wording is right for a receiver with
+   * no wire at all, and wrong for one whose wire is simply two slots wide.
+   */
+  val reason: ForwardPlanSkipReason? = null,
+  /** The detail [reason]'s sentence and hint read: the rendered receiver type (`Int?`). Same slot
+   *  `ForwardCallableCatalogEntry.Skipped.detail` carries on the callable route, so the two routes
+   *  render one string. */
+  val detail: String? = null,
 )
 
 /** Builds the property slice while leaving unsupported/specialized properties on their named legacy paths. */
@@ -303,11 +316,18 @@ internal class ForwardPropertyPlanner(
     // Nothing legacy-routes an extension property by receiver, so unlike `recordDropped` there is
     // no re-emission to exclude here.
     if (!supportedReceiver) {
+      // ADR-064 amendment (2026-09-20): the fan-out half of the refusal is named, so it reads the
+      // extension-FUNCTION route's sentence and hint instead of this route's generic receiver
+      // pair. Asked through the same predicate `isSupportedReceiver`'s `Nullable` arm refuses on,
+      // so the two cannot disagree about which receivers are fan-outs.
+      val fanOut: Boolean = receiverType.hasValueFanOutInner() != null
       droppedReceivers.add(
         ForwardDroppedExtensionReceiver(
           symbol = "${prop.packageName.asString()}.$receiverName.$name",
           node = prop,
           receiverDescription = receiverType.diagnosticTypeName(),
+          reason = if (fanOut) ForwardPlanSkipReason.RECEIVER_FAN_OUT else null,
+          detail = if (fanOut) receiverType.diagnosticTypeName() else null,
         ),
       )
       return null
@@ -343,6 +363,11 @@ internal class ForwardPropertyPlanner(
    * `Nullable(Duration)`, and a nullable value class over a `Primitive`/`Enum` underlying) needs a
    * second adjacent slot for the has-value flag, and a receiver is exactly one slot (one
    * `valueParameter`) -- admitting them would mint one slot and silently lose the null.
+   *
+   * ADR-064 amendment (2026-09-20): that fan-out half keeps this kind but no longer reads this
+   * route's generic receiver hint. It is recorded as [ForwardPlanSkipReason.RECEIVER_FAN_OUT] and
+   * reads the extension-FUNCTION route's sentence and hint, which name the receiver type, blame
+   * the two-slot SHAPE rather than the type, and offer the parameter remedy.
    */
   private fun BridgeType.isSupportedReceiver(): Boolean = when (this) {
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Primitive,
