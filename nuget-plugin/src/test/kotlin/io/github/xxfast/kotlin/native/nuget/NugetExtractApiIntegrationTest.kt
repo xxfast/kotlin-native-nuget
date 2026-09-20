@@ -13,6 +13,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -350,6 +351,129 @@ class NugetExtractApiIntegrationTest {
     assertEquals(
       forward.getValue("constructors").jsonArray.signatures().toSet(),
       reversed.getValue("constructors").jsonArray.signatures().toSet(),
+    )
+  }
+
+  /**
+   * ADR-152: the REAL reader against a REAL compiled assembly, per CLAUDE.md's hand-built-fixture
+   * warning. Every claim here is about metadata the C# compiler wrote, not about JSON this test
+   * typed out: the `NullableAttribute` bytes are pre-order over the whole tree with the `Task`
+   * node counted first, and nothing but running the compiler produces them.
+   */
+  @Test
+  fun `metadata reader maps Task returns to an async method and skips the rest`() {
+    val dotnet: String = findDotnet() ?: return
+
+    val source: String = """
+      using System.Threading.Tasks;
+
+      namespace Probe.Async;
+
+      public sealed class Kitten
+      {
+          public Kitten(string name) { Name = name; }
+          public string Name { get; }
+      }
+
+      public sealed class Kennel
+      {
+          public Task NapAsync() => Task.CompletedTask;
+          public Task<int> CountAsync() => Task.FromResult(2);
+          public Task<string> NameAsync() => Task.FromResult("Oreo & Mylo");
+          public Task<Kitten> AdoptAsync(string name) => Task.FromResult(new Kitten(name));
+          public Task<string?> WhisperAsync() => Task.FromResult<string?>(null);
+          public Task<string>? MaybeAsync() => null;
+          public ValueTask<int> PurrsAsync() => ValueTask.FromResult(3);
+          public ValueTask SettleAsync() => ValueTask.CompletedTask;
+          public void Queue(Task pending) { }
+          public Task<string> LedgerAsync(string? a, string? b, string? c) =>
+              Task.FromResult($"{a}{b}{c}");
+      }
+    """.trimIndent()
+
+    val dll: File = compileFixture(dotnet, source, "AsyncReaderFixture")
+    val toolDir: File = Files.createTempDirectory("NugetMetadataReader-async-fixture").toFile()
+    unpackMetadataReader(toolDir, javaClass.classLoader)
+    val root: JsonObject = Json.parseToJsonElement(
+      runMetadataReader(dotnet, toolDir, mapOf("AsyncFixture" to listOf(dll.absolutePath))),
+    ).jsonObject
+
+    val methods: List<JsonObject> = root.type("Probe.Async", "Kennel")
+      .getValue("methods").jsonArray.map { it.jsonObject }
+    fun method(name: String): JsonObject = methods.single {
+      it.getValue("name").jsonPrimitive.content == name
+    }
+
+    fun asyncKind(name: String): String? =
+      method(name)["asyncKind"]?.jsonPrimitive?.contentOrNull
+
+    // The awaited type is the return type; non-generic `Task` awaits to void.
+    assertEquals("task", asyncKind("NapAsync"))
+    assertEquals("void", method("NapAsync").getValue("returnType").jsonObject
+      .getValue("kind").jsonPrimitive.content)
+    assertEquals("task", asyncKind("CountAsync"))
+    assertEquals("int", method("CountAsync").getValue("returnType").jsonObject
+      .getValue("name").jsonPrimitive.content)
+    assertEquals("task", asyncKind("AdoptAsync"))
+    assertEquals("handle", method("AdoptAsync").getValue("returnType").jsonObject
+      .getValue("kind").jsonPrimitive.content)
+
+    // Nullability is resolved over the WHOLE tree before the Task node is unwrapped:
+    // `Task<string>` is [1, 1] and `Task<string?>` is [1, 2]. Unwrap first and both read byte 1.
+    assertEquals(
+      false,
+      method("NameAsync").getValue("returnType").jsonObject
+        .getValue("nullable").jsonPrimitive.boolean,
+    )
+    assertEquals(
+      true,
+      method("WhisperAsync").getValue("returnType").jsonObject
+        .getValue("nullable").jsonPrimitive.boolean,
+    )
+
+    // Three nullable parameters put LedgerAsync in a NullableContext(2), so its all-non-null
+    // two-node return tree is written as the SINGLE-byte NullableAttribute form. ADR-152 inferred
+    // that byte expands to the node count (claim D); it did not, and this member was skipped.
+    assertEquals("task", asyncKind("LedgerAsync"))
+    assertEquals(
+      false,
+      method("LedgerAsync").getValue("returnType").jsonObject
+        .getValue("nullable").jsonPrimitive.boolean,
+    )
+
+    // A synchronous method still carries no async kind at all.
+    assertEquals(
+      listOf("NapAsync", "CountAsync", "NameAsync", "AdoptAsync", "WhisperAsync", "LedgerAsync"),
+      methods.filter { it["asyncKind"]?.jsonPrimitive?.contentOrNull != null }
+        .map { it.getValue("name").jsonPrimitive.content },
+    )
+
+    // Everything deferred keeps a NAMED skip, never a silent drop: ValueTask (both arities),
+    // `Task<T>?`, and a `Task`-typed parameter.
+    val diagnostics: List<JsonObject> = root.getValue("assemblies").jsonArray.single().jsonObject
+      .getValue("diagnostics").jsonArray.map { it.jsonObject }
+    listOf("PurrsAsync", "SettleAsync", "MaybeAsync", "Queue").forEach { member ->
+      assertTrue(
+        diagnostics.any {
+          it.getValue("kind").jsonPrimitive.content == "info_async_not_yet_mapped" &&
+              it.getValue("memberName").jsonPrimitive.content == member
+        },
+        "`$member` must be skipped with info_async_not_yet_mapped, found: " +
+            diagnostics.map {
+              it.getValue("memberName").jsonPrimitive.content to
+                  it.getValue("kind").jsonPrimitive.content
+            },
+      )
+    }
+
+    // The bug ADR-152 fixes on the way: non-generic `Task` used to reach
+    // `skipped_unbound_type_reference`, which told the user to bind System.Private.CoreLib.
+    assertTrue(
+      diagnostics.none {
+        it.getValue("kind").jsonPrimitive.content == "skipped_unbound_type_reference" &&
+            it.getValue("memberName").jsonPrimitive.content == "NapAsync"
+      },
+      "non-generic Task must not be reported as an unbound type reference",
     )
   }
 

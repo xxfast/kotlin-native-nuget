@@ -18,6 +18,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirParameter
 import io.github.xxfast.kotlin.native.nuget.rir.RirPrimitiveType
 import io.github.xxfast.kotlin.native.nuget.rir.RirProperty
 import io.github.xxfast.kotlin.native.nuget.rir.RirRegistrable
+import io.github.xxfast.kotlin.native.nuget.rir.RirSlotRole
 import io.github.xxfast.kotlin.native.nuget.rir.RirStringType
 import io.github.xxfast.kotlin.native.nuget.rir.RirStruct
 import io.github.xxfast.kotlin.native.nuget.rir.RirStructShape
@@ -44,8 +45,11 @@ import io.github.xxfast.kotlin.native.nuget.rir.isNullable
 import io.github.xxfast.kotlin.native.nuget.rir.isHandleBacked
 import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgeContractHash
 import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgePlan
+import io.github.xxfast.kotlin.native.nuget.rir.mapSlots
+import io.github.xxfast.kotlin.native.nuget.rir.nameSuffix
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import io.github.xxfast.kotlin.native.nuget.rir.registrationExportName
+import io.github.xxfast.kotlin.native.nuget.rir.slotCount
 import io.github.xxfast.kotlin.native.nuget.rir.structContractHash
 import io.github.xxfast.kotlin.native.nuget.rir.structReceiverAbiArgs
 import org.gradle.api.DefaultTask
@@ -746,11 +750,21 @@ private fun referencedHandleNamespaces(
             genericInstanceHandleArgs(it.type).map { h -> h.namespace }
       }
 
+      // ADR-152: an INTERFACE-typed member reference needs its declaring namespace imported for
+      // exactly the same reason a class-handle one does. A pre-existing gap: every fixture before
+      // `Kennel.BoardAsync(IFeedable)` had its interfaces in the same namespace as the class, so
+      // the missing `using` compiled by accident.
       is RirRegistrable.Method ->
-        listOfNotNull((r.method.returnType as? RirObjectHandleType)?.namespace) +
+        listOfNotNull(
+          (r.method.returnType as? RirObjectHandleType)?.namespace,
+          (r.method.returnType as? RirInterfaceType)?.namespace,
+        ) +
             genericInstanceHandleArgs(r.method.returnType).map { it.namespace } +
             r.method.parameters.flatMap {
-              listOfNotNull((it.type as? RirObjectHandleType)?.namespace) +
+              listOfNotNull(
+                (it.type as? RirObjectHandleType)?.namespace,
+                (it.type as? RirInterfaceType)?.namespace,
+              ) +
                   genericInstanceHandleArgs(it.type).map { h -> h.namespace }
             }
 
@@ -1045,17 +1059,24 @@ private fun registrationFileContent(
 
   // ADR-054: IoGithubXxfast.KotlinNativeNuget carries NugetTrace, referenced by the
   // [ModuleInitializer] below in every generated {Type}Registration.cs.
+  // ADR-152: `Task` and `NugetTasks.Attach` are named by every async method's Begin/End pair.
+  val asyncUsings: List<String> =
+    if (registrables.any { it is RirRegistrable.Method && it.method.asyncKind != null })
+      listOf("System.Threading.Tasks")
+    else emptyList()
+
   val usings: String = (
       listOf(
         "System", "System.Runtime.CompilerServices", "System.Runtime.InteropServices",
         "IoGithubXxfast.KotlinNativeNuget",
-      ) + allNamespaces
+      ) + asyncUsings + allNamespaces
       ).joinToString("\n") { "    using $it;" }
 
   // ADR-054: the register export's contract — both baked identically from the same shared
   // contractHash() function NugetGenerateBindingsTask calls, so within one build the two
   // generated sides can never disagree on either value.
-  val slotCount: Int = registrables.size
+  // ADR-152: slots, not registrables, an async method occupies two of them (Begin, End).
+  val slotCount: Int = registrables.slotCount()
   val hash: Long = contractHash(cls, registrables, structs)
   val qualifiedType: String = "$namespaceName.${cls.name}"
   val slotWord: String = if (slotCount == 1) "slot" else "slots"
@@ -1065,19 +1086,21 @@ private fun registrationFileContent(
   // ADR-054: slotCount/contractHash precede the pointer parameters (both int/long — see the
   // amended ADR-048 contract). registrables is never empty here (the caller returns early when
   // it is), so prepending the two leading params as a plain string is safe — no dangling comma.
-  val registrableParams: String = registrables.joinToString(", ") { r ->
+  val registrableParams: String = registrables.mapSlots { r, role ->
     when (r) {
       is RirRegistrable.Ctor -> "IntPtr ctor${r.ctor.bridgeSuffix()}Ptr"
       is RirRegistrable.Method ->
-        "IntPtr ${r.method.name.toMethodCamelCase()}${r.method.bridgeSuffix()}Ptr"
+        "IntPtr ${r.method.name.toMethodCamelCase()}${r.method.bridgeSuffix()}" +
+            "${role.nameSuffix}Ptr"
 
       is RirRegistrable.PropertyGetter -> "IntPtr ${r.property.name.toMethodCamelCase()}GetterPtr"
       is RirRegistrable.PropertySetter -> "IntPtr ${r.property.name.toMethodCamelCase()}SetterPtr"
     }
-  }
+  }.joinToString(", ")
   val dllImportParams: String = "int slotCount, long contractHash, $registrableParams"
 
-  val moduleInitArgs: String = (listOf("$slotCount", "${hash}L") + registrables.map { r ->
+  val slotIntroArgs: List<String> = listOf("$slotCount", "${hash}L")
+  val moduleInitArgs: String = (slotIntroArgs + registrables.mapSlots { r, role ->
     when (r) {
       is RirRegistrable.Ctor -> {
         val paramTypes: String = abiArgs(r.ctor.parameters, structs)
@@ -1106,12 +1129,25 @@ private fun registrationFileContent(
         // static/instance) — only its parameter list gains a leading IntPtr selfHandle, already
         // reflected in buildThunkMethod's paramList; the delegate* type here must match.
         val selfParamType: String? = if (!r.method.isStatic) "IntPtr" else null
-        val allParamTypes: String =
-          (listOfNotNull(selfParamType, paramTypes.ifEmpty { null }) + ERR_OUT_ABI)
-            .joinToString(", ")
-        val fnTypeParams: String = "$allParamTypes, $retType"
+        // ADR-152: the Begin slot takes the ordinary in-args plus the completion callback and its
+        // opaque ctx, and returns void; the End slot takes the task GCHandle plus the sync
+        // return half's out-pointers. Both keep the trailing ADR-104 error slot.
+        val allParamTypes: String = when (role) {
+          RirSlotRole.ASYNC_BEGIN -> (
+              listOfNotNull(selfParamType) + inTypes + listOf("IntPtr", "IntPtr") + ERR_OUT_ABI
+              ).joinToString(", ")
+
+          RirSlotRole.ASYNC_END ->
+            (listOf("IntPtr") + outTypes + ERR_OUT_ABI).joinToString(", ")
+
+          RirSlotRole.SYNC ->
+            (listOfNotNull(selfParamType, paramTypes.ifEmpty { null }) + ERR_OUT_ABI)
+              .joinToString(", ")
+        }
+        val slotRetType: String = if (role == RirSlotRole.ASYNC_BEGIN) "void" else retType
+        val fnTypeParams: String = "$allParamTypes, $slotRetType"
         "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)" +
-            "(&${r.method.name}${r.method.bridgeSuffix()}_Thunk)"
+            "(&${r.method.name}${r.method.bridgeSuffix()}${role.nameSuffix}_Thunk)"
       }
 
       // ADR-056: expanded through the shared abiOutArgs/abiReturnType functions — a struct-typed
@@ -1143,14 +1179,19 @@ private fun registrationFileContent(
     }
   }).joinToString(",\n                    ")
 
-  val thunks: String = registrables.joinToString("\n\n") { r ->
+  val thunks: String = registrables.mapSlots { r, role ->
     when (r) {
       is RirRegistrable.Ctor -> buildCtorThunkMethod(cls, r.ctor, structs)
-      is RirRegistrable.Method -> buildThunkMethod(cls, r.method, structs)
+      is RirRegistrable.Method -> when (role) {
+        RirSlotRole.SYNC -> buildThunkMethod(cls, r.method, structs)
+        RirSlotRole.ASYNC_BEGIN -> buildAsyncBeginThunkMethod(cls, r.method, structs)
+        RirSlotRole.ASYNC_END -> buildAsyncEndThunkMethod(r.method, structs)
+      }
+
       is RirRegistrable.PropertyGetter -> buildPropertyGetterThunkMethod(cls, r.property, structs)
       is RirRegistrable.PropertySetter -> buildPropertySetterThunkMethod(cls, r.property, structs)
     }
-  }
+  }.joinToString("\n\n")
 
   return """
     |// <auto-generated>
@@ -1554,7 +1595,26 @@ private fun buildThunkMethod(
     if (method.isStatic) "${cls.name}.${method.name}($callArgs)"
     else "receiver.${method.name}($callArgs)"
 
-  val callBodyLines: List<String> = when (val retType = method.returnType) {
+  val callBodyLines: List<String> = returnBodyLines(method.returnType, callExpr, outArgs, structs)
+
+  val bodyLines: List<String> = listOfNotNull(receiverLine) + paramDeclarationLines + callBodyLines
+
+  // ADR-104: user code, so this thunk carries the error channel (superseding ADR-049's
+  // "let it crash" for this emission site).
+  return errorChannelThunk(retAbiType, thunkName, paramList, bodyLines)
+}
+
+// ADR-152: a thunk's RETURN half, extracted verbatim from buildThunkMethod so the async `End`
+// thunk can reuse it with `((Task<T>)handle.Target!).GetAwaiter().GetResult()` as its
+// [callExpr]. That is the whole reason the begin/end pair needs no new marshalling: every
+// already-supported return kind (primitive, string, handle, interface, enum, struct out-pointers,
+// generic instance) arrives here unchanged.
+private fun returnBodyLines(
+  returnType: RirTypeRef,
+  callExpr: String,
+  outArgs: List<AbiArg>,
+  structs: Map<RirTypeKey, RirStruct>,
+): List<String> = when (val retType = returnType) {
     is RirVoidType -> listOf("$callExpr;")
 
     // ADR-053: a nullable-annotated string return declares its local as `string?` — the shim's
@@ -1633,10 +1693,74 @@ private fun buildThunkMethod(
     )
   }
 
-  val bodyLines: List<String> = listOfNotNull(receiverLine) + paramDeclarationLines + callBodyLines
+// ADR-152: the `Begin` half of an async method. Ordinary parameters, plus the completion callback
+// and its opaque ctx, and no result at all: it starts the task and hands it to NugetTasks.Attach,
+// which owns the task's GCHandle and the single ContinueWith. It goes through errorChannelThunk
+// like every other user-code thunk, so a SYNCHRONOUS throw (a non-`async` Task-returning method
+// that validates its arguments) leaves through the ADR-104 error slot and the callback never
+// fires, which is exactly the path the Kotlin side releases its ctx on.
+private fun buildAsyncBeginThunkMethod(
+  cls: RirClass,
+  method: RirMethod,
+  structs: Map<RirTypeKey, RirStruct>,
+): String {
+  val thunkName: String = "${method.name}${method.bridgeSuffix()}Begin_Thunk"
+  val selfParam: String? = if (!method.isStatic) "IntPtr selfHandle" else null
+  val inParamDecls: List<String> = abiArgs(method.parameters, structs).map { arg ->
+    "${csAbiType(arg.type)} ${thunkParamName(RirParameter(arg.name, arg.type))}"
+  }
+  val paramList: String =
+    (listOfNotNull(selfParam) + inParamDecls + listOf("IntPtr callback", "IntPtr ctx"))
+      .joinToString(", ")
 
-  // ADR-104: user code, so this thunk carries the error channel (superseding ADR-049's
-  // "let it crash" for this emission site).
+  val paramBindings: List<ParamBinding> = method.parameters.map { paramBinding(it, structs) }
+  val callArgs: String = paramBindings.joinToString(", ") { it.expression }
+  val receiverLine: String? =
+    if (method.isStatic) null
+    else "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
+  val callExpr: String =
+    if (method.isStatic) "${cls.name}.${method.name}($callArgs)"
+    else "receiver.${method.name}($callArgs)"
+
+  val bodyLines: List<String> = listOfNotNull(receiverLine) +
+      paramBindings.flatMap { it.declarationLines } +
+      listOf("Task task = $callExpr;", "NugetTasks.Attach(task, callback, ctx);")
+
+  return errorChannelThunk("void", thunkName, paramList, bodyLines)
+}
+
+// ADR-152: the `End` half. The ordinary synchronous return thunk with the task's GCHandle in place
+// of the receiver and `GetAwaiter().GetResult()` as the call expression, which rethrows the
+// ORIGINAL exception rather than wrapping it in an AggregateException the way `.Result` does, so a
+// faulted task reaches Kotlin through the ADR-104 channel as its own managed type. The handle is
+// freed in `finally`, on the success and the fault path alike.
+private fun buildAsyncEndThunkMethod(
+  method: RirMethod,
+  structs: Map<RirTypeKey, RirStruct>,
+): String {
+  val thunkName: String = "${method.name}${method.bridgeSuffix()}End_Thunk"
+  val outArgs: List<AbiArg> = abiOutArgs(method.returnType, structs)
+  val outParamDecls: List<String> = outArgs.map { arg -> "${csAbiType(arg.type)}* ${arg.name}" }
+  val paramList: String = (listOf("IntPtr taskHandle") + outParamDecls).joinToString(", ")
+  val retAbiType: String = csAbiType(abiReturnType(method.returnType, structs))
+
+  val taskType: String =
+    if (method.returnType is RirVoidType) "Task"
+    else "Task<${csNativeType(method.returnType)}>"
+  val callExpr: String = "((${taskType})handle.Target!).GetAwaiter().GetResult()"
+
+  val bodyLines: List<String> = listOf(
+    "GCHandle handle = GCHandle.FromIntPtr(taskHandle);",
+    "try",
+    "{",
+  ) + returnBodyLines(method.returnType, callExpr, outArgs, structs).map { "    $it" } + listOf(
+    "}",
+    "finally",
+    "{",
+    "    handle.Free();",
+    "}",
+  )
+
   return errorChannelThunk(retAbiType, thunkName, paramList, bodyLines)
 }
 
@@ -2174,6 +2298,8 @@ private fun nugetRuntimeRegistrationContent(
   |    using System;
   |    using System.Runtime.CompilerServices;
   |    using System.Runtime.InteropServices;
+  |    using System.Threading;
+  |    using System.Threading.Tasks;
   |
   |    internal static class NugetRuntimeRegistration
   |    {
@@ -2268,6 +2394,47 @@ private fun nugetRuntimeRegistrationContent(
   |            catch (Exception)
   |            {
   |                return IntPtr.Zero;
+  |            }
+  |        }
+  |    }
+  |
+  |    // ADR-152: the managed half of the reverse async crossing, emitted once for the whole
+  |    // package (there is nothing per-method about it). Attach owns the Task's GCHandle and the
+  |    // one continuation that calls back into Kotlin with it.
+  |    //
+  |    // TaskContinuationOptions.None with TaskScheduler.Default, deliberately not the
+  |    // run-it-inline option: the callback must never run arbitrary Kotlin inline on whichever
+  |    // I/O completion thread finished the task, nor inline on the thread that called Begin. The
+  |    // Kotlin side still tolerates the callback landing before Begin returns (an
+  |    // already-completed Task calls back from a pool thread immediately).
+  |    //
+  |    // The callback travels as IntPtr inside the state tuple because a function pointer type
+  |    // cannot be a generic argument.
+  |    internal static unsafe class NugetTasks
+  |    {
+  |        internal static void Attach(Task task, IntPtr callback, IntPtr ctx)
+  |        {
+  |            ArgumentNullException.ThrowIfNull(task);
+  |            IntPtr handle = GCHandle.ToIntPtr(GCHandle.Alloc(task));
+  |            try
+  |            {
+  |                task.ContinueWith(
+  |                    static (_, state) =>
+  |                    {
+  |                        var (cb, h, c) = ((IntPtr, IntPtr, IntPtr))state!;
+  |                        ((delegate* unmanaged[Cdecl]<IntPtr, IntPtr, void>)cb)(h, c);
+  |                    },
+  |                    (callback, handle, ctx),
+  |                    CancellationToken.None,
+  |                    TaskContinuationOptions.None,
+  |                    TaskScheduler.Default);
+  |            }
+  |            catch
+  |            {
+  |                // Nothing else can free it: no continuation was attached, so no End call and no
+  |                // completion callback will ever arrive for this task.
+  |                GCHandle.FromIntPtr(handle).Free();
+  |                throw;
   |            }
   |        }
   |    }

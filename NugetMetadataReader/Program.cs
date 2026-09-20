@@ -1996,6 +1996,19 @@ internal static class AssemblyExtractor
             var paramTypeRef = sig.ParameterTypes[i].TypeRef;
             if (paramTypeRef is null) return (null, null, null); // unknown, non-diagnostic type — skip silently
 
+            // ADR-152: an async type at a CONSTRUCTOR parameter position keeps a named skip.
+            if (paramTypeRef is RirAsyncType)
+            {
+                return (null, new RirDiagnostic(
+                    kind: "info_async_not_yet_mapped",
+                    typeName: typeName,
+                    memberName: ".ctor",
+                    memberSignature: BuildSignatureString(mr, methodDef, ".ctor"),
+                    reason: "an async type is mapped at the method return position only " +
+                        "(ADR-152); here it is a constructor parameter",
+                    hint: "Take the awaited value as the constructor parameter instead."), null);
+            }
+
             int seq = i + 1;
             string paramName = "arg" + i;
             ParameterHandle paramHandle = default;
@@ -2171,6 +2184,51 @@ internal static class AssemblyExtractor
             anyOblivious |= returnResolution.Oblivious;
         }
 
+        // ADR-152: unwrap the async shape AFTER nullability resolved the whole tree. A `Task<T>?`
+        // return (outer byte 2) is out of v1 scope: "the task itself may be null" has no Kotlin
+        // `suspend` shape, and silently binding it as `T?` would be a different contract.
+        string? asyncKind = null;
+        if (returnTypeRef is RirAsyncType asyncReturn)
+        {
+            if (asyncReturn.Nullable)
+            {
+                var fullSig = BuildSignatureString(mr, methodDef, methodName);
+                return (null, new RirDiagnostic(
+                    kind: "info_async_not_yet_mapped",
+                    typeName: typeName,
+                    memberName: methodName,
+                    memberSignature: fullSig,
+                    reason: "a nullable `Task<T>?` return is not mapped in v1 (ADR-152): a null " +
+                        "task has no `suspend fun` shape",
+                    hint: "Return a non-nullable `Task<T>` (a completed task carrying null, if " +
+                        "that is the intent)."), null);
+            }
+
+            // ADR-152 v1 admits the async shape on a bound CLASS only. An interface member would
+            // need the inverse slot for a Kotlin implementor (Phase 13), and a generic class's
+            // members bind through the witness-thunk route, neither of which grows a Begin/End
+            // pair in this revision.
+            bool genericOwner = declaringTypeParameters is { Count: > 0 };
+            if (isInterface || genericOwner)
+            {
+                var fullSig = BuildSignatureString(mr, methodDef, methodName);
+                return (null, new RirDiagnostic(
+                    kind: "info_async_not_yet_mapped",
+                    typeName: typeName,
+                    memberName: methodName,
+                    memberSignature: fullSig,
+                    reason: isInterface
+                        ? "an async member of a bound INTERFACE is not mapped in v1 (ADR-152): a " +
+                          "Kotlin implementor would need the inverse slot"
+                        : "an async member of a GENERIC class is not mapped in v1 (ADR-152): its " +
+                          "members bind through the witness-thunk route",
+                    hint: "Expose this async member on a non-generic bound class."), null);
+            }
+
+            asyncKind = asyncReturn.Kind;
+            returnTypeRef = asyncReturn.Awaited;
+        }
+
         // Map parameters.
         var parameters = new List<RirParameter>();
 
@@ -2178,6 +2236,21 @@ internal static class AssemblyExtractor
         {
             var paramTypeRef = sig.ParameterTypes[i].TypeRef;
             if (paramTypeRef is null) return (null, null, null); // should have been caught above
+
+            // ADR-152: the async shape is admitted at the method RETURN position only. A
+            // `Task`-typed parameter has no `suspend fun` meaning on the Kotlin side.
+            if (paramTypeRef is RirAsyncType)
+            {
+                var fullSig = BuildSignatureString(mr, methodDef, methodName);
+                return (null, new RirDiagnostic(
+                    kind: "info_async_not_yet_mapped",
+                    typeName: typeName,
+                    memberName: methodName,
+                    memberSignature: fullSig,
+                    reason: "an async type is mapped at the method return position only " +
+                        "(ADR-152); here it is a parameter",
+                    hint: "Take the awaited value as the parameter instead."), null);
+            }
 
             int seq = i + 1;
             string paramName = "arg" + i;
@@ -2222,7 +2295,7 @@ internal static class AssemblyExtractor
             : null;
 
         var managedSignature = BuildManagedSignature(mr, typeHandle, methodHandle);
-        return (new RirMethod(methodName, returnTypeRef, parameters, isStatic, managedSignature),
+        return (new RirMethod(methodName, returnTypeRef, parameters, isStatic, managedSignature, asyncKind),
             null, obliviousDiagnostic);
     }
 
@@ -2262,6 +2335,20 @@ internal static class AssemblyExtractor
                 memberSignature: propName,
                 reason: t.Diagnostic.Reason,
                 hint: t.Diagnostic.Hint));
+        }
+
+        // ADR-152: an async-typed PROPERTY keeps a named skip. `suspend` is a function shape in
+        // Kotlin; there is no suspending property.
+        if (t.TypeRef is RirAsyncType)
+        {
+            return (null, new RirDiagnostic(
+                kind: "info_async_not_yet_mapped",
+                typeName: typeName,
+                memberName: propName,
+                memberSignature: propName,
+                reason: "an async type is mapped at the method return position only (ADR-152); " +
+                    "here it is a property type",
+                hint: "Expose a `Task`-returning method instead of a `Task`-typed property."));
         }
 
         return (t.TypeRef, null);
@@ -2529,7 +2616,7 @@ internal static class NullabilityHelpers
     /// </summary>
     private static bool IsAnnotatable(RirTypeRef type) =>
         type is RirStringType or RirObjectHandleType or RirInterfaceType or RirTypeParameterType
-            or RirGenericInstanceType;
+            or RirGenericInstanceType or RirAsyncType;
 
     /// <summary>
     /// ADR-072 Decision 7: the number of annotatable nodes in <paramref name="type"/>'s pre-order
@@ -2543,6 +2630,10 @@ internal static class NullabilityHelpers
     {
         RirStringType or RirObjectHandleType or RirInterfaceType or RirTypeParameterType => 1,
         RirGenericInstanceType g => 1 + g.TypeArguments.Sum(CountAnnotatableNodes),
+        // ADR-152: the `Task` node itself is annotatable and comes FIRST in the pre-order, so
+        // `Task<string?>` is [1, 2] and `Task<string>?` is [2, 1]. Counting it is what makes the
+        // difference between those two readable at all.
+        RirAsyncType a => 1 + CountAnnotatableNodes(a.Awaited),
         _ => 0,
     };
 
@@ -2632,6 +2723,15 @@ internal static class NullabilityHelpers
 
                 return new RirGenericInstanceType(g.Namespace, g.Name, newArgs, outerNullable);
             }
+
+            case RirAsyncType a:
+            {
+                bool outerNullable = bytes[cursor++] == 2;
+                var awaited = CountAnnotatableNodes(a.Awaited) == 0
+                    ? a.Awaited
+                    : ApplyPreOrder(a.Awaited, bytes, ref cursor, ref hitNullableTypeParameter);
+                return new RirAsyncType(awaited, a.Kind, outerNullable);
+            }
             default:
                 return type;
         }
@@ -2660,6 +2760,20 @@ internal static class NullabilityHelpers
         if (memberBytes is not null)
         {
             oblivious = false;
+
+            // Roslyn writes the SINGLE-byte `NullableAttribute(byte)` form whenever every node of
+            // the tree carries the same value, and the byte[] form otherwise. ADR-072 Decision 7's
+            // description says that single byte expands to the node count; it did not: the
+            // length-1 array fell straight into the count check below and any multi-node member
+            // whose nodes all agreed (e.g. `Task<string>` or `Box<string>` under a method
+            // `NullableContext(2)`) was skipped as `skipped_generic_type_argument` instead of
+            // binding. Broadcast it, exactly as the context tiers below already do.
+            if (memberBytes.Length == 1 && nodeCount > 1)
+            {
+                mismatch = false;
+                return Enumerable.Repeat(memberBytes[0], nodeCount).ToArray();
+            }
+
             mismatch = memberBytes.Length != nodeCount;
             return mismatch ? null : memberBytes;
         }
@@ -3100,6 +3214,25 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         if (fullName == "System.String")
             return new TypeRefOrDiag(new RirStringType(), null, "string");
 
+        // ADR-152: non-generic `Task` is an async shape, not an unbound handle. It never reached
+        // `IsAsyncType` before (that check only runs for a null TypeRef with a raw name, which the
+        // GENERIC instantiation path produces), so it was reported as
+        // `skipped_unbound_type_reference`, a diagnostic that told the user to bind
+        // System.Private.CoreLib. Non-generic `ValueTask` is still out of v1 scope, but it is out
+        // of scope as an ASYNC shape, so it moves onto the async info diagnostic too.
+        if (fullName == "System.Threading.Tasks.Task")
+            return new TypeRefOrDiag(new RirAsyncType(RirVoidType.Instance), null, fullName);
+
+        if (fullName == "System.Threading.Tasks.ValueTask")
+            return new TypeRefOrDiag(null,
+                new PendingDiagnostic(
+                    "info_async_not_yet_mapped",
+                    $"async return type `{fullName}` is not yet mapped in v1 (ADR-152 maps `Task` " +
+                        "and `Task<T>` only)",
+                    "Expose a `Task`-returning member instead; `ValueTask` is one more " +
+                        "`RirAsyncKind` value in a later revision."),
+                fullName);
+
         // All other external type references are outside the bound set and cannot be opaque
         // handles. Emit a diagnostic so the member skip is visible (ADR-051; replaces the
         // previous silent null,null for direct non-generic external type refs).
@@ -3129,6 +3262,18 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
     public TypeRefOrDiag GetGenericInstantiation(TypeRefOrDiag genericType, ImmutableArray<TypeRefOrDiag> typeArguments)
     {
         var rawName = genericType.RawTypeName;
+
+        // ADR-152: `Task<T>` with one admissible argument becomes the reader-internal async
+        // wrapper, which `TryMapMethod` unwraps after nullability resolution. Every other async
+        // shape (`ValueTask`, `ValueTask<T>`, `IAsyncEnumerable<T>`, and a `Task<T>` whose
+        // argument is outside the v1 return vocabulary) keeps the informational skip.
+        if (rawName == "System.Threading.Tasks.Task`1" && typeArguments.Length == 1)
+        {
+            var awaited = typeArguments[0];
+            if (awaited.Diagnostic is not null) return new TypeRefOrDiag(null, awaited.Diagnostic, rawName);
+            if (awaited.TypeRef is not null and not RirAsyncType)
+                return new TypeRefOrDiag(new RirAsyncType(awaited.TypeRef), null, rawName);
+        }
 
         // Async shapes — informational (not a structural skip).
         if (IsAsyncTypeName(rawName))
@@ -3531,13 +3676,15 @@ internal sealed class RirMethod
         RirTypeRef returnType,
         IReadOnlyList<RirParameter> parameters,
         bool isStatic,
-        string managedSignature)
+        string managedSignature,
+        string? asyncKind = null)
     {
         Name = name;
         ReturnType = returnType;
         Parameters = parameters;
         IsStatic = isStatic;
         ManagedSignature = managedSignature;
+        AsyncKind = asyncKind;
     }
 
     public string Name { get; }
@@ -3545,6 +3692,15 @@ internal sealed class RirMethod
     public IReadOnlyList<RirParameter> Parameters { get; }
     public bool IsStatic { get; }
     public string ManagedSignature { get; }
+
+    /// <summary>
+    /// ADR-152: <c>"task"</c> when this method returns <c>Task</c> or <c>Task&lt;T&gt;</c> and
+    /// binds as a Kotlin <c>suspend fun</c>; null for an ordinary synchronous method. When it is
+    /// set, <see cref="ReturnType"/> is the AWAITED type (<c>void</c> for non-generic
+    /// <c>Task</c>), not the task itself. An open enum (a string in the JSON contract, an enum in
+    /// <c>RirModel.kt</c>) so <c>ValueTask</c> lands later as one more value, not a contract change.
+    /// </summary>
+    public string? AsyncKind { get; }
 }
 
 internal sealed class RirProperty
@@ -3757,6 +3913,33 @@ internal sealed class RirGenericInstanceType : RirTypeRef
     public string Namespace { get; }
     public string Name { get; }
     public IReadOnlyList<RirTypeRef> TypeArguments { get; }
+    public bool Nullable { get; }
+}
+
+/// <summary>
+/// ADR-152, READER-INTERNAL: a <c>Task</c> / <c>Task&lt;T&gt;</c> node. It is never serialized;
+/// <c>TryMapMethod</c> unwraps it to <see cref="Awaited"/> and records
+/// <see cref="RirMethod.AsyncKind"/> instead, AFTER nullability has been resolved over the whole
+/// tree. It exists precisely so that resolution sees the same node count the C# compiler counted
+/// when it wrote the <c>NullableAttribute</c> bytes: those bytes are pre-order over the WHOLE
+/// tree, the <c>Task</c> node included (<c>Task&lt;string?&gt;</c> is <c>[1, 2]</c>), so unwrapping
+/// first would hand a 2-byte array to a 1-node tree.
+/// </summary>
+internal sealed class RirAsyncType : RirTypeRef
+{
+    public RirAsyncType(RirTypeRef awaited, string kind = "task", bool nullable = false)
+    {
+        Awaited = awaited;
+        Kind = kind;
+        Nullable = nullable;
+    }
+
+    public RirTypeRef Awaited { get; }
+
+    /// <summary>The <c>RirAsyncKind</c> value this maps to: <c>"task"</c> in v1.</summary>
+    public string Kind { get; }
+
+    /// <summary>A <c>Task&lt;T&gt;?</c> return (outer byte 2), which v1 skips.</summary>
     public bool Nullable { get; }
 }
 
