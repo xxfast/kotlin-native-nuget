@@ -24,7 +24,7 @@ class Tier1KdocXmlDocTest {
       /**
        * Books a stay.
        *
-       * Second paragraph, dropped in v1.
+       * Second paragraph, a remark since the ADR-150 amendment.
        *
        * @param nights how many nights
        * @param suite which suite
@@ -63,6 +63,9 @@ class Tier1KdocXmlDocTest {
     assertTrue(
       generated.contains(
         "        /// <summary>Books a stay.</summary>\n" +
+            "        /// <remarks>\n" +
+            "        /// <para>Second paragraph, a remark since the ADR-150 amendment.</para>\n" +
+            "        /// </remarks>\n" +
             "        /// <param name=\"nights\">how many nights</param>\n" +
             "        /// <param name=\"suite\">which suite</param>\n" +
             "        /// <returns>the booking reference</returns>\n" +
@@ -71,7 +74,8 @@ class Tier1KdocXmlDocTest {
       ),
       generated,
     )
-    assertFalse(generated.contains("Second paragraph"), generated)
+    // ADR-150 amendment: the summary is still paragraph one alone.
+    assertFalse(generated.contains("<summary>Books a stay. Second"), generated)
   }
 
   @Test
@@ -81,6 +85,9 @@ class Tier1KdocXmlDocTest {
     assertTrue(
       generated.contains(
         "        /// <summary>Books a stay.</summary>\n" +
+            "        /// <remarks>\n" +
+            "        /// <para>Second paragraph, a remark since the ADR-150 amendment.</para>\n" +
+            "        /// </remarks>\n" +
             "        /// <param name=\"nights\">how many nights</param>\n" +
             "        /// <returns>the booking reference</returns>\n",
       ),
@@ -715,5 +722,233 @@ class Tier1KdocXmlDocTest {
     val generated: String = Tier1Harness.run(families).generatedCSharp
     assertDocuments(generated, "A short one.", "Catnap")
     assertDocuments(generated, "How it felt.", "Feels")
+  }
+
+  /**
+   * ADR-150 amendment (the deferred inline and tag scope). The third fixture: the seams
+   * `IntegrationTests/XmlDocTests.cs` cannot reach, because they are about the *text* the
+   * generator writes rather than about what the compiler resolves.
+   */
+  private val amendment: String = """
+    package tier1.kdocamend
+
+    open class Haunting
+
+    // ADR-112 INELIGIBLE on purpose (`Nobody` has a second superclass), so `Basket`'s only
+    // constructor skips as SEALED_POSITION and the class carries ADR-064's generated remark.
+    sealed interface Ghost {
+      class Nobody : Haunting(), Ghost
+    }
+
+    /**
+     * A basket.
+     *
+     * Holds a [Blanket] and a `Pair<A & B>`; see [notAType] and [Crate].
+     *
+     * @see Blanket
+     * @see notAType
+     */
+    class Basket(ghost: Ghost) {
+
+      /** Lines it. */
+      fun line(): Int = 1
+    }
+
+    /** A blanket. */
+    class Blanket(val warmth: Int)
+
+    /** A crate that holds anything. */
+    class Crate<T>(val item: T)
+
+    /**
+     * The bowl.
+     *
+     * @property flavour what is in it
+     * @property rinsed whether it was hosed down
+     * @constructor Fills the bowl.
+     * @param scoops how many went in
+     */
+    class Bowl(val flavour: String, val scoops: Int) {
+
+      /** Whether the cat licked it clean. */
+      val rinsed: Boolean get() = scoops > 1
+    }
+
+    /** A tin. */
+    class Tin(/** The tin's own label. */ val label: String)
+
+    /**
+     * A weight in grams.
+     *
+     * @property grams how heavy the cat is
+     * @constructor Weighs a cat.
+     */
+    value class Weight(val grams: Int) {
+
+      /** Whether it is a big cat. */
+      fun heavy(): Boolean = grams > 5000
+    }
+
+    /**
+     * A length.
+     *
+     * @property centimetres how long, from the class comment
+     */
+    value class Length(/** The measured length. */ val centimetres: Int)
+
+    /**
+     * A tagged cat.
+     *
+     * @property cat the cat being tagged
+     */
+    value class Tagged(val cat: Blanket)
+  """.trimIndent()
+
+  /**
+   * The seam `csharp-dev` deliberately left uncrossed consumer-side: a class that has BOTH author
+   * remarks and ADR-064's generated one renders ONE `<remarks>`, with the generator's prose last.
+   * Two elements would compile (verified 2026-09-20) but would hide one from doc tooling.
+   */
+  @Test
+  fun `author remarks and the generated remark share one remarks element`() {
+    val generated: String = Tier1Harness.run(amendment).generatedCSharp
+
+    val start: Int = generated.indexOf("/// <summary>A basket.</summary>")
+    assertTrue(start > 0, generated)
+    val block: String = generated.substring(start).substringBefore("\n\n")
+    assertEquals(1, block.split("<remarks>").size - 1, block)
+    assertTrue(block.contains("/// <para>Holds a <see cref="), block)
+    // ADR-064's prose is the LAST paragraph of that one element, after the author's, and still
+    // escapes the `<init>` its detail names.
+    assertTrue(
+      block.substringBefore("</remarks>").substringAfterLast("<para>")
+        .startsWith("Cannot be constructed from C#:"),
+      "ADR-064's remark is not the last paragraph of the author's remarks:\n$block",
+    )
+    assertTrue(block.contains("(&lt;init&gt;: SEALED_POSITION)"), block)
+  }
+
+  @Test
+  fun `a link resolves only to a declared non-generic type and otherwise falls back to inline code`() {
+    val generated: String = Tier1Harness.run(amendment).generatedCSharp
+
+    // Declared, non-generic: a real cref, `global::`-qualified (spike 1, 2026-09-20).
+    assertTrue(
+      generated.contains("<see cref=\"global::Interop.Blanket\"/>"),
+      generated,
+    )
+    // A name nothing declares, and a GENERIC type (a bare cref to which is CS1574): both keep the
+    // author's Kotlin spelling inside `<c>`, which can never break a consumer's build.
+    assertTrue(generated.contains("<c>notAType</c>"), generated)
+    assertTrue(generated.contains("<c>Crate</c>"), generated)
+    // `Crate` really is declared, so this cell proves the GENERIC exclusion rather than the
+    // undeclared-name one the line above pins.
+    assertTrue(generated.contains("public class Crate<T>"), generated)
+    assertFalse(generated.contains("cref=\"global::Interop.Crate\""), generated)
+    // The backtick span is escaped per segment, inside the `<c>` and not around it.
+    assertTrue(generated.contains("<c>Pair&lt;A &amp; B&gt;</c>"), generated)
+  }
+
+  @Test
+  fun `a see is a seealso when it resolves and a closing remark when it does not`() {
+    val generated: String = Tier1Harness.run(amendment).generatedCSharp
+
+    assertTrue(
+      generated.contains("/// <seealso cref=\"global::Interop.Blanket\"/>"),
+      generated,
+    )
+    assertTrue(generated.contains("/// <para>See also: <c>notAType</c></para>"), generated)
+  }
+
+  @Test
+  fun `a property tag documents the constructor property and the constructor parameter`() {
+    val generated: String = Tier1Harness.run(amendment).generatedCSharp
+
+    assertDocuments(generated, "what is in it", "Flavour")
+    assertDocuments(generated, "Fills the bowl.", "public Bowl(string flavour, int scoops)")
+    assertTrue(generated.contains("/// <param name=\"flavour\">what is in it</param>"), generated)
+    assertTrue(
+      generated.contains("/// <param name=\"scoops\">how many went in</param>"),
+      generated,
+    )
+    // A `@property` naming a body property documents that property and never the constructor: a
+    // `<param name="rinsed">` on a constructor that has no such parameter is a fatal CS1572.
+    assertFalse(generated.contains("<param name=\"rinsed\">"), generated)
+    // A class-level `@param` documents the constructor parameter only, never the property.
+    assertFalse(generated.contains("<summary>how many went in</summary>"), generated)
+  }
+
+  /**
+   * A value class's `@constructor` had nowhere to land before this item: `CirValueClassConstructor`
+   * carried no doc slot. It lands on the `public Weight(int grams)` the record struct renders,
+   * which is the C# surface of the Kotlin primary constructor. (A reference-underlying value class
+   * has no such surface for its primary — ADR-035 leaves it to the positional record header —
+   * so only its secondaries can carry one.)
+   */
+  @Test
+  fun `a value class's constructor tag documents its generated constructor`() {
+    val generated: String = Tier1Harness.run(amendment).generatedCSharp
+
+    assertDocuments(generated, "Weighs a cat.", "public Weight(int grams)")
+    assertTrue(
+      generated.contains("/// <param name=\"grams\">how heavy the cat is</param>"),
+      generated,
+    )
+    // The UNDERLYING property is rendered inline by `renderValueClass` rather than projected as a
+    // `CirProperty`, so it takes its `<summary>` from `underlyingDoc` -- the same `@property`
+    // precedence an ordinary class's property has.
+    assertDocuments(generated, "how heavy the cat is", "public int Grams { get; }")
+  }
+
+  @Test
+  fun `a value class's underlying property prefers its own KDoc over the property tag`() {
+    val generated: String = Tier1Harness.run(amendment).generatedCSharp
+
+    assertDocuments(generated, "The measured length.", "public int Centimetres { get; }")
+    // The class comment's text loses the property, and is still the constructor parameter's
+    // `<param>` (there is no `@param centimetres`): the same split KdocFoodBowl pins for an
+    // ordinary class.
+    assertFalse(
+      generated.contains("<summary>how long, from the class comment</summary>"),
+      generated,
+    )
+    assertTrue(
+      generated.contains(
+        "/// <param name=\"centimetres\">how long, from the class comment</param>\n" +
+            "        public Length(int centimetres)",
+      ),
+      generated,
+    )
+  }
+
+  /**
+   * A REFERENCE-underlying value class declares its underlying through the positional record
+   * header, where a `<summary>` has nothing to attach to. `<param name="...">` on the type is the
+   * only legal spelling; the compiler copies it onto the type, onto the synthesized constructor
+   * and onto the property alike (verified 2026-09-20). The class `<summary>` appearing at all is
+   * new too: this shape's early return skipped `renderDoc` entirely before.
+   */
+  @Test
+  fun `a reference-underlying value class documents its header parameter and its type`() {
+    val generated: String = Tier1Harness.run(amendment).generatedCSharp
+
+    val start: Int = generated.indexOf("/// <summary>A tagged cat.</summary>")
+    assertTrue(start > 0, generated)
+    val block: String = generated.substring(start).substringBefore("\n    {")
+    assertTrue(block.contains("/// <param name=\"Cat\">the cat being tagged</param>"), block)
+    assertTrue(block.contains("public readonly record struct Tagged("), block)
+    // Exactly one tag for that name, or CS1571; and none for a name that is not the positional
+    // parameter, or CS1572.
+    assertEquals(1, block.split("<param name=\"Cat\">").size - 1, block)
+  }
+
+  @Test
+  fun `a constructor property's own KDoc outranks the class property tag`() {
+    val generated: String = Tier1Harness.run(amendment).generatedCSharp
+
+    assertDocuments(generated, "Whether the cat licked it clean.", "Rinsed")
+    assertFalse(generated.contains("whether it was hosed down"), generated)
+    // Spike 2 (2026-09-20): an inline `/** own */ val` DOES report a docString, so own-wins fires.
+    assertDocuments(generated, "The tin's own label.", "Label")
   }
 }

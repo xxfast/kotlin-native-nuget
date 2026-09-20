@@ -3,25 +3,79 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
 
 /**
+ * ADR-150 amendment: one inline segment of doc prose. Text, never markup: `renderDoc` escapes each
+ * segment and then wraps it, which is the only way a code span holding `<T>` can come out as
+ * `<c>&lt;T&gt;</c>` rather than as escaped markup or unescaped text.
+ */
+sealed interface CirDocInline {
+
+  /** Prose exactly as the author wrote it. */
+  data class Text(val value: String) : CirDocInline
+
+  /** A backtick span, rendered `<c>`. */
+  data class Code(val value: String) : CirDocInline
+
+  /**
+   * A KDoc `[link]` nothing has resolved. Rendered `<c>` with the author's own Kotlin spelling: a
+   * cref naming a type the generated file does not declare is a CS1574 in a *consumer's* build of
+   * a file they cannot edit, so an unresolved link never guesses one.
+   */
+  data class Link(val target: String, val label: String? = null) : CirDocInline
+
+  /**
+   * A link `CirFile.resolveDocLinks()` proved against the declarations the finished file really
+   * carries. [cref] is `global::`-qualified, which spike 1 (2026-09-20) verified resolves for a
+   * nested class, an interface, an enum, a `readonly record struct` and a static class alike.
+   */
+  data class TypeRef(val cref: String, val label: String? = null) : CirDocInline
+}
+
+/** One run of prose: the inline segments of a paragraph, a tag's text or a summary. */
+typealias CirDocText = List<CirDocInline>
+
+/** ADR-150 amendment: one block of a `<remarks>` (or of a multi-block `<summary>`). */
+sealed interface CirDocBlock {
+
+  data class Para(val text: CirDocText) : CirDocBlock
+
+  /** A fenced KDoc block, rendered as a `<code>` element whose content is escaped verbatim. */
+  data class Code(val value: String) : CirDocBlock
+}
+
+/**
  * ADR-150: the C# XML doc comment of one generated declaration, in tag slots, as plain text.
  *
  * Built once per declaration (from `ForwardKdoc`) and rendered by `renderDoc`, which is the only
  * place any of this becomes markup.
+ *
+ * [remarks] holds the author's body paragraphs after the first. The generator's own prose
+ * (ADR-064's no-public-constructor remark) is NOT here: it lives on the owning declaration as a
+ * `remarks: List<String>`, and `renderDoc` takes it as its third argument so that one member always
+ * renders exactly one `<remarks>` element -- author paragraphs first, generated ones last.
  */
 data class CirDoc(
-  val summary: String? = null,
+  val summary: CirDocText? = null,
+  /** Fenced blocks that sat inside the first body paragraph, rendered inside `<summary>`. */
+  val summaryCode: List<String> = emptyList(),
+  val remarks: List<CirDocBlock> = emptyList(),
   val params: List<CirDocParam> = emptyList(),
-  val returns: String? = null,
+  val returns: CirDocText? = null,
   val throws: List<CirDocThrows> = emptyList(),
+  /**
+   * ADR-150 amendment: one entry per `@see`. A [CirDocInline.TypeRef] renders `<seealso cref>`;
+   * anything else closes the `<remarks>` with a `See also:` paragraph, because `<seealso>` without
+   * a cref says nothing.
+   */
+  val seeAlso: List<CirDocInline> = emptyList(),
 )
 
 /**
  * [text] is empty for a parameter the author did not document; the tag is still required (CS1573).
  */
-data class CirDocParam(val name: String, val text: String)
+data class CirDocParam(val name: String, val text: CirDocText)
 
 /** [cref] is a C# exception type this generator itself emits, so it always resolves (CS1574). */
-data class CirDocThrows(val cref: String, val text: String)
+data class CirDocThrows(val cref: String, val text: CirDocText)
 
 data class CirFile(
   val usings: List<String> = listOf("System", "System.Runtime.InteropServices"),
@@ -107,11 +161,15 @@ data class CirClass(
   val isSealed: Boolean = false,
   val companionMembers: List<CirMember> = emptyList(),
   val hasSuspendMethods: Boolean = false,
-  // ADR-064 amendment (2026-09-10): plain-text prose for a `<remarks>` doc comment on the class,
-  // set only when WARNING_NO_PUBLIC_CONSTRUCTOR fires, off the same detail string the diagnostic
-  // uses. Text, not markup: `renderRemarks` owns the XML escaping, because the detail names
-  // Kotlin constructors as `<init>`.
-  val remarks: String? = null,
+  // ADR-064 amendment (2026-09-10): plain-text prose for the class's `<remarks>` doc comment, set
+  // only when WARNING_NO_PUBLIC_CONSTRUCTOR fires, off the same detail string the diagnostic uses.
+  // Text, not markup: `renderDoc` owns the XML escaping, because the detail names Kotlin
+  // constructors as `<init>`.
+  //
+  // ADR-150 amendment (2026-09-20): a LIST, and the generator's half of the one `<remarks>` this
+  // member renders -- the author's KDoc paragraphs come first, off `doc.remarks`, and every
+  // paragraph here follows them.
+  val remarks: List<String> = emptyList(),
   // ADR-150: the author's KDoc, as plain text in tag slots. Null when the declaration has none,
   // when it is `@suppress`ed, or when the doc came from a non-KOTLIN origin. `renderDoc` owns the
   // escaping, the same way `renderRemarks` does.
@@ -135,6 +193,17 @@ data class CirValueClass(
   val methods: List<CirMethod>,
   // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
   val doc: CirDoc? = null,
+  /**
+   * ADR-150 amendment (2026-09-20): the KDoc of the UNDERLYING property, which is never a
+   * [CirProperty] -- each value-class shape renders that member itself, so it has no other slot.
+   *
+   * Where it lands depends on the shape. A VALUE underlying renders it as the `<summary>` of the
+   * `public <T> <Name> { get; }` line. A REFERENCE underlying has no such line -- the positional
+   * record header declares the property -- so its summary becomes the `<param name="<Name>">` of
+   * the record TYPE, which is the only legal spelling and which the compiler then copies onto the
+   * positional property itself (verified 2026-09-20; see `renderReferenceValueClass`).
+   */
+  val underlyingDoc: CirDoc? = null,
 ) : CirDeclaration
 
 data class CirValueClassConstructor(
@@ -150,6 +219,14 @@ data class CirValueClassConstructor(
   // `(int)mood`). Null means the public shape is already the wire shape, the pre-existing routes.
   val nativeParameters: List<CirParameter>? = null,
   val nativeArguments: List<String>? = null,
+  /**
+   * ADR-150 amendment (2026-09-20): the author's KDoc for the `public <Name>(...)` rendered around
+   * this. A value-class PRIMARY takes it from the class comment's `@constructor` / `@param` /
+   * `@property` tags, since a primary constructor reports no `docString` of its own; a secondary
+   * documents itself. A reference-underlying value class has no entry here for its primary at all:
+   * ADR-035 leaves that surface to the positional record header (a hand-written twin is CS0111).
+   */
+  val doc: CirDoc? = null,
 )
 
 data class CirEnum(
@@ -212,10 +289,10 @@ data class CirSealedSubclass(
   val constructors: List<CirConstructor> = emptyList(),
   /**
    * ADR-148: the consumer-facing twin of `WARNING_NO_PUBLIC_CONSTRUCTOR` for an arm, the same
-   * prose [CirClass.remarks] carries for an ordinary class. Null whenever the arm either exports a
+   * prose [CirClass.remarks] carries for an ordinary class. Empty whenever the arm either exports a
    * constructor or never declared a public one (an `object` arm declares none).
    */
-  val remarks: String? = null,
+  val remarks: List<String> = emptyList(),
   /**
    * ADR-116: the arm's own declared member functions, projected from the ADR-062 callable plan the
    * way an ordinary [CirClass]'s methods are. Empty for an arm that declares none. A `suspend`
