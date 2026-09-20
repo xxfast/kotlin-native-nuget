@@ -8,8 +8,21 @@ internal fun StringBuilder.renderObject(obj: CirObject) {
   obj.methods.forEach { method -> renderMember(method) }
   // ADR-133: an `object` owner nests its declarations exactly as a class owner does.
   renderNestedDeclarations(obj.nestedDeclarations)
+  // Every member renderer ends with a separating blank line, which leaves one dangling before the
+  // closing brace. Most visible on a `const val`-only object, whose whole body was one line of
+  // code and one blank; dropped here so the body ends at its last member.
+  dropTrailingBlankLine()
 
   appendLine("    }")
+}
+
+/** Removes one trailing blank line, if the builder ends with one. */
+private fun StringBuilder.dropTrailingBlankLine() {
+  val separator: String = System.lineSeparator()
+  when {
+    endsWith(separator + separator) -> setLength(length - separator.length)
+    endsWith("\n\n") -> setLength(length - 1)
+  }
 }
 
 internal fun StringBuilder.renderValueClass(cls: CirValueClass) {

@@ -120,11 +120,15 @@ internal class ForwardPropertyPlanner(
     topLevel: List<KSPropertyDeclaration>,
     extensions: List<KSPropertyDeclaration>,
     sealed: List<KSClassDeclaration> = emptyList(),
+    // ROADMAP Phase 4: the object singletons, whose own properties had no route at all before --
+    // neither planned nor dropped, so `object Jar { val count }` was silent on both halves.
+    objects: List<KSClassDeclaration> = emptyList(),
   ): List<ForwardPropertyPlan> = buildList {
     classes.forEach { cls ->
       addAll(classProperties(cls))
       addAll(companionProperties(cls))
     }
+    objects.forEach { obj -> addAll(objectProperties(obj)) }
     // ADR-111: a sealed subclass is reached only through its base (`classes` excludes it by
     // `isSealedSubclass`), so nothing double-plans.
     sealed.forEach { base ->
@@ -273,6 +277,42 @@ internal class ForwardPropertyPlanner(
           prop = prop,
           getExport = "${prefix}_companion_get_$name",
           setExport = "${prefix}_companion_set_$name",
+        )
+      }
+      .toList()
+  }
+
+  /**
+   * ROADMAP Phase 4: an `object`'s own properties, planned as the fourth static position.
+   *
+   * The receiver is [ForwardPropertyReceiver.Static] with the object's qualified name, exactly the
+   * companion arm's: there is no singleton receiver on the wire at all, and the emitter spells the
+   * access `pkg.TreatPantry.count`, which is how a Kotlin object property is read. `const val` is
+   * excluded here and rendered as a C# `const` by `translateConstProperty`, the way a companion's
+   * is.
+   *
+   * Inherited members FLATTEN (`superClass = null`, the class route's own predicate): a C# static
+   * class cannot extend anything, so an inherited `val` has no other carrier and would otherwise be
+   * unreachable. This is deliberately asymmetric with object *methods*, which stay declared-only
+   * (`ForwardCallablePlanner.objectEntries`); the two should be lifted together one day.
+   */
+  private fun objectProperties(obj: KSClassDeclaration): List<ForwardPropertyPlan> {
+    val owner: String = obj.qualifiedName?.asString() ?: return emptyList()
+    val prefix: String = obj.nativePrefix()
+    return obj.getAllProperties()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { prop -> !prop.isCompilerOwnedMember(obj) }
+      .filter { !it.modifiers.contains(Modifier.CONST) }
+      .filter { prop -> prop.isForwardPlannableMemberOf(obj, superClass = null) }
+      .mapNotNull { prop ->
+        val name: String = prop.simpleName.asString()
+        propertyPlan(
+          symbol = "$owner.$name",
+          position = ForwardPropertyPosition.OBJECT,
+          receiver = ForwardPropertyReceiver.Static(owner),
+          prop = prop,
+          getExport = "${prefix}_get_${toCName(name)}",
+          setExport = "${prefix}_set_${toCName(name)}",
         )
       }
       .toList()
@@ -646,6 +686,13 @@ internal class ForwardPropertyPlanner(
    * `getAllProperties()` loop, so they only ever re-emit a property declared *on* a class. An
    * extension property has no adapter anywhere, so excluding it turned a real drop into silence
    * (`val Patient.status: StateFlow<Int>` vanished from the generated C# with no diagnostic).
+   *
+   * ROADMAP Phase 4 (2026-09-20): the predicate is now the positive `position == CLASS` rather
+   * than `!= EXTENSION`. Measured by Tier 1 probe before the change: a `StateFlow` property on a
+   * COMPANION, at TOP LEVEL, and (the new position) on an OBJECT produced **no** diagnostic at all
+   * and **no** C# member either -- the companion loop (`CirClassTranslator`) and the top-level one
+   * (`CirTranslator`) project planned properties only, and neither has a flow adapter. Only the
+   * class route (which the sealed base and arm positions share) genuinely re-emits them.
    */
   private fun recordDropped(
     symbol: String,
@@ -655,7 +702,7 @@ internal class ForwardPropertyPlanner(
   ) {
     val protocol: BridgeType.SpecializedProtocol? =
       type.unwrapNullable() as? BridgeType.SpecializedProtocol
-    val isLegacyRouted: Boolean = position != ForwardPropertyPosition.EXTENSION &&
+    val isLegacyRouted: Boolean = position == ForwardPropertyPosition.CLASS &&
         protocol != null && LEGACY_ROUTED_PROTOCOLS.any { prefix ->
       protocol.name.startsWith(prefix)
     }

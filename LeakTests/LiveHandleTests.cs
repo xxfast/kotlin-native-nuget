@@ -10,6 +10,7 @@ using TestLibrary.Issue131;
 using TestLibrary.Kennel;
 using TestLibrary.Models;
 using TestLibrary.Nested;
+using TestLibrary.Objectprops;
 using TestLibrary.Parcel;
 using TestLibrary.Routes;
 
@@ -1164,5 +1165,31 @@ public class LiveHandleTests
         await AssertNoLeakAsync(
             async () => Assert.Equal(2 * 2_000, await KennelSample.PounceRepeatedlyAsync(2_000)),
             iterations: 3);
+    }
+
+    // Row 11. ROADMAP Phase 4 (object properties): a handle-typed getter on a STATIC owner. No
+    // static-property getter row existed before this one, so it is also the first row covering the
+    // companion and top-level getter mint. `TreatPantry.Favourite` hands back a fresh StableRef on
+    // every read — the singleton keeps its own Oreo, the wrapper owns only the ref — so fifty
+    // reads with fifty disposes have to come back to exactly the baseline. A getter that retains
+    // without the wrapper's `Dispose` releasing shows up here as a delta of fifty.
+    [Fact]
+    public void ObjectHandleProperty_StaticGetter_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using Cat favourite = TreatPantry.Favourite;
+            Assert.Equal("Oreo", favourite.Name);
+        });
+    }
+
+    // Row 11a. The collection half of the same static route: `TreatPantry.Flavours` materialises a
+    // `List<String>`, which mints a list handle plus one string box per element on the way out.
+    // Those are owned by the marshalling code, not by a C# wrapper the test can dispose, so a
+    // missing `finally` on the static-property read path is invisible in row 11 and visible here.
+    [Fact]
+    public void ObjectCollectionProperty_StaticGetter_ReturnsToBaseline()
+    {
+        AssertNoLeak(() => Assert.Equal(new[] { "tuna", "salmon" }, TreatPantry.Flavours));
     }
 }

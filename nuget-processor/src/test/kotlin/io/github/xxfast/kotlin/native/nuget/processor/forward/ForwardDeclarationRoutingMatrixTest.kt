@@ -46,12 +46,9 @@ class ForwardDeclarationRoutingMatrixTest {
 
   @Test
   fun `every property position projects Int and Enum`() {
-    val positions: List<ForwardPropertyPosition> = listOf(
-      ForwardPropertyPosition.CLASS,
-      ForwardPropertyPosition.TOP_LEVEL,
-      ForwardPropertyPosition.EXTENSION,
-      ForwardPropertyPosition.COMPANION,
-    )
+    // Every position, read off the enum rather than a hand-kept list: a new position that nobody
+    // adds here is a route this matrix silently stops covering.
+    val positions: List<ForwardPropertyPosition> = ForwardPropertyPosition.entries
     positions.forEach { position ->
       val intPlan: ForwardPropertyPlan = propertyPlan(position, BridgeType.Primitive(PrimitiveKind.INT))
       val enumPlan: ForwardPropertyPlan = propertyPlan(position, BridgeType.Enum("sample.Mood"))
@@ -276,6 +273,9 @@ class ForwardDeclarationRoutingMatrixTest {
       ForwardPropertyPosition.CLASS -> ForwardPropertyReceiver.Handle("sample.Patient")
       ForwardPropertyPosition.TOP_LEVEL -> ForwardPropertyReceiver.Static(null)
       ForwardPropertyPosition.COMPANION -> ForwardPropertyReceiver.Static("sample.Patient")
+      // ROADMAP Phase 4: an object's own property is a static position, receiver-free on the wire
+      // and spelled `sample.Pantry.route` in the Kotlin export.
+      ForwardPropertyPosition.OBJECT -> ForwardPropertyReceiver.Static("sample.Pantry")
       ForwardPropertyPosition.EXTENSION -> ForwardPropertyReceiver.Value(
         BridgeType.Primitive(PrimitiveKind.INT),
       )
@@ -337,7 +337,8 @@ class ForwardDeclarationRoutingMatrixTest {
         assertTrue(property.name.isNotBlank())
       }
 
-      ForwardPropertyPosition.TOP_LEVEL, ForwardPropertyPosition.COMPANION -> {
+      ForwardPropertyPosition.TOP_LEVEL, ForwardPropertyPosition.COMPANION,
+      ForwardPropertyPosition.OBJECT -> {
         val members = ForwardCirPropertyProjection.staticProperty(plan, "sample")
         assertTrue(members.isNotEmpty())
       }

@@ -286,6 +286,15 @@ assertTrue(line.contains("include(\"dep.outside\")"))
 - Open: a class that *overrides* a member of an unexported interface renders that member `virtual`
   (`ForwardCallablePlanner.kt:748-750`, `CirClassTranslator.kt:36-37`), which compiles; noted, not tested.
 
+## Note (2026-09-20): reused for an object's dropped supertypes
+
+The `SKIPPED_UNEXPORTED_SUPERTYPE` kind this ADR introduced is now also emitted for a Kotlin
+`object`'s own declared supertypes ([ADR-110](110-top-level-function-pascal-case.md)'s 2026-09-20
+amendment): a static class can neither extend nor implement anything, so every supertype an object
+declares is dropped, whether or not that supertype is itself in the export set — a different trigger
+from this ADR's own (export-set membership), sharing only the diagnostic kind and the "members still
+bind, the relation is gone" shape.
+
 ## Amendment (2026-09-05): base classes
 
 The base-class hole this ADR named and deferred is closed, the same way, through the one shared

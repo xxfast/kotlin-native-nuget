@@ -36,7 +36,14 @@ internal object ForwardCirPropertyProjection {
   fun publicType(plan: ForwardPropertyPlan): String = plan.type.csharpType()
 
   fun staticProperty(plan: ForwardPropertyPlan, libraryName: String): List<CirMember> {
-    require(plan.position == ForwardPropertyPosition.TOP_LEVEL || plan.position == ForwardPropertyPosition.COMPANION) {
+    // ROADMAP Phase 4: an `object`'s own property is the third static position, projected by this
+    // same function -- the wire has no receiver slot, so the C# member is a static property whose
+    // accessors call the extern with nothing but the error slot.
+    require(
+      plan.position == ForwardPropertyPosition.TOP_LEVEL ||
+          plan.position == ForwardPropertyPosition.COMPANION ||
+          plan.position == ForwardPropertyPosition.OBJECT
+    ) {
       "Expected static property plan"
     }
     val imports: List<CirDllImport> = plan.calls().map { call -> nativeImport(call, libraryName, emptyList(), plan) }

@@ -23,6 +23,12 @@ predicate, same wire shapes (`COpaquePointer?`, `value != null ? CreateList(valu
 "`Direct` never `NullableDispatch`" rule for a nullable collection reference. They are omissions in this
 ADR's stated coverage, not incorrect claims in it.
 
+**2026-09-20 note:** an `object`'s own declared property (`ForwardPropertyPosition.OBJECT`, a new
+static position, [ADR-110](110-top-level-function-pascal-case.md)'s 2026-09-20 amendment) is planned
+by this same `propertyPlan`, so the getter/setter independence decided below applies unchanged; a
+`Flow`/`StateFlow`/lambda-typed object property is a named `SKIPPED_UNSUPPORTED_PROPERTY` skip, since
+no legacy adapter exists to re-emit it on a static owner.
+
 ## Context
 
 Two ROADMAP "Post-migration hardening" items are one change, because they are two facets of the same

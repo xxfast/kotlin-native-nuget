@@ -716,7 +716,7 @@ internal class ForwardCallablePlanner(
     }
     val planner = ForwardPropertyPlanner(classifier, expects)
     val propertyPlans: List<ForwardPropertyPlan> = planner.catalog(
-      classes, properties, extensionProperties, sealedClasses,
+      classes, properties, extensionProperties, sealedClasses, objects,
     )
     return ForwardCallablePlanCatalog(
       entries, propertyPlans, planner.droppedPropertySetters, planner.droppedProperties,
@@ -1722,8 +1722,15 @@ internal class ForwardCallablePlanner(
     val occurrences: MutableMap<String, Int> = mutableMapOf()
     val members: List<KSFunctionDeclaration> = obj.getAllFunctions()
       .filter { it.getVisibility() == Visibility.PUBLIC }
-      .filter { it.parentDeclaration == obj }
       .filter { member -> !member.isCompilerOwnedMember(obj) }
+      // ROADMAP Phase 4: the class route's own membership predicate, with `superClass = null`,
+      // because a C# static class cannot extend anything -- an implemented inherited method has no
+      // other carrier, exactly like an inherited property
+      // (`ForwardPropertyPlanner.objectProperties`). This used to be `parentDeclaration == obj`,
+      // which dropped an inherited `fun restock()` with no diagnostic at all. `Any`'s
+      // `equals`/`hashCode`/`toString` are already gone above (`isCompilerOwnedMember`), and an
+      // abstract member has no implementation for `hasImplementation()` to admit.
+      .filter { member -> member.isForwardPlannableMemberOf(obj, superClass = null) }
       .toList()
 
     fun entryFor(function: KSFunctionDeclaration, omitted: Int): ForwardCallableCatalogEntry {

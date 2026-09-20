@@ -7,6 +7,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBoundInterf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
 import com.google.devtools.ksp.symbol.ClassKind
+import com.google.devtools.ksp.symbol.FileLocation
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
@@ -1482,13 +1483,43 @@ internal fun translateConstProperty(
   return CirConst(name = csPropName, type = csType, value = csValue)
 }
 
+/**
+ * The literal a `const val` is initialised with, read out of the declaring source file: KSP does
+ * not surface a compile-time constant's value, so the text is the only source.
+ *
+ * ROADMAP Phase 4: the search starts at the property's OWN line rather than at the top of the
+ * file. It used to take the first `const val NAME` in the whole file, so two declarations sharing a
+ * const name -- two objects, or two companions -- both rendered the FIRST one's value, silently.
+ * Searching forward from the declaration's line is robust to whether [FileLocation] points at the
+ * `const val` line itself or at a preceding KDoc/annotation line: in both cases the first match
+ * at-or-after it is this property's own. A declaration with no file location (a dependency klib)
+ * falls back to the whole-file search, which is what it has always done.
+ */
 private fun extractConstValue(prop: KSPropertyDeclaration): String? {
   val filePath: String = prop.containingFile?.filePath ?: return null
   val propName: String = prop.simpleName.asString()
   val sourceText: String = java.io.File(filePath).readText()
   val pattern = Regex("""const\s+val\s+${Regex.escape(propName)}\s*(?::\s*\S+)?\s*=\s*(.+)""")
-  val match: MatchResult = pattern.find(sourceText) ?: return null
+  val match: MatchResult =
+    pattern.find(sourceText, sourceText.offsetOfLine(prop.declarationLine())) ?: return null
   return match.groupValues[1].trim()
+}
+
+/** The 1-based source line this declaration starts on, or 1 when it has no file location. */
+private fun KSDeclaration.declarationLine(): Int = (location as? FileLocation)?.lineNumber ?: 1
+
+/**
+ * The character offset [line] (1-based) starts at, counted over the RAW text so a CRLF file is not
+ * off by one per preceding line. Clamped to the text length for a line number past the end.
+ */
+private fun String.offsetOfLine(line: Int): Int {
+  var offset: Int = 0
+  repeat(line - 1) {
+    val next: Int = indexOf('\n', offset)
+    if (next < 0) return length
+    offset = next + 1
+  }
+  return offset
 }
 
 private fun kotlinLiteralToCSharp(value: String, kotlinType: String): String {

@@ -225,6 +225,33 @@ class ForwardPropertyEmitterTest {
     assertContains(kotlin, "sample.Patient.defaultAge = value")
   }
 
+  /**
+   * ROADMAP Phase 4: an object's own property rides the companion arm's receiver-free wire, so the
+   * Kotlin access is the singleton read itself and the C# member is a static property whose extern
+   * takes nothing but the error slot.
+   */
+  @Test
+  fun `object property reads the singleton and renders a static C sharp property`() {
+    val plan = staticProperty(
+      position = ForwardPropertyPosition.OBJECT,
+      owner = "sample.TreatJar",
+      name = "count",
+      type = BridgeType.Primitive(PrimitiveKind.INT),
+      getExport = "treatjar_get_count",
+      setExport = "treatjar_set_count",
+    )
+
+    val kotlin = renderKotlin(plan)
+    assertContains(kotlin, "@CName(\"treatjar_get_count\")")
+    assertContains(kotlin, "sample.TreatJar.count")
+    assertContains(kotlin, "sample.TreatJar.count = value")
+
+    val csharp = renderStatic(plan)
+    assertContains(csharp, "public static int Count")
+    assertContains(csharp, "Native_TreatjarGetCount")
+    assertContains(csharp, "Native_TreatjarSetCount")
+  }
+
   @Test
   fun `extension property on primitive receiver uses this-style C sharp methods`() {
     val plan = extensionProperty(

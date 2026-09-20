@@ -113,10 +113,6 @@ same declaration.
 - **Only the first paragraph survives.** A later paragraph, a `` `code span` ``, a `[link]`,
   `@property`, `@constructor`, and `@see` are all dropped rather than rendered as something
   misleading; keep the summary line self-contained.
-- A Kotlin `object`'s own property has no C# surface at all (unrelated to documentation, see
-  [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md)), so there's
-  nothing generated for its KDoc to attach to either.
-
 ## `expect`/`actual` {id="expectactual"}
 
 KDoc written on an `expect` declaration reaches the generated C#, for every family the
