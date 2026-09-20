@@ -283,7 +283,7 @@ class Tier1NestedTypesTest {
     // CS1109: extension methods cannot be declared in a nested class, so `Kind`'s extensions are
     // the top-level `OwnerKindExtensions`. The name carries the chain so two owners' `Kind`s do
     // not collide at namespace level.
-    assertContains(csharp, "public static class OwnerKindExtensions")
+    assertContains(csharp, "public static partial class OwnerKindExtensions")
     assertFalse(
       blockBody(csharp, "public class Owner").contains("Extensions"),
       "expected no extension class inside the owner (CS1109); csharp=$csharp",

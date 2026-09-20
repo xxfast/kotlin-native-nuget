@@ -14,6 +14,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyReceiver
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.isUnderPackage
 
@@ -134,6 +135,12 @@ internal class CollectionHelperTracker {
 
   fun trackProperty(plan: ForwardPropertyPlan) {
     trackCollection(plan.type)
+    // ADR-132 (2026-09-20): an extension property's RECEIVER is a marshalled slot like any other,
+    // and since the receiver set admits `Collection` it can be the only collection in a file. The
+    // property's declared type alone used to answer here, so `val List<String>.longestName: String`
+    // disposed its receiver handle with a `NugetListNative` the file never emitted (CS0103).
+    val receiver: ForwardPropertyReceiver = plan.receiver
+    if (receiver is ForwardPropertyReceiver.Value) trackCollection(receiver.type)
   }
 }
 

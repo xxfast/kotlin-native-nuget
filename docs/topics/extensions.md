@@ -45,14 +45,17 @@ TestLibrary.Reserved.StringExtensions.Tag("Oreo", "Mylo"); // a different packag
 | Kotlin receiver | Extension function | Extension property |
 |---|---|---|
 | Exported class, nested class, or eligible sealed base | yes | yes |
-| Bare interface | yes | yes |
+| Bare interface, bound C# interface (from a NuGet dependency) | yes | yes |
 | Nullable class or nullable interface | yes | yes |
-| `String`, a primitive | yes | yes |
+| `String`, a primitive, `Uuid`, `Instant`, `Duration` | yes | yes |
 | Value class over `String`, a primitive, an enum, or an object handle | yes | yes |
-| Nullable value class over `String` or an object handle | yes | no |
-| Bare enum, `Uuid`, `Instant`, `Duration` | yes | no |
+| Nullable value class over `String` or an object handle | yes | yes |
+| Bare enum | yes | yes |
+| `Collection` (`List`/`Map`/`Set`) | yes | yes |
+| Nullable `String`, nullable `Uuid` | yes | yes |
 | `Int?`, `Enum?`, `Instant?`, `Duration?`, or a nullable primitive/enum-underlying value class | no | no |
-| Collection, generic type, unexported (non-stdlib) type | no | no |
+| Nullable collection, nullable bound C# interface | yes | no |
+| Generic type, unexported (non-stdlib, non-dependency) type, `ByteArray`, `Char` | no | no |
 
 A receiver in a "no" cell is dropped with a named diagnostic
 (`SKIPPED_UNSUPPORTED_PROPERTY` for a property, `RECEIVER_FAN_OUT` for the fan-out function case).
@@ -61,10 +64,15 @@ Declare a top-level function taking the value as a parameter instead
 An extension property typed `Flow`, `StateFlow`, or a lambda is skipped the same way, even on an
 otherwise-supported receiver.
 
-`Instant`, `Duration`, and `Uuid` (mapped to `DateTimeOffset`, `TimeSpan`, and `Guid`, see
-[Primitives and strings](primitives-and-strings.md#instant)) work as extension-function receivers,
-not extension-property receivers. A nullable `Instant`, `Duration`, or primitive/enum-underlying
-value class only works as a function *parameter*, never as a receiver (see the table above).
+`Instant`, `Duration`, and `Uuid` map to `DateTimeOffset`, `TimeSpan`, and `Guid` at a receiver the
+same way they do everywhere else (see
+[Primitives and strings](primitives-and-strings.md#instant)). A nullable collection or a nullable
+bound C# interface (see
+[The bridgeable subset](bridgeable-subset.md#exposing-a-c-interface-in-your-own-kotlin-api)) still
+works as a function *parameter*, just not as a receiver at either position. A has-value fan-out
+shape (`Int?`, `Enum?`, `Instant?`, `Duration?`, or a nullable primitive/enum-underlying value
+class) only works as a function *parameter*, never as a receiver at either position, because a
+receiver is exactly one ABI slot and a fan-out needs two (see the table above).
 
 ### Nullable receivers
 
@@ -112,6 +120,39 @@ val Pet.summary: String get() = "$name/$legs/${speak()}"
 ```C#
 rex.GetSummary(); // "Rex/4/Woof!"
 ```
+
+### Converting and collection receivers {id="converting-and-collection-receivers"}
+
+An extension property's receiver may also be a converting scalar (`Enum`, `Uuid`, `Instant`,
+`Duration`), a `Collection`, or a bound C# interface from a NuGet dependency, the same shapes an
+extension *function* receiver already takes. A `var` carries the receiver on the setter export too,
+in front of the value:
+
+```kotlin
+val Uuid.shortForm: String get() = toString().substringBefore('-')
+
+var Uuid.nickname: String
+  get() = chipNicknames[this] ?: "unnamed chip"
+  set(value) { chipNicknames[this] = value }
+```
+
+```C#
+public static string GetShortForm(this global::System.Guid receiver);
+
+public static string GetNickname(this global::System.Guid receiver);
+public static void SetNickname(this global::System.Guid receiver, string value);
+```
+
+```C#
+Guid chip = Guid.Parse("7f9c2ba4-0000-4e10-8c1a-11111111abcd");
+chip.GetNickname();            // "unnamed chip"
+chip.SetNickname("Oreo's chip");
+chip.GetNickname();            // "Oreo's chip"
+```
+
+A collection receiver (`val List<String>.longestName`) disposes a handle the C# side builds for the
+crossing, same as any other collection argument; a bound-interface receiver (`val
+IFeedable.feedingNote`) dispatches back into the C# object the same way an interface receiver does.
 
 ### Sealed receivers {id="sealed-receivers"}
 
@@ -162,6 +203,10 @@ id.OrAnonymous();          // compiles: "Oreo-1"
 
 new CatId("Oreo-1").OrAnonymous(); // CS1929: call it on a CatId? variable instead
 ```
+
+`Guid?` has the same asymmetry for the same reason: a nullable `Uuid` receiver (`val
+Uuid?.isMissing`) only binds `this Guid? receiver`, so `missing.GetIsMissing()` needs a `Guid?`
+local, not a bare `Guid`.
 
 ### Nested receivers
 

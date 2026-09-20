@@ -47,9 +47,17 @@ internal object ForwardCirPropertyProjection {
     require(plan.position == ForwardPropertyPosition.EXTENSION) { "Expected extension property plan" }
     val receiver = plan.receiver as ForwardPropertyReceiver.Value
     val publicReceiver: String = receiver.type.csharpType()
+    // ADR-132 (2026-09-20): spelled through the SHARED nullable-string-wire rule, not off the bare
+    // wire type. A `String?` / `Uuid?` / `ValueClass(String)?` receiver hands the import a nullable
+    // expression, and `STRING -> "string"` made that a CS8604 under the generated file's
+    // `<Nullable>enable</Nullable>` + `<TreatWarningsAsErrors>`. The callable route already had the
+    // rule; `isNullableStringWire` is now the one copy both read.
     val nativeReceiver: String = plan.calls().first().parameters
       .first { parameter -> parameter.role == ForwardAbiRole.RECEIVER }
-      .wireType.csharpWireType()
+      .let { parameter ->
+        if (parameter.transfer.type.isNullableStringWire()) "string?"
+        else parameter.wireType.csharpWireType()
+      }
     // ADR-075: an extension receiver that is a value class passes its underlying value to the
     // native call, exactly like the value class's own generated members
     // (`renderValueClassMembers`'s `underlyingName` -- the Kotlin `value` property capitalized).
@@ -229,19 +237,37 @@ internal object ForwardCirPropertyProjection {
         ),
       )
 
-      is ForwardPropertySetter.NullableDispatch -> buildString {
-        appendLine(); appendLine("            if (value.HasValue)"); appendLine("            {")
-        append(
-          checkedVoidBody(
-            nativeName(plan, setter.value),
-            args(plan.type.inputArgument("value.Value", nonNull = true)),
-            indent = "                "
+      // ADR-132 (2026-09-20): the fan-out arm goes through the SAME handle scope as `Direct` above.
+      // It used to build its body directly, so an `Interface`/`Nullable(Interface)` receiver --
+      // whose `inputArgument` is the local `receiverHandle` -- named a local this arm never
+      // declared, minted or disposed: CS0103 in the generated C#, and a leaked ADR-084 transfer
+      // handle per set if it had compiled. The value itself never mints a handle here (this arm
+      // exists only for the has-value fan-out shapes: primitive, enum, Instant, Duration and a
+      // Primitive/Enum-underlying value class), so the receiver's step is the only prelude.
+      is ForwardPropertySetter.NullableDispatch -> forwardCirHandleScope(
+        prelude = listOfNotNull(receiverStep),
+        cleanup = listOfNotNull(receiverCleanup),
+        core = buildString {
+          appendLine("            if (value.HasValue)"); appendLine("            {")
+          append(
+            checkedVoidBody(
+              nativeName(plan, setter.value),
+              args(plan.type.inputArgument("value.Value", nonNull = true)),
+              indent = "                "
+            )
           )
-        )
-        appendLine(); appendLine("            }"); appendLine("            else"); appendLine("            {")
-        append(checkedVoidBody(nativeName(plan, setter.nullValue), args(), indent = "                "))
-        appendLine(); append("            }")
-      }
+          appendLine()
+          appendLine("            }"); appendLine("            else"); appendLine("            {")
+          append(
+            checkedVoidBody(
+              nativeName(plan, setter.nullValue),
+              args(),
+              indent = "                "
+            )
+          )
+          appendLine(); append("            }")
+        },
+      )
 
       null -> error("Forward property ${plan.symbol} has no setter")
     }
@@ -525,6 +551,16 @@ internal object ForwardCirPropertyProjection {
         )
       }
 
+      // ADR-088 / ADR-132 (2026-09-20): a bound C# interface receiver crosses as a FRESH transfer
+      // GCHandle, byte for byte the callable route's `boundInterfacePrelude`. Deliberately no
+      // cleanup below: the receiving side owns it (Kotlin's `nuget{Iface}Value` either frees it on
+      // a token-probe hit or hands it to the ADR-070 wrapper's cleaner), so freeing it here too
+      // would double-free, and not allocating a fresh one would let Kotlin store a handle C# then
+      // released. Nothing to hoist either, so the flat spelling is the only one.
+      is BridgeType.BoundInterface -> ForwardCirHandleStep(
+        flat = "IntPtr ${name}Handle = GCHandle.ToIntPtr(GCHandle.Alloc($name));",
+      )
+
       is BridgeType.Collection -> {
         val factory: String = when (value.kind) {
           CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "CreateList"
@@ -617,6 +653,9 @@ internal object ForwardCirPropertyProjection {
       // ADR-151: the handle [handleStep] minted with `NugetMarshal.CreateBytes`.
       BridgeType.ByteArray -> "${name}Handle"
 
+      // ADR-088: the transfer GCHandle [handleStep] allocated just above.
+      is BridgeType.BoundInterface -> "${name}Handle"
+
       // ADR-077 sub-items 2/3/4: unwrap the record struct to its capitalized underlying property
       // and lower it to the wire per underlying, with null propagation for the nullable spelling
       // (a C# null ships the null pointer). The old `else -> name` fell through here and passed
@@ -651,6 +690,8 @@ internal object ForwardCirPropertyProjection {
     BridgeType.Instant, BridgeType.Duration -> ForwardAbiWireType.INT64
     // ADR-107: the error-envelope pointer, matching ForwardPropertyPlanner.wireType().
     BridgeType.Throwable -> ForwardAbiWireType.POINTER
+    // ADR-088: the transfer GCHandle pointer, matching ForwardPropertyPlanner.wireType().
+    is BridgeType.BoundInterface -> ForwardAbiWireType.POINTER
     // ADR-106: the getter's pointer-to-text wire (the setter's STRING slot is declared from the
     // plan's own parameter, not from here).
     BridgeType.Uuid -> ForwardAbiWireType.POINTER
@@ -689,6 +730,9 @@ internal object ForwardCirPropertyProjection {
     is BridgeType.TypeParameter -> name
     // ADR-040: the public C# spelling is the projected interface, never the backing class.
     is BridgeType.Interface -> csharpType
+    // ADR-088: the ORIGINAL bound C# interface, as the plugin's manifest spells it -- the same
+    // spelling `forwardPublicCsharpType` gives it on the callable route.
+    is BridgeType.BoundInterface -> csharpType
     // The public C# spelling is the value class itself (e.g. `ChartId`), never its underlying
     // wire value: true for an extension property's receiver (ADR-075) and for an ordinary
     // value-class-typed property (ADR-077 sub-item 2).
