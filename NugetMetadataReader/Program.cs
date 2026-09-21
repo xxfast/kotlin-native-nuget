@@ -3641,8 +3641,9 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
 
     private static PendingDiagnostic DelegatePending(string fullName) =>
         new(DelegateSkipKind,
-            $"delegate type `{fullName}` is not bound in this extraction run: a C# delegate is " +
-                "carried by a Kotlin function type, which this build does not generate yet (ADR-158)",
+            $"delegate type `{fullName}` is not a delegate shape this build binds: its `Invoke` " +
+                "shape is not one this reader derives, or one of its positions is outside the v1 " +
+                "delegate vocabulary (ADR-158)",
             "Expose an equivalent member that takes the values themselves, or a bound interface " +
                 "whose Kotlin implementation plays the callback's part (ADR-085).");
 
