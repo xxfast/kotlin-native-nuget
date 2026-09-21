@@ -266,7 +266,9 @@ fun bridgeableStructConstructors(
 ): List<RirConstructor> {
   val constructors: List<RirConstructor> = struct.constructors
     .filterNot { it.isState }
-    .filter { ctor -> ctor.parameters.all { isV1Type(it.type, boundHandleTypes) } }
+    .filter { ctor ->
+      ctor.parameters.all { isV1Type(it.type, boundHandleTypes, allowCollections = false) }
+    }
     .sortedBy { it.identity() }
   bridgeIds(constructors.map { it.identity() })
   return constructors
@@ -298,7 +300,7 @@ private fun bridgeableStructRegistrablesCandidates(
 
   val staticMethods: List<RirRegistrable> = struct.methods
     .filter { it.isStatic }
-    .filter { isV1Bridgeable(it, boundHandleTypes) }
+    .filter { isV1Bridgeable(it, boundHandleTypes, allowCollections = false) }
     .filterNot { isSkippedStructMethod(it) }
     .filterNot { it.asyncKind != null }
     .sortedBy { it.identity() }
@@ -306,7 +308,7 @@ private fun bridgeableStructRegistrablesCandidates(
 
   val instanceMethods: List<RirRegistrable> = struct.methods
     .filter { !it.isStatic }
-    .filter { isV1Bridgeable(it, boundHandleTypes) }
+    .filter { isV1Bridgeable(it, boundHandleTypes, allowCollections = false) }
     .filterNot { isSkippedStructMethod(it) }
     // ADR-152 deferred scope: async on a struct method (reconstruct-on-call) is a named skip, not
     // a binding, see asyncDeferredDiagnostics.
@@ -321,7 +323,7 @@ private fun bridgeableStructRegistrablesCandidates(
   val computedGetters: List<RirRegistrable> = struct.properties
     .filter { it.isReadOnly && !it.isStatic }
     .filter { it.name.lowercase() !in componentReadNames }
-    .filter { isV1Type(it.type, boundHandleTypes) }
+    .filter { isV1Type(it.type, boundHandleTypes, allowCollections = false) }
     .sortedBy { it.name }
     .map { RirRegistrable.PropertyGetter(it) }
 
@@ -541,13 +543,13 @@ fun bridgeableInterfaceRegistrables(
     // Kotlin class implementing that interface would need the inverse slot), so it is a named skip
     // here, see asyncDeferredDiagnostics.
     .filterNot { it.asyncKind != null }
-    .filter { isV1Bridgeable(it, boundHandleTypes, boundInterfaceTypes) }
+    .filter { isV1Bridgeable(it, boundHandleTypes, boundInterfaceTypes, allowCollections = false) }
     .sortedBy { it.identity() }
     .map { RirRegistrable.Method(it) }
 
   val properties: List<RirProperty> = iface.properties
     .filterNot { it.isStatic }
-    .filter { isV1Type(it.type, boundHandleTypes, boundInterfaceTypes) }
+    .filter { isV1Type(it.type, boundHandleTypes, boundInterfaceTypes, allowCollections = false) }
     .sortedBy { it.name }
 
   val propertyRegistrables: List<RirRegistrable> = properties.flatMap { property ->
@@ -638,6 +640,9 @@ val RirTypeRef.isNullable: Boolean
     // ADR-072 Decision 3 / ADR-053 failure class, third instance: a Box<int>? reference itself
     // can be independently nullable, regardless of its type argument's own nullability.
     is RirGenericInstanceType -> nullable
+    // ADR-155 / ADR-053 failure class, fourth instance: `IReadOnlyList<string>?` is a nullable
+    // COLLECTION (IntPtr.Zero on the wire), independent of its elements' own nullability.
+    is RirCollectionType -> nullable
     is RirVoidType, is RirPrimitiveType, is RirEnumType, is RirStructType,
     is RirTypeParameterType,
       -> false
@@ -662,6 +667,13 @@ private fun RirTypeRef.describe(): String = when (this) {
     "$namespace.$name[${
       typeArguments.joinToString(",") { it.describe() + if (it.isNullable) "?" else "" }
     }]"
+
+  // ADR-155: each element carries its OWN "?", so element nullability lands in contractHash for
+  // free (signaturePart's else arm routes through here).
+  is RirCollectionType ->
+    "${collection.name.lowercase()}<${
+      typeArguments.joinToString(",") { it.describe() + if (it.isNullable) "?" else "" }
+    }>"
 
   is RirTypeParameterType -> name
 }
@@ -855,6 +867,71 @@ fun asyncDeferredDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> =
     }
   }
 
+// ADR-155: does this type reference mention a collection anywhere the generators would have to
+// convert it?
+private fun mentionsCollection(type: RirTypeRef): Boolean =
+  type is RirCollectionType ||
+      (type is RirGenericInstanceType && type.typeArguments.any(::mentionsCollection))
+
+// ADR-155: one named `skipped_collection_position` per member the GENERATORS decline because of
+// WHERE the collection sits, not what is in it. A struct member decomposes into flattened
+// out-pointers (ADR-056) and a bound-interface member has its own hand-written dispatch body
+// (ADR-070); neither rides the shared conversion tables this wire was built into, so isV1Type
+// refuses them (allowCollections = false) and this is what says so out loud. Without it the
+// member would vanish silently, which is the exact failure ADR-043 diagnostics exist to prevent.
+fun collectionPositionDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> =
+  rir.assemblies.flatMap { assembly ->
+    assembly.namespaces.flatMap { namespace ->
+      namespace.types.flatMap { type ->
+        val owner: String = when (type) {
+          is RirStruct -> "struct"
+          is RirInterface -> "bound interface"
+          else -> return@flatMap emptyList()
+        }
+        val methods: List<RirMethod> = when (type) {
+          is RirStruct -> type.methods
+          is RirInterface -> type.methods
+          else -> emptyList()
+        }
+        val properties: List<RirProperty> = when (type) {
+          is RirStruct -> type.properties
+          is RirInterface -> type.properties
+          else -> emptyList()
+        }
+        val fromMethods: List<RirDiagnostic> = methods
+          .filter { m ->
+            mentionsCollection(m.returnType) ||
+                m.parameters.any { p -> mentionsCollection(p.type) }
+          }
+          .map { method ->
+            RirDiagnostic(
+              kind = RirDiagnosticKind.SKIPPED_COLLECTION_POSITION,
+              typeName = type.name,
+              memberName = method.name,
+              memberSignature = method.identity(),
+              reason = "a collection on a $owner member is not mapped yet (ADR-155 deferred " +
+                  "scope): that position does not ride the shared conversion path",
+              hint = "Expose this member on an ordinary bound class instead.",
+            )
+          }
+        val fromProperties: List<RirDiagnostic> = properties
+          .filter { mentionsCollection(it.type) }
+          .map { property ->
+            RirDiagnostic(
+              kind = RirDiagnosticKind.SKIPPED_COLLECTION_POSITION,
+              typeName = type.name,
+              memberName = property.name,
+              memberSignature = "${property.type.describe()} ${property.name}",
+              reason = "a collection on a $owner member is not mapped yet (ADR-155 deferred " +
+                  "scope): that position does not ride the shared conversion path",
+              hint = "Expose this member on an ordinary bound class instead.",
+            )
+          }
+        (fromMethods + fromProperties).map { assembly.packageId to it }
+      }
+    }
+  }
+
 // ADR-052 "shared bridgeable ordering", extended by Phase 9 line 151 and ADR-059 Decision 5a: the
 // constructor pointer (if any) first, then bridgeable static methods, then bridgeable instance
 // methods, then one PropertyGetter/[PropertySetter] pair per bridgeable instance property,
@@ -881,9 +958,60 @@ fun bridgeableRegistrables(
     cls, boundHandleTypes, structs, boundInterfaceTypes, boundGenericClassDefinitions,
   )
     .map { it.memberSignature }.toSet()
-  val result: List<RirRegistrable> = candidates.filterNot { it.identity() in overLimit }
+  // ADR-155 Q8: a C# overload set that collapses to ONE Kotlin signature is dropped WHOLE, here,
+  // in the shared filter, never all but one (ADR-072 Decision 5's rule: the outcome must not
+  // depend on declaration order), and never in one generator only, which would misalign the two
+  // sides' slots.
+  val collapsed: Set<String> = collapsedOverloadSets(
+    cls, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions,
+  )
+    .flatten().map { it.identity() }.toSet()
+  val result: List<RirRegistrable> = candidates
+    .filterNot { it.identity() in overLimit || it.identity() in collapsed }
   bridgeIds(result.map { it.identity() })
   return result
+}
+
+// ADR-155 Q8: the C# overload sets on [cls] that project to ONE Kotlin signature, which is a
+// state this feature makes reachable: every list-like C# definition renders the same read-only
+// Kotlin type, so `AddRange(IEnumerable<string>)` beside `AddRange(List<string>)` (ordinary C#,
+// it is `List<T>.AddRange`'s own shape) now collides where both used to be skipped for being
+// unbridgeable. Deliberately scoped to sets where a COLLECTION parameter is what collapsed them:
+// every other collision shape keeps the pre-existing hard generation failure
+// (validateKotlinSignatures), which this decision does not touch.
+//
+// Both generators read this through bridgeableRegistrables, so neither can bind a member the
+// other dropped.
+internal fun collapsedOverloadSets(
+  cls: RirClass,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+  boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
+): List<List<RirMethod>> = cls.methods
+  .filter {
+    isV1Bridgeable(it, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions)
+  }
+  .groupBy { method ->
+    val scope: String = if (method.isStatic) "static" else "instance"
+    "$scope:${method.name.toMethodCamelCase()}(" +
+        method.parameters.joinToString(",") { it.type.kotlinCollapseKey() } + ")"
+  }
+  .values
+  .filter { group ->
+    group.size > 1 && group.any { it.parameters.any { p -> p.type is RirCollectionType } }
+  }
+  .toList()
+
+// The key two C# members collide on once projected into Kotlin. A collection deliberately ignores
+// its `definition`: that is exactly the information Kotlin does NOT carry (every list-like
+// definition is `List<T>`), and therefore exactly what makes the two members one signature.
+private fun RirTypeRef.kotlinCollapseKey(): String = when (this) {
+  is RirCollectionType -> {
+    val args: String = typeArguments.joinToString(",") { it.kotlinCollapseKey() }
+    "${collection.name.lowercase()}<$args>" + if (nullable) "?" else ""
+  }
+
+  else -> describe() + if (isNullable) "?" else ""
 }
 
 // ADR-048 v1 bridgeable subset: static methods only, void/string/primitive/handle parameter and
@@ -894,12 +1022,18 @@ private fun isV1Bridgeable(
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
   boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
+  allowCollections: Boolean = true,
 ): Boolean {
-  val returnIsV1: Boolean =
-    isV1Type(method.returnType, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions)
+  val returnIsV1: Boolean = isV1Type(
+    method.returnType, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions,
+    allowCollections,
+  )
   if (!returnIsV1) return false
   return method.parameters.all {
-    isV1Type(it.type, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions)
+    isV1Type(
+      it.type, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions,
+      allowCollections,
+    )
   }
 }
 
@@ -908,6 +1042,7 @@ private fun isV1Type(
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
   boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
+  allowCollections: Boolean = true,
 ): Boolean = when (type) {
   is RirVoidType -> true
   is RirStringType -> true
@@ -948,7 +1083,45 @@ private fun isV1Type(
   // signatures, which never reach this shared non-generic filter (Decision 3: the generic path is
   // routed BEFORE this one). Fail-closed.
   is RirTypeParameterType -> false
+  // ADR-155: a mapped BCL collection is bridgeable iff every element is in the v1 element
+  // vocabulary AND this position admits a collection at all. [allowCollections] is false on the
+  // struct and bound-interface routes, which have their own hand-written conversion sites rather
+  // than the shared ones this wire rides: those positions become a NAMED skip
+  // (collectionPositionDiagnostics) instead of a half-built member.
+  is RirCollectionType -> allowCollections &&
+      type.typeArguments.size == (if (type.collection == RirCollectionKind.MAP) 2 else 1) &&
+      type.typeArguments.all { isCollectionElement(it, boundHandleTypes, boundInterfaceTypes) } &&
+      (type.collection != RirCollectionKind.MAP || isMapKey(type.typeArguments[0]))
 }
+
+// ADR-155 v1 element vocabulary: exactly ADR-072 Decision 6's type-argument vocabulary minus the
+// type parameter. A struct element (multi-slot), a nested collection (a slot holding a buffer
+// pointer), a `Nullable<T>` element (needs a presence slot) and a bound generic instance are all
+// deferred, and the reader refuses them by name (skipped_collection_element) before they reach
+// here; this is the generator-side fail-closed mirror of that refusal.
+private fun isCollectionElement(
+  type: RirTypeRef,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface>,
+): Boolean = when (type) {
+  is RirPrimitiveType -> type.name in setOf(
+    "bool", "byte", "short", "int", "long", "float", "double", "char",
+  )
+
+  is RirStringType -> true
+  is RirEnumType -> true
+  is RirObjectHandleType -> RirTypeKey(type.namespace, type.name) in boundHandleTypes
+  is RirInterfaceType -> RirTypeKey(type.namespace, type.name) in boundInterfaceTypes
+  is RirVoidType, is RirStructType, is RirCollectionType, is RirGenericInstanceType,
+  is RirTypeParameterType,
+    -> false
+}
+
+// ADR-155: a map key is a primitive, a string or an enum, and is never nullable: a null key has
+// no `0` slot to spare (that encoding is taken by a null reference VALUE) and no Kotlin Map
+// semantics worth guessing at.
+private fun isMapKey(type: RirTypeRef): Boolean =
+  (type is RirPrimitiveType || type is RirStringType || type is RirEnumType) && !type.isNullable
 
 // ADR-054: a pure, deterministic 64-bit hash (FNV-1a) over the ordered registrable signature list
 // of one RirClass — the "contractHash" leading parameter both generators bake into a type's
@@ -1231,7 +1404,11 @@ private fun isKotlinBridgeSlotType(
   is RirStringType -> true
   is RirObjectHandleType -> RirTypeKey(type.namespace, type.name) in boundHandleTypes
   is RirInterfaceType -> RirTypeKey(type.namespace, type.name) in boundInterfaceTypes
-  is RirStructType, is RirGenericInstanceType, is RirTypeParameterType -> false
+  // ADR-155: a collection-typed slot on a Kotlin-implemented C# interface is Phase 13, deferred:
+  // the slot inverts the direction (Kotlin allocates the buffer C# frees).
+  is RirStructType, is RirGenericInstanceType, is RirTypeParameterType,
+  is RirCollectionType,
+    -> false
 }
 
 // ADR-085: v1 method arity ceiling (mirrors ADR-084's forward vocabulary).

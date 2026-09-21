@@ -2743,7 +2743,7 @@ internal static class NullabilityHelpers
     /// </summary>
     private static bool IsAnnotatable(RirTypeRef type) =>
         type is RirStringType or RirObjectHandleType or RirInterfaceType or RirTypeParameterType
-            or RirGenericInstanceType or RirAsyncType;
+            or RirGenericInstanceType or RirAsyncType or RirCollectionType;
 
     /// <summary>
     /// ADR-072 Decision 7: the number of annotatable nodes in <paramref name="type"/>'s pre-order
@@ -2761,6 +2761,11 @@ internal static class NullabilityHelpers
         // `Task<string?>` is [1, 2] and `Task<string>?` is [2, 1]. Counting it is what makes the
         // difference between those two readable at all.
         RirAsyncType a => 1 + CountAnnotatableNodes(a.Awaited),
+        // ADR-155: the COLLECTION node itself is annotatable and comes first in the pre-order, so
+        // `IReadOnlyList<string?>` is [1, 2] and `IReadOnlyList<string>?` is [2, 1]. A value-type
+        // argument still contributes none, which is why `IDictionary<string, int>` counts two
+        // nodes, not three.
+        RirCollectionType c => 1 + c.TypeArguments.Sum(CountAnnotatableNodes),
         _ => 0,
     };
 
@@ -2849,6 +2854,20 @@ internal static class NullabilityHelpers
                 }
 
                 return new RirGenericInstanceType(g.Namespace, g.Name, newArgs, outerNullable);
+            }
+
+            case RirCollectionType c:
+            {
+                bool outerNullable = bytes[cursor++] == 2;
+                var newArgs = new List<RirTypeRef>(c.TypeArguments.Count);
+                foreach (var arg in c.TypeArguments)
+                {
+                    newArgs.Add(CountAnnotatableNodes(arg) == 0
+                        ? arg
+                        : ApplyPreOrder(arg, bytes, ref cursor, ref hitNullableTypeParameter));
+                }
+
+                return new RirCollectionType(c.Collection, c.Definition, newArgs, outerNullable);
             }
 
             case RirAsyncType a:
@@ -3008,6 +3027,7 @@ internal static class NullabilityHelpers
     {
         RirTypeParameterType => true,
         RirGenericInstanceType g => g.TypeArguments.Any(ContainsTypeParameter),
+        RirCollectionType c => c.TypeArguments.Any(ContainsTypeParameter),
         _ => false,
     };
 }
@@ -3416,7 +3436,11 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         {
             var awaited = typeArguments[0];
             if (awaited.Diagnostic is not null) return new TypeRefOrDiag(null, awaited.Diagnostic, rawName);
-            if (awaited.TypeRef is not null and not RirAsyncType)
+            // ADR-155: `Task<IReadOnlyList<T>>` is OUT of v1. Falling through to the async-shape
+            // branch below keeps the existing `info_async_not_yet_mapped` rather than inventing a
+            // second name for it, and the nullable bytes ([1, 1, 2]: Task, collection, element)
+            // compose without change for whoever lifts the deferral.
+            if (awaited.TypeRef is not null and not RirAsyncType and not RirCollectionType)
                 return new TypeRefOrDiag(new RirAsyncType(awaited.TypeRef), null, rawName);
         }
 
@@ -3463,8 +3487,47 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
                 rawName);
         }
 
-        // ADR-072 Decision 9: the definition lives outside the bound assemblies (List<int>,
-        // Dictionary<string,int>, ...). No members are ever extracted for such a definition, so
+        // ADR-155: a MAPPED BCL collection definition. Matched on namespace + name only, never on
+        // the resolution scope: `IReadOnlyList`1` resolves to System.Runtime while `List`1`,
+        // `Dictionary`2` and `HashSet`1` resolve to System.Collections, so an assembly-qualified
+        // match would silently miss half the table. This branch sits between the ADR-072 bound-
+        // definition branch above and Decision 9's diagnostic below, which is the only place the
+        // instantiation is known to be external AND known by name.
+        if (rawName is not null && CollectionDefinitions.TryGetValue(rawName, out var collection)
+            && typeArguments.Length == collection.Arity)
+        {
+            var elements = new List<RirTypeRef>(typeArguments.Length);
+            foreach (var arg in typeArguments)
+            {
+                // Refused BY NAME here rather than by propagating the argument's own diagnostic:
+                // `List<int?>` is `List<Nullable<int>>`, whose inner instantiation would otherwise
+                // blame the BCL (ADR-072 Decision 9) for what is really an element this bridge
+                // cannot carry.
+                if (arg.TypeRef is null || !IsV1CollectionElement(arg.TypeRef))
+                {
+                    return new TypeRefOrDiag(null,
+                        new PendingDiagnostic(
+                            "skipped_collection_element",
+                            $"element `{arg.RawTypeName ?? "?"}` of `{rawName}` is outside the v1 " +
+                                "collection-element vocabulary (ADR-155): only a primitive, " +
+                                "string, bound enum, bound class handle or bound interface is " +
+                                "admissible. Struct elements, nested collections, `Nullable<T>` " +
+                                "elements, bound generic instances, type parameters and `object` " +
+                                "are deferred.",
+                            "Expose a collection of a primitive, string, bound enum, bound class " +
+                                "or bound interface, or an equivalent C# adapter."),
+                        rawName);
+                }
+
+                elements.Add(arg.TypeRef);
+            }
+
+            return new TypeRefOrDiag(
+                new RirCollectionType(collection.Kind, rawName, elements), null, rawName);
+        }
+
+        // ADR-072 Decision 9: the definition lives outside the bound assemblies (Queue<int>,
+        // ImmutableArray<string>, ...). No members are ever extracted for such a definition, so
         // binding it as a handle would produce a value with nothing on it. Diagnosed rather than
         // silently dropped (this used to be a deliberate, undiagnosed drop).
         return new TypeRefOrDiag(null,
@@ -3473,10 +3536,47 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
                 $"instantiation of `{rawName}`: its generic definition lives outside the bound " +
                     "assemblies, so it has no extracted members and cannot be bound as a handle " +
                     "(ADR-072 Decision 9)",
-                "Bind this collection idiom via the collections item (ROADMAP line 220) once " +
-                    "available, or expose an equivalent adapter with a concrete element type."),
+                "Expose one of the mapped BCL collection types (IEnumerable<T>, " +
+                    "IReadOnlyCollection<T>, IReadOnlyList<T>, ICollection<T>, IList<T>, List<T>, " +
+                    "IReadOnlySet<T>, ISet<T>, HashSet<T>, IReadOnlyDictionary<K,V>, " +
+                    "IDictionary<K,V>, Dictionary<K,V>) (ADR-155), or an equivalent adapter with a " +
+                    "concrete element type."),
             rawName ?? "?");
     }
+
+    /// <summary>
+    /// ADR-155: the BCL collection definitions that cross as a Kotlin collection, by CLR name and
+    /// the Kotlin container each maps to. Deliberately keyed on the full name only; see the branch
+    /// in <see cref="GetGenericInstantiation"/> for why the resolution scope is not part of the key.
+    /// </summary>
+    private static readonly Dictionary<string, (string Kind, int Arity)> CollectionDefinitions =
+        new(StringComparer.Ordinal)
+        {
+            ["System.Collections.Generic.IEnumerable`1"] = ("list", 1),
+            ["System.Collections.Generic.IReadOnlyCollection`1"] = ("list", 1),
+            ["System.Collections.Generic.IReadOnlyList`1"] = ("list", 1),
+            ["System.Collections.Generic.ICollection`1"] = ("list", 1),
+            ["System.Collections.Generic.IList`1"] = ("list", 1),
+            ["System.Collections.Generic.List`1"] = ("list", 1),
+            ["System.Collections.Generic.IReadOnlySet`1"] = ("set", 1),
+            ["System.Collections.Generic.ISet`1"] = ("set", 1),
+            ["System.Collections.Generic.HashSet`1"] = ("set", 1),
+            ["System.Collections.Generic.IReadOnlyDictionary`2"] = ("map", 2),
+            ["System.Collections.Generic.IDictionary`2"] = ("map", 2),
+            ["System.Collections.Generic.Dictionary`2"] = ("map", 2),
+        };
+
+    /// <summary>
+    /// ADR-155's v1 element vocabulary: ADR-072 Decision 6's type-argument vocabulary MINUS the
+    /// type parameter (a type-parameter element inside a generic class is deferred, since it has
+    /// no slot encoding until the class is instantiated).
+    /// </summary>
+    private static bool IsV1CollectionElement(RirTypeRef type) => type switch
+    {
+        RirPrimitiveType or RirStringType or RirEnumType or RirObjectHandleType
+            or RirInterfaceType => true,
+        _ => false,
+    };
 
     /// <summary>ADR-072 Decision 6: the v1 vocabulary for a generic type argument. A primitive,
     /// string, bound enum, bound class handle, bound interface, or (only meaningful while decoding
@@ -3547,12 +3647,24 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
     public TypeRefOrDiag GetByReferenceType(TypeRefOrDiag elementType) =>
         new TypeRefOrDiag(null, null, "ref " + elementType.RawTypeName);
 
-    // Arrays — not in v1 vocabulary.
+    // Arrays, not in v1 vocabulary. ADR-155: deferred WITH A NAME. An array used to reach the
+    // caller as (null, null, raw), which is a silent drop: the member vanished from the bound
+    // surface with no diagnostic at all. `byte[]` wants the ADR-151 blit rather than the slot
+    // buffer, so the whole family stays deferred, but it is now reported.
     public TypeRefOrDiag GetArrayType(TypeRefOrDiag elementType, ArrayShape shape) =>
-        new TypeRefOrDiag(null, null, elementType.RawTypeName + "[]");
+        ArrayPending(elementType.RawTypeName + "[]");
 
     public TypeRefOrDiag GetSZArrayType(TypeRefOrDiag elementType) =>
-        new TypeRefOrDiag(null, null, elementType.RawTypeName + "[]");
+        ArrayPending(elementType.RawTypeName + "[]");
+
+    private static TypeRefOrDiag ArrayPending(string rawName) =>
+        new(null,
+            new PendingDiagnostic(
+                "skipped_array",
+                $"`{rawName}`: arrays are deferred (ADR-155). The Kotlin type for an array is its " +
+                    "own decision, and `byte[]` wants the ADR-151 blit rather than a slot buffer.",
+                "Expose IReadOnlyList<T> (or another mapped BCL collection) instead of an array."),
+            rawName);
 
     // FunctionPointer — not in v1 vocabulary.
     public TypeRefOrDiag GetFunctionPointerType(MethodSignature<TypeRefOrDiag> signature) =>
@@ -3919,6 +4031,7 @@ internal sealed class RirConstructor
 [JsonDerivedType(typeof(RirInterfaceType), "interface")]
 [JsonDerivedType(typeof(RirTypeParameterType), "typeparam")]
 [JsonDerivedType(typeof(RirGenericInstanceType), "generic")]
+[JsonDerivedType(typeof(RirCollectionType), "collection")]
 internal abstract class RirTypeRef { }
 
 internal sealed class RirVoidType : RirTypeRef
@@ -4099,6 +4212,36 @@ internal sealed class RirGenericInstanceType : RirTypeRef
 }
 
 /// <summary>
+/// ADR-155: a mapped BCL collection in a C# signature, crossing as ONE pointer to a flat
+/// <c>[count][8-byte slots]</c> buffer (a map interleaves key and value; <c>IntPtr.Zero</c> is a
+/// null collection; a <c>0</c> slot is a null reference element). <see cref="Definition"/> is the
+/// CLR name of the DECLARED definition, which the shim casts the container it built to, so C#
+/// overload resolution picks the overload the thunk was made for. <see cref="Nullable"/> is this
+/// REFERENCE's own annotation (<c>IReadOnlyList&lt;string&gt;?</c>), independent of the elements'
+/// own (<c>IReadOnlyList&lt;string?&gt;</c>). Mirrors <c>RirCollectionType</c> in
+/// <c>RirModel.kt</c> field-for-field.
+/// </summary>
+internal sealed class RirCollectionType : RirTypeRef
+{
+    public RirCollectionType(
+        string collection, string definition, IReadOnlyList<RirTypeRef> typeArguments,
+        bool nullable = false)
+    {
+        Collection = collection;
+        Definition = definition;
+        TypeArguments = typeArguments;
+        Nullable = nullable;
+    }
+
+    /// <summary>The <c>RirCollectionKind</c> value: <c>"list"</c>, <c>"set"</c> or <c>"map"</c>.</summary>
+    public string Collection { get; }
+
+    public string Definition { get; }
+    public IReadOnlyList<RirTypeRef> TypeArguments { get; }
+    public bool Nullable { get; }
+}
+
+/// <summary>
 /// ADR-152, READER-INTERNAL: a <c>Task</c> / <c>Task&lt;T&gt;</c> node. It is never serialized;
 /// <c>TryMapMethod</c> unwraps it to <see cref="Awaited"/> and records
 /// <see cref="RirMethod.AsyncKind"/> instead, AFTER nullability has been resolved over the whole
@@ -4219,6 +4362,7 @@ internal sealed class RirDiagnostic
 [JsonSerializable(typeof(RirInstantiation))]
 [JsonSerializable(typeof(RirTypeParameterType))]
 [JsonSerializable(typeof(RirGenericInstanceType))]
+[JsonSerializable(typeof(RirCollectionType))]
 [JsonSerializable(typeof(RirDiagnostic))]
 [JsonSourceGenerationOptions(
     WriteIndented = true,
