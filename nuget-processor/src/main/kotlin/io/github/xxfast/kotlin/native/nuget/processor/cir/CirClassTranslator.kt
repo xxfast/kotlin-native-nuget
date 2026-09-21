@@ -37,6 +37,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ENUM_ARM_VALUE_MEMBER
+import io.github.xxfast.kotlin.native.nuget.processor.forward.enumArmName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPlanProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPropertyProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
@@ -1835,6 +1838,48 @@ internal fun suspendMembers(
   return asyncMembers + suspendStateFlowMembers
 }
 
+/**
+ * ADR-157: the boxed enum arm, `{Enum}Arm`. Two members, both planned: the constructor taking the
+ * C# enum and the `Value` getter returning it. Never the enum's own members -- those are ADR-006
+ * extension methods on the enum itself, which is still declared as a C# `enum` beside this box.
+ */
+private fun enumArmSubclass(
+  sealed: KSClassDeclaration,
+  arm: KSClassDeclaration,
+  subPrefix: String,
+  callableCatalog: ForwardCallablePlanCatalog,
+  tracker: CollectionHelperTracker,
+  context: NugetContext,
+  expects: ExpectIndex,
+): CirSealedSubclass {
+  val armQualifiedName: String? = arm.qualifiedName?.asString()
+  val properties: List<CirProperty> = listOfNotNull(
+    armQualifiedName
+      ?.let { callableCatalog.propertyFor("$it.$ENUM_ARM_VALUE_MEMBER") }
+      ?.let { plan ->
+        tracker.trackProperty(plan)
+        ForwardCirPropertyProjection.classProperty(plan)
+      },
+  )
+  val constructors: List<CirConstructor> =
+    (armQualifiedName?.let { callableCatalog.constructors(it) } ?: emptyList()).map { plan ->
+      tracker.trackPlan(plan)
+      ForwardCirPlanProjection.constructor(plan)
+    }
+  return CirSealedSubclass(
+    doc = arm.forwardKdoc(expects)?.toCirDoc(),
+    name = arm.enumArmName(),
+    nativePrefix = subPrefix,
+    properties = properties,
+    constructors = constructors,
+    // Where the enum is declared, the box is declared: nested in the base for a nested enum, at
+    // namespace level beside it otherwise. The bare name belongs to the C# enum either way.
+    isNested = arm.parentDeclaration?.qualifiedName?.asString() ==
+        sealed.qualifiedName?.asString(),
+    boxedEnumType = properties.firstOrNull()?.type ?: arm.nestedCsName(),
+  )
+}
+
 internal fun translateSealedClass(
   cls: KSClassDeclaration,
   context: NugetContext,
@@ -1896,6 +1941,15 @@ internal fun translateSealedClass(
     .map { subclass ->
       val subName: String = subclass.simpleName.asString()
       val subPrefix: String = "${prefix}_${subName.lowercase()}"
+      // ADR-157: an enum arm is a BOX. Its own members belong to `{Enum}Extensions` (ADR-006) and
+      // the enum keeps being declared, exactly once, as a C# `enum`; the arm carries the box
+      // constructor and the `Value` getter, both off the same plans and the same projections every
+      // other arm member uses.
+      if (subclass.isEnumArm()) {
+        return@map enumArmSubclass(
+          cls, subclass, subPrefix, callableCatalog, tracker, context, expects,
+        )
+      }
       val isDataClass: Boolean = subclass.modifiers.contains(Modifier.DATA)
       val isNested: Boolean =
         subclass.parentDeclaration?.qualifiedName?.asString() == cls.qualifiedName?.asString()
@@ -2906,10 +2960,30 @@ internal fun translateInterfaceBackingClass(
   )
 }
 
+/**
+ * The C# spelling of an enum at a type position, the same rule
+ * `ForwardBridgeTypeClassifier.csharpTypeNameFor` applies: the enclosing-scope name, qualified with
+ * `global::<namespace>.` unless there is no root namespace to qualify against.
+ */
+private fun csharpEnumTypeName(enum: KSClassDeclaration, context: NugetContext?): String {
+  val nestedName: String = enum.nestedCsName()
+  if (context == null || context.rootNamespace.isEmpty()) return nestedName
+  val namespace: String = mapPackageToNamespace(
+    enum.packageName.asString(),
+    context.rootPackage,
+    context.rootNamespace,
+  )
+  return "global::$namespace.$nestedName"
+}
+
 internal fun translateEnum(
   enum: KSClassDeclaration,
   libraryName: String,
   expects: ExpectIndex = ExpectIndex(),
+  // The namespace mapping, so an enum-typed enum property can spell the other enum the way every
+  // other C# type position spells it. Null keeps the bare nested name (the Tier 1 no-namespace
+  // shape), matching `ForwardBridgeTypeClassifier.csharpTypeNameFor`'s empty-rootNamespace case.
+  context: NugetContext? = null,
 ): CirEnum {
   val name: String = enum.simpleName.asString()
   val entries: List<CirEnumEntry> = enum.declarations
@@ -2935,14 +3009,25 @@ internal fun translateEnum(
       val propType: String = propTypeResolved.declaration.simpleName.asString()
       val csPropName: String = propName.replaceFirstChar { it.uppercase() }
 
-      val nativeReturnType: String = mapReturnType(propType)
-      val type: String = if (propType == "String") "string" else mapReturnType(propType)
+      // An enum-typed enum member (`enum class Swirl(val patch: Patch)`) crosses as the ordinal
+      // like every other ADR-006 enum position. It fell out of `mapReturnType`'s table as `IntPtr`
+      // before, so the extension handed back a raw Kotlin object pointer no consumer could use.
+      val propEnum: KSClassDeclaration? = (propTypeResolved.declaration as? KSClassDeclaration)
+        ?.takeIf { it.classKind == ClassKind.ENUM_CLASS }
+
+      val nativeReturnType: String = if (propEnum != null) "int" else mapReturnType(propType)
+      val type: String = when {
+        propEnum != null -> csharpEnumTypeName(propEnum, context)
+        propType == "String" -> "string"
+        else -> mapReturnType(propType)
+      }
 
       CirEnumProperty(
         name = csPropName,
         type = type,
         nativeReturnType = nativeReturnType,
         nativeName = propName,
+        isEnum = propEnum != null,
       )
     }
     .toList()

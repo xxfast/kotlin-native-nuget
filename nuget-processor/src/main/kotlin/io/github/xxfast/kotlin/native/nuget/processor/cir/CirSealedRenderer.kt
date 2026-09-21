@@ -221,6 +221,20 @@ private fun sealedSubclassBlock(
     renderSealedSubclassDataMethods(sealed.libraryName, subclass.nativePrefix, sealed.name, subclass.name)
   }
 
+  // ADR-157: managed value equality over `Value`, so a box compares like the data arms beside it.
+  // Managed rather than a Kotlin `equals` export on purpose: two boxes of one entry are two
+  // distinct handles over one Kotlin singleton, so handle identity reads false where the consumer
+  // means true, and `Value` is already an `int` on this side of the wire.
+  if (subclass.boxedEnumType != null) {
+    appendLine("            public override bool Equals(object? obj)")
+    appendLine("                => obj is ${subclass.name} other && other.Value == Value;")
+    appendLine()
+    appendLine("            public override int GetHashCode() => Value.GetHashCode();")
+    appendLine()
+    appendLine("            public override string ToString() => Value.ToString();")
+    appendLine()
+  }
+
   // ADR-134: types Kotlin declares inside the arm. `renderNestedDeclarations` already renders one
   // level in (a class member's depth); the arm's own members are re-indented once more, so these
   // take the same extra level.

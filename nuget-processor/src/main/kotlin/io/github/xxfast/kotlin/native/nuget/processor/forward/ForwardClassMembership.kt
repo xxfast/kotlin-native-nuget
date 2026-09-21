@@ -78,9 +78,17 @@ internal fun KSClassDeclaration.sealedInterfaceIneligibility(): String? {
 private fun KSClassDeclaration.armIneligibility(): String? {
   val name: String = simpleName.asString()
   if (classKind == ClassKind.INTERFACE) return "subclass `$name` is an interface"
+  // ADR-157: an `enum class` arm is admitted, boxed as `{Enum}Arm`. A C# enum still admits only an
+  // integral base (CS1008), so the enum keeps being declared as an ordinary C# enum and the box is
+  // the arm. The one refusal left is the box's own name already being taken, which would be CS0101
+  // in the generated file with nothing in the build log to explain it.
   if (classKind == ClassKind.ENUM_CLASS) {
-    return "subclass `$name` is an enum class, and a C# enum can only extend an integral " +
-        "type (CS1008), never the abstract class an arm is declared as"
+    if (ForwardDeclaredTypeNames.declares(packageName.asString(), enumArmName())) {
+      return "subclass `$name` is an enum class, so its arm is boxed as `${enumArmName()}` " +
+          "(ADR-157), and a type of that name is already declared in package " +
+          "`${packageName.asString()}`"
+    }
+    return null
   }
   val base: KSClassDeclaration? = declaredSuperClass()
   if (base != null) {
@@ -147,11 +155,61 @@ internal fun KSClassDeclaration.isEligibleSealedType(): Boolean =
  * sealed interface still has no sealed route, so its subclasses keep exactly that handling.
  */
 internal fun KSClassDeclaration.isSealedSubclass(): Boolean =
-  declaredSuperClass()?.modifiers?.contains(Modifier.SEALED) == true ||
+  // ADR-157: an enum arm is NOT a sealed subclass. The ADR-006 enum route keeps owning the enum --
+  // it is still declared, exactly once, as a C# `enum` -- and the sealed route only adds the
+  // `{Enum}Arm` box beside it. Answering true here would hand the enum to `rootEnums`'s
+  // `!isSealedSubclass()` filter and the nested-declaration walk, and the C# enum would vanish.
+  !isEnumArm() &&
+      (declaredSuperClass()?.modifiers?.contains(Modifier.SEALED) == true ||
+          superTypes
+            .map { type -> type.resolve().declaration }
+            .filterIsInstance<KSClassDeclaration>()
+            .any { it.isEligibleSealedInterface() })
+
+/**
+ * ADR-157: an `enum class` that is an arm of an eligible sealed hierarchy, i.e. the shape that
+ * binds as a boxed `{Enum}Arm` rather than as an ordinary arm class.
+ *
+ * Read by [isSealedSubclass] (which answers false for one), by every arm *member* walk (the enum's
+ * own members belong to `{Enum}Extensions` under ADR-006, and planning them a second time under the
+ * arm's prefix would export each of them twice), and by the sealed translators, which give the arm
+ * the box constructor and the `Value` getter instead of the arm's own members.
+ */
+internal fun KSClassDeclaration.isEnumArm(): Boolean =
+  classKind == ClassKind.ENUM_CLASS &&
       superTypes
         .map { type -> type.resolve().declaration }
         .filterIsInstance<KSClassDeclaration>()
-        .any { it.isEligibleSealedInterface() }
+        .any { it.isEligibleSealedType() }
+
+/** ADR-157: the C# name of this enum arm's box. */
+internal fun KSClassDeclaration.enumArmName(): String = "${simpleName.asString()}Arm"
+
+/**
+ * ADR-157: the module's declared type names, by package, so [armIneligibility] can refuse a
+ * hierarchy whose `{Enum}Arm` box name is already taken rather than emit a CS0101 the author has to
+ * decode from a C# compile. Filled once per KSP round by `NugetProcessor`, exactly as
+ * `ForwardDiagnosticSink` is reset there; empty means "nothing known", which refuses nothing.
+ *
+ * Package-scoped rather than namespace-scoped: package-to-namespace mapping is a `NugetContext`
+ * concern this predicate has no access to, and the mapping is injective for every shape that can
+ * collide here (two packages mapping onto one namespace is already an ADR-040 collision error).
+ */
+internal object ForwardDeclaredTypeNames {
+  private val byPackage: MutableMap<String, MutableSet<String>> = mutableMapOf()
+
+  fun reset(declarations: Sequence<KSClassDeclaration>) {
+    byPackage.clear()
+    declarations.forEach { declaration ->
+      byPackage
+        .getOrPut(declaration.packageName.asString()) { mutableSetOf() }
+        .add(declaration.simpleName.asString())
+    }
+  }
+
+  fun declares(packageName: String, simpleName: String): Boolean =
+    byPackage[packageName]?.contains(simpleName) == true
+}
 
 /**
  * ADR-112 amendment: an arm of an *ineligible* sealed interface, the half [isSealedSubclass]

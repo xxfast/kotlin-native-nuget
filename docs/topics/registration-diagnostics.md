@@ -132,6 +132,10 @@ same shim) forces a pending release round before you re-read the count, since a 
 later GC cycle, not promptly. The count is process-global, so isolate the check from anything else
 running in the process that crosses a handle at the same time.
 
+A boxed [`enum class` sealed arm](interfaces-abstract-sealed.md#an-enum-class-arm) counts here too:
+its constructor mints a `StableRef` to a Kotlin enum entry, and reading one back through a holder's
+property mints a second, independent handle, so both must come back to baseline on `Dispose`.
+
 For a [cancellation-token-taking async call](instance-members.md#async-cancellation), this count
 only proves the pending-continuation and `Task` handles came back to baseline: the bridge-owned
 `CancellationTokenSource` is a plain .NET `GCHandle`, not one of the Kotlin `StableRef`s

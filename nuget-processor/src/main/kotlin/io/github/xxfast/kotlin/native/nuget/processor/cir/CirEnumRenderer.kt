@@ -53,6 +53,9 @@ internal fun StringBuilder.renderEnumExtensions(enum: CirEnum) {
 
     val body: String = if (prop.type == "string") {
       "Marshal.PtrToStringUTF8(Native_Get${prop.name}((int)$receiverParam))!"
+    } else if (prop.isEnum) {
+      // The wire is the ordinal (ADR-006); the extern is `int` and the public spelling is the enum.
+      "(${prop.type})Native_Get${prop.name}((int)$receiverParam)"
     } else {
       "Native_Get${prop.name}((int)$receiverParam)"
     }

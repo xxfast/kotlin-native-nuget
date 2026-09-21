@@ -383,39 +383,150 @@ class Tier1SealedInterfaceTest {
   }
 
   @Test
-  fun `an enum arm keeps the sealed interface ineligible and names the C# reason`() {
+  fun `an enum arm is boxed as {Enum}Arm and the interface becomes eligible`() {
     val result = Tier1Harness.run(siblingArms)
+
+    // ADR-157 inverts ADR-125's control: the arm is boxed rather than refused.
+    assertTrue(
+      result.kspWarnings.none {
+        it.contains(ForwardDiagnosticKind.SKIPPED_INELIGIBLE_SEALED_INTERFACE.name) &&
+            it.contains("`tier1.sealedinterface.siblingarms.Tone`")
+      },
+      "expected no ineligibility warning for the enum-armed Tone; kspWarnings=" +
+          "${result.kspWarnings}",
+    )
+    val csharp: String = result.generatedCSharp
+    assertContains(csharp, "public abstract class Tone : IDisposable, INugetHandle")
+    assertEquals(
+      0,
+      csharp.occurrencesOf("public interface ITone"),
+      "expected the admitted interface to leave the interface route; generatedCSharp=" +
+          "${csharp.lines().filter { it.contains("Tone") }}",
+    )
+    // The CS0101 trap, which survives the inversion: the enum is declared by `rootEnums`, so the
+    // box must take the `PitchArm` name and the enum must keep the bare one, exactly once.
+    assertEquals(
+      1,
+      csharp.occurrencesOf("public enum Pitch"),
+      "expected the enum declared exactly once, as an enum; generatedCSharp=" +
+          "${csharp.lines().filter { it.contains("Pitch") }}",
+    )
+    // Spelled with the whole declaration on purpose: `public sealed class PitchArm` does not
+    // contain the substring `class Pitch ` either, so a bare `contains("class Pitch")` assertion
+    // would pass whatever the box were named.
+    assertEquals(
+      0,
+      csharp.occurrencesOf("class Pitch :"),
+      "expected no arm class under the enum's own name; generatedCSharp=" +
+          "${csharp.lines().filter { it.contains("Pitch") }}",
+    )
+    assertEquals(
+      1,
+      csharp.occurrencesOf("public sealed class PitchArm : Tone"),
+      "expected the box declared exactly once; generatedCSharp=" +
+          "${csharp.lines().filter { it.contains("Pitch") }}",
+    )
+    assertContains(csharp, "public PitchArm(global::Interop.Pitch entry)")
+    assertContains(csharp, "public global::Interop.Pitch Value")
+    assertContains(csharp, "=> obj is PitchArm other && other.Value == Value;")
+  }
+
+  /**
+   * Requirement 6 of issue #236, the diagnostic half: neither skip fires for the admitted shape,
+   * the enum-only one or the mixed one. Asserted as an ABSENCE because the presence assertions
+   * above cannot see it: a hierarchy can render and still have dropped every member typed with it.
+   */
+  @Test
+  fun `neither sealed diagnostic fires for an enum-armed or mixed hierarchy`() {
+    val result = Tier1Harness.run(enumArms)
+
+    assertTrue(result.compiledClean, "expected the shape to bind; got: ${result.compileErrors}")
+    listOf("Marking", "Snack").forEach { hierarchy ->
+      assertTrue(
+        result.kspWarnings.none {
+          it.contains(ForwardDiagnosticKind.SKIPPED_INELIGIBLE_SEALED_INTERFACE.name) &&
+              it.contains(hierarchy)
+        },
+        "expected no ineligibility warning for $hierarchy; kspWarnings=${result.kspWarnings}",
+      )
+      assertTrue(
+        result.kspWarnings.none {
+          it.contains(ForwardDiagnosticKind.SKIPPED_SEALED_POSITION.name) &&
+              it.contains(hierarchy)
+        },
+        "expected no sealed-position skip naming $hierarchy; kspWarnings=${result.kspWarnings}",
+      )
+    }
+    val csharp: String = result.generatedCSharp
+    // The cascade the issue counts: the holder gets its constructor and its copy back.
+    assertContains(csharp, "public Portrait(global::Interop.Marking marking)")
+    assertContains(csharp, "public Portrait Copy(global::Interop.Marking marking)")
+    // Two enum arms of one hierarchy, and the mixed hierarchy's one beside a data arm.
+    assertContains(csharp, "public sealed class PatchArm : Marking")
+    assertContains(csharp, "public sealed class SwirlArm : Marking")
+    assertContains(csharp, "public sealed class CrunchArm : Snack")
+    assertContains(csharp, "public sealed class Pouch : Snack")
+  }
+
+  /**
+   * ADR-157's one new refusal: the box's name is already taken in the same namespace. Refused by
+   * name, in the build log, rather than emitted as a CS0101 the author has to decode from a C#
+   * compile of generated code.
+   */
+  @Test
+  fun `a taken {Enum}Arm name refuses the hierarchy and says so`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.sealedinterface.armcollision
+
+      sealed interface Marking
+
+      enum class Patch : Marking { BIB, SOCKS }
+
+      /** The collision: the box would be declared `PatchArm` and this already is. */
+      class PatchArm(val note: String)
+      """.trimIndent(),
+    )
 
     val diagnostic: String = requireNotNull(
       result.kspWarnings.firstOrNull {
         it.contains(ForwardDiagnosticKind.SKIPPED_INELIGIBLE_SEALED_INTERFACE.name) &&
-            it.contains("`tier1.sealedinterface.siblingarms.Tone`")
+            it.contains("`tier1.sealedinterface.armcollision.Marking`")
       },
-    ) { "expected an ineligibility warning for Tone; kspWarnings=${result.kspWarnings}" }
+    ) { "expected an ineligibility warning for Marking; kspWarnings=${result.kspWarnings}" }
     assertTrue(
-      diagnostic.contains("subclass `Pitch`") && diagnostic.contains("enum"),
-      "expected the enum-arm reason; got: $diagnostic",
+      diagnostic.contains("boxed as `PatchArm`") && diagnostic.contains("already declared"),
+      "expected the collision named; got: $diagnostic",
     )
-    // The CS0101 trap: the enum is declared by `rootEnums`, so an arm class for it would be a
-    // second declaration under the same name in the same namespace.
-    assertEquals(
-      1,
-      result.generatedCSharp.occurrencesOf("public enum Pitch"),
-      "expected the enum arm declared exactly once, as an enum; generatedCSharp=" +
-          "${result.generatedCSharp.lines().filter { it.contains("Pitch") }}",
-    )
-    assertFalse(
-      result.generatedCSharp.contains("class Pitch"),
-      "expected no arm class for an enum arm; generatedCSharp=" +
-          "${result.generatedCSharp.lines().filter { it.contains("Pitch") }}",
-    )
-    assertEquals(
-      1,
-      result.generatedCSharp.occurrencesOf("public interface ITone"),
-      "expected the refused interface to stay on the interface route, once; generatedCSharp=" +
-          "${result.generatedCSharp.lines().filter { it.contains("Tone") }}",
-    )
+    // Both types keep their own declarations; neither is doubled.
+    assertEquals(1, result.generatedCSharp.occurrencesOf("public enum Patch"))
+    assertEquals(1, result.generatedCSharp.occurrencesOf("public class PatchArm"))
   }
+
+  /**
+   * ADR-157's fixture shape, in one cell: two enum arms whose ordinals collide, one of them
+   * carrying a property typed as the other's enum, plus a mixed hierarchy and a holder.
+   */
+  private val enumArms: String = """
+    package tier1.sealedinterface.enumarms
+
+    sealed interface Marking
+
+    enum class Patch : Marking { BIB, SOCKS }
+
+    enum class Swirl(val patch: Patch) : Marking {
+      COCOA(Patch.BIB),
+      CREAM(Patch.SOCKS),
+    }
+
+    sealed interface Snack
+
+    enum class Crunch : Snack { BISCUIT, KIBBLE }
+
+    data class Pouch(val flavour: String) : Snack
+
+    data class Portrait(val marking: Marking)
+  """.trimIndent()
 
   /**
    * The guard nesting used to provide for free: a nested class has exactly one enclosing
@@ -465,22 +576,29 @@ class Tier1SealedInterfaceTest {
   }
 
   /**
-   * ADR-112 amendment: the same refusal as `Mixed`, for the enum reason and with the arm nested. An
-   * arm is undeclared because its interface is refused, and the parent's diagnostic says so, so a
-   * second nested-declaration warning on the arm only sends the author to a move that ADR-125 made
+   * ADR-112 amendment: the same refusal as `Mixed`, with the arm nested. An arm is undeclared
+   * because its interface is refused, and the parent's diagnostic says so, so a second
+   * nested-declaration warning on the arm only sends the author to a move that ADR-125 made
    * irrelevant. `Helper` is the control for the rule being by supertype, not by enclosing
    * declaration: it is nested in the same refused interface and is not an arm, so it keeps warning.
+   *
+   * ADR-157: the refusing reason used to be an `enum class` arm, which is admitted now (boxed as
+   * `{Enum}Arm`). The cell is about an arm of a refused hierarchy, not about *why* it was refused,
+   * so the arm now refuses for the reason that is still refusing: two sealed interfaces, which C#
+   * single inheritance cannot express.
    */
   private val nestedArm: String = """
     package tier1.sealedinterface.nestedarm
 
+    sealed interface Beat
+
     sealed interface Tone {
-      enum class Pitch : Tone { HIGH, LOW }
+      class Pitch : Tone, Beat
       class Helper
     }
 
     class Tuner {
-      fun tone(): Tone = Tone.Pitch.HIGH
+      fun tone(): Tone = Tone.Pitch()
     }
   """.trimIndent()
 
@@ -535,13 +653,15 @@ class Tier1SealedInterfaceTest {
 
     open class Groove
 
+    sealed interface Riff
+
     sealed interface Chord {
-      enum class Root : Chord { MAJOR, MINOR }
+      class Root : Chord, Riff
       class Seventh : Groove(), Chord
     }
 
     class Band {
-      fun chord(): Chord = Chord.Root.MAJOR
+      fun chord(): Chord = Chord.Seventh()
     }
   """.trimIndent()
 
@@ -560,9 +680,11 @@ class Tier1SealedInterfaceTest {
       "expected one ineligibility warning for the hierarchy; kspWarnings=${result.kspWarnings}",
     )
     val diagnostic: String = refusals.single()
+    // ADR-157: `Root` used to refuse for being an `enum class`, which is admitted now. Two
+    // independently refusing arms is what this cell is about, so it refuses for the other reason.
     assertTrue(
-      diagnostic.contains("subclass `Root`") && diagnostic.contains("enum"),
-      "expected the enum arm to be named; got: $diagnostic",
+      diagnostic.contains("subclass `Root` implements more than one sealed interface"),
+      "expected the two-interface arm to be named; got: $diagnostic",
     )
     assertTrue(
       diagnostic.contains(
