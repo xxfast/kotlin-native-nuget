@@ -766,18 +766,16 @@ internal fun StringBuilder.renderDispose(
       // before `Drain` has returned the handle, the same ADR-019 window `NugetJobCell` closes for
       // the suspend call sites. The callback used to dispose a still-zero local and leak the job.
       appendLine("            var job = new NugetJobCell();")
-      appendLine("            callback = (resultPtr, errorPtr, isCancelled, userData) =>")
-      appendLine("            {")
-      appendLine("                job.CompleteFromCallback();")
-      appendLine("                callbackHandle.Free();")
-      appendLine("                TaskCompletionSource<bool> t = tcs;")
-      appendLine("                NugetScopeNative.Dispose(scopeHandle);")
-      appendLine("                Native_Dispose(handle);")
-      appendLine("                if (isCancelled != 0)")
-      appendLine("                    t.TrySetCanceled();")
-      appendLine("                else")
-      appendLine("                    t.SetResult(true);")
-      appendLine("            };")
+      // ADR-161: the same containment as every other completion closure. The two disposals are
+      // inside it (a failing dispose must fault the returned ValueTask, not the process) and the
+      // drain callback has no error arm to contain.
+      appendAsyncCompletionClosure(
+        "TaskCompletionSource<bool>",
+        "t.SetResult(true);",
+        cancellationArgument = "",
+        prelude = listOf("NugetScopeNative.Dispose(scopeHandle);", "Native_Dispose(handle);"),
+        includesErrorBranch = false,
+      )
       appendLine("            callbackHandle = GCHandle.Alloc(callback);")
       appendLine(
         "            IntPtr drainJobHandle = NugetScopeNative.Drain(scopeHandle, " +

@@ -96,6 +96,11 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine("        private IntPtr _jobHandle;")
   appendLine("        private NugetFlowCallbacks? _callbacks;")
   appendLine("        private bool _done;")
+  // ADR-161: set by the onNext closure when an ITEM failed to materialise, read by the constructor
+  // straight after `startCollect` returns. A flow whose first emission is synchronous can fault
+  // before `_jobHandle` has been assigned, in which case the closure has no handle to cancel and the
+  // constructor does it instead.
+  appendLine("        private volatile bool _faulted;")
   appendLine("        private readonly Func<IntPtr, T> _read;")
   appendLine()
   appendLine("        public T Current { get; private set; } = default!;")
@@ -114,8 +119,26 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
     "                if (isCancelled != 0) { _channel.Writer.TryComplete(); " +
         "callbacks.Release(); return; }"
   )
-  appendLine("                T value = _read(itemPtr);")
-  appendLine("                _channel.Writer.TryWrite(value);")
+  // ADR-161: the read is a managed-to-native call plus a materialisation (`new T(handle)`, a
+  // collection read, or `FromHandle<T>`, which has no branch for every element kind). It runs inside
+  // the NugetFlowOnNext thunk, whose catch-all is `Environment.FailFast` (ADR-102), so a failed item
+  // used to end the host process. It now faults the channel -- which `MoveNextAsync` already
+  // rethrows out of `await foreach` -- and cancels the Kotlin collector, so the consumer sees the
+  // materialisation exception on the stream it was enumerating. Accepted residue, named in the ADR
+  // and in LeakTests: the item handle whose read failed is not released here, because a read that
+  // threw may or may not have taken ownership of it, and a dispose on that path risks a double free.
+  appendLine("                try")
+  appendLine("                {")
+  appendLine("                    T value = _read(itemPtr);")
+  appendLine("                    _channel.Writer.TryWrite(value);")
+  appendLine("                }")
+  appendLine("                catch (Exception ex)")
+  appendLine("                {")
+  appendLine("                    _channel.Writer.TryComplete(ex);")
+  appendLine("                    _faulted = true;")
+  appendLine("                    IntPtr job = Volatile.Read(ref _jobHandle);")
+  appendLine("                    if (job != IntPtr.Zero) NugetJobNative.Cancel(job);")
+  appendLine("                }")
   appendLine("            };")
   appendLine()
   appendLine("            NugetFlowOnCompleteCallback onComplete = (userData) =>")
@@ -126,7 +149,16 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine()
   appendLine("            NugetFlowOnErrorCallback onError = (errorPtr, userData) =>")
   appendLine("            {")
-  appendLine("                _channel.Writer.TryComplete(NugetErrorNative.BuildException(errorPtr));")
+  // ADR-161: `BuildException` reads the error handle across the wire and can itself fail; the
+  // channel must still complete, with whatever failure actually happened, or the collector hangs.
+  appendLine("                try")
+  appendLine("                {")
+  appendLine("                    _channel.Writer.TryComplete(NugetErrorNative.BuildException(errorPtr));")
+  appendLine("                }")
+  appendLine("                catch (Exception ex)")
+  appendLine("                {")
+  appendLine("                    _channel.Writer.TryComplete(ex);")
+  appendLine("                }")
   appendLine("                callbacks.Release();")
   appendLine("            };")
   appendLine()
@@ -139,6 +171,11 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine("                NugetThunks.NugetFlowOnCompletePtr,")
   appendLine("                NugetThunks.NugetFlowOnErrorPtr,")
   appendLine("                callbacks.Root());")
+  appendLine()
+  // ADR-161: a synchronous first emission runs onNext before this assignment, so the closure's own
+  // cancel had no handle to use. Whoever sees the fault with a handle in hand cancels; Cancel is
+  // idempotent, so both doing it is harmless.
+  appendLine("            if (_faulted && _jobHandle != IntPtr.Zero) NugetJobNative.Cancel(_jobHandle);")
   appendLine()
   appendLine("            if (cancellationToken.CanBeCanceled)")
   appendLine("                _cancelReg = cancellationToken.Register(() => NugetJobNative.Cancel(_jobHandle));")

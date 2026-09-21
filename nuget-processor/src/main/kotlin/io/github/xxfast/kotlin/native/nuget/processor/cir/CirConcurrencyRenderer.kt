@@ -106,6 +106,84 @@ private fun StringBuilder.renderJobCell() {
   appendLine()
 }
 
+/**
+ * ADR-161: the ONE suspend-completion closure body, shared by every site that renders a
+ * `NugetAsyncCallback` (this file's [renderAsyncMethod], `CirFunctionRenderer`'s four
+ * `KotlinSuspendFunc`/`KotlinSuspendAction` invokers and `CirClassRenderer`'s drain closure).
+ *
+ * The closure runs inside the `NugetAsyncCallback` thunk, whose catch-all is
+ * `Environment.FailFast` (ADR-102), so a bridge-internal failure while MATERIALISING the awaited
+ * result -- `new T(resultPtr)`, a `FromHandle<T>` with no branch for the type, a collection read,
+ * or `NugetErrorNative.BuildException` on the error arm -- used to end the host process. It now
+ * faults the `Task` the caller is already awaiting: the awaiter sees the materialisation exception
+ * and the process lives. The thunk's FailFast stays as the backstop for anything this `try` cannot
+ * reach.
+ *
+ * `job.CompleteFromCallback()` and `callbackHandle.Free()` stay OUTSIDE the `try` on purpose: they
+ * are the two steps that must have happened before anything can throw, and a throw from either is
+ * a defect in generated code rather than a materialisation failure. Note that they also run before
+ * the `try`, so after a fault the callback handle is already freed and the job already completed:
+ * the `Task` completing is the only thing left to get right, which is exactly what the catch does.
+ *
+ * [prelude] carries site-specific statements that belong inside the containment (the drain
+ * closure's scope and object disposal), [includesErrorBranch] is false for the drain closure, which
+ * has no error arm, and [cancellationArgument] is empty where no token is in scope.
+ */
+internal fun StringBuilder.appendAsyncCompletionClosure(
+  tcsType: String,
+  resultExtraction: String,
+  cancellationArgument: String = "cancellationToken",
+  prelude: List<String> = emptyList(),
+  includesErrorBranch: Boolean = true,
+) {
+  appendLine("            callback = (resultPtr, errorPtr, isCancelled, userData) =>")
+  appendLine("            {")
+  appendLine("                job.CompleteFromCallback();")
+  appendLine("                callbackHandle.Free();")
+  appendLine("                $tcsType t = tcs;")
+  appendLine("                try")
+  appendLine("                {")
+  prelude.forEach { statement -> appendLine("                    $statement") }
+  appendLine("                    if (isCancelled != 0)")
+  appendLine("                    {")
+  appendLine("                        t.TrySetCanceled($cancellationArgument);")
+  appendLine("                    }")
+  if (includesErrorBranch) {
+    appendLine("                    else if (errorPtr != IntPtr.Zero)")
+    appendLine("                    {")
+    appendLine("                        t.SetException(NugetErrorNative.BuildException(errorPtr));")
+    appendLine("                    }")
+  }
+  appendLine("                    else")
+  appendLine("                    {")
+  appendLine("                        ${reindentedExtraction(resultExtraction)}")
+  appendLine("                    }")
+  appendLine("                }")
+  appendLine("                catch (Exception ex)")
+  appendLine("                {")
+  appendLine("                    t.TrySetException(ex);")
+  appendLine("                }")
+  appendLine("            };")
+}
+
+/**
+ * A multi-line result extraction was written against the shipped 20-space body indent; the
+ * containment `try` moves the body four columns right, so every continuation line moves with it and
+ * keeps its relative nesting.
+ */
+private fun reindentedExtraction(extraction: String): String {
+  val lines: List<String> = extraction.lines()
+  if (lines.size == 1) return extraction
+  return lines.mapIndexed { index, line ->
+    if (index == 0) {
+      line
+    } else {
+      val lead: Int = line.takeWhile { character -> character == ' ' }.length
+      " ".repeat(24 + (lead - 20).coerceAtLeast(0)) + line.trimStart()
+    }
+  }.joinToString("\n")
+}
+
 private val primitiveAsyncTypes = setOf(
   "string", "int", "long", "float", "double", "bool",
   "sbyte", "byte", "short", "ushort", "uint", "ulong",
@@ -197,24 +275,7 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   appendLine("            NugetAsyncCallback callback = null!;")
   appendLine("            GCHandle callbackHandle = default;")
   appendLine("            var job = new NugetJobCell();")
-  appendLine("            callback = (resultPtr, errorPtr, isCancelled, userData) =>")
-  appendLine("            {")
-  appendLine("                job.CompleteFromCallback();")
-  appendLine("                callbackHandle.Free();")
-  appendLine("                $tcsType t = tcs;")
-  appendLine("                if (isCancelled != 0)")
-  appendLine("                {")
-  appendLine("                    t.TrySetCanceled(cancellationToken);")
-  appendLine("                }")
-  appendLine("                else if (errorPtr != IntPtr.Zero)")
-  appendLine("                {")
-  appendLine("                    t.SetException(NugetErrorNative.BuildException(errorPtr));")
-  appendLine("                }")
-  appendLine("                else")
-  appendLine("                {")
-  appendLine("                    $resultExtraction")
-  appendLine("                }")
-  appendLine("            };")
+  appendAsyncCompletionClosure(tcsType, resultExtraction)
   appendLine("            callbackHandle = GCHandle.Alloc(callback);")
   // ADR-114: the native call is synchronous even though the await is not, so the wire container is
   // built immediately before it and disposed in a `finally` immediately after it returns. The

@@ -299,8 +299,11 @@ public class AotThunkGenerationTests
 
         string args = CallArguments(interop, "startCollect(");
         Assert.DoesNotContain("IntPtr.Zero", args);
+        // ADR-161 widened the window from 40 lines: the onNext and onError closures each gained a
+        // materialisation-fault containment, which pushed the `startCollect` call further down the
+        // constructor. The window is only here to scope the search to this constructor.
         Assert.Contains(
-            "NugetThunks", WindowAfter(interop, "internal KotlinFlowEnumerator(", 40));
+            "NugetThunks", WindowAfter(interop, "internal KotlinFlowEnumerator(", 60));
     }
 
     /// <summary>
