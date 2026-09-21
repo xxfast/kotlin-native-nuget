@@ -154,11 +154,14 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
   // ADR-101 amendment (2026-09-11): a derived class lists its own interfaces beside the base. The
   // disposables stay off that list: the base declares `_handle`, implements `INugetHandle` and
   // carries `IDisposable`, and a derived class inherits all three.
+  // ADR-159: `IAsyncDisposable` rides on scope OWNERSHIP, not on base-lessness. A derived class that
+  // projects the chain's first async member declares the scope and the drain, so it has to advertise
+  // them; a class below the owner inherits the interface with the body and must not re-list it.
+  val asyncDisposable: List<String> = listOfNotNull("IAsyncDisposable".takeIf { cls.ownsScope })
   val implements: String = if (cls.superClass != null) {
-    " : " + (listOf(cls.superClass) + cls.interfaces).joinToString(", ")
+    " : " + (listOf(cls.superClass) + cls.interfaces + asyncDisposable).joinToString(", ")
   } else {
-    val disposables: List<String> =
-      listOf("IDisposable") + listOfNotNull("IAsyncDisposable".takeIf { cls.hasSuspendMethods })
+    val disposables: List<String> = listOf("IDisposable") + asyncDisposable
     " : " + (cls.interfaces + disposables + "INugetHandle").distinct().joinToString(", ")
   }
 
@@ -182,15 +185,22 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
 
   if (cls.superClass == null) {
     appendLine("        internal IntPtr _handle;")
-    if (cls.hasSuspendMethods) renderScopeHandleField()
+    if (cls.ownsScope) renderScopeHandleField()
     appendLine()
     appendLine("        IntPtr INugetHandle.Handle => _handle;")
     appendLine()
 
-    if (cls.hasSuspendMethods) {
+    if (cls.ownsScope) {
       renderGetOrCreateScope()
       appendLine()
     }
+  } else if (cls.ownsScope) {
+    // ADR-159: a derived owner. `_handle` and `INugetHandle` stay on the base (ADR-094), the scope
+    // does not: it belongs to the level that projects the first async member.
+    renderScopeHandleField()
+    appendLine()
+    renderGetOrCreateScope()
+    appendLine()
   }
 
   if (cls.constructor != null && !cls.isAbstract) {
@@ -272,6 +282,8 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
     isOpen = cls.isOpen,
     hasSuperClass = cls.superClass != null,
     hasSuspendMethods = cls.hasSuspendMethods,
+    ownsScope = cls.ownsScope,
+    overridesDisposeAsync = cls.overridesDisposeAsync,
   )
 
   // ADR-133: nested declarations render last, inside this block, re-indented one level.
@@ -662,9 +674,14 @@ internal fun StringBuilder.renderScopeHandleField() {
   appendLine("        internal IntPtr _scopeHandle;")
 }
 
-/** ADR-118: the lazy scope every async body calls, shared by ordinary classes and sealed arms. */
+/**
+ * ADR-118: the lazy scope every async body calls, shared by ordinary classes and sealed arms.
+ *
+ * ADR-159: `internal`, matching `_scopeHandle`. `private` was invisible to a subclass whose own
+ * async bodies call it unqualified (CS0122), which is every class below the scope owner.
+ */
 internal fun StringBuilder.renderGetOrCreateScope() {
-  appendLine("        private IntPtr GetOrCreateScope()")
+  appendLine("        internal IntPtr GetOrCreateScope()")
   appendLine("        {")
   appendLine("            IntPtr existing = _scopeHandle;")
   appendLine("            if (existing != IntPtr.Zero) return existing;")
@@ -685,6 +702,11 @@ internal fun StringBuilder.renderDispose(
   isOpen: Boolean = false,
   hasSuperClass: Boolean = false,
   hasSuspendMethods: Boolean = false,
+  // ADR-159: `hasSuspendMethods` is "a scope exists on this instance" and drives the cleanup block
+  // in `Dispose()` at every level; `ownsScope` is "this class declares it" and drives `DisposeAsync`.
+  // A sealed arm owns whatever scope it has, so the default keeps `CirSealedRenderer` intact.
+  ownsScope: Boolean = hasSuspendMethods,
+  overridesDisposeAsync: Boolean = false,
 ) {
   val abstract: String = if (isAbstract) "abstract " else ""
   // ADR-101 amendment (2026-09-10): a derived class always spells its Dispose `override`, so a
@@ -695,6 +717,11 @@ internal fun StringBuilder.renderDispose(
 
   if (isAbstract) {
     appendLine("        public ${abstract}void Dispose();")
+    // ADR-159: an abstract scope owner can only DECLARE the drain -- it has no `Native_Dispose`
+    // import to call -- so `DisposeAsync` follows `Dispose`'s spelling and each concrete class below
+    // renders the body as an `override`. Without this the abstract class advertised
+    // `IAsyncDisposable` and implemented nothing (CS0535).
+    if (ownsScope) appendLine("        public ${abstract}ValueTask DisposeAsync();")
   } else {
     renderDllImport(requireNotNull(nativeImport) { "Concrete disposable classes require a native import" })
     appendLine("        public ${override}void Dispose()")
@@ -711,9 +738,14 @@ internal fun StringBuilder.renderDispose(
     }
     appendLine("            Native_Dispose(handle);")
     appendLine("        }")
-    if (hasSuspendMethods) {
+    // ADR-159: the drain is declared once per chain, by the owner, and inherited below (every
+    // class's `_dispose` export is `NugetHandles.release`, so the owner's `Native_Dispose` is
+    // correct for a derived instance's handle). The one exception is an abstract owner, whose
+    // declaration each concrete class overrides with the body.
+    if (ownsScope || overridesDisposeAsync) {
+      val disposeAsyncModifier: String = if (overridesDisposeAsync) "override " else ""
       appendLine()
-      appendLine("        public ValueTask DisposeAsync()")
+      appendLine("        public ${disposeAsyncModifier}ValueTask DisposeAsync()")
       appendLine("        {")
       appendLine("            IntPtr handle = Interlocked.Exchange(ref _handle, IntPtr.Zero);")
       appendLine("            if (handle == IntPtr.Zero) return ValueTask.CompletedTask;")

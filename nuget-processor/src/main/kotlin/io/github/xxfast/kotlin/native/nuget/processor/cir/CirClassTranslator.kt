@@ -64,7 +64,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.sealedAsHandle
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipDetail
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardScopeOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuspendRouteMethods
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSupertypeNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
@@ -881,8 +883,14 @@ internal fun translateClass(
       method.isForwardMemberOf(cls, superClassDeclaration)
     }
 
-  val (allSuspendMethods, regularMethods) = filteredMethods
-    .partition { it.modifiers.contains(Modifier.SUSPEND) }
+  // ADR-159: the suspend half comes off the shared selector rather than off this walk, so the
+  // Kotlin export builder and the C# projection cannot disagree about which members exist, and an
+  // `override suspend fun` over a kept base's member is not re-projected here (the base's export
+  // dispatches to it dynamically; a second `FillAsync` on the subclass is CS0108).
+  val allSuspendMethods: List<KSFunctionDeclaration> =
+    cls.forwardSuspendRouteMethods(classifier, superClassDeclaration)
+  val regularMethods: List<KSFunctionDeclaration> = filteredMethods
+    .filterNot { it.modifiers.contains(Modifier.SUSPEND) }
 
   val (flowMethods, nonFlowMethods) = regularMethods.partition { method ->
     val returnQualified: String? = method.returnType?.resolve()?.expandAliases()
@@ -1093,8 +1101,13 @@ internal fun translateClass(
   // C# cannot declare two members of one type whose name and parameter types agree (ADR-034 /
   // ADR-090, extended to companions by ADR-095). Instance methods and companion statics are
   // checked *together*: static-ness is not part of a C# signature either.
+  // ADR-159: the async and Flow-route methods are in the checked set now. The call used to run
+  // before they were projected, so two `suspend` overloads that render one C# signature reached the
+  // generated file and failed it with CS0111 instead of being named here (ADR-118 gives them
+  // distinct C symbols, so the collision is purely the public C# signature).
   emitCsharpSignatureCollisions(
-    methods = plannedMethods + companionMembers.filterIsInstance<CirMethod>(),
+    methods = plannedMethods +
+        (companionMembers + asyncMembers + flowRouteMembers).filterIsInstance<CirMethod>(),
     container = name,
     symbol = cls,
     logger = logger,
@@ -1109,6 +1122,10 @@ internal fun translateClass(
         ForwardCirPlanProjection.classMethod(planned, prefix, isOverride = false)
       }
   } else null
+
+  // ADR-159: one scope per instance, owned by the root-most class in the kept chain that projects a
+  // scope-using member. `null` means nothing in the chain does.
+  val scopeOwner: KSClassDeclaration? = cls.forwardScopeOwner(classifier, exportedTypes)
 
   return CirClass(
     name = name,
@@ -1130,13 +1147,16 @@ internal fun translateClass(
     isAbstract = isAbstract,
     isOpen = isOpen,
     companionMembers = companionMembers + asyncMembers + flowRouteMembers,
-    hasSuspendMethods = cls.getAllFunctions().any { it.modifiers.contains(Modifier.SUSPEND) } ||
-        flowMethods.isNotEmpty() ||
-        cls.getAllProperties().any { prop ->
-          val qualified: String? =
-            prop.type.resolve().expandAliases().declaration.qualifiedName?.asString()
-          qualified in FLOW_TYPES || qualified in STATE_FLOW_TYPES
-        },
+    // ADR-159: derived from what PROJECTED, in one place, for the whole kept chain. The raw
+    // `getAllFunctions()` scan this replaces read inherited members (so a subclass of an async base
+    // rendered a second `DisposeAsync`, CS0108) and refused ones (so a class whose only suspend
+    // member was dropped advertised `IAsyncDisposable` and implemented nothing).
+    hasSuspendMethods = scopeOwner != null,
+    ownsScope = scopeOwner?.qualifiedName?.asString() == cls.qualifiedName?.asString() &&
+        scopeOwner != null,
+    overridesDisposeAsync = scopeOwner != null && !isAbstract &&
+        scopeOwner.qualifiedName?.asString() != cls.qualifiedName?.asString() &&
+        scopeOwner.modifiers.contains(Modifier.ABSTRACT),
     remarks = listOfNotNull(remarks),
     doc = cls.forwardKdoc(expects)?.toCirDoc(),
   )
@@ -2058,10 +2078,6 @@ internal fun translateSealedClass(
         // override something the base's own plan declined, and then there is nothing to override.
         projected.againstSealedBase(baseMethods)
       }
-      // ADR-034's collision guard, which the sealed route never ran: two arm methods whose C#
-      // signatures agree (`set(x: Foo)` / `set(x: Foo?)`) are CS0111 in the generated file.
-      emitCsharpSignatureCollisions(methods, "$name.$subName", subclass, logger)
-
       // ADR-118: the arm's declared `suspend` members ride the legacy suspend route under the
       // arm's own export prefix, projected by the same `suspendMembers` an ordinary class calls,
       // so the arm's externs and bodies are an ordinary class's.
@@ -2168,6 +2184,17 @@ internal fun translateSealedClass(
       } else {
         null
       }
+
+      // ADR-034's collision guard, which the sealed route never ran: two arm methods whose C#
+      // signatures agree (`set(x: Foo)` / `set(x: Foo?)`) are CS0111 in the generated file.
+      // ADR-159: below the async and Flow projection, so two `suspend` overloads that render one
+      // `PlayAsync(string)` are named here rather than reaching the generated file.
+      emitCsharpSignatureCollisions(
+        methods + (asyncMembers + flowMembers).filterIsInstance<CirMethod>(),
+        "$name.$subName",
+        subclass,
+        logger,
+      )
 
       CirSealedSubclass(
         doc = subclass.forwardKdoc(expects)?.toCirDoc(),
@@ -2957,6 +2984,13 @@ internal fun translateInterfaceBackingClass(
     interfaces = listOf("I$name"),
     hasInternalHandleConstructor = true,
     isSealed = true,
+    // ADR-159 (ROADMAP:49's flag-derivation half): derived from what this wrapper projects, which is
+    // never an async member -- `ForwardCallablePlanner.interfaceEntries` skips `suspend` with
+    // `ForwardPlanSkipReason.SUSPEND`, and no Flow route runs for an interface -- so the wrapper owns
+    // no scope. Left explicit rather than defaulted so the day interface async members are admitted
+    // (deferred) the line to change is here, reading `forwardScopeOwner` like every other class.
+    hasSuspendMethods = false,
+    ownsScope = false,
   )
 }
 

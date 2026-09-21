@@ -645,6 +645,10 @@ class CirOrdinaryRendererTest {
       methods = emptyList(),
       interfaces = listOf("ISensor"),
       hasSuspendMethods = true,
+      // ADR-159: `IAsyncDisposable` rides on scope OWNERSHIP now. A base-less class with a scope is
+      // its owner by definition, which is what this cell has always been about; a class below the
+      // owner inherits the interface with the body and must not re-list it.
+      ownsScope = true,
     )
 
     val rendered: String = render(cls)

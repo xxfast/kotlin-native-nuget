@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -155,5 +156,44 @@ class Tier1SuspendMethodOverloadTest {
     assertContains(csharp, "public sealed class Idle : Job, IAsyncDisposable")
     assertContains(csharp, "public sealed class Done : Job\n")
     assertContains(csharp, "public abstract class Job : IDisposable, INugetHandle")
+  }
+
+  /**
+   * ADR-159: two `suspend` overloads that render **one** C# signature must fail the round with the
+   * ADR-034 kind, not reach the generated file as CS0111. C# cannot overload on reference
+   * nullability, and the `CancellationToken` tail every async method grows at render time cannot
+   * separate the two either, so `play(String)` / `play(String?)` both spell `PlayAsync(string)`.
+   *
+   * The guard existed; it ran before the async and Flow members were projected, so it never saw
+   * them. ADR-118 gives the two overloads distinct C symbols and externs, which is why the failure
+   * was purely the public C# signature and KSP was silent.
+   *
+   * `@JvmName` is a harness artefact: Tier 1 compiles the fixture for the JVM, where the two
+   * `play`s clash. Kotlin/Native does not need it, so it is not in `test-library`. Diagnostic cell,
+   * in-process only: its correct outcome is a failed build.
+   */
+  @Test
+  fun `suspend overloads that render one C# signature fire ERROR_CSHARP_SIGNATURE_COLLISION`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.suspendoverloadcollision
+
+      class Piano(val keys: Int) {
+        suspend fun play(note: String): Int = note.length
+
+        @JvmName("playNullable")
+        suspend fun play(note: String?): Int = note?.length ?: keys
+      }
+      """.trimIndent(),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    assertTrue(
+      result.kspErrors.any {
+        it.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name)
+      },
+      "expected the async overload collision to fail generation rather than emit CS0111; " +
+          "kspErrors=${result.kspErrors}",
+    )
   }
 }
