@@ -229,6 +229,26 @@ class NugetPlugin : Plugin<Project> {
       val runtimeDep: Any = project.findProject(":nuget-runtime")
         ?: "io.github.xxfast:nuget-runtime:$PLUGIN_VERSION"
 
+      // ADR-155: a method bound from a C# `IAsyncEnumerable<T>` return names
+      // `kotlinx.coroutines.flow.Flow` in a PUBLIC signature of a generated class, and generated
+      // classes compile from `nativeMain` (see the srcDir wiring above) while `nuget-runtime` —
+      // and coroutines through its `api` — reaches only `${target}MainApi`. Without this a
+      // consumer that does not itself declare coroutines fails with `Unresolved reference: Flow`.
+      // ADR-130's objection to putting the RUNTIME here (it publishes no iOS variant) does not
+      // apply: kotlinx-coroutines-core publishes every native target. `api`, not
+      // `implementation`: the type is in a public signature.
+      // `configureEach`, not `findByName`: the default hierarchy has not materialised `nativeMain`
+      // yet at the moment the plugin is applied (verified — `findByName` returns null there and
+      // the dependency is silently never added, which is the exact failure mode this whole
+      // wiring exists to prevent).
+      kotlin.sourceSets.configureEach { sourceSet ->
+        if (sourceSet.name != "nativeMain") return@configureEach
+        project.dependencies.add(
+          sourceSet.apiConfigurationName,
+          "org.jetbrains.kotlinx:kotlinx-coroutines-core:$COROUTINES_VERSION",
+        )
+      }
+
       kotlin.targets.withType(KotlinNativeTarget::class.java).configureEach { target ->
         if (target.konanTarget.name !in KONAN_TO_RID) return@configureEach
 

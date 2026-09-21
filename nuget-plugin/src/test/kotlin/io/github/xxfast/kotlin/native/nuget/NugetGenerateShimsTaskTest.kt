@@ -1544,7 +1544,7 @@ class NugetGenerateShimsTaskTest {
   }
 
   @Test
-  fun `NugetRuntimeRegistration cs gains leading slotCount 7 and a contractHash literal`() {
+  fun `NugetRuntimeRegistration cs gains leading slotCount 10 and a contractHash literal`() {
     val files: List<GeneratedFile> = generateCSharpShims(templateWithCtorRir, "sample")
     val runtimeShim: GeneratedFile = requireNotNull(
       files.find { it.relativePath.endsWith("NugetRuntimeRegistration.cs") }
@@ -1564,10 +1564,15 @@ class NugetGenerateShimsTaskTest {
       runtimeShim.content,
       "IntPtr releaseCancellationPtr, IntPtr managedErrorKindPtr",
     )
+    // ADR-155: the three enumeration slots (MoveNextBegin, MoveNextEnd, DisposeEnumeration).
+    assertContains(
+      runtimeShim.content,
+      "IntPtr moveNextBeginPtr, IntPtr moveNextEndPtr, IntPtr disposeEnumerationPtr",
+    )
     assertTrue(
-      Regex("nuget_runtime_register\\(\\s*7,\\s*-?\\d+L,").containsMatchIn(runtimeShim.content),
-      "ADR-054/089/104/153: nuget_runtime_register must be called with slotCount=7 and a Long " +
-          "contractHash literal, got:\n${runtimeShim.content}",
+      Regex("nuget_runtime_register\\(\\s*10,\\s*-?\\d+L,").containsMatchIn(runtimeShim.content),
+      "ADR-054/089/104/153/155: nuget_runtime_register must be called with slotCount=10 and a " +
+          "Long contractHash literal, got:\n${runtimeShim.content}",
     )
   }
 
@@ -1650,9 +1655,10 @@ class NugetGenerateShimsTaskTest {
 
     assertContains(
       runtimeShim.content,
-      "register enter <runtime> -> nuget_runtime_register(7 slots) dll=sample",
-      message = "ADR-089/104: the shared runtime registers free + weaken + resolve + the two " +
-          "managed-error accessors",
+      "register enter <runtime> -> nuget_runtime_register(10 slots) dll=sample",
+      message = "ADR-089/104/153/155: the shared runtime registers free + weaken + resolve + the " +
+          "two managed-error accessors + release-cancellation + error-kind + the three " +
+          "enumeration thunks",
     )
     assertContains(runtimeShim.content, "NugetTrace.Write(\"register ok    <runtime>\");")
   }

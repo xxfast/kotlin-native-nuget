@@ -4,6 +4,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.AbiArg
 import io.github.xxfast.kotlin.native.nuget.rir.KotlinBridgePlan
 import io.github.xxfast.kotlin.native.nuget.rir.NUGET_RUNTIME_CONTRACT_HASH
 import io.github.xxfast.kotlin.native.nuget.rir.REVERSE_ABI_TAG
+import io.github.xxfast.kotlin.native.nuget.rir.RirAsyncKind
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnostic
@@ -2946,16 +2947,33 @@ private fun bindingsFileContent(
                   ERR_CFN_TYPE
               ).joinToString(", ")
 
+          // ADR-155: `Enumerate` is the sync parameter list with no out-args (it returns an
+          // opaque enumeration handle, never a value), and `Current` is byte-identical to
+          // ASYNC_END — the sync return half over a handle.
+          RirSlotRole.ASYNC_ENUMERATE ->
+            (methodParamCfnTypes(r.method, structs, includeOutArgs = false) + ERR_CFN_TYPE)
+              .joinToString(", ")
+
+          RirSlotRole.ASYNC_CURRENT -> (
+              listOf("COpaquePointer?") +
+                  abiOutArgs(r.method.returnType, structs).map { cfnOutPointerType(it.type) } +
+                  ERR_CFN_TYPE
+              ).joinToString(", ")
+
           RirSlotRole.SYNC ->
             (methodParamCfnTypes(r.method, structs) + ERR_CFN_TYPE).joinToString(", ")
         }
         // ADR-153: a token-taking Begin hands back the CancellationTokenSource's GCHandle, so its
         // slot returns COpaquePointer? where ADR-152's returns Unit. Per method, never per build:
         // the two shapes coexist in one class.
-        val retCfnType: String =
-          if (role == RirSlotRole.ASYNC_BEGIN)
+        val retCfnType: String = when {
+          role == RirSlotRole.ASYNC_BEGIN ->
             (if (r.method.cancellationToken != null) "COpaquePointer?" else "Unit")
-          else cfnType(abiReturnType(r.method.returnType, structs))
+
+          // ADR-155: the enumeration handle, one per collect, whatever the element type is.
+          role == RirSlotRole.ASYNC_ENUMERATE -> "COpaquePointer?"
+          else -> cfnType(abiReturnType(r.method.returnType, structs))
+        }
         "@Suppress(\"NOTHING_TO_INLINE\")\n" +
             "internal var ${r.method.name.toMethodCamelCase()}${r.method.bridgeSuffix()}" +
             "${role.nameSuffix}Fn: " +
@@ -3158,8 +3176,19 @@ private fun stubFileContent(
   val imports: MutableList<String> =
     mutableListOf("import kotlinx.cinterop.invoke", "import $INTERNAL_PKG.nugetCall")
   // ADR-152: a `suspend fun` stub awaits through nugetAwaitTask and names the task handle's type.
-  if (staticMethods.any { it.asyncKind != null }) {
+  if (staticMethods.any { it.asyncKind == RirAsyncKind.TASK }) {
     imports.add("import $INTERNAL_PKG.nugetAwaitTask")
+    if ("import kotlinx.cinterop.COpaquePointer" !in imports) {
+      imports.add("import kotlinx.cinterop.COpaquePointer")
+    }
+  }
+  // ADR-155: an async-enumerable member is NOT suspend and never touches nugetAwaitTask; it
+  // names `Flow` in its own signature and builds it through the runtime-owned `nugetFlow` seam.
+  // `Flow` is the one kotlinx.coroutines symbol a nativeMain stub may name (ADR-130 as amended by
+  // ADR-155): the plugin puts kotlinx-coroutines-core on the consumer's nativeMain for it.
+  if (staticMethods.any { it.asyncKind == RirAsyncKind.ASYNC_ENUMERABLE }) {
+    imports.add("import $INTERNAL_PKG.nugetFlow")
+    imports.add("import kotlinx.coroutines.flow.Flow")
     if ("import kotlinx.cinterop.COpaquePointer" !in imports) {
       imports.add("import kotlinx.cinterop.COpaquePointer")
     }
@@ -3389,7 +3418,14 @@ private fun classWrapperContent(
   if (hasInterfaceParam) imports.add("import $INTERNAL_PKG.nugetTransferScope")
   // ADR-152: a `suspend fun` stub awaits through nugetAwaitTask (COpaquePointer is already
   // imported unconditionally on this path, for the wrapper's own handle).
-  if (allMethods.any { it.asyncKind != null }) imports.add("import $INTERNAL_PKG.nugetAwaitTask")
+  if (allMethods.any { it.asyncKind == RirAsyncKind.TASK }) {
+    imports.add("import $INTERNAL_PKG.nugetAwaitTask")
+  }
+  // ADR-155, as above: the enumerable route is a plain `fun` over `nugetFlow`, not a suspend one.
+  if (allMethods.any { it.asyncKind == RirAsyncKind.ASYNC_ENUMERABLE }) {
+    imports.add("import $INTERNAL_PKG.nugetFlow")
+    imports.add("import kotlinx.coroutines.flow.Flow")
+  }
   if (hasStringReturn) {
     imports.add("import $INTERNAL_PKG.freeManagedString")
     imports.add("import kotlinx.cinterop.ByteVar")
@@ -3783,8 +3819,14 @@ private fun buildStubMethod(
   // ADR-019, which appends it) unless the declaring type already has a method with the stripped
   // name, Kotlin cannot overload on `suspend` alone, so stripping `ReadAsync` beside an existing
   // `Read` would be an ERROR_KOTLIN_SIGNATURE_COLLISION.
-  val name: String = kotlinMemberName(cls, method)
-  val isAsync: Boolean = method.asyncKind != null
+  val memberName: String = kotlinMemberName(cls, method)
+  val isAsync: Boolean = method.asyncKind == RirAsyncKind.TASK
+  // ADR-155: an async-enumerable member is a PLAIN fun returning `Flow<T>`. Nothing about its
+  // body is a suspension: the whole of it is rendered as an inner `step` function with the
+  // ordinary synchronous return half over the enumeration handle, which `nugetFlow` then drives.
+  // That is what makes the element vocabulary equal to ADR-152's with zero new marshalling.
+  val isFlow: Boolean = method.asyncKind == RirAsyncKind.ASYNC_ENUMERABLE
+  val name: String = if (isFlow) FLOW_STEP_FN else memberName
   val fnKeyword: String = if (isAsync) "suspend fun" else "fun"
   // The registration var names keep the C# member's own name (never the stripped one), so a
   // `Read`/`ReadAsync` pair cannot collide on a var, and the two async slots are `...BeginFn` and
@@ -3798,9 +3840,12 @@ private fun buildStubMethod(
   val hasStringParam: Boolean =
     method.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) }
 
-  val params: String = method.parameters.joinToString(", ") { p ->
+  val memberParams: String = method.parameters.joinToString(", ") { p ->
     "${p.name}: ${declKotlinType(p.type, qualifiedTypeNames)}"
   }
+  // ADR-155: the inner step takes the enumeration handle and nothing else; the member's own
+  // parameters were consumed by `Enumerate`, once per collect.
+  val params: String = if (isFlow) "$FLOW_ENUMERATION: COpaquePointer" else memberParams
 
   // ADR-053: the return's nullability is driven by the RIR's decoded metadata for both strings
   // and handles (a nullable annotation renders `T?`; a non-null annotation — including an
@@ -3833,9 +3878,16 @@ private fun buildStubMethod(
   // ADR-085: an interface-typed parameter may mint a bridge, whose transfer handle this call
   // site owns and frees after the invoke (wrapInvoke's nugetTransferScope).
   val hasInterfaceParam: Boolean = method.parameters.any { it.type is RirInterfaceType }
-  val invokeCall: String =
-    if (isAsync) wrapInvoke("task", hasStringArg = false, hasInterfaceArg = false, callee = "end")
-    else wrapInvoke(invokeArgs, hasStringParam, hasInterfaceParam)
+  val invokeCall: String = when {
+    isAsync -> wrapInvoke("task", hasStringArg = false, hasInterfaceArg = false, callee = "end")
+    // ADR-155: `Current` is the sync return half with the enumeration handle where a receiver
+    // would be — the same substitution ADR-152's End makes with the task handle.
+    isFlow -> wrapInvoke(
+      FLOW_ENUMERATION, hasStringArg = false, hasInterfaceArg = false, callee = "current",
+    )
+
+    else -> wrapInvoke(invokeArgs, hasStringParam, hasInterfaceParam)
+  }
 
   // ADR-152: the prologue every branch below shares. Synchronously, one registered thunk; for an
   // async member, BOTH slots, then the suspension itself, `nugetAwaitTask` starts the C# task
@@ -3848,7 +3900,9 @@ private fun buildStubMethod(
     hasInterfaceParam,
     callee = "begin",
   )
-  val preludeLines: List<String> = if (!isAsync) listOf(
+  // ADR-155: the step's own prelude is empty — `current` is bound once by the OUTER member, not
+  // per element, so the pointer lookup does not run on every `MoveNext`.
+  val preludeLines: List<String> = if (isFlow) emptyList() else if (!isAsync) listOf(
     "val fn = requireNotNull($fnVar) {",
     "  $failMsg",
     "}",
@@ -3971,9 +4025,13 @@ private fun buildStubMethod(
       val outPtrArgs: List<String> = outArgs.map { "${it.name}.ptr" }
       // ADR-152: an async member reads its struct out-pointers from the End slot, whose only
       // in-argument is the task handle the await resumed with.
-      val fullInvokeArgs: String =
-        (if (isAsync) listOf("task") else listOfNotNull(receiverArg) + paramArgs)
-            .plus(outPtrArgs).joinToString(", ")
+      val fullInvokeArgs: String = (
+          if (isAsync) listOf("task")
+          // ADR-155: and an async-enumerable member reads them from the `Current` slot, whose
+          // only in-argument is the enumeration handle.
+          else if (isFlow) listOf(FLOW_ENUMERATION)
+          else listOfNotNull(receiverArg) + paramArgs
+          ).plus(outPtrArgs).joinToString(", ")
       // ADR-059: each LEAF is read back through structComponentReads' recursive use of
       // componentRead — the SAME per-type conversion a top-level return of that leaf's type
       // already uses — instead of the raw `.value`, which is only correct for the pass-through
@@ -3988,7 +4046,7 @@ private fun buildStubMethod(
             fullInvokeArgs,
             hasStringArg = false,
             hasInterfaceArg = false,
-            callee = if (isAsync) "end" else "fn",
+            callee = if (isAsync) "end" else if (isFlow) "current" else "fn",
           ),
         )
         read.statements.forEach { appendLine("  $it") }
@@ -4042,11 +4100,43 @@ private fun buildStubMethod(
           "generic-class path, never through buildStubMethod()"
     )
   }
+  // ADR-155: everything above rendered the STEP. Wrap it in the member itself: bind both slots
+  // once, then hand `nugetFlow` a way to start an enumeration and a way to read the current
+  // element. The C# method runs inside `enumerate`, i.e. at each collect, which is what makes the
+  // flow cold (ADR-155 open question 1).
+  if (isFlow) {
+    val elementType: String = declKotlinType(method.returnType, qualifiedTypeNames)
+    val enumerateCall: String =
+      wrapInvoke(invokeArgs, hasStringParam, hasInterfaceParam, callee = "enumerate")
+    val member: String = """
+      |fun $memberName($memberParams): Flow<$elementType> {
+      |  val enumerate = requireNotNull(${fnBase}EnumerateFn) {
+      |    $failMsg
+      |  }
+      |  val current = requireNotNull(${fnBase}CurrentFn) {
+      |    $failMsg
+      |  }
+      |${rendered.prependIndent("  ")}
+      |  return nugetFlow(
+      |    enumerate = { $enumerateCall },
+      |    current = ::$FLOW_STEP_FN,
+      |  )
+      |}
+    """.trimMargin()
+    return if (isOverride) member.replaceFirst("fun ", "override fun ") else member
+  }
+
   // ADR-070 Decision 5: a matching class member gains `override` — the ONE call site both a
   // simple and a struct-return branch share, rather than baking the keyword into every one of
   // the branches above ("fun $name(" appears exactly once, at the very start of each block).
   return if (isOverride) rendered.replaceFirst("fun $name(", "override fun $name(") else rendered
 }
+
+// ADR-155: the inner step function's name and its single parameter. `nuget`-prefixed because they
+// share a scope with the member's own C# parameter names: a C# method with a parameter called
+// `step` would otherwise make `::step` ambiguous, and one called `enumeration` would shadow.
+private const val FLOW_STEP_FN: String = "nugetStep"
+private const val FLOW_ENUMERATION: String = "nugetEnumeration"
 
 // Phase 9 (ROADMAP line 151): a bridgeable instance property renders as:
 //   - read-only (isReadOnly=true) -> `val x: T get() = ...` (bridge-backed, so an explicit get()
@@ -4352,6 +4442,8 @@ private fun nugetKotlinErrorsActual(): String = """
   |import io.github.xxfast.kotlin.native.nuget.runtime.NugetError
   |import io.github.xxfast.kotlin.native.nuget.runtime.awaitForKotlin
   |import io.github.xxfast.kotlin.native.nuget.runtime.buildError
+  |import io.github.xxfast.kotlin.native.nuget.runtime.flowForKotlin
+  |import kotlinx.coroutines.flow.Flow
   |import kotlin.experimental.ExperimentalNativeApi
   |import kotlinx.cinterop.COpaquePointer
   |import kotlinx.cinterop.StableRef
@@ -4382,6 +4474,39 @@ private fun nugetKotlinErrorsActual(): String = """
   |    }.invoke(source, if (cancelled) 1 else 0)
   |  },
   |  begin = begin,
+  |)
+  |
+  |// ADR-155: one line of delegation to the runtime's flowForKotlin, exactly as nugetAwaitTask
+  |// delegates to awaitForKotlin. Everything here is a registered-pointer lookup; not one rule
+  |// about stepping, disposal or cancellation is restated (they live in the runtime, once).
+  |internal actual fun <T> nugetFlow(
+  |  enumerate: () -> COpaquePointer?,
+  |  current: (enumeration: COpaquePointer) -> T,
+  |): Flow<T> = flowForKotlin(
+  |  release = { task ->
+  |    requireNotNull(freeGcHandleFn) {
+  |      NugetRegistry.notRegistered("<runtime>", "")
+  |    }.invoke(task)
+  |  },
+  |  enumerate = {
+  |    requireNotNull(enumerate()) {
+  |      "the C# Enumerate thunk returned a null enumeration handle without reporting an error."
+  |    }
+  |  },
+  |  moveNextBegin = { enumeration, callback, ctx ->
+  |    val fn = requireNotNull(moveNextBeginFn) { NugetRegistry.notRegistered("<runtime>", "") }
+  |    nugetCall { err -> fn.invoke(enumeration, callback, ctx, err) }
+  |  },
+  |  moveNextEnd = { task ->
+  |    val fn = requireNotNull(moveNextEndFn) { NugetRegistry.notRegistered("<runtime>", "") }
+  |    nugetCall { err -> fn.invoke(task, err) } != 0
+  |  },
+  |  current = current,
+  |  dispose = { enumeration, cancelled ->
+  |    requireNotNull(disposeEnumerationFn) {
+  |      NugetRegistry.notRegistered("<runtime>", "")
+  |    }.invoke(enumeration, if (cancelled) 1 else 0)
+  |  },
   |)
   |
   |private tailrec fun NugetError.at(index: Int): NugetError =
@@ -4457,6 +4582,9 @@ private fun nugetRuntimeContent(): String = """
   |import kotlin.concurrent.AtomicInt
   |import kotlin.concurrent.AtomicReference
   |import kotlin.native.identityHashCode
+  |// ADR-155 (amending ADR-130): the ONE coroutines type nativeMain may name, because the plugin
+  |// puts kotlinx-coroutines-core on the consumer's nativeMain for exactly this.
+  |import kotlinx.coroutines.flow.Flow
   |import kotlinx.cinterop.COpaquePointer
   |import kotlinx.cinterop.CFunction
   |import kotlinx.cinterop.CPointer
@@ -4507,6 +4635,20 @@ private fun nugetRuntimeContent(): String = """
   |
   |internal var managedErrorKindFn:
   |  CPointer<CFunction<(COpaquePointer) -> Int>>? = null
+  |
+  |// ADR-155: the three SHARED enumeration slots. They are shared rather than per-method because
+  |// stepping an enumeration says nothing about the element type: only `Enumerate` and `Current`
+  |// are per-method. MoveNextBegin and MoveNextEnd run user code (the C# iterator body), so they
+  |// are the first runtime slots to carry an ADR-104 error slot; DisposeEnumeration is plumbing
+  |// and carries none, the same split ADR-153's releaseCancellation follows.
+  |internal var moveNextBeginFn:
+  |  CPointer<CFunction<(COpaquePointer, COpaquePointer, COpaquePointer, CPointer<COpaquePointerVar>) -> Unit>>? = null
+  |
+  |internal var moveNextEndFn:
+  |  CPointer<CFunction<(COpaquePointer, CPointer<COpaquePointerVar>) -> Int>>? = null
+  |
+  |internal var disposeEnumerationFn:
+  |  CPointer<CFunction<(COpaquePointer, Int) -> Unit>>? = null
   |
   |/**
   | * ADR-104: a managed (C#) exception that crossed the reverse bridge. [managedType] is the .NET
@@ -4590,13 +4732,16 @@ private fun nugetRuntimeContent(): String = """
   |  managedErrorMessagePtr: COpaquePointer?,
   |  releaseCancellationPtr: COpaquePointer?,
   |  managedErrorKindPtr: COpaquePointer?,
+  |  moveNextBeginPtr: COpaquePointer?,
+  |  moveNextEndPtr: COpaquePointer?,
+  |  disposeEnumerationPtr: COpaquePointer?,
   |) {
   |  NugetRegistry.checkContract(
   |    qualifiedType = "<runtime>",
   |    packageId = "",
   |    slotCount = slotCount,
   |    contractHash = contractHash,
-  |    expectedSlots = 7,
+  |    expectedSlots = 10,
   |    expectedHash = ${NUGET_RUNTIME_CONTRACT_HASH}L,
   |  )
   |  freeGcHandleFn = requireNotNull(freeGcHandlePtr) {
@@ -4620,7 +4765,16 @@ private fun nugetRuntimeContent(): String = """
   |  managedErrorKindFn = requireNotNull(managedErrorKindPtr) {
   |    "nuget_runtime_register passed a null managedErrorKind thunk pointer."
   |  }.reinterpret()
-  |  NugetRegistry.record("<runtime>", 7)
+  |  moveNextBeginFn = requireNotNull(moveNextBeginPtr) {
+  |    "nuget_runtime_register passed a null moveNextBegin thunk pointer."
+  |  }.reinterpret()
+  |  moveNextEndFn = requireNotNull(moveNextEndPtr) {
+  |    "nuget_runtime_register passed a null moveNextEnd thunk pointer."
+  |  }.reinterpret()
+  |  disposeEnumerationFn = requireNotNull(disposeEnumerationPtr) {
+  |    "nuget_runtime_register passed a null disposeEnumeration thunk pointer."
+  |  }.reinterpret()
+  |  NugetRegistry.record("<runtime>", 10)
   |}
   |
   |// ADR-089: the reuse table's key. Identity, never `equals` — a Kotlin data class implementing a
@@ -4808,6 +4962,18 @@ private fun nugetRuntimeContent(): String = """
   |internal expect suspend fun nugetAwaitTask(
   |  begin: (callback: COpaquePointer, ctx: COpaquePointer) -> COpaquePointer?,
   |): COpaquePointer
+  |
+  |// ADR-155: the same seam for an async-enumerable member. The generated member supplies only
+  |// what is specific to it — [enumerate] calls the C# method and returns one enumeration handle
+  |// per collect, [current] reads the element — and the runtime's flowForKotlin owns the stepping,
+  |// the disposal and the cancellation rules. `Flow` is the one coroutines type a
+  |// nativeMain declaration here may name (ADR-130 as amended by ADR-155): the plugin puts
+  |// kotlinx-coroutines-core on the consumer's nativeMain precisely because this signature, and
+  |// every generated member that returns one, live there.
+  |internal expect fun <T> nugetFlow(
+  |  enumerate: () -> COpaquePointer?,
+  |  current: (enumeration: COpaquePointer) -> T,
+  |): Flow<T>
   |
   |// ADR-086: the OUT-direction lowering for a handle-backed bridge slot (a bound-object or
   |// bound-interface return or getter). Always a FRESH transfer handle, which the C# bridge member

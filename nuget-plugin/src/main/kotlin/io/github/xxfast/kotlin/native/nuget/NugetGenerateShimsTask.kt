@@ -4,6 +4,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.AbiArg
 import io.github.xxfast.kotlin.native.nuget.rir.KotlinBridgePlan
 import io.github.xxfast.kotlin.native.nuget.rir.NUGET_RUNTIME_CONTRACT_HASH
 import io.github.xxfast.kotlin.native.nuget.rir.REVERSE_ABI_TAG
+import io.github.xxfast.kotlin.native.nuget.rir.RirAsyncKind
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
@@ -1061,20 +1062,30 @@ private fun registrationFileContent(
   // [ModuleInitializer] below in every generated {Type}Registration.cs.
   // ADR-152: `Task` and `NugetTasks.Attach` are named by every async method's Begin/End pair.
   // ADR-153: a token-taking Begin names CancellationTokenSource, which lives one namespace up.
-  val asyncUsings: List<String> =
-    (if (registrables.any { it is RirRegistrable.Method && it.method.cancellationToken != null })
-      listOf("System.Threading")
-    else emptyList()) +
-        if (registrables.any { it is RirRegistrable.Method && it.method.asyncKind != null })
-          listOf("System.Threading.Tasks")
-        else emptyList()
+  // ADR-155: an Enumerate thunk ALWAYS mints a CancellationTokenSource (whether or not the method
+  // takes a token) and names IAsyncEnumerator<T>, so it pulls in System.Threading and
+  // System.Collections.Generic regardless.
+  val enumerableUsings: List<String> =
+    if (registrables.any {
+        it is RirRegistrable.Method && it.method.asyncKind == RirAsyncKind.ASYNC_ENUMERABLE
+      }) listOf("System.Threading", "System.Collections.Generic") else emptyList()
+
+  val asyncUsings: List<String> = enumerableUsings +
+      (if (registrables.any { it is RirRegistrable.Method && it.method.cancellationToken != null })
+        listOf("System.Threading")
+      else emptyList()) +
+      if (registrables.any { it is RirRegistrable.Method && it.method.asyncKind != null })
+        listOf("System.Threading.Tasks")
+      else emptyList()
 
   val usings: String = (
       listOf(
         "System", "System.Runtime.CompilerServices", "System.Runtime.InteropServices",
         "IoGithubXxfast.KotlinNativeNuget",
       ) + asyncUsings + allNamespaces
-      ).joinToString("\n") { "    using $it;" }
+      // ADR-155: distinct, because System.Threading is now asked for by two independent reasons
+      // (a token-taking member, and any async-enumerable member) and C# rejects a repeated using.
+      ).distinct().joinToString("\n") { "    using $it;" }
 
   // ADR-054: the register export's contract — both baked identically from the same shared
   // contractHash() function NugetGenerateBindingsTask calls, so within one build the two
@@ -1144,12 +1155,23 @@ private fun registrationFileContent(
           RirSlotRole.ASYNC_END ->
             (listOf("IntPtr") + outTypes + ERR_OUT_ABI).joinToString(", ")
 
+          // ADR-155: Enumerate takes the ordinary in-args and returns the enumeration handle;
+          // Current is byte-identical to End, over that handle instead of a task handle.
+          RirSlotRole.ASYNC_ENUMERATE ->
+            (listOfNotNull(selfParamType) + inTypes + ERR_OUT_ABI).joinToString(", ")
+
+          RirSlotRole.ASYNC_CURRENT ->
+            (listOf("IntPtr") + outTypes + ERR_OUT_ABI).joinToString(", ")
+
           RirSlotRole.SYNC ->
             (listOfNotNull(selfParamType, paramTypes.ifEmpty { null }) + ERR_OUT_ABI)
               .joinToString(", ")
         }
-        val slotRetType: String =
-          if (role == RirSlotRole.ASYNC_BEGIN) asyncBeginAbiType(r.method) else retType
+        val slotRetType: String = when (role) {
+          RirSlotRole.ASYNC_BEGIN -> asyncBeginAbiType(r.method)
+          RirSlotRole.ASYNC_ENUMERATE -> "IntPtr"
+          else -> retType
+        }
         val fnTypeParams: String = "$allParamTypes, $slotRetType"
         "(IntPtr)(delegate* unmanaged[Cdecl]<$fnTypeParams>)" +
             "(&${r.method.name}${r.method.bridgeSuffix()}${role.nameSuffix}_Thunk)"
@@ -1191,6 +1213,8 @@ private fun registrationFileContent(
         RirSlotRole.SYNC -> buildThunkMethod(cls, r.method, structs)
         RirSlotRole.ASYNC_BEGIN -> buildAsyncBeginThunkMethod(cls, r.method, structs)
         RirSlotRole.ASYNC_END -> buildAsyncEndThunkMethod(r.method, structs)
+        RirSlotRole.ASYNC_ENUMERATE -> buildEnumerateThunkMethod(cls, r.method, structs)
+        RirSlotRole.ASYNC_CURRENT -> buildCurrentThunkMethod(r.method, structs)
       }
 
       is RirRegistrable.PropertyGetter -> buildPropertyGetterThunkMethod(cls, r.property, structs)
@@ -1620,83 +1644,83 @@ private fun returnBodyLines(
   outArgs: List<AbiArg>,
   structs: Map<RirTypeKey, RirStruct>,
 ): List<String> = when (val retType = returnType) {
-    is RirVoidType -> listOf("$callExpr;")
+  is RirVoidType -> listOf("$callExpr;")
 
-    // ADR-053: a nullable-annotated string return declares its local as `string?` — the shim's
-    // `#nullable enable` would otherwise warn CS8600 on assigning a possibly-null string to a
-    // non-null local. A non-null-annotated return (including an oblivious one) is unaffected.
-    is RirStringType -> listOf(
-      "${if (retType.isNullable) "string?" else "string"} result = $callExpr;",
+  // ADR-053: a nullable-annotated string return declares its local as `string?` — the shim's
+  // `#nullable enable` would otherwise warn CS8600 on assigning a possibly-null string to a
+  // non-null local. A non-null-annotated return (including an oblivious one) is unaffected.
+  is RirStringType -> listOf(
+    "${if (retType.isNullable) "string?" else "string"} result = $callExpr;",
+    "return ${csReturnConversion(retType, "result")};",
+  )
+
+  // ADR-051/ADR-053: wrap the returned object in a Normal GCHandle, return its IntPtr. If the
+  // method returns null, return IntPtr.Zero. This body is deliberately IDENTICAL for both a
+  // nullable- and a non-null-annotated handle return: GCHandle.Alloc(null) is legal and would
+  // otherwise leak a non-zero handle whose Target is null, so the null check stays even when the
+  // C# API claims the return is never null — a lying API becomes a clear Kotlin-side
+  // IllegalStateException instead of a crash deep in some later thunk.
+  is RirObjectHandleType -> listOf(
+    "${csNativeType(retType)}? result = $callExpr;",
+    "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
+  )
+
+  // ADR-070 Decision 1: byte-identical to the handle-return branch above — GCHandle.Alloc works
+  // on any interface-typed reference exactly as it does on a class reference (verified: interface
+  // dispatch through a thunk needs no bound, public, or even named runtime type).
+  is RirInterfaceType -> listOf(
+    "${csNativeType(retType)}? result = $callExpr;",
+    "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
+  )
+
+  is RirEnumType -> listOf(
+    "${csNativeType(retType)} result = $callExpr;",
+    "return ${csReturnConversion(retType, "result")};",
+  )
+
+  // ADR-059: a struct-typed return crosses as void plus one out-pointer write per LEAF (DFS
+  // pre-order, recursing through any struct-typed component), each routed through the SAME
+  // csReturnConversion(...) a top-level return of that leaf's type would use
+  // (Marshal.StringToCoTaskMemUTF8 for string, the byte/ushort narrowing for bool/char, the enum
+  // cast) — a raw `result.X` assignment is only correct for the pass-through primitives
+  // (int/long/float/double).
+  is RirStructType -> {
+    val struct = requireNotNull(structs[RirTypeKey(retType.namespace, retType.name)]) {
+      "[nuget] struct ${retType.namespace}.${retType.name} is referenced as a return type but " +
+          "not declared in reverse-ir.json"
+    }
+    listOf("${csNativeType(retType)} result = $callExpr;") +
+        structOutWrites(struct, outArgs.iterator(), "result", structs)
+  }
+
+  is RirPrimitiveType -> when (retType.name) {
+    "bool" -> listOf(
+      "bool result = $callExpr;",
       "return ${csReturnConversion(retType, "result")};",
     )
 
-    // ADR-051/ADR-053: wrap the returned object in a Normal GCHandle, return its IntPtr. If the
-    // method returns null, return IntPtr.Zero. This body is deliberately IDENTICAL for both a
-    // nullable- and a non-null-annotated handle return: GCHandle.Alloc(null) is legal and would
-    // otherwise leak a non-zero handle whose Target is null, so the null check stays even when the
-    // C# API claims the return is never null — a lying API becomes a clear Kotlin-side
-    // IllegalStateException instead of a crash deep in some later thunk.
-    is RirObjectHandleType -> listOf(
-      "${csNativeType(retType)}? result = $callExpr;",
-      "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
+    "char" -> listOf(
+      "char result = $callExpr;",
+      "return ${csReturnConversion(retType, "result")};",
     )
 
-    // ADR-070 Decision 1: byte-identical to the handle-return branch above — GCHandle.Alloc works
-    // on any interface-typed reference exactly as it does on a class reference (verified: interface
-    // dispatch through a thunk needs no bound, public, or even named runtime type).
-    is RirInterfaceType -> listOf(
-      "${csNativeType(retType)}? result = $callExpr;",
-      "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
-    )
-
-    is RirEnumType -> listOf(
+    else -> listOf(
       "${csNativeType(retType)} result = $callExpr;",
-      "return ${csReturnConversion(retType, "result")};",
-    )
-
-    // ADR-059: a struct-typed return crosses as void plus one out-pointer write per LEAF (DFS
-    // pre-order, recursing through any struct-typed component), each routed through the SAME
-    // csReturnConversion(...) a top-level return of that leaf's type would use
-    // (Marshal.StringToCoTaskMemUTF8 for string, the byte/ushort narrowing for bool/char, the enum
-    // cast) — a raw `result.X` assignment is only correct for the pass-through primitives
-    // (int/long/float/double).
-    is RirStructType -> {
-      val struct = requireNotNull(structs[RirTypeKey(retType.namespace, retType.name)]) {
-        "[nuget] struct ${retType.namespace}.${retType.name} is referenced as a return type but " +
-            "not declared in reverse-ir.json"
-      }
-      listOf("${csNativeType(retType)} result = $callExpr;") +
-          structOutWrites(struct, outArgs.iterator(), "result", structs)
-    }
-
-    is RirPrimitiveType -> when (retType.name) {
-      "bool" -> listOf(
-        "bool result = $callExpr;",
-        "return ${csReturnConversion(retType, "result")};",
-      )
-
-      "char" -> listOf(
-        "char result = $callExpr;",
-        "return ${csReturnConversion(retType, "result")};",
-      )
-
-      else -> listOf(
-        "${csNativeType(retType)} result = $callExpr;",
-        "return result;",
-      )
-    }
-
-    // ADR-072 Decision 1: byte-identical to the handle/interface-return branches above.
-    is RirGenericInstanceType -> listOf(
-      "${csNativeType(retType)}? result = $callExpr;",
-      "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
-    )
-
-    is RirTypeParameterType -> error(
-      "[nuget] a bare type parameter must be substituted to a concrete type before reaching " +
-          "buildThunkMethod()"
+      "return result;",
     )
   }
+
+  // ADR-072 Decision 1: byte-identical to the handle/interface-return branches above.
+  is RirGenericInstanceType -> listOf(
+    "${csNativeType(retType)}? result = $callExpr;",
+    "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
+  )
+
+  is RirTypeParameterType -> error(
+    "[nuget] a bare type parameter must be substituted to a concrete type before reaching " +
+        "buildThunkMethod()"
+  )
+}
 
 // ADR-152: the `Begin` half of an async method. Ordinary parameters, plus the completion callback
 // and its opaque ctx, and no result at all: it starts the task and hands it to NugetTasks.Attach,
@@ -1788,6 +1812,77 @@ private fun buildAsyncEndThunkMethod(
     "    handle.Free();",
     "}",
   )
+
+  return errorChannelThunk(retAbiType, thunkName, paramList, bodyLines)
+}
+
+// ADR-155: the `Enumerate` half of an async-enumerable method. Synchronous: it calls the C#
+// method and `GetAsyncEnumerator`, and hands back ONE enumeration handle per collect. It runs at
+// each `collect` (never at the Kotlin call), which is what makes the flow cold and what lets the
+// per-collect token reach both an elided `CancellationToken` parameter and the enumerator.
+//
+// The CancellationTokenSource is minted unconditionally, unlike ADR-153's Begin: the enumeration
+// needs a token whether or not the METHOD takes one, because `GetAsyncEnumerator` takes one too
+// (and for a source marked [EnumeratorCancellation] that is the token that actually stops a
+// pending step). Its GCHandle is allocated LAST, after everything that can throw, so a throwing
+// method leaks neither the source nor an enumeration handle Kotlin will never dispose.
+private fun buildEnumerateThunkMethod(
+  cls: RirClass,
+  method: RirMethod,
+  structs: Map<RirTypeKey, RirStruct>,
+): String {
+  val thunkName: String = "${method.name}${method.bridgeSuffix()}Enumerate_Thunk"
+  val selfParam: String? = if (!method.isStatic) "IntPtr selfHandle" else null
+  val inParamDecls: List<String> = abiArgs(method.parameters, structs).map { arg ->
+    "${csAbiType(arg.type)} ${thunkParamName(RirParameter(arg.name, arg.type))}"
+  }
+  val paramList: String = (listOfNotNull(selfParam) + inParamDecls).joinToString(", ")
+
+  val paramBindings: List<ParamBinding> = method.parameters.map { paramBinding(it, structs) }
+  // ADR-153, unchanged: the elided token goes back at the C# index the reader recorded.
+  val callArgExpressions: MutableList<String> = paramBindings.map { it.expression }.toMutableList()
+  val tokenIndex: Int? = method.cancellationToken
+  if (tokenIndex != null) callArgExpressions.add(tokenIndex, "cts.Token")
+  val callArgs: String = callArgExpressions.joinToString(", ")
+  val receiverLine: String? =
+    if (method.isStatic) null
+    else "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
+  val callExpr: String =
+    if (method.isStatic) "${cls.name}.${method.name}($callArgs)"
+    else "receiver.${method.name}($callArgs)"
+
+  val element: String = csNativeType(method.returnType)
+  val bodyLines: List<String> = listOfNotNull(receiverLine) +
+      paramBindings.flatMap { it.declarationLines } +
+      listOf(
+        "CancellationTokenSource cts = new();",
+        "IAsyncEnumerator<$element> enumerator = $callExpr.GetAsyncEnumerator(cts.Token);",
+        "return GCHandle.ToIntPtr(GCHandle.Alloc(" +
+            "new NugetAsyncEnumeration<$element>(enumerator, cts)));",
+      )
+
+  return errorChannelThunk("IntPtr", thunkName, paramList, bodyLines)
+}
+
+// ADR-155: the `Current` half — the ordinary synchronous return thunk with the enumeration handle
+// where a receiver would be and `Enumerator.Current` as its call expression, the same substitution
+// ADR-152's End makes with a task handle. It does NOT free the handle: the enumeration outlives
+// every element and belongs to DisposeEnumeration.
+private fun buildCurrentThunkMethod(
+  method: RirMethod,
+  structs: Map<RirTypeKey, RirStruct>,
+): String {
+  val thunkName: String = "${method.name}${method.bridgeSuffix()}Current_Thunk"
+  val outArgs: List<AbiArg> = abiOutArgs(method.returnType, structs)
+  val outParamDecls: List<String> = outArgs.map { arg -> "${csAbiType(arg.type)}* ${arg.name}" }
+  val paramList: String = (listOf("IntPtr enumeration") + outParamDecls).joinToString(", ")
+  val retAbiType: String = csAbiType(abiReturnType(method.returnType, structs))
+
+  val element: String = csNativeType(method.returnType)
+  val bodyLines: List<String> = listOf(
+    "NugetAsyncEnumeration<$element> e = " +
+        "(NugetAsyncEnumeration<$element>)GCHandle.FromIntPtr(enumeration).Target!;",
+  ) + returnBodyLines(method.returnType, "e.Enumerator.Current", outArgs, structs)
 
   return errorChannelThunk(retAbiType, thunkName, paramList, bodyLines)
 }
@@ -2324,6 +2419,8 @@ private fun nugetRuntimeRegistrationContent(
   |namespace IoGithubXxfast.KotlinNativeNuget
   |{
   |    using System;
+  |    // ADR-155: IAsyncEnumerator<T>, named by the NugetAsyncEnumeration<T> below.
+  |    using System.Collections.Generic;
   |    using System.Runtime.CompilerServices;
   |    using System.Runtime.InteropServices;
   |    using System.Threading;
@@ -2336,17 +2433,18 @@ private fun nugetRuntimeRegistrationContent(
   |        private static extern void nuget_runtime_register(int slotCount, long contractHash,
   |            IntPtr freeGcHandlePtr, IntPtr weakenGcHandlePtr, IntPtr resolveGcHandlePtr,
   |            IntPtr managedErrorTypePtr, IntPtr managedErrorMessagePtr,
-  |            IntPtr releaseCancellationPtr, IntPtr managedErrorKindPtr);
+  |            IntPtr releaseCancellationPtr, IntPtr managedErrorKindPtr,
+  |            IntPtr moveNextBeginPtr, IntPtr moveNextEndPtr, IntPtr disposeEnumerationPtr);
   |
   |        [ModuleInitializer]
   |        internal static unsafe void Initialize()
   |        {
   |            NugetTrace.Write(
-  |                "register enter <runtime> -> nuget_runtime_register(7 slots) dll=$nativeLibraryName");
+  |                "register enter <runtime> -> nuget_runtime_register(10 slots) dll=$nativeLibraryName");
   |            try
   |            {
   |                nuget_runtime_register(
-  |                    7,
+  |                    10,
   |                    ${NUGET_RUNTIME_CONTRACT_HASH}L,
   |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, void>)(&FreeGcHandle_Thunk),
   |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&WeakenGcHandle_Thunk),
@@ -2354,7 +2452,10 @@ private fun nugetRuntimeRegistrationContent(
   |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&ManagedErrorType_Thunk),
   |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)(&ManagedErrorMessage_Thunk),
   |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, int, void>)(&ReleaseCancellation_Thunk),
-  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, int>)(&ManagedErrorKind_Thunk));
+  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, int>)(&ManagedErrorKind_Thunk),
+  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, IntPtr*, void>)(&MoveNextBegin_Thunk),
+  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr*, int>)(&MoveNextEnd_Thunk),
+  |                    (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, int, void>)(&DisposeEnumeration_Thunk));
   |            }
   |            catch (DllNotFoundException e)
   |            {
@@ -2469,6 +2570,124 @@ private fun nugetRuntimeRegistrationContent(
   |                return 0;
   |            }
   |        }
+  |
+  |        // ADR-155, slot 8: begin one MoveNextAsync. Runs USER code (the C# iterator body up to
+  |        // its next yield), so unlike every runtime slot before it this one carries an ADR-104
+  |        // error slot: a synchronous throw from the iterator has to reach the collector as a
+  |        // NugetManagedException, not as an unobserved faulted task.
+  |        //
+  |        // The pending step is remembered on the enumeration because DisposeEnumeration must
+  |        // AWAIT it: DisposeAsync during a pending MoveNextAsync throws NotSupportedException and
+  |        // leaves the iterator running (spike-verified).
+  |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+  |        private static unsafe void MoveNextBegin_Thunk(IntPtr enumeration, IntPtr callback, IntPtr ctx, IntPtr* errOut)
+  |        {
+  |            try
+  |            {
+  |                NugetAsyncEnumeration n = (NugetAsyncEnumeration)GCHandle.FromIntPtr(enumeration).Target!;
+  |                Task<bool> pending = n.MoveNext().AsTask();
+  |                n.Pending = pending;
+  |                NugetTasks.Attach(pending, callback, ctx);
+  |            }
+  |            catch (Exception ex)
+  |            {
+  |                *errOut = GCHandle.ToIntPtr(GCHandle.Alloc(ex));
+  |            }
+  |        }
+  |
+  |        // ADR-155, slot 9: the End half of one step. GetAwaiter().GetResult() rather than
+  |        // .Result, so a mid-stream throw arrives as the ORIGINAL exception instead of an
+  |        // AggregateException. The task handle is freed in `finally`, on the fault path too.
+  |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+  |        private static unsafe int MoveNextEnd_Thunk(IntPtr taskHandle, IntPtr* errOut)
+  |        {
+  |            GCHandle handle = GCHandle.FromIntPtr(taskHandle);
+  |            try
+  |            {
+  |                return ((Task<bool>)handle.Target!).GetAwaiter().GetResult() ? 1 : 0;
+  |            }
+  |            catch (Exception ex)
+  |            {
+  |                *errOut = GCHandle.ToIntPtr(GCHandle.Alloc(ex));
+  |                return 0;
+  |            }
+  |            finally
+  |            {
+  |                handle.Free();
+  |            }
+  |        }
+  |
+  |        // ADR-155, slot 10: plumbing, so no error slot — it is called from a Kotlin `finally`
+  |        // that may already be running under cancellation and cannot wait or throw. The real
+  |        // cleanup is QUEUED and the ordering is load-bearing: cancel the source, await the
+  |        // pending step, only THEN DisposeAsync (disposing during a pending step throws
+  |        // NotSupportedException and leaks the running iterator, spike-verified).
+  |        //
+  |        // Task.Run with an outer catch-all, NEVER an `async` lambda on a work item: an
+  |        // exception escaping an `async void` shape terminates the .NET host, which is precisely
+  |        // the host abort this feature forbids. ADR-153's ReleaseCancellation_Thunk may use a
+  |        // plain work item only because its body is synchronous.
+  |        //
+  |        // v1 consequence: a throwing C# `finally` inside the iterator is dropped here, and
+  |        // `collect` can return before the iterator's cleanup has run.
+  |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+  |        private static void DisposeEnumeration_Thunk(IntPtr enumeration, int cancelled)
+  |        {
+  |            GCHandle h = GCHandle.FromIntPtr(enumeration);
+  |            NugetAsyncEnumeration n = (NugetAsyncEnumeration)h.Target!;
+  |            h.Free();
+  |            _ = Task.Run(async () =>
+  |            {
+  |                try
+  |                {
+  |                    if (cancelled != 0)
+  |                    {
+  |                        try { n.Cts.Cancel(); } catch (AggregateException) { }
+  |                    }
+  |                    try { await n.Pending; } catch (Exception) { }
+  |                    try { await n.Dispose(); } catch (Exception) { }
+  |                    n.Cts.Dispose();
+  |                }
+  |                catch (Exception)
+  |                {
+  |                    // Deliberately swallowed: nothing above may escape this lambda.
+  |                }
+  |            });
+  |        }
+  |    }
+  |
+  |    // ADR-155: one live C# enumeration — the enumerator, the source whose token it was started
+  |    // with, and the in-flight step if any. The non-generic base exists so the three SHARED
+  |    // runtime thunks can step ANY element type without knowing it; only the per-method
+  |    // Enumerate/Current thunks are generic.
+  |    internal abstract class NugetAsyncEnumeration
+  |    {
+  |        internal CancellationTokenSource Cts = null!;
+  |
+  |        // The in-flight MoveNextAsync, or a completed task when no step is pending. Never null,
+  |        // so the dispose sequence can await it unconditionally.
+  |        internal Task Pending = Task.CompletedTask;
+  |
+  |        internal abstract ValueTask<bool> MoveNext();
+  |
+  |        internal abstract ValueTask Dispose();
+  |    }
+  |
+  |    // `ValueTask` here is INTERNAL plumbing (`.AsTask()` in MoveNextBegin), not a surface type:
+  |    // mapping `ValueTask` as a bound return type remains a separate, untouched item.
+  |    internal sealed class NugetAsyncEnumeration<T> : NugetAsyncEnumeration
+  |    {
+  |        internal NugetAsyncEnumeration(IAsyncEnumerator<T> enumerator, CancellationTokenSource cts)
+  |        {
+  |            Enumerator = enumerator;
+  |            Cts = cts;
+  |        }
+  |
+  |        internal IAsyncEnumerator<T> Enumerator { get; }
+  |
+  |        internal override ValueTask<bool> MoveNext() => Enumerator.MoveNextAsync();
+  |
+  |        internal override ValueTask Dispose() => Enumerator.DisposeAsync();
   |    }
   |
   |    // ADR-152: the managed half of the reverse async crossing, emitted once for the whole

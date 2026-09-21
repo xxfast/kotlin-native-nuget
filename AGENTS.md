@@ -48,6 +48,15 @@ On top of that, we have some additional conventions that are specific to this re
 - Avoid making unrelated changes or improvements that are not directly related to the ticket, as this can make code reviews more difficult and can introduce unintended side effects.
 - Don't touch unrelated code or files that are not necessary for the implementation of the ticket - no matter how small and easy it may look
 
+## Version Pins Duplicated Across Included Builds
+
+- `nuget-plugin/build.gradle.kts` (an included build) cannot read `gradle/libs.versions.toml`, so
+  a few dependency versions it needs at generation time — `COROUTINES_VERSION`
+  ([ADR-155](docs/adr/155-iasyncenumerable-to-flow.md), the version of `kotlinx-coroutines-core`
+  the plugin adds to a consumer's `nativeMain`) — are hand-pinned inline instead. If you bump a
+  version in `gradle/libs.versions.toml` that has a pinned twin here, bump both places; nothing
+  fails loudly if you don't.
+
 ## Keep the C# Test Project Cross-Platform
 
 - `IntegrationTests/IntegrationTests.csproj` and `LeakTests/LeakTests.csproj` each pin a `<RuntimeIdentifier>` so MSBuild copies the matching `runtimes/{rid}/native/*` asset next to the test host (a RID-less framework-dependent build does not, causing `DllNotFoundException` on the `[DllImport]` P/Invoke).

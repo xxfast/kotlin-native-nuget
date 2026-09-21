@@ -6,6 +6,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import test.kennel.Kennel
@@ -281,6 +285,150 @@ suspend fun pounceRepeatedly(times: Int): Int = Kennel().use { kennel ->
   var total = 0
   repeat(times) { total += kennel.pounce(2) }
   total
+}
+
+// ADR-155: a C# `IAsyncEnumerable<T>` member consumed from Kotlin as a COLD `Flow<T>`, pulled one
+// `MoveNextAsync` at a time over ADR-152's begin/end pair.
+//
+// EXPECTED TO FAIL TODAY: neither the reader nor the generator knows `asyncKind:
+// "async_enumerable"`, so `test.kennel.Kennel` has none of `barks`, `litter`, `ticks`, `howls` or
+// the counter properties below and this file does not compile. That is the point at this stage.
+//
+// Each row names the seam it stands on, and the rows that are ABOUT stopping read C#-side counters
+// back off the same object afterwards: "the collector saw one element" is equally true of a bridge
+// that cancelled the C# enumeration, of one that abandoned it running forever, and of one that
+// never started it. Only the difference between what C# YIELDED and what the collector RECEIVED,
+// plus whether the iterator's `finally` ran, tells those three apart.
+
+/**
+ * A full second, in 10ms steps, against a 300ms uninterruptible C# step: disposal is
+ * fire-and-forget (ADR-155 open question 2), so cleanup is polled rather than assumed.
+ */
+private suspend fun pollFor(predicate: () -> Boolean): Boolean {
+  repeat(100) {
+    if (predicate()) return true
+    delay(10.milliseconds)
+  }
+  return predicate()
+}
+
+/**
+ * The converting element (`String`) in order, over a source that ignores its token. `count`
+ * elements means `count - 1` dawdles, so keep it at 1 anywhere the wall clock matters.
+ */
+suspend fun kennelBarks(count: Int): String =
+  Kennel().use { it.barks(count).toList().joinToString(",") }
+
+/**
+ * COLDNESS, the whole of it: ONE `Flow` value, collected TWICE. Collecting
+ * `kennel.barks(1).toList()` twice would move `barkCalls` to 2 whether the C# method ran at the
+ * Kotlin call or at each collect, so it could not discriminate ADR-155's open question 1. This
+ * shape can: a flow that captured one C# enumeration reads `1|1`, a cold one reads `2|2`.
+ */
+suspend fun barksCollectedTwice(): String = Kennel().use { kennel ->
+  val barks: Flow<String> = kennel.barks(1)
+  val first: List<String> = barks.toList()
+  val second: List<String> = barks.toList()
+  "${first.joinToString(",")}~${second.joinToString(",")}" +
+      "|${kennel.barkCalls}|${kennel.barkEnumerations}"
+}
+
+/**
+ * CANCEL MID-STEP against the TOKEN-IGNORING source. The collector gives up while C# is inside an
+ * uninterruptible wait, so C# finishes that step and yields once more (two yields) while the
+ * collector receives exactly one (nothing is delivered after cancellation, ADR-155's ownership
+ * note: `Current` is never read on the cancelled step). The `finally` is POLLED, not assumed:
+ * disposal is fire-and-forget and may land after `collect` has already returned.
+ */
+suspend fun barksCancelledMidStep(): String = Kennel().use { kennel ->
+  var delivered = 0
+  withTimeoutOrNull(IMPATIENT) { kennel.barks(3).collect { delivered++ } }
+  val cleaned: Boolean = pollFor { kennel.barkFinallyRuns > 0 }
+  "$delivered|${kennel.barkYields}|$cleaned|${kennel.barkFinallyRuns}"
+}
+
+/**
+ * The other end of the same mechanism: `take(1)` aborts the collector while C# is SUSPENDED at a
+ * yield with no step in flight, so the enumeration is disposed there and C# never produces a
+ * second element at all. Distinct from [barksCancelledMidStep], where it produces one more.
+ */
+suspend fun firstBarkOnly(): String = Kennel().use { kennel ->
+  val first: String = kennel.barks(3).take(1).toList().single()
+  val cleaned: Boolean = pollFor { kennel.barkFinallyRuns > 0 }
+  "$first|${kennel.barkYields}|$cleaned"
+}
+
+/** The bound-class HANDLE element: each `Kitten` is a handle the collector owns and closes. */
+suspend fun kennelLitter(): String = Kennel().use { kennel ->
+  kennel.litter().toList().joinToString(",") { kitten -> kitten.use { it.name } }
+}
+
+/**
+ * CANCEL MID-STEP against the TOKEN-HONOURING source. Same collector cancellation as
+ * [barksCancelledMidStep], different C# outcome: the pending step is aborted, so `litterCancelled`
+ * is the proof that the per-collect token the bridge owns actually reached the C# method rather
+ * than the enumeration merely being dropped on the floor.
+ */
+suspend fun litterCancelledMidStep(): String = Kennel().use { kennel ->
+  var delivered = 0
+  withTimeoutOrNull(IMPATIENT) { kennel.litter().collect { kitten -> delivered++; kitten.close() } }
+  val cleaned: Boolean = pollFor { kennel.litterFinallyRuns > 0 }
+  "$delivered|${kennel.litterCancelled}|$cleaned"
+}
+
+/**
+ * STATIC: `Kennel.ticks()` is called off the companion, so the generated `Enumerate` thunk carries
+ * no receiver handle. (The nullable VALUE element this row originally carried is a split-out item;
+ * `Kennel.NullableTicks` stays an unbound, named skip.)
+ */
+suspend fun kennelTicks(): String = Kennel.ticks().toList().joinToString(",")
+
+/**
+ * The MID-STREAM THROW, on the element shape that needs no conversion. Two elements arrive first,
+ * so "received nothing" and "received two and no exception" are different failures here, and the
+ * iterator's `finally` is asserted to have run on the fault path too.
+ */
+suspend fun howlsFault(): String = Kennel().use { kennel ->
+  val heard: MutableList<Int> = mutableListOf()
+  val outcome: String = try {
+    kennel.howls().collect { heard += it }
+    NO_THROW
+  } catch (e: NugetManagedException) {
+    describe(e)
+  }
+  val cleaned: Boolean = pollFor { kennel.howlFinallyRuns > 0 }
+  "${heard.joinToString(",")}|$outcome|$cleaned"
+}
+
+/**
+ * Leak driver: [times] full enumerations, one `ctx` per element step plus one per end-of-stream.
+ */
+suspend fun barksRepeatedly(times: Int): Int = Kennel().use { kennel ->
+  var total = 0
+  repeat(times) { total += kennel.barks(1).toList().size }
+  total
+}
+
+/**
+ * Leak driver, CANCELLED path: the step's `ctx` is released by a completion landing after cancel.
+ */
+suspend fun barksCancelledRepeatedly(times: Int): Int = Kennel().use { kennel ->
+  repeat(times) { withTimeoutOrNull(IMPATIENT) { kennel.barks(3).collect { } } }
+  pollFor { kennel.barkFinallyRuns >= times }
+  kennel.barkFinallyRuns
+}
+
+/** Leak driver, FAULTED path: the throwing step reaches `End`, which must free both handles. */
+suspend fun howlsFaultRepeatedly(times: Int): Int = Kennel().use { kennel ->
+  repeat(times) {
+    try {
+      kennel.howls().collect { }
+    } catch (e: NugetManagedException) {
+      // expected, every round
+    }
+  }
+  pollFor { kennel.howlFinallyRuns >= times }
+  kennel.howlFinallyRuns
 }
 
 /**

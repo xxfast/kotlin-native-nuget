@@ -117,7 +117,10 @@ kotlin {
 
   sourceSets {
     nativeMain.dependencies {
-      implementation(libs.kotlinx.coroutines.core)
+      // ADR-155: coroutines is NOT declared here on purpose. The plugin puts
+      // kotlinx-coroutines-core on `nativeMain` itself, because a generated `Flow<T>` signature
+      // lives there. Declaring it again here would hide a broken plugin from the one fixture in
+      // the repo that can catch it (ADR-155 finding 6).
       // ADR-066: a real second Gradle module, one klib boundary away. Consumed here so the
       // forward export reachability closure has a genuine cross-module type graph to walk.
       implementation(project(":test-models"))

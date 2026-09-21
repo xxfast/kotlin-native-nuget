@@ -366,6 +366,8 @@ class NugetExtractApiIntegrationTest {
     val dotnet: String = findDotnet() ?: return
 
     val source: String = """
+      using System.Collections.Generic;
+      using System.Threading;
       using System.Threading.Tasks;
 
       namespace Probe.Async;
@@ -389,6 +391,18 @@ class NugetExtractApiIntegrationTest {
           public void Queue(Task pending) { }
           public Task<string> LedgerAsync(string? a, string? b, string? c) =>
               Task.FromResult($"{a}{b}{c}");
+
+          // ADR-155. Only the SIGNATURE is metadata, so these need no iterator bodies.
+          public IAsyncEnumerable<string> BarksAsync(int count) => null!;
+          public IAsyncEnumerable<Kitten> LitterAsync(CancellationToken ct = default) => null!;
+          public static IAsyncEnumerable<int> Ticks() => null!;
+          public IAsyncEnumerable<int> HowlsAsync() => null!;
+          // Deferred, each a NAMED skip: an element with no reverse mapping (System.Nullable<int>),
+          // the parameter position, and the nested shape the `not RirAsyncType` guard exists for
+          // (without it `Nested` would bind with `Task<int>` as its element type, silently).
+          public IAsyncEnumerable<int?> NullableTicks() => null!;
+          public int Herd(IAsyncEnumerable<int> arrivals) => 0;
+          public IAsyncEnumerable<Task<int>> Nested() => null!;
       }
     """.trimIndent()
 
@@ -401,6 +415,7 @@ class NugetExtractApiIntegrationTest {
 
     val methods: List<JsonObject> = root.type("Probe.Async", "Kennel")
       .getValue("methods").jsonArray.map { it.jsonObject }
+
     fun method(name: String): JsonObject = methods.single {
       it.getValue("name").jsonPrimitive.content == name
     }
@@ -410,14 +425,20 @@ class NugetExtractApiIntegrationTest {
 
     // The awaited type is the return type; non-generic `Task` awaits to void.
     assertEquals("task", asyncKind("NapAsync"))
-    assertEquals("void", method("NapAsync").getValue("returnType").jsonObject
-      .getValue("kind").jsonPrimitive.content)
+    assertEquals(
+      "void", method("NapAsync").getValue("returnType").jsonObject
+        .getValue("kind").jsonPrimitive.content
+    )
     assertEquals("task", asyncKind("CountAsync"))
-    assertEquals("int", method("CountAsync").getValue("returnType").jsonObject
-      .getValue("name").jsonPrimitive.content)
+    assertEquals(
+      "int", method("CountAsync").getValue("returnType").jsonObject
+        .getValue("name").jsonPrimitive.content
+    )
     assertEquals("task", asyncKind("AdoptAsync"))
-    assertEquals("handle", method("AdoptAsync").getValue("returnType").jsonObject
-      .getValue("kind").jsonPrimitive.content)
+    assertEquals(
+      "handle", method("AdoptAsync").getValue("returnType").jsonObject
+        .getValue("kind").jsonPrimitive.content
+    )
 
     // Nullability is resolved over the WHOLE tree before the Task node is unwrapped:
     // `Task<string>` is [1, 1] and `Task<string?>` is [1, 2]. Unwrap first and both read byte 1.
@@ -442,18 +463,33 @@ class NugetExtractApiIntegrationTest {
         .getValue("nullable").jsonPrimitive.boolean,
     )
 
-    // A synchronous method still carries no async kind at all.
+    // ADR-155: an `IAsyncEnumerable<T>` METHOD RETURN carries its own kind, so the generator can
+    // tell "suspend fun over Begin/End" from "plain fun returning Flow over Enumerate/Current"
+    // without re-deriving it from the return type.
+    listOf("BarksAsync", "LitterAsync", "Ticks", "HowlsAsync").forEach { member ->
+      assertEquals("async_enumerable", asyncKind(member), "`$member` must bind as a Flow source")
+    }
+
+    // A synchronous method still carries no async kind at all. A SET, not a list: the fixture's
+    // declaration order is not the contract, membership is.
     assertEquals(
-      listOf("NapAsync", "CountAsync", "NameAsync", "AdoptAsync", "WhisperAsync", "LedgerAsync"),
+      setOf(
+        "NapAsync", "CountAsync", "NameAsync", "AdoptAsync", "WhisperAsync", "LedgerAsync",
+        "BarksAsync", "LitterAsync", "Ticks", "HowlsAsync",
+      ),
       methods.filter { it["asyncKind"]?.jsonPrimitive?.contentOrNull != null }
-        .map { it.getValue("name").jsonPrimitive.content },
+        .map { it.getValue("name").jsonPrimitive.content }.toSet(),
     )
 
     // Everything deferred keeps a NAMED skip, never a silent drop: ValueTask (both arities),
     // `Task<T>?`, and a `Task`-typed parameter.
     val diagnostics: List<JsonObject> = root.getValue("assemblies").jsonArray.single().jsonObject
       .getValue("diagnostics").jsonArray.map { it.jsonObject }
-    listOf("PurrsAsync", "SettleAsync", "MaybeAsync", "Queue").forEach { member ->
+    // ADR-155 adds two of its own: `Herd`, an `IAsyncEnumerable<T>` at a PARAMETER (return
+    // position only), and `NullableTicks`, whose `int?` element is System.Nullable<int> and has
+    // no reverse mapping at all — the split-out nullable-value-element item. Both must be NAMED,
+    // never a silent bind that drops the nulls or binds the parameter as something else.
+    listOf("PurrsAsync", "SettleAsync", "MaybeAsync", "Queue", "Herd").forEach { member ->
       assertTrue(
         diagnostics.any {
           it.getValue("kind").jsonPrimitive.content == "info_async_not_yet_mapped" &&
@@ -464,6 +500,23 @@ class NugetExtractApiIntegrationTest {
               it.getValue("memberName").jsonPrimitive.content to
                   it.getValue("kind").jsonPrimitive.content
             },
+      )
+    }
+
+    // The split-out item, asserted by its SYMPTOM rather than its diagnostic kind: nothing maps
+    // System.Nullable<int> on the reverse side, so `IAsyncEnumerable<int?>` must be skipped by
+    // SOME named diagnostic and must not appear as a bound method at all. Binding it as a plain
+    // `Flow<Int>` would silently drop every null the C# source yields.
+    listOf("NullableTicks", "Nested").forEach { member ->
+      assertTrue(
+        diagnostics.any { it.getValue("memberName").jsonPrimitive.content == member },
+        "`$member` must be named by a diagnostic, found: " +
+            diagnostics.map { it.getValue("memberName").jsonPrimitive.content },
+      )
+      assertTrue(
+        methods.none { it.getValue("name").jsonPrimitive.content == member },
+        "`$member` must not bind: binding it silently would drop nulls (NullableTicks) or use " +
+            "the wrong element type (Nested)",
       )
     }
 

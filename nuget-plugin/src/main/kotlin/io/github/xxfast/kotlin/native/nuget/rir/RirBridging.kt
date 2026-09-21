@@ -476,6 +476,13 @@ enum class RirSlotRole {
   SYNC,
   ASYNC_BEGIN,
   ASYNC_END,
+
+  // ADR-155: an `IAsyncEnumerable<T>` method's two slots. `Enumerate` is synchronous — it calls
+  // the C# method and `GetAsyncEnumerator`, handing back one enumeration handle per collect —
+  // and `Current` is the ordinary sync RETURN half over that handle. The stepping itself needs
+  // no per-method slot: it goes through the three SHARED runtime slots.
+  ASYNC_ENUMERATE,
+  ASYNC_CURRENT,
 }
 
 // The name fragment a slot contributes to its Kotlin `...Fn` var and its C# `..._Thunk`, empty
@@ -485,12 +492,20 @@ val RirSlotRole.nameSuffix: String
     RirSlotRole.SYNC -> ""
     RirSlotRole.ASYNC_BEGIN -> "Begin"
     RirSlotRole.ASYNC_END -> "End"
+    RirSlotRole.ASYNC_ENUMERATE -> "Enumerate"
+    RirSlotRole.ASYNC_CURRENT -> "Current"
   }
 
-fun RirRegistrable.slotRoles(): List<RirSlotRole> =
-  if (this is RirRegistrable.Method && method.asyncKind != null)
-    listOf(RirSlotRole.ASYNC_BEGIN, RirSlotRole.ASYNC_END)
-  else listOf(RirSlotRole.SYNC)
+fun RirRegistrable.slotRoles(): List<RirSlotRole> = when {
+  this !is RirRegistrable.Method -> listOf(RirSlotRole.SYNC)
+  // ADR-155: still two adjacent slots, but a DIFFERENT pair. Every consumer of this list is
+  // therefore forced to decide on the kind rather than on `asyncKind != null`.
+  method.asyncKind == RirAsyncKind.ASYNC_ENUMERABLE ->
+    listOf(RirSlotRole.ASYNC_ENUMERATE, RirSlotRole.ASYNC_CURRENT)
+
+  method.asyncKind != null -> listOf(RirSlotRole.ASYNC_BEGIN, RirSlotRole.ASYNC_END)
+  else -> listOf(RirSlotRole.SYNC)
+}
 
 // The registration's true slot count: what both `slotCount` arguments and both register-export
 // parameter lists are built from (ADR-054's contract check compares exactly this number).
@@ -895,6 +910,12 @@ private fun isV1Bridgeable(
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
   boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
 ): Boolean {
+  // ADR-155: for an async-enumerable method the return type IS the element type, and there is no
+  // such thing as `IAsyncEnumerable<void>`. Rejected in the SHARED filter so a malformed RIR
+  // yields nothing at all rather than a half-built pair on one side.
+  if (method.asyncKind == RirAsyncKind.ASYNC_ENUMERABLE && method.returnType is RirVoidType) {
+    return false
+  }
   val returnIsV1: Boolean =
     isV1Type(method.returnType, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions)
   if (!returnIsV1) return false
@@ -1035,7 +1056,14 @@ private fun RirRegistrable.contractSignature(structs: Map<RirTypeKey, RirStruct>
     // async method drifts the hash: the Begin thunk's return type changes from void to IntPtr,
     // and moving the token between two positions changes which argument lands in which slot,
     // neither of which is visible in the name, the remaining parameters or the awaited type.
-    is RirRegistrable.Method -> (if (method.asyncKind != null) "async:" else "") +
+    // ADR-155: a DISTINCT prefix, not a shared one: `Task<T> Foo()` and `IAsyncEnumerable<T> Foo()`
+    // have the same name, the same parameters and the same element type but entirely different
+    // slots, so they must not hash alike.
+    is RirRegistrable.Method -> (when (method.asyncKind) {
+      RirAsyncKind.ASYNC_ENUMERABLE -> "asyncenum:"
+      RirAsyncKind.TASK -> "async:"
+      null -> ""
+    }) +
         (method.cancellationToken?.let { "ct$it:" } ?: "") +
         method.identity() + ":method:${method.name}(" +
         method.parameters.joinToString(",") { it.type.signaturePart(structs) } +
@@ -1114,7 +1142,15 @@ val NUGET_RUNTIME_CONTRACT_HASH: Long = fnv1a64(
       "managedErrorType(err:COpaquePointer):COpaquePointer;" +
       "managedErrorMessage(err:COpaquePointer):COpaquePointer;" +
       "releaseCancellation(source:COpaquePointer,cancel:Int):Unit;" +
-      "managedErrorKind(err:COpaquePointer):Int"
+      "managedErrorKind(err:COpaquePointer):Int;" +
+      // ADR-155: three more, taking the shared runtime from 7 slots to 10. A consumer whose C#
+      // shim predates the enumeration slots and whose native library does not (or the other way
+      // round) fails at startup with the ADR-054 message instead of stepping an enumeration
+      // through a pointer that was never registered.
+      "moveNextBegin(enumeration:COpaquePointer,callback:COpaquePointer," +
+      "ctx:COpaquePointer,err:COpaquePointer):Unit;" +
+      "moveNextEnd(task:COpaquePointer,err:COpaquePointer):Int;" +
+      "disposeEnumeration(enumeration:COpaquePointer,cancelled:Int):Unit"
 )
 
 // Shared registration export-name derivation (ADR-048's naming contract, which ADR-049's C# side

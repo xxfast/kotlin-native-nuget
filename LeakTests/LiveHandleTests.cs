@@ -1363,6 +1363,57 @@ public class LiveHandleTests
             iterations: 3);
     }
 
+    // Rows 9m to 9o. ADR-155: the reverse async-ENUMERABLE crossing. A collect of N elements is
+    // N+1 `MoveNextBegin`/`MoveNextEnd` pairs, and each pair is an ordinary ADR-152 await: one
+    // counted pending-continuation `ctx` StableRef plus one .NET GCHandle on the step's Task. So
+    // the per-element repetition is inside the flow, not in the iteration count, and a ctx dropped
+    // once per ELEMENT shows up here at N+1 times the rate a per-CALL leak would.
+    //
+    // WHAT THESE ROWS CAN AND CANNOT SEE, as with 9j to 9l: `nuget_live_handles` counts Kotlin
+    // StableRefs only. The enumeration GCHandle and its CancellationTokenSource are .NET handles
+    // and are NOT counted on any of these rows (ADR-155 Consequences, ROADMAP line 268), so a C#
+    // enumeration leaked per collect is invisible here and is pinned only by a counting fake in
+    // the runtime's nativeTest. What these rows do pin is that the per-step ctx returns to
+    // baseline on all three release sites, which are genuinely different code paths.
+
+    // Row 9m. The COMPLETED path: whole enumerations, run to the end-of-stream `MoveNextEnd` that
+    // returns false. Each element's ctx is released by its completion callback, as in row 9.
+    [Fact]
+    public async Task ReverseAsyncEnumerable_FullCollect_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () => Assert.Equal(20, await KennelSample.BarksRepeatedlyAsync(20)),
+            iterations: 3);
+    }
+
+    // Row 9n. The CANCELLED path, and a different release site: the collector is cancelled while a
+    // `MoveNextAsync` is in flight over a source that ignores the token, so the step completes
+    // AFTER the coroutine was cancelled (ADR-152's cancel-then-complete window) and the ctx has to
+    // be released by `onCancellation` rather than by the callback. A channel that only cleans up
+    // when a completion is consumed leaks exactly one ctx per cancelled collect and nowhere else.
+    // The returned finally-count is asserted so a run in which nothing was actually cancelled, or
+    // in which the C# enumerations were abandoned rather than disposed, cannot pass as clean.
+    [Fact]
+    public async Task ReverseAsyncEnumerable_CancelledMidStep_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () => Assert.Equal(5, await KennelSample.BarksCancelledRepeatedlyAsync(5)),
+            iterations: 2);
+    }
+
+    // Row 9o. The FAULTED path: the stream throws mid-enumeration, so the elements already
+    // delivered took the ordinary path and the final step leaves through `MoveNextEnd`'s error
+    // channel. That step never reaches a success return, so its Task handle is freed in a
+    // `finally` or not at all, and the flow's own `finally` still has to dispose the enumeration
+    // while an exception is in flight.
+    [Fact]
+    public async Task ReverseAsyncEnumerable_ThrowsMidStream_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () => Assert.Equal(10, await KennelSample.HowlsFaultRepeatedlyAsync(10)),
+            iterations: 3);
+    }
+
     // Row 11. ROADMAP Phase 4 (object properties): a handle-typed getter on a STATIC owner. No
     // static-property getter row existed before this one, so it is also the first row covering the
     // companion and top-level getter mint. `TreatPantry.Favourite` hands back a fresh StableRef on

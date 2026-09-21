@@ -78,6 +78,9 @@ extracted too, and binds as a real Kotlin generic class rather than a monomorphi
 registration export per closed instantiation, since a `[UnmanagedCallersOnly]` thunk can never be
 generic. See [Generic types](generic-types.md).
 
+A `Task`-/`Task<T>`-returning method binds as a Kotlin `suspend fun`, and an `IAsyncEnumerable<T>`
+return binds as a cold `Flow<T>`; see [Instance members](instance-members.md#async-methods).
+
 ### `nugetGenerateBindings` and `nugetGenerateShims`: two generators, one contract
 
 Both tasks read the identical `reverse-ir.json` and must agree on one shared contract, fixed by
@@ -248,5 +251,7 @@ install pointer rather than a cryptic subprocess error.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/086-object-interface-slots-kotlin-bridge.md">ADR-086: Object- and interface-typed slots for a Kotlin-implemented C# interface</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/087-kotlin-slot-exceptions.md">ADR-087: Exceptions from Kotlin-implemented C# interface members</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/104-reverse-thunk-error-channel.md">ADR-104: Reverse thunk error channel</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/152-task-to-suspend-fun.md">ADR-152: Reverse Task/Task&lt;T&gt; to suspend fun</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/155-iasyncenumerable-to-flow.md">ADR-155: Reverse IAsyncEnumerable&lt;T&gt; to Flow&lt;T&gt;</a>
     </category>
 </seealso>

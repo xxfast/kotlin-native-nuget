@@ -222,4 +222,105 @@ public class KennelRoundTripTests
     [Fact]
     public async Task Doze_DefaultedToken_StillBindsWithTheTokenElided() =>
         Assert.Equal(6, await KennelSample.DozeWithADefaultTokenAsync());
+
+    // ----------------------------------------------------------------------------------------
+    // ADR-155: a C# `IAsyncEnumerable<T>` member as a COLD Kotlin `Flow<T>`, pulled one
+    // `MoveNextAsync` at a time over the same begin/end pair. One row per mechanism again, and
+    // deliberately not one per element type: the element vocabulary is ADR-152's (already proved
+    // above), whereas coldness, stopping and the mid-stream fault are new and are where a
+    // plausible-looking implementation is wrong.
+    //
+    // The stopping rows read C#-side counters back, because "the collector saw one element" is
+    // equally true of a bridge that stopped the C# enumeration, one that abandoned it still
+    // running, and one that never started it. Disposal is fire-and-forget (ADR-155 open question
+    // 2), so the Kotlin side POLLS for the iterator's `finally` rather than assuming it has run by
+    // the time `collect` returned.
+    // ----------------------------------------------------------------------------------------
+
+    // Elements in order, for the CONVERTING element (`string`): the ordinary happy path, and the
+    // control for every row below it.
+    [Fact]
+    public async Task Barks_CollectsEveryElementInOrder() =>
+        Assert.Equal("woof0,woof1", await KennelSample.KennelBarksAsync(2));
+
+    // COLDNESS, and with it ADR-155's open question 1. ONE Kotlin `Flow` value collected TWICE:
+    // both collections must see the full stream, and BOTH C# counters must read 2 — the method was
+    // called once per collect (so its per-collect CancellationToken is real) and its iterator body
+    // ran once per collect. A flow that eagerly called the C# method and shared one enumeration
+    // still delivers both lists correctly — a compiler-generated iterator re-enumerates from the
+    // start on a second GetAsyncEnumerator (ADR-155 ledger (e)) — and reads "1|2" here: called
+    // once, enumerated twice, which is the one fact only this shape can see.
+    [Fact]
+    public async Task Barks_OneFlowCollectedTwice_IsColdAndCallsTheMethodPerCollect() =>
+        Assert.Equal("woof0~woof0|2|2", await KennelSample.BarksCollectedTwiceAsync());
+
+    // CANCEL MID-STEP against a source that IGNORES the token. The collector's cancellation lands
+    // while C# is inside an uninterruptible wait, so ADR-155's documented behaviour is: C# finishes
+    // that step and yields once more, the collector receives NOTHING after the cancel, and the
+    // enumeration is then disposed. Read in order: 1 delivered, 2 yielded by C#, the iterator's
+    // `finally` observed, and it ran exactly once. `delivered == 2` would mean an element was
+    // handed to the collector after cancellation; `finally` never running means the C# iterator was
+    // abandoned mid-stream, which is the leak this whole dispose sequence exists to prevent.
+    [Fact]
+    public async Task Barks_CollectorCancelledMidStep_StopsAtTheNextElementAndRunsTheFinally() =>
+        Assert.Equal("1|2|true|1", await KennelSample.BarksCancelledMidStepAsync());
+
+    // The same source aborted while it is SUSPENDED AT A YIELD (`take(1)`), with no step in flight:
+    // here C# never produces a second element at all (`yields == 1`), which is what distinguishes
+    // the two stopping paths. A bridge that disposed the enumerator during a pending step would
+    // throw NotSupportedException (ADR-155 ledger (a)) rather than reaching this assertion.
+    [Fact]
+    public async Task Barks_TakeOne_DisposesAtTheYieldWithoutAnotherElement() =>
+        Assert.Equal("woof0|1|true", await KennelSample.FirstBarkOnlyAsync());
+
+    // The bound-class HANDLE element, resolved once per element rather than once per call: each
+    // `Kitten` is a fresh handle the Kotlin collector owns and closes.
+    [Fact]
+    public async Task Litter_HandleElements_CollectsEveryElementInOrder() =>
+        Assert.Equal("Oreo,Mylo", await KennelSample.KennelLitterAsync());
+
+    // CANCEL MID-STEP against a source that HONOURS the token ([EnumeratorCancellation]). Same
+    // collector cancellation as the barks row, different C# outcome: the pending step is aborted
+    // and `litterCancelled` proves the per-collect token the bridge owns actually reached the C#
+    // method. A bridge that passed `CancellationToken.None` to `GetAsyncEnumerator` delivers one
+    // element and runs the finally exactly as here, and reads `false` in the middle field.
+    [Fact]
+    public async Task Litter_CollectorCancelledMidStep_CancelsTheCSharpToken() =>
+        Assert.Equal("1|true|true", await KennelSample.LitterCancelledMidStepAsync());
+
+    // STATIC: no selfHandle in the generated `Enumerate`, the method is called off the TYPE. The
+    // nullable VALUE element this row used to carry (`IAsyncEnumerable<int?>`) is a split-out
+    // item — System.Nullable<int> has no reverse mapping at all — and lives on as
+    // `Kennel.NullableTicks`. That it stays a NAMED skip is asserted against an inline probe
+    // assembly in NugetExtractApiIntegrationTest; here it simply must not appear on the binding.
+    [Fact]
+    public async Task Ticks_StaticSource_CollectsEveryElement() =>
+        Assert.Equal("1,2,3", await KennelSample.KennelTicksAsync());
+
+    // The MID-STREAM THROW, on the element needing no conversion at all. Three facts in order: the
+    // two good elements arrived BEFORE the fault (a stream that delivered nothing is a different
+    // bug), the fault surfaced on the collector as a catchable ADR-104 NugetManagedException
+    // carrying the managed type name, and the C# iterator's `finally` still ran.
+    [Fact]
+    public async Task Howls_ThrowsMidStream_SurfacesAsACatchableManagedException()
+    {
+        string surfaced = await KennelSample.HowlsFaultAsync();
+        string[] parts = surfaced.Split('|');
+        Assert.True(parts.Length == 4, $"expected 'elements|managedType|message|cleaned', got: {surfaced}");
+        Assert.Equal("1,2", parts[0]);
+        Assert.Equal("System.InvalidOperationException", parts[1]);
+        Assert.Equal("Mylo howled the roof off", parts[2]);
+        Assert.Equal("true", parts[3]);
+    }
+
+    // The other half of "not a host abort": the fault above is thrown from inside a generated
+    // unmanaged callback path, and the failure mode that row cannot see is the process dying just
+    // after it passed. Any reverse call that still works afterwards says the host survived; this
+    // one is the cheapest.
+    [Fact]
+    public async Task Howls_ThrowsMidStream_DoesNotAbortTheHost()
+    {
+        await KennelSample.HowlsFaultAsync();
+        Assert.Equal(2, await KennelSample.KennelCountAsync());
+    }
 }
