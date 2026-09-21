@@ -8,12 +8,12 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * ADR-162: the containment boundary's own unit. The behaviour this pins is the one the item exists
- * for — a second offending declaration is still reported after the first — and it is pinned here
- * rather than only end to end because there is no shipped Kotlin shape that reaches a raw
- * `error(...)` today (every historical one, issue #52 / ADR-080 / ADR-081 / ADR-097, has since been
- * fixed, and the research spikes had to inject a throw). A test may not inject one, so the guard is
- * exercised directly.
+ * ADR-162: the containment boundary's own unit. The behaviour this pins is the one the item
+ * exists for — a second offending declaration is still reported after the first — and it is
+ * pinned here rather than only end to end because there is no shipped Kotlin shape that reaches a
+ * raw `error(...)` today (every historical one, issue #52 / ADR-080 / ADR-081 / ADR-097, has since
+ * been fixed, and the research spikes had to inject a throw). A test may not inject one, so the
+ * guard is exercised directly.
  */
 class ForwardDiagnosticGuardTest {
 
@@ -67,7 +67,9 @@ class ForwardDiagnosticGuardTest {
       }
     }
 
-    assertEquals(1, logger.errors.size, "deduped on (declaration, failure); errors=${logger.errors}")
+    assertEquals(
+      1, logger.errors.size, "deduped on (declaration, failure); errors=${logger.errors}",
+    )
   }
 
   /** A different failure on the same declaration is a different bug and must not be swallowed. */
@@ -75,16 +77,20 @@ class ForwardDiagnosticGuardTest {
   fun `a different failure on the same declaration is reported again`() {
     val logger = RecordingKSPLogger()
 
-    guarded(declaration = "sample.Twice", node = null, logger = logger) { error("first invariant") }
-    guarded(declaration = "sample.Twice", node = null, logger = logger) { error("second invariant") }
+    guarded(declaration = "sample.Twice", node = null, logger = logger) {
+      error("first invariant")
+    }
+    guarded(declaration = "sample.Twice", node = null, logger = logger) {
+      error("second invariant")
+    }
 
     assertEquals(2, logger.errors.size, "errors=${logger.errors}")
   }
 
   /**
-   * `Exception` only. An `Error` is not a fact about one declaration and must still abort the round,
-   * or a build that ran out of memory would report a hundred "generator bug" lines and ship nothing
-   * useful.
+   * `Exception` only. An `Error` is not a fact about one declaration and must still abort the
+   * round, or a build that ran out of memory would report a hundred "generator bug" lines and
+   * ship nothing useful.
    */
   @Test
   fun `an Error is not contained`() {
@@ -122,8 +128,9 @@ class ForwardDiagnosticGuardTest {
       ForwardPlanSkipReason.INTERNAL_FAILURE.droppedFromCSharp,
       "a contained plan failure must reach the drop-reporting path, or nothing reports it",
     )
-    val reason: String =
-      ForwardPlanSkipReason.INTERNAL_FAILURE.diagnosticReason(detail = "IllegalStateException: boom")
+    val reason: String = ForwardPlanSkipReason.INTERNAL_FAILURE.diagnosticReason(
+      detail = "IllegalStateException: boom",
+    )
     assertTrue(reason.contains("IllegalStateException: boom"), "reason=$reason")
     assertTrue(
       ForwardPlanSkipReason.INTERNAL_FAILURE.diagnosticHint().contains("exclude(...)"),
@@ -131,7 +138,9 @@ class ForwardDiagnosticGuardTest {
     )
   }
 
-  /** ADR-162: the additive `file`/`line` the Gradle re-emitter composes its leading location from. */
+  /**
+   * ADR-162: the additive `file`/`line` the Gradle re-emitter composes its leading location from.
+   */
   @Test
   fun `a recorded diagnostic with no node carries no location fields`() {
     val logger = RecordingKSPLogger()

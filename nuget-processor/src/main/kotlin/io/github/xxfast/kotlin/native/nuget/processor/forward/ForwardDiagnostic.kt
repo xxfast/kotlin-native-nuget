@@ -767,8 +767,9 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       "its type `${detail ?: "in an excluded package"}` is excluded from the export scope by " +
           "your own exclude(...)"
 
-    // ADR-162: the generator's fault, said plainly, with the exception class and message so the bug
-    // is findable. Never the generic sentence, which would read as a claim about the author's types.
+    // ADR-162: the generator's fault, said plainly, with the exception class and message so the
+    // bug is findable. Never the generic sentence, which would read as a claim about the author's
+    // types.
     ForwardPlanSkipReason.INTERNAL_FAILURE ->
       "the generator's own invariant failed while planning it " +
           "(${detail ?: "no failure detail was captured"})"
@@ -1008,8 +1009,8 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // [guarded]-reported half of the same kind, which does have the name, spells it out.
   ForwardPlanSkipReason.INTERNAL_FAILURE ->
     "this is a bug in the bridge generator, not a mistake in your Kotlin: add an exclude(...) " +
-        "entry for this declaration to nuget { publish { } } to unblock this build, and report the " +
-        "failure with this whole message"
+        "entry for this declaration to nuget { publish { } } to unblock this build, and report " +
+        "the failure with this whole message"
 
   // ADR-151: an unmapped stdlib type no longer reaches here at all (the classifier refuses it as
   // plainly unsupported), so this arm is about a real dependency module. The stdlib sentence moved

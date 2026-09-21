@@ -107,11 +107,12 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    * generator bug, and shipping a package quietly missing the declaration is worse than a build
    * that stops.
    *
-   * A `Skipped` entry rather than an omitted one, which is the load-bearing part (verified by spike,
-   * ADR-162 F2): omitting the entry makes the Kotlin emitter throw `Forward callable catalog has no
-   * entry for ...` before the fatal-diagnostic gate, which masks every later failure of the round
-   * and takes over Gradle's headline — the exact one-at-a-time behaviour this containment exists to
-   * end. [ForwardCallableCatalogEntry.Skipped.detail] carries the exception class and message.
+   * A `Skipped` entry rather than an omitted one, which is the load-bearing part (verified by
+   * spike, ADR-162 F2): omitting the entry makes the Kotlin emitter throw `Forward callable
+   * catalog has no entry for ...` before the fatal-diagnostic gate, which masks every later
+   * failure of the round and takes over Gradle's headline — the exact one-at-a-time behaviour
+   * this containment exists to end. [ForwardCallableCatalogEntry.Skipped.detail] carries the
+   * exception class and message.
    */
   INTERNAL_FAILURE(droppedFromCSharp = true),
 

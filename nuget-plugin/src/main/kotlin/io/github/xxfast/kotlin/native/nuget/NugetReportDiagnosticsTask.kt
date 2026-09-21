@@ -88,10 +88,10 @@ internal data class ForwardDiagnosticEntry(
 /**
  * ADR-162: the console line, leading with `<path>:<line>: ` when the entry carries a location.
  *
- * The composition lives here rather than in the processor's `ForwardDiagnostic.format()` because the
- * two consumers of that one string need opposite things: KSP's Gradle logger prefixes the location
- * itself, so `format()` staying location-led-free is what keeps the `e: [ksp] ...` line from
- * printing it twice.
+ * The composition lives here rather than in the processor's `ForwardDiagnostic.format()` because
+ * the two consumers of that one string need opposite things: KSP's Gradle logger prefixes the
+ * location itself, so `format()` staying location-led-free is what keeps the `e: [ksp] ...` line
+ * from printing it twice.
  */
 internal fun ForwardDiagnosticEntry.consoleLine(): String =
   if (file != null && line != null) "$file:$line: $message" else message

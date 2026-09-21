@@ -9,10 +9,10 @@ import kotlin.test.assertTrue
  * `ForwardDiagnosticKind`, now inside it.
  *
  * `enumParamsUnsupported` in `CirFunctionTranslator` was a bare `logger.error` with no
- * `[nuget:KIND]` tag, so it was the one build failure from this processor a consumer could not grep
- * for by kind. Behaviour is unchanged on purpose (same node, same severity, the translator still
- * returns no members); the cell exists to pin that the label is there and that the round still fails
- * before the Kotlin export file is written.
+ * `[nuget:KIND]` tag, so it was the one build failure from this processor a consumer could not
+ * grep for by kind. Behaviour is unchanged on purpose (same node, same severity, the translator
+ * still returns no members); the cell exists to pin that the label is there and that the round
+ * still fails before the Kotlin export file is written.
  *
  * Deliberately in-process only, never in `test-library/`: the correct outcome is a failed build,
  * which would break `packNuget`.

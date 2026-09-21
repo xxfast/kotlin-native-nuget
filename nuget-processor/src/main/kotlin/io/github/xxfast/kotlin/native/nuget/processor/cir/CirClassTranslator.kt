@@ -2315,9 +2315,9 @@ internal fun emitCsharpSignatureCollisions(
   /**
    * ADR-162 (ROADMAP line 87): signatures the *renderer* puts on this container, which are
    * therefore not in [methods] and cannot collide with each other, only with an authored member.
-   * A handle container declares `IDisposable.Dispose()`, so `class Closer { fun dispose() {} }` is
-   * CS0111 exactly like any other duplicate pair — but the generated half is not a `CirMethod`, so
-   * it used to sail past this guard and surface much later as the generic
+   * A handle container declares `IDisposable.Dispose()`, so `class Closer { fun dispose() {} }`
+   * is CS0111 exactly like any other duplicate pair — but the generated half is not a
+   * `CirMethod`, so it used to sail past this guard and surface much later as the generic
    * `ERROR_C_ENTRY_POINT_COLLISION` (two owners of `closer_dispose`), which reads as an ABI
    * accident rather than as the C# rule it is.
    *
@@ -2347,7 +2347,8 @@ internal fun emitCsharpSignatureCollisions(
             kind = ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION,
             symbol = symbol,
             declaration = "$container.${signature.first()}",
-            reason = "it renders as `${signature.first()}(${signature.drop(1).joinToString(", ")})`" +
+            reason = "it renders as " +
+                "`${signature.first()}(${signature.drop(1).joinToString(", ")})`" +
                 ", which collides with the `${signature.first()}()` every generated handle class " +
                 "declares for `IDisposable`; C# cannot declare two members with the same " +
                 "signature (ADR-034)",

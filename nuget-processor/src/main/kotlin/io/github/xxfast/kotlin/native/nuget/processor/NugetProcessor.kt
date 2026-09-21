@@ -723,12 +723,12 @@ class NugetProcessor(
   private val logger: ForwardDiagnosticTrackingLogger = ForwardDiagnosticTrackingLogger(logger)
 
   /**
-   * ADR-162: the last line of containment. The per-declaration guards cover the loops, but the round
-   * also does whole-file work no declaration owns — the ADR-066 closure, the post-passes, and the
-   * single `CirRenderer.render` call, which cannot name a declaration without threading `KSNode`
-   * through the whole CIR model (deferred). A failure there used to leave KSP printing one bare
-   * `e: [ksp] java.lang.IllegalStateException: ...` with no `[nuget:...]` kind to grep for; now it is
-   * labelled, at the cost of having no source location to attach.
+   * ADR-162: the last line of containment. The per-declaration guards cover the loops, but the
+   * round also does whole-file work no declaration owns — the ADR-066 closure, the post-passes,
+   * and the single `CirRenderer.render` call, which cannot name a declaration without threading
+   * `KSNode` through the whole CIR model (deferred). A failure there used to leave KSP printing one
+   * bare `e: [ksp] java.lang.IllegalStateException: ...` with no `[nuget:...]` kind to grep for;
+   * now it is labelled, at the cost of having no source location to attach.
    *
    * `Exception` only, so an `OutOfMemoryError` or a `StackOverflowError` still aborts the round.
    */
@@ -1453,16 +1453,16 @@ class NugetProcessor(
       .filter { iface -> iface.qualifiedName?.asString() in reachableInterfaceNames }
 
     // ADR-162: the interface planning loops are guarded per interface for the same reason the
-    // callable planner's `planOrSkip` is: an interface whose planning throws used to abort the round
-    // before any other interface was even looked at. A contained one contributes no entries, which
-    // is safe here precisely because the round is going to fail at the gate anyway.
+    // callable planner's `planOrSkip` is: an interface whose planning throws used to abort the
+    // round before any other interface was even looked at. A contained one contributes no
+    // entries, which is safe here precisely because the round is going to fail at the gate anyway.
     val interfaceEntries: List<ForwardCallableCatalogEntry> = reachableInterfaces.flatMap { iface ->
       guarded(iface.forwardGuardName(), iface, logger) {
         // Issue #249: a REACHABLE interface's entries are stamped here too, not only on the
         // declaration catalog. This catalog is the one that reports for a reachable interface (the
-        // declaration catalog's copy carries the same symbol and is suppressed by the symbol guard
-        // below), so leaving it unstamped would silently leave `IFoo` with no `<remarks>` in exactly
-        // the shape a consumer meets: an interface something returns.
+        // declaration catalog's copy carries the same symbol and is suppressed by the symbol
+        // guard below), so leaving it unstamped would silently leave `IFoo` with no `<remarks>` in
+        // exactly the shape a consumer meets: an interface something returns.
         forwardPlanner.interfaceEntries(iface).ownedBy(iface.forwardDiagnosticOwner())
       }.orEmpty()
     }

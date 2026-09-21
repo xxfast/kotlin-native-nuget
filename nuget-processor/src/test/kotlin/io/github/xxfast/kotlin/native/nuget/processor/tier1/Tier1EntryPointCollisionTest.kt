@@ -53,12 +53,13 @@ class Tier1EntryPointCollisionTest {
    * ADR-162 (ROADMAP line 87): `fun dispose()` is a **C# signature** collision, not an ABI one.
    *
    * It used to reach this route: the generated `Dispose()` is renderer-owned, so it is not a
-   * `CirMethod` in the list ADR-034's guard groups, the authored `dispose()` sailed past that guard,
-   * and the pair surfaced two phases later as two owners of the `closer_dispose` entry point. The
-   * message was true but read as an ABI accident; the defect is CS0111, one type with two members of
-   * one signature, which is exactly what `ERROR_CSHARP_SIGNATURE_COLLISION` says. The reserved
-   * renderer-owned signature now catches it during translate, which is *before* the fatal-diagnostic
-   * gate, so the ABI contract never runs and this route is no longer reached at all.
+   * `CirMethod` in the list ADR-034's guard groups, the authored `dispose()` sailed past that
+   * guard, and the pair surfaced two phases later as two owners of the `closer_dispose` entry
+   * point. The message was true but read as an ABI accident; the defect is CS0111, one type with
+   * two members of one signature, which is exactly what `ERROR_CSHARP_SIGNATURE_COLLISION` says.
+   * The reserved renderer-owned signature now catches it during translate, which is *before* the
+   * fatal-diagnostic gate, so the ABI contract never runs and this route is no longer reached at
+   * all.
    */
   @Test
   fun `fun dispose collides with the generated Dispose as a C# signature collision`() {
