@@ -67,7 +67,7 @@ class NugetPluginRuntimeExportWiringTest {
     assertTrue(
       runtimeCoordinate in project.dependencyNames("macosArm64MainApi"),
       "expected the runtime on the target's api configuration; " +
-        "got ${project.dependencyNames("macosArm64MainApi")}",
+          "got ${project.dependencyNames("macosArm64MainApi")}",
     )
   }
 
@@ -80,7 +80,7 @@ class NugetPluginRuntimeExportWiringTest {
       assertTrue(
         runtimeCoordinate in project.dependencyNames(lib.exportConfigurationName),
         "expected the runtime exported from ${lib.name}; " +
-          "got ${project.dependencyNames(lib.exportConfigurationName)}",
+            "got ${project.dependencyNames(lib.exportConfigurationName)}",
       )
     }
   }
@@ -118,9 +118,34 @@ class NugetPluginRuntimeExportWiringTest {
       assertTrue(
         runtimeCoordinate in project.dependencyNames("macosArm64MainApi"),
         "expected the api dependency regardless of the author's export; " +
-          "got ${project.dependencyNames("macosArm64MainApi")}",
+            "got ${project.dependencyNames("macosArm64MainApi")}",
       )
     }
+  }
+
+  /**
+   * ADR-156 finding 6: generated bound classes compile from `nativeMain`, and a method bound from
+   * an `IAsyncEnumerable<T>` return names `kotlinx.coroutines.flow.Flow` in a PUBLIC signature
+   * there. `nuget-runtime` (and coroutines through its `api`) reaches only
+   * `${'$'}{target}MainApi`, so without this the consumer gets `Unresolved reference: Flow`.
+   * Coroutines, unlike the runtime, publishes every native target, so ADR-130's iOS objection
+   * does not apply.
+   */
+  @Test
+  fun `kotlinx-coroutines-core is added as an api dependency of nativeMain`() {
+    val project: Project = buildProjectWithSharedLib()
+    project.evaluate()
+
+    assertTrue(
+      project.configurations.findByName("nativeMainApi") != null,
+      "the default hierarchy must have materialised a nativeMain source set; " +
+          "got ${project.configurations.names}",
+    )
+    val deps: List<String> = project.dependencyNames("nativeMainApi")
+    assertTrue(
+      deps.any { it.startsWith("org.jetbrains.kotlinx:kotlinx-coroutines-core:") },
+      "expected coroutines on nativeMainApi so a generated Flow signature resolves; got $deps",
+    )
   }
 
   /** A native target outside `KONAN_TO_RID` is not a bridge target: no runtime, no export. */
@@ -136,7 +161,7 @@ class NugetPluginRuntimeExportWiringTest {
     assertTrue(
       runtimeCoordinate !in project.dependencyNames("iosArm64MainApi"),
       "expected no runtime on a non-bridge target; " +
-        "got ${project.dependencyNames("iosArm64MainApi")}",
+          "got ${project.dependencyNames("iosArm64MainApi")}",
     )
   }
 }

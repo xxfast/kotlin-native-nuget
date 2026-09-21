@@ -127,16 +127,27 @@ class NugetAsyncBindingTest {
     assertContains(stub, "return nugetCall { err -> end.invoke(task, err) }")
   }
 
-  // ADR-130's seam, and the reason it is asserted HERE rather than in the fixture build:
-  // `test-library` declares coroutines on nativeMain itself, so a stub naming
-  // suspendCancellableCoroutine directly would compile there and fail for a real consumer.
+  // ADR-130's seam. `suspendCancellableCoroutine` and friends must never appear in a nativeMain
+  // file: they reach the consumer only through the runtime's per-target `api`.
+  //
+  // ADR-156 amends the rule to exactly one exception, `kotlinx.coroutines.flow.Flow`, because an
+  // async-enumerable member returns one in a PUBLIC signature and the plugin now puts
+  // kotlinx-coroutines-core on the consumer's nativeMain for precisely that. The rest of the rule
+  // is unchanged, which is why this asserts per-line rather than dropping the check: `test-library`
+  // deliberately no longer declares coroutines itself, so a nativeMain file naming anything else
+  // from kotlinx fails the fixture build.
   @Test
-  fun `a generated suspend stub names no kotlinx coroutines symbol`() {
+  fun `a generated suspend stub names no kotlinx coroutines symbol beyond Flow`() {
     generateKotlinStubs(rir).filter { it.relativePath.startsWith("nativeMain/") }.forEach { file ->
-      assertFalse(
-        file.content.contains("kotlinx.coroutines"),
-        "${file.relativePath} names kotlinx.coroutines; nativeMain cannot see the runtime's " +
-            "coroutines api (ADR-130)",
+      val offending: List<String> = file.content.lineSequence()
+        .filter { line ->
+          line.contains("kotlinx.coroutines") && !line.contains("kotlinx.coroutines.flow.Flow")
+        }
+        .toList()
+      assertTrue(
+        offending.isEmpty(),
+        "${file.relativePath} names kotlinx.coroutines beyond Flow; nativeMain cannot see the " +
+            "runtime's coroutines api (ADR-130/155), got: $offending",
       )
     }
   }

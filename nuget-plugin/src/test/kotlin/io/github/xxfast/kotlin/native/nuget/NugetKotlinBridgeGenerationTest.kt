@@ -348,13 +348,14 @@ class NugetKotlinBridgeGenerationTest {
   }
 
   @Test
-  fun `the shared runtime registration grows to seven slots and moves its contract hash`() {
+  fun `the shared runtime registration grows to ten slots and moves its contract hash`() {
     val runtime: GeneratedFile = generateKotlinStubs(rir)
       .single { it.relativePath.endsWith("/NugetRuntime.kt") }
 
-    assertContains(runtime.content, "expectedSlots = 7,")
+    // ADR-156 took it from ADR-153's 7 to 10 (MoveNextBegin/MoveNextEnd/DisposeEnumeration).
+    assertContains(runtime.content, "expectedSlots = 10,")
     assertContains(runtime.content, "expectedHash = ${NUGET_RUNTIME_CONTRACT_HASH}L,")
-    assertContains(runtime.content, "NugetRegistry.record(\"<runtime>\", 7)")
+    assertContains(runtime.content, "NugetRegistry.record(\"<runtime>\", 10)")
     assertContains(runtime.content, "weakenGcHandleFn = requireNotNull(weakenGcHandlePtr)")
     assertContains(runtime.content, "resolveGcHandleFn = requireNotNull(resolveGcHandlePtr)")
     // ADR-104: the two managed-error accessors Kotlin reads a caught exception through.
@@ -376,7 +377,12 @@ class NugetKotlinBridgeGenerationTest {
             "managedErrorType(err:COpaquePointer):COpaquePointer;" +
             "managedErrorMessage(err:COpaquePointer):COpaquePointer;" +
             "releaseCancellation(source:COpaquePointer,cancel:Int):Unit;" +
-            "managedErrorKind(err:COpaquePointer):Int"
+            "managedErrorKind(err:COpaquePointer):Int;" +
+            // ADR-156: the three enumeration slots.
+            "moveNextBegin(enumeration:COpaquePointer,callback:COpaquePointer," +
+            "ctx:COpaquePointer,err:COpaquePointer):Unit;" +
+            "moveNextEnd(task:COpaquePointer,err:COpaquePointer):Int;" +
+            "disposeEnumeration(enumeration:COpaquePointer,cancelled:Int):Unit"
       ),
       NUGET_RUNTIME_CONTRACT_HASH,
     )

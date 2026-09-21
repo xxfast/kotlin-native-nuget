@@ -161,17 +161,25 @@ class NugetCancellationTokenBindingTest {
       support,
       "throw kotlin.coroutines.cancellation.CancellationException(message, managed)",
     )
+    // ADR-130 as amended by ADR-156: `Flow` is the ONE kotlinx.coroutines name nativeMain may
+    // carry (the plugin puts kotlinx-coroutines-core there for it). The cancellation type must
+    // still be the stdlib one — on Kotlin/Native it IS the kotlinx type, via a typealias, so
+    // naming kotlinx here would be a gratuitous dependency on a source set that had none.
     assertFalse(
-      support.contains("kotlinx.coroutines"),
-      "nativeMain cannot see kotlinx.coroutines (ADR-130); the stdlib type IS the kotlinx type",
+      support.lineSequence().any {
+        it.contains("kotlinx.coroutines") && !it.contains("kotlinx.coroutines.flow.Flow")
+      },
+      "nativeMain may name only kotlinx.coroutines.flow.Flow (ADR-130/155); the cancellation " +
+          "type is the stdlib one",
     )
   }
 
   @Test
-  fun `the runtime register export carries seven slots and both new thunks`() {
+  fun `the runtime register export carries ten slots and both new thunks`() {
     val bindings: String = runtimeBindings()
 
-    assertContains(bindings, "expectedSlots = 7,")
+    // ADR-156 took the shared runtime from ADR-153's 7 slots to 10.
+    assertContains(bindings, "expectedSlots = 10,")
     assertContains(bindings, "releaseCancellationPtr: COpaquePointer?,")
     assertContains(bindings, "managedErrorKindPtr: COpaquePointer?,")
     assertContains(bindings, "internal var releaseCancellationFn:")
@@ -270,14 +278,14 @@ class NugetCancellationTokenBindingTest {
   }
 
   @Test
-  fun `both generators register seven runtime slots`() {
+  fun `both generators register ten runtime slots`() {
     val runtime: String = runtimeShim()
 
-    assertContains(runtime, "nuget_runtime_register(7 slots)")
+    assertContains(runtime, "nuget_runtime_register(10 slots)")
     assertContains(runtime, "IntPtr releaseCancellationPtr, IntPtr managedErrorKindPtr")
     assertContains(runtime, "(&ReleaseCancellation_Thunk)")
     assertContains(runtime, "(&ManagedErrorKind_Thunk)")
-    assertContains(runtimeBindings(), "expectedSlots = 7,")
+    assertContains(runtimeBindings(), "expectedSlots = 10,")
   }
 
   // ---------------------------------------------------------------- contract

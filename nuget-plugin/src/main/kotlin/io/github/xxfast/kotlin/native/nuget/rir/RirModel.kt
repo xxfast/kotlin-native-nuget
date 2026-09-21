@@ -155,6 +155,12 @@ data class RirStructComponent(
 enum class RirAsyncKind {
   @SerialName("task")
   TASK,
+
+  // ADR-156: `IAsyncEnumerable<T>` at a method return, which binds as a plain (NOT suspend)
+  // `fun x(): Flow<T>` over an Enumerate/Current slot pair plus three shared runtime slots.
+  // [RirMethod.returnType] holds the ELEMENT type.
+  @SerialName("async_enumerable")
+  ASYNC_ENUMERABLE,
 }
 
 // ADR-152: for an async method, [returnType] is the AWAITED type (RirVoidType for a non-generic

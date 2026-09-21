@@ -480,6 +480,22 @@ class NugetGenerateBindingsTaskTest {
     assertContains(runtime.content, "@CName(\"nuget_runtime_register\")")
   }
 
+  // ADR-156: the shared runtime registration grows 7 -> 10 with the three enumeration slots that
+  // drive a `Flow` (MoveNextBegin, MoveNextEnd, DisposeEnumeration). The count is global, not
+  // per-fixture: every consumer's runtime export must accept all ten or ADR-054's contract check
+  // fails at startup.
+  @Test
+  fun `nuget_runtime_register takes the three enumeration slots and expects ten`() {
+    val runtime: GeneratedFile = generateKotlinStubs(templateRir)
+      .single { it.relativePath.endsWith("NugetRuntime.kt") }
+
+    assertContains(runtime.content, "moveNextBeginPtr: COpaquePointer?,")
+    assertContains(runtime.content, "moveNextEndPtr: COpaquePointer?,")
+    assertContains(runtime.content, "disposeEnumerationPtr: COpaquePointer?,")
+    assertContains(runtime.content, "expectedSlots = 10,")
+    assertContains(runtime.content, "NugetRegistry.record(\"<runtime>\", 10)")
+  }
+
   @Test
   fun `NugetRuntime kt declares NugetObjectHandle class`() {
     val files: List<GeneratedFile> = generateKotlinStubs(templateRir)

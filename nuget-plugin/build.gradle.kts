@@ -44,7 +44,9 @@ dependencies {
 val generateVersionConstant: TaskProvider<Task> = tasks.register("generateVersionConstant") {
   val outputDir: Provider<Directory> = layout.buildDirectory.dir("generated/source/version/main")
   val pluginVersion: String = version.toString()
+  val coroutinesVersion: String = "1.10.2"
   inputs.property("pluginVersion", pluginVersion)
+  inputs.property("coroutinesVersion", coroutinesVersion)
   outputs.dir(outputDir)
 
   doLast {
@@ -55,6 +57,12 @@ val generateVersionConstant: TaskProvider<Task> = tasks.register("generateVersio
       package io.github.xxfast.kotlin.native.nuget
 
       internal const val PLUGIN_VERSION: String = "$pluginVersion"
+
+      // ADR-156: the plugin puts kotlinx-coroutines-core on the consumer's `nativeMain` so a
+      // generated `Flow<T>` signature resolves there. Pinned inline for the same reason Kover is
+      // (this included build does not consume the root version catalog): if you bump
+      // `coroutines` in gradle/libs.versions.toml, bump it here too.
+      internal const val COROUTINES_VERSION: String = "$coroutinesVersion"
       """.trimIndent() + "\n",
     )
   }
@@ -82,7 +90,8 @@ gradlePlugin {
       id = "io.github.xxfast.kotlin.native.nuget"
       implementationClass = "io.github.xxfast.kotlin.native.nuget.NugetPlugin"
       displayName = "Kotlin/Native NuGet"
-      description = "Packages a Kotlin/Native library as a NuGet package with generated C# bindings, and consumes C# NuGet packages from Kotlin"
+      description =
+        "Packages a Kotlin/Native library as a NuGet package with generated C# bindings, and consumes C# NuGet packages from Kotlin"
       tags.set(listOf("kotlin", "kotlin-native", "nuget", "csharp", "dotnet", "interop"))
     }
   }

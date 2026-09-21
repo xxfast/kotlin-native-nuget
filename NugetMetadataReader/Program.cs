@@ -3444,6 +3444,21 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
                 return new TypeRefOrDiag(new RirAsyncType(awaited.TypeRef), null, rawName);
         }
 
+        // ADR-156: `IAsyncEnumerable<T>` with one admissible element becomes the SAME reader
+        // wrapper with a different kind, so it counts as one annotatable node exactly as
+        // `Task<T>` does and `TryMapMethod` unwraps it through the same path. The
+        // `not RirAsyncType` guard is load-bearing and is why this is not a one-line addition to
+        // the branch above: without it `IAsyncEnumerable<Task<T>>` would bind with `Task<T>` as
+        // its ELEMENT type, silently, instead of staying skipped.
+        if (rawName == "System.Collections.Generic.IAsyncEnumerable`1" && typeArguments.Length == 1)
+        {
+            var element = typeArguments[0];
+            if (element.Diagnostic is not null) return new TypeRefOrDiag(null, element.Diagnostic, rawName);
+            if (element.TypeRef is not null and not RirAsyncType)
+                return new TypeRefOrDiag(
+                    new RirAsyncType(element.TypeRef, "async_enumerable"), null, rawName);
+        }
+
         // Async shapes — informational (not a structural skip).
         if (IsAsyncTypeName(rawName))
             return new TypeRefOrDiag(null, null, rawName);

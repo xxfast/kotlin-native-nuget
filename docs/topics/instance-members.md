@@ -199,13 +199,73 @@ A **sync** method taking a token, a method taking two or more tokens, a nullable
 diagnostic (`info_cancellation_token_not_yet_mapped`) rather than the generic
 `skipped_unbound_type_reference` hint.
 
+## Async streams {id="async-streams"}
+
+An `IAsyncEnumerable<T>`-returning method, instance or static, becomes a Kotlin `Flow<T>`:
+
+```C#
+// TestDependency/Kennel.cs
+public IAsyncEnumerable<string> BarksAsync(int count) { /* ... */ }
+public async IAsyncEnumerable<Kitten> LitterAsync(
+    [EnumeratorCancellation] CancellationToken ct = default) { /* ... */ }
+public static async IAsyncEnumerable<int> Ticks() { /* ... */ }
+```
+
+```kotlin
+val kennel = Kennel()
+kennel.barks(3).collect { println(it) }                    // fun barks(count: Int): Flow<String>
+kennel.litter().collect { kitten -> kitten.use { it.name } } // fun litter(): Flow<Kitten>, elements are handles you own
+Kennel.ticks().toList()                                      // companion object { fun ticks(): Flow<Int> }
+```
+
+The naming and cancellation-token elision rules are the same as [async methods](#async-methods) and
+[cancellation](#async-cancellation) above; a trailing `Async` drops the same way, and a single
+`CancellationToken` parameter elides.
+
+The flow is cold, and **the C# method itself runs at `collect`, not at the Kotlin call that returns
+the `Flow`**. One `Flow` value collected twice runs the C# method twice:
+
+```kotlin
+val barks = kennel.barks(1)
+barks.toList()   // BarksAsync runs once
+barks.toList()   // runs again, from the start
+```
+
+A synchronous argument-validation throw from the C# method therefore surfaces at `collect`, not
+where you called `kennel.barks(...)`, and a method with side effects runs once per collect rather
+than once per `Flow` value.
+
+Collector cancellation (`withTimeoutOrNull`, `take(1)`, a cancelled parent job) stops the C#
+enumeration, but only **promptly** when the source itself marks its token parameter
+`[EnumeratorCancellation]` (`LitterAsync` above); without it, the current step finishes and yields
+one more element before C# notices. Either way, the collector receives nothing past the point it
+cancelled: no element is ever delivered after cancellation. Disposing the C# enumerator is
+fire-and-forget: `collect` can return before the C# iterator's own `finally` has run, and an
+exception thrown from that `finally` is silently dropped. A mid-stream throw from the C# source
+surfaces the same way a faulted `Task` does, as a catchable `NugetManagedException`:
+
+```kotlin
+try {
+  kennel.howls().collect { }
+} catch (e: NugetManagedException) {
+  e.managedType   // "System.InvalidOperationException"
+}
+```
+
+`IAsyncEnumerable<T>` at a parameter, property, constructor, or type-argument position,
+`IAsyncEnumerable<T>?`, a nullable *value* element (`IAsyncEnumerable<int?>`), and async on a bound
+interface, a struct, or a generic class, are not bound; see Limitations below.
+
 ## Limitations
 
 - `Nullable<T>` value-typed instance properties and parameters (`int?`, `CatMood?`) are not yet
   supported.
 - Struct-typed instance properties and methods are supported; see [C# structs](structs.md).
-- `ValueTask`/`ValueTask<T>` methods, and an async method on a bound interface, a struct, or a
-  generic class, don't bind yet; see [The bridgeable subset](bridgeable-subset.md).
+- `ValueTask`/`ValueTask<T>` methods, and an async method (including `IAsyncEnumerable<T>`) on a
+  bound interface, a struct, or a generic class, don't bind yet; see
+  [The bridgeable subset](bridgeable-subset.md).
+- `IAsyncEnumerable<T>` at a parameter, property, constructor, or type-argument position,
+  `IAsyncEnumerable<T>?`, and a nullable *value* element (`IAsyncEnumerable<int?>`), don't bind yet.
 - A sync method taking a `CancellationToken`, a method taking more than one, a nullable
   `CancellationToken?`, and a token on a constructor or property are not yet bound.
 
@@ -222,5 +282,6 @@ diagnostic (`info_cancellation_token_not_yet_mapped`) rather than the generic
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/057-csharp-overload-sets-in-kotlin.md">ADR-057: C# overload sets in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/152-task-to-suspend-fun.md">ADR-152: Reverse Task/Task&lt;T&gt; to suspend fun</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/153-reverse-cancellation-token.md">ADR-153: Reverse cancellation token</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/156-iasyncenumerable-to-flow.md">ADR-156: Reverse IAsyncEnumerable&lt;T&gt; to Flow&lt;T&gt;</a>
     </category>
 </seealso>

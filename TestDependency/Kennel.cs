@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 using Test.Menagerie;
 
 namespace Test.Kennel;
@@ -320,6 +322,180 @@ public class Kennel
     {
         await Task.Delay(Delay);
         return 2;
+    }
+
+    // ----------------------------------------------------------------------------------------
+    // ADR-156: the `IAsyncEnumerable<T>` half. A C# async stream becomes a COLD Kotlin `Flow<T>`
+    // pulled one `MoveNextAsync` at a time over ADR-152's begin/end pair. Every member below is
+    // one seam, and the counters exist because "Kotlin got three strings" says nothing about
+    // whether the C# iterator was ever started twice, ever stopped, or ever cleaned up:
+    //
+    //   BarksAsync  converting element (string), INSTANCE, NO [EnumeratorCancellation]: the
+    //               token-ignoring source. A collector cancelled mid-step cannot interrupt the
+    //               pending step, so C# runs on to its next yield and the enumeration stops
+    //               there. `BarkYields` counts what C# produced, so "no element delivered after
+    //               cancel" is a statement about the DIFFERENCE between what C# yielded and what
+    //               the collector saw, not about a number Kotlin alone could fake.
+    //   LitterAsync bound-class HANDLE element (Kitten), WITH [EnumeratorCancellation]: the
+    //               honouring source, where the same cancel aborts the pending step promptly.
+    //   Ticks       STATIC, and a nullable VALUE element (`int?` is System.Nullable<int>, a
+    //               closed generic struct, not an annotation) — the one element shape here that
+    //               is neither a pass-through scalar nor a reference.
+    //   HowlsAsync  plain `int`, the element needing NO conversion at all, and the member that
+    //               THROWS mid-stream after two good elements: the fault has to arrive on the
+    //               collector as a catchable NugetManagedException, with the iterator's `finally`
+    //               still run and the host still alive.
+    //
+    // `yield return` inside a `try` with a `catch` is illegal in a C# iterator, so every cleanup
+    // observation below is a `try/finally`, never StayAsync's catch-and-rethrow shape.
+    // ----------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// How many times <see cref="BarksAsync"/> was CALLED. Deliberately incremented in a plain
+    /// (non-iterator) wrapper, because an async iterator's body does not run at the call: the
+    /// split between this and <see cref="BarkEnumerations"/> is what tells a `Flow` that calls the
+    /// C# method once and enumerates twice from a `Flow` that calls it per collect (ADR-156's open
+    /// question 1). One Kotlin `Flow` value collected twice must move BOTH counters to 2.
+    /// </summary>
+    public int BarkCalls { get; private set; }
+
+    /// <summary>How many <see cref="BarksAsync"/> iterator bodies actually started.</summary>
+    public int BarkEnumerations { get; private set; }
+
+    /// <summary>How many elements <see cref="BarksAsync"/> has yielded, across all enumerations.</summary>
+    public int BarkYields { get; private set; }
+
+    /// <summary>How many <see cref="BarksAsync"/> iterator `finally` blocks ran (cleanup).</summary>
+    public int BarkFinallyRuns { get; private set; }
+
+    /// <summary>True once a <see cref="LitterAsync"/> step SAW its token cancelled.</summary>
+    public bool LitterCancelled { get; private set; }
+
+    /// <summary>How many <see cref="LitterAsync"/> iterator `finally` blocks ran.</summary>
+    public int LitterFinallyRuns { get; private set; }
+
+    /// <summary>How many <see cref="HowlsAsync"/> iterator `finally` blocks ran, throw included.</summary>
+    public int HowlFinallyRuns { get; private set; }
+
+    /// <summary>
+    /// The token-IGNORING source, in two parts on purpose. This half is an ordinary method, so it
+    /// runs (and bumps <see cref="BarkCalls"/>) the moment the bridge calls it, which under ADR-156
+    /// is at collect time.
+    /// </summary>
+    public IAsyncEnumerable<string> BarksAsync(int count)
+    {
+        BarkCalls++;
+        return BarkStream(count);
+    }
+
+    /// <summary>
+    /// The iterator half. The first element is immediate and every later one is behind a
+    /// <see cref="Dawdle"/> wait that no token can interrupt, so a collector cancelled during that
+    /// wait is cancelled MID-STEP: C# finishes the step, yields once more, and only then stops.
+    /// That is the whole of ADR-156's "promptly when the C# honours the token, at the next element
+    /// otherwise", and it is why this fixture does not simply abort at a yield.
+    /// </summary>
+    private async IAsyncEnumerable<string> BarkStream(int count)
+    {
+        BarkEnumerations++;
+        try
+        {
+            for (int i = 0; i < count; i++)
+            {
+                if (i > 0) await Task.Delay(Dawdle);
+                BarkYields++;
+                yield return $"woof{i}";
+            }
+        }
+        finally
+        {
+            BarkFinallyRuns++;
+        }
+    }
+
+    /// <summary>
+    /// The token-HONOURING source, yielding a bound-class HANDLE element. The first kitten is
+    /// immediate, the second is behind a cancellable wait, so a mid-step cancel aborts the step
+    /// itself and <see cref="LitterCancelled"/> records that C# was genuinely told to stop rather
+    /// than merely abandoned. A `catch` is impossible around a `yield return`, so the observation
+    /// lives in the `finally`.
+    /// </summary>
+    public async IAsyncEnumerable<Kitten> LitterAsync(
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        try
+        {
+            yield return new Kitten("Oreo");
+            await Task.Delay(Dawdle, ct);
+            yield return new Kitten("Mylo");
+        }
+        finally
+        {
+            if (ct.IsCancellationRequested) LitterCancelled = true;
+            LitterFinallyRuns++;
+        }
+    }
+
+    /// <summary>
+    /// STATIC: no selfHandle in the generated `Enumerate`, and the method is called off the TYPE
+    /// rather than off a receiver handle.
+    ///
+    /// This row was written as <c>IAsyncEnumerable&lt;int?&gt;</c> (a nullable VALUE element) and
+    /// was narrowed to plain <c>int</c> deliberately: <c>int?</c> is
+    /// <c>System.Nullable&lt;int&gt;</c>, a closed generic struct, and NOTHING in the reverse
+    /// pipeline maps it yet — <c>RirPrimitiveType</c> has no nullability at all. Nullable value
+    /// ELEMENTS are a split-out item; what matters here is that the shape stays a NAMED skip
+    /// rather than binding as a plain <c>Int</c> and losing the nulls. That claim is ASSERTED
+    /// against an inline probe assembly in <c>NugetExtractApiIntegrationTest</c>; the members
+    /// below are the live examples of the same shapes in the shipped fixture, so a regression
+    /// shows up here as a bound member that should not exist.
+    /// </summary>
+    public static async IAsyncEnumerable<int> Ticks()
+    {
+        await Task.Yield();
+        yield return 1;
+        yield return 2;
+        yield return 3;
+    }
+
+    /// <summary>
+    /// ADR-156 deferred scope, live: `IAsyncEnumerable&lt;T&gt;` at a PARAMETER. Binding it would
+    /// need a generated C# enumerable that pulls from a Kotlin collector — the repeated-callback
+    /// machinery the reverse bridge does not have — so it must stay a NAMED skip.
+    /// </summary>
+    public int Herd(IAsyncEnumerable<int> arrivals) => 0;
+
+    /// <summary>
+    /// The nullable VALUE element, kept here as the live regression fixture for the split-out
+    /// item above: it must produce `info_async_not_yet_mapped` (or another NAMED skip), never a
+    /// silent bind that drops the nulls.
+    /// </summary>
+    public static async IAsyncEnumerable<int?> NullableTicks()
+    {
+        await Task.Yield();
+        yield return 1;
+        yield return null;
+    }
+
+    /// <summary>
+    /// Plain <c>int</c>, the element shape needing NO conversion, and the MID-STREAM THROW: two
+    /// good elements arrive before the fault, so a collector that received nothing has a different
+    /// bug from one that received two and then no exception. The `finally` still runs on this path
+    /// (ADR-156 ledger (e)) and <see cref="HowlFinallyRuns"/> is how the test sees it.
+    /// </summary>
+    public async IAsyncEnumerable<int> HowlsAsync()
+    {
+        try
+        {
+            await Task.Yield();
+            yield return 1;
+            yield return 2;
+            throw new InvalidOperationException("Mylo howled the roof off");
+        }
+        finally
+        {
+            HowlFinallyRuns++;
+        }
     }
 }
 
