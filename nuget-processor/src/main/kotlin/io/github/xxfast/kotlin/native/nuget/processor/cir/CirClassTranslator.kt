@@ -3016,8 +3016,8 @@ private fun csharpEnumTypeName(enum: KSClassDeclaration, context: NugetContext?)
  * Issue #285: two entries of one enum whose converted C# names are equal.
  *
  * This is not a new hazard introduced by the casing rule, it is an old one that was silent: `FOO`
- * beside `Foo` already rendered `Foo = 0, Foo = 1`, which is CS0102 at the *consumer's* compile with
- * no generator diagnostic at all. The per-segment rule adds one more colliding pair (`FOO_BAR`
+ * beside `Foo` already rendered `Foo = 0, Foo = 1`, which is CS0102 at the *consumer's* compile
+ * with no generator diagnostic at all. The per-segment rule adds one more colliding pair (`FOO_BAR`
  * beside `FooBar`, which used to differ only because the second was mangled to `Foobar`) and closes
  * both with the same fatal error ADR-110/ADR-113 already use for a C# name claimed twice.
  *

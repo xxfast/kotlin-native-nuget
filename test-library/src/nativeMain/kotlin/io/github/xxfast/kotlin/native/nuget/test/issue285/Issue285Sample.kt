@@ -65,7 +65,8 @@ fun echoExample(value: Example): Example = value
  * The next entry in declaration order, wrapping at the end. A second ordinal route whose answer
  * differs from its argument, so a C# assertion cannot pass by accident on an identity shim.
  */
-fun nextExample(value: Example): Example = Example.entries[(value.ordinal + 1) % Example.entries.size]
+fun nextExample(value: Example): Example =
+  Example.entries[(value.ordinal + 1) % Example.entries.size]
 
 /**
  * The Kotlin `name` of an entry, which the C# spelling is allowed to differ from (ADR-006 excludes
