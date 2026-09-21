@@ -31,6 +31,21 @@ A read-only property (`{ get; }`, or a getter-only expression body) becomes a Ko
 settable property (`{ get; set; }`) becomes a `var`. Neither is a stored field: every access calls
 through the bridge, just like a method call.
 
+An `init`-only property (`{ get; init; }`) also becomes a `val`, not a `var`: Kotlin has no object
+initializer to assign it through, so there is no setter to bind and no way to write it after
+construction from Kotlin.
+
+```C#
+// TestDependency/Kennel.cs
+public string Motto { get; init; } = "sit, stay";
+public int Capacity { get; init; } = 2;
+```
+
+```kotlin
+val kennel = Kennel()
+"${kennel.motto}|${kennel.capacity}"  // "sit, stay|2", both read-only
+```
+
 ## Overloads
 
 Same-name C# instance methods become ordinary Kotlin overloads, resolved by parameter type:

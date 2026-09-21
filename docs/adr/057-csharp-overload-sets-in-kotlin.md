@@ -421,6 +421,21 @@ package/versioning path; do not patch NuGet caches or generated shims.
 - Digest collision: force/inject equal bridge IDs for unequal canonical strings and assert a
   fail-fast diagnostic.
 
+### Amendment (2026-09-22): `error_kotlin_signature_collision` now has a producer
+
+Decision 4 called for a structured diagnostic; until now the check was a bare `require(false)`
+`IllegalArgumentException` in `NugetGenerateBindingsTask.kt`, naming only the first colliding
+group, with no package id and no `RirDiagnostic` kind. Every colliding group is now reported as
+its own `error_kotlin_signature_collision` diagnostic, on the shared rendering path, prefixed
+`[nuget:<packageId>]`, keyed on the Kotlin name actually emitted (`Async`-stripped) rather than the
+raw camelCased C# name. Behaviour stays fatal, per this ADR.
+
+The check now also covers class properties and bound-interface methods, which it had never seen: a
+C# class with two properties differing only by case (`Name`/`name`), or a bound interface with two
+such methods, used to render redeclared Kotlin silently instead of failing generation. Two gaps
+remain open, tracked in ROADMAP's Tooling section rather than here: `RirStruct` methods and
+generic class definitions are still unchecked.
+
 ## Consequences
 
 - Ordinary C# overloads become ordinary Kotlin overloads; no public suffix API is introduced.

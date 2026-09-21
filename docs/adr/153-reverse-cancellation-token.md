@@ -35,11 +35,14 @@ What the pipeline does today:
   exactly one site: the generated `nugetThrowManagedError`
   (`NugetGenerateBindingsTask.kt:4518-4523`), which compiles from `nativeMain` and therefore
   cannot name a `kotlinx.coroutines` symbol (ADR-130, ADR-152 Context).
-- **Verified by grep.** Nothing in `nuget-plugin/src/main` or the reader *produces*
-  `error_kotlin_signature_collision` for the reverse direction (the enum value exists,
-  `rir/RirModel.kt:345`, and one test feeds it from hand-written JSON). Two C# overloads that
-  project to the same Kotlin signature reach the Kotlin compiler as a "conflicting overloads"
-  error in the consumer's build.
+- **Verified by grep, since amended.** At the time this ADR was written, nothing in
+  `nuget-plugin/src/main` or the reader *produced* `error_kotlin_signature_collision` for the
+  reverse direction (the enum value existed, `rir/RirModel.kt:345`, and one test fed it from
+  hand-written JSON); a collision was fatal (a bare `require(false)`) but reported no structured
+  kind. Two C# overloads that projected to the same Kotlin signature failed generation with an
+  unstructured error before any Kotlin was written, not a "conflicting overloads" error in the
+  consumer's build. ADR-057's 2026-09-22 amendment gave it the structured
+  `error_kotlin_signature_collision` diagnostic this bullet originally found missing.
 
 ## Alternatives Considered
 
@@ -126,8 +129,8 @@ try { kennel.bolt() } catch (e: CancellationException) { /* C# cancelled itself 
 - `FooAsync()` beside `FooAsync(CancellationToken)`: after elision both are `suspend fun foo()`.
   The reader folds the pair: the token overload is kept, the token-less sibling (same name, same
   static-ness, same remaining parameter types) is dropped with an info diagnostic
-  `info_cancellation_overload_folded`. Without this the consumer's Kotlin does not compile
-  (Context, last bullet).
+  `info_cancellation_overload_folded`. Without this, generation fails with
+  `error_kotlin_signature_collision` (Context, last bullet; ADR-057's 2026-09-22 amendment).
 - **Where the fold sits (amended during implementation).** It is a post-pass over the per-type
   mapped method list in `MapType` (`FoldCancellationOverloads`, `Program.cs`), not a rule inside
   `TryMapMethod`: the decision needs both siblings and `TryMapMethod` sees one member at a time.
