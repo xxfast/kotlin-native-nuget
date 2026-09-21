@@ -2102,7 +2102,7 @@ class NugetGenerateBindingsTaskTest {
       // ADR-130 "Allocation, pinned": not NugetHandles.retain, so nuget_live_handles and the
       // LeakTests baselines do not move.
       assertFalse(
-        file.content.contains("NugetHandles.retain("),
+        file.content.contains("NugetHandles.retain(buildError("),
         "the envelope must NOT be counted in nuget_live_handles",
       )
 

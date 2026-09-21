@@ -3268,7 +3268,7 @@ private fun bindingsFileContent(
       add("import $INTERNAL_PKG.NugetObjectHandle")
       add("import $INTERNAL_PKG.NugetBridgeTable")
       add("import $INTERNAL_PKG.nugetKotlinError")
-      add("import kotlinx.cinterop.StableRef")
+      add("import $INTERNAL_PKG.nugetRetainCtx")
       add("import kotlinx.cinterop.asStableRef")
       add("import kotlinx.cinterop.staticCFunction")
       add("import kotlinx.cinterop.invoke")
@@ -3551,7 +3551,7 @@ private fun kotlinDelegateBlock(
     |  val fn = requireNotNull($objectName.create${shape}DelegateFn) {
     |    $failMsg
     |  }
-    |  val ctx: COpaquePointer = StableRef.create(f).asCPointer()
+    |  val ctx: COpaquePointer = nugetRetainCtx(f)
     |  val delegate: COpaquePointer = requireNotNull(
     |    fn.invoke(staticCFunction(::$prefix${'D'}elegateSlot), ctx),
     |  ) {
@@ -5049,6 +5049,7 @@ private fun nugetKotlinErrorsActual(): String = """
   |
   |import io.github.xxfast.kotlin.native.nuget.runtime.NugetError
   |import io.github.xxfast.kotlin.native.nuget.runtime.awaitForKotlin
+  |import io.github.xxfast.kotlin.native.nuget.runtime.NugetHandles
   |import io.github.xxfast.kotlin.native.nuget.runtime.buildError
   |import io.github.xxfast.kotlin.native.nuget.runtime.flowForKotlin
   |import kotlinx.coroutines.flow.Flow
@@ -5060,6 +5061,14 @@ private fun nugetKotlinErrorsActual(): String = """
   |
   |internal actual fun nugetKotlinError(t: Throwable): COpaquePointer =
   |  StableRef.create(buildError(t)).asCPointer()
+  |
+  |// ADR-158: the counted half of a bridge/delegate ctx (see the `expect` for why it is counted and
+  |// why it must stay paired with the release inside nuget_kotlin_release below).
+  |internal actual fun nugetRetainCtx(value: Any): COpaquePointer = NugetHandles.retain(value)
+  |
+  |internal actual fun nugetReleaseCtx(ctx: COpaquePointer) {
+  |  NugetHandles.release(ctx)
+  |}
   |
   |// ADR-152: one line of delegation to the runtime's awaitForKotlin. `release` is only ever
   |// reached on the cancel-then-complete path, where the coroutine was cancelled before the C#
@@ -5557,6 +5566,19 @@ private fun nugetRuntimeContent(): String = """
   |// visible. Every call site keeps calling nugetKotlinError(t) unchanged.
   |internal expect fun nugetKotlinError(t: Throwable): COpaquePointer
   |
+  |// ADR-158: the ctx StableRef a minted bridge or delegate holds, COUNTED through the same
+  |// NugetHandles.retain/release pair `nuget_live_handles` reports, so a Kotlin object handed INTO
+  |// C# is observable by the leak harness exactly like a C# object handed into Kotlin. Before this,
+  |// the bridge ctx was a raw StableRef.create and every leak row over a Kotlin-implemented
+  |// interface or a Kotlin lambda was measuring nothing. `NugetHandles` lives in the runtime klib,
+  |// which this shared nativeMain file cannot see (ADR-130), hence the same expect/actual seam
+  |// nugetKotlinError uses. Retain and release MUST stay a pair: half of it (a counted mint with an
+  |// uncounted release) makes every such row fail by one handle per crossing, forever.
+  |internal expect fun nugetRetainCtx(value: Any): COpaquePointer
+  |
+  |// The release half, across the same seam and for the same reason.
+  |internal expect fun nugetReleaseCtx(ctx: COpaquePointer)
+  |
   |// ADR-152: the reverse async crossing, across the SAME source-set seam and for the same reason.
   |// `awaitForKotlin` lives in the runtime klib (it owns the cancellable suspension), which is
   |// declared `api` on the PER-TARGET source set, so this
@@ -5697,10 +5719,11 @@ private fun nugetRuntimeContent(): String = """
   |  // loses its last root. Offered to every table because the release path is interface-agnostic;
   |  // the ctx guard inside evict() means at most one table owns this ctx, and a table holding a
   |  // NEWER bridge for the same impl is left alone.
-  |  val ref = ctx.asStableRef<Any>()
-  |  val impl: Any = ref.get()
+  |  val impl: Any = ctx.asStableRef<Any>().get()
   |  nugetBridgeTables.value.forEach { it.evict(impl, ctx) }
-  |  ref.dispose()
+  |  // ADR-158: the counted release, the pair of nugetRetainCtx. Was a bare `dispose()`, which left
+  |  // `nuget_live_handles` blind to every Kotlin object living inside a C# bridge or delegate.
+  |  nugetReleaseCtx(ctx)
   |}
 """.trimMargin().trim()
 
@@ -6436,7 +6459,7 @@ private fun interfaceBindingsFileContent(
       add("import $INTERNAL_PKG.nugetKotlinString")
       // ADR-089: the per-interface bridge reuse table beside mint{Iface}Bridge.
       add("import $INTERNAL_PKG.NugetBridgeTable")
-      add("import kotlinx.cinterop.StableRef")
+      add("import $INTERNAL_PKG.nugetRetainCtx")
       add("import kotlinx.cinterop.staticCFunction")
       if (bridgeHasString) add("import kotlinx.cinterop.toKString")
       val hasEnumSlot: Boolean = bridgePlan.slots.any { r ->
@@ -6683,7 +6706,7 @@ private fun kotlinBridgeBlock(
     |  val fn = requireNotNull($objectName.createBridgeFn) {
     |    $failMsg
     |  }
-    |  val ctx: COpaquePointer = StableRef.create(impl).asCPointer()
+    |  val ctx: COpaquePointer = nugetRetainCtx(impl)
     |  val bridge: COpaquePointer = requireNotNull(
     |    fn.invoke(
     |    $mintArgs,

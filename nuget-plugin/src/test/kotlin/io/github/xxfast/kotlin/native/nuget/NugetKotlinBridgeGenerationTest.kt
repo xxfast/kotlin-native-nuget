@@ -226,7 +226,10 @@ class NugetKotlinBridgeGenerationTest {
     assertContains(
       file.content, "internal fun mintIFeedableBridge(impl: IFeedable): COpaquePointer",
     )
-    assertContains(file.content, "val ctx: COpaquePointer = StableRef.create(impl).asCPointer()")
+    // ADR-158: the ctx is now COUNTED (nugetRetainCtx -> NugetHandles.retain), paired with the
+    // NugetHandles.release inside nuget_kotlin_release, so `nuget_live_handles` and the LeakTests
+    // harness can finally see a Kotlin object living inside a C# bridge.
+    assertContains(file.content, "val ctx: COpaquePointer = nugetRetainCtx(impl)")
     // Slot order is the registration order, and ctx is always last.
     assertContains(
       file.content,
@@ -268,8 +271,8 @@ class NugetKotlinBridgeGenerationTest {
       .single { it.relativePath.endsWith("/NugetRuntime.kt") }
 
     assertContains(runtime.content, "@CName(\"nuget_kotlin_release\")")
-    assertContains(runtime.content, "val ref = ctx.asStableRef<Any>()")
-    assertContains(runtime.content, "ref.dispose()")
+    assertContains(runtime.content, "val impl: Any = ctx.asStableRef<Any>().get()")
+    assertContains(runtime.content, "nugetReleaseCtx(ctx)")
     assertContains(runtime.content, "@CName(\"nuget_kotlin_string_free\")")
     assertContains(runtime.content, "nativeHeap.free(ptr)")
   }
