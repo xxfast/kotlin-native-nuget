@@ -2919,7 +2919,7 @@ internal static class NullabilityHelpers
     /// </summary>
     private static bool IsAnnotatable(RirTypeRef type) =>
         type is RirStringType or RirObjectHandleType or RirInterfaceType or RirTypeParameterType
-            or RirGenericInstanceType or RirAsyncType or RirCollectionType;
+            or RirGenericInstanceType or RirAsyncType or RirCollectionType or RirDelegateType;
 
     /// <summary>
     /// ADR-072 Decision 7: the number of annotatable nodes in <paramref name="type"/>'s pre-order
@@ -2942,6 +2942,13 @@ internal static class NullabilityHelpers
         // argument still contributes none, which is why `IDictionary<string, int>` counts two
         // nodes, not three.
         RirCollectionType c => 1 + c.TypeArguments.Sum(CountAnnotatableNodes),
+        // ADR-158: the DELEGATE node comes first in the pre-order, then its type arguments, exactly
+        // as a collection's do (`Action<string?>` is [1, 2], `Func<string?,string>?` is [2, 2, 1],
+        // `Func<int,string?>` is [1, 2] because the int argument consumes no byte: all three
+        // verified by spike, 2026-09-21). Counted over typeArguments and NEVER over the derived
+        // Parameters/ReturnType, which would double-count `Comparison<T>` (one argument, two
+        // parameters) and miss `Predicate<T>`'s synthetic bool return.
+        RirDelegateType d => 1 + d.TypeArguments.Sum(CountAnnotatableNodes),
         _ => 0,
     };
 
@@ -3044,6 +3051,36 @@ internal static class NullabilityHelpers
                 }
 
                 return new RirCollectionType(c.Collection, c.Definition, newArgs, outerNullable);
+            }
+
+            // ADR-158, finding 7a trap 2: the bytes land on the type ARGUMENTS (that is what Roslyn
+            // annotates), and the Invoke shape is REBUILT from the annotated arguments here. Carrying
+            // the pre-walk Parameters/ReturnType over would leave `typeArguments` saying `string?`
+            // while `parameters` still said `string`, and the generators read `parameters`: every
+            // `Action<string?>` would bind as `(String) -> Unit`, silently.
+            case RirDelegateType d:
+            {
+                bool outerNullable = bytes[cursor++] == 2;
+                var newArgs = new List<RirTypeRef>(d.TypeArguments.Count);
+                foreach (var arg in d.TypeArguments)
+                {
+                    newArgs.Add(CountAnnotatableNodes(arg) == 0
+                        ? arg
+                        : ApplyPreOrder(arg, bytes, ref cursor, ref hitNullableTypeParameter));
+                }
+
+                // The shape was already derivable when the node was built, so a false here would be
+                // a contradiction; fall back to the pre-walk shape rather than throwing inside the
+                // nullability pass.
+                if (!SignatureDecoder.TryDelegateShape(
+                    d.Definition, newArgs, out var parameters, out var returnType))
+                {
+                    parameters = d.Parameters;
+                    returnType = d.ReturnType;
+                }
+
+                return new RirDelegateType(
+                    d.Definition, newArgs, parameters, returnType, outerNullable);
             }
 
             case RirAsyncType a:
@@ -3557,7 +3594,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         // timer callback) is a TypeReference, not a TypeSpec, so it never reaches the generic arm.
         // Same misfiling `Task` had before ADR-152, and the same fix.
         if (IsDelegateDefinitionName(fullName))
-            return new TypeRefOrDiag(null, DelegatePending(fullName), fullName);
+            return DelegateFromDefinition(fullName, ImmutableArray<TypeRefOrDiag>.Empty);
 
         // ADR-153: a CancellationToken is not an unbound handle either. Admissibility is a
         // property of the whole member (exactly one, on an async method), not of the type, so the
@@ -3645,6 +3682,107 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
     internal static bool IsDelegateDefinitionName(string? fullName) =>
         fullName is not null && DelegateDefinitions.Contains(fullName);
 
+    /// <summary>
+    /// ADR-158 Decision 8: the Invoke arity ceiling for a delegate slot. The mechanism is
+    /// arity-generic (a six-parameter `staticCFunction`, ctx + 4 + errOut, was verified by spike on
+    /// Kotlin 2.4.10 mingwX64) and the hard ABI limit is 22 (ADR-059), so this is policy: it keeps
+    /// the generated surface to the shapes real APIs use. Deliberately separate from the interface
+    /// bridge's own ceiling of 2, which this does not move.
+    /// </summary>
+    internal const int DelegateMaxArity = 4;
+
+    /// <summary>
+    /// ADR-158: the <c>Invoke</c> shape of a BCL delegate, derived POSITIONALLY from the closed type
+    /// arguments, per definition. Returns false for a name whose shape this reader does not derive
+    /// (<c>EventHandler</c>, the thread/timer callbacks, bare <c>Delegate</c>), which keeps the
+    /// named skip. Called twice per delegate: once when the type ref is built, and once more after
+    /// the ADR-053 nullability walk has replaced the type arguments, because the parameters and
+    /// return are DERIVED and must be rebuilt from the annotated arguments rather than carried over.
+    /// </summary>
+    internal static bool TryDelegateShape(
+        string definition,
+        IReadOnlyList<RirTypeRef> typeArguments,
+        out IReadOnlyList<RirTypeRef> parameters,
+        out RirTypeRef returnType)
+    {
+        parameters = Array.Empty<RirTypeRef>();
+        returnType = RirVoidType.Instance;
+
+        if (definition == "System.Action") return true;
+
+        if (definition.StartsWith("System.Action`", StringComparison.Ordinal))
+        {
+            parameters = typeArguments;
+            return true;
+        }
+
+        if (definition.StartsWith("System.Func`", StringComparison.Ordinal))
+        {
+            if (typeArguments.Count == 0) return false;
+            parameters = typeArguments.Take(typeArguments.Count - 1).ToList();
+            returnType = typeArguments[^1];
+            return true;
+        }
+
+        if (definition == "System.Predicate`1" && typeArguments.Count == 1)
+        {
+            parameters = typeArguments;
+            returnType = new RirPrimitiveType("bool");
+            return true;
+        }
+
+        if (definition == "System.Comparison`1" && typeArguments.Count == 1)
+        {
+            parameters = new[] { typeArguments[0], typeArguments[0] };
+            returnType = new RirPrimitiveType("int");
+            return true;
+        }
+
+        if (definition == "System.Converter`2" && typeArguments.Count == 2)
+        {
+            parameters = new[] { typeArguments[0] };
+            returnType = typeArguments[1];
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// ADR-158: the delegate type ref for a BCL definition, or the named skip. Every argument must
+    /// already have resolved to a v1 type ref: an async argument (<c>Func&lt;Task&lt;int&gt;&gt;</c>)
+    /// or anything else outside the generic-argument vocabulary keeps the skip, so an async delegate
+    /// never half-binds. The arity ceiling is checked here so the reason names it.
+    /// </summary>
+    private TypeRefOrDiag DelegateFromDefinition(
+        string definition, ImmutableArray<TypeRefOrDiag> typeArguments)
+    {
+        var args = new List<RirTypeRef>(typeArguments.Length);
+        foreach (var arg in typeArguments)
+        {
+            if (arg.TypeRef is null || !IsV1GenericTypeArgument(arg.TypeRef))
+                return new TypeRefOrDiag(null, DelegatePending(definition), definition);
+
+            args.Add(arg.TypeRef);
+        }
+
+        if (!TryDelegateShape(definition, args, out var parameters, out var returnType))
+            return new TypeRefOrDiag(null, DelegatePending(definition), definition);
+
+        if (parameters.Count > DelegateMaxArity)
+            return new TypeRefOrDiag(null,
+                new PendingDiagnostic(
+                    DelegateSkipKind,
+                    $"delegate `{definition}` takes {parameters.Count} arguments, above the v1 " +
+                        $"delegate ceiling of {DelegateMaxArity} (ADR-158 Decision 8)",
+                    $"Expose a delegate with at most {DelegateMaxArity} parameters, or pass the " +
+                        "values through a bound class."),
+                definition);
+
+        return new TypeRefOrDiag(
+            new RirDelegateType(definition, args, parameters, returnType), null, definition);
+    }
+
     private static PendingDiagnostic CancellationTokenPending(string reason) =>
         new(CancellationTokenDiagnostics.Kind, reason, CancellationTokenDiagnostics.Hint);
 
@@ -3670,7 +3808,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         // collection branch, so a closed generic custom delegate can never be mistaken for a
         // generic class with a witness bridge.
         if (IsDelegateDefinitionName(rawName))
-            return new TypeRefOrDiag(null, DelegatePending(rawName!), rawName);
+            return DelegateFromDefinition(rawName!, typeArguments);
 
         if (genericType.Diagnostic is { Kind: DelegateSkipKind })
             return new TypeRefOrDiag(null, genericType.Diagnostic, rawName);
@@ -4315,6 +4453,7 @@ internal sealed class RirConstructor
 [JsonDerivedType(typeof(RirTypeParameterType), "typeparam")]
 [JsonDerivedType(typeof(RirGenericInstanceType), "generic")]
 [JsonDerivedType(typeof(RirCollectionType), "collection")]
+[JsonDerivedType(typeof(RirDelegateType), "delegate")]
 internal abstract class RirTypeRef { }
 
 internal sealed class RirVoidType : RirTypeRef
@@ -4521,6 +4660,38 @@ internal sealed class RirCollectionType : RirTypeRef
 
     public string Definition { get; }
     public IReadOnlyList<RirTypeRef> TypeArguments { get; }
+    public bool Nullable { get; }
+}
+
+/// <summary>
+/// ADR-158: a C# delegate in a signature, crossing as ONE transfer <c>GCHandle</c> over a
+/// Kotlin-minted one-slot bridge. <see cref="Definition"/> is the CLR full name of the DECLARED
+/// delegate (<c>System.Func`2</c>), which the C# holder factory constructs;
+/// <see cref="TypeArguments"/> spells the closed type and is empty for a non-generic delegate;
+/// <see cref="Parameters"/>/<see cref="ReturnType"/> are the <c>Invoke</c> shape AFTER substitution
+/// AND after nullability was applied to the arguments (a generator reads these, never the
+/// arguments). Mirrors <c>RirDelegateType</c> in <c>RirModel.kt</c> field-for-field.
+/// </summary>
+internal sealed class RirDelegateType : RirTypeRef
+{
+    public RirDelegateType(
+        string definition,
+        IReadOnlyList<RirTypeRef> typeArguments,
+        IReadOnlyList<RirTypeRef> parameters,
+        RirTypeRef returnType,
+        bool nullable = false)
+    {
+        Definition = definition;
+        TypeArguments = typeArguments;
+        Parameters = parameters;
+        ReturnType = returnType;
+        Nullable = nullable;
+    }
+
+    public string Definition { get; }
+    public IReadOnlyList<RirTypeRef> TypeArguments { get; }
+    public IReadOnlyList<RirTypeRef> Parameters { get; }
+    public RirTypeRef ReturnType { get; }
     public bool Nullable { get; }
 }
 

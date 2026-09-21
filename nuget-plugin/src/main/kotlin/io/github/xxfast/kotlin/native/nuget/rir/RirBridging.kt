@@ -958,6 +958,96 @@ fun collectionPositionDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic
     }
   }
 
+// ADR-158: does this type reference mention a delegate anywhere the generators would have to mint a
+// bridge for?
+private fun mentionsDelegate(type: RirTypeRef): Boolean =
+  type is RirDelegateType ||
+      (type is RirCollectionType && type.typeArguments.any(::mentionsDelegate)) ||
+      (type is RirGenericInstanceType && type.typeArguments.any(::mentionsDelegate))
+
+// ADR-158: the plugin-side half of the delegate skips. The READER names the shapes it declines
+// itself (an async delegate, an Invoke shape outside the v1 vocabulary, arity above the ceiling, a
+// custom delegate it cannot decode); this names every member whose delegate the reader ADMITTED and
+// the generators still decline, so an admitted-then-dropped member is never silent. Mirrors
+// collectionPositionDiagnostics above, and shrinks as positions are lifted: the day a delegate
+// PARAMETER of an ordinary bound class binds, that case stops appearing here.
+fun delegatePositionDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> =
+  rir.assemblies.flatMap { assembly ->
+    assembly.namespaces.flatMap { namespace ->
+      namespace.types.flatMap { type ->
+        val owner: String = when (type) {
+          is RirClass -> if (type.typeParameters.isEmpty()) "class" else "generic class"
+          is RirStruct -> "struct"
+          is RirInterface -> "bound interface"
+          else -> return@flatMap emptyList()
+        }
+        val methods: List<RirMethod> = when (type) {
+          is RirClass -> type.methods
+          is RirStruct -> type.methods
+          is RirInterface -> type.methods
+          else -> emptyList()
+        }
+        val properties: List<RirProperty> = when (type) {
+          is RirClass -> type.properties
+          is RirStruct -> type.properties
+          is RirInterface -> type.properties
+          else -> emptyList()
+        }
+        val constructors: List<RirConstructor> = when (type) {
+          is RirClass -> type.constructors
+          is RirStruct -> type.constructors
+          else -> emptyList()
+        }
+
+        fun reason(position: String): String =
+          "a delegate at a $position of a $owner member is not bound yet (ADR-158 deferred " +
+              "scope): only a delegate PARAMETER of a method or constructor of an ordinary bound " +
+              "class crosses"
+
+        val hint = "Expose this member with the delegate as a parameter of an ordinary bound " +
+            "class, or pass the values themselves."
+
+        val fromMethods: List<RirDiagnostic> = methods
+          .filter { m -> mentionsDelegate(m.returnType) || m.parameters.any { mentionsDelegate(it.type) } }
+          .map { method ->
+            RirDiagnostic(
+              kind = RirDiagnosticKind.SKIPPED_DELEGATE_POSITION,
+              typeName = type.name,
+              memberName = method.name,
+              memberSignature = method.identity(),
+              reason = reason(if (mentionsDelegate(method.returnType)) "return" else "parameter"),
+              hint = hint,
+            )
+          }
+        val fromProperties: List<RirDiagnostic> = properties
+          .filter { mentionsDelegate(it.type) }
+          .map { property ->
+            RirDiagnostic(
+              kind = RirDiagnosticKind.SKIPPED_DELEGATE_POSITION,
+              typeName = type.name,
+              memberName = property.name,
+              memberSignature = "${property.type.describe()} ${property.name}",
+              reason = reason("property"),
+              hint = hint,
+            )
+          }
+        val fromConstructors: List<RirDiagnostic> = constructors
+          .filter { ctor -> ctor.parameters.any { mentionsDelegate(it.type) } }
+          .map { ctor ->
+            RirDiagnostic(
+              kind = RirDiagnosticKind.SKIPPED_DELEGATE_POSITION,
+              typeName = type.name,
+              memberName = type.name,
+              memberSignature = ctor.identity(),
+              reason = reason("constructor parameter"),
+              hint = hint,
+            )
+          }
+        (fromMethods + fromProperties + fromConstructors).map { assembly.packageId to it }
+      }
+    }
+  }
+
 // ADR-052 "shared bridgeable ordering", extended by Phase 9 line 151 and ADR-059 Decision 5a: the
 // constructor pointer (if any) first, then bridgeable static methods, then bridgeable instance
 // methods, then one PropertyGetter/[PropertySetter] pair per bridgeable instance property,

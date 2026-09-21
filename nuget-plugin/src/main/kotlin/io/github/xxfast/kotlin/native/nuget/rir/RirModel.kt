@@ -562,6 +562,13 @@ enum class RirDiagnosticKind {
   @SerialName("skipped_delegate_signature")
   SKIPPED_DELEGATE_SIGNATURE,
 
+  // ADR-158: a delegate the READER admitted (it carries a derivable Invoke shape inside the v1
+  // vocabulary) that the GENERATORS still decline: a return or property position, a struct or
+  // bound-interface or generic-class member, or a delegate nested in a collection. Plugin-derived,
+  // the mirror of SKIPPED_COLLECTION_POSITION, so no admitted-then-dropped member is silent.
+  @SerialName("skipped_delegate_position")
+  SKIPPED_DELEGATE_POSITION,
+
   // ADR-155: an array (`T[]`). Deferred with the rest of the array work (`byte[]` → `ByteArray`
   // wants the ADR-151 blit, not slots). Today such a member vanishes with no diagnostic at all.
   @SerialName("skipped_array")

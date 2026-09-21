@@ -53,6 +53,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.classInterfaceSupertypes
 import io.github.xxfast.kotlin.native.nuget.rir.collisionDiagnostics
 import io.github.xxfast.kotlin.native.nuget.rir.collapsedOverloadSets
 import io.github.xxfast.kotlin.native.nuget.rir.collectionPositionDiagnostics
+import io.github.xxfast.kotlin.native.nuget.rir.delegatePositionDiagnostics
 import io.github.xxfast.kotlin.native.nuget.rir.identity
 import io.github.xxfast.kotlin.native.nuget.rir.contractHash
 import io.github.xxfast.kotlin.native.nuget.rir.fnv1a64
@@ -6757,8 +6758,14 @@ internal fun allDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> {
   // members), the positions that do not ride the shared conversion path.
   val fromCollectionPositions: List<Pair<String, RirDiagnostic>> =
     collectionPositionDiagnostics(rir)
+  // ADR-158: the plugin-side half of the delegate skips. The reader now ADMITS a BCL delegate whose
+  // Invoke shape it can derive, so without this a member the generators still decline would vanish
+  // with no warning at all: the reader's own named skip no longer covers it.
+  val fromDelegatePositions: List<Pair<String, RirDiagnostic>> =
+    delegatePositionDiagnostics(rir)
   return fromReader + fromCollisions + fromArityLimits + fromAmbiguousGenericConstructors +
-      fromDeferredAsync + fromCollapsedOverloads + fromCollectionPositions
+      fromDeferredAsync + fromCollapsedOverloads + fromCollectionPositions +
+      fromDelegatePositions
 }
 
 // ADR-155 Q8: one skipped_overload_set per DROPPED MEMBER (never one per set: a user reading the

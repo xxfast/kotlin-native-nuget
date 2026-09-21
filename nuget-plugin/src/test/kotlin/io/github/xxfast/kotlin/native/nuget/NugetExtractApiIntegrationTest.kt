@@ -511,6 +511,10 @@ class NugetExtractApiIntegrationTest {
           public int ApplyGeneric(int seed, Transformer<int, int> step) => step(seed);
           public Transform MakeDoubler() => value => value * 2;
           public int Plain(int seed) => seed + 1;
+          public string Maybe(Func<int, int>? step) => step is null ? "none" : "some";
+          public int Sum5(Func<int, int, int, int, int, int> add) => add(1, 2, 3, 4, 5);
+          public System.Threading.Tasks.Task<int> LaterAsync(
+              Func<System.Threading.Tasks.Task<int>> work) => work();
       }
     """.trimIndent()
 
@@ -533,11 +537,53 @@ class NugetExtractApiIntegrationTest {
 
     val workbench: JsonObject = root.type("Probe.Delegates", "Workbench")
     val methods: List<JsonObject> = workbench.getValue("methods").jsonArray.map { it.jsonObject }
+    fun method(name: String): JsonObject =
+      methods.single { it.getValue("name").jsonPrimitive.content == name }
+    fun delegateOf(member: String, parameter: Int = 0): JsonObject = method(member)
+      .getValue("parameters").jsonArray[parameter].jsonObject.getValue("type").jsonObject
+    fun kind(o: JsonObject): String = o.getValue("kind").jsonPrimitive.content
+    fun nullable(o: JsonObject): Boolean = o["nullable"]?.jsonPrimitive?.boolean ?: false
+    fun list(o: JsonObject, field: String): List<JsonObject> =
+      o[field]?.jsonArray?.map { it.jsonObject } ?: emptyList()
+
+    // A BCL delegate whose Invoke shape the reader can derive positionally reaches the RIR as a
+    // first-class `delegate` type ref. The three routes: a generic TypeSpec (Apply), a non-generic
+    // TypeReference (Act), and a name-table shape that is neither Func nor Action (AnyLong).
+    assertEquals("delegate", kind(delegateOf("Apply", parameter = 1)))
     assertEquals(
-      listOf("Plain"),
-      methods.map { it.getValue("name").jsonPrimitive.content },
-      "no delegate-shaped member binds in this build, including the return position that used to " +
-          "bind by accident as a handle (MakeDoubler)",
+      "System.Func`2",
+      delegateOf("Apply", 1).getValue("definition").jsonPrimitive.content,
+      "the C# holder factory spells the DECLARED delegate type, so it must survive",
+    )
+    assertEquals("int", list(delegateOf("Apply", 1), "parameters").single().getValue("name").jsonPrimitive.content)
+    assertEquals("int", delegateOf("Apply", 1).getValue("returnType").jsonObject.getValue("name").jsonPrimitive.content)
+    assertEquals("System.Action", delegateOf("Act").getValue("definition").jsonPrimitive.content)
+    assertEquals(emptyList(), list(delegateOf("Act"), "parameters"))
+    assertEquals("void", kind(delegateOf("Act").getValue("returnType").jsonObject))
+    assertEquals("System.Predicate`1", delegateOf("AnyLong").getValue("definition").jsonPrimitive.content)
+    assertEquals(
+      "bool",
+      delegateOf("AnyLong").getValue("returnType").jsonObject.getValue("name").jsonPrimitive.content,
+      "Predicate<T>'s bool return is synthetic: it is not a type argument",
+    )
+
+    // ADR-053/ADR-158 finding 7a. `Action<string?>` is [1, 2] pre-order with the delegate node
+    // first, and the bytes land on the type ARGUMENTS: the derived `parameters` must carry the
+    // annotation too, because that is the list a generator reads.
+    assertEquals(false, nullable(delegateOf("Shout")))
+    assertEquals(true, nullable(list(delegateOf("Shout"), "typeArguments").single()))
+    assertEquals(
+      true,
+      nullable(list(delegateOf("Shout"), "parameters").single()),
+      "deriving parameters BEFORE the nullability walk binds `Action<string?>` as `(String) -> " +
+          "Unit` with no diagnostic anywhere",
+    )
+    // The other encoding: every node agrees, so Roslyn writes no per-parameter attribute at all and
+    // the information lives in a method-level NullableContextAttribute(2).
+    assertEquals(
+      true,
+      nullable(delegateOf("Maybe")),
+      "`Func<int,int>? step` is a nullable DELEGATE carried by a context attribute",
     )
 
     val diagnostics: List<JsonObject> = root.getValue("assemblies").jsonArray.single().jsonObject
@@ -546,17 +592,20 @@ class NugetExtractApiIntegrationTest {
       .filter { it.getValue("memberName").jsonPrimitive.content == member }
       .map { it.getValue("kind").jsonPrimitive.content }
 
-    // One kind from all three decoding routes: a generic BCL TypeSpec (Apply/Shout/AnyLong), a
-    // non-generic BCL TypeReference (Act), and a package-declared TypeDef (ApplyNamed/MakeDoubler,
-    // and the closed generic custom delegate, which must not become an ADR-072 generic instance).
-    listOf("Apply", "Shout", "AnyLong", "Act", "ApplyNamed", "ApplyGeneric", "MakeDoubler")
-      .forEach { member ->
-        assertEquals(
-          listOf("skipped_delegate_signature"),
-          diagnosedKinds(member),
-          "`$member` must carry exactly one delegate-shaped diagnostic",
-        )
-      }
+    // Still named skips, from the reader: a package-declared TypeDef (ApplyNamed, MakeDoubler, and
+    // the closed generic custom delegate, which must not become an ADR-072 generic instance), an
+    // ASYNC delegate, and an arity above the v1 ceiling of 4.
+    listOf("ApplyNamed", "ApplyGeneric", "MakeDoubler", "LaterAsync", "Sum5").forEach { member ->
+      assertEquals(
+        listOf("skipped_delegate_signature"),
+        diagnosedKinds(member),
+        "`$member` must carry exactly one delegate-shaped diagnostic",
+      )
+      assertTrue(
+        methods.none { it.getValue("name").jsonPrimitive.content == member },
+        "`$member` must not bind",
+      )
+    }
 
     // `Invoke`, `BeginInvoke` and `EndInvoke` are never extracted, so the two noise diagnostics
     // `BeginInvoke`/`EndInvoke` produced (AsyncCallback, IAsyncResult) are gone with them.
