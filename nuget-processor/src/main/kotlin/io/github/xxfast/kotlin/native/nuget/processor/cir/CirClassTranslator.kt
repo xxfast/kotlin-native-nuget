@@ -884,9 +884,9 @@ internal fun translateClass(
     }
 
   // ADR-159: the suspend half comes off the shared selector rather than off this walk, so the
-  // Kotlin export builder and the C# projection cannot disagree about which members exist, and an
-  // `override suspend fun` over a kept base's member is not re-projected here (the base's export
-  // dispatches to it dynamically; a second `FillAsync` on the subclass is CS0108).
+  // Kotlin export builder and the C# projection cannot disagree about which members exist, and
+  // an `override suspend fun` over a kept base's member is not re-projected here (the base's
+  // export dispatches to it dynamically; a second `FillAsync` on the subclass is CS0108).
   val allSuspendMethods: List<KSFunctionDeclaration> =
     cls.forwardSuspendRouteMethods(classifier, superClassDeclaration)
   val regularMethods: List<KSFunctionDeclaration> = filteredMethods
@@ -1102,8 +1102,8 @@ internal fun translateClass(
   // ADR-090, extended to companions by ADR-095). Instance methods and companion statics are
   // checked *together*: static-ness is not part of a C# signature either.
   // ADR-159: the async and Flow-route methods are in the checked set now. The call used to run
-  // before they were projected, so two `suspend` overloads that render one C# signature reached the
-  // generated file and failed it with CS0111 instead of being named here (ADR-118 gives them
+  // before they were projected, so two `suspend` overloads that render one C# signature reached
+  // the generated file and failed it with CS0111 instead of being named here (ADR-118 gives them
   // distinct C symbols, so the collision is purely the public C# signature).
   emitCsharpSignatureCollisions(
     methods = plannedMethods +
@@ -1123,8 +1123,8 @@ internal fun translateClass(
       }
   } else null
 
-  // ADR-159: one scope per instance, owned by the root-most class in the kept chain that projects a
-  // scope-using member. `null` means nothing in the chain does.
+  // ADR-159: one scope per instance, owned by the root-most class in the kept chain that
+  // projects a scope-using member. `null` means nothing in the chain does.
   val scopeOwner: KSClassDeclaration? = cls.forwardScopeOwner(classifier, exportedTypes)
 
   return CirClass(
@@ -1148,9 +1148,9 @@ internal fun translateClass(
     isOpen = isOpen,
     companionMembers = companionMembers + asyncMembers + flowRouteMembers,
     // ADR-159: derived from what PROJECTED, in one place, for the whole kept chain. The raw
-    // `getAllFunctions()` scan this replaces read inherited members (so a subclass of an async base
-    // rendered a second `DisposeAsync`, CS0108) and refused ones (so a class whose only suspend
-    // member was dropped advertised `IAsyncDisposable` and implemented nothing).
+    // `getAllFunctions()` scan this replaces read inherited members (so a subclass of an async
+    // base rendered a second `DisposeAsync`, CS0108) and refused ones (so a class whose only
+    // suspend member was dropped advertised `IAsyncDisposable` and implemented nothing).
     hasSuspendMethods = scopeOwner != null,
     ownsScope = scopeOwner?.qualifiedName?.asString() == cls.qualifiedName?.asString() &&
         scopeOwner != null,
@@ -2984,11 +2984,12 @@ internal fun translateInterfaceBackingClass(
     interfaces = listOf("I$name"),
     hasInternalHandleConstructor = true,
     isSealed = true,
-    // ADR-159 (ROADMAP:49's flag-derivation half): derived from what this wrapper projects, which is
-    // never an async member -- `ForwardCallablePlanner.interfaceEntries` skips `suspend` with
-    // `ForwardPlanSkipReason.SUSPEND`, and no Flow route runs for an interface -- so the wrapper owns
-    // no scope. Left explicit rather than defaulted so the day interface async members are admitted
-    // (deferred) the line to change is here, reading `forwardScopeOwner` like every other class.
+    // ADR-159 (ROADMAP:49's flag-derivation half): derived from what this wrapper projects,
+    // which is never an async member -- `ForwardCallablePlanner.interfaceEntries` skips
+    // `suspend` with `ForwardPlanSkipReason.SUSPEND`, and no Flow route runs for an interface --
+    // so the wrapper owns no scope. Left explicit rather than defaulted so the day interface
+    // async members are admitted (deferred) the line to change is here, reading
+    // `forwardScopeOwner` like every other class.
     hasSuspendMethods = false,
     ownsScope = false,
   )

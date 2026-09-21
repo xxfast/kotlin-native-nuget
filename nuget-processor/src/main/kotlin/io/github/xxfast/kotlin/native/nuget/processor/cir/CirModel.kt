@@ -178,9 +178,9 @@ data class CirClass(
   // projected members alone would have made a derived class drop the base's scope cleanup silently.
   val ownsScope: Boolean = false,
   // ADR-159: this concrete class carries the `DisposeAsync` BODY as an `override`, because the
-  // owner above it is abstract and could only declare it (an abstract class has no `Native_Dispose`
-  // import to drain into). `DisposeAsync` follows `Dispose`'s spelling, which is the rule that makes
-  // `IAsyncDisposable` satisfiable on an abstract owner at all.
+  // owner above it is abstract and could only declare it (an abstract class has no
+  // `Native_Dispose` import to drain into). `DisposeAsync` follows `Dispose`'s spelling, which is
+  // the rule that makes `IAsyncDisposable` satisfiable on an abstract owner at all.
   val overridesDisposeAsync: Boolean = false,
   // ADR-064 amendment (2026-09-10): plain-text prose for the class's `<remarks>` doc comment, set
   // only when WARNING_NO_PUBLIC_CONSTRUCTOR fires, off the same detail string the diagnostic uses.

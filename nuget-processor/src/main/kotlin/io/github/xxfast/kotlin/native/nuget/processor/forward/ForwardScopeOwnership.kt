@@ -16,12 +16,13 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsForwardFlow
 /**
  * ADR-159: who owns the coroutine scope in an inheritance chain.
  *
- * One scope per instance, owned by the **first class in the kept chain that projects a scope-using
- * member**; every class below the owner reuses that one scope and inherits `DisposeAsync`. Before
- * this file the scope emission fired only on a base-less class while the flag that drives
- * `Dispose()` came off a raw `getAllFunctions()` scan, so an async member anywhere but the root of a
- * chain generated C# that did not compile (CS0103/CS0108/CS0122/CS0535), and a class whose only
- * async member was *refused* was handed an `IAsyncDisposable` it could not implement.
+ * One scope per instance, owned by the **first class in the kept chain that projects a
+ * scope-using member**; every class below the owner reuses that one scope and inherits
+ * `DisposeAsync`. Before this file the scope emission fired only on a base-less class while the
+ * flag that drives `Dispose()` came off a raw `getAllFunctions()` scan, so an async member
+ * anywhere but the root of a chain generated C# that did not compile
+ * (CS0103/CS0108/CS0122/CS0535), and a class whose only async member was *refused* was handed an
+ * `IAsyncDisposable` it could not implement.
  *
  * "Projects" is the load-bearing word: the question is what reached the generated artifacts, not
  * what the author declared. Every refusal the async and Flow routes apply (ADR-114 parameter,
@@ -65,11 +66,10 @@ internal fun KSClassDeclaration.forwardSuspendRouteMethods(
 }
 
 /**
- * The Flow-returning methods this class projects on the legacy Flow route, the ordinary-class twin
- * of [forwardArmFlowMethods][io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMethods].
- * Read only by the scope question: the two artifact halves already agree on this route (both apply
- * `isForwardMemberOf`), which is why the Flow twin of the shape compiled and leaked instead of
- * failing the build.
+ * The Flow-returning methods this class projects on the legacy Flow route, the ordinary-class
+ * twin of [forwardArmFlowMethods]. Read only by the scope question: the two artifact halves
+ * already agree on this route (both apply `isForwardMemberOf`), which is why the Flow twin of
+ * the shape compiled and leaked instead of failing the build.
  */
 internal fun KSClassDeclaration.forwardClassFlowMethods(
   classifier: ForwardBridgeTypeClassifier,

@@ -154,9 +154,10 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
   // ADR-101 amendment (2026-09-11): a derived class lists its own interfaces beside the base. The
   // disposables stay off that list: the base declares `_handle`, implements `INugetHandle` and
   // carries `IDisposable`, and a derived class inherits all three.
-  // ADR-159: `IAsyncDisposable` rides on scope OWNERSHIP, not on base-lessness. A derived class that
-  // projects the chain's first async member declares the scope and the drain, so it has to advertise
-  // them; a class below the owner inherits the interface with the body and must not re-list it.
+  // ADR-159: `IAsyncDisposable` rides on scope OWNERSHIP, not on base-lessness. A derived class
+  // that projects the chain's first async member declares the scope and the drain, so it has to
+  // advertise them; a class below the owner inherits the interface with the body and must not
+  // re-list it.
   val asyncDisposable: List<String> = listOfNotNull("IAsyncDisposable".takeIf { cls.ownsScope })
   val implements: String = if (cls.superClass != null) {
     " : " + (listOf(cls.superClass) + cls.interfaces + asyncDisposable).joinToString(", ")
@@ -355,7 +356,6 @@ private fun StringBuilder.renderClassConstructor(cls: CirClass, ctor: CirConstru
     className = cls.name,
     ctor = ctor,
     hasSuperClass = cls.superClass != null,
-    hasSuspendMethods = cls.hasSuspendMethods,
   )
 }
 
@@ -372,10 +372,9 @@ internal fun StringBuilder.renderConstructorMember(
   className: String,
   ctor: CirConstructor,
   hasSuperClass: Boolean,
-  hasSuspendMethods: Boolean = false,
 ) {
   renderDllImport(constructorNativeImport(libraryName, nativePrefix, ctor))
-  renderConstructor(className, ctor, hasSuperClass, hasSuspendMethods)
+  renderConstructor(className, ctor, hasSuperClass)
 }
 
 private fun StringBuilder.renderLegacyMethodNativeImport(cls: CirClass, method: CirMethod) {
@@ -394,7 +393,6 @@ internal fun StringBuilder.renderConstructor(
   className: String,
   ctor: CirConstructor,
   hasSuperClass: Boolean = false,
-  hasSuspendMethods: Boolean = false,
 ) {
   renderDoc(ctor.doc, "        ")
   val paramStr: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
@@ -702,9 +700,10 @@ internal fun StringBuilder.renderDispose(
   isOpen: Boolean = false,
   hasSuperClass: Boolean = false,
   hasSuspendMethods: Boolean = false,
-  // ADR-159: `hasSuspendMethods` is "a scope exists on this instance" and drives the cleanup block
-  // in `Dispose()` at every level; `ownsScope` is "this class declares it" and drives `DisposeAsync`.
-  // A sealed arm owns whatever scope it has, so the default keeps `CirSealedRenderer` intact.
+  // ADR-159: `hasSuspendMethods` is "a scope exists on this instance" and drives the cleanup
+  // block in `Dispose()` at every level; `ownsScope` is "this class declares it" and drives
+  // `DisposeAsync`. A sealed arm owns whatever scope it has, so the default keeps
+  // `CirSealedRenderer` intact.
   ownsScope: Boolean = hasSuspendMethods,
   overridesDisposeAsync: Boolean = false,
 ) {
@@ -718,8 +717,8 @@ internal fun StringBuilder.renderDispose(
   if (isAbstract) {
     appendLine("        public ${abstract}void Dispose();")
     // ADR-159: an abstract scope owner can only DECLARE the drain -- it has no `Native_Dispose`
-    // import to call -- so `DisposeAsync` follows `Dispose`'s spelling and each concrete class below
-    // renders the body as an `override`. Without this the abstract class advertised
+    // import to call -- so `DisposeAsync` follows `Dispose`'s spelling and each concrete class
+    // below renders the body as an `override`. Without this the abstract class advertised
     // `IAsyncDisposable` and implemented nothing (CS0535).
     if (ownsScope) appendLine("        public ${abstract}ValueTask DisposeAsync();")
   } else {

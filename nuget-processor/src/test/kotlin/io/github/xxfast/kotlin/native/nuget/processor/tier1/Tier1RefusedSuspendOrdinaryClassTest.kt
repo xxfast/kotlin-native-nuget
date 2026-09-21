@@ -8,19 +8,19 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * ADR-159: a class whose **only** async member was refused owns no scope. The ordinary-class mirror
- * of [Tier1SealedArmRefusedSuspendTest], which pinned the same rule for a sealed arm long before the
- * ordinary route derived its flag from anything.
+ * ADR-159: a class whose **only** async member was refused owns no scope. The ordinary-class
+ * mirror of [Tier1SealedArmRefusedSuspendTest], which pinned the same rule for a sealed arm long
+ * before the ordinary route derived its flag from anything.
  *
  * The scan this replaces read declarations, not projections, so `NapRegistry` was handed
  * `public class NapRegistry : IDisposable, IAsyncDisposable` with a `_scopeHandle` and a
- * `DisposeAsync` that drains a scope no call ever creates. In a coroutine-free module it was worse
- * than spurious: `tracker.needsAsync` is set only by projected async members, so the file carried no
- * `using System.Threading.Tasks` and the gate reported CS0246 on `ValueTask`, CS0246 on `Task` and
- * CS0738 on the unimplementable interface.
+ * `DisposeAsync` that drains a scope no call ever creates. In a coroutine-free module it was
+ * worse than spurious: `tracker.needsAsync` is set only by projected async members, so the file
+ * carried no `using System.Threading.Tasks` and the gate reported CS0246 on `ValueTask`, CS0246
+ * on `Task` and CS0738 on the unimplementable interface.
  *
- * Deliberately a module with nothing else async, because that is the shape that broke: the refusal
- * has to survive being the only async declaration in the file.
+ * Deliberately a module with nothing else async, because that is the shape that broke: the
+ * refusal has to survive being the only async declaration in the file.
  *
  * Mylo will not be weighed in pairs.
  */

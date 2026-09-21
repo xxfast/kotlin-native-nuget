@@ -117,7 +117,8 @@ class Tier1SubclassScopeOwnerTest {
     )
     assertTrue(
       classBlock(cs, "NapLounge").contains("internal IntPtr GetOrCreateScope()"),
-      "expected the derived owner to declare the scope factory; got: ${classBlock(cs, "NapLounge")}",
+      "expected the derived owner to declare the scope factory; got: " +
+          classBlock(cs, "NapLounge"),
     )
     assertTrue(
       classBlock(cs, "NapLounge").contains("public ValueTask DisposeAsync()"),
@@ -165,9 +166,9 @@ class Tier1SubclassScopeOwnerTest {
   }
 
   /**
-   * Shape: both levels declare. The owner's scope factory has to be reachable from the subclass's
-   * own async bodies, which `private` was not (CS0122). `internal` matches `_scopeHandle`, which was
-   * already visible.
+   * Shape: both levels declare. The owner's scope factory has to be reachable from the
+   * subclass's own async bodies, which `private` was not (CS0122). `internal` matches
+   * `_scopeHandle`, which was already visible.
    */
   @Test
   fun `the scope factory is visible to a subclass that calls it`() {
@@ -228,7 +229,10 @@ class Tier1SubclassScopeOwnerTest {
     val result = run()
 
     val owner: String = classBlock(result.generatedCSharp, "Brusher")
-    assertContains(result.generatedCSharp, "public abstract class Brusher : IDisposable, IAsyncDisposable")
+    assertContains(
+      result.generatedCSharp,
+      "public abstract class Brusher : IDisposable, IAsyncDisposable",
+    )
     assertTrue(
       owner.contains("public abstract ValueTask DisposeAsync();"),
       "expected the abstract owner to declare the drain (CS0535 without it); got: $owner",
@@ -253,7 +257,8 @@ class Tier1SubclassScopeOwnerTest {
   /** The C# class body, from its declaration line to the next class declaration. */
   private fun classBlock(csharp: String, name: String): String {
     val lines: List<String> = csharp.lines()
-    val start: Int = lines.indexOfFirst { it.contains("class $name ") || it.endsWith("class $name") }
+    val start: Int =
+      lines.indexOfFirst { it.contains("class $name ") || it.endsWith("class $name") }
     if (start < 0) return "<no class $name in generated C#>"
     val end: Int = lines.drop(start + 1)
       .indexOfFirst { it.trimStart().startsWith("public ") && it.contains("class ") }

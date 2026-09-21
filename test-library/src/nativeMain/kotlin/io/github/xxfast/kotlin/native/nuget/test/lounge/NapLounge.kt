@@ -140,8 +140,9 @@ class CombBrusher : Brusher() {
  * The negative control: a class whose ONLY async member is refused. `Pair<String, Int>` is not a
  * bridgeable parameter, so [pair] is skipped named (`SKIPPED_UNSUPPORTED_INPUT`) and no
  * `*_pair_async` export exists. Nothing on this class uses a scope, so it must get no
- * `IAsyncDisposable`, no `_scopeHandle` and no `DisposeAsync`: the scope flag has to be derived from
- * what PROJECTED, not from a raw scan of the declarations. [cushions] is the member that survives.
+ * `IAsyncDisposable`, no `_scopeHandle` and no `DisposeAsync`: the scope flag has to be derived
+ * from what PROJECTED, not from a raw scan of the declarations. [cushions] is the member that
+ * survives.
  */
 class NapRegistry {
   suspend fun pair(entry: Pair<String, Int>): Int = entry.second

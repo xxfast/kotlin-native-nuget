@@ -95,8 +95,8 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
 ) {
   val qualifiedName: String = cls.qualifiedName?.asString() ?: return
 
-  // ADR-159: one selector, shared with the C# half (`translateClass`'s `allSuspendMethods`) and with
-  // the gate in `NugetProcessor`. It owns the ADR-147 generic-owner refusal, the ADR-114/119
+  // ADR-159: one selector, shared with the C# half (`translateClass`'s `allSuspendMethods`) and
+  // with the gate in `NugetProcessor`. It owns the ADR-147 generic-owner refusal, the ADR-114/119
   // parameter and return refusals, ADR-118's declared-only rule for a sealed arm, the
   // `isForwardMemberOf` membership rule the C# half always applied and the new
   // `override suspend fun` skip. This half used to filter on strictly less and emitted a stray
