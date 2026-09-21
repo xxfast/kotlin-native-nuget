@@ -99,6 +99,52 @@ class Tier1EntryPointCollisionTest {
   }
 
   /**
+   * ADR-162: the reserved renderer-owned signature is passed at the sealed **base** and sealed
+   * **arm** sites too, which was inferred from the renderers (`CirSealedRenderer` gives the base
+   * `: IDisposable, INugetHandle` and its own `Dispose()`, and an arm inherits it) and is verified
+   * here. Both offending declarations are reported in ONE round, which is the containment claim
+   * itself: before this item a build named one of them and stopped.
+   */
+  @Test
+  fun `fun dispose on a sealed base and on an arm both collide with the generated Dispose`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.abicollision.sealeddispose
+
+      sealed class Feeding {
+        fun dispose() {}
+
+        data class Ready(val bowls: Int) : Feeding() {
+          fun dispose() {}
+        }
+      }
+      """.trimIndent(),
+    )
+
+    assertTrue(
+      result.kspErrors.any { message ->
+        message.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name) &&
+            message.contains("Feeding.Dispose") &&
+            !message.contains("Feeding.Ready.Dispose")
+      },
+      "expected the sealed base's own dispose to collide; kspErrors=${result.kspErrors}",
+    )
+    assertTrue(
+      result.kspErrors.any { message ->
+        message.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name) &&
+            message.contains("Feeding.Ready.Dispose")
+      },
+      "expected the arm's dispose to collide with the inherited Dispose; " +
+          "kspErrors=${result.kspErrors}",
+    )
+    assertTrue(
+      result.generatedFiles.keys.none { name -> name.endsWith("CNameExports.kt") },
+      "a collision must fail the round before the Kotlin export file is written; " +
+          "generatedFiles=${result.generatedFiles.keys}",
+    )
+  }
+
+  /**
    * The issue's own shape, on the live suspend legacy route. ADR-118 numbers a suspend **overload**
    * pair, so `play(Player)`/`play(Track)` no longer collide; the collision that still reaches this
    * route across two *different* owners is a class method against a top-level function whose Kotlin

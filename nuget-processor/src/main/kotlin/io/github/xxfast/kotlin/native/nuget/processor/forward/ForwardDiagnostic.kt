@@ -473,11 +473,16 @@ internal fun ForwardDiagnostic.format(): String {
  * `KSNode` so KSP/Gradle can render the message at the author's own Kotlin source.
  */
 internal object ForwardDiagnosticSink {
-  // ADR-100: every non-fatal diagnostic, in emission order, for `NugetDiagnostics.json`. The
-  // KSPLogger calls stay (free, observed by the Tier 1 harness, and they start working the day the
-  // Gradle/KSP worker-stdout gap closes upstream), but they reach no console today, so the file is
-  // what a consumer actually gets. Synchronized because KSP runs the processor on a Worker API
-  // thread and two targets' rounds can share one daemon; the processor resets before each round.
+  // ADR-100: every non-fatal diagnostic, in emission order, for `NugetDiagnostics.json`.
+  //
+  // Corrected 2026-09-21 (ADR-162, verified by spike on `:test-library:kspKotlinMingwX64`, Windows,
+  // Gradle 9.1.0, `--console=plain`): these KSPLogger lines DO reach the console, as
+  // `e:`/`w: [ksp] <path>:<line>: <message>`, and every failure of a round is printed, not only the
+  // first. This comment used to claim they reach no console at all. What ADR-100 measured remains
+  // true of the task-level gap it was written for: `packNuget` usually does not run the KSP task
+  // (FROM-CACHE, then UP-TO-DATE), so on most builds nothing is emitted here to see and the file is
+  // still what a consumer gets. Synchronized because KSP runs the processor on a Worker API thread
+  // and two targets' rounds can share one daemon; the processor resets before each round.
   private val recorded: MutableList<ForwardDiagnosticRecord> =
     Collections.synchronizedList(mutableListOf())
 

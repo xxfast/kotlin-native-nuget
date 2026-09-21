@@ -42,7 +42,12 @@ internal data class ForwardDiagnosticRecord(
  *
  * Hand-rolled rather than kotlinx.serialization, following the `bound-types.json` precedent
  * ([parseBoundTypesManifest]): the processor has no JSON dependency and adding one to every
- * consumer's KSP classpath to write a four-field flat array is a poor trade.
+ * consumer's KSP classpath to write a flat array of at most six string fields is a poor trade.
+ *
+ * Every value is a JSON **string**, including ADR-162's `line`. That is a contract with the reader
+ * (`NugetReportDiagnosticsTask.parseForwardDiagnostics`), which finds fields by walking quoted
+ * tokens and pairing them key, value: one bare number would shift every following key onto the
+ * wrong value. A new field must be a string, or the reader has to learn about types first.
  */
 internal fun renderForwardDiagnosticsJson(records: List<ForwardDiagnosticRecord>): String {
   val entries: String = records.joinToString(",\n") { record ->
