@@ -86,10 +86,17 @@ class Tier1CallbackFaultContainmentTest {
 
     assertTrue(
       result.generatedCSharp.contains(
-        "if (_faulted && _jobHandle != IntPtr.Zero) NugetJobNative.Cancel(_jobHandle);"
+        "if (_faulted && job != IntPtr.Zero) NugetJobNative.Cancel(job);"
       ),
       "expected the constructor to cancel a flow that faulted before _jobHandle was assigned; " +
           "got: ${csharpLinesFor(result, "_faulted")}",
+    )
+    assertTrue(
+      result.generatedCSharp.contains("Interlocked.Exchange(ref _jobHandle, job);"),
+      "expected the job handle to be PUBLISHED with a release store, not a plain write: the onNext " +
+          "closure reads it from the Kotlin emitter's thread, so a plain write lets that reader see " +
+          "IntPtr.Zero after the handle exists and skip its own cancel; got: " +
+          csharpLinesFor(result, "_jobHandle"),
     )
     assertTrue(
       result.generatedCSharp.contains("private volatile bool _faulted;"),

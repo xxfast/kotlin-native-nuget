@@ -166,16 +166,22 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine("            callbacks.OnComplete = onComplete;")
   appendLine("            callbacks.OnError = onError;")
   appendLine()
-  appendLine("            _jobHandle = startCollect(")
+  appendLine("            IntPtr job = startCollect(")
   appendLine("                NugetThunks.NugetFlowOnNextPtr,")
   appendLine("                NugetThunks.NugetFlowOnCompletePtr,")
   appendLine("                NugetThunks.NugetFlowOnErrorPtr,")
   appendLine("                callbacks.Root());")
+  // ADR-161: the publication half of the ordering window part A left open. The onNext closure reads
+  // this field from the Kotlin emitter's thread with a `Volatile.Read`, so the store has to be a
+  // release, not a plain write, or the reader can see `IntPtr.Zero` after the handle exists and skip
+  // its cancel. Paired with the local below, which is what this frame cancels through: re-reading
+  // the field would be a second race for no gain.
+  appendLine("            Interlocked.Exchange(ref _jobHandle, job);")
   appendLine()
-  // ADR-161: a synchronous first emission runs onNext before this assignment, so the closure's own
+  // ADR-161: a synchronous first emission runs onNext before the store above, so the closure's own
   // cancel had no handle to use. Whoever sees the fault with a handle in hand cancels; Cancel is
   // idempotent, so both doing it is harmless.
-  appendLine("            if (_faulted && _jobHandle != IntPtr.Zero) NugetJobNative.Cancel(_jobHandle);")
+  appendLine("            if (_faulted && job != IntPtr.Zero) NugetJobNative.Cancel(job);")
   appendLine()
   appendLine("            if (cancellationToken.CanBeCanceled)")
   appendLine("                _cancelReg = cancellationToken.Register(() => NugetJobNative.Cancel(_jobHandle));")
