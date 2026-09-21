@@ -125,7 +125,14 @@ public class CharPositionMarshallingTests
     [Fact]
     public void Tag_NullableCharParameterAndReturn_RoundTripInOneCall()
     {
-        using var tag = new Tag('O');
+        // The cast is not decoration. `Tag`'s public constructor takes `char?` and its internal
+        // handle constructor takes `nint`; a bare `char` literal converts implicitly to BOTH
+        // (`char` -> `char?` lifted, `char` -> `int` -> `nint` numeric) and neither is better, so
+        // `new Tag('O')` is CS0121. That collision is not specific to `Char?` -- any single
+        // nullable-numeric constructor parameter has it -- and it is reported as a separate defect
+        // rather than papered over here; `new Tag(null)` above is unambiguous because `null` has no
+        // conversion to `nint` at all.
+        using var tag = new Tag((char?)'O');
 
         Assert.Null(tag.Echo(null));
         Assert.Equal('é', tag.Echo('é'));

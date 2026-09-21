@@ -1,3 +1,7 @@
+// `KotlinAction<T>` and `KotlinFunc<T, TResult>` are declared in the root `TestLibrary` namespace,
+// beside the other generated helpers, not in the fixture's own namespace -- the same `using` pair
+// `LambdaTests.cs` opens with.
+using TestLibrary;
 using TestLibrary.Cat;
 using TestLibrary.Metronome;
 
