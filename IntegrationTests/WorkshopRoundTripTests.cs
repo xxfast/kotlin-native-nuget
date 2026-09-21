@@ -58,10 +58,11 @@ public class WorkshopRoundTripTests
     public void ActionOfString_IsInvokedTwice_InOrder() =>
         Assert.Equal("Oreo,Mylo", WorkshopSample.WorkshopNames());
 
-    // The package-declared `Transform` delegate, which must stop being extracted as a class (it is
-    // one today, verified against the shipped reader on 2026-09-22) and become `(Int) -> Int` plus
-    // a `typealias Transform`. The Kotlin driver declares the value AT the typealias, so the row
-    // fails if the alias is missing even though a bare lambda would have compiled.
+    // The package-declared `Transform` delegate, decoded from its own `Invoke` MethodDef and bound
+    // as `(Int) -> Int` plus a `typealias Transform`. The Kotlin driver declares the value AT the
+    // typealias, so the row fails if the alias is missing even though a bare lambda would have
+    // compiled. The C# factory must also construct a real `Transform` and not a `Func<int,int>`,
+    // which `ApplyNamed(int, Transform)` would not accept.
     [Fact]
     public void CustomDelegate_BindsAsAFunctionTypeBehindItsTypealias() =>
         Assert.Equal(63, WorkshopSample.WorkshopApplyNamed(21));

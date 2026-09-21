@@ -1,12 +1,12 @@
 namespace Test.Workshop;
 
 /// <summary>
-/// A package-declared <c>delegate</c>, the "custom delegate" half of the feature. Today the reader
-/// has no <c>IsDelegate</c> test, so this TypeDef lands in the bound-handle name collector and is
-/// extracted as an ordinary <c>RirClass</c> with an <c>Invoke</c> method, no constructor and two
-/// noise diagnostics from <c>BeginInvoke</c>/<c>EndInvoke</c> (verified by spike, 2026-09-21). It
-/// must stop being a class and become a Kotlin function type plus a <c>typealias Transform</c>
-/// carrying this C# name.
+/// A package-declared <c>delegate</c>, the "custom delegate" half of the feature. Its shape comes
+/// from its own <c>Invoke</c> MethodDef (it has no type arguments to derive one from), and it binds
+/// as the Kotlin function type <c>(Int) -&gt; Int</c> plus a <c>typealias Transform</c> carrying this
+/// C# name. Before ADR-158 this TypeDef landed in the bound-handle name collector and was extracted
+/// as an ordinary <c>RirClass</c> with an <c>Invoke</c> method, no constructor and two noise
+/// diagnostics from <c>BeginInvoke</c>/<c>EndInvoke</c> (verified by spike, 2026-09-21).
 /// </summary>
 public delegate int Transform(int value);
 

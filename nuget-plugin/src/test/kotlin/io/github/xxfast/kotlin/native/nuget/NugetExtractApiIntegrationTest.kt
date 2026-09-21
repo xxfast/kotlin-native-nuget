@@ -489,7 +489,7 @@ class NugetExtractApiIntegrationTest {
   // `skipped_unbound_generic_instantiation` (hint: expose a BCL collection) and `Act` was
   // `skipped_unbound_type_reference` (hint: include System.Private.CoreLib).
   @Test
-  fun `metadata reader refuses delegates with one named skip and never as a class`() {
+  fun `metadata reader carries a delegate as a delegate and never as a class`() {
     val dotnet: String = findDotnet() ?: return
 
     val source: String = """
@@ -503,9 +503,15 @@ class NugetExtractApiIntegrationTest {
 
       public delegate void Sink(string? line);
 
+      public delegate bool TryParseNamed(string text, out int value);
+
+      public delegate System.Threading.Tasks.Task<int> LaterNamed();
+
       public sealed class Workbench
       {
           public void Pour(Sink sink) { sink(null); }
+          public bool Parse(TryParseNamed parse) => parse("1", out _);
+          public System.Threading.Tasks.Task<int> Later(LaterNamed work) => work();
           public int Apply(int seed, Func<int, int> step) => step(seed);
           public void Shout(Action<string?> sink) { sink("Oreo"); }
           public bool AnyLong(Predicate<string> test) => test("Oreo");
@@ -638,8 +644,11 @@ class NugetExtractApiIntegrationTest {
     assertEquals(emptyList(), diagnosedKinds("MakeDoubler"))
 
     // Still named skips, from the reader: a GENERIC custom delegate (which must not become an
-    // ADR-072 generic instance), an ASYNC delegate, and an arity above the v1 ceiling of 4.
-    listOf("ApplyGeneric", "LaterAsync", "Sum5").forEach { member ->
+    // ADR-072 generic instance), an ASYNC delegate in either spelling (a BCL `Func<Task<int>>` and a
+    // package-declared one), an arity above the v1 ceiling of 4, and a custom delegate with an `out`
+    // parameter. The last two are the custom route's own vocabulary guards: `out int` decodes to a
+    // byref with no type ref at all, and a `Task<int>` Invoke return is outside the slot vocabulary.
+    listOf("ApplyGeneric", "LaterAsync", "Sum5", "Parse", "Later").forEach { member ->
       assertEquals(
         listOf("skipped_delegate_signature"),
         diagnosedKinds(member),
