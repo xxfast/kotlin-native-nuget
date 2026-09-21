@@ -10,7 +10,7 @@ a C# `abstract class` whose subclasses share one inherited `_handle`, and `seale
 | `interface` | `interface` (`I`-prefixed) | default methods delegate to Kotlin |
 | `abstract class` | `abstract class` | `_handle` inherited by every subclass |
 | `sealed class` | `abstract class` | each subtype its own class, nested inside the base or declared beside it, reconstructed through a generated `FromHandle` |
-| eligible `sealed interface` (no type parameters; every subclass a `class`/`object`, no other superclass, no sub-interface, no second sealed-interface parent, no `enum class` arm) | `abstract class` | same shape as `sealed class`; no C# interface is declared for it |
+| eligible `sealed interface` (no type parameters; every subclass a `class`/`object` or `enum class`, no other superclass, no sub-interface, no second sealed-interface parent) | `abstract class` | same shape as `sealed class`; no C# interface is declared for it; an `enum class` arm binds as a boxed `{Enum}Arm` |
 | ineligible `sealed interface` | `interface` (`I`-prefixed) | stays on the ordinary interface route; every member typed with it is skipped |
 
 ## Interfaces
@@ -378,10 +378,10 @@ A `data class`/`data object` arm gets `Equals`/`GetHashCode`/`ToString` the same
 ### Sealed interfaces {id="sealed-interfaces"}
 
 A `sealed interface` maps the same way exactly when it is **eligible**: no type parameters, and
-every subclass is a `class`/`object`, nested in the interface or declared beside it, with no other
-superclass, no sub-interface, no second sealed-interface parent, and no `enum class` arm. An
-eligible sealed interface renders as an `abstract class`, exactly like `sealed class` above; no
-`IFoo` interface is ever declared for it:
+every subclass is a `class`/`object` or `enum class`, nested in the interface or declared beside it,
+with no other superclass, no sub-interface, and no second sealed-interface parent. An eligible
+sealed interface renders as an `abstract class`, exactly like `sealed class` above; no `IFoo`
+interface is ever declared for it:
 
 ```kotlin
 sealed interface Pulse {
@@ -396,10 +396,48 @@ Assert.IsType<Pulse.Flat>(current);
 ```
 
 An **ineligible** sealed interface, one whose arm extends another class, implements a second sealed
-interface, or is declared as an `enum class`, stays on the ordinary interface route instead: it
-keeps its plain `IFoo` declaration, and every function, property, or parameter typed with it is
-skipped, named on a build warning. There is no partial binding for an ineligible sealed interface:
-make every arm a plain `class`/`object` with no other superclass, or use a `sealed class` instead.
+interface, or is a sub-interface arm, stays on the ordinary interface route instead: it keeps its
+plain `IFoo` declaration, and every function, property, or parameter typed with it is skipped,
+named on a build warning. There is no partial binding for an ineligible sealed interface: make
+every arm a plain `class`/`object`/`enum class` with no other superclass, or use a `sealed class`
+instead.
+
+### An `enum class` arm {id="an-enum-class-arm"}
+
+An `enum class` arm, alone or mixed with `class`/`object` arms, binds as a boxed arm: `public
+sealed class {Enum}Arm : Base`, holding the enum entry, with a public constructor from the C# enum
+and a `Value` getter back to it. The C# `enum` is still declared exactly once, keeping its own
+[extension methods](enums.md); a boxed arm adds no second spelling for those members.
+
+```kotlin
+sealed interface Marking
+
+enum class Patch : Marking { BIB, SOCKS }
+enum class Swirl(val patch: Patch) : Marking { COCOA(Patch.BIB), CREAM(Patch.SOCKS) }
+```
+
+```C#
+using Marking painted = EnumArmedSealedSample.PaintedMarking();
+
+string text = painted switch
+{
+    PatchArm { Value: Patch.Bib } => "bib",
+    PatchArm patch => $"patch {patch.Value}",
+    SwirlArm swirl => $"swirl {swirl.Value} over {swirl.Value.Patch()}",
+    _ => throw new InvalidOperationException(),
+};
+
+using var socks = new PatchArm(Patch.Socks); // boxes an existing entry
+```
+
+`swirl.Value.Patch()` reaches `Swirl`'s own member through the ordinary [enum extension
+method](enums.md), never a second spelling on the box. A boxed arm is `IDisposable` like any other
+arm; `new PatchArm(Patch.Socks)` without `using` leaks a handle to a permanent Kotlin singleton the
+same way an unboxed arm constructor does. There is no implicit conversion from the C# enum to the
+sealed base (`Marking m = Patch.Bib` does not compile): it would mint a handle the caller never sees
+and cannot dispose. A declared type already named `{Enum}Arm` in the same namespace refuses the
+interface, naming the collision, rather than colliding silently. An arm that extends another class
+in addition to being an enum is still out of scope.
 
 ### Sealed types as property types {id="sealed-types-as-property-types"}
 
@@ -635,9 +673,12 @@ A sealed base, a sealed arm, and any `interface` owner can nest their own plain
 - Object identity is not preserved across two reads of a **Kotlin-backed** interface property: each
   read is a distinct C# wrapper over the same Kotlin object. A stored **C#-implemented** object is
   the exception: it always resolves back to the original instance.
-- An ineligible sealed interface, an arm with another superclass, an `enum class` arm, or an arm
+- An ineligible sealed interface, an arm with another superclass, a sub-interface arm, or an arm
   implementing a second sealed interface, has no binding at all: every function, property, or
   parameter typed with it is skipped.
+- An `enum class` arm's boxed constructor and `Value` getter cost a handle and a P/Invoke each; see
+  [An `enum class` arm](#an-enum-class-arm) for the disposal obligation and the missing implicit
+  conversion.
 - An eligible sealed interface arm's own extra interfaces (`class Odd : Kind, CharSequence`) are
   dropped silently from the generated class.
 - An `object` arm, or a `class`-kind arm whose every constructor is refused, has only the

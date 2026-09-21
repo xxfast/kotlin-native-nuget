@@ -26,7 +26,9 @@ string description = mood.Description();  // extension method
 
 Entries rename from Kotlin's `SCREAMING_SNAKE_CASE` to C#'s `PascalCase`. A property or method
 typed with the enum, in any parameter, return, or getter/setter position, binds like any other
-enum-typed member: `var mood: Mood` becomes a settable `Mood` property.
+enum-typed member: `var mood: Mood` becomes a settable `Mood` property. This also covers a member
+whose own type is a *different* enum, such as `enum class Swirl(val patch: Patch)`: `swirl.Patch()`
+returns the C# `Patch` enum, not a raw handle.
 
 ## Nullable {id="nullable"}
 

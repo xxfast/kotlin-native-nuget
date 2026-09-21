@@ -9,6 +9,7 @@ using TestLibrary.Issue115;
 using TestLibrary.Issue126;
 using TestLibrary.Issue127;
 using TestLibrary.Issue131;
+using TestLibrary.Issue236;
 using TestLibrary.Kennel;
 using TestLibrary.Models;
 using TestLibrary.Nested;
@@ -234,6 +235,40 @@ public class LiveHandleTests
         {
             using var hearth = new Hearth("The bay window");
             Assert.ThrowsAny<ArgumentException>(() => new Hearth.Sunbather(hearth, -1));
+        });
+    }
+
+    // Row 1f. ADR-157 (issue #236): the boxed enum arm's constructor, the one new mint path of the
+    // feature. `new PatchArm(Patch.Socks)` mints a StableRef to a Kotlin enum *entry*, a permanent
+    // singleton, so nothing about the Kotlin object's lifetime can hide a missed release: the count
+    // is the only signal there is. Two boxes of one entry are two independent handles, so the row
+    // takes both and each must come back. Oreo puts his socks on fifty times.
+    [Fact]
+    public void BoxedEnumArmConstructor_UsingDispose_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var socks = new PatchArm(Patch.Socks);
+            using var alsoSocks = new PatchArm(Patch.Socks);
+            Assert.Equal(Patch.Socks, socks.Value);
+            Assert.Equal(socks, alsoSocks);
+        });
+    }
+
+    // Row 1g. The read half of Row 1f: an arm handed *out* through the discriminator rather than
+    // minted by C#. `Portrait.Marking` retains the entry on the Kotlin side and C# reconstructs it
+    // through `Marking.FromHandle`, so the box the getter hands back owns a second handle that only
+    // `Dispose` releases (no finalizers anywhere in the generated wrappers). Holder and arm are
+    // separate handles and both are counted. Mylo is painted, read back and put away fifty times.
+    [Fact]
+    public void BoxedEnumArmRead_ThroughAHolderProperty_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var cream = new SwirlArm(Swirl.Cream);
+            using var portrait = new Portrait(cream);
+            using Marking read = portrait.Marking;
+            Assert.Equal(Swirl.Cream, Assert.IsType<SwirlArm>(read).Value);
         });
     }
 

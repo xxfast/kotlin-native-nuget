@@ -152,7 +152,13 @@ internal object ForwardCirPlanProjection {
   }
 
   fun constructor(plan: ForwardCallablePlan, nativeSuffix: String = ""): CirConstructor {
-    require(plan.invocation.origin == ForwardCallableOrigin.CONSTRUCTOR) {
+    // ADR-157: a boxed enum arm's constructor is a constructor here in every respect -- one
+    // public parameter, an owned handle result, `_handle = ...` -- and differs only in the Kotlin
+    // invocation, which this half never sees.
+    require(
+      plan.invocation.origin == ForwardCallableOrigin.CONSTRUCTOR ||
+          plan.invocation.origin == ForwardCallableOrigin.ENUM_ARM_BOX,
+    ) {
       "Forward CIR constructor projection received ${plan.invocation.origin}"
     }
     val nativeCall: ForwardNativeCall = plan.singleNativeImport()

@@ -99,6 +99,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isArmOfIneligibleS
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterface
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDeclaredTypeNames
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedSubclass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.sealedInterfaceIneligibility
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityClosure
@@ -632,6 +634,10 @@ internal fun warnRefusedLegacyRouteMembers(
     sealedClasses.forEach { sealed ->
       val sealedName: String = sealed.simpleName.asString()
       sealed.getSealedSubclasses().forEach { subclass ->
+        // ADR-157: a boxed enum arm declares no members of this route's kind, and what it does
+        // declare belongs to `{Enum}Extensions`. Naming one here would report a hole in a C# type
+        // that carries the member perfectly well.
+        if (subclass.isEnumArm()) return@forEach
         val owner: String = "$sealedName.${subclass.simpleName.asString()}"
         // ADR-009 declares an arm under its base, nested or not, so the arm is its own C# owner.
         val ownerDeclaration: ForwardDiagnosticOwner = subclass.forwardDiagnosticOwner()
@@ -801,6 +807,15 @@ class NugetProcessor(
 
     val allDeclarations: List<KSDeclaration> =
       candidateDeclarations.filter(::isExportedAndUnmarked)
+
+    // ADR-157: the name index `armIneligibility` reads, so a `{Enum}Arm` box whose name is already
+    // taken refuses its hierarchy by name instead of emitting a CS0101 nothing explains. Every
+    // declared class in the module, not just the exported ones: a C# type this build does not emit
+    // still cannot collide, but an internal Kotlin class is not the hazard -- the hazard is a
+    // *public* sibling, and this filter is the same one the roots use.
+    ForwardDeclaredTypeNames.reset(
+      allDeclarations.asSequence().filterIsInstance<KSClassDeclaration>(),
+    )
 
     // ADR-115: named once, where the author wrote the marker. A marked *member* of an exported
     // class skips per-callable in the planner instead; only a declaration the scope would
@@ -1284,9 +1299,12 @@ class NugetProcessor(
             // constraints too. It used to ask for every subclass to be nested, which is a style
             // rule the renderer never needed and a breaking change for a library whose subtypes
             // are public API on other platforms.
-            hint = "every subclass must be a class or object, declared in the interface or " +
-                "beside it, with no other superclass, no sub-interface and no second sealed " +
-                "interface; an enum can never be a subclass (ADR-125). Or declare it as a " +
+            // ADR-157 drops the enum clause: an `enum class` arm is admitted now, boxed as
+            // `{Enum}Arm`. The clause was also being printed on hierarchies whose real problem was
+            // a second superclass, which sent the author looking for an enum that was not there.
+            hint = "every subclass must be a class or object, or an enum class (boxed as " +
+                "`{Enum}Arm`, ADR-157), declared in the interface or beside it, with no other " +
+                "superclass, no sub-interface and no second sealed interface. Or declare it as a " +
                 "sealed class",
             // The interface IS declared (as `I<Name>`); what is missing is the discriminator, and
             // every member typed with it is named on its own owner by its own position skip.

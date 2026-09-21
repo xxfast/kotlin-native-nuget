@@ -353,6 +353,14 @@ data class CirSealedSubclass(
   val hasSuspendMethods: Boolean = false,
   val isDataClass: Boolean = false,
   /**
+   * ADR-157: the C# spelling of the enum this arm boxes (`Patch`), or null for every ordinary arm.
+   *
+   * Set only on a `{Enum}Arm`. It carries exactly two things the renderer cannot derive: that the
+   * managed equality block compares over `Value` rather than calling a Kotlin `equals` export (an
+   * enum has no data-class members to export), and the type to spell in `Equals`'s pattern.
+   */
+  val boxedEnumType: String? = null,
+  /**
    * Issue #54: whether the subclass is declared *inside* its sealed base in Kotlin. C# follows the
    * Kotlin scope, so a nested one is rendered inside the base's braces (`Shape.Circle`) and a
    * sibling is rendered after them, at namespace level (`Label`). Either way the exports keep the
@@ -564,6 +572,15 @@ data class CirEnumProperty(
   val type: String,
   val nativeReturnType: String,
   val nativeName: String,
+  /**
+   * True when [type] is itself a C# `enum`, i.e. the Kotlin enum declares a property typed as
+   * another enum (`enum class Swirl(val patch: Patch)`). The wire is the `int` ordinal, exactly as
+   * any other ADR-006 enum position, so the extension body casts the extern's `int` back to [type].
+   * Without this the property fell out of `mapReturnType`'s table as `IntPtr` and the ADR-006 route
+   * handed the caller a raw Kotlin object pointer typed `IntPtr` (fixed alongside ADR-157; no
+   * fixture had an enum-typed enum member before).
+   */
+  val isEnum: Boolean = false,
 )
 
 sealed interface CirMember

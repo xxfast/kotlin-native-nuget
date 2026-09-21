@@ -240,6 +240,10 @@ internal class ForwardPropertyPlanner(
     val owner: String = subclass.qualifiedName?.asString() ?: return emptyList()
     val prefix: String =
       "${sealed.nativePrefix()}_${subclass.simpleName.asString().lowercase()}"
+    // ADR-157: an enum arm carries exactly one property, the box's `Value`, and none of the enum's
+    // own. Those belong to `{Enum}Extensions` (ADR-006) and are already planned there; planning
+    // them again under the arm's prefix would export each of them twice, plus `name` and `ordinal`.
+    if (subclass.isEnumArm()) return enumArmValueProperty(sealed, subclass, prefix, owner)
     return subclass.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { prop -> !prop.isCompilerOwnedMember(subclass) }
@@ -255,6 +259,43 @@ internal class ForwardPropertyPlanner(
         )
       }
       .toList()
+  }
+
+  /**
+   * ADR-157: the boxed enum arm's one property, `Value`, planned rather than hand-written so its
+   * error slot, its `int` ordinal wire and its C# getter come off the same emitter and projection
+   * every other arm property uses, and so the ADR-055 contract check sees both halves.
+   *
+   * There is no [KSPropertyDeclaration] behind it: `Value` is the box, not a Kotlin member, which
+   * is what [ForwardPropertyReceiver.EnumArm] exists to say.
+   */
+  private fun enumArmValueProperty(
+    sealed: KSClassDeclaration,
+    subclass: KSClassDeclaration,
+    prefix: String,
+    owner: String,
+  ): List<ForwardPropertyPlan> {
+    val base: String = sealed.qualifiedName?.asString() ?: return emptyList()
+    val type: BridgeType = classifier.classify(subclass.asStarProjectedType())
+    if (type !is BridgeType.Enum) return emptyList()
+    val receiver = ForwardPropertyReceiver.EnumArm(base, owner)
+    val getter = ForwardPropertyGetter.Direct(
+      nativeCall("${prefix}_get_value", type.wireType(), receiver, emptyList()),
+    )
+    return listOf(
+      ForwardPropertyPlan(
+        // Keyed on the BOX, not on the enum: the enum's own qualified name is the catalog key of
+        // nothing else, but a key that reads as a member of the arm is what every reader expects.
+        symbol = "$owner.${ENUM_ARM_VALUE_MEMBER}",
+        position = ForwardPropertyPosition.CLASS,
+        receiver = receiver,
+        kotlinName = ENUM_ARM_VALUE_MEMBER,
+        publicName = "Value",
+        type = type,
+        getter = getter,
+        helperRequirements = helperRequirements(type, receiver, getter, setter = null),
+      ).validate(),
+    )
   }
 
   private fun classProperties(cls: KSClassDeclaration): List<ForwardPropertyPlan> {
@@ -816,6 +857,20 @@ internal class ForwardPropertyPlanner(
       valueParameter(type, "receiver", ForwardAbiRole.RECEIVER),
     )
     is ForwardPropertyReceiver.Static -> emptyList()
+
+    // ADR-157: the same borrowed handle slot a [Handle] receiver carries, typed as the sealed
+    // base -- which is what the box's StableRef was minted through and what the discriminator
+    // reads it back as.
+    is ForwardPropertyReceiver.EnumArm -> listOf(
+      ForwardAbiParameter(
+        "handle", ForwardAbiWireType.POINTER, ForwardAbiDirection.IN,
+        ForwardTransfer(
+          "handle", BridgeType.ObjectHandle(base), ForwardFlow.INTO_KOTLIN,
+          ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
+        ),
+        ForwardAbiRole.RECEIVER,
+      ),
+    )
   }
 
   private fun valueParameter(

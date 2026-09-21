@@ -124,7 +124,7 @@ change; the cascade disappears for those hierarchies; the two new refusals name 
 each. Cons: `rootEnums` needs the filter its siblings have, and an author who writes an enum arm
 gets a refusal rather than a binding.
 
-### 2. Admit enum arms as boxed wrapper arms (rejected for v1, priced)
+### 2. Admit enum arms as boxed wrapper arms (rejected for v1, priced; delivered by ADR-157)
 
 `public sealed class PitchArm : Tone { public Pitch Value { get; } }`. Needs a new CIR arm kind, a
 new Kotlin export returning the entry ordinal, an unwrap on the parameter side, and a naming rule
@@ -158,7 +158,8 @@ Adopt alternative 1. Eligibility for a `sealed interface` becomes:
   declared beside it**;
 - no entry is an `INTERFACE` (the discriminator is a flat `when`, and a sub-interface has no single
   C# class to construct);
-- no entry is an `ENUM_CLASS` (CS1008, verified by spike);
+- no entry is an `ENUM_CLASS` (CS1008, verified by spike), superseded by
+  [ADR-157](157-enum-armed-sealed-interface.md), which admits a boxed enum arm instead of refusing it;
 - no entry has another class supertype (a C# arm can only extend the abstract base);
 - no entry implements more than one sealed interface (C# single inheritance).
 
@@ -232,13 +233,18 @@ or declare it as a sealed class
 
 The `SEALED_POSITION` hint drops "make every subclass a nested class or object" for the same reason.
 
+**Superseded (2026-09-21).** [ADR-157](157-enum-armed-sealed-interface.md) admits an `enum class`
+arm as a boxed handle-backed arm instead of refusing it, so the example above and the "arms may not
+be enums" clause no longer apply; the disqualifying reasons that remain are a second superclass, a
+second sealed-interface parent, or a sub-interface arm.
+
 ## Consequences
 
 - A sibling-armed sealed interface binds at every ADR-105 position, and the cascade onto every
   callable that takes one as an input disappears with it. That is the twenty members issue #130
   reports, recovered for the `data class`-armed hierarchy.
-- An enum-armed sealed interface stays ineligible, with a reason that names CS1008. The cascade
-  onto its holders is unchanged. There is no C# shape short of alternative 2.
+- An enum-armed sealed interface stayed ineligible, with a reason that named CS1008, until
+  [ADR-157](157-enum-armed-sealed-interface.md) admitted alternative 2 (a boxed enum arm) instead.
 - A **nested** enum arm was eligible before this ADR and rendered as an opaque
   `public sealed class Pitch : Tone` with no entries and no `Value`, silently losing the enum
   (no CS0101, since `rootEnums` never declares a nested enum). The new refusal fixes that as a side
@@ -250,10 +256,10 @@ The `SEALED_POSITION` hint drops "make every subclass a nested class or object" 
   issue explicitly does not ask for it, and it is the same supertype limitation an ordinary class
   has.
 - ROADMAP's "an ineligible sealed interface's nested subclass gets two build warnings" item shrinks
-  but stays open: the double warning now needs an interface refused for the enum, multi-parent,
-  sub-interface, generic or second-superclass reason.
-- Still deferred: boxed enum arms, sub-interfaces, generic sealed interfaces, base members with
-  bodies rendered on the abstract class, an arm's extra interfaces.
+  but stays open: the double warning now needs an interface refused for the multi-parent,
+  sub-interface, generic, or second-superclass reason (no longer the enum one, since ADR-157).
+- Still deferred: sub-interfaces, generic sealed interfaces, base members with bodies rendered on
+  the abstract class, an arm's extra interfaces. Boxed enum arms shipped in ADR-157.
 - No new handle kind and no new marshalling path: a sibling arm rides the same `FromHandle` mint a
   nested arm does, so `LeakTests` gains no row. `LiveHandleTests.cs` has no sealed row at all today,
   which is a general gap and belongs on ROADMAP rather than here.

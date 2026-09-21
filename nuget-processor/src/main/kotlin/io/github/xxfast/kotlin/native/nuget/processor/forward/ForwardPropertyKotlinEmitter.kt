@@ -356,6 +356,8 @@ private fun exportBuilder(
       builder.addParameter("receiver", kotlinInputType(receiver.type))
 
     is ForwardPropertyReceiver.Static -> Unit
+    // ADR-157: the box reads through the base handle, the same single slot a Handle receiver has.
+    is ForwardPropertyReceiver.EnumArm -> builder.addParameter("handle", cOpaquePointer)
   }
   if (includeError) builder.addParameter("errorOut", cOpaquePointer.copy(nullable = true))
   return builder
@@ -365,6 +367,11 @@ private fun ForwardPropertyPlan.accessExpression(): String =
   when (val receiver: ForwardPropertyReceiver = receiver) {
     is ForwardPropertyReceiver.Handle ->
       "handle.asStableRef<${receiver.owner}>().get().$kotlinName"
+
+    // ADR-157: no member access after the cast. The box's `Value` IS the receiver -- an enum entry
+    // has no property that answers with itself -- and the `Enum` result branch appends `.ordinal`.
+    is ForwardPropertyReceiver.EnumArm ->
+      "(handle.asStableRef<${receiver.base}>().get() as ${receiver.enum})"
 
     // ADR-132 at the property position: the receiver is lowered by the *same* wire-to-Kotlin
     // function the setter value uses, so an interface receiver reads its borrowed StableRef and a

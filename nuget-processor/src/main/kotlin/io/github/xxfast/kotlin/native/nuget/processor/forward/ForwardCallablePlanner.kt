@@ -509,8 +509,12 @@ internal data class ForwardCallablePlanCatalog(
    * entries that no `getConstructors()` walk can see, so both emitters read constructors off the
    * catalog instead of re-deriving a plan key per declaration. Owner-exact matching.
    */
+  // ADR-157: a boxed enum arm's constructor answers here too. It is a constructor at every site
+  // that reads this query (the Kotlin export loop, the CIR arm projection, the C# renderer); only
+  // its Kotlin invocation differs, and that is the emitter's business, not the catalog's.
   fun constructors(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
-    plan.invocation.origin == ForwardCallableOrigin.CONSTRUCTOR &&
+    (plan.invocation.origin == ForwardCallableOrigin.CONSTRUCTOR ||
+        plan.invocation.origin == ForwardCallableOrigin.ENUM_ARM_BOX) &&
         plan.invocation.symbol.substringBeforeLast('.') == owner
   }
 
@@ -660,6 +664,10 @@ internal class ForwardCallablePlanner(
           .mapNotNull { entry -> entry.node }
           .toSet()
         sealed.getSealedSubclasses().forEach { sub ->
+          // ADR-157: an enum arm has no members of its own on this route. What Kotlin declares on
+          // the enum belongs to `{Enum}Extensions` (ADR-006) and is planned there; the arm carries
+          // the box constructor (below) and `Value` (the property planner) and nothing else.
+          if (sub.isEnumArm()) return@forEach
           addAll(
             sealedSubclassEntries(sealed, sub, plannedBaseMembers)
               .ownedBy(sub.forwardDiagnosticOwner()),
@@ -688,6 +696,13 @@ internal class ForwardCallablePlanner(
               )
             )
           }
+        // ADR-157: the boxed enum arm's one constructor, `new PatchArm(Patch.Socks)`, planned
+        // through the same `planOrSkip` an ordinary constructor goes through so its enum lowering,
+        // its error slot and its ABI contract entry are the ordinary route's. The Kotlin
+        // invocation is the identity on the lowered argument (`Patch.entries[value]`).
+        sealed.getSealedSubclasses()
+          .filter { sub -> sub.isEnumArm() }
+          .forEach { sub -> addAll(enumArmBoxEntries(sealed, sub)) }
       }
       // ADR-095: top-level and extension overloads number per (package, name), the extension one
       // deliberately receiver-agnostic because its plan symbol is (`fun Cat.pat()` then
@@ -1466,6 +1481,42 @@ internal class ForwardCallablePlanner(
         detail = entry.reason.name,
       )
     }
+  }
+
+  /**
+   * ADR-157: the boxed enum arm's constructor. One parameter, the C# enum; one result, an owned
+   * handle over the Kotlin entry the ordinal names.
+   *
+   * The export is `${sealed}_${arm}_create`, the same suffix every other constructor on the sealed
+   * route uses, so the shared `constructorNativeImport` rule addresses it without a second naming
+   * convention. ADR-157 drafted it as `_box`; that spelling would have bought one hand-written
+   * import and nothing else.
+   */
+  private fun enumArmBoxEntries(
+    sealed: KSClassDeclaration,
+    arm: KSClassDeclaration,
+  ): List<ForwardCallableCatalogEntry> {
+    val owner: String = arm.qualifiedName?.asString() ?: return emptyList()
+    val prefix = "${sealed.nativePrefix()}_${arm.simpleName.asString().lowercase()}"
+    val type: BridgeType = classifier.classify(arm.asStarProjectedType())
+    if (type !is BridgeType.Enum) return emptyList()
+    return listOf(
+      planOrSkip(
+        symbol = "$owner.<init>",
+        publicName = "Create",
+        exportName = "${prefix}_create",
+        receiver = ForwardReceiver.Static,
+        // Not `value`: that is a PLAN_OWNED_NAME (the setter slot), and a plan may not hand a
+        // user-role parameter one of those.
+        parameters = listOf("entry" to type),
+        // The handle is a StableRef over the enum ENTRY, so the owner of the result is the enum
+        // itself; C# reads it back as the arm through the base's own discriminator.
+        result = BridgeType.ObjectHandle(owner),
+        origin = ForwardCallableOrigin.ENUM_ARM_BOX,
+        target = owner,
+        node = arm,
+      ),
+    )
   }
 
   private fun constructorEntries(
