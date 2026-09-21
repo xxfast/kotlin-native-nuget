@@ -280,10 +280,14 @@ member's type binds as:
 - a mapped BCL collection (`IReadOnlyList<T>`, `List<T>`, `IReadOnlyDictionary<K,V>`,
   `HashSet<T>`, and their kin): a Kotlin `List`/`Set`/`Map`, always read-only, eagerly copied; see
   [Collections from C#](reverse-collections.md)
+- a delegate parameter (`Func<>`, `Action<>`, `Predicate<T>`, `Comparison<T>`, `Converter<,>`, or a
+  package-declared `delegate`) on a method or constructor of an ordinary bound class: a Kotlin
+  function type, called with an ordinary Kotlin lambda; see
+  [Delegate parameters from C#](reverse-delegates.md)
 
-Everything else, arrays, a `Task` of a collection, delegates, `dynamic`, `object`, open generics,
-and a generic instantiation of a definition outside the bound assemblies and outside the mapped
-collection table (`Queue<int>`), doesn't bind. A closed instantiation of a bound generic **class**
+Everything else, arrays, a `Task` of a collection, a delegate outside the admitted parameter
+position, `dynamic`, `object`, open generics, and a generic instantiation of a definition outside
+the bound assemblies and outside the mapped collection table (`Queue<int>`), doesn't bind. A closed instantiation of a bound generic **class**
 is the one other generic shape that does; see [Generic types](generic-types.md). `System.String`
 is the only external (out-of-assembly) reference type recognized: a type from a namespace you
 didn't `include()`, from an assembly outside the extraction run, or from an undeclared NuGet

@@ -468,3 +468,13 @@ C# drops every reference and the .NET GC collects the bridge, a later crossing m
 the same GC-timed posture every release in this ADR already had. This ADR's own text is left as
 written, a point-in-time record of the v1 posture; ADR-089 is the current source of truth for
 identity across crossings.
+
+## Amendment (2026-09-22, ADR-158): the bridge ctx is now a counted handle
+
+The ctx `StableRef` this ADR mints (`StableRef.create(impl)`) and releases inside
+`nuget_kotlin_release` was a bare `StableRef`, never routed through `NugetHandles.retain`/`release`,
+so `nuget_live_handles` never counted a Kotlin object living inside a C# bridge.
+[ADR-158](158-reverse-delegate-parameters.md), built on this ADR's own machinery for a delegate
+parameter, closed that gap for both cases at once: mint and release now go through a counted pair
+reached via the ADR-130 `expect`/`actual` seam. This ADR's mechanism (the factory, the slot
+dispatch, the token probe, the SafeHandle-driven release) is otherwise unchanged.

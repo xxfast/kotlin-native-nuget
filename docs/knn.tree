@@ -44,6 +44,7 @@
         <toc-element topic="structs.md"/>
         <toc-element topic="generic-types.md"/>
         <toc-element topic="reverse-collections.md"/>
+        <toc-element topic="reverse-delegates.md"/>
         <toc-element topic="bridgeable-subset.md"/>
         <toc-element topic="registration-diagnostics.md"/>
     </toc-element>
