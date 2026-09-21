@@ -14,8 +14,8 @@ import kotlin.test.assertTrue
  *    per-call route, every payload on the stored route) or crossed and killed the host process on a
  *    real null (`String?`, and a callback returning null at a generated `!!`). It is now a named
  *    skip, which replaces a broken build rather than removing a working member;
- *  - a lambda whose own TYPE is nullable (`listener: ((Int) -> Unit)?`) bound AND reported itself as
- *    skipped, on the very class that carried the member. It keeps binding, silently, with an
+ *  - a lambda whose own TYPE is nullable (`listener: ((Int) -> Unit)?`) bound AND reported itself
+ *    as skipped, on the very class that carried the member. It keeps binding, silently, with an
  *    `ArgumentNullException` guard in the wrapper.
  */
 class Tier1NullableLambdaPayloadTest {

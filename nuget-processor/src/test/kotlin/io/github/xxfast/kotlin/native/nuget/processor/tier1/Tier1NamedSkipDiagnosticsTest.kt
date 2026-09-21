@@ -177,7 +177,9 @@ class Tier1NamedSkipDiagnosticsTest {
     // not renumber this one.
     assertTrue(
       result.kspWarnings.any {
-        it.contains("its key type String? is nullable, and a .NET dictionary cannot hold a null key")
+        it.contains(
+          "its key type String? is nullable, and a .NET dictionary cannot hold a null key",
+        )
       },
       "expected the sentence to name the offending map key component; " +
           "kspWarnings=${result.kspWarnings}",
@@ -216,7 +218,9 @@ class Tier1NamedSkipDiagnosticsTest {
     // the nullable-key half moved to its own reason.
     assertTrue(
       result.kspWarnings.any {
-        it.contains("its key type String? is nullable, and a .NET dictionary cannot hold a null key")
+        it.contains(
+          "its key type String? is nullable, and a .NET dictionary cannot hold a null key",
+        )
       },
       "expected the nullable key to win the attribution; kspWarnings=${result.kspWarnings}",
     )

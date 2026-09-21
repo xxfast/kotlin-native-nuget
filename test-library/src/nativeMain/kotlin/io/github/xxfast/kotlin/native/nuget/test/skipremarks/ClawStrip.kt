@@ -12,9 +12,9 @@ package io.github.xxfast.kotlin.native.nuget.test.skipremarks
  * fixture's drop.
  *
  * Every owner seam once, and the two shapes that are NOT owner-level:
- * - [ClawStrip] -- dropped properties AND dropped methods beside surviving members (including the
- *   boundary-nullability cells: nullable map keys at a return, a property and a nested position, and
- *   nullable lambda payloads on the per-call and stored callback routes), plus the
+ * - [ClawStrip] -- dropped properties AND dropped methods beside surviving members (including
+ *   the boundary-nullability cells: nullable map keys at a return, a property and a nested
+ *   position, and nullable lambda payloads on the per-call and stored callback routes), plus the
  *   ADR-075 partial case ([ClawStrip.lastTumble]: the setter drops, the property survives, so the
  *   remark belongs on the C# PROPERTY rather than on the class),
  * - [KibbleBin] -- an `object` (static class) with a dropped method,

@@ -26,9 +26,9 @@ package io.github.xxfast.kotlin.native.nuget.test.cat
  *    is red at runtime. That erasure is the consumer-visible half of the defect: `csTypeArgument`
  *    never reads `isMarkedNullable`, so `(String?) -> Unit` and `(String) -> Unit` are spelled
  *    identically with no diagnostic in between.
- *  - [finder] is the **null RESULT** leg, the mirror direction: `NugetHandles.retain(fn.invoke(p) as
- *    Any)` on a null result is the same uncaught `NullPointerException` inside a `@CName` export
- *    with no error slot.
+ *  - [finder] is the **null RESULT** leg, the mirror direction:
+ *    `NugetHandles.retain(fn.invoke(p) as Any)` on a null result is the same uncaught
+ *    `NullPointerException` inside a `@CName` export with no error slot.
  *
  * [lastSeen] and [lastSeenWasNull] exist so the assertion is that the KOTLIN lambda observed
  * `null`, not merely that `Invoke` returned. They are functions rather than a top-level `var`

@@ -268,8 +268,8 @@ private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallableP
         inner == BridgeType.Instant || inner == BridgeType.Duration ||
         inner is BridgeType.ValueClass || inner is BridgeType.Enum
   ) {
-    "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive, Char, Instant, " +
-        "Duration, enum or value class"
+    "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive, Char, " +
+        "Instant, Duration, enum or value class"
   }
   val error: ForwardAbiParameter = requireNotNull(plan.errorSlot) {
     "Legacy two-call plan ${plan.invocation.symbol} is missing its error slot"

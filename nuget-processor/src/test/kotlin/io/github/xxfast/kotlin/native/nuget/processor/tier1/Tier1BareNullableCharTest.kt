@@ -81,15 +81,19 @@ class Tier1BareNullableCharTest {
     assertContains(kotlin, "if (observedHasValue) observed else null")
 
     val cs: String = result.generatedCSharp
-    // The constructor cell: csharp-dev observed `WARNING_NO_PUBLIC_CONSTRUCTOR ... <init>: NULLABLE`
-    // here, so a bindable ctor is its own assertion and not a side effect of the method one.
+    // The constructor cell: csharp-dev observed `WARNING_NO_PUBLIC_CONSTRUCTOR ... <init>:
+    // NULLABLE` here, so a bindable ctor is its own assertion and not a side effect of the
+    // method one.
     assertContains(cs, "public Tag(char? observed)")
     assertContains(cs, "char initial")
     assertContains(cs, "initial.HasValue, initial.GetValueOrDefault()")
     assertContains(cs, "observed.HasValue, observed.GetValueOrDefault()")
+    val skipOrMissingCtorWarnings: List<String> = result.kspWarnings.filter { warning ->
+      "SKIPPED" in warning || "NO_PUBLIC_CONSTRUCTOR" in warning
+    }
     assertEquals(
       emptyList(),
-      result.kspWarnings.filter { warning -> "SKIPPED" in warning || "NO_PUBLIC_CONSTRUCTOR" in warning },
+      skipOrMissingCtorWarnings,
       "expected no skip and no missing-constructor warning for any Char? position",
     )
   }
@@ -114,7 +118,10 @@ class Tier1BareNullableCharTest {
 
     val kotlin: String = result.generated
     // kotlinx.cinterop has no `CharVar`, so the write goes through `UShortVar` over `.code`.
-    assertContains(kotlin, "valueOut.reinterpret<UShortVar>().pointed.value = result.code.toUShort()")
+    assertContains(
+      kotlin,
+      "valueOut.reinterpret<UShortVar>().pointed.value = result.code.toUShort()",
+    )
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "out ushort valueOut")

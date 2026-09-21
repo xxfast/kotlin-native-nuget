@@ -1,9 +1,9 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
-// Boundary nullability part A1 deleted this helper's private `WrapArg<T>` and its six `nuget_wrap_*`
-// imports. They were a strictly worse copy of `NugetMarshal.Wrap<T>` -- no null guard, no
-// `Nullable<T>` normalisation, no narrow kinds, no `char`, and no ownership report, so nobody could
-// dispose what it minted -- and every call site already had `NugetMarshal` in scope.
+// Boundary nullability part A1 deleted this helper's private `WrapArg<T>` and its six
+// `nuget_wrap_*` imports. They were a strictly worse copy of `NugetMarshal.Wrap<T>` -- no null
+// guard, no `Nullable<T>` normalisation, no narrow kinds, no `char`, and no ownership report, so
+// nobody could dispose what it minted -- and every call site already had `NugetMarshal` in scope.
 internal fun StringBuilder.renderFuncNativeHelper(helper: CirFuncNativeHelper) {
   appendLine("    internal static class NugetFuncNative")
   appendLine("    {")
@@ -282,10 +282,10 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       )
       appendLine("            callbackHandle = GCHandle.Alloc(callback);")
       // Boundary nullability part A1: `NugetMarshal.Wrap<T>` in place of the private `WrapArg<T>`
-      // copy, so a null argument is `IntPtr.Zero` rather than an uncaught NPE inside the export, and
-      // `owned` closes the per-call StableRef leak. LOAD-BEARING ordering: the suspend export reads
-      // every box SYNCHRONOUSLY, before `launchForCSharp`, which is the only reason disposing them
-      // the moment `Invoke` returns is safe rather than a use-after-free.
+      // copy, so a null argument is `IntPtr.Zero` rather than an uncaught NPE inside the export,
+      // and `owned` closes the per-call StableRef leak. LOAD-BEARING ordering: the suspend export
+      // reads every box SYNCHRONOUSLY, before `launchForCSharp`, which is the only reason
+      // disposing them the moment `Invoke` returns is safe rather than a use-after-free.
       for (i in 0 until arity) {
         appendLine(
           "            IntPtr boxedArg$i = $marshalRef.Wrap<T${i + 1}>(arg$i, out bool owned$i);",

@@ -5,8 +5,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Boundary nullability part A1: the returned-lambda route (`nuget_funcN_invoke`), where Kotlin hands
- * C# a lambda and C# calls `Invoke`.
+ * Boundary nullability part A1: the returned-lambda route (`nuget_funcN_invoke`), where Kotlin
+ * hands C# a lambda and C# calls `Invoke`.
  *
  * Two halves, and fixing either alone leaves the feature unusable. The SPELLING: `csTypeArgument`
  * never read `isMarkedNullable`, so `(String?) -> Unit` and `(String) -> Unit` rendered identically
@@ -83,11 +83,12 @@ class Tier1NullableLambdaTypeArgumentTest {
 
   /**
    * The SUSPEND twin (`nuget_suspend_funcN_invoke`), which has its own copy of every one of the
-   * above: its own `WrapArg<T>`, its own spelling path, its own invoke exports. A fix applied to one
-   * copy and not the other leaves this route broken, so it is its own cell rather than an assumption.
+   * above: its own `WrapArg<T>`, its own spelling path, its own invoke exports. A fix applied to
+   * one copy and not the other leaves this route broken, so it is its own cell rather than an
+   * assumption.
    *
-   * The suspend lambda route binds at a PROPERTY (`val onFeed: suspend (String) -> String`), not at a
-   * function return, which is why this fixture differs in shape from the two above.
+   * The suspend lambda route binds at a PROPERTY (`val onFeed: suspend (String) -> String`), not
+   * at a function return, which is why this fixture differs in shape from the two above.
    */
   @Test
   fun `the suspend lambda twin carries nullability and boxes through Wrap too`() {

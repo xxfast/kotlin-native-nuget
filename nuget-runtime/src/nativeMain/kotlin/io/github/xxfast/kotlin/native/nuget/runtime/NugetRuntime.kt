@@ -322,9 +322,10 @@ public fun export_nuget_func0_invoke(handle: COpaquePointer): COpaquePointer? {
 @CName("nuget_func1_invoke")
 public fun export_nuget_func1_invoke(
   handle: COpaquePointer,
-  // Boundary nullability part A1: `IntPtr.Zero` IS the argument's null, so the slot is nullable and
-  // the deref is safe-called. The shipped non-null spelling did `arg0.asStableRef<Any>().get()` on a
-  // zero pointer, an uncaught NPE that killed the host process.
+  // Boundary nullability part A1: `IntPtr.Zero` IS the argument's null, so the slot is nullable
+  // and the deref is safe-called. The shipped non-null spelling did
+  // `arg0.asStableRef<Any>().get()` on a zero pointer, an uncaught NPE that killed the host
+  // process.
   arg0: COpaquePointer?,
 ): COpaquePointer? {
   val fn = handle.asStableRef<Function1<Any?, Any?>>().get()

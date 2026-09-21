@@ -111,7 +111,8 @@ internal fun KSFunctionDeclaration.hasPlannedCallbackParameter(
 internal fun KSFunctionDeclaration.refusedNullableLambdaPayload(): String? =
   parameters.firstNotNullOfOrNull { param ->
     val expanded: KSType = param.type.resolve().expandAliases()
-    if (expanded.declaration.qualifiedName?.asString() !in LAMBDA_TYPES) return@firstNotNullOfOrNull null
+    val expandedName: String? = expanded.declaration.qualifiedName?.asString()
+    if (expandedName !in LAMBDA_TYPES) return@firstNotNullOfOrNull null
     // Every argument, the last of which is the lambda's RETURN type: both positions are refused,
     // and they are dropped by separate lines of the route's own selector, so neither is redundant.
     val nullable: KSType = expanded.arguments

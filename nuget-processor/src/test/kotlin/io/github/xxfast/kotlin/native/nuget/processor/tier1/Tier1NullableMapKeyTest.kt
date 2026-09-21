@@ -8,10 +8,11 @@ import kotlin.test.assertTrue
  * ADR-083 amendment (boundary nullability part B): a `Map` whose KEY is nullable is declined at
  * EVERY position, not only at the input one ADR-083 named.
  *
- * ADR-083 left the result-position gates untouched on purpose, and the measured consequence was not
- * a consumer-side warning: the member bound, rendered `IReadOnlyDictionary<string?, int>` whose body
- * calls `NugetMarshal.ReadMap<string?, int>`, and that helper is declared `where TKey : notnull`, so
- * the generated file raised CS8714 -- an ERROR under the generated-bindings csproj
+ * ADR-083 left the result-position gates untouched on purpose, and the measured consequence was
+ * not a consumer-side warning: the member bound, rendered `IReadOnlyDictionary<string?, int>`
+ * whose body calls `NugetMarshal.ReadMap<string?, int>`, and that helper is declared
+ * `where TKey : notnull`, so the generated file raised CS8714 -- an ERROR under the
+ * generated-bindings csproj
  * (`<Nullable>enable</Nullable>` plus `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>`). A
  * `Map<String?, Int>` return was therefore a `packNuget` abort at seven positions, which is why the
  * skip removes nothing that ever worked.
@@ -103,7 +104,8 @@ class Tier1NullableMapKeyTest {
 
     assertTrue(
       result.compiledClean,
-      "expected the declined async members to leave compilable Kotlin; got: ${result.compileErrors}",
+      "expected the declined async members to leave compilable Kotlin; " +
+          "got: ${result.compileErrors}",
     )
 
     // These routes are the reason `declinesNullableMapKey` is consulted inside the RECURSIVE

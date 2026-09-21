@@ -2970,9 +2970,10 @@ internal class ForwardCallablePlanner(
       }
 
       // ADR-098 amendment (boundary nullability part C): `Char?` takes the identical adjacent pair,
-      // the value slot carrying CHAR16 by value. A by-value `char` slot is exactly what a non-null
-      // `Char` parameter already uses, so ADR-098's `[MarshalAs(UnmanagedType.U2)]` covers it and no
-      // `out char` (which silently narrows every non-ASCII character) is ever minted.
+      // the value slot carrying CHAR16 by value. A by-value `char` slot is exactly what a
+      // non-null `Char` parameter already uses, so ADR-098's `[MarshalAs(UnmanagedType.U2)]`
+      // covers it and no `out char` (which silently narrows every non-ASCII character) is ever
+      // minted.
       is BridgeType.Primitive, BridgeType.Char -> listOf(
         ForwardAbiParameter(
           name = "${name}HasValue",
@@ -3729,8 +3730,8 @@ internal class ForwardCallablePlanner(
       //
       // Narrow to a plain `lambda ` protocol on purpose. Every other nullable protocol (Flow,
       // StateFlow, suspend lambda, generic) genuinely has no route at an input position, so its
-      // NULLABLE/UNROUTED wording -- which names the offending parameter, issue #131 -- is the right
-      // answer and must not be swapped for a silent deferral.
+      // NULLABLE/UNROUTED wording -- which names the offending parameter, issue #131 -- is the
+      // right answer and must not be swapped for a silent deferral.
       is BridgeType.SpecializedProtocol -> when {
         inner.isSealedProtocol() -> ForwardPlanSkipReason.SEALED_POSITION
         inner.name.startsWith("lambda ") -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
@@ -4064,9 +4065,9 @@ internal fun BridgeType.Collection.declinesByteArrayComponent(): Boolean = when 
  */
 /**
  * The "key type String?" detail for the innermost map [declinesNullableMapKey] refuses, searched
- * recursively so a nested `List<Map<String?, Int>>` names the key rather than the list. `null` when
- * nothing here is a nullable-key map, which is what keeps the shared `skipDetail()` chain intact for
- * every other reason.
+ * recursively so a nested `List<Map<String?, Int>>` names the key rather than the list. `null`
+ * when nothing here is a nullable-key map, which is what keeps the shared `skipDetail()` chain
+ * intact for every other reason.
  */
 internal fun BridgeType.nullableMapKeyDetail(): String? {
   val collection: BridgeType.Collection =
