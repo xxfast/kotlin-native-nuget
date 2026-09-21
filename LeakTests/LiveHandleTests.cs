@@ -1682,4 +1682,107 @@ public class LiveHandleTests
             Assert.Null(metronome.FirstChimeOrNull(c => { using (c) { return c.Weight == 99; } }));
         }, iterations: 5000);
     }
+
+    // Row 14. ADR-161, the throwing-callback paths. Fault injection on the pattern of row 8's
+    // `ListReturn_ThrowingElementFactory_ReleasesTheListHandle`, except the throw comes from the
+    // consumer's own callback rather than a swapped factory, so no `NugetMarshal.Factories` entry
+    // has to be restored.
+    //
+    // What can leak on a throwing callback is the argument handle Kotlin minted BEFORE invoking the
+    // callback (`LambdaParameterExports.kt:100-105`): on the happy path the C# side reads and
+    // disposes it, on the throwing path the read may never happen. So every row below uses the
+    // `String` payload, which is the handle-passed one; the `Int` payload has no handle to leak and
+    // is deliberately not measured here.
+    //
+    // All three rows are process-fatal against the build of 2026-09-22: the throw inside the thunk
+    // reaches `Environment.FailFast` and kills the test host before the count is read. They are the
+    // red cells for the error channel, not skips.
+    //
+    // Not measured, accepted residue named by the ADR-161 research memo: a `Flow<T>` item whose
+    // materialisation throws leaks one StableRef per failed item, because the Kotlin side already
+    // handed the item handle over when the C# read failed. That is a known cost of PR A's
+    // fault-the-stream answer, not something a row here should pin as correct.
+
+    // Row 14. Per-call lambda, `String` payload, the throw uncaught in Kotlin. Fifty crossings, each
+    // minting one payload handle that the callback never reads because it throws first. Oreo objects
+    // to being described, fifty times.
+    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: a throwing callback fails fast the whole test host, so the live-handle count is never read. Remove the Skip in the PR that lands the forward callback error channel.")]
+    public void PerCallLambdaThrow_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var faults = new CallbackFaults();
+            Assert.ThrowsAny<Exception>(
+                () => faults.DescribeWith(_ => throw new InvalidOperationException("Oreo objects")));
+        });
+    }
+
+    // Row 14a. The same payload handle where KOTLIN catches the managed exception and returns
+    // normally. Separate row from 14 because the release happens on a different path: 14 unwinds out
+    // of the export through the ADR-024 error arm, while here the export returns a value, so a
+    // release wired only into the error arm passes 14 and leaks here. The error holder the channel
+    // mints per throw has to be gone too, which is what makes a +1-per-iteration delta here readable
+    // as "the managed-error holder is never disposed".
+    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: a throwing callback fails fast the whole test host, so the live-handle count is never read. Remove the Skip in the PR that lands the forward callback error channel.")]
+    public void PerCallLambdaThrowCaughtInKotlin_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var faults = new CallbackFaults();
+            Assert.Contains("recovered", faults.RecoverWith(_ => throw new InvalidOperationException("nope")));
+        });
+    }
+
+    // Row 14b. Stored callback (ADR-037). The subscription's GCHandle and the per-emission payload
+    // handle are owned by different scopes here: the subscription outlives the throwing emission, so
+    // a fix that frees the subscription on the error path would show as a crash rather than a leak,
+    // and a payload handle abandoned per emission shows as a per-iteration delta. Mylo is told about
+    // dinner fifty times and refuses every time.
+    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: a throwing callback fails fast the whole test host, so the live-handle count is never read. Remove the Skip in the PR that lands the forward callback error channel.")]
+    public void StoredCallbackThrow_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var faults = new CallbackFaults();
+            using IDisposable sub = faults.AddFaultListener(_ => throw new ArgumentException("Mylo refuses"));
+            Assert.ThrowsAny<Exception>(() => faults.Emit("dinner"));
+        });
+    }
+
+    // Row 14c. The ADR-084 interface bridge slot, whose ctx is a per-slot GCHandle in `_pins` and
+    // whose result is a `string` the Kotlin side would otherwise wrap. The throwing slot has to
+    // release the payload handle AND leave the bridge state intact for the next call, so the row
+    // makes a second, non-throwing call inside the same crossing.
+    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: a throwing callback fails fast the whole test host, so the live-handle count is never read. Remove the Skip in the PR that lands the forward callback error channel.")]
+    public void InterfaceBridgeSlotThrow_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var faults = new CallbackFaults();
+            using var throwing = new LeakThrowingFaultListener();
+            Assert.ThrowsAny<Exception>(() => faults.GreetVia(throwing));
+            using var polite = new LeakPoliteFaultListener();
+            Assert.Equal("hello Oreo", faults.GreetVia(polite));
+        });
+    }
+
+    /// <summary>ADR-161 row 14c: every member throws.</summary>
+    private sealed class LeakThrowingFaultListener : IFaultListener
+    {
+        public string OnName(string name) => throw new InvalidOperationException("not answering");
+
+        public int OnCount(int count) => throw new InvalidOperationException("not counting");
+
+        public void Dispose() { }
+    }
+
+    /// <summary>ADR-161 row 14c: the same interface, answering, to prove the bridge still works.</summary>
+    private sealed class LeakPoliteFaultListener : IFaultListener
+    {
+        public string OnName(string name) => "hello " + name;
+
+        public int OnCount(int count) => count;
+
+        public void Dispose() { }
+    }
 }
