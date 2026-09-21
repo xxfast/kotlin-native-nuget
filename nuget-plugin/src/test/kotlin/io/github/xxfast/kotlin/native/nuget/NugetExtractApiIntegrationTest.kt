@@ -564,15 +564,21 @@ class NugetExtractApiIntegrationTest {
       delegateOf("Apply", 1).getValue("definition").jsonPrimitive.content,
       "the C# holder factory spells the DECLARED delegate type, so it must survive",
     )
-    assertEquals("int", list(delegateOf("Apply", 1), "parameters").single().getValue("name").jsonPrimitive.content)
-    assertEquals("int", delegateOf("Apply", 1).getValue("returnType").jsonObject.getValue("name").jsonPrimitive.content)
+    val applyParam: JsonObject = list(delegateOf("Apply", 1), "parameters").single()
+    assertEquals("int", applyParam.getValue("name").jsonPrimitive.content)
+    val applyReturn: JsonObject = delegateOf("Apply", 1).getValue("returnType").jsonObject
+    assertEquals("int", applyReturn.getValue("name").jsonPrimitive.content)
     assertEquals("System.Action", delegateOf("Act").getValue("definition").jsonPrimitive.content)
     assertEquals(emptyList(), list(delegateOf("Act"), "parameters"))
     assertEquals("void", kind(delegateOf("Act").getValue("returnType").jsonObject))
-    assertEquals("System.Predicate`1", delegateOf("AnyLong").getValue("definition").jsonPrimitive.content)
+    assertEquals(
+      "System.Predicate`1",
+      delegateOf("AnyLong").getValue("definition").jsonPrimitive.content,
+    )
+    val anyLongReturn: JsonObject = delegateOf("AnyLong").getValue("returnType").jsonObject
     assertEquals(
       "bool",
-      delegateOf("AnyLong").getValue("returnType").jsonObject.getValue("name").jsonPrimitive.content,
+      anyLongReturn.getValue("name").jsonPrimitive.content,
       "Predicate<T>'s bool return is synthetic: it is not a type argument",
     )
 
@@ -609,19 +615,15 @@ class NugetExtractApiIntegrationTest {
       "a non-generic custom delegate has no type arguments at all: the Invoke MethodDef is the " +
           "only source of its shape",
     )
-    assertEquals(
-      "int",
-      list(delegateOf("ApplyNamed", 1), "parameters").single().getValue("name").jsonPrimitive.content,
-    )
-    assertEquals(
-      "int",
-      delegateOf("ApplyNamed", 1).getValue("returnType").jsonObject.getValue("name").jsonPrimitive.content,
-    )
+    val applyNamedParam: JsonObject = list(delegateOf("ApplyNamed", 1), "parameters").single()
+    assertEquals("int", applyNamedParam.getValue("name").jsonPrimitive.content)
+    val applyNamedReturn: JsonObject = delegateOf("ApplyNamed", 1).getValue("returnType").jsonObject
+    assertEquals("int", applyNamedReturn.getValue("name").jsonPrimitive.content)
 
-    // The custom route's own nullability trap: the USING parameter's NullableAttribute annotates the
-    // delegate REFERENCE (one node), so a `string?` INVOKE parameter can only come from the Invoke
-    // MethodDef's own rows, resolved with the delegate TypeDef as the type tier. Skipping that
-    // resolution is silent: `Sink` would bind as `(String) -> Unit`.
+    // The custom route's own nullability trap: the USING parameter's NullableAttribute annotates
+    // the delegate REFERENCE (one node), so a `string?` INVOKE parameter can only come from the
+    // Invoke MethodDef's own rows, resolved with the delegate TypeDef as the type tier. Skipping
+    // that resolution is silent: `Sink` would bind as `(String) -> Unit`.
     assertEquals("delegate", kind(delegateOf("Pour")))
     assertEquals("void", kind(delegateOf("Pour").getValue("returnType").jsonObject))
     assertEquals(
@@ -644,10 +646,11 @@ class NugetExtractApiIntegrationTest {
     assertEquals(emptyList(), diagnosedKinds("MakeDoubler"))
 
     // Still named skips, from the reader: a GENERIC custom delegate (which must not become an
-    // ADR-072 generic instance), an ASYNC delegate in either spelling (a BCL `Func<Task<int>>` and a
-    // package-declared one), an arity above the v1 ceiling of 4, and a custom delegate with an `out`
-    // parameter. The last two are the custom route's own vocabulary guards: `out int` decodes to a
-    // byref with no type ref at all, and a `Task<int>` Invoke return is outside the slot vocabulary.
+    // ADR-072 generic instance), an ASYNC delegate in either spelling (a BCL `Func<Task<int>>` and
+    // a package-declared one), an arity above the v1 ceiling of 4, and a custom delegate with an
+    // `out` parameter. The last two are the custom route's own vocabulary guards: `out int`
+    // decodes to a byref with no type ref at all, and a `Task<int>` Invoke return is outside the
+    // slot vocabulary.
     listOf("ApplyGeneric", "LaterAsync", "Sum5", "Parse", "Later").forEach { member ->
       assertEquals(
         listOf("skipped_delegate_signature"),
@@ -664,7 +667,8 @@ class NugetExtractApiIntegrationTest {
     // `BeginInvoke`/`EndInvoke` produced (AsyncCallback, IAsyncResult) are gone with them.
     assertTrue(
       diagnostics.none {
-        it.getValue("memberName").jsonPrimitive.content in setOf("Invoke", "BeginInvoke", "EndInvoke")
+        it.getValue("memberName").jsonPrimitive.content in
+            setOf("Invoke", "BeginInvoke", "EndInvoke")
       },
       "a delegate TypeDef must never enter member extraction: $diagnostics",
     )

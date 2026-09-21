@@ -549,18 +549,21 @@ fun generateKotlinStubs(
 
           if (registrables.isEmpty()) return@forEach
 
-          // ADR-158 step 4: one `typealias` per package-declared delegate this class admits, in the
-          // Kotlin package its own C# namespace maps to. The parameter itself is spelled as the bare
-          // function type (a lambda is the surface), so the alias is additive: a consumer who wants
-          // the C# name can declare `val t: Transform = { it * 3 }` and pass that.
+          // ADR-158 step 4: one `typealias` per package-declared delegate this class admits, in
+          // the Kotlin package its own C# namespace maps to. The parameter itself is spelled as
+          // the bare function type (a lambda is the surface), so the alias is additive: a
+          // consumer who wants the C# name can declare `val t: Transform = { it * 3 }` and pass
+          // that.
           delegatePlans(registrables, cls.name)
             .map { it.delegate.copy(nullable = false) }
             .filter { it.isPackageDeclared() }
             .forEach { delegate ->
               val delegateNs: String = delegate.definition.substringBeforeLast('.', "")
-              val aliasPkg: String = if (delegateNs.isEmpty()) kotlinPkg else kotlinPackage(
-                assembly.packageId, delegateNs, packageNameOverrides, namespaceAliases,
-              )
+              val aliasPkg: String =
+                if (delegateNs.isEmpty()) kotlinPkg
+                else kotlinPackage(
+                  assembly.packageId, delegateNs, packageNameOverrides, namespaceAliases,
+                )
               // A position whose Kotlin name is only spellable with an import (an enum, handle or
               // interface declared in another package) would make the alias file itself not
               // compile, which is strictly worse than having no alias: the parameter binds either
@@ -2887,9 +2890,10 @@ private fun collectionWrite(type: RirCollectionType, name: String): String {
   return "nugetWriteSlots($slots)"
 }
 
-// ADR-158: the Kotlin function type for a delegate, with [spell] deciding how each Invoke position
-// is rendered (unqualified, or cross-package qualified). Parenthesised when the delegate reference
-// itself is nullable, so the caller's trailing `?` lands on the FUNCTION and not on its return type.
+// ADR-158: the Kotlin function type for a delegate, with [spell] deciding how each Invoke
+// position is rendered (unqualified, or cross-package qualified). Parenthesised when the delegate
+// reference itself is nullable, so the caller's trailing `?` lands on the FUNCTION and not on its
+// return type.
 private fun delegateKotlinType(type: RirDelegateType, spell: (RirTypeRef) -> String): String {
   val params: String = type.parameters.joinToString(", ") { spell(it) }
   val ret: String = if (type.returnType is RirVoidType) "Unit" else spell(type.returnType)
@@ -3586,8 +3590,8 @@ private fun bindingsFileContent(
 
 // ADR-158: the Kotlin half of one delegate shape: the single `staticCFunction`-able slot the C#
 // holder calls back through, this shape's ADR-089 reuse table, and the mint entry point the call
-// site lowers a lambda into. The interface twin is kotlinBridgeBlock; the differences are that there
-// is exactly one slot, that the ctx StableRef holds a FUNCTION rather than an interface
+// site lowers a lambda into. The interface twin is kotlinBridgeBlock; the differences are that
+// there is exactly one slot, that the ctx StableRef holds a FUNCTION rather than an interface
 // implementation, and that the slot calls the function itself instead of a named member.
 private fun kotlinDelegateBlock(
   plan: KotlinDelegatePlan,
@@ -3598,8 +3602,9 @@ private fun kotlinDelegateBlock(
 ): String {
   val shape: String = plan.shapeKey
   val prefix: String = shape.replaceFirstChar { it.lowercaseChar() }
-  val fnType: String = delegateKotlinType(plan.delegate.copy(nullable = false)) { declKotlinType(it) }
-  val method = plan.invoke.method
+  val fnType: String =
+    delegateKotlinType(plan.delegate.copy(nullable = false)) { declKotlinType(it) }
+  val method: RirMethod = plan.invoke.method
   val declaredParams: String = (listOf("ctx: COpaquePointer?") +
       method.parameters.mapIndexed { i, p -> "a$i: ${cfnType(p.type)}" } + ERR_OUT_PARAM)
     .joinToString(", ")
@@ -7038,10 +7043,10 @@ internal fun allDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> {
 }
 
 // ADR-158 Decision 9: one note per bound overload SET (not per member: the ambiguity is a property
-// of the set, and the note names both members in its reason) whose members differ only by delegate
-// shape. Computed over the registrables that SURVIVED the shared filter and the ADR-057 collapse, so
-// it can never name a member that does not bind: if one of the pair were dropped, the survivor is
-// callable with a bare lambda and there is nothing to warn about.
+// of the set, and the note names both members in its reason) whose members differ only by
+// delegate shape. Computed over the registrables that SURVIVED the shared filter and the ADR-057
+// collapse, so it can never name a member that does not bind: if one of the pair were dropped, the
+// survivor is callable with a bare lambda and there is nothing to warn about.
 //
 // The workarounds are quoted verbatim because both were verified to resolve by spike (Kotlin
 // 2.4.10) while every bare-lambda form failed, including `{ }`.
@@ -7070,18 +7075,18 @@ internal fun delegateOverloadAmbiguityDiagnostics(
         memberName = set.first().name,
         memberSignature = set.first().identity(),
         reason = "these overloads differ only by delegate shape ($signatures), and all of them " +
-            "bind. A BARE Kotlin lambda cannot call them: it resolves against every candidate, so " +
-            "the call site is an `Overload resolution ambiguity` error",
+            "bind. A BARE Kotlin lambda cannot call them: it resolves against every candidate, " +
+            "so the call site is an `Overload resolution ambiguity` error",
         hint = "Pass a typed function value (`val pick: () -> Int = { 1 }; run(pick)`) or an " +
             "anonymous function (`run(fun(): Int = 1)`); both pick one overload.",
       )
     }
 }
 
-// ADR-158 Decision 9: every non-delegate position agrees and at least one delegate position differs.
-// A set where two positions differ (`Apply(int, Func<int,int>)` beside `Apply(string, Action)`) is
-// resolvable on the other argument and must not be named, which is what makes this a per-position
-// comparison rather than "the set contains a delegate".
+// ADR-158 Decision 9: every non-delegate position agrees and at least one delegate position
+// differs. A set where two positions differ (`Apply(int, Func<int,int>)` beside
+// `Apply(string, Action)`) is resolvable on the other argument and must not be named, which is
+// what makes this a per-position comparison rather than "the set contains a delegate".
 private fun differsOnlyByDelegateShape(set: List<RirMethod>): Boolean {
   val positions: List<List<RirTypeRef>> = set.map { method -> method.parameters.map { it.type } }
   // Compared by the KOTLIN spelling, which is the thing overload resolution actually sees: two C#

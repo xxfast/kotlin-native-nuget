@@ -3258,13 +3258,14 @@ abstract class NugetGenerateShimsTask : DefaultTask() {
 // thunk Kotlin invokes to build one and the identity-token probe Kotlin's return path uses to
 // recover the original Kotlin object. Slot order comes from the SAME KotlinBridgePlan the Kotlin
 // generator projects, so field i here is `staticCFunction` i there.
-// ADR-158: the C# half of one delegate shape. A holder object owns the Kotlin ctx (a KotlinRefHandle
-// SafeHandle, so .NET collection of the DELEGATE releases the Kotlin lambda) plus the single slot
-// pointer, and its `Invoke` member is rendered by the SAME bridgeMethodMember the ADR-085 interface
-// bridge uses, so the error channel, the string marshalling and the slot argument order cannot drift
-// between the two. The factory returns a real delegate over `holder.Invoke`: a closed delegate over
-// an instance method is `ldftn` + `newobj`, no reflection, so it is AOT and trimmer safe, and the
-// delegate strongly roots the holder (spike-verified, 2026-09-21).
+// ADR-158: the C# half of one delegate shape. A holder object owns the Kotlin ctx (a
+// KotlinRefHandle SafeHandle, so .NET collection of the DELEGATE releases the Kotlin lambda) plus
+// the single slot pointer, and its `Invoke` member is rendered by the SAME bridgeMethodMember the
+// ADR-085 interface bridge uses, so the error channel, the string marshalling and the slot
+// argument order cannot drift between the two. The factory returns a real delegate over
+// `holder.Invoke`: a closed delegate over an instance method is `ldftn` + `newobj`, no reflection,
+// so it is AOT and trimmer safe, and the delegate strongly roots the holder (spike-verified,
+// 2026-09-21).
 private fun kotlinDelegateCsharp(plan: KotlinDelegatePlan, errorNamespace: String): String {
   val shape: String = plan.shapeKey
   val holder = "${shape}Holder"

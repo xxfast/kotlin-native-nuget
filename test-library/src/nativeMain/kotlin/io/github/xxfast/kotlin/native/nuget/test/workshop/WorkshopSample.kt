@@ -84,7 +84,7 @@ fun workshopSum4(): Int = Workshop.sum4 { a, b, c, d -> a * 1000 + b * 100 + c *
  */
 fun workshopShout(): String {
   val seen = mutableListOf<String>()
-  val result = Workshop().use { workshop ->
+  val result: String = Workshop().use { workshop ->
     workshop.shout { name -> seen += (name ?: "<null>") }
   }
   return "$result:${seen.joinToString(",")}"
@@ -114,8 +114,9 @@ fun workshopMaybe(): String = Workshop().use { workshop ->
  * has to name.
  */
 fun workshopRunBoth(): String {
-  val action = Workshop.run(fun() { /* a `Unit` anonymous function picks the `Action` overload */ })
-  val func = Workshop.run(fun(): Int = 7)
+  val action: String =
+    Workshop.run(fun() { /* a `Unit` anonymous function picks the `Action` overload */ })
+  val func: String = Workshop.run(fun(): Int = 7)
   return "$action/$func"
 }
 
@@ -139,7 +140,7 @@ fun workshopThrowing(): String = Workshop().use { workshop ->
 
 /** The non-throwing sibling on the SAME receiver: the throw must not poison the crossing. */
 fun workshopThrowingThenFine(): String = Workshop().use { workshop ->
-  val thrown = try {
+  val thrown: String = try {
     workshop.apply(1) { error("boom from Kotlin") }
     NO_THROW
   } catch (e: NugetManagedException) {

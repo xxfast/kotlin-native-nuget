@@ -14,6 +14,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirStructComponent
 import io.github.xxfast.kotlin.native.nuget.rir.RirMethod
 import io.github.xxfast.kotlin.native.nuget.rir.RirParameter
 import io.github.xxfast.kotlin.native.nuget.rir.RirPrimitiveType
+import io.github.xxfast.kotlin.native.nuget.rir.RirRegistrable
 import io.github.xxfast.kotlin.native.nuget.rir.RirStringType
 import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableInterfaceRegistrables
@@ -40,15 +41,16 @@ import kotlin.test.assertTrue
  * property, a struct or bound-interface member, a generic class's member, a delegate nested in a
  * collection, and a delegate inside a Kotlin-bridge slot.
  *
- * What is pinned here is what a half-finished version of this feature gets wrong SILENTLY: that the
- * new `kind` parses at all (an unknown discriminator fails the whole build, so a reader emitting one
- * against an older plugin is a hard stop, never a silent drop); that the substituted Invoke shape
- * and the type arguments it came from cannot disagree about nullability, because a generator reads
- * `parameters` and not `typeArguments`; that admission is decided in the SHARED filter, so the two
- * generators cannot disagree about a type's registration slot count (asserted for the class, the
- * interface and the struct lists, which is what makes the renderers' `error(...)` arms unreachable
- * rather than merely unlikely); and that two delegate shapes never collapse to one ADR-054 contract
- * hash, because each shape adds a factory slot and the slot COUNT alone cannot tell them apart.
+ * What is pinned here is what a half-finished version of this feature gets wrong SILENTLY: that
+ * the new `kind` parses at all (an unknown discriminator fails the whole build, so a reader
+ * emitting one against an older plugin is a hard stop, never a silent drop); that the substituted
+ * Invoke shape and the type arguments it came from cannot disagree about nullability, because a
+ * generator reads `parameters` and not `typeArguments`; that admission is decided in the SHARED
+ * filter, so the two generators cannot disagree about a type's registration slot count (asserted
+ * for the class, the interface and the struct lists, which is what makes the renderers'
+ * `error(...)` arms unreachable rather than merely unlikely); and that two delegate shapes never
+ * collapse to one ADR-054 contract hash, because each shape adds a factory slot and the slot
+ * COUNT alone cannot tell them apart.
  *
  * That the real reader emits this RIR for real metadata is asserted separately, against a compiled
  * assembly, in `NugetExtractApiIntegrationTest`; that the crossing runs is
@@ -128,7 +130,8 @@ class NugetDelegateBindingTest {
           name = "RunKept",
           returnType = int,
           parameters = listOf(RirParameter("seed", int)),
-          managedSignature = "method|instance|Test.Workshop.Workshop|RunKept|(System.Int32)|System.Int32",
+          managedSignature =
+            "method|instance|Test.Workshop.Workshop|RunKept|(System.Int32)|System.Int32",
         ),
         // Refused at the parameter position.
         RirMethod(
@@ -138,8 +141,8 @@ class NugetDelegateBindingTest {
             RirParameter("seed", int),
             RirParameter("step", func(int, returns = int)),
           ),
-          managedSignature =
-            "method|instance|Test.Workshop.Workshop|Apply|(System.Int32,System.Func`2)|System.Int32",
+          managedSignature = "method|instance|Test.Workshop.Workshop|Apply|" +
+              "(System.Int32,System.Func`2)|System.Int32",
         ),
         // Refused at the return position too (the position that used to bind by accident as a
         // handle, before the reader stopped extracting a delegate TypeDef as a class).
@@ -152,14 +155,15 @@ class NugetDelegateBindingTest {
       ),
     )
 
-    val bound: List<String> =
-      bridgeableRegistrables(workshop, boundHandleTypes = emptySet()).filterIsInstance<io.github.xxfast.kotlin.native.nuget.rir.RirRegistrable.Method>().map { it.method.name }
+    val bound: List<String> = bridgeableRegistrables(workshop, boundHandleTypes = emptySet())
+      .filterIsInstance<RirRegistrable.Method>()
+      .map { it.method.name }
     assertEquals(
       listOf("Apply", "RunKept"),
       bound.sorted(),
-      "a delegate PARAMETER of an ordinary class binds; a delegate RETURN (MakeDoubler) does not, " +
-          "and the decision is made in the SHARED filter so the two generators cannot disagree " +
-          "about how many registration slots the type has",
+      "a delegate PARAMETER of an ordinary class binds; a delegate RETURN (MakeDoubler) does " +
+          "not, and the decision is made in the SHARED filter so the two generators cannot " +
+          "disagree about how many registration slots the type has",
     )
   }
 
@@ -172,13 +176,14 @@ class NugetDelegateBindingTest {
           name = "Apply",
           returnType = RirVoidType,
           parameters = listOf(RirParameter("step", step)),
-          managedSignature = "method|instance|Test.Workshop.Workshop|Apply|(System.Func)|System.Void",
+          managedSignature =
+            "method|instance|Test.Workshop.Workshop|Apply|(System.Func)|System.Void",
         ),
       ),
     )
 
-    val intToInt = workshop(func(int, returns = int))
-    val intToLong = workshop(func(int, returns = RirPrimitiveType("long")))
+    val intToInt: RirClass = workshop(func(int, returns = int))
+    val intToLong: RirClass = workshop(func(int, returns = RirPrimitiveType("long")))
 
     // Through `identity()`, the one public door onto the shared `describe()` fold: with no
     // managedSignature it spells the member from its types, which is exactly what contractHash
@@ -188,8 +193,8 @@ class NugetDelegateBindingTest {
     assertNotEquals(
       derivedIdentity(intToInt),
       derivedIdentity(intToLong),
-      "`Func<int,int>` and `Func<int,long>` need different C# holders, so they must never describe " +
-          "or hash alike",
+      "`Func<int,int>` and `Func<int,long>` need different C# holders, so they must never " +
+          "describe or hash alike",
     )
     assertTrue(
       derivedIdentity(intToInt).contains("int") && derivedIdentity(intToInt).contains("Func"),
@@ -201,7 +206,7 @@ class NugetDelegateBindingTest {
     // a native library that now expects `Func<int,long>` has to fail loudly at startup, and the
     // slot count alone cannot see the difference: both are one slot.
     fun hashOf(cls: RirClass): Long {
-      val registrables = bridgeableRegistrables(cls, emptySet())
+      val registrables: List<RirRegistrable> = bridgeableRegistrables(cls, emptySet())
       return delegateContractHash(
         contractHash(cls, registrables, emptyMap()), delegatePlans(registrables, cls.name),
       )
@@ -214,8 +219,8 @@ class NugetDelegateBindingTest {
     )
   }
 
-  // `describe()` is private to the bridging file; `identity()` is its public door, and falls back to
-  // describing the member from its types when the RIR carries no managedSignature.
+  // `describe()` is private to the bridging file; `identity()` is its public door, and falls back
+  // to describing the member from its types when the RIR carries no managedSignature.
   private fun derivedIdentity(cls: RirClass): String =
     cls.methods.single().copy(managedSignature = "").identity()
 
@@ -258,14 +263,15 @@ class NugetDelegateBindingTest {
       ),
     )
 
-    val bound: List<String> =
-      bridgeableRegistrables(workshop, boundHandleTypes = emptySet()).filterIsInstance<io.github.xxfast.kotlin.native.nuget.rir.RirRegistrable.Method>().map { it.method.name }
+    val bound: List<String> = bridgeableRegistrables(workshop, boundHandleTypes = emptySet())
+      .filterIsInstance<RirRegistrable.Method>()
+      .map { it.method.name }
     assertTrue("Plain" in bound)
     assertTrue("Keep" in bound, "a bare delegate parameter binds")
     assertFalse(
       "KeepAll" in bound,
-      "a delegate INSIDE a collection does not: one buffer slot cannot carry a minted bridge plus " +
-          "its lifetime, the same refusal a collection-typed interface slot gets",
+      "a delegate INSIDE a collection does not: one buffer slot cannot carry a minted bridge " +
+          "plus its lifetime, the same refusal a collection-typed interface slot gets",
     )
   }
 
@@ -284,7 +290,8 @@ class NugetDelegateBindingTest {
           name = "Apply",
           returnType = int,
           parameters = listOf(step),
-          managedSignature = "method|instance|Test.Workshop.IWorkshop|Apply|(System.Func`2)|System.Int32",
+          managedSignature = "method|instance|Test.Workshop.IWorkshop|Apply|" +
+              "(System.Func`2)|System.Int32",
         ),
       ),
     )
@@ -297,7 +304,10 @@ class NugetDelegateBindingTest {
       name = "Bench",
       components = listOf(RirStructComponent("Seats", "Seats", int)),
       constructors = listOf(
-        RirConstructor(parameters = listOf(RirParameter("seats", int)), managedSignature = "Bench(Int32)"),
+        RirConstructor(
+          parameters = listOf(RirParameter("seats", int)),
+          managedSignature = "Bench(Int32)",
+        ),
         RirConstructor(parameters = listOf(step), managedSignature = "Bench(Func`2)"),
       ),
       methods = listOf(
@@ -333,7 +343,8 @@ class NugetDelegateBindingTest {
       returnType = RirStringType(),
       parameters = listOf(RirParameter(name, delegate)),
       isStatic = true,
-      managedSignature = "method|static|Test.Workshop.Workshop|Run|(${delegate.definition})|System.String",
+      managedSignature =
+        "method|static|Test.Workshop.Workshop|Run|(${delegate.definition})|System.String",
     )
 
     val action = RirDelegateType(
@@ -358,16 +369,21 @@ class NugetDelegateBindingTest {
         RirMethod(
           name = "Apply",
           returnType = int,
-          parameters = listOf(RirParameter("seed", int), RirParameter("step", func(int, returns = int))),
+          parameters = listOf(
+            RirParameter("seed", int),
+            RirParameter("step", func(int, returns = int)),
+          ),
           isStatic = true,
-          managedSignature = "method|static|Test.Workshop.Workshop|Apply|(System.Int32,System.Func`2)|System.Int32",
+          managedSignature = "method|static|Test.Workshop.Workshop|Apply|" +
+              "(System.Int32,System.Func`2)|System.Int32",
         ),
         RirMethod(
           name = "Apply",
           returnType = int,
           parameters = listOf(RirParameter("seed", RirStringType()), RirParameter("step", action)),
           isStatic = true,
-          managedSignature = "method|static|Test.Workshop.Workshop|Apply|(System.String,System.Action)|System.Int32",
+          managedSignature = "method|static|Test.Workshop.Workshop|Apply|" +
+              "(System.String,System.Action)|System.Int32",
         ),
       ),
     )
@@ -413,8 +429,8 @@ class NugetDelegateBindingTest {
           returnType = int,
           parameters = listOf(RirParameter("seed", int), RirParameter("step", transform)),
           isStatic = true,
-          managedSignature =
-            "method|static|Test.Workshop.Workshop|ApplyNamed|(System.Int32,Test.Workshop.Transform)|System.Int32",
+          managedSignature = "method|static|Test.Workshop.Workshop|ApplyNamed|" +
+              "(System.Int32,Test.Workshop.Transform)|System.Int32",
         ),
       ),
     )
@@ -446,8 +462,8 @@ class NugetDelegateBindingTest {
     assertContains(
       shim,
       "new global::Test.Workshop.Transform(",
-      message = "the factory must construct the DECLARED delegate type: a Func<int,int> would not bind to " +
-          "`ApplyNamed(int, Transform)`",
+      message = "the factory must construct the DECLARED delegate type: a Func<int,int> would " +
+          "not bind to `ApplyNamed(int, Transform)`",
     )
     assertContains(shim, "CreateTransformInt32Int32Delegate")
   }

@@ -969,9 +969,9 @@ fun collectionPositionDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic
     }
   }
 
-// ADR-158 step 4: is this a PACKAGE-DECLARED delegate (`Test.Workshop.Transform`) rather than one of
-// the BCL shapes the reader derives positionally from a name table (`System.Func`2`)? The RIR carries
-// no flag for it on purpose: the distinction is a naming one and only two things care, both
+// ADR-158 step 4: is this a PACKAGE-DECLARED delegate (`Test.Workshop.Transform`) rather than one
+// of the BCL shapes the reader derives positionally from a name table (`System.Func`2`)? The RIR
+// carries no flag for it on purpose: the distinction is a naming one and only two things care, both
 // cosmetic. A package-declared delegate gets a Kotlin `typealias` carrying its C# name, and the C#
 // holder factory constructs that declared type rather than a `Func`. Everything about the wire,
 // the slot and the lifetime is identical, which is why this is a predicate and not a variant.
@@ -1075,7 +1075,11 @@ fun delegatePlans(registrables: List<RirRegistrable>, typeName: String): List<Ko
     }
     .sortedBy { it.shapeKey }
 
-  val duplicates: List<String> = plans.groupBy { it.shapeKey }.filterValues { it.size > 1 }.keys.toList()
+  val duplicates: List<String> = plans
+    .groupBy { it.shapeKey }
+    .filterValues { it.size > 1 }
+    .keys
+    .toList()
   require(duplicates.isEmpty()) {
     "[nuget] ADR-158: two different delegate shapes on $typeName sanitize to the same generated " +
         "name(s) ${duplicates.joinToString()}: " +
