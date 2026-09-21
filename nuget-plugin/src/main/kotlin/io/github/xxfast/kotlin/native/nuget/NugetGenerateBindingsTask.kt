@@ -6659,9 +6659,9 @@ internal fun diagnosticWarnings(rir: RirFile): List<String> {
 }
 
 // The same seven sources diagnosticWarnings concatenates, STRUCTURED, before formatDiagnostic
-// throws the kind away. The reverse census buckets by kind and cannot recover it from the rendered
-// string. validateDiagnostics deliberately stays in diagnosticWarnings and not here: the census
-// must be able to enumerate the `error_*` kinds it would have thrown on.
+// throws the kind away. The reverse census buckets by kind and cannot recover it from the
+// rendered string. validateDiagnostics deliberately stays in diagnosticWarnings and not here:
+// the census must be able to enumerate the `error_*` kinds it would have thrown on.
 internal fun allDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> {
   val boundTypes: Set<RirTypeKey> = boundHandleTypes(rir)
   val structs: Map<RirTypeKey, RirStruct> = boundStructTypes(rir)

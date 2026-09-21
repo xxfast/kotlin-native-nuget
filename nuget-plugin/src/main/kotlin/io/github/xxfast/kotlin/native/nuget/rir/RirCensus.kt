@@ -3,13 +3,13 @@ package io.github.xxfast.kotlin.native.nuget.rir
 import io.github.xxfast.kotlin.native.nuget.allDiagnostics
 
 /**
- * The reverse diagnostics census: what a real published NuGet package actually does when the whole
- * reverse pipeline is pointed at it. One [Census] per package, rendered to a stable JSON string and
- * committed as a golden, so a bridge change that starts (or stops) binding real members shows up as
- * a reviewable diff instead of as nothing.
+ * The reverse diagnostics census: what a real published NuGet package actually does when the
+ * whole reverse pipeline is pointed at it. One [Census] per package, rendered to a stable JSON
+ * string and committed as a golden, so a bridge change that starts (or stops) binding real
+ * members shows up as a reviewable diff instead of as nothing.
  *
- * Deliberately NOT a quality metric. [PublicSurfaceCensus] is the honest denominator, counted by the
- * reader off the metadata; [MemberCensus.seen] is only what the RIR plus the reader's own
+ * Deliberately NOT a quality metric. [PublicSurfaceCensus] is the honest denominator, counted by
+ * the reader off the metadata; [MemberCensus.seen] is only what the RIR plus the reader's own
  * diagnostics can see, and the gap between the two is the members this project drops with no
  * diagnostic at all.
  */
@@ -49,8 +49,8 @@ data class PublicSurfaceCensus(
   val genericMethods: Int,
 ) {
   // The denominator the bound counts are compared against: every member-shaped thing, never the
-  // types. Operators and events are counted in, because today they are dropped silently and the
-  // whole point of the denominator is that a silent drop costs the ratio.
+  // types. Operators and events are counted in, because today they are dropped silently and
+  // the whole point of the denominator is that a silent drop costs the ratio.
   val members: Int get() = methods + constructors + properties + operators + events
 }
 
@@ -73,9 +73,9 @@ data class CollapsedOverloadCensus(
 )
 
 /**
- * Builds the census for one package from its parsed RIR. Pure: no process launch, no file access,
- * so the shape is unit-testable against a hand-built [RirFile] in the ordinary `test` task, and the
- * dogfood task only supplies the real input.
+ * Builds the census for one package from its parsed RIR. Pure: no process launch, no file
+ * access, so the shape is unit-testable against a hand-built [RirFile] in the ordinary `test`
+ * task, and the dogfood task only supplies the real input.
  */
 fun census(
   rir: RirFile,
@@ -96,7 +96,8 @@ fun census(
   val enums: List<RirEnum> = rir.allTypes().filterIsInstance<RirEnum>()
 
   // `bound` is counted with the four bridgeable* filters, NEVER bridgeableRegistrables: a
-  // registrable list splits a property into getter and setter, which makes "bound" exceed "seen".
+  // registrable list splits a property into getter and setter, which makes "bound" exceed
+  // "seen".
   val boundConstructors: Int = classes.sumOf {
     bridgeableConstructors(it, boundTypes, boundInterfaces, genericDefs).size
   } + structs.sumOf { bridgeableStructConstructors(it, boundTypes).size }
@@ -110,13 +111,13 @@ fun census(
     bridgeableProperties(it, boundTypes, boundInterfaces, genericDefs).size
   } + interfaces.sumOf { it.properties.size } + structs.sumOf { it.properties.size }
 
-  // `seen` is what the RIR carries plus what a reader diagnostic named, which is the widest total
-  // this side of the bridge can observe. The reader's diagnostics do not say which member SHAPE
-  // they refused, so they all land on one bucket rather than being guessed into four.
+  // `seen` is what the RIR carries plus what a reader diagnostic named, which is the widest
+  // total this side of the bridge can observe. The reader's diagnostics do not say which member
+  // SHAPE they refused, so they all land on one bucket rather than being guessed into four.
   val readerDiagnostics: List<RirDiagnostic> = rir.assemblies.flatMap { it.diagnostics }
-  // Only the `skipped_*` kinds: an `info_*` entry (an oblivious member, a deferred async shape's
-  // note) names a member that may well be BOUND, so counting those here would inflate the skip
-  // bucket by 84 members on Humanizer.Core alone.
+  // Only the `skipped_*` kinds: an `info_*` entry (an oblivious member, a deferred async
+  // shape's note) names a member that may well be BOUND, so counting those here would inflate
+  // the skip bucket by 84 members on Humanizer.Core alone.
   val namedSkips: Int = readerDiagnostics.count {
     it.memberName.isNotEmpty() && it.kind.wireName().startsWith("skipped_")
   }
@@ -137,8 +138,8 @@ fun census(
   }
 
   // Every diagnostic that will ever reach a consumer's log, reader-emitted and plugin-derived
-  // alike, bucketed by kind. validateDiagnostics is NOT called: an `error_*` kind is a census row,
-  // not an abort.
+  // alike, bucketed by kind. validateDiagnostics is NOT called: an `error_*` kind is a census
+  // row, not an abort.
   val all: List<RirDiagnostic> = allDiagnostics(rir).map { it.second }
 
   return Census(
@@ -152,8 +153,8 @@ fun census(
     generationError = generationError,
     nullability = NullabilityCensus(
       // ADR-053 collapses the whole-assembly case to ONE entry naming no member; an oblivious
-      // island inside an annotated assembly keeps its per-member entries. The two are told apart
-      // by exactly that, so a scalar "oblivious" would be wrong on both.
+      // island inside an annotated assembly keeps its per-member entries. The two are told
+      // apart by exactly that, so a scalar "oblivious" would be wrong on both.
       assemblyOblivious = readerDiagnostics.any {
         it.kind == RirDiagnosticKind.INFO_OBLIVIOUS_NULLABILITY && it.memberName.isEmpty()
       },
@@ -185,7 +186,8 @@ fun census(
     members = mapOf(
       "constructor" to MemberCensus(seen = rirConstructors, bound = boundConstructors),
       "staticMethod" to MemberCensus(seen = rirStaticMethods, bound = boundStaticMethods),
-      "instanceMethod" to MemberCensus(seen = rirInstanceMethods, bound = boundInstanceMethods),
+      "instanceMethod" to
+        MemberCensus(seen = rirInstanceMethods, bound = boundInstanceMethods),
       "property" to MemberCensus(seen = rirProperties, bound = boundProperties),
       "readerSkippedMember" to MemberCensus(seen = namedSkips, bound = 0),
     ),
@@ -201,11 +203,13 @@ fun census(
       // ADR-155 drops the WHOLE set, so every member of every collapsed set is lost.
       membersDropped = collapsed.sumOf { it.size },
       bridgeableMethods = bridgeableMethods,
-      examples = collapsed.take(5).map { set ->
-        set.joinToString(" | ") { "${it.name}${it.managedSignature}" }
-      }.sorted(),
+      examples = collapsed
+        .take(5)
+        .map { set -> set.joinToString(" | ") { "${it.name}${it.managedSignature}" } }
+        .sorted(),
     ),
-    errors = all.filter { it.kind.wireName().startsWith("error_") }
+    errors = all
+      .filter { it.kind.wireName().startsWith("error_") }
       .map { "${it.kind.wireName()}: ${it.typeName}.${it.memberName}" }
       .sorted(),
   )
@@ -213,8 +217,8 @@ fun census(
 
 /**
  * The row for a package the reader could not read at all. There is no RIR, so every RIR-derived
- * cell is absent rather than zero: a committed `reader: "failed"` golden on a real, popular package
- * is a status line, and it turns green in a diff the day the reader stops crashing.
+ * cell is absent rather than zero: a committed `reader: "failed"` golden on a real, popular
+ * package is a status line, and it turns green in a diff the day the reader stops crashing.
  */
 fun readerFailureCensus(
   packageName: String,
@@ -232,13 +236,13 @@ fun readerFailureCensus(
   generation = "not_reached",
 )
 
-// Every RirDiagnosticKind's @SerialName is its own name, lowercased; derived rather than looked up
-// so the census never carries a second copy of the vocabulary that could drift from RirModel.
+// Every RirDiagnosticKind's @SerialName is its own name, lowercased; derived rather than looked
+// up so the census never carries a second copy of the vocabulary that could drift from RirModel.
 internal fun RirDiagnosticKind.wireName(): String = name.lowercase()
 
 // The unbound type's name lives only inside the diagnostic's prose today (there is no `subject`
-// field on RirDiagnostic), and the reader always backticks it first. Nothing depends on this being
-// exhaustive: a reason with no backticked token simply does not contribute to the histogram.
+// field on RirDiagnostic), and the reader always backticks it first. Nothing depends on this
+// being exhaustive: a reason with no backticked token simply does not contribute to the histogram.
 internal fun backtickedSubject(reason: String): String? {
   val open: Int = reason.indexOf('`')
   if (open < 0) return null
@@ -252,8 +256,8 @@ internal fun RirFile.allTypes(): List<RirType> =
   assemblies.flatMap { assembly -> assembly.namespaces.flatMap { it.types } }
 
 /**
- * Renders a [Census] as JSON with a fixed key order, sorted maps, no timestamps and no absolute
- * paths, so a golden diff shows only what actually moved. Hand-written rather than
+ * Renders a [Census] as JSON with a fixed key order, sorted maps, no timestamps and no
+ * absolute paths, so a golden diff shows only what actually moved. Hand-written rather than
  * kotlinx.serialization because the key order and the two-space layout ARE the contract here.
  */
 fun Census.toStableJson(): String {

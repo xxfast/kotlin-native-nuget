@@ -8,6 +8,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.readerFailureCensus
 import io.github.xxfast.kotlin.native.nuget.rir.toStableJson
 import java.io.File
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -18,15 +19,15 @@ import kotlin.test.fail
 
 /**
  * The reverse dogfooding census (`./gradlew -p nuget-plugin dogfoodCensus`, or
- * `scripts/verify-dogfood.sh`). Runs the WHOLE reverse pipeline over nine pinned published NuGet
- * packages and compares each package's census against its committed golden, exactly.
+ * `scripts/verify-dogfood.sh`). Runs the WHOLE reverse pipeline over nine pinned published
+ * NuGet packages and compares each package's census against its committed golden, exactly.
  *
- * Tagged `dogfood` so the ordinary `test` task (and therefore `verify.sh` and every PR matrix leg)
- * never depends on nuget.org. Unlike the integration tests it FAILS when `dotnet` is absent: a
- * census that silently measures nothing is worse than no census.
+ * Tagged `dogfood` so the ordinary `test` task (and therefore `verify.sh` and every PR matrix
+ * leg) never depends on nuget.org. Unlike the integration tests it FAILS when `dotnet` is
+ * absent: a census that silently measures nothing is worse than no census.
  *
- * A golden diff is the entire point. When a bridge change starts binding something new, rerun with
- * `--update` and put the diff in the PR.
+ * A golden diff is the entire point. When a bridge change starts binding something new, rerun
+ * with `--update` and put the diff in the PR.
  */
 @Tag("dogfood")
 class DogfoodCensusTest {
@@ -41,7 +42,7 @@ class DogfoodCensusTest {
       javaClass.classLoader.getResourceAsStream("dogfood/packages.json"),
     ) { "dogfood/packages.json missing from the test resources" }.reader().readText()
     return Json.parseToJsonElement(text).jsonArray.map { entry ->
-      val obj = entry.jsonObject
+      val obj: JsonObject = entry.jsonObject
       DogfoodPackage(
         id = obj.getValue("id").jsonPrimitive.content,
         version = obj.getValue("version").jsonPrimitive.content,
@@ -57,8 +58,8 @@ class DogfoodCensusTest {
     }
     val goldenDir = File(
       requireNotNull(System.getProperty("dogfood.goldenDir")) {
-        "dogfood.goldenDir is not set; run through the dogfoodCensus task, which points it at the " +
-            "SOURCE resources dir (a build/ copy would make --update write into the void)"
+        "dogfood.goldenDir is not set; run through the dogfoodCensus task, which points it at " +
+            "the SOURCE resources dir (a build/ copy would make --update write into the void)"
       },
     )
     val update: Boolean = System.getProperty("dogfood.update") == "true"
@@ -151,7 +152,7 @@ class DogfoodCensusTest {
       val bound: Int = c.members.values.sumOf { it.bound }
       val surface: Int = c.publicSurface?.members ?: 0
       val share: String =
-        if (surface == 0) "n/a" else "${(bound * 100.0 / surface).let { "%.1f".format(it) }} percent"
+        if (surface == 0) "n/a" else "%.1f percent".format(bound * 100.0 / surface)
       "| ${c.packageName} ${c.version} | `${c.asset}` | ${c.reader} | ${c.generation} | " +
           "$bound | $surface | $share | ${c.collapsedOverloads.sets} | " +
           "${c.collapsedOverloads.bridgeableMethods} |"
@@ -168,7 +169,8 @@ class DogfoodCensusTest {
       .flatMap { it.unboundTypeReferences.entries }
       .groupingBy { it.key }
       .fold(0) { total, entry -> total + entry.value }
-      .entries.sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+      .entries
+      .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
       .take(20)
       .map { it.key to it.value }
 

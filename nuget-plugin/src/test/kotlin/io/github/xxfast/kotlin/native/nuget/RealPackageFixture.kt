@@ -5,15 +5,15 @@ import java.io.File
 import java.nio.file.Files
 
 /**
- * The shared "real published package to reverse-ir.json" pipeline: `dotnet restore`, the plugin's
- * own `deriveDllPaths`, then the bundled `NugetMetadataReader` as a subprocess. Extracted from
- * `NugetExtractApiIntegrationTest` so the dogfood census runs the SAME path a consumer's build
- * does rather than a second copy of it that could drift.
+ * The shared "real published package to reverse-ir.json" pipeline: `dotnet restore`, the
+ * plugin's own `deriveDllPaths`, then the bundled `NugetMetadataReader` as a subprocess.
+ * Extracted from `NugetExtractApiIntegrationTest` so the dogfood census runs the SAME path a
+ * consumer's build does rather than a second copy of it that could drift.
  *
  * Unlike the integration tests, nothing here asserts: [readerOutcome] returns the exit code and
- * stderr so a caller can record a reader crash as data. One package per reader invocation, because
- * the reader aborts the whole run on one bad type and a shared invocation would lose every other
- * package's row.
+ * stderr so a caller can record a reader crash as data. One package per reader invocation,
+ * because the reader aborts the whole run on one bad type and a shared invocation would lose
+ * every other package's row.
  */
 object RealPackageFixture {
   data class ReaderOutcome(
@@ -33,8 +33,10 @@ object RealPackageFixture {
     "dotnet"
   }.getOrNull()
 
-  /** Unpacks the bundled reader once. The reader's first build is the expensive part, so callers
-   *  share one directory across every package. */
+  /**
+   * Unpacks the bundled reader once. The reader's first build is the expensive part, so callers
+   * share one directory across every package.
+   */
   fun unpackReader(classLoader: ClassLoader, name: String = "NugetMetadataReader-dogfood"): File {
     val dir: File = Files.createTempDirectory(name).toFile()
     unpackMetadataReader(dir, classLoader)
@@ -97,20 +99,24 @@ object RealPackageFixture {
 
   /**
    * Cuts an absolute NuGet-cache path down to the part that is the same on every machine. The
-   * cache path is `<home>/.nuget/packages/<id lowercased>/<version>/lib/<tfm>/<name>.dll`, and both
-   * the home directory and the separator differ between this developer's Windows box and the Linux
-   * CI runner. The asset IS the multi-TFM assertion, so it must survive; the prefix must not.
+   * cache path is `<home>/.nuget/packages/<id lowercased>/<version>/lib/<tfm>/<name>.dll`, and
+   * both the home directory and the separator differ between this developer's Windows box and
+   * the Linux CI runner. The asset IS the multi-TFM assertion, so it must survive; the prefix
+   * must not.
    */
   fun relativeAsset(absolute: String, id: String, version: String): String {
     val normalized: String = absolute.replace('\\', '/')
     val marker = "/${id.lowercase()}/$version/"
     val index: Int = normalized.indexOf(marker)
-    return if (index < 0) normalized.substringAfterLast('/') else
-      normalized.substring(index + marker.length)
+    return if (index < 0) normalized.substringAfterLast('/')
+    else normalized.substring(index + marker.length)
   }
 
-  /** The reader's stderr names the absolute DLL path it failed on; that prefix is machine-specific
-   *  and would make a committed failure row red for the wrong reason on another host. */
+  /**
+   * The reader's stderr names the absolute DLL path it failed on; that prefix is
+   * machine-specific and would make a committed failure row red for the wrong reason on
+   * another host.
+   */
   fun sanitizeReaderError(stderr: String, id: String, version: String): String {
     val firstLine: String = stderr.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty().trim()
     val normalized: String = firstLine.replace('\\', '/')

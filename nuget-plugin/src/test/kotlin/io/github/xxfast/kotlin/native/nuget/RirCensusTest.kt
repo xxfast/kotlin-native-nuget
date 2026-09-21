@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget
 
 import io.github.xxfast.kotlin.native.nuget.rir.Census
+import io.github.xxfast.kotlin.native.nuget.rir.PublicSurfaceCensus
 import io.github.xxfast.kotlin.native.nuget.rir.RirAssembly
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnostic
@@ -24,15 +25,15 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The PURE half of the reverse census: everything about the census that does not need nuget.org, so
- * it runs in the ordinary `test` task. The real-package run lives in `DogfoodCensusTest` (tagged
- * `dogfood`); this file pins the shape, the counting rules and the renderer, which is what a golden
- * diff is read against.
+ * The PURE half of the reverse census: everything about the census that does not need
+ * nuget.org, so it runs in the ordinary `test` task. The real-package run lives in
+ * `DogfoodCensusTest` (tagged `dogfood`); this file pins the shape, the counting rules and the
+ * renderer, which is what a golden diff is read against.
  */
 class RirCensusTest {
-  // `Unsupported` is NOT in this RIR: an unbound type reference is something the reader refused, so
-  // on the Kotlin side it only ever arrives as a diagnostic. `Register` is bridgeable, `Track` takes
-  // a handle to a type nothing declares and so is not.
+  // `Unsupported` is NOT in this RIR: an unbound type reference is something the reader
+  // refused, so on the Kotlin side it only ever arrives as a diagnostic. `Register` is
+  // bridgeable, `Track` takes a handle to a type nothing declares and so is not.
   private val rir: RirFile = RirFile(
     assemblies = listOf(
       RirAssembly(
@@ -135,7 +136,7 @@ class RirCensusTest {
 
   @Test
   fun `the denominator is the reader's independent count, not the RIR's own members`() {
-    val surface = requireNotNull(censusOf().publicSurface)
+    val surface: PublicSurfaceCensus = requireNotNull(censusOf().publicSurface)
     // 6 methods + 1 ctor + 2 properties + 2 operators + 1 event. Operators and the nested type's
     // members are counted IN on purpose: they are dropped with no diagnostic, so the ratio must pay
     // for them rather than shrink its own denominator.
@@ -190,9 +191,12 @@ class RirCensusTest {
       ),
       keys,
     )
-    // No absolute path and no timestamp may ever reach a golden: either makes every machine's run
-    // a diff.
-    assertTrue(!first.contains(":\\") && !first.contains("/home/") && !first.contains("/Users/"))
+    // No absolute path and no timestamp may ever reach a golden: either makes every machine's
+    // run a diff.
+    val hasWindowsPath: Boolean = first.contains(":\\")
+    val hasLinuxHome: Boolean = first.contains("/home/")
+    val hasMacHome: Boolean = first.contains("/Users/")
+    assertTrue(!hasWindowsPath && !hasLinuxHome && !hasMacHome)
   }
 
   @Test
