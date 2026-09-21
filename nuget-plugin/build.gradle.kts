@@ -58,7 +58,7 @@ val generateVersionConstant: TaskProvider<Task> = tasks.register("generateVersio
 
       internal const val PLUGIN_VERSION: String = "$pluginVersion"
 
-      // ADR-155: the plugin puts kotlinx-coroutines-core on the consumer's `nativeMain` so a
+      // ADR-156: the plugin puts kotlinx-coroutines-core on the consumer's `nativeMain` so a
       // generated `Flow<T>` signature resolves there. Pinned inline for the same reason Kover is
       // (this included build does not consume the root version catalog): if you bump
       // `coroutines` in gradle/libs.versions.toml, bump it here too.

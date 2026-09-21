@@ -21,15 +21,27 @@ import java.nio.file.Files
  * `:test-models`/`StoryCode` fixture), exactly as the ADR calls for.
  */
 internal object Tier1DependencyLibrary {
-  fun compile(source: String, fileName: String = "Dependency.kt"): File {
+  fun compile(source: String, fileName: String = "Dependency.kt"): File =
+    compile(mapOf(fileName to source))
+
+  /**
+   * ADR-154: the multi-FILE overload. A Kotlin file declares exactly one package, and per-type
+   * admission is only meaningful when one dependency holds several packages (one admitted by
+   * name, one by prefix, one admitted by nothing at all), so the by-type and by-prefix arms of
+   * `admit(...)` cannot be told apart inside a single-file jar. Mirrors
+   * [Tier1Harness.run]'s own single-file/multi-file pair.
+   */
+  fun compile(sources: Map<String, String>): File {
     val workDir: File = Files.createTempDirectory("nuget-tier1-dep-").toFile()
     val sourceDir: File = workDir.resolve("src").apply { mkdirs() }
-    val sourceFile: File = sourceDir.resolve(fileName).apply { writeText(source) }
+    val sourceFiles: List<File> = sources.map { (fileName, source) ->
+      sourceDir.resolve(fileName).apply { writeText(source) }
+    }
     val jarFile: File = workDir.resolve("dependency.jar")
 
     val collector = RecordingMessageCollector()
     val arguments = K2JVMCompilerArguments().apply {
-      freeArgs = listOf(sourceFile.absolutePath)
+      freeArgs = sourceFiles.map { it.absolutePath }
       destination = jarFile.absolutePath
       classpath = Tier1Classpath.kotlinStdlib.absolutePath
       noStdlib = true
@@ -38,7 +50,7 @@ internal object Tier1DependencyLibrary {
     }
     K2JVMCompiler().exec(collector, Services.EMPTY, arguments)
     check(jarFile.exists()) {
-      "Tier 1 dependency library failed to compile $fileName: ${collector.errors}"
+      "Tier 1 dependency library failed to compile ${sources.keys}: ${collector.errors}"
     }
     return jarFile
   }

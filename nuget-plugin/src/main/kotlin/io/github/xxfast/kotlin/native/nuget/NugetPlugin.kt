@@ -229,7 +229,7 @@ class NugetPlugin : Plugin<Project> {
       val runtimeDep: Any = project.findProject(":nuget-runtime")
         ?: "io.github.xxfast:nuget-runtime:$PLUGIN_VERSION"
 
-      // ADR-155: a method bound from a C# `IAsyncEnumerable<T>` return names
+      // ADR-156: a method bound from a C# `IAsyncEnumerable<T>` return names
       // `kotlinx.coroutines.flow.Flow` in a PUBLIC signature of a generated class, and generated
       // classes compile from `nativeMain` (see the srcDir wiring above) while `nuget-runtime` —
       // and coroutines through its `api` — reaches only `${target}MainApi`. Without this a
@@ -314,6 +314,18 @@ class NugetPlugin : Plugin<Project> {
           argMethod.invoke(ksp, "nuget.includePackages", pub?.include.orEmpty().joinToString(","))
           argMethod.invoke(ksp, "nuget.excludePackages", pub?.exclude.orEmpty().joinToString(","))
           argMethod.invoke(ksp, "nuget.boundPackages", boundPackages.joinToString(","))
+          // ADR-154: the additive dependency-admission entries, on the same comma-joined channel
+          // as include/exclude. No Kotlin qualified name or package prefix can contain a comma, so
+          // the join is unambiguous. Empty is the shipped default (admission by `include(...)`
+          // alone).
+          argMethod.invoke(ksp, "nuget.admit", pub?.admit.orEmpty().joinToString(","))
+          // ADR-154 §6: opt-in strictness, lowered as a plain boolean string. Absent or "false"
+          // keeps ADR-066 section 4's warn-and-skip default.
+          argMethod.invoke(
+            ksp,
+            "nuget.strictDependencyTypes",
+            (pub?.strictDependencyTypes ?: false).toString(),
+          )
           // ADR-115 amendment: the markers this publisher waives, on the same channel as
           // include/exclude. Empty is the shipped default: every marked declaration keeps skipping.
           argMethod.invoke(

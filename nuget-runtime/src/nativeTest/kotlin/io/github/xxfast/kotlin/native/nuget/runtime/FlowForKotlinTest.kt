@@ -19,7 +19,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * ADR-155, the rows nothing else in the system observes: [flowForKotlin] disposes the C#
+ * ADR-156, the rows nothing else in the system observes: [flowForKotlin] disposes the C#
  * enumeration EXACTLY ONCE on every exit path, and tells C# whether the collector was cancelled.
  *
  * A leaked enumeration is silent (its `GCHandle` is uncounted by `nuget_live_handles`, like

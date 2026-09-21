@@ -1564,7 +1564,7 @@ class NugetGenerateShimsTaskTest {
       runtimeShim.content,
       "IntPtr releaseCancellationPtr, IntPtr managedErrorKindPtr",
     )
-    // ADR-155: the three enumeration slots (MoveNextBegin, MoveNextEnd, DisposeEnumeration).
+    // ADR-156: the three enumeration slots (MoveNextBegin, MoveNextEnd, DisposeEnumeration).
     assertContains(
       runtimeShim.content,
       "IntPtr moveNextBeginPtr, IntPtr moveNextEndPtr, IntPtr disposeEnumerationPtr",

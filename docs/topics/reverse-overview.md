@@ -231,6 +231,7 @@ install pointer rather than a cryptic subprocess error.
         <a href="instance-members.md">Instance members</a>
         <a href="structs.md">C# structs</a>
         <a href="generic-types.md">Generic types</a>
+        <a href="reverse-collections.md">Collections from C#</a>
         <a href="bridgeable-subset.md">The bridgeable subset</a>
     </category>
     <category ref="external">
@@ -252,6 +253,6 @@ install pointer rather than a cryptic subprocess error.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/087-kotlin-slot-exceptions.md">ADR-087: Exceptions from Kotlin-implemented C# interface members</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/104-reverse-thunk-error-channel.md">ADR-104: Reverse thunk error channel</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/152-task-to-suspend-fun.md">ADR-152: Reverse Task/Task&lt;T&gt; to suspend fun</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/155-iasyncenumerable-to-flow.md">ADR-155: Reverse IAsyncEnumerable&lt;T&gt; to Flow&lt;T&gt;</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/156-iasyncenumerable-to-flow.md">ADR-156: Reverse IAsyncEnumerable&lt;T&gt; to Flow&lt;T&gt;</a>
     </category>
 </seealso>

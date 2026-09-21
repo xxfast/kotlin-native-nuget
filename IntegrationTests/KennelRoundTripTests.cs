@@ -224,7 +224,7 @@ public class KennelRoundTripTests
         Assert.Equal(6, await KennelSample.DozeWithADefaultTokenAsync());
 
     // ----------------------------------------------------------------------------------------
-    // ADR-155: a C# `IAsyncEnumerable<T>` member as a COLD Kotlin `Flow<T>`, pulled one
+    // ADR-156: a C# `IAsyncEnumerable<T>` member as a COLD Kotlin `Flow<T>`, pulled one
     // `MoveNextAsync` at a time over the same begin/end pair. One row per mechanism again, and
     // deliberately not one per element type: the element vocabulary is ADR-152's (already proved
     // above), whereas coldness, stopping and the mid-stream fault are new and are where a
@@ -232,7 +232,7 @@ public class KennelRoundTripTests
     //
     // The stopping rows read C#-side counters back, because "the collector saw one element" is
     // equally true of a bridge that stopped the C# enumeration, one that abandoned it still
-    // running, and one that never started it. Disposal is fire-and-forget (ADR-155 open question
+    // running, and one that never started it. Disposal is fire-and-forget (ADR-156 open question
     // 2), so the Kotlin side POLLS for the iterator's `finally` rather than assuming it has run by
     // the time `collect` returned.
     // ----------------------------------------------------------------------------------------
@@ -243,19 +243,19 @@ public class KennelRoundTripTests
     public async Task Barks_CollectsEveryElementInOrder() =>
         Assert.Equal("woof0,woof1", await KennelSample.KennelBarksAsync(2));
 
-    // COLDNESS, and with it ADR-155's open question 1. ONE Kotlin `Flow` value collected TWICE:
+    // COLDNESS, and with it ADR-156's open question 1. ONE Kotlin `Flow` value collected TWICE:
     // both collections must see the full stream, and BOTH C# counters must read 2 — the method was
     // called once per collect (so its per-collect CancellationToken is real) and its iterator body
     // ran once per collect. A flow that eagerly called the C# method and shared one enumeration
     // still delivers both lists correctly — a compiler-generated iterator re-enumerates from the
-    // start on a second GetAsyncEnumerator (ADR-155 ledger (e)) — and reads "1|2" here: called
+    // start on a second GetAsyncEnumerator (ADR-156 ledger (e)) — and reads "1|2" here: called
     // once, enumerated twice, which is the one fact only this shape can see.
     [Fact]
     public async Task Barks_OneFlowCollectedTwice_IsColdAndCallsTheMethodPerCollect() =>
         Assert.Equal("woof0~woof0|2|2", await KennelSample.BarksCollectedTwiceAsync());
 
     // CANCEL MID-STEP against a source that IGNORES the token. The collector's cancellation lands
-    // while C# is inside an uninterruptible wait, so ADR-155's documented behaviour is: C# finishes
+    // while C# is inside an uninterruptible wait, so ADR-156's documented behaviour is: C# finishes
     // that step and yields once more, the collector receives NOTHING after the cancel, and the
     // enumeration is then disposed. Read in order: 1 delivered, 2 yielded by C#, the iterator's
     // `finally` observed, and it ran exactly once. `delivered == 2` would mean an element was
@@ -268,7 +268,7 @@ public class KennelRoundTripTests
     // The same source aborted while it is SUSPENDED AT A YIELD (`take(1)`), with no step in flight:
     // here C# never produces a second element at all (`yields == 1`), which is what distinguishes
     // the two stopping paths. A bridge that disposed the enumerator during a pending step would
-    // throw NotSupportedException (ADR-155 ledger (a)) rather than reaching this assertion.
+    // throw NotSupportedException (ADR-156 ledger (a)) rather than reaching this assertion.
     [Fact]
     public async Task Barks_TakeOne_DisposesAtTheYieldWithoutAnotherElement() =>
         Assert.Equal("woof0|1|true", await KennelSample.FirstBarkOnlyAsync());

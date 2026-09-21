@@ -480,7 +480,7 @@ class NugetGenerateBindingsTaskTest {
     assertContains(runtime.content, "@CName(\"nuget_runtime_register\")")
   }
 
-  // ADR-155: the shared runtime registration grows 7 -> 10 with the three enumeration slots that
+  // ADR-156: the shared runtime registration grows 7 -> 10 with the three enumeration slots that
   // drive a `Flow` (MoveNextBegin, MoveNextEnd, DisposeEnumeration). The count is global, not
   // per-fixture: every consumer's runtime export must accept all ten or ADR-054's contract check
   // fails at startup.

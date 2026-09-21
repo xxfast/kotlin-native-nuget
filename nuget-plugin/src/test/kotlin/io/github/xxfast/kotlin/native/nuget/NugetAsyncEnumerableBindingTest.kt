@@ -28,7 +28,7 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
- * ADR-155: a C# method returning `IAsyncEnumerable<T>` binds as a Kotlin **plain** `fun` returning
+ * ADR-156: a C# method returning `IAsyncEnumerable<T>` binds as a Kotlin **plain** `fun` returning
  * `Flow<T>`, pulled over an `Enumerate` / `Current` slot pair per method plus three shared runtime
  * slots (`MoveNextBegin`, `MoveNextEnd`, `DisposeEnumeration`).
  *
@@ -143,7 +143,7 @@ class NugetAsyncEnumerableBindingTest {
     assertContains(stub, "fun barks(count: Int): Flow<String>")
     assertFalse(
       stub.contains("suspend fun barks"),
-      "ADR-155: the method is a plain `fun`; nothing runs until `collect`, got:\n$stub",
+      "ADR-156: the method is a plain `fun`; nothing runs until `collect`, got:\n$stub",
     )
     assertContains(stub, "import kotlinx.coroutines.flow.Flow")
   }
@@ -308,7 +308,7 @@ class NugetAsyncEnumerableBindingTest {
     assertContains(runtime, "DisposeEnumeration_Thunk(IntPtr enumeration, int cancelled)")
   }
 
-  // ADR-155's load-bearing guard: an exception escaping an `async void` dispose sequence
+  // ADR-156's load-bearing guard: an exception escaping an `async void` dispose sequence
   // terminates the .NET host, which is exactly the host abort the feature forbids.
   @Test
   fun `the queued dispose sequence is a Task Run with an outer catch never async void`() {
@@ -326,7 +326,7 @@ class NugetAsyncEnumerableBindingTest {
           "the host, got:\n$dispose",
     )
     // Cancel, await the pending step, THEN dispose: DisposeAsync during a pending MoveNextAsync
-    // throws NotSupportedException and leaks the running iterator (ADR-155 spike row a).
+    // throws NotSupportedException and leaks the running iterator (ADR-156 spike row a).
     assertTrue(
       dispose.indexOf("Cts.Cancel()") < dispose.indexOf("await n.Pending") &&
           dispose.indexOf("await n.Pending") < dispose.indexOf("await n.Dispose()"),
@@ -344,7 +344,7 @@ class NugetAsyncEnumerableBindingTest {
     )
     assertTrue(
       Regex("nuget_runtime_register\\(\\s*10,\\s*-?\\d+L,").containsMatchIn(runtime),
-      "ADR-155: the three enumeration slots take nuget_runtime_register from 7 to 10, " +
+      "ADR-156: the three enumeration slots take nuget_runtime_register from 7 to 10, " +
           "got:\n$runtime",
     )
   }

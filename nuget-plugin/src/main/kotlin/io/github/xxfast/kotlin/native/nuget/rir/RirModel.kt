@@ -156,7 +156,7 @@ enum class RirAsyncKind {
   @SerialName("task")
   TASK,
 
-  // ADR-155: `IAsyncEnumerable<T>` at a method return, which binds as a plain (NOT suspend)
+  // ADR-156: `IAsyncEnumerable<T>` at a method return, which binds as a plain (NOT suspend)
   // `fun x(): Flow<T>` over an Enumerate/Current slot pair plus three shared runtime slots.
   // [RirMethod.returnType] holds the ELEMENT type.
   @SerialName("async_enumerable")
@@ -291,6 +291,39 @@ data class RirTypeParameterType(val index: Int, val name: String) : RirTypeRef
 data class RirGenericInstanceType(
   val namespace: String,
   val name: String,
+  val typeArguments: List<RirTypeRef>,
+  val nullable: Boolean = false,
+) : RirTypeRef
+
+// ADR-155: which Kotlin collection a mapped BCL definition binds as. The Kotlin type is ALWAYS the
+// read-only one (List/Set/Map, never MutableList/MutableSet/MutableMap) at every position, because
+// the value is an eager copy: a mutable Kotlin type would let `roster.tags.add(x)` compile and
+// change nothing in C#. So there is no `mutable` flag here: nothing would read it.
+@Serializable
+enum class RirCollectionKind {
+  @SerialName("list")
+  LIST,
+
+  @SerialName("set")
+  SET,
+
+  @SerialName("map")
+  MAP,
+}
+
+// ADR-155: a BCL collection in a C# signature, crossing as ONE pointer to a flat
+// `[count][8-byte slots]` buffer (a map interleaves k,v; IntPtr.Zero is a null collection; a 0 slot
+// is a null reference element). [definition] is the CLR name of the DECLARED C# definition
+// ("System.Collections.Generic.IList`1"): the shim casts the container it built to this, so C#
+// overload resolution picks the overload the thunk was made for: without it an
+// `IList<int>`/`List<int>` overload pair dispatches to the same overload, silently.
+// [nullable] is this REFERENCE's own annotation (`IReadOnlyList<string>?`), independent of the
+// elements' own (`IReadOnlyList<string?>`).
+@Serializable
+@SerialName("collection")
+data class RirCollectionType(
+  val collection: RirCollectionKind,
+  val definition: String,
   val typeArguments: List<RirTypeRef>,
   val nullable: Boolean = false,
 ) : RirTypeRef
@@ -456,4 +489,25 @@ enum class RirDiagnosticKind {
   // `Box`. This is a hard generation failure, mirroring ERROR_KOTLIN_SIGNATURE_COLLISION.
   @SerialName("error_generic_arity_name_collision")
   ERROR_GENERIC_ARITY_NAME_COLLISION,
+
+  // ADR-155: a mapped BCL collection whose element (or map key/value) is outside the v1 element
+  // vocabulary: a struct element, a nested collection, a `Nullable<T>` element (`List<int?>`), a
+  // bound generic instance element, a type-parameter element inside a generic class, or `object`.
+  // Named, because the alternative (skipped_unbound_generic_instantiation) blames the BCL
+  // definition when the element is the thing the bridge cannot carry.
+  @SerialName("skipped_collection_element")
+  SKIPPED_COLLECTION_ELEMENT,
+
+  // ADR-155: an array (`T[]`). Deferred with the rest of the array work (`byte[]` → `ByteArray`
+  // wants the ADR-151 blit, not slots). Today such a member vanishes with no diagnostic at all.
+  @SerialName("skipped_array")
+  SKIPPED_ARRAY,
+
+  // ADR-155: a collection at a POSITION the shared conversion path does not reach: a struct
+  // member (its components cross as flattened out-pointers, ADR-056) or a bound-interface member
+  // (its own hand-written dispatch bodies, ADR-070). Plugin-derived, never emitted by the
+  // metadata reader, which cannot know which positions the generators share. Named rather than
+  // dropped silently, and named rather than hand-patched at the site: the ADR-155 rule.
+  @SerialName("skipped_collection_position")
+  SKIPPED_COLLECTION_POSITION,
 }

@@ -229,24 +229,27 @@ public class BoxesDiagnosticsTests
     }
 
     [Fact]
-    public void Numbers_UnboundListInstantiation_IsSkippedWithDiagnostic()
+    public void Waiting_UnmappedBclDefinition_IsSkippedWithDiagnostic()
     {
-        // List<int>: the definition lives outside the bound assemblies.
+        // ADR-072 Decision 9, still pinned, on a definition ADR-155 does NOT map. `Boxes.Numbers`
+        // (List<int>) and `Boxes.Counts` (Dictionary<string,int>) stood here until collections
+        // landed; both now bind, so the rule needs a definition that is genuinely external and
+        // unmapped. One row, not the old pair: the diagnostic is per DEFINITION and says nothing
+        // about arity, and the mapped path is already exercised at arity 2 by
+        // RosterRoundTripTests.Map_CrossesAsAMap_WithABitCastValue.
         JsonElement diagnostics = Diagnostics(TestDependencyAssembly());
         Assert.True(
-            HasDiagnostic(diagnostics, "Boxes", "Numbers", "skipped_unbound_generic_instantiation"),
-            "expected skipped_unbound_generic_instantiation naming Boxes.Numbers (List<int>)");
+            HasDiagnostic(diagnostics, "Boxes", "Waiting", "skipped_unbound_generic_instantiation"),
+            "expected skipped_unbound_generic_instantiation naming Boxes.Waiting (Queue<int>)");
     }
 
+    // The other half of that change of verdict: `Dictionary<string,int>` on a STATIC route of a
+    // static class, which is not the position any Roster row stands on (Roster's map is an
+    // instance method on a handle class). Cheap, and it is what says `Counts` did not merely stop
+    // being diagnosed.
     [Fact]
-    public void Counts_UnboundDictionaryInstantiation_IsSkippedWithDiagnostic()
-    {
-        // Dictionary<string,int>: same diagnostic, arity 2.
-        JsonElement diagnostics = Diagnostics(TestDependencyAssembly());
-        Assert.True(
-            HasDiagnostic(diagnostics, "Boxes", "Counts", "skipped_unbound_generic_instantiation"),
-            "expected skipped_unbound_generic_instantiation naming Boxes.Counts (Dictionary<string,int>)");
-    }
+    public void Counts_MappedDictionaryDefinition_CrossesAsAMap() =>
+        Assert.Equal(9, BoxesSample.CountOf("Oreo"));
 
     [Fact]
     public void Nested_BoxOfBoxOfInt_IsSkippedWithDiagnostic()

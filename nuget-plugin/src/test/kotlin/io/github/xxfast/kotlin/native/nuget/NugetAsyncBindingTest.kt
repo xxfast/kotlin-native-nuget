@@ -130,7 +130,7 @@ class NugetAsyncBindingTest {
   // ADR-130's seam. `suspendCancellableCoroutine` and friends must never appear in a nativeMain
   // file: they reach the consumer only through the runtime's per-target `api`.
   //
-  // ADR-155 amends the rule to exactly one exception, `kotlinx.coroutines.flow.Flow`, because an
+  // ADR-156 amends the rule to exactly one exception, `kotlinx.coroutines.flow.Flow`, because an
   // async-enumerable member returns one in a PUBLIC signature and the plugin now puts
   // kotlinx-coroutines-core on the consumer's nativeMain for precisely that. The rest of the rule
   // is unchanged, which is why this asserts per-line rather than dropping the check: `test-library`

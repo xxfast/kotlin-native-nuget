@@ -567,6 +567,31 @@ internal class ForwardBridgeTypeClassifier(
         isUndeclaredValueClass = true,
       )
     }
+
+    // ROADMAP line 38, folded into ADR-154 §4: the TOP-LEVEL dependency value class. Until this
+    // gate, a value class the closure refused on scope grounds was still spelled
+    // `global::Ns.Eartag` at every position (and `new global::Ns.Eartag(...)` at a return), with no
+    // diagnostic at all, against a struct nothing ever declared: CS0246 in the consumer's build,
+    // from a member the author was never told about. Per-type `admit(...)` makes it far easier to
+    // reach, since a dependency class's members routinely mention sibling value classes.
+    //
+    // Keyed on the closure's SCOPE refusal, never on "absent from `exportedValueClasses`": that
+    // wider test would refuse `kotlin.Result`, which is a top-level value class in no export set
+    // and must keep classifying as a `ValueClass` for ADR-108's payload rewrite. `Result` is
+    // recorded refused `NOT_INCLUDED` (it is not an INTRINSIC_TERMINAL of the closure), so the
+    // carve-out is explicit rather than incidental. `Duration` and `Uuid` ARE terminals and never
+    // reach here; if another stdlib value class ever does, it lands on this named skip rather than
+    // on an undeclared spelling, which is the safe direction.
+    val topLevelScopeRefusal: ForwardAdmissionRefusal? = scopeRefusal(qualifiedName)
+      ?.takeIf { declaration.parentDeclaration == null && qualifiedName != RESULT_QUALIFIED_NAME }
+    if (topLevelScopeRefusal != null) {
+      return BridgeType.Unsupported(
+        qualifiedName,
+        "declared in a dependency module whose package is outside the export scope",
+        isUnexportedDependency = true,
+        unexportedDependencyRefusal = topLevelScopeRefusal,
+      )
+    }
     val underlyingParam = declaration.primaryConstructor?.parameters?.singleOrNull()
       ?: return BridgeType.Unsupported(
         qualifiedName,
@@ -662,6 +687,13 @@ internal fun KSType.toBridgeType(context: ForwardBridgeTypeContext): BridgeType 
  */
 internal fun KSClassDeclaration.isValueClass(): Boolean =
   modifiers.contains(Modifier.VALUE) || modifiers.contains(Modifier.INLINE)
+
+/** ADR-108's carrier, carved out of ADR-154 §4's top-level value-class scope gate: it is a
+ *  top-level stdlib value class the closure records refused (`NOT_INCLUDED`, since it is not an
+ *  intrinsic terminal), yet it must keep classifying as a `ValueClass` so the planner can rewrite a
+ *  `Result<T>` return to its payload. It has no C# type of its own, so the gate would amputate the
+ *  whole Result route rather than skip one undeclared spelling. */
+private const val RESULT_QUALIFIED_NAME: String = "kotlin.Result"
 
 /**
  * ADR-147: the first upper bound's Kotlin FQCN, or null when the parameter is unconstrained.

@@ -325,7 +325,7 @@ public class Kennel
     }
 
     // ----------------------------------------------------------------------------------------
-    // ADR-155: the `IAsyncEnumerable<T>` half. A C# async stream becomes a COLD Kotlin `Flow<T>`
+    // ADR-156: the `IAsyncEnumerable<T>` half. A C# async stream becomes a COLD Kotlin `Flow<T>`
     // pulled one `MoveNextAsync` at a time over ADR-152's begin/end pair. Every member below is
     // one seam, and the counters exist because "Kotlin got three strings" says nothing about
     // whether the C# iterator was ever started twice, ever stopped, or ever cleaned up:
@@ -354,7 +354,7 @@ public class Kennel
     /// How many times <see cref="BarksAsync"/> was CALLED. Deliberately incremented in a plain
     /// (non-iterator) wrapper, because an async iterator's body does not run at the call: the
     /// split between this and <see cref="BarkEnumerations"/> is what tells a `Flow` that calls the
-    /// C# method once and enumerates twice from a `Flow` that calls it per collect (ADR-155's open
+    /// C# method once and enumerates twice from a `Flow` that calls it per collect (ADR-156's open
     /// question 1). One Kotlin `Flow` value collected twice must move BOTH counters to 2.
     /// </summary>
     public int BarkCalls { get; private set; }
@@ -379,7 +379,7 @@ public class Kennel
 
     /// <summary>
     /// The token-IGNORING source, in two parts on purpose. This half is an ordinary method, so it
-    /// runs (and bumps <see cref="BarkCalls"/>) the moment the bridge calls it, which under ADR-155
+    /// runs (and bumps <see cref="BarkCalls"/>) the moment the bridge calls it, which under ADR-156
     /// is at collect time.
     /// </summary>
     public IAsyncEnumerable<string> BarksAsync(int count)
@@ -392,7 +392,7 @@ public class Kennel
     /// The iterator half. The first element is immediate and every later one is behind a
     /// <see cref="Dawdle"/> wait that no token can interrupt, so a collector cancelled during that
     /// wait is cancelled MID-STEP: C# finishes the step, yields once more, and only then stops.
-    /// That is the whole of ADR-155's "promptly when the C# honours the token, at the next element
+    /// That is the whole of ADR-156's "promptly when the C# honours the token, at the next element
     /// otherwise", and it is why this fixture does not simply abort at a yield.
     /// </summary>
     private async IAsyncEnumerable<string> BarkStream(int count)
@@ -459,7 +459,7 @@ public class Kennel
     }
 
     /// <summary>
-    /// ADR-155 deferred scope, live: `IAsyncEnumerable&lt;T&gt;` at a PARAMETER. Binding it would
+    /// ADR-156 deferred scope, live: `IAsyncEnumerable&lt;T&gt;` at a PARAMETER. Binding it would
     /// need a generated C# enumerable that pulls from a Kotlin collector — the repeated-callback
     /// machinery the reverse bridge does not have — so it must stay a NAMED skip.
     /// </summary>
@@ -481,7 +481,7 @@ public class Kennel
     /// Plain <c>int</c>, the element shape needing NO conversion, and the MID-STREAM THROW: two
     /// good elements arrive before the fault, so a collector that received nothing has a different
     /// bug from one that received two and then no exception. The `finally` still runs on this path
-    /// (ADR-155 ledger (e)) and <see cref="HowlFinallyRuns"/> is how the test sees it.
+    /// (ADR-156 ledger (e)) and <see cref="HowlFinallyRuns"/> is how the test sees it.
     /// </summary>
     public async IAsyncEnumerable<int> HowlsAsync()
     {

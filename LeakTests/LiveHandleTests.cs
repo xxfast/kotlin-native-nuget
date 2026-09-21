@@ -1,6 +1,8 @@
 using Test.Menagerie;
 using TestLibrary;
+using TestLibrary.Admission;
 using TestLibrary.Cat;
+using TestLibrary.Dev.Other.Bytype;
 using TestLibrary.Clinic;
 using TestLibrary.Dispenser;
 using TestLibrary.Issue115;
@@ -1363,7 +1365,7 @@ public class LiveHandleTests
             iterations: 3);
     }
 
-    // Rows 9m to 9o. ADR-155: the reverse async-ENUMERABLE crossing. A collect of N elements is
+    // Rows 9m to 9o. ADR-156: the reverse async-ENUMERABLE crossing. A collect of N elements is
     // N+1 `MoveNextBegin`/`MoveNextEnd` pairs, and each pair is an ordinary ADR-152 await: one
     // counted pending-continuation `ctx` StableRef plus one .NET GCHandle on the step's Task. So
     // the per-element repetition is inside the flow, not in the iteration count, and a ctx dropped
@@ -1371,7 +1373,7 @@ public class LiveHandleTests
     //
     // WHAT THESE ROWS CAN AND CANNOT SEE, as with 9j to 9l: `nuget_live_handles` counts Kotlin
     // StableRefs only. The enumeration GCHandle and its CancellationTokenSource are .NET handles
-    // and are NOT counted on any of these rows (ADR-155 Consequences, ROADMAP line 268), so a C#
+    // and are NOT counted on any of these rows (ADR-156 Consequences, ROADMAP line 268), so a C#
     // enumeration leaked per collect is invisible here and is pinned only by a counting fake in
     // the runtime's nativeTest. What these rows do pin is that the per-step ctx returns to
     // baseline on all three release sites, which are genuinely different code paths.
@@ -1438,5 +1440,24 @@ public class LiveHandleTests
     public void ObjectCollectionProperty_StaticGetter_ReturnsToBaseline()
     {
         AssertNoLeak(() => Assert.Equal(new[] { "tuna", "salmon" }, TreatPantry.Flavours));
+    }
+
+    // Row 12. ADR-154: the admitted-dependency-class route. `dev.other.bytype.Waterbowl` reaches
+    // C# through `admit("dev.other.bytype.Waterbowl")` alone — no `include(...)` entry covers its
+    // package — and it is a handle type, so every `Storeroom.Bowl()` mints a StableRef that the
+    // wrapper's `Dispose` has to release. A klib type admitted BY NAME takes a different planning
+    // path from a module-local class and from the `include`-admitted `dev.other.admitted.Billboard`
+    // (which mints no handle in any existing row), so a missing release on the per-type admission
+    // route is invisible everywhere else in this file. The String read is in the window on purpose:
+    // it is the member that survived while its siblings were dropped, and it boxes on the way out.
+    [Fact]
+    public void AdmittedDependencyClass_ReturnedHandle_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var storeroom = new Storeroom("Oreo");
+            using Waterbowl bowl = storeroom.Bowl();
+            Assert.Equal("Oreo's bowl", bowl.Label);
+        });
     }
 }

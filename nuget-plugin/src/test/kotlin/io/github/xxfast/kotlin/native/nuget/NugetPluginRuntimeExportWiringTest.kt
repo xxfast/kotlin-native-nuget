@@ -124,7 +124,7 @@ class NugetPluginRuntimeExportWiringTest {
   }
 
   /**
-   * ADR-155 finding 6: generated bound classes compile from `nativeMain`, and a method bound from
+   * ADR-156 finding 6: generated bound classes compile from `nativeMain`, and a method bound from
    * an `IAsyncEnumerable<T>` return names `kotlinx.coroutines.flow.Flow` in a PUBLIC signature
    * there. `nuget-runtime` (and coroutines through its `api`) reaches only
    * `${'$'}{target}MainApi`, so without this the consumer gets `Unresolved reference: Flow`.

@@ -287,7 +287,7 @@ suspend fun pounceRepeatedly(times: Int): Int = Kennel().use { kennel ->
   total
 }
 
-// ADR-155: a C# `IAsyncEnumerable<T>` member consumed from Kotlin as a COLD `Flow<T>`, pulled one
+// ADR-156: a C# `IAsyncEnumerable<T>` member consumed from Kotlin as a COLD `Flow<T>`, pulled one
 // `MoveNextAsync` at a time over ADR-152's begin/end pair.
 //
 // EXPECTED TO FAIL TODAY: neither the reader nor the generator knows `asyncKind:
@@ -302,7 +302,7 @@ suspend fun pounceRepeatedly(times: Int): Int = Kennel().use { kennel ->
 
 /**
  * A full second, in 10ms steps, against a 300ms uninterruptible C# step: disposal is
- * fire-and-forget (ADR-155 open question 2), so cleanup is polled rather than assumed.
+ * fire-and-forget (ADR-156 open question 2), so cleanup is polled rather than assumed.
  */
 private suspend fun pollFor(predicate: () -> Boolean): Boolean {
   repeat(100) {
@@ -322,7 +322,7 @@ suspend fun kennelBarks(count: Int): String =
 /**
  * COLDNESS, the whole of it: ONE `Flow` value, collected TWICE. Collecting
  * `kennel.barks(1).toList()` twice would move `barkCalls` to 2 whether the C# method ran at the
- * Kotlin call or at each collect, so it could not discriminate ADR-155's open question 1. This
+ * Kotlin call or at each collect, so it could not discriminate ADR-156's open question 1. This
  * shape can: a flow that captured one C# enumeration reads `1|1`, a cold one reads `2|2`.
  */
 suspend fun barksCollectedTwice(): String = Kennel().use { kennel ->
@@ -336,7 +336,7 @@ suspend fun barksCollectedTwice(): String = Kennel().use { kennel ->
 /**
  * CANCEL MID-STEP against the TOKEN-IGNORING source. The collector gives up while C# is inside an
  * uninterruptible wait, so C# finishes that step and yields once more (two yields) while the
- * collector receives exactly one (nothing is delivered after cancellation, ADR-155's ownership
+ * collector receives exactly one (nothing is delivered after cancellation, ADR-156's ownership
  * note: `Current` is never read on the cancelled step). The `finally` is POLLED, not assumed:
  * disposal is fire-and-forget and may land after `collect` has already returned.
  */

@@ -1,4 +1,4 @@
-# ADR-155: Reverse, a C# `IAsyncEnumerable<T>` method binds as a Kotlin `Flow<T>` that pulls `MoveNextAsync` over ADR-152's begin/end pair
+# ADR-156: Reverse, a C# `IAsyncEnumerable<T>` method binds as a Kotlin `Flow<T>` that pulls `MoveNextAsync` over ADR-152's begin/end pair
 
 ## Status
 

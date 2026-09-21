@@ -87,7 +87,7 @@ The mapping has three cases
 |---|---|
 | `rootPackage` itself | `<packageId>` |
 | under `rootPackage` (`<root>.a.b`) | `<packageId>.A.B` |
-| outside `rootPackage`, admitted by an explicit `include(...)` (`x.y.z`) | `<packageId>.X.Y.Z`, the **full** package PascalCased |
+| outside `rootPackage`, admitted by an explicit `include(...)` or `admit(...)` (`x.y.z`) | `<packageId>.X.Y.Z`, the **full** package PascalCased |
 
 With `rootPackage` unset, every package collapses to `<packageId>` regardless, since there is no
 prefix to strip or compare against. The full-package case reaches an admitted
@@ -123,8 +123,10 @@ The export set is not limited to the module's own files, either: it is a reachab
 also walks into types declared in a dependency Gradle module (return types, parameter types,
 property types, type arguments of `Flow<T>`/collections, sealed subclasses, primary-constructor
 parameters), admitting each discovered type through the same `include`/`exclude`/`rootPackage`
-predicate. See [The nuget {} DSL](nuget-dsl.md) for the full predicate and the cross-module closure
-rules.
+predicate, plus an additive `admit(...)` for a single dependency type or package that isn't worth
+including wholesale ([ADR-154](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/154-forward-dependency-type-admission.md)).
+See [The nuget {} DSL](nuget-dsl.md#cross-module-export-closure) for the full predicate, the
+`include`-vs-`admit` guidance, and the cross-module closure rules.
 
 <note>
     <p>
@@ -178,6 +180,9 @@ member, and a compiler plugin's synthesized surface such as kotlinx.serializatio
   [Top-level declarations](top-level-declarations.md) for that one. This page covers the third:
   `ERROR_C_ENTRY_POINT_COLLISION`, two *different* Kotlin declarations deriving the same underlying C
   entry point; see [Two declarations can't share one C entry point](#entry-point-collision) below.
+  A fourth, opt-in only: with `publish { strictDependencyTypes = true }`, an un-admitted dependency
+  type that the ordinary default would only warn about and skip becomes
+  `ERROR_UNEXPORTED_DEPENDENCY_TYPE` instead; see below.
 
 A `List`/`Map`/`Set` parameter with an unsupported element/key/value type (see
 [Collections](collections.md)) is skipped like this, naming the component that failed rather than the
@@ -319,52 +324,62 @@ static class, and C# forbids a static type at a parameter or return position (CS
 nesting limitation; it applies to a top-level object the same way. See
 [Classes and objects: An `object` at a member position stays CS0722](classes-and-objects.md#nested-object-position).
 
-Three more kinds cover the cross-module export closure ([ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md);
-see [The nuget {} DSL](nuget-dsl.md) for the closure's own rules). A reachable dependency-module type
-outside the effective `include`/`rootPackage` scope is skipped, naming the exact fix, from
-`test-library`'s `Newsroom.sponsor(): Advertisement` (`dev.other.core.Advertisement` sits outside
-`rootPackage`):
+Three more kinds cover the cross-module export closure ([ADR-066](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/066-forward-export-reachability-closure.md),
+[ADR-154](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/154-forward-dependency-type-admission.md);
+see [The nuget {} DSL](nuget-dsl.md#cross-module-export-closure) for the closure's own rules and the
+`include`-vs-`admit` guidance). A reachable dependency-module type the closure never admitted is
+skipped, naming the exact fix, from `test-library`'s `Storeroom.rimguard()`
+(`dev.other.bytype.Rimguard` sits beside an admitted sibling, `Waterbowl`, but was never itself
+admitted):
 
 ```
-[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping Newsroom.sponsor: its type
-    `dev.other.core.Advertisement` is declared in a dependency module outside the export scope.
-    add include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.admitted", "dev.other.core")
-    to nuget { publish { } } (an explicit include replaces the rootPackage default, so keep your own
-    packages listed), or expose a type from an in-scope package instead
-    at Newsroom.kt:66
+[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping Storeroom.rimguard: its type
+    `dev.other.bytype.Rimguard` is declared in a dependency module outside the export scope. add
+    admit("dev.other.bytype.Rimguard") to nuget { publish { } } to export it (admit is additive and
+    dependency-only; it takes a package prefix such as "dev.other.bytype" too), or
+    exclude("dev.other.bytype.Rimguard") to record the omission as deliberate
+    at Storeroom.kt:90
 ```
 
-The hint names the whole `include(...)` line, the current scope first, because an explicit `include`
-replaces the `rootPackage` default rather than adding to it ([#55](https://github.com/xxfast/kotlin-native-nuget/issues/55)).
+Admitting a type admits only that one declaration, not a package walk ([ADR-154](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/154-forward-dependency-type-admission.md)
+§3): `test-library/build.gradle.kts` admits `dev.other.bytype.Waterbowl` by name, and `Waterbowl`
+still generates as a handle class with its other members intact, while its sibling `Rimguard`
+above stays a named skip. The same hint appears at a property position too, under
+`SKIPPED_UNSUPPORTED_PROPERTY` rather than this kind (`Waterbowl.rim: Rimguard`), because a
+property route reports its own kind regardless of why the type was refused.
 
-`include(...)` is only ever the right fix for a type the closure simply never included. Three other
-reasons the closure can refuse a dependency type all fold into the same
-`SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` kind but each get their own hint, since `include(...)` would be
-wrong advice for any of them. Following [ADR-109](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/109-duplicate-type-hazard.md)'s
+`admit(...)` is only ever the right fix for a type the closure simply never admitted. Two other
+reasons the closure can refuse a dependency type fold into the same `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`
+kind but each get their own hint, since `admit(...)` would be wrong advice for either. Following
+[ADR-109](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/109-duplicate-type-hazard.md)'s
 own `exclude("<pkg>")` remedy for a duplicated type lands here:
 
 ```
 [nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping Newsroom.latest(): "dep.models" is excluded by
     exclude("dep.models") in nuget { publish { } }, so a callable reaching dep.models.TopStory is
-    skipped by design; remove the exclude to export it here (include(...) cannot override an
-    exclude)
+    skipped by design; remove that exclude entry to export it here (neither include(...) nor
+    admit(...) can override an exclude)
 ```
 
-With neither `rootPackage` nor `include` set, so the closure never crosses the module boundary at
-all, the hint names the setting that turns cross-module admission on instead:
+With neither `rootPackage`, `include` nor `admit` set, so the closure never crosses the module
+boundary at all, the hint names the setting that turns cross-module admission on instead:
 
 ```
-[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping Newsroom.latest(): no rootPackage or include is
-    set, so nuget { publish { } } never crosses the module boundary and dep.models.TopStory stays
-    out of the export set; set rootPackage(...) or list your own packages alongside "dep.models" in
-    include(...) (include(...) on its own replaces the everything-in-this-module default and would
-    drop your own files)
+[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping Newsroom.latest(): no rootPackage, include or
+    admit entry is set, so nuget { publish { } } never crosses the module boundary and
+    dep.models.TopStory stays out of the export set; add admit("dep.models.TopStory") to
+    nuget { publish { } } (additive and dependency-only), or set rootPackage
 ```
 
 And a dependency's own `expect` declaration says its actualization lives in that module and cannot
-be reached with `include(...)` at all, naming the type instead of suggesting a scope change that
-cannot fix it. See [The nuget {} DSL](nuget-dsl.md#cross-module-export-closure) for the full set of
-refusal reasons.
+be reached with `admit(...)` at all, naming the type instead of suggesting a scope change that
+cannot fix it.
+
+With `publish { strictDependencyTypes = true }`, the first two refusals above (not admitted,
+cross-module admission off entirely) escalate from a warning to `ERROR_UNEXPORTED_DEPENDENCY_TYPE`
+and stop the build; the `exclude(...)`-caused refusal and the unreachable `expect` case stay
+warnings, since both are already a decision the author made on purpose. See
+[The nuget {} DSL](nuget-dsl.md#cross-module-export-closure) for the full set of refusal reasons.
 
 When the scope admits none of the module's public declarations, the processor warns once with
 `SKIPPED_ALL_DECLARATIONS`, naming the scope and the packages it dropped, instead of returning
@@ -954,9 +969,9 @@ repository's own fixture, KSP task `UP-TO-DATE`:
 > Task :test-library:kspKotlinMacosArm64 UP-TO-DATE
 
 > Task :test-library:nugetReportDiagnostics
-[nuget:INFO_EXPORTED_FROM_DEPENDENCY] Note TestLibraryNative: the export closure admitted 11 type(s) from dependency modules: dev.other.admitted.Billboard, io.github.xxfast.kotlin.native.nuget.test.models.Broadcast, io.github.xxfast.kotlin.native.nuget.test.models.Byline, io.github.xxfast.kotlin.native.nuget.test.models.Nap, io.github.xxfast.kotlin.native.nuget.test.models.Nap.Deep, io.github.xxfast.kotlin.native.nuget.test.models.Nap.Zoomies, io.github.xxfast.kotlin.native.nuget.test.models.Purr, io.github.xxfast.kotlin.native.nuget.test.models.StoryCode, io.github.xxfast.kotlin.native.nuget.test.models.StoryUri, io.github.xxfast.kotlin.native.nuget.test.models.TopStory, io.github.xxfast.kotlin.native.nuget.test.models.Whisker. these are generated exactly like module-local types; narrow with exclude(...) if any of them should not be part of the public API
-[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.sponsor: its type `dev.other.core.Advertisement` is declared in a dependency module outside the export scope. add include("io.github.xxfast.kotlin.native.nuget.test", "dev.other.admitted", "dev.other.core") to nuget { publish { } } (an explicit include replaces the rootPackage default, so keep your own packages listed), or expose a type from an in-scope package instead
-    at /Users/xxfast/Developer/XXFAST/KMP/kotlin-native-nuget/test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/test/Newsroom.kt:66
+[nuget:INFO_EXPORTED_FROM_DEPENDENCY] Note TestLibraryNative: the export closure admitted 19 type(s) from dependency modules: dev.other.admitted.Billboard, dev.other.bykind.Tuft, dev.other.bytype.Bedding, dev.other.bytype.PurrLevel, dev.other.bytype.Waterbowl, io.github.xxfast.kotlin.native.nuget.test.models.Almanac, io.github.xxfast.kotlin.native.nuget.test.models.Broadcast, io.github.xxfast.kotlin.native.nuget.test.models.Byline, io.github.xxfast.kotlin.native.nuget.test.models.Carton, io.github.xxfast.kotlin.native.nuget.test.models.CartonTag, io.github.xxfast.kotlin.native.nuget.test.models.Nap, io.github.xxfast.kotlin.native.nuget.test.models.Nap.Deep, io.github.xxfast.kotlin.native.nuget.test.models.Nap.Zoomies, io.github.xxfast.kotlin.native.nuget.test.models.Purr, io.github.xxfast.kotlin.native.nuget.test.models.StoryCode, io.github.xxfast.kotlin.native.nuget.test.models.StoryUri, io.github.xxfast.kotlin.native.nuget.test.models.Timetable, io.github.xxfast.kotlin.native.nuget.test.models.TopStory, io.github.xxfast.kotlin.native.nuget.test.models.Whisker. these are generated exactly like module-local types; narrow with exclude(...) if any of them should not be part of the public API
+[nuget:SKIPPED_UNEXPORTED_DEPENDENCY_TYPE] Skipping io.github.xxfast.kotlin.native.nuget.test.Newsroom.sponsor: its type `dev.other.core.Advertisement` is declared in a dependency module outside the export scope. add admit("dev.other.core.Advertisement") to nuget { publish { } } to export it (admit is additive and dependency-only; it takes a package prefix such as "dev.other.core" too), or exclude("dev.other.core.Advertisement") to record the omission as deliberate
+    at /Users/xxfast/Developer/XXFAST/KMP/kotlin-native-nuget/test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/test/Newsroom.kt:69
 [nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.length: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
 [nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.get: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares
 [nuget:SKIPPED_INHERITED_MEMBER] Skipping io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.subSequence: it is a value class member that a supertype declares. a value class never exports a member a supertype declares, whether inherited, delegated (`by`) or explicitly overridden (ADR-082); call the supertype's API through the struct's underlying property from C#, or declare a member under a name or signature no supertype declares

@@ -55,6 +55,19 @@
       OperationCanceledException subclass), a sync OCE throw (Startle), and the two shapes that
       must stay skipped with info_cancellation_token_not_yet_mapped: a sync token-taking method
       (Wait) and a two-token one (HerdAsync).
+      Test.Roster.ILabelled / Tag / Roster, ADR-155 fixture (BCL collections as eagerly copied
+      Kotlin collections over a slot buffer): one member per mechanism, an int element (no
+      conversion), a string element (one CoTaskMem slot each), a nullable element, a nullable
+      collection, a map with a bit-cast double value, a set of a bound enum declared in another
+      namespace, bound-interface elements (Labels), handle elements
+      from a mutable declared type that must still bind read-only, a collection property
+      (get/set), a collection constructor parameter, an IEnumerable&lt;string&gt; parameter, the
+      Pick(IList&lt;int&gt;, Tag) / Pick(List&lt;int&gt;, ILabelled) overload pair that pins the
+      shim's cast to the declared type, a lazy IEnumerable that throws mid-enumeration, the
+      weak-reference AliveTags() collectability probe for element handles, and the shapes that
+      must stay skipped with a named diagnostic: an array (Kennels), a struct element (Beds), and
+      the AddRange(IEnumerable&lt;string&gt;) / AddRange(List&lt;string&gt;) pair that collapses to
+      one Kotlin signature and is dropped as a whole set (skipped_overload_set).
 </Description>
   </PropertyGroup>
 

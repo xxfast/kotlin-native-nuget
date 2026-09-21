@@ -352,7 +352,7 @@ class NugetKotlinBridgeGenerationTest {
     val runtime: GeneratedFile = generateKotlinStubs(rir)
       .single { it.relativePath.endsWith("/NugetRuntime.kt") }
 
-    // ADR-155 took it from ADR-153's 7 to 10 (MoveNextBegin/MoveNextEnd/DisposeEnumeration).
+    // ADR-156 took it from ADR-153's 7 to 10 (MoveNextBegin/MoveNextEnd/DisposeEnumeration).
     assertContains(runtime.content, "expectedSlots = 10,")
     assertContains(runtime.content, "expectedHash = ${NUGET_RUNTIME_CONTRACT_HASH}L,")
     assertContains(runtime.content, "NugetRegistry.record(\"<runtime>\", 10)")
@@ -378,7 +378,7 @@ class NugetKotlinBridgeGenerationTest {
             "managedErrorMessage(err:COpaquePointer):COpaquePointer;" +
             "releaseCancellation(source:COpaquePointer,cancel:Int):Unit;" +
             "managedErrorKind(err:COpaquePointer):Int;" +
-            // ADR-155: the three enumeration slots.
+            // ADR-156: the three enumeration slots.
             "moveNextBegin(enumeration:COpaquePointer,callback:COpaquePointer," +
             "ctx:COpaquePointer,err:COpaquePointer):Unit;" +
             "moveNextEnd(task:COpaquePointer,err:COpaquePointer):Int;" +

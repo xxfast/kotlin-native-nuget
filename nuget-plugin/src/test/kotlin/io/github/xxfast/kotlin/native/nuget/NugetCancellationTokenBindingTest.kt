@@ -161,7 +161,7 @@ class NugetCancellationTokenBindingTest {
       support,
       "throw kotlin.coroutines.cancellation.CancellationException(message, managed)",
     )
-    // ADR-130 as amended by ADR-155: `Flow` is the ONE kotlinx.coroutines name nativeMain may
+    // ADR-130 as amended by ADR-156: `Flow` is the ONE kotlinx.coroutines name nativeMain may
     // carry (the plugin puts kotlinx-coroutines-core there for it). The cancellation type must
     // still be the stdlib one — on Kotlin/Native it IS the kotlinx type, via a typealias, so
     // naming kotlinx here would be a gratuitous dependency on a source set that had none.
@@ -178,7 +178,7 @@ class NugetCancellationTokenBindingTest {
   fun `the runtime register export carries ten slots and both new thunks`() {
     val bindings: String = runtimeBindings()
 
-    // ADR-155 took the shared runtime from ADR-153's 7 slots to 10.
+    // ADR-156 took the shared runtime from ADR-153's 7 slots to 10.
     assertContains(bindings, "expectedSlots = 10,")
     assertContains(bindings, "releaseCancellationPtr: COpaquePointer?,")
     assertContains(bindings, "managedErrorKindPtr: COpaquePointer?,")

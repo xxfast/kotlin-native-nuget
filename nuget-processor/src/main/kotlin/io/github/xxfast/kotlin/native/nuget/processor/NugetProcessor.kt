@@ -86,6 +86,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipRea
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.PackageScope
+import io.github.xxfast.kotlin.native.nuget.processor.forward.matchesDeclaration
+import io.github.xxfast.kotlin.native.nuget.processor.forward.escalatedForStrictDependencyTypes
 import io.github.xxfast.kotlin.native.nuget.processor.forward.renderForwardDiagnosticsJson
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticTrackingLogger
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
@@ -281,19 +283,24 @@ internal fun KSClassDeclaration.nestedOwnerScopeCollision(): String? {
 internal fun warnDroppedForwardCallables(
   catalog: ForwardCallablePlanCatalog,
   logger: KSPLogger,
-  // Issue #55: the effective include set, so an `include(...)` hint can name the whole line.
-  scope: List<String> = emptyList(),
+  // ROADMAP line 37 / ADR-154: the author's own `exclude(...)` entries, so an excluded-type hint
+  // quotes the entry that matched. Replaces the issue #55 `include(...)` scope list, which the
+  // additive `admit(...)` hint no longer needs (ADR-154 §5).
+  excludeEntries: List<String> = emptyList(),
+  // ADR-154 §6: opt-in escalation of the two actionable dependency-scope refusals.
+  strictDependencyTypes: Boolean = false,
 ) {
   val diagnostics: List<ForwardDiagnostic> = catalog.droppedCallables.map { dropped ->
     ForwardDiagnostic(
-      kind = dropped.reason.toDiagnosticKind(dropped.position, dropped.structural),
+      kind = dropped.reason.toDiagnosticKind(dropped.position, dropped.structural)
+        .escalatedForStrictDependencyTypes(dropped.reason, strictDependencyTypes),
       symbol = dropped.node,
       declaration = dropped.symbol,
       // ADR-064's 2026-09-10 amendment: the sentence lives on the reason, beside the hint it
       // reads with, so a drop that is not a type combination adds a `when` arm there rather than
       // a sixth special case here.
       reason = dropped.reason.diagnosticReason(dropped.detail, dropped.parameter),
-      hint = dropped.reason.diagnosticHint(dropped.detail, scope, dropped.parameter),
+      hint = dropped.reason.diagnosticHint(dropped.detail, dropped.parameter, excludeEntries),
       // Issue #249: stamped on the catalog entry by the walk that planned it, so an inherited
       // member's owner is the class being planned rather than the supertype its node reports.
       owner = dropped.owner,
@@ -378,9 +385,13 @@ internal fun warnDroppedForwardPropertySetters(
 internal fun warnDroppedForwardProperties(
   catalog: ForwardCallablePlanCatalog,
   logger: KSPLogger,
-  // Issue #55: the effective include set, so a scope drop's `include(...)` hint can name the whole
-  // line here exactly as it does for a callable.
-  scope: List<String> = emptyList(),
+  // ROADMAP line 37 / ADR-154: the callable route's parameter, verbatim — the author's own
+  // `exclude(...)` entries, so both routes quote the matched entry identically.
+  excludeEntries: List<String> = emptyList(),
+  // ADR-154 §6: the property position takes the SAME escalation, even though its kind
+  // (`SKIPPED_UNSUPPORTED_PROPERTY`) is positional and names no dependency at all. That is exactly
+  // why strict mode keys on the reason and never on the kind.
+  strictDependencyTypes: Boolean = false,
 ) {
   val diagnostics: List<ForwardDiagnostic> = catalog.droppedProperties.map { dropped ->
     // ADR-115: the author's own signal, named as such. Checked first: the property's type is
@@ -416,11 +427,12 @@ internal fun warnDroppedForwardProperties(
       // way, and `toDiagnosticKind()` deliberately `error()`s on the legacy-route reasons a
       // property can genuinely hold.
       ForwardDiagnostic(
-        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY
+          .escalatedForStrictDependencyTypes(dropped.reason, strictDependencyTypes),
         symbol = dropped.node,
         declaration = dropped.symbol,
         reason = dropped.reason.diagnosticReason(dropped.detail),
-        hint = dropped.reason.diagnosticHint(dropped.detail, scope),
+        hint = dropped.reason.diagnosticHint(dropped.detail, excludeEntries = excludeEntries),
         owner = dropped.owner,
         member = dropped.memberName,
       )
@@ -746,6 +758,30 @@ class NugetProcessor(
     fun isExportedAndUnmarked(declaration: KSDeclaration): Boolean =
       isExported(declaration) && !isMarkedOptIn(declaration)
 
+    // ADR-154 §1: the additive `admit(...)` matcher — the exact by-package-or-by-qualified-name
+    // rule `exclude` uses (issue #53), so one entry can name a single type or a whole package.
+    fun admitEntry(declaration: KSDeclaration): String? = context.admit.matchesDeclaration(
+      declaration.packageName.asString(),
+      declaration.qualifiedName?.asString(),
+    )
+
+    // ADR-154 §2: the closure's admission predicate for a CROSS-MODULE declaration.
+    //
+    // `effectiveInclude.isNotEmpty()` on the first disjunct is load-bearing, not defensive:
+    // `PackageScope.covers` answers `true` for every non-excluded package when its include list is
+    // empty (`ForwardPublishedScope.kt`), and today that never reaches a klib declaration only
+    // because admission rule 4 shuts the gate first. `admit(...)` opens that gate (see
+    // `crossModuleAdmissionAllowed` below), so without the guard a build with no `rootPackage`, no
+    // `include` and one `admit("io.ktor.http.Url")` would admit EVERY reachable klib declaration
+    // and walk the whole compile classpath — ADR-066 Alternative 3, silently.
+    //
+    // `exclude` still wins (the closure tests it before this predicate) and ADR-115's opt-in
+    // markers still refuse, on both disjuncts.
+    fun isAdmitted(declaration: KSDeclaration): Boolean {
+      if (effectiveInclude.isNotEmpty() && isExportedAndUnmarked(declaration)) return true
+      return admitEntry(declaration) != null && !isMarkedOptIn(declaration)
+    }
+
     // ADR-074: for a native compilation `getAllFiles()` returns both halves of every
     // `expect`/`actual` pair as two files of one compilation (Verified, spike finding 1), so this
     // raw list is the shared input for the `isExpect` filter below, the by-name expect index, and
@@ -814,6 +850,11 @@ class NugetProcessor(
         }
         if (context.excludePackages.isNotEmpty()) {
           add("exclude(${context.excludePackages.joinToString { "\"$it\"" }})")
+        }
+        // ADR-154: listed for completeness, never as the cause — `admit(...)` is dependency-only
+        // and cannot empty the module's OWN export set, which is what this diagnostic is about.
+        if (context.admit.isNotEmpty()) {
+          add("admit(${context.admit.joinToString { "\"$it\"" }})")
         }
         if (context.rootPackage.isNotBlank()) add("rootPackage = \"${context.rootPackage}\"")
       }.joinToString()
@@ -1011,7 +1052,10 @@ class NugetProcessor(
       isExcluded = { declaration ->
         ownScope.excludes(declaration.packageName.asString(), declaration.qualifiedName?.asString())
       },
-      crossModuleAdmissionAllowed = effectiveInclude.isNotEmpty(),
+      isAdmitted = ::isAdmitted,
+      // ADR-154 §2: `admit(...)` opens rule 4's gate too. Neither set still means "never cross the
+      // module boundary"; the per-type predicate above is what keeps the crossing bounded.
+      crossModuleAdmissionAllowed = effectiveInclude.isNotEmpty() || context.admit.isNotEmpty(),
       actualTypeAliasTargets = actualTypeAliasTargets,
     ).walk(
       classes = rootClasses,
@@ -1449,9 +1493,13 @@ class NugetProcessor(
       droppedProperties = declarationPropertyPlanner.droppedProperties,
     )
 
-    warnDroppedForwardCallables(callableCatalog, logger, effectiveInclude)
+    warnDroppedForwardCallables(
+      callableCatalog, logger, context.excludePackages, context.strictDependencyTypes,
+    )
     warnDroppedForwardPropertySetters(callableCatalog, logger)
-    warnDroppedForwardProperties(callableCatalog, logger, effectiveInclude)
+    warnDroppedForwardProperties(
+      callableCatalog, logger, context.excludePackages, context.strictDependencyTypes,
+    )
     warnDroppedForwardExtensionReceivers(callableCatalog, logger)
     warnRefusedLegacyRouteMembers(
       classes, sealedClasses, suspendFunctions, forwardClassifier, logger,
@@ -1485,7 +1533,8 @@ class NugetProcessor(
         },
       ),
       logger,
-      effectiveInclude,
+      context.excludePackages,
+      context.strictDependencyTypes,
     )
     // The property half of the same hole, under the same symbol guard.
     val warnedPropertySymbols: Set<String> =
@@ -1497,7 +1546,8 @@ class NugetProcessor(
           .filter { dropped -> dropped.symbol !in warnedPropertySymbols },
       ),
       logger,
-      effectiveInclude,
+      context.excludePackages,
+      context.strictDependencyTypes,
     )
 
     val cNameExports: FileSpec = generateCNameWrappers(

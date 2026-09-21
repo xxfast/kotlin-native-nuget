@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
 /**
- * ADR-155: the whole shape of a C# `IAsyncEnumerable<T>` bound as a Kotlin `Flow<T>`, owned by the
+ * ADR-156: the whole shape of a C# `IAsyncEnumerable<T>` bound as a Kotlin `Flow<T>`, owned by the
  * runtime rather than re-emitted per method (ADR-128). A generated member supplies only the two
  * things that are specific to it — how to START an enumeration ([enumerate], which calls the C#
  * method and `GetAsyncEnumerator`) and how to READ the current element ([current], the ordinary
@@ -37,7 +37,7 @@ import kotlinx.coroutines.flow.flow
  * cancellation, where a suspension point would be an immediate second cancellation. The C# side
  * therefore queues the real cleanup (cancel the source, await the pending step, `DisposeAsync`)
  * and returns at once, which is why `collect` can return before the C# iterator's `finally` has
- * run (ADR-155 open question 2).
+ * run (ADR-156 open question 2).
  *
  * [cancelled] tells C# which arm to take: true means the collector gave up, so the source is
  * cancelled first (a token-honouring C# method stops promptly; one that ignores its token stops

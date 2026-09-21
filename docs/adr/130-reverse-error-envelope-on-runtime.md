@@ -390,10 +390,10 @@ generated shape and item 4's outer proof are still accurate for the shipped desi
   spike (spiked on `mingwX64` + `linuxX64` only, moot for the shipped design since it never ships that
   wiring).
 
-**Amended by [ADR-155](155-iasyncenumerable-to-flow.md):** Variant 1's finding above (a `nativeMain`
+**Amended by [ADR-156](156-iasyncenumerable-to-flow.md):** Variant 1's finding above (a `nativeMain`
 file cannot reference a declaration reachable only through a per-target `api`, which is why this
 ADR's error envelope moved through the `expect`/`actual` seam instead) is no longer the whole
-picture. ADR-155 verified that the plugin can add `kotlinx-coroutines-core` as `api` directly on
+picture. ADR-156 verified that the plugin can add `kotlinx-coroutines-core` as `api` directly on
 the consumer's `nativeMain`, so a generated `nativeMain` declaration may now also name
 `kotlinx.coroutines.flow.Flow`, and nothing else from kotlinx. The suspend seam here is unchanged:
 `awaitForKotlin` and friends still reach the consumer only through the runtime's per-target `api`.

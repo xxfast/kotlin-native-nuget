@@ -206,7 +206,10 @@ passes the *same* `isPackageExported` predicate ADR-063 already computes.
   directions of the "too broad / too narrow" problem solved by the same knob.
 - The escape hatch already exists and is one line: `include("dev.other.core")` widens admission for a
   dependency whose package tree is unrelated to `rootPackage`. The diagnostic (below) names that
-  exact line.
+  exact line. **Superseded (2026-09-20) by [ADR-154](154-forward-dependency-type-admission.md):** the
+  escape hatch is now `admit(...)`, additive and as fine as a single qualified type name, so widening
+  admission for one dependency type no longer requires including its whole package. `include(...)`
+  keeps doing exactly what this ADR describes; the diagnostic hints below are superseded to match.
 
 **Cons:**
 - Admission is inferred from package naming, which is a convention, not a declaration of intent. A

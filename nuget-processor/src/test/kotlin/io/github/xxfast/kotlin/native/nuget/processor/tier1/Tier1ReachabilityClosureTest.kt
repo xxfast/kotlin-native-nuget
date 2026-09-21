@@ -59,11 +59,12 @@ class Tier1ReachabilityClosureTest {
       "expected a SKIPPED_UNEXPORTED_DEPENDENCY_TYPE diagnostic naming Newsroom.sponsor's " +
           "out-of-scope dep.outside.Advert return type; kspWarnings=${result.kspWarnings}"
     }
-    // Issue #55: the hint names the whole include line, own package first, because an explicit
-    // include replaces the rootPackage default rather than adding to it.
+    // ADR-154: the remedy is the additive `admit(...)` entry naming the refused TYPE. Issue #55's
+    // whole-include line is gone with it: it was the answer to a replacement trap `admit` does not
+    // have.
     assertTrue(
-      diagnostic.contains("include(\"tier1.reachabilityclosure\", \"dep.outside\")"),
-      "expected the diagnostic to name the full include(...) line; got: $diagnostic",
+      diagnostic.contains("add admit(\"dep.outside.Advert\")"),
+      "expected the diagnostic to name the additive admit line; got: $diagnostic",
     )
   }
 
@@ -258,8 +259,9 @@ class Tier1ReachabilityClosureTest {
       "expected the property diagnostic to read as out of scope; got: $diagnostic",
     )
     assertTrue(
-      diagnostic.contains("include(\"tier1.reachabilityclosure.property\", \"dep.outside\")"),
-      "expected the property diagnostic to name the full include(...) line; got: $diagnostic",
+      // ADR-154: the property route reads the same additive hint the callable route does.
+      diagnostic.contains("add admit(\"dep.outside.Advert\")"),
+      "expected the property diagnostic to name the additive admit line; got: $diagnostic",
     )
   }
 
@@ -502,8 +504,13 @@ class Tier1ReachabilityClosureTest {
           "kspWarnings=${result.kspWarnings}"
     }
     assertTrue(
-      diagnostic.contains("include(\"tier1.reachabilityclosure.edge\", \"dep.edge\")"),
-      "expected the scope remedy naming the full include(...) line; got: $diagnostic",
+      // ADR-154: for a NESTED refused type the additive entry names the OWNER. Admitting the
+      // nested name alone repairs nothing: the closure admits `Entry`, climbs to `Ledger` (edge A),
+      // finds the longer entry is not a prefix of it, refuses the owner `NOT_INCLUDED` and
+      // propagates that refusal straight back onto `Entry`. Admitting the owner admits both, and
+      // ADR-133's owner walk declares the nested type.
+      diagnostic.contains("add admit(\"dep.edge.Ledger\")"),
+      "expected the scope remedy naming the additive admit line; got: $diagnostic",
     )
     assertFalse(
       result.kspWarnings.any {

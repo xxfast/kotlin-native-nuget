@@ -49,13 +49,20 @@ class Tier1ExportScopeDiagnosticsTest {
     ) {
       "expected a SKIPPED_UNEXPORTED_DEPENDENCY_TYPE diagnostic; kspWarnings=${result.kspWarnings}"
     }
+    // ADR-154 §5: the remedy is the ADDITIVE verb. The whole `include(...)` replacement line this
+    // cell used to pin was issue #55's answer to a trap `admit(...)` does not have — it cannot
+    // empty the export set, so the hint has no reason to echo the author's own packages back.
     assertTrue(
-      diagnostic.contains("include(\"tier1.scopehint.api\", \"dep.outside\")"),
-      "expected the hint to name the full include line; got: $diagnostic",
+      diagnostic.contains("""add admit("dep.outside.Advert")"""),
+      "expected the additive admit line; got: $diagnostic",
     )
     assertTrue(
-      diagnostic.contains("replaces the rootPackage default"),
-      "expected the hint to say why the own package must stay listed; got: $diagnostic",
+      diagnostic.contains(""""dep.outside""""),
+      "expected the package-prefix arm offered beside it; got: $diagnostic",
+    )
+    assertFalse(
+      diagnostic.contains("include("),
+      "the replacement verb is not the dependency remedy any more; got: $diagnostic",
     )
   }
 

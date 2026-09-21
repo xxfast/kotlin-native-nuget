@@ -282,6 +282,6 @@ interface, a struct, or a generic class, are not bound; see Limitations below.
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/057-csharp-overload-sets-in-kotlin.md">ADR-057: C# overload sets in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/152-task-to-suspend-fun.md">ADR-152: Reverse Task/Task&lt;T&gt; to suspend fun</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/153-reverse-cancellation-token.md">ADR-153: Reverse cancellation token</a>
-        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/155-iasyncenumerable-to-flow.md">ADR-155: Reverse IAsyncEnumerable&lt;T&gt; to Flow&lt;T&gt;</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/156-iasyncenumerable-to-flow.md">ADR-156: Reverse IAsyncEnumerable&lt;T&gt; to Flow&lt;T&gt;</a>
     </category>
 </seealso>

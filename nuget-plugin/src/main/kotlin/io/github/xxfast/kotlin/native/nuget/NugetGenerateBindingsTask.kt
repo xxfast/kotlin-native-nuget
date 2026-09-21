@@ -6,6 +6,8 @@ import io.github.xxfast.kotlin.native.nuget.rir.NUGET_RUNTIME_CONTRACT_HASH
 import io.github.xxfast.kotlin.native.nuget.rir.REVERSE_ABI_TAG
 import io.github.xxfast.kotlin.native.nuget.rir.RirAsyncKind
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
+import io.github.xxfast.kotlin.native.nuget.rir.RirCollectionKind
+import io.github.xxfast.kotlin.native.nuget.rir.RirCollectionType
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnostic
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnosticKind
@@ -48,6 +50,9 @@ import io.github.xxfast.kotlin.native.nuget.rir.bridgeableStructRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeSuffix
 import io.github.xxfast.kotlin.native.nuget.rir.classInterfaceSupertypes
 import io.github.xxfast.kotlin.native.nuget.rir.collisionDiagnostics
+import io.github.xxfast.kotlin.native.nuget.rir.collapsedOverloadSets
+import io.github.xxfast.kotlin.native.nuget.rir.collectionPositionDiagnostics
+import io.github.xxfast.kotlin.native.nuget.rir.identity
 import io.github.xxfast.kotlin.native.nuget.rir.contractHash
 import io.github.xxfast.kotlin.native.nuget.rir.fnv1a64
 import io.github.xxfast.kotlin.native.nuget.rir.interfaceBaseKeys
@@ -74,6 +79,13 @@ import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.TaskAction
 import java.io.File
+
+// ADR-155: a mapped BCL collection is skipped by the shared bridgeable filter (RirBridging's
+// isV1Type) until the slot-buffer wire is generated, so no collection-typed member ever reaches a
+// conversion table. Reaching one means the filter and the tables disagree, which would otherwise
+// emit a half-built member.
+private const val COLLECTION_NOT_MAPPED: String =
+  "[nuget] ADR-155: a collection type reached a conversion table before it is mapped"
 
 private const val INTERNAL_PKG = "io.github.xxfast.kotlin.native.nuget.internal"
 private const val INTERNAL_DIR = "io/github/xxfast/kotlin/native/nuget/internal"
@@ -190,12 +202,31 @@ private fun typeContains(
   predicate: (RirTypeRef) -> Boolean,
 ): Boolean {
   if (predicate(type)) return true
+  // ADR-155, finding 12: a collection's ELEMENT type is reachable only by recursing into the type
+  // arguments. Without this every "does this file need X" detector is blind to an element used
+  // nowhere else on the type (`IReadOnlySet<CatMood>` and no other CatMood member), which is a
+  // missing import and a compile error in the GENERATED Kotlin.
+  if (type is RirCollectionType) {
+    return type.typeArguments.any { typeContains(it, structs, predicate) }
+  }
   val struct: RirStruct? =
     (type as? RirStructType)?.let { structs[RirTypeKey(it.namespace, it.name)] }
   return struct?.components.orEmpty().any { typeContains(it.type, structs, predicate) }
 }
 
 private fun isStringRef(type: RirTypeRef): Boolean = type is RirStringType
+
+// ADR-155: a value that needs the stub's `memScoped` block at an ARGUMENT position: a string
+// (`.cstr.ptr`) or a collection (its slot buffer is allocated in the same scope and owned by it).
+private fun isScopedRef(type: RirTypeRef): Boolean =
+  type is RirStringType || type is RirCollectionType
+
+// ADR-155: a collection whose elements are bound interfaces mints a bridge per element, so the
+// call site needs the same nugetTransferScope an interface-typed parameter does.
+private fun isInterfaceLike(type: RirTypeRef): Boolean =
+  type is RirInterfaceType ||
+      (type is RirCollectionType && type.typeArguments.any(::isInterfaceLike))
+
 private fun isEnumRef(type: RirTypeRef): Boolean = type is RirEnumType
 
 // ADR-070: a handle-typed reference and an interface-typed reference (RirInterfaceType) both cross
@@ -509,7 +540,7 @@ fun generateKotlinStubs(
                 method.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) }
           }
           val ctorsHaveString: Boolean = ctors.any { ctor ->
-            ctor.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) }
+            ctor.parameters.any { p -> typeContains(p.type, structs, ::isScopedRef) }
           }
           val propertiesHaveString: Boolean =
             propertyGetters.any { typeContains(it.type, structs, ::isStringRef) }
@@ -817,6 +848,8 @@ internal fun instantiationArgTag(type: RirTypeRef): String = when (type) {
     "[nuget] nested generic instantiations are excluded from v1 (ADR-072 Decision 6): " +
         "${type.namespace}.${type.name}"
   )
+
+  is RirCollectionType -> error(COLLECTION_NOT_MAPPED)
 
   is RirTypeParameterType -> error(
     "[nuget] an unresolved type parameter cannot be a generic type argument: ${type.name}"
@@ -1545,7 +1578,61 @@ private fun genericClassNeedsEnums(cls: RirClass): Boolean {
 // type argument, so no deeper recursion is possible) or the import for it is silently missing.
 private fun genericInstanceEnumArgs(type: RirTypeRef): List<RirEnumType> =
   if (type is RirGenericInstanceType) type.typeArguments.filterIsInstance<RirEnumType>()
+  // ADR-155, finding 12: a collection ELEMENT is reachable only through the type arguments, and
+  // an element type used nowhere else on the type (`IReadOnlySet<CatMood>`) loses its import
+  // otherwise, a compile error in the generated Kotlin, loud, but only for that one shape.
+  else if (type is RirCollectionType) type.typeArguments.flatMap { genericInstanceEnumArgs(it) } +
+      type.typeArguments.filterIsInstance<RirEnumType>()
   else emptyList()
+
+// ADR-155: the same recursion for the other two element kinds that name a Kotlin type.
+private fun collectionElements(type: RirTypeRef): List<RirTypeRef> =
+  if (type is RirCollectionType) {
+    type.typeArguments + type.typeArguments.flatMap(::collectionElements)
+  } else {
+    emptyList()
+  }
+
+// ADR-155: the internal helpers a stub file's collection members call, and the cinterop imports
+// their buffers need. Keyed on the POSITION (a read needs nugetReadSlots, a write needs
+// nugetWriteSlots) and on the element kind, so a file with only `List<Int>` members does not
+// import the string/pointer slot readers it never calls.
+private fun collectionImports(
+  methods: List<RirMethod>,
+  ctors: List<RirConstructor>,
+  properties: List<RirProperty>,
+  settable: Set<String>,
+): List<String> {
+  val reads: List<RirCollectionType> =
+    (methods.map { it.returnType } + properties.map { it.type })
+      .filterIsInstance<RirCollectionType>()
+  val writes: List<RirCollectionType> = (
+      methods.flatMap { m -> m.parameters.map { it.type } } +
+          ctors.flatMap { c -> c.parameters.map { it.type } } +
+          properties.filter { it.name in settable }.map { it.type }
+      ).filterIsInstance<RirCollectionType>()
+  if (reads.isEmpty() && writes.isEmpty()) return emptyList()
+
+  val imports: MutableList<String> = mutableListOf()
+  if (reads.isNotEmpty()) imports.add("import $INTERNAL_PKG.nugetReadSlots")
+  if (writes.isNotEmpty()) {
+    imports.add("import $INTERNAL_PKG.nugetWriteSlots")
+    // The buffer is allocated in the same block a `.cstr.ptr` argument uses, which a file whose
+    // only collection element is an Int would otherwise never import.
+    imports.add("import kotlinx.cinterop.memScoped")
+    // `CPointer.toLong()` is an EXTENSION: a string element's `.cstr.ptr.toLong()` is
+    // "none of the following candidates is applicable" without it, never a missing-import error.
+    imports.add("import kotlinx.cinterop.toLong")
+  }
+  val readElements: List<RirTypeRef> = reads.flatMap { it.typeArguments }
+  if (readElements.any { it is RirStringType }) {
+    imports.add("import $INTERNAL_PKG.nugetSlotString")
+  }
+  if (readElements.any { it is RirObjectHandleType || it is RirInterfaceType }) {
+    imports.add("import $INTERNAL_PKG.nugetSlotPointer")
+  }
+  return imports
+}
 
 private fun referencedEnumTypes(
   methods: List<RirMethod>,
@@ -1720,10 +1807,18 @@ private fun referencedInterfaceTypes(
 ): List<RirInterfaceType> = (
     methods.flatMap { method ->
       listOfNotNull(method.returnType as? RirInterfaceType) +
-          method.parameters.mapNotNull { it.type as? RirInterfaceType }
+          method.parameters.mapNotNull { it.type as? RirInterfaceType } +
+          collectionElements(method.returnType).filterIsInstance<RirInterfaceType>() +
+          method.parameters.flatMap { collectionElements(it.type) }
+              .filterIsInstance<RirInterfaceType>()
     } +
-        ctors.flatMap { ctor -> ctor.parameters.mapNotNull { it.type as? RirInterfaceType } } +
-        properties.mapNotNull { it.type as? RirInterfaceType }
+        ctors.flatMap { ctor ->
+          ctor.parameters.mapNotNull { it.type as? RirInterfaceType } +
+              ctor.parameters.flatMap { collectionElements(it.type) }
+                  .filterIsInstance<RirInterfaceType>()
+        } +
+        properties.mapNotNull { it.type as? RirInterfaceType } +
+        properties.flatMap { collectionElements(it.type) }.filterIsInstance<RirInterfaceType>()
     ).distinct()
 
 // The bound-class-handle-typed references a stub file needs an `import <pkg>.<ClassName>` line
@@ -1735,13 +1830,20 @@ private fun referencedHandleTypes(
 ): List<RirObjectHandleType> {
   val fromMethods: List<RirObjectHandleType> = methods.flatMap { method ->
     listOfNotNull(method.returnType as? RirObjectHandleType) +
-        method.parameters.mapNotNull { it.type as? RirObjectHandleType }
+        method.parameters.mapNotNull { it.type as? RirObjectHandleType } +
+        collectionElements(method.returnType).filterIsInstance<RirObjectHandleType>() +
+        method.parameters.flatMap { collectionElements(it.type) }
+            .filterIsInstance<RirObjectHandleType>()
   }
   val fromCtors: List<RirObjectHandleType> = ctors.flatMap { ctor ->
-    ctor.parameters.mapNotNull { it.type as? RirObjectHandleType }
+    ctor.parameters.mapNotNull { it.type as? RirObjectHandleType } +
+        ctor.parameters.flatMap { collectionElements(it.type) }
+            .filterIsInstance<RirObjectHandleType>()
   }
   val fromProperties: List<RirObjectHandleType> =
-    properties.mapNotNull { it.type as? RirObjectHandleType }
+    properties.mapNotNull { it.type as? RirObjectHandleType } +
+        properties.flatMap { collectionElements(it.type) }
+            .filterIsInstance<RirObjectHandleType>()
   return (fromMethods + fromCtors + fromProperties).distinct()
 }
 
@@ -1899,7 +2001,7 @@ private fun structFileContent(
     method.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) }
   }
   val ctorsHaveString: Boolean = constructors.any { ctor ->
-    ctor.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) }
+    ctor.parameters.any { p -> typeContains(p.type, structs, ::isScopedRef) }
   }
   val usesReceiverString: Boolean =
     receiverHasString &&
@@ -2388,6 +2490,8 @@ private fun buildStructStubMethod(
       "[nuget] interface returns on struct methods are out of scope (ADR-070 v1)",
     )
 
+    is RirCollectionType -> error(COLLECTION_NOT_MAPPED)
+
     is RirGenericInstanceType, is RirTypeParameterType -> error(
       "[nuget] generic instantiations/type parameters on struct methods are out of scope " +
           "(ADR-072 Decision 6: struct type arguments are excluded)",
@@ -2501,6 +2605,8 @@ private fun buildStructStubProperty(
       "[nuget] interface-typed computed properties on structs are out of scope (ADR-070 v1)",
     )
 
+    is RirCollectionType -> error(COLLECTION_NOT_MAPPED)
+
     is RirGenericInstanceType, is RirTypeParameterType -> error(
       "[nuget] generic instantiations/type parameters on struct properties are out of scope " +
           "(ADR-072 Decision 6: struct type arguments are excluded)",
@@ -2508,6 +2614,146 @@ private fun buildStructStubProperty(
   }
 
   return "val $name: $declType\n" + getterBlock.prependIndent("  ")
+}
+
+// ADR-155: the Kotlin type a mapped BCL collection renders at EVERY position: always the
+// read-only one, for every C# definition, mutable or not. The value is an eager copy, so a
+// `MutableList` would let `tags.add(x)` compile and change nothing in C# (Q2, decided against
+// ADR-011's mutability mirror). [element] renders one type argument WITH its own nullability.
+private fun collectionKotlinType(
+  type: RirCollectionType,
+  element: (RirTypeRef) -> String,
+): String {
+  val args: String = type.typeArguments.joinToString(", ") { element(it) }
+  return when (type.collection) {
+    RirCollectionKind.LIST -> "List<$args>"
+    RirCollectionKind.SET -> "Set<$args>"
+    RirCollectionKind.MAP -> "Map<$args>"
+  }
+}
+
+// The bare Kotlin name of a collection ELEMENT, cross-package-qualified like any other reference.
+private fun elementTypeName(type: RirTypeRef, qualifiedTypeNames: Map<RirTypeKey, String>): String {
+  val key: RirTypeKey? = when (type) {
+    is RirObjectHandleType -> RirTypeKey(type.namespace, type.name)
+    is RirEnumType -> RirTypeKey(type.namespace, type.name)
+    is RirInterfaceType -> RirTypeKey(type.namespace, type.name)
+    else -> null
+  }
+  return key?.let { qualifiedTypeNames[it] } ?: kotlinType(type)
+}
+
+// ADR-155: one element out of its 8-byte slot. The BUFFER shape is the runtime's
+// (readSlotsForKotlin); what a slot MEANS is per-element and lives here, so each element kind
+// reuses the conversion its own type already has at a top-level return position: a string slot is
+// a CoTaskMem pointer read and freed, a handle slot is a fresh strong GCHandle the wrapper built
+// from it now owns, an enum slot is a bounds-checked ordinal, a `0` slot is a null reference.
+private fun slotRead(
+  type: RirTypeRef,
+  slot: String,
+  qualifiedTypeNames: Map<RirTypeKey, String>,
+  memberQualifiedName: String,
+): String {
+  val name: String = elementTypeName(type, qualifiedTypeNames)
+  val nullMsg: String =
+    "$memberQualifiedName returned a null element, but the C# API annotates it non-null."
+  if (type.isNullable) return when (type) {
+    is RirStringType -> "nugetSlotString($slot)"
+    is RirObjectHandleType -> "nugetSlotPointer($slot)?.let { $name(it) }"
+    is RirInterfaceType -> "nugetSlotPointer($slot)?.let { nuget${type.name}Value(it) }"
+    else -> error(
+      "[nuget] ADR-155: ${type::class.simpleName} is not a nullable-capable collection element"
+    )
+  }
+  return when (type) {
+    is RirStringType -> "requireNotNull(nugetSlotString($slot)) { \"$nullMsg\" }"
+    is RirObjectHandleType -> "$name(requireNotNull(nugetSlotPointer($slot)) { \"$nullMsg\" })"
+    is RirInterfaceType ->
+      "nuget${type.name}Value(requireNotNull(nugetSlotPointer($slot)) { \"$nullMsg\" })"
+
+    is RirEnumType -> "nugetEnumEntry($name.entries, $slot.toInt(), \"${type.name}\")"
+    is RirPrimitiveType -> when (type.name) {
+      "bool" -> "$slot != 0L"
+      "byte" -> "$slot.toUByte()"
+      "short" -> "$slot.toShort()"
+      "int" -> "$slot.toInt()"
+      "long" -> slot
+      // ADR-155: a float is widened to double and BIT-CAST into its slot, never widened
+      // numerically: the round trip is exact for every float, and a widened 9.5 reads as 9.
+      "float" -> "Double.fromBits($slot).toFloat()"
+      "double" -> "Double.fromBits($slot)"
+      "char" -> "$slot.toInt().toChar()"
+      else -> error("[nuget] ADR-155: '${type.name}' is not a collection element primitive")
+    }
+
+    else -> error(
+      "[nuget] ADR-155: ${type::class.simpleName} is outside the v1 collection element " +
+          "vocabulary; it must be refused by isV1Type before reaching slotRead()"
+    )
+  }
+}
+
+// ADR-155: the inverse, one element INTO its slot, for a collection-typed argument. Every
+// expression here is legal inside the stub's `memScoped` block, which owns the `.cstr` memory and
+// the buffer alike; handle slots are BORROWED (the raw pointer, no new GCHandle), so there is
+// nothing to free on either side.
+private fun slotWrite(type: RirTypeRef, value: String): String = when {
+  type is RirStringType && type.nullable -> "if ($value == null) 0L else $value.cstr.ptr.toLong()"
+  type is RirStringType -> "$value.cstr.ptr.toLong()"
+  type is RirEnumType -> "$value.ordinal.toLong()"
+  type is RirObjectHandleType && type.nullable ->
+    "if ($value == null) 0L else $value.handle.require(\"${type.name}\").rawValue.toLong()"
+
+  type is RirObjectHandleType -> "$value.handle.require(\"${type.name}\").rawValue.toLong()"
+  type is RirInterfaceType && type.nullable ->
+    "handleOfOrNull($value, \"${type.namespace}.${type.name}\")?.rawValue?.toLong() ?: 0L"
+
+  type is RirInterfaceType ->
+    "handleOf($value, \"${type.namespace}.${type.name}\").rawValue.toLong()"
+  type is RirPrimitiveType -> when (type.name) {
+    "bool" -> "if ($value) 1L else 0L"
+    "char" -> "$value.code.toLong()"
+    "float" -> "$value.toDouble().toRawBits()"
+    "double" -> "$value.toRawBits()"
+    else -> "$value.toLong()"
+  }
+
+  else -> error(
+    "[nuget] ADR-155: ${type::class.simpleName} is outside the v1 collection element " +
+        "vocabulary; it must be refused by isV1Type before reaching slotWrite()"
+  )
+}
+
+// ADR-155: the whole collection out of a LongArray of slots. A map interleaves its key and value
+// slots, so it steps by two rather than reading a second buffer.
+private fun collectionRead(
+  type: RirCollectionType,
+  slots: String,
+  qualifiedTypeNames: Map<RirTypeKey, String>,
+  memberQualifiedName: String,
+): String {
+  fun read(element: RirTypeRef, slot: String): String =
+    slotRead(element, slot, qualifiedTypeNames, memberQualifiedName)
+  return when (type.collection) {
+    RirCollectionKind.LIST -> "$slots.map { slot -> ${read(type.typeArguments[0], "slot")} }"
+    RirCollectionKind.SET -> "$slots.map { slot -> ${read(type.typeArguments[0], "slot")} }.toSet()"
+    RirCollectionKind.MAP -> "(0 until $slots.size / 2).associate { i -> " +
+        "${read(type.typeArguments[0], "$slots[i * 2]")} to " +
+        "${read(type.typeArguments[1], "$slots[i * 2 + 1]")} }"
+  }
+}
+
+// ADR-155: the whole collection INTO a buffer allocated in the stub's existing memScoped block.
+private fun collectionWrite(type: RirCollectionType, name: String): String {
+  val slots: String = when (type.collection) {
+    RirCollectionKind.LIST, RirCollectionKind.SET ->
+      "$name.map { element -> ${slotWrite(type.typeArguments[0], "element")} }"
+
+    RirCollectionKind.MAP -> "$name.flatMap { (key, value) -> listOf(" +
+        "${slotWrite(type.typeArguments[0], "key")}, " +
+        "${slotWrite(type.typeArguments[1], "value")}) }"
+  }
+  return "nugetWriteSlots($slots)"
 }
 
 private fun kotlinType(type: RirTypeRef): String = when (type) {
@@ -2540,9 +2786,13 @@ private fun kotlinType(type: RirTypeRef): String = when (type) {
     )
   }
 
+  // ADR-155: always the read-only Kotlin collection, at every position.
+  is RirCollectionType -> collectionKotlinType(type) { declKotlinType(it) }
+
   // ADR-072: a generic instantiation/type parameter never reaches this ORDINARY (non-generic)
   // type renderer: it is only ever bridgeable through the dedicated generic-class witness path
   // (genericAwareKotlinType), which substitutes it away before any ordinary rendering runs.
+
   is RirGenericInstanceType, is RirTypeParameterType -> error(
     "[nuget] a generic instantiation/type parameter must be substituted/rendered through the " +
         "dedicated ADR-072 generic-class path, never through kotlinType()"
@@ -2574,6 +2824,12 @@ private fun declKotlinType(
     return "$base<$args>" + if (type.isNullable) "?" else ""
   }
   if (type is RirTypeParameterType) return type.name
+  // ADR-155: an element is a reference like any other and needs the same cross-package
+  // qualification; rendering it unqualified is a silent name collision in the generated stub.
+  if (type is RirCollectionType) {
+    return collectionKotlinType(type) { declKotlinType(it, qualifiedTypeNames) } +
+        if (type.nullable) "?" else ""
+  }
 
   val key: RirTypeKey? = when (type) {
     is RirObjectHandleType -> RirTypeKey(type.namespace, type.name)
@@ -2643,6 +2899,10 @@ private fun cfnType(type: RirTypeRef): String = when (type) {
   // above (CS8894 forbids a closed generic itself on an [UnmanagedCallersOnly] signature, but its
   // GCHandle wrapper is ordinary).
   is RirGenericInstanceType -> "COpaquePointer?"
+  // ADR-155: one pointer to the `[count][slots]` buffer, whatever the element count, so a
+  // collection is wire-identical to a handle for arity, cfnType and the out-pointer machinery.
+  is RirCollectionType -> "COpaquePointer?"
+
   is RirTypeParameterType -> error(
     "[nuget] a bare type parameter must be substituted to a concrete type before reaching " +
         "cfnType()"
@@ -2673,6 +2933,8 @@ private fun cVarType(type: RirTypeRef): String = when (type) {
   is RirInterfaceType -> "COpaquePointerVar"
   is RirVoidType -> error("[nuget] void cannot be a struct out-pointer component")
   is RirStructType -> error("[nuget] nested struct components are not supported in v1 (ADR-056)")
+  is RirCollectionType -> error(COLLECTION_NOT_MAPPED)
+
   is RirGenericInstanceType, is RirTypeParameterType -> error(
     "[nuget] generic instantiations/type parameters are not supported as struct components " +
         "(ADR-072 Decision 6: struct type arguments are excluded)"
@@ -2761,6 +3023,8 @@ private fun componentRead(type: RirTypeRef, arg: AbiArg): ComponentRead {
       "[nuget] struct ${type.namespace}.${type.name} must be expanded via structComponentReads " +
           "before reaching componentRead — componentRead only accepts leaf (scalar) types."
     )
+
+    is RirCollectionType -> error(COLLECTION_NOT_MAPPED)
 
     is RirGenericInstanceType, is RirTypeParameterType -> error(
       "[nuget] generic instantiations/type parameters are not supported as struct components " +
@@ -2947,7 +3211,7 @@ private fun bindingsFileContent(
                   ERR_CFN_TYPE
               ).joinToString(", ")
 
-          // ADR-155: `Enumerate` is the sync parameter list with no out-args (it returns an
+          // ADR-156: `Enumerate` is the sync parameter list with no out-args (it returns an
           // opaque enumeration handle, never a value), and `Current` is byte-identical to
           // ASYNC_END — the sync return half over a handle.
           RirSlotRole.ASYNC_ENUMERATE ->
@@ -2970,7 +3234,7 @@ private fun bindingsFileContent(
           role == RirSlotRole.ASYNC_BEGIN ->
             (if (r.method.cancellationToken != null) "COpaquePointer?" else "Unit")
 
-          // ADR-155: the enumeration handle, one per collect, whatever the element type is.
+          // ADR-156: the enumeration handle, one per collect, whatever the element type is.
           role == RirSlotRole.ASYNC_ENUMERATE -> "COpaquePointer?"
           else -> cfnType(abiReturnType(r.method.returnType, structs))
         }
@@ -3182,10 +3446,10 @@ private fun stubFileContent(
       imports.add("import kotlinx.cinterop.COpaquePointer")
     }
   }
-  // ADR-155: an async-enumerable member is NOT suspend and never touches nugetAwaitTask; it
+  // ADR-156: an async-enumerable member is NOT suspend and never touches nugetAwaitTask; it
   // names `Flow` in its own signature and builds it through the runtime-owned `nugetFlow` seam.
   // `Flow` is the one kotlinx.coroutines symbol a nativeMain stub may name (ADR-130 as amended by
-  // ADR-155): the plugin puts kotlinx-coroutines-core on the consumer's nativeMain for it.
+  // ADR-156): the plugin puts kotlinx-coroutines-core on the consumer's nativeMain for it.
   if (staticMethods.any { it.asyncKind == RirAsyncKind.ASYNC_ENUMERABLE }) {
     imports.add("import $INTERNAL_PKG.nugetFlow")
     imports.add("import kotlinx.coroutines.flow.Flow")
@@ -3251,6 +3515,8 @@ private fun stubFileContent(
     staticMethods.any { typeContains(it.returnType, structs, ::isEnumRef) } ||
         staticPropertyGetters.any { typeContains(it.type, structs, ::isEnumRef) }
   if (hasEnumReturn) imports.add("import $INTERNAL_PKG.nugetEnumEntry")
+  collectionImports(staticMethods, ctors, staticPropertyGetters, propertySetterNames)
+    .forEach { if (it !in imports) imports.add(it) }
   imports.addAll(
     enumImports(
       referencedEnumTypes(staticMethods, ctors, staticPropertyGetters), enumPkgs, kotlinPkg,
@@ -3382,7 +3648,7 @@ private fun classWrapperContent(
   val methodsHaveStringParam: Boolean =
     allMethods.any { m -> m.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) } }
   val ctorsHaveStringParam: Boolean = ctors.any { ctor ->
-    ctor.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) }
+    ctor.parameters.any { p -> typeContains(p.type, structs, ::isScopedRef) }
   }
   val instanceSettablePropertiesHaveString: Boolean = instancePropertyGetters.any {
     typeContains(it.type, structs, ::isStringRef) && it.name in propertySetterNames
@@ -3421,7 +3687,7 @@ private fun classWrapperContent(
   if (allMethods.any { it.asyncKind == RirAsyncKind.TASK }) {
     imports.add("import $INTERNAL_PKG.nugetAwaitTask")
   }
-  // ADR-155, as above: the enumerable route is a plain `fun` over `nugetFlow`, not a suspend one.
+  // ADR-156, as above: the enumerable route is a plain `fun` over `nugetFlow`, not a suspend one.
   if (allMethods.any { it.asyncKind == RirAsyncKind.ASYNC_ENUMERABLE }) {
     imports.add("import $INTERNAL_PKG.nugetFlow")
     imports.add("import kotlinx.coroutines.flow.Flow")
@@ -3464,6 +3730,8 @@ private fun classWrapperContent(
     allPropertyGetters.any { typeContains(it.type, structs, ::isEnumRef) }
   val hasEnumReturn: Boolean = methodsHaveEnumReturn || propertiesHaveEnumReturn
   if (hasEnumReturn) imports.add("import $INTERNAL_PKG.nugetEnumEntry")
+  collectionImports(allMethods, ctors, allPropertyGetters, propertySetterNames)
+    .forEach { if (it !in imports) imports.add(it) }
   val structEnumTypes: List<RirEnumType> = (
       allMethods.flatMap { method ->
         structEnumComponents(method.returnType, structs) +
@@ -3686,6 +3954,15 @@ private fun argConversion(type: RirTypeRef, name: String): String = when {
 
   type is RirGenericInstanceType -> "$name.handle.require(\"${type.name.substringBefore('`')}\")"
 
+  // ADR-155, the permissive site finding 12 names: the boolean-guard `else -> name` would pass
+  // the Kotlin collection itself where the CFunction expects one pointer. The buffer is built in
+  // the `memScoped` block wrapInvoke already opens for `.cstr.ptr` arguments (isScopedRef), and
+  // dies with it: nothing to free on either side.
+  type is RirCollectionType && type.nullable ->
+    "if ($name == null) null else ${collectionWrite(type, name)}"
+
+  type is RirCollectionType -> collectionWrite(type, name)
+
   else -> name
 }
 
@@ -3764,13 +4041,15 @@ private fun buildConstructHelper(
   val params: String = ctor.parameters.joinToString(", ") { p ->
     "${p.name}: ${declKotlinType(p.type, qualifiedTypeNames)}"
   }
-  val hasStringParam: Boolean = ctor.parameters.any { it.type is RirStringType }
+  // ADR-155: a collection argument allocates its slot buffer in the same memScoped block a
+  // `.cstr.ptr` argument uses, so this flag is about SCOPE, not about strings.
+  val hasStringParam: Boolean = ctor.parameters.any { isScopedRef(it.type) }
 
   val invokeArgs: String = ctor.parameters.flatMap { p ->
     structArgConversions(p.type, p.name, structs)
   }.joinToString(", ")
 
-  val hasInterfaceParam: Boolean = ctor.parameters.any { it.type is RirInterfaceType }
+  val hasInterfaceParam: Boolean = ctor.parameters.any { isInterfaceLike(it.type) }
   val invokeCall: String =
     wrapInvoke(invokeArgs, hasStringParam, hasInterfaceParam)
 
@@ -3821,7 +4100,7 @@ private fun buildStubMethod(
   // `Read` would be an ERROR_KOTLIN_SIGNATURE_COLLISION.
   val memberName: String = kotlinMemberName(cls, method)
   val isAsync: Boolean = method.asyncKind == RirAsyncKind.TASK
-  // ADR-155: an async-enumerable member is a PLAIN fun returning `Flow<T>`. Nothing about its
+  // ADR-156: an async-enumerable member is a PLAIN fun returning `Flow<T>`. Nothing about its
   // body is a suspension: the whole of it is rendered as an inner `step` function with the
   // ordinary synchronous return half over the enumeration handle, which `nugetFlow` then drives.
   // That is what makes the element vocabulary equal to ADR-152's with zero new marshalling.
@@ -3837,13 +4116,14 @@ private fun buildStubMethod(
   // ADR-056/059: a struct component can itself be (or contain, at any nesting depth) a string —
   // memScoped is needed whenever ANY leaf crossing as a string argument requires it, not just a
   // direct top-level string parameter.
+  // ADR-155: a collection argument allocates its slot buffer in the same block (isScopedRef).
   val hasStringParam: Boolean =
-    method.parameters.any { p -> typeContains(p.type, structs, ::isStringRef) }
+    method.parameters.any { p -> typeContains(p.type, structs, ::isScopedRef) }
 
   val memberParams: String = method.parameters.joinToString(", ") { p ->
     "${p.name}: ${declKotlinType(p.type, qualifiedTypeNames)}"
   }
-  // ADR-155: the inner step takes the enumeration handle and nothing else; the member's own
+  // ADR-156: the inner step takes the enumeration handle and nothing else; the member's own
   // parameters were consumed by `Enumerate`, once per collect.
   val params: String = if (isFlow) "$FLOW_ENUMERATION: COpaquePointer" else memberParams
 
@@ -3877,10 +4157,10 @@ private fun buildStubMethod(
 
   // ADR-085: an interface-typed parameter may mint a bridge, whose transfer handle this call
   // site owns and frees after the invoke (wrapInvoke's nugetTransferScope).
-  val hasInterfaceParam: Boolean = method.parameters.any { it.type is RirInterfaceType }
+  val hasInterfaceParam: Boolean = method.parameters.any { isInterfaceLike(it.type) }
   val invokeCall: String = when {
     isAsync -> wrapInvoke("task", hasStringArg = false, hasInterfaceArg = false, callee = "end")
-    // ADR-155: `Current` is the sync return half with the enumeration handle where a receiver
+    // ADR-156: `Current` is the sync return half with the enumeration handle where a receiver
     // would be — the same substitution ADR-152's End makes with the task handle.
     isFlow -> wrapInvoke(
       FLOW_ENUMERATION, hasStringArg = false, hasInterfaceArg = false, callee = "current",
@@ -3900,7 +4180,7 @@ private fun buildStubMethod(
     hasInterfaceParam,
     callee = "begin",
   )
-  // ADR-155: the step's own prelude is empty — `current` is bound once by the OUTER member, not
+  // ADR-156: the step's own prelude is empty — `current` is bound once by the OUTER member, not
   // per element, so the pointer lookup does not run on every `MoveNext`.
   val preludeLines: List<String> = if (isFlow) emptyList() else if (!isAsync) listOf(
     "val fn = requireNotNull($fnVar) {",
@@ -4027,7 +4307,7 @@ private fun buildStubMethod(
       // in-argument is the task handle the await resumed with.
       val fullInvokeArgs: String = (
           if (isAsync) listOf("task")
-          // ADR-155: and an async-enumerable member reads them from the `Current` slot, whose
+          // ADR-156: and an async-enumerable member reads them from the `Current` slot, whose
           // only in-argument is the enumeration handle.
           else if (isFlow) listOf(FLOW_ENUMERATION)
           else listOfNotNull(receiverArg) + paramArgs
@@ -4095,15 +4375,41 @@ private fun buildStubMethod(
       """.trimMargin()
     }
 
+    // ADR-155: one pointer in, one eager copy out. The buffer is read and freed inside
+    // nugetReadSlots (the runtime owns the layout), then each slot is decoded by the conversion
+    // its own element type already has. A null pointer is a null COLLECTION, which is a different
+    // thing from an empty one and from a null element.
+    is RirCollectionType -> {
+      val slots: String = collectionRead(
+        retType, "slots", qualifiedTypeNames, "${cls.name}.${method.name}",
+      )
+      if (retType.nullable) """
+        |$fnKeyword $name($params)$retSuffix {
+        |$prelude
+        |  val slots: LongArray = nugetReadSlots($invokeCall)
+        |    ?: return null
+        |  return $slots
+        |}
+      """.trimMargin() else """
+        |$fnKeyword $name($params)$retSuffix {
+        |$prelude
+        |  val slots: LongArray = requireNotNull(nugetReadSlots($invokeCall)) {
+        |    "$nonNullHandleMsg"
+        |  }
+        |  return $slots
+        |}
+      """.trimMargin()
+    }
+
     is RirTypeParameterType -> error(
       "[nuget] a bare type parameter must be substituted/rendered through the dedicated ADR-072 " +
           "generic-class path, never through buildStubMethod()"
     )
   }
-  // ADR-155: everything above rendered the STEP. Wrap it in the member itself: bind both slots
+  // ADR-156: everything above rendered the STEP. Wrap it in the member itself: bind both slots
   // once, then hand `nugetFlow` a way to start an enumeration and a way to read the current
   // element. The C# method runs inside `enumerate`, i.e. at each collect, which is what makes the
-  // flow cold (ADR-155 open question 1).
+  // flow cold (ADR-156 open question 1).
   if (isFlow) {
     val elementType: String = declKotlinType(method.returnType, qualifiedTypeNames)
     val enumerateCall: String =
@@ -4132,7 +4438,7 @@ private fun buildStubMethod(
   return if (isOverride) rendered.replaceFirst("fun $name(", "override fun $name(") else rendered
 }
 
-// ADR-155: the inner step function's name and its single parameter. `nuget`-prefixed because they
+// ADR-156: the inner step function's name and its single parameter. `nuget`-prefixed because they
 // share a scope with the member's own C# parameter names: a C# method with a parameter called
 // `step` would otherwise make `::step` ambiguous, and one called `enumeration` would shadow.
 private const val FLOW_STEP_FN: String = "nugetStep"
@@ -4332,6 +4638,32 @@ private fun buildStubProperty(
       """.trimMargin()
     }
 
+    // ADR-155: the same read as a method return, off the property getter slot.
+    is RirCollectionType -> {
+      val slots: String = collectionRead(
+        type, "slots", qualifiedTypeNames, "${cls.name}.${property.name}",
+      )
+      if (type.nullable) """
+        |get() {
+        |  val fn = requireNotNull($getterFnVar) {
+        |    $failMsg
+        |  }
+        |  val slots: LongArray = nugetReadSlots($getterInvoke) ?: return null
+        |  return $slots
+        |}
+      """.trimMargin() else """
+        |get() {
+        |  val fn = requireNotNull($getterFnVar) {
+        |    $failMsg
+        |  }
+        |  val slots: LongArray = requireNotNull(nugetReadSlots($getterInvoke)) {
+        |    "$nonNullHandleMsg"
+        |  }
+        |  return $slots
+        |}
+      """.trimMargin()
+    }
+
     is RirTypeParameterType -> error(
       "[nuget] a bare type parameter must be substituted/rendered through the dedicated ADR-072 " +
           "generic-class path, never through buildStubProperty()"
@@ -4360,7 +4692,9 @@ private fun buildStubProperty(
       val valueArg: String = argConversion(propType, "value")
       val rawArgs: String =
         if (receiverArg == null) valueArg else "$receiverArg, $valueArg"
-      wrapInvoke(rawArgs, propType is RirStringType, propType is RirInterfaceType)
+      // ADR-155: a collection-typed setter allocates its buffer in the same memScoped block a
+      // string argument uses, and mints a bridge per element for an interface element.
+      wrapInvoke(rawArgs, isScopedRef(propType), isInterfaceLike(propType))
     }
     """
       |set(value) {
@@ -4390,35 +4724,92 @@ private fun nugetInteropExpect(): String = """
   |
   |package $INTERNAL_PKG
   |
+  |import kotlinx.cinterop.ByteVar
   |import kotlinx.cinterop.COpaquePointer
+  |import kotlinx.cinterop.CPointed
+  |import kotlinx.cinterop.NativePlacement
+  |import kotlinx.cinterop.reinterpret
+  |import kotlinx.cinterop.toCPointer
+  |import kotlinx.cinterop.toKString
   |
   |internal expect fun freeManagedString(ptr: COpaquePointer?)
+  |
+  |// ADR-155: the collection slot buffer. Both halves delegate to the runtime klib, which is
+  |// visible only from a per-target source set (ADR-127 declares it `api` on {target}Main), so
+  |// they cross into this shared file through the same expect/actual seam freeManagedString and
+  |// nugetAwaitTask already use.
+  |internal expect fun nugetReadSlots(buffer: COpaquePointer?): LongArray?
+  |
+  |internal expect fun NativePlacement.nugetWriteSlots(slots: List<Long>): COpaquePointer
+  |
+  |// One string element out of its slot: a CoTaskMem pointer Kotlin reads and frees immediately,
+  |// exactly like a top-level string return. A `0` slot is a null element.
+  |internal fun nugetSlotString(slot: Long): String? {
+  |  val ptr: COpaquePointer = slot.toCPointer<ByteVar>() ?: return null
+  |  val value: String = ptr.reinterpret<ByteVar>().toKString()
+  |  freeManagedString(ptr)
+  |  return value
+  |}
+  |
+  |// One handle/interface element out of its slot: a fresh strong GCHandle the wrapper built from
+  |// it now owns, or null for a `0` slot.
+  |internal fun nugetSlotPointer(slot: Long): COpaquePointer? = slot.toCPointer<CPointed>()
 """.trimMargin().trim()
 
 private fun nugetInteropMingw(): String = """
-  |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+  |@file:OptIn(
+  |  kotlinx.cinterop.ExperimentalForeignApi::class,
+  |  io.github.xxfast.kotlin.native.nuget.runtime.NugetRuntimeApi::class,
+  |)
   |
   |package $INTERNAL_PKG
   |
+  |import io.github.xxfast.kotlin.native.nuget.runtime.readSlotsForKotlin
+  |import io.github.xxfast.kotlin.native.nuget.runtime.writeSlotsForKotlin
   |import kotlinx.cinterop.COpaquePointer
+  |import kotlinx.cinterop.NativePlacement
   |import platform.windows.CoTaskMemFree
   |
   |internal actual fun freeManagedString(ptr: COpaquePointer?) {
   |  ptr?.let { CoTaskMemFree(it) }
   |}
+  |
+  |// ADR-155: one line of delegation each. The runtime owns the `[count][slots]` layout; the
+  |// release function is passed in because freeing C#-allocated memory is per-target, and this
+  |// file is where that already lives.
+  |internal actual fun nugetReadSlots(buffer: COpaquePointer?): LongArray? =
+  |  readSlotsForKotlin(buffer) { freeManagedString(it) }
+  |
+  |internal actual fun NativePlacement.nugetWriteSlots(slots: List<Long>): COpaquePointer =
+  |  writeSlotsForKotlin(slots)
 """.trimMargin().trim()
 
 private fun nugetInteropPosix(): String = """
-  |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+  |@file:OptIn(
+  |  kotlinx.cinterop.ExperimentalForeignApi::class,
+  |  io.github.xxfast.kotlin.native.nuget.runtime.NugetRuntimeApi::class,
+  |)
   |
   |package $INTERNAL_PKG
   |
+  |import io.github.xxfast.kotlin.native.nuget.runtime.readSlotsForKotlin
+  |import io.github.xxfast.kotlin.native.nuget.runtime.writeSlotsForKotlin
   |import kotlinx.cinterop.COpaquePointer
+  |import kotlinx.cinterop.NativePlacement
   |import platform.posix.free
   |
   |internal actual fun freeManagedString(ptr: COpaquePointer?) {
   |  ptr?.let { free(it) }
   |}
+  |
+  |// ADR-155: one line of delegation each. The runtime owns the `[count][slots]` layout; the
+  |// release function is passed in because freeing C#-allocated memory is per-target, and this
+  |// file is where that already lives.
+  |internal actual fun nugetReadSlots(buffer: COpaquePointer?): LongArray? =
+  |  readSlotsForKotlin(buffer) { freeManagedString(it) }
+  |
+  |internal actual fun NativePlacement.nugetWriteSlots(slots: List<Long>): COpaquePointer =
+  |  writeSlotsForKotlin(slots)
 """.trimMargin().trim()
 
 // ADR-130: NugetKotlinErrors.kt — the `actual` half of the reverse error envelope, emitted into
@@ -4476,7 +4867,7 @@ private fun nugetKotlinErrorsActual(): String = """
   |  begin = begin,
   |)
   |
-  |// ADR-155: one line of delegation to the runtime's flowForKotlin, exactly as nugetAwaitTask
+  |// ADR-156: one line of delegation to the runtime's flowForKotlin, exactly as nugetAwaitTask
   |// delegates to awaitForKotlin. Everything here is a registered-pointer lookup; not one rule
   |// about stepping, disposal or cancellation is restated (they live in the runtime, once).
   |internal actual fun <T> nugetFlow(
@@ -4582,7 +4973,7 @@ private fun nugetRuntimeContent(): String = """
   |import kotlin.concurrent.AtomicInt
   |import kotlin.concurrent.AtomicReference
   |import kotlin.native.identityHashCode
-  |// ADR-155 (amending ADR-130): the ONE coroutines type nativeMain may name, because the plugin
+  |// ADR-156 (amending ADR-130): the ONE coroutines type nativeMain may name, because the plugin
   |// puts kotlinx-coroutines-core on the consumer's nativeMain for exactly this.
   |import kotlinx.coroutines.flow.Flow
   |import kotlinx.cinterop.COpaquePointer
@@ -4636,7 +5027,7 @@ private fun nugetRuntimeContent(): String = """
   |internal var managedErrorKindFn:
   |  CPointer<CFunction<(COpaquePointer) -> Int>>? = null
   |
-  |// ADR-155: the three SHARED enumeration slots. They are shared rather than per-method because
+  |// ADR-156: the three SHARED enumeration slots. They are shared rather than per-method because
   |// stepping an enumeration says nothing about the element type: only `Enumerate` and `Current`
   |// are per-method. MoveNextBegin and MoveNextEnd run user code (the C# iterator body), so they
   |// are the first runtime slots to carry an ADR-104 error slot; DisposeEnumeration is plumbing
@@ -4963,11 +5354,11 @@ private fun nugetRuntimeContent(): String = """
   |  begin: (callback: COpaquePointer, ctx: COpaquePointer) -> COpaquePointer?,
   |): COpaquePointer
   |
-  |// ADR-155: the same seam for an async-enumerable member. The generated member supplies only
+  |// ADR-156: the same seam for an async-enumerable member. The generated member supplies only
   |// what is specific to it — [enumerate] calls the C# method and returns one enumeration handle
   |// per collect, [current] reads the element — and the runtime's flowForKotlin owns the stepping,
   |// the disposal and the cancellation rules. `Flow` is the one coroutines type a
-  |// nativeMain declaration here may name (ADR-130 as amended by ADR-155): the plugin puts
+  |// nativeMain declaration here may name (ADR-130 as amended by ADR-156): the plugin puts
   |// kotlinx-coroutines-core on the consumer's nativeMain precisely because this signature, and
   |// every generated member that returns one, live there.
   |internal expect fun <T> nugetFlow(
@@ -5741,6 +6132,8 @@ private fun interfaceHandleReturnBlock(
       "[nuget] struct-typed interface members are out of scope (ADR-070 v1)",
     )
 
+    is RirCollectionType -> error(COLLECTION_NOT_MAPPED)
+
     is RirGenericInstanceType, is RirTypeParameterType -> error(
       "[nuget] generic-typed interface members are out of scope (ADR-070/ADR-072: generic " +
           "interfaces are excluded)",
@@ -6251,9 +6644,57 @@ internal fun diagnosticWarnings(rir: RirFile): List<String> {
   // ADR-152: the plugin-side half of the async skips (struct methods, bound-interface members,
   // generic-class members), so a deferred async shape the reader let through is still named.
   val fromDeferredAsync: List<Pair<String, RirDiagnostic>> = asyncDeferredDiagnostics(rir)
+  // ADR-155 Q8: the C# overload sets the shared filter dropped whole, named one per member. The
+  // DROP is in RirBridging (both generators read it); only the message is here, because naming
+  // the Kotlin signature the members collapsed to needs this file's declKotlinType.
+  val fromCollapsedOverloads: List<Pair<String, RirDiagnostic>> =
+    rir.assemblies.flatMap { assembly ->
+      assembly.namespaces.flatMap { namespace ->
+        namespace.types.filterIsInstance<RirClass>().flatMap { cls ->
+          collapsedOverloadDiagnostics(
+            cls, boundTypes, boundInterfaceTypes(rir), genericDefs,
+          ).map { assembly.packageId to it }
+        }
+      }
+    }
+  // ADR-155: the plugin-side half of the collection skips (struct members, bound-interface
+  // members), the positions that do not ride the shared conversion path.
+  val fromCollectionPositions: List<Pair<String, RirDiagnostic>> =
+    collectionPositionDiagnostics(rir)
   return (fromReader + fromCollisions + fromArityLimits + fromAmbiguousGenericConstructors +
-      fromDeferredAsync)
+      fromDeferredAsync + fromCollapsedOverloads + fromCollectionPositions)
     .map { (packageId, diagnostic) -> formatDiagnostic(packageId, diagnostic) }
+}
+
+// ADR-155 Q8: one skipped_overload_set per DROPPED MEMBER (never one per set: a user reading the
+// log needs to see each C# member they lose by name), naming the single Kotlin signature the set
+// collapsed to. The set is computed by the shared filter, so this can never name a member either
+// generator actually bound.
+internal fun collapsedOverloadDiagnostics(
+  cls: RirClass,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+  boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
+): List<RirDiagnostic> = collapsedOverloadSets(
+  cls, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions,
+).flatMap { collision ->
+  val first: RirMethod = collision.first()
+  val params: String = first.parameters.joinToString(", ") { p ->
+    "${p.name}: ${declKotlinType(p.type)}"
+  }
+  val signature = "fun ${first.name.toMethodCamelCase()}($params)"
+  collision.map { method ->
+    RirDiagnostic(
+      kind = RirDiagnosticKind.SKIPPED_OVERLOAD_SET,
+      typeName = cls.name,
+      memberName = method.name,
+      memberSignature = method.identity(),
+      reason = "every list-like C# collection renders the same read-only Kotlin type, so this " +
+          "overload set collapses to one Kotlin signature, `$signature`. The WHOLE set is " +
+          "dropped, never all but one",
+      hint = "Expose one of the overloads under a different C# name, or keep only one of them.",
+    )
+  }
 }
 
 private fun validateDiagnostics(rir: RirFile) {
@@ -6333,6 +6774,16 @@ private fun RirTypeRef.kotlinCollisionType(): String = when (this) {
   is RirGenericInstanceType ->
     "$namespace.$name[${typeArguments.joinToString(",") { it.kotlinCollisionType() }}]" +
         if (isNullable) "?" else ""
+
+  // ADR-155: every list-like C# definition renders the SAME Kotlin type, so the collision key
+  // deliberately ignores `definition`: `AddRange(IEnumerable<string>)` beside
+  // `AddRange(List<string>)` IS one Kotlin signature, and this is the site that has to see it.
+  // Also the one site a collection type ref reaches while the member itself is not yet
+  // bridgeable, since the constructor arm below checks every declared constructor.
+  is RirCollectionType -> {
+    val args: String = typeArguments.joinToString(",") { it.kotlinCollisionType() }
+    "${collection.name.lowercase()}[$args]" + if (isNullable) "?" else ""
+  }
 
   else -> declKotlinType(this)
 }
