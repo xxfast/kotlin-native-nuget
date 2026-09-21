@@ -1,6 +1,8 @@
 package io.github.xxfast.kotlin.native.nuget
 
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
+import io.github.xxfast.kotlin.native.nuget.rir.RirCollectionKind
+import io.github.xxfast.kotlin.native.nuget.rir.RirCollectionType
 import io.github.xxfast.kotlin.native.nuget.rir.RirDelegateType
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
@@ -17,6 +19,8 @@ import io.github.xxfast.kotlin.native.nuget.rir.bridgeableRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableStructConstructors
 import io.github.xxfast.kotlin.native.nuget.rir.bridgeableStructRegistrables
 import io.github.xxfast.kotlin.native.nuget.rir.contractHash
+import io.github.xxfast.kotlin.native.nuget.rir.delegateContractHash
+import io.github.xxfast.kotlin.native.nuget.rir.delegatePlans
 import io.github.xxfast.kotlin.native.nuget.rir.identity
 import io.github.xxfast.kotlin.native.nuget.rir.isNullable
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
@@ -140,9 +144,10 @@ class NugetDelegateBindingTest {
     val bound: List<String> =
       bridgeableRegistrables(workshop, boundHandleTypes = emptySet()).filterIsInstance<io.github.xxfast.kotlin.native.nuget.rir.RirRegistrable.Method>().map { it.method.name }
     assertEquals(
-      listOf("RunKept"),
-      bound,
-      "a delegate must be refused in the SHARED filter, so the two generators cannot disagree " +
+      listOf("Apply", "RunKept"),
+      bound.sorted(),
+      "a delegate PARAMETER of an ordinary class binds; a delegate RETURN (MakeDoubler) does not, " +
+          "and the decision is made in the SHARED filter so the two generators cannot disagree " +
           "about how many registration slots the type has",
     )
   }
@@ -180,12 +185,21 @@ class NugetDelegateBindingTest {
       "the description carries both the CLR definition and the Invoke shape: " +
           derivedIdentity(intToInt),
     )
+    // ADR-054: each shape adds a factory slot to the DECLARING type's registration, so the type's
+    // contract hash must move with the shape. A shim built against `Func<int,int>` registering into
+    // a native library that now expects `Func<int,long>` has to fail loudly at startup, and the
+    // slot count alone cannot see the difference: both are one slot.
+    fun hashOf(cls: RirClass): Long {
+      val registrables = bridgeableRegistrables(cls, emptySet())
+      return delegateContractHash(
+        contractHash(cls, registrables, emptyMap()), delegatePlans(registrables, cls.name),
+      )
+    }
+    assertNotEquals(hashOf(intToInt), hashOf(intToLong))
     assertEquals(
-      contractHash(intToInt, bridgeableRegistrables(intToInt, emptySet()), emptyMap()),
-      contractHash(intToLong, bridgeableRegistrables(intToLong, emptySet()), emptyMap()),
-      "while the shapes are refused, neither contributes a slot, so the hash is the empty-list " +
-          "hash for both: this is the assertion the binding half INVERTS when the factory slot " +
-          "starts folding into the declaring type's registration",
+      1,
+      delegatePlans(bridgeableRegistrables(intToInt, emptySet()), "Workshop").size,
+      "one factory slot per distinct shape, whatever the number of members using it",
     )
   }
 
@@ -214,13 +228,34 @@ class NugetDelegateBindingTest {
           managedSignature =
             "method|instance|Test.Workshop.Workshop|Keep|(System.Func`2)|System.Void",
         ),
+        RirMethod(
+          name = "KeepAll",
+          returnType = RirVoidType,
+          parameters = listOf(
+            RirParameter(
+              "steps",
+              RirCollectionType(
+                collection = RirCollectionKind.LIST,
+                definition = "System.Collections.Generic.IReadOnlyList`1",
+                typeArguments = listOf(func(int, returns = int)),
+              ),
+            ),
+          ),
+          managedSignature =
+            "method|instance|Test.Workshop.Workshop|KeepAll|(IReadOnlyList`1)|System.Void",
+        ),
       ),
     )
 
     val bound: List<String> =
       bridgeableRegistrables(workshop, boundHandleTypes = emptySet()).filterIsInstance<io.github.xxfast.kotlin.native.nuget.rir.RirRegistrable.Method>().map { it.method.name }
     assertTrue("Plain" in bound)
-    assertFalse("Keep" in bound)
+    assertTrue("Keep" in bound, "a bare delegate parameter binds")
+    assertFalse(
+      "KeepAll" in bound,
+      "a delegate INSIDE a collection does not: one buffer slot cannot carry a minted bridge plus " +
+          "its lifetime, the same refusal a collection-typed interface slot gets",
+    )
   }
 
   // The renderer arms say "a delegate never reaches here", and that claim is only true if EVERY

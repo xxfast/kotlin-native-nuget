@@ -16,6 +16,7 @@ using TestLibrary.Nested;
 using TestLibrary.Objectprops;
 using TestLibrary.Parcel;
 using TestLibrary.Routes;
+using TestLibrary.Workshop;
 
 namespace LeakTests;
 
@@ -1493,6 +1494,74 @@ public class LiveHandleTests
             using var storeroom = new Storeroom("Oreo");
             using Waterbowl bowl = storeroom.Bowl();
             Assert.Equal("Oreo's bowl", bowl.Label);
+        });
+    }
+
+    // Rows 13 to 15. The reverse DELEGATE-PARAMETER crossing: a Kotlin lambda handed to C# behind
+    // a one-slot bridge, whose ctx is a Kotlin `StableRef` on the lambda.
+    //
+    // WHAT THESE ROWS CAN AND CANNOT SEE, stated rather than implied (the row 6k and 9j caveat
+    // again, and it bites harder here). `nuget_live_handles` counts Kotlin StableRefs reached
+    // through `NugetHandles.retain`/`release`. The bridge ctx is a `StableRef.create(impl)`, and no
+    // existing row in this file passes a KOTLIN-implemented object into C#, so whether that ctx is
+    // counted here is not yet established by anything: if it is not, these rows observe only the
+    // transfer-scope traffic and the boxed payloads, and the ctx half is pinned by
+    // `kotlinBridgeReleaseCount` in `WorkshopRoundTripTests` instead. The .NET GCHandle on the
+    // holder is a managed handle and is NOT counted on any of these rows, on any path. They are
+    // here regardless, because a per-crossing mint that is never released at all is exactly what
+    // row 13 would catch, and because the throw path in row 15 frees from a different place.
+
+    // Row 13. PER-CALL, fifty crossings, each with a FRESHLY CAPTURING lambda. The capture is
+    // load-bearing: a non-capturing lambda is a singleton in Kotlin, so the ADR-089 reuse table
+    // would hand back the same bridge every time and a per-crossing leak would never be sampled.
+    // The factor varies per iteration for the same reason.
+    [Fact]
+    public void ReverseDelegate_PerCallCapturingLambda_ReturnsToBaseline()
+    {
+        int factor = 0;
+        AssertNoLeak(() =>
+        {
+            factor++;
+            // Corrected 2026-09-22: `WorkshopScale` goes through `Workshop.Apply`, which invokes the
+            // lambda TWICE (`step(step(seed))`), so the answer is seed * factor^2, not seed * factor.
+            // The original `7 * factor` failed with 28 against an expected 14 on the first green
+            // build of the crossing, which is the fixture's own semantics, not a marshalling fault.
+            Assert.Equal(7 * factor * factor, WorkshopSample.WorkshopScale(7, factor));
+        });
+    }
+
+    // Row 14. The STORED delegate, released when its OWNER is disposed rather than at the end of
+    // the crossing that passed it. This is the lifetime metadata cannot distinguish from the
+    // per-call one, so it has to come back to baseline over the same harness: keep, invoke it once
+    // to prove it is genuinely alive across the gap, then dispose the owner. Fewer iterations
+    // because each one waits on .NET collection to get the release it is measuring.
+    [Fact]
+    public void ReverseDelegate_StoredThenOwnerDisposed_ReturnsToBaseline()
+    {
+        AssertNoLeak(
+            () =>
+            {
+                WorkshopSample.WorkshopKeep(3);
+                Assert.Equal(21, WorkshopSample.WorkshopRunKept(7));
+                WorkshopSample.WorkshopDisposeHeld();
+            },
+            iterations: 10);
+    }
+
+    // Row 15. The THROWING lambda. The fault leaves the slot through the ADR-087 envelope, which
+    // mints a StableRef of its own for the `NugetError`, and comes out of the reverse thunk through
+    // the ADR-104 channel, which mints a .NET GCHandle for the managed exception. So this path
+    // frees from two places neither of the rows above touches, and a channel that only cleans up on
+    // success leaks exactly here. Whether the TRANSFER handle is freed on the throw path is the
+    // C#-side half that this harness cannot see at all (the same unverified question ADR-088 owns).
+    [Fact]
+    public void ReverseDelegate_ThrowingLambda_ReturnsToBaseline()
+    {
+        int factor = 0;
+        AssertNoLeak(() =>
+        {
+            factor++;
+            Assert.Equal($"boom x{factor}", WorkshopSample.WorkshopScaleThrowing(factor));
         });
     }
 }

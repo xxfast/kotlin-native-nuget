@@ -241,7 +241,12 @@ fun bridgeableStaticMethods(
   boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
 ): List<RirMethod> = cls.methods.filter {
   it.isStatic &&
-      isV1Bridgeable(it, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions)
+      // ADR-158: the one admitted delegate position, and only on a non-generic class (a generic
+      // class's members dispatch through ADR-072 witnesses, which have no delegate arm).
+      isV1Bridgeable(
+        it, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions,
+        allowDelegates = cls.typeParameters.isEmpty(),
+      )
 }
 
 // ADR-052: mirrors bridgeableStaticMethods, but for public instance constructors. ADR-057
@@ -257,7 +262,10 @@ fun bridgeableConstructors(
 ): List<RirConstructor> =
   cls.constructors.filter { ctor ->
     ctor.parameters.all {
-      isV1Type(it.type, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions)
+      isV1Type(
+        it.type, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions,
+        allowDelegates = cls.typeParameters.isEmpty(),
+      )
     }
   }
 
@@ -528,7 +536,10 @@ fun bridgeableInstanceMethods(
   boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
 ): List<RirMethod> = cls.methods.filter {
   !it.isStatic &&
-      isV1Bridgeable(it, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions)
+      isV1Bridgeable(
+        it, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions,
+        allowDelegates = cls.typeParameters.isEmpty(),
+      )
 }
 
 // Phase 9: v1-bridgeable properties on a bound class. Static properties support strings and the
@@ -958,6 +969,113 @@ fun collectionPositionDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic
     }
   }
 
+// ADR-158: the generated-name key for one delegate SHAPE, a sanitized CLR name plus the wire
+// spelling of every Invoke position, so two shapes can never share a holder class, a factory or a
+// reuse table. `Func<int,int>` is `FuncInt32Int32`; `Action<string?>` is `ActionStringN`; the
+// non-generic `Action` is `Action`. Collision-checked by the caller (delegatePlans) the way ADR-072
+// checks instantiation names.
+fun RirDelegateType.shapeKey(): String {
+  val base: String = definition.substringAfterLast('.').substringBefore('`')
+  val parts: List<String> = (parameters + returnType).map { part ->
+    val name: String = when (part) {
+      is RirVoidType -> "Void"
+      is RirStringType -> "String"
+      is RirPrimitiveType -> when (part.name) {
+        "bool" -> "Boolean"
+        "byte" -> "Byte"
+        "short" -> "Int16"
+        "int" -> "Int32"
+        "long" -> "Int64"
+        "float" -> "Single"
+        "double" -> "Double"
+        "char" -> "Char"
+        else -> part.name.replaceFirstChar { it.uppercaseChar() }
+      }
+
+      is RirEnumType -> part.name
+      is RirObjectHandleType -> part.name
+      is RirInterfaceType -> part.name
+      else -> "Unsupported"
+    }
+    name + if (part.isNullable) "N" else ""
+  }
+  return base + parts.joinToString("")
+}
+
+// ADR-158: one delegate shape crossing into C# from a bound class's members: the C# holder class,
+// the `[UnmanagedCallersOnly]` factory and the Kotlin `staticCFunction` slot are all generated from
+// this, in both generators, off the SAME list, so the factory's registration slot cannot drift.
+// [invoke] is the delegate's `Invoke` signature dressed as an ordinary registrable method, which is
+// what lets the ADR-085 slot renderers (Kotlin `kotlinSlotEnvelope`, C# `bridgeMethodMember`) be
+// reused verbatim instead of re-derived.
+data class KotlinDelegatePlan(
+  val shapeKey: String,
+  val delegate: RirDelegateType,
+  val invoke: RirRegistrable.Method,
+)
+
+// ADR-158: every distinct delegate shape at a PARAMETER position of a bridgeable member of [cls],
+// deduped by the shared shape description (which already carries the Invoke types and their
+// nullability) and ordered by shape key so both generators emit the same slot order. One factory
+// per shape per DECLARING type: two bound classes using `Func<int,int>` mint two factories, which
+// costs a slot each and buys nothing across types, but keeps the ADR-054 accounting local to the
+// type whose contract hash moves.
+fun delegatePlans(
+  cls: RirClass,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+  boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
+  structs: Map<RirTypeKey, RirStruct> = emptyMap(),
+): List<KotlinDelegatePlan> {
+  if (cls.typeParameters.isNotEmpty()) return emptyList()
+  return delegatePlans(
+    bridgeableRegistrables(
+      cls, boundHandleTypes, structs, boundInterfaceTypes, boundGenericClassDefinitions,
+    ),
+    cls.name,
+  )
+}
+
+// ADR-158: the same plans off an ALREADY-computed registrable list, which is what both generators
+// have in hand when they render a type's registration (and is why neither needs to re-run the
+// admission filter and risk disagreeing with the other about the slot list).
+fun delegatePlans(registrables: List<RirRegistrable>, typeName: String): List<KotlinDelegatePlan> {
+  val delegates: List<RirDelegateType> = registrables.flatMap { r ->
+    when (r) {
+      is RirRegistrable.Method -> r.method.parameters.map { it.type }
+      is RirRegistrable.Ctor -> r.ctor.parameters.map { it.type }
+      is RirRegistrable.PropertyGetter -> listOf(r.property.type)
+      is RirRegistrable.PropertySetter -> listOf(r.property.type)
+    }
+  }.filterIsInstance<RirDelegateType>()
+
+  val plans: List<KotlinDelegatePlan> = delegates
+    .distinctBy { it.describe() }
+    .map { delegate ->
+      KotlinDelegatePlan(
+        shapeKey = delegate.shapeKey(),
+        delegate = delegate,
+        invoke = RirRegistrable.Method(
+          RirMethod(
+            name = "Invoke",
+            returnType = delegate.returnType,
+            parameters = delegate.parameters.mapIndexed { i, type -> RirParameter("a$i", type) },
+            managedSignature = "delegate|${delegate.describe()}",
+          ),
+        ),
+      )
+    }
+    .sortedBy { it.shapeKey }
+
+  val duplicates: List<String> = plans.groupBy { it.shapeKey }.filterValues { it.size > 1 }.keys.toList()
+  require(duplicates.isEmpty()) {
+    "[nuget] ADR-158: two different delegate shapes on $typeName sanitize to the same generated " +
+        "name(s) ${duplicates.joinToString()}: " +
+        plans.filter { it.shapeKey in duplicates }.joinToString { it.delegate.describe() }
+  }
+  return plans
+}
+
 // ADR-158: does this type reference mention a delegate anywhere the generators would have to mint a
 // bridge for?
 private fun mentionsDelegate(type: RirTypeRef): Boolean =
@@ -1007,8 +1125,15 @@ fun delegatePositionDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>>
         val hint = "Expose this member with the delegate as a parameter of an ordinary bound " +
             "class, or pass the values themselves."
 
+        // ADR-158: the ADMITTED position (a delegate parameter of a method or constructor of an
+        // ordinary, non-generic bound class) is not a skip and must not be named: the member binds.
+        val parameterPositionBinds: Boolean = type is RirClass && type.typeParameters.isEmpty()
+
         val fromMethods: List<RirDiagnostic> = methods
-          .filter { m -> mentionsDelegate(m.returnType) || m.parameters.any { mentionsDelegate(it.type) } }
+          .filter { m ->
+            mentionsDelegate(m.returnType) ||
+                (!parameterPositionBinds && m.parameters.any { mentionsDelegate(it.type) })
+          }
           .map { method ->
             RirDiagnostic(
               kind = RirDiagnosticKind.SKIPPED_DELEGATE_POSITION,
@@ -1032,7 +1157,9 @@ fun delegatePositionDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>>
             )
           }
         val fromConstructors: List<RirDiagnostic> = constructors
-          .filter { ctor -> ctor.parameters.any { mentionsDelegate(it.type) } }
+          .filter { ctor ->
+            !parameterPositionBinds && ctor.parameters.any { mentionsDelegate(it.type) }
+          }
           .map { ctor ->
             RirDiagnostic(
               kind = RirDiagnosticKind.SKIPPED_DELEGATE_POSITION,
@@ -1139,6 +1266,11 @@ private fun isV1Bridgeable(
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
   boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
   allowCollections: Boolean = true,
+  // ADR-158: admission is POSITION-aware, and only the parameter position of an ordinary bound
+  // class's method or constructor admits a delegate. A delegate RETURN needs the inverse machinery
+  // (a registered Invoke thunk per shape and a Kotlin function object wrapping a GCHandle), which
+  // nothing generates, so the return check below never passes this through.
+  allowDelegates: Boolean = false,
 ): Boolean {
   // ADR-156: for an async-enumerable method the return type IS the element type, and there is no
   // such thing as `IAsyncEnumerable<void>`. Rejected in the SHARED filter so a malformed RIR
@@ -1154,7 +1286,7 @@ private fun isV1Bridgeable(
   return method.parameters.all {
     isV1Type(
       it.type, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions,
-      allowCollections,
+      allowCollections, allowDelegates,
     )
   }
 }
@@ -1165,6 +1297,7 @@ private fun isV1Type(
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
   boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
   allowCollections: Boolean = true,
+  allowDelegates: Boolean = false,
 ): Boolean = when (type) {
   is RirVoidType -> true
   is RirStringType -> true
@@ -1201,11 +1334,17 @@ private fun isV1Type(
       boundGenericClassDefinitions[RirTypeKey(type.namespace, type.name)]
     definition != null && definition.instantiations.any { it.typeArguments == type.typeArguments }
   }
-  // ADR-158, first half: the RIR can now CARRY a delegate, but nothing generates the one-slot
-  // Kotlin bridge that would let one cross, so the shared filter refuses it. Fail-closed in the
-  // same shape as the type-parameter arm below: admitting it here would emit a thunk parameter
-  // with no minting code on the Kotlin side.
-  is RirDelegateType -> false
+  // ADR-158: a delegate crosses at a PARAMETER position of an ordinary bound class only (the
+  // caller decides by passing allowDelegates), and every Invoke position must itself be in the slot
+  // vocabulary, checked with allowDelegates FALSE so a nested delegate (`Func<Func<int>>`) stays
+  // out: one slot cannot mint a bridge from inside a bridge.
+  // A collection inside a slot is deferred for the same reason it is deferred for an interface
+  // slot (the allocator inverts), so allowCollections is false here too.
+  is RirDelegateType -> allowDelegates &&
+      type.parameters.all {
+        isKotlinBridgeSlotType(it, false, boundHandleTypes, boundInterfaceTypes)
+      } &&
+      isKotlinBridgeSlotType(type.returnType, true, boundHandleTypes, boundInterfaceTypes)
   // A bare type parameter reference can only ever appear inside a generic type's OWN member
   // signatures, which never reach this shared non-generic filter (Decision 3: the generic path is
   // routed BEFORE this one). Fail-closed.
@@ -1686,6 +1825,18 @@ fun kotlinBridgeDiagnostics(
 // ADR-086: an interface with a handle-backed out position registers a THIRD extra slot (the dup
 // thunk), so its tag moves to v2 — a v1 shim against a v2 native library (or the reverse) is a
 // loud ADR-054 contract failure instead of a pointer-table mis-assignment.
+// ADR-158: each delegate shape adds ONE factory slot to the declaring type's registration, so the
+// type's ADR-054 contract hash must move with the shape list: a shim built against `Func<int,int>`
+// must not silently register against a native library that now expects `Func<int,long>`. Folded in
+// shape-key order, the same order the slots are appended in.
+fun delegateContractHash(memberHash: Long, plans: List<KotlinDelegatePlan>): Long {
+  if (plans.isEmpty()) return memberHash
+  val factories: String = "kotlin_delegate_v1:" + plans.joinToString("|") { plan ->
+    "${plan.shapeKey}(${plan.invoke.contractSignature(emptyMap())})"
+  }
+  return memberHash xor fnv1a64(factories)
+}
+
 fun kotlinBridgeContractHash(memberHash: Long, plan: KotlinBridgePlan): Long =
   kotlinBridgeContractHash(memberHash, plan.slots, plan.needsDupHandle)
 
