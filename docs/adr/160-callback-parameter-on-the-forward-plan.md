@@ -169,8 +169,7 @@ consumer cannot get `int total = metronome.CountTicks(...)` back at all.
   leaks one handle per invocation, the same residual ADR-036 already names for every callback
   payload: a generated wrapper has `Dispose()` and no finalizer.
 - `isForwardLegacyRoute()` (`exports/ClassExports.kt:82`) still reports any lambda-parameter member
-  as legacy regardless of whether the plan actually owns it; harmless today (both routes reach a
-  compiling answer), tracked on the ROADMAP.
+  as legacy regardless of whether the plan actually owns it. Tracked on the ROADMAP.
 - Deliberately still refused by name, on both halves: `Char` on either the payload or the lambda-
   result axis (no by-value crossing convention and not a legal `[UnmanagedCallersOnly]` signature
   type); an object or enum lambda **result** (releasing a box the C# wrapper still owns is an
@@ -179,8 +178,8 @@ consumer cannot get `int total = metronome.CountTicks(...)` back at all.
   a callback parameter on a constructor, a data class's `copy()`, an enum-arm box constructor, or a
   value-class member.
 - No fixture exercises an unsigned-primitive or interface-typed callback payload on the plan; ten of
-  the classifier's forty-four `BridgeType` combinations for a callback payload are untested. Tracked
-  on the ROADMAP.
+  forty-four branches in `forward/ForwardCirCallbackProjection.kt` are cold. Tracked on the
+  ROADMAP.
 - The plan's delegate segment spelling (`Uint`, `Ulong`) does not match the interface-bridge route's
   own unsigned spelling (`UInt`, `ULong`); cosmetic, tracked on the ROADMAP.
 - A planned callback member on a generic class is untested.
@@ -190,8 +189,8 @@ consumer cannot get `int total = metronome.CountTicks(...)` back at all.
 - **ADR-036** is the mechanism this route still uses end to end: the delegate, the `GCHandle`
   context, and the ownership rule for a handle-passed payload are all unchanged, only the two
   return axes and the position matrix move onto the plan.
-- **ADR-062** is the plan itself; this is the first specialized-protocol input the plan admits as a
-  first-class `BridgeType` rather than a skip, following the precedent ADR-111/116/118/124 set for
-  moving a sealed arm's members onto the same plan one shape at a time.
+- **ADR-062** is the plan itself; this admits a per-call callback parameter as a `BridgeType`
+  rather than a skip, following the precedent ADR-111/116/118/124 set for moving a sealed arm's
+  members onto the same plan one shape at a time.
 - **ADR-080** established the two-slot fan-out for a single logical input (`HasValue` plus the
   value); `${name}Ptr`/`${name}UserData` is the same idea for a callback.

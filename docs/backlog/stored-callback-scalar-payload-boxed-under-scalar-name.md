@@ -1,7 +1,7 @@
-# The stored-callback route boxes a scalar payload under a scalar-shaped delegate name
+# The stored-callback route boxes a scalar payload under the `Object` delegate name
 
-**A stored `(Int) -> Unit` listener registers its delegate under a scalar-shaped name
-(`NugetIntVoidCallback`) while still boxing the payload as a handle (`IntPtr arg0Ptr`), read back
+**A stored `(Int) -> Unit` listener registers its delegate under the `Object` suffix
+(`NugetObjectVoidCallback(IntPtr arg0Ptr, IntPtr _)`) and boxes the payload as a handle, read back
 with `NugetMarshal.FromHandle<int>`.** Name and wire agree, so there is no collision or compile
 failure today; what remains is that a stored scalar payload pays for a `StableRef` box per
 invocation it does not need.
@@ -18,10 +18,11 @@ both compile clean; there is no `NugetIntVoidCallback` shape conflict on today's
 [ADR-036](../adr/036-reverse-interop-mechanism.md)'s 2026-09-13 amendment already says the same: "a
 primitive falls through to the `Object` suffix" (`036:515-519`).
 
-Closing this means moving the stored route onto the by-value predicate the per-call route and
-[ADR-160](../adr/160-callback-parameter-on-the-forward-plan.md) already use
-(`isByValueCallbackScalar`), which would let a stored scalar payload cross by value instead of
-through a `StableRef` box: a by-value optimisation, not a correctness fix. The trap to avoid:
+Closing this means giving the stored route the same by-value classification
+[ADR-160](../adr/160-callback-parameter-on-the-forward-plan.md)'s
+`ForwardBridgeTypeClassifier`/`BridgeType.Primitive` gives the per-call route's payload, which
+would let a stored scalar payload cross by value instead of through a `StableRef` box: a by-value
+optimisation, not a correctness fix. The trap to avoid:
 renaming `storedArgSuffix`'s output to the simple name without also moving the wire to by-value
 would create the very collision this item used to (incorrectly) describe as already present.
 
