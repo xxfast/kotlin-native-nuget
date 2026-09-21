@@ -1312,4 +1312,34 @@ class NugetKotlinBridgeGenerationTest {
       "_ => new TestLibrary.KotlinException(kotlinType, message, stackTrace, inner)",
     )
   }
+
+  @Test
+  fun `an init-only interface property gives the bridge an init accessor, a get-only one does not`() {
+    // `{ get; init; }` has NO setter slot (nothing writes it after construction), but the bridge
+    // still has to satisfy the interface: get-only is CS0535 ("does not implement 'I.P.init'") and a
+    // `set` accessor is CS8854 ("'set' cannot implement 'I.P.init'"). Only `init` compiles.
+    val iBadge = RirInterface(
+      name = "IBadge",
+      methods = emptyList(),
+      properties = listOf(
+        RirProperty(
+          name = "Label", type = RirStringType(nullable = false),
+          isReadOnly = true, isInitOnly = true,
+        ),
+        // The control: read-only because there is no setter at all. This one stays get-only.
+        RirProperty(name = "Serial", type = RirPrimitiveType("int"), isReadOnly = true),
+      ),
+    )
+    val file: GeneratedFile = generateCSharpShims(rirOf(iBadge), "TestLibraryNative")
+      .single { it.relativePath == "IBadgeRegistration.cs" }
+
+    assertContains(file.content, "public string Label")
+    assertContains(file.content, "                init")
+    assertFalse(
+      file.content.contains("Label_Set_Thunk"),
+      "an init-only member has no setter slot, so no setter thunk may be generated",
+    )
+    // The get-only sibling is untouched: exactly one `init` accessor in the whole bridge.
+    assertEquals(1, Regex("(?m)^\\s+init$").findAll(file.content).count())
+  }
 }

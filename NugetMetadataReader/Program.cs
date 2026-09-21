@@ -1818,6 +1818,33 @@ internal static class AssemblyExtractor
                         & System.Reflection.MethodAttributes.MemberAccessMask)
                         != System.Reflection.MethodAttributes.Public;
 
+                // An `init` accessor reaches metadata as an ORDINARY public setter whose return
+                // type carries `modreq(System.Runtime.CompilerServices.IsExternalInit)`. Nothing
+                // above looks at the setter's signature, so `{ get; init; }` read back as writable
+                // and the generated C# thunk assigned it (`receiver.Motto = ...`), which is CS8852:
+                // an init-only property is assignable only in an object initializer. Treat it as
+                // read-only (the faithful Kotlin surface is a `val`) and record that a setter did
+                // exist, which the ADR-085 interface bridge needs.
+                //
+                // The modifier sits on the SETTER METHOD's return type, not on the property
+                // signature TryDecodePropertyType decodes, and the TYPED decoder throws modifiers
+                // away (GetModifiedType returns unmodifiedType) — so this uses the string decoder,
+                // which renders `modreq(<full name>)<type>`. Spiked on both a net8.0 assembly (the
+                // modifier is a BCL TypeRef) and a netstandard2.0 assembly polyfilling
+                // IsExternalInit itself (an in-assembly TypeDef): the spelling is identical, so the
+                // prefix match is correct for both and no handle kind is inspected.
+                bool isInitOnly = false;
+                if (!isReadOnly)
+                {
+                    var setterReturn = mr.GetMethodDefinition(accessors.Setter)
+                        .DecodeSignature(new CanonicalSignatureDecoder(), genericContext: null)
+                        .ReturnType;
+                    isInitOnly = setterReturn.StartsWith(
+                        "modreq(System.Runtime.CompilerServices.IsExternalInit)",
+                        StringComparison.Ordinal);
+                    if (isInitOnly) isReadOnly = true;
+                }
+
                 // ADR-053: a property carries exactly one NullableAttribute (on the Property row
                 // itself), falling back to its declaring TypeDef's NullableContextAttribute — "a
                 // Property cannot carry a context" (no method tier), hence `methodHandle: default`.
@@ -1850,7 +1877,8 @@ internal static class AssemblyExtractor
                                 "make its null-safety explicit."));
                     }
 
-                    properties.Add(new RirProperty(propName, finalPropTypeRef, isReadOnly, propIsStatic));
+                    properties.Add(new RirProperty(
+                        propName, finalPropTypeRef, isReadOnly, propIsStatic, isInitOnly));
                 }
             }
             else if (propDiagnostic is not null)
@@ -3987,18 +4015,30 @@ internal sealed class RirMethod
 
 internal sealed class RirProperty
 {
-    public RirProperty(string name, RirTypeRef type, bool isReadOnly, bool isStatic)
+    public RirProperty(
+        string name, RirTypeRef type, bool isReadOnly, bool isStatic, bool isInitOnly = false)
     {
         Name = name;
         Type = type;
         IsReadOnly = isReadOnly;
         IsStatic = isStatic;
+        IsInitOnly = isInitOnly;
     }
 
     public string Name { get; }
     public RirTypeRef Type { get; }
     public bool IsReadOnly { get; }
     public bool IsStatic { get; }
+
+    /// <summary>
+    /// The setter exists but is <c>init</c>-only (its return type carries
+    /// <c>modreq(System.Runtime.CompilerServices.IsExternalInit)</c>), so the property is read-only
+    /// after construction: <see cref="IsReadOnly"/> is also true. The flag is what lets the shim
+    /// generator tell "init" apart from "no setter at all", which the ADR-085 Kotlin-implementable
+    /// bridge needs: a bridge property with <c>set</c> is CS8854 and a get-only one is CS0535, so
+    /// only an <c>init</c> accessor compiles.
+    /// </summary>
+    public bool IsInitOnly { get; }
 }
 
 internal sealed class RirParameter

@@ -3367,10 +3367,23 @@ private fun bridgePropertyMember(
       |                }
     """.trimMargin()
   }
+  // An `init`-only interface member has no setter slot (nothing can write it after construction),
+  // but the bridge still has to SATISFY `{ get; init; }`: a get-only property is CS0535 ("does not
+  // implement interface member 'I.P.init'") and a `set` accessor is CS8854 ("'set' cannot implement
+  // 'I.P.init'"). Only an `init` accessor compiles. Its body is unreachable: the bridge type is
+  // private and is only ever constructed by Create{Iface}Bridge, never through an object
+  // initializer, and Kotlin's side of an init-only member is a plain `val`.
+  val initBlock: String = if (setter != null || !getter.property.isInitOnly) "" else "\n" + """
+    |                init
+    |                {
+    |                    // Unreachable: this bridge is never built through an object initializer.
+    |                    // The accessor exists so the bridge satisfies `$type ${getter.property.name} { get; init; }`.
+    |                }
+  """.trimMargin()
   return """
     |            public $type ${getter.property.name}
     |            {
-    |$getBlock$setBlock
+    |$getBlock$setBlock$initBlock
     |            }
   """.trimMargin()
 }

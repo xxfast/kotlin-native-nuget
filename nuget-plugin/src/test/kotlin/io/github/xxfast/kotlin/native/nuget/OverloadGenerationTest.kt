@@ -537,6 +537,84 @@ class OverloadGenerationTest {
   private val qualifiedRightRead =
     "method|static|Acme.Api.Reader|Read|(Acme.Right.Token)|System.Void"
 
+  // ADR-057's structured producer (the enum constant existed, nothing produced it): each of these
+  // used to emit REDECLARED Kotlin with no error and no diagnostic, and the one case that did fail
+  // threw a bare IllegalArgumentException with no kind and no package id.
+
+  @Test
+  fun `two case-folded properties fail generation with the structured kind and the package id`() {
+    val rir: RirFile = parseReverseIr(
+      """
+      {"assemblies":[{
+        "packageId":"Acme.Api","assemblyName":"Acme.Api",
+        "namespaces":[{"name":"Acme.Api","types":[{
+          "kind":"class","name":"Props",
+          "properties":[
+            {"name":"Name","type":{"kind":"string","nullable":false},"isReadOnly":false},
+            {"name":"name","type":{"kind":"string","nullable":false},"isReadOnly":false}
+          ]
+        }]}]
+      }]}
+      """.trimIndent()
+    )
+
+    val error: IllegalArgumentException = assertFailsWith { generateKotlinStubs(rir) }
+    assertContains(error.message.orEmpty(), "error_kotlin_signature_collision")
+    assertContains(error.message.orEmpty(), "[nuget:Acme.Api]")
+    assertContains(error.message.orEmpty(), "var name: String")
+  }
+
+  @Test
+  fun `two case-folded interface methods fail generation with the structured kind`() {
+    val rir: RirFile = parseReverseIr(
+      """
+      {"assemblies":[{
+        "packageId":"Acme.Api","assemblyName":"Acme.Api",
+        "namespaces":[{"name":"Acme.Api","types":[{
+          "kind":"interface","name":"IMeths",
+          "methods":[
+            {"name":"Read","managedSignature":"method|instance|Acme.Api.IMeths|Read|()|System.Int32",
+             "returnType":{"kind":"primitive","name":"int"},"parameters":[]},
+            {"name":"read","managedSignature":"method|instance|Acme.Api.IMeths|read|()|System.Int32",
+             "returnType":{"kind":"primitive","name":"int"},"parameters":[]}
+          ]
+        }]}]
+      }]}
+      """.trimIndent()
+    )
+
+    val error: IllegalArgumentException = assertFailsWith { generateKotlinStubs(rir) }
+    assertContains(error.message.orEmpty(), "error_kotlin_signature_collision")
+    assertContains(error.message.orEmpty(), "fun read()")
+  }
+
+  @Test
+  fun `a sync method colliding with an Async sibling's stripped name is diagnosed`() {
+    // The keep rule compares the C# name EXACTLY (`cls.methods.any { it.name == stripped }`), so
+    // `read` beside `ReadAsync` slipped through the old camelCase key and emitted `suspend fun
+    // read(): Int` beside `fun read(): Int`. Keying on the EMITTED name (kotlinMemberName) sees it.
+    val rir: RirFile = parseReverseIr(
+      """
+      {"assemblies":[{
+        "packageId":"Acme.Api","assemblyName":"Acme.Api",
+        "namespaces":[{"name":"Acme.Api","types":[{
+          "kind":"class","name":"A",
+          "methods":[
+            {"name":"read","managedSignature":"method|instance|Acme.Api.A|read|()|System.Int32",
+             "returnType":{"kind":"primitive","name":"int"},"parameters":[]},
+            {"name":"ReadAsync","asyncKind":"task",
+             "managedSignature":"method|instance|Acme.Api.A|ReadAsync|()|System.Int32",
+             "returnType":{"kind":"primitive","name":"int"},"parameters":[]}
+          ]
+        }]}]
+      }]}
+      """.trimIndent()
+    )
+
+    val error: IllegalArgumentException = assertFailsWith { generateKotlinStubs(rir) }
+    assertContains(error.message.orEmpty(), "error_kotlin_signature_collision")
+  }
+
   private fun assertInOrder(content: String, values: List<String>) {
     val positions: List<Int> = values.map { value -> content.indexOf(value) }
     assertTrue(positions.all { it >= 0 }, "missing ordered bridge ids in generated content")
