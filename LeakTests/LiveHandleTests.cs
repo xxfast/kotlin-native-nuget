@@ -1707,7 +1707,7 @@ public class LiveHandleTests
     // Row 14. Per-call lambda, `String` payload, the throw uncaught in Kotlin. Fifty crossings, each
     // minting one payload handle that the callback never reads because it throws first. Oreo objects
     // to being described, fifty times.
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: a throwing callback fails fast the whole test host, so the live-handle count is never read. Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact]
     public void PerCallLambdaThrow_ReturnsToBaseline()
     {
         AssertNoLeak(() =>
@@ -1724,7 +1724,7 @@ public class LiveHandleTests
     // release wired only into the error arm passes 14 and leaks here. The error holder the channel
     // mints per throw has to be gone too, which is what makes a +1-per-iteration delta here readable
     // as "the managed-error holder is never disposed".
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: a throwing callback fails fast the whole test host, so the live-handle count is never read. Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact]
     public void PerCallLambdaThrowCaughtInKotlin_ReturnsToBaseline()
     {
         AssertNoLeak(() =>
@@ -1739,7 +1739,7 @@ public class LiveHandleTests
     // a fix that frees the subscription on the error path would show as a crash rather than a leak,
     // and a payload handle abandoned per emission shows as a per-iteration delta. Mylo is told about
     // dinner fifty times and refuses every time.
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: a throwing callback fails fast the whole test host, so the live-handle count is never read. Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact]
     public void StoredCallbackThrow_ReturnsToBaseline()
     {
         AssertNoLeak(() =>
@@ -1754,7 +1754,7 @@ public class LiveHandleTests
     // whose result is a `string` the Kotlin side would otherwise wrap. The throwing slot has to
     // release the payload handle AND leave the bridge state intact for the next call, so the row
     // makes a second, non-throwing call inside the same crossing.
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: a throwing callback fails fast the whole test host, so the live-handle count is never read. Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact]
     public void InterfaceBridgeSlotThrow_ReturnsToBaseline()
     {
         AssertNoLeak(() =>

@@ -44,7 +44,7 @@ public class CallbackFaultTests
     /// export to the C# caller as a catchable exception, and the process has to still be usable
     /// afterwards: the second <c>DescribeWith</c> is the liveness half and is not decoration.
     /// </summary>
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: this cell fails fast the whole test host (the thunk catch-all is Environment.FailFast). Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact]
     public void PerCallLambdaThrow_ReachesTheCSharpCaller_AndTheHostSurvives()
     {
         using var faults = new CallbackFaults();
@@ -62,7 +62,7 @@ public class CallbackFaultTests
     /// rethrown (<c>ExceptionDispatchInfo</c>), not a <c>KotlinException</c> wrapper. This is the
     /// stronger form of the cell above and the one a C# consumer actually writes.
     /// </summary>
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: this cell fails fast the whole test host (the thunk catch-all is Environment.FailFast). Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact]
     public void PerCallLambdaThrow_RethrowsTheOriginalManagedException()
     {
         using var faults = new CallbackFaults();
@@ -78,7 +78,7 @@ public class CallbackFaultTests
     /// The report has to name the managed-exception type, which is how this cell tells "Kotlin saw
     /// the C# exception" apart from "Kotlin saw some unrelated bridge failure".
     /// </summary>
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: this cell fails fast the whole test host (the thunk catch-all is Environment.FailFast). Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact]
     public void PerCallLambdaThrow_StringPayload_IsCatchableInKotlin()
     {
         using var faults = new CallbackFaults();
@@ -94,7 +94,7 @@ public class CallbackFaultTests
     /// The same, with an <c>Int</c> payload and an <c>Int</c> lambda result: both cross by value, so
     /// this cell stays red against a fix that only reached the handle-passed payload shape.
     /// </summary>
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: this cell fails fast the whole test host (the thunk catch-all is Environment.FailFast). Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact]
     public void PerCallLambdaThrow_IntPayload_IsCatchableInKotlin()
     {
         using var faults = new CallbackFaults();
@@ -114,7 +114,7 @@ public class CallbackFaultTests
     /// Kotlin author's wrapper, so the rethrow is only allowed when the escaping Kotlin error is the
     /// managed-exception type. A fix that rethrows a stashed original unconditionally fails here.
     /// </summary>
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: this cell fails fast the whole test host (the thunk catch-all is Environment.FailFast). Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact]
     public void PerCallLambdaThrow_KotlinWrapper_IsNotReplacedByTheOriginalException()
     {
         using var faults = new CallbackFaults();
@@ -138,7 +138,7 @@ public class CallbackFaultTests
     /// invocation (<c>emitSafely</c>, a <c>runCatching</c> per listener) must be able to count the
     /// failure, and the unguarded one (<c>Emit</c>) must hand it to the C# caller of <c>Emit</c>.
     /// </summary>
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: this cell fails fast the whole test host (the thunk catch-all is Environment.FailFast). Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact]
     public void StoredListenerThrow_StringPayload_SurfacesAtKotlinsInvocationSite()
     {
         using var faults = new CallbackFaults();
@@ -155,7 +155,7 @@ public class CallbackFaultTests
     /// The <c>Int</c>-payload stored listener: same route, by-value payload, so it is a separate
     /// cell from the <c>String</c> one for the same reason the per-call pair is.
     /// </summary>
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: this cell fails fast the whole test host (the thunk catch-all is Environment.FailFast). Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact]
     public void StoredListenerThrow_IntPayload_SurfacesAtKotlinsInvocationSite()
     {
         using var faults = new CallbackFaults();
@@ -165,10 +165,14 @@ public class CallbackFaultTests
         var ex = Assert.ThrowsAny<Exception>(() => faults.EmitTick(3));
         Assert.Contains("Mylo lost count", ex.Message);
 
-        // Liveness: a non-throwing listener on the same object still works afterwards.
+        // Liveness: a non-throwing listener on the same object still works afterwards. `EmitSafely`
+        // counts the listeners that FAILED, so the expected count is zero here, not one: the only
+        // `String` listener subscribed is the polite one, and the throwing listener is on the `Int`
+        // side. (Written as `1` while the cell was skipped, so the first run that could see it is
+        // the one that landed the error channel.)
         var seen = new List<string>();
         using IDisposable ok = faults.AddFaultListener(seen.Add);
-        Assert.Equal(1, faults.EmitSafely("breakfast"));
+        Assert.Equal(0, faults.EmitSafely("breakfast"));
         Assert.Equal(new List<string> { "breakfast" }, seen);
     }
 
@@ -181,7 +185,7 @@ public class CallbackFaultTests
     /// <c>string</c>, so there is no default it could return: the failure must become an exception
     /// at the Kotlin call site rather than a FailFast or a null the Kotlin side dereferences.
     /// </summary>
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: this cell fails fast the whole test host (the thunk catch-all is Environment.FailFast). Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact]
     public void InterfaceMemberThrow_StringResult_ReachesTheCSharpCaller()
     {
         using var faults = new CallbackFaults();
@@ -192,7 +196,7 @@ public class CallbackFaultTests
     }
 
     /// <summary>The <c>Int</c>-returning slot on the same interface: by-value result.</summary>
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: this cell fails fast the whole test host (the thunk catch-all is Environment.FailFast). Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact]
     public void InterfaceMemberThrow_IntResult_ReachesTheCSharpCaller()
     {
         using var faults = new CallbackFaults();
@@ -203,7 +207,7 @@ public class CallbackFaultTests
     }
 
     /// <summary>The interface-slot throw, caught on the Kotlin side and reported.</summary>
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: this cell fails fast the whole test host (the thunk catch-all is Environment.FailFast). Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact]
     public void InterfaceMemberThrow_IsCatchableInKotlin()
     {
         using var faults = new CallbackFaults();
@@ -220,7 +224,7 @@ public class CallbackFaultTests
     /// The ADR-039 add/remove listener pair, whose thunks come from the same emitter but whose
     /// GCHandles are owned by the subscription. One uncaught cell covers that fourth route.
     /// </summary>
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: this cell fails fast the whole test host (the thunk catch-all is Environment.FailFast). Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact]
     public void ListenerBridgeThrow_ReachesTheCSharpCaller()
     {
         using var source = new CatEventSource("Oreo");
@@ -277,7 +281,7 @@ public class CallbackFaultTests
     /// <c>void</c> listener the invocation is DROPPED. Today the freed slot is reused by the next
     /// allocation (memo spike (b)), so this either fails fast or silently runs a foreign delegate.
     /// </summary>
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: this cell fails fast the whole test host (the thunk catch-all is Environment.FailFast). Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact(Skip = "ADR-161 part C (the late-callback key table) is not implemented yet: the ctx is still a GCHandle the subscription frees, so a late invocation reads a freed handle whose slot the next allocation reuses. Part B (the error channel) has landed. Remove the Skip in the PR that lands the never-reused key table.")]
     public void LateInvocationAfterDispose_VoidListener_IsDropped()
     {
         using var faults = new CallbackFaults();
@@ -303,7 +307,7 @@ public class CallbackFaultTests
     /// returned and its <c>GCHandle</c> was freed. There is no value to invent, so Kotlin must see
     /// an <c>ObjectDisposedException</c> reported through the error channel and be able to catch it.
     /// </summary>
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: this cell fails fast the whole test host (the thunk catch-all is Environment.FailFast). Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact(Skip = "ADR-161 part C (the late-callback key table) is not implemented yet: the ctx is still a GCHandle the subscription frees, so a late invocation reads a freed handle whose slot the next allocation reuses. Part B (the error channel) has landed. Remove the Skip in the PR that lands the never-reused key table.")]
     public void LateInvocationAfterCallReturned_ValueReturning_ReportsObjectDisposed()
     {
         using var faults = new CallbackFaults();
@@ -316,7 +320,7 @@ public class CallbackFaultTests
     }
 
     /// <summary>Uncaught, the same late call: the C# caller gets the disposal error, not a crash.</summary>
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: this cell fails fast the whole test host (the thunk catch-all is Environment.FailFast). Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact(Skip = "ADR-161 part C (the late-callback key table) is not implemented yet: the ctx is still a GCHandle the subscription frees, so a late invocation reads a freed handle whose slot the next allocation reuses. Part B (the error channel) has landed. Remove the Skip in the PR that lands the never-reused key table.")]
     public void LateInvocationAfterCallReturned_Uncaught_ReachesTheCSharpCaller()
     {
         using var faults = new CallbackFaults();
@@ -333,7 +337,7 @@ public class CallbackFaultTests
     /// only for the interleavings it happened to hit), which is why the two cells above exist; it is
     /// still the only cell that exercises a genuinely concurrent free.
     /// </summary>
-    [Fact(Skip = "ADR-161 parts B and C are not implemented yet: this cell fails fast the whole test host (the thunk catch-all is Environment.FailFast). Remove the Skip in the PR that lands the forward callback error channel.")]
+    [Fact(Skip = "ADR-161 part C (the late-callback key table) is not implemented yet: the ctx is still a GCHandle the subscription frees, so a late invocation reads a freed handle whose slot the next allocation reuses. Part B (the error channel) has landed. Remove the Skip in the PR that lands the never-reused key table.")]
     public async Task DisposeRacingEmit_NeverKillsTheHost()
     {
         using var faults = new CallbackFaults();
