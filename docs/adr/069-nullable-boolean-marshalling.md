@@ -299,10 +299,13 @@ nullable fan-out cannot silently drop `Boolean` back out.
   must be inverted (from "asserts the skip" to "asserts the binding") rather than deleted.
 - The top-level `packNuget` crash is removed. It was never reachable in this repository because no
   fixture had a top-level `fun f(): Boolean?`; it *was* reachable by any consumer.
-- `Char?` stays deferred. ADR-061 bracketed `Boolean?` and `Char?` together, but they are not the
-  same problem: Kotlin `Char` is 2-byte UTF-16 against C#'s default 1-byte ANSI `char` marshalling
-  (ADR-049's second correction), so it needs `UShortVar` + `ushort` narrowing, not `MarshalAs(I1)`.
-  Same-shaped follow-up, different wire type, out of scope here.
+- `Char?` stayed deferred here. ADR-061 bracketed `Boolean?` and `Char?` together, but they are not
+  the same problem: Kotlin `Char` is 2-byte UTF-16 against C#'s default 1-byte ANSI `char`
+  marshalling (ADR-049's second correction), so it needs `UShortVar` + `ushort` narrowing, not
+  `MarshalAs(I1)`. Same-shaped follow-up, different wire type, out of scope here. **Shipped
+  2026-09-22** in [ADR-098's amendment](098-narrow-primitive-and-char-collection-components.md):
+  `Char?` binds at every ordinary position via a `ushort`-shaped `valueOut`/has-value pair, the
+  `UShortVar` route this note anticipated.
 - **Not changed:** the parameter path (no `MarshalAs`, correct by little-endian low-byte read); the
   two-call/single-call split between the top-level and method return positions; the legacy
   `CirFunctionTranslator` nullable route (dead).

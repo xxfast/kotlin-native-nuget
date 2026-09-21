@@ -276,6 +276,20 @@ value slot. ADR-011 eager-copy semantics are unchanged.
   still binds (as today); with the read fix, an actual null key now surfaces as a C#
   `ArgumentNullException` at `result[key] = value` instead of a Kotlin-side NPE inside the
   export. Whether to narrow that result gate is left with the narrowing family.
+
+  **Amendment (2026-09-22): the result gate is narrowed too, and for a stricter reason than
+  expected.** `NugetMarshal.ReadMap<TKey, TValue>` is declared `where TKey : notnull`, and the
+  generated-bindings build enables `<Nullable>enable</Nullable>` with warnings as errors, so a
+  `Map<K?, V>` return, property, or nested component was never a runtime `ArgumentNullException`
+  waiting to happen — it is `CS8714` at `packNuget` time, on every position that renders
+  `ReadMap<K?, V>`: a method/top-level return, a property getter, a nested component
+  (`List<Map<K?, V>>`), and the `suspend`/`Flow` legacy routes, which reach the same helper. A new
+  `ForwardPlanSkipReason.NULLABLE_MAP_KEY` reuses the input side's `COLLECTION` diagnostic kind but
+  reads `position` (`SKIPPED_UNSUPPORTED_INPUT` or `SKIPPED_UNSUPPORTED_RETURN`) since, unlike
+  `COLLECTION`, this reason fires on both sides of that split; the hint names the key's type, not
+  the whole collection, since a nullable **value** binds fine and an author reading "collection"
+  would look at the wrong slot. See [Collections: Collection component
+  types](../topics/collections.md#collection-component-types).
 - Deferred: nullable `Char`/narrow-primitive/bare-enum components (ride the sibling
   enum/narrow-primitive item and ADR-075's type-specialized-boxing reframing); nested-collection
   components (sibling item); `Instant` components (ADR-076 deferral); nullable map keys as a
@@ -287,7 +301,9 @@ value slot. ADR-011 eager-copy semantics are unchanged.
      read. Same `!!` family, different export family; out of scope.
   2. `nuget_func1_invoke`/`func2`/`func3`/`suspend_func1` unconditionally
      `arg0.asStableRef<Any>().get()`: a null lambda argument cannot cross the callback bridge.
-     Out of scope (lambda-parameter nullability is its own surface).
+     Out of scope (lambda-parameter nullability is its own surface). **Fixed 2026-09-22**: see
+     [ADR-012's amendment](012-lambda-function-type-mapping.md#amendment-2026-09-22-nullable-lambda-boundary),
+     which rides this ADR's in-band null pointer pattern for the `COpaquePointer?` invoke exports.
   3. A `Map<String?, Int>` return renders `Dictionary<string?, int>`, which violates
      `Dictionary`'s `TKey : notnull` constraint → CS8714 warning in the generated,
      `#nullable enable` file (inferred from C# rules, not compiled). Pre-existing.

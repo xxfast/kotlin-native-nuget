@@ -181,9 +181,11 @@ decoration: every branch this ADR adds is otherwise reachable only through the K
   stale-shim mismatch by design.
 - **Out of scope, split out:** `Char?` at a property position hits the *same* Direct-route crash
   (`hasValueFanOutInner` has no `Char` case and `addGetter`'s `Nullable` `when` has no `Char`
-  branch; verified by source reading, not runtime-reproduced). `Char?` stays deferred with
-  ADR-061/069's Char-width reasoning; it should at minimum get the Option-2 style named skip when
-  touched.
+  branch; verified by source reading, not runtime-reproduced). `Char?` stayed deferred with
+  ADR-061/069's Char-width reasoning. **Shipped 2026-09-22** in
+  [ADR-098's amendment](098-narrow-primitive-and-char-collection-components.md): `Char?` joins the
+  has-value fan-out at the property, the parameter, the member return and the top-level return, the
+  same crash class this ADR closed for bare `Nullable(Enum)`.
 - **Out of scope, split out:** `ForwardPlanSkipReason.NULLABLE` maps fixedly to
   `SKIPPED_UNSUPPORTED_RETURN` with a "nullable Boolean return" hint even when the offender is a
   parameter (verified by spike). Once this ADR lands the enum instances vanish, but any remaining

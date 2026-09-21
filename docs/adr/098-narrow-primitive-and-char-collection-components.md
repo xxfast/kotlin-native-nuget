@@ -439,14 +439,12 @@ Named explicitly, because nobody re-checks these after this document.
   non-ASCII call sites go from corrupt to correct. `ROADMAP.md:148` closes.
 - Six (part A) plus two (part B) new native exports, additive, with no contract-hash or
   registration-slot impact (see above).
-- **Not fixed, and must not be assumed fixed:** a bare `Char?` property/return still aborts
-  `packNuget` with no route (`ROADMAP.md:147`): `hasValueFanOutInner()` has no `Char` case. This ADR
-  gives that work its missing *wire* but not its has-value fan-out, which is
+- **Was not fixed here** (see the 2026-09-22 amendment above, which closes it): a bare `Char?`
+  property/return aborted `packNuget` with no route, since `hasValueFanOutInner()` had no `Char`
+  case. This ADR gave that work its missing *wire* but not its has-value fan-out, which is
   [ADR-079](079-nullable-primitive-enum-underlying-value-classes.md)'s template applied to `Char`.
-  `ROADMAP.md:146` should be re-scoped after this lands: the width question is answered
-  (`[MarshalAs(UnmanagedType.U2)]`, and the Kotlin side needs nothing), what remains is purely the
-  nullable fan-out. Note that `List<Char?>` **does** work after this ADR, via ADR-083's pointer-null
-  component slot; it is only the *ordinary* nullable position that stays open.
+  Note that `List<Char?>` **does** work since this ADR, via ADR-083's pointer-null
+  component slot; it was only the *ordinary* nullable position that stayed open until the amendment.
 - Deferred, unchanged: nested-collection components (`ROADMAP.md:137`), `Map<String?, Int>` returns
   (`:135`), the `Wrap<T>` per-element box leak (`:144`), and the two ADR-097 coverage gaps (`:138`),
   one of which this ADR narrows further, since `isWrappableComponent()` now admits every
@@ -459,3 +457,33 @@ Named explicitly, because nobody re-checks these after this document.
   Recorded as a new ROADMAP item, not fixed here, and explicitly not fixture-covered.
 - Part A and part B are independently landable in that order if the gate prefers two changes. Part B
   is the one carrying a behaviour change on shipped members.
+
+## Amendment (2026-09-22): the has-value fan-out, at every ordinary position {id="amendment-2026-09-22-char-nullable-fan-out"}
+
+`Char` is its own `BridgeType`, not a `PrimitiveKind`, so every `is BridgeType.Primitive` arm of the
+ADR-079/080 has-value fan-out missed it, and the consequence differed by position. At a **property**
+(constructor `var`, body `val`, or top-level `val`) the planner admitted `Nullable(Char)`, planned a
+`Direct` getter (no `Char` arm in `hasValueFanOutInner`), and the Kotlin emitter fell into
+`error("Forward property direct nullable getter is invalid ...")` — an uncaught processor exception
+that aborted generation for the **whole module**, not just the one property. At a parameter, a
+member return, and a top-level return, the callable planner already skipped named
+(`ForwardPlanSkipReason.NULLABLE`), but with a hint ("expose ... a separate has-value/value pair")
+that described exactly the wire this amendment now builds.
+
+`Char?` now binds at all four positions: the property getter/setter (class-level and top-level), the
+parameter, the member return, and the top-level return. A **by-value** slot (parameter, property
+setter) stays a `char` with the `[MarshalAs(UnmanagedType.U2)]` this ADR already established. The
+member return's **OUT slot** is a blittable `out ushort`, written through a `UShortVar`
+(kotlinx.cinterop has no `CharVar`) and cast back to `char` on the C# side — not
+`[MarshalAs(UnmanagedType.U2)] out char`, and never a bare `out char`: a bare `out char` marshals as
+one ANSI byte under the default `CharSet` and silently narrows every non-ASCII character (`'é'` to
+U+FFFD, `'한'` to a truncated low byte), verified by spike on JIT. The `ushort` slot reuses the same
+`valueOutTransferType()` path the bare-nullable-enum route already uses for its `Primitive(INT)`
+transfer, so it needs no new marshalling arm, and it is blittable under NativeAOT by construction
+(unlike the `MarshalAs` alternative, which is unverified there).
+
+The `NULLABLE` skip hint no longer recommends "a separate has-value/value pair", since that
+described the generator's own wire rather than anything an author could write; it now recommends
+exposing a non-nullable wrapper or splitting the member into a has-value/value pair of methods.
+
+See [Primitives and strings: Char](../topics/primitives-and-strings.md#char).

@@ -234,6 +234,31 @@ Support arities 0–3 initially (`() -> R` through `(T1, T2, T3) -> R`). Higher 
 
 Option 3 is tempting but fundamentally incompatible with deterministic resource management. Every other bridge type (`Cat`, `KotlinFunc`, collections) follows `IDisposable`. Leaking StableRefs behind a `Func` delegate breaks this contract and introduces non-deterministic cleanup that could exhaust Kotlin/Native's stable ref table under load.
 
+## Amendment (2026-09-22): a nullable type argument is spelled, and null crosses the boundary {id="amendment-2026-09-22-nullable-lambda-boundary"}
+
+The `KotlinFunc`/`KotlinAction` type arguments above were never nullability-aware: `csTypeArgument`
+read only the expanded type, never `isMarkedNullable`, so `(String?) -> Unit` and `(String) -> Unit`
+rendered identically as `KotlinAction<string>`, and `(Int?) -> Unit` rendered `KotlinAction<int>`,
+where `null` cannot even be written. Underneath the spelling, every leg that carried a `null` was an
+uncaught Kotlin `NullPointerException` inside a `@CName` export with no error slot — a null string
+argument, a `null` lambda result, or a bare `IntPtr.Zero` handle argument all terminated the host
+process rather than raising anything C# could catch.
+
+Both halves are fixed together, since fixing the spelling alone would just make the crash reachable
+by an honestly-typed caller. `csTypeArgument` now reads nullability the same two-sided way
+`ForwardBridgeTypeClassifier.classify` does, so `KotlinAction<string?>` and `KotlinFunc<int?, string>`
+are real, distinguishable types. The eight `nuget_func{N}_invoke`/`nuget_suspend_func{N}_invoke`
+exports take and return `COpaquePointer?` and ride the same in-band null pointer as any other
+handle-shaped wire (see [ADR-083](083-nullable-collection-components.md)); `Invoke`/`InvokeAsync`
+route every argument through `NugetMarshal.Wrap<T>(arg, out bool owned)` instead of a private,
+narrower `WrapArg<T>` copy, disposing the boxed argument on `owned` in a `finally` once the native
+call returns (never before — the suspend exports dereference the argument synchronously, ahead of
+`launchForCSharp`). The C ABI is unchanged: Kotlin/Native emits `void*` for both the nullable and
+non-nullable spelling, so no runtime version or contract-hash bump is owed for this change.
+Routing through `Wrap<T>`/`FromHandle<T>` also means `Invoke` now accepts every narrow primitive and
+`char` (ADR-098), not only the six kinds `WrapArg<T>` knew about, and closes a one-`StableRef`-per-
+argument-per-call leak `WrapArg<T>` never disposed.
+
 ## Consequences
 
 - New CIR types: `CirLambdaProperty`, `CirLambdaParameter` for lambda-typed declarations
