@@ -9,6 +9,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirCollectionKind
 import io.github.xxfast.kotlin.native.nuget.rir.RirCollectionType
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
+import io.github.xxfast.kotlin.native.nuget.rir.RirDelegateType
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnostic
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnum
@@ -833,6 +834,9 @@ private fun genericAwareKotlinType(type: RirTypeRef): String = when (type) {
 // v1 vocabulary fails fast (the reader is responsible for never emitting such an instantiation as
 // "discovered" in the first place; reaching here means that contract was violated).
 internal fun instantiationArgTag(type: RirTypeRef): String = when (type) {
+  // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+  // member with a delegate anywhere in its signature reaches a Kotlin renderer.
+  is RirDelegateType -> error("[nuget] a delegate type must not reach the Kotlin renderer")
   is RirPrimitiveType -> kotlinType(type)
   is RirStringType -> (if (type.nullable) "Nullable" else "") + "String"
   is RirObjectHandleType -> (if (type.nullable) "Nullable" else "") + type.name
@@ -2427,6 +2431,9 @@ private fun buildStructStubMethod(
   val invokeArgsBase: List<String> = receiverArgs + paramArgs
 
   return when (val retType: RirTypeRef = method.returnType) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature reaches a Kotlin renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the Kotlin renderer")
     is RirVoidType -> {
       val invokeArgs: String = invokeArgsBase.joinToString(", ")
       val invokeCall: String =
@@ -2553,6 +2560,9 @@ private fun buildStructStubProperty(
     struct.components.any { typeContains(it.type, structs, ::isStringRef) }
 
   val getterBlock: String = when (val type: RirTypeRef = property.type) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature reaches a Kotlin renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the Kotlin renderer")
     is RirVoidType -> error("[nuget] a property cannot have void type")
     is RirStringType -> {
       val invokeArgs: String = receiverArgs.joinToString(", ")
@@ -2791,6 +2801,9 @@ private fun collectionWrite(type: RirCollectionType, name: String): String {
 }
 
 private fun kotlinType(type: RirTypeRef): String = when (type) {
+  // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+  // member with a delegate anywhere in its signature reaches a Kotlin renderer.
+  is RirDelegateType -> error("[nuget] a delegate type must not reach the Kotlin renderer")
   is RirVoidType -> "Unit"
   is RirStringType -> "String"
   is RirEnumType -> type.name
@@ -2897,6 +2910,9 @@ private fun qualifiedTypeNames(
 }
 
 private fun cfnType(type: RirTypeRef): String = when (type) {
+  // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+  // member with a delegate anywhere in its signature reaches a Kotlin renderer.
+  is RirDelegateType -> error("[nuget] a delegate type must not reach the Kotlin renderer")
   is RirVoidType -> "Unit"
   is RirStringType -> "COpaquePointer?"
   is RirEnumType -> "Int"
@@ -2946,6 +2962,9 @@ private fun cfnType(type: RirTypeRef): String = when (type) {
 // ADR-056: the kotlinx.cinterop CVariable subtype an out-pointer component allocates via
 // `alloc<...>()`, per the wire table (component type -> Kotlin CFunction out-ptr).
 private fun cVarType(type: RirTypeRef): String = when (type) {
+  // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+  // member with a delegate anywhere in its signature reaches a Kotlin renderer.
+  is RirDelegateType -> error("[nuget] a delegate type must not reach the Kotlin renderer")
   is RirPrimitiveType -> when (type.name) {
     "bool" -> "UByteVar"
     "byte" -> "UByteVar"
@@ -2993,6 +3012,9 @@ private data class ComponentRead(val statements: List<String>, val expression: S
 private fun componentRead(type: RirTypeRef, arg: AbiArg): ComponentRead {
   val raw = "${arg.name}.value"
   return when (type) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature reaches a Kotlin renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the Kotlin renderer")
     is RirPrimitiveType -> when (type.name) {
       // UByteVar.value is UByte (0 or 1) — see cVarType: there is no BooleanVar in
       // kotlinx.cinterop, so the out-pointer slot is UByte and must be narrowed back to Boolean
@@ -4249,6 +4271,9 @@ private fun buildStubMethod(
   // so the caller can shift the whole block to its actual embedding depth with a single
   // String.prependIndent() call, rather than baking one specific nesting depth into this function.
   val rendered: String = when (val retType = method.returnType) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature reaches a Kotlin renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the Kotlin renderer")
     is RirVoidType -> """
       |$fnKeyword $name($params)$retSuffix {
       |$prelude
@@ -4525,6 +4550,9 @@ private fun buildStubProperty(
   // so it can be shifted under the property declaration with a single String.prependIndent() call,
   // the same composition buildStubMethod above uses for its own fun blocks.
   val getterBlock: String = when (val type = property.type) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature reaches a Kotlin renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the Kotlin renderer")
     is RirVoidType -> error("[nuget] a property cannot have void type")
 
     // ADR-056: "property getter -> as a return (out-pointers)" (Decision, wire-format table) —
@@ -6088,6 +6116,9 @@ private fun interfaceHandleReturnBlock(
   val nullMsg = "$memberQualifiedName returned null, expected a non-null string pointer"
   val nonNullHandleMsg = "$memberQualifiedName returned null, but the C# API annotates it non-null."
   return when (returnType) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature reaches a Kotlin renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the Kotlin renderer")
     is RirVoidType -> """
       |$signature {
       |  val fn = requireNotNull($fnVar) {

@@ -359,6 +359,32 @@ data class RirCollectionType(
   val nullable: Boolean = false,
 ) : RirTypeRef
 
+// ADR-158: a C# delegate in a signature (`Func<int,int>`, `Action<string?>`, `Predicate<T>`, a
+// package-declared `delegate`), which binds as a Kotlin function type. First-class rather than
+// folded into [RirGenericInstanceType] because the non-generic shapes (`System.Action`, a custom
+// `delegate int Transform(int)`) have no type arguments at all, and because the events design needs
+// a delegate type ref it can point an `add_`/`remove_` pair at.
+//
+// [definition] is the CLR full name (`System.Func`2`, `Test.Workshop.Transform`): the C# shim has
+// to spell the DECLARED delegate type when it constructs the instance, for the same
+// overload-resolution reason ADR-155 keeps a collection's definition.
+// [typeArguments] spells the closed C# type and is empty for a non-generic delegate.
+// [parameters]/[returnType] are the `Invoke` signature AFTER type-argument substitution and AFTER
+// nullability has been applied to [typeArguments]: the reader derives them last, because a
+// generator reads these and not the arguments, so deriving them first binds `Action<string?>` as
+// `(String) -> Unit` with no diagnostic anywhere (ADR-158, finding 7a trap 2).
+// [nullable] is this delegate REFERENCE's own annotation (`Action? onDone`, a nullable Kotlin
+// function type), independent of its arguments' (`Action<string?>`).
+@Serializable
+@SerialName("delegate")
+data class RirDelegateType(
+  val definition: String,
+  val typeArguments: List<RirTypeRef> = emptyList(),
+  val parameters: List<RirTypeRef> = emptyList(),
+  val returnType: RirTypeRef = RirVoidType,
+  val nullable: Boolean = false,
+) : RirTypeRef
+
 @Serializable
 data class RirDiagnostic(
   val kind: RirDiagnosticKind,

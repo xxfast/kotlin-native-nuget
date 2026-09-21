@@ -659,6 +659,9 @@ val RirTypeRef.isNullable: Boolean
     // ADR-155 / ADR-053 failure class, fourth instance: `IReadOnlyList<string>?` is a nullable
     // COLLECTION (IntPtr.Zero on the wire), independent of its elements' own nullability.
     is RirCollectionType -> nullable
+    // ADR-158: a nullable delegate reference (`Action? onDone`) becomes a nullable Kotlin function
+    // type, so the flag is real here even though nothing binds a delegate yet.
+    is RirDelegateType -> nullable
     is RirVoidType, is RirPrimitiveType, is RirEnumType, is RirStructType,
     is RirTypeParameterType,
       -> false
@@ -690,6 +693,13 @@ private fun RirTypeRef.describe(): String = when (this) {
     "${collection.name.lowercase()}<${
       typeArguments.joinToString(",") { it.describe() + if (it.isNullable) "?" else "" }
     }>"
+
+  // ADR-158: the Invoke shape, not just the CLR name: `Func<int,int>` and `Func<int,string>` must
+  // never describe() identically, for the same contractHash reason the generic arm above records.
+  is RirDelegateType ->
+    "$definition(${
+      parameters.joinToString(",") { it.describe() + if (it.isNullable) "?" else "" }
+    })->${returnType.describe()}${if (returnType.isNullable) "?" else ""}"
 
   is RirTypeParameterType -> name
 }
@@ -1101,6 +1111,11 @@ private fun isV1Type(
       boundGenericClassDefinitions[RirTypeKey(type.namespace, type.name)]
     definition != null && definition.instantiations.any { it.typeArguments == type.typeArguments }
   }
+  // ADR-158, first half: the RIR can now CARRY a delegate, but nothing generates the one-slot
+  // Kotlin bridge that would let one cross, so the shared filter refuses it. Fail-closed in the
+  // same shape as the type-parameter arm below: admitting it here would emit a thunk parameter
+  // with no minting code on the Kotlin side.
+  is RirDelegateType -> false
   // A bare type parameter reference can only ever appear inside a generic type's OWN member
   // signatures, which never reach this shared non-generic filter (Decision 3: the generic path is
   // routed BEFORE this one). Fail-closed.
@@ -1134,7 +1149,10 @@ private fun isCollectionElement(
   is RirEnumType -> true
   is RirObjectHandleType -> RirTypeKey(type.namespace, type.name) in boundHandleTypes
   is RirInterfaceType -> RirTypeKey(type.namespace, type.name) in boundInterfaceTypes
+  // ADR-158: a delegate ELEMENT (`List<Func<int,int>>`) is out for the same reason a nested
+  // collection is: one slot cannot carry a minted bridge handle plus its lifetime.
   is RirVoidType, is RirStructType, is RirCollectionType, is RirGenericInstanceType,
+  is RirDelegateType,
   is RirTypeParameterType,
     -> false
 }
@@ -1443,8 +1461,10 @@ private fun isKotlinBridgeSlotType(
   is RirInterfaceType -> RirTypeKey(type.namespace, type.name) in boundInterfaceTypes
   // ADR-155: a collection-typed slot on a Kotlin-implemented C# interface is Phase 13, deferred:
   // the slot inverts the direction (Kotlin allocates the buffer C# frees).
+  // ADR-158: a delegate INSIDE a slot (a Kotlin-implemented interface member that itself takes a
+  // C# delegate) is deferred: the slot would have to mint a bridge from inside a bridge.
   is RirStructType, is RirGenericInstanceType, is RirTypeParameterType,
-  is RirCollectionType,
+  is RirCollectionType, is RirDelegateType,
     -> false
 }
 

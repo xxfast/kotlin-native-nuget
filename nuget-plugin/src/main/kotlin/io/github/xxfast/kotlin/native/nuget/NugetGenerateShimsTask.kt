@@ -9,6 +9,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirCollectionKind
 import io.github.xxfast.kotlin.native.nuget.rir.RirCollectionType
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
+import io.github.xxfast.kotlin.native.nuget.rir.RirDelegateType
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
 import io.github.xxfast.kotlin.native.nuget.rir.RirGenericInstanceType
@@ -267,6 +268,9 @@ fun generateCSharpShims(
 // "two non-obvious blittability corrections"); every other primitive crosses directly.
 // ADR-051: handles also cross as IntPtr (GCHandle.ToIntPtr).
 private fun csAbiType(type: RirTypeRef): String = when (type) {
+  // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+  // member with a delegate anywhere in its signature is ever handed to a shim renderer.
+  is RirDelegateType -> error("[nuget] a delegate type must not reach the C# shim renderer")
   is RirVoidType -> "void"
   is RirStringType -> "IntPtr"
   is RirObjectHandleType -> "IntPtr"
@@ -311,6 +315,9 @@ private fun csAbiType(type: RirTypeRef): String = when (type) {
 // The real, natural C# type for the actual method call/return (as opposed to the ABI-level type
 // that crosses [UnmanagedCallersOnly] — see csAbiType above).
 private fun csNativeType(type: RirTypeRef): String = when (type) {
+  // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+  // member with a delegate anywhere in its signature is ever handed to a shim renderer.
+  is RirDelegateType -> error("[nuget] a delegate type must not reach the C# shim renderer")
   is RirVoidType -> "void"
   is RirStringType -> "string"
   // ADR-051: the natural C# type for a handle is the simple type name (e.g. Template).
@@ -457,6 +464,9 @@ private fun csGenericArgumentType(type: RirTypeRef): String =
 // not in the v1 struct component vocabulary anyway (ADR-056), so callBodyLines' RirObjectHandleType
 // branch stays hand-written.
 private fun csReturnConversion(type: RirTypeRef, valueExpr: String): String = when (type) {
+  // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+  // member with a delegate anywhere in its signature is ever handed to a shim renderer.
+  is RirDelegateType -> error("[nuget] a delegate type must not reach the C# shim renderer")
   is RirVoidType -> error("[nuget] void has no return conversion")
   is RirStringType -> "Marshal.StringToCoTaskMemUTF8($valueExpr)"
   is RirObjectHandleType -> error(
@@ -545,6 +555,9 @@ private fun thunkParamName(p: RirParameter): String = when (p.type) {
 // ADR-053: a nullable-annotated string parameter drops the null-forgiving `!` — the parameter may
 // legitimately be null, and Marshal.PtrToStringUTF8 already returns `string?`.
 private fun paramConversion(p: RirParameter): String = when (p.type) {
+  // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+  // member with a delegate anywhere in its signature is ever handed to a shim renderer.
+  is RirDelegateType -> error("[nuget] a delegate type must not reach the C# shim renderer")
   is RirStringType ->
     if (p.type.nullable) "Marshal.PtrToStringUTF8(${thunkParamName(p)})"
     else "Marshal.PtrToStringUTF8(${thunkParamName(p)})!"
@@ -1578,6 +1591,9 @@ private fun buildInterfaceThunkMethod(iface: RirInterface, method: RirMethod): S
   val retAbiType: String = csAbiType(method.returnType)
 
   val callBodyLines: List<String> = when (val retType: RirTypeRef = method.returnType) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature is ever handed to a shim renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the C# shim renderer")
     is RirVoidType -> listOf("$callExpr;")
     is RirStringType -> listOf(
       "${if (retType.isNullable) "string?" else "string"} result = $callExpr;",
@@ -1641,6 +1657,9 @@ private fun buildInterfacePropertyGetterThunk(iface: RirInterface, property: Rir
   val retAbiType: String = csAbiType(property.type)
 
   val bodyLines: List<String> = when (val type: RirTypeRef = property.type) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature is ever handed to a shim renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the C# shim renderer")
     is RirVoidType -> error("[nuget] a property cannot have void type")
     is RirStringType -> listOf(
       "${if (type.isNullable) "string?" else "string"} result = $getExpr;",
@@ -1774,6 +1793,9 @@ private fun returnBodyLines(
   outArgs: List<AbiArg>,
   structs: Map<RirTypeKey, RirStruct>,
 ): List<String> = when (val retType = returnType) {
+  // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+  // member with a delegate anywhere in its signature is ever handed to a shim renderer.
+  is RirDelegateType -> error("[nuget] a delegate type must not reach the C# shim renderer")
   is RirVoidType -> listOf("$callExpr;")
 
   // ADR-053: a nullable-annotated string return declares its local as `string?` — the shim's
@@ -2046,6 +2068,9 @@ private fun buildPropertyGetterThunkMethod(
   val retAbiType: String = csAbiType(abiRetType)
 
   val bodyLines: List<String> = when (val type = property.type) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature is ever handed to a shim renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the C# shim renderer")
     is RirVoidType -> error("[nuget] a property cannot have void type")
 
     // ADR-056: "property getter -> as a return (out-pointers)" — same shape as buildThunkMethod's
@@ -2377,6 +2402,9 @@ private fun buildStructMethodThunk(
   }
 
   val callBodyLines: List<String> = when (val retType: RirTypeRef = method.returnType) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature is ever handed to a shim renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the C# shim renderer")
     is RirVoidType -> listOf("$callExpr;")
     is RirStringType -> listOf(
       "string result = $callExpr;",
@@ -2454,6 +2482,9 @@ private fun buildStructPropertyGetterThunk(
   val getExpr: String = "${structReceiverReconstruction(struct, structs)}.${property.name}"
 
   val bodyLines: List<String> = when (val type: RirTypeRef = property.type) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature is ever handed to a shim renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the C# shim renderer")
     is RirVoidType -> error("[nuget] a property cannot have void type")
     is RirStringType -> listOf(
       "string result = $getExpr;",
