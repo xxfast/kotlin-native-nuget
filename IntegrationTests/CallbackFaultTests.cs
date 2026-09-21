@@ -12,8 +12,10 @@ namespace IntegrationTests;
 /// (<c>CirCallbackRenderer.appendThunkBody</c>), so the whole <c>dotnet test</c> host aborts before
 /// any assertion is reached. That includes the cells whose Kotlin fixture member wraps the call in
 /// <c>try/catch</c>: the FailFast happens inside the thunk, below the Kotlin frame, so the Kotlin
-/// <c>catch</c> never runs. Nothing here is marked <c>Skip</c>: these are the red cells the feature
-/// turns green.</para>
+/// <c>catch</c> never runs. Because a FailFast aborts the whole suite rather than reporting one
+/// failure, those fifteen cells carry <c>Skip</c> until parts B and C land; removing the attributes
+/// is the first step of the PR that lands the error channel. The one live cell is the part A flow
+/// cell, which passes.</para>
 ///
 /// Three mechanisms run user C# code inline and each one gets its own cells, because a fix applied
 /// to one emitter leaves the other two fail-fasting:

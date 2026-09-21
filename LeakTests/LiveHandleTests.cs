@@ -1695,8 +1695,9 @@ public class LiveHandleTests
     // is deliberately not measured here.
     //
     // All three rows are process-fatal against the build of 2026-09-22: the throw inside the thunk
-    // reaches `Environment.FailFast` and kills the test host before the count is read. They are the
-    // red cells for the error channel, not skips.
+    // reaches `Environment.FailFast` and kills the test host before the count is read. A FailFast
+    // aborts the whole harness rather than reporting one failure, so all four rows carry `Skip`
+    // until the error channel lands; removing the attributes is that PR's first step.
     //
     // Not measured, accepted residue named by the ADR-161 research memo: a `Flow<T>` item whose
     // materialisation throws leaks one StableRef per failed item, because the Kotlin side already
