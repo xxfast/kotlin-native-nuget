@@ -290,11 +290,6 @@ internal fun KSClassDeclaration.forwardArmCallbackCandidates(): List<KSFunctionD
     // A data class's generated `copy` can carry a lambda-typed parameter; the ordinary route
     // excludes those members upstream and so does the plan, so this route must not claim them.
     .filter { method -> !method.isCompilerOwnedMember(this) }
-    // Boundary nullability part A2: refused on the CANDIDATE list, ahead of every arm-keyed route's
-    // pair detection, for the reason the ordinary class applies it ahead of its own partition -- a
-    // stored pair whose halves both vanish is never found, so no `removeX` survives as a cancel for
-    // a subscription nobody can make. `warnRefusedLegacyRouteMembers` names the member.
-    .filterNot { method -> method.refusedNullableLambdaPayload() != null }
     .toList()
 
 /**
@@ -308,4 +303,11 @@ internal fun KSClassDeclaration.forwardArmCallbackCandidates(): List<KSFunctionD
 internal fun KSFunctionDeclaration.isArmCallbackRoutable(
   classifier: ForwardBridgeTypeClassifier,
 ): Boolean = optInMarker(classifier.exportMarkers) == null &&
-    classifier.legacyRefusedReturn(this) == null
+    classifier.legacyRefusedReturn(this) == null &&
+    // Boundary nullability part A2: a sealed ARM's callback member takes the same refusal an
+    // ordinary class's does. Applied here rather than in the three arm selectors so the per-call
+    // route, the stored pair route and the interface-bridge route cannot drift, and because the
+    // filter runs AFTER pair detection: a refused add half cannot leave its partner behind as a
+    // per-call callback. Without it a `(Int?) -> Unit` on an arm still aborted the
+    // generated-Kotlin compile with no diagnostic.
+    refusedNullableLambdaPayload() == null

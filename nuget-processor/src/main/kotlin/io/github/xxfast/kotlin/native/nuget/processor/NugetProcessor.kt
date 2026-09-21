@@ -693,11 +693,11 @@ internal fun warnRefusedLegacyRouteMembers(
           .forEach { method ->
             nameRefused(method, "$owner.${method.simpleName.asString()}", ownerDeclaration)
           }
-        // Boundary nullability part A2, on the arm: ADR-116's amendment re-keyed the per-call and
-        // stored callback routes onto the arm, so `forwardArmCallbackCandidates` drops a
-        // nullable-payload member there exactly as an ordinary class's partition drops one, and the
-        // arm's CALLBACK_PROTOCOL skip is deliberately not named by the planner. This walk is
-        // therefore the only thing that tells the author the arm's member is gone.
+        // Boundary nullability part A2, the sealed-arm twin of the class walk above: the arm's
+        // callback routes refuse a nullable payload through `isArmCallbackRoutable`, silently, so
+        // this is the only thing that names it. ADR-116's amendment re-keyed the per-call and stored
+        // callback routes onto the arm, and the arm's CALLBACK_PROTOCOL skip is deliberately not
+        // named by the planner, so nothing else would tell the author the member is gone.
         subclass.getAllFunctions()
           .filter { method -> method.getVisibility() == Visibility.PUBLIC }
           .filter { method -> method.parentDeclaration == subclass }

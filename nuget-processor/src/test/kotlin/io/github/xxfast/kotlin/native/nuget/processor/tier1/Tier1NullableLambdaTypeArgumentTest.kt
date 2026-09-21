@@ -80,4 +80,52 @@ class Tier1NullableLambdaTypeArgumentTest {
       "the box must be disposed AFTER the native call, never before",
     )
   }
+
+  /**
+   * The SUSPEND twin (`nuget_suspend_funcN_invoke`), which has its own copy of every one of the
+   * above: its own `WrapArg<T>`, its own spelling path, its own invoke exports. A fix applied to one
+   * copy and not the other leaves this route broken, so it is its own cell rather than an assumption.
+   *
+   * The suspend lambda route binds at a PROPERTY (`val onFeed: suspend (String) -> String`), not at a
+   * function return, which is why this fixture differs in shape from the two above.
+   */
+  @Test
+  fun `the suspend lambda twin carries nullability and boxes through Wrap too`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.nullablesuspendlambda
+
+      class Feeder(val catName: String) {
+        val onFeed: suspend (String?) -> String = { food -> "${'$'}catName ate ${'$'}food" }
+
+        val onNote: suspend (Int) -> String? = { grams -> if (grams > 0) "${'$'}grams g" else null }
+
+        val onPlain: suspend (String) -> String = { food -> food }
+      }
+      """.trimIndent(),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected the suspend lambda properties to bind; got: ${result.compileErrors}",
+    )
+
+    val cs: String = result.generatedCSharp
+    assertTrue("KotlinSuspendFunc<string?, string> OnFeed" in cs, "nullable payload; cs=$cs")
+    assertTrue("KotlinSuspendFunc<int, string?> OnNote" in cs, "nullable result; cs=$cs")
+    // The control, unchanged.
+    assertTrue("KotlinSuspendFunc<string, string> OnPlain" in cs, "non-null is unchanged; cs=$cs")
+    assertFalse("WrapArg<" in cs, "the suspend helper's own WrapArg<T> copy must be gone too")
+    assertTrue(
+      "Wrap<T1>(arg0, out bool owned0);" in cs,
+      "expected InvokeAsync to box through NugetMarshal.Wrap; cs=$cs",
+    )
+    // The disposal is safe ONLY because the suspend export reads every box synchronously, before
+    // `launchForCSharp`; the generated order is what pins that.
+    assertTrue(
+      cs.indexOf("Wrap<T1>(arg0, out bool owned0);") < cs.indexOf("if (owned0) "),
+      "the box must be disposed after the native call returns, never inside the continuation",
+    )
+  }
 }
