@@ -108,21 +108,21 @@ class Tier1InterfaceBridgeFactoryTest {
     val kotlin: String = result.generated
 
     // A String getter and a String-returning method share one unwrap shape.
-    assertContains(kotlin, "val speakFn = speakPtr.reinterpret<CFunction<(COpaquePointer) -> COpaquePointer?>>()")
+    assertContains(kotlin, "val speakFn = speakPtr.reinterpret<CFunction<(COpaquePointer, COpaquePointer?) -> COpaquePointer?>>()")
     assertContains(kotlin, "override fun speak(): String {")
-    assertContains(kotlin, "val ref = speakFn.invoke(speakCtx)!!")
+    assertContains(kotlin, "val ref = nugetCallbackCall { nugetErr -> speakFn.invoke(speakCtx, nugetErr) }!!")
     assertContains(kotlin, "val value = ref.asStableRef<String>().get()")
     // A primitive getter crosses unconverted.
-    assertContains(kotlin, "val legsGetFn = legsGetPtr.reinterpret<CFunction<(COpaquePointer) -> Int>>()")
-    assertContains(kotlin, "return legsGetFn.invoke(legsGetCtx)")
+    assertContains(kotlin, "val legsGetFn = legsGetPtr.reinterpret<CFunction<(COpaquePointer, COpaquePointer?) -> Int>>()")
+    assertContains(kotlin, "return nugetCallbackCall { nugetErr -> legsGetFn.invoke(legsGetCtx, nugetErr) }")
     // The nullable String getter reads the null pointer as null, never as the empty string.
-    assertContains(kotlin, "val ref = nicknameGetFn.invoke(nicknameGetCtx) ?: return null")
+    assertContains(kotlin, "val ref = nugetCallbackCall { nugetErr -> nicknameGetFn.invoke(nicknameGetCtx, nugetErr) } ?: return null")
     // A String argument is minted here and disposed by the C# reader.
     assertContains(kotlin, "val arg0Ref = NugetHandles.retain(item as Any)")
-    assertContains(kotlin, "fetchFn.invoke(arg0Ref, fetchCtx)")
+    assertContains(kotlin, "nugetCallbackCall { nugetErr -> fetchFn.invoke(arg0Ref, fetchCtx, nugetErr) }")
     // A Unit method has no result to marshal.
     assertContains(kotlin, "override fun nap(): Unit {")
-    assertContains(kotlin, "napFn.invoke(napCtx)")
+    assertContains(kotlin, "nugetCallbackCall { nugetErr -> napFn.invoke(napCtx, nugetErr) }")
   }
 
   @Test
@@ -169,11 +169,11 @@ class Tier1InterfaceBridgeFactoryTest {
     val result = Tier1Harness.run(source)
     val kotlin: String = result.generated
 
-    assertContains(kotlin, "val releaseFn = releasePtr.reinterpret<CFunction<(COpaquePointer) -> Unit>>()")
+    assertContains(kotlin, "val releaseFn = releasePtr.reinterpret<CFunction<(COpaquePointer, COpaquePointer?) -> Unit>>()")
     // The cleaner's argument is the fn/ctx pair and its block captures nothing: anything reaching
     // the bridge would root the object whose collection is the trigger.
     assertContains(kotlin, "private val cleaner = createCleaner(releaseFn to releaseCtx) { (fn, ctx) ->")
-    assertContains(kotlin, "fn.invoke(ctx)")
+    assertContains(kotlin, "fn.invoke(ctx, null)")
     assertFalse(
       kotlin.contains("createCleaner(bridge"),
       "the cleaner must never hold the bridge object itself",

@@ -129,11 +129,11 @@ class Tier1CallbackPayloadOwnershipTest {
     val result = run()
 
     assertTrue(
-      result.generated.contains("CFunction<(Int, COpaquePointer) -> Unit>"),
+      result.generated.contains("CFunction<(Int, COpaquePointer, COpaquePointer?) -> Unit>"),
       "control: an Int payload still crosses by value; got: ${payloadLines(result)}",
     )
     assertTrue(
-      result.generated.contains("listenerFn.invoke(listenerArg0, listenerUserData)"),
+      result.generated.contains("listenerFn.invoke(listenerArg0, listenerUserData, nugetErr)"),
       "control: a by-value payload is handed over verbatim; got: ${payloadLines(result)}",
     )
   }

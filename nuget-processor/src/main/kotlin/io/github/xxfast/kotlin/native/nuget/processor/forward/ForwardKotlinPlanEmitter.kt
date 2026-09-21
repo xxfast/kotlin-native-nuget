@@ -1273,8 +1273,9 @@ private fun loweredCallbackExpression(name: String, type: BridgeType.Callback): 
   }
 
   val parameterNames: List<String> = type.parameters.indices.map { index -> "${name}Arg$index" }
+  // ADR-161: payloads, the echoed ctx, then the trailing error slot every user-code thunk carries.
   val signature: String = (
-      type.parameters.map(::wireKotlinType) + "COpaquePointer"
+      type.parameters.map(::wireKotlinType) + "COpaquePointer" + "COpaquePointer?"
       ).joinToString(", ")
   val resultWire: String = when (val result: BridgeType = type.result) {
     BridgeType.Unit -> "Unit"
@@ -1297,7 +1298,7 @@ private fun loweredCallbackExpression(name: String, type: BridgeType.Callback): 
           BridgeType.String -> "NugetHandles.retain($argument as Any)"
           else -> "NugetHandles.retain($argument)"
         }
-      } + "${name}UserData"
+      } + "${name}UserData" + "nugetErr"
       ).joinToString(", ")
 
   val header: String =
@@ -1307,19 +1308,23 @@ private fun loweredCallbackExpression(name: String, type: BridgeType.Callback): 
     appendLine(
       "  val ${name}Fn = ${name}Ptr.reinterpret<CFunction<($signature) -> $resultWire>>()"
     )
+    // ADR-161: the ADR-160 plan route's per-call callback goes through the same error channel as the
+    // three legacy routes. The `!!` stays outside `nugetCallbackCall` so the managed exception is
+    // read and thrown before a null result can become an NPE (ADR-104's check-before-deref rule).
+    val invocation: String = "nugetCallbackCall { nugetErr -> ${name}Fn.invoke($arguments) }"
     when (val result: BridgeType = type.result) {
-      BridgeType.Unit -> appendLine("  ${name}Fn.invoke($arguments)")
+      BridgeType.Unit -> appendLine("  $invocation")
       BridgeType.String -> {
-        appendLine("  val ${name}Box = ${name}Fn.invoke($arguments)!!")
+        appendLine("  val ${name}Box = $invocation!!")
         appendLine("  val ${name}Value = ${name}Box.asStableRef<String>().get()")
         appendLine("  NugetHandles.release(${name}Box)")
         appendLine("  ${name}Value")
       }
 
       is BridgeType.Primitive -> if (result.kind == PrimitiveKind.BOOLEAN) {
-        appendLine("  ${name}Fn.invoke($arguments) != 0.toByte()")
+        appendLine("  $invocation != 0.toByte()")
       } else {
-        appendLine("  ${name}Fn.invoke($arguments)")
+        appendLine("  $invocation")
       }
 
       else -> error("Forward Kotlin plan emitter has no callback result lowering for $result")

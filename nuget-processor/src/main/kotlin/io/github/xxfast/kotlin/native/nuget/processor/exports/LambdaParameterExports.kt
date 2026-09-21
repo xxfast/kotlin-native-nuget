@@ -75,7 +75,10 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
         else -> append("COpaquePointer?, ")
       }
     }
-    append("COpaquePointer")  // userData
+    append("COpaquePointer, ")  // userData
+    // ADR-161: the trailing error slot. Every user-code thunk takes it, so this type and the C#
+    // `delegate* unmanaged[Cdecl]<..., IntPtr*, R>` move in one commit (Tier1CallbackArityAgreement).
+    append("COpaquePointer?")
   }
 
   val cfuncReturnType: String = when {
@@ -110,7 +113,7 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
         val argKotlin: String = lambdaArgTypes[i].declaration.simpleName.asString()
         if (byValueArgs[i] && argKotlin != "Boolean") append("it$i, ") else append("arg${i}Ref, ")
       }
-      append("${lambdaParamName}UserData")
+      append("${lambdaParamName}UserData, nugetErr")
     }
 
     // ADR-036 amendment (2026-09-11): a handle-passed payload is the C# side's to free, so
@@ -120,15 +123,21 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
     // the count one *below* baseline per crossing (LeakTests rows 8g/8h/8i) and freed a handle a
     // live wrapper was still holding. The callback's *return* box is the other way round: no C#
     // owner ever frees it, so its release below stays.
+    // ADR-161: every invocation goes through `nugetCallbackCall`, which allocates and zeroes the
+    // trailing error slot, reads it BEFORE the caller touches the result, and throws
+    // `NugetManagedException` at this Kotlin call site if the C# callback threw. The `!!` and the
+    // `asStableRef` below stay OUTSIDE the helper deliberately: a null result caused by a managed
+    // throw must not become an NPE ahead of the exception that explains it (ADR-104's ordering).
+    val invocation: String = "nugetCallbackCall { nugetErr -> $fnVar.invoke($fnCallArgs) }"
     when {
-      lambdaRetKotlin == "Unit" -> appendLine("${indent}$fnVar.invoke($fnCallArgs)")
+      lambdaRetKotlin == "Unit" -> appendLine("$indent$invocation")
       lambdaRetKotlin == "Boolean" -> {
-        appendLine("${indent}val cbResult = $fnVar.invoke($fnCallArgs) != 0.toByte()")
+        appendLine("${indent}val cbResult = $invocation != 0.toByte()")
         append("${indent}cbResult")
       }
       else -> {
         // String or object return from C# callback — backed by nuget_wrap_string StableRef
-        appendLine("${indent}val resultRef = $fnVar.invoke($fnCallArgs)!!")
+        appendLine("${indent}val resultRef = $invocation!!")
         appendLine("${indent}val cbResult = resultRef.asStableRef<String>().get()")
         appendLine("${indent}NugetHandles.release(resultRef)")
         append("${indent}cbResult")

@@ -54,6 +54,16 @@ internal object Tier1RuntimeStub {
     @NugetRuntimeApi
     fun buildError(e: Throwable): NugetError = TODO()
 
+    // ADR-161: the forward callback error channel. Generated code names both of these, so a
+    // signature drift here would compile a generated call that the real runtime rejects.
+    class NugetManagedException(
+      val managedType: String,
+      val managedMessage: String,
+    ) : RuntimeException("${'$'}managedType: ${'$'}managedMessage")
+
+    @NugetRuntimeApi
+    fun <R> nugetCallbackCall(block: (COpaquePointer) -> R): R = TODO()
+
     @NugetRuntimeApi
     interface NugetCSharpBridge {
       val nugetToken: COpaquePointer

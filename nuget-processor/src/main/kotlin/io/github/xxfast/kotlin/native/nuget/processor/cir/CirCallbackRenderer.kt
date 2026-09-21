@@ -58,8 +58,12 @@ internal fun StringBuilder.appendCtxDispatchThunk(
   val arguments: String = types.indices.joinToString(", ") { index -> "a$index" }
   val ctx: String = "a${types.size - 1}"
   val invocation: String = "(($name)GCHandle.FromIntPtr($ctx).Target!)($arguments)"
-  appendThunkBody(name, parameters, returnType, invocation)
-  appendThunkPointer(name, types, returnType)
+  // ADR-161: only the user-code thunks (this function's callers, which are the four rows of the
+  // memo's table plus the bridge release thunk) take the trailing error slot. The Flow and async
+  // thunk families call `appendThunkBody` directly and keep today's arity and FailFast, because the
+  // published `nuget-runtime` klib invokes them and they run no user C# code.
+  appendThunkBody(name, "$parameters, IntPtr* errOut", returnType, invocation, errOut = true)
+  appendThunkPointer(name, types + "IntPtr*", returnType)
 }
 
 /**
@@ -72,6 +76,7 @@ internal fun StringBuilder.appendThunkBody(
   parameters: String,
   returnType: String,
   invocation: String,
+  errOut: Boolean = false,
 ) {
   val isVoid: Boolean = returnType == "void"
   appendLine(
@@ -90,6 +95,31 @@ internal fun StringBuilder.appendThunkBody(
   appendLine("            }")
   appendLine("            catch (Exception ex)")
   appendLine("            {")
+  if (errOut) {
+    // ADR-161: the error channel, and its own failure mode. The nested try is load-bearing: an
+    // OLD runtime under new generated C# has no `nuget_managed_error_create`, so the P/Invoke
+    // throws `EntryPointNotFoundException` right here, and the inner catch turns that into a loud
+    // FailFast instead of an exception unwinding out of an [UnmanagedCallersOnly] frame.
+    appendLine("                if (errOut != null)")
+    appendLine("                {")
+    appendLine("                    try")
+    appendLine("                    {")
+    appendLine("                        *errOut = NugetErrorNative.CreateManagedError(ex);")
+    appendLine("                    }")
+    appendLine("                    catch (Exception channelFailure)")
+    appendLine("                    {")
+    appendLine(
+      "                        Environment.FailFast(" +
+          "\"nuget: error channel failed in $name\", channelFailure);"
+    )
+    appendLine("                    }")
+    if (isVoid) {
+      appendLine("                    return;")
+    } else {
+      appendLine("                    return default;")
+    }
+    appendLine("                }")
+  }
   appendLine("                Environment.FailFast(\"nuget: unhandled exception in $name\", ex);")
   if (!isVoid) {
     appendLine("                return default;")

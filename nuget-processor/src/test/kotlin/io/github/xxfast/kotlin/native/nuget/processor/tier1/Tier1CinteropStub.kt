@@ -130,26 +130,43 @@ internal object Tier1CinteropStub {
     // is itself the pointer here and the arities are spelled out.
     class CFunction<F : Function<*>> : COpaquePointer()
 
-    fun <R> CFunction<(COpaquePointer) -> R>.invoke(ctx: COpaquePointer): R =
+    // Generic in EVERY parameter, which is how real Kotlin/Native spells these (one extension per
+    // arity, no position pinned to a concrete type). They used to pin the trailing parameter to
+    // `COpaquePointer` because every callback ended at its echoed context pointer; ADR-161 appended
+    // a NULLABLE error slot after it, and a pinned trailing `COpaquePointer` would not match a
+    // `CFunction<(..., COpaquePointer, COpaquePointer?) -> R>`. Adding a second, nullable-tailed
+    // overload per arity is not an option: the receiver's type argument erases away, so the two
+    // would be a platform declaration clash. Fully generic is both closer to the real signature and
+    // the one spelling that admits both.
+    //
+    // A suspend export's completion callback is the widest shape reached without an error slot
+    // (`(COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit`), and a three-payload
+    // user-code callback plus ctx plus errOut is the widest shape reached with one.
+    fun <P0, R> CFunction<(P0) -> R>.invoke(arg0: P0): R =
       TODO("Tier 1 compiles generated code, it never runs it")
 
-    fun <P0, R> CFunction<(P0, COpaquePointer) -> R>.invoke(arg0: P0, ctx: COpaquePointer): R =
+    fun <P0, P1, R> CFunction<(P0, P1) -> R>.invoke(arg0: P0, arg1: P1): R =
       TODO("Tier 1 compiles generated code, it never runs it")
 
-    fun <P0, P1, R> CFunction<(P0, P1, COpaquePointer) -> R>.invoke(
-      arg0: P0,
-      arg1: P1,
-      ctx: COpaquePointer,
-    ): R = TODO("Tier 1 compiles generated code, it never runs it")
-
-    // A suspend export's completion callback is arity 3 plus its context pointer:
-    // `(COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit`
-    // (result, error, cancelled).
-    fun <P0, P1, P2, R> CFunction<(P0, P1, P2, COpaquePointer) -> R>.invoke(
+    fun <P0, P1, P2, R> CFunction<(P0, P1, P2) -> R>.invoke(
       arg0: P0,
       arg1: P1,
       arg2: P2,
-      ctx: COpaquePointer,
+    ): R = TODO("Tier 1 compiles generated code, it never runs it")
+
+    fun <P0, P1, P2, P3, R> CFunction<(P0, P1, P2, P3) -> R>.invoke(
+      arg0: P0,
+      arg1: P1,
+      arg2: P2,
+      arg3: P3,
+    ): R = TODO("Tier 1 compiles generated code, it never runs it")
+
+    fun <P0, P1, P2, P3, P4, R> CFunction<(P0, P1, P2, P3, P4) -> R>.invoke(
+      arg0: P0,
+      arg1: P1,
+      arg2: P2,
+      arg3: P3,
+      arg4: P4,
     ): R = TODO("Tier 1 compiles generated code, it never runs it")
   """.trimIndent()
 

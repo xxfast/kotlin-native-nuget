@@ -102,6 +102,36 @@ class Tier1CallbackArityAgreementTest {
     )
   }
 
+  /**
+   * ADR-161 part B: the trailing error slot. Counting alone cannot catch the one change part B
+   * makes, because both halves grow by one and the set equality above stays green either way. The
+   * slot has to be the LAST parameter on both halves, and it has to be a pointer-to-pointer on the
+   * C# side and a nullable opaque pointer on the Kotlin side, so this cell names the types.
+   *
+   * Written red before the emitters moved: today every Kotlin `CFunction` ends at the echoed ctx
+   * (`COpaquePointer`) and every C# thunk ends at `IntPtr`.
+   */
+  @Test
+  fun `every user-code callback half ends with the error slot`() {
+    val result = run()
+
+    val kotlinTails: Set<String> = kotlinCallbackTails(result.generated)
+    val csharpTails: Set<String> = csharpThunkTails(result.generatedCSharp)
+
+    assertTrue(kotlinTails.isNotEmpty(), "expected generated CFunction call sites at all")
+    assertEquals(
+      setOf("COpaquePointer?"),
+      kotlinTails,
+      "expected every generated Kotlin CFunction type to end with the ADR-161 error slot",
+    )
+    assertEquals(
+      setOf("IntPtr*"),
+      csharpTails,
+      "expected every generated user-code thunk to end with the ADR-161 `IntPtr* errOut` slot; a " +
+          "thunk at arity N+1 called with N writes a managed handle through garbage",
+    )
+  }
+
   /** Both halves still have to be individually well formed, not merely equal in count. */
   @Test
   fun `the generated Kotlin compiles and every thunk pointer is a cdecl function pointer`() {
@@ -143,6 +173,29 @@ class Tier1CallbackArityAgreementTest {
         name.startsWith("NugetFlowOn") || name == "NugetAsyncCallback"
       }
       .map { chunk -> parameterCount(chunk.substringBefore(">)&")) - 1 }
+      .toSet()
+
+  /** The last parameter type of each generated Kotlin `CFunction` type. */
+  private fun kotlinCallbackTails(generated: String): Set<String> =
+    generated.split("reinterpret<CFunction<").drop(1)
+      .map { chunk ->
+        chunk.substringAfter("(").substringBefore(")").split(",").last().trim()
+      }
+      .toSet()
+
+  /**
+   * The last PARAMETER type of each generated C# user-code thunk: the `delegate*` type argument
+   * list is parameters plus the return type, so the tail is the second-to-last entry.
+   */
+  private fun csharpThunkTails(generated: String): Set<String> =
+    generated.split("(delegate* unmanaged[Cdecl]<").drop(1)
+      .filterNot { chunk ->
+        val name: String = chunk.substringAfter(">)&").substringBefore("Thunk")
+        name.startsWith("NugetFlowOn") || name == "NugetAsyncCallback"
+      }
+      .map { chunk ->
+        chunk.substringBefore(">)&").split(",").map(String::trim).dropLast(1).last()
+      }
       .toSet()
 
   private fun parameterCount(list: String): Int =
