@@ -70,3 +70,10 @@ internal fun <T> describeAll(boxes: List<Box<T>>): List<String> = boxes.map { it
 /** Exercises [describeAll] over two different `Box<Int>` instances. */
 fun describeAllBoxOfInt(first: Int, second: Int): String =
   describeAll(listOf(Box(first), Box(second))).joinToString(separator = ",")
+
+/**
+ * ADR-155: `Boxes.Counts` returns `Dictionary<String, Int>`, which used to be
+ * `skipped_unbound_generic_instantiation` (ADR-072 Decision 9) and now binds as a read-only
+ * Kotlin `Map`. A STATIC route on a static class, which is the position no Roster row stands on.
+ */
+fun countOf(name: String): Int = Boxes.counts().getValue(name)

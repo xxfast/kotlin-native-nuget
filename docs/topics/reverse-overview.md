@@ -228,6 +228,7 @@ install pointer rather than a cryptic subprocess error.
         <a href="instance-members.md">Instance members</a>
         <a href="structs.md">C# structs</a>
         <a href="generic-types.md">Generic types</a>
+        <a href="reverse-collections.md">Collections from C#</a>
         <a href="bridgeable-subset.md">The bridgeable subset</a>
     </category>
     <category ref="external">

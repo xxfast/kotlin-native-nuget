@@ -245,6 +245,12 @@ siblings. If two different C# signatures would collapse to the same Kotlin scope
 ordered parameter types, generation fails with an error naming both signatures instead of
 producing a broken build.
 
+The one exception is an overload set that collapses only because of a collection parameter, for
+example `AddRange(IEnumerable<T>)` beside `AddRange(List<T>)`: every list-like C# type maps to the
+same read-only Kotlin `List<T>` (see [Collections from C#](reverse-collections.md)), so such pairs
+are common and expected, not a build error. The whole set is skipped with its own diagnostic
+instead, never "all but one"; the type's other members still bind.
+
 ## Types that cross the wire
 
 Beyond primitives and `string` (see [Primitives and strings](primitives-and-strings.md); the
@@ -257,14 +263,17 @@ member's type binds as:
 - a supported enum: an ordinal `Int` converted to and from a Kotlin `enum class`, see
   [Enums](#enums) above
 - a bound, admissible interface: a Kotlin `interface`, see [Interfaces](#interfaces) above
+- a mapped BCL collection (`IReadOnlyList<T>`, `List<T>`, `IReadOnlyDictionary<K,V>`,
+  `HashSet<T>`, and their kin): a Kotlin `List`/`Set`/`Map`, always read-only, eagerly copied; see
+  [Collections from C#](reverse-collections.md)
 
-Everything else, arrays, collections, delegates, `dynamic`, `object`, open generics, and a generic
-instantiation of a definition outside the bound assemblies (`List<int>`), doesn't bind. A closed
-instantiation of a bound generic **class** is the one generic shape that does; see
-[Generic types](generic-types.md). `System.String` is the only external (out-of-assembly)
-reference type recognized: a type from a namespace you didn't `include()`, from an assembly
-outside the extraction run, or from an undeclared NuGet dependency is treated the same as an
-unsupported type, even though the reader can see and name it.
+Everything else, arrays, a `Task` of a collection, delegates, `dynamic`, `object`, open generics,
+and a generic instantiation of a definition outside the bound assemblies and outside the mapped
+collection table (`Queue<int>`), doesn't bind. A closed instantiation of a bound generic **class**
+is the one other generic shape that does; see [Generic types](generic-types.md). `System.String`
+is the only external (out-of-assembly) reference type recognized: a type from a namespace you
+didn't `include()`, from an assembly outside the extraction run, or from an undeclared NuGet
+dependency is treated the same as an unsupported type, even though the reader can see and name it.
 
 ## Exceptions
 
@@ -317,10 +326,12 @@ build, a contract mismatch at process startup) rather than an extraction-time sk
         <a href="instance-members.md">Instance members</a>
         <a href="structs.md">C# structs</a>
         <a href="generic-types.md">Generic types</a>
+        <a href="reverse-collections.md">Collections from C#</a>
         <a href="registration-diagnostics.md">Registration diagnostics</a>
         <a href="exceptions.md">Exceptions</a>
     </category>
     <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/155-csharp-collections-in-kotlin.md">ADR-155: C# collections in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/043-bridgeable-subset-boundary.md">ADR-043: Bridgeable subset boundary</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/070-csharp-interfaces-in-kotlin.md">ADR-070: C# interfaces in Kotlin</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/085-kotlin-implemented-csharp-interfaces.md">ADR-085: Kotlin-implemented C# interfaces</a>
