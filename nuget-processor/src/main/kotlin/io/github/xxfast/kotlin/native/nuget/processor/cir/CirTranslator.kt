@@ -5,6 +5,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.csharpIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardGuardName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.guarded
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBoundInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardCallbackDelegate
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
@@ -456,39 +458,44 @@ internal fun translate(
     }
   }
 
+  // ADR-162: guarded per declaration. A generator invariant that a legal class shape reaches used
+  // to abort the whole round here with one unlocated `IllegalStateException`, hiding every other
+  // offending declaration; now each one is reported against its own source location and the loop
+  // keeps going, so the author gets the whole list in one build. The round still fails at the
+  // fatal-diagnostic gate, so nothing half-translated ships.
   regularClasses.filter { !it.isNestedDeclaration() }.forEach { cls ->
-    namespaces.addDeclaration(
-      namespaceOf(cls.packageName.asString()),
+    val declaration: CirDeclaration = guarded(cls.forwardGuardName(), cls, logger) {
       translateClass(
         cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
         classifier, interfaceDeclarationCatalog, expects,
-      ).copy(nestedDeclarations = translateNestedOf(cls)),
-    )
+      ).copy(nestedDeclarations = translateNestedOf(cls))
+    } ?: return@forEach
+    namespaces.addDeclaration(namespaceOf(cls.packageName.asString()), declaration)
   }
 
   // ADR-134: a nested value class is declared by the owner walk above and nowhere else; a
   // namespace-level twin would be CS0101 against it (the issue #54/#110 lesson).
   valueClasses.filter { !it.isNestedDeclaration() }.forEach { cls ->
-    namespaces.addDeclaration(
-      namespaceOf(cls.packageName.asString()),
-      translateValueClass(cls, context.libraryName, logger, context, callableCatalog, expects),
-    )
+    val declaration: CirDeclaration = guarded(cls.forwardGuardName(), cls, logger) {
+      translateValueClass(cls, context.libraryName, logger, context, callableCatalog, expects)
+    } ?: return@forEach
+    namespaces.addDeclaration(namespaceOf(cls.packageName.asString()), declaration)
   }
 
   enums.filter { !it.isNestedDeclaration() }.forEach { enum ->
-    namespaces.addDeclaration(
-      namespaceOf(enum.packageName.asString()),
-      translateEnum(enum, context.libraryName, logger, expects, context),
-    )
+    val declaration: CirDeclaration = guarded(enum.forwardGuardName(), enum, logger) {
+      translateEnum(enum, context.libraryName, logger, expects, context)
+    } ?: return@forEach
+    namespaces.addDeclaration(namespaceOf(enum.packageName.asString()), declaration)
   }
 
   interfaces.filter { !it.isNestedDeclaration() }.forEach { iface ->
-    namespaces.addDeclaration(
-      namespaceOf(iface.packageName.asString()),
+    val declaration: CirDeclaration = guarded(iface.forwardGuardName(), iface, logger) {
       translateInterface(iface, interfaceDeclarationCatalog, logger, expects)
         // ADR-134: the interface block owns its nested declarations (`ICage.Bar`).
-        .copy(nestedDeclarations = translateNestedOf(iface)),
-    )
+        .copy(nestedDeclarations = translateNestedOf(iface))
+    } ?: return@forEach
+    namespaces.addDeclaration(namespaceOf(iface.packageName.asString()), declaration)
   }
 
   // ADR-040: name collision, "not currently handled" per the ADR's Breaking-changes section — a
@@ -568,11 +575,11 @@ internal fun translate(
   }
 
   objects.filter { !it.isNestedDeclaration() }.forEach { obj ->
-    namespaces.addDeclaration(
-      namespaceOf(obj.packageName.asString()),
+    val declaration: CirDeclaration = guarded(obj.forwardGuardName(), obj, logger) {
       translateObject(obj, context.libraryName, callableCatalog, tracker, logger, expects)
-        .copy(nestedDeclarations = translateNestedOf(obj)),
-    )
+        .copy(nestedDeclarations = translateNestedOf(obj))
+    } ?: return@forEach
+    namespaces.addDeclaration(namespaceOf(obj.packageName.asString()), declaration)
   }
 
   // ADR-126. An exported receiver homes its `{Receiver}Extensions` class on the receiver's own

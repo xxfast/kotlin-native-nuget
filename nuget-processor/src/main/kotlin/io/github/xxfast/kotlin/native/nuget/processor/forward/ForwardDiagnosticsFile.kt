@@ -24,6 +24,17 @@ internal data class ForwardDiagnosticRecord(
   val owner: ForwardDiagnosticOwner? = null,
   val member: String? = null,
   val reason: String = "",
+  /**
+   * ADR-162 (ROADMAP line 58): the `KSNode`'s own source location, split into its two parts.
+   *
+   * [message] already ends with `\n    at <path>:<line>`, so this is not new information; it is the
+   * same information in a shape a consumer can use. `NugetReportDiagnosticsTask` composes its
+   * console line as `<file>:<line>: <message>`, the kotlinc/KSP shape an IDE build window
+   * linkifies, which the trailing suffix inside [message] is not. Serialized only when present: a
+   * scope-level diagnostic (`SKIPPED_ALL_DECLARATIONS`) has no declaration to point at.
+   */
+  val file: String? = null,
+  val line: Int? = null,
 )
 
 /**
@@ -35,11 +46,25 @@ internal data class ForwardDiagnosticRecord(
  */
 internal fun renderForwardDiagnosticsJson(records: List<ForwardDiagnosticRecord>): String {
   val entries: String = records.joinToString(",\n") { record ->
+    // ADR-162: `file`/`line` are additive and OMITTED when absent rather than written as `null`.
+    // The reader requires every field it names, so an absent-means-absent encoding keeps a
+    // location-less diagnostic (a scope-level one) readable by both the old and the new parser.
+    val location: String =
+      if (record.file != null && record.line != null) {
+        // `line` is written as a JSON *string*, deliberately. The reader on the other side
+        // (`parseForwardDiagnostics`) finds fields by walking quoted tokens and pairing them
+        // key, value, which is sound only while every value this writer emits is a string; a bare
+        // number would shift every following key onto the wrong value.
+        "\n    \"file\": ${record.file.jsonString()}," +
+            "\n    \"line\": ${record.line.toString().jsonString()},"
+      } else {
+        ""
+      }
     """
     |  {
     |    "severity": "${record.severity.name}",
     |    "kind": "${record.kind.name}",
-    |    "declaration": ${record.declaration.jsonString()},
+    |    "declaration": ${record.declaration.jsonString()},$location
     |    "message": ${record.message.jsonString()}
     |  }
     """.trimMargin()

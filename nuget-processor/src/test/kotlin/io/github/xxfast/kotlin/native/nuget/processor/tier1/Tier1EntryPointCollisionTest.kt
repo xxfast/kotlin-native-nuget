@@ -50,12 +50,18 @@ class Tier1EntryPointCollisionTest {
   }
 
   /**
-   * Two fine owners: the user's `dispose()` by its plan tag, the generated `Dispose` by its own
-   * per-site owner tag with the `generated Dispose` role (ADR-117 amendment, Alternative 3). Before
-   * the amendment the second owner rendered the class-level `"route-owned export"` range text.
+   * ADR-162 (ROADMAP line 87): `fun dispose()` is a **C# signature** collision, not an ABI one.
+   *
+   * It used to reach this route: the generated `Dispose()` is renderer-owned, so it is not a
+   * `CirMethod` in the list ADR-034's guard groups, the authored `dispose()` sailed past that guard,
+   * and the pair surfaced two phases later as two owners of the `closer_dispose` entry point. The
+   * message was true but read as an ABI accident; the defect is CS0111, one type with two members of
+   * one signature, which is exactly what `ERROR_CSHARP_SIGNATURE_COLLISION` says. The reserved
+   * renderer-owned signature now catches it during translate, which is *before* the fatal-diagnostic
+   * gate, so the ABI contract never runs and this route is no longer reached at all.
    */
   @Test
-  fun `fun dispose names the method and the generated Dispose`() {
+  fun `fun dispose collides with the generated Dispose as a C# signature collision`() {
     val result = Tier1Harness.run(
       """
       package tier1.abicollision.dispose
@@ -68,12 +74,21 @@ class Tier1EntryPointCollisionTest {
 
     assertTrue(
       result.kspErrors.any { message ->
-        message.contains(ForwardDiagnosticKind.ERROR_C_ENTRY_POINT_COLLISION.name) &&
-            message.contains("closer_dispose") &&
-            message.contains("tier1.abicollision.dispose.Closer.dispose()") &&
-            message.contains("tier1.abicollision.dispose.Closer (generated Dispose)")
+        // `Closer.Dispose`, not the Kotlin `dispose`: ADR-034's guard names the generated C#
+        // container and member, which is the pair the C# compiler would reject.
+        message.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name) &&
+            message.contains("Closer.Dispose") &&
+            message.contains("IDisposable") &&
+            message.contains("Fixture.kt:")
       },
-      "expected a collision naming the method and the generated Dispose by role; " +
+      "expected a C# signature collision against the generated Dispose, located; " +
+          "kspErrors=${result.kspErrors}",
+    )
+    assertTrue(
+      result.kspErrors.none { message ->
+        message.contains(ForwardDiagnosticKind.ERROR_C_ENTRY_POINT_COLLISION.name)
+      },
+      "the generic entry-point collision must no longer be what the author reads; " +
           "kspErrors=${result.kspErrors}",
     )
     assertTrue(

@@ -85,6 +85,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
+import io.github.xxfast.kotlin.native.nuget.processor.forward.internalFailureDetail
+import io.github.xxfast.kotlin.native.nuget.processor.forward.internalFailureDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.PackageScope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.matchesDeclaration
 import io.github.xxfast.kotlin.native.nuget.processor.forward.escalatedForStrictDependencyTypes
@@ -718,7 +720,33 @@ class NugetProcessor(
   // surfaces after `process()` returns.
   private val logger: ForwardDiagnosticTrackingLogger = ForwardDiagnosticTrackingLogger(logger)
 
-  override fun process(resolver: Resolver): List<KSAnnotated> {
+  /**
+   * ADR-162: the last line of containment. The per-declaration guards cover the loops, but the round
+   * also does whole-file work no declaration owns — the ADR-066 closure, the post-passes, and the
+   * single `CirRenderer.render` call, which cannot name a declaration without threading `KSNode`
+   * through the whole CIR model (deferred). A failure there used to leave KSP printing one bare
+   * `e: [ksp] java.lang.IllegalStateException: ...` with no `[nuget:...]` kind to grep for; now it is
+   * labelled, at the cost of having no source location to attach.
+   *
+   * `Exception` only, so an `OutOfMemoryError` or a `StackOverflowError` still aborts the round.
+   */
+  override fun process(resolver: Resolver): List<KSAnnotated> = try {
+    processRound(resolver)
+  } catch (failure: Exception) {
+    ForwardDiagnosticSink.emit(
+      listOf(
+        internalFailureDiagnostic(
+          declaration = "this Kotlin module",
+          node = null,
+          detail = internalFailureDetail(failure),
+        ),
+      ),
+      logger,
+    )
+    emptyList()
+  }
+
+  private fun processRound(resolver: Resolver): List<KSAnnotated> {
     if (processed) return emptyList()
     processed = true
 
