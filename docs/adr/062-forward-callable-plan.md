@@ -4,7 +4,9 @@
 
 Accepted. Phase 10 of [MIGRATION.md](../archive/migration.md) completes the centralization: ordinary
 synchronous callables are planned once and dual-projected; specialized protocols remain on named
-legacy routes. `scripts/verify.sh` is green.
+legacy routes. `scripts/verify.sh` is green. [ADR-160](160-callback-parameter-on-the-forward-plan.md)
+admits the first specialized protocol, a per-call callback parameter, as a first-class `BridgeType`
+rather than a skip.
 
 ## Context
 

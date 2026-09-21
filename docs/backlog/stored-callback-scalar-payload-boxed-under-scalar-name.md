@@ -1,28 +1,31 @@
-# A stored-callback scalar payload is registered under a scalar-shaped delegate name while still boxing it as a handle
+# The stored-callback route boxes a scalar payload under a scalar-shaped delegate name
 
-**A class that declares a stored `(Int) -> Unit` listener alongside a per-call `(Int) -> Unit`
-lambda parameter registers one shared delegate name, `NugetIntVoidCallback`, with two incompatible
-parameter lists: `IntPtr arg0Ptr` from the stored route, `int arg0` from the per-call route.**
-Whichever route registers second reuses the first's shape; if the per-call route loses the race, its
-lambda's parameter type no longer matches the delegate's declared shape, the same CS1661/CS1678
-consumer-compile failure [ADR-036](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md)'s
-2026-09-13 amendment just fixed for `Boolean` against `Byte`.
+**A stored `(Int) -> Unit` listener registers its delegate under a scalar-shaped name
+(`NugetIntVoidCallback`) while still boxing the payload as a handle (`IntPtr arg0Ptr`), read back
+with `NugetMarshal.FromHandle<int>`.** Name and wire agree, so there is no collision or compile
+failure today; what remains is that a stored scalar payload pays for a `StableRef` box per
+invocation it does not need.
 
-`storedArgSuffix` (`CirClassTranslator.kt:2818-2825`, in `translateStoredCallbackMethod`) suffixes a
-Kotlin `Int` payload as `Int`, the same fragment the per-call route's `typeSuffix` gives a by-value
-`Int`. But the stored route's `delegateParamList` (`CirClassTranslator.kt:2832-2837`) always boxes a
-non-enum payload as `IntPtr arg${i}Ptr`, never by value: the suffix names the wire the *other* routes
-use for that fragment, not the wire this route actually emits.
+`storedArgSuffix` (`CirClassTranslator.kt:3427-3435`) tests the QUALIFIED type name
+(`kotlin.Int`) against `KOTLIN_TO_CSHARP_RETURN`, a map keyed by SIMPLE name
+(`cir/CirTypeMapping.kt:28-42`). `kotlin.Int` never matches that map, so the suffix falls through to
+`Object` for every primitive, and the delegate registered under that suffix
+(`NugetObjectVoidCallback(IntPtr arg0Ptr, IntPtr _)`) is exactly what the boxed, handle-passed
+implementation emits. A verified spike (a class with both a stored and a per-call `(Int) -> Unit`
+member) confirmed the two delegates that actually register are distinct
+(`NugetIntVoidCallback` for the per-call route, `NugetObjectVoidCallback` for the stored route) and
+both compile clean; there is no `NugetIntVoidCallback` shape conflict on today's main.
+[ADR-036](../adr/036-reverse-interop-mechanism.md)'s 2026-09-13 amendment already says the same: "a
+primitive falls through to the `Object` suffix" (`036:515-519`).
 
-It went unnoticed because no fixture declares a stored callback and a per-call lambda parameter of
-the same primitive type on one class; `test-library`'s stored-callback fixtures use `Mood` (an enum)
-and object payloads, never a bare `Int`/`Double`/`Byte`.
+Closing this means moving the stored route onto the by-value predicate the per-call route and
+[ADR-160](../adr/160-callback-parameter-on-the-forward-plan.md) already use
+(`isByValueCallbackScalar`), which would let a stored scalar payload cross by value instead of
+through a `StableRef` box: a by-value optimisation, not a correctness fix. The trap to avoid:
+renaming `storedArgSuffix`'s output to the simple name without also moving the wire to by-value
+would create the very collision this item used to (incorrectly) describe as already present.
 
-A related, still-latent sibling on the interface-bridge planner: `ForwardBridgeWire.nameFragment()`
-(`ForwardInterfaceBridgePlanner.kt:220-223`) spells `BOOLEAN -> "Byte"` under the separate
-`NugetBridge...` prefix, with no `BYTE` wire member to collide against yet; it must take `Bool` the
-day one is added.
-
-Discovered alongside [ADR-036](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/036-reverse-interop-mechanism.md)'s
-2026-09-13 amendment, while fixing the `Boolean`/`Byte` per-call collision. Verified by reading; not
-reproduced by a fixture.
+Discovered alongside [ADR-036](../adr/036-reverse-interop-mechanism.md)'s 2026-09-13 amendment;
+reassessed and reworded alongside [ADR-160](../adr/160-callback-parameter-on-the-forward-plan.md)'s
+research (spike confirmed no collision). Verified by reading and by spike; not pinned by a
+committed Tier 1 test.

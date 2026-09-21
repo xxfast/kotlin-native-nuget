@@ -15,9 +15,11 @@ the wrapper holding a dangling handle for the rest of the callback body, turning
 `NugetMarshal.LiveHandles`; a use-after-free is not, which is why the fix chose the leak.
 
 It stays invisible today because nothing forces a callback body to dispose the object it is handed:
-`LeakTests` rows 8g through 8j (`LeakTests/LiveHandleTests.cs`) all `using` the payload correctly, so
-they measure the fix's ownership rule, not this residual. No fixture calls a callback route with a
-body that reads the object and drops it without disposing.
+`LeakTests` rows 8g through 8j, and [ADR-160](../adr/160-callback-parameter-on-the-forward-plan.md)'s
+rows 13/13a, all `using` the payload correctly, so they measure the fix's ownership rule, not this
+residual. No fixture calls a callback route with a body that reads the object and drops it without
+disposing; row 13 was measured with the `using` temporarily removed while developing ADR-160
+(+4 handles per iteration), which confirms the leak but was not committed as a test.
 
 Closing it means giving the generated wrappers a finalizer (or a `SafeHandle`-backed release) that
 frees an undisposed handle, which is a separate decision from the ownership fix: it puts native
