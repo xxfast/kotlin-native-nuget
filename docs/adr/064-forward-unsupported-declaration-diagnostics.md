@@ -1898,3 +1898,27 @@ no naming rule is re-derived anywhere. It keeps one narrow synthesis fallback, f
 `translate` loop ever grouped because the declaration never reached `translate` at all -- an
 ADR-115 opt-in-marked top-level function is filtered out before collection, so a file holding only
 one leaves no husk to attach to.
+
+## Amendment (2026-09-22): two new `ERROR_*` kinds, [ADR-162](162-per-declaration-error-containment.md)
+
+Two kinds join the enum, both `ERROR_*` and both new with that ADR rather than a reclassification of
+an existing one:
+
+- `ERROR_INTERNAL_GENERATOR_FAILURE`: a planner, projection, emitter or translator invariant that a
+  legal public Kotlin declaration reached — a raw `error(...)`/`require(...)`/`check(...)`/`!!` that
+  fired because some `when` had not yet learned about a new `BridgeType` variant or route. Distinct
+  from every other kind in this file: it is not a "cannot express this" decision about the author's
+  Kotlin, it is the generator failing at something it was meant to handle, so its hint is "report the
+  failure with this whole message", not "change your Kotlin". Reachable from a plan-time skip too,
+  via `ForwardPlanSkipReason.INTERNAL_FAILURE` — the one plan skip reason that maps to an `ERROR_*`
+  kind rather than a `SKIPPED_*` one.
+- `ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE`: `CirFunctionTranslator`'s `enumParamsUnsupported`, a
+  pre-existing bare `logger.error` with no kind at all, is the last fatal forward diagnostic ADR-162
+  folded into this enum. Behaviour (which functions are refused, and why) is unchanged; only the tag
+  changes.
+
+Both are installed through ADR-162's `guarded(...)` boundary or its plan-time equivalent, not through
+a producer calling `ForwardDiagnosticSink.emit` directly at a throw site the way every other kind in
+this file is. See ADR-162 for the containment mechanism (per-declaration, not per-round) and for why
+the ROADMAP's own "continues, as the `SKIPPED_*` diagnostics do" wording for this family was replaced
+with "fatal everywhere" by human decision.

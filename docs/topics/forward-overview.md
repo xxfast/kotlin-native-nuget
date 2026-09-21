@@ -182,7 +182,12 @@ member, and a compiler plugin's synthesized surface such as kotlinx.serializatio
   entry point; see [Two declarations can't share one C entry point](#entry-point-collision) below.
   A fourth, opt-in only: with `publish { strictDependencyTypes = true }`, an un-admitted dependency
   type that the ordinary default would only warn about and skip becomes
-  `ERROR_UNEXPORTED_DEPENDENCY_TYPE` instead; see below.
+  `ERROR_UNEXPORTED_DEPENDENCY_TYPE` instead; see below. If a Kotlin declaration trips a generator bug
+  rather than a documented limitation, the build fails with `ERROR_INTERNAL_GENERATOR_FAILURE`,
+  naming the declaration, the underlying exception, and an `exclude("<qualified name>")` line that
+  unblocks the build while the bug is reported and fixed; every other offending declaration in the
+  same build is reported the same way, in the same run, rather than one at a time
+  ([ADR-162](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/162-per-declaration-error-containment.md)).
 
 A `List`/`Map`/`Set` parameter with an unsupported element/key/value type (see
 [Collections](collections.md)) is skipped like this, naming the component that failed rather than the
@@ -903,20 +908,21 @@ function, a class method or property, a `suspend` method) names itself, with par
 `file:line`, as above; this includes a generic class's own declared methods and constructor
 ([ADR-147](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/147-generic-class-methods.md)),
 which collide the same way an ordinary class's do. A **generated** member, one Kotlin itself never
-declares, such as the `IDisposable.Dispose()` every class gets for free, a sealed discriminator, or
-a data-class `equals` / `hashCode` / `toString`, names the class (or sealed arm) that owns it plus a
-role in parentheses, since several such members can share one class or arm. `fun dispose()` on an
-exported class is this shape: it collides with the always-generated `Dispose`, and the message
-names the method plus the generated member's role
-([ADR-117](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/117-forward-abi-collision-names-owning-declarations.md)'s
-2026-09-13 amendment):
+declares, such as a sealed discriminator or a data-class `equals` / `hashCode` / `toString`, names
+the class (or sealed arm) that owns it plus a role in parentheses, since several such members can
+share one class or arm.
 
-```
-  - tier1.abicollision.dispose.Closer.dispose()
-    at .../Closer.kt:4
-  - tier1.abicollision.dispose.Closer (generated Dispose)
-    at .../Closer.kt:3
-```
+A method literally named `dispose` is a **different** kind, not this one: every handle class already
+declares `public void Dispose()` for free, so `fun dispose()` collides with that reserved signature
+during generation, and reports `ERROR_CSHARP_SIGNATURE_COLLISION`, the same kind and CS0111 wording
+[Classes and objects](classes-and-objects.md) uses for two same-signature constructors or methods,
+naming the method and "generated Dispose" as the two owners
+([ADR-162](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/162-per-declaration-error-containment.md)).
+It fires earlier than the entry-point check on this page, so it never reaches
+`ERROR_C_ENTRY_POINT_COLLISION` at all; a sealed base's own `dispose()`, and a sealed arm's own
+`dispose()` colliding with the base's *inherited* `Dispose()`, both fire the same way, and both
+report in one round when a hierarchy has more than one. `fun close()` is unaffected: it renders
+`Close()` beside `Dispose()` with no collision.
 
 The hint is always the same: rename one of the colliding declarations. The prefix scheme itself
 (unqualified simple name, no package, no namespace) is unchanged; naming the collision is the interim
@@ -1116,5 +1122,7 @@ re-verification lands, tracked in
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/102-aot-safe-forward-callbacks.md">ADR-102: AOT-safe forward callbacks</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/109-duplicate-type-hazard.md">ADR-109: Forward, duplicate-type hazard across two published packages</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/115-opt-in-marker-declarations.md">ADR-115: Opt-in-marker declarations are out of the exported surface</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/117-forward-abi-collision-names-owning-declarations.md">ADR-117: Forward ABI collision names owning declarations</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/162-per-declaration-error-containment.md">ADR-162: Per-declaration error containment</a>
     </category>
 </seealso>
