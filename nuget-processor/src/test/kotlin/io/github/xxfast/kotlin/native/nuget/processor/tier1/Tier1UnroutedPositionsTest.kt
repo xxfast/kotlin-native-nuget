@@ -62,9 +62,9 @@ class Tier1UnroutedPositionsTest {
 
   /**
    * The 26 individually-named silent cells (ADR-160 took three of the original 29 out: the object,
-   * top-level and extension per-call lambda parameters all bind off the plan now). The three `Dock` secondary constructors are the 30th
-   * to 32nd: they all render the one symbol `Dock.<init>`, so they are counted rather than
-   * matched one by one ([constructorCells]).
+   * top-level and extension per-call lambda parameters all bind off the plan now). The three
+   * `Dock` secondary constructors are the 30th to 32nd: they all render the one symbol
+   * `Dock.<init>`, so they are counted rather than matched one by one ([constructorCells]).
    */
   private val cells: List<Cell> = listOf(
     // --- ordinary class owner (`Depot`) -------------------------------------------------------

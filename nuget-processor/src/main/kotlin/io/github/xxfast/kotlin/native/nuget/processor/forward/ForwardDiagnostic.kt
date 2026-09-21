@@ -734,8 +734,9 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       // is a lambda *return* anywhere but a top-level function, and a lambda whose payload or own
       // return neither the plan nor the hand-written route carries.
       ForwardPlanSkipReason.CALLBACK_PROTOCOL.name ->
-        "a lambda parameter binds at an ordinary position and a lambda return only at a top-level " +
-            "function, so either this position or this lambda's own payload/return has no route"
+        "a lambda parameter binds at an ordinary position and a lambda return only at a " +
+            "top-level function, so either this position or this lambda's own payload/return " +
+            "has no route"
 
       ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL.name ->
         "a `suspend` lambda is not bridged at any position"

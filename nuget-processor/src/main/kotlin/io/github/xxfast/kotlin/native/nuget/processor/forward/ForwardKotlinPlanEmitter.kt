@@ -1252,11 +1252,11 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
   }
 
 /**
- * ADR-160: the Kotlin lambda that forwards an invocation out to the C# delegate, through the ADR-102
- * thunk address in `${name}Ptr` and the GCHandle ctx echoed in `${name}UserData`.
+ * ADR-160: the Kotlin lambda that forwards an invocation out to the C# delegate, through the
+ * ADR-102 thunk address in `${name}Ptr` and the GCHandle ctx echoed in `${name}UserData`.
  *
- * Ownership is ADR-036's, unchanged by the route migration: a `String` or object PAYLOAD is retained
- * on the way out and never released here, because the C# side is what frees it
+ * Ownership is ADR-036's, unchanged by the route migration: a `String` or object PAYLOAD is
+ * retained on the way out and never released here, because the C# side is what frees it
  * (`NugetMarshal.FromHandle<string>` disposes as it reads; an exported object's wrapper takes the
  * raw handle and its `Dispose()` is the free). A `String` RESULT is the other way round: C# mints
  * the box with `WrapString` and no C# owner ever frees it, so this side releases it after reading.

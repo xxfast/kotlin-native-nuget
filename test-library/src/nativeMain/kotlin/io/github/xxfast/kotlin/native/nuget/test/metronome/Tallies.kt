@@ -28,9 +28,11 @@ fun tallyTicks(listener: (Int) -> Unit): Int {
  */
 fun Metronome.everyOtherTick(listener: (Int) -> Unit): Int {
   var fired = 0
-  for (beat in 1..beatCount) if (beat % 2 == 0) {
-    listener(beat)
-    fired++
+  (1..beatCount).forEach { beat ->
+    if (beat % 2 == 0) {
+      listener(beat)
+      fired++
+    }
   }
   return fired
 }

@@ -147,7 +147,8 @@ internal fun legacyRefusedCallbackMember(method: KSFunctionDeclaration): String?
   if (lambdas.size > 1) {
     return "it declares ${lambdas.size} lambda parameters, and this route carries exactly one"
   }
-  val other: KSValueParameter? = method.parameters.firstOrNull { parameter -> parameter !in lambdas }
+  val other: KSValueParameter? =
+    method.parameters.firstOrNull { parameter -> parameter !in lambdas }
   if (other != null) {
     return "it declares the non-lambda parameter `${other.name?.asString() ?: "_"}` beside its " +
         "lambda, which this route drops from both halves"

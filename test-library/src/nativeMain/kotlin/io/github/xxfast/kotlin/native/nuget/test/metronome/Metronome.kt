@@ -107,7 +107,10 @@ class Metronome(private val beats: Int) {
     return beats > 0
   }
 
-  /** Outer `Double`: a floating result comes back in a different register class from the integers. */
+  /**
+   * Outer `Double`: a floating result comes back in a different register class from the
+   * integers.
+   */
   fun runSeconds(listener: (Int) -> Unit): Double {
     repeat(beats) { listener(it + 1) }
     return beats * 0.5
@@ -165,9 +168,11 @@ class Metronome(private val beats: Int) {
   /** Invokes [listener] only for beats above [min], and returns how many times it fired. */
   fun countAbove(min: Int, listener: (Int) -> Unit): Int {
     var fired = 0
-    for (beat in 1..beats) if (beat > min) {
-      listener(beat)
-      fired++
+    (1..beats).forEach { beat ->
+      if (beat > min) {
+        listener(beat)
+        fired++
+      }
     }
     return fired
   }

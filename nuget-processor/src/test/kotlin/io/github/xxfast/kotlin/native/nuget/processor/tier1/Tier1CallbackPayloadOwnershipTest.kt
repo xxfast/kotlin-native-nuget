@@ -96,9 +96,9 @@ class Tier1CallbackPayloadOwnershipTest {
     val result = run()
 
     // ADR-160 re-pinned these two spellings when the per-call route moved onto the ADR-062 plan:
-    // the retain is now inline in the lowered lambda argument and the payload local is named after
-    // the callback parameter (`format`/`action`) rather than positionally. The RULE is unchanged and
-    // is what this cell is about: retain on the way out, no release on this side.
+    // the retain is now inline in the lowered lambda argument and the payload local is named
+    // after the callback parameter (`format`/`action`) rather than positionally. The RULE is
+    // unchanged and is what this cell is about: retain on the way out, no release on this side.
     assertTrue(
       result.generated.contains("NugetHandles.retain(formatArg0 as Any)"),
       "the String payload still crosses as a retained handle; got: ${payloadLines(result)}",
