@@ -1,0 +1,65 @@
+{
+  "package": "Polly.Core",
+  "version": "8.5.2",
+  "asset": "lib/net8.0/Polly.Core.dll",
+  "includes": [],
+  "reader": "ok",
+  "readerError": null,
+  "generation": "ok",
+  "generationError": null,
+  "nullability": {
+    "assemblyOblivious": false,
+    "obliviousMembers": 0
+  },
+  "publicSurface": {
+    "types": 94,
+    "nestedTypes": 0,
+    "structs": 35,
+    "methods": 115,
+    "constructors": 74,
+    "properties": 147,
+    "operators": 6,
+    "events": 0,
+    "genericMethods": 69
+  },
+  "types": {
+    "class": 28,
+    "staticClass": 13,
+    "interface": 0,
+    "enum": 3,
+    "struct": 1,
+    "genericDefinition": 0
+  },
+  "members": {
+    "constructor": { "seen": 21, "bound": 20 },
+    "instanceMethod": { "seen": 6, "bound": 6 },
+    "property": { "seen": 17, "bound": 16 },
+    "readerSkippedMember": { "seen": 109, "bound": 0 },
+    "staticMethod": { "seen": 2, "bound": 2 }
+  },
+  "diagnostics": {
+    "info_async_not_yet_mapped": 2,
+    "info_cancellation_token_not_yet_mapped": 12,
+    "info_uninstantiated_generic_type": 15,
+    "skipped_collection_element": 1,
+    "skipped_generic_type_argument": 9,
+    "skipped_indexer": 5,
+    "skipped_open_generic": 14,
+    "skipped_unbound_generic_instantiation": 28,
+    "skipped_unbound_type_reference": 17,
+    "skipped_unsupported_struct": 35
+  },
+  "unboundTypeReferences": {
+    "System.Action": 1,
+    "System.Exception": 5,
+    "System.TimeProvider": 2,
+    "System.TimeSpan": 9
+  },
+  "collapsedOverloads": {
+    "sets": 0,
+    "membersDropped": 0,
+    "bridgeableMethods": 8,
+    "examples": []
+  },
+  "errors": []
+}

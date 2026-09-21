@@ -1,0 +1,61 @@
+{
+  "package": "NuGet.Versioning",
+  "version": "6.12.1",
+  "asset": "lib/netstandard2.0/NuGet.Versioning.dll",
+  "includes": [],
+  "reader": "ok",
+  "readerError": null,
+  "generation": "ok",
+  "generationError": null,
+  "nullability": {
+    "assemblyOblivious": false,
+    "obliviousMembers": 0
+  },
+  "publicSurface": {
+    "types": 16,
+    "nestedTypes": 0,
+    "structs": 0,
+    "methods": 77,
+    "constructors": 32,
+    "properties": 38,
+    "operators": 6,
+    "events": 0,
+    "genericMethods": 1
+  },
+  "types": {
+    "class": 10,
+    "staticClass": 1,
+    "interface": 1,
+    "enum": 2,
+    "struct": 0,
+    "genericDefinition": 0
+  },
+  "members": {
+    "constructor": { "seen": 28, "bound": 28 },
+    "instanceMethod": { "seen": 35, "bound": 35 },
+    "property": { "seen": 35, "bound": 35 },
+    "readerSkippedMember": { "seen": 27, "bound": 0 },
+    "staticMethod": { "seen": 10, "bound": 10 }
+  },
+  "diagnostics": {
+    "skipped_collection_element": 1,
+    "skipped_empty_interface": 2,
+    "skipped_unbound_type_reference": 26
+  },
+  "unboundTypeReferences": {
+    "NuGet.Versioning.IVersionComparer": 8,
+    "NuGet.Versioning.IVersionRangeComparer": 4,
+    "System.ComponentModel.ITypeDescriptorContext": 4,
+    "System.IFormatProvider": 4,
+    "System.Text.StringBuilder": 1,
+    "System.Type": 2,
+    "System.Version": 3
+  },
+  "collapsedOverloads": {
+    "sets": 0,
+    "membersDropped": 0,
+    "bridgeableMethods": 45,
+    "examples": []
+  },
+  "errors": []
+}

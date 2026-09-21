@@ -6653,6 +6653,16 @@ private fun kotlinBridgeOutbound(type: RirTypeRef, expr: String, dupFnRef: Strin
 // function in this file; the task below is the only place that actually calls logger.warn.
 internal fun diagnosticWarnings(rir: RirFile): List<String> {
   validateDiagnostics(rir)
+  return allDiagnostics(rir).map { (packageId, diagnostic) ->
+    formatDiagnostic(packageId, diagnostic)
+  }
+}
+
+// The same seven sources diagnosticWarnings concatenates, STRUCTURED, before formatDiagnostic
+// throws the kind away. The reverse census buckets by kind and cannot recover it from the rendered
+// string. validateDiagnostics deliberately stays in diagnosticWarnings and not here: the census
+// must be able to enumerate the `error_*` kinds it would have thrown on.
+internal fun allDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> {
   val boundTypes: Set<RirTypeKey> = boundHandleTypes(rir)
   val structs: Map<RirTypeKey, RirStruct> = boundStructTypes(rir)
   // ADR-072: derived once here too, so a member skipped for exceeding the arity ceiling is still
@@ -6716,9 +6726,8 @@ internal fun diagnosticWarnings(rir: RirFile): List<String> {
   // members), the positions that do not ride the shared conversion path.
   val fromCollectionPositions: List<Pair<String, RirDiagnostic>> =
     collectionPositionDiagnostics(rir)
-  return (fromReader + fromCollisions + fromArityLimits + fromAmbiguousGenericConstructors +
-      fromDeferredAsync + fromCollapsedOverloads + fromCollectionPositions)
-    .map { (packageId, diagnostic) -> formatDiagnostic(packageId, diagnostic) }
+  return fromReader + fromCollisions + fromArityLimits + fromAmbiguousGenericConstructors +
+      fromDeferredAsync + fromCollapsedOverloads + fromCollectionPositions
 }
 
 // ADR-155 Q8: one skipped_overload_set per DROPPED MEMBER (never one per set: a user reading the

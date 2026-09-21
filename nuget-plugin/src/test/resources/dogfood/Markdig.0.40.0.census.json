@@ -1,0 +1,79 @@
+{
+  "package": "Markdig",
+  "version": "0.40.0",
+  "asset": "lib/net8.0/Markdig.dll",
+  "includes": [],
+  "reader": "ok",
+  "readerError": null,
+  "generation": "ok",
+  "generationError": null,
+  "nullability": {
+    "assemblyOblivious": false,
+    "obliviousMembers": 0
+  },
+  "publicSurface": {
+    "types": 310,
+    "nestedTypes": 15,
+    "structs": 11,
+    "methods": 530,
+    "constructors": 260,
+    "properties": 374,
+    "operators": 3,
+    "events": 10,
+    "genericMethods": 40
+  },
+  "types": {
+    "class": 235,
+    "staticClass": 19,
+    "interface": 10,
+    "enum": 3,
+    "struct": 1,
+    "genericDefinition": 1
+  },
+  "members": {
+    "constructor": { "seen": 220, "bound": 219 },
+    "instanceMethod": { "seen": 200, "bound": 196 },
+    "property": { "seen": 249, "bound": 249 },
+    "readerSkippedMember": { "seen": 179, "bound": 0 },
+    "staticMethod": { "seen": 93, "bound": 93 }
+  },
+  "diagnostics": {
+    "info_uninstantiated_generic_type": 11,
+    "skipped_ambiguous_generic_constructor": 4,
+    "skipped_array": 7,
+    "skipped_collection_element": 12,
+    "skipped_empty_interface": 1,
+    "skipped_event": 10,
+    "skipped_generic_interface": 3,
+    "skipped_indexer": 5,
+    "skipped_member_name_collision": 7,
+    "skipped_open_generic": 10,
+    "skipped_unbound_generic_instantiation": 15,
+    "skipped_unbound_type_reference": 36,
+    "skipped_unsupported_enum": 24,
+    "skipped_unsupported_struct": 60
+  },
+  "unboundTypeReferences": {
+    "CreateEmphasisInlineDelegate": 1,
+    "CreateLinkInlineDelegate": 1,
+    "Enumerator": 2,
+    "GetTagDelegate": 1,
+    "GetUrlDelegate": 1,
+    "InfoParserDelegate": 1,
+    "Markdig.Syntax.IMarkdownObject": 3,
+    "PostMatchDelegate": 1,
+    "System.AsyncCallback": 4,
+    "System.IAsyncResult": 4,
+    "System.IO.TextWriter": 12,
+    "System.Text.StringBuilder": 2,
+    "System.Type": 1,
+    "System.Uri": 2
+  },
+  "collapsedOverloads": {
+    "sets": 0,
+    "membersDropped": 0,
+    "bridgeableMethods": 279,
+    "examples": []
+  },
+  "errors": []
+}

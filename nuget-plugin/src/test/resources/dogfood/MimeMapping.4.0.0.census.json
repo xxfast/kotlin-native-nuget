@@ -1,0 +1,52 @@
+{
+  "package": "MimeMapping",
+  "version": "4.0.0",
+  "asset": "lib/netstandard2.0/MimeMapping.dll",
+  "includes": [],
+  "reader": "ok",
+  "readerError": null,
+  "generation": "ok",
+  "generationError": null,
+  "nullability": {
+    "assemblyOblivious": false,
+    "obliviousMembers": 0
+  },
+  "publicSurface": {
+    "types": 3,
+    "nestedTypes": 1,
+    "structs": 0,
+    "methods": 2,
+    "constructors": 0,
+    "properties": 2,
+    "operators": 0,
+    "events": 0,
+    "genericMethods": 0
+  },
+  "types": {
+    "class": 0,
+    "staticClass": 2,
+    "interface": 0,
+    "enum": 0,
+    "struct": 0,
+    "genericDefinition": 0
+  },
+  "members": {
+    "constructor": { "seen": 0, "bound": 0 },
+    "instanceMethod": { "seen": 0, "bound": 0 },
+    "property": { "seen": 0, "bound": 0 },
+    "readerSkippedMember": { "seen": 3, "bound": 0 },
+    "staticMethod": { "seen": 1, "bound": 1 }
+  },
+  "diagnostics": {
+    "skipped_array": 1,
+    "skipped_indexer": 2
+  },
+  "unboundTypeReferences": {},
+  "collapsedOverloads": {
+    "sets": 0,
+    "membersDropped": 0,
+    "bridgeableMethods": 1,
+    "examples": []
+  },
+  "errors": []
+}

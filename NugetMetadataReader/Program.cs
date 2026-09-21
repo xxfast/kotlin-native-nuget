@@ -255,7 +255,123 @@ internal static class AssemblyExtractor
                     "IllegalStateException at the bridge, naming the member."));
         }
 
-        return new RirAssembly(packageId, assemblyName, rirNamespaces, diagnostics);
+        return new RirAssembly(
+            packageId, assemblyName, rirNamespaces, diagnostics, CountPublicSurface(mr));
+    }
+
+    /// <summary>
+    /// Counts the whole public surface of the assembly, independent of every filter above: nested
+    /// public types are counted (the loop that builds <c>namespaceMap</c> drops them), so are the
+    /// members of value types that never reach the RIR. Accessors and <c>op_*</c> methods are
+    /// excluded from <c>methods</c>; operators get their own count. This is a DENOMINATOR, not a
+    /// binding decision, so it deliberately ignores includes/excludes: the census divides by the
+    /// package's real surface.
+    /// </summary>
+    private static RirPublicSurface CountPublicSurface(MetadataReader mr)
+    {
+        var types = 0;
+        var nestedTypes = 0;
+        var structs = 0;
+        var methods = 0;
+        var constructors = 0;
+        var properties = 0;
+        var operators = 0;
+        var events = 0;
+        var genericMethods = 0;
+
+        foreach (var handle in mr.TypeDefinitions)
+        {
+            var typeDef = mr.GetTypeDefinition(handle);
+            var visibility = typeDef.Attributes & System.Reflection.TypeAttributes.VisibilityMask;
+            var isNested = visibility == System.Reflection.TypeAttributes.NestedPublic;
+            var isTopLevel = visibility == System.Reflection.TypeAttributes.Public;
+            if (!isNested && !isTopLevel) continue;
+            if (mr.GetString(typeDef.Name) == "<Module>") continue;
+
+            // A nested public type is only reachable if every enclosing type is public too.
+            if (isNested && !IsPubliclyReachable(mr, typeDef)) continue;
+
+            types++;
+            if (isNested) nestedTypes++;
+            if (MetadataHelpers.IsValueType(mr, typeDef) && !MetadataHelpers.IsEnum(mr, typeDef))
+                structs++;
+
+            foreach (var methodHandle in typeDef.GetMethods())
+            {
+                var method = mr.GetMethodDefinition(methodHandle);
+                if ((method.Attributes & System.Reflection.MethodAttributes.MemberAccessMask)
+                    != System.Reflection.MethodAttributes.Public)
+                    continue;
+
+                var name = mr.GetString(method.Name);
+                if (name == ".ctor")
+                {
+                    constructors++;
+                    continue;
+                }
+
+                if (name == ".cctor") continue;
+                if (name.StartsWith("get_", StringComparison.Ordinal) ||
+                    name.StartsWith("set_", StringComparison.Ordinal) ||
+                    name.StartsWith("add_", StringComparison.Ordinal) ||
+                    name.StartsWith("remove_", StringComparison.Ordinal) ||
+                    name.StartsWith("raise_", StringComparison.Ordinal))
+                    continue;
+
+                if (name.StartsWith("op_", StringComparison.Ordinal))
+                {
+                    operators++;
+                    continue;
+                }
+
+                methods++;
+                if (method.GetGenericParameters().Count > 0) genericMethods++;
+            }
+
+            foreach (var propertyHandle in typeDef.GetProperties())
+            {
+                var property = mr.GetPropertyDefinition(propertyHandle);
+                var accessors = property.GetAccessors();
+                if (IsPublicAccessor(mr, accessors.Getter) || IsPublicAccessor(mr, accessors.Setter))
+                    properties++;
+            }
+
+            foreach (var eventHandle in typeDef.GetEvents())
+            {
+                var evt = mr.GetEventDefinition(eventHandle);
+                var accessors = evt.GetAccessors();
+                if (IsPublicAccessor(mr, accessors.Adder) || IsPublicAccessor(mr, accessors.Remover))
+                    events++;
+            }
+        }
+
+        return new RirPublicSurface(
+            types, nestedTypes, structs, methods, constructors, properties, operators, events,
+            genericMethods);
+    }
+
+    private static bool IsPublicAccessor(MetadataReader mr, MethodDefinitionHandle handle)
+    {
+        if (handle.IsNil) return false;
+        var method = mr.GetMethodDefinition(handle);
+        return (method.Attributes & System.Reflection.MethodAttributes.MemberAccessMask)
+            == System.Reflection.MethodAttributes.Public;
+    }
+
+    private static bool IsPubliclyReachable(MetadataReader mr, TypeDefinition typeDef)
+    {
+        var current = typeDef;
+        while (true)
+        {
+            var declaring = current.GetDeclaringType();
+            if (declaring.IsNil) return true;
+            var parent = mr.GetTypeDefinition(declaring);
+            var visibility = parent.Attributes & System.Reflection.TypeAttributes.VisibilityMask;
+            if (visibility != System.Reflection.TypeAttributes.Public &&
+                visibility != System.Reflection.TypeAttributes.NestedPublic)
+                return false;
+            current = parent;
+        }
     }
 
     /// <summary>
@@ -4341,18 +4457,63 @@ internal sealed class RirAssembly
         string packageId,
         string assemblyName,
         IReadOnlyList<RirNamespace> namespaces,
-        IReadOnlyList<RirDiagnostic> diagnostics)
+        IReadOnlyList<RirDiagnostic> diagnostics,
+        RirPublicSurface? publicSurface = null)
     {
         PackageId = packageId;
         AssemblyName = assemblyName;
         Namespaces = namespaces;
         Diagnostics = diagnostics;
+        PublicSurface = publicSurface;
     }
 
     public string PackageId { get; }
     public string AssemblyName { get; }
     public IReadOnlyList<RirNamespace> Namespaces { get; }
     public IReadOnlyList<RirDiagnostic> Diagnostics { get; }
+    public RirPublicSurface? PublicSurface { get; }
+}
+
+/// <summary>
+/// The independent denominator for the reverse census: what the assembly's public surface
+/// actually contains, counted straight off the metadata BEFORE the top-level-only type filter and
+/// before any bridgeability decision. Nothing downstream reads it; it exists so a bound/total
+/// ratio cannot silently shrink its own denominator when a whole family of members (nested public
+/// types, the members of a struct that fails ADR-056) is dropped with no diagnostic at all.
+/// </summary>
+internal sealed class RirPublicSurface
+{
+    public RirPublicSurface(
+        int types,
+        int nestedTypes,
+        int structs,
+        int methods,
+        int constructors,
+        int properties,
+        int operators,
+        int events,
+        int genericMethods)
+    {
+        Types = types;
+        NestedTypes = nestedTypes;
+        Structs = structs;
+        Methods = methods;
+        Constructors = constructors;
+        Properties = properties;
+        Operators = operators;
+        Events = events;
+        GenericMethods = genericMethods;
+    }
+
+    public int Types { get; }
+    public int NestedTypes { get; }
+    public int Structs { get; }
+    public int Methods { get; }
+    public int Constructors { get; }
+    public int Properties { get; }
+    public int Operators { get; }
+    public int Events { get; }
+    public int GenericMethods { get; }
 }
 
 internal sealed class RirFile
@@ -4393,6 +4554,7 @@ internal sealed class RirDiagnostic
 
 [JsonSerializable(typeof(RirFile))]
 [JsonSerializable(typeof(RirAssembly))]
+[JsonSerializable(typeof(RirPublicSurface))]
 [JsonSerializable(typeof(RirNamespace))]
 [JsonSerializable(typeof(RirType))]
 [JsonSerializable(typeof(RirClass))]

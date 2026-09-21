@@ -1,0 +1,82 @@
+{
+  "package": "NodaTime",
+  "version": "3.2.2",
+  "asset": "lib/net8.0/NodaTime.dll",
+  "includes": [],
+  "reader": "ok",
+  "readerError": null,
+  "generation": "ok",
+  "generationError": null,
+  "nullability": {
+    "assemblyOblivious": false,
+    "obliviousMembers": 0
+  },
+  "publicSurface": {
+    "types": 93,
+    "nestedTypes": 4,
+    "structs": 13,
+    "methods": 619,
+    "constructors": 54,
+    "properties": 378,
+    "operators": 102,
+    "events": 0,
+    "genericMethods": 2
+  },
+  "types": {
+    "class": 42,
+    "staticClass": 22,
+    "interface": 3,
+    "enum": 1,
+    "struct": 0,
+    "genericDefinition": 1
+  },
+  "members": {
+    "constructor": { "seen": 14, "bound": 14 },
+    "instanceMethod": { "seen": 66, "bound": 65 },
+    "property": { "seen": 173, "bound": 102 },
+    "readerSkippedMember": { "seen": 244, "bound": 0 },
+    "staticMethod": { "seen": 44, "bound": 43 }
+  },
+  "diagnostics": {
+    "info_uninstantiated_generic_type": 1,
+    "skipped_collection_element": 2,
+    "skipped_collection_position": 1,
+    "skipped_empty_interface": 1,
+    "skipped_generic_interface": 1,
+    "skipped_generic_type_argument": 13,
+    "skipped_indexer": 6,
+    "skipped_unbound_generic_instantiation": 21,
+    "skipped_unbound_type_reference": 70,
+    "skipped_unsupported_enum": 7,
+    "skipped_unsupported_struct": 125
+  },
+  "unboundTypeReferences": {
+    "NodaTime.IClock": 7,
+    "System.AsyncCallback": 1,
+    "System.DateOnly": 1,
+    "System.DateTime": 2,
+    "System.DateTimeOffset": 3,
+    "System.DayOfWeek": 4,
+    "System.Diagnostics.Stopwatch": 1,
+    "System.Exception": 4,
+    "System.Globalization.CalendarWeekRule": 1,
+    "System.Globalization.CultureInfo": 29,
+    "System.IAsyncResult": 3,
+    "System.IO.Stream": 1,
+    "System.Text.StringBuilder": 1,
+    "System.TimeOnly": 1,
+    "System.TimeProvider": 4,
+    "System.TimeSpan": 2,
+    "System.TimeZoneInfo": 2,
+    "System.Xml.Schema.XmlSchema": 1,
+    "System.Xml.Schema.XmlSchemaSet": 1,
+    "System.Xml.XmlQualifiedName": 1
+  },
+  "collapsedOverloads": {
+    "sets": 0,
+    "membersDropped": 0,
+    "bridgeableMethods": 102,
+    "examples": []
+  },
+  "errors": []
+}

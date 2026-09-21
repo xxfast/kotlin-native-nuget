@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The reverse dogfooding census (the `dogfood` job) is the only thing these two add. It restores
+  # nine real published packages from nuget.org, so it runs on a schedule and on demand rather than
+  # on every push, and it is never a required check.
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
 
 jobs:
   test:
@@ -18,6 +24,10 @@ jobs:
             aot_binary: ./AotSmokeTest/bin/Release/net10.0/win-x64/publish/AotSmokeTest.exe
 
     runs-on: ${{ matrix.os }}
+    # The weekly schedule and workflow_dispatch above exist only for the `dogfood` job, and a
+    # workflow-level trigger fires every job in the file. This matrix pays for two Kotlin/Native
+    # links and two AOT publishes, so it stays on push and pull_request only.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
 
     steps:
       - uses: actions/checkout@v4
@@ -130,6 +140,8 @@ jobs:
   smoke-test:
     name: Consume plugin by coordinate
     runs-on: macos-latest
+    # Same reason as `test` above: not a job the weekly dogfood schedule should pay for.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
 
     steps:
       - uses: actions/checkout@v4
@@ -152,3 +164,68 @@ jobs:
 
       - name: Resolve the plugin and processor by coordinate
         run: ./gradlew -p smoke-test verifyProcessorResolvesByCoordinate
+
+  # The reverse dogfooding census: the real plugin pipeline over nine pinned published NuGet
+  # packages, compared against the committed goldens in nuget-plugin/src/test/resources/dogfood.
+  # Deliberately NOT a required check: it reaches nuget.org, and a feed outage must not block a
+  # merge. On a pull request it only runs when the change touches something that can move a census
+  # number; it always runs on the weekly schedule and on workflow_dispatch. No Kotlin/Native
+  # toolchain is needed, so this is the cheapest runner class in the workflow.
+  dogfood:
+    name: Reverse census over real packages
+    runs-on: ubuntu-latest
+    # Pull requests (path-filtered in the first step below), the weekly schedule and on demand. NOT
+    # on push: a merge to main has already had this run on its pull request.
+    if: github.event_name != 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The path filter below diffs against the merge base, which needs more than one commit.
+          fetch-depth: 0
+
+      - name: Decide whether this change can move a census number
+        id: filter
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base="origin/${{ github.base_ref }}"
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" || true
+          changed=$(git diff --name-only "$base"...HEAD || true)
+          echo "changed files:"
+          echo "$changed"
+          if echo "$changed" | grep -Eq '^(NugetMetadataReader/|nuget-plugin/src/main/kotlin/io/github/xxfast/kotlin/native/nuget/rir/|nuget-plugin/src/main/kotlin/io/github/xxfast/kotlin/native/nuget/NugetGenerateBindingsTask\.kt|nuget-plugin/src/main/kotlin/io/github/xxfast/kotlin/native/nuget/NugetGenerateShimsTask\.kt|nuget-plugin/src/test/resources/dogfood/|nuget-plugin/src/test/kotlin/io/github/xxfast/kotlin/native/nuget/(DogfoodCensusTest|RirCensusTest|RealPackageFixture)\.kt|scripts/verify-dogfood\.sh|\.github/workflows/ci\.yml)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-java@v4
+        if: steps.filter.outputs.run == 'true'
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        if: steps.filter.outputs.run == 'true'
+
+      - uses: actions/setup-dotnet@v4
+        if: steps.filter.outputs.run == 'true'
+        with:
+          dotnet-version: 10.0.x
+
+      # Keyed on the pinned package list, so a warm run never touches the feed at all and a version
+      # bump invalidates the cache exactly once.
+      - name: Cache the global NuGet package cache
+        if: steps.filter.outputs.run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: dogfood-nuget-${{ hashFiles('nuget-plugin/src/test/resources/dogfood/packages.json') }}
+          restore-keys: dogfood-nuget-
+
+      - name: Reverse census
+        if: steps.filter.outputs.run == 'true'
+        run: ./gradlew -p nuget-plugin dogfoodCensus

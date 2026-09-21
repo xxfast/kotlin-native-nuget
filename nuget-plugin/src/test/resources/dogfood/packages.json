@@ -1,0 +1,11 @@
+[
+  { "id": "MimeMapping", "version": "4.0.0", "includes": [] },
+  { "id": "NuGet.Versioning", "version": "6.12.1", "includes": [] },
+  { "id": "Humanizer.Core", "version": "2.14.1", "includes": [] },
+  { "id": "NodaTime", "version": "3.2.2", "includes": [] },
+  { "id": "Polly.Core", "version": "8.5.2", "includes": [] },
+  { "id": "Serilog", "version": "4.2.0", "includes": [] },
+  { "id": "Markdig", "version": "0.40.0", "includes": [] },
+  { "id": "CsvHelper", "version": "33.0.1", "includes": [] },
+  { "id": "Newtonsoft.Json", "version": "13.0.3", "includes": [] }
+]

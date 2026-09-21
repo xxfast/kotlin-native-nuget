@@ -16,6 +16,30 @@ data class RirAssembly(
   val assemblyName: String,
   val namespaces: List<RirNamespace>,
   val diagnostics: List<RirDiagnostic> = emptyList(),
+  // The reverse census' independent denominator. Optional and defaulted so a `reverse-ir.json`
+  // written by an older reader (or a hand-built fixture) still parses; nothing in either generator
+  // reads it, and no binding decision may ever depend on it.
+  val publicSurface: RirPublicSurface? = null,
+)
+
+/**
+ * What the assembly's public surface actually contains, counted off the metadata by the reader
+ * BEFORE its top-level-only type filter and before any bridgeability decision. The census divides
+ * its bound count by this, so that a family of members dropped with no diagnostic at all (nested
+ * public types, the members of a struct that fails ADR-056) shrinks the ratio instead of
+ * disappearing from both halves of it.
+ */
+@Serializable
+data class RirPublicSurface(
+  val types: Int = 0,
+  val nestedTypes: Int = 0,
+  val structs: Int = 0,
+  val methods: Int = 0,
+  val constructors: Int = 0,
+  val properties: Int = 0,
+  val operators: Int = 0,
+  val events: Int = 0,
+  val genericMethods: Int = 0,
 )
 
 @Serializable
