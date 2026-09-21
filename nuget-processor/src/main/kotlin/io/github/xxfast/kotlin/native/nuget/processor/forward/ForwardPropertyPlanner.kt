@@ -1013,7 +1013,13 @@ internal class ForwardPropertyPlanner(
     if (this !is BridgeType.Nullable) return null
     return when (type) {
       // ADR-080: a bare enum wires as its `int` ordinal, which has no spare null either.
-      is BridgeType.Primitive, BridgeType.Instant, BridgeType.Duration, is BridgeType.Enum -> type
+      // ADR-098 amendment (boundary nullability part C): `Char` wires as CHAR16 (`unsigned short`),
+      // which has no spare null either -- U+0000 is a legitimate character. It is its own
+      // `BridgeType` rather than a `PrimitiveKind`, which is the only reason it was not already in
+      // this set; before this arm existed the getter planned `Direct` and the Kotlin emitter threw
+      // out of `KotlinSymbolProcessing.execute`, aborting generation for the whole module.
+      is BridgeType.Primitive, BridgeType.Char, BridgeType.Instant, BridgeType.Duration,
+      is BridgeType.Enum -> type
       is BridgeType.ValueClass ->
         if (type.underlying is BridgeType.Primitive || type.underlying is BridgeType.Enum) type
         else null

@@ -1969,7 +1969,11 @@ internal class ForwardCallablePlanner(
     // the `_value` call returning the underlying's own wire.
     if (origin == ForwardCallableOrigin.TOP_LEVEL &&
       result is BridgeType.Nullable &&
-      (result.type is BridgeType.Primitive || result.type == BridgeType.Instant ||
+      // ADR-098 amendment (boundary nullability part C): `Char?` joins the same reroute, its
+      // by-value CHAR16 slot in the `_value` call. ADR-076, ADR-079 and ADR-080 each added their
+      // type here; when this legacy route retires, `Char?` moves with the rest of the set.
+      (result.type is BridgeType.Primitive || result.type == BridgeType.Char ||
+          result.type == BridgeType.Instant ||
           result.type == BridgeType.Duration ||
           result.type is BridgeType.Enum ||
           (result.type as? BridgeType.ValueClass)?.underlying?.isHasValueFanOutUnderlying() == true)
@@ -2025,7 +2029,8 @@ internal class ForwardCallablePlanner(
   ): ForwardCallableCatalogEntry {
     val inner: BridgeType = result.type
     require(
-      inner is BridgeType.Primitive || inner == BridgeType.Instant ||
+      inner is BridgeType.Primitive || inner == BridgeType.Char ||
+          inner == BridgeType.Instant ||
           inner == BridgeType.Duration ||
           inner is BridgeType.Enum ||
           (inner as? BridgeType.ValueClass)?.underlying?.isHasValueFanOutUnderlying() == true
@@ -2068,6 +2073,11 @@ internal class ForwardCallablePlanner(
     )
     val valueWireType: ForwardAbiWireType = when (inner) {
       is BridgeType.Primitive -> inner.wireType()
+      // ADR-098 amendment (boundary nullability part C): CHAR16 by value, so the `_value` import
+      // renders `char` and inherits ADR-098's `[return: MarshalAs(UnmanagedType.U2)]`. Without this
+      // arm the plan claimed INT64 while the projection rendered `char`, which the ADR-055 contract
+      // check catches as `expected ... -> short, actual ... -> long`.
+      BridgeType.Char -> ForwardAbiWireType.CHAR16
       // ADR-079: the `_value` call returns the underlying's wire (the primitive's own, INT32 for
       // an enum ordinal); the box step composes in the emitted expressions at both ends.
       is BridgeType.ValueClass -> inner.underlying.underlyingWireType()
@@ -2946,7 +2956,11 @@ internal class ForwardCallablePlanner(
         )
       }
 
-      is BridgeType.Primitive -> listOf(
+      // ADR-098 amendment (boundary nullability part C): `Char?` takes the identical adjacent pair,
+      // the value slot carrying CHAR16 by value. A by-value `char` slot is exactly what a non-null
+      // `Char` parameter already uses, so ADR-098's `[MarshalAs(UnmanagedType.U2)]` covers it and no
+      // `out char` (which silently narrows every non-ASCII character) is ever minted.
+      is BridgeType.Primitive, BridgeType.Char -> listOf(
         ForwardAbiParameter(
           name = "${name}HasValue",
           wireType = ForwardAbiWireType.BOOLEAN,
@@ -3403,6 +3417,42 @@ internal class ForwardCallablePlanner(
       helperRequirements = setOf(ForwardHelperRequirement.ENUM_ORDINAL),
     )
 
+    // ADR-098 amendment (boundary nullability part C): `Char?` is the Enum arm above with the
+    // ordinal step replaced by `.code`. `valueOut` carries Primitive(USHORT), so it renders as a
+    // blittable `out ushort` and Kotlin writes through a `UShortVar` (kotlinx.cinterop has no
+    // `CharVar`). Deliberately NOT an `out char`: a BARE `out char` marshals one ANSI byte and
+    // silently corrupts every non-ASCII character ('e-acute' to U+FFFD), and while
+    // `[MarshalAs(UnmanagedType.U2)] out char` measures correct on JIT it is unverified under
+    // NativeAOT and would need a second arm in `outParameterMarshalPrefix`. `ushort` is blittable
+    // by construction and reuses the Enum `valueOutTransferType()` path unchanged.
+    BridgeType.Char -> ForwardResultShape(
+      wireType = ForwardAbiWireType.BOOLEAN,
+      transfer = ForwardTransfer(
+        subject = "result",
+        type = BridgeType.Nullable(type),
+        flow = ForwardFlow.OUT_OF_KOTLIN,
+        passing = ForwardPassing.VALUE,
+        ownership = ForwardOwnership.BORROWED,
+        conversion = ForwardConversion.DIRECT,
+      ),
+      extraParameters = listOf(
+        ForwardAbiParameter(
+          name = "valueOut",
+          wireType = ForwardAbiWireType.POINTER,
+          direction = ForwardAbiDirection.OUT,
+          transfer = ForwardTransfer(
+            subject = "valueOut",
+            type = BridgeType.Primitive(PrimitiveKind.USHORT),
+            flow = ForwardFlow.OUT_OF_KOTLIN,
+            passing = ForwardPassing.OUT,
+            ownership = ForwardOwnership.BORROWED,
+            conversion = ForwardConversion.DIRECT,
+          ),
+          role = ForwardAbiRole.VALUE_OUT,
+        )
+      ),
+    )
+
     else -> null
   }
 
@@ -3499,6 +3549,8 @@ internal class ForwardCallablePlanner(
   private fun BridgeType.isHasValueFanOutInput(): Boolean {
     val inner: BridgeType = (this as? BridgeType.Nullable)?.type ?: return false
     return inner.isHasValueFanOutUnderlying() ||
+        // ADR-098 amendment (boundary nullability part C): `Char?` fans out too.
+        inner == BridgeType.Char ||
         inner == BridgeType.Instant || inner == BridgeType.Duration ||
         (inner as? BridgeType.ValueClass)?.underlying?.isHasValueFanOutUnderlying() == true
   }
@@ -3626,6 +3678,9 @@ internal class ForwardCallablePlanner(
       // PARAMETER skipped while a nullable interface RETURN and PROPERTY both bound.
       is BridgeType.Interface,
       // ADR-106: `Uuid?` rides the null pointer, like `String?`.
+      // ADR-098 amendment (boundary nullability part C): `Char?` fans out to the has-value pair
+      // with a by-value `char` in the value slot, the same way a nullable primitive does.
+      BridgeType.Char,
       BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid -> null
 
       // ADR-080: a bare nullable enum fans out to the has-value pair with the ordinal in the

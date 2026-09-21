@@ -261,11 +261,14 @@ private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallableP
   val inner: BridgeType = result.type
   // ADR-079: a Primitive/Enum-underlying value class rides the same two-call shape, unboxing to
   // the underlying on the `_value` call.
+  // ADR-098 amendment (boundary nullability part C): and so does `Char?`, its by-value CHAR16 slot
+  // on the `_value` call.
   require(
-    inner is BridgeType.Primitive || inner == BridgeType.Instant || inner == BridgeType.Duration ||
+    inner is BridgeType.Primitive || inner == BridgeType.Char ||
+        inner == BridgeType.Instant || inner == BridgeType.Duration ||
         inner is BridgeType.ValueClass || inner is BridgeType.Enum
   ) {
-    "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive, Instant, " +
+    "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive, Char, Instant, " +
         "Duration, enum or value class"
   }
   val error: ForwardAbiParameter = requireNotNull(plan.errorSlot) {
@@ -835,6 +838,26 @@ private fun addNullableResult(
       )
     }
 
+    // ADR-098 amendment (boundary nullability part C): same BOOLEAN + valueOut shape, writing the
+    // character's `.code` as a `UShort` through a `UShortVar`. kotlinx.cinterop has no `CharVar`
+    // (`unresolved reference`, measured on Kotlin/Native 2.4.10), and the plan's valueOut transfer
+    // type is Primitive(USHORT) to match, so C# reads `out ushort` and casts.
+    BridgeType.Char -> {
+      require(call.result == ForwardAbiWireType.BOOLEAN) {
+        "Forward Kotlin nullable Char result must use BOOLEAN"
+      }
+      val valueOut: ForwardAbiParameter = requireNotNull(
+        call.parameters.firstOrNull { parameter -> parameter.role == ForwardAbiRole.VALUE_OUT },
+      ) { "Forward Kotlin nullable Char result is missing valueOut" }
+      builder.returns(kotlinType("Boolean"))
+      builder.addCode(
+        nullablePrimitiveResultBody(invocation, valueOut.name, errorName, "result.code.toUShort()"),
+        cVarType(PrimitiveKind.USHORT),
+        cOpaquePointerVar,
+        nugetHandles,
+      )
+    }
+
     // ADR-076: same BOOLEAN + valueOut shape as the nullable-primitive case above, except the
     // Kotlin Instant result is converted to ticks before it is written into valueOut.
     // ADR-103: Duration rides the identical branch; `toDotNetTicks()` resolves on its own receiver.
@@ -1206,7 +1229,9 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
       is BridgeType.TypeParameter ->
         "${parameter.name}?.asStableRef<${inner.stableRefTypeName()}>()?.get()"
 
-      is BridgeType.Primitive ->
+      // ADR-098 amendment (boundary nullability part C): `Char?` arrives as the same adjacent pair
+      // and needs no conversion -- the by-value slot already IS a Kotlin `Char`.
+      is BridgeType.Primitive, BridgeType.Char ->
         "if (${parameter.name}HasValue) ${parameter.name} else null"
 
       // ADR-080: same HasValue guard, with the ordinal lookup the non-null enum branch uses.

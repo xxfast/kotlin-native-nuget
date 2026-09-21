@@ -261,6 +261,18 @@ private fun FileSpec.Builder.addNullableValueGetter(
       getterBuilder
     }
 
+    // ADR-098 amendment (boundary nullability part C): `Char?` rides the same LegacyTwoCall
+    // `_value` call, returning a by-value `Char` over the CHAR16 wire. The by-value slot is the one
+    // a non-null `Char` property already uses, so the U2 marshalling ADR-098 minted covers it
+    // unchanged; only the shape selection is new.
+    BridgeType.Char -> exportBuilder(call, plan.receiver, plan.symbol)
+      .returns(kotlinType("Char"))
+      .addCode(
+        valueBody("${plan.accessExpression()}!!", "errorOut", "'\\u0000'"),
+        cOpaquePointerVar,
+        nugetHandles,
+      )
+
     // ADR-076: same LegacyTwoCall value shape as the nullable Primitive case above, converted to
     // ticks before it crosses the wire.
     // ADR-103: same again for Duration.

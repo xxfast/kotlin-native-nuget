@@ -1131,13 +1131,19 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // Issue #131: it can name the offending *parameter* though, which is what the reader needs to
   // find the type in their own source. Without a name (a return, or an extension receiver) the
   // shipped sentence is unchanged.
+  // ADR-098 amendment (boundary nullability part C): the old wording recommended "a separate
+  // has-value/value pair", which described the generator's OWN wire shape rather than anything the
+  // author could write, and for `Char?` it recommended exactly the shape the generator now builds
+  // itself (that type no longer reaches this reason at all). The replacement names the two things
+  // an author can actually do to their own API.
   ForwardPlanSkipReason.NULLABLE ->
     if (parameter != null) {
       "the nullable parameter `$parameter` has no wire at an input position; expose a " +
-          "non-nullable wrapper, or a separate has-value/value pair, instead"
+          "non-nullable wrapper, or split the member in two (one overload that takes the value " +
+          "and one that takes none), instead"
     } else {
-      "expose a non-nullable wrapper, or a separate has-value/value pair, instead of a nullable " +
-          "value at this position"
+      "expose a non-nullable wrapper, or split the member in two (one that reports whether there " +
+          "is a value and one that returns it), instead of a nullable value at this position"
     }
 
   ForwardPlanSkipReason.UNSUPPORTED_COMBINATION ->

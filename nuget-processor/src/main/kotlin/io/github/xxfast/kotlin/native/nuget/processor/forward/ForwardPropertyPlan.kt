@@ -81,7 +81,10 @@ internal data class ForwardPropertyPlan(
     val nullableInner: BridgeType? = (type as? BridgeType.Nullable)?.type
     val underlying: BridgeType? = (nullableInner as? BridgeType.ValueClass)?.underlying
     // ADR-080: a bare nullable enum rides the same shapes, its `int` ordinal in the value slot.
+    // ADR-098 amendment (boundary nullability part C): `Char?` joins the same set -- CHAR16 has no
+    // spare null, so the has-value channel is out of band exactly as it is for a primitive.
     val isNullableLegacyPrimitive: Boolean = nullableInner is BridgeType.Primitive ||
+        nullableInner == BridgeType.Char ||
         nullableInner == BridgeType.Instant || nullableInner == BridgeType.Duration ||
         nullableInner is BridgeType.Enum ||
         underlying is BridgeType.Primitive || underlying is BridgeType.Enum

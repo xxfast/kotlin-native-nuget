@@ -433,13 +433,16 @@ internal object ForwardCirPropertyProjection {
     val inner: BridgeType = (type as BridgeType.Nullable).type
     // ADR-079: a Primitive/Enum-underlying value class rides the same two-call getter; the
     // `_value` read's local type comes from the underlying's wire (`wireType()` delegates).
+    // ADR-098 amendment (boundary nullability part C): and so does `Char?`, its `_value` read a
+    // by-value `char` (CHAR16 through `csharpWireType()`, U2-decorated by native-type text).
     require(
-      inner is BridgeType.Primitive || inner == BridgeType.Instant ||
+      inner is BridgeType.Primitive || inner == BridgeType.Char ||
+          inner == BridgeType.Instant ||
           inner == BridgeType.Duration ||
           inner is BridgeType.ValueClass || inner is BridgeType.Enum
     ) {
-      "Forward property legacy getter requires a nullable primitive, Instant, Duration, enum or " +
-          "value class, got $type"
+      "Forward property legacy getter requires a nullable primitive, Char, Instant, Duration, " +
+          "enum or value class, got $type"
     }
     val presenceArgs: String = listOf(args, "out IntPtr error").filter { it.isNotBlank() }.joinToString(", ")
     val valueArgs: String = listOf(args, "out IntPtr error2").filter { it.isNotBlank() }.joinToString(", ")

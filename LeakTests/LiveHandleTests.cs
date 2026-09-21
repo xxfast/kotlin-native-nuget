@@ -1786,4 +1786,41 @@ public class LiveHandleTests
 
         public void Dispose() { }
     }
+
+    // Row 13. Boundary nullability part A1: the returned-lambda route with a NULLABLE argument.
+    // This is the first row of any kind on `KotlinAction`/`KotlinFunc`, and the route has two
+    // separate handle debts per call, which is why the row exists at all rather than riding row 1's
+    // coverage:
+    //
+    //  - the lambda itself is a StableRef, released by the wrapper's `Dispose` (the `using`), and
+    //  - EVERY argument is boxed into its own StableRef by the generated `WrapArg<T>`, which the
+    //    generated `Invoke` never disposes and `nuget_funcN_invoke` only `get()`s. That is one
+    //    leaked handle per call today, so fifty calls are a delta of fifty and no amount of
+    //    settling hides it. Delegating `Invoke` to `NugetMarshal.Wrap<T>(arg, out bool owned)` and
+    //    disposing on `owned` in a `finally` is the fix, and this row is how it is measured.
+    //
+    // Both payloads are driven in the window on purpose. A null argument must mint NO box at all
+    // (`Wrap<T>` short circuits to `IntPtr.Zero`), a non-null one mints exactly one that has to come
+    // back, and the null return leg (`Finder()` on a name that is not Oreo) must not retain a
+    // handle for the absent result. A fix that made null tolerable by leaking the non-null case, or
+    // that boxed `IntPtr.Zero` into a handle nobody owns, fails here.
+    //
+    // Note for whoever reads a red here first: until A1's null tolerance lands, the null `Invoke`
+    // does not leak, it terminates the process. This row is only measurable after that change.
+    //
+    // Oreo signs out and back in fifty times without leaving a paw print on the register.
+    [Fact]
+    public void NullableLambdaArgument_InvokeAndDispose_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using KotlinAction<string?> record = Recorder.SignIn();
+            record.Invoke(null);
+            record.Invoke("Oreo");
+            Assert.Equal("Oreo", Recorder.LastSeen());
+
+            using KotlinFunc<string, string?> find = Recorder.Finder();
+            Assert.Null(find.Invoke("Mylo"));
+        });
+    }
 }

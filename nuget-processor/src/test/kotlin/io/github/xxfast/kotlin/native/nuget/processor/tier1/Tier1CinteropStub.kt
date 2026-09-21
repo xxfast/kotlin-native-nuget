@@ -100,6 +100,16 @@ internal object Tier1CinteropStub {
       get() = 0.0
       set(_) {}
 
+    // ADR-098 amendment (boundary nullability part C): a `Char?` method return writes its `.code`
+    // as a `UShort` through the same reinterpret shape. `UShortVar` rather than a `CharVar` because
+    // kotlinx.cinterop has no `CharVar` at all (`unresolved reference` on Kotlin/Native 2.4.10),
+    // which is why the wire is a blittable `ushort` the C# side casts.
+    class UShortVar : COpaquePointerVar()
+
+    var UShortVar.value: UShort
+      get() = 0.toUShort()
+      set(_) {}
+
     @Suppress("UNCHECKED_CAST")
     fun <T : COpaquePointer> COpaquePointer.reinterpret(): T = this as T
 

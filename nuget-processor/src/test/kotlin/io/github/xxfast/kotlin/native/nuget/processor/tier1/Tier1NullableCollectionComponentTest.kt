@@ -257,8 +257,10 @@ class Tier1NullableCollectionComponentTest {
    * without anyone asking. This cell is that consequence, observed rather than argued: both used
    * to be named skips here (and before ADR-083, a crash in `componentLowering`).
    *
-   * A *bare* `Char?` is a different question and still has no route -- it needs ADR-079's
-   * has-value fan-out, which this ADR did not give it. Only the component position works.
+   * A *bare* `Char?` is a different question and rides a different mechanism: the ADR-098 amendment
+   * gave it ADR-079's has-value fan-out at every ordinary position, pinned in
+   * `Tier1BareNullableCharTest`. This cell stays about the COMPONENT position, where the boxed
+   * handle's null pointer is the null and no fan-out is involved.
    */
   @Test
   fun `nullable narrow-primitive and Char list elements bind for free off the inner type`() {

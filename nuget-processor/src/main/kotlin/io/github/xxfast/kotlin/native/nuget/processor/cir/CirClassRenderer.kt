@@ -505,9 +505,12 @@ internal fun StringBuilder.renderConst(const: CirConst) {
  *
  * Applied by native-type text rather than per projection, so that every renderer that mints an
  * extern slot -- the projected [renderDllImport], the legacy method import, the enum-property
- * import -- goes through the same rule and none can mint an unattributed one. An `out char` slot
- * has no route yet (a nullable `Char` still has no has-value fan-out), so only the by-value shape
- * is matched.
+ * import -- goes through the same rule and none can mint an unattributed one. Only the by-value
+ * shape is matched, and that is now exhaustive: since the ADR-098 amendment gave `Char?` its
+ * has-value fan-out, an OUT slot for a character is declared `out ushort` and cast on the C# side
+ * (blittable by construction), so no `out char` slot exists anywhere to attribute. A BARE `out
+ * char` was measured to narrow every non-ASCII character to one ANSI byte, which is the regression
+ * this whole rule exists to prevent.
  */
 internal fun charParameterMarshal(nativeType: String, name: String): String =
   if (nativeType == "char") "[MarshalAs(UnmanagedType.U2)] $nativeType $name"
