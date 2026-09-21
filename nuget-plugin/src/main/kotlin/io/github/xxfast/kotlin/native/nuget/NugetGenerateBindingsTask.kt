@@ -1793,23 +1793,25 @@ private fun handleImports(
 // `internal` in the INTERFACE's own Kotlin package, so the type import alone leaves an unresolved
 // reference whenever the two land in different Kotlin packages (a namespaceAliases entry, or two
 // bound packages). The parameter position never calls the resolver (`argConversion` uses
-// `handleOf`), which is why only read positions get the second line — an import nothing uses would
-// be a warning in generated source for no gain. Mirrors slotHandleImports, which already emits
-// both.
+// `handleOf`), which is why only read positions get the second line — an import nothing uses
+// would be a warning in generated source for no gain. Mirrors slotHandleImports, which already
+// emits both.
 private fun interfaceImports(
   interfaceTypes: List<RirInterfaceType>,
   readPositionTypes: List<RirInterfaceType>,
   interfacePkgs: Map<RirTypeKey, String>,
   kotlinPkg: String,
 ): List<String> {
-  val readKeys: Set<RirTypeKey> = readPositionTypes.map { RirTypeKey(it.namespace, it.name) }.toSet()
+  val readKeys: Set<RirTypeKey> =
+    readPositionTypes.map { RirTypeKey(it.namespace, it.name) }.toSet()
   return interfaceTypes
     .flatMap { type ->
-      val key = RirTypeKey(type.namespace, type.name)
+      val key: RirTypeKey = RirTypeKey(type.namespace, type.name)
       val pkg: String? = interfacePkgs[key]
       if (pkg == null || pkg == kotlinPkg) emptyList()
-      else if (key in readKeys) listOf("import $pkg.${type.name}", "import $pkg.nuget${type.name}Value")
-      else listOf("import $pkg.${type.name}")
+      else if (key in readKeys) {
+        listOf("import $pkg.${type.name}", "import $pkg.nuget${type.name}Value")
+      } else listOf("import $pkg.${type.name}")
     }
     .distinct()
     .sorted()
@@ -6756,7 +6758,9 @@ private fun validateDiagnostics(rir: RirFile) {
       .filter { it.kind.name.startsWith("ERROR") }
       .map { assembly.packageId to it }
   }
-  require(errors.isEmpty()) { errors.joinToString("\n") { (packageId, d) -> errorLine(packageId, d) } }
+  require(errors.isEmpty()) {
+    errors.joinToString("\n") { (packageId, d) -> errorLine(packageId, d) }
+  }
 }
 
 // The one rendering of a fatal reverse diagnostic, whether the READER produced it or the plugin
@@ -6766,10 +6770,10 @@ private fun errorLine(packageId: String, diagnostic: RirDiagnostic): String =
   "[nuget:$packageId] ${diagnostic.kind.name.lowercase()}: ${diagnostic.reason}. " + diagnostic.hint
 
 // ADR-057 finishing move: collisions were already detected and already fatal, but through a bare
-// `require(false)` that carried no diagnostic kind and no package id, and they never reached the one
-// rendering path. Now every colliding group becomes an ERROR_KOTLIN_SIGNATURE_COLLISION and they are
-// reported TOGETHER (the old form threw on the first group it found). Behaviour stays fatal: ADR-057
-// decided not to silently select, public-rename or warn-and-continue.
+// `require(false)` that carried no diagnostic kind and no package id, and they never reached the
+// one rendering path. Now every colliding group becomes an ERROR_KOTLIN_SIGNATURE_COLLISION and
+// they are reported TOGETHER (the old form threw on the first group it found). Behaviour stays
+// fatal: ADR-057 decided not to silently select, public-rename or warn-and-continue.
 private fun validateKotlinSignatures(rir: RirFile) {
   val collisions: List<Pair<String, RirDiagnostic>> = kotlinSignatureCollisions(rir)
   require(collisions.isEmpty()) {
@@ -6792,12 +6796,12 @@ private fun signatureCollision(
   hint = "Expose a differently named C# adapter.",
 )
 
-// Every group of bridgeable members that collapses to ONE Kotlin declaration. Kotlin/Native has no
-// erasure rule: two declarations conflict when the same scope has the same name and the same
-// value-parameter types, and neither the return type nor `suspend` disambiguates (nullability does,
-// which kotlinCollisionType models by appending `?`). Static members land in the companion, instance
-// members in the class, hence the `scope:` prefix. A property and a function may share a name, so
-// properties are grouped among themselves.
+// Every group of bridgeable members that collapses to ONE Kotlin declaration. Kotlin/Native has
+// no erasure rule: two declarations conflict when the same scope has the same name and the same
+// value-parameter types, and neither the return type nor `suspend` disambiguates (nullability
+// does, which kotlinCollisionType models by appending `?`). Static members land in the companion,
+// instance members in the class, hence the `scope:` prefix. A property and a function may share a
+// name, so properties are grouped among themselves.
 internal fun kotlinSignatureCollisions(rir: RirFile): List<Pair<String, RirDiagnostic>> {
   val structs: Map<RirTypeKey, RirStruct> = boundStructTypes(rir)
   val genericDefs: Map<RirTypeKey, RirClass> = boundGenericClassDefinitions(rir)
@@ -6886,9 +6890,9 @@ internal fun kotlinSignatureCollisions(rir: RirFile): List<Pair<String, RirDiagn
   }
 }
 
-// Two C# properties differing only in case (`Name` beside `name`, both legal and both public) render
-// one Kotlin name, which is a redeclaration. Never checked before: the old validator looked at
-// methods and constructors only.
+// Two C# properties differing only in case (`Name` beside `name`, both legal and both public)
+// render one Kotlin name, which is a redeclaration. Never checked before: the old validator
+// looked at methods and constructors only.
 private fun propertyCollisions(
   typeName: String,
   properties: List<RirProperty>,

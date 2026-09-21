@@ -7,6 +7,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirEnum
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnumEntry
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
+import io.github.xxfast.kotlin.native.nuget.rir.RirInterface
 import io.github.xxfast.kotlin.native.nuget.rir.RirMethod
 import io.github.xxfast.kotlin.native.nuget.rir.RirNamespace
 import io.github.xxfast.kotlin.native.nuget.rir.RirObjectHandleType
@@ -14,6 +15,8 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirParameter
 import io.github.xxfast.kotlin.native.nuget.rir.RirPrimitiveType
 import io.github.xxfast.kotlin.native.nuget.rir.RirProperty
 import io.github.xxfast.kotlin.native.nuget.rir.RirStringType
+import io.github.xxfast.kotlin.native.nuget.rir.RirStruct
+import io.github.xxfast.kotlin.native.nuget.rir.RirStructComponent
 import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -1684,31 +1687,29 @@ class NugetGenerateShimsTaskTest {
     // `error CA2255` even at the SDK default level. So an un-headered [ModuleInitializer] site is a
     // consumer-visible break, and this pins all five of them (static class, bound class, bound
     // interface, struct, shared runtime).
-    val iBadge = io.github.xxfast.kotlin.native.nuget.rir.RirInterface(
+    val iBadge: RirInterface = RirInterface(
       name = "IBadge",
       methods = listOf(RirMethod(name = "Describe", returnType = RirStringType(nullable = false))),
       properties = emptyList(),
     )
-    val collar = io.github.xxfast.kotlin.native.nuget.rir.RirStruct(
+    val collar: RirStruct = RirStruct(
       name = "Collar",
       components = listOf(
-        io.github.xxfast.kotlin.native.nuget.rir.RirStructComponent(
-          name = "girth", readName = "Girth", type = RirPrimitiveType("int"),
-        ),
+        RirStructComponent(name = "girth", readName = "Girth", type = RirPrimitiveType("int")),
       ),
     )
-    val kennel = RirClass(
+    val kennel: RirClass = RirClass(
       name = "Kennel",
       constructors = listOf(RirConstructor()),
       methods = listOf(RirMethod(name = "Bark", returnType = RirVoidType)),
     )
-    val tools = RirClass(
+    val tools: RirClass = RirClass(
       name = "Tools",
       isStatic = true,
       isAbstract = true,
       methods = listOf(RirMethod(name = "Ping", isStatic = true, returnType = RirVoidType)),
     )
-    val rir = RirFile(
+    val rir: RirFile = RirFile(
       assemblies = listOf(
         RirAssembly(
           packageId = "TestDependency",

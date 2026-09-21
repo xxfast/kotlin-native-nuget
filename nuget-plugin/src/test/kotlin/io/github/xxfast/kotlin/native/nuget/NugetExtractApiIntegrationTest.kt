@@ -4,7 +4,9 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnostic
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
+import io.github.xxfast.kotlin.native.nuget.rir.RirInterface
 import io.github.xxfast.kotlin.native.nuget.rir.RirNamespace
+import io.github.xxfast.kotlin.native.nuget.rir.RirProperty
 import io.github.xxfast.kotlin.native.nuget.rir.deriveDllPaths
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import java.io.File
@@ -880,7 +882,7 @@ class NugetExtractApiIntegrationTest {
     )
     val ns: RirNamespace = file.assemblies.single().namespaces.single { it.name == "Probe.Init" }
     val kennel: RirClass = ns.types.filterIsInstance<RirClass>().single { it.name == "Kennel" }
-    fun property(name: String) = kennel.properties.single { it.name == name }
+    fun property(name: String): RirProperty = kennel.properties.single { it.name == name }
 
     // init-only: read-only AND flagged, one converting member type and one direct.
     assertTrue(property("Motto").isReadOnly, "an init-only property is read-only after construction")
@@ -896,7 +898,7 @@ class NugetExtractApiIntegrationTest {
     assertFalse(property("Fixed").isInitOnly)
 
     // The interface half, which is where the flag is load-bearing (ADR-085 bridge accessor).
-    val badge = ns.types.filterIsInstance<io.github.xxfast.kotlin.native.nuget.rir.RirInterface>()
+    val badge: RirInterface = ns.types.filterIsInstance<RirInterface>()
       .single { it.name == "IBadge" }
     assertTrue(badge.properties.single().isReadOnly)
     assertTrue(badge.properties.single().isInitOnly)
