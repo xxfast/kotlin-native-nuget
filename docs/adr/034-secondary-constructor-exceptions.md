@@ -183,3 +183,13 @@ signatures are distinct.
 - `@JvmOverloads`-style synthetic default-argument constructors — only declared
   `constructor(...)` members are exported.
 - Private/internal secondary constructors.
+
+### Cross-reference (2026-09-22)
+
+The `ERROR_CSHARP_SIGNATURE_COLLISION` guard this ADR introduced (`emitCsharpSignatureCollisions`)
+did not run over a class's async and Flow-route methods: it was called before they were assembled
+onto the class, so two `suspend` overloads that rendered one C# signature reached the generated file
+as `CS0111` instead of failing the round with this ADR's diagnostic.
+[ADR-159](159-async-member-on-kotlin-subclass.md) moves the call below that assembly on both the
+ordinary-class and sealed-arm routes, so async and Flow-route methods now pass through this guard
+the same as every other method.
