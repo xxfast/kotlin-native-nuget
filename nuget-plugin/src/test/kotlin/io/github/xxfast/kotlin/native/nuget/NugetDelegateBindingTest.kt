@@ -31,17 +31,25 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
- * ADR-158, the contract half: `reverse-ir.json` can now carry a C# delegate as a first-class type
- * ref, and the shared v1 filter refuses one so nothing downstream can half-bind it.
+ * ADR-158: `reverse-ir.json` carries a C# delegate as a first-class type ref, and a delegate at a
+ * PARAMETER position of a method or constructor of an ordinary, non-generic bound class binds as a
+ * Kotlin function type. Every other position stays refused and named: a delegate return, a
+ * property, a struct or bound-interface member, a generic class's member, a delegate nested in a
+ * collection, and a delegate inside a Kotlin-bridge slot.
  *
- * This is the seam the binding half flips. The delegate is NOT bound yet: no Kotlin function type
- * is spelled, no one-slot bridge is minted, and the real reader still refuses every delegate-shaped
- * member by name (`skipped_delegate_signature`, asserted against a compiled assembly in
- * `NugetExtractApiIntegrationTest`). What is pinned here is what a half-finished feature gets wrong
- * silently: that the new `kind` parses at all (an unknown discriminator fails the whole build, so a
- * reader emitting one before the plugin knows it is a hard stop, not a silent drop), that a
- * delegate-typed member is refused by the SHARED filter rather than by one generator, and that two
- * delegate shapes never collapse to the same ADR-054 contract hash.
+ * What is pinned here is what a half-finished version of this feature gets wrong SILENTLY: that the
+ * new `kind` parses at all (an unknown discriminator fails the whole build, so a reader emitting one
+ * against an older plugin is a hard stop, never a silent drop); that the substituted Invoke shape
+ * and the type arguments it came from cannot disagree about nullability, because a generator reads
+ * `parameters` and not `typeArguments`; that admission is decided in the SHARED filter, so the two
+ * generators cannot disagree about a type's registration slot count (asserted for the class, the
+ * interface and the struct lists, which is what makes the renderers' `error(...)` arms unreachable
+ * rather than merely unlikely); and that two delegate shapes never collapse to one ADR-054 contract
+ * hash, because each shape adds a factory slot and the slot COUNT alone cannot tell them apart.
+ *
+ * That the real reader emits this RIR for real metadata is asserted separately, against a compiled
+ * assembly, in `NugetExtractApiIntegrationTest`; that the crossing runs is
+ * `IntegrationTests/WorkshopRoundTripTests`.
  */
 class NugetDelegateBindingTest {
 
