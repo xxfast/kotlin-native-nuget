@@ -3718,9 +3718,34 @@ internal class ForwardCallablePlanner(
       // the trap issue #54 fixed for undeclared types. Narrow on purpose: every other nullable
       // protocol (Flow, lambda, generic) keeps the shipped NULLABLE wording, since those are
       // separate deferrals with their own routes.
-      is BridgeType.SpecializedProtocol ->
-        if (inner.isSealedProtocol()) ForwardPlanSkipReason.SEALED_POSITION
-        else ForwardPlanSkipReason.NULLABLE
+      // Boundary nullability part A2: a nullable lambda TYPE (`cb: ((Int) -> Unit)?`) is routed by
+      // the legacy per-call/stored selector exactly as the non-null spelling is (that selector keys
+      // on the expanded declaration's qualified name only), so it BINDS -- while this arm reported
+      // it as NULLABLE, a `droppedFromCSharp = true` reason. The member therefore existed in
+      // `Interop.cs` AND carried a `SKIPPED_UNSUPPORTED_INPUT` warning, a `NugetDiagnostics.json`
+      // row and a "Not generated from Kotlin ..." remark on the very class that declared it. The
+      // diagnostic was the wrong half: the nullable spelling takes the same silent legacy-deferral
+      // reason the non-null one does, so the tool stops contradicting itself.
+      //
+      // Narrow to a plain `lambda ` protocol on purpose. Every other nullable protocol (Flow,
+      // StateFlow, suspend lambda, generic) genuinely has no route at an input position, so its
+      // NULLABLE/UNROUTED wording -- which names the offending parameter, issue #131 -- is the right
+      // answer and must not be swapped for a silent deferral.
+      is BridgeType.SpecializedProtocol -> when {
+        inner.isSealedProtocol() -> ForwardPlanSkipReason.SEALED_POSITION
+        inner.name.startsWith("lambda ") -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
+        else -> ForwardPlanSkipReason.NULLABLE
+      }
+
+      // ADR-160 interaction: a nullable lambda whose payload and result the plan's own callback
+      // lowering DOES carry classifies as `Nullable(Callback)`, not as a `lambda ...` protocol, so
+      // it needs the identical silent legacy deferral the arm above gives the declined shapes. The
+      // plan itself cannot take it -- a `Callback` ABI slot is a function pointer plus user data,
+      // with no has-value companion -- and `hasPlannedCallbackParameter` therefore leaves the
+      // member on the hand-written route, which binds it and guards the delegate with
+      // `ArgumentNullException.ThrowIfNull`. Without this arm the member binds in `Interop.cs` AND
+      // reports itself skipped, which is the contradiction part A2 removed.
+      is BridgeType.Callback -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
 
       // ADR-088: `IFeedable?` is on this ADR's deferred list. The null-pointer ride is natural,
       // but it needs its own lowering in four emitter positions; until then the skip names the

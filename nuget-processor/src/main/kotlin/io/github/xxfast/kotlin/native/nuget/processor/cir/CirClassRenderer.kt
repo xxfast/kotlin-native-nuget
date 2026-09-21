@@ -898,6 +898,13 @@ private fun StringBuilder.renderCallbackMethod(method: CirCallbackMethod) {
   appendLine()
   appendLine("        public ${method.csReturnType} ${method.csMethodName}(${method.csParamType} ${method.lambdaParamName})")
   appendLine("        {")
+  // Boundary nullability part A2: ahead of `GCHandle.Alloc`, which accepts null perfectly happily
+  // and defers the failure to a thunk that dereferences `Target` inside `[UnmanagedCallersOnly]`.
+  if (method.rejectsNullDelegate) {
+    appendLine(
+      "            ArgumentNullException.ThrowIfNull(${method.lambdaParamName});",
+    )
+  }
   appendLine("            ${method.delegateName} nativeCallback = ${method.delegateParamList} =>")
   appendLine("            {")
   appendLine(method.callbackBody)

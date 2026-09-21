@@ -1,0 +1,155 @@
+package io.github.xxfast.kotlin.native.nuget.processor.tier1
+
+import kotlin.test.Test
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+/**
+ * Boundary nullability part A2: the per-call (ADR-036/102) and stored (ADR-037) callback routes.
+ *
+ * Two opposite edits, and they have to be read together, because before this change the tool got
+ * each one exactly backwards:
+ *  - a lambda whose PAYLOAD or RETURN is nullable bound with no diagnostic at all and then either
+ *    aborted the author's `packNuget` inside generated Kotlin (`Int?` and handle payloads on the
+ *    per-call route, every payload on the stored route) or crossed and killed the host process on a
+ *    real null (`String?`, and a callback returning null at a generated `!!`). It is now a named
+ *    skip, which replaces a broken build rather than removing a working member;
+ *  - a lambda whose own TYPE is nullable (`listener: ((Int) -> Unit)?`) bound AND reported itself as
+ *    skipped, on the very class that carried the member. It keeps binding, silently, with an
+ *    `ArgumentNullException` guard in the wrapper.
+ */
+class Tier1NullableLambdaPayloadTest {
+
+  @Test
+  fun `a nullable lambda payload or return is a named skip on the per-call route`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.nullablelambdapayload
+
+      class Cat(val name: String)
+
+      class Walker {
+        fun eachCount(cb: (Int?) -> Unit) = cb(null)
+
+        fun eachName(cb: (String?) -> Unit) = cb(null)
+
+        fun eachCat(cb: (Cat?) -> Unit) = cb(null)
+
+        fun ask(cb: (Int) -> String?): String? = cb(1)
+
+        fun eachPlainCount(cb: (Int) -> Unit) = cb(1)
+      }
+      """.trimIndent(),
+    )
+
+    // Red before the refusal: three of these five shapes made the generated Kotlin uncompilable.
+    assertTrue(
+      result.compiledClean,
+      "expected the refusal to leave compilable Kotlin; got: ${result.compileErrors}",
+    )
+
+    val cs: String = result.generatedCSharp
+    assertFalse("EachCount(" in cs, "a nullable value payload must not bind")
+    assertFalse("EachName(" in cs, "a nullable reference payload must not bind")
+    assertFalse("EachCat(" in cs, "a nullable handle payload must not bind")
+    assertFalse("Ask(" in cs, "a nullable lambda RETURN must not bind")
+    // The non-null sibling is the control: this is a payload rule, not a lambda rule.
+    assertTrue("EachPlainCount(" in cs, "a non-null payload must keep binding")
+
+    val kotlin: String = result.generated
+    listOf("eachCount", "eachName", "eachCat", "ask").forEach { member ->
+      assertFalse(
+        "export_walker_$member" in kotlin,
+        "expected `$member` absent from the Kotlin half too, so the two halves agree",
+      )
+      assertTrue(
+        result.kspWarnings.any { warning ->
+          member in warning && "a callback parameter can carry" in warning
+        },
+        "expected a named callback-payload skip for `$member`; got: ${result.kspWarnings}",
+      )
+    }
+  }
+
+  @Test
+  fun `a nullable lambda payload drops both halves of a stored callback pair`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.nullablelambdastored
+
+      class Bell {
+        fun addRinger(listener: (String?) -> Unit) {
+          ringers += listener
+        }
+
+        fun removeRinger(listener: (String?) -> Unit) {
+          ringers -= listener
+        }
+
+        private var ringers: List<(String?) -> Unit> = emptyList()
+      }
+      """.trimIndent(),
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected the refusal to leave compilable Kotlin; got: ${result.compileErrors}",
+    )
+
+    // The pair goes together: a skip on the add alone would leave a cancel for a subscription
+    // nobody can make, and a skip on the remove alone an uncancellable subscription.
+    val cs: String = result.generatedCSharp
+    assertFalse("AddRinger(" in cs, "the add half must not bind")
+    assertFalse("RemoveRinger(" in cs, "the remove half must not bind")
+    listOf("addRinger", "removeRinger").forEach { member ->
+      assertTrue(
+        result.kspWarnings.any { warning -> member in warning },
+        "expected both halves of the pair named; got: ${result.kspWarnings}",
+      )
+    }
+  }
+
+  @Test
+  fun `a nullable lambda TYPE keeps binding, silently, and rejects a null delegate`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.nullablelambdatype
+
+      class Metronome(private val beats: Int) {
+        fun onMaybeTick(listener: ((Int) -> Unit)?) = repeat(beats) { listener?.invoke(it + 1) }
+      }
+      """.trimIndent(),
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected a nullable lambda type to keep binding; got: ${result.compileErrors}",
+    )
+
+    val cs: String = result.generatedCSharp
+    assertTrue("OnMaybeTick(" in cs, "a nullable lambda type binds; only its payload matters")
+    // The obligation that comes with binding it: the erased delegate slot cannot carry "absent", so
+    // a null reaches a `[UnmanagedCallersOnly]` thunk that dereferences `GCHandle.Target`, a
+    // fail-fast no `catch` can see. Rejected at the managed boundary instead, before `Alloc`.
+    assertTrue(
+      "ArgumentNullException.ThrowIfNull(listener);" in cs,
+      "expected the wrapper to reject a null delegate up front; cs=$cs",
+    )
+    assertTrue(
+      cs.indexOf("ArgumentNullException.ThrowIfNull(listener);") <
+          cs.indexOf("GCHandle.Alloc(nativeCallback)"),
+      "the guard must precede GCHandle.Alloc, which accepts null and defers the failure",
+    )
+
+    // And the half that used to contradict the other: the member exists, so nothing may report it
+    // as absent.
+    assertFalse(
+      result.kspWarnings.any { warning -> "onMaybeTick" in warning },
+      "a member that BINDS must not also be reported as skipped; got: ${result.kspWarnings}",
+    )
+    assertFalse(
+      "Not generated from Kotlin `onMaybeTick`" in cs,
+      "no XML remark may claim an absent member on the class that declares it",
+    )
+  }
+}

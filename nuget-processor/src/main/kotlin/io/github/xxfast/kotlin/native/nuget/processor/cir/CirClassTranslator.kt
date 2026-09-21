@@ -33,6 +33,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
 import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsHeldMutableStateFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardLegacyRoute
+import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedNullableLambdaPayload
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
@@ -901,7 +902,13 @@ internal fun translateClass(
     returnQualified in FLOW_TYPES || returnQualified in STATE_FLOW_TYPES
   }
 
-  val (lambdaParamMethods, normalMethods) = nonFlowMethods.partition { method ->
+  // Boundary nullability part A2: the C# twin of the Kotlin half's refusal, applied at the same
+  // point (before the partition) so the two halves cannot disagree about which members exist. A
+  // lambda whose payload or return is nullable has no crossing on this route at all.
+  val crossableNonFlowMethods: List<KSFunctionDeclaration> = nonFlowMethods
+    .filterNot { method -> method.refusedNullableLambdaPayload() != null }
+
+  val (lambdaParamMethods, normalMethods) = crossableNonFlowMethods.partition { method ->
     method.parameters.any { param ->
       param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in LAMBDA_TYPES
     }
@@ -3540,6 +3547,10 @@ private fun translateCallbackMethod(
     csParamType = csParamType,
     callbackBody = callbackBody,
     wrapperBody = wrapperBody,
+    // Boundary nullability part A2: the UNEXPANDED type, because `expandAliases()` drops use-site
+    // nullability -- a `typealias Tick = (Int) -> Unit` parameter spelled `Tick?` would otherwise
+    // read as non-null and lose its guard.
+    rejectsNullDelegate = lambdaParam.type.resolve().isMarkedNullable,
   )
 }
 
