@@ -246,15 +246,15 @@ class Tier1LegacyRouteHandleParameterTest {
     val result = run()
 
     val wrong: List<String> = listOf(
-      "radio_watch_collect" to "observation",
-      "radio_watch_value" to "observation",
-      "radio_watch_3_collect" to "lamp",
-      "radio_watch_4_value" to "observation",
-      "radio_watch_5_value" to "cat",
-      "radio_stream_collect" to "cat",
-      "radio_log_async" to "observation",
-      "radio_tally_value" to "observation",
-      "broadcast_async" to "cat",
+      "library_watchtower__radio_watch_collect" to "observation",
+      "library_watchtower__radio_watch_value" to "observation",
+      "library_watchtower__radio_watch_3_collect" to "lamp",
+      "library_watchtower__radio_watch_4_value" to "observation",
+      "library_watchtower__radio_watch_5_value" to "cat",
+      "library_watchtower__radio_stream_collect" to "cat",
+      "library_watchtower__radio_log_async" to "observation",
+      "library_watchtower__radio_tally_value" to "observation",
+      "library_watchtower__broadcast_async" to "cat",
     ).filterNot { (export, param) ->
       exportSignature(result, export).contains("$param: COpaquePointer")
     }.map { (export, param) -> "$export($param)" }
@@ -277,7 +277,7 @@ class Tier1LegacyRouteHandleParameterTest {
   fun `a handle parameter is dereferenced before the coroutine launches`() {
     val result = run()
 
-    val body: String = exportBody(result, "radio_watch_collect")
+    val body: String = exportBody(result, "library_watchtower__radio_watch_collect")
     val deref: Int = body.indexOf(
       "val observationArg = observation.asStableRef<tier1.watchtower.Observation.Alive>().get()"
     )
@@ -307,7 +307,7 @@ class Tier1LegacyRouteHandleParameterTest {
   fun `a collection and a handle parameter on one member both get preludes`() {
     val result = run()
 
-    val body: String = exportBody(result, "radio_tally_collect")
+    val body: String = exportBody(result, "library_watchtower__radio_tally_collect")
 
     assertTrue(
       body.contains("obj.tally(kindsArg, observationArg)"),
@@ -392,9 +392,9 @@ class Tier1LegacyRouteHandleParameterTest {
           "${csharpLinesFor(result, "Label")}",
     )
     assertTrue(
-      exportSignature(result, "radio_label_value").contains("text: String"),
+      exportSignature(result, "library_watchtower__radio_label_value").contains("text: String"),
       "control: the Kotlin slot for a String parameter is unchanged; got: " +
-          exportSignature(result, "radio_label_value"),
+          exportSignature(result, "library_watchtower__radio_label_value"),
     )
   }
 

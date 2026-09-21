@@ -36,7 +36,7 @@ class Tier1ResultReturnTest {
       "expected the generated export to compile; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_service_run" in result.generated,
+      "export_library_tier1_resultunit__service_run" in result.generated,
       "expected run to be exported; generated=${result.generated}",
     )
     assertTrue(
@@ -137,7 +137,7 @@ class Tier1ResultReturnTest {
       "expected no broken source for the Result parameter; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_holder_record" !in result.generated,
+      "export_library_tier1_resultparameter__holder_record" !in result.generated,
       "expected the method to be entirely absent; generated=${result.generated}",
     )
     assertTrue(
@@ -175,7 +175,7 @@ class Tier1ResultReturnTest {
       "expected no broken source for the Result<Shape> return; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_studio_draw" !in result.generated,
+      "export_library_tier1_resultsealed__studio_draw" !in result.generated,
       "expected draw to be entirely absent from the generated Kotlin; generated=${result.generated}",
     )
     assertTrue(

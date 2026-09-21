@@ -68,11 +68,11 @@ class Tier1UnexportedBaseClassSkipTest {
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     assertTrue(
-      "export_api_ping" in result.generated,
+      "export_library_api_ping" in result.generated,
       "dropping the base must not cost the class its own members; generated:\n${result.generated}",
     )
     assertTrue(
-      "export_api_get_port" in result.generated,
+      "export_library_api_get_port" in result.generated,
       "dropping the base must not cost the class its own properties; " +
           "generated:\n${result.generated}",
     )
@@ -80,12 +80,12 @@ class Tier1UnexportedBaseClassSkipTest {
     // members on the subclass, these two are the assertions that say so, and the class would ship
     // silently missing everything it inherited.
     assertTrue(
-      "export_api_greet" in result.generated,
+      "export_library_api_greet" in result.generated,
       "the dropped base's concrete method must bind on the subclass itself — nothing else can " +
           "carry it once the C# base is gone; generated:\n${result.generated}",
     )
     assertTrue(
-      "export_api_get_label" in result.generated,
+      "export_library_api_get_label" in result.generated,
       "the dropped base's property must bind on the subclass itself; " +
           "generated:\n${result.generated}",
     )
@@ -180,7 +180,7 @@ class Tier1UnexportedBaseClassSkipTest {
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     assertTrue(
-      "export_api_ping" in result.generated && "export_api_tag" in result.generated,
+      "export_library_api_ping" in result.generated && "export_library_api_tag" in result.generated,
       "a same-round base outside `rootPackage` is just as absent from the export set as a " +
           "dependency one, so its member re-homes identically; generated:\n${result.generated}",
     )
@@ -228,7 +228,7 @@ class Tier1UnexportedBaseClassSkipTest {
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     assertTrue(
-      "export_api_speak" in result.generated,
+      "export_library_api_speak" in result.generated,
       "the override is the only implementation there is once the base is dropped; " +
           "generated:\n${result.generated}",
     )
@@ -279,11 +279,11 @@ class Tier1UnexportedBaseClassSkipTest {
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     val kotlin: String = result.generated
     assertTrue(
-      "@CName(\"api_farewell\")" in kotlin,
+      "@CName(\"library_api_farewell\")" in kotlin,
       "the full-arity override still exports; generated:\n$kotlin",
     )
     assertTrue(
-      "@CName(\"api_farewell_2\")" in kotlin,
+      "@CName(\"library_api_farewell_2\")" in kotlin,
       "the dropped base carries no C# overload to inherit, so the omitting overload has to be " +
           "synthesized here; generated:\n$kotlin",
     )
@@ -335,21 +335,21 @@ class Tier1UnexportedBaseClassSkipTest {
           "base-less; generated C#:\n${result.generatedCSharp}",
     )
     assertTrue(
-      "export_api_ping" in result.generated,
+      "export_library_api_ping" in result.generated,
       "generated:\n${result.generated}",
     )
     assertTrue(
-      "export_api_row" in result.generated,
+      "export_library_api_row" in result.generated,
       "the dropped intermediate's member has no C# carrier other than Api, so it re-homes; " +
           "generated:\n${result.generated}",
     )
     assertFalse(
-      "export_api_anchor" in result.generated,
+      "export_library_api_anchor" in result.generated,
       "the kept base still carries its own members; re-homing them onto Api hides the base " +
           "member (CS0108); generated:\n${result.generated}",
     )
     assertTrue(
-      "export_localexportedbase_anchor" in result.generated,
+      "export_library_localexportedbase_anchor" in result.generated,
       "the kept base exports its own member as itself; generated:\n${result.generated}",
     )
 

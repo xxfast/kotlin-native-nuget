@@ -153,7 +153,7 @@ class Tier1OptInMarkerSkipTest {
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     assertTrue(
-      "export_litter_create_2" in result.generated,
+      "export_library_tier1_optin_trailing__litter_create_2" in result.generated,
       "the omitting overload must still be exported; generated:\n${result.generated}",
     )
   }

@@ -129,17 +129,17 @@ class Tier1LegacyRouteCollectionParameterTest {
 
     val wrong: List<String> = listOf(
       // _collect
-      "treatboard_served_collect" to "kinds",
-      "treatboard_rations_collect" to "portions",
-      "treatboard_servings_collect" to "kinds",
-      "treatboard_feeding_collect" to "treats",
+      "library_treats__treatboard_served_collect" to "kinds",
+      "library_treats__treatboard_rations_collect" to "portions",
+      "library_treats__treatboard_servings_collect" to "kinds",
+      "library_treats__treatboard_feeding_collect" to "treats",
       // _value
-      "treatboard_served_value" to "kinds",
-      "treatboard_rations_value" to "portions",
+      "library_treats__treatboard_served_value" to "kinds",
+      "library_treats__treatboard_rations_value" to "portions",
       // _async, class method and top level
-      "treatboard_forget_async" to "ids",
-      "treatboard_tally_async" to "portions",
-      "forgetAll_async" to "ids",
+      "library_treats__treatboard_forget_async" to "ids",
+      "library_treats__treatboard_tally_async" to "portions",
+      "library_treats__forgetAll_async" to "ids",
     ).filterNot { (export, param) ->
       exportSignature(result, export).contains("$param: COpaquePointer")
     }.map { (export, param) -> "$export($param)" }

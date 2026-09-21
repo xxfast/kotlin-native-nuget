@@ -67,11 +67,11 @@ class Tier1SealedSubclassPropertyPlanTest {
 
     assertContains(
       result.generated,
-      "public fun export_signal_ping_get_mood(handle: COpaquePointer, errorOut: COpaquePointer?): Boolean",
+      "public fun export_library_tier1_sealedplan__signal_ping_get_mood(handle: COpaquePointer, errorOut: COpaquePointer?): Boolean",
     )
     assertContains(
       result.generated,
-      "public fun export_signal_ping_get_mood_value(handle: COpaquePointer, errorOut: COpaquePointer?): Int",
+      "public fun export_library_tier1_sealedplan__signal_ping_get_mood_value(handle: COpaquePointer, errorOut: COpaquePointer?): Int",
     )
     assertFalse(
       result.generated.contains(".mood.ordinal"),
@@ -192,7 +192,7 @@ class Tier1SealedSubclassPropertyPlanTest {
 
     assertContains(
       result.generated,
-      "public fun export_signal_ping_set_counter(",
+      "public fun export_library_tier1_sealedplan__signal_ping_set_counter(",
     )
     assertContains(
       result.generatedCSharp,
@@ -224,13 +224,13 @@ class Tier1SealedSubclassPropertyPlanTest {
     val result = run()
 
     // The base carries both of its own declared properties, once.
-    assertContains(result.generated, "@CName(\"signal_get_id\")")
-    assertContains(result.generated, "@CName(\"signal_get_tag\")")
-    assertContains(result.generatedCSharp, "EntryPoint = \"signal_get_tag\"")
+    assertContains(result.generated, "@CName(\"library_tier1_sealedplan__signal_get_id\")")
+    assertContains(result.generated, "@CName(\"library_tier1_sealedplan__signal_get_tag\")")
+    assertContains(result.generatedCSharp, "EntryPoint = \"library_tier1_sealedplan__signal_get_tag\"")
     assertContains(result.generatedCSharp, "public virtual string Tag")
 
     // Each arm declares its own `override val id`, so each keeps its own export for that one.
-    listOf("signal_ping", "signal_boom").forEach { prefix ->
+    listOf("library_tier1_sealedplan__signal_ping", "library_tier1_sealedplan__signal_boom").forEach { prefix ->
       assertContains(result.generated, "@CName(\"${prefix}_get_id\")")
     }
 
@@ -269,7 +269,7 @@ class Tier1SealedSubclassPropertyPlanTest {
     assertContains(
       result.generatedCSharp,
       """
-      |            [DllImport("library", CallingConvention = CallingConvention.Cdecl, EntryPoint = "handler_ontap_get_onTap")]
+      |            [DllImport("library", CallingConvention = CallingConvention.Cdecl, EntryPoint = "library_tier1_sealedlambda__handler_ontap_get_onTap")]
       |            private static extern IntPtr Native_Get_onTap(IntPtr handle, out IntPtr error);
       """.trimMargin(),
     )
@@ -277,6 +277,6 @@ class Tier1SealedSubclassPropertyPlanTest {
       result.generatedCSharp,
       "            public KotlinFunc<int, string> OnTap => new KotlinFunc<int, string>(Native_Get_onTap(_handle, out _));",
     )
-    assertContains(result.generated, "@CName(\"handler_ontap_get_onTap\")")
+    assertContains(result.generated, "@CName(\"library_tier1_sealedlambda__handler_ontap_get_onTap\")")
   }
 }

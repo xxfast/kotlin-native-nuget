@@ -70,9 +70,9 @@ class Tier1ValueClassReferenceSecondaryConstructorTest {
   fun `the Kotlin half exports the secondary and not the deferred primary`() {
     val result = Tier1Harness.run(source)
 
-    assertContains(result.generated, "export_wrapper_create_2")
+    assertContains(result.generated, "export_library_tier1_vcrefsec__wrapper_create_2")
     assertFalse(
-      "export_wrapper_create(" in result.generated,
+      "export_library_tier1_vcrefsec__wrapper_create(" in result.generated,
       "expected no export for the deferred primary; got: ${result.generated}",
     )
   }
@@ -95,7 +95,7 @@ class Tier1ValueClassReferenceSecondaryConstructorTest {
     val cs: String = result.generatedCSharp
     assertContains(cs, "private static extern IntPtr Native_Create(")
     assertContains(cs, "private static extern IntPtr Native_Create_2(")
-    assertContains(result.generated, "export_catid_create")
-    assertContains(result.generated, "export_catid_create_2")
+    assertContains(result.generated, "export_library_tier1_vcrefsec__catid_create")
+    assertContains(result.generated, "export_library_tier1_vcrefsec__catid_create_2")
   }
 }

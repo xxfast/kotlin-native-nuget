@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
+
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
@@ -150,10 +152,12 @@ internal fun FileSpec.Builder.addClassExports(
   // the planners ask. An unexported base is base-less here too, so the base's concrete members
   // are emitted with this class as receiver instead of being left to a C# base that never exists.
   exportedTypes: Set<String>,
+  /** ADR-163: the one symbol table, so this legacy emitter derives the prefix the plan derived. */
+  symbols: ForwardSymbolTable,
 ) {
   val name: String = cls.simpleName.asString()
   val qualifiedName: String = cls.qualifiedName?.asString() ?: return
-  val prefix: String = cls.nativePrefix()
+  val prefix: String = cls.nativePrefix(symbols)
   val isAbstract: Boolean = cls.modifiers.contains(Modifier.ABSTRACT)
 
   // The shared has-superclass predicate (`ForwardClassMembership.kt`), so this emitter keeps

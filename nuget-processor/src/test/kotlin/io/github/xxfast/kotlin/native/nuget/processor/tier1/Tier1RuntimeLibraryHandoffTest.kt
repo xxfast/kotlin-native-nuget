@@ -55,7 +55,7 @@ class Tier1RuntimeLibraryHandoffTest {
   fun `the fixture still exports its own declarations`() {
     val generated: String = generated()
     assertTrue(
-      "@CName(\"depot_labels\")" in generated,
+      "@CName(\"library_tier1_runtimehandoff__depot_labels\")" in generated,
       "expected the fixture's own exports to survive the runtime move; generated=\n$generated",
     )
   }

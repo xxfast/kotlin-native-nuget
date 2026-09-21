@@ -135,8 +135,8 @@ class Tier1StaticRouteOverloadTest {
       "cross-receiver namesakes are not a C# collision; kspErrors=${result.kspErrors}",
     )
     assertTrue(
-      result.generated.contains("@CName(\"mitten_pat\")") &&
-          result.generated.contains("@CName(\"tomcat_pat_2\")"),
+      result.generated.contains("@CName(\"library_tier1_extensioncrossreceiver__mitten_pat\")") &&
+          result.generated.contains("@CName(\"library_tier1_extensioncrossreceiver__tomcat_pat_2\")"),
       "expected package-scoped numbering across receivers; generated=${result.generated}",
     )
   }

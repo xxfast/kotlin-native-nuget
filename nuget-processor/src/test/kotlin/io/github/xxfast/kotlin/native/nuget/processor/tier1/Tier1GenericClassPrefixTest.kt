@@ -34,12 +34,12 @@ class Tier1GenericClassPrefixTest {
 
     val kotlin: String = result.generated
     // ADR-147: one boxed constructor, not the twelve widths plus an object fallback.
-    assertContains(kotlin, "@CName(\"crate_create\")")
+    assertContains(kotlin, "@CName(\"library_tier1_genericprefix__crate_create\")")
     assertFalse(kotlin.contains("crate_create_int"), "the per-width create variants are gone")
     assertFalse(kotlin.contains("crate_create_object"), "the object create fallback is gone")
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "EntryPoint = \"crate_create\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_genericprefix__crate_create\"")
     // ADR-147: CS7042 forbids a DllImport inside a generic type, so the extern lives in the
     // sibling `CrateNative` and the carrier holds a forwarder of the identical signature.
     assertContains(cs, "internal static class CrateNative")

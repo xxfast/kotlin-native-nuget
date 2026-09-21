@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirExtraNative
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMember
@@ -179,7 +180,7 @@ internal object ForwardCirPropertyProjection {
           else parameter.wireType.csharpWireType()
         CirParameter(parameter.name, type)
       }
-    val nativeName: String = call.exportName
+    val nativeName: String = call.csharpStem
       .split('_')
       .joinToString("") { part -> part.replaceFirstChar { it.uppercase() } }
     return CirDllImport(
@@ -502,7 +503,7 @@ internal object ForwardCirPropertyProjection {
         else -> "Native_Set_${plan.kotlinName}"
       }
     }
-    return "Native_" + call.exportName.split('_').joinToString("") {
+    return "Native_" + call.csharpStem.split('_').joinToString("") {
       it.replaceFirstChar { char -> char.uppercase() }
     }
   }

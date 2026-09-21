@@ -83,12 +83,12 @@ class Tier1UndeclaredEnumSkipTest {
           "${result.generatedCSharp.lines().filter { it.contains("Mode") }}",
     )
     listOf(
-      "export_owner_get_setting",
-      "export_owner_activate",
-      "export_owner_current",
-      "export_owner_apply",
-      "export_owner_index",
-      "export_dial_create",
+      "export_library_tier1_undeclaredenum__owner_get_setting",
+      "export_library_tier1_undeclaredenum__owner_activate",
+      "export_library_tier1_undeclaredenum__owner_current",
+      "export_library_tier1_undeclaredenum__owner_apply",
+      "export_library_tier1_undeclaredenum__owner_index",
+      "export_library_tier1_undeclaredenum__dial_create",
     ).forEach { export ->
       assertContains(
         result.generated,
@@ -156,11 +156,11 @@ class Tier1UndeclaredEnumSkipTest {
     val result = Tier1Harness.run(source)
 
     listOf(
-      "export_owner_get_volume",
-      "export_owner_tune",
-      "export_owner_tuning",
-      "export_owner_get_label",
-      "export_dial_get_label",
+      "export_library_tier1_undeclaredenum__owner_get_volume",
+      "export_library_tier1_undeclaredenum__owner_tune",
+      "export_library_tier1_undeclaredenum__owner_tuning",
+      "export_library_tier1_undeclaredenum__owner_get_label",
+      "export_library_tier1_undeclaredenum__dial_get_label",
     ).forEach { export ->
       assertTrue(
         result.generated.contains(export),
@@ -251,17 +251,17 @@ class Tier1UndeclaredEnumSkipTest {
       "expected Broadcast.band to bind now that AdBand is declared; " +
           "kspWarnings=${result.kspWarnings}",
     )
-    assertContains(result.generated, "export_broadcast_get_band")
+    assertContains(result.generated, "export_library_dep_models__broadcast_get_band")
     assertTrue(
-      result.generated.contains("export_newsroom_broadcast") &&
-          result.generated.contains("export_broadcast_get_station"),
+      result.generated.contains("export_library_tier1_undeclaredenum_deps__newsroom_broadcast") &&
+          result.generated.contains("export_library_dep_models__broadcast_get_station"),
       "expected the admitted dependency class and its other member to survive; " +
           "generated=${result.generated}",
     )
     // The control for the closure's new filter: it declines *nested* dependency enums only, so a
     // top-level one in the same admitted package is still admitted, declared and bound.
     assertTrue(
-      result.generated.contains("export_broadcast_get_genre") &&
+      result.generated.contains("export_library_dep_models__broadcast_get_genre") &&
           result.generatedCSharp.contains("enum Genre"),
       "expected the top-level dependency enum to still be admitted and declared; " +
           "generatedCSharp=${result.generatedCSharp.lines().filter { it.contains("Genre") }}",
@@ -273,7 +273,7 @@ class Tier1UndeclaredEnumSkipTest {
     val result = dependencyResult()
 
     assertFalse(
-      result.generated.contains("export_newsroom_airwave"),
+      result.generated.contains("export_library_tier1_undeclaredenum__newsroom_airwave"),
       "expected Newsroom.airwave to be absent; generated=${result.generated}",
     )
     assertFalse(

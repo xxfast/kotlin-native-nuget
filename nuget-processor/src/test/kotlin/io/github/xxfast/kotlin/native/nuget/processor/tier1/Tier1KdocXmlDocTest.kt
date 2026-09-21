@@ -398,7 +398,7 @@ class Tier1KdocXmlDocTest {
     // The proof that the truncated call site compiles is `test-library` under `scripts/verify.sh`.
     assertEquals("OK", result.kspExitCode, "kspErrors=${result.kspErrors}")
 
-    assertTrue(kotlin.contains("@CName(\"sunspot_stretchFor\")"), kotlin)
+    assertTrue(kotlin.contains("@CName(\"library_tier1_kdocexpectdefault__sunspot_stretchFor\")"), kotlin)
     // The ABI is unchanged by the widening: one export, and no truncated call site to compile.
     assertFalse(kotlin.contains("sunspot_stretchFor_2"), kotlin)
     assertFalse(kotlin.contains(".stretchFor()"), kotlin)

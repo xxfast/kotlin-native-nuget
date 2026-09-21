@@ -84,8 +84,8 @@ class Tier1SealedArmLambdaTest {
     )
 
     val missing: List<String> = listOf(
-      "@CName(\"job_running_relabel\")",
-      "@CName(\"job_idle_pokeWith\")",
+      "@CName(\"library_tier1_armlambda__job_running_relabel\")",
+      "@CName(\"library_tier1_armlambda__job_idle_pokeWith\")",
     ).filterNot(result.generated::contains)
 
     assertTrue(missing.isEmpty(), "expected the arm-prefixed callback exports; missing: $missing")
@@ -118,7 +118,7 @@ class Tier1SealedArmLambdaTest {
       "expected the Func member on the Running arm; got: ${csharpLinesFor(result, "Relabel")}",
     )
     assertTrue(
-      running.contains("EntryPoint = \"job_running_relabel\""),
+      running.contains("EntryPoint = \"library_tier1_armlambda__job_running_relabel\""),
       "expected the arm-prefixed extern on the Running arm; got: " +
           "${csharpLinesFor(result, "job_running_relabel")}",
     )
@@ -127,7 +127,7 @@ class Tier1SealedArmLambdaTest {
       "expected the Action member on the Idle arm; got: ${csharpLinesFor(result, "PokeWith")}",
     )
     assertTrue(
-      idle.contains("EntryPoint = \"job_idle_pokeWith\""),
+      idle.contains("EntryPoint = \"library_tier1_armlambda__job_idle_pokeWith\""),
       "expected the arm-prefixed extern on the Idle arm; got: " +
           "${csharpLinesFor(result, "job_idle_pokeWith")}",
     )
@@ -187,8 +187,8 @@ class Tier1SealedArmLambdaTest {
     )
 
     val missing: List<String> = listOf(
-      "@CName(\"feed_live_addTicker\")",
-      "@CName(\"feed_live_removeTicker\")",
+      "@CName(\"library_tier1_armpair__feed_live_addTicker\")",
+      "@CName(\"library_tier1_armpair__feed_live_removeTicker\")",
     ).filterNot(result.generated::contains)
 
     assertTrue(missing.isEmpty(), "expected the arm-prefixed pair exports; missing: $missing")
@@ -201,8 +201,8 @@ class Tier1SealedArmLambdaTest {
           "${csharpLinesFor(result, "AddTicker")}",
     )
     assertTrue(
-      live.contains("EntryPoint = \"feed_live_addTicker\"") &&
-          live.contains("EntryPoint = \"feed_live_removeTicker\""),
+      live.contains("EntryPoint = \"library_tier1_armpair__feed_live_addTicker\"") &&
+          live.contains("EntryPoint = \"library_tier1_armpair__feed_live_removeTicker\""),
       "expected both arm-prefixed externs on the Live arm; got: " +
           "${csharpLinesFor(result, "feed_live_")}",
     )
@@ -254,8 +254,8 @@ class Tier1SealedArmLambdaTest {
     )
 
     val missing: List<String> = listOf(
-      "@CName(\"feed_idle_addWatcher\")",
-      "@CName(\"feed_idle_removeWatcher\")",
+      "@CName(\"library_tier1_armbridge__feed_idle_addWatcher\")",
+      "@CName(\"library_tier1_armbridge__feed_idle_removeWatcher\")",
     ).filterNot(result.generated::contains)
 
     assertTrue(missing.isEmpty(), "expected the arm-prefixed bridge exports; missing: $missing")

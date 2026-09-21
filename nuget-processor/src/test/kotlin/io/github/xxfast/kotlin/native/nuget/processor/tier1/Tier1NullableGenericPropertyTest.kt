@@ -77,7 +77,7 @@ class Tier1NullableGenericPropertyTest {
     )
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"crate_get_value\")")
+    assertContains(kotlin, "@CName(\"library_tier1_nonnullgenericproperty__crate_get_value\")")
     assertContains(
       kotlin,
       "NugetHandles.retain(handle.asStableRef<tier1.nonnullgenericproperty.Crate<Any>>()" +

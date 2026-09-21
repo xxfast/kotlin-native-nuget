@@ -42,11 +42,11 @@ class Tier1SealedMutableCollectionPropertyTest {
       "expected the fixture to compile; got: ${result.compileErrors}",
     )
     assertTrue(
-      result.generated.contains("export_board_get_shapes"),
+      result.generated.contains("export_library_tier1_sealedmutablecollectionproperty__board_get_shapes"),
       "expected the getter to bind; generated=${result.generated}",
     )
     assertTrue(
-      result.generated.contains("export_board_set_shapes"),
+      result.generated.contains("export_library_tier1_sealedmutablecollectionproperty__board_set_shapes"),
       "expected the setter to bind; generated=${result.generated}",
     )
   }
@@ -69,7 +69,7 @@ class Tier1SealedMutableCollectionPropertyTest {
     val result = Tier1Harness.run(source)
 
     assertTrue(
-      result.generated.contains("export_board_set_current"),
+      result.generated.contains("export_library_tier1_sealedmutablecollectionproperty__board_set_current"),
       "expected the scalar sealed setter to bind; generated=${result.generated}",
     )
     assertTrue(

@@ -53,7 +53,7 @@ class Tier1SealedReturnPlanTest {
       "expected the sealed returns to compile; got: ${result.compileErrors}",
     )
     assertTrue(
-      result.generated.contains("export_factory_shapeOf"),
+      result.generated.contains("export_library_tier1_sealedreturn__factory_shapeOf"),
       "expected Factory.shapeOf to export; generated=${result.generated}",
     )
     assertTrue(
@@ -73,7 +73,7 @@ class Tier1SealedReturnPlanTest {
     val result = Tier1Harness.run(source)
 
     assertTrue(
-      result.generated.contains("export_shapes_pick"),
+      result.generated.contains("export_library_tier1_sealedreturn__shapes_pick"),
       "expected Shapes.pick to export; generated=${result.generated}",
     )
     assertTrue(
@@ -88,7 +88,7 @@ class Tier1SealedReturnPlanTest {
     val result = Tier1Harness.run(source)
 
     assertTrue(
-      result.generated.contains("export_factory_maybe"),
+      result.generated.contains("export_library_tier1_sealedreturn__factory_maybe"),
       "expected Factory.maybe to export; generated=${result.generated}",
     )
     assertTrue(
@@ -106,7 +106,7 @@ class Tier1SealedReturnPlanTest {
     val result = Tier1Harness.run(source)
 
     assertTrue(
-      result.generated.contains("export_factory_everyShape"),
+      result.generated.contains("export_library_tier1_sealedreturn__factory_everyShape"),
       "expected Factory.everyShape to export; generated=${result.generated}",
     )
     assertTrue(
@@ -129,7 +129,7 @@ class Tier1SealedReturnPlanTest {
 
     assertEquals(
       1,
-      Regex("""@CName\("anyShape"\)""").findAll(result.generated).count(),
+      Regex("""@CName\("library_tier1_sealedreturn__anyShape"\)""").findAll(result.generated).count(),
       "expected exactly one export for the top-level sealed return; generated=${result.generated}",
     )
     assertTrue(

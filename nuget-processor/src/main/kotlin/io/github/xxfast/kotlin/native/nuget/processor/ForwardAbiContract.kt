@@ -85,10 +85,13 @@ internal data class ForwardAbiCollision(
         owners.joinToString("\n") { owner -> "  - ${owner.render()}" }
 
   val hint: String
-    get() = "The C entry point is derived from the declaration's own enclosing chain of simple " +
-        "names, never its package (ADR-133), so two same-named declarations in different " +
-        "packages collide; rename one " +
-        "declaration. [${signatures.joinToString(", ")}]"
+    get() = "The C entry point is the library name, the declaration's package relative to " +
+        "`nuget.rootPackage`, and its enclosing chain of simple names (ADR-163), so two " +
+        "same-named declarations in different packages no longer collide. What remains is a " +
+        "collision inside ONE package and owner: a member whose name matches a generated role " +
+        "(`fun dispose()` against the generated `Dispose`), a Kotlin `_` that reads as this " +
+        "scheme's own separator, or two routes claiming one member; rename one declaration. " +
+        "[${signatures.joinToString(", ")}]"
 
   fun message(): String = "$reason\n$hint"
 }

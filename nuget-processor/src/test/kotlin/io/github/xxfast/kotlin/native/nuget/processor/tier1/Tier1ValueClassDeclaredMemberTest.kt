@@ -39,9 +39,9 @@ class Tier1ValueClassDeclaredMemberTest {
     )
 
     assertTrue(result.compiledClean, "expected Uri.get to compile; got: ${result.compileErrors}")
-    assertContains(result.generated, "@CName(\"uri_get\")")
+    assertContains(result.generated, "@CName(\"library_tier1_valueclassdeclared__uri_get\")")
     assertFalse(
-      result.generated.contains("@CName(\"uri_get_length\")"),
+      result.generated.contains("@CName(\"library_tier1_valueclassdeclared__uri_get_length\")"),
       "the delegated CharSequence.length is the inherited signature and must stay skipped; " +
           "generated=${result.generated}",
     )
@@ -82,8 +82,8 @@ class Tier1ValueClassDeclaredMemberTest {
     assertTrue(result.compiledClean, "expected both overloads to compile; got: ${result.compileErrors}")
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"chartid_describe\")")
-    assertContains(kotlin, "@CName(\"chartid_describe_2\")")
+    assertContains(kotlin, "@CName(\"library_tier1_valueclassoverload__chartid_describe\")")
+    assertContains(kotlin, "@CName(\"library_tier1_valueclassoverload__chartid_describe_2\")")
     assertContains(kotlin, "tier1.valueclassoverload.ChartId(value).describe()")
     assertContains(kotlin, "tier1.valueclassoverload.ChartId(value).describe(")
     assertFalse(
@@ -93,8 +93,8 @@ class Tier1ValueClassDeclaredMemberTest {
     )
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "EntryPoint = \"chartid_describe\"")
-    assertContains(cs, "EntryPoint = \"chartid_describe_2\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_valueclassoverload__chartid_describe\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_valueclassoverload__chartid_describe_2\"")
     assertContains(cs, "public string Describe()")
     assertContains(cs, "public string Describe(string prefix)")
     assertContains(cs, "Native_Describe_2(Value, prefix)")
@@ -124,7 +124,7 @@ class Tier1ValueClassDeclaredMemberTest {
 
     assertTrue(result.compiledClean, "expected Password to compile; got: ${result.compileErrors}")
     assertFalse(
-      result.generated.contains("@CName(\"password_get\")"),
+      result.generated.contains("@CName(\"library_tier1_valueclassoverride__password_get\")"),
       "an explicit override is the inherited signature and must stay out of the export set; " +
           "generated=${result.generated}",
     )
@@ -168,7 +168,7 @@ class Tier1ValueClassDeclaredMemberTest {
 
     assertTrue(result.compiledClean, "expected Code to compile; got: ${result.compileErrors}")
     assertFalse(
-      result.generated.contains("@CName(\"code_compareTo\")"),
+      result.generated.contains("@CName(\"library_tier1_valueclasstypeparam__code_compareTo\")"),
       "Comparable's parameter is the type parameter T, which matches Code conservatively, so " +
           "the override stays out of the export set; generated=${result.generated}",
     )

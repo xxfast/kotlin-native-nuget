@@ -40,9 +40,9 @@ class Tier1ConstructorDefaultParameterTest {
     )
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"carrier_create\")")
-    assertContains(kotlin, "@CName(\"carrier_create_2\")")
-    assertContains(kotlin, "@CName(\"carrier_create_3\")")
+    assertContains(kotlin, "@CName(\"library_tier1_ctordefaults__carrier_create\")")
+    assertContains(kotlin, "@CName(\"library_tier1_ctordefaults__carrier_create_2\")")
+    assertContains(kotlin, "@CName(\"library_tier1_ctordefaults__carrier_create_3\")")
     // The load-bearing assertion: the truncated plans call the constructor with fewer positional
     // arguments. Kotlin, not the generator, supplies `size` / `padded`.
     assertContains(kotlin, "Carrier(label, size, padded)")
@@ -50,9 +50,9 @@ class Tier1ConstructorDefaultParameterTest {
     assertContains(kotlin, "Carrier(label)")
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "EntryPoint = \"carrier_create\"")
-    assertContains(cs, "EntryPoint = \"carrier_create_2\"")
-    assertContains(cs, "EntryPoint = \"carrier_create_3\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_ctordefaults__carrier_create\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_ctordefaults__carrier_create_2\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_ctordefaults__carrier_create_3\"")
     assertContains(cs, "private static extern IntPtr Native_Create_2(")
     assertContains(cs, "private static extern IntPtr Native_Create_3(")
     // One natural C# overload set: the numbering never reaches the public surface.
@@ -82,9 +82,9 @@ class Tier1ConstructorDefaultParameterTest {
     assertTrue(result.compiledClean, "expected clean compile; got: ${result.compileErrors}")
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"scratchpost_create\")")
-    assertContains(kotlin, "@CName(\"scratchpost_create_2\")")
-    assertContains(kotlin, "@CName(\"scratchpost_create_3\")")
+    assertContains(kotlin, "@CName(\"library_tier1_ctordefaultssecondary__scratchpost_create\")")
+    assertContains(kotlin, "@CName(\"library_tier1_ctordefaultssecondary__scratchpost_create_2\")")
+    assertContains(kotlin, "@CName(\"library_tier1_ctordefaultssecondary__scratchpost_create_3\")")
     assertFalse(
       kotlin.contains("scratchpost_create_4"),
       "the primary has no defaults, so nothing is synthesized for it; generated=$kotlin",
@@ -127,8 +127,8 @@ class Tier1ConstructorDefaultParameterTest {
 
     assertEquals("OK", result.kspExitCode, "kspErrors=${result.kspErrors}")
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"beacon_create\")")
-    assertContains(kotlin, "@CName(\"beacon_create_2\")")
+    assertContains(kotlin, "@CName(\"library_tier1_ctordefaultsexpect__beacon_create\")")
+    assertContains(kotlin, "@CName(\"library_tier1_ctordefaultsexpect__beacon_create_2\")")
     assertContains(kotlin, "Beacon(name, interval)")
     assertContains(kotlin, "Beacon(name)")
     assertContains(result.generatedCSharp, "public Beacon(string name)")
@@ -178,7 +178,7 @@ class Tier1ConstructorDefaultParameterTest {
 
     assertTrue(result.compiledClean, "expected clean compile; got: ${result.compileErrors}")
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"kennel_create\")")
+    assertContains(kotlin, "@CName(\"library_tier1_ctordefaultsmiddle__kennel_create\")")
     assertFalse(
       kotlin.contains("kennel_create_2"),
       "a middle default gets no omitting overload (the JvmOverloads rule); generated=$kotlin",
@@ -206,7 +206,7 @@ class Tier1ConstructorDefaultParameterTest {
 
     assertTrue(result.compiledClean, "expected clean compile; got: ${result.compileErrors}")
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"plain_create\")")
+    assertContains(kotlin, "@CName(\"library_tier1_ctornodefaults__plain_create\")")
     assertFalse(kotlin.contains("plain_create_2"), "no numbering without defaults; generated=$kotlin")
 
     val cs: String = result.generatedCSharp

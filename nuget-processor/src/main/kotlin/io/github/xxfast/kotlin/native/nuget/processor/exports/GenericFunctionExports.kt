@@ -1,5 +1,9 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
+import io.github.xxfast.kotlin.native.nuget.processor.forward.importIfDefaultPackage
+import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinPackageReference
+
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.squareup.kotlinpoet.ClassName
@@ -31,8 +35,16 @@ internal fun KSFunctionDeclaration.hasLegacyGenericFunctionRoute(): Boolean =
  * Generates @CName bridge exports for generic functions using type-variant pattern.
  * For identity<T>(value: T): T, generates identity_string, identity_int, etc.
  */
-internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclaration) {
-  val funcName: String = func.simpleName.asString()
+internal fun FileSpec.Builder.addGenericFunctionExports(
+  func: KSFunctionDeclaration,
+  /** ADR-163: the one symbol table; `translateGenericFunction` pins the same strings. */
+  symbols: ForwardSymbolTable,
+) {
+  // ADR-163: the qualified symbol stem, and the fully qualified Kotlin call beside it. The stem
+  // also carries the `toCName` escape, which this route used to skip while its C# twin applied it.
+  val symbolStem: String = symbols.topLevel(func)
+  val funcName: String =
+    kotlinPackageReference(func.packageName.asString()) + func.simpleName.asString()
   val returnType: KSType? = func.returnType?.resolve()?.expandAliases()
   val returnDecl: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
 
@@ -42,8 +54,9 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
 
   if (paramIndex == -1) return
 
-  // ADR-064: imported behind the gate, so a function this route refuses leaves no dead import.
-  addImport(func.packageName.asString(), funcName)
+  // ADR-163: the default package has no qualifier to spell, so the bare call needs this import.
+  importIfDefaultPackage(func)
+
 
   val paramName: String = func.parameters[paramIndex].name?.asString() ?: "value"
 
@@ -71,7 +84,7 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
   )
 
   if (!hasNonTrivialBound) primitiveTypes.forEach { (suffix, kotlinType) ->
-    val cname = "${funcName}_$suffix"
+    val cname = "${symbolStem}_$suffix"
 
     if (returnsGenericClass) {
       addFunction(
@@ -119,7 +132,7 @@ internal fun FileSpec.Builder.addGenericFunctionExports(func: KSFunctionDeclarat
     }
   }
 
-  val cname = "${funcName}_object"
+  val cname = "${symbolStem}_object"
 
   val boundQualified: String? = func.typeParameters.firstOrNull()
     ?.bounds?.toList()?.firstOrNull()?.let { bound ->

@@ -814,6 +814,7 @@ class CirOrdinaryRendererTest {
     val enum = CirEnum(
       name = "Mood",
       libraryName = "clinic",
+      nativePrefix = "mood",
       entries = listOf(
         CirEnumEntry("Calm", 0),
         CirEnumEntry("Anxious", 1),

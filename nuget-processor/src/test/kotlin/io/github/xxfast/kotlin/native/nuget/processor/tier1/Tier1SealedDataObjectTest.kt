@@ -41,15 +41,15 @@ class Tier1SealedDataObjectTest {
 
     assertContains(
       result.generated,
-      "public fun export_shape_empty_equals(handle: COpaquePointer, other: COpaquePointer): Boolean",
+      "public fun export_library_tier1_dataobject__shape_empty_equals(handle: COpaquePointer, other: COpaquePointer): Boolean",
     )
     assertContains(
       result.generated,
-      "public fun export_shape_empty_hashcode(handle: COpaquePointer): Int",
+      "public fun export_library_tier1_dataobject__shape_empty_hashcode(handle: COpaquePointer): Int",
     )
     assertContains(
       result.generated,
-      "public fun export_shape_empty_tostring(handle: COpaquePointer): String",
+      "public fun export_library_tier1_dataobject__shape_empty_tostring(handle: COpaquePointer): String",
     )
   }
 
@@ -57,9 +57,9 @@ class Tier1SealedDataObjectTest {
   fun `a data object subclass binds the data methods in C#`() {
     val result = run()
 
-    assertContains(result.generatedCSharp, "EntryPoint = \"shape_empty_equals\"")
-    assertContains(result.generatedCSharp, "EntryPoint = \"shape_empty_hashcode\"")
-    assertContains(result.generatedCSharp, "EntryPoint = \"shape_empty_tostring\"")
+    assertContains(result.generatedCSharp, "EntryPoint = \"library_tier1_dataobject__shape_empty_equals\"")
+    assertContains(result.generatedCSharp, "EntryPoint = \"library_tier1_dataobject__shape_empty_hashcode\"")
+    assertContains(result.generatedCSharp, "EntryPoint = \"library_tier1_dataobject__shape_empty_tostring\"")
     assertContains(result.generatedCSharp, "if (obj is Empty other) return Native_Equals(_handle, other._handle);")
     assertContains(result.generatedCSharp, "public override int GetHashCode() => Native_HashCode(_handle);")
   }

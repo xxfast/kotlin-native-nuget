@@ -29,13 +29,13 @@ class Tier1TopLevelPascalCaseTest {
     assertTrue(result.compiledClean, "got: ${result.compileErrors}")
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"add\")")
-    assertContains(kotlin, "@CName(\"lock\")")
+    assertContains(kotlin, "@CName(\"library_tier1_pascal__add\")")
+    assertContains(kotlin, "@CName(\"library_tier1_pascal__lock\")")
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "public static partial class Arithmetic")
     assertContains(cs, "public static int Add(int a, int b)")
-    assertContains(cs, "EntryPoint = \"add\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_pascal__add\"")
     // A PascalCased name is never a C# keyword, so `fun lock()` no longer needs the `@` escape.
     assertContains(cs, "public static string Lock()")
     assertFalse(
@@ -101,8 +101,8 @@ class Tier1TopLevelPascalCaseTest {
     // The whole file class moves, not just the claiming function.
     assertContains(cs, "public static string Other()")
     // C#-only: the native export keeps the Kotlin spelling.
-    assertContains(cs, "EntryPoint = \"greeting\"")
-    assertContains(result.generated, "@CName(\"greeting\")")
+    assertContains(cs, "EntryPoint = \"library_tier1_pascalfileclass__greeting\"")
+    assertContains(result.generated, "@CName(\"library_tier1_pascalfileclass__greeting\")")
 
     val note: String? = result.kspWarnings.firstOrNull {
       it.contains(ForwardDiagnosticKind.INFO_FILE_CLASS_RENAMED.name)
@@ -137,7 +137,7 @@ class Tier1TopLevelPascalCaseTest {
     val cs: String = result.generatedCSharp
     assertContains(cs, "Lock()")
     assertContains(cs, "EventAsync")
-    assertContains(cs, "EntryPoint = \"lock\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_pascallegacy__lock\"")
     assertFalse("@lock" in cs, "expected no verbatim identifier on the sealed route; cs=$cs")
     assertFalse("@event" in cs, "expected no verbatim identifier on the suspend route; cs=$cs")
   }

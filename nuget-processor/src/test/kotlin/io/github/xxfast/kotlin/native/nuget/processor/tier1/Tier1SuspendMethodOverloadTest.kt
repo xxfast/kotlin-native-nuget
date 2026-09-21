@@ -49,8 +49,8 @@ class Tier1SuspendMethodOverloadTest {
 
     val kotlin: String = result.generated
     listOf(
-      "shelter_adopt_async", "shelter_adopt_2_async",
-      "shelter_rehome_async", "shelter_rehome_2_async",
+      "library_tier1_suspendoverload__shelter_adopt_async", "library_tier1_suspendoverload__shelter_adopt_2_async",
+      "library_tier1_suspendoverload__shelter_rehome_async", "library_tier1_suspendoverload__shelter_rehome_2_async",
     ).forEach { entryPoint ->
       assertContains(kotlin, "@CName(\"$entryPoint\")")
       assertEquals(
@@ -115,8 +115,8 @@ class Tier1SuspendMethodOverloadTest {
 
     val kotlin: String = result.generated
     listOf(
-      "job_running_pause_async", "job_running_pause_2_async",
-      "job_running_resume_async", "job_idle_nap_async",
+      "library_tier1_suspendarm__job_running_pause_async", "library_tier1_suspendarm__job_running_pause_2_async",
+      "library_tier1_suspendarm__job_running_resume_async", "library_tier1_suspendarm__job_idle_nap_async",
     ).forEach { entryPoint ->
       assertContains(kotlin, "@CName(\"$entryPoint\")")
       assertEquals(

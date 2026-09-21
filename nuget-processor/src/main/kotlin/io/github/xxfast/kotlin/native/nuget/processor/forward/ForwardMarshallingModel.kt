@@ -519,6 +519,13 @@ internal data class ForwardNativeCall(
   val exportName: String,
   val result: ForwardAbiWireType,
   val parameters: List<ForwardAbiParameter>,
+  /**
+   * ADR-163: [exportName] without its library and package qualification, the stem the C# side folds
+   * its `Native_...` extern name out of. Carried on the call rather than recomputed at render time,
+   * so the one place that knows the scheme (`ForwardSymbolTable`) is the only place that strips it.
+   * Defaults to [exportName], which is what an already-unqualified hand-built call wants.
+   */
+  val csharpStem: String = exportName,
 )
 
 internal data class ForwardPublicParameter(val name: String, val type: BridgeType)

@@ -89,12 +89,12 @@ class Tier1SealedArmFlowTest {
     )
 
     val missing: List<String> = listOf(
-      "@CName(\"job_watching_get_ticks_collect\")",
-      "@CName(\"job_watching_get_ticks_value\")",
-      "@CName(\"job_watching_labels_collect\")",
-      "@CName(\"job_watching_labels_2_collect\")",
-      "@CName(\"job_running_get_beats_collect\")",
-      "@CName(\"job_running_get_beats_value\")",
+      "@CName(\"library_tier1_armflow__job_watching_get_ticks_collect\")",
+      "@CName(\"library_tier1_armflow__job_watching_get_ticks_value\")",
+      "@CName(\"library_tier1_armflow__job_watching_labels_collect\")",
+      "@CName(\"library_tier1_armflow__job_watching_labels_2_collect\")",
+      "@CName(\"library_tier1_armflow__job_running_get_beats_collect\")",
+      "@CName(\"library_tier1_armflow__job_running_get_beats_value\")",
     ).filterNot(result.generated::contains)
 
     assertTrue(missing.isEmpty(), "expected the arm-prefixed flow exports; missing: $missing")
@@ -132,10 +132,10 @@ class Tier1SealedArmFlowTest {
       "public KotlinStateFlow<int> Beats",
       "Native_LabelsCollect(",
       "Native_Labels_2Collect(",
-      "EntryPoint = \"job_watching_get_ticks_collect\"",
-      "EntryPoint = \"job_watching_get_ticks_value\"",
-      "EntryPoint = \"job_watching_labels_collect\"",
-      "EntryPoint = \"job_watching_labels_2_collect\"",
+      "EntryPoint = \"library_tier1_armflow__job_watching_get_ticks_collect\"",
+      "EntryPoint = \"library_tier1_armflow__job_watching_get_ticks_value\"",
+      "EntryPoint = \"library_tier1_armflow__job_watching_labels_collect\"",
+      "EntryPoint = \"library_tier1_armflow__job_watching_labels_2_collect\"",
     ).filterNot(result.generatedCSharp::contains)
 
     assertTrue(
@@ -252,7 +252,7 @@ class Tier1SealedArmFlowTest {
           "${result.compileErrors} ${result.kspErrors}",
     )
     assertTrue(
-      result.generated.contains("@CName(\"pulse_beat_get_rate_collect\")"),
+      result.generated.contains("@CName(\"library_tier1_armflowinterface__pulse_beat_get_rate_collect\")"),
       "expected the eligible sealed interface's arm to take the same route a sealed class's arm " +
           "takes; got: ${result.generated.lines().filter { it.contains("pulse_beat") }}",
     )

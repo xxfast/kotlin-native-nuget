@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.ClassName
@@ -955,6 +956,43 @@ private fun ForwardCallablePlan.ownerTypeName(): String =
 /** ADR-147: the bound a `T` box is read back as, `Any` when the parameter is unconstrained. */
 private fun BridgeType.TypeParameter.stableRefTypeName(): String = boundQualifiedName ?: "Any"
 
+/**
+ * ADR-163: a Kotlin package spelled as the receiver-free qualifier of a top-level call, with the
+ * trailing `.` included so the root package yields the empty string and the call stays bare.
+ *
+ * Each segment is backtick-escaped when it is a Kotlin hard keyword: `package in.house` is legal
+ * Kotlin, and `in.house.rollCall()` is not.
+ */
+internal fun kotlinPackageReference(packageName: String): String {
+  if (packageName.isEmpty()) return ""
+  return packageName.split(".")
+    .joinToString(".") { segment -> if (segment in KOTLIN_HARD_KEYWORDS) "`$segment`" else segment } + "."
+}
+
+/**
+ * ADR-163: the one import a qualified top-level call still needs.
+ *
+ * [kotlinPackageReference] returns the empty string for the DEFAULT package, so the call there is a
+ * bare simple name, and the generated file lives in its own package: without an import that is an
+ * `Unresolved reference`. Every route that spells a top-level call must go through this, or the
+ * default package compiles on the plan route and breaks on a legacy one.
+ *
+ * A root-package declaration cannot collide with a namesake from another package under this scheme,
+ * because the other one is spelled qualified, so the single import is unambiguous by construction.
+ */
+internal fun FileSpec.Builder.importIfDefaultPackage(declaration: KSDeclaration) {
+  if (declaration.packageName.asString().isEmpty()) {
+    addImport("", declaration.simpleName.asString())
+  }
+}
+
+/** The Kotlin hard keywords, which a package segment may be and a qualified reference may not. */
+private val KOTLIN_HARD_KEYWORDS: Set<String> = setOf(
+  "as", "break", "class", "continue", "do", "else", "false", "for", "fun", "if", "in",
+  "interface", "is", "null", "object", "package", "return", "super", "this", "throw",
+  "true", "try", "typealias", "typeof", "val", "var", "when", "while",
+)
+
 private fun invocationExpression(
   plan: ForwardCallablePlan,
   receiver: ForwardAbiParameter?,
@@ -970,7 +1008,18 @@ private fun invocationExpression(
     }
 
     ForwardCallableOrigin.EXTENSION -> "${receiverExpression(requireNotNull(receiver))}.$functionName($arguments)"
-    ForwardCallableOrigin.TOP_LEVEL -> "$functionName($arguments)"
+    // ADR-163: fully qualified, never imported by simple name. Two `rollCall()` in two packages
+    // both become exported symbols now that the C name is package-qualified, and a bare call with
+    // two simple-name imports beside it is an overload-resolution ambiguity in the generated file
+    // (verified by spike: `CNameExports.kt:35:3: Overload resolution ambiguity between candidates`).
+    // The generated wrapper names are `export_$cname`, so they are already unique.
+    // A DEFAULT-package declaration's qualified name carries no `.`, and `substringBeforeLast` on a
+    // string without its separator returns the whole string: that spelled `rollCall.rollCall()`.
+    ForwardCallableOrigin.TOP_LEVEL -> {
+      val symbol: String = plan.invocation.symbol
+      val packageName: String = if (symbol.contains('.')) symbol.substringBeforeLast('.') else ""
+      "${kotlinPackageReference(packageName)}$functionName($arguments)"
+    }
     ForwardCallableOrigin.OBJECT, ForwardCallableOrigin.COMPANION ->
       "${requireNotNull(plan.invocation.target)}.$functionName($arguments)"
 

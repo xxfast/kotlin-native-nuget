@@ -147,10 +147,10 @@ class Tier1ReceiverShapesExtensionPropertyTest {
       """.trimIndent(),
     )
 
-    assertContains(result.generated, "@CName(\"sitter_bridge_create\")")
+    assertContains(result.generated, "@CName(\"library_tier1_propreceiverreach__sitter_bridge_create\")")
     assertContains(
       result.generatedCSharp,
-      "internal sealed class SitterBridgeState : NugetBridgeState",
+      "internal sealed class Tier1PropreceiverreachSitterBridgeState : NugetBridgeState",
     )
     // ROADMAP line 28: this fixture used to carry an unrelated `fun frontDoor(): String` purely to
     // open `CirTranslator.needsCoreMarshal`. Without it the module rendered `NugetMarshal.HandleOf`

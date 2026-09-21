@@ -258,7 +258,10 @@ data class CirEnum(
   val libraryName: String,
   // ADR-133: the C entry-point prefix, the enclosing chain (`owner_kind`); the enum entry point
   // used to be composed from the simple name alone.
-  val nativePrefix: String = name.lowercase(),
+  // ADR-163: no default. It used to fall back to `name.lowercase()`, which is exactly the
+  // unqualified spelling two same-named enums in two packages collided on, so a translator that
+  // forgot to pass it would silently reintroduce the collision.
+  val nativePrefix: String,
   // ADR-133: the C# spelling with its enclosing scope (`Owner.Kind`), used by the extension class,
   // which cannot itself nest (CS1109) and so stays at namespace level as `OwnerKindExtensions`.
   val csName: String = name,

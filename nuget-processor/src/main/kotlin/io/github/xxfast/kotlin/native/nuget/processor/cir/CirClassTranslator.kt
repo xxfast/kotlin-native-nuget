@@ -16,6 +16,7 @@ import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Variance
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
+import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
 import io.github.xxfast.kotlin.native.nuget.processor.forward.cirDoc
@@ -589,7 +590,7 @@ internal fun translateClass(
   expects: ExpectIndex = ExpectIndex(),
 ): CirClass {
   val name: String = cls.simpleName.asString()
-  val prefix: String = cls.nativePrefix()
+  val prefix: String = cls.nativePrefix(context.symbols)
   val isDataClass: Boolean = cls.modifiers.contains(Modifier.DATA)
   val isAbstract: Boolean = cls.modifiers.contains(Modifier.ABSTRACT)
   val isOpen: Boolean = !isAbstract && cls.modifiers.contains(Modifier.OPEN)
@@ -1944,7 +1945,7 @@ internal fun translateSealedClass(
 ): CirSealedClass {
   val libraryName: String = context.libraryName
   val name: String = cls.simpleName.asString()
-  val prefix: String = cls.nativePrefix()
+  val prefix: String = cls.nativePrefix(context.symbols)
   val qualifiedName: String? = cls.qualifiedName?.asString()
 
   // ADR-111/ADR-116 amendment (2026-09-11): the base's own declared members, off base-keyed plans
@@ -2396,6 +2397,8 @@ internal fun emitCsharpSignatureCollisions(
 internal fun translateObject(
   obj: KSClassDeclaration,
   libraryName: String,
+  /** ADR-163: the one symbol table. */
+  symbols: ForwardSymbolTable,
   callableCatalog: ForwardCallablePlanCatalog,
   tracker: CollectionHelperTracker,
   logger: KSPLogger,
@@ -2404,7 +2407,7 @@ internal fun translateObject(
   expects: ExpectIndex = ExpectIndex(),
 ): CirObject {
   val name: String = obj.simpleName.asString()
-  val prefix: String = obj.nativePrefix()
+  val prefix: String = obj.nativePrefix(symbols)
 
   // Object methods are static (no receiver handle), so they route through the same
   // shape as top-level functions (CirFunctionTranslator's static template) rather than
@@ -3019,11 +3022,13 @@ private fun emitInterfaceNameCollisions(
 internal fun translateInterfaceBackingClass(
   iface: KSClassDeclaration,
   libraryName: String,
+  /** ADR-163: the one symbol table. */
+  symbols: ForwardSymbolTable,
   callableCatalog: ForwardCallablePlanCatalog,
   tracker: CollectionHelperTracker,
 ): CirClass {
   val name: String = iface.simpleName.asString()
-  val prefix: String = iface.nativePrefix()
+  val prefix: String = iface.nativePrefix(symbols)
   val ifaceQualified: String = iface.qualifiedName?.asString() ?: name
 
   val properties: List<CirProperty> = iface.getAllProperties()
@@ -3141,6 +3146,9 @@ internal fun translateEnum(
   // and its top-level one) have a logger in scope, and a nullable logger would silently disable the
   // after-casing collision guard in exactly the harness that tests it.
   logger: KSPLogger,
+  /** ADR-163: the one symbol table. Non-null even where [context] is: the entry-point prefix is
+   *  not optional, and an unqualified fallback is exactly the collision this ADR removes. */
+  symbols: ForwardSymbolTable,
   expects: ExpectIndex = ExpectIndex(),
   // The namespace mapping, so an enum-typed enum property can spell the other enum the way every
   // other C# type position spells it. Null keeps the bare nested name (the Tier 1 no-namespace
@@ -3201,7 +3209,7 @@ internal fun translateEnum(
     libraryName = libraryName,
     // ADR-133: the chain, so a nested `Owner.Kind` exports `owner_kind_get_*` and cannot collide
     // with a top-level `Kind` (ADR-117).
-    nativePrefix = enum.nativePrefix(),
+    nativePrefix = enum.nativePrefix(symbols),
     csName = enum.nestedCsName(),
     entries = entries,
     properties = properties,
@@ -3221,7 +3229,7 @@ internal fun translateValueClass(
 ): CirValueClass {
   val name: String = cls.simpleName.asString()
   val qualifiedName: String = cls.qualifiedName?.asString() ?: name
-  val prefix: String = cls.nativePrefix()
+  val prefix: String = cls.nativePrefix(context.symbols)
 
   val underlyingParamName: String = cls.primaryConstructor!!.parameters.first().name!!.asString()
   val underlyingProp: KSPropertyDeclaration = cls.getAllProperties()

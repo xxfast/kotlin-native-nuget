@@ -42,8 +42,8 @@ class Tier1OrdinarySurfaceTest {
     assertTrue(result.compiledClean, "got: ${result.compileErrors}")
     val cs = result.generatedCSharp
     assertContains(cs, "public static int Counter")
-    assertContains(cs, "EntryPoint = \"get_counter\"")
-    assertContains(cs, "EntryPoint = \"set_counter\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_toplevelprop__get_counter\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_toplevelprop__set_counter\"")
   }
 
   @Test

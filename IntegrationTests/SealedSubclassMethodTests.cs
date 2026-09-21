@@ -422,7 +422,7 @@ public class SealedSubclassMethodTests
     {
         string[] entryPoints = EntryPointsOfTheSealedFamily();
 
-        Assert.Contains("job_running_get_progress", entryPoints);
+        Assert.Contains("test_issue115__job_running_get_progress", entryPoints);
         Assert.DoesNotContain(
             entryPoints,
             entryPoint => entryPoint.EndsWith("_rest_async", StringComparison.Ordinal));
@@ -440,10 +440,10 @@ public class SealedSubclassMethodTests
     {
         string[] entryPoints = EntryPointsOfTheSealedFamily();
 
-        Assert.Contains("job_running_pause_async", entryPoints);
-        Assert.Contains("job_running_pause_2_async", entryPoints);
-        Assert.Contains("job_running_resume_async", entryPoints);
-        Assert.Contains("job_idle_nap_async", entryPoints);
+        Assert.Contains("test_issue115__job_running_pause_async", entryPoints);
+        Assert.Contains("test_issue115__job_running_pause_2_async", entryPoints);
+        Assert.Contains("test_issue115__job_running_resume_async", entryPoints);
+        Assert.Contains("test_issue115__job_idle_nap_async", entryPoints);
     }
 
     /// <summary>

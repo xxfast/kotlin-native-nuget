@@ -118,7 +118,7 @@ class Tier1NullableCollectionComponentTest {
     )
     // A C# Dictionary cannot hold a null key, so the key spelling skips entirely.
     assertTrue(
-      "export_chartbook_keyedScores" !in kotlin,
+      "export_library_tier1_nullablecollectionmap__chartbook_keyedScores" !in kotlin,
       "expected the nullable-key map input to be skipped; generated=$kotlin",
     )
   }
@@ -283,8 +283,8 @@ class Tier1NullableCollectionComponentTest {
     )
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "export_chartbook_tallyShorts")
-    assertContains(kotlin, "export_chartbook_initials")
+    assertContains(kotlin, "export_library_tier1_nullablecollectionnarrowing__chartbook_tallyShorts")
+    assertContains(kotlin, "export_library_tier1_nullablecollectionnarrowing__chartbook_initials")
     assertContains(kotlin, "it as kotlin.Short?")
     assertContains(kotlin, "it as kotlin.Char?")
   }

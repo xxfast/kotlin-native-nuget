@@ -51,16 +51,16 @@ class Tier1InheritedMemberDiagnosticsTest {
       "expected no broken source for Dog; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_dog_fetch" in result.generated,
+      "export_library_tier1_inherited__dog_fetch" in result.generated,
       "expected Dog's own declared method to bind; generated=${result.generated}",
     )
-    listOf("export_dog_speak", "export_dog_get_legs", "export_dog_get_name").forEach { export ->
+    listOf("export_library_tier1_inherited__dog_speak", "export_library_tier1_inherited__dog_get_legs", "export_library_tier1_inherited__dog_get_name").forEach { export ->
       assertTrue(
         export !in result.generated,
         "expected no duplicate $export on the subclass; generated=${result.generated}",
       )
     }
-    listOf("export_animal_speak", "export_animal_get_legs", "export_animal_get_name").forEach { export ->
+    listOf("export_library_tier1_inherited__animal_speak", "export_library_tier1_inherited__animal_get_legs", "export_library_tier1_inherited__animal_get_name").forEach { export ->
       assertTrue(
         export in result.generated,
         "expected the inherited member to keep its export on the declaring class; " +
@@ -142,7 +142,7 @@ class Tier1InheritedMemberDiagnosticsTest {
       "expected no broken source for Host; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_host_greet" in result.generated && "export_host_get_greeting" in result.generated,
+      "export_library_tier1_inheritediface__host_greet" in result.generated && "export_library_tier1_inheritediface__host_get_greeting" in result.generated,
       "expected Host's defaulted interface members to bind; generated=${result.generated}",
     )
     assertTrue(

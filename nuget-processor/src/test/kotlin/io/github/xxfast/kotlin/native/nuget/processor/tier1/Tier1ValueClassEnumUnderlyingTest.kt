@@ -32,7 +32,7 @@ class Tier1ValueClassEnumUnderlyingTest {
     assertTrue(result.compiledClean, "expected enum-underlying value class to compile; got: ${result.compileErrors}")
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"temperament_create\")")
+    assertContains(kotlin, "@CName(\"library_tier1_valueclassenum__temperament_create\")")
     assertContains(kotlin, "tier1.valueclassenum.Temperament(tier1.valueclassenum.Mood.entries[mood]).mood.ordinal")
 
     val cs: String = result.generatedCSharp
@@ -137,8 +137,8 @@ class Tier1ValueClassEnumUnderlyingTest {
     assertContains(kotlin, "valueOut.reinterpret<DoubleVar>().pointed.value = result.milligrams")
     assertContains(kotlin, "valueOut.reinterpret<IntVar>().pointed.value = result.mood.ordinal")
     // Top-level return: ADR-002's two-call pair, the `_value` half unboxing to the underlying.
-    assertContains(kotlin, "@CName(\"standardDosage_has_value\")")
-    assertContains(kotlin, "@CName(\"standardDosage_value\")")
+    assertContains(kotlin, "@CName(\"library_tier1_valueclassnullableskip__standardDosage_has_value\")")
+    assertContains(kotlin, "@CName(\"library_tier1_valueclassnullableskip__standardDosage_value\")")
     assertContains(kotlin, "standardDosage(kind)!!.milligrams")
 
     val cs: String = result.generatedCSharp

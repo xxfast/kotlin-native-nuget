@@ -25,6 +25,7 @@ import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.ksp.writeTo
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirRenderer
 import io.github.xxfast.kotlin.native.nuget.processor.cir.resolveDocLinks
 import io.github.xxfast.kotlin.native.nuget.processor.cir.withSkipRemarks
@@ -807,6 +808,32 @@ class NugetProcessor(
     // NugetDiagnostics.json describes this compilation and no earlier one.
     ForwardDiagnosticSink.reset()
 
+    // ADR-163: every forward symbol this round mints starts with the sanitised library name, so a
+    // library literally called `nuget` would mint into ADR-127's reserved runtime ABI space. Checked
+    // before anything is planned, because there is no per-declaration fix for it: the option is
+    // wrong, not the code.
+    if (context.symbols.librarySegment == RESERVED_LIBRARY_SEGMENT) {
+      ForwardDiagnosticSink.emit(
+        listOf(
+          ForwardDiagnostic(
+            kind = ForwardDiagnosticKind.ERROR_RESERVED_LIBRARY_NAME,
+            symbol = null,
+            declaration = context.libraryName,
+            reason = "The library name '${context.libraryName}' sanitises to " +
+                "'$RESERVED_LIBRARY_SEGMENT', the leading segment ADR-127 reserves for the " +
+                "nuget-runtime ABI. Every C entry point this build would mint " +
+                "('${RESERVED_LIBRARY_SEGMENT}_...') could collide with a runtime export.",
+            hint = "Rename the library: set `nuget { libraryName = \"...\" }` (or the Kotlin/Native " +
+                "binary's base name) to anything whose lowercased, `[a-z0-9_]`-sanitised form is " +
+                "not '$RESERVED_LIBRARY_SEGMENT'.",
+            owner = null,
+          ),
+        ),
+        logger,
+      )
+      return emptyList()
+    }
+
     // ADR-063: the effective include set is the explicit `include` when non-empty, else
     // `[rootPackage]` when `rootPackage` is set, else empty (= all). Mirrors the reverse side's
     // `IsNamespaceIncluded` predicate exactly (exclude wins; empty include = all; prefix match).
@@ -1454,8 +1481,8 @@ class NugetProcessor(
         exportMarkers = context.exportMarkers,
       ),
     )
-    val forwardPlanner = ForwardCallablePlanner(forwardClassifier, expects)
-    val forwardPropertyPlanner = ForwardPropertyPlanner(forwardClassifier, expects)
+    val forwardPlanner = ForwardCallablePlanner(forwardClassifier, context.symbols, expects)
+    val forwardPropertyPlanner = ForwardPropertyPlanner(forwardClassifier, context.symbols, expects)
     val ordinaryCatalog: ForwardCallablePlanCatalog = forwardPlanner.catalog(
       classes, functions, extensionFunctions, objects, properties, extensionProperties, valueClasses,
       sealedClasses,
@@ -1546,8 +1573,8 @@ class NugetProcessor(
     // only implemented and never returned. Fresh planner instances: their drop channels are
     // deliberately NOT merged below, or every reachable interface's skip would be reported twice
     // (a reachable interface is planned by both).
-    val declarationPlanner = ForwardCallablePlanner(forwardClassifier, expects)
-    val declarationPropertyPlanner = ForwardPropertyPlanner(forwardClassifier, expects)
+    val declarationPlanner = ForwardCallablePlanner(forwardClassifier, context.symbols, expects)
+    val declarationPropertyPlanner = ForwardPropertyPlanner(forwardClassifier, context.symbols, expects)
 
     // ADR-075 amendment (2026-09-13): the UNEXPORTED supertypes of exported classes, planned onto
     // the same declaration catalog. ADR-101 drops `: INesting` from the base list, but the members
@@ -1585,7 +1612,7 @@ class NugetProcessor(
     // A THIRD planner instance, for the same reason the declaration planner above is a second one:
     // its drop channel must not be merged, or every declared member of an unexported supertype the
     // class implements concretely would be warned about on every build.
-    val supertypePropertyPlanner = ForwardPropertyPlanner(forwardClassifier, expects)
+    val supertypePropertyPlanner = ForwardPropertyPlanner(forwardClassifier, context.symbols, expects)
     val interfaceDeclarationCatalog = ForwardCallablePlanCatalog(
       // Issue #249: the interface is the C# owner of whatever `IFoo` loses.
       // ADR-162: guarded per interface, same reasoning as the reachable loops above.
@@ -1952,31 +1979,42 @@ class NugetProcessor(
         // leave a line importing a symbol the generated file never mentions. The legacy route
         // imports its own, after its own early returns.
         if (planned.isNotEmpty()) {
-          builder.addImport(func.packageName.asString(), func.simpleName.asString())
+          // ADR-163: no simple-name import. The plan emitter spells a top-level call fully
+          // qualified, because two same-named functions in two packages now both export and an
+          // import pair would make the generated call ambiguous.
+          //
+          // The DEFAULT package is the exception: there is no qualifier to spell, and the generated
+          // file lives in its own package, so the bare call is an `Unresolved reference` without an
+          // import. A root-package declaration cannot collide with a namesake from another package
+          // under this scheme anyway (the other one is spelled qualified), so the one import is
+          // safe.
+          if (func.packageName.asString().isEmpty()) {
+            builder.addImport("", func.simpleName.asString())
+          }
           planned.forEach { builder.addForwardKotlinPlanExport(it) }
         } else {
-          builder.addFunctionExports(func)
+          builder.addFunctionExports(func, context.symbols)
         }
       }
     }
 
     genericFunctions.forEach { func ->
       // The import lives inside addGenericFunctionExports, behind its own gate (ADR-064).
-      guardDeclaration(func) { builder.addGenericFunctionExports(func) }
+      guardDeclaration(func) { builder.addGenericFunctionExports(func, context.symbols) }
     }
 
     classes.forEach { cls ->
       guardDeclaration(cls) {
-        builder.addClassExports(cls, callableCatalog, forwardClassifier, exportedTypes)
+        builder.addClassExports(cls, callableCatalog, forwardClassifier, exportedTypes, context.symbols)
       }
     }
     classes.forEach { cls ->
       guardDeclaration(cls) { builder.addCompanionExports(cls, callableCatalog) }
     }
-    enums.forEach { enum -> guardDeclaration(enum) { builder.addEnumExports(enum) } }
+    enums.forEach { enum -> guardDeclaration(enum) { builder.addEnumExports(enum, context.symbols) } }
     sealedClasses.forEach { sealed ->
       guardDeclaration(sealed) {
-        builder.addSealedClassExports(sealed, callableCatalog, context.exportMarkers)
+        builder.addSealedClassExports(sealed, callableCatalog, context.exportMarkers, context.symbols)
       }
     }
     objects.forEach { obj ->
@@ -1986,14 +2024,14 @@ class NugetProcessor(
       guardDeclaration(cls) { builder.addValueClassExports(cls, callableCatalog) }
     }
     reachableInterfaces.forEach { iface ->
-      guardDeclaration(iface) { builder.addInterfaceExports(iface, callableCatalog) }
+      guardDeclaration(iface) { builder.addInterfaceExports(iface, callableCatalog, context.symbols) }
     }
     // ADR-084 stage 1: the per-interface bridge factory, projected from the same slot plan the C#
     // `{Iface}BridgeState` is projected from (see `ForwardInterfaceBridgePlanner`).
     val bridgePlans: List<ForwardBridgeInterfacePlan> =
       reachableInterfaces.mapNotNull { iface ->
         guarded(iface.forwardGuardName(), iface, logger) {
-          ForwardInterfaceBridgePlanner.plan(iface, forwardClassifier)
+          ForwardInterfaceBridgePlanner.plan(iface, forwardClassifier, context.symbols)
         }
       }
     bridgePlans.forEach { plan -> builder.addInterfaceBridgeFactoryExport(plan) }
@@ -2212,7 +2250,9 @@ class NugetProcessor(
     suspendFunctions.forEach { func ->
       // The import lives inside addSuspendFunctionExports, behind its legacy-refusal gates
       // (ADR-064): a refused suspend function used to leave a dead import behind.
-      guardDeclaration(func) { builder.addSuspendFunctionExports(func, forwardClassifier) }
+      guardDeclaration(func) {
+        builder.addSuspendFunctionExports(func, context.symbols, forwardClassifier)
+      }
     }
 
     classes.forEach { cls ->
@@ -2229,6 +2269,7 @@ class NugetProcessor(
             cls,
             forwardClassifier,
             callableCatalog,
+            context.symbols,
             exportedTypes = exportedTypes,
           )
         }
@@ -2240,7 +2281,7 @@ class NugetProcessor(
     // `sealedSubclassEntries` and `translateSealedClass` apply, so all three halves agree on which
     // members exist.
     sealedClasses.forEach { sealed ->
-      val sealedPrefix: String = sealed.simpleName.asString().lowercase()
+      val sealedPrefix: String = sealed.nativePrefix(context.symbols)
       sealed.getSealedSubclasses().forEach { subclass ->
         // ADR-162: guarded on the ARM, which is the declaration the author would have to change.
         guardDeclaration(subclass) {
@@ -2249,6 +2290,7 @@ class NugetProcessor(
             cls = subclass,
             classifier = forwardClassifier,
             callableCatalog = callableCatalog,
+            symbols = context.symbols,
             prefix = "${sealedPrefix}_${subclass.simpleName.asString().lowercase()}",
             declaredOnly = true,
           )
@@ -2263,7 +2305,7 @@ class NugetProcessor(
     // Both rules live in `FlowExports`, so this loop, the two gates below and `translateSealedClass`
     // cannot drift about which members exist.
     sealedClasses.forEach { sealed ->
-      val sealedPrefix: String = sealed.simpleName.asString().lowercase()
+      val sealedPrefix: String = sealed.nativePrefix(context.symbols)
       sealed.getSealedSubclasses().forEach { subclass ->
         guardDeclaration(subclass) {
           val subQualifiedName: String =
@@ -2293,7 +2335,7 @@ class NugetProcessor(
     // its own; `forwardArmLambdaMethods` is the single selector this loop, the import gate above
     // and `translateSealedClass` all read.
     sealedClasses.forEach { sealed ->
-      val sealedPrefix: String = sealed.simpleName.asString().lowercase()
+      val sealedPrefix: String = sealed.nativePrefix(context.symbols)
       sealed.getSealedSubclasses().forEach { subclass ->
         guardDeclaration(subclass) {
           val subQualifiedName: String =
@@ -2316,7 +2358,7 @@ class NugetProcessor(
     // its own; `forwardArmStoredCallbackPairs` / `forwardArmInterfaceBridgePairs` are the two
     // selectors this loop, the import gates below and `translateSealedClass` all read.
     sealedClasses.forEach { sealed ->
-      val sealedPrefix: String = sealed.simpleName.asString().lowercase()
+      val sealedPrefix: String = sealed.nativePrefix(context.symbols)
       sealed.getSealedSubclasses().forEach { subclass ->
         guardDeclaration(subclass) {
           val subQualifiedName: String =

@@ -36,7 +36,7 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_clinic_intake to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_cell2__clinic_intake to compile; got: ${result.compileErrors}",
     )
   }
 
@@ -64,7 +64,7 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_patient_alias to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_cell4__patient_alias to compile; got: ${result.compileErrors}",
     )
   }
 
@@ -90,7 +90,7 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_patient_ageInMonths to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_cell5__patient_ageInMonths to compile; got: ${result.compileErrors}",
     )
   }
 
@@ -118,7 +118,7 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_patient_companion to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_cell6__patient_companion to compile; got: ${result.compileErrors}",
     )
   }
 
@@ -144,7 +144,7 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_admit to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_cell10__admit to compile; got: ${result.compileErrors}",
     )
   }
 
@@ -166,7 +166,7 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_patient_initial to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_cell13__patient_initial to compile; got: ${result.compileErrors}",
     )
   }
 
@@ -192,7 +192,7 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_chartref_label to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_cell16__chartref_label to compile; got: ${result.compileErrors}",
     )
   }
 
@@ -216,7 +216,7 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_visit_create to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_cell17__visit_create to compile; got: ${result.compileErrors}",
     )
   }
 
@@ -240,7 +240,7 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_visit_copy to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_cell18__visit_copy to compile; got: ${result.compileErrors}",
     )
   }
 
@@ -271,14 +271,14 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_visit_get_notes/set_notes to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_cell20__visit_get_notes/set_notes to compile; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_visit_get_notes" in result.generated,
+      "export_library_tier1_cell20__visit_get_notes" in result.generated,
       "expected the getter export to be generated; generated=${result.generated}",
     )
     assertTrue(
-      "export_visit_set_notes" in result.generated,
+      "export_library_tier1_cell20__visit_set_notes" in result.generated,
       "expected the setter export to be generated (String is a wrappable element); " +
           "generated=${result.generated}",
     )
@@ -310,7 +310,7 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_holder_create/export_holder_copy to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_holder__holder_create/export_library_tier1_holder__holder_copy to compile; got: ${result.compileErrors}",
     )
   }
 
@@ -335,14 +335,14 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_box_get_items/set_items to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_box__box_get_items/set_items to compile; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_box_get_items" in result.generated,
+      "export_library_tier1_box__box_get_items" in result.generated,
       "expected the getter export to be generated; generated=${result.generated}",
     )
     assertTrue(
-      "export_box_set_items" in result.generated,
+      "export_library_tier1_box__box_set_items" in result.generated,
       "expected the setter export to be generated (Int is a wrappable element); " +
           "generated=${result.generated}",
     )
@@ -381,14 +381,14 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_box_get_moods to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_moodbox__box_get_moods to compile; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_box_get_moods" in result.generated,
+      "export_library_tier1_moodbox__box_get_moods" in result.generated,
       "expected the getter export to still be generated; generated=${result.generated}",
     )
     assertTrue(
-      "export_box_set_moods" !in result.generated,
+      "export_library_tier1_moodbox__box_set_moods" !in result.generated,
       "expected no setter export (a nullable nested collection is not a wrappable element); " +
           "generated=${result.generated}",
     )
@@ -424,14 +424,14 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_box_get_scores to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_moodmap__box_get_scores to compile; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_box_get_scores" in result.generated,
+      "export_library_tier1_moodmap__box_get_scores" in result.generated,
       "expected the getter export to still be generated; generated=${result.generated}",
     )
     assertTrue(
-      "export_box_set_scores" !in result.generated,
+      "export_library_tier1_moodmap__box_set_scores" !in result.generated,
       "expected no setter export (a nullable nested collection is not a wrappable map value); " +
           "generated=${result.generated}",
     )
@@ -471,14 +471,14 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_box_get_scores to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_moodmapboth__box_get_scores to compile; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_box_get_scores" in result.generated,
+      "export_library_tier1_moodmapboth__box_get_scores" in result.generated,
       "expected the getter export to still be generated; generated=${result.generated}",
     )
     assertTrue(
-      "export_box_set_scores" !in result.generated,
+      "export_library_tier1_moodmapboth__box_set_scores" !in result.generated,
       "expected no setter export (neither the key nor the value is a wrappable map component); " +
           "generated=${result.generated}",
     )
@@ -515,10 +515,10 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_visit_create to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_nullablelistctor__visit_create to compile; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_visit_create" in result.generated,
+      "export_library_tier1_nullablelistctor__visit_create" in result.generated,
       "expected the constructor export to be generated; generated=${result.generated}",
     )
     val cs: String = result.generatedCSharp
@@ -574,7 +574,7 @@ class Tier1CompileCellsTest {
           "extension emitter); got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_patient_chartEntry" !in result.generated,
+      "export_library_tier1_cell23__patient_chartEntry" !in result.generated,
       "expected chartEntry to be entirely absent from the generated CNameExports.kt (a named " +
           "skip is never emitted, not even partially); generated=${result.generated}",
     )
@@ -619,7 +619,7 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_repo_tags to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_methodreturn__repo_tags to compile; got: ${result.compileErrors}",
     )
   }
 
@@ -641,7 +641,7 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_repo_replace to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_methodparam__repo_replace to compile; got: ${result.compileErrors}",
     )
   }
 
@@ -665,7 +665,7 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_factory_companion_of to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_companiongeneric__factory_companion_of to compile; got: ${result.compileErrors}",
     )
   }
 
@@ -695,7 +695,7 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_holder_pick to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_extgeneric__holder_pick to compile; got: ${result.compileErrors}",
     )
   }
 
@@ -724,7 +724,7 @@ class Tier1CompileCellsTest {
 
     assertTrue(
       result.compiledClean,
-      "expected export_repo_pick to compile; got: ${result.compileErrors}",
+      "expected export_library_tier1_methodtypeparam__repo_pick to compile; got: ${result.compileErrors}",
     )
   }
 }

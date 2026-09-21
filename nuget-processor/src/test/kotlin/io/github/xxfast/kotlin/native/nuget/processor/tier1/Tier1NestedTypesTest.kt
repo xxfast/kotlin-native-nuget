@@ -296,23 +296,23 @@ class Tier1NestedTypesTest {
 
     val kotlin: String = result.generated
     listOf(
-      "@CName(\"owner_nested_create\")",
-      "@CName(\"owner_nested_get_height\")",
-      "@CName(\"owner_defaults_capacity\")",
-      "@CName(\"owner_middle_inner_create\")",
-      "@CName(\"registry_entry_create\")",
+      "@CName(\"library_tier1_nestedtypes__owner_nested_create\")",
+      "@CName(\"library_tier1_nestedtypes__owner_nested_get_height\")",
+      "@CName(\"library_tier1_nestedtypes__owner_defaults_capacity\")",
+      "@CName(\"library_tier1_nestedtypes__owner_middle_inner_create\")",
+      "@CName(\"library_tier1_nestedtypes__registry_entry_create\")",
       // The owner's own members keep their single-segment prefix.
-      "@CName(\"owner_makeNested\")",
-      "@CName(\"owner_heightOf\")",
+      "@CName(\"library_tier1_nestedtypes__owner_makeNested\")",
+      "@CName(\"library_tier1_nestedtypes__owner_heightOf\")",
     ).forEach { export ->
       assertContains(kotlin, export, message = "expected $export; generated=$kotlin")
     }
     // ADR-133's "no existing entry point changes" claim: a top-level declaration has a one-element
     // chain, so its prefix is exactly what it was before the feature.
-    assertContains(kotlin, "@CName(\"solo_create\")")
-    assertContains(kotlin, "@CName(\"solo_describe\")")
+    assertContains(kotlin, "@CName(\"library_tier1_nestedtypes__solo_create\")")
+    assertContains(kotlin, "@CName(\"library_tier1_nestedtypes__solo_describe\")")
     assertFalse(
-      kotlin.contains("@CName(\"nested_create\")") || kotlin.contains("@CName(\"entry_create\")"),
+      kotlin.contains("@CName(\"library_nested_create\")") || kotlin.contains("@CName(\"library_entry_create\")"),
       "expected no unchained entry point (ADR-117 collision risk); generated=$kotlin",
     )
   }
@@ -322,12 +322,12 @@ class Tier1NestedTypesTest {
     val result = Tier1Harness.run(source)
 
     listOf(
-      "export_owner_makeNested",
-      "export_owner_heightOf",
-      "export_owner_get_habitat",
-      "export_owner_rename",
-      "export_owner_inner",
-      "export_owner_get_label",
+      "export_library_tier1_nestedtypes__owner_makeNested",
+      "export_library_tier1_nestedtypes__owner_heightOf",
+      "export_library_tier1_nestedtypes__owner_get_habitat",
+      "export_library_tier1_nestedtypes__owner_rename",
+      "export_library_tier1_nestedtypes__owner_inner",
+      "export_library_tier1_nestedtypes__owner_get_label",
     ).forEach { export ->
       assertContains(result.generated, export, message = "expected $export to bind; generated=${result.generated}")
     }
@@ -380,12 +380,12 @@ class Tier1NestedTypesTest {
       },
       "expected no nested-declaration skip for an inner class; warnings=${result.kspWarnings}",
     )
-    assertContains(result.generated, "@CName(\"host_guest_create\")")
+    assertContains(result.generated, "@CName(\"library_tier1_nestedinner__host_guest_create\")")
     // The outer is parameter zero on the wire, borrowed, and the Kotlin call is receiver-qualified.
     assertContains(
       result.generated,
       """
-      public fun export_host_guest_create(
+      public fun export_library_tier1_nestedinner__host_guest_create(
         outer: COpaquePointer,
         visits: Int,
         errorOut: COpaquePointer?,
@@ -418,7 +418,7 @@ class Tier1NestedTypesTest {
     // it survives the truncation and the overload is `(outer)`, never `()`.
     assertContains(
       result.generated,
-      "public fun export_host_tag_create_2(outer: COpaquePointer, errorOut: COpaquePointer?):",
+      "public fun export_library_tier1_nestedinner__host_tag_create_2(outer: COpaquePointer, errorOut: COpaquePointer?):",
     )
     assertContains(
       result.generated,
@@ -537,7 +537,7 @@ class Tier1NestedTypesTest {
     )
     assertContains(
       result.generated,
-      "export_owner_get_label",
+      "export_library_tier1_nestedcollision__owner_get_label",
       message = "expected the owner's other members to survive; generated=${result.generated}",
     )
   }
@@ -581,7 +581,7 @@ class Tier1NestedTypesTest {
     )
     assertContains(
       result.generated,
-      "export_owner_get_label",
+      "export_library_tier1_ownername__owner_get_label",
       message = "expected the owner's other members to survive; generated=${result.generated}",
     )
   }
@@ -729,7 +729,7 @@ class Tier1NestedTypesTest {
     )
     assertContains(
       result.generated,
-      "export_owner_get_label",
+      "export_library_tier1_companioncollision__owner_get_label",
       message = "expected the owner's other members to survive; generated=${result.generated}",
     )
   }
@@ -834,8 +834,8 @@ class Tier1NestedTypesTest {
     )
     // The object itself is still declared as a nested static class, and the controls still bind.
     assertContains(result.generatedCSharp, "public static class Marker")
-    assertContains(result.generated, "export_owner_get_label")
-    assertContains(result.generated, "export_plain_get_tag")
+    assertContains(result.generated, "export_library_tier1_objectposition__owner_get_label")
+    assertContains(result.generated, "export_library_tier1_objectposition__plain_get_tag")
   }
 
   /**
@@ -877,16 +877,16 @@ class Tier1NestedTypesTest {
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     val kotlin: String = result.generated
     listOf(
-      "@CName(\"owner_nested_summarize\")",
-      "@CName(\"owner_nested_get_isHigh\")",
+      "@CName(\"library_tier1_nestedextension__owner_nested_summarize\")",
+      "@CName(\"library_tier1_nestedextension__owner_nested_get_isHigh\")",
       // The control: the member route on the same receiver, which already chains.
-      "@CName(\"owner_nested_describe\")",
+      "@CName(\"library_tier1_nestedextension__owner_nested_describe\")",
     ).forEach { export ->
       assertContains(kotlin, export, message = "expected $export; generated=$kotlin")
     }
     assertFalse(
-      kotlin.contains("@CName(\"nested_summarize\")") ||
-          kotlin.contains("@CName(\"nested_get_isHigh\")"),
+      kotlin.contains("@CName(\"library_tier1_nestedextension__nested_summarize\")") ||
+          kotlin.contains("@CName(\"library_tier1_nestedextension__nested_get_isHigh\")"),
       "expected no unchained extension entry point (ADR-117 collision risk); generated=$kotlin",
     )
 
@@ -921,8 +921,8 @@ class Tier1NestedTypesTest {
    *
    * Measured, 2026-09-13, and **not** what this cell was written to expect: the round does not
    * fail with `ERROR_C_ENTRY_POINT_COLLISION`. The duplicate is absorbed silently by the numbering
-   * suffix, so the two extensions ship as `@CName("inner_describe")` and
-   * `@CName("inner_describe_2")` -- which of the two owners gets the unsuffixed symbol is not
+   * suffix, so the two extensions ship as `@CName("library_tier1_nestedextension__inner_describe")` and
+   * `@CName("library_tier1_nestedextension__inner_describe_2")` -- which of the two owners gets the unsuffixed symbol is not
    * pinned here (presumably visit order), i.e. the published ABI of an untouched declaration can
    * move when an unrelated type is added elsewhere. That is a stronger argument for chaining than
    * the predicted hard error was, and it is why the collision assertion below is kept even though
@@ -967,8 +967,8 @@ class Tier1NestedTypesTest {
     )
     val kotlin: String = result.generated
     listOf(
-      "@CName(\"coop_inner_describe\")",
-      "@CName(\"roost_inner_describe\")",
+      "@CName(\"library_tier1_nestedextcollision__coop_inner_describe\")",
+      "@CName(\"library_tier1_nestedextcollision__roost_inner_describe\")",
     ).forEach { export ->
       assertContains(kotlin, export, message = "expected $export; generated=$kotlin")
     }
@@ -1111,7 +1111,7 @@ class Tier1NestedTypesTest {
     // the ROOT namespace's CirBridgeHelper, so `Owner.Keeper` and `Registry.Keeper` both emit
     // `KeeperBridgeState` (CS0101) plus two `keeperImpl` pattern variables in one block (CS0128).
     // Both are at a parameter position, so both plans are real.
-    listOf("OwnerKeeperBridgeState", "RegistryKeeperBridgeState").forEach { state ->
+    listOf("Tier1NestedasyncOwnerKeeperBridgeState", "Tier1NestedasyncRegistryKeeperBridgeState").forEach { state ->
       assertContains(
         csharp,
         "internal sealed class $state : NugetBridgeState",
@@ -1125,13 +1125,13 @@ class Tier1NestedTypesTest {
     )
     // The pattern variable in `HandleFor` is derived from the same name, so two bare `keeperImpl`
     // declarations land in one block (CS0128). A top-level interface keeps its bare spelling:
-    // Tier1InterfaceBridgeFactoryTest pins `PetBridgeState` / `petImpl` and must stay green.
+    // Tier1InterfaceBridgeFactoryTest pins `Tier1NestedasyncPetBridgeState` / `tier1nestedasyncpetImpl` and must stay green.
     assertFalse(
       Regex("""\bkeeperImpl\b""").findAll(csharp).count() > 0,
       "expected no bare `keeperImpl` pattern variable (CS0128, see comment above); csharp=" +
           "${csharp.lines().filter { it.contains("Impl") }}",
     )
-    assertContains(csharp, "internal sealed class PetBridgeState : NugetBridgeState")
+    assertContains(csharp, "internal sealed class Tier1NestedasyncPetBridgeState : NugetBridgeState")
   }
 
   @Test
@@ -1237,15 +1237,15 @@ class Tier1NestedTypesTest {
     val kotlin: String = result.generated
     listOf(
       // interface owner
-      "@CName(\"cage_bar_create\")",
+      "@CName(\"library_tier1_nestedowners__cage_bar_create\")",
       // sealed base owner
-      "@CName(\"signal_detail_create\")",
+      "@CName(\"library_tier1_nestedowners__signal_detail_create\")",
       // sealed arm owner: base + arm + child, three segments
-      "@CName(\"signal_on_trace_create\")",
+      "@CName(\"library_tier1_nestedowners__signal_on_trace_create\")",
       // eligible sealed interface owner
-      "@CName(\"pulse_x_create\")",
+      "@CName(\"library_tier1_nestedowners__pulse_x_create\")",
       // nested value class: no handle, but its members carry the chain
-      "@CName(\"crate_weight_isHeavy\")",
+      "@CName(\"library_tier1_nestedowners__crate_weight_isHeavy\")",
     ).forEach { export ->
       assertContains(kotlin, export, message = "expected $export; generated=$kotlin")
     }

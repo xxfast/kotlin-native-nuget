@@ -44,7 +44,7 @@ class Tier1SequencePositionTest {
       "expected no broken source for the Sequence fixture; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_ticker_load" !in result.generated,
+      "export_library_tier1_sequence__ticker_load" !in result.generated,
       "expected load to be entirely absent from the generated CNameExports.kt; " +
           "generated=${result.generated}",
     )
@@ -68,7 +68,7 @@ class Tier1SequencePositionTest {
     val result = Tier1Harness.run(fixture)
 
     assertTrue(
-      "export_ticker_stream" !in result.generated,
+      "export_library_tier1_sequence__ticker_stream" !in result.generated,
       "expected stream to be entirely absent from the generated CNameExports.kt; " +
           "generated=${result.generated}",
     )
@@ -92,7 +92,7 @@ class Tier1SequencePositionTest {
     val result = Tier1Harness.run(fixture)
 
     assertTrue(
-      "export_tick(" !in result.generated,
+      "export_library_tier1_sequence__tick(" !in result.generated,
       "expected tick to be entirely absent from the generated CNameExports.kt; " +
           "generated=${result.generated}",
     )
@@ -134,7 +134,7 @@ class Tier1SequencePositionTest {
     val result = Tier1Harness.run(fixture)
 
     assertTrue(
-      "export_ticker_size" in result.generated,
+      "export_library_tier1_sequence__ticker_size" in result.generated,
       "expected the control member to survive; generated=${result.generated}",
     )
   }

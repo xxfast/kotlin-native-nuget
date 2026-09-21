@@ -110,16 +110,16 @@ class Tier1SealedArmRefusedSuspendTest {
     val result = run()
 
     assertTrue(
-      result.generated.contains("@CName(\"errand_fetch_drop_async\")"),
+      result.generated.contains("@CName(\"library_tier1_refusedarm__errand_fetch_drop_async\")"),
       "expected the routed arm member to keep its export; got: " +
           "${result.generated.lines().filter { it.contains("drop") }.map(String::trim)}",
     )
 
     assertEquals(
       1,
-      Regex("EntryPoint = \"errand_fetch_drop_async\"").findAll(result.generatedCSharp).count(),
+      Regex("EntryPoint = \"library_tier1_refusedarm__errand_fetch_drop_async\"").findAll(result.generatedCSharp).count(),
       "expected exactly one extern for the routed arm member; got: " +
-          "${csharpLinesFor(result, "errand_fetch_drop_async")}",
+          "${csharpLinesFor(result, "library_tier1_refusedarm__errand_fetch_drop_async")}",
     )
   }
 
