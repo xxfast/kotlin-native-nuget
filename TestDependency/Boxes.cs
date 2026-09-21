@@ -61,9 +61,14 @@ public static class Boxes
     public static Pairing<string, int> Tally(string label, int count) => new(label, count);
     public static Crate<string> CrateOfText(string item) => new(item);
 
-    // Each of the next four must be SKIPPED, each with its own named diagnostic, not silently:
-    public static List<int> Numbers() => new() { 1, 2, 3 };              // skipped_unbound_generic_instantiation
-    public static Dictionary<string, int> Counts() => new();             // ditto, arity 2
+    // ADR-155: these two used to be `skipped_unbound_generic_instantiation` and now BIND, because
+    // `List<T>` and `Dictionary<K,V>` are mapped BCL definitions. Kept as the ADR-072 Decision 9
+    // shapes they were, so the change of verdict is visible on the same members.
+    public static List<int> Numbers() => new() { 1, 2, 3 };
+    public static Dictionary<string, int> Counts() => new() { ["Oreo"] = 9 };
+
+    // Each of the next three must be SKIPPED, each with its own named diagnostic, not silently:
+    public static Queue<int> Waiting() => new();                         // skipped_unbound_generic_instantiation
     public static Box<Box<int>> Nested() => new(new Box<int>(1));        // skipped_generic_type_argument
     public static T Identity<T>(T value) => value;                       // skipped_open_generic (ADR-043 survives)
 }

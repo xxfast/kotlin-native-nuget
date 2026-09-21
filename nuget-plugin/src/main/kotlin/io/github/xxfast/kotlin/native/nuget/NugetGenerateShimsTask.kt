@@ -5,6 +5,8 @@ import io.github.xxfast.kotlin.native.nuget.rir.KotlinBridgePlan
 import io.github.xxfast.kotlin.native.nuget.rir.NUGET_RUNTIME_CONTRACT_HASH
 import io.github.xxfast.kotlin.native.nuget.rir.REVERSE_ABI_TAG
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
+import io.github.xxfast.kotlin.native.nuget.rir.RirCollectionKind
+import io.github.xxfast.kotlin.native.nuget.rir.RirCollectionType
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
@@ -61,6 +63,13 @@ import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.TaskAction
 import java.io.File
+
+// ADR-155: a mapped BCL collection is skipped by the shared bridgeable filter (RirBridging's
+// isV1Type) until the slot-buffer wire is generated, so no collection-typed member ever reaches a
+// conversion table. Reaching one means the filter and the tables disagree, which would otherwise
+// emit a half-built member.
+private const val COLLECTION_NOT_MAPPED: String =
+  "[nuget] ADR-155: a collection type reached a conversion table before it is mapped"
 
 // ADR-049: C#-side registration shim generator — the managed mirror of generateKotlinStubs
 // (ADR-048). Emits, per bound RirClass with at least one v1-bridgeable static method, one
@@ -289,6 +298,9 @@ private fun csAbiType(type: RirTypeRef): String = when (type) {
   // [UnmanagedCallersOnly] boundary as an erased GCHandle IntPtr, regardless of its type
   // argument(s) (CS8894 forbids the closed generic itself, never its GCHandle wrapper).
   is RirGenericInstanceType -> "IntPtr"
+  // ADR-155: one pointer to the `[count][slots]` buffer, whatever the element count.
+  is RirCollectionType -> "IntPtr"
+
   is RirTypeParameterType -> error(
     "[nuget] a bare type parameter must be substituted to a concrete type before reaching " +
         "csAbiType()"
@@ -336,7 +348,89 @@ private fun csNativeType(type: RirTypeRef): String = when (type) {
       type.typeArguments.joinToString(", ") { csGenericArgumentType(it) }
     }>"
 
+  // ADR-155: the DECLARED C# type, fully qualified. The shim builds a List/HashSet/Dictionary
+  // and casts it to this, so an `IList<int>` overload beside a `List<int>` one dispatches to the
+  // overload its own thunk was made for instead of silently picking the same one (finding 16),
+  // and a pair the compiler cannot resolve is not CS0121 (finding 19).
+  is RirCollectionType -> {
+    val args: String = type.typeArguments.joinToString(", ") {
+      csCollectionArgument(it) + if (it.isNullable) "?" else ""
+    }
+    "global::${type.definition.substringBefore('`')}<$args>"
+  }
+
   is RirTypeParameterType -> type.name
+}
+
+// ADR-155: an ELEMENT type inside a collection's rendered C# type, fully qualified. The
+// collection itself is `global::`-qualified (it is a BCL type named by the declared definition),
+// and an element declared in another namespace (`IReadOnlySet<CatMood>` on a type in Test.Roster,
+// with CatMood in Test.Enums) is CS0246 without the same treatment: the shim has no `using` for
+// a namespace nothing else on the type mentions.
+private fun csCollectionArgument(type: RirTypeRef): String = when (type) {
+  is RirEnumType -> "global::${type.namespace}.${type.name}"
+  is RirObjectHandleType -> "global::${type.namespace}.${type.name}"
+  is RirInterfaceType -> "global::${type.namespace}.${type.name}"
+  else -> csNativeType(type)
+}
+
+// ADR-155: which concrete container the shim builds for a collection parameter. The DECLARED type
+// is often an interface, which cannot be `new`ed. Verified by spike: List<T> is assignable to all
+// six list-like declared types, HashSet<T> to both set ones and Dictionary<K,V> to both dictionary
+// ones, so one container per kind covers the whole table.
+private fun csCollectionReader(type: RirCollectionType): String = when (type.collection) {
+  RirCollectionKind.LIST -> "ReadList"
+  RirCollectionKind.SET -> "ReadSet"
+  RirCollectionKind.MAP -> "ReadMap"
+}
+
+// ADR-155: one element INTO its 8-byte slot, as a C# lambda. Integers and `char` widen; a float
+// widens to double and is BIT-CAST (exact for every float, where a widened 9.5 reads as 9); an
+// enum crosses as its ordinal; a string as CoTaskMem UTF-8; a handle or interface as a fresh
+// strong GCHandle; a null reference as 0.
+private fun csToSlot(type: RirTypeRef): String = when {
+  type is RirStringType ->
+    "value => value is null ? 0L : (long)Marshal.StringToCoTaskMemUTF8(value)"
+
+  type is RirObjectHandleType || type is RirInterfaceType ->
+    "value => value is null ? 0L : (long)GCHandle.ToIntPtr(GCHandle.Alloc(value))"
+
+  type is RirEnumType -> "value => (long)(int)value"
+  type is RirPrimitiveType -> when (type.name) {
+    "bool" -> "value => value ? 1L : 0L"
+    "float" -> "value => BitConverter.DoubleToInt64Bits((double)value)"
+    "double" -> "value => BitConverter.DoubleToInt64Bits(value)"
+    else -> "value => (long)value"
+  }
+
+  else -> error(
+    "[nuget] ADR-155: ${type::class.simpleName} is outside the v1 collection element vocabulary; " +
+        "it must be refused by isV1Type before reaching csToSlot()"
+  )
+}
+
+// ADR-155: the inverse, for a collection-typed PARAMETER. Handle slots are BORROWED (the GCHandle
+// stays Kotlin's: resolved here, never freed here), which is why nothing in this table allocates.
+private fun csFromSlot(type: RirTypeRef): String = when {
+  type is RirStringType && type.nullable ->
+    "slot => slot == 0 ? null : Marshal.PtrToStringUTF8((IntPtr)slot)"
+
+  type is RirStringType -> "slot => Marshal.PtrToStringUTF8((IntPtr)slot)!"
+  type is RirObjectHandleType || type is RirInterfaceType ->
+    "slot => (${csCollectionArgument(type)})GCHandle.FromIntPtr((IntPtr)slot).Target!"
+
+  type is RirEnumType -> "slot => (${csCollectionArgument(type)})(int)slot"
+  type is RirPrimitiveType -> when (type.name) {
+    "bool" -> "slot => slot != 0"
+    "float" -> "slot => (float)BitConverter.Int64BitsToDouble(slot)"
+    "double" -> "slot => BitConverter.Int64BitsToDouble(slot)"
+    else -> "slot => (${csNativeType(type)})slot"
+  }
+
+  else -> error(
+    "[nuget] ADR-155: ${type::class.simpleName} is outside the v1 collection element vocabulary; " +
+        "it must be refused by isV1Type before reaching csFromSlot()"
+  )
 }
 
 // ADR-072 Decision 4/7: renders ONE type argument of a closed generic instantiation with its OWN
@@ -398,6 +492,16 @@ private fun csReturnConversion(type: RirTypeRef, valueExpr: String): String = wh
         "callBodyLines, not csReturnConversion"
   )
 
+  // ADR-155: the whole collection into one CoTaskMem buffer, which Kotlin frees. Both dictionary
+  // interfaces implement IEnumerable<KeyValuePair<K,V>>, so WriteMap needs exactly one shape.
+  is RirCollectionType -> when (type.collection) {
+    RirCollectionKind.LIST, RirCollectionKind.SET ->
+      "NugetCollections.Write($valueExpr, ${csToSlot(type.typeArguments[0])})"
+
+    RirCollectionKind.MAP -> "NugetCollections.WriteMap($valueExpr, " +
+        "${csToSlot(type.typeArguments[0])}, ${csToSlot(type.typeArguments[1])})"
+  }
+
   is RirTypeParameterType -> error(
     "[nuget] a bare type parameter must be substituted to a concrete type before reaching " +
         "csReturnConversion()"
@@ -429,6 +533,9 @@ private fun thunkParamName(p: RirParameter): String = when (p.type) {
   // parameter is wire-identical to a handle and must keep the same "Handle" suffix convention;
   // the fall-through `else -> p.name` would silently lose it.
   is RirGenericInstanceType -> "${p.name}Handle"
+
+  // ADR-155: the raw ABI value is a buffer pointer, never the container the body then builds.
+  is RirCollectionType -> "${p.name}Buffer"
 
   else -> p.name
 }
@@ -466,6 +573,25 @@ private fun paramConversion(p: RirParameter): String = when (p.type) {
   // concrete closed instantiation's own C# type (e.g. "(Box<int>)").
   is RirGenericInstanceType ->
     "(${csNativeType(p.type)})GCHandle.FromIntPtr(${thunkParamName(p)}).Target!"
+
+  // ADR-155: read the slots into a concrete container, then CAST it to the declared type, or an
+  // overloaded member dispatches to the wrong overload (finding 16) or does not compile at all
+  // (CS0121, finding 19).
+  is RirCollectionType -> {
+    val element: String = when (p.type.collection) {
+      RirCollectionKind.MAP -> "${csFromSlot(p.type.typeArguments[0])}, " +
+          csFromSlot(p.type.typeArguments[1])
+
+      else -> csFromSlot(p.type.typeArguments[0])
+    }
+    // The Read* helpers return null for a null buffer, which for a non-null-annotated parameter
+    // is a bridge-invariant violation rather than a value: `!` says so, and the CS8604 that
+    // otherwise lands here is the compiler pointing at exactly that.
+    val nullability: String = if (p.type.nullable) "?" else "!"
+    "(${csNativeType(p.type)}${if (p.type.nullable) "?" else ""})" +
+        "NugetCollections.${csCollectionReader(p.type)}(${thunkParamName(p)}, $element)" +
+        if (p.type.nullable) "" else nullability
+  }
 
   is RirTypeParameterType -> error(
     "[nuget] a bare type parameter must be substituted to a concrete type before reaching " +
@@ -1467,6 +1593,8 @@ private fun buildInterfaceThunkMethod(iface: RirInterface, method: RirMethod): S
       "[nuget] struct-typed interface members are out of scope (ADR-070 v1)",
     )
 
+    is RirCollectionType -> error(COLLECTION_NOT_MAPPED)
+
     is RirGenericInstanceType, is RirTypeParameterType -> error(
       "[nuget] generic-typed interface members are out of scope (ADR-070/ADR-072: generic " +
           "interfaces are excluded)",
@@ -1519,6 +1647,8 @@ private fun buildInterfacePropertyGetterThunk(iface: RirInterface, property: Rir
     is RirStructType -> error(
       "[nuget] struct-typed interface members are out of scope (ADR-070 v1)",
     )
+
+    is RirCollectionType -> error(COLLECTION_NOT_MAPPED)
 
     is RirGenericInstanceType, is RirTypeParameterType -> error(
       "[nuget] generic-typed interface members are out of scope (ADR-070/ADR-072: generic " +
@@ -1690,6 +1820,13 @@ private fun returnBodyLines(
     is RirGenericInstanceType -> listOf(
       "${csNativeType(retType)}? result = $callExpr;",
       "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
+    )
+
+    // ADR-155: one pointer out. `?` on the local because a null collection is IntPtr.Zero, which
+    // NugetCollections.Write returns for a null source.
+    is RirCollectionType -> listOf(
+      "${csNativeType(retType)}? result = $callExpr;",
+      "return ${csReturnConversion(retType, "result")};",
     )
 
     is RirTypeParameterType -> error(
@@ -1873,6 +2010,12 @@ private fun buildPropertyGetterThunkMethod(
     is RirGenericInstanceType -> listOf(
       "${csNativeType(type)}? result = $getExpr;",
       "return result is null ? IntPtr.Zero : GCHandle.ToIntPtr(GCHandle.Alloc(result));",
+    )
+
+    // ADR-155: same one-pointer write as a method return, off the property getter.
+    is RirCollectionType -> listOf(
+      "${csNativeType(type)}? result = $getExpr;",
+      "return ${csReturnConversion(type, "result")};",
     )
 
     is RirTypeParameterType -> error(
@@ -2185,6 +2328,8 @@ private fun buildStructMethodThunk(
       "[nuget] interface returns on struct methods are out of scope (ADR-070 v1)",
     )
 
+    is RirCollectionType -> error(COLLECTION_NOT_MAPPED)
+
     is RirGenericInstanceType, is RirTypeParameterType -> error(
       "[nuget] generic instantiations/type parameters on struct methods are out of scope " +
           "(ADR-072 Decision 6: struct type arguments are excluded)",
@@ -2260,6 +2405,8 @@ private fun buildStructPropertyGetterThunk(
       "[nuget] interface-typed computed properties on structs are out of scope (ADR-070 v1)",
     )
 
+    is RirCollectionType -> error(COLLECTION_NOT_MAPPED)
+
     is RirGenericInstanceType, is RirTypeParameterType -> error(
       "[nuget] generic instantiations/type parameters on struct properties are out of scope " +
           "(ADR-072 Decision 6: struct type arguments are excluded)",
@@ -2324,6 +2471,8 @@ private fun nugetRuntimeRegistrationContent(
   |namespace IoGithubXxfast.KotlinNativeNuget
   |{
   |    using System;
+  |    using System.Collections.Generic;
+  |    using System.Linq;
   |    using System.Runtime.CompilerServices;
   |    using System.Runtime.InteropServices;
   |    using System.Threading;
@@ -2509,6 +2658,103 @@ private fun nugetRuntimeRegistrationContent(
   |                GCHandle.FromIntPtr(handle).Free();
   |                throw;
   |            }
+  |        }
+  |    }
+  |
+  |    // ADR-155: the managed half of the reverse COLLECTION crossing, emitted once for the whole
+  |    // package (there is nothing per-member about it). A collection crosses as ONE pointer to a
+  |    // flat buffer of 8-byte slots, `[count][slot 1]...[slot n]`, interleaved `[k][v]` for a map.
+  |    // IntPtr.Zero is a null collection, which is distinct from an empty one.
+  |    //
+  |    // What a slot MEANS is per-element, so it arrives as a delegate the generated thunk
+  |    // supplies: the shape is fixed here, the element conversion is not.
+  |    internal static unsafe class NugetCollections
+  |    {
+  |        internal delegate long ToSlot<T>(T value);
+  |
+  |        internal delegate T FromSlot<T>(long slot);
+  |
+  |        internal static IntPtr Write<T>(IEnumerable<T>? source, ToSlot<T> toSlot)
+  |        {
+  |            if (source is null) return IntPtr.Zero;
+  |            // User code runs HERE, before a single allocation exists: a lazy sequence that
+  |            // throws mid-enumeration leaves through the thunk's error slot with nothing to free.
+  |            T[] items = source.ToArray();
+  |            return Fill(items.Length, i => toSlot(items[i]));
+  |        }
+  |
+  |        internal static IntPtr WriteMap<TKey, TValue>(
+  |            IEnumerable<KeyValuePair<TKey, TValue>>? source,
+  |            ToSlot<TKey> keySlot,
+  |            ToSlot<TValue> valueSlot)
+  |        {
+  |            if (source is null) return IntPtr.Zero;
+  |            KeyValuePair<TKey, TValue>[] items = source.ToArray();
+  |            // The count is the SLOT count, not the pair count: the reader steps by two.
+  |            return Fill(
+  |                items.Length * 2,
+  |                i => i % 2 == 0 ? keySlot(items[i / 2].Key) : valueSlot(items[i / 2].Value));
+  |        }
+  |
+  |        internal static List<T>? ReadList<T>(IntPtr buffer, FromSlot<T> fromSlot)
+  |        {
+  |            long[]? slots = Slots(buffer);
+  |            if (slots is null) return null;
+  |            List<T> result = new(slots.Length);
+  |            foreach (long slot in slots) result.Add(fromSlot(slot));
+  |            return result;
+  |        }
+  |
+  |        internal static HashSet<T>? ReadSet<T>(IntPtr buffer, FromSlot<T> fromSlot)
+  |        {
+  |            long[]? slots = Slots(buffer);
+  |            if (slots is null) return null;
+  |            HashSet<T> result = new();
+  |            foreach (long slot in slots) result.Add(fromSlot(slot));
+  |            return result;
+  |        }
+  |
+  |        internal static Dictionary<TKey, TValue>? ReadMap<TKey, TValue>(
+  |            IntPtr buffer,
+  |            FromSlot<TKey> keyFrom,
+  |            FromSlot<TValue> valueFrom)
+  |            where TKey : notnull
+  |        {
+  |            long[]? slots = Slots(buffer);
+  |            if (slots is null) return null;
+  |            Dictionary<TKey, TValue> result = new(slots.Length / 2);
+  |            for (int i = 0; i < slots.Length / 2; i++)
+  |            {
+  |                result[keyFrom(slots[i * 2])] = valueFrom(slots[(i * 2) + 1]);
+  |            }
+  |            return result;
+  |        }
+  |
+  |        // The slots of a parameter buffer Kotlin allocated in its own memScoped block. Nothing
+  |        // is freed here: that scope owns the buffer and every string inside it, exactly like a
+  |        // string argument today.
+  |        private static long[]? Slots(IntPtr buffer)
+  |        {
+  |            if (buffer == IntPtr.Zero) return null;
+  |            long* raw = (long*)buffer;
+  |            long count = raw[0];
+  |            if (count < 0 || count > int.MaxValue)
+  |            {
+  |                throw new InvalidOperationException(
+  |                    $"[nuget] a Kotlin collection buffer declared {count} slots, which is not a "
+  |                    + "readable count.");
+  |            }
+  |            long[] slots = new long[(int)count];
+  |            for (int i = 0; i < slots.Length; i++) slots[i] = raw[i + 1];
+  |            return slots;
+  |        }
+  |
+  |        private static IntPtr Fill(int slots, Func<int, long> slot)
+  |        {
+  |            long* buffer = (long*)Marshal.AllocCoTaskMem(checked((slots + 1) * sizeof(long)));
+  |            buffer[0] = slots;
+  |            for (int i = 0; i < slots; i++) buffer[i + 1] = slot(i);
+  |            return (IntPtr)buffer;
   |        }
   |    }
   |

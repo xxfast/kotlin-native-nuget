@@ -361,6 +361,123 @@ class NugetExtractApiIntegrationTest {
    * typed out: the `NullableAttribute` bytes are pre-order over the whole tree with the `Task`
    * node counted first, and nothing but running the compiler produces them.
    */
+  /**
+   * ADR-155. A hand-built RIR proves nothing about the reader (CLAUDE.md), and this is the half a
+   * generator test cannot fake: the `NullableAttribute` bytes are pre-order over the whole tree
+   * with the COLLECTION node counted first and a value-type argument contributing none, so
+   * `IReadOnlyList<string?>` and `IReadOnlyList<string>?` differ only in which node the `2` lands
+   * on. Only the C# compiler produces those bytes.
+   */
+  @Test
+  fun `metadata reader maps BCL collections to a collection type ref`() {
+    val dotnet: String = findDotnet() ?: return
+
+    val source: String = """
+      using System.Collections.Generic;
+
+      namespace Probe.Collections;
+
+      public interface ILabelled { string Label { get; } }
+
+      public sealed class Tag : ILabelled
+      {
+          public Tag(string label) { Label = label; }
+          public string Label { get; }
+      }
+
+      public sealed class Roster
+      {
+          public IReadOnlyList<int> Ages() => new List<int> { 9, 7 };
+          public IReadOnlyList<string> Names() => new List<string> { "Oreo" };
+          public IReadOnlyList<string?> Nicknames() => new List<string?> { "O", null };
+          public IReadOnlyList<string>? MaybeNames() => null;
+          public IReadOnlyDictionary<string, int> Scores() => new Dictionary<string, int>();
+          public ISet<string> Labels() => new HashSet<string>();
+          public IList<Tag> Tags() => new List<Tag>();
+          public int Enroll(IEnumerable<string> names) => 0;
+          public void Rank(IDictionary<string, int> scores) { }
+          public List<int?> Maybes() => new List<int?>();
+          public string[] Codes() => new string[0];
+          public Queue<int> Waiting() => new Queue<int>();
+      }
+    """.trimIndent()
+
+    val dll: File = compileFixture(dotnet, source, "CollectionReaderFixture")
+    val toolDir: File = Files.createTempDirectory("NugetMetadataReader-collection-fixture").toFile()
+    unpackMetadataReader(toolDir, javaClass.classLoader)
+    val root: JsonObject = Json.parseToJsonElement(
+      runMetadataReader(dotnet, toolDir, mapOf("CollectionFixture" to listOf(dll.absolutePath))),
+    ).jsonObject
+
+    val type: JsonObject = root.type("Probe.Collections", "Roster")
+    val methods: List<JsonObject> = type.getValue("methods").jsonArray.map { it.jsonObject }
+    fun returnOf(name: String): JsonObject = methods
+      .single { it.getValue("name").jsonPrimitive.content == name }
+      .getValue("returnType").jsonObject
+
+    fun kind(o: JsonObject): String = o.getValue("kind").jsonPrimitive.content
+    fun nullable(o: JsonObject): Boolean = o["nullable"]?.jsonPrimitive?.boolean ?: false
+    fun args(o: JsonObject): List<JsonObject> =
+      o.getValue("typeArguments").jsonArray.map { it.jsonObject }
+
+    // Matched on namespace + name only: IReadOnlyList`1 resolves to System.Runtime while List`1
+    // and Dictionary`2 resolve to System.Collections, so an assembly-qualified match misses half.
+    assertEquals("collection", kind(returnOf("Ages")))
+    assertEquals("list", returnOf("Ages").getValue("collection").jsonPrimitive.content)
+    assertEquals(
+      "System.Collections.Generic.IReadOnlyList`1",
+      returnOf("Ages").getValue("definition").jsonPrimitive.content,
+      "the shim casts the container it built to the DECLARED definition, so it must survive",
+    )
+    assertEquals("map", returnOf("Scores").getValue("collection").jsonPrimitive.content)
+    assertEquals("set", returnOf("Labels").getValue("collection").jsonPrimitive.content)
+    assertEquals(
+      "System.Collections.Generic.IList`1",
+      returnOf("Tags").getValue("definition").jsonPrimitive.content,
+    )
+    assertEquals("handle", kind(args(returnOf("Tags")).single()))
+
+    // The two `2` bytes, one node apart.
+    assertEquals(false, nullable(returnOf("Nicknames")))
+    assertEquals(true, nullable(args(returnOf("Nicknames")).single()))
+    assertEquals(true, nullable(returnOf("MaybeNames")))
+    assertEquals(false, nullable(args(returnOf("MaybeNames")).single()))
+    // A value-type argument contributes no byte at all, and the whole member may carry none.
+    assertEquals(false, nullable(returnOf("Ages")))
+    assertEquals(false, nullable(args(returnOf("Ages")).single()))
+
+    // Parameters ride the same decode.
+    val enroll: JsonObject = methods
+      .single { it.getValue("name").jsonPrimitive.content == "Enroll" }
+    val names: JsonObject = enroll.getValue("parameters").jsonArray.single()
+      .jsonObject.getValue("type").jsonObject
+    assertEquals("collection", kind(names))
+    assertEquals(
+      "System.Collections.Generic.IEnumerable`1",
+      names.getValue("definition").jsonPrimitive.content,
+    )
+
+    val diagnostics: List<JsonObject> = root.getValue("assemblies").jsonArray.single().jsonObject
+      .getValue("diagnostics").jsonArray.map { it.jsonObject }
+    fun diagnosed(member: String): String? = diagnostics
+      .firstOrNull { it.getValue("memberName").jsonPrimitive.content == member }
+      ?.getValue("kind")?.jsonPrimitive?.content
+
+    // `List<int?>` is List<Nullable<int>>: it must be refused BY NAME before the inner
+    // instantiation reaches ADR-072 Decision 9's diagnostic and blames the BCL.
+    assertEquals("skipped_collection_element", diagnosed("Maybes"))
+    // Arrays are deferred, and today vanish with no diagnostic at all.
+    assertEquals("skipped_array", diagnosed("Codes"))
+    // An unmapped BCL definition keeps the existing named skip.
+    assertEquals("skipped_unbound_generic_instantiation", diagnosed("Waiting"))
+    listOf("Maybes", "Codes", "Waiting").forEach { member ->
+      assertTrue(
+        methods.none { it.getValue("name").jsonPrimitive.content == member },
+        "`$member` is outside ADR-155's v1 vocabulary and must not bind",
+      )
+    }
+  }
+
   @Test
   fun `metadata reader maps Task returns to an async method and skips the rest`() {
     val dotnet: String = findDotnet() ?: return
