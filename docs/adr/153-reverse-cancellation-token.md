@@ -35,14 +35,14 @@ What the pipeline does today:
   exactly one site: the generated `nugetThrowManagedError`
   (`NugetGenerateBindingsTask.kt:4518-4523`), which compiles from `nativeMain` and therefore
   cannot name a `kotlinx.coroutines` symbol (ADR-130, ADR-152 Context).
-- **Verified by grep, since amended.** At the time this ADR was written, nothing in
-  `nuget-plugin/src/main` or the reader *produced* `error_kotlin_signature_collision` for the
-  reverse direction (the enum value existed, `rir/RirModel.kt:345`, and one test fed it from
-  hand-written JSON); a collision was fatal (a bare `require(false)`) but reported no structured
-  kind. Two C# overloads that projected to the same Kotlin signature failed generation with an
-  unstructured error before any Kotlin was written, not a "conflicting overloads" error in the
-  consumer's build. ADR-057's 2026-09-22 amendment gave it the structured
-  `error_kotlin_signature_collision` diagnostic this bullet originally found missing.
+- **Verified by grep.** Nothing in `nuget-plugin/src/main` or the reader *produces*
+  `error_kotlin_signature_collision` for the reverse direction (the enum value exists,
+  `rir/RirModel.kt:345`, and one test feeds it from hand-written JSON). Two C# overloads that
+  project to the same Kotlin signature reach the Kotlin compiler as a "conflicting overloads"
+  error in the consumer's build.
+  Amended 2026-09-22: a collision is now reported as `error_kotlin_signature_collision` before any
+  Kotlin is written, not left to reach the consumer's Kotlin compiler (ADR-057's 2026-09-22
+  amendment).
 
 ## Alternatives Considered
 
