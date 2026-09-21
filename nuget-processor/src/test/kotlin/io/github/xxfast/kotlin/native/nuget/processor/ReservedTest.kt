@@ -74,4 +74,71 @@ class ReservedTest {
     assertEquals("@ref", "ref".csharpParameterName())
     assertEquals("@params", "params".csharpParameterName())
   }
+
+  /**
+   * Issue #285, the casing table of the research memo, row for row: the shared spelling of an enum
+   * entry and a `const val`. The MOVED rows are the fix; the UNCHANGED rows are the load-bearing
+   * negative controls, since a rule that simply kept the Kotlin spelling verbatim would satisfy
+   * every moved row and emit `AB1C` and `HAPPY_CAT` for the rest.
+   */
+  @Test
+  fun `kotlinConstantToPascalCase keeps a segment's internal capitals`() {
+    // Moved: PascalCase and camelCase kept their internal capitals nowhere before.
+    assertEquals("SecondValue", "SecondValue".kotlinConstantToPascalCase())
+    assertEquals("ThirdValueHere", "ThirdValueHere".kotlinConstantToPascalCase())
+    assertEquals("CamelCase", "camelCase".kotlinConstantToPascalCase())
+    assertEquals("ThirdValue", "thirdValue".kotlinConstantToPascalCase())
+    // The mixed row that rules out a whole-name gate: an acronym, an internal capital and a `_`.
+    assertEquals("XMLParserV2", "XMLParser_V2".kotlinConstantToPascalCase())
+    assertEquals("MaxRetries", "MaxRetries".kotlinConstantToPascalCase())
+
+    // Unchanged: a single Pascal word, all caps with a digit, SCREAMING_SNAKE, snake_case, and an
+    // all-caps segment beside a Pascal one.
+    assertEquals("First", "First".kotlinConstantToPascalCase())
+    assertEquals("Ab1c", "AB1C".kotlinConstantToPascalCase())
+    assertEquals("Ab1c", "Ab1c".kotlinConstantToPascalCase())
+    assertEquals("Happy", "HAPPY".kotlinConstantToPascalCase())
+    assertEquals("HappyCat", "HAPPY_CAT".kotlinConstantToPascalCase())
+    assertEquals("ScreamingSnake", "SCREAMING_SNAKE".kotlinConstantToPascalCase())
+    assertEquals("SnakeCase", "snake_case".kotlinConstantToPascalCase())
+    assertEquals("HttpStatus", "HTTP_Status".kotlinConstantToPascalCase())
+    assertEquals("MaxNaps", "MAX_NAPS".kotlinConstantToPascalCase())
+    assertEquals("PiApprox", "PI_APPROX".kotlinConstantToPascalCase())
+  }
+
+  /**
+   * The two shapes Kotlin accepts and C# does not, which used to be emitted raw as CS1001 inside
+   * `Interop.cs` itself: a converted name that starts with a digit, and one that is empty.
+   */
+  @Test
+  fun `kotlinConstantToPascalCase guards a digit-led or empty converted name`() {
+    assertEquals("_1st", "_1ST".kotlinConstantToPascalCase())
+    assertEquals("_1st", "1ST".kotlinConstantToPascalCase())
+    assertEquals("_", "_".kotlinConstantToPascalCase())
+    assertEquals("_", "__".kotlinConstantToPascalCase())
+    assertEquals("_", "".kotlinConstantToPascalCase())
+  }
+
+  /**
+   * A C# keyword is unreachable by construction, which is why the helper takes no [toCSharpName]
+   * pass: the first character is always an uppercase letter or `_`, and every C# keyword is all
+   * lowercase.
+   */
+  @Test
+  fun `kotlinConstantToPascalCase can never spell a C-sharp keyword`() {
+    assertEquals("Class", "class".kotlinConstantToPascalCase())
+    assertEquals("Default", "default".kotlinConstantToPascalCase())
+    assertEquals("Event", "event".kotlinConstantToPascalCase())
+  }
+
+  /**
+   * The precondition of the ERROR_CSHARP_NAME_COLLISION guard, pinned at the helper: the pair that
+   * already collided before the fix, and the one the per-segment rule newly makes collide.
+   */
+  @Test
+  fun `kotlinConstantToPascalCase collapses two names onto one`() {
+    assertEquals("Foo".kotlinConstantToPascalCase(), "FOO".kotlinConstantToPascalCase())
+    assertEquals("FooBar".kotlinConstantToPascalCase(), "FOO_BAR".kotlinConstantToPascalCase())
+    assertEquals("_".kotlinConstantToPascalCase(), "__".kotlinConstantToPascalCase())
+  }
 }

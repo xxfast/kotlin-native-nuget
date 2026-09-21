@@ -17,6 +17,7 @@ import com.google.devtools.ksp.symbol.Variance
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
+import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
 import io.github.xxfast.kotlin.native.nuget.processor.forward.cirDoc
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKdoc
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toCirDoc
@@ -3011,9 +3012,58 @@ private fun csharpEnumTypeName(enum: KSClassDeclaration, context: NugetContext?)
   return "global::$namespace.$nestedName"
 }
 
+/**
+ * Issue #285: two entries of one enum whose converted C# names are equal.
+ *
+ * This is not a new hazard introduced by the casing rule, it is an old one that was silent: `FOO`
+ * beside `Foo` already rendered `Foo = 0, Foo = 1`, which is CS0102 at the *consumer's* compile with
+ * no generator diagnostic at all. The per-segment rule adds one more colliding pair (`FOO_BAR`
+ * beside `FooBar`, which used to differ only because the second was mangled to `Foobar`) and closes
+ * both with the same fatal error ADR-110/ADR-113 already use for a C# name claimed twice.
+ *
+ * Fatal rather than a deterministic suffix on purpose: a silent `FooBar_1` is the very
+ * unpredictability the issue reports, and the ordinals may not move, so there is no rename the
+ * generator could pick that a consumer would rather have than a one-word source fix.
+ */
+private fun emitEnumEntryNameCollisions(
+  enumName: String,
+  enum: KSClassDeclaration,
+  logger: KSPLogger,
+) {
+  enum.declarations
+    .filterIsInstance<KSClassDeclaration>()
+    .filter { it.classKind == ClassKind.ENUM_ENTRY }
+    .map { entry -> entry.simpleName.asString() }
+    .toList()
+    .groupBy { kotlinName -> kotlinName.kotlinConstantToPascalCase() }
+    .filter { (_, kotlinNames) -> kotlinNames.size > 1 }
+    .forEach { (csName, kotlinNames) ->
+      ForwardDiagnosticSink.emit(
+        listOf(
+          ForwardDiagnostic(
+            kind = ForwardDiagnosticKind.ERROR_CSHARP_NAME_COLLISION,
+            symbol = enum,
+            declaration = "$enumName.$csName",
+            reason = "the entries ${kotlinNames.joinToString(", ") { "'$it'" }} all convert to " +
+                "that one C# name, and C# cannot declare an enum member twice (CS0102)",
+            hint = "rename one entry; the C# spelling may not be suffixed automatically because " +
+                "an entry crosses as its ordinal",
+            // ERROR_*: the build fails, so nothing generated is ever read.
+            owner = null,
+          ),
+        ),
+        logger,
+      )
+    }
+}
+
 internal fun translateEnum(
   enum: KSClassDeclaration,
   libraryName: String,
+  // Issue #285: required, not nullable-with-a-skip. Both call sites (`CirTranslator`'s nested walk
+  // and its top-level one) have a logger in scope, and a nullable logger would silently disable the
+  // after-casing collision guard in exactly the harness that tests it.
+  logger: KSPLogger,
   expects: ExpectIndex = ExpectIndex(),
   // The namespace mapping, so an enum-typed enum property can spell the other enum the way every
   // other C# type position spells it. Null keeps the bare nested name (the Tier 1 no-namespace
@@ -3028,12 +3078,14 @@ internal fun translateEnum(
     // entry has -- a pre-existing defect no fixture had reached.
     .filter { it.classKind == ClassKind.ENUM_ENTRY }
     .mapIndexed { index, entry ->
-      val entryName: String = entry.simpleName.asString()
-      val csEntryName: String = entryName.split("_")
-        .joinToString("") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
+      // Issue #285: the one place an entry name is spelled for C#. Every value position crosses as
+      // the ordinal, so this helper (shared with `const val`) owns the whole surface spelling.
+      val csEntryName: String = entry.simpleName.asString().kotlinConstantToPascalCase()
       CirEnumEntry(csEntryName, index, doc = entry.forwardKdoc(expects)?.toCirDoc())
     }
     .toList()
+
+  emitEnumEntryNameCollisions(name, enum, logger)
 
   val properties: List<CirEnumProperty> = enum.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }

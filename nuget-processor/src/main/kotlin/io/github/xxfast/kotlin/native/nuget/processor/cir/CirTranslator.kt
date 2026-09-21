@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 import com.google.devtools.ksp.processing.KSPLogger
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.csharpIdentifier
+import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBoundInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
@@ -421,7 +422,7 @@ internal fun translate(
       )
     }
     enums.filter { isOwnedBy(owner, it) }.forEach { enum ->
-      add(translateEnum(enum, context.libraryName, expects, context))
+      add(translateEnum(enum, context.libraryName, logger, expects, context))
     }
     // ADR-134: a nested `value class` is declared as a nested `readonly record struct`. Its
     // members already export under the whole chain (`nativePrefix()`) and every type position
@@ -475,7 +476,7 @@ internal fun translate(
   enums.filter { !it.isNestedDeclaration() }.forEach { enum ->
     namespaces.addDeclaration(
       namespaceOf(enum.packageName.asString()),
-      translateEnum(enum, context.libraryName, expects, context),
+      translateEnum(enum, context.libraryName, logger, expects, context),
     )
   }
 
@@ -1517,10 +1518,9 @@ internal fun translateConstProperty(
   val propName: String = prop.simpleName.asString()
   val propTypeResolved: KSType = prop.type.resolve().expandAliases()
   val propType: String = propTypeResolved.declaration.simpleName.asString()
-  val csPropName: String = propName.split("_")
-    .joinToString("") { segment ->
-      segment.lowercase().replaceFirstChar { it.uppercase() }
-    }
+  // Issue #285, the twin of the enum-entry defect: the identical expression lived here, so
+  // `const val MaxRetries` was only reachable as `Maxretries`. Same helper, same rule, one place.
+  val csPropName: String = propName.kotlinConstantToPascalCase()
   val csType: String = KOTLIN_TO_CSHARP_PARAM[propType] ?: return null
   val value: String = extractConstValue(prop) ?: return null
   val csValue: String = kotlinLiteralToCSharp(value, propType)
