@@ -12,6 +12,7 @@ using TestLibrary.Issue131;
 using TestLibrary.Issue236;
 using TestLibrary.Kennel;
 using TestLibrary.Lounge;
+using TestLibrary.Metronome;
 using TestLibrary.Models;
 using TestLibrary.Nested;
 using TestLibrary.Objectprops;
@@ -1634,5 +1635,51 @@ public class LiveHandleTests
             factor++;
             Assert.Equal($"boom x{factor}", WorkshopSample.WorkshopScaleThrowing(factor));
         });
+    }
+
+    // Row 13. ADR-160: a per-call lambda-parameter member whose METHOD return is an exported object.
+    // The only cell on that route that mints a handle, and it mints two kinds per call: one per
+    // candidate handed to the C# predicate (`Func<Chime,bool>`) and one for the chime the member
+    // returns, which the consumer disposes. The row measures both kinds; which side owns the payload
+    // handle of the predicate is ADR-036's, restated by ADR-160: the C# side owns the payload
+    // wrapper, so the predicate below disposes each candidate it is handed (`using (c)`), exactly as
+    // ADR-036's documented `using var t = toy;` callback body does. That is what makes this row a
+    // measurement of the ROUTE rather than of consumer discipline: a consumer lambda that does not
+    // dispose leaks one handle per invocation, since a generated wrapper has `Dispose()` and no
+    // finalizer (the residual ADR-036 names, measured here at +4 handles per iteration before the
+    // `using` was added).
+    // The predicate fires synchronously before the P/Invoke returns, so a handle minted per
+    // invocation and never released is a per-iteration leak rather than a per-call one: the
+    // iteration count is deliberately in the thousands, because three candidates per call means a
+    // 50-iteration row could hide a single-handle-per-invocation leak inside the settle noise while
+    // this row cannot. Mylo is picked out of the chime rack five thousand times and put back each
+    // time.
+    [Fact]
+    public void CallbackMemberObjectReturn_PredicateAndResult_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var metronome = new Metronome(4);
+            using Chime chime = metronome.FirstChime(c => { using (c) { return c.Weight >= 2; } });
+            Assert.Equal("Mylo", chime.Name);
+        }, iterations: 5000);
+    }
+
+    // Row 13a. The nullable twin (`firstOrNull`). Both branches inside one crossing on purpose: the
+    // null branch walks every candidate and returns IntPtr.Zero, so it mints the borrowed predicate
+    // handles and no result, while the matching branch mints the result too. A release wired only to
+    // the success path leaks on the null branch, and a guard that returns early before freeing the
+    // GCHandle leaks on both; row 13 alone sees neither. Oreo is looked for and found, then a chime
+    // that does not exist is looked for and is not.
+    [Fact]
+    public void CallbackMemberNullableObjectReturn_BothBranches_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var metronome = new Metronome(4);
+            using Chime? oreo = metronome.FirstChimeOrNull(c => { using (c) { return c.Name == "Oreo"; } });
+            Assert.NotNull(oreo);
+            Assert.Null(metronome.FirstChimeOrNull(c => { using (c) { return c.Weight == 99; } }));
+        }, iterations: 5000);
     }
 }

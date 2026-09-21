@@ -95,12 +95,16 @@ class Tier1CallbackPayloadOwnershipTest {
   fun `both handle-passed payloads are still retained for the crossing`() {
     val result = run()
 
+    // ADR-160 re-pinned these two spellings when the per-call route moved onto the ADR-062 plan:
+    // the retain is now inline in the lowered lambda argument and the payload local is named after
+    // the callback parameter (`format`/`action`) rather than positionally. The RULE is unchanged and
+    // is what this cell is about: retain on the way out, no release on this side.
     assertTrue(
-      result.generated.contains("val arg0Ref = NugetHandles.retain(it0 as Any)"),
+      result.generated.contains("NugetHandles.retain(formatArg0 as Any)"),
       "the String payload still crosses as a retained handle; got: ${payloadLines(result)}",
     )
     assertTrue(
-      result.generated.contains("val arg0Ref = NugetHandles.retain(it0)"),
+      result.generated.contains("NugetHandles.retain(actionArg0)"),
       "the object payload still crosses as a retained handle; got: ${payloadLines(result)}",
     )
   }
@@ -114,7 +118,7 @@ class Tier1CallbackPayloadOwnershipTest {
     val result = run()
 
     assertTrue(
-      result.generated.contains("NugetHandles.release(resultRef)"),
+      result.generated.contains("NugetHandles.release(formatBox)"),
       "the callback's return box has no C# owner; Kotlin still frees it",
     )
   }
@@ -129,7 +133,7 @@ class Tier1CallbackPayloadOwnershipTest {
       "control: an Int payload still crosses by value; got: ${payloadLines(result)}",
     )
     assertTrue(
-      result.generated.contains("listenerFn.invoke(it0, listenerUserData)"),
+      result.generated.contains("listenerFn.invoke(listenerArg0, listenerUserData)"),
       "control: a by-value payload is handed over verbatim; got: ${payloadLines(result)}",
     )
   }
@@ -172,7 +176,7 @@ class Tier1CallbackPayloadOwnershipTest {
   fun `the C sharp thunks still unmarshal both payloads`() {
     val result = run()
 
-    listOf("string arg0 = NugetMarshal.FromHandle<string>(arg0Ptr);", "FromHandle<Toy>(arg0Ptr);")
+    listOf("NugetMarshal.FromHandle<string>(a0)", "Toy>(a0)")
       .forEach { line ->
         assertTrue(
           result.generatedCSharp.contains(line),

@@ -186,6 +186,31 @@ internal sealed interface BridgeType {
   data class Nullable(val type: BridgeType) : BridgeType
 
   /**
+   * ADR-160: a per-call Kotlin function type (`(Int) -> Int`) at a **parameter** position, the C#
+   * caller's own lambda, invoked by Kotlin before the native call returns and never stored.
+   *
+   * The only [BridgeType] that occupies TWO native slots of its own (`${name}Ptr` and
+   * `${name}UserData`, both POINTER/IN), because ADR-102's AOT-safe shape is an
+   * `[UnmanagedCallersOnly]` thunk address plus the echoed `GCHandle` ctx of the managed delegate:
+   * the fan-out precedent is ADR-080's `${name}HasValue` pair. Both slots carry the *same*
+   * [BridgeType.Callback] transfer, BORROWED with no conversion: the lowering is bespoke on both
+   * halves (a Kotlin `CFunction` reinterpret plus a wrapper lambda, a C# delegate instance plus
+   * `GCHandle.Alloc`/`Free`), not one of the shared [ForwardConversion] steps.
+   *
+   * Only the component set both halves implement is ever constructed ([parameters] in
+   * Primitive/String/ObjectHandle/Interface/Enum, [result] in Unit/Primitive/String); every other
+   * shape (a `Char`, a nullable, an object or enum LAMBDA return, a suspend lambda, a
+   * lambda-returning-lambda, a collection in the payload) stays a
+   * [SpecializedProtocol] at classification and takes the named `CALLBACK_PROTOCOL` skip. A
+   * callback at a RESULT position is refused the same way: a Kotlin function handed OUT is a
+   * different mechanism, and it keeps its legacy route.
+   */
+  data class Callback(
+    val parameters: List<BridgeType>,
+    val result: BridgeType,
+  ) : BridgeType
+
+  /**
    * Protocols remain on named legacy routes until their dedicated planning adapters exist.
    *
    * @param sealedHandle ADR-105: for a `sealed helper <fqn>` protocol over an exported sealed
@@ -777,6 +802,15 @@ internal object ForwardCallablePlanValidator {
           "Forward plan $position has an invalid nullable type"
         }
         validateType(type.type, "$position nullable type")
+      }
+
+      // ADR-160: valid at a parameter position only, which is the only place the classifier mints
+      // it; its components are validated so a shape neither half can emit cannot reach a plan.
+      is BridgeType.Callback -> {
+        type.parameters.forEach { parameter ->
+          validateType(parameter, "$position callback parameter")
+        }
+        validateType(type.result, "$position callback result")
       }
 
       is BridgeType.Collection -> validateCollection(type, position)

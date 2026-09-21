@@ -1072,8 +1072,11 @@ internal class ForwardCallablePlanner(
         // As in `classEntries`: the route selects on the return type and owns the member, refused
         // parameters included (those are named once, by `warnRefusedLegacyRouteMembers`).
         method.hasLegacyFlowReturn() -> true
+        // ADR-160 step 4: suppressed only when the legacy route really does re-emit the member.
+        // A member it refuses by name is named here instead, which is what stops the ADR-055
+        // contract failure from being the author's first sign of trouble.
         skipped.reason == ForwardPlanSkipReason.CALLBACK_PROTOCOL ->
-          method.hasLegacyLambdaParameter()
+          method.hasLegacyLambdaParameter() && legacyRefusedCallbackMember(method) == null
 
         else -> false
       }
@@ -1206,7 +1209,9 @@ internal class ForwardCallablePlanner(
         method.hasLegacyFlowReturn() -> true
         skipped.reason == ForwardPlanSkipReason.CALLBACK_PROTOCOL ->
           method in interfaceBridgeMethods || method in storedCallbackMethods ||
-              method.hasLegacyLambdaParameter()
+              // ADR-160 step 4: as above, only a member the legacy route actually emits is
+              // suppressed here; one it refuses by name is reported.
+              (method.hasLegacyLambdaParameter() && legacyRefusedCallbackMember(method) == null)
 
         else -> false
       }
@@ -2377,6 +2382,31 @@ internal class ForwardCallablePlanner(
       }
       addAll(declared)
     }
+    // ADR-160: a callback is per-call ONLY. The C# prelude allocates the GCHandle before the call
+    // and frees it in the `finally`, which is correct exactly when the lambda cannot outlive the
+    // crossing. A constructor (or a data-class `copy`, or an enum-arm box, or a value-class member)
+    // normally STORES the lambda, and the first later invocation would dispatch the ADR-102 thunk
+    // through a freed GCHandle. Those positions keep the `CALLBACK_PROTOCOL` skip, which is what
+    // ADR-037's stored-callback route exists for.
+    val storedCallbackOrigins: Set<ForwardCallableOrigin> = setOf(
+      ForwardCallableOrigin.CONSTRUCTOR,
+      ForwardCallableOrigin.COPY,
+      ForwardCallableOrigin.ENUM_ARM_BOX,
+      ForwardCallableOrigin.VALUE_CLASS,
+    )
+    val storedCallback: Pair<String?, BridgeType>? = if (origin in storedCallbackOrigins) {
+      declared.firstOrNull { (_, type) -> type is BridgeType.Callback }
+        ?.let { (name, type) -> name to type }
+    } else {
+      null
+    }
+    if (storedCallback != null) {
+      return ForwardCallableCatalogEntry.Skipped(
+        symbol, ForwardPlanSkipReason.CALLBACK_PROTOCOL, node = node,
+        position = ForwardSkipPosition.INPUT,
+        parameter = storedCallback.first,
+      )
+    }
     val inputTypes: List<BridgeType> = namedInputs.map { it.second }
     val ineligible: Pair<String?, BridgeType>? = namedInputs
       .firstOrNull { (_, type) -> type.inputSkipReason() != null }
@@ -2582,6 +2612,24 @@ internal class ForwardCallablePlanner(
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> listOf(
       valueParameter(name, type, ForwardFlow.INTO_KOTLIN, role),
     )
+
+    // ADR-160: the only input that fans out to two slots of its OWN type, ADR-102's AOT-safe pair
+    // -- the `[UnmanagedCallersOnly]` thunk address, then the `GCHandle` ctx of the managed
+    // delegate the thunk dispatches to. Both BORROWED with no conversion: the C# wrapper allocates
+    // and frees the GCHandle around the call, Kotlin only reinterprets the address for the duration
+    // of the invocation and stores nothing (per-call, never a stored ADR-037 subscription).
+    is BridgeType.Callback -> listOf("${name}Ptr", "${name}UserData").map { slot ->
+      ForwardAbiParameter(
+        name = slot,
+        wireType = ForwardAbiWireType.POINTER,
+        direction = ForwardAbiDirection.IN,
+        transfer = ForwardTransfer(
+          slot, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.BORROWED, null,
+        ),
+        role = role,
+      )
+    }
 
     // ADR-076: the wire value is a raw INT64 of ticks; the Kotlin export converts it back to an
     // Instant via the TICKS_TO_INSTANT helper before use.
@@ -3471,6 +3519,11 @@ internal class ForwardCallablePlanner(
   }
 
   private fun BridgeType.inputSkipReason(): ForwardPlanSkipReason? = when (this) {
+    // ADR-160: the one position a callback binds at. The classifier already refused every payload
+    // or lambda-result shape the two halves cannot lower, so a `Callback` reaching here is
+    // emittable by construction.
+    is BridgeType.Callback -> null
+
     // ADR-106: Uuid is admissible at every input position, over the String wire.
     BridgeType.String, BridgeType.Char, BridgeType.Instant, BridgeType.Duration,
     BridgeType.Uuid -> null
@@ -3611,6 +3664,10 @@ internal class ForwardCallablePlanner(
 
   private fun BridgeType.wireType(): ForwardAbiWireType = when (this) {
     BridgeType.Unit -> ForwardAbiWireType.VOID
+    // ADR-160: a callback occupies two POINTER slots of its own, built explicitly by
+    // `nativeInputParameters`; this is the wire of each of them, and never of a result (a callback
+    // has no result shape).
+    is BridgeType.Callback -> ForwardAbiWireType.POINTER
     // ADR-107: the error-envelope pointer. Unreachable from a callable plan today (no shape and
     // no input arm admits a Throwable), but it is the wire the property route uses, so naming it
     // here keeps the two planners' answers identical rather than erroring on a live type.
@@ -3733,6 +3790,10 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   // ADR-107: `List<Throwable>` is explicitly deferred -- the component would have to be boxed by
   // `nuget_wrap_*`, which has no envelope arm -- so it skips named, issue #52's rule.
   BridgeType.Throwable -> false
+
+  // ADR-160: a callback is a parameter-position type only; a `List<(Int) -> Unit>` has no wire at
+  // all, so the member skips named rather than half-binding.
+  is BridgeType.Callback -> false
 
   // ADR-106: collection components are deferred (the component would need a `nuget_wrap_*` arm
   // over the text form), so `List<Uuid>` skips named rather than half-binding.
@@ -4122,6 +4183,10 @@ internal fun BridgeType.sealedTypeDetail(): String? {
 
 internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
   BridgeType.Unit, is BridgeType.Primitive -> null
+  // ADR-160: only reached from a position a callback cannot bind at -- a RESULT (a Kotlin function
+  // handed OUT is a different mechanism and keeps its own legacy route) or a collection component.
+  // A parameter-position callback plans a shape and never asks.
+  is BridgeType.Callback -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
   BridgeType.Char -> ForwardPlanSkipReason.CHAR
   BridgeType.String -> ForwardPlanSkipReason.STRING
   // ADR-076: defensive only -- shapeOrNull's Instant branch always succeeds, same as CHAR/

@@ -655,6 +655,9 @@ class ForwardMarshallingMatrixTest {
   }
 
   private fun typeLabel(type: BridgeType): String = when (type) {
+    // ADR-160: a callback is a parameter-position-only type; the matrix rows here are return
+    // positions, so it has no row of its own and only needs a label.
+    is BridgeType.Callback -> "Callback"
     BridgeType.Unit -> "Unit"
     is BridgeType.Primitive -> "Primitive(${type.kind})"
     BridgeType.Char -> "Char"

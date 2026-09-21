@@ -14,6 +14,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedCallbackMember
+import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
@@ -49,6 +51,27 @@ internal fun KSFunctionDeclaration.hasLegacyFlowReturn(): Boolean {
  */
 internal fun KSFunctionDeclaration.hasLegacyLambdaParameter(): Boolean = parameters.any { param ->
   param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in LAMBDA_TYPES
+}
+
+/**
+ * ADR-160: the per-call lambda-parameter members the ADR-062 plan now owns, which is what retires
+ * the hand-written route for them on BOTH halves (`addLambdaParamMethodExport` here,
+ * `translateCallbackMethod` in the C# translator). One predicate, read by every selector, so the
+ * two halves cannot disagree about which route a member is on -- disagreement here is a duplicate
+ * `@CName` (ADR-117) or a member one half declares and the other does not (the ADR-055 contract).
+ *
+ * True only when EVERY lambda parameter classifies as a [BridgeType.Callback]: a member carrying a
+ * shape the plan's callback lowering does not implement (a `Char` payload, an object or enum lambda
+ * return, a suspend lambda) keeps the legacy route exactly as it was. A stored-callback or
+ * interface-bridge PAIR is excluded by its own selector upstream of this, not here: pair detection
+ * is structural and must keep seeing both halves.
+ */
+internal fun KSFunctionDeclaration.hasPlannedCallbackParameter(
+  classifier: ForwardBridgeTypeClassifier,
+): Boolean = hasLegacyLambdaParameter() && parameters.all { param ->
+  val type: KSType = param.type.resolve().expandAliases()
+  type.declaration.qualifiedName?.asString() !in LAMBDA_TYPES ||
+      classifier.classify(type) is BridgeType.Callback
 }
 
 /**
@@ -195,6 +218,13 @@ internal fun FileSpec.Builder.addClassExports(
 
   lambdaParamMethods.forEach { method ->
     if (method in storedCallbackAddMethods || method in storedCallbackRemoveMethods) return@forEach
+    // ADR-160: the plan owns this member's export (emitted off the catalog), so the hand-written
+    // route must not mint the same `@CName` a second time.
+    if (method.hasPlannedCallbackParameter(classifier)) return@forEach
+    // ADR-160 step 4: a member this route cannot marshal is dropped here and named by the
+    // planner's own CALLBACK_PROTOCOL skip, instead of failing the ADR-055 contract (a scalar
+    // outer return) or emitting Kotlin that does not compile (a dropped non-lambda parameter).
+    if (legacyRefusedCallbackMember(method) != null) return@forEach
     addLambdaParamMethodExport(method, qualifiedName, prefix)
   }
 

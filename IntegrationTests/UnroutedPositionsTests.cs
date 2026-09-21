@@ -97,8 +97,10 @@ public class UnroutedPositionsTests
     }
 
     /// <summary>
-    /// No legacy route is keyed to an object owner at all, so even the two shapes that bind on a
-    /// class (a Flow return, a lambda parameter) are gone here.
+    /// No <b>legacy</b> route is keyed to an object owner at all, so the Flow return that binds on a
+    /// class is gone here. The lambda parameter no longer is: ADR-160 moved it onto the ADR-062
+    /// plan, which is keyed to the position rather than to the owner kind, and it is asserted present
+    /// at the end of this fact.
     /// </summary>
     [Fact]
     public void ObjectMembersAtUnroutedPositionsAreAbsent()
@@ -110,11 +112,17 @@ public class UnroutedPositionsTests
             PublicStatic,
             "FlowReturnOnObject",
             "FlowParamOnObject",
-            "CallbackParamOnObject",
+            // ADR-160 moved the per-call lambda parameter onto the ADR-062 plan, which is keyed to
+            // the position rather than to the owner kind, so `CallbackParamOnObject` BINDS now and
+            // is asserted present below instead of absent here.
             "CallbackReturnOnObject",
             "GenericReturnOnObject",
             "GenericParamOnObject",
             "StructuralOnObject");
+
+        // ADR-160: the object position's per-call lambda parameter is the one cell this matrix row
+        // lost. Asserted positively so the row cannot silently go back to refusing it.
+        Assert.NotNull(registry!.GetMethod("CallbackParamOnObject", PublicStatic));
     }
 
     /// <summary>
@@ -155,13 +163,33 @@ public class UnroutedPositionsTests
             PublicStatic,
             "FlowReturnOnExtension",
             "FlowParamOnExtension",
-            "CallbackParamOnExtension",
             "GenericReturnOnExtension",
             "StructuralOnExtension",
             "FlowParamOnTopLevel",
-            "CallbackParamOnTopLevel",
+            // ADR-160: the top-level per-call lambda parameter binds off the plan now, exactly as
+            // the class-method one does; asserted present below.
             "GenericParamOnTopLevel",
             "StructuralRefusedOnTopLevel");
+
+        // ADR-160: the top-level per-call lambda parameter is the cell this row lost. Asserted
+        // positively so the row cannot silently go back to refusing it.
+        Assert.NotNull(sample!.GetMethod("CallbackParamOnTopLevel", PublicStatic));
+
+        // An extension does NOT share the file-named class: it is emitted on a per-receiver
+        // `{Receiver}Extensions` static class, which is why every `*OnExtension` name asserted
+        // against `UnroutedPositionsSample` above proves nothing on its own. The real claim is made
+        // here, against the owner that could carry them -- and `CallbackParamOnExtension` is the one
+        // ADR-160 binds, so it is asserted present rather than absent.
+        Type? extensions = TopLevelType("DepotExtensions");
+        Assert.NotNull(extensions);
+        AssertAllAbsent(
+            extensions,
+            PublicStatic,
+            "FlowReturnOnExtension",
+            "FlowParamOnExtension",
+            "GenericReturnOnExtension",
+            "StructuralOnExtension");
+        Assert.NotNull(extensions!.GetMethod("CallbackParamOnExtension", PublicStatic));
 
         // The LIE cell: today this renders `public static Flow<int> FlowReturnOnTopLevel()` against
         // a `Flow<T>` type that exists nowhere in Interop.cs (the class route spells the same thing

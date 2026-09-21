@@ -505,6 +505,10 @@ internal class ForwardPropertyPlanner(
    * the two-slot SHAPE rather than the type, and offer the parameter remedy.
    */
   private fun BridgeType.isSupportedReceiver(): Boolean = when (this) {
+    // ADR-160: a callback binds at a parameter position; an extension ON a function type is not a
+    // shape either half spells.
+    is BridgeType.Callback -> false
+
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Primitive,
     BridgeType.String -> true
 
@@ -974,6 +978,9 @@ internal class ForwardPropertyPlanner(
    *  underlying is what has to be spellable. Exhaustive on purpose: a new [BridgeType] variant
    *  must decide here rather than fall into an `else`. */
   private fun BridgeType.isReadableComponent(): Boolean = when (this) {
+    // ADR-160: not readable at a property position; a function-typed property keeps its own skip.
+    is BridgeType.Callback -> false
+
     BridgeType.Char, BridgeType.String, BridgeType.Instant, BridgeType.Duration,
     is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
     is BridgeType.Interface -> true

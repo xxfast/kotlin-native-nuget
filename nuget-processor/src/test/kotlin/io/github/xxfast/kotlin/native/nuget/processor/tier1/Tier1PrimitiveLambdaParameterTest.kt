@@ -197,35 +197,37 @@ class Tier1PrimitiveLambdaParameterTest {
       }
   }
 
-  /** The C# thunk body reads the payload straight off the typed parameter. */
+  /** The C# thunk body reads the payload straight off the typed parameter. ADR-160 re-pinned the
+   *  parameter names (`a0`, `ctx`) and the `bool` widening (now inline at the call) when the route
+   *  moved onto the ADR-062 plan; the by-value RULE this cell is about is unchanged. */
   @Test
   fun `the C sharp callback body reads the payload from the delegate parameter`() {
     val result = run()
 
     val onTick: String = callbackLine(result, "OnTick")
     assertTrue(
-      onTick.contains("(int arg0, IntPtr userData) =>"),
-      "expected the Int payload lambda to take `int arg0`; got: $onTick",
+      onTick.contains("(int a0, IntPtr ctx) =>"),
+      "expected the Int payload lambda to take `int a0`; got: $onTick",
     )
     assertTrue(
-      onTick.contains("listener(arg0);"),
+      onTick.contains("listener(a0);"),
       "expected the Int payload to be handed to the caller's lambda unchanged; got: $onTick",
     )
 
     val onBeat: String = callbackLine(result, "OnBeat")
     assertTrue(
-      onBeat.contains("(byte arg0Byte, IntPtr userData) =>"),
-      "expected the Boolean payload lambda to take `byte arg0Byte`; got: $onBeat",
+      onBeat.contains("(byte a0, IntPtr ctx) =>"),
+      "expected the Boolean payload lambda to take `byte a0`; got: $onBeat",
     )
     assertTrue(
-      onBeat.contains("bool arg0 = arg0Byte != 0;"),
+      onBeat.contains("listener(a0 != 0);"),
       "expected the Boolean payload to be widened from its byte wire type; got: $onBeat",
     )
 
     val onTempo: String = callbackLine(result, "OnTempo")
     assertTrue(
-      onTempo.contains("(double arg0, IntPtr userData) =>"),
-      "expected the Double payload lambda to take `double arg0`; got: $onTempo",
+      onTempo.contains("(double a0, IntPtr ctx) =>"),
+      "expected the Double payload lambda to take `double a0`; got: $onTempo",
     )
   }
 

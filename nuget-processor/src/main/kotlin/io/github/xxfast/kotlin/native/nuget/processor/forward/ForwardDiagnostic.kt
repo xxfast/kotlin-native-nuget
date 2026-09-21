@@ -728,9 +728,14 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       ForwardPlanSkipReason.FLOW_PROTOCOL.name ->
         "a Flow/StateFlow binds at a class-method return and a property, but not at this position"
 
+      // ADR-160: a per-call lambda PARAMETER now binds off the ADR-062 plan at every ordinary
+      // position (class method, sealed arm, object member, top-level function, extension), so the
+      // shipped sentence ("not at this position") became false for it. What is left unrouted here
+      // is a lambda *return* anywhere but a top-level function, and a lambda whose payload or own
+      // return neither the plan nor the hand-written route carries.
       ForwardPlanSkipReason.CALLBACK_PROTOCOL.name ->
-        "a lambda binds at a class-method parameter and a top-level function return, but not at " +
-            "this position"
+        "a lambda parameter binds at an ordinary position and a lambda return only at a top-level " +
+            "function, so either this position or this lambda's own payload/return has no route"
 
       ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL.name ->
         "a `suspend` lambda is not bridged at any position"
@@ -1269,6 +1274,13 @@ private const val genericSkipHint: String =
  * exactly the wording the property setter diagnostic already uses.
  */
 internal fun BridgeType.diagnosticTypeName(): String = when (this) {
+  // ADR-160: spelled as the Kotlin function type the author wrote, so a refused nesting reads
+  // `(Int) -> Unit` rather than a model constant.
+  is BridgeType.Callback -> parameters.joinToString(
+    prefix = "(",
+    postfix = ") -> ${result.diagnosticTypeName()}",
+  ) { parameter -> parameter.diagnosticTypeName() }
+
   BridgeType.Unit -> "Unit"
   BridgeType.Char -> "Char"
   BridgeType.String -> "String"

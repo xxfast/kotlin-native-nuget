@@ -49,6 +49,17 @@ internal fun BridgeType.forwardPublicCsharpType(): String = when (this) {
   BridgeType.ByteArray -> "byte[]"
   // ADR-147: a type parameter's public C# spelling is its own name, on the generic carrier.
   is BridgeType.TypeParameter -> name
+  // ADR-160: the idiomatic C# spelling of a per-call callback -- `Action` for a `Unit` lambda
+  // result, `Func<..., R>` otherwise -- so the consumer writes a lambda and nothing else.
+  is BridgeType.Callback -> {
+    val payload: List<String> =
+      parameters.map { parameter -> parameter.forwardPublicCsharpType() }
+    if (result == BridgeType.Unit) {
+      if (payload.isEmpty()) "Action" else "Action<${payload.joinToString(", ")}>"
+    } else {
+      (payload + result.forwardPublicCsharpType()).joinToString(", ", "Func<", ">")
+    }
+  }
   is BridgeType.Nullable -> "${type.forwardPublicCsharpType()}?"
   else -> error("Forward CIR direct-value projection cannot render public type $this")
 }
@@ -73,6 +84,12 @@ internal fun BridgeType.forwardPublicCsharpType(): String = when (this) {
 internal fun BridgeType.isPubliclySpellable(
   typeParametersInScope: Set<String> = emptySet(),
 ): Boolean = when (this) {
+  // ADR-160: a callback's C# spelling is an `Action<>`/`Func<>` over components that are each
+  // publicly spellable in their own right; the classifier admits no other shape.
+  is BridgeType.Callback -> parameters.all { parameter ->
+    parameter.isPubliclySpellable(typeParametersInScope)
+  } && result.isPubliclySpellable(typeParametersInScope)
+
   BridgeType.Unit,
   is BridgeType.Primitive,
   BridgeType.Char,
