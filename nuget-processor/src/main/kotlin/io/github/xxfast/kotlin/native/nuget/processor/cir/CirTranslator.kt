@@ -419,7 +419,7 @@ internal fun translate(
       )
     }
     enums.filter { isOwnedBy(owner, it) }.forEach { enum ->
-      add(translateEnum(enum, context.libraryName, expects))
+      add(translateEnum(enum, context.libraryName, expects, context))
     }
     // ADR-134: a nested `value class` is declared as a nested `readonly record struct`. Its
     // members already export under the whole chain (`nativePrefix()`) and every type position
@@ -473,7 +473,7 @@ internal fun translate(
   enums.filter { !it.isNestedDeclaration() }.forEach { enum ->
     namespaces.addDeclaration(
       namespaceOf(enum.packageName.asString()),
-      translateEnum(enum, context.libraryName, expects),
+      translateEnum(enum, context.libraryName, expects, context),
     )
   }
 

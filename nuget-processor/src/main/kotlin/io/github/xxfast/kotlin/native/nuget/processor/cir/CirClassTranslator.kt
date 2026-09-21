@@ -2906,10 +2906,30 @@ internal fun translateInterfaceBackingClass(
   )
 }
 
+/**
+ * The C# spelling of an enum at a type position, the same rule
+ * `ForwardBridgeTypeClassifier.csharpTypeNameFor` applies: the enclosing-scope name, qualified with
+ * `global::<namespace>.` unless there is no root namespace to qualify against.
+ */
+private fun csharpEnumTypeName(enum: KSClassDeclaration, context: NugetContext?): String {
+  val nestedName: String = enum.nestedCsName()
+  if (context == null || context.rootNamespace.isEmpty()) return nestedName
+  val namespace: String = mapPackageToNamespace(
+    enum.packageName.asString(),
+    context.rootPackage,
+    context.rootNamespace,
+  )
+  return "global::$namespace.$nestedName"
+}
+
 internal fun translateEnum(
   enum: KSClassDeclaration,
   libraryName: String,
   expects: ExpectIndex = ExpectIndex(),
+  // The namespace mapping, so an enum-typed enum property can spell the other enum the way every
+  // other C# type position spells it. Null keeps the bare nested name (the Tier 1 no-namespace
+  // shape), matching `ForwardBridgeTypeClassifier.csharpTypeNameFor`'s empty-rootNamespace case.
+  context: NugetContext? = null,
 ): CirEnum {
   val name: String = enum.simpleName.asString()
   val entries: List<CirEnumEntry> = enum.declarations
@@ -2935,14 +2955,25 @@ internal fun translateEnum(
       val propType: String = propTypeResolved.declaration.simpleName.asString()
       val csPropName: String = propName.replaceFirstChar { it.uppercase() }
 
-      val nativeReturnType: String = mapReturnType(propType)
-      val type: String = if (propType == "String") "string" else mapReturnType(propType)
+      // An enum-typed enum member (`enum class Swirl(val patch: Patch)`) crosses as the ordinal
+      // like every other ADR-006 enum position. It fell out of `mapReturnType`'s table as `IntPtr`
+      // before, so the extension handed back a raw Kotlin object pointer no consumer could use.
+      val propEnum: KSClassDeclaration? = (propTypeResolved.declaration as? KSClassDeclaration)
+        ?.takeIf { it.classKind == ClassKind.ENUM_CLASS }
+
+      val nativeReturnType: String = if (propEnum != null) "int" else mapReturnType(propType)
+      val type: String = when {
+        propEnum != null -> csharpEnumTypeName(propEnum, context)
+        propType == "String" -> "string"
+        else -> mapReturnType(propType)
+      }
 
       CirEnumProperty(
         name = csPropName,
         type = type,
         nativeReturnType = nativeReturnType,
         nativeName = propName,
+        isEnum = propEnum != null,
       )
     }
     .toList()

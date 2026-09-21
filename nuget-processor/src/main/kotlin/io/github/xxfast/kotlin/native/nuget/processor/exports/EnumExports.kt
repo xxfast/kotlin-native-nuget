@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
 import com.google.devtools.ksp.getVisibility
+import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
@@ -8,6 +9,7 @@ import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import com.squareup.kotlinpoet.INT
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 
@@ -33,13 +35,19 @@ internal fun FileSpec.Builder.addEnumExports(enum: KSClassDeclaration) {
     val propType: String = propResolved.declaration.qualifiedName
       ?.asString() ?: "Any"
 
+    // An enum-typed member of an enum (`enum class Swirl(val patch: Patch)`) lowers to the ordinal
+    // like every other ADR-006 enum position. Returning the Kotlin enum object itself gave C# an
+    // `IntPtr` no consumer could turn back into a `Patch` (fixed alongside ADR-157).
+    val isEnumTyped: Boolean =
+      (propResolved.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
+
     addFunction(
       FunSpec.builder("export_${prefix}_get_$propName")
         .addAnnotation(cNameAnnotation("${prefix}_get_$propName", ownedBy(prop)))
         .addParameter("ordinal", Int::class)
-        .returns(ClassName.bestGuess(propType))
+        .returns(if (isEnumTyped) INT else ClassName.bestGuess(propType))
         .addStatement("val ${prefix}: %L = %L.entries[ordinal]", qualifiedName, qualifiedName)
-        .addStatement("return ${prefix}.$propName")
+        .addStatement("return ${prefix}.$propName${if (isEnumTyped) ".ordinal" else ""}")
         .build()
     )
   }

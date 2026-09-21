@@ -564,6 +564,15 @@ data class CirEnumProperty(
   val type: String,
   val nativeReturnType: String,
   val nativeName: String,
+  /**
+   * True when [type] is itself a C# `enum`, i.e. the Kotlin enum declares a property typed as
+   * another enum (`enum class Swirl(val patch: Patch)`). The wire is the `int` ordinal, exactly as
+   * any other ADR-006 enum position, so the extension body casts the extern's `int` back to [type].
+   * Without this the property fell out of `mapReturnType`'s table as `IntPtr` and the ADR-006 route
+   * handed the caller a raw Kotlin object pointer typed `IntPtr` (fixed alongside ADR-157; no
+   * fixture had an enum-typed enum member before).
+   */
+  val isEnum: Boolean = false,
 )
 
 sealed interface CirMember
