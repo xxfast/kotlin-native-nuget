@@ -41,10 +41,11 @@
     "info_oblivious_nullability": 84,
     "skipped_array": 4,
     "skipped_collection_element": 12,
+    "skipped_delegate_signature": 3,
     "skipped_empty_interface": 9,
     "skipped_generic_type_argument": 4,
     "skipped_open_generic": 1,
-    "skipped_unbound_generic_instantiation": 11,
+    "skipped_unbound_generic_instantiation": 8,
     "skipped_unbound_type_reference": 184,
     "skipped_unsupported_enum": 1,
     "skipped_unsupported_struct": 54

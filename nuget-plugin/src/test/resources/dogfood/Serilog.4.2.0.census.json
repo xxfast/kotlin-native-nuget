@@ -32,28 +32,30 @@
   },
   "members": {
     "constructor": { "seen": 15, "bound": 14 },
-    "instanceMethod": { "seen": 57, "bound": 56 },
+    "instanceMethod": { "seen": 65, "bound": 64 },
     "property": { "seen": 37, "bound": 33 },
-    "readerSkippedMember": { "seen": 286, "bound": 0 },
-    "staticMethod": { "seen": 14, "bound": 14 }
+    "readerSkippedMember": { "seen": 270, "bound": 0 },
+    "staticMethod": { "seen": 21, "bound": 18 }
   },
   "diagnostics": {
     "info_async_not_yet_mapped": 3,
     "info_uninstantiated_generic_type": 2,
-    "skipped_array": 21,
+    "skipped_array": 22,
     "skipped_collection_element": 3,
     "skipped_default_interface_method": 79,
+    "skipped_delegate_position": 3,
+    "skipped_delegate_signature": 4,
     "skipped_empty_interface": 8,
     "skipped_event": 1,
     "skipped_open_generic": 43,
-    "skipped_unbound_generic_instantiation": 26,
-    "skipped_unbound_type_reference": 113
+    "skipped_unbound_generic_instantiation": 4,
+    "skipped_unbound_type_reference": 114
   },
   "unboundTypeReferences": {
     "Serilog.Core.ILogEventEnricher": 4,
     "Serilog.Core.ILogEventPropertyFactory": 2,
     "Serilog.Core.ILogEventPropertyValueFactory": 1,
-    "Serilog.Core.ILoggingFailureListener": 2,
+    "Serilog.Core.ILoggingFailureListener": 3,
     "System.DateTimeOffset": 4,
     "System.Exception": 72,
     "System.IDisposable": 2,
@@ -65,7 +67,7 @@
   "collapsedOverloads": {
     "sets": 0,
     "membersDropped": 0,
-    "bridgeableMethods": 66,
+    "bridgeableMethods": 78,
     "examples": []
   },
   "errors": []
