@@ -109,6 +109,60 @@ class Tier1NullableLambdaPayloadTest {
     }
   }
 
+  /**
+   * The sealed-ARM twin. ADR-116's amendment re-keyed the per-call and stored callback routes onto
+   * the arm, and the arm's routes read their own selector (`isArmCallbackRoutable`), so a refusal
+   * applied to the class walk alone leaves the arm aborting the generated-Kotlin compile with no
+   * diagnostic. Coverage found this refusal branch cold: the arm walk in
+   * `warnRefusedLegacyRouteMembers` and the `isArmCallbackRoutable` clause were both entered by
+   * every non-null arm fixture and never once taken.
+   *
+   * The non-null sibling on the same arm is the control: the refusal is per MEMBER, not per arm, so
+   * one refused member must not take the arm's working callback member with it.
+   */
+  @Test
+  fun `a nullable lambda payload is a named skip on a sealed arm too`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.nullablearmlambda
+
+      sealed class Job {
+        data class Running(val progress: Int) : Job() {
+          fun eachCount(cb: (Int?) -> Unit) = cb(null)
+
+          fun eachPlainCount(cb: (Int) -> Unit) = cb(progress)
+        }
+
+        data class Done(val code: Int) : Job()
+      }
+
+      class JobFactory {
+        fun running(progress: Int): Job.Running = Job.Running(progress)
+      }
+      """.trimIndent(),
+      fileName = "ArmJobSample.kt",
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected the arm refusal to leave compilable Kotlin; got: ${result.compileErrors}",
+    )
+
+    val cs: String = result.generatedCSharp
+    assertFalse("EachCount(" in cs, "a nullable payload must not bind on an arm either")
+    assertTrue("EachPlainCount(" in cs, "the arm's non-null sibling must keep binding")
+    assertFalse(
+      "export_job_running_eachCount" in result.generated,
+      "expected the arm's Kotlin half gone too, so the two halves agree",
+    )
+    assertTrue(
+      result.kspWarnings.any { warning ->
+        "eachCount" in warning && "a callback parameter can carry" in warning
+      },
+      "expected the arm's member named by the sealed walk; got: ${result.kspWarnings}",
+    )
+  }
+
   @Test
   fun `a nullable lambda TYPE keeps binding, silently, and rejects a null delegate`() {
     val result = Tier1Harness.run(
