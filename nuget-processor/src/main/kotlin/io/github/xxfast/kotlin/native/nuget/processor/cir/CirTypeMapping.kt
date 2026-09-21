@@ -448,15 +448,25 @@ internal fun csTypeArgument(
   val simpleName: String = declaration.simpleName.asString()
   val qualifiedName: String = declaration.qualifiedName?.asString() ?: simpleName
 
-  KOTLIN_TO_CSHARP_PARAM[simpleName]?.let { return CsTypeArgument.Named(it) }
+  // Boundary nullability part A1: the type argument's own nullability, read the two-sided way
+  // `ForwardBridgeTypeClassifier.classify` reads it (`expandAliases()` drops use-site nullability,
+  // so a `typealias Name = String` argument spelled `Name?` would otherwise read as non-null).
+  // Without this, `(String?) -> Unit` and `(String) -> Unit` were spelled identically as
+  // `KotlinAction<string>` with no diagnostic in between, and `(Int?) -> Unit` came out
+  // `KotlinAction<int>`, where null is not expressible at all: a consumer could not write the call.
+  // `void` is excluded because `void?` is not a C# type (a Unit-returning lambda drops the argument
+  // entirely, issue #114).
+  val suffix: String = if (type.isMarkedNullable || resolved.isMarkedNullable) "?" else ""
+
+  KOTLIN_TO_CSHARP_PARAM[simpleName]?.let { return CsTypeArgument.Named("$it$suffix") }
   if (qualifiedName == "kotlin.Unit") return CsTypeArgument.Named("void")
-  if (declaration is KSTypeParameter) return CsTypeArgument.Named(simpleName)
+  if (declaration is KSTypeParameter) return CsTypeArgument.Named("$simpleName$suffix")
 
   if (declaration !is KSClassDeclaration) return CsTypeArgument.Unnameable(qualifiedName)
   if (resolved.arguments.isNotEmpty()) return CsTypeArgument.Unnameable(qualifiedName)
   if (qualifiedName !in exportedTypes) return CsTypeArgument.Unnameable(qualifiedName)
 
-  return CsTypeArgument.Named(qualifiedElementCsType(resolved, context))
+  return CsTypeArgument.Named("${qualifiedElementCsType(resolved, context)}$suffix")
 }
 
 /**

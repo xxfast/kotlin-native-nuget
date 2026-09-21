@@ -308,45 +308,56 @@ public fun export_nuget_wrap_char(`value`: Char): COpaquePointer = NugetHandles.
 
 @NugetRuntimeApi
 @CName("nuget_func0_invoke")
-public fun export_nuget_func0_invoke(handle: COpaquePointer): COpaquePointer {
+public fun export_nuget_func0_invoke(handle: COpaquePointer): COpaquePointer? {
   val fn = handle.asStableRef<Function0<*>>().get()
-  return NugetHandles.retain(fn.invoke() as Any)
+  // Boundary nullability part A1: a lambda that legitimately returns null ships the null pointer,
+  // the ADR-083 in-band null every other pointer-shaped wire already uses. The shipped
+  // `retain(result as Any)` threw an uncaught `NullPointerException` inside an export with no error
+  // slot, which terminates the host process (exit code 3, measured at a scratch mirror). The C
+  // signature is unchanged: Kotlin/Native emits `void*` for both spellings.
+  return fn.invoke()?.let(NugetHandles::retain)
 }
 
 @NugetRuntimeApi
 @CName("nuget_func1_invoke")
-public fun export_nuget_func1_invoke(handle: COpaquePointer, arg0: COpaquePointer): COpaquePointer {
+public fun export_nuget_func1_invoke(
+  handle: COpaquePointer,
+  // Boundary nullability part A1: `IntPtr.Zero` IS the argument's null, so the slot is nullable and
+  // the deref is safe-called. The shipped non-null spelling did `arg0.asStableRef<Any>().get()` on a
+  // zero pointer, an uncaught NPE that killed the host process.
+  arg0: COpaquePointer?,
+): COpaquePointer? {
   val fn = handle.asStableRef<Function1<Any?, Any?>>().get()
-  val param0 = arg0.asStableRef<Any>().get()
-  return NugetHandles.retain(fn.invoke(param0) as Any)
+  val param0 = arg0?.asStableRef<Any>()?.get()
+  return fn.invoke(param0)?.let(NugetHandles::retain)
 }
 
 @NugetRuntimeApi
 @CName("nuget_func2_invoke")
 public fun export_nuget_func2_invoke(
   handle: COpaquePointer,
-  arg0: COpaquePointer,
-  arg1: COpaquePointer,
-): COpaquePointer {
+  arg0: COpaquePointer?,
+  arg1: COpaquePointer?,
+): COpaquePointer? {
   val fn = handle.asStableRef<Function2<Any?, Any?, Any?>>().get()
-  val param0 = arg0.asStableRef<Any>().get()
-  val param1 = arg1.asStableRef<Any>().get()
-  return NugetHandles.retain(fn.invoke(param0, param1) as Any)
+  val param0 = arg0?.asStableRef<Any>()?.get()
+  val param1 = arg1?.asStableRef<Any>()?.get()
+  return fn.invoke(param0, param1)?.let(NugetHandles::retain)
 }
 
 @NugetRuntimeApi
 @CName("nuget_func3_invoke")
 public fun export_nuget_func3_invoke(
   handle: COpaquePointer,
-  arg0: COpaquePointer,
-  arg1: COpaquePointer,
-  arg2: COpaquePointer,
-): COpaquePointer {
+  arg0: COpaquePointer?,
+  arg1: COpaquePointer?,
+  arg2: COpaquePointer?,
+): COpaquePointer? {
   val fn = handle.asStableRef<Function3<Any?, Any?, Any?, Any?>>().get()
-  val param0 = arg0.asStableRef<Any>().get()
-  val param1 = arg1.asStableRef<Any>().get()
-  val param2 = arg2.asStableRef<Any>().get()
-  return NugetHandles.retain(fn.invoke(param0, param1, param2) as Any)
+  val param0 = arg0?.asStableRef<Any>()?.get()
+  val param1 = arg1?.asStableRef<Any>()?.get()
+  val param2 = arg2?.asStableRef<Any>()?.get()
+  return fn.invoke(param0, param1, param2)?.let(NugetHandles::retain)
 }
 
 @NugetRuntimeApi
@@ -361,7 +372,9 @@ public fun export_nuget_suspend_func0_invoke(
   // how its value becomes a handle. The `== Unit` test and the mint order are unchanged.
   return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData) {
     val result = fn.invoke()
-    if (result == Unit) null else NugetHandles.retain(result as Any)
+    // Boundary nullability part A1: a null result rides the same null pointer `Unit` already does,
+    // instead of `retain(null as Any)`, which was an uncaught NPE that killed the host.
+    if (result == Unit) null else result?.let(NugetHandles::retain)
   }
 }
 
@@ -369,17 +382,22 @@ public fun export_nuget_suspend_func0_invoke(
 @CName("nuget_suspend_func1_invoke")
 public fun export_nuget_suspend_func1_invoke(
   handle: COpaquePointer,
-  arg0: COpaquePointer,
+  arg0: COpaquePointer?,
   callbackPtr: COpaquePointer,
   userData: COpaquePointer,
 ): COpaquePointer {
   val fn = handle.asStableRef<SuspendFunction1<Any?, Any?>>().get()
-  val param0 = arg0.asStableRef<Any>().get()
+  // LOAD-BEARING: this `get()` runs SYNCHRONOUSLY, before `launchForCSharp` below, and that is the
+  // only reason the C# caller may dispose the argument box as soon as the native call returns.
+  // Moving it inside the launch block is a use-after-free.
+  val param0 = arg0?.asStableRef<Any>()?.get()
   // ADR-128: the launch shape lives in `launchForCSharp`; this site owns only the call and
   // how its value becomes a handle. The `== Unit` test and the mint order are unchanged.
   return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData) {
     val result = fn.invoke(param0)
-    if (result == Unit) null else NugetHandles.retain(result as Any)
+    // Boundary nullability part A1: a null result rides the same null pointer `Unit` already does,
+    // instead of `retain(null as Any)`, which was an uncaught NPE that killed the host.
+    if (result == Unit) null else result?.let(NugetHandles::retain)
   }
 }
 
@@ -387,19 +405,22 @@ public fun export_nuget_suspend_func1_invoke(
 @CName("nuget_suspend_func2_invoke")
 public fun export_nuget_suspend_func2_invoke(
   handle: COpaquePointer,
-  arg0: COpaquePointer,
-  arg1: COpaquePointer,
+  arg0: COpaquePointer?,
+  arg1: COpaquePointer?,
   callbackPtr: COpaquePointer,
   userData: COpaquePointer,
 ): COpaquePointer {
   val fn = handle.asStableRef<SuspendFunction2<Any?, Any?, Any?>>().get()
-  val param0 = arg0.asStableRef<Any>().get()
-  val param1 = arg1.asStableRef<Any>().get()
+  // LOAD-BEARING, see `nuget_suspend_func1_invoke`: read synchronously, before the launch.
+  val param0 = arg0?.asStableRef<Any>()?.get()
+  val param1 = arg1?.asStableRef<Any>()?.get()
   // ADR-128: the launch shape lives in `launchForCSharp`; this site owns only the call and
   // how its value becomes a handle. The `== Unit` test and the mint order are unchanged.
   return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData) {
     val result = fn.invoke(param0, param1)
-    if (result == Unit) null else NugetHandles.retain(result as Any)
+    // Boundary nullability part A1: a null result rides the same null pointer `Unit` already does,
+    // instead of `retain(null as Any)`, which was an uncaught NPE that killed the host.
+    if (result == Unit) null else result?.let(NugetHandles::retain)
   }
 }
 
@@ -407,21 +428,24 @@ public fun export_nuget_suspend_func2_invoke(
 @CName("nuget_suspend_func3_invoke")
 public fun export_nuget_suspend_func3_invoke(
   handle: COpaquePointer,
-  arg0: COpaquePointer,
-  arg1: COpaquePointer,
-  arg2: COpaquePointer,
+  arg0: COpaquePointer?,
+  arg1: COpaquePointer?,
+  arg2: COpaquePointer?,
   callbackPtr: COpaquePointer,
   userData: COpaquePointer,
 ): COpaquePointer {
   val fn = handle.asStableRef<SuspendFunction3<Any?, Any?, Any?, Any?>>().get()
-  val param0 = arg0.asStableRef<Any>().get()
-  val param1 = arg1.asStableRef<Any>().get()
-  val param2 = arg2.asStableRef<Any>().get()
+  // LOAD-BEARING, see `nuget_suspend_func1_invoke`: read synchronously, before the launch.
+  val param0 = arg0?.asStableRef<Any>()?.get()
+  val param1 = arg1?.asStableRef<Any>()?.get()
+  val param2 = arg2?.asStableRef<Any>()?.get()
   // ADR-128: the launch shape lives in `launchForCSharp`; this site owns only the call and
   // how its value becomes a handle. The `== Unit` test and the mint order are unchanged.
   return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData) {
     val result = fn.invoke(param0, param1, param2)
-    if (result == Unit) null else NugetHandles.retain(result as Any)
+    // Boundary nullability part A1: a null result rides the same null pointer `Unit` already does,
+    // instead of `retain(null as Any)`, which was an uncaught NPE that killed the host.
+    if (result == Unit) null else result?.let(NugetHandles::retain)
   }
 }
 

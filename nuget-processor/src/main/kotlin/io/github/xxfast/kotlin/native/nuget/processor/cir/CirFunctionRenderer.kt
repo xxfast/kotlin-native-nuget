@@ -1,8 +1,10 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+// Boundary nullability part A1 deleted this helper's private `WrapArg<T>` and its six `nuget_wrap_*`
+// imports. They were a strictly worse copy of `NugetMarshal.Wrap<T>` -- no null guard, no
+// `Nullable<T>` normalisation, no narrow kinds, no `char`, and no ownership report, so nobody could
+// dispose what it minted -- and every call site already had `NugetMarshal` in scope.
 internal fun StringBuilder.renderFuncNativeHelper(helper: CirFuncNativeHelper) {
-  val hasArgs: Boolean = helper.arities.any { it > 0 }
-
   appendLine("    internal static class NugetFuncNative")
   appendLine("    {")
 
@@ -17,40 +19,6 @@ internal fun StringBuilder.renderFuncNativeHelper(helper: CirFuncNativeHelper) {
 
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_dispose\")]")
   appendLine("        internal static extern void Dispose(IntPtr handle);")
-
-  if (hasArgs) {
-    appendLine()
-    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_string\")]")
-    appendLine("        private static extern IntPtr wrap_string(string value);")
-    appendLine()
-    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_int\")]")
-    appendLine("        private static extern IntPtr wrap_int(int value);")
-    appendLine()
-    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_long\")]")
-    appendLine("        private static extern IntPtr wrap_long(long value);")
-    appendLine()
-    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_float\")]")
-    appendLine("        private static extern IntPtr wrap_float(float value);")
-    appendLine()
-    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_double\")]")
-    appendLine("        private static extern IntPtr wrap_double(double value);")
-    appendLine()
-    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_bool\")]")
-    appendLine("        private static extern IntPtr wrap_bool(bool value);")
-    appendLine()
-    appendLine("        internal static IntPtr WrapArg<T>(T value)")
-    appendLine("        {")
-    appendLine("            if (typeof(T) == typeof(string)) return wrap_string((string)(object)value!);")
-    appendLine("            if (typeof(T) == typeof(int)) return wrap_int((int)(object)value!);")
-    appendLine("            if (typeof(T) == typeof(long)) return wrap_long((long)(object)value!);")
-    appendLine("            if (typeof(T) == typeof(float)) return wrap_float((float)(object)value!);")
-    appendLine("            if (typeof(T) == typeof(double)) return wrap_double((double)(object)value!);")
-    appendLine("            if (typeof(T) == typeof(bool)) return wrap_bool((bool)(object)value!);")
-    // ADR-094: a wrapper argument answers INugetHandle instead of exposing `_handle` reflectively.
-    appendLine("            if (value is INugetHandle wrapper) return wrapper.Handle;")
-    appendLine("            throw new NotSupportedException($\"Cannot wrap {typeof(T).Name} as lambda argument\");")
-    appendLine("        }")
-  }
 
   appendLine("    }")
   appendLine()
@@ -103,10 +71,24 @@ internal fun StringBuilder.renderFuncHelper(helper: CirFuncHelper) {
       appendLine()
       appendLine("        public TResult Invoke($methodParams)")
       appendLine("        {")
+      // Boundary nullability part A1: `NugetMarshal.Wrap<T>` in place of the private `WrapArg<T>`
+      // copy. Three defects in one substitution: `Wrap<T>` returns `IntPtr.Zero` for a null (the
+      // copy passed a null string straight into `export_nuget_wrap_string(value: String)`, an
+      // uncaught NPE that killed the host), it normalises `Nullable<T>` to its underlying (the copy
+      // matched no branch for `int?` and threw `NotSupportedException`), and it covers the six
+      // narrow kinds plus `char`, which the copy never learned. `owned` then closes the leak: the
+      // copy's boxes were never disposed by anyone, one leaked StableRef per argument per call.
       for (i in 0 until arity) {
-        appendLine("            IntPtr boxedArg$i = $funcNativeRef.WrapArg<T${i + 1}>(arg$i);")
+        appendLine(
+          "            IntPtr boxedArg$i = $marshalRef.Wrap<T${i + 1}>(arg$i, out bool owned$i);",
+        )
       }
       appendLine("            IntPtr result = $funcNativeRef.Invoke$arity($invokeArgs);")
+      // Disposed after the native call, never before: the export dereferences each box
+      // synchronously inside `Invoke`, so this is the first safe point.
+      for (i in 0 until arity) {
+        appendLine("            if (owned$i) $funcNativeRef.Dispose(boxedArg$i);")
+      }
       appendLine("            return $marshalRef.FromHandle<TResult>(result);")
       appendLine("        }")
       appendLine()
@@ -168,10 +150,16 @@ internal fun StringBuilder.renderFuncHelper(helper: CirFuncHelper) {
       appendLine()
       appendLine("        public void Invoke($actionMethodParams)")
       appendLine("        {")
+      // Boundary nullability part A1, the Unit-returning twin; see `KotlinFunc.Invoke` above.
       for (i in 0 until arity) {
-        appendLine("            IntPtr boxedArg$i = $funcNativeRef.WrapArg<T${i + 1}>(arg$i);")
+        appendLine(
+          "            IntPtr boxedArg$i = $marshalRef.Wrap<T${i + 1}>(arg$i, out bool owned$i);",
+        )
       }
       appendLine("            IntPtr result = $funcNativeRef.Invoke$arity($actionInvokeArgs);")
+      for (i in 0 until arity) {
+        appendLine("            if (owned$i) $funcNativeRef.Dispose(boxedArg$i);")
+      }
       appendLine("            if (result != IntPtr.Zero) $funcNativeRef.Dispose(result);")
       appendLine("        }")
       appendLine()
@@ -189,9 +177,9 @@ internal fun StringBuilder.renderFuncHelper(helper: CirFuncHelper) {
   }
 }
 
+// Boundary nullability part A1 deleted the suspend twin of the private `WrapArg<T>` copy too, for
+// the same reasons; see [renderFuncNativeHelper].
 internal fun StringBuilder.renderSuspendFuncNativeHelper(helper: CirSuspendFuncNativeHelper) {
-  val hasArgs: Boolean = helper.arities.any { it > 0 }
-
   appendLine("    internal static class NugetSuspendFuncNative")
   appendLine("    {")
 
@@ -207,40 +195,6 @@ internal fun StringBuilder.renderSuspendFuncNativeHelper(helper: CirSuspendFuncN
 
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_dispose\")]")
   appendLine("        internal static extern void Dispose(IntPtr handle);")
-
-  if (hasArgs) {
-    appendLine()
-    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_string\")]")
-    appendLine("        private static extern IntPtr wrap_string(string value);")
-    appendLine()
-    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_int\")]")
-    appendLine("        private static extern IntPtr wrap_int(int value);")
-    appendLine()
-    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_long\")]")
-    appendLine("        private static extern IntPtr wrap_long(long value);")
-    appendLine()
-    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_float\")]")
-    appendLine("        private static extern IntPtr wrap_float(float value);")
-    appendLine()
-    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_double\")]")
-    appendLine("        private static extern IntPtr wrap_double(double value);")
-    appendLine()
-    appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_bool\")]")
-    appendLine("        private static extern IntPtr wrap_bool(bool value);")
-    appendLine()
-    appendLine("        internal static IntPtr WrapArg<T>(T value)")
-    appendLine("        {")
-    appendLine("            if (typeof(T) == typeof(string)) return wrap_string((string)(object)value!);")
-    appendLine("            if (typeof(T) == typeof(int)) return wrap_int((int)(object)value!);")
-    appendLine("            if (typeof(T) == typeof(long)) return wrap_long((long)(object)value!);")
-    appendLine("            if (typeof(T) == typeof(float)) return wrap_float((float)(object)value!);")
-    appendLine("            if (typeof(T) == typeof(double)) return wrap_double((double)(object)value!);")
-    appendLine("            if (typeof(T) == typeof(bool)) return wrap_bool((bool)(object)value!);")
-    // ADR-094: a wrapper argument answers INugetHandle instead of exposing `_handle` reflectively.
-    appendLine("            if (value is INugetHandle wrapper) return wrapper.Handle;")
-    appendLine("            throw new NotSupportedException(\$\"Cannot wrap {typeof(T).Name} as lambda argument\");")
-    appendLine("        }")
-  }
 
   appendLine("    }")
   appendLine()
@@ -327,10 +281,20 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
         "t.SetResult($marshalRef.FromHandle<TResult>(resultPtr));",
       )
       appendLine("            callbackHandle = GCHandle.Alloc(callback);")
+      // Boundary nullability part A1: `NugetMarshal.Wrap<T>` in place of the private `WrapArg<T>`
+      // copy, so a null argument is `IntPtr.Zero` rather than an uncaught NPE inside the export, and
+      // `owned` closes the per-call StableRef leak. LOAD-BEARING ordering: the suspend export reads
+      // every box SYNCHRONOUSLY, before `launchForCSharp`, which is the only reason disposing them
+      // the moment `Invoke` returns is safe rather than a use-after-free.
       for (i in 0 until arity) {
-        appendLine("            IntPtr boxedArg$i = $funcNativeRef.WrapArg<T${i + 1}>(arg$i);")
+        appendLine(
+          "            IntPtr boxedArg$i = $marshalRef.Wrap<T${i + 1}>(arg$i, out bool owned$i);",
+        )
       }
       appendLine("            IntPtr jobHandle = $funcNativeRef.Invoke$arity($invokeArgs);")
+      for (i in 0 until arity) {
+        appendLine("            if (owned$i) $funcNativeRef.Dispose(boxedArg$i);")
+      }
       appendLine("            CancellationTokenRegistration reg = cancellationToken.CanBeCanceled")
       appendLine(
         "                ? cancellationToken.Register(() => " +
@@ -422,10 +386,17 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       // ADR-161: one shared, materialisation-fault-containing closure body.
       appendAsyncCompletionClosure("TaskCompletionSource<bool>", "t.SetResult(true);")
       appendLine("            callbackHandle = GCHandle.Alloc(callback);")
+      // Boundary nullability part A1, the Unit-returning suspend twin; the same synchronous-read
+      // ordering constraint applies, see `KotlinSuspendFunc.InvokeAsync` above.
       for (i in 0 until arity) {
-        appendLine("            IntPtr boxedArg$i = $funcNativeRef.WrapArg<T${i + 1}>(arg$i);")
+        appendLine(
+          "            IntPtr boxedArg$i = $marshalRef.Wrap<T${i + 1}>(arg$i, out bool owned$i);",
+        )
       }
       appendLine("            IntPtr jobHandle = $funcNativeRef.Invoke$arity($invokeArgs);")
+      for (i in 0 until arity) {
+        appendLine("            if (owned$i) $funcNativeRef.Dispose(boxedArg$i);")
+      }
       appendLine("            CancellationTokenRegistration reg = cancellationToken.CanBeCanceled")
       appendLine(
         "                ? cancellationToken.Register(() => " +
