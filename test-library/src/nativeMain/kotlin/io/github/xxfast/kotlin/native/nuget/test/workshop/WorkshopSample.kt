@@ -13,13 +13,8 @@ import test.workshop.Workshop
 //         -> (reverse bridge, this feature)  test.workshop.{Workshop, Transform}
 //           -> real C# TestDependency        Test.Workshop.{Workshop, Transform}
 //
-// EXPECTED NOT TO COMPILE TODAY. Verified against the shipped reader on 2026-09-22: every
-// delegate-taking member of `Test.Workshop.Workshop` is dropped with
-// `skipped_unbound_generic_instantiation` (or `skipped_unbound_type_reference` for the
-// non-generic `System.Action`), and `Transform` is extracted as an ordinary CLASS with an
-// `Invoke` method and no constructor, so `applyNamed` today wants a handle no Kotlin code can
-// build. The only members the generator emits are `applyNamed`, `runKept`, `runKeptOnPool` and
-// `forget`. So this file is the failing half of the feature, by design.
+// Every function here is forward-exported so xunit can drive it: the C# test project is the only
+// thing that can observe a Kotlin lambda arriving back in C# as a real delegate.
 //
 // Organised by the SEAM each function crosses, because the crossing is a one-slot Kotlin bridge
 // and a driver built only from `{ it * 2 }` over `Func<int,int>` would go green while the string
@@ -63,20 +58,10 @@ fun workshopNames(): String = Workshop().use { workshop ->
  * carrying the C# name. The typealias is spelled out here on purpose: it is the surface promise,
  * and a lambda literal alone would not notice if it were missing.
  */
-// DISABLED 2026-09-22 (ADR-158, custom delegates are step 4 of the item and did not land in this
-// pass): a package-declared `delegate` is still a named reader skip, so `applyNamed` is not
-// generated and no `typealias Transform` exists. The xunit row that drives this is skipped with the
-// same reason. Kept verbatim, commented, so re-enabling it is one uncomment plus removing the Skip.
-// fun workshopApplyNamed(seed: Int): Int {
-//   val triple: test.workshop.Transform = { it * 3 }
-//   return Workshop().use { it.applyNamed(seed, triple) }
-// }
-// The forward export has to keep EXISTING (the skipped xunit row still references it and the
-// IntegrationTests assembly must compile), so it throws rather than returning a plausible number:
-// a stub that answered 63 would make the row pass the day someone deletes the Skip, with no
-// delegate crossing anywhere in it.
-fun workshopApplyNamed(seed: Int): Int =
-  error("ADR-158 step 4: a package-declared C# delegate does not bind yet (seed=$seed)")
+fun workshopApplyNamed(seed: Int): Int {
+  val triple: test.workshop.Transform = { it * 3 }
+  return Workshop().use { it.applyNamed(seed, triple) }
+}
 
 /**
  * `Predicate<String>`: a `Boolean` slot return, and short-circuiting on the C# side, so the

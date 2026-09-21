@@ -57,6 +57,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.KotlinDelegatePlan
 import io.github.xxfast.kotlin.native.nuget.rir.delegateContractHash
 import io.github.xxfast.kotlin.native.nuget.rir.delegatePlans
 import io.github.xxfast.kotlin.native.nuget.rir.delegatePositionDiagnostics
+import io.github.xxfast.kotlin.native.nuget.rir.isPackageDeclared
 import io.github.xxfast.kotlin.native.nuget.rir.shapeKey
 import io.github.xxfast.kotlin.native.nuget.rir.identity
 import io.github.xxfast.kotlin.native.nuget.rir.contractHash
@@ -427,6 +428,12 @@ fun generateKotlinStubs(
   val qualifiedTypeNames: Map<RirTypeKey, String> = qualifiedTypeNames(
     file, packageNameOverrides, namespaceAliases,
   )
+  // ADR-158 step 4: the package-declared delegates whose C# name has to survive as a Kotlin
+  // `typealias`, keyed by the Kotlin package the delegate's OWN C# namespace maps to and then by
+  // the alias name. Collected from the ADMITTED shapes (the same plans both generators mint a
+  // holder for), never from a namespace's type list: a delegate TypeDef is no longer extracted as a
+  // type, so a namespace that declares nothing else may not appear in the RIR at all.
+  val delegateAliases: MutableMap<String, MutableMap<String, RirDelegateType>> = mutableMapOf()
 
   file.assemblies.forEach { assembly ->
     assembly.namespaces.forEach { namespace ->
@@ -541,6 +548,32 @@ fun generateKotlinStubs(
             .toSet()
 
           if (registrables.isEmpty()) return@forEach
+
+          // ADR-158 step 4: one `typealias` per package-declared delegate this class admits, in the
+          // Kotlin package its own C# namespace maps to. The parameter itself is spelled as the bare
+          // function type (a lambda is the surface), so the alias is additive: a consumer who wants
+          // the C# name can declare `val t: Transform = { it * 3 }` and pass that.
+          delegatePlans(registrables, cls.name)
+            .map { it.delegate.copy(nullable = false) }
+            .filter { it.isPackageDeclared() }
+            .forEach { delegate ->
+              val delegateNs: String = delegate.definition.substringBeforeLast('.', "")
+              val aliasPkg: String = if (delegateNs.isEmpty()) kotlinPkg else kotlinPackage(
+                assembly.packageId, delegateNs, packageNameOverrides, namespaceAliases,
+              )
+              // A position whose Kotlin name is only spellable with an import (an enum, handle or
+              // interface declared in another package) would make the alias file itself not
+              // compile, which is strictly worse than having no alias: the parameter binds either
+              // way. Skipped rather than half-emitted.
+              val spellable: Boolean = (delegate.parameters + delegate.returnType).all { position ->
+                aliasPositionPackage(position, enumPkgs, handlePkgs, interfacePkgs)
+                  .let { it == null || it == aliasPkg }
+              }
+              if (!spellable) return@forEach
+              delegateAliases.getOrPut(aliasPkg) { mutableMapOf() }[
+                delegate.definition.substringAfterLast('.')
+              ] = delegate
+            }
 
           val allMethods: List<RirMethod> = staticMethods + instanceMethods
           val methodsHaveString: Boolean = allMethods.any { method ->
@@ -698,6 +731,17 @@ fun generateKotlinStubs(
         )
       }
     }
+  }
+
+  // ADR-158 step 4: one file per package rather than one per delegate, and named NugetDelegates.kt
+  // so it can never collide with a bound C# type's own generated file.
+  delegateAliases.forEach { (aliasPkg, aliases) ->
+    result.add(
+      GeneratedFile(
+        relativePath = "nativeMain/${aliasPkg.replace('.', '/')}/NugetDelegates.kt",
+        content = delegateAliasFileContent(aliasPkg, aliases, qualifiedTypeNames),
+      )
+    )
   }
 
   // ADR-104: every reverse call site now goes through nugetCall, whose throw path reads two
@@ -1944,6 +1988,42 @@ private fun String.toEnumScreamingSnake(): String = buildString {
     if (index > 0 && char.isUpperCase()) append('_')
     append(char.uppercaseChar())
   }
+}
+
+// ADR-158 step 4: the Kotlin package a delegate Invoke position's own type is generated into, or
+// null when the position needs no package at all (void, a primitive, a string). Used only to decide
+// whether a `typealias` can be spelled with bare names in the alias file's package.
+private fun aliasPositionPackage(
+  position: RirTypeRef,
+  enumPkgs: Map<RirTypeKey, String>,
+  handlePkgs: Map<RirTypeKey, String>,
+  interfacePkgs: Map<RirTypeKey, String>,
+): String? = when (position) {
+  is RirEnumType -> enumPkgs[RirTypeKey(position.namespace, position.name)]
+  is RirObjectHandleType -> handlePkgs[RirTypeKey(position.namespace, position.name)]
+  is RirInterfaceType -> interfacePkgs[RirTypeKey(position.namespace, position.name)]
+  else -> null
+}
+
+// ADR-158 step 4: the package-declared delegates of one Kotlin package, as typealiases. The RHS is
+// spelled by the SAME declKotlinType a parameter of that delegate type is spelled by, so the alias
+// and the bound parameter can never denote different function types.
+private fun delegateAliasFileContent(
+  kotlinPkg: String,
+  aliases: Map<String, RirDelegateType>,
+  qualifiedTypeNames: Map<RirTypeKey, String>,
+): String {
+  val body: String = aliases.entries.sortedBy { it.key }.joinToString("\n\n") { (name, delegate) ->
+    """
+      |// Generated: C# `${delegate.definition}`
+      |typealias $name = ${declKotlinType(delegate, qualifiedTypeNames)}
+    """.trimMargin()
+  }
+  return """
+    |package $kotlinPkg
+    |
+    |$body
+  """.trimMargin().trim()
 }
 
 private fun enumFileContent(kotlinPkg: String, enum: RirEnum, packageId: String): String {

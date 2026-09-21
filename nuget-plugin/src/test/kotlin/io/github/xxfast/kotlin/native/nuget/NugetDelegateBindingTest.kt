@@ -1,6 +1,8 @@
 package io.github.xxfast.kotlin.native.nuget
 
+import io.github.xxfast.kotlin.native.nuget.rir.RirAssembly
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
+import io.github.xxfast.kotlin.native.nuget.rir.RirNamespace
 import io.github.xxfast.kotlin.native.nuget.rir.RirCollectionKind
 import io.github.xxfast.kotlin.native.nuget.rir.RirCollectionType
 import io.github.xxfast.kotlin.native.nuget.rir.RirDelegateType
@@ -25,6 +27,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.identity
 import io.github.xxfast.kotlin.native.nuget.rir.isNullable
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
@@ -316,5 +319,66 @@ class NugetDelegateBindingTest {
       bridgeableStructConstructors(struct, boundHandleTypes = emptySet()).size == 1,
       "only the delegate-free constructor survives",
     )
+  }
+
+  // ADR-158 step 4: a PACKAGE-DECLARED delegate. The wire, the slot and the lifetime are the BCL
+  // case's, so what is pinned here is the only thing that differs: the Kotlin parameter is a bare
+  // function type with a `typealias` beside it carrying the C# name, and the C# factory constructs
+  // the DECLARED delegate type. A factory that built a `Func<int,int>` instead would still compile
+  // and still invoke, and `Workshop.ApplyNamed(int, Transform)` would then fail to bind to it: the
+  // defect is a C# overload-resolution error at shim-compile time, not a marshalling one.
+  @Test
+  fun `a package-declared delegate binds as a function type behind a typealias`() {
+    val transform = RirDelegateType(
+      definition = "Test.Workshop.Transform",
+      typeArguments = emptyList(),
+      parameters = listOf(int),
+      returnType = int,
+    )
+    val workshop = RirClass(
+      name = "Workshop",
+      methods = listOf(
+        RirMethod(
+          name = "ApplyNamed",
+          returnType = int,
+          parameters = listOf(RirParameter("seed", int), RirParameter("step", transform)),
+          isStatic = true,
+          managedSignature =
+            "method|static|Test.Workshop.Workshop|ApplyNamed|(System.Int32,Test.Workshop.Transform)|System.Int32",
+        ),
+      ),
+    )
+    val rir = RirFile(
+      assemblies = listOf(
+        RirAssembly(
+          packageId = "TestDependency",
+          assemblyName = "TestDependency",
+          namespaces = listOf(RirNamespace(name = "Test.Workshop", types = listOf(workshop))),
+        ),
+      ),
+    )
+
+    val files: List<GeneratedFile> = generateKotlinStubs(rir)
+    val stub: String = files.single { it.relativePath.endsWith("/Workshop.kt") }.content
+    assertContains(stub, "fun applyNamed(seed: Int, step: (Int) -> Int): Int")
+
+    // The alias lives in the delegate's OWN package, in a file named so it can never collide with a
+    // bound C# type's generated file, and is emitted even though no RIR type declares the delegate
+    // (a delegate TypeDef is not extracted as a type at all).
+    val aliases: GeneratedFile =
+      files.single { it.relativePath.endsWith("NugetDelegates.kt") }
+    assertEquals("nativeMain/testdependency/NugetDelegates.kt", aliases.relativePath)
+    assertContains(aliases.content, "package testdependency")
+    assertContains(aliases.content, "typealias Transform = (Int) -> Int")
+
+    val shim: String = generateCSharpShims(rir, "sample")
+      .single { it.relativePath.endsWith("WorkshopRegistration.cs") }.content
+    assertContains(
+      shim,
+      "new global::Test.Workshop.Transform(",
+      message = "the factory must construct the DECLARED delegate type: a Func<int,int> would not bind to " +
+          "`ApplyNamed(int, Transform)`",
+    )
+    assertContains(shim, "CreateTransformInt32Int32Delegate")
   }
 }

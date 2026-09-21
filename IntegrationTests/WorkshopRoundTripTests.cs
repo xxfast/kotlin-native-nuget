@@ -62,11 +62,7 @@ public class WorkshopRoundTripTests
     // one today, verified against the shipped reader on 2026-09-22) and become `(Int) -> Int` plus
     // a `typealias Transform`. The Kotlin driver declares the value AT the typealias, so the row
     // fails if the alias is missing even though a bare lambda would have compiled.
-    // DISABLED 2026-09-22 (ADR-158, custom delegates are step 4 of the item and did not land in this
-    // pass): a package-declared `delegate` is still a named reader skip (skipped_delegate_signature),
-    // so `Workshop.ApplyNamed` does not bind and neither the typealias nor the Kotlin driver exists.
-    // Re-enable together with the reader half that decodes a custom delegate`s own Invoke MethodDef.
-    [Fact(Skip = "ADR-158 step 4: custom (package-declared) delegates are not bound yet")]
+    [Fact]
     public void CustomDelegate_BindsAsAFunctionTypeBehindItsTypealias() =>
         Assert.Equal(63, WorkshopSample.WorkshopApplyNamed(21));
 

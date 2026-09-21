@@ -969,6 +969,14 @@ fun collectionPositionDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic
     }
   }
 
+// ADR-158 step 4: is this a PACKAGE-DECLARED delegate (`Test.Workshop.Transform`) rather than one of
+// the BCL shapes the reader derives positionally from a name table (`System.Func`2`)? The RIR carries
+// no flag for it on purpose: the distinction is a naming one and only two things care, both
+// cosmetic. A package-declared delegate gets a Kotlin `typealias` carrying its C# name, and the C#
+// holder factory constructs that declared type rather than a `Func`. Everything about the wire,
+// the slot and the lifetime is identical, which is why this is a predicate and not a variant.
+fun RirDelegateType.isPackageDeclared(): Boolean = !definition.startsWith("System.")
+
 // ADR-158: the generated-name key for one delegate SHAPE, a sanitized CLR name plus the wire
 // spelling of every Invoke position, so two shapes can never share a holder class, a factory or a
 // reuse table. `Func<int,int>` is `FuncInt32Int32`; `Action<string?>` is `ActionStringN`; the

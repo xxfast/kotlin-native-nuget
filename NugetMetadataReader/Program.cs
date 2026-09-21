@@ -3491,9 +3491,10 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         // ADR-158: a package-declared delegate is not a bound handle type (it is excluded from the
         // collector), so without this branch a member taking one would be reported as
         // `skipped_unbound_type_reference` telling the user to bind a namespace that is already
-        // bound. Named instead, with the delegate-specific hint.
+        // bound. Its shape comes from its own `Invoke` MethodDef rather than from type arguments,
+        // and a shape this reader declines keeps the named delegate skip.
         if (MetadataHelpers.IsDelegate(mr, typeDef))
-            return new TypeRefOrDiag(null, DelegatePending(fullName), fullName);
+            return CustomDelegateType(mr, handle, typeDef, fullName);
 
         if (_enumTypes.TryGetValue(fullName, out var enumType))
         {
@@ -3781,6 +3782,150 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
 
         return new TypeRefOrDiag(
             new RirDelegateType(definition, args, parameters, returnType), null, definition);
+    }
+
+    /// <summary>
+    /// ADR-158: guards the recursion in <see cref="CustomDelegateType"/>. A package-declared
+    /// delegate whose own <c>Invoke</c> mentions a delegate (`delegate int Rec(Rec r)`, or merely
+    /// `delegate void Outer(Transform t)`) would otherwise re-enter this decoder for a delegate
+    /// TypeDef while the outer decode is still in flight, and a self-referential one would not
+    /// terminate at all. A nested delegate is out of v1 scope anyway (a slot cannot mint a bridge
+    /// from inside a bridge), so re-entry takes the named skip immediately.
+    /// </summary>
+    private bool _decodingDelegateInvoke;
+
+    /// <summary>
+    /// ADR-158: the delegate type ref for a PACKAGE-DECLARED delegate, decoded from its own
+    /// <c>Invoke</c> MethodDef rather than from type arguments (it has none: `delegate int
+    /// Transform(int value)` is not generic). Everything this reader declines keeps the named
+    /// delegate skip with a reason that says which rule refused it, because the alternative is a
+    /// member vanishing from the bound surface with nothing said.
+    ///
+    /// Nullability is resolved per Invoke position through the ADR-053 chain with the Invoke
+    /// MethodDef as the method tier and the delegate TypeDef as the type tier, which is where a
+    /// custom delegate's own annotations live (the USING parameter's bytes annotate the delegate
+    /// REFERENCE, one node, and are applied later by the ADR-072 pre-order walk). Omitting this
+    /// would be silent: every `string?` Invoke parameter would bind non-null.
+    /// </summary>
+    private TypeRefOrDiag CustomDelegateType(
+        MetadataReader mr, TypeDefinitionHandle handle, TypeDefinition typeDef, string fullName)
+    {
+        TypeRefOrDiag Skip(string reason) =>
+            new(null,
+                new PendingDiagnostic(
+                    DelegateSkipKind,
+                    $"delegate `{fullName}` {reason}",
+                    "Expose an equivalent member whose delegate is one of the bound shapes, or a " +
+                        "bound interface whose Kotlin implementation plays the callback's part " +
+                        "(ADR-085)."),
+                fullName);
+
+        if (_decodingDelegateInvoke)
+            return Skip("appears inside another delegate's `Invoke` signature, which is outside v1 " +
+                "scope (a delegate slot cannot itself mint a delegate)");
+
+        if (typeDef.GetGenericParameters().Count > 0)
+            return Skip("is generic, which is outside v1 scope: its Invoke shape would differ per " +
+                "instantiation");
+
+        if (!typeDef.GetDeclaringType().IsNil)
+            return Skip("is a nested type, which is outside v1 scope: it has no namespace of its " +
+                "own to carry the generated Kotlin typealias");
+
+        MethodDefinition? invoke = null;
+        MethodDefinitionHandle invokeHandle = default;
+        foreach (var methodHandle in typeDef.GetMethods())
+        {
+            var method = mr.GetMethodDefinition(methodHandle);
+            if (mr.GetString(method.Name) != "Invoke") continue;
+            invoke = method;
+            invokeHandle = methodHandle;
+            break;
+        }
+
+        if (invoke is null)
+            return Skip("declares no `Invoke` method, so its signature cannot be read");
+
+        MethodSignature<TypeRefOrDiag> signature;
+        _decodingDelegateInvoke = true;
+        try
+        {
+            signature = invoke.Value.DecodeSignature(this, genericContext: null);
+        }
+        finally
+        {
+            _decodingDelegateInvoke = false;
+        }
+
+        if (signature.GenericParameterCount > 0)
+            return Skip("has a generic `Invoke`, which is outside v1 scope");
+
+        if (signature.ParameterTypes.Length > DelegateMaxArity)
+            return Skip($"takes {signature.ParameterTypes.Length} arguments, above the v1 delegate " +
+                $"ceiling of {DelegateMaxArity} (ADR-158 Decision 8)");
+
+        // Parameter rows carry the per-position NullableAttribute; sequence number 0 is the return.
+        // A position with no row at all is normal (the common case for the return), and the method
+        // and type context tiers still apply to it.
+        var rows = new Dictionary<int, ParameterHandle>();
+        foreach (var paramHandle in invoke.Value.GetParameters())
+            rows[mr.GetParameter(paramHandle).SequenceNumber] = paramHandle;
+
+        TypeRefOrDiag? Resolve(TypeRefOrDiag decoded, int sequenceNumber, out RirTypeRef? resolved)
+        {
+            resolved = null;
+            if (decoded.TypeRef is null)
+                return Skip($"has an `Invoke` position of type `{decoded.RawTypeName ?? "?"}`, " +
+                    "outside the v1 delegate vocabulary (a `ref`/`out`/`in` parameter, an array, a " +
+                    "pointer, `object`, a struct, a collection or another delegate)");
+
+            EntityHandle memberHandle = rows.TryGetValue(sequenceNumber, out var row)
+                ? row
+                : default;
+            var resolution = NullabilityHelpers.ResolveTree(
+                mr, decoded.TypeRef, memberHandle, invokeHandle, handle);
+            if (resolution.Type is null)
+                return Skip("has an `Invoke` position whose nullable annotations this reader " +
+                    "refuses to guess at (ADR-072 Decision 7)");
+
+            resolved = resolution.Type;
+            return null;
+        }
+
+        var parameters = new List<RirTypeRef>(signature.ParameterTypes.Length);
+        for (int i = 0; i < signature.ParameterTypes.Length; i++)
+        {
+            var skipped = Resolve(signature.ParameterTypes[i], i + 1, out var resolvedParam);
+            if (skipped is not null) return skipped;
+            if (!IsV1GenericTypeArgument(resolvedParam!))
+                return Skip("has an `Invoke` parameter outside the v1 delegate vocabulary: only a " +
+                    "primitive, string, bound enum, bound class handle or bound interface crosses a " +
+                    "delegate slot");
+
+            parameters.Add(resolvedParam!);
+        }
+
+        RirTypeRef returnType;
+        if (signature.ReturnType.TypeRef is RirVoidType)
+        {
+            returnType = RirVoidType.Instance;
+        }
+        else
+        {
+            var skipped = Resolve(signature.ReturnType, 0, out var resolvedReturn);
+            if (skipped is not null) return skipped;
+            if (!IsV1GenericTypeArgument(resolvedReturn!))
+                return Skip("has an `Invoke` return outside the v1 delegate vocabulary: only " +
+                    "`void`, a primitive, string, bound enum, bound class handle or bound interface " +
+                    "crosses a delegate slot");
+
+            returnType = resolvedReturn!;
+        }
+
+        return new TypeRefOrDiag(
+            new RirDelegateType(fullName, Array.Empty<RirTypeRef>(), parameters, returnType),
+            null,
+            fullName);
     }
 
     private static PendingDiagnostic CancellationTokenPending(string reason) =>

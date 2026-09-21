@@ -501,8 +501,11 @@ class NugetExtractApiIntegrationTest {
 
       public delegate TOut Transformer<TIn, TOut>(TIn value);
 
+      public delegate void Sink(string? line);
+
       public sealed class Workbench
       {
+          public void Pour(Sink sink) { sink(null); }
           public int Apply(int seed, Func<int, int> step) => step(seed);
           public void Shout(Action<string?> sink) { sink("Oreo"); }
           public bool AnyLong(Predicate<string> test) => test("Oreo");
@@ -586,16 +589,57 @@ class NugetExtractApiIntegrationTest {
       "`Func<int,int>? step` is a nullable DELEGATE carried by a context attribute",
     )
 
+    // ADR-158 step 4: a PACKAGE-DECLARED delegate, whose shape comes from its own `Invoke`
+    // MethodDef rather than from type arguments (it has none), and whose definition is the CLR full
+    // name the C# holder factory constructs and the Kotlin typealias is named after.
+    assertEquals("delegate", kind(delegateOf("ApplyNamed", parameter = 1)))
+    assertEquals(
+      "Probe.Delegates.Transform",
+      delegateOf("ApplyNamed", 1).getValue("definition").jsonPrimitive.content,
+    )
+    assertEquals(
+      emptyList(),
+      list(delegateOf("ApplyNamed", 1), "typeArguments"),
+      "a non-generic custom delegate has no type arguments at all: the Invoke MethodDef is the " +
+          "only source of its shape",
+    )
+    assertEquals(
+      "int",
+      list(delegateOf("ApplyNamed", 1), "parameters").single().getValue("name").jsonPrimitive.content,
+    )
+    assertEquals(
+      "int",
+      delegateOf("ApplyNamed", 1).getValue("returnType").jsonObject.getValue("name").jsonPrimitive.content,
+    )
+
+    // The custom route's own nullability trap: the USING parameter's NullableAttribute annotates the
+    // delegate REFERENCE (one node), so a `string?` INVOKE parameter can only come from the Invoke
+    // MethodDef's own rows, resolved with the delegate TypeDef as the type tier. Skipping that
+    // resolution is silent: `Sink` would bind as `(String) -> Unit`.
+    assertEquals("delegate", kind(delegateOf("Pour")))
+    assertEquals("void", kind(delegateOf("Pour").getValue("returnType").jsonObject))
+    assertEquals(
+      true,
+      nullable(list(delegateOf("Pour"), "parameters").single()),
+      "`delegate void Sink(string? line)` carries its nullability on its own Invoke parameter row",
+    )
+
     val diagnostics: List<JsonObject> = root.getValue("assemblies").jsonArray.single().jsonObject
       .getValue("diagnostics").jsonArray.map { it.jsonObject }
     fun diagnosedKinds(member: String): List<String> = diagnostics
       .filter { it.getValue("memberName").jsonPrimitive.content == member }
       .map { it.getValue("kind").jsonPrimitive.content }
 
-    // Still named skips, from the reader: a package-declared TypeDef (ApplyNamed, MakeDoubler, and
-    // the closed generic custom delegate, which must not become an ADR-072 generic instance), an
-    // ASYNC delegate, and an arity above the v1 ceiling of 4.
-    listOf("ApplyNamed", "ApplyGeneric", "MakeDoubler", "LaterAsync", "Sum5").forEach { member ->
+    // A delegate RETURN is refused by the PLUGIN's shared filter, not by the reader, exactly as a
+    // BCL delegate return is: the reader's job is to carry the shape, and a position rule that
+    // lived in two places would drift. So `MakeDoubler` reaches the RIR with a delegate return and
+    // carries no reader diagnostic (`delegatePositionDiagnostics` names it later).
+    assertEquals("delegate", kind(method("MakeDoubler").getValue("returnType").jsonObject))
+    assertEquals(emptyList(), diagnosedKinds("MakeDoubler"))
+
+    // Still named skips, from the reader: a GENERIC custom delegate (which must not become an
+    // ADR-072 generic instance), an ASYNC delegate, and an arity above the v1 ceiling of 4.
+    listOf("ApplyGeneric", "LaterAsync", "Sum5").forEach { member ->
       assertEquals(
         listOf("skipped_delegate_signature"),
         diagnosedKinds(member),
