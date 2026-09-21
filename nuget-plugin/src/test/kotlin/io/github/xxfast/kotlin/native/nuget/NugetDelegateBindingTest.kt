@@ -321,6 +321,76 @@ class NugetDelegateBindingTest {
     )
   }
 
+  // ADR-158 Decision 9: the `Task.Run` shape. Both overloads BIND, which is the whole reason the
+  // note exists: the consumer's own `workshop.run { 1 }` is then an `Overload resolution ambiguity`
+  // error in THEIR source, with nothing in the build log to connect it to the binding. Verified by
+  // spike (Kotlin 2.4.10): every bare-lambda form fails, including `{ }`, while a typed function
+  // value and an anonymous function resolve.
+  @Test
+  fun `an overload pair differing only by delegate shape binds with a named note`() {
+    fun run(name: String, delegate: RirDelegateType) = RirMethod(
+      name = "Run",
+      returnType = RirStringType(),
+      parameters = listOf(RirParameter(name, delegate)),
+      isStatic = true,
+      managedSignature = "method|static|Test.Workshop.Workshop|Run|(${delegate.definition})|System.String",
+    )
+
+    val action = RirDelegateType(
+      definition = "System.Action",
+      typeArguments = emptyList(),
+      parameters = emptyList(),
+      returnType = RirVoidType,
+    )
+    val pick = RirDelegateType(
+      definition = "System.Func`1",
+      typeArguments = listOf(int),
+      parameters = emptyList(),
+      returnType = int,
+    )
+    val workshop = RirClass(
+      name = "Workshop",
+      methods = listOf(
+        run("act", action),
+        run("pick", pick),
+        // A sibling pair that differs at a NON-delegate position too: resolvable on that argument,
+        // so it must NOT be named. This is what makes the check per-position.
+        RirMethod(
+          name = "Apply",
+          returnType = int,
+          parameters = listOf(RirParameter("seed", int), RirParameter("step", func(int, returns = int))),
+          isStatic = true,
+          managedSignature = "method|static|Test.Workshop.Workshop|Apply|(System.Int32,System.Func`2)|System.Int32",
+        ),
+        RirMethod(
+          name = "Apply",
+          returnType = int,
+          parameters = listOf(RirParameter("seed", RirStringType()), RirParameter("step", action)),
+          isStatic = true,
+          managedSignature = "method|static|Test.Workshop.Workshop|Apply|(System.String,System.Action)|System.Int32",
+        ),
+      ),
+    )
+
+    val notes: List<String> = delegateOverloadAmbiguityDiagnostics(workshop, emptySet())
+      .map { "${it.kind}|${it.memberName}|${it.reason}|${it.hint}" }
+    assertEquals(1, notes.size, "one note per SET, and only for the delegate-only pair: $notes")
+    val note: String = notes.single()
+    assertContains(note, "INFO_DELEGATE_OVERLOAD_AMBIGUITY")
+    assertContains(note, "Run")
+    assertContains(note, "`Run(() -> Unit)`")
+    assertContains(note, "`Run(() -> Int)`")
+    assertContains(note, "all of them bind")
+    assertContains(note, "run(fun(): Int = 1)")
+
+    // And it is a NOTE, not a skip: both members are in the bound list.
+    assertEquals(
+      4,
+      bridgeableRegistrables(workshop, boundHandleTypes = emptySet()).size,
+      "naming the ambiguity must not drop anything",
+    )
+  }
+
   // ADR-158 step 4: a PACKAGE-DECLARED delegate. The wire, the slot and the lifetime are the BCL
   // case's, so what is pinned here is the only thing that differs: the Kotlin parameter is a bare
   // function type with a `typealias` beside it carrying the C# name, and the C# factory constructs

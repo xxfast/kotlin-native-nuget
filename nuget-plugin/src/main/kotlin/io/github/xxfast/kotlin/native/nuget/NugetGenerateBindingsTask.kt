@@ -7019,9 +7019,77 @@ internal fun allDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> {
   // with no warning at all: the reader's own named skip no longer covers it.
   val fromDelegatePositions: List<Pair<String, RirDiagnostic>> =
     delegatePositionDiagnostics(rir)
+  // ADR-158 Decision 9: the bound overload sets a BARE Kotlin lambda cannot call. Not a skip: every
+  // member binds, which is exactly why it needs saying, since the failure is a compile error in the
+  // CONSUMER's own source with nothing in the build log to explain it.
+  val fromDelegateOverloads: List<Pair<String, RirDiagnostic>> =
+    rir.assemblies.flatMap { assembly ->
+      assembly.namespaces.flatMap { namespace ->
+        namespace.types.filterIsInstance<RirClass>().flatMap { cls ->
+          delegateOverloadAmbiguityDiagnostics(
+            cls, boundTypes, boundInterfaceTypes(rir), genericDefs, structs,
+          ).map { assembly.packageId to it }
+        }
+      }
+    }
   return fromReader + fromCollisions + fromArityLimits + fromAmbiguousGenericConstructors +
       fromDeferredAsync + fromCollapsedOverloads + fromCollectionPositions +
-      fromDelegatePositions
+      fromDelegatePositions + fromDelegateOverloads
+}
+
+// ADR-158 Decision 9: one note per bound overload SET (not per member: the ambiguity is a property
+// of the set, and the note names both members in its reason) whose members differ only by delegate
+// shape. Computed over the registrables that SURVIVED the shared filter and the ADR-057 collapse, so
+// it can never name a member that does not bind: if one of the pair were dropped, the survivor is
+// callable with a bare lambda and there is nothing to warn about.
+//
+// The workarounds are quoted verbatim because both were verified to resolve by spike (Kotlin
+// 2.4.10) while every bare-lambda form failed, including `{ }`.
+internal fun delegateOverloadAmbiguityDiagnostics(
+  cls: RirClass,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+  boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
+  structs: Map<RirTypeKey, RirStruct> = emptyMap(),
+): List<RirDiagnostic> {
+  val bound: List<RirMethod> = bridgeableRegistrables(
+    cls, boundHandleTypes, structs, boundInterfaceTypes, boundGenericClassDefinitions,
+  ).filterIsInstance<RirRegistrable.Method>().map { it.method }
+
+  return bound
+    .groupBy { Triple(it.name.toMethodCamelCase(), it.isStatic, it.parameters.size) }
+    .values
+    .filter { set -> set.size > 1 && differsOnlyByDelegateShape(set) }
+    .map { set ->
+      val signatures: String = set.joinToString(", ") { method ->
+        "`${method.name}(${method.parameters.joinToString(", ") { declKotlinType(it.type) }})`"
+      }
+      RirDiagnostic(
+        kind = RirDiagnosticKind.INFO_DELEGATE_OVERLOAD_AMBIGUITY,
+        typeName = cls.name,
+        memberName = set.first().name,
+        memberSignature = set.first().identity(),
+        reason = "these overloads differ only by delegate shape ($signatures), and all of them " +
+            "bind. A BARE Kotlin lambda cannot call them: it resolves against every candidate, so " +
+            "the call site is an `Overload resolution ambiguity` error",
+        hint = "Pass a typed function value (`val pick: () -> Int = { 1 }; run(pick)`) or an " +
+            "anonymous function (`run(fun(): Int = 1)`); both pick one overload.",
+      )
+    }
+}
+
+// ADR-158 Decision 9: every non-delegate position agrees and at least one delegate position differs.
+// A set where two positions differ (`Apply(int, Func<int,int>)` beside `Apply(string, Action)`) is
+// resolvable on the other argument and must not be named, which is what makes this a per-position
+// comparison rather than "the set contains a delegate".
+private fun differsOnlyByDelegateShape(set: List<RirMethod>): Boolean {
+  val positions: List<List<RirTypeRef>> = set.map { method -> method.parameters.map { it.type } }
+  // Compared by the KOTLIN spelling, which is the thing overload resolution actually sees: two C#
+  // types that render the same Kotlin type are not a difference a call site could resolve on.
+  val differing: List<Int> = positions.first().indices.filter { i ->
+    positions.map { declKotlinType(it[i]) }.distinct().size > 1
+  }
+  return differing.isNotEmpty() && differing.all { i -> positions.all { it[i] is RirDelegateType } }
 }
 
 // ADR-155 Q8: one skipped_overload_set per DROPPED MEMBER (never one per set: a user reading the

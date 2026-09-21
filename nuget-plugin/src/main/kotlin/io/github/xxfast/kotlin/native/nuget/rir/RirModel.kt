@@ -569,6 +569,15 @@ enum class RirDiagnosticKind {
   @SerialName("skipped_delegate_position")
   SKIPPED_DELEGATE_POSITION,
 
+  // ADR-158 Decision 9: a bound overload set whose members differ ONLY by delegate shape
+  // (`Run(Action)` beside `Run(Func<int>)`, the `Task.Run` shape). Every member BINDS; the note
+  // exists because a BARE Kotlin lambda never resolves against such a pair (verified by spike on
+  // Kotlin 2.4.10: `Overload resolution ambiguity`, in both directions, including the `{ }` form),
+  // while a typed function value or an anonymous function does. Not a skip: dropping the set would
+  // delete members that stay perfectly callable.
+  @SerialName("info_delegate_overload_ambiguity")
+  INFO_DELEGATE_OVERLOAD_AMBIGUITY,
+
   // ADR-155: an array (`T[]`). Deferred with the rest of the array work (`byte[]` → `ByteArray`
   // wants the ADR-151 blit, not slots). Today such a member vanishes with no diagnostic at all.
   @SerialName("skipped_array")
