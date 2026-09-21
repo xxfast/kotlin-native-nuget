@@ -75,6 +75,19 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  helpers have no bytes arm yet). Either way a genuine drop with no legacy route. */
   BYTE_ARRAY(droppedFromCSharp = true),
 
+  /**
+   * ADR-083 amendment (boundary nullability part B): a `Map`/`MutableMap` whose KEY is nullable, at
+   * ANY position. ADR-083 declined it at an input position already; the result, property-read and
+   * nested positions admitted it and rendered `NugetMarshal.ReadMap<string?, int>` against a helper
+   * declared `where TKey : notnull`, which is CS8714 and a hard error under the ADR-138 gate's
+   * csproj -- a `packNuget` abort, not a consumer-side warning.
+   *
+   * Its own reason rather than the COLLECTION bucket because the hint slot carries no per-detail
+   * text, and COLLECTION's hint ("use components that are primitives, Char, String, ...") would
+   * send the author looking at their key's TYPE when the problem is its nullability.
+   */
+  NULLABLE_MAP_KEY(droppedFromCSharp = true),
+
   /** ADR-107: `kotlin.Throwable` binds at a **property getter** and nowhere else in v1, so a
    *  callable carrying one (a method return, a parameter, a constructor argument) is a genuine
    *  drop with no legacy route -- named here rather than folded into HANDLE, whose hint would
@@ -3737,14 +3750,20 @@ internal class ForwardCallablePlanner(
    */
   private fun BridgeType.collectionComponentDetail(): String? {
     val collection: BridgeType.Collection = unwrapNullable() as? BridgeType.Collection ?: return null
-    if (collection.collectionInputSkipReason() != ForwardPlanSkipReason.COLLECTION) return null
+    // ADR-083 amendment (boundary nullability part B): NULLABLE_MAP_KEY gets the same "key type
+    // String?" detail COLLECTION gets, so its hint can name the offending slot; every other reason
+    // keeps its own unnamed wording.
+    val reason: ForwardPlanSkipReason? = collection.collectionInputSkipReason()
+    if (reason == ForwardPlanSkipReason.NULLABLE_MAP_KEY) {
+      return "key type ${collection.key?.diagnosticTypeName() ?: "unknown"}"
+    }
+    if (reason != ForwardPlanSkipReason.COLLECTION) return null
     val isMap: Boolean =
       collection.kind == CollectionKind.MAP || collection.kind == CollectionKind.MUTABLE_MAP
     if (!isMap) {
       return "element type ${collection.element?.diagnosticTypeName() ?: "unknown"}"
     }
-    val keyOk: Boolean =
-      collection.key?.let { it !is BridgeType.Nullable && it.isWrappableComponent() } == true
+    val keyOk: Boolean = collection.key?.isWrappableComponent() == true
     val valueOk: Boolean = collection.value?.isWrappableComponent() == true
     val key: String = collection.key?.diagnosticTypeName() ?: "unknown"
     val value: String = collection.value?.diagnosticTypeName() ?: "unknown"
@@ -3765,9 +3784,12 @@ internal class ForwardCallablePlanner(
     // (isWrappableComponent). ADR-083: the *key* additionally has to be non-nullable -- a C#
     // Dictionary cannot hold a null key, so a nullable-key map has no idiomatic projection and
     // skips named, even though its value slot would be fine.
+    // ADR-083 amendment (boundary nullability part B): the key's nullability is no longer tested
+    // here. `declinesNullableMapKey` makes `isBridgeableComponent()` false, so the arm above fires
+    // first and attributes the skip to NULLABLE_MAP_KEY at an input position exactly as it does at
+    // a return one -- one rule, one wording, every position.
     kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP -> {
-      val keyAdmitted: Boolean =
-        key?.let { it !is BridgeType.Nullable && it.isWrappableComponent() } == true
+      val keyAdmitted: Boolean = key?.isWrappableComponent() == true
       val valueAdmitted: Boolean = value?.isWrappableComponent() == true
       if (keyAdmitted && valueAdmitted) null else ForwardPlanSkipReason.COLLECTION
     }
@@ -3925,7 +3947,12 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   is BridgeType.Nullable -> type !is BridgeType.Nullable && type != BridgeType.Unit &&
       type.isBridgeableComponent()
 
-  is BridgeType.Collection -> if (declinesByteArrayComponent()) false else {
+  // ADR-083 amendment (boundary nullability part B): a nullable map KEY fails here too, which is
+  // what carries the rule to the result, property-read and NESTED positions -- this function
+  // recurses, so `List<Map<String?, Int>>` is covered by the same one consult.
+  is BridgeType.Collection -> if (declinesByteArrayComponent() || declinesNullableMapKey()) {
+    false
+  } else {
     val isMap: Boolean = kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
     if (isMap) {
       key?.isBridgeableComponent() == true && value?.isBridgeableComponent() == true
@@ -3994,6 +4021,46 @@ internal fun BridgeType.Collection.declinesByteArrayComponent(): Boolean = when 
 }
 
 /**
+ * ADR-083 amendment (boundary nullability part B): whether this collection is a map whose KEY is
+ * nullable, which is declined at EVERY position rather than only at an input one.
+ *
+ * ADR-083 refused a nullable key at the input positions and deliberately left the result-position
+ * gates untouched. Measured consequence: `fun perchScores(): Map<String?, Int>` rendered
+ * `IReadOnlyDictionary<string?, int>` over `NugetMarshal.ReadMap<string?, int>`, and that helper is
+ * `where TKey : notnull`, so the generated file raised CS8714 -- an ERROR under the generated
+ * bindings csproj (`<Nullable>enable</Nullable>` plus `<TreatWarningsAsErrors>true`), at the member
+ * return, the property read, a nested component, a top-level function, a `suspend fun` and a
+ * `Flow` element alike. So the shape never compiled anywhere, which is why declining it removes
+ * nothing that worked.
+ *
+ * Declining rather than binding is also the idiomatic answer: `Dictionary`, `ImmutableDictionary`
+ * and `FrozenDictionary` all throw on a null key, as do Java's `Map.of` and Swift's ObjC bridge. A
+ * Kotlin `Map<String?, V>` is the outlier.
+ */
+/**
+ * The "key type String?" detail for the innermost map [declinesNullableMapKey] refuses, searched
+ * recursively so a nested `List<Map<String?, Int>>` names the key rather than the list. `null` when
+ * nothing here is a nullable-key map, which is what keeps the shared `skipDetail()` chain intact for
+ * every other reason.
+ */
+internal fun BridgeType.nullableMapKeyDetail(): String? {
+  val collection: BridgeType.Collection =
+    (if (this is BridgeType.Nullable) type else this) as? BridgeType.Collection ?: return null
+  if (collection.declinesNullableMapKey()) {
+    return "key type ${collection.key?.diagnosticTypeName() ?: "unknown"}"
+  }
+  return listOfNotNull(collection.element, collection.key, collection.value)
+    .firstNotNullOfOrNull { component -> component.nullableMapKeyDetail() }
+}
+
+internal fun BridgeType.Collection.declinesNullableMapKey(): Boolean = when (kind) {
+  CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> key is BridgeType.Nullable
+  CollectionKind.SET, CollectionKind.MUTABLE_SET,
+  CollectionKind.LIST, CollectionKind.MUTABLE_LIST,
+    -> false
+}
+
+/**
  * ADR-073: the component types the C# write side can actually box, for an input-position
  * `Map`/`Set` (and their mutable variants): the six `nuget_wrap_*` primitives plus an object
  * handle (via `CreateMap`/`CreateSet`'s reflective `_handle` fallback), plus (ADR-081) a value
@@ -4058,11 +4125,15 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   // same CreateList/CreateSet/CreateMap the outer one uses and read back through the matching
   // Read* helper. Recursive, so depth 3 is the same code as depth 1. The map-key rule mirrors the
   // top-level one: a C# Dictionary cannot hold a null key.
-  is BridgeType.Collection -> if (declinesByteArrayComponent()) false else {
+  // ADR-083 amendment (boundary nullability part B): the inline "key is not Nullable" test that
+  // used to sit in the map arm below now lives in [declinesNullableMapKey], so the write side and
+  // every read side consult one predicate instead of four copies of the rule.
+  is BridgeType.Collection -> if (declinesByteArrayComponent() || declinesNullableMapKey()) {
+    false
+  } else {
     val isMap: Boolean = kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
     if (isMap) {
-      key?.let { it !is BridgeType.Nullable && it.isWrappableComponent() } == true &&
-          value?.isWrappableComponent() == true
+      key?.isWrappableComponent() == true && value?.isWrappableComponent() == true
     } else {
       element?.isWrappableComponent() == true
     }
@@ -4347,6 +4418,11 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
     // would find nothing and fall back to whichever slot is first. Named here instead, so the
     // author reads "BYTE_ARRAY" and gets the identity-versus-copy hint.
     declinesByteArrayComponent() -> ForwardPlanSkipReason.BYTE_ARRAY
+    // ADR-083 amendment (boundary nullability part B): named here for the same reason BYTE_ARRAY
+    // is. `Nullable(String)` is a perfectly good component on its own, so the failing-component
+    // search below would find nothing and fall back to whichever slot is first, reporting NULLABLE
+    // with a hint about non-nullable wrappers instead of naming the KEY.
+    declinesNullableMapKey() -> ForwardPlanSkipReason.NULLABLE_MAP_KEY
     isBridgeableComponent() -> ForwardPlanSkipReason.COLLECTION
     // ROADMAP Phase 4: the component that actually FAILED, not whichever slot is listed first.
     // `Map<String, Sequence<Int>>` used to report `STRING` -- naming the one component that was
@@ -4449,6 +4525,9 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
  * ("Collection (element type ...)") for that case.
  */
 internal fun BridgeType.skipDetail(): String? = optInMarkerDetail()
+  // ADR-083 amendment (boundary nullability part B): ahead of the generic arms so the property
+  // route's NULLABLE_MAP_KEY sentence names the key slot, matching the callable route's.
+  ?: nullableMapKeyDetail()
   ?: actualTypeAliasTargetDetail()
   ?: unexportedDependencyDetail()
   ?: undeclaredTypeDetail()

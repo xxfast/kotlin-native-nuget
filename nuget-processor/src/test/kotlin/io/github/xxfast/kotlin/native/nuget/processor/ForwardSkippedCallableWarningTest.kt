@@ -286,6 +286,10 @@ class ForwardSkippedCallableWarningTest {
         // DECLINED equality slots -- a `Set<ByteArray>` element and a `Map<ByteArray, V>` key --
         // since every other component position binds. Still a genuine drop with no legacy route.
         ForwardPlanSkipReason.BYTE_ARRAY,
+        // ADR-083 amendment (boundary nullability part B): a nullable map KEY, declined at every
+        // position. A genuine drop with no legacy route -- the generated `ReadMap<TKey, TValue>` is
+        // `where TKey : notnull`, so binding it could only produce a file that does not compile.
+        ForwardPlanSkipReason.NULLABLE_MAP_KEY,
         ForwardPlanSkipReason.NULLABLE,
         // ADR-132: an extension receiver whose wire is the ADR-079/080 `HasValue` + value pair.
         // Every other admitted receiver shape lowers like a parameter now; this one cannot be

@@ -447,8 +447,13 @@ class Tier1CompileCellsTest {
 
   /**
    * `ForwardPropertyPlanner.componentDescription()`'s `!keyOk && !valueOk` arm: a `Map` whose key
-   * AND value both fail `isWrappableComponent()` (a nullable nested collection fails as a
-   * collection, and again as a nullable key), so the diagnostic must name both sides.
+   * AND value both fail `isWrappableComponent()`, so the diagnostic must name both sides.
+   *
+   * ADR-083 amendment (boundary nullability part B) moved this cell off a NULLABLE key
+   * (`Map<List<String>?, List<String>?>`): a nullable key is now declined at the READ position too,
+   * so that shape drops the whole property and has no getter to assert. The key is an `Instant`
+   * instead, which is readable (it has a C# spelling) but not wrappable (ADR-076 defers an Instant
+   * collection component), which is exactly the pairing this arm needs.
    */
   @Test
   fun `class property with Map of nested-collection key and value has no setter and names both types`() {
@@ -456,8 +461,10 @@ class Tier1CompileCellsTest {
       """
       package tier1.moodmapboth
 
+      import kotlin.time.Instant
+
       class Box {
-        var scores: Map<List<String>?, List<String>?> = emptyMap()
+        var scores: Map<Instant, List<String>?> = emptyMap()
       }
       """.trimIndent()
     )
@@ -478,7 +485,7 @@ class Tier1CompileCellsTest {
     assertTrue(
       result.kspWarnings.any {
         it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) &&
-            it.contains("key type Collection?") &&
+            it.contains("key type Instant") &&
             it.contains("and value type Collection?")
       },
       "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming both Box.scores's key and value " +

@@ -965,6 +965,12 @@ internal class ForwardPropertyPlanner(
     // ROADMAP Phase 4: the `Set` element and `Map` KEY slots a `ByteArray` is declined at, the same
     // rule `isBridgeableComponent` applies -- identity equality against a copied array.
     if (declinesByteArrayComponent()) return false
+    // ADR-083 amendment (boundary nullability part B): the read side is the position ADR-083 left
+    // open. `val tallies: Map<Int?, String>` rendered `IReadOnlyDictionary<int?, string>` over
+    // `NugetMarshal.ReadMap<int?, string>`, whose `where TKey : notnull` made the generated file
+    // fail to compile (CS8714), so the property dropped the whole module's build rather than
+    // binding.
+    if (declinesNullableMapKey()) return false
     val isMap: Boolean = kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
     return if (isMap) {
       key?.isReadableComponent() == true && value?.isReadableComponent() == true

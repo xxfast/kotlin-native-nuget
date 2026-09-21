@@ -171,9 +171,15 @@ class Tier1NamedSkipDiagnosticsTest {
     // The mirror image of the nested-value cell above: here the `Int` value is fine and the key is
     // not, so the hint has to name the key. Naming whichever slot is checked last would be exactly
     // the class of wrong-component message this wording replaced.
+    // ADR-083 amendment (boundary nullability part B): the reason is now NULLABLE_MAP_KEY rather
+    // than COLLECTION, so the sentence and the hint are the key-specific pair. The KIND is
+    // deliberately unchanged at this input position: the amendment added the READ positions, it did
+    // not renumber this one.
     assertTrue(
-      result.kspWarnings.any { it.contains("the key type String? cannot be written") },
-      "expected the hint to name the offending map key component; " +
+      result.kspWarnings.any {
+        it.contains("its key type String? is nullable, and a .NET dictionary cannot hold a null key")
+      },
+      "expected the sentence to name the offending map key component; " +
           "kspWarnings=${result.kspWarnings}",
     )
   }
@@ -204,12 +210,15 @@ class Tier1NamedSkipDiagnosticsTest {
       "expected setKeyedMoods to be entirely absent from the generated CNameExports.kt; " +
           "generated=${result.generated}",
     )
+    // ADR-083 amendment (boundary nullability part B): when the key is NULLABLE, that refusal wins
+    // over the two-component wording, because it is the one an author cannot fix by changing the
+    // value type. The both-components arm still fires for two non-null but unwrappable slots; only
+    // the nullable-key half moved to its own reason.
     assertTrue(
       result.kspWarnings.any {
-        it.contains("the key type String? and value type Collection? cannot be written")
+        it.contains("its key type String? is nullable, and a .NET dictionary cannot hold a null key")
       },
-      "expected the hint to name both offending map components; " +
-          "kspWarnings=${result.kspWarnings}",
+      "expected the nullable key to win the attribution; kspWarnings=${result.kspWarnings}",
     )
   }
 
