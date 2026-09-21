@@ -11,7 +11,9 @@ import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ENUM_ARM_VALUE_MEMBER
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardPropertyPlanExports
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
@@ -78,6 +80,28 @@ internal fun FileSpec.Builder.addSealedClassExports(
     val subQualifiedName: String = subclass.qualifiedName?.asString() ?: continue
     val subPrefix: String = "${prefix}_${subName.lowercase()}"
     val isDataClass: Boolean = subclass.modifiers.contains(Modifier.DATA)
+
+    // ADR-157: the boxed enum arm. Three exports and no more: the planned box constructor, the
+    // planned `Value` getter, and the dispose every arm has. The enum's own members are ADR-006
+    // extension methods and are exported by `addEnumExports`; exporting them again here would be
+    // two `@CName`s for one member.
+    if (subclass.isEnumArm()) {
+      callableCatalog.constructors(subQualifiedName).forEach { plan ->
+        addForwardKotlinPlanExport(plan)
+      }
+      callableCatalog.propertyFor("$subQualifiedName.$ENUM_ARM_VALUE_MEMBER")
+        ?.let { addForwardPropertyPlanExports(it) }
+      addFunction(
+        FunSpec.builder("export_${subPrefix}_dispose")
+          .addAnnotation(
+            cNameAnnotation("${subPrefix}_dispose", ownedBy(subclass, "generated Dispose")),
+          )
+          .addParameter("handle", cOpaquePointer)
+          .addStatement("%T.release(handle)", nugetHandles)
+          .build()
+      )
+      continue
+    }
 
     // ADR-148: the arm's public constructors, off the same catalog query and the same emitter an
     // ordinary class's go through (`ClassExports`). An `object` arm plans none, so this is empty

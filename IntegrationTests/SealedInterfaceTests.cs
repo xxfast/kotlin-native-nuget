@@ -34,9 +34,11 @@ namespace IntegrationTests;
 /// binds exactly like a nested one, because arm discovery is <c>getSealedSubclasses()</c> either
 /// way and the renderer already outdents sibling arms for sealed classes. <c>Transmission</c> is
 /// that hierarchy, and <c>Packet</c> is the cascade the issue reports: a <c>data class</c> holding
-/// the interface loses its constructor and its <c>Copy</c> while the interface is refused. The
-/// widening stops at <c>Tone</c>, whose only arm is an <c>enum class</c>, because a C# enum admits
-/// only an integral base.
+/// the interface loses its constructor and its <c>Copy</c> while the interface is refused. ADR-125
+/// stopped at <c>Tone</c>, whose only arm is an <c>enum class</c>; ADR-157 (issue #236) inverts
+/// that control by boxing the arm as <c>PitchArm</c>, so <c>Tone</c> is eligible too and only
+/// <c>Mixed</c> stays refused. The enum-armed feature itself is pinned by
+/// <c>EnumArmedSealedTests</c>.
 /// </para>
 /// <para>
 /// Oreo purrs a beat you can count at 60; Mylo goes so limp in the sun he reads flat. On the radio
@@ -378,14 +380,15 @@ public class SealedInterfaceTests
     }
 
     /// <summary>
-    /// The enum-arm refusal, the control that keeps the widening honest. A C# enum admits only an
-    /// integral base (<c>error CS1008</c>), so <c>Pitch</c> has no shape as an arm: <c>Tone</c> must
-    /// stay ineligible and keep binding as <c>ITone</c>, and <c>Pitch</c> must be declared exactly
-    /// once, as an ordinary enum. An implementation that drops the nesting check without refusing
-    /// enum arms declares <c>Pitch</c> twice and every consumer fails CS0101.
+    /// The enum-arm control, <b>inverted by ADR-157 (issue #236)</b>. A C# enum still admits only
+    /// an integral base (<c>error CS1008</c>), so <c>Pitch</c> still has no shape as an arm, but the
+    /// arm is now boxed as <c>PitchArm</c> rather than refused: <c>Tone</c> becomes eligible and
+    /// binds as an abstract class, <c>ITone</c> disappears, and <c>Pitch</c> must <em>still</em> be
+    /// declared exactly once as an ordinary enum. An implementation that takes the enum's own name
+    /// for the box declares <c>Pitch</c> twice and every consumer fails CS0101.
     /// </summary>
     [Fact]
-    public void Pitch_EnumArm_KeepsToneIneligibleAndIsDeclaredOnceAsAnEnum()
+    public void Pitch_EnumArm_IsBoxedAndToneBecomesEligible()
     {
         Assembly assembly = typeof(Pitch).Assembly;
 
@@ -393,10 +396,16 @@ public class SealedInterfaceTests
         Assert.Equal(Pitch.High, Enum.Parse<Pitch>("High"));
         Assert.Equal(1, assembly.GetTypes().Count(type => type.Name == "Pitch"));
 
-        Assert.Null(assembly.GetType("TestLibrary.Issue54.Tone"));
-
-        Type? tone = assembly.GetType("TestLibrary.Issue54.ITone");
+        Type? tone = assembly.GetType("TestLibrary.Issue54.Tone");
         Assert.NotNull(tone);
-        Assert.True(tone.IsInterface);
+        Assert.True(tone.IsClass);
+        Assert.True(tone.IsAbstract);
+
+        Type? arm = assembly.GetType("TestLibrary.Issue54.PitchArm");
+        Assert.NotNull(arm);
+        Assert.True(arm.IsSealed);
+        Assert.Equal(tone, arm.BaseType);
+
+        Assert.Null(assembly.GetType("TestLibrary.Issue54.ITone"));
     }
 }

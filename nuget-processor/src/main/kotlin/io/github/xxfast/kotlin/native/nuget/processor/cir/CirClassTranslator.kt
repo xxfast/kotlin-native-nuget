@@ -37,6 +37,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ENUM_ARM_VALUE_MEMBER
+import io.github.xxfast.kotlin.native.nuget.processor.forward.enumArmName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPlanProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPropertyProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
@@ -1835,6 +1838,48 @@ internal fun suspendMembers(
   return asyncMembers + suspendStateFlowMembers
 }
 
+/**
+ * ADR-157: the boxed enum arm, `{Enum}Arm`. Two members, both planned: the constructor taking the
+ * C# enum and the `Value` getter returning it. Never the enum's own members -- those are ADR-006
+ * extension methods on the enum itself, which is still declared as a C# `enum` beside this box.
+ */
+private fun enumArmSubclass(
+  sealed: KSClassDeclaration,
+  arm: KSClassDeclaration,
+  subPrefix: String,
+  callableCatalog: ForwardCallablePlanCatalog,
+  tracker: CollectionHelperTracker,
+  context: NugetContext,
+  expects: ExpectIndex,
+): CirSealedSubclass {
+  val armQualifiedName: String? = arm.qualifiedName?.asString()
+  val properties: List<CirProperty> = listOfNotNull(
+    armQualifiedName
+      ?.let { callableCatalog.propertyFor("$it.$ENUM_ARM_VALUE_MEMBER") }
+      ?.let { plan ->
+        tracker.trackProperty(plan)
+        ForwardCirPropertyProjection.classProperty(plan)
+      },
+  )
+  val constructors: List<CirConstructor> =
+    (armQualifiedName?.let { callableCatalog.constructors(it) } ?: emptyList()).map { plan ->
+      tracker.trackPlan(plan)
+      ForwardCirPlanProjection.constructor(plan)
+    }
+  return CirSealedSubclass(
+    doc = arm.forwardKdoc(expects)?.toCirDoc(),
+    name = arm.enumArmName(),
+    nativePrefix = subPrefix,
+    properties = properties,
+    constructors = constructors,
+    // Where the enum is declared, the box is declared: nested in the base for a nested enum, at
+    // namespace level beside it otherwise. The bare name belongs to the C# enum either way.
+    isNested = arm.parentDeclaration?.qualifiedName?.asString() ==
+        sealed.qualifiedName?.asString(),
+    boxedEnumType = properties.firstOrNull()?.type ?: arm.nestedCsName(),
+  )
+}
+
 internal fun translateSealedClass(
   cls: KSClassDeclaration,
   context: NugetContext,
@@ -1896,6 +1941,15 @@ internal fun translateSealedClass(
     .map { subclass ->
       val subName: String = subclass.simpleName.asString()
       val subPrefix: String = "${prefix}_${subName.lowercase()}"
+      // ADR-157: an enum arm is a BOX. Its own members belong to `{Enum}Extensions` (ADR-006) and
+      // the enum keeps being declared, exactly once, as a C# `enum`; the arm carries the box
+      // constructor and the `Value` getter, both off the same plans and the same projections every
+      // other arm member uses.
+      if (subclass.isEnumArm()) {
+        return@map enumArmSubclass(
+          cls, subclass, subPrefix, callableCatalog, tracker, context, expects,
+        )
+      }
       val isDataClass: Boolean = subclass.modifiers.contains(Modifier.DATA)
       val isNested: Boolean =
         subclass.parentDeclaration?.qualifiedName?.asString() == cls.qualifiedName?.asString()

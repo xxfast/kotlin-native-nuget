@@ -966,6 +966,12 @@ private fun invocationExpression(
       "handle.asStableRef<${plan.ownerTypeName()}>().get().copy($arguments)"
     }
 
+    // ADR-157, the branch finding 1 of the ADR's ledger said might not be needed: it is, and it is
+    // one line. The box constructor's invocation is the identity on the lowered enum argument,
+    // which `loweredArgument` already spells as `Patch.entries[value]`; the result branch above
+    // then mints the handle through `NugetHandles.retain` like any other owned result.
+    ForwardCallableOrigin.ENUM_ARM_BOX -> arguments
+
     ForwardCallableOrigin.VALUE_CLASS ->
       error("VALUE_CLASS plans use addForwardValueClassPlanExport, not invocationExpression")
   }

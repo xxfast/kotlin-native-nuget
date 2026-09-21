@@ -116,7 +116,9 @@ class ForwardDeclarationRoutingMatrixTest {
           publicParams = emptyList(),
         )
 
-      ForwardCallableOrigin.CONSTRUCTOR -> RoutingParts(
+      // ADR-157: the boxed enum arm's constructor is a constructor at every site this matrix
+      // exercises; only the Kotlin invocation differs.
+      ForwardCallableOrigin.CONSTRUCTOR, ForwardCallableOrigin.ENUM_ARM_BOX -> RoutingParts(
         receiverParams = emptyList(),
         invocation = ForwardInvocation(
           "sample.Patient.<init>",
@@ -253,7 +255,7 @@ class ForwardDeclarationRoutingMatrixTest {
         assertTrue(members.isNotEmpty())
       }
 
-      ForwardCallableOrigin.CONSTRUCTOR -> {
+      ForwardCallableOrigin.CONSTRUCTOR, ForwardCallableOrigin.ENUM_ARM_BOX -> {
         val ctor = ForwardCirPlanProjection.constructor(plan)
         assertTrue(ctor.hasErrorCheck || ctor.body.isNotEmpty() || ctor.parameters.isNotEmpty() || true)
       }
@@ -305,6 +307,9 @@ class ForwardDeclarationRoutingMatrixTest {
         ),
       )
       is ForwardPropertyReceiver.Static -> emptyList()
+      // ADR-157's receiver has no `ForwardPropertyPosition` of its own, so the `when` above never
+      // builds one and this matrix never reaches it.
+      is ForwardPropertyReceiver.EnumArm -> error("property matrix has no enum-arm position")
     }
     val error = errorParameter()
     val call = ForwardNativeCall(

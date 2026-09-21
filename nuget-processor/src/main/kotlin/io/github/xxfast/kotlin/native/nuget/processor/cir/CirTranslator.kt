@@ -15,6 +15,8 @@ import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.enumArmName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPlanProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPropertyProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
@@ -506,6 +508,15 @@ internal fun translate(
   sealedClasses.forEach { sealed ->
     recordExistingTypeName(sealed)
     sealed.getSealedSubclasses().forEach { sub ->
+      // ADR-157: an enum arm's C# declaration is `{Enum}Arm`. The enum's own name is already
+      // recorded above, by the `enums` walk, and recording it a second time here would report the
+      // enum as colliding with itself.
+      if (sub.isEnumArm()) {
+        existingTypeNamesByNamespace
+          .getOrPut(namespaceOf(sub.packageName.asString())) { mutableSetOf() }
+          .add(sub.enumArmName())
+        return@forEach
+      }
       recordExistingTypeName(sub)
     }
   }

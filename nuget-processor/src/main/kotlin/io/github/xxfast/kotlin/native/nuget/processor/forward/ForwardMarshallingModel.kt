@@ -535,6 +535,15 @@ internal enum class ForwardCallableOrigin {
    * from its underlying wire value is owned by the VALUE_CLASS emitters (ADR-014 / ADR-035).
    */
   VALUE_CLASS,
+
+  /**
+   * ADR-157: the boxed enum arm's constructor, `new PatchArm(Patch.Socks)`. The Kotlin invocation
+   * is the *identity* on the lowered enum parameter -- `Patch.entries[value]`, which is exactly
+   * what [loweredArgument] already spells for a [BridgeType.Enum] input -- so the result is an
+   * ordinary owned handle over the entry and everything else (the error slot, the lowering, the
+   * ABI contract) is the ordinary route's.
+   */
+  ENUM_ARM_BOX,
 }
 
 internal data class ForwardInvocation(

@@ -353,6 +353,14 @@ data class CirSealedSubclass(
   val hasSuspendMethods: Boolean = false,
   val isDataClass: Boolean = false,
   /**
+   * ADR-157: the C# spelling of the enum this arm boxes (`Patch`), or null for every ordinary arm.
+   *
+   * Set only on a `{Enum}Arm`. It carries exactly two things the renderer cannot derive: that the
+   * managed equality block compares over `Value` rather than calling a Kotlin `equals` export (an
+   * enum has no data-class members to export), and the type to spell in `Equals`'s pattern.
+   */
+  val boxedEnumType: String? = null,
+  /**
    * Issue #54: whether the subclass is declared *inside* its sealed base in Kotlin. C# follows the
    * Kotlin scope, so a nested one is rendered inside the base's braces (`Shape.Circle`) and a
    * sibling is rendered after them, at namespace level (`Label`). Either way the exports keep the

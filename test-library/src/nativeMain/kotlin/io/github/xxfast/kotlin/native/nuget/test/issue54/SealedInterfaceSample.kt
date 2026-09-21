@@ -167,13 +167,15 @@ sealed interface Mixed {
  * [Ping] carries one converted member (`label: String`) and one unconverted member (`ms: Int`) on a
  * single arm, so a fix that opens the arm but not its payload conversion is visible.
  *
- * [Tone] is the **new ineligible control**, and it is ineligible for a reason C# can name rather
- * than a style rule: its arm [Pitch] is an `enum class`, and a C# enum admits only an integral base
- * (`error CS1008`), so there is no shape for `enum Pitch : Tone`. It sits in this same namespace as
- * a **declared top-level enum** on purpose. `rootEnums` carries no `!isSealedSubclass()` filter, so
- * an implementation that drops the nesting check without refusing enum arms declares both
- * `public enum Pitch` and `public sealed class Pitch : Tone` here and every consumer fails CS0101.
- * The trap is live, and it fails loudly at `packNuget` rather than silently.
+ * [Tone] was the ineligible control of ADR-125 and **inverts** with ADR-157 (issue #236): its arm
+ * [Pitch] is an `enum class`, and a C# enum admits only an integral base (`error CS1008`), so the
+ * arm is boxed as `PitchArm` instead of being refused. [Tone] becomes eligible, binds as
+ * `public abstract class Tone`, and `ITone` disappears. It sits in this same namespace as a
+ * **declared top-level enum** on purpose, because the CS0101 trap survives the inversion:
+ * [Pitch] must still be declared exactly once, as `public enum Pitch`, and the box must take the
+ * `PitchArm` name rather than the enum's. The trap fails loudly at `packNuget` rather than
+ * silently. The ineligible control this file still carries is [Mixed], whose arm has a second
+ * superclass.
  *
  * The cats work the radio. Oreo (black with the white middle) checks in with a short chirp you can
  * time; Mylo (brown and creamy) is asleep and transmits nothing, which is still a reading.
@@ -226,16 +228,18 @@ class Radio {
 data class Packet(val signal: Transmission)
 
 /**
- * The new ineligible control: a sealed interface whose only arm is an `enum class`. Stays
- * ineligible after ADR-125, with a diagnostic naming the C# reason (a C# enum admits only an
- * integral base, `CS1008`) instead of the old style rule. Keeps binding as `ITone`, exactly as
- * [Mixed] does.
+ * The inverted control: a sealed interface whose only arm is an `enum class`. Ineligible under
+ * ADR-125, admitted by ADR-157 with the arm boxed, so it now binds as `public abstract class Tone`
+ * and no `ITone` survives. The single-arm shape on purpose: the `issue236` fixture carries the
+ * two-arm ordinal-collision case, and this one only has to prove the inversion reaches a hierarchy
+ * that was refused by name.
  */
 sealed interface Tone
 
 /**
  * The enum arm, declared **top level** in the same namespace so the CS0101 double-declaration trap
- * is live: this must appear exactly once, as `public enum Pitch`, and never also as a sealed arm
- * class. Oreo's chirp is [HIGH]; the rumble Mylo makes when moved is [LOW].
+ * stays live: this must appear exactly once, as `public enum Pitch`, and the box beside it must be
+ * named `PitchArm`, never `Pitch`. Oreo's chirp is [HIGH]; the rumble Mylo makes when moved is
+ * [LOW].
  */
 enum class Pitch : Tone { HIGH, LOW }

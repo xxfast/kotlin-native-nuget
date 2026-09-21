@@ -11,10 +11,21 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
  */
 internal enum class ForwardPropertyPosition { CLASS, TOP_LEVEL, EXTENSION, COMPANION, OBJECT }
 
+/** ADR-157: the catalog-key and Kotlin-side member name of a boxed enum arm's `Value`. */
+internal const val ENUM_ARM_VALUE_MEMBER: String = "value"
+
 internal sealed interface ForwardPropertyReceiver {
   data class Handle(val owner: String) : ForwardPropertyReceiver
   data class Value(val type: BridgeType) : ForwardPropertyReceiver
   data class Static(val owner: String?) : ForwardPropertyReceiver
+
+  /**
+   * ADR-157: the boxed enum arm's `Value` getter. The handle is read back as the sealed [base] --
+   * the same type the ADR-009 discriminator reads it as -- and downcast to the arm's [enum], with
+   * no member access after it: the property *is* the receiver. Every other receiver appends the
+   * Kotlin property name, which an enum entry has nothing to answer with.
+   */
+  data class EnumArm(val base: String, val enum: String) : ForwardPropertyReceiver
 }
 
 internal sealed interface ForwardPropertyGetter {
