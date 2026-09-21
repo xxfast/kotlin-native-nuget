@@ -529,6 +529,13 @@ enum class RirDiagnosticKind {
   @SerialName("skipped_collection_element")
   SKIPPED_COLLECTION_ELEMENT,
 
+  // ADR-158: a member that takes or returns a C# delegate (`Func<>`, `Action<>`, `Predicate<T>`, a
+  // package-declared `delegate`). Named, because the two diagnostics these used to get both blamed
+  // the wrong thing: `skipped_unbound_type_reference` says to include System.Private.CoreLib in the
+  // extraction run, and `skipped_unbound_generic_instantiation` says to expose a BCL collection.
+  @SerialName("skipped_delegate_signature")
+  SKIPPED_DELEGATE_SIGNATURE,
+
   // ADR-155: an array (`T[]`). Deferred with the rest of the array work (`byte[]` → `ByteArray`
   // wants the ADR-151 blit, not slots). Today such a member vanishes with no diagnostic at all.
   @SerialName("skipped_array")

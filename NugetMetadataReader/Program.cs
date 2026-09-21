@@ -401,6 +401,12 @@ internal static class AssemblyExtractor
                 if (isInterface || isStaticClass) continue;
                 if (MetadataHelpers.IsValueType(mr, typeDef)) continue;
                 if (MetadataHelpers.IsRefStructType(mr, typeDef)) continue;
+                // ADR-158: a package-declared `delegate` is a sealed class in metadata, but it is
+                // not a handle type: its only constructor is `(object, IntPtr)`, which no Kotlin
+                // caller can supply. Excluded here so no member ever resolves a delegate parameter
+                // to RirObjectHandleType, and so the generic-definition collector below never sees
+                // a generic delegate as a bindable generic class.
+                if (MetadataHelpers.IsDelegate(mr, typeDef)) continue;
 
                 var typeName = mr.GetString(typeDef.Name);
                 var fullName = string.IsNullOrEmpty(ns) ? typeName : $"{ns}.{typeName}";
@@ -1669,6 +1675,14 @@ internal static class AssemblyExtractor
         var typeName = mr.GetString(typeDef.Name);
         var ns = mr.GetString(typeDef.Namespace);
         var fullName = string.IsNullOrEmpty(ns) ? typeName : $"{ns}.{typeName}";
+
+        // ADR-158: a package-declared `delegate` never enters member extraction. Extracting it as
+        // a class produced an `Invoke` method, an empty constructor list and two noise diagnostics
+        // (`BeginInvoke`/`EndInvoke` reference `System.AsyncCallback`/`System.IAsyncResult`).
+        // Silent at TYPE level on purpose: the delegate itself is not a skipped member, and every
+        // member that mentions it carries the named `skipped_delegate_signature` diagnostic.
+        if (MetadataHelpers.IsDelegate(mr, typeDef)) return (null, Array.Empty<RirDiagnostic>());
+
         if (enumTypes.TryGetValue(fullName, out var enumType))
         {
             if (enumType.Enum is not null) return (enumType.Enum, Array.Empty<RirDiagnostic>());
@@ -2742,6 +2756,24 @@ internal static class MetadataHelpers
     }
 
     /// <summary>
+    /// ADR-158: true iff <paramref name="typeDef"/> is a delegate declaration. A C#
+    /// <c>public delegate int Transform(int x);</c> compiles to a sealed class whose base type is
+    /// <c>System.MulticastDelegate</c> (ECMA-335 II.14.6), so without this test the TypeDef lands
+    /// in the bound-handle name collector and is extracted as an ordinary class with an
+    /// <c>Invoke</c> method and no usable constructor (verified by spike, 2026-09-21).
+    /// <c>System.Delegate</c> is accepted as a base too, for a delegate emitted by a compiler that
+    /// does not go through <c>MulticastDelegate</c>.
+    /// </summary>
+    internal static bool IsDelegate(MetadataReader mr, TypeDefinition typeDef)
+    {
+        if (typeDef.BaseType.Kind != HandleKind.TypeReference) return false;
+
+        var baseRef = mr.GetTypeReference((TypeReferenceHandle)typeDef.BaseType);
+        return mr.GetString(baseRef.Namespace) == "System"
+            && mr.GetString(baseRef.Name) is "MulticastDelegate" or "Delegate";
+    }
+
+    /// <summary>
     /// Returns true if <paramref name="typeDef"/> carries <c>IsByRefLikeAttribute</c>,
     /// which marks it as a <c>ref struct</c> that cannot cross the C ABI.
     /// </summary>
@@ -3419,6 +3451,13 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
                 fullName);
         }
 
+        // ADR-158: a package-declared delegate is not a bound handle type (it is excluded from the
+        // collector), so without this branch a member taking one would be reported as
+        // `skipped_unbound_type_reference` telling the user to bind a namespace that is already
+        // bound. Named instead, with the delegate-specific hint.
+        if (MetadataHelpers.IsDelegate(mr, typeDef))
+            return new TypeRefOrDiag(null, DelegatePending(fullName), fullName);
+
         if (_enumTypes.TryGetValue(fullName, out var enumType))
         {
             if (enumType.Enum is not null)
@@ -3514,6 +3553,12 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         if (fullName == "System.Threading.Tasks.Task")
             return new TypeRefOrDiag(new RirAsyncType(RirVoidType.Instance), null, fullName);
 
+        // ADR-158: a non-generic BCL delegate (`System.Action`, `System.EventHandler`, a thread or
+        // timer callback) is a TypeReference, not a TypeSpec, so it never reaches the generic arm.
+        // Same misfiling `Task` had before ADR-152, and the same fix.
+        if (IsDelegateDefinitionName(fullName))
+            return new TypeRefOrDiag(null, DelegatePending(fullName), fullName);
+
         // ADR-153: a CancellationToken is not an unbound handle either. Admissibility is a
         // property of the whole member (exactly one, on an async method), not of the type, so the
         // decoder hands back a marker and TryMapMethod decides.
@@ -3545,6 +3590,61 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
             fullName);
     }
 
+    /// <summary>
+    /// ADR-158: the delegate-shaped skip. One kind, one hint, from all three decoding routes (a
+    /// package-declared delegate TypeDef, a non-generic BCL delegate TypeReference, and a generic
+    /// BCL delegate TypeSpec), because the user-visible fact is the same in all three: this member
+    /// takes or returns a delegate and no delegate shape is bound in this build. Replaces the two
+    /// misleading diagnostics the shipped reader gave (`skipped_unbound_type_reference`, which says
+    /// to include System.Private.CoreLib, and `skipped_unbound_generic_instantiation`, which says
+    /// to expose a BCL collection).
+    /// </summary>
+    internal const string DelegateSkipKind = "skipped_delegate_signature";
+
+    private static PendingDiagnostic DelegatePending(string fullName) =>
+        new(DelegateSkipKind,
+            $"delegate type `{fullName}` is not bound in this extraction run: a C# delegate is " +
+                "carried by a Kotlin function type, which this build does not generate yet (ADR-158)",
+            "Expose an equivalent member that takes the values themselves, or a bound interface " +
+                "whose Kotlin implementation plays the callback's part (ADR-085).");
+
+    /// <summary>
+    /// ADR-158: the BCL delegate definitions, by CLR full name. Keyed on the full name ONLY, never
+    /// on the resolution scope, for the reason ADR-155 verified for collections: `Func`/`Action`
+    /// resolve through the `System.Runtime` facade in some assemblies and `System.Private.CoreLib`
+    /// in others, so an assembly-qualified match would silently miss half the table. Generic and
+    /// non-generic names live in one set because the two decoding routes ask the same question.
+    /// </summary>
+    private static readonly HashSet<string> DelegateDefinitions = BuildDelegateDefinitions();
+
+    private static HashSet<string> BuildDelegateDefinitions()
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "System.Action",
+            "System.Delegate",
+            "System.MulticastDelegate",
+            "System.EventHandler",
+            "System.AsyncCallback",
+            "System.Threading.TimerCallback",
+            "System.Threading.WaitCallback",
+            "System.Threading.ThreadStart",
+            "System.Threading.ParameterizedThreadStart",
+            "System.Comparison`1",
+            "System.Predicate`1",
+            "System.Converter`2",
+            "System.EventHandler`1",
+        };
+
+        // `Action`1..16` and `Func`1..17`, the arities the BCL actually declares.
+        for (int arity = 1; arity <= 16; arity++) names.Add($"System.Action`{arity}");
+        for (int arity = 1; arity <= 17; arity++) names.Add($"System.Func`{arity}");
+        return names;
+    }
+
+    internal static bool IsDelegateDefinitionName(string? fullName) =>
+        fullName is not null && DelegateDefinitions.Contains(fullName);
+
     private static PendingDiagnostic CancellationTokenPending(string reason) =>
         new(CancellationTokenDiagnostics.Kind, reason, CancellationTokenDiagnostics.Hint);
 
@@ -3562,6 +3662,18 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
     public TypeRefOrDiag GetGenericInstantiation(TypeRefOrDiag genericType, ImmutableArray<TypeRefOrDiag> typeArguments)
     {
         var rawName = genericType.RawTypeName;
+
+        // ADR-158: a generic delegate instantiation. Two sources, one outcome: a BCL name from the
+        // table (`Func`2`, `Action`1`, `Predicate`1`), or a package-declared generic delegate,
+        // whose own definition already came back from GetTypeFromDefinition carrying the delegate
+        // diagnostic. Placed FIRST, before the ADR-072 bound-definition branch and the ADR-155
+        // collection branch, so a closed generic custom delegate can never be mistaken for a
+        // generic class with a witness bridge.
+        if (IsDelegateDefinitionName(rawName))
+            return new TypeRefOrDiag(null, DelegatePending(rawName!), rawName);
+
+        if (genericType.Diagnostic is { Kind: DelegateSkipKind })
+            return new TypeRefOrDiag(null, genericType.Diagnostic, rawName);
 
         // ADR-153: `CancellationToken?` is `Nullable<CancellationToken>`, a GENERICINST that never
         // reaches the plain TypeReference branch (spike-verified). It is out of scope, but it is

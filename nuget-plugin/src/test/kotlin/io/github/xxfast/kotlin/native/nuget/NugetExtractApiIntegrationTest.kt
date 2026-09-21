@@ -481,6 +481,93 @@ class NugetExtractApiIntegrationTest {
     }
   }
 
+  // ADR-158, first commit: a package-declared `delegate` stops being extracted as an ordinary
+  // class, and every delegate-shaped member becomes ONE named skip instead of two misleading ones.
+  // Verified against the shipped reader before the fix (spike a, 2026-09-21): `Transform` came out
+  // as `{"kind":"class","name":"Transform"}` with an `Invoke` method and an empty constructor list,
+  // `ApplyNamed` bound with an unconstructible handle parameter, `Apply`/`Shout` were
+  // `skipped_unbound_generic_instantiation` (hint: expose a BCL collection) and `Act` was
+  // `skipped_unbound_type_reference` (hint: include System.Private.CoreLib).
+  @Test
+  fun `metadata reader refuses delegates with one named skip and never as a class`() {
+    val dotnet: String = findDotnet() ?: return
+
+    val source: String = """
+      using System;
+
+      namespace Probe.Delegates;
+
+      public delegate int Transform(int value);
+
+      public delegate TOut Transformer<TIn, TOut>(TIn value);
+
+      public sealed class Workbench
+      {
+          public int Apply(int seed, Func<int, int> step) => step(seed);
+          public void Shout(Action<string?> sink) { sink("Oreo"); }
+          public bool AnyLong(Predicate<string> test) => test("Oreo");
+          public string Act(Action act) { act(); return "ran"; }
+          public int ApplyNamed(int seed, Transform step) => step(seed);
+          public int ApplyGeneric(int seed, Transformer<int, int> step) => step(seed);
+          public Transform MakeDoubler() => value => value * 2;
+          public int Plain(int seed) => seed + 1;
+      }
+    """.trimIndent()
+
+    val dll: File = compileFixture(dotnet, source, "DelegateReaderFixture")
+    val toolDir: File = Files.createTempDirectory("NugetMetadataReader-delegate-fixture").toFile()
+    unpackMetadataReader(toolDir, javaClass.classLoader)
+    val root: JsonObject = Json.parseToJsonElement(
+      runMetadataReader(dotnet, toolDir, mapOf("DelegateFixture" to listOf(dll.absolutePath))),
+    ).jsonObject
+
+    val types: List<String> = root.getValue("assemblies").jsonArray.single().jsonObject
+      .getValue("namespaces").jsonArray.single().jsonObject
+      .getValue("types").jsonArray.map { it.jsonObject.getValue("name").jsonPrimitive.content }
+    assertEquals(
+      listOf("Workbench"),
+      types,
+      "a delegate TypeDef is a sealed class in metadata, but it is not a bindable type: neither " +
+          "`Transform` nor the generic `Transformer`2` may reach the RIR",
+    )
+
+    val workbench: JsonObject = root.type("Probe.Delegates", "Workbench")
+    val methods: List<JsonObject> = workbench.getValue("methods").jsonArray.map { it.jsonObject }
+    assertEquals(
+      listOf("Plain"),
+      methods.map { it.getValue("name").jsonPrimitive.content },
+      "no delegate-shaped member binds in this build, including the return position that used to " +
+          "bind by accident as a handle (MakeDoubler)",
+    )
+
+    val diagnostics: List<JsonObject> = root.getValue("assemblies").jsonArray.single().jsonObject
+      .getValue("diagnostics").jsonArray.map { it.jsonObject }
+    fun diagnosedKinds(member: String): List<String> = diagnostics
+      .filter { it.getValue("memberName").jsonPrimitive.content == member }
+      .map { it.getValue("kind").jsonPrimitive.content }
+
+    // One kind from all three decoding routes: a generic BCL TypeSpec (Apply/Shout/AnyLong), a
+    // non-generic BCL TypeReference (Act), and a package-declared TypeDef (ApplyNamed/MakeDoubler,
+    // and the closed generic custom delegate, which must not become an ADR-072 generic instance).
+    listOf("Apply", "Shout", "AnyLong", "Act", "ApplyNamed", "ApplyGeneric", "MakeDoubler")
+      .forEach { member ->
+        assertEquals(
+          listOf("skipped_delegate_signature"),
+          diagnosedKinds(member),
+          "`$member` must carry exactly one delegate-shaped diagnostic",
+        )
+      }
+
+    // `Invoke`, `BeginInvoke` and `EndInvoke` are never extracted, so the two noise diagnostics
+    // `BeginInvoke`/`EndInvoke` produced (AsyncCallback, IAsyncResult) are gone with them.
+    assertTrue(
+      diagnostics.none {
+        it.getValue("memberName").jsonPrimitive.content in setOf("Invoke", "BeginInvoke", "EndInvoke")
+      },
+      "a delegate TypeDef must never enter member extraction: $diagnostics",
+    )
+  }
+
   @Test
   fun `metadata reader maps Task returns to an async method and skips the rest`() {
     val dotnet: String = findDotnet() ?: return
