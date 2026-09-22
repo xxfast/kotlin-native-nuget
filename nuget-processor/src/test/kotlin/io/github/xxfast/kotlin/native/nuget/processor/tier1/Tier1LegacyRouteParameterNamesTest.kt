@@ -183,26 +183,50 @@ class Tier1LegacyRouteParameterNamesTest {
     assertContains(generated, "Native_StateSetValue(flow, v, out IntPtr error);")
   }
 
+  /**
+   * ADR-160 re-pinned this cell: the per-call lambda parameter is on the ADR-062 plan now, whose
+   * two-slot fan-out spells the ABI slots `${name}Ptr` / `${name}UserData`. Those COMPOSED
+   * identifiers are not C# keywords (`refPtr` is a perfectly legal name, and the whole generated
+   * file builds under `TreatWarningsAsErrors` in `GeneratedBindingsCheck`), so only the parameter
+   * the consumer actually writes is escaped -- which is the rule the scanner cell below now states.
+   * The cell still proves what issues #65/#66 are about: a lambda parameter literally named `ref`
+   * renders `@ref` at the public signature and at the call into the consumer's lambda.
+   */
   @Test
-  fun `the lambda parameter route escapes a keyword parameter and its pointer local`() {
-    assertContains(
-      generated,
-      "private static extern void Native_OnEvent(IntPtr handle, IntPtr @refPtr, IntPtr userData, " +
-          "out IntPtr error);",
+  fun `the lambda parameter route escapes a keyword parameter`() {
+    assertEquals(
+      true,
+      generated.contains(
+        "private static extern void Native_OnEvent(IntPtr handle, IntPtr refPtr, IntPtr " +
+            "refUserData, out IntPtr error);",
+      ),
+      "extern lines: " + generated.lines().filter { it.contains("OnEvent") }.joinToString("\n"),
     )
-    assertContains(generated, "public void OnEvent(Action<KeywordTick> @ref)")
-    assertContains(generated, "@ref(arg0);")
+    assertContains(generated, "public void OnEvent(Action<global::Interop.KeywordTick> @ref)")
+    assertEquals(
+      true,
+      generated.contains("@ref(NugetMarshal.FromHandle<"),
+      "expected the escaped name at the call into the consumer's lambda; got: " +
+          generated.lines().filter { it.contains("ref") }.joinToString("\n"),
+    )
   }
 
+  /**
+   * The `error` twin, re-pinned for the same reason. The rename is the plan's (`error` -> `error_`,
+   * so the consumer's parameter cannot shadow the ADR-024 `out IntPtr error` slot beside it), and
+   * the fan-out slot `errorPtr` is a distinct identifier from that slot, which is why it needs no
+   * rename of its own.
+   */
   @Test
   fun `the lambda parameter route renames a callback that shadows the error slot`() {
     assertContains(
       generated,
-      "private static extern void Native_OnFail(IntPtr handle, IntPtr error_Ptr, IntPtr " +
-          "userData, out IntPtr error);",
+      "private static extern void Native_OnFail(IntPtr handle, IntPtr errorPtr, IntPtr " +
+          "errorUserData, out IntPtr error);",
     )
-    assertContains(generated, "public void OnFail(Action<KeywordTick> error_)")
-    assertContains(generated, "error_(arg0);")
+    assertContains(generated, "public void OnFail(Action<global::Interop.KeywordTick> error_)")
+    assertContains(generated, "error_(NugetMarshal.FromHandle<")
+    assertContains(generated, "GCHandle error_Ctx = default;")
   }
 
   @Test
@@ -248,6 +272,12 @@ class Tier1LegacyRouteParameterNamesTest {
    * written so the escaped form is not a substring of it (`int @ref` does not contain `int ref`),
    * and so a legitimate C# `ref` argument keyword (`Interlocked.Exchange(ref _handle, ...)`) or the
    * shared runtime's own `IntPtr errorPtr` delegate slot is not a false positive.
+   *
+   * ADR-160 narrowed the rule to what C# actually requires: the **emitted identifier** must not be
+   * a keyword. A generator-composed name whose *stem* is one (`refPtr`, `refUserData`, `errorPtr`
+   * -- the ADR-062 plan's two-slot callback fan-out) is a legal identifier and is left bare, which
+   * is why those two entries are gone from [BARE]. `IntPtr ref,` stays: there the whole parameter
+   * name is the keyword.
    */
   @Test
   fun `no legacy render site leaves a keyword or error slot name bare`() {
@@ -261,11 +291,10 @@ class Tier1LegacyRouteParameterNamesTest {
   private companion object {
     val BARE: List<String> = listOf(
       "int ref", "long ref", "float ref", "double ref", "bool ref", "string ref", "T ref",
-      "IntPtr ref,", "IntPtr refPtr",
+      "IntPtr ref,",
       "string params", "GetOrCreateScope(), params,",
       "int error,", "int error)", "GetOrCreateScope(), error,",
       "Native_StateValue(_handle, error)", "Native_StateSetValue(_handle, error,",
-      "IntPtr errorPtr, IntPtr userData, out IntPtr error",
       "Make_native(ref,", "FetchAsync_native(ref,", "(object)ref!", "(INugetHandle)ref!",
     )
 

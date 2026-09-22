@@ -21,6 +21,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
 import io.github.xxfast.kotlin.native.nuget.processor.forward.cirDoc
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKdoc
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toCirDoc
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedCallbackMember
+import io.github.xxfast.kotlin.native.nuget.processor.exports.hasPlannedCallbackParameter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMethods
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmLambdaMethods
@@ -913,6 +915,13 @@ internal fun translateClass(
 
   val callbackMembers: List<CirCallbackMethod> = lambdaParamMethods
     .filter { it !in storedCallbackExcluded }
+    // ADR-160: the C# half of a planned callback member comes off the plan catalog below
+    // (`plannedMethods`), so this route must not declare it again -- the same retirement the
+    // Kotlin half applies through the identical predicate.
+    .filterNot { method -> method.hasPlannedCallbackParameter(classifier) }
+    // ADR-160 step 4: the C# half of the same named refusal the Kotlin half applies, so a member
+    // this route cannot carry is absent from both artifacts rather than half-declared.
+    .filterNot { method -> legacyRefusedCallbackMember(method) != null }
     .mapNotNull { method ->
       translateCallbackMethod(method, libraryName, prefix, exportedTypes, tracker)
     }

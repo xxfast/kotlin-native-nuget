@@ -615,6 +615,9 @@ internal object ForwardCirPlanProjection {
       is BridgeType.Collection -> listOf("${parameter.csharpName}Handle")
       // ADR-151: the handle [bytesPrelude] minted with `NugetMarshal.CreateBytes`.
       BridgeType.ByteArray -> listOf("${parameter.csharpName}Handle")
+      // ADR-160: the two-slot ADR-102 pair -- the link-time thunk address, then the GCHandle
+      // [forwardCallbackPrelude] allocated over the managed delegate the thunk dispatches to.
+      is BridgeType.Callback -> forwardCallbackArguments(parameter.csharpName, type)
       // ADR-077: the generated `readonly record struct` capitalizes the Kotlin underlying
       // property (`value` -> `Value`, CirClassTranslator); the unwrapped value is lowered to its
       // wire form per underlying (sub-item 4), and Kotlin re-wraps it on the other side.
@@ -715,6 +718,23 @@ internal object ForwardCirPlanProjection {
    * array) and disposed by [bytesCleanup] after it. `byte[]?` folds the null into `IntPtr.Zero`,
    * exactly as [collectionPrelude] does.
    */
+  /**
+   * ADR-160: the managed delegate plus its `GCHandle`, declared before the `try` so
+   * [callbackCleanup]'s `finally` can free it on every exit path (including a Kotlin exception
+   * rethrown by the error check, which is exactly the leak the ADR-099 handle scope was built for).
+   */
+  private fun ForwardCallablePlan.callbackPrelude(
+    parameter: ForwardPublicParameter,
+  ): ForwardCirHandleStep? {
+    val type: BridgeType.Callback = parameter.type as? BridgeType.Callback ?: return null
+    return forwardCallbackPrelude(parameter.csharpName, type)
+  }
+
+  private fun ForwardCallablePlan.callbackCleanup(parameter: ForwardPublicParameter): String? {
+    if (parameter.type !is BridgeType.Callback) return null
+    return forwardCallbackCleanup(parameter.csharpName)
+  }
+
   private fun ForwardCallablePlan.bytesPrelude(
     parameter: ForwardPublicParameter,
   ): ForwardCirHandleStep? {
@@ -918,6 +938,7 @@ internal object ForwardCirPlanProjection {
           ?: interfacePrelude(parameter)
           ?: boundInterfacePrelude(parameter)
           ?: typeParameterPrelude(parameter)
+          ?: callbackPrelude(parameter)
       }
     val cleanup: List<String> =
       parameters.mapNotNull { parameter ->
@@ -925,6 +946,7 @@ internal object ForwardCirPlanProjection {
           ?: collectionCleanup(parameter)
           ?: interfaceCleanup(parameter)
           ?: typeParameterCleanup(parameter)
+          ?: callbackCleanup(parameter)
       }
     val argumentList: List<String> =
       listOfNotNull(receiverArgument) + parameters.flatMap { parameter -> callArgument(parameter) }
@@ -1508,7 +1530,9 @@ internal object ForwardCirPlanProjection {
     is BridgeType.Nullable -> type.isCSharpReferenceType()
     // ADR-151: `byte[]` is a C# array, a reference type, so `ByteArray?` renders `byte[]?`.
     BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface,
-    is BridgeType.BoundInterface, is BridgeType.Collection, BridgeType.ByteArray -> true
+    is BridgeType.BoundInterface, is BridgeType.Collection, BridgeType.ByteArray,
+      // ADR-160: `Action<>`/`Func<>` are delegate types, which are C# reference types.
+    is BridgeType.Callback -> true
     // ADR-076: DateTimeOffset is a C# value type, same as Enum/ValueClass.
     // ADR-103: so is TimeSpan.
     // ADR-106: Guid is a C# value type too, so `Uuid?` renders Nullable<Guid> ("Guid?").

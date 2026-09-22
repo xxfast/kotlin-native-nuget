@@ -989,6 +989,10 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
   BridgeType.ByteArray, is BridgeType.TypeParameter -> cOpaquePointer
   // ADR-088: the transfer GCHandle the C# wrapper allocated.
   is BridgeType.BoundInterface -> cOpaquePointer
+  // ADR-160: both of a callback's two slots are opaque addresses -- the ADR-102 thunk and the
+  // GCHandle ctx it dispatches through. Non-null: C# always supplies a real thunk address, and a
+  // nullable `CFunction` reinterpret would need a guard at every invocation.
+  is BridgeType.Callback -> cOpaquePointer
   // ADR-077 sub-item 1: a value class crosses as its underlying wire value, so the export's
   // parameter is typed as the underlying (String today) and `loweredArgument` re-wraps it.
   is BridgeType.ValueClass -> kotlinInputType(type.underlying, wireType)
@@ -1172,6 +1176,13 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
 
     is BridgeType.Collection -> loweredCollectionExpression(parameter.name, type)
 
+    // ADR-160: the Kotlin argument is a real Kotlin lambda that calls back out through the thunk
+    // address, so the whole lowering is one expression and the member is invoked exactly as the
+    // author wrote it. The reinterpret lives inside the lambda deliberately: it is a cast, it costs
+    // nothing per invocation, and it keeps the expression self-contained (a second callback
+    // parameter on the same member cannot collide with this one's locals).
+    is BridgeType.Callback -> loweredCallbackExpression(parameter.name, type)
+
     // ADR-151: the handle holds the Kotlin ByteArray `nuget_bytes_create` built from the caller's
     // buffer, so the lowering is the plain handle read an object parameter uses.
     BridgeType.ByteArray -> "${parameter.name}.asStableRef<kotlin.ByteArray>().get()"
@@ -1239,6 +1250,83 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
 
     else -> error("Forward Kotlin plan emitter has no argument lowering for $type")
   }
+
+/**
+ * ADR-160: the Kotlin lambda that forwards an invocation out to the C# delegate, through the
+ * ADR-102 thunk address in `${name}Ptr` and the GCHandle ctx echoed in `${name}UserData`.
+ *
+ * Ownership is ADR-036's, unchanged by the route migration: a `String` or object PAYLOAD is
+ * retained on the way out and never released here, because the C# side is what frees it
+ * (`NugetMarshal.FromHandle<string>` disposes as it reads; an exported object's wrapper takes the
+ * raw handle and its `Dispose()` is the free). A `String` RESULT is the other way round: C# mints
+ * the box with `WrapString` and no C# owner ever frees it, so this side releases it after reading.
+ * A by-value scalar (and an enum ordinal) mints nothing in either direction.
+ */
+private fun loweredCallbackExpression(name: String, type: BridgeType.Callback): String {
+  fun wireKotlinType(component: BridgeType): String = when (component) {
+    is BridgeType.Primitive ->
+      if (component.kind == PrimitiveKind.BOOLEAN) "Byte" else component.kind.simpleKotlinName()
+
+    is BridgeType.Enum -> "Int"
+    BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface -> "COpaquePointer?"
+    else -> error("Forward Kotlin plan emitter has no callback wire type for $component")
+  }
+
+  val parameterNames: List<String> = type.parameters.indices.map { index -> "${name}Arg$index" }
+  val signature: String = (
+      type.parameters.map(::wireKotlinType) + "COpaquePointer"
+      ).joinToString(", ")
+  val resultWire: String = when (val result: BridgeType = type.result) {
+    BridgeType.Unit -> "Unit"
+    else -> wireKotlinType(result)
+  }
+  val arguments: String = (
+      type.parameters.mapIndexed { index, component ->
+        val argument: String = parameterNames[index]
+        when (component) {
+          is BridgeType.Primitive ->
+            if (component.kind == PrimitiveKind.BOOLEAN) {
+              "if ($argument) 1.toByte() else 0.toByte()"
+            } else {
+              argument
+            }
+
+          is BridgeType.Enum -> "$argument.ordinal"
+          // `as Any` so `NugetHandles.retain` takes the String through its object overload, the
+          // legacy route's spelling.
+          BridgeType.String -> "NugetHandles.retain($argument as Any)"
+          else -> "NugetHandles.retain($argument)"
+        }
+      } + "${name}UserData"
+      ).joinToString(", ")
+
+  val header: String =
+    if (parameterNames.isEmpty()) "{" else "{ ${parameterNames.joinToString(", ")} ->"
+  return buildString {
+    appendLine(header)
+    appendLine(
+      "  val ${name}Fn = ${name}Ptr.reinterpret<CFunction<($signature) -> $resultWire>>()"
+    )
+    when (val result: BridgeType = type.result) {
+      BridgeType.Unit -> appendLine("  ${name}Fn.invoke($arguments)")
+      BridgeType.String -> {
+        appendLine("  val ${name}Box = ${name}Fn.invoke($arguments)!!")
+        appendLine("  val ${name}Value = ${name}Box.asStableRef<String>().get()")
+        appendLine("  NugetHandles.release(${name}Box)")
+        appendLine("  ${name}Value")
+      }
+
+      is BridgeType.Primitive -> if (result.kind == PrimitiveKind.BOOLEAN) {
+        appendLine("  ${name}Fn.invoke($arguments) != 0.toByte()")
+      } else {
+        appendLine("  ${name}Fn.invoke($arguments)")
+      }
+
+      else -> error("Forward Kotlin plan emitter has no callback result lowering for $result")
+    }
+    append("}")
+  }
+}
 
 /**
  * ADR-077 sub-item 4: the wire-to-underlying step composed inside a value-class re-wrap. Shared by

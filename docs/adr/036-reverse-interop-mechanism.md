@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted
+Accepted. [ADR-160](160-callback-parameter-on-the-forward-plan.md) moves the per-call lambda
+parameter's own method return, and the projection for the position matrix, onto the ADR-062 plan;
+the delegate, `GCHandle` mechanism, and payload ownership rule decided here are unchanged.
 
 ## Context
 

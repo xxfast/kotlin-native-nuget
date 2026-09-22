@@ -5,7 +5,7 @@ lives: a Kotlin lambda exposed to C# as a disposable handle, a C# lambda Kotlin 
 call and does not keep, or a C# lambda Kotlin stores as an observer until you dispose it. A fourth
 shape lets a C# class implement a Kotlin interface and register it as such an observer.
 
-## Kotlin → C#: lambda properties and returns
+## Kotlin → C#: lambda properties and returns {id="kotlin-c-lambda-properties-and-returns"}
 
 ```kotlin
 val onMeow: () -> String = { "Meow! My name is $name" }
@@ -53,6 +53,18 @@ lambda-typed property you expect is missing, check for this rather than a build 
 fun describeWith(format: (String) -> String): String = format(name)
 fun nicknamesMatching(predicate: (String) -> Boolean): List<String> = nicknames.filter(predicate)
 fun forEachToy(action: (Toy) -> Unit) = toys.forEach(action)
+
+// The member's own (outer) return survives a lambda parameter, at any type the plan supports.
+fun countTicks(listener: (Int) -> Unit): Int {
+  repeat(beats) { listener(it + 1) }
+  return beats
+}
+
+// The lambda's own (inner) return crosses back by value too.
+fun sumWeights(weigh: (Int) -> Int): Int = (1..beats).sumOf { weigh(it) }
+
+// A non-lambda parameter is fine beside the lambda.
+fun countAbove(min: Int, listener: (Int) -> Unit): Int { /* ... */ }
 ```
 
 ```C#
@@ -61,24 +73,39 @@ string described = cat.DescribeWith(name => $"This cat is called {name}");
 
 int minLength = 6;
 IReadOnlyList<string> matching = cat.NicknamesMatching(n => n.Length >= minLength);
+
+using var metronome = new Metronome(4);
+var seen = new List<int>();
+int total = metronome.CountTicks(t => seen.Add(t));   // 4, seen == [1, 2, 3, 4]
+
+int sum = metronome.SumWeights(t => t * 2);            // 20
+int fired = metronome.CountAbove(2, t => seen.Add(t)); // only ticks above 2 fire
 ```
 
-Pass an ordinary `Func<>`/`Action<>`, including a capturing lambda or a method group, arity 0 and
-up. Kotlin invokes it once per call and does not retain a reference afterwards; do not rely on a
+Pass an ordinary `Func<>`/`Action<>`, including a capturing lambda or a method group, arity 0 to 3.
+Kotlin invokes it once per call and does not retain a reference afterwards; do not rely on a
 delegate passed here firing again later (use a stored callback, below, for that). A `kotlin.*`
 primitive parameter (`Int`, `Boolean`, `Byte`, `Double`, ...) crosses by value, not through a
-handle, so the callback body receives it directly with nothing to dispose. A method with a per-call
-lambda parameter must itself return `Unit` or a marshalled type such as `String`, as `DescribeWith`
-and `NicknamesMatching` do above; one whose own return is a raw primitive such as `Int` fails
-packaging with a forward ABI mismatch instead of generating. `Flow<T>` and a suspend lambda
-(`suspend (T) -> R`) are not supported as a parameter type at all.
+handle, so the callback body receives it directly with nothing to dispose; so does a primitive or
+`String` value the lambda itself returns. The member's own return can be a scalar, `String`, an
+exported object, its nullable twin, or an enum, the same set an ordinary method return supports.
+
+The same route binds a method declared on a sealed arm (see
+[Lambda parameters on a sealed arm](interfaces-abstract-sealed.md#sealed-lambda-generated-c)), a
+top-level function, or an extension function.
+
+A few shapes are not supported and are refused by name (a build-time skip, not broken generated
+code): `Char` as either the lambda's payload or its own return; an exported object or enum as the
+lambda's *own* return (as opposed to the member's return, which supports both); a nullable lambda;
+a suspend lambda (`suspend (T) -> R`); a lambda type nested inside a `List`/`Set`/`Map`; a callback
+at a *result* position (a member returning a lambda rather than taking one; return a
+[Kotlin lambda property](#kotlin-c-lambda-properties-and-returns) instead); and a lambda parameter
+on a constructor, a data class's `copy()`, an enum-arm box constructor, or a value-class member,
+since none of those can hold the lambda's `GCHandle` open past the single call that creates them.
 
 An exception thrown inside the lambda body is not caught and turned into a Kotlin exception: it
 terminates the process (`Environment.FailFast`). Catch inside the lambda if you need to keep the
 process alive.
-
-The same route also binds a method declared on a sealed arm; see
-[Lambda parameters on a sealed arm](interfaces-abstract-sealed.md#sealed-lambda-generated-c).
 
 ## Ownership of a callback payload {id="ownership-of-a-callback-payload"}
 
@@ -100,6 +127,19 @@ cat.ForEachToy(toy =>
 A generated wrapper has `Dispose()` and no finalizer, so an object payload your callback never
 disposes leaks for the life of the process; `NugetMarshal.LiveHandles` can help diagnose that. A
 primitive payload never had a handle, so there is nothing to own.
+
+The rule applies just as much when the lambda also returns a value picked from its payload: dispose
+the payload before returning from it, not after.
+
+```C#
+using Chime chime = metronome.FirstChime(c =>
+{
+    using (c) { return c.Weight >= 2; }
+});
+```
+
+The object `FirstChime` itself returns is a separate, freshly retained handle and is yours to
+dispose too, the same as any other exported-object return.
 
 ## C# → Kotlin: stored callbacks
 

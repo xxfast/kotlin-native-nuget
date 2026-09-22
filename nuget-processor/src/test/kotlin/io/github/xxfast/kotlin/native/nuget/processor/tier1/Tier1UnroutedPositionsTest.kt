@@ -38,8 +38,9 @@ import kotlin.test.assertTrue
  *    they ARE re-emitted, on the *implementing class*, and are missing only from the C# interface;
  *  - the cross-namespace generic return (`fun f(): Box<Int>` at top level) — emitted unqualified,
  *    `CS0246`;
- *  - `fun callbackParamOnClass(cb: (Int) -> Unit): Int` (non-`Unit` return) — a hard forward-ABI
- *    mismatch, so the `Unit` form is the one mirrored below.
+ *  - `fun callbackParamOnClass(cb: (Int) -> Unit): Int` (non-`Unit` return): ADR-160 binds it off
+ *    the plan, so the hard forward-ABI mismatch it used to be is gone; the `Unit` form below is
+ *    still the one this class mirrors.
  *
  * `compiledClean` is deliberately not asserted: the class flow route emits `CFunction`-typed
  * subscription callbacks that `Tier1CinteropStub` does not model (the same pre-existing harness
@@ -60,9 +61,10 @@ class Tier1UnroutedPositionsTest {
     Cell(member, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION)
 
   /**
-   * The 29 individually-named silent cells. The three `Dock` secondary constructors are the 30th
-   * to 32nd: they all render the one symbol `Dock.<init>`, so they are counted rather than
-   * matched one by one ([constructorCells]).
+   * The 26 individually-named silent cells (ADR-160 took three of the original 29 out: the object,
+   * top-level and extension per-call lambda parameters all bind off the plan now). The three
+   * `Dock` secondary constructors are the 30th to 32nd: they all render the one symbol
+   * `Dock.<init>`, so they are counted rather than matched one by one ([constructorCells]).
    */
   private val cells: List<Cell> = listOf(
     // --- ordinary class owner (`Depot`) -------------------------------------------------------
@@ -87,11 +89,12 @@ class Tier1UnroutedPositionsTest {
     returns("tier1.unrouted.Depot.genericElementOnClass"),
 
     // --- object owner (`DepotRegistry`) -------------------------------------------------------
-    // rows 3a / 13a / 22a / 18a: no legacy route is keyed to an object owner at all, so even the
-    // shapes that bind on a class vanish here.
+    // rows 3a / 22a / 18a: no LEGACY route is keyed to an object owner at all, so the Flow and
+    // generic shapes that bind on a class vanish here. Row 13a (the per-call lambda parameter) is
+    // no longer one of them: it is on the ADR-062 plan since ADR-160, which is keyed to the
+    // position rather than to the owner kind.
     returns("tier1.unrouted.DepotRegistry.flowReturnOnObject"),
     input("tier1.unrouted.DepotRegistry.flowParamOnObject"),
-    input("tier1.unrouted.DepotRegistry.callbackParamOnObject"),
     returns("tier1.unrouted.DepotRegistry.callbackReturnOnObject"),
     returns("tier1.unrouted.DepotRegistry.genericReturnOnObject"),
     input("tier1.unrouted.DepotRegistry.genericParamOnObject"),
@@ -112,7 +115,6 @@ class Tier1UnroutedPositionsTest {
     // `ForwardCallablePlanner.extensionEntry`), so these names have no `Depot.` segment.
     returns("tier1.unrouted.flowReturnOnExtension"),
     input("tier1.unrouted.flowParamOnExtension"),
-    input("tier1.unrouted.callbackParamOnExtension"),
     returns("tier1.unrouted.genericReturnOnExtension"),
     structural("tier1.unrouted.structuralOnExtension"),
 
@@ -123,7 +125,6 @@ class Tier1UnroutedPositionsTest {
     // name it as a skip and stop emitting, not to invent one.
     returns("tier1.unrouted.flowReturnOnTopLevel"),
     input("tier1.unrouted.flowParamOnTopLevel"),
-    input("tier1.unrouted.callbackParamOnTopLevel"),
     input("tier1.unrouted.genericParamOnTopLevel"),
     // row 16: `fun <T> f(): List<T>` — the structural top-level route refuses it internally
     // (`paramIndex == -1 -> return`), and that refusal is total for the declaration, so the
@@ -331,7 +332,6 @@ class Tier1UnroutedPositionsTest {
       "GenericElementOnClass(",
       "FlowReturnOnObject(",
       "FlowParamOnObject(",
-      "CallbackParamOnObject(",
       "CallbackReturnOnObject(",
       "GenericReturnOnObject(",
       "GenericParamOnObject(",
@@ -341,12 +341,10 @@ class Tier1UnroutedPositionsTest {
       "StructuralOnInterface(",
       "FlowReturnOnExtension(",
       "FlowParamOnExtension(",
-      "CallbackParamOnExtension(",
       "GenericReturnOnExtension(",
       "StructuralOnExtension(",
       "FlowReturnOnTopLevel(",
       "FlowParamOnTopLevel(",
-      "CallbackParamOnTopLevel(",
       "GenericParamOnTopLevel(",
       "StructuralRefusedOnTopLevel(",
     ).forEach { member ->
@@ -373,6 +371,39 @@ class Tier1UnroutedPositionsTest {
       "warning about a member the consumer can still call is a false positive; " +
           "kspWarnings=${result.kspWarnings}",
     )
+  }
+
+  /**
+   * ADR-160: the three cells this matrix row LOST when the per-call lambda parameter moved onto the
+   * ADR-062 plan. The plan is keyed to the position rather than to the owner kind, so an object
+   * member, a top-level function and an extension all bind the same shape a class method does, each
+   * with its own non-`Unit` return. Asserted positively, so the row cannot quietly go back to
+   * refusing them, and their names are gone from the two absence lists above for the same reason.
+   */
+  @Test
+  fun `the object top-level and extension lambda parameters bind off the plan`() {
+    val result: Tier1Result = run()
+
+    listOf(
+      "public static int CallbackParamOnObject(Action<int> cb)",
+      "public static int CallbackParamOnTopLevel(Action<int> cb)",
+      "int CallbackParamOnExtension(",
+    ).forEach { member ->
+      assertTrue(
+        result.generatedCSharp.contains(member),
+        "ADR-160 binds this position now; expected `$member`",
+      )
+    }
+    listOf(
+      "tier1.unrouted.DepotRegistry.callbackParamOnObject",
+      "tier1.unrouted.callbackParamOnTopLevel",
+      "tier1.unrouted.callbackParamOnExtension",
+    ).forEach { symbol ->
+      assertFalse(
+        result.kspWarnings.any { warning -> warning.contains(symbol) },
+        "a bound member must not be named as a skip; kspWarnings=${result.kspWarnings}",
+      )
+    }
   }
 
   @Test

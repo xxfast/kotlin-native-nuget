@@ -1998,7 +1998,17 @@ class NugetProcessor(
       }
     }
 
-    val hasLambdaParamMethods: Boolean = armsHaveLambdaParamMethods || classesHaveLambdaParamMethods
+    // ADR-160: the plan owns per-call callbacks at owners `classes` does not list (a sealed arm, a
+    // top-level function, an extension), and the arm selector above no longer sees a planned member
+    // at all, so the three imports are gated on the CATALOG as well. Same defect class the ADR-116
+    // amendment above fixed for the arm: without this a module whose only callback owner is a
+    // planned arm or top-level member emits `reinterpret<CFunction<...>>` with no import.
+    val plansHaveCallbackParameters: Boolean = callableCatalog.plans.any { plan ->
+      plan.publicSignature.parameters.any { parameter -> parameter.type is BridgeType.Callback }
+    }
+
+    val hasLambdaParamMethods: Boolean = armsHaveLambdaParamMethods ||
+        classesHaveLambdaParamMethods || plansHaveCallbackParameters
 
     // ADR-116 amendment (2026-09-13): the arm half of both gates below. A sealed class is not in
     // `classes` (ADR-009), so a module whose only callback owner is a pair-bearing arm would emit

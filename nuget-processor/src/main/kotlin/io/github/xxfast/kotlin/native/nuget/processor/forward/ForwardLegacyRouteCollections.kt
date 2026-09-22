@@ -109,6 +109,65 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
 private fun BridgeType.isLegacyScalar(): Boolean =
   this is BridgeType.Primitive || this is BridgeType.Char || this is BridgeType.String
 
+/**
+ * The Kotlin function types the per-call callback route keys on. Its own copy of the list rather
+ * than an import of `LAMBDA_TYPES`, so a member of this file needs nothing from `cir/`.
+ */
+private val LEGACY_CALLBACK_TYPES: Set<String> = setOf(
+  "kotlin.Function0", "kotlin.Function1", "kotlin.Function2", "kotlin.Function3",
+)
+
+/** The three outer returns the hand-written per-call route can actually marshal. */
+private val LEGACY_CALLBACK_RETURNS: Set<String> = setOf(
+  "kotlin.Unit", "kotlin.String", "kotlin.collections.List", "kotlin.collections.MutableList",
+)
+
+/**
+ * ADR-160 step 4: why the **hand-written** per-call lambda-parameter route cannot carry this
+ * member, or null when it can. Read by every selector of that route, on both halves, so a member it
+ * cannot carry is a NAMED SKIP instead of the two failure modes it shipped with:
+ *
+ *  - a non-`Unit`, non-`String`, non-`List` outer return made the C# half declare the extern as
+ *    `IntPtr` while the Kotlin half returned the scalar, which the ADR-055 contract turned into
+ *    `Forward ABI mismatch for <export>; ... -> pointer, actual ... -> int` and failed the whole
+ *    build (ROADMAP line 75's symptom),
+ *  - a non-lambda parameter (or a second lambda) was silently dropped by BOTH halves, and the
+ *    generated Kotlin then failed to compile with `No value passed for parameter 'x'`.
+ *
+ * Members whose lambda the ADR-062 plan owns never reach here: the plan carries every outer return
+ * its own result matrix carries, mixed parameters included. What is left on this route is exactly
+ * the payload/result shapes the plan's callback lowering declines (`Char`, an object or enum lambda
+ * return, a suspend lambda), and those keep working at the returns listed above.
+ */
+internal fun legacyRefusedCallbackMember(method: KSFunctionDeclaration): String? {
+  val lambdas: List<KSValueParameter> = method.parameters.filter { parameter ->
+    parameter.type.resolve().expandAliases().declaration.qualifiedName?.asString() in
+        LEGACY_CALLBACK_TYPES
+  }
+  if (lambdas.size > 1) {
+    return "it declares ${lambdas.size} lambda parameters, and this route carries exactly one"
+  }
+  val other: KSValueParameter? =
+    method.parameters.firstOrNull { parameter -> parameter !in lambdas }
+  if (other != null) {
+    return "it declares the non-lambda parameter `${other.name?.asString() ?: "_"}` beside its " +
+        "lambda, which this route drops from both halves"
+  }
+  val returnType: KSType? = method.returnType?.resolve()?.expandAliases()
+  val returnName: String = returnType?.declaration?.qualifiedName?.asString() ?: "kotlin.Unit"
+  val nullable: Boolean = method.returnType?.resolve()?.isMarkedNullable == true ||
+      returnType?.isMarkedNullable == true
+  if (nullable) {
+    return "its return type `$returnName?` is nullable, which this route spells non-null on both " +
+        "halves"
+  }
+  if (returnName !in LEGACY_CALLBACK_RETURNS) {
+    return "its return type `$returnName` is not one this route can marshal (it carries `Unit`, " +
+        "`String` and `List`)"
+  }
+  return null
+}
+
 /** [legacyParameterShape] for every parameter of a member, in declaration order. */
 internal fun ForwardBridgeTypeClassifier.legacyParameterShapes(
   parameters: List<KSValueParameter>,

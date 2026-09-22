@@ -35,9 +35,46 @@ package io.github.xxfast.kotlin.native.nuget.test.metronome
  * Every listener is invoked more than once with a changing payload: a single invocation would pass
  * against a thunk that delivered a constant, and the tests assert the exact sequence.
  *
+ * ADR-160 (the per-call callable moving onto the ADR-062 forward callable plan) adds two further
+ * axes on the same members, and they are kept apart everywhere below:
+ *
+ *  - the **METHOD (outer) return**, the member's own result (`fun countTicks(cb: (Int) -> Unit):
+ *    Int`). Every outer-axis cell takes a `Unit`-returning lambda, so a failure names the outer
+ *    axis and nothing else,
+ *  - the **LAMBDA (inner) return**, what the C# lambda hands back (`fun sumWeights(weigh: (Int) ->
+ *    Int): Int`). The inner-axis cells below unavoidably carry an outer return too; where the two
+ *    are the same Kotlin type ([sumWeights], [totalMicros], [totalTempo]) the cell cannot tell the
+ *    axes apart on its own, and it is the Tier 1 text pin (delegate return type, `CFunction`
+ *    signature) that isolates the inner half. [joinTicks] and [tickLabel] are green today
+ *    (`Cat.describeWith` precedent) and are regression anchors, not reds.
+ *
+ * Beyond the two return axes the ADR-062 plan is what makes the rest of this file expressible at
+ * all, so the fixture crosses exactly the cells the legacy route refuses and no more:
+ *
+ *  - an **exported-object** outer return ([firstChime]) and its **nullable** twin
+ *    ([firstChimeOrNull], the `firstOrNull` shape), which is the only cell that mints a handle out
+ *    of a callback member and therefore the only one with LeakTests rows,
+ *  - an **enum** outer return ([moodAfter]),
+ *  - a **mixed parameter list** ([countAbove]), a non-lambda parameter next to the lambda, which
+ *    today's route silently drops,
+ *  - the **top-level** and **extension** positions, in the sibling `Tallies.kt` (ADR-007 puts a
+ *    top-level function in a static class named after its file, and `Metronome` is taken by the
+ *    class),
+ *  - a **sealed arm** receiver ([Cadence.Steady.countTicks]), the third owner kind the route has to
+ *    key its export prefix from.
+ *
+ * Deliberately absent, so the cells above stay readable: suspend lambdas, a lambda that returns a
+ * lambda, and collections in the lambda payload.
+ *
  * Oreo is the tick-counter of this house. Mylo just follows the tempo.
  */
 class Metronome(private val beats: Int) {
+  /** The configured beat count, so [everyOtherTick] can drive its own loop without nesting. */
+  val beatCount: Int get() = beats
+
+  /** The chimes this metronome can pick from. Oreo is the light one, Mylo lands heavier. */
+  private val chimes: List<Chime> = listOf(Chime("Oreo", 1), Chime("Mylo", 2), Chime("Both", 3))
+
   /** Invokes [listener] with `1..beats`, in order. */
   fun onTick(listener: (Int) -> Unit) = repeat(beats) { listener(it + 1) }
 
@@ -53,4 +90,111 @@ class Metronome(private val beats: Int) {
 
   /** Invokes [listener] once per beat with a tempo that climbs by a half step each time. */
   fun onTempo(listener: (Double) -> Unit) = repeat(beats) { listener(60.0 + it * 0.5) }
+
+  // ---------------------------------------------------------------------------------------------
+  // METHOD (outer) return axis. Inner lambda is always `Unit` here.
+  // ---------------------------------------------------------------------------------------------
+
+  /** Outer `Int`: the beats it ticked. The headline cell of ROADMAP line 75. */
+  fun countTicks(listener: (Int) -> Unit): Int {
+    repeat(beats) { listener(it + 1) }
+    return beats
+  }
+
+  /** Outer `Boolean`, the one scalar that is not its own wire (it crosses as a byte). */
+  fun ranAnyTick(listener: (Int) -> Unit): Boolean {
+    repeat(beats) { listener(it + 1) }
+    return beats > 0
+  }
+
+  /**
+   * Outer `Double`: a floating result comes back in a different register class from the
+   * integers.
+   */
+  fun runSeconds(listener: (Int) -> Unit): Double {
+    repeat(beats) { listener(it + 1) }
+    return beats * 0.5
+  }
+
+  /** Outer `String`, green today (`Cat.describeWith`): the regression anchor of the outer axis. */
+  fun tickLabel(listener: (Int) -> Unit): String {
+    repeat(beats) { listener(it + 1) }
+    return "$beats beats for Oreo"
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // LAMBDA (inner) return axis. The C# lambda hands a scalar back by value.
+  // ---------------------------------------------------------------------------------------------
+
+  /** Inner `Int`, by value in both directions. */
+  fun sumWeights(weigh: (Int) -> Int): Int = (1..beats).sumOf { weigh(it) }
+
+  /** Inner `Long`, the 64-bit integer wire. */
+  fun totalMicros(microsOf: (Int) -> Long): Long = (1..beats).sumOf { microsOf(it) }
+
+  /** Inner `Double`, the floating wire. */
+  fun totalTempo(tempoOf: (Int) -> Double): Double = (1..beats).sumOf { tempoOf(it) }
+
+  /** Inner `String`, green today (`Cat.describeWith`): the regression anchor of the inner axis. */
+  fun joinTicks(nameOf: (Int) -> String): String = (1..beats).joinToString("-") { nameOf(it) }
+
+  // ---------------------------------------------------------------------------------------------
+  // Outer returns the legacy route refuses: exported object, its nullable twin, enum.
+  // ---------------------------------------------------------------------------------------------
+
+  /**
+   * Outer **exported object**: the first chime the C# predicate accepts, retained on the way out so
+   * the consumer disposes it. Throws when nothing matches, which is why the nullable twin exists.
+   */
+  fun firstChime(where: (Chime) -> Boolean): Chime = chimes.first(where)
+
+  /** Outer **nullable exported object**, the `firstOrNull` shape: both branches are reachable. */
+  fun firstChimeOrNull(where: (Chime) -> Boolean): Chime? = chimes.firstOrNull(where)
+
+  /** Outer **enum**: crosses as its ordinal, not as a handle. */
+  fun moodAfter(listener: (Int) -> Unit): Mood {
+    repeat(beats) { listener(it + 1) }
+    return when {
+      beats >= 6 -> Mood.FRANTIC
+      beats >= 3 -> Mood.BRISK
+      else -> Mood.CALM
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Mixed parameter list: a non-lambda parameter next to the lambda. Today both halves drop it.
+  // ---------------------------------------------------------------------------------------------
+
+  /** Invokes [listener] only for beats above [min], and returns how many times it fired. */
+  fun countAbove(min: Int, listener: (Int) -> Unit): Int {
+    var fired = 0
+    (1..beats).forEach { beat ->
+      if (beat > min) {
+        listener(beat)
+        fired++
+      }
+    }
+    return fired
+  }
+}
+
+/** A chime Oreo or Mylo can set off. Exported, so [Metronome.firstChime] returns a handle. */
+class Chime(val name: String, val weight: Int)
+
+/** How wound up the house is once the metronome has run. */
+enum class Mood { CALM, BRISK, FRANTIC }
+
+/**
+ * The **sealed arm** owner kind: a per-call lambda member declared on an arm, which has to key its
+ * export prefix off the arm (ADR-116/118/124 did the same for the plain, suspend and flow rows).
+ */
+sealed class Cadence {
+  /** Oreo's pulse: steady, and it counts its own ticks. */
+  class Steady(val span: Int) : Cadence() {
+    /** Outer `Int` on an arm receiver. */
+    fun countTicks(listener: (Int) -> Unit): Int {
+      repeat(span) { listener(it + 1) }
+      return span
+    }
+  }
 }

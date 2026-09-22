@@ -69,6 +69,11 @@ object DepotRegistry {
 
   fun flowParamOnObject(events: Flow<Int>): Int = 0
 
+  /**
+   * Row 13a. Predicted NONE; BINDS since ADR-160 -- the per-call callback parameter is on the
+   * ADR-062 plan, which is keyed to the position rather than to the owner kind, so an object member
+   * carries it exactly as a class method does. Shape unchanged.
+   */
   fun callbackParamOnObject(cb: (Int) -> Unit): Int {
     cb(1)
     return 1
@@ -111,7 +116,11 @@ fun flowParamOnTopLevel(events: Flow<Int>): Int = 0
 /** row 11: CALLBACK_PROTOCOL, lambda return on a top-level function. Predicted RE. */
 fun callbackReturnOnTopLevel(): (String) -> String = { it }
 
-/** row 12: CALLBACK_PROTOCOL, lambda parameter on a top-level function. Predicted NONE. */
+/**
+ * row 12: CALLBACK_PROTOCOL, lambda parameter on a top-level function. Predicted NONE; BINDS
+ * since ADR-160, which moved the per-call callback parameter onto the ADR-062 plan (the plan is
+ * keyed to the position, not to the owner kind). Shape unchanged.
+ */
 fun callbackParamOnTopLevel(cb: (Int) -> Unit): Int {
   cb(1)
   return 1
@@ -132,7 +141,10 @@ fun Depot.flowReturnOnExtension(): Flow<Int> = flowOf(1)
 /** row 6: FLOW_PROTOCOL parameter on an extension. Predicted NONE. */
 fun Depot.flowParamOnExtension(events: Flow<Int>): Int = 0
 
-/** row 13: CALLBACK_PROTOCOL parameter on an extension. Predicted NONE. */
+/**
+ * row 13: CALLBACK_PROTOCOL parameter on an extension. Predicted NONE; BINDS since ADR-160,
+ * on the per-receiver `DepotExtensions` class. Shape unchanged.
+ */
 fun Depot.callbackParamOnExtension(cb: (Int) -> Unit): Int {
   cb(1)
   return 1

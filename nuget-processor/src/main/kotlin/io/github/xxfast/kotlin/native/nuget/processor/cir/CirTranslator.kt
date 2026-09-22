@@ -4,7 +4,9 @@ import com.google.devtools.ksp.processing.KSPLogger
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.csharpIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
+import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBoundInterface
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardCallbackDelegate
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
 import com.google.devtools.ksp.symbol.ClassKind
@@ -671,6 +673,20 @@ internal fun translate(
     // empty-class bug.
     if (members.isNotEmpty()) namespaces.mergeStaticClass(namespace, className, members)
   }
+
+  // ADR-160: every per-call callback parameter the plan owns declares its delegate here, off the
+  // plan catalog rather than per translated member, so the `Interop.cs` helper block and each call
+  // site are minted from the same [BridgeType.Callback] and one delegate covers every member that
+  // shares its wire. Deduplicated by name, exactly as the bridge delegates below are.
+  val plannedCallbackDelegates: List<CirCallbackDelegate> = callableCatalog.plans
+    .flatMap { plan -> plan.publicSignature.parameters }
+    .mapNotNull { parameter -> parameter.type as? BridgeType.Callback }
+    .map { callback -> callback.forwardCallbackDelegate() }
+  tracker.callbackDelegates.addAll(
+    plannedCallbackDelegates.filter { delegate ->
+      tracker.callbackDelegates.none { existing -> existing.name == delegate.name }
+    }.distinctBy { delegate -> delegate.name },
+  )
 
   if (tracker.suspendLambdaArities.isNotEmpty()) tracker.needsAsync = true
 

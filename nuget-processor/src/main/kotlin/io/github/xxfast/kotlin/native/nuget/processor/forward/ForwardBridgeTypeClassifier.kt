@@ -176,6 +176,14 @@ internal class ForwardBridgeTypeClassifier(
     if (qualifiedName !in context.exportedObjectHandles && classDeclaration.isStdlibThrowable()) {
       return BridgeType.Throwable
     }
+    // ADR-160: a plain Kotlin function type whose payload and result are both shapes the plan's
+    // two callback lowerings implement becomes a first-class [BridgeType.Callback]. Ahead of
+    // `specializedProtocol`, which is what every other (and every non-parameter) function-type
+    // spelling still falls through to, so the legacy per-call route keeps exactly the shapes the
+    // plan does not carry.
+    if (qualifiedName in LAMBDA_TYPES) {
+      callbackType(type)?.let { return it }
+    }
     specializedProtocol(qualifiedName)?.let { return it }
     collectionType(qualifiedName, type.arguments)?.let { return it }
 
@@ -658,6 +666,47 @@ internal class ForwardBridgeTypeClassifier(
     "kotlin.Double" -> BridgeType.Primitive(PrimitiveKind.DOUBLE)
     "kotlin.Unit" -> BridgeType.Unit
     else -> null
+  }
+
+  /**
+   * ADR-160: the [BridgeType.Callback] for a `kotlin.FunctionN` type, or null when either half of
+   * the plan's callback lowering cannot carry one of its components, in which case the caller falls
+   * through to the `lambda <fqn>` [BridgeType.SpecializedProtocol] and the member takes the named
+   * `CALLBACK_PROTOCOL` skip (or keeps its legacy route where one exists).
+   *
+   * The admitted payload set is exactly ADR-036's table minus what has no crossing convention on
+   * any callback route: a primitive by value (`Boolean` over its `Byte` wire), a `String` or an
+   * exported object/interface over a handle, an enum over its ordinal. The admitted result set is
+   * narrower still, because a value coming OUT of the C# lambda has an ownership question ADR-160
+   * left to a sibling item: `Unit`, a primitive by value, or a `String` over the box C# mints and
+   * Kotlin releases.
+   */
+  private fun callbackType(type: KSType): BridgeType.Callback? {
+    val arguments: List<KSTypeArgument> = type.arguments
+    if (arguments.isEmpty()) return null
+    val components: List<BridgeType> = arguments.map { argument ->
+      val resolved: KSType = argument.type?.resolve() ?: return null
+      classify(resolved)
+    }
+    val parameters: List<BridgeType> = components.dropLast(1)
+    val result: BridgeType = components.last()
+    if (!parameters.all { parameter -> parameter.isCallbackPayload() }) return null
+    if (!result.isCallbackResult()) return null
+    return BridgeType.Callback(parameters, result)
+  }
+
+  /** The payload shapes both callback halves lower, in. See [callbackType]. */
+  private fun BridgeType.isCallbackPayload(): Boolean = when (this) {
+    is BridgeType.Primitive, BridgeType.String, is BridgeType.Enum -> true
+    is BridgeType.ObjectHandle -> !viaDiscriminator
+    is BridgeType.Interface -> true
+    else -> false
+  }
+
+  /** The result shapes both callback halves lower, out. See [callbackType]. */
+  private fun BridgeType.isCallbackResult(): Boolean = when (this) {
+    BridgeType.Unit, is BridgeType.Primitive, BridgeType.String -> true
+    else -> false
   }
 
   private fun specializedProtocol(qualifiedName: String): BridgeType.SpecializedProtocol? = when {

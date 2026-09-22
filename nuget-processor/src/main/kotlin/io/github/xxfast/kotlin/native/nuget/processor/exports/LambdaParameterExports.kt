@@ -12,6 +12,7 @@ import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_TO_CSHARP_PARAM
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedCallbackMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.optInMarker
@@ -249,6 +250,13 @@ internal fun KSClassDeclaration.forwardArmLambdaMethods(
 
   return candidates
     .filter { it !in paired }
+    // ADR-160: an arm's per-call member is planned like a class's, and the plan emits both halves.
+    .filterNot { it.hasPlannedCallbackParameter(classifier) }
+    // ADR-160 step 4: the arm reads the same named refusal an ordinary class does. Applied to THIS
+    // selector rather than to `isArmCallbackRoutable`, which the stored-callback and
+    // interface-bridge pair selectors share: their add/remove shapes are the ADR-037/039 route's
+    // business and this change must not widen what those two refuse.
+    .filterNot { legacyRefusedCallbackMember(it) != null }
     .filter { it.isArmCallbackRoutable(classifier) }
 }
 
