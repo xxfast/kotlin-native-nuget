@@ -69,6 +69,46 @@ internal fun String.csharpIdentifier(): String {
 }
 
 /**
+ * The C# spelling of a Kotlin *constant-shaped* name: an `enum class` entry and a `const val`
+ * (issue #285, dated amendment to ADR-006).
+ *
+ * ADR-006 wrote one line for entry names, "`SCREAMING_SNAKE_CASE` to `PascalCase`", and the
+ * expression that implemented it lowercased every `_` segment whole before uppercasing its first
+ * character. That is correct for the shape the ADR considered and wrong for every other one Kotlin
+ * admits: a PascalCase entry `SecondValue` reached C# as `Secondvalue`, `camelCase` as `Camelcase`,
+ * and `XMLParser_V2` as `XmlparserV2`, so a consumer could not predict the member name from the
+ * Kotlin declaration without compiling to read the CS0117 or opening `Interop.cs`.
+ *
+ * The rule is per SEGMENT, which is the only part that matters and the reason a whole-name gate was
+ * rejected: split on `_` and drop empty segments; a segment that contains at least one lowercase
+ * letter keeps its internal casing and only gets a capital first character; a segment with no
+ * lowercase letter (all caps, digits) lowercases first, exactly as before; join. So `XMLParser_V2`
+ * keeps the acronym AND joins across the `_`, while `HAPPY_CAT` still answers `HappyCat` and `AB1C`
+ * still answers `Ab1c`. `AB1C` is deliberate, not an oversight: it is indistinguishable from
+ * `HAPPY` to `Happy`, so preserving it would reverse ADR-006 and move every published enum.
+ *
+ * Two guards close shapes Kotlin accepts and C# does not (both were emitted raw before, as CS1001
+ * inside `Interop.cs` itself): a converted name that is empty (`_`, `__`) becomes `_`, and one that
+ * starts with a digit (`_1ST` to `1st`) takes a `_` prefix.
+ *
+ * No [toCSharpName] pass and none needed: the result's first character is always an uppercase
+ * letter or `_`, and every C# keyword is all lowercase, so a converted name can never spell one.
+ *
+ * The ABI does not see this name. An entry crosses as its ordinal `int` in every position
+ * (ADR-006), and a `const` is a compile-time literal, so this is a C#-surface spelling only.
+ */
+internal fun String.kotlinConstantToPascalCase(): String {
+  val converted: String = split("_")
+    .filter { segment -> segment.isNotEmpty() }
+    .joinToString("") { segment ->
+      val cased: String =
+        if (segment.any { character -> character.isLowerCase() }) segment else segment.lowercase()
+      cased.replaceFirstChar { character -> character.uppercase() }
+    }
+  return if (converted.isEmpty() || converted.first().isDigit()) "_$converted" else converted
+}
+
+/**
  * The name of the ADR-024 exception slot every synchronous C# import and wrapper body declares as
  * its trailing `out IntPtr error`. Named once here so the rename rule below cannot drift from the
  * ~60 `out IntPtr error` literals in `cir/` that the slot is actually rendered from.
