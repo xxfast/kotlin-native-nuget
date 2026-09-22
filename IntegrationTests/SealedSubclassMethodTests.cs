@@ -17,12 +17,14 @@ namespace IntegrationTests;
 /// This file cannot compile until the methods bind: every call below is CS1061 today. That is the
 /// red. After ADR-116 lands, <c>Job.Running</c> carries <c>Cancel</c>, <c>Label</c>, both
 /// <c>Step</c> overloads, <c>Next</c>, <c>Finish</c> and <c>Pick</c> as
-/// <c>job_running_*</c> exports beside the <c>job_running_get_progress</c> getter it already has.
+/// <c>job_running_*</c> exports beside the <c>test_issue115__job_running_get_progress</c> getter it
+/// already has.
 /// </para>
 /// <para>
 /// ADR-118 adds the suspend half. A <c>suspend fun</c> an arm <em>declares</em> now binds as
 /// <c>Task&lt;T&gt; ...Async(..., CancellationToken)</c> off the arm's own export prefix
-/// (<c>job_running_pause_async</c>), the arm gains <c>_scopeHandle</c>, <c>IAsyncDisposable</c> and
+/// (<c>test_issue115__job_running_pause_async</c>), the arm gains <c>_scopeHandle</c>,
+/// <c>IAsyncDisposable</c> and
 /// <c>DisposeAsync</c>, and a second same-named overload takes <c>_2</c> on <em>both</em> the
 /// <c>[DllImport]</c> EntryPoint and the private extern's C# name.
 /// </para>
@@ -30,7 +32,8 @@ namespace IntegrationTests;
 /// ADR-124 adds the flow half. A <c>Flow&lt;T&gt;</c> or <c>StateFlow&lt;T&gt;</c> an arm declares,
 /// at a property getter or at a method return, binds as <c>KotlinFlow&lt;T&gt;</c> /
 /// <c>KotlinStateFlow&lt;T&gt;</c> off the arm's own export prefix
-/// (<c>job_watching_get_ticks_collect</c>, <c>job_watching_labels_collect</c>), through the same
+/// (<c>test_issue115__job_watching_get_ticks_collect</c>,
+/// <c>test_issue115__job_watching_labels_collect</c>), through the same
 /// collect and value thunks the ordinary-class route uses. The method form is
 /// <c>SKIPPED_UNSUPPORTED_COMBINATION</c> today and the property form is dropped in silence, so
 /// <c>Ticks</c>, <c>Labels</c> and <c>Beats</c> are all CS1061 until it lands.
@@ -430,7 +433,8 @@ public class SealedSubclassMethodTests
 
     /// <summary>
     /// The numbering read off the entry points themselves: two <c>suspend</c> overloads on one arm
-    /// take <c>job_running_pause_async</c> and <c>job_running_pause_2_async</c>, composed off the
+    /// take <c>test_issue115__job_running_pause_async</c> and
+    /// <c>test_issue115__job_running_pause_2_async</c>, composed off the
     /// arm's prefix rather than the base's. This fails loudly if the planner's occurrence counter
     /// never reaches the suspend route's composition site — the awaited call above would still
     /// return <em>a</em> number.

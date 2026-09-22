@@ -262,6 +262,10 @@ same-owner receiver's own overloads keep numbering exactly as shipped (`Mitten.p
 `ForwardAbiContract.hint` was reworded from "derived from the unqualified simple name" to "derived
 from the declaration's own enclosing chain of simple names, never its package" to match.
 
+**Superseded by [ADR-163](163-export-symbol-package-qualification.md):** the entry point now IS
+package-qualified, so this sentence is no longer true; the hint is reworded again to describe the
+library-plus-package scheme.
+
 **Residual, not fixed here.** A typealias extension receiver still keeps the alias's own lowercased
 name in the C entry point while the C# extension class spells the expanded type, the pre-existing
 asymmetry this amendment does not move; harmless while every nested type is reachable without going

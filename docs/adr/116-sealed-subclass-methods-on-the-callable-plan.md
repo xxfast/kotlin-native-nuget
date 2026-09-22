@@ -123,8 +123,8 @@ Feed `sealedClasses.flatMap { it.getSealedSubclasses() }` into `classes` for met
 
 Rejected: `addClassExports` spells its prefix `cls.simpleName.lowercase()` (`ClassExports.kt`),
 so `Running.cancel` would export as `running_cancel` while every other `Running` export is
-`job_running_*` (`docs/backlog/two-exported-types-same-simple-name-different.md` already records
-the bare-simple-name prefix hazard); the C# half, `translateClass`, builds a `CirClass`, not a
+`job_running_*` (the bare-simple-name prefix hazard [ADR-163](163-export-symbol-package-qualification.md)
+later fixed for every route); the C# half, `translateClass`, builds a `CirClass`, not a
 `CirSealedSubclass`, so the sealed renderer could not consume it; and it re-opens exactly the
 one-type-two-classes duplicate issue #54 closed by excluding sealed subclasses from `classes`.
 

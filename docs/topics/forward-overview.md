@@ -139,6 +139,41 @@ See [The nuget {} DSL](nuget-dsl.md#cross-module-export-closure) for the full pr
     </p>
 </note>
 
+### Export symbols {id="export-symbols"}
+
+Every generated C entry point (the `@CName` on the Kotlin side, the `[DllImport(EntryPoint = "...")]`
+on the C# side) is `<library>_<package>__<the declaration's own name>`
+([ADR-163](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/163-export-symbol-package-qualification.md)):
+
+- `<library>` is the sanitised `packageId`/`libraryName` the `DllImport` already names, lowercased
+  with any run of non-`[a-z0-9_]` characters collapsed to one `_`. It is never empty, so no export
+  is ever a bare user identifier.
+- `<package>` is the declaring Kotlin package relative to `rootPackage`, `.` replaced by `_`; empty
+  and dropped (with its own `_`) for a declaration in `rootPackage` itself.
+- the rest is the declaration's own enclosing chain of simple names and member, exactly as before.
+
+A root-package `class Kitten` in a library named `Cats` exports `cats_kitten_create`; the same class
+under `com.example.cats.house` exports `cats_house__kitten_create`. Nobody spells this symbol by
+hand: it is a private contract between the generated `CNameExports.kt` and the generated
+`Interop.cs`, and it is free to change release to release. It is documented here only because it
+explains two things a consumer or library author can otherwise be surprised by:
+
+- **Two declarations with the same simple name in different packages both bind.** `a.Kitten` and
+  `b.Kitten`, or two `rollCall()` top-level functions, or two `LoadState` sealed classes, each in
+  their own package, no longer collide the way they used to; each reaches its own generated
+  namespace under the package mapping above.
+- **A top-level function is never dropped for sharing a name with a C runtime or Win32 symbol.**
+  On mingwX64, `ld.lld`'s MinGW auto-exporter silently removes any exported name that an import
+  library on the link line already exports (`signal`, `read`, `exit`, `Beep`, ...), so a bare
+  `fun signal(dbm: Int)` used to compile clean and then throw `EntryPointNotFoundException` at
+  runtime with no build-time diagnostic. Because every export now carries the library segment,
+  no generated symbol can ever collide with one of those names.
+
+A sanitised library name of `nuget` fails the build with a named error instead of generating,
+since `nuget_*` is the fixed leading segment
+[ADR-127](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md)
+reserves for the runtime's own ABI.
+
 ## Diagnostics
 
 Not every Kotlin construct can be expressed as C#. When the generator meets one it cannot bridge,
@@ -864,21 +899,30 @@ sealed class outside the export scope. See
 
 ### Two declarations can't share one C entry point {id="entry-point-collision"}
 
-The native ABI is one flat namespace of `@CName`-exported C functions, and the export symbol is
-derived from the Kotlin declaration's own (unqualified) name. Two declarations that resolve to the
-same symbol used to abort `packNuget` with a raw `IllegalArgumentException` naming only the mangled
-symbol (`radio_play_collect`), not which Kotlin declarations were fighting over it.
+The native ABI is one flat namespace of `@CName`-exported C functions. Every export symbol is
+`<library>_<declaring package relative to nuget.rootPackage>__<the declaration's own name>`
+([Export symbols](#export-symbols) below), so `a.Kitten` and `b.Kitten` in two different packages of
+one library export as `test_a__kitten_create` and `test_b__kitten_create` and both bind; a
+same-simple-name collision across packages is no longer possible. What is left is a collision
+*inside one package and owner*: a member whose name happens to match a generated role, or two
+different declarations whose mangled names meet because a Kotlin identifier already contains `_`,
+this scheme's own separator. Two declarations that resolve to the same symbol used to abort
+`packNuget` with a raw `IllegalArgumentException` naming only the mangled symbol
+(`radio_play_collect`), not which Kotlin declarations were fighting over it.
 [ADR-117](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/117-forward-abi-collision-names-owning-declarations.md)
 (issue [#106](https://github.com/xxfast/kotlin-native-nuget/issues/106)) replaced that with a named
-`ERROR_C_ENTRY_POINT_COLLISION`, naming every owning declaration. Two same-simple-name classes in
-different packages is the plainest trigger:
+`ERROR_C_ENTRY_POINT_COLLISION`, naming every owning declaration. A class method whose mangled name
+already spells a sibling top-level function's own name is one trigger that survives package
+qualification, because both declarations live in the same package:
 
 ```kotlin
-// package tier1.abicollision.a
-class Kitten(val name: String)
+package tier1.abicollision.suspend
 
-// package tier1.abicollision.b
-class Kitten(val name: String)
+class Radio {
+  suspend fun play(p: Player): Int = 1
+}
+
+suspend fun radio_play(): Int = 2
 ```
 
 The shape below is reconstructed from `ForwardDiagnostic.format()` (`[nuget:<kind>] <verb>
@@ -886,21 +930,23 @@ The shape below is reconstructed from `ForwardDiagnostic.format()` (`[nuget:<kin
 `Tier1EntryPointCollisionTest` asserts against, with the temp-file paths elided:
 
 ```
-[nuget:ERROR_C_ENTRY_POINT_COLLISION] Error tier1.abicollision.a.Kitten(String): Forward ABI
-    duplicate C# import for kitten_create; 2 Kotlin declarations export the same C entry point:
-      - tier1.abicollision.a.Kitten(String)
-        at .../A.kt:3
-      - tier1.abicollision.b.Kitten(String)
-        at .../B.kt:3. The C entry point is derived from the unqualified simple name; rename one
-    declaration. [kitten_create(in string, out pointer) -> pointer, kitten_create(in string, out pointer) -> pointer]
-    at .../A.kt:3
+[nuget:ERROR_C_ENTRY_POINT_COLLISION] Error tier1.abicollision.suspend.Radio.play(Player):
+    Forward ABI duplicate C# import for test_abicollision_suspend__radio_play_async; 2 Kotlin
+    declarations export the same C entry point:
+      - tier1.abicollision.suspend.Radio.play(Player)
+        at .../A.kt:5
+      - tier1.abicollision.suspend.radio_play()
+        at .../A.kt:8. The C entry point is the library name, the declaration's package relative to
+    `nuget.rootPackage`, and its enclosing chain of simple names (ADR-163), so two same-named
+    declarations in different packages no longer collide. What remains is a collision inside ONE
+    package and owner: a member whose name matches a generated role (`fun dispose()` against the
+    generated `Dispose`), a Kotlin `_` that reads as this scheme's own separator, or two routes
+    claiming one member; rename one declaration.
+    at .../A.kt:5
 ```
 
-(The constructor's C# import carries the ADR-031 error out-parameter alongside the `name` argument,
-the same `out IntPtr error` shape [Constructor default parameters](classes-and-objects.md#ctordefaults-generated-c)
-shows for `carrier_create`, which is why the bracketed signature pair reads `(in string, out pointer)`
-rather than just `(in string)`.) The trailing `at` line echoes the first owner's own location again,
-the same location `logger.error` attaches the diagnostic to; it is not a third declaration.
+The trailing `at` line echoes the first owner's own location again, the same location
+`logger.error` attaches the diagnostic to; it is not a third declaration.
 
 Every `@CName` export, on every route, names its exact owning declaration; there is no route left
 that can only point at a class-level range. An ordinary declaration (a constructor, a top-level
@@ -924,12 +970,10 @@ It fires earlier than the entry-point check on this page, so it never reaches
 report in one round when a hierarchy has more than one. `fun close()` is unaffected: it renders
 `Close()` beside `Dispose()` with no collision.
 
-The hint is always the same: rename one of the colliding declarations. The prefix scheme itself
-(unqualified simple name, no package, no namespace) is unchanged; naming the collision is the interim
-remedy, not a fix for it. See the
-[open backlog item](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/backlog/two-exported-types-same-simple-name-different.md)
-for the structural fix (qualifying the export prefix by package) that would close the collision
-itself rather than only naming it.
+The hint is always the same: rename one of the colliding declarations. Package qualification
+([ADR-163](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/163-export-symbol-package-qualification.md))
+closes every cross-package trigger; this diagnostic is the backstop for what qualification cannot
+tell apart, a collision inside one package and owner.
 
 ### A nullable parameter names itself, instead of the return {id="nullable-parameter-names-itself"}
 

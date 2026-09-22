@@ -260,16 +260,17 @@ check keeps its own copy (out of scope here).
   `ERROR_CSHARP_SIGNATURE_COLLISION` instead of emitting CS0111/CS0663.
 - Numbering is declaration/collection-order dependent, accepted as in ADR-034/090 (one-build
   shim+native pairing, ADR-054).
-- Pre-existing, out of scope, unchanged by this ADR: two same-name top-level functions in
-  *different* packages both export bare `toCName(name)` and trip the `ForwardAbiContract`
+- Pre-existing at the time, out of scope for this ADR: two same-name top-level functions in
+  *different* packages both exported bare `toCName(name)` and tripped the `ForwardAbiContract`
   duplicate-export guard; two extension receivers with the same lowercase simple name in
-  different packages share an export prefix; `{Receiver}Extensions` groups by receiver *simple*
-  name. Each fails loudly at generation today and keeps doing so. The same family bit this ADR's
-  own fixture (**verified** while implementing): two exported *classes* with the same simple name
-  in different packages both export `${simpleName.lowercase()}_create`
-  (`ForwardCallablePlanner.constructorEntries`), so a second `Kitten` failed the build with
-  `Forward ABI duplicate C# import for kitten_create`. The fixture receiver was renamed `Mitten`;
-  qualifying export prefixes by package is its own item.
+  different packages shared an export prefix; `{Receiver}Extensions` grouped by receiver *simple*
+  name. Each failed loudly at generation. The same family bit this ADR's own fixture (**verified**
+  while implementing): two exported *classes* with the same simple name in different packages both
+  exported `${simpleName.lowercase()}_create` (`ForwardCallablePlanner.constructorEntries`), so a
+  second `Kitten` failed the build with `Forward ABI duplicate C# import for kitten_create`. The
+  fixture receiver was renamed `Mitten` at the time. **Superseded by
+  [ADR-163](163-export-symbol-package-qualification.md):** every export symbol is now qualified by
+  library and declaring package, so all three shapes above bind instead of colliding.
 - Deferred with their existing routes: namesakes that are suspend, generic, Flow-returning or
   otherwise non-planned keep their current handling; the counter numbers around them
   deterministically.

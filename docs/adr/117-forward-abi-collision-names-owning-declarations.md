@@ -21,6 +21,12 @@ Accepted
 > `DUPLICATE_CSHARP_IMPORT`, not `CONFLICTING_LEGACY_IMPORTS`: this ADR's recorded residual, that no
 > Tier 1 cell reaches `CONFLICTING_LEGACY_IMPORTS` through a real KSP round, is **still open**.
 
+> **Amended by [ADR-163](163-export-symbol-package-qualification.md) (2026-09-22).** Every
+> **cross-package** shape in the table below (two `Kitten` classes, two top-level functions, two
+> sealed classes, two enum-extension properties) no longer collides: every export symbol is now
+> qualified by library and declaring package. What still reaches this diagnostic is a collision
+> **inside one package and owner**; the hint text is reworded to say so.
+
 ## Context
 
 Issue [#106](https://github.com/xxfast/kotlin-native-nuget/issues/106), split out of the closed
@@ -42,7 +48,7 @@ guards firing on user-writable Kotlin:
 
 | Shape | Colliding entry point | Universe of the C# import | Where the Kotlin `@CName` export is composed |
 | --- | --- | --- | --- |
-| Two `class Kitten` in different packages ([backlog](../backlog/two-exported-types-same-simple-name-different.md)) | `kitten_create` | structural (`CirDllImport`, planned constructor) | `addForwardKotlinPlanExport` (plan, `node = constructor`, **Verified** `ForwardCallablePlanner.kt:1083/1097`) |
+| Two `class Kitten` in different packages (no longer collides, [ADR-163](163-export-symbol-package-qualification.md)) | `kitten_create` | structural (`CirDllImport`, planned constructor) | `addForwardKotlinPlanExport` (plan, `node = constructor`, **Verified** `ForwardCallablePlanner.kt:1083/1097`) |
 | Two same-named top-level functions in different packages | `<name>` | structural (planned, [ADR-095](095-static-route-overloads.md)) | `addForwardKotlinPlanExport` (plan, `node = function`, **Verified** `:1428`) |
 | Two `sealed class LoadState` in different packages | `loadstate_get_type` | legacy text (`CirSealedRenderer.kt:32`, **Verified**) | `SealedClassExports.kt` (6 `cNameAnnotation` sites, sealed class known, no per-export owner) |
 | `fun dispose()` on an exported class (no longer reaches this route, see the 2026-09-22 amendment below) | `closer_dispose` | user method structural; generated `Dispose` legacy text (`CirClassRenderer.kt:57`, **Verified**) | user method via plan; generated one at `ClassExports.kt:74` |
@@ -175,6 +181,11 @@ point, then the signatures that were being compared:
     at C:\...\src\B.kt:3
 The C entry point is derived from the unqualified simple name; rename one declaration. [kitten_create(in string) -> pointer, kitten_create(in string) -> pointer]
 ```
+
+**Amended by [ADR-163](163-export-symbol-package-qualification.md):** the worked example above no
+longer collides. Every entry point is now qualified by library and declaring package, so this exact
+`a.Kitten`/`b.Kitten` pair binds instead of failing the build, and the hint text is reworded to say
+so. What still reaches this diagnostic is narrower: a collision inside one package and owner.
 
 The `dispose` shape renders one fine owner and one coarse owner:
 
@@ -336,9 +347,9 @@ Tests:
   owner for every collision those routes can produce today (all class-prefix collisions). Any
   route migrating to a plan gets fine owners for free. ROADMAP line 54's numbering fix removes the
   suspend collision itself; until then this ADR names it.
-- The message names but does not fix the unqualified-prefix scheme
-  ([backlog](../backlog/two-exported-types-same-simple-name-different.md)); that remains its own
-  item, and this ADR's hint ("rename one declaration") is the interim remedy it points at.
+- The message names but does not fix the unqualified-prefix scheme; this ADR's hint ("rename one
+  declaration") is the interim remedy. **Fixed by [ADR-163](163-export-symbol-package-qualification.md):**
+  every export symbol is now qualified by library and declaring package.
 - Deferred: per-site tags on the legacy routes (Alternative 3); recording `ERROR_*` into
   `NugetDiagnostics.json` (ADR-100's deferred item, unchanged); a structural `role` field
   (ROADMAP line 24, unchanged, since the owner is carried beside the signature, not on it).
