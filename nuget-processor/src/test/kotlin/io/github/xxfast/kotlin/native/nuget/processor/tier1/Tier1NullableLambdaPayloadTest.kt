@@ -183,16 +183,17 @@ class Tier1NullableLambdaPayloadTest {
     val cs: String = result.generatedCSharp
     assertTrue("OnMaybeTick(" in cs, "a nullable lambda type binds; only its payload matters")
     // The obligation that comes with binding it: the erased delegate slot cannot carry "absent", so
-    // a null reaches a `[UnmanagedCallersOnly]` thunk that dereferences `GCHandle.Target`, a
-    // fail-fast no `catch` can see. Rejected at the managed boundary instead, before `Alloc`.
+    // a null reaches a `[UnmanagedCallersOnly]` thunk that dereferences the registered ctx, a
+    // fail-fast no `catch` can see. Rejected at the managed boundary instead, before any ctx is
+    // registered for this call.
     assertTrue(
       "ArgumentNullException.ThrowIfNull(listener);" in cs,
       "expected the wrapper to reject a null delegate up front; cs=$cs",
     )
     assertTrue(
       cs.indexOf("ArgumentNullException.ThrowIfNull(listener);") <
-          cs.indexOf("GCHandle.Alloc(nativeCallback)"),
-      "the guard must precede GCHandle.Alloc, which accepts null and defers the failure",
+          cs.indexOf("NugetThunks.RegisterCtx(nativeCallback)"),
+      "the guard must precede the ctx mint, which accepts null and defers the failure",
     )
 
     // And the half that used to contradict the other: the member exists, so nothing may report it
