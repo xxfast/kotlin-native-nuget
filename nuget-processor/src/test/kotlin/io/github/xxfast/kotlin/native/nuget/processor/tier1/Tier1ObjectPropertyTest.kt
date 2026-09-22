@@ -41,8 +41,8 @@ class Tier1ObjectPropertyTest {
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "public static int Count")
-    assertContains(cs, "EntryPoint = \"treatjar_get_count\"")
-    assertContains(cs, "EntryPoint = \"treatjar_set_count\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_objectprop__treatjar_get_count\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_objectprop__treatjar_set_count\"")
   }
 
   @Test
@@ -198,9 +198,9 @@ class Tier1ObjectPropertyTest {
 
     assertTrue(result.compiledClean, "expected compile; got: ${result.compileErrors}")
     val cs: String = result.generatedCSharp
-    assertContains(cs, "EntryPoint = \"treatjar_size\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_objectinheritedfun__treatjar_size\"")
     // A defaulted interface member is inherited with an implementation too.
-    assertContains(cs, "EntryPoint = \"treatjar_restock\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_objectinheritedfun__treatjar_restock\"")
     // `Any`'s members are never bound: they carry no C# meaning on a static class.
     assertFalse(cs.contains("treatjar_toString"), cs)
     assertFalse(cs.contains("treatjar_hashCode"), cs)
@@ -276,7 +276,7 @@ class Tier1ObjectPropertyTest {
     )
 
     assertTrue(result.compiledClean, "expected compile; got: ${result.compileErrors}")
-    assertContains(result.generatedCSharp, "EntryPoint = \"aviary_defaults_get_size\"")
+    assertContains(result.generatedCSharp, "EntryPoint = \"library_tier1_objectnested__aviary_defaults_get_size\"")
   }
 
   @Test

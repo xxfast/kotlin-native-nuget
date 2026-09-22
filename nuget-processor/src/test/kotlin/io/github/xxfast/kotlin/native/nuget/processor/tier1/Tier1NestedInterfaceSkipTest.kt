@@ -70,9 +70,9 @@ class Tier1NestedInterfaceSkipTest {
   fun `the non-null parameter position binds through the chain-prefixed exports`() {
     val result = Tier1Harness.run(source)
 
-    // Was: assertFalse(generated.contains("export_owner_attach")).
-    assertContains(result.generated, "export_owner_attach")
-    assertContains(result.generated, "@CName(\"owner_attach\")")
+    // Was: assertFalse(generated.contains("export_library_tier1_nestedinterface__owner_attach")).
+    assertContains(result.generated, "export_library_tier1_nestedinterface__owner_attach")
+    assertContains(result.generated, "@CName(\"library_tier1_nestedinterface__owner_attach\")")
     // The interface's own ADR-040 dispatch exports carry the enclosing chain too.
     assertTrue(
       result.generated.contains("owner_listener_"),
@@ -80,7 +80,7 @@ class Tier1NestedInterfaceSkipTest {
           "generated=${result.generated}",
     )
     assertTrue(
-      result.generated.contains("export_owner_get_label"),
+      result.generated.contains("export_library_tier1_nestedinterface__owner_get_label"),
       "expected the control member to keep binding; generated=${result.generated}",
     )
   }
@@ -92,9 +92,9 @@ class Tier1NestedInterfaceSkipTest {
     // A nullable interface is a capability ADR-133 does not settle; what it must not do is bind one
     // nullable position and drop another, which would be a bug in the nullable path, not nesting.
     val bound: List<Boolean> = listOf(
-      "export_owner_detach",
-      "export_owner_current",
-      "export_owner_get_attached",
+      "export_library_tier1_nestedinterface__owner_detach",
+      "export_library_tier1_nestedinterface__owner_current",
+      "export_library_tier1_nestedinterface__owner_get_attached",
     ).map { result.generated.contains(it) }
 
     assertEquals(

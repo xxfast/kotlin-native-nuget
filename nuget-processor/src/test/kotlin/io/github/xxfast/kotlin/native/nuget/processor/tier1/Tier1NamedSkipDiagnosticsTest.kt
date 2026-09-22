@@ -51,7 +51,7 @@ class Tier1NamedSkipDiagnosticsTest {
       "expected no broken source for setMoods; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_patient_setMoods" !in result.generated,
+      "export_library_tier1_skipmapinput__patient_setMoods" !in result.generated,
       "expected setMoods to be entirely absent from the generated CNameExports.kt; " +
           "generated=${result.generated}",
     )
@@ -93,7 +93,7 @@ class Tier1NamedSkipDiagnosticsTest {
       "expected no broken source for setInitials; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_patient_setInitials" !in result.generated,
+      "export_library_tier1_skipsetinput__patient_setInitials" !in result.generated,
       "expected setInitials to be entirely absent from the generated CNameExports.kt; " +
           "generated=${result.generated}",
     )
@@ -131,7 +131,7 @@ class Tier1NamedSkipDiagnosticsTest {
       "expected no broken source for setOptionalScores; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_patient_setOptionalScores" in result.generated,
+      "export_library_tier1_skipmapnullableinput__patient_setOptionalScores" in result.generated,
       "expected setOptionalScores to bind now that a nullable map value is admitted; " +
           "generated=${result.generated}",
     )
@@ -159,7 +159,7 @@ class Tier1NamedSkipDiagnosticsTest {
       "expected no broken source for setKeyedScores; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_patient_setKeyedScores" !in result.generated,
+      "export_library_tier1_skipmapnullablekeyinput__patient_setKeyedScores" !in result.generated,
       "expected setKeyedScores to be entirely absent from the generated CNameExports.kt; " +
           "generated=${result.generated}",
     )
@@ -208,7 +208,7 @@ class Tier1NamedSkipDiagnosticsTest {
       "expected no broken source for setKeyedMoods; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_patient_setKeyedMoods" !in result.generated,
+      "export_library_tier1_skipmapbothinput__patient_setKeyedMoods" !in result.generated,
       "expected setKeyedMoods to be entirely absent from the generated CNameExports.kt; " +
           "generated=${result.generated}",
     )
@@ -251,7 +251,7 @@ class Tier1NamedSkipDiagnosticsTest {
       "expected no broken source for logGrid; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_wardboard_logGrid" !in result.generated,
+      "export_library_tier1_skiplistinput__wardboard_logGrid" !in result.generated,
       "expected logGrid to be entirely absent from the generated CNameExports.kt; " +
           "generated=${result.generated}",
     )
@@ -293,7 +293,7 @@ class Tier1NamedSkipDiagnosticsTest {
       "expected no broken source for setTagGroups; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_patient_setTagGroups" !in result.generated,
+      "export_library_tier1_skipsetnestedinput__patient_setTagGroups" !in result.generated,
       "expected setTagGroups to be entirely absent from the generated CNameExports.kt; " +
           "generated=${result.generated}",
     )
@@ -333,12 +333,12 @@ class Tier1NamedSkipDiagnosticsTest {
       "expected no broken source for setTags/setAllergies; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_patient_setTags" in result.generated,
+      "export_library_tier1_bindmapsetinput__patient_setTags" in result.generated,
       "expected setTags (Map<String, String>) to bind now that ADR-073 shipped; " +
           "generated=${result.generated}",
     )
     assertTrue(
-      "export_patient_setAllergies" in result.generated,
+      "export_library_tier1_bindmapsetinput__patient_setAllergies" in result.generated,
       "expected setAllergies (Set<String>) to bind now that ADR-073 shipped; " +
           "generated=${result.generated}",
     )
@@ -372,7 +372,7 @@ class Tier1NamedSkipDiagnosticsTest {
       "expected no broken source for isEligible; got: ${result.compileErrors}",
     )
     assertTrue(
-      "export_patient_isEligible" in result.generated,
+      "export_library_tier1_skipnullboolreturn__patient_isEligible" in result.generated,
       "expected isEligible to be bound in the generated Interop.kt; generated=${result.generated}",
     )
     assertTrue(
@@ -390,7 +390,7 @@ class Tier1NamedSkipDiagnosticsTest {
    * itself. **Verified through this harness, this is not yet even a skip**: `getAllFunctions()` /
    * `getAllProperties()` in `valueClassMethodEntries` / `valueClassPropertyEntries` do not filter
    * by `parentDeclaration`, so today the planner happily plans and emits
-   * `export_password_get_length`, `export_password_get` and `export_password_isEmpty` — all
+   * `export_library_tier1_skipnullboolreturn__password_get_length`, `export_library_tier1_skipnullboolreturn__password_get` and `export_library_tier1_skipnullboolreturn__password_isEmpty` — all
    * three compile clean, with zero KSP diagnostics of any kind. ADR-064's v1 product decision is
    * that these are unsupported and must become a named skip
    * (`SKIPPED_INHERITED_MEMBER`), not silently bridged.
@@ -414,7 +414,7 @@ class Tier1NamedSkipDiagnosticsTest {
       result.compiledClean,
       "expected no broken source for Password; got: ${result.compileErrors}",
     )
-    listOf("export_password_get_length", "export_password_get", "export_password_isEmpty").forEach { export ->
+    listOf("export_library_tier1_skipinherited__password_get_length", "export_library_tier1_skipinherited__password_get", "export_library_tier1_skipinherited__password_isEmpty").forEach { export ->
       assertFalse(
         result.generated.contains(export),
         "expected $export (an inherited CharSequence member, not declared by Password itself) " +
@@ -458,7 +458,7 @@ class Tier1NamedSkipDiagnosticsTest {
       "expected no broken source for Patient.box; got: ${result.compileErrors}",
     )
     assertFalse(
-      result.generated.contains("export_patient_get_box"),
+      result.generated.contains("export_library_tier1_skipproperty__patient_get_box"),
       "expected the unplannable property to be entirely absent from the generated exports; " +
           "generated=${result.generated}",
     )

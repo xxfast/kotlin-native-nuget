@@ -1,5 +1,8 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
+import io.github.xxfast.kotlin.native.nuget.processor.forward.importIfDefaultPackage
+import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinPackageReference
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
@@ -85,19 +88,22 @@ private fun KSType.isLegacyGenericRouteParameter(): Boolean {
  * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/007-top-level-function-class-naming.md">ADR-007: Top-level function naming</a>
  * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/010-generics-mapping.md">ADR-010: Generics mapping</a>
  */
-internal fun FileSpec.Builder.addFunctionExports(func: KSFunctionDeclaration) {
-  val cname: String = toCName(func.simpleName.asString())
-  val funcName: String = func.simpleName.asString()
+internal fun FileSpec.Builder.addFunctionExports(
+  func: KSFunctionDeclaration,
+  /** ADR-163: the one symbol table, the same string `translateFunction` pins as its entryPoint. */
+  symbols: ForwardSymbolTable,
+) {
+  val cname: String = symbols.topLevel(func)
+  // ADR-163: the call is fully qualified, so two same-named top-level functions in two packages
+  // do not import to one ambiguous simple name in the generated file.
+  val funcName: String =
+    kotlinPackageReference(func.packageName.asString()) + func.simpleName.asString()
 
   if (!func.hasLegacyGenericReturnRoute()) {
     // Ordinary types without a plan are unsupported for emission — never fall through to
     // IntPtr / defaultValueFor("0") garbage (Phase 10 / MIGRATION invariants).
     return
   }
-
-  // ADR-064: the import belongs to the route that actually emits. The caller no longer adds it
-  // ahead of the plan gate, so this legacy generic-return route imports what it calls.
-  addImport(func.packageName.asString(), funcName)
 
   val paramCall: String = func.parameters.joinToString(", ") { param ->
     val resolved: KSType = param.type.resolve().expandAliases()
@@ -114,6 +120,8 @@ internal fun FileSpec.Builder.addFunctionExports(func: KSFunctionDeclaration) {
         "\"Ordinal \" + $name + \" is out of bounds for enum $enumName\"))"
   }
 
+  // ADR-163: the default package has no qualifier to spell, so the bare call needs this import.
+  importIfDefaultPackage(func)
   addFunction(
     FunSpec.builder("export_$cname")
       .addAnnotation(cNameAnnotation(cname, ownedBy(func)))

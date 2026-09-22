@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
+
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -649,6 +651,12 @@ internal data class ForwardCallablePlanCatalog(
 internal class ForwardCallablePlanner(
   private val classifier: ForwardBridgeTypeClassifier,
   /**
+   * ADR-163: the one forward symbol table. Every export name a plan carries is library- and
+   * package-qualified through it, so the plan's two projections cannot disagree and two
+   * same-simple-name owners in two packages no longer derive one C entry point.
+   */
+  private val symbols: ForwardSymbolTable,
+  /**
    * ADR-091: the ADR-074 expect index. Only source of parameter defaults for an `expect`/`actual`
    * pair, whose `actual` (the export root) always reports `hasDefault = false`.
    */
@@ -720,7 +728,7 @@ internal class ForwardCallablePlanner(
             addAll(
               constructorEntries(
                 sub,
-                prefix = "${sealed.nativePrefix()}_${sub.simpleName.asString().lowercase()}",
+                prefix = "${sealed.nativePrefix(symbols)}_${sub.simpleName.asString().lowercase()}",
                 copy = false,
               )
             )
@@ -797,7 +805,7 @@ internal class ForwardCallablePlanner(
         addAll(valueClassEntries(cls).ownedBy(cls.forwardDiagnosticOwner()))
       }
     }
-    val planner = ForwardPropertyPlanner(classifier, expects)
+    val planner = ForwardPropertyPlanner(classifier, symbols, expects)
     val propertyPlans: List<ForwardPropertyPlan> = planner.catalog(
       classes, properties, extensionProperties, sealedClasses, objects,
     )
@@ -815,7 +823,7 @@ internal class ForwardCallablePlanner(
    */
   private fun valueClassEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val owner: String = cls.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = cls.nativePrefix()
+    val prefix: String = cls.nativePrefix(symbols)
     val underlyingParam = cls.primaryConstructor?.parameters?.firstOrNull() ?: return emptyList()
     val underlyingPropName: String = underlyingParam.name?.asString() ?: return emptyList()
     val classifiedUnderlying: BridgeType = classifier.classify(underlyingParam.type.resolve())
@@ -1055,7 +1063,7 @@ internal class ForwardCallablePlanner(
    */
   fun interfaceEntries(iface: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val ifaceName: String = iface.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = iface.nativePrefix()
+    val prefix: String = iface.nativePrefix(symbols)
     val receiverType: BridgeType = BridgeType.ObjectHandle(ifaceName)
     val methods: List<KSFunctionDeclaration> = iface.getAllFunctions()
       .filter { method -> method.getVisibility() == Visibility.PUBLIC }
@@ -1114,7 +1122,7 @@ internal class ForwardCallablePlanner(
 
   private fun classEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val className: String = cls.simpleName.asString()
-    val prefix: String = cls.nativePrefix()
+    val prefix: String = cls.nativePrefix(symbols)
     val superClass: KSClassDeclaration? = cls.forwardSuperClass(classifier.exportedObjectHandles)
     val receiverType: BridgeType = BridgeType.ObjectHandle(
       requireNotNull(cls.qualifiedName?.asString()) {
@@ -1265,7 +1273,7 @@ internal class ForwardCallablePlanner(
    */
   private fun sealedBaseEntries(sealed: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val owner: String = sealed.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = sealed.nativePrefix()
+    val prefix: String = sealed.nativePrefix(symbols)
     val receiverType: BridgeType = BridgeType.ObjectHandle(owner)
     val methods: List<KSFunctionDeclaration> = sealed.getAllFunctions()
       .filter { method -> method.getVisibility() == Visibility.PUBLIC }
@@ -1390,7 +1398,7 @@ internal class ForwardCallablePlanner(
     // arm can carry `virtual`. On a final arm the member is effectively final in Kotlin anyway,
     // and `virtual` inside a `public sealed class` is CS0549.
     val isOpenArm: Boolean = subclass.modifiers.contains(Modifier.OPEN)
-    val prefix: String = "${sealed.nativePrefix()}_${subName.lowercase()}"
+    val prefix: String = "${sealed.nativePrefix(symbols)}_${subName.lowercase()}"
     val receiverType: BridgeType = BridgeType.ObjectHandle(owner)
     val methods: List<KSFunctionDeclaration> = subclass.getAllFunctions()
       .filter { method -> method.getVisibility() == Visibility.PUBLIC }
@@ -1531,7 +1539,7 @@ internal class ForwardCallablePlanner(
     arm: KSClassDeclaration,
   ): List<ForwardCallableCatalogEntry> {
     val owner: String = arm.qualifiedName?.asString() ?: return emptyList()
-    val prefix = "${sealed.nativePrefix()}_${arm.simpleName.asString().lowercase()}"
+    val prefix = "${sealed.nativePrefix(symbols)}_${arm.simpleName.asString().lowercase()}"
     val type: BridgeType = classifier.classify(arm.asStarProjectedType())
     if (type !is BridgeType.Enum) return emptyList()
     return listOf(
@@ -1559,7 +1567,7 @@ internal class ForwardCallablePlanner(
     // base's plus its own simple name and a *sibling* arm's `nativePrefix()` does not compose that
     // (`label`, not `flatshape_label`). Everything else about an arm's constructors is an ordinary
     // class's, so the prefix is the only seam.
-    prefix: String = cls.nativePrefix(),
+    prefix: String = cls.nativePrefix(symbols),
     // ADR-148: whether a `data` class also gets its `copy`. False on a sealed arm: the sealed
     // route renders no `Copy` member, so the entry would plan an export nothing imports.
     copy: Boolean = true,
@@ -1837,7 +1845,9 @@ internal class ForwardCallablePlanner(
     // on the export name only (it is the C symbol); a PascalCased name is never a C# keyword, so
     // no verbatim-identifier escape is needed either.
     publicName = function.simpleName.asString().replaceFirstChar { it.uppercase() },
-    exportName = "${toCName(function.simpleName.asString())}$suffix",
+    // ADR-163: the library and package qualification, which is what makes a top-level
+    // `fun signal(dbm: Int)` bind at all and two `rollCall()` in two packages coexist.
+    exportName = "${symbols.topLevel(function)}$suffix",
     origin = ForwardCallableOrigin.TOP_LEVEL,
     target = null,
     member = function.simpleName.asString(),
@@ -1859,7 +1869,7 @@ internal class ForwardCallablePlanner(
 
   private fun objectEntries(obj: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val owner: String = obj.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = obj.nativePrefix()
+    val prefix: String = obj.nativePrefix(symbols)
     val occurrences: MutableMap<String, Int> = mutableMapOf()
     val members: List<KSFunctionDeclaration> = obj.getAllFunctions()
       .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -1910,7 +1920,7 @@ internal class ForwardCallablePlanner(
     val owner: String = cls.qualifiedName?.asString() ?: return emptyList()
     val companion: KSClassDeclaration = cls.declarations.filterIsInstance<KSClassDeclaration>()
       .firstOrNull { it.isCompanionObject } ?: return emptyList()
-    val prefix: String = cls.nativePrefix()
+    val prefix: String = cls.nativePrefix(symbols)
     val occurrences: MutableMap<String, Int> = mutableMapOf()
     val members: List<KSFunctionDeclaration> = companion.getAllFunctions()
       .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -2236,7 +2246,11 @@ internal class ForwardCallablePlanner(
     // parameter). ADR-018: a typealias receiver is expanded above, so `typealias Bird =
     // Aviary.Bird` binds under `aviary_bird_` exactly as the C# `AviaryBirdExtensions` class and
     // the extension *property* route already spell it.
-    val receiverPrefix: String = (receiver.declaration as? KSClassDeclaration)?.nativePrefix()
+    // ADR-163: the receiver's UNQUALIFIED chain. The package part of an extension's symbol is the
+    // EXTENSION's own package, not the receiver's (ADR-095's counter is scoped per package and
+    // name), so `symbols.extension` supplies the qualifier from `function` below.
+    val receiverPrefix: String = (receiver.declaration as? KSClassDeclaration)
+      ?.let { declaration -> ForwardSymbolTable.ownerChain(declaration) }
       ?: receiver.declaration.simpleName.asString().lowercase()
     // ADR-095 keeps an extension symbol receiver-agnostic (the overload counter is per package and
     // name, not per receiver). ADR-133 amendment: the receiver's enclosing-owner chain joins it,
@@ -2304,7 +2318,7 @@ internal class ForwardCallablePlanner(
     return planOrSkip(
       symbol = symbol,
       publicName = toCName(functionName).replaceFirstChar { it.uppercase() },
-      exportName = "${receiverPrefix}_${toCName(functionName)}$suffix",
+      exportName = symbols.extension(function, receiverPrefix, "${toCName(functionName)}$suffix"),
       // ADR-105 amendment: the receiver gets the same sealed rewrite scope (d) applies to every
       // declared parameter, here rather than in `planOrSkip`, because the extension route is the
       // only one that can hand it a protocol receiver (every other route builds a bare

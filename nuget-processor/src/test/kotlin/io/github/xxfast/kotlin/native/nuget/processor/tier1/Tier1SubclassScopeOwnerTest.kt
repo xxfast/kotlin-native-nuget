@@ -202,12 +202,16 @@ class Tier1SubclassScopeOwnerTest {
       "expected no stray Kotlin export for the override; got: " +
           result.generated.lines().filter { it.contains("timedfeeder") }.map(String::trim),
     )
-    assertContains(result.generated, "@CName(\"feeder_fill_async\")")
-    assertContains(result.generated, "@CName(\"timedfeeder_schedule_async\")")
+    assertContains(result.generated, "@CName(\"library_tier1_scopeowner__feeder_fill_async\")")
+    assertContains(
+      result.generated,
+      "@CName(\"library_tier1_scopeowner__timedfeeder_schedule_async\")",
+    )
 
     assertEquals(
       0,
-      Regex("EntryPoint = \"timedfeeder_fill_async\"").findAll(result.generatedCSharp).count(),
+      Regex("EntryPoint = \"library_tier1_scopeowner__timedfeeder_fill_async\"")
+        .findAll(result.generatedCSharp).count(),
       "expected no C# import for the override either",
     )
     assertEquals(

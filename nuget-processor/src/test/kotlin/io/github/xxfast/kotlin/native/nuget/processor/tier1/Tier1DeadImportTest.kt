@@ -39,9 +39,13 @@ class Tier1DeadImportTest {
       result.compiledClean,
       "expected no broken source for the dead-import fixture; got: ${result.compileErrors}",
     )
+    // ADR-163 removed the top-level function's simple-name import entirely: the call is spelled with
+    // its package instead, so two same-named top-level functions in two packages cannot collide on
+    // one imported simple name. The positive half of the pair is now the qualified call, which keeps
+    // "no import for a skip" from degrading into "nothing is emitted at all".
     assertTrue(
-      "import tier1.deadfun.ping" in result.generated,
-      "expected the surviving function to keep its import; generated=${result.generated}",
+      "tier1.deadfun.ping()" in result.generated,
+      "expected the surviving function to keep its qualified call; generated=${result.generated}",
     )
     assertFalse(
       "import tier1.deadfun.sift" in result.generated,

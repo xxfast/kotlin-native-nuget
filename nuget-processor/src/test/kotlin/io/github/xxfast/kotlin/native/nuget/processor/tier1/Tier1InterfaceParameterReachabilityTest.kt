@@ -48,16 +48,16 @@ class Tier1InterfaceParameterReachabilityTest {
 
     val kotlin: String = result.generated
     // Nested: the export name carries the enclosing chain exactly as a return-reachable one does.
-    assertContains(kotlin, "@CName(\"boarding_clerk_bridge_create\")")
+    assertContains(kotlin, "@CName(\"library_tier1_paramreach__boarding_clerk_bridge_create\")")
     // Top-level: nothing in the reachability walk looks at nesting, so a fix that special-cases
     // the nested path has to fail here.
-    assertContains(kotlin, "@CName(\"doorman_bridge_create\")")
+    assertContains(kotlin, "@CName(\"library_tier1_paramreach__doorman_bridge_create\")")
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "internal sealed class BoardingClerkBridgeState : NugetBridgeState")
-    assertContains(cs, "internal sealed class DoormanBridgeState : NugetBridgeState")
-    assertContains(cs, "EntryPoint = \"boarding_clerk_bridge_create\"")
-    assertContains(cs, "EntryPoint = \"doorman_bridge_create\"")
+    assertContains(cs, "internal sealed class Tier1ParamreachBoardingClerkBridgeState : NugetBridgeState")
+    assertContains(cs, "internal sealed class Tier1ParamreachDoormanBridgeState : NugetBridgeState")
+    assertContains(cs, "EntryPoint = \"library_tier1_paramreach__boarding_clerk_bridge_create\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_paramreach__doorman_bridge_create\"")
     // The bridge layer exists at all, so the ADR-040 boundary throw is gone.
     assertContains(cs, "return NugetBridge.HandleFor(value);")
     assertFalse(
@@ -73,10 +73,10 @@ class Tier1InterfaceParameterReachabilityTest {
     // `Sitter` is never a declared parameter and never a return: it is only an ADR-132 extension
     // receiver, which the planner carries as a RECEIVER-role ABI slot rather than in
     // `publicSignature.parameters`. Walking the public parameters alone leaves this one unbridged.
-    assertContains(result.generated, "@CName(\"sitter_bridge_create\")")
+    assertContains(result.generated, "@CName(\"library_tier1_paramreach__sitter_bridge_create\")")
     assertContains(
       result.generatedCSharp,
-      "internal sealed class SitterBridgeState : NugetBridgeState",
+      "internal sealed class Tier1ParamreachSitterBridgeState : NugetBridgeState",
     )
   }
 

@@ -1,5 +1,8 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
+import io.github.xxfast.kotlin.native.nuget.processor.forward.importIfDefaultPackage
+import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinPackageReference
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
@@ -41,6 +44,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
  */
 internal fun FileSpec.Builder.addSuspendFunctionExports(
   func: KSFunctionDeclaration,
+  /** ADR-163: the one symbol table. */
+  symbols: ForwardSymbolTable,
   // ADR-114: same classification the class-method route below uses. This route compiles today
   // (`addParameters` keeps the type arguments), but it hands C# an IntPtr no caller can produce.
   classifier: ForwardBridgeTypeClassifier,
@@ -48,10 +53,11 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
   if (classifier.legacyRefusedParameter(func.parameters) != null) return
   // ADR-119: a generic return that is not a marshallable collection skips on both halves too.
   if (classifier.legacyRefusedReturn(func) != null) return
-  val cname: String = toCName(func.simpleName.asString())
-  val funcName: String = func.simpleName.asString()
-  // ADR-064: after the refusal gates, so a refused suspend function leaves no dead import.
-  addImport(func.packageName.asString(), funcName)
+  // ADR-163: library- and package-qualified, and the Kotlin call fully qualified rather than
+  // imported by simple name (two same-named suspend functions in two packages both export now).
+  val cname: String = symbols.topLevel(func)
+  val funcName: String =
+    kotlinPackageReference(func.packageName.asString()) + func.simpleName.asString()
   val returnType = func.returnType?.resolve()?.expandAliases()
   val qualifiedReturn: String = returnType?.declaration?.qualifiedName?.asString() ?: "kotlin.Unit"
   val isUnit: Boolean = qualifiedReturn == "kotlin.Unit"
@@ -77,6 +83,9 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
     .returns(cOpaquePointer)
     .addCode(body)
 
+  // ADR-163: the default package has no qualifier to spell, so the bare call needs this import.
+  importIfDefaultPackage(func)
+
   addFunction(builder.build())
 }
 
@@ -89,7 +98,8 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
   cls: KSClassDeclaration,
   classifier: ForwardBridgeTypeClassifier,
   callableCatalog: ForwardCallablePlanCatalog,
-  prefix: String = cls.nativePrefix(),
+  symbols: ForwardSymbolTable,
+  prefix: String = cls.nativePrefix(symbols),
   declaredOnly: Boolean = false,
   exportedTypes: Set<String> = emptySet(),
 ) {

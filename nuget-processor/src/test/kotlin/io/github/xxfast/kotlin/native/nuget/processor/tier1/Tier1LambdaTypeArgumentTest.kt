@@ -256,9 +256,13 @@ class Tier1LambdaTypeArgumentTest {
 
     assertTrue(
       result.generatedCSharp.contains(
-        "public static Crate<global::Interop.Catcam.Lens.Snapshot> CrateOfSnapshot()"
+        "public static global::Interop.Catcam.Crate<global::Interop.Catcam.Lens.Snapshot> " +
+            "CrateOfSnapshot()"
       ),
-      "expected the generic return's exported type argument to be namespace-qualified; got: " +
+      // ROADMAP line 76: the OUTER type name was the one site still spelled by its simple name, so a
+      // generic return declared in another Kotlin package than the function rendered `Crate<...>`
+      // inside a namespace that does not contain `Crate`: CS0246.
+      "expected the generic return and its type argument to be namespace-qualified; got: " +
           "${result.generatedCSharp.lines().filter { it.contains("CrateOfSnapshot") }}",
     )
     assertTrue(

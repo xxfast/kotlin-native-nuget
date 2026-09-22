@@ -47,14 +47,14 @@ class Tier1AliasReceiverExtensionTest {
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     val kotlin: String = result.generated
 
-    assertContains(kotlin, "@CName(\"aviary_bird_sing\")")
+    assertContains(kotlin, "@CName(\"library_tier1_aliasreceiver__aviary_bird_sing\")")
     assertFalse(
       kotlin.contains("\"bird_sing\""),
       "the alias's own name must not reach the C ABI; generated=$kotlin",
     )
     // The control, and the property twin that already expanded before this change.
-    assertContains(kotlin, "@CName(\"bird2_sing\")")
-    assertContains(kotlin, "@CName(\"aviary_bird_get_loudness\")")
+    assertContains(kotlin, "@CName(\"library_tier1_aliasreceiver__bird2_sing\")")
+    assertContains(kotlin, "@CName(\"library_tier1_aliasreceiver__aviary_bird_get_loudness\")")
   }
 
   @Test
@@ -69,7 +69,7 @@ class Tier1AliasReceiverExtensionTest {
       csharp.contains("class BirdExtensions"),
       "the alias must not get an extension class of its own; csharp=$csharp",
     )
-    assertContains(csharp, "EntryPoint = \"aviary_bird_sing\"")
+    assertContains(csharp, "EntryPoint = \"library_tier1_aliasreceiver__aviary_bird_sing\"")
     assertContains(csharp, "class Bird2Extensions")
   }
 
@@ -111,8 +111,8 @@ class Tier1AliasReceiverExtensionTest {
           "kspErrors=${result.kspErrors}",
     )
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
-    assertContains(result.generated, "@CName(\"aviary_bird_sing\")")
-    assertContains(result.generated, "@CName(\"bird_sing\")")
+    assertContains(result.generated, "@CName(\"library_tier1_aliasreceiver_nested__aviary_bird_sing\")")
+    assertContains(result.generated, "@CName(\"library_tier1_aliasreceiver_other__bird_sing\")")
   }
 
   /**
@@ -141,6 +141,6 @@ class Tier1AliasReceiverExtensionTest {
       result.generated.contains("\"maybebird_hum\""),
       "the alias's own name must not reach the C ABI; generated=${result.generated}",
     )
-    assertContains(result.generated, "@CName(\"aviary_bird_hum\")")
+    assertContains(result.generated, "@CName(\"library_tier1_aliasreceiver_nullable__aviary_bird_hum\")")
   }
 }

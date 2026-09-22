@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
@@ -106,6 +107,8 @@ internal data class ForwardDroppedExtensionReceiver(
 /** Builds the property slice while leaving unsupported/specialized properties on their named legacy paths. */
 internal class ForwardPropertyPlanner(
   private val classifier: ForwardBridgeTypeClassifier,
+  /** ADR-163: the one forward symbol table, the same instance the callable planner holds. */
+  private val symbols: ForwardSymbolTable,
   /**
    * ADR-150: the same index the callable planner holds. Without it a documented top-level
    * `expect val`, and a documented property of an `expect class`, rendered undocumented — the
@@ -205,7 +208,7 @@ internal class ForwardPropertyPlanner(
    */
   private fun sealedBaseProperties(sealed: KSClassDeclaration): List<ForwardPropertyPlan> {
     val owner: String = sealed.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = sealed.nativePrefix()
+    val prefix: String = sealed.nativePrefix(symbols)
     return sealed.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { prop -> !prop.isCompilerOwnedMember(sealed) }
@@ -239,7 +242,7 @@ internal class ForwardPropertyPlanner(
   ): List<ForwardPropertyPlan> {
     val owner: String = subclass.qualifiedName?.asString() ?: return emptyList()
     val prefix: String =
-      "${sealed.nativePrefix()}_${subclass.simpleName.asString().lowercase()}"
+      "${sealed.nativePrefix(symbols)}_${subclass.simpleName.asString().lowercase()}"
     // ADR-157: an enum arm carries exactly one property, the box's `Value`, and none of the enum's
     // own. Those belong to `{Enum}Extensions` (ADR-006) and are already planned there; planning
     // them again under the arm's prefix would export each of them twice, plus `name` and `ordinal`.
@@ -317,8 +320,8 @@ internal class ForwardPropertyPlanner(
           // qualified name is not a legal type argument to `asStableRef`.
           receiver = ForwardPropertyReceiver.Handle(cls.forwardOwnerTypeName() ?: owner),
           prop = prop,
-          getExport = "${cls.nativePrefix()}_get_${prop.simpleName.asString()}",
-          setExport = "${cls.nativePrefix()}_set_${prop.simpleName.asString()}",
+          getExport = "${cls.nativePrefix(symbols)}_get_${prop.simpleName.asString()}",
+          setExport = "${cls.nativePrefix(symbols)}_set_${prop.simpleName.asString()}",
           superClass = superClass,
         )
       }
@@ -333,7 +336,7 @@ internal class ForwardPropertyPlanner(
    */
   fun interfaceProperties(iface: KSClassDeclaration): List<ForwardPropertyPlan> {
     val owner: String = iface.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = iface.nativePrefix()
+    val prefix: String = iface.nativePrefix(symbols)
     return inOwner(iface.forwardDiagnosticOwner()) {
       iface.getAllProperties()
         .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -357,7 +360,7 @@ internal class ForwardPropertyPlanner(
     val companion: KSClassDeclaration = cls.declarations.filterIsInstance<KSClassDeclaration>()
       .firstOrNull { it.isCompanionObject } ?: return emptyList()
     val owner: String = cls.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = cls.nativePrefix()
+    val prefix: String = cls.nativePrefix(symbols)
     return companion.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { prop -> !prop.isCompilerOwnedMember(companion) }
@@ -393,7 +396,7 @@ internal class ForwardPropertyPlanner(
    */
   private fun objectProperties(obj: KSClassDeclaration): List<ForwardPropertyPlan> {
     val owner: String = obj.qualifiedName?.asString() ?: return emptyList()
-    val prefix: String = obj.nativePrefix()
+    val prefix: String = obj.nativePrefix(symbols)
     return obj.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { prop -> !prop.isCompilerOwnedMember(obj) }
@@ -419,10 +422,17 @@ internal class ForwardPropertyPlanner(
     return propertyPlan(
       symbol = "${prop.packageName.asString()}.$name",
       position = ForwardPropertyPosition.TOP_LEVEL,
-      receiver = ForwardPropertyReceiver.Static(null),
+      // ADR-163: the Kotlin access is package-qualified, not a simple-name import, for the same
+      // reason the top-level function call is: two `val`s of one name in two packages both export
+      // now, and two simple-name imports of them are ambiguous in the generated file.
+      receiver = ForwardPropertyReceiver.Static(
+        kotlinPackageReference(prop.packageName.asString()).removeSuffix(".").ifEmpty { null },
+      ),
       prop = prop,
-      getExport = "get_$cname",
-      setExport = "set_$cname",
+      // ADR-163: library- and package-qualified like every other route, so two top-level `val`s of
+      // one name in two packages no longer derive one getter symbol.
+      getExport = "${symbols.qualifier(prop)}get_$cname",
+      setExport = "${symbols.qualifier(prop)}set_$cname",
     )
   }
 
@@ -444,7 +454,10 @@ internal class ForwardPropertyPlanner(
     // declaration is not a class.
     val receiverName: String = (receiver.declaration as? KSClassDeclaration)?.nestedCsName()
       ?: receiver.declaration.simpleName.asString()
-    val receiverPrefix: String = (receiver.declaration as? KSClassDeclaration)?.nativePrefix()
+    // ADR-163: the receiver chain UNQUALIFIED. The package part of an extension symbol is the
+    // extension's own package, supplied by `symbols.extension` below.
+    val receiverPrefix: String = (receiver.declaration as? KSClassDeclaration)
+      ?.let { declaration -> ForwardSymbolTable.ownerChain(declaration) }
       ?: receiver.declaration.simpleName.asString().lowercase()
     val name: String = prop.simpleName.asString()
     // ADR-064's position coverage: the receiver is the last position that used to vanish silently.
@@ -472,8 +485,8 @@ internal class ForwardPropertyPlanner(
       position = ForwardPropertyPosition.EXTENSION,
       receiver = ForwardPropertyReceiver.Value(receiverType),
       prop = prop,
-      getExport = "${receiverPrefix}_get_${toCName(name)}",
-      setExport = "${receiverPrefix}_set_${toCName(name)}",
+      getExport = symbols.extension(prop, receiverPrefix, "get_${toCName(name)}"),
+      setExport = symbols.extension(prop, receiverPrefix, "set_${toCName(name)}"),
     )
   }
 
@@ -841,6 +854,7 @@ internal class ForwardPropertyPlanner(
     values: List<ForwardAbiParameter>,
   ): ForwardNativeCall = ForwardNativeCall(
     exportName = exportName,
+    csharpStem = symbols.stem(exportName),
     result = result,
     parameters = receiver.parameters() + values + errorParameter(),
   )

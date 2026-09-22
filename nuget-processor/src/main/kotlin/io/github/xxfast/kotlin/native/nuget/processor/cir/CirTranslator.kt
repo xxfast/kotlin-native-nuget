@@ -2,6 +2,8 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import com.google.devtools.ksp.processing.KSPLogger
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
+import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
+import io.github.xxfast.kotlin.native.nuget.processor.sanitizeLibrarySegment
 import io.github.xxfast.kotlin.native.nuget.processor.csharpIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
@@ -118,7 +120,17 @@ data class NugetContext(
    *  exportMarkers(...) }` waives, so a declaration carrying one exports as if it carried no
    *  marker at all. Empty is the shipped default (every marked declaration skips). */
   val exportMarkers: Set<String> = emptySet(),
-)
+) {
+  /**
+   * ADR-163: the one forward symbol table, derived from [libraryName] and [rootPackage] and carried
+   * here so every `cir/` site that already holds a context holds the table too. [NugetProcessor]
+   * reads this same instance to hand to the planners and the legacy `exports/` builders, so there
+   * is exactly one per processing round (`by lazy`, not a `get()`, so memoized qualifiers survive).
+   */
+  internal val symbols: ForwardSymbolTable by lazy {
+    ForwardSymbolTable(sanitizeLibrarySegment(libraryName), rootPackage)
+  }
+}
 
 internal fun translate(
   context: NugetContext,
@@ -375,7 +387,7 @@ internal fun translate(
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
     val members: List<CirMember> = funcs.flatMap { function ->
       translateSuspendFunction(
-        function, context.libraryName, tracker, exportedTypes, logger, classifier,
+        function, context.libraryName, context.symbols, tracker, exportedTypes, logger, classifier,
       )
     }
     namespaces.mergeStaticClass(namespace, finalClassName, members)
@@ -426,7 +438,7 @@ internal fun translate(
       )
     }
     enums.filter { isOwnedBy(owner, it) }.forEach { enum ->
-      add(translateEnum(enum, context.libraryName, logger, expects, context))
+      add(translateEnum(enum, context.libraryName, logger, context.symbols, expects, context))
     }
     // ADR-134: a nested `value class` is declared as a nested `readonly record struct`. Its
     // members already export under the whole chain (`nativePrefix()`) and every type position
@@ -446,13 +458,17 @@ internal fun translate(
         .filter { it.qualifiedName?.asString() == iface.qualifiedName?.asString() }
         .forEach { backing ->
           add(
-            translateInterfaceBackingClass(backing, context.libraryName, callableCatalog, tracker),
+            translateInterfaceBackingClass(
+              backing, context.libraryName, context.symbols, callableCatalog, tracker,
+            ),
           )
         }
     }
     objects.filter { isOwnedBy(owner, it) }.forEach { obj ->
       add(
-        translateObject(obj, context.libraryName, callableCatalog, tracker, logger, expects)
+        translateObject(
+          obj, context.libraryName, context.symbols, callableCatalog, tracker, logger, expects,
+        )
           .copy(nestedDeclarations = translateNestedOf(obj)),
       )
     }
@@ -484,7 +500,7 @@ internal fun translate(
 
   enums.filter { !it.isNestedDeclaration() }.forEach { enum ->
     val declaration: CirDeclaration = guarded(enum.forwardGuardName(), enum, logger) {
-      translateEnum(enum, context.libraryName, logger, expects, context)
+      translateEnum(enum, context.libraryName, logger, context.symbols, expects, context)
     } ?: return@forEach
     namespaces.addDeclaration(namespaceOf(enum.packageName.asString()), declaration)
   }
@@ -556,7 +572,9 @@ internal fun translate(
     }
     namespaces.addDeclaration(
       namespace,
-      translateInterfaceBackingClass(iface, context.libraryName, callableCatalog, tracker),
+      translateInterfaceBackingClass(
+        iface, context.libraryName, context.symbols, callableCatalog, tracker,
+      ),
     )
   }
 
@@ -576,7 +594,9 @@ internal fun translate(
 
   objects.filter { !it.isNestedDeclaration() }.forEach { obj ->
     val declaration: CirDeclaration = guarded(obj.forwardGuardName(), obj, logger) {
-      translateObject(obj, context.libraryName, callableCatalog, tracker, logger, expects)
+      translateObject(
+        obj, context.libraryName, context.symbols, callableCatalog, tracker, logger, expects,
+      )
         .copy(nestedDeclarations = translateNestedOf(obj))
     } ?: return@forEach
     namespaces.addDeclaration(namespaceOf(obj.packageName.asString()), declaration)
@@ -705,7 +725,8 @@ internal fun translate(
   // factory: `HandleOf` keeps throwing for it rather than emitting a half-supported ABI.
   val bridgePlans: List<CirBridgeInterface> = interfaceBackingClasses.mapNotNull { iface ->
     val plan: ForwardBridgeInterfacePlan =
-      ForwardInterfaceBridgePlanner.plan(iface, classifier) ?: return@mapNotNull null
+      ForwardInterfaceBridgePlanner.plan(iface, classifier, context.symbols)
+        ?: return@mapNotNull null
     CirBridgeInterface(namespaceOf(iface.packageName.asString()), plan)
   }
   if (bridgePlans.isNotEmpty()) {

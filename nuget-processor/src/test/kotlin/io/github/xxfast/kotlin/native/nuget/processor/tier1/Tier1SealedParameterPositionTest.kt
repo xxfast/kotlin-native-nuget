@@ -108,7 +108,7 @@ class Tier1SealedParameterPositionTest {
     val result = Tier1Harness.run(source)
 
     assertTrue(
-      result.generated.contains("export_shapes_count"),
+      result.generated.contains("export_library_tier1_sealedparameterposition__shapes_count"),
       "expected the collection parameter callable to bind; generated=${result.generated}",
     )
     assertTrue(
@@ -127,7 +127,7 @@ class Tier1SealedParameterPositionTest {
     val result = Tier1Harness.run(source)
 
     assertTrue(
-      result.generated.contains("export_drawing_create"),
+      result.generated.contains("export_library_tier1_sealedparameterposition__drawing_create"),
       "expected the constructor to bind; generated=${result.generated}",
     )
     assertTrue(
@@ -149,7 +149,7 @@ class Tier1SealedParameterPositionTest {
     val result = Tier1Harness.run(source)
 
     assertTrue(
-      result.generated.contains("export_board_set_shapes"),
+      result.generated.contains("export_library_tier1_sealedparameterposition__board_set_shapes"),
       "expected the setter to bind now that the write side is open; " +
           "generated=${result.generated}",
     )
@@ -170,8 +170,8 @@ class Tier1SealedParameterPositionTest {
     val result = Tier1Harness.run(source)
 
     assertTrue(
-      result.generated.contains("""@CName("radius_has_value")""") &&
-          result.generated.contains("""@CName("radius_value")"""),
+      result.generated.contains("""@CName("library_tier1_sealedparameterposition__radius_has_value")""") &&
+          result.generated.contains("""@CName("library_tier1_sealedparameterposition__radius_value")"""),
       "expected both halves of the two-call route to bind; generated=${result.generated}",
     )
     assertTrue(
@@ -188,7 +188,7 @@ class Tier1SealedParameterPositionTest {
     val result = Tier1Harness.run(source)
 
     assertFalse(
-      result.generated.contains("export_shapes_haunt"),
+      result.generated.contains("export_library_tier1_sealedparameterposition__shapes_haunt"),
       "expected the sealed-interface parameter to stay skipped; generated=${result.generated}",
     )
     assertTrue(

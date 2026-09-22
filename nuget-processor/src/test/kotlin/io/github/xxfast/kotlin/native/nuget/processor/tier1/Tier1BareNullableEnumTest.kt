@@ -129,8 +129,8 @@ class Tier1BareNullableEnumTest {
     assertTrue(result.compiledClean, "expected a top-level nullable enum return to bind; got: ${result.compileErrors}")
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"napMood_has_value\")")
-    assertContains(kotlin, "@CName(\"napMood_value\")")
+    assertContains(kotlin, "@CName(\"library_tier1_barenullableenumtoplevel__napMood_has_value\")")
+    assertContains(kotlin, "@CName(\"library_tier1_barenullableenumtoplevel__napMood_value\")")
     assertContains(kotlin, "napMood(hour)!!.ordinal")
 
     val cs: String = result.generatedCSharp

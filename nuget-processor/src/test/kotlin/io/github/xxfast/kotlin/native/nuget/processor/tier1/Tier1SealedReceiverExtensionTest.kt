@@ -86,7 +86,7 @@ class Tier1SealedReceiverExtensionTest {
     val result = Tier1Harness.run(source)
 
     assertTrue(
-      result.generated.contains("""@CName("shape_covers")"""),
+      result.generated.contains("""@CName("library_tier1_sealedreceiver__shape_covers")"""),
       "expected the two-handle extension to bind; generated=${result.generated}",
     )
     assertTrue(
@@ -146,7 +146,7 @@ class Tier1SealedReceiverExtensionTest {
     val result = Tier1Harness.run(source)
 
     assertFalse(
-      result.generated.contains("export_ghost_haunt"),
+      result.generated.contains("export_library_tier1_sealedreceiver__ghost_haunt"),
       "expected the sealed-interface receiver to stay skipped; generated=${result.generated}",
     )
     assertTrue(

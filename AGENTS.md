@@ -116,9 +116,14 @@ The reverse bridge is observable as of [ADR-054](docs/adr/054-reverse-bridge-reg
 - This is not pedantry. ADR-053 asserted that `NullableAttribute`'s constructor is always a `MethodDefinitionHandle` (true only when the attribute is compiler-synthesized; on net8.0 it ships in the BCL and is a `MemberReferenceHandle`). An implementing agent followed it literally, silently decoded every annotation as oblivious, and had to debug its way back out.
 - If you are implementing against an ADR and a mechanism claim does not match reality, **the ADR is wrong**. Say so, fix it, and do not bend the code to match the doc.
 
-## Fixture Sample Functions Share One Export Namespace
+## Fixture Sample Functions Sharing a Name Across Packages
 
-- Every top-level Kotlin sample function across `test-library` exports to one flat forward `@CName` namespace, regardless of file or package: a new top-level fun with the same simple name as one already declared elsewhere (`rollCall()` in `KennelSample.kt` and a new `RosterSample.kt`) collides silently at generation time, surfacing only as "Overload resolution ambiguity" in generated `CNameExports.kt`, not a named diagnostic pointing at either file. Grep `test-library/src/nativeMain` for your chosen function name before adding it, or just give it a fixture-specific name up front. See [the backlog entry](docs/backlog/two-exported-types-same-simple-name-different.md) for the underlying export-prefix defect this rides on.
+- [ADR-163](docs/adr/163-export-symbol-package-qualification.md) qualifies every forward `@CName` by
+  library and declaring package, so a new top-level fun with the same simple name as one already
+  declared in a *different* package (`rollCall()` in `kennel/KennelSample.kt` and `roster/RosterSample.kt`)
+  no longer collides on one export symbol; each binds under its own generated namespace. A same-name
+  pair still needs to live in different packages to bind at all, and a same-name pair in the *same*
+  package is still an ordinary Kotlin overload-resolution question, unrelated to this scheme.
 
 ## Fail Fast & Follow Defensive Programming
 

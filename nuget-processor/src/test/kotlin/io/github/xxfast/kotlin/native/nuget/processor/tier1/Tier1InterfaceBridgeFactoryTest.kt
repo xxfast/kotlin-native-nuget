@@ -44,7 +44,7 @@ class Tier1InterfaceBridgeFactoryTest {
     assertTrue(result.compiledClean, "expected the bridge factory to compile; got: ${result.compileErrors}")
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"pet_bridge_create\")")
+    assertContains(kotlin, "@CName(\"library_tier1_bridgefactory__pet_bridge_create\")")
     // Slot order is properties in declaration order, then functions: name, legs, nickname, speak,
     // fetch, nap. Both projections read it off ForwardInterfaceBridgePlanner.
     assertContains(kotlin, "nameGetPtr")
@@ -151,8 +151,8 @@ class Tier1InterfaceBridgeFactoryTest {
     val result = Tier1Harness.run(source)
     val cs: String = result.generatedCSharp
 
-    assertContains(cs, "internal sealed class PetBridgeState : NugetBridgeState")
-    assertContains(cs, "EntryPoint = \"pet_bridge_create\"")
+    assertContains(cs, "internal sealed class Tier1BridgefactoryPetBridgeState : NugetBridgeState")
+    assertContains(cs, "EntryPoint = \"library_tier1_bridgefactory__pet_bridge_create\"")
     assertContains(
       cs,
       "NugetBridgeObjectCallback speak = _ => { string result = impl.Speak(); return NugetMarshal.WrapString(result); };"
@@ -182,7 +182,7 @@ class Tier1InterfaceBridgeFactoryTest {
       cs.contains("passing a C#-implemented interface is not supported yet"),
       "the ADR-040 boundary exception must be gone once a bridge layer is emitted",
     )
-    assertContains(cs, "return PetBridgeState.Create(petImpl).KotlinHandle;")
+    assertContains(cs, "return Tier1BridgefactoryPetBridgeState.Create(tier1bridgefactorypetImpl).KotlinHandle;")
     assertContains(cs, "implements no bridgeable Kotlin interface.")
   }
 
@@ -311,7 +311,7 @@ class Tier1InterfaceBridgeFactoryTest {
     )
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"stove_bridge_create\")")
+    assertContains(kotlin, "@CName(\"library_tier1_bridgefactory__stove_bridge_create\")")
     // Fully qualified: the generated file adds no import for the enum, and a bare simple name
     // would not resolve at the `override` position.
     assertContains(kotlin, "override val heat: tier1.bridgefactory.Heat")
@@ -320,7 +320,7 @@ class Tier1InterfaceBridgeFactoryTest {
     assertContains(kotlin, "heat.ordinal")
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "internal sealed class StoveBridgeState : NugetBridgeState")
+    assertContains(cs, "internal sealed class Tier1BridgefactoryStoveBridgeState : NugetBridgeState")
     // `global::`-qualified, from the classifier's own spelling rule.
     assertContains(cs, "global::Interop.Heat value0 = (global::Interop.Heat)arg0;")
     assertContains(cs, "return (int)impl.Heat;")

@@ -27,6 +27,31 @@ fun toCName(name: String): String {
   return name
 }
 
+/** Every run of characters a C symbol segment cannot contain, once the name is lowercased. */
+private val NON_C_IDENTIFIER = Regex("[^a-z0-9_]+")
+
+/**
+ * ADR-127's reserved leading segment. A library whose sanitised name is this would mint symbols in
+ * the `nuget-runtime` ABI's own space, so [sanitizeLibrarySegment]'s caller fails the build.
+ */
+internal const val RESERVED_LIBRARY_SEGMENT: String = "nuget"
+
+/**
+ * ADR-163: the leading segment of every forward C entry point, derived from the `nuget.libraryName`
+ * the `DllImport` already names.
+ *
+ * Lowercased, then every run of characters outside `[a-z0-9_]` collapsed to a single `_`, so
+ * `Test-Library.Native` becomes `test_library_native`. A leading digit takes a `_` prefix (a C
+ * symbol may not start with one; the alternative, leaving it to the linker, hides the defect in a
+ * toolchain error message). An empty or all-punctuation name would leave symbols bare, which is the
+ * `signal` hazard this scheme exists to close, so it falls back to `_`.
+ */
+internal fun sanitizeLibrarySegment(libraryName: String): String {
+  val collapsed: String = libraryName.lowercase().replace(NON_C_IDENTIFIER, "_")
+  val trimmed: String = collapsed.ifEmpty { "_" }
+  return if (trimmed.first().isDigit()) "_$trimmed" else trimmed
+}
+
 fun toCSharpName(cname: String): String {
   if (cname.trimEnd('_') in CSHARP_RESERVED) return "@$cname"
   return cname

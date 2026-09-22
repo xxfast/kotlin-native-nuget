@@ -53,16 +53,16 @@ class Tier1UnexportedSupertypeSkipTest {
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     assertTrue(
-      "export_api_ping" in result.generated,
+      "export_library_api_ping" in result.generated,
       "dropping the supertype must not cost the class its own members; generated:\n${result.generated}",
     )
     assertTrue(
-      "export_api_get_port" in result.generated,
+      "export_library_api_get_port" in result.generated,
       "dropping the supertype must not cost the class its own properties; " +
           "generated:\n${result.generated}",
     )
     assertTrue(
-      "export_api_tag" in result.generated,
+      "export_library_api_tag" in result.generated,
       "the dropped supertype's *defaulted* member still binds on the class itself " +
           "(`ForwardClassMembership.kt`), so the C# surface loses nothing at all; " +
           "generated:\n${result.generated}",

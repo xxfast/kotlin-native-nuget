@@ -85,7 +85,7 @@ class Tier1SealedInterfaceTest {
       )
     }
     assertTrue(
-      result.generated.contains("export_pulse_get_type"),
+      result.generated.contains("export_library_tier1_sealedinterface__pulse_get_type"),
       "expected the discriminator export; generated=${result.generated}",
     )
   }
@@ -288,7 +288,7 @@ class Tier1SealedInterfaceTest {
       "expected Monitor.mixed to keep skipping named; kspWarnings=${result.kspWarnings}",
     )
     assertFalse(
-      result.generated.contains("export_monitor_mixed"),
+      result.generated.contains("export_library_tier1_sealedinterface_siblingarms__monitor_mixed"),
       "expected no export for the ineligible position; generated=${result.generated}",
     )
     assertTrue(
@@ -360,7 +360,7 @@ class Tier1SealedInterfaceTest {
           "${csharp.lines().filter { it.contains("ITransmission") }}",
     )
     assertTrue(
-      result.generated.contains("export_transmission_get_type"),
+      result.generated.contains("export_library_tier1_sealedinterface_siblingarms__transmission_get_type"),
       "expected the discriminator export; generated=${result.generated}",
     )
   }

@@ -50,15 +50,15 @@ class Tier1FlowMethodOverloadTest {
 
     val kotlin: String = result.generated
     listOf(
-      "radio_play_collect", "radio_play_2_collect",
-      "radio_play_value", "radio_play_2_value",
-      "radio_schedule_collect", "radio_schedule_2_collect",
+      "library_tier1_flowoverload__radio_play_collect", "library_tier1_flowoverload__radio_play_2_collect",
+      "library_tier1_flowoverload__radio_play_value", "library_tier1_flowoverload__radio_play_2_value",
+      "library_tier1_flowoverload__radio_schedule_collect", "library_tier1_flowoverload__radio_schedule_2_collect",
       // ADR-071 (2026-09-11): a MutableStateFlow return is held by handle, so its numbered
       // entry points are the acquire and the flow-keyed setter, not a per-member collect/value.
-      "radio_volume", "radio_volume_2",
-      "radio_volume_set_value", "radio_volume_2_set_value",
-      "radio_maybePlay_collect", "radio_maybePlay_2_collect",
-      "radio_maybePlay_has_value", "radio_maybePlay_2_has_value",
+      "library_tier1_flowoverload__radio_volume", "library_tier1_flowoverload__radio_volume_2",
+      "library_tier1_flowoverload__radio_volume_set_value", "library_tier1_flowoverload__radio_volume_2_set_value",
+      "library_tier1_flowoverload__radio_maybePlay_collect", "library_tier1_flowoverload__radio_maybePlay_2_collect",
+      "library_tier1_flowoverload__radio_maybePlay_has_value", "library_tier1_flowoverload__radio_maybePlay_2_has_value",
     ).forEach { entryPoint ->
       assertContains(kotlin, "@CName(\"$entryPoint\")")
       assertEquals(
@@ -100,8 +100,8 @@ class Tier1FlowMethodOverloadTest {
     )
 
     assertTrue(result.compiledClean, "expected the plain class to compile; got: ${result.compileErrors}")
-    assertContains(result.generated, "@CName(\"radio_play_collect\")")
-    assertContains(result.generated, "@CName(\"radio_play_value\")")
+    assertContains(result.generated, "@CName(\"library_tier1_flownooverload__radio_play_collect\")")
+    assertContains(result.generated, "@CName(\"library_tier1_flownooverload__radio_play_value\")")
     assertContains(result.generatedCSharp, "Native_PlayCollect(")
     assertContains(result.generatedCSharp, "Native_PlayValue(")
   }

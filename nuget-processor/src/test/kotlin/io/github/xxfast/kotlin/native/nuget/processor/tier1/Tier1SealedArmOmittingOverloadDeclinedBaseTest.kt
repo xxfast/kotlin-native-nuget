@@ -76,8 +76,8 @@ class Tier1SealedArmOmittingOverloadDeclinedBaseTest {
     )
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"job_running_tag\")")
-    assertContains(kotlin, "@CName(\"job_running_tag_2\")")
+    assertContains(kotlin, "@CName(\"library_tier1_armdeclinedbase__job_running_tag\")")
+    assertContains(kotlin, "@CName(\"library_tier1_armdeclinedbase__job_running_tag_2\")")
     // The synthesized arity calls Kotlin with one positional argument, letting the overridee's
     // default supply the rest. A truncation that passed both would read as the wrong value.
     assertContains(kotlin, "tag(prefix)")
@@ -111,7 +111,7 @@ class Tier1SealedArmOmittingOverloadDeclinedBaseTest {
       "expected the declared arity on the arm; got: ${linesFor(result, "Tag(")}",
     )
     assertTrue(
-      running.contains("EntryPoint = \"job_running_tag\""),
+      running.contains("EntryPoint = \"library_tier1_armdeclinedbase__job_running_tag\""),
       "expected the arm-prefixed extern; got: ${linesFor(result, "job_running_tag")}",
     )
 

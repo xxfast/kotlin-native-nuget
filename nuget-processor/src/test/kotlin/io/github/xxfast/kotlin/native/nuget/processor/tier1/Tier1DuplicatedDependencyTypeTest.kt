@@ -64,7 +64,7 @@ class Tier1DuplicatedDependencyTypeTest {
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     assertTrue(
-      "export_newsroom_latest" in result.generated,
+      "export_library_tier1_dup__newsroom_latest" in result.generated,
       "ADR-109 changes no generated output: the duplicated type must still export; " +
           "generated:\n${result.generated}",
     )

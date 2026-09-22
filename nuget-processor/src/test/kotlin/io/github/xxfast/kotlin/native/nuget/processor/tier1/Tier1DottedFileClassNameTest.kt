@@ -39,7 +39,7 @@ class Tier1DottedFileClassNameTest {
       "a dotted class name does not parse as C#; cs=$cs",
     )
     // C#-only: the native export name never came from the file, so it is untouched.
-    assertContains(result.generated, "@CName(\"hub\")")
+    assertContains(result.generated, "@CName(\"library_tier1_dottedfile_platform__hub\")")
   }
 
   /**

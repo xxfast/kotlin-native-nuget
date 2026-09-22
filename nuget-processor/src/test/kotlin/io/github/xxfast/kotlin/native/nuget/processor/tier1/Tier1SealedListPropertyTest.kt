@@ -66,7 +66,7 @@ class Tier1SealedListPropertyTest {
     )
     assertContains(
       result.generated,
-      "fun export_state_loaded_get_items(handle: COpaquePointer, errorOut: COpaquePointer?)",
+      "fun export_library_tier1_sealedlistproperty__state_loaded_get_items(handle: COpaquePointer, errorOut: COpaquePointer?)",
     )
   }
 

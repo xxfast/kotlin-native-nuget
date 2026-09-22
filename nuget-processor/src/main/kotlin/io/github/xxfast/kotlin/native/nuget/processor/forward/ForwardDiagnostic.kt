@@ -204,6 +204,13 @@ internal enum class ForwardDiagnosticKind(
    *  mangled symbol. Still fails safe — the round returns before `CNameExports.kt` is written. */
   ERROR_C_ENTRY_POINT_COLLISION(ForwardDiagnosticSeverity.ERROR),
 
+  /** ADR-163: the sanitised `nuget.libraryName` is `nuget`, which is ADR-127's reserved leading
+   *  segment for the runtime's own fixed ABI (`nuget_string_free`, `nuget_gc_collect`, ~67 names).
+   *  Every forward symbol this build would mint starts with that segment, so a user declaration
+   *  could land exactly on a runtime export and bind the wrong function at link time. Fatal, and
+   *  fatal early: the round stops before a single symbol is planned. */
+  ERROR_RESERVED_LIBRARY_NAME(ForwardDiagnosticSeverity.ERROR),
+
   /** ADR-066: a reachable, structurally bridgeable declaration in a dependency module whose
    *  package the reachability closure did not admit — out of scope, not unsupported. Replaces
    *  the misleading `SKIPPED_UNSUPPORTED_TYPE` this case used to fall through to. */

@@ -69,9 +69,9 @@ class Tier1NestedClassSkipTest {
     }
     // Was: every one of these exports had to be ABSENT.
     listOf(
-      "export_owner_make",
-      "export_owner_maybe",
-      "export_owner_get_stored",
+      "export_library_tier1_nestedclass__owner_make",
+      "export_library_tier1_nestedclass__owner_maybe",
+      "export_library_tier1_nestedclass__owner_get_stored",
     ).forEach { export ->
       assertContains(
         result.generated,
@@ -80,7 +80,7 @@ class Tier1NestedClassSkipTest {
       )
     }
     assertTrue(
-      result.generated.contains("export_owner_get_label"),
+      result.generated.contains("export_library_tier1_nestedclass__owner_get_label"),
       "expected the control member to keep binding; generated=${result.generated}",
     )
   }
@@ -91,11 +91,11 @@ class Tier1NestedClassSkipTest {
 
     // ADR-117 would raise ERROR_C_ENTRY_POINT_COLLISION if `Owner.Nested` exported `nested_create`
     // against an unrelated top-level `Nested`; the chain is what keeps the symbol unique.
-    assertContains(result.generated, "@CName(\"owner_nested_create\")")
-    assertContains(result.generated, "@CName(\"quiet_unused_deeper_create\")")
+    assertContains(result.generated, "@CName(\"library_tier1_nestedclass__owner_nested_create\")")
+    assertContains(result.generated, "@CName(\"library_tier1_nestedclass__quiet_unused_deeper_create\")")
     assertFalse(
-      result.generated.contains("@CName(\"nested_create\")") ||
-          result.generated.contains("@CName(\"deeper_create\")"),
+      result.generated.contains("@CName(\"library_tier1_nestedclass__nested_create\")") ||
+          result.generated.contains("@CName(\"library_tier1_nestedclass__deeper_create\")"),
       "expected no unchained entry point; generated=${result.generated}",
     )
   }
@@ -130,7 +130,7 @@ class Tier1NestedClassSkipTest {
           "${result.generatedCSharp.lines().filter { it.contains("Companion") }}",
     )
     assertTrue(
-      result.generated.contains("export_owner_create"),
+      result.generated.contains("export_library_tier1_nestedclass__owner_create"),
       "expected the companion's own member to keep binding; generated=${result.generated}",
     )
     // Carve-out 2: what hides under a private owner is not reachable API, so it is neither
@@ -152,7 +152,7 @@ class Tier1NestedClassSkipTest {
 
     // Was: `Owner.maybe` had to skip, and the assertion was only that it did not blame NULLABLE.
     // The nullable position was a separate code path then and stays a separate cell now.
-    assertContains(result.generated, "export_owner_maybe")
+    assertContains(result.generated, "export_library_tier1_nestedclass__owner_maybe")
     assertFalse(
       result.kspWarnings.any { it.contains("SKIPPED_") && it.contains("Owner.maybe") },
       "expected no skip for the nullable nested return; kspWarnings=${result.kspWarnings}",

@@ -56,9 +56,9 @@ class Tier1GenericBaseClassTest {
 
     val kotlin: String = result.generated
     assertFalse(
-      "export_stringcrate_get_value" in kotlin,
+      "export_library_tier1_genericbase__stringcrate_get_value" in kotlin,
       "an inherited property must stay on the base, not be re-bound on the subclass; got: $kotlin",
     )
-    assertContains(kotlin, "@CName(\"stringcrate_own\")")
+    assertContains(kotlin, "@CName(\"library_tier1_genericbase__stringcrate_own\")")
   }
 }

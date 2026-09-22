@@ -238,12 +238,12 @@ class Tier1EnumCollectionComponentTest {
     )
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "export_moodledger_logMoods")
+    assertContains(kotlin, "export_library_tier1_enumcollectionnarrowing__moodledger_logMoods")
     // ADR-098: the Short element crosses as itself, so the Kotlin lowering is a plain cast off
     // the boxed component -- no ordinal projection, unlike the enum cells above.
-    assertContains(kotlin, "export_moodledger_logSpans")
+    assertContains(kotlin, "export_library_tier1_enumcollectionnarrowing__moodledger_logSpans")
     assertContains(kotlin, "it as kotlin.Short")
-    assertTrue("export_moodledger_logNested" !in kotlin, "generated=$kotlin")
+    assertTrue("export_library_tier1_enumcollectionnarrowing__moodledger_logNested" !in kotlin, "generated=$kotlin")
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "LogSpans")

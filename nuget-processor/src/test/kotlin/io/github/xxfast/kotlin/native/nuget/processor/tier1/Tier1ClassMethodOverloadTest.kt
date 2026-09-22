@@ -45,9 +45,9 @@ class Tier1ClassMethodOverloadTest {
     )
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"narrator_describe\")")
-    assertContains(kotlin, "@CName(\"narrator_describe_2\")")
-    assertContains(kotlin, "@CName(\"narrator_describe_3\")")
+    assertContains(kotlin, "@CName(\"library_tier1_classoverload__narrator_describe\")")
+    assertContains(kotlin, "@CName(\"library_tier1_classoverload__narrator_describe_2\")")
+    assertContains(kotlin, "@CName(\"library_tier1_classoverload__narrator_describe_3\")")
     assertFalse(
       kotlin.contains(".describe_2(") || kotlin.contains(".describe_3("),
       "every Kotlin call site must say the declared name; generated=$kotlin",
@@ -59,9 +59,9 @@ class Tier1ClassMethodOverloadTest {
     )
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "EntryPoint = \"narrator_describe\"")
-    assertContains(cs, "EntryPoint = \"narrator_describe_2\"")
-    assertContains(cs, "EntryPoint = \"narrator_describe_3\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_classoverload__narrator_describe\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_classoverload__narrator_describe_2\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_classoverload__narrator_describe_3\"")
     assertContains(cs, "public string Describe()")
     assertContains(cs, "public string Describe(string prefix)")
     assertContains(cs, "public string Describe(string prefix, bool excited)")
@@ -98,8 +98,8 @@ class Tier1ClassMethodOverloadTest {
     )
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "EntryPoint = \"narrator_rate\"")
-    assertContains(cs, "EntryPoint = \"narrator_rate_2\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_classoverloadwire__narrator_rate\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_classoverloadwire__narrator_rate_2\"")
     assertContains(cs, "Native_Rate(_handle, stars, out IntPtr error)")
     assertContains(cs, "Native_Rate_2(_handle, (int)mood, out IntPtr error)")
     assertEquals(
@@ -159,8 +159,8 @@ class Tier1ClassMethodOverloadTest {
     )
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"narrator_describe\")")
-    assertContains(kotlin, "@CName(\"narrator_greet\")")
+    assertContains(kotlin, "@CName(\"library_tier1_classnooverload__narrator_describe\")")
+    assertContains(kotlin, "@CName(\"library_tier1_classnooverload__narrator_greet\")")
     assertFalse(kotlin.contains("_describe_2"), "no numbering without overloads; generated=$kotlin")
     assertFalse(kotlin.contains("_greet_2"), "no numbering without overloads; generated=$kotlin")
 

@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
@@ -34,10 +35,12 @@ internal fun FileSpec.Builder.addSealedClassExports(
   // question the planner did. A route that read the raw marker here would refuse a declaration
   // the plan already admitted.
   exportMarkers: Set<String>,
+  /** ADR-163: the one symbol table. */
+  symbols: ForwardSymbolTable,
 ) {
   val name: String = sealed.simpleName.asString()
   val qualifiedName: String = sealed.qualifiedName?.asString() ?: return
-  val prefix: String = sealed.nativePrefix()
+  val prefix: String = sealed.nativePrefix(symbols)
 
   val subclasses: List<KSClassDeclaration> = sealed.getSealedSubclasses().toList()
 

@@ -46,7 +46,7 @@ class Tier1MutableStateFlowFunctionTest {
     // One acquire export per member, minting the flow's own StableRef through the generated
     // handle table (never a bare `StableRef.create`, which would bypass ADR-120's live-handle
     // accounting).
-    assertContains(kotlin, "@CName(\"dispenser_level\")")
+    assertContains(kotlin, "@CName(\"library_tier1_mutablestateflowfunction__dispenser_level\")")
     assertContains(kotlin, "NugetHandles.retain(obj.level() as Any)")
 
     // The write is keyed on the flow handle, so it lands in the flow the caller was handed
@@ -55,7 +55,7 @@ class Tier1MutableStateFlowFunctionTest {
       kotlin,
       "flowHandle.asStableRef<kotlinx.coroutines.flow.MutableStateFlow<kotlin.Int>>()",
     )
-    assertContains(kotlin, "@CName(\"dispenser_level_set_value\")")
+    assertContains(kotlin, "@CName(\"library_tier1_mutablestateflowfunction__dispenser_level_set_value\")")
 
     // The per-member reads are dead on this route: reads go through ADR-068's shared
     // handle-keyed exports, generated once per module.
@@ -73,8 +73,8 @@ class Tier1MutableStateFlowFunctionTest {
 
     val csharp: String = result.generatedCSharp
 
-    assertContains(csharp, "EntryPoint = \"dispenser_level\"")
-    assertContains(csharp, "EntryPoint = \"dispenser_level_set_value\"")
+    assertContains(csharp, "EntryPoint = \"library_tier1_mutablestateflowfunction__dispenser_level\"")
+    assertContains(csharp, "EntryPoint = \"library_tier1_mutablestateflowfunction__dispenser_level_set_value\"")
     assertFalse(
       csharp.contains("dispenser_level_collect"),
       "expected no per-member _collect import for a held flow; generatedCSharp=$csharp",

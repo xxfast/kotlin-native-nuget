@@ -48,7 +48,7 @@ class Tier1CoroutinesClasspathPreconditionTest {
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     assertTrue(
-      "export_ticker_ticks" in result.generated,
+      "export_library_tier1_coroutinesclasspath__ticker_ticks" in result.generated,
       "expected the Flow route to bind against the real Flow; generated:\n${result.generated}",
     )
   }

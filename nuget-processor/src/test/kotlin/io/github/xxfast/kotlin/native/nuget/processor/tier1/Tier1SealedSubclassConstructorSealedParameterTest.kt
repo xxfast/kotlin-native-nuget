@@ -47,7 +47,7 @@ class Tier1SealedSubclassConstructorSealedParameterTest {
     )
     // Kotlin: the same ADR-105 read-back an ordinary class's constructor gets.
     assertContains(result.generated, "inner.asStableRef<tier1.armctorsealed.Shape>().get()")
-    assertContains(result.generated, "@CName(\"shape_framed_create\")")
+    assertContains(result.generated, "@CName(\"library_tier1_armctorsealed__shape_framed_create\")")
   }
 
   @Test

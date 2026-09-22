@@ -51,7 +51,7 @@ class Tier1InterfaceReturnTest {
     assertContains(kotlin, "pet_get_name")
     assertContains(kotlin, "pet_speak")
     assertContains(kotlin, "pet_dispose")
-    assertContains(kotlin, "export_cat_findFriend")
+    assertContains(kotlin, "export_library_tier1_interfacereturn__cat_findFriend")
   }
 
   /**
@@ -241,7 +241,7 @@ class Tier1InterfaceReturnTest {
 
     assertTrue(result.compiledClean, "expected no broken source for Shelter.pets; got: ${result.compileErrors}")
     assertFalse(
-      "export_shelter_pets" in result.generated,
+      "export_library_tier1_interfacecollectionskip__shelter_pets" in result.generated,
       "expected Shelter.pets to be entirely absent from the generated CNameExports.kt; " +
           "generated=${result.generated}",
     )
@@ -341,11 +341,11 @@ class Tier1InterfaceReturnTest {
           "Animal's get-only Vibe; generatedCSharp:\n$csharp",
     )
     assertFalse(
-      "export_cat_set_vibe" in result.generated,
+      "export_library_tier1_overridevalwithvar__cat_set_vibe" in result.generated,
       "expected no Kotlin setter export for Cat.vibe; generated=${result.generated}",
     )
     assertTrue(
-      "export_cat_get_vibe" in result.generated,
+      "export_library_tier1_overridevalwithvar__cat_get_vibe" in result.generated,
       "expected the Cat.vibe getter export to survive; generated=${result.generated}",
     )
     assertTrue(
@@ -385,7 +385,7 @@ class Tier1InterfaceReturnTest {
           "generatedCSharp:\n${result.generatedCSharp}",
     )
     assertFalse(
-      "export_cat_set_vibe" in result.generated,
+      "export_library_tier1_overrideabstractval__cat_set_vibe" in result.generated,
       "expected no Kotlin setter export for Cat.vibe; generated=${result.generated}",
     )
   }
@@ -429,7 +429,7 @@ class Tier1InterfaceReturnTest {
       message = "expected Clicker.Count to keep its setter; generatedCSharp:\n$csharp",
     )
     assertTrue(
-      "export_clicker_set_count" in result.generated,
+      "export_library_tier1_overrideinterfaceval__clicker_set_count" in result.generated,
       "expected the Clicker.count setter export; generated=${result.generated}",
     )
   }

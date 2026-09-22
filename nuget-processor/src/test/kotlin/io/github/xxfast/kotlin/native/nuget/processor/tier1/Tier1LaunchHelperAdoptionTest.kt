@@ -72,7 +72,7 @@ class Tier1LaunchHelperAdoptionTest {
           "${result.kspErrors}",
     )
 
-    val body: String = exportBody(result, "adoptCat_async")
+    val body: String = exportBody(result, "library_tier1_launchhelper__adoptCat_async")
 
     assertContains(
       body,
@@ -89,7 +89,7 @@ class Tier1LaunchHelperAdoptionTest {
     // The top-level `Unit` route: nothing to mint, so the body's last expression is the `null`
     // the helper hands its success arm -- the one arm of `buildSuspendFunctionBody` that no other
     // Tier 1 fixture reaches.
-    val unitBody: String = exportBody(result, "cleanLitter_async")
+    val unitBody: String = exportBody(result, "library_tier1_launchhelper__cleanLitter_async")
     assertContains(
       unitBody,
       "launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData)",
@@ -114,7 +114,7 @@ class Tier1LaunchHelperAdoptionTest {
     )
 
     // The `Unit` route: no result to mint, so the body's last expression is `null`.
-    val unitBody: String = exportBody(result, "shelter_feed_async")
+    val unitBody: String = exportBody(result, "library_tier1_launchhelper__shelter_feed_async")
     assertContains(
       unitBody,
       "val scope = scopeHandle.asStableRef<CoroutineScope>().get()",
@@ -128,7 +128,7 @@ class Tier1LaunchHelperAdoptionTest {
     assertNoInlineLaunchShape(unitBody)
 
     // The nullable-result route: the null guard (issue #108) is unchanged and stays in the body.
-    val nullableBody: String = exportBody(result, "shelter_findCat_async")
+    val nullableBody: String = exportBody(result, "library_tier1_launchhelper__shelter_findCat_async")
     assertContains(
       nullableBody,
       "launchForCSharp(scope, callbackPtr, userData)",
@@ -152,7 +152,7 @@ class Tier1LaunchHelperAdoptionTest {
           "${result.kspErrors}",
     )
 
-    val propertyBody: String = exportBody(result, "radio_get_purrs_collect")
+    val propertyBody: String = exportBody(result, "library_tier1_launchhelper__radio_get_purrs_collect")
     assertContains(
       propertyBody,
       "collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData)",
@@ -165,7 +165,7 @@ class Tier1LaunchHelperAdoptionTest {
     )
     assertNoInlineLaunchShape(propertyBody)
 
-    val methodBody: String = exportBody(result, "radio_station_collect")
+    val methodBody: String = exportBody(result, "library_tier1_launchhelper__radio_station_collect")
     assertContains(
       methodBody,
       "collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData)",

@@ -65,7 +65,7 @@ class Tier1KeptBaseInterfaceListTest {
     val result = generate()
 
     assertTrue(
-      "export_ledge_brushes" in result.generated,
+      "export_library_ledge_brushes" in result.generated,
       "`: IGroomable` without a `Brushes` body is CS0535, and the default body is reachable by " +
           "ordinary dispatch on the instance behind the handle; generated:\n${result.generated}",
     )
@@ -74,7 +74,7 @@ class Tier1KeptBaseInterfaceListTest {
       "generated C#:\n${result.generatedCSharp}",
     )
     assertFalse(
-      "export_ledge_height" in result.generated,
+      "export_library_ledge_height" in result.generated,
       "a base *class* member still stays on the base: re-binding it on the subclass hides the " +
           "base one (CS0108); generated:\n${result.generated}",
     )

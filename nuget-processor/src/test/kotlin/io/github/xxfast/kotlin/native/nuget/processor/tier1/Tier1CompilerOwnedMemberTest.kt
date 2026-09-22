@@ -73,7 +73,7 @@ class Tier1CompilerOwnedMemberTest {
     )
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
-    listOf("export_machine_shown", "export_machine_companion_shown", "export_registry_shown")
+    listOf("export_library_machine_shown", "export_library_machine_companion_shown", "export_library_registry_shown")
       .forEach { expected ->
         assertTrue(
           expected in result.generated,
@@ -118,7 +118,7 @@ class Tier1CompilerOwnedMemberTest {
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     assertTrue(
-      "export_crate_get_label" in result.generated,
+      "export_library_crate_get_label" in result.generated,
       "the `@Serializable` type itself still exports in full; generated:\n${result.generated}",
     )
     assertFalse(

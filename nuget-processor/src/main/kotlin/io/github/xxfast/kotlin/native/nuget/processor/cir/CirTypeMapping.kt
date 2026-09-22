@@ -17,6 +17,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticK
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyReceiver
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedInterface
+import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.isUnderPackage
 
 internal fun KSType.expandAliases(): KSType {
@@ -227,18 +228,13 @@ internal fun KSClassDeclaration.nestedCsName(): String {
  * ADR-133: the C entry-point prefix of a declaration -- the whole enclosing chain, each simple name
  * lowercased, `_`-joined (`owner_nested`, `owner_middle_inner`).
  *
- * A top-level declaration's chain has exactly one element, so its prefix is byte-identical to the
- * `simpleName.lowercase()` this replaces and no released entry point changes. The sealed route
- * composes an arm on top of the base's prefix, which keeps both `shape_circle` (nested arm) and
- * `flatshape_label` (sibling arm) exactly as they were.
+ * ADR-163: that chain is no longer the whole prefix. It now sits behind the library and package
+ * qualification [ForwardSymbolTable] owns, so two `Kitten` classes in two packages no longer derive
+ * one symbol. The zero-argument form was DELETED rather than kept as a default: every caller has to
+ * pass the table, so no route can mint an unqualified prefix by omission.
  */
-internal fun KSClassDeclaration.nativePrefix(): String =
-  generateSequence<KSDeclaration>(this) { it.parentDeclaration }
-    .takeWhile { it is KSClassDeclaration }
-    .map { it.simpleName.asString().lowercase() }
-    .toList()
-    .asReversed()
-    .joinToString("_")
+internal fun KSClassDeclaration.nativePrefix(symbols: ForwardSymbolTable): String =
+  symbols.owner(this)
 
 /**
  * ADR-133: the ADR-040 C# interface name of a declaration, with the `I` on the LAST segment only

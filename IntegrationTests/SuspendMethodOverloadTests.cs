@@ -184,12 +184,12 @@ public class SuspendMethodOverloadTests
         string[] sitter = EntryPointsOf(typeof(AsyncCatSitter));
         string[] tracker = EntryPointsOf(typeof(CatMoodTracker));
 
-        Assert.Contains("asynccatservice_fetchCat_async", service);
-        Assert.Contains("asynccatservice_fetchCat_2_async", service);
-        Assert.Contains("asynccatsitter_feed_async", sitter);
-        Assert.Contains("asynccatsitter_feed_2_async", sitter);
-        Assert.Contains("catmoodtracker_awaitMoodReport_async", tracker);
-        Assert.Contains("catmoodtracker_awaitMoodReport_2_async", tracker);
+        Assert.Contains("test_cat__asynccatservice_fetchCat_async", service);
+        Assert.Contains("test_cat__asynccatservice_fetchCat_2_async", service);
+        Assert.Contains("test_cat__asynccatsitter_feed_async", sitter);
+        Assert.Contains("test_cat__asynccatsitter_feed_2_async", sitter);
+        Assert.Contains("test_cat__catmoodtracker_awaitMoodReport_async", tracker);
+        Assert.Contains("test_cat__catmoodtracker_awaitMoodReport_2_async", tracker);
     }
 
     /// <summary>Every <c>[DllImport]</c> EntryPoint declared on <paramref name="type"/>.</summary>

@@ -24,7 +24,10 @@ class ForwardPhase6StaticCallableTest {
       target = "sample.Catalog",
     )
 
-    assertContains(renderKotlin(topLevel), "NugetHandles.retain(createCounter())")
+    // ADR-163: a top-level call is spelled with its package, never imported by simple name, so two
+    // same-named top-level functions in two packages cannot be an overload ambiguity in the one
+    // generated `CNameExports.kt`.
+    assertContains(renderKotlin(topLevel), "NugetHandles.retain(sample.createCounter())")
     assertContains(
       renderKotlin(objectMethod),
       "NugetHandles.retain(sample.Catalog.createCounter())",

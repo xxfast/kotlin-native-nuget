@@ -141,4 +141,42 @@ class ReservedTest {
     assertEquals("FooBar".kotlinConstantToPascalCase(), "FOO_BAR".kotlinConstantToPascalCase())
     assertEquals("_".kotlinConstantToPascalCase(), "__".kotlinConstantToPascalCase())
   }
+
+  /**
+   * ADR-163: the leading segment of every forward C entry point. It is derived from a name a human
+   * chose for a NuGet package or a Kotlin/Native binary, so it may carry case, dots and dashes that
+   * no C symbol may.
+   */
+  @Test
+  fun `sanitizeLibrarySegment lowercases and collapses everything a C symbol cannot carry`() {
+    assertEquals("testlibrary", sanitizeLibrarySegment("TestLibrary"))
+    assertEquals("test_library_native", sanitizeLibrarySegment("Test-Library.Native"))
+    // A RUN of illegal characters collapses to one `_`, so the separator count stays predictable.
+    assertEquals("a_b", sanitizeLibrarySegment("a -. b"))
+    assertEquals("kn_demo", sanitizeLibrarySegment("kn_demo"))
+  }
+
+  @Test
+  fun `sanitizeLibrarySegment keeps a leading digit out of symbol position`() {
+    // A C identifier may not begin with a digit, and leaving it to the linker hides the defect in a
+    // toolchain message.
+    assertEquals("_2cats", sanitizeLibrarySegment("2cats"))
+    assertEquals("_9lives", sanitizeLibrarySegment("9Lives"))
+  }
+
+  @Test
+  fun `sanitizeLibrarySegment never returns an empty segment`() {
+    // An empty leading segment would leave a top-level symbol bare, which is precisely the `signal`
+    // hazard ADR-163 exists to close.
+    assertEquals("_", sanitizeLibrarySegment(""))
+    assertEquals("_", sanitizeLibrarySegment("..."))
+  }
+
+  @Test
+  fun `sanitizeLibrarySegment can land on the reserved runtime segment`() {
+    // The sanitiser does NOT refuse it: the caller does, with a named diagnostic, because only the
+    // caller can point at the option that set it (ADR-127 reserves `nuget_*` for the runtime ABI).
+    assertEquals(RESERVED_LIBRARY_SEGMENT, sanitizeLibrarySegment("NuGet"))
+    assertEquals(RESERVED_LIBRARY_SEGMENT, sanitizeLibrarySegment("nuget"))
+  }
 }

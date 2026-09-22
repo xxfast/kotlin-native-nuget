@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -98,6 +99,8 @@ internal object ForwardInterfaceBridgePlanner {
   fun plan(
     iface: KSClassDeclaration,
     classifier: ForwardBridgeTypeClassifier,
+    /** ADR-163: the one symbol table. */
+    symbols: ForwardSymbolTable,
   ): ForwardBridgeInterfacePlan? {
     if (iface.classKind != ClassKind.INTERFACE) return null
     if (iface.typeParameters.isNotEmpty()) return null
@@ -121,13 +124,17 @@ internal object ForwardInterfaceBridgePlanner {
       simpleName = simpleName,
       // ADR-133: `Aviary.IKeeper`, and the bridge export carries the chain like every other.
       csName = iface.nestedInterfaceCsName(),
-      exportName = "${iface.nativePrefix()}_bridge_create",
+      exportName = "${iface.nativePrefix(symbols)}_bridge_create",
       // ADR-133: the enclosing chain, flattened. Every state class is rendered into the ROOT
       // namespace's one `CirBridgeHelper`, so two owners' same-simple-name nested interfaces
       // (`Aviary.Keeper` and `Registry.Keeper`) both emitted `KeeperBridgeState`: CS0101, plus two
       // `keeperImpl` pattern variables in one `HandleFor` block (CS0128). A top-level interface
       // has no chain and keeps its shipped `PetBridgeState` byte for byte.
-      stateClassName = "${iface.nestedCsName().replace(".", "")}BridgeState",
+      // ADR-163: package-qualified too. Every state class is rendered into the ROOT namespace, so
+      // two same-simple-name interfaces in two packages were CS0101 there the moment their entry
+      // points stopped colliding and the build got far enough to emit both.
+      stateClassName =
+        "${symbols.csharpQualifier(iface)}${iface.nestedCsName().replace(".", "")}BridgeState",
       slots = slots,
     )
   }

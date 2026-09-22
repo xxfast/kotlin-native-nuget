@@ -50,7 +50,7 @@ class Tier1TypeLevelExcludeTest {
     assertTrue(csharp.contains("class Frame"), "expected Frame kept; got: $csharp")
     assertTrue(csharp.contains("string Title"), "expected Album.title kept; got: $csharp")
     assertFalse(
-      result.generated.contains("export_album_get_shapes"),
+      result.generated.contains("export_library_album_get_shapes"),
       "expected Album.shapes skipped, not walked; generated=${result.generated}",
     )
     assertTrue(
@@ -73,7 +73,7 @@ class Tier1TypeLevelExcludeTest {
     assertTrue(csharp.contains("class Shape"), "expected Shape kept; got: $csharp")
     assertTrue(csharp.contains("class Frame"), "expected Frame kept; got: $csharp")
     assertTrue(
-      result.generated.contains("export_frame"),
+      result.generated.contains("export_library_frame"),
       "expected the top-level frame() to bind; generated=${result.generated}",
     )
   }
@@ -84,12 +84,12 @@ class Tier1TypeLevelExcludeTest {
 
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
     assertFalse(
-      result.generated.contains("export_frame("),
+      result.generated.contains("export_library_frame("),
       "expected frame() gone; generated=${result.generated}",
     )
     assertTrue(result.generatedCSharp.contains("class Frame"), "expected the Frame class kept")
     assertTrue(
-      result.generated.contains("export_album("),
+      result.generated.contains("export_library_album("),
       "expected album() kept; generated=${result.generated}",
     )
   }

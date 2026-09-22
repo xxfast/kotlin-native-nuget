@@ -48,7 +48,7 @@ class Tier1ReachabilityClosureTest {
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     assertFalse(
-      "export_newsroom_sponsor" in result.generated,
+      "export_library_newsroom_sponsor" in result.generated,
       "expected Newsroom.sponsor to be entirely absent from the generated CNameExports.kt; " +
           "generated:\n${result.generated}",
     )
@@ -80,7 +80,7 @@ class Tier1ReachabilityClosureTest {
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     assertTrue(
-      "export_newsroom_sponsor" in result.generated,
+      "export_library_tier1_reachabilityclosure__newsroom_sponsor" in result.generated,
       "expected Newsroom.sponsor to bind once its dependency type is admitted; " +
           "generated:\n${result.generated}",
     )
@@ -167,12 +167,12 @@ class Tier1ReachabilityClosureTest {
       )
     }
     assertTrue(
-      "export_outer_get_tag" in result.generated,
+      "export_library_dep_nested__outer_get_tag" in result.generated,
       "expected the admitted OUTER type and its own members to survive; " +
           "generated:\n${result.generated}",
     )
     assertTrue(
-      "export_newsroom_inner" in result.generated,
+      "export_library_tier1_reachabilityclosure_nested__newsroom_inner" in result.generated,
       "expected the member returning the nested dependency class to bind; " +
           "generated:\n${result.generated}",
     )
@@ -240,7 +240,7 @@ class Tier1ReachabilityClosureTest {
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     assertFalse(
-      "export_billboard_get_sponsor" in result.generated,
+      "export_library_billboard_get_sponsor" in result.generated,
       "expected Billboard.sponsor to be absent from the generated CNameExports.kt; " +
           "generated:\n${result.generated}",
     )
@@ -347,7 +347,7 @@ class Tier1ReachabilityClosureTest {
           "generatedCSharp=${result.generatedCSharp.lines().filter { it.contains("Stamp") }}",
     )
 
-    listOf("export_newsroom_entry", "export_ledger_get_tag", "export_ledger_entry_stamp")
+    listOf("export_library_tier1_reachabilityclosure_edge__newsroom_entry", "export_library_dep_edge__ledger_get_tag", "export_library_dep_edge__ledger_entry_stamp")
       .forEach { export ->
         assertTrue(
           export in result.generated,
@@ -440,7 +440,7 @@ class Tier1ReachabilityClosureTest {
           "${result.generatedCSharp.lines().filter { it.contains("Almanac") }}",
     )
     assertFalse(
-      "export_newsroom_almanac" in result.generated,
+      "export_library_newsroom_almanac" in result.generated,
       "expected the member returning the deferred nested type to bind nothing; generated:\n" +
           result.generated,
     )
@@ -489,7 +489,7 @@ class Tier1ReachabilityClosureTest {
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     assertFalse(
-      "export_newsroom_entry" in result.generated,
+      "export_library_is__newsroom_entry" in result.generated,
       "expected Newsroom.entry to be absent while its dependency package is out of scope; " +
           "generated:\n${result.generated}",
     )

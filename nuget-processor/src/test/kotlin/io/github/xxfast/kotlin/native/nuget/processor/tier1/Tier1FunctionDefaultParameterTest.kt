@@ -70,19 +70,19 @@ class Tier1FunctionDefaultParameterTest {
 
     assertTrue(result.compiledClean, "expected clean compile; got: ${result.compileErrors}")
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"hail\")")
-    assertContains(kotlin, "@CName(\"hail_2\")")
-    assertContains(kotlin, "@CName(\"mitten_knead\")")
-    assertContains(kotlin, "@CName(\"mitten_knead_2\")")
-    assertContains(kotlin, "@CName(\"mitten_knead_3\")")
+    assertContains(kotlin, "@CName(\"library_tier1_fundefaultsstatic__hail\")")
+    assertContains(kotlin, "@CName(\"library_tier1_fundefaultsstatic__hail_2\")")
+    assertContains(kotlin, "@CName(\"library_tier1_fundefaultsstatic__mitten_knead\")")
+    assertContains(kotlin, "@CName(\"library_tier1_fundefaultsstatic__mitten_knead_2\")")
+    assertContains(kotlin, "@CName(\"library_tier1_fundefaultsstatic__mitten_knead_3\")")
     // The load-bearing assertion: the truncated plans call Kotlin with fewer positional arguments,
     // and the extension keeps its receiver even when every parameter is dropped.
     assertContains(kotlin, "hail(name)")
     assertContains(kotlin, ".get().knead()")
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "EntryPoint = \"hail_2\"")
-    assertContains(cs, "EntryPoint = \"mitten_knead_3\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_fundefaultsstatic__hail_2\"")
+    assertContains(cs, "EntryPoint = \"library_tier1_fundefaultsstatic__mitten_knead_3\"")
     assertContains(cs, "public static string Knead(this global::Interop.Mitten receiver)")
   }
 
@@ -117,11 +117,11 @@ class Tier1FunctionDefaultParameterTest {
     // never compiles cleanly here (ADR-091's cell has the same shape); KSP still runs.
     assertEquals("OK", result.kspExitCode, "kspErrors=${result.kspErrors}")
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"beam\")")
-    assertContains(kotlin, "@CName(\"beam_2\")")
+    assertContains(kotlin, "@CName(\"library_tier1_fundefaultsexpectoverload__beam\")")
+    assertContains(kotlin, "@CName(\"library_tier1_fundefaultsexpectoverload__beam_2\")")
     // Exactly one synthesized overload, and it truncates the *second* namesake (`level`), not the
     // first (`tag`), whose parameters carry no default at all.
-    assertContains(kotlin, "@CName(\"beam_3\")")
+    assertContains(kotlin, "@CName(\"library_tier1_fundefaultsexpectoverload__beam_3\")")
     assertFalse(
       kotlin.contains("beam_4"),
       "only the defaulted namesake may synthesize; generated=$kotlin",
@@ -197,9 +197,9 @@ class Tier1FunctionDefaultParameterTest {
 
     assertTrue(result.compiledClean, "expected clean compile; got: ${result.compileErrors}")
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"animal_speak\")")
-    assertContains(kotlin, "@CName(\"animal_speak_2\")")
-    assertContains(kotlin, "@CName(\"cat_speak\")")
+    assertContains(kotlin, "@CName(\"library_tier1_fundefaultsoverride__animal_speak\")")
+    assertContains(kotlin, "@CName(\"library_tier1_fundefaultsoverride__animal_speak_2\")")
+    assertContains(kotlin, "@CName(\"library_tier1_fundefaultsoverride__cat_speak\")")
     assertFalse(
       kotlin.contains("cat_speak_2"),
       "an override synthesizes nothing (it inherits the base's overload); generated=$kotlin",

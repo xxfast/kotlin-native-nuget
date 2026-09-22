@@ -5,6 +5,7 @@ import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericReturnRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.legacyGenericRouteParameterIndex
@@ -73,12 +74,18 @@ internal fun translateFunction(
   exportedTypes: Set<String>,
   logger: KSPLogger,
 ): List<CirMember> {
-  val cname: String = toCName(func.simpleName.asString())
+  // ADR-163: library- and package-qualified, the same string `FunctionExports` mints.
+  val cname: String = context.symbols.topLevel(func)
   // ADR-110: PascalCase like every other forward position. The keyword escape runs *after* the
   // case change, so `fun lock()` renders `Lock` rather than the verbatim `@lock` (no C# keyword is
   // capitalised). Every DllImport below pins `entryPoint = cname`, so the native symbol is
   // unaffected.
-  val csName: String = toCSharpName(cname.replaceFirstChar { it.uppercase() })
+  //
+  // ADR-163: derived from the DECLARATION name, never from [cname]. The C entry point is now
+  // library- and package-qualified, so a `csName` read off it would rename the public C# method
+  // (and the `${csName}_native` extern) every time the symbol scheme changes. The class route
+  // already names its externs from member names; this is that rule, on the legacy top-level route.
+  val csName: String = toCSharpName(func.simpleName.asString().replaceFirstChar { it.uppercase() })
   val returnType = func.returnType?.resolve()?.expandAliases()
   val isNullable: Boolean = returnType?.isMarkedNullable == true
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
@@ -522,6 +529,16 @@ internal fun translateFunction(
     val typeArgs: String =
       csTypeArgumentNames(returnType.arguments, exportedTypes, context).joinToString(", ")
 
+    // ROADMAP line 76 / ADR-163's sibling fix: the OUTER type name was still the bare simple name,
+    // so a top-level function whose return type is declared in another Kotlin package rendered
+    // `Box<int>` inside the *function's* namespace and the consumer's build failed with CS0246.
+    // Issue #111 qualified the type ARGUMENTS here; the enum arm 15 lines below already spells
+    // `global::$ns.$name`. This is that same spelling, on the outer name.
+    val returnNamespace: String = mapPackageToNamespace(
+      requireNotNull(returnDecl).packageName.asString(), context.rootPackage, context.rootNamespace,
+    )
+    val qualifiedReturn: String = "global::$returnNamespace.$kotlinReturnType<$typeArgs>"
+
     val nativeImport = CirDllImport(
       libraryName = libraryName,
       entryPoint = cname,
@@ -542,12 +559,12 @@ internal fun translateFunction(
       appendLine("            {")
       appendLine("                throw NugetErrorNative.BuildException(error);")
       appendLine("            }")
-      append("            return new $kotlinReturnType<$typeArgs>(nativeResult);")
+      append("            return new $qualifiedReturn(nativeResult);")
     }
 
     val wrapper = CirMethod(
       name = csName,
-      returnType = "$kotlinReturnType<$typeArgs>",
+      returnType = qualifiedReturn,
       parameters = params,
       body = body,
       isStatic = true,
@@ -673,6 +690,8 @@ internal fun translateFunction(
 internal fun translateSuspendFunction(
   func: KSFunctionDeclaration,
   libraryName: String,
+  /** ADR-163: the one symbol table, so this half agrees with `SuspendFunctionExports`. */
+  symbols: ForwardSymbolTable,
   tracker: CollectionHelperTracker,
   exportedTypes: Set<String>,
   logger: KSPLogger,
@@ -692,9 +711,11 @@ internal fun translateSuspendFunction(
   // ROADMAP Phase 4: the class route's bytes arm, for a top-level `suspend fun f(): ByteArray`.
   if (returnShape is ForwardLegacyReturnShape.Bytes) tracker.needsBytes = true
 
-  val cname: String = toCName(func.simpleName.asString())
+  // ADR-163: library- and package-qualified; `_async` is appended by the entry points below.
+  val cname: String = symbols.topLevel(func)
   // ADR-110: escape after the case change, so `suspend fun lock()` renders `LockAsync`.
-  val csName: String = toCSharpName(cname.replaceFirstChar { it.uppercase() })
+  // ADR-163: from the declaration name, not from [cname] (see `translateFunction`).
+  val csName: String = toCSharpName(func.simpleName.asString().replaceFirstChar { it.uppercase() })
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
   val isUnit: Boolean = kotlinReturnType == "Unit"
 
@@ -835,7 +856,7 @@ internal fun translateGenericFunction(
   )
 
   if (!isConstrained) primitiveTypes.forEach { (suffix, csType) ->
-    val entryPoint = "${funcName}_$suffix"
+    val entryPoint = "${context.symbols.topLevel(func)}_$suffix"
     val nativeName = "${csName}_${suffix}_native"
 
     val nativeReturnType: String = when {
@@ -859,7 +880,7 @@ internal fun translateGenericFunction(
     )
   }
 
-  val objectEntryPoint = "${funcName}_object"
+  val objectEntryPoint = "${context.symbols.topLevel(func)}_object"
   val objectNativeName = "${csName}_object_native"
 
   result.add(

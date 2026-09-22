@@ -61,7 +61,7 @@ class Tier1SealedCollectionPropertyTest {
     )
     listOf("shapes", "optional", "unique", "byName").forEach { property ->
       assertTrue(
-        result.generated.contains("export_album_get_$property"),
+        result.generated.contains("export_library_tier1_sealedcollectionproperty__album_get_$property"),
         "expected Album.$property to bind; generated=${result.generated}",
       )
       assertFalse(
@@ -103,7 +103,7 @@ class Tier1SealedCollectionPropertyTest {
     val result = Tier1Harness.run(source)
 
     assertFalse(
-      result.generated.contains("export_album_get_filters"),
+      result.generated.contains("export_library_tier1_sealedcollectionproperty__album_get_filters"),
       "expected Album.filters to be absent from the generated exports; " +
           "generated=${result.generated}",
     )
@@ -129,7 +129,7 @@ class Tier1SealedCollectionPropertyTest {
     val result = Tier1Harness.run(source)
 
     assertTrue(
-      result.generated.contains("export_album_get_title"),
+      result.generated.contains("export_library_tier1_sealedcollectionproperty__album_get_title"),
       "expected Album.title to bind; generated=${result.generated}",
     )
   }

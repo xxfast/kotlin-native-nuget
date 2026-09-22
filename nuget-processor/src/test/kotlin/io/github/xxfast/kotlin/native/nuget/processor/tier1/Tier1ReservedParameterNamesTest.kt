@@ -90,7 +90,7 @@ class Tier1ReservedParameterNamesTest {
     )
     assertContains(
       result.generated,
-      "public fun export_widget_create(handle_: Int, errorOut: COpaquePointer?)",
+      "public fun export_library_tier1_reserved__widget_create(handle_: Int, errorOut: COpaquePointer?)",
     )
   }
 
@@ -214,7 +214,7 @@ class Tier1ReservedParameterNamesTest {
     )
     assertContains(
       result.generated,
-      "public fun export_ratio_scale(`value`: Int, value_: Int): Int = " +
+      "public fun export_library_tier1_reserved__ratio_scale(`value`: Int, value_: Int): Int = " +
           "tier1.reserved.Ratio(value).scale(value_)",
     )
   }
@@ -259,7 +259,7 @@ class Tier1ReservedParameterNamesTest {
     )
     assertContains(
       result.generated,
-      "public fun export_meter_create(value_: String, errorOut: COpaquePointer?)",
+      "public fun export_library_tier1_reserved__meter_create(value_: String, errorOut: COpaquePointer?)",
     )
   }
 
@@ -292,7 +292,7 @@ class Tier1ReservedParameterNamesTest {
     assertContains(result.generated, "probe(errorOut_, valueOut_) != null")
     assertContains(
       result.generated,
-      "public fun export_probe_has_value(\n  errorOut_: Int,\n  valueOut_: Int,\n" +
+      "public fun export_library_tier1_reserved__probe_has_value(\n  errorOut_: Int,\n  valueOut_: Int,\n" +
           "  errorOut: COpaquePointer?,\n)",
     )
   }

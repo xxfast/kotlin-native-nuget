@@ -83,7 +83,7 @@ class Tier1AnnotationClassSkipTest {
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     assertTrue(
-      "export_toy_get_name" in result.generated,
+      "export_library_tier1_annotationclass_usage__toy_get_name" in result.generated,
       "the annotated class must keep exporting exactly as before; generated:\n${result.generated}",
     )
     assertFalse(

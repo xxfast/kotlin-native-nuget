@@ -63,7 +63,7 @@ class Tier1SealedSubclassConstructorTest {
     // base owns `internal IntPtr _handle`, so the arm sets it after the native call.
     assertContains(cs, "public Deep(int minutes) : base(IntPtr.Zero)")
     assertContains(cs, "IntPtr handle = Native_Create(minutes, out IntPtr error);")
-    assertContains(cs, "EntryPoint = \"nap_deep_create\"")
+    assertContains(cs, "EntryPoint = \"library_armctor__nap_deep_create\"")
     // The handle constructor stays, and stays internal: a consumer has no legitimate handle.
     assertContains(cs, "internal Deep(IntPtr handle) : base(handle)")
   }
@@ -75,11 +75,11 @@ class Tier1SealedSubclassConstructorTest {
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
     val kotlin: String = result.generated
 
-    assertContains(kotlin, "@CName(\"nap_deep_create\")")
+    assertContains(kotlin, "@CName(\"library_armctor__nap_deep_create\")")
     assertContains(kotlin, "tier1.armctor.Nap.Deep(minutes)")
     // Not the plain-class prefix: that one belongs to no declaration here (issue #110).
     assertFalse(
-      kotlin.contains("@CName(\"deep_create\")"),
+      kotlin.contains("@CName(\"library_armctor__deep_create\")"),
       "expected the arm prefix, not a plain-class one; generated=$kotlin",
     )
   }
@@ -91,7 +91,7 @@ class Tier1SealedSubclassConstructorTest {
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
 
     assertContains(result.generatedCSharp, "public Label(string text) : base(IntPtr.Zero)")
-    assertContains(result.generated, "@CName(\"nap_label_create\")")
+    assertContains(result.generated, "@CName(\"library_armctor__nap_label_create\")")
   }
 
   @Test
