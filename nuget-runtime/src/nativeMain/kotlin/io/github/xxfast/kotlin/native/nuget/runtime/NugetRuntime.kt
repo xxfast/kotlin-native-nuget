@@ -12,6 +12,7 @@ import kotlin.coroutines.SuspendFunction0
 import kotlin.coroutines.SuspendFunction1
 import kotlin.coroutines.SuspendFunction2
 import kotlin.coroutines.SuspendFunction3
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.experimental.ExperimentalNativeApi
 import kotlin.native.CName
 import kotlin.native.runtime.GC
@@ -28,10 +29,13 @@ import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.StableRef
 import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.alloc
 import kotlinx.cinterop.asStableRef
 import kotlinx.cinterop.convert
 import kotlinx.cinterop.invoke
+import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.pointed
+import kotlinx.cinterop.ptr
 import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.usePinned
@@ -519,6 +523,75 @@ private tailrec fun NugetError.at(index: Int): NugetError =
 @NugetRuntimeApi
 @CName("nuget_runtime_version")
 public fun export_nuget_runtime_version(): String = NUGET_RUNTIME_VERSION
+
+/**
+ * ADR-161: the exception a Kotlin caller sees when the C# callback it invoked threw.
+ *
+ * Public, and thrown by [nugetCallbackCall], so a library author can `catch` it at the Kotlin call
+ * site of the lambda. The message carries the managed type first so a `catch (e: Exception)` that
+ * only prints `e.message` still names what actually failed on the other side.
+ */
+public class NugetManagedException(
+  public val managedType: String,
+  public val managedMessage: String,
+) : RuntimeException("$managedType: $managedMessage")
+
+/**
+ * ADR-161: the Kotlin-owned holder a C# thunk pushes through [export_nuget_managed_error_create]
+ * and [nugetCallbackCall] reads back. Deliberately a raw [StableRef], not `NugetHandles.retain`:
+ * the holder lives for the length of one callback return and never reaches a consumer, so counting
+ * it would move every `nuget_live_handles` baseline for a thing no test can observe.
+ */
+internal class NugetManagedError(
+  val type: String,
+  val message: String,
+  val kind: Int,
+)
+
+/**
+ * ADR-161: the 71st export, and the only one part B adds. A generated `[UnmanagedCallersOnly]`
+ * thunk calls this from inside its `catch` and stores the returned pointer in the trailing
+ * `IntPtr* errOut` slot the Kotlin side supplied.
+ *
+ * [kind] is `1` for a managed cancellation (`OperationCanceledException`), `0` otherwise, mirroring
+ * ADR-153's reverse-direction mapping so a cancelled C# callback cancels the Kotlin coroutine that
+ * invoked it rather than failing it.
+ */
+@NugetRuntimeApi
+@CName("nuget_managed_error_create")
+public fun export_nuget_managed_error_create(
+  type: String,
+  message: String,
+  kind: Int,
+): COpaquePointer = StableRef.create(NugetManagedError(type, message, kind)).asCPointer()
+
+/**
+ * ADR-161: the Kotlin half of the forward callback error channel. Every generated invocation of a
+ * user-code callback goes through here.
+ *
+ * The slot is allocated and zeroed by the caller (this function), which is ADR-104's structural
+ * rule: the error is checked **before** the return value is touched, so a `!!` or an `asStableRef`
+ * on the callback's result can never fire ahead of the managed exception that explains why the
+ * result is absent. The holder is disposed here, by the side that owns it.
+ */
+@NugetRuntimeApi
+public fun <R> nugetCallbackCall(block: (COpaquePointer) -> R): R = memScoped {
+  val slot: COpaquePointerVar = alloc()
+  slot.value = null
+  val result: R = block(slot.ptr)
+  val raw: COpaquePointer? = slot.value
+  if (raw == null) return@memScoped result
+  val ref: StableRef<NugetManagedError> = raw.asStableRef()
+  val error: NugetManagedError = ref.get()
+  ref.dispose()
+  if (error.kind == 1) {
+    throw CancellationException(
+      "${error.type}: ${error.message}",
+      NugetManagedException(error.type, error.message),
+    )
+  }
+  throw NugetManagedException(error.type, error.message)
+}
 
 @NugetRuntimeApi
 @CName("nuget_error_type")

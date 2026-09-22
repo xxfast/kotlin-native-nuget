@@ -615,8 +615,8 @@ internal object ForwardCirPlanProjection {
       is BridgeType.Collection -> listOf("${parameter.csharpName}Handle")
       // ADR-151: the handle [bytesPrelude] minted with `NugetMarshal.CreateBytes`.
       BridgeType.ByteArray -> listOf("${parameter.csharpName}Handle")
-      // ADR-160: the two-slot ADR-102 pair -- the link-time thunk address, then the GCHandle
-      // [forwardCallbackPrelude] allocated over the managed delegate the thunk dispatches to.
+      // ADR-160: the two-slot ADR-102 pair -- the link-time thunk address, then the ADR-161 table
+      // key [forwardCallbackPrelude] registered the managed delegate under.
       is BridgeType.Callback -> forwardCallbackArguments(parameter.csharpName, type)
       // ADR-077: the generated `readonly record struct` capitalizes the Kotlin underlying
       // property (`value` -> `Value`, CirClassTranslator); the unwrapped value is lowered to its
@@ -719,9 +719,11 @@ internal object ForwardCirPlanProjection {
    * exactly as [collectionPrelude] does.
    */
   /**
-   * ADR-160: the managed delegate plus its `GCHandle`, declared before the `try` so
-   * [callbackCleanup]'s `finally` can free it on every exit path (including a Kotlin exception
-   * rethrown by the error check, which is exactly the leak the ADR-099 handle scope was built for).
+   * ADR-160: the managed delegate plus its ADR-161 table key, declared before the `try` so
+   * [callbackCleanup]'s `finally` can remove the key on every exit path (including a Kotlin
+   * exception rethrown by the error check, which is exactly the leak the ADR-099 handle scope was
+   * built for). Removing it on exit is also what makes a call that outlives this frame a lookup
+   * MISS.
    */
   private fun ForwardCallablePlan.callbackPrelude(
     parameter: ForwardPublicParameter,

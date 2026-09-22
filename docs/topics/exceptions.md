@@ -104,7 +104,9 @@ A method with a `List`/`Map`/`Set` parameter releases its temporary collection h
 call throws or returns; see
 [Collections](collections.md#exception-safety-on-collection-parameters-and-returns). For an
 exception thrown out of a Kotlin implementation of a C#-declared interface, called back from C#,
-see [The bridgeable subset](bridgeable-subset.md).
+see [The bridgeable subset](bridgeable-subset.md). The reverse direction, a C# lambda or callback
+that throws while Kotlin is calling it, is a separate channel; see
+[Exceptions from a callback](lambdas-and-callbacks.md#exceptions-from-a-callback).
 
 ## Throwable properties
 

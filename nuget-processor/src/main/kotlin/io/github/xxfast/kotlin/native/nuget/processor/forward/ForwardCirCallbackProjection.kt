@@ -12,8 +12,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirCallbackDelegate
  * `void(int, IntPtr)`) to share a single declared delegate.
  *
  * The ADR-102 AOT-safe shape is untouched: Kotlin receives `NugetThunks.{Delegate}Ptr`, the address
- * of an `[UnmanagedCallersOnly]` thunk resolved at link time, plus the `GCHandle` of the managed
- * delegate instance as the echoed ctx. Nothing here calls
+ * of an `[UnmanagedCallersOnly]` thunk resolved at link time, plus the echoed ctx of the managed
+ * delegate instance -- an ADR-161 table key, no longer a `GCHandle`. Nothing here calls
  * `Marshal.GetFunctionPointerForDelegate`.
  */
 internal fun BridgeType.Callback.forwardCallbackDelegate(): CirCallbackDelegate =
@@ -42,8 +42,9 @@ internal fun BridgeType.Callback.forwardCallbackDelegateParameterList(): String 
 
 /**
  * The call-site prelude: the managed delegate instance that calls the consumer's lambda, then the
- * `GCHandle` the thunk dispatches through. Both are declared before the `try` so the `finally`
- * [forwardCallbackCleanup] writes can name the handle; the alloc itself is the guarded statement.
+ * ADR-161 table key the thunk dispatches through. Both are declared before the `try` so the
+ * `finally` [forwardCallbackCleanup] writes can name the key; the registration itself is the
+ * guarded statement.
  */
 internal fun forwardCallbackPrelude(
   name: String,
@@ -72,9 +73,9 @@ internal fun forwardCallbackPrelude(
     "{",
     "    $body",
     "};",
-    "GCHandle ${name}Ctx = default;",
+    "IntPtr ${name}Ctx = IntPtr.Zero;",
   )
-  val statement = "${name}Ctx = GCHandle.Alloc(${name}Native);"
+  val statement: String = "${name}Ctx = NugetThunks.RegisterCtx(${name}Native);"
   return ForwardCirHandleStep(
     flat = (declarations + statement).joinToString("\n"),
     declarations = declarations,
@@ -82,15 +83,20 @@ internal fun forwardCallbackPrelude(
   )
 }
 
-/** The `finally` half of [forwardCallbackPrelude]: the GCHandle is freed on every exit path. */
+/**
+ * The `finally` half of [forwardCallbackPrelude]: the ADR-161 key is removed from the table on
+ * every exit path, which is what makes an invocation that outlives this frame a lookup miss rather
+ * than a read of whatever took the freed GCHandle's slot. `IntPtr.Zero` means the registration
+ * itself is the statement that threw, so there is nothing to remove.
+ */
 internal fun forwardCallbackCleanup(name: String): String =
-  "if (${name}Ctx.IsAllocated) ${name}Ctx.Free();"
+  "if (${name}Ctx != IntPtr.Zero) NugetThunks.UnregisterCtx(${name}Ctx);"
 
 /** The two native arguments a callback parameter contributes, in the planner's slot order. */
 internal fun forwardCallbackArguments(name: String, type: BridgeType.Callback): List<String> =
   listOf(
     "NugetThunks.${type.forwardCallbackDelegateName()}Ptr",
-    "GCHandle.ToIntPtr(${name}Ctx)",
+    "${name}Ctx",
   )
 
 /**

@@ -151,7 +151,9 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
       if (info.isEnum) append("Int, ")
       else append("COpaquePointer?, ")
     }
-    append("COpaquePointer")  // userData is always last
+    append("COpaquePointer, ")  // userData is always last
+    // ADR-161: the trailing error slot, on every user-code callback half.
+    append("COpaquePointer?")
   }
   val cfuncSignature: String = "($cfuncArgTypes) -> Unit"
 
@@ -190,9 +192,11 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
           if (argSimpleName == "Boolean") append("arg${i}Val, ") else append("arg${i}Ref, ")
         }
       }
-      append("userData")
+      append("userData, nugetErr")
     }
-    appendLine("    fn.invoke($invokeArgs)")
+    // ADR-161: a throwing stored listener surfaces as a `NugetManagedException` wherever the Kotlin
+    // object invokes its listeners, which is ordinary Kotlin semantics for a throwing listener.
+    appendLine("    nugetCallbackCall { nugetErr -> fn.invoke($invokeArgs) }")
 
     // ADR-036 amendment (2026-09-11): the C# thunk owns a handle-passed argument, exactly as on
     // the per-call and interface-bridge routes. Nothing is released here.

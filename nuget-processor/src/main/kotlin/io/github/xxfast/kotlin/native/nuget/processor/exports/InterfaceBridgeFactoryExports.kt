@@ -34,21 +34,30 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
   val body: String = buildString {
     appendLine("return try {")
     plan.slots.forEach { slot ->
-      val args: String = (slot.parameters.map { it.type.wire.kotlinWire() } + "COpaquePointer")
-        .joinToString(", ")
+      // ADR-161: payloads, the slot's ctx, then the trailing error slot.
+      val args: String = (
+          slot.parameters.map { it.type.wire.kotlinWire() } + "COpaquePointer" + "COpaquePointer?"
+          ).joinToString(", ")
       appendLine(
         "  val ${slot.slotPrefix}Fn = ${slot.slotPrefix}Ptr" +
             ".reinterpret<CFunction<($args) -> ${slot.result.wire.kotlinWire()}>>()"
       )
     }
-    appendLine("  val releaseFn = releasePtr.reinterpret<CFunction<(COpaquePointer) -> Unit>>()")
+    // ADR-161: the release thunk shares the one thunk shell, so it carries the slot too, but the
+    // cleaner passes `null`: there is nowhere to throw to from a GC worker, so a failure there
+    // keeps ADR-102's `Environment.FailFast` backstop. `null` is what selects that branch in the
+    // thunk.
+    appendLine(
+      "  val releaseFn = releasePtr" +
+          ".reinterpret<CFunction<(COpaquePointer, COpaquePointer?) -> Unit>>()"
+    )
     appendLine("  val bridge = object : ${plan.qualifiedName}, NugetCSharpBridge {")
     // ADR-084 facet 5: the token is a GCHandle to the *implementing C# object*, so the return-
     // position probe resolves the original instance without knowing any bridge-state type.
     appendLine("    override val nugetToken: COpaquePointer = token")
     appendLine("    @Suppress(\"unused\")")
     appendLine("    private val cleaner = createCleaner(releaseFn to releaseCtx) { (fn, ctx) ->")
-    appendLine("      fn.invoke(ctx)")
+    appendLine("      fn.invoke(ctx, null)")
     appendLine("    }")
     plan.slots.forEach { slot -> appendSlotOverride(slot) }
     appendLine("  }")
@@ -118,7 +127,11 @@ private fun invocation(slot: ForwardBridgeSlot): String {
       else -> parameter.name
     }
   }
-  return "${slot.slotPrefix}Fn.invoke(${(args + "${slot.slotPrefix}Ctx").joinToString(", ")})"
+  // ADR-161: the ADR-084 slot's invocation goes through the error channel, so a C# member that
+  // throws becomes a `NugetManagedException` at the Kotlin call site of the interface member. The
+  // result marshalling below stays outside the helper, so the error is read before any `!!`.
+  val invokeArgs: String = (args + "${slot.slotPrefix}Ctx" + "nugetErr").joinToString(", ")
+  return "nugetCallbackCall { nugetErr -> ${slot.slotPrefix}Fn.invoke($invokeArgs) }"
 }
 
 private fun StringBuilder.appendResultMarshalling(

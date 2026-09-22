@@ -536,6 +536,9 @@ internal val NUGET_RUNTIME_EXPORTS: Set<String> = setOf(
   "nuget_map_create",
   "nuget_map_key_at",
   "nuget_map_put",
+  // ADR-161: the forward callback error channel's only new export. A C# thunk calls it from inside
+  // its catch to mint the Kotlin-owned holder it stores in the trailing `IntPtr* errOut` slot.
+  "nuget_managed_error_create",
   "nuget_map_value_at",
   "nuget_runtime_version",
   "nuget_scope_cancel",

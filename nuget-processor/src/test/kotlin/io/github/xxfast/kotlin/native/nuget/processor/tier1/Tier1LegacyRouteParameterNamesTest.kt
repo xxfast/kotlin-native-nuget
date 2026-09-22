@@ -226,7 +226,9 @@ class Tier1LegacyRouteParameterNamesTest {
     )
     assertContains(generated, "public void OnFail(Action<global::Interop.KeywordTick> error_)")
     assertContains(generated, "error_(NugetMarshal.FromHandle<")
-    assertContains(generated, "GCHandle error_Ctx = default;")
+    // ADR-161 part C: the ctx local is the table key, not a GCHandle. The rename still has to reach
+    // it, which is the only thing this line is pinning.
+    assertContains(generated, "IntPtr error_Ctx = IntPtr.Zero;")
   }
 
   @Test

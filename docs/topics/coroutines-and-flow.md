@@ -298,6 +298,12 @@ the Kotlin flow from the start. `WithCancellation` stops the enumeration early.
 An element type that is an interface, or a `List<T>`/`Set<T>`/`Map<K, V>`, is spelled and read
 exactly like the same type at a property or `suspend` return, described above.
 
+If an emitted element (or a `suspend` result) cannot be materialized on the C# side, `await
+foreach` throws instead of aborting the process: the failure faults the `IAsyncEnumerable<T>` (or
+the `Task`) and cancels the Kotlin side of the collection. One accepted cost: the item whose
+materialisation failed had already had its handle handed over by Kotlin, so that one handle leaks;
+see [ADR-161](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/161-csharp-callback-exception-into-kotlin.md).
+
 ### Nullable element `Flow<T?>` {id="flow-nullable-element"}
 
 A nullable element carries its `?` onto `KotlinFlow<T?>`, and a `null` emission is a genuine item,
@@ -429,7 +435,9 @@ members.
 ## Limitations
 
 - `SharedFlow<T>` (hot, multi-subscriber) is not supported.
-- `StateFlow<SomeEnum>` / `MutableStateFlow<SomeEnum>`: `.Value` has no enum reader.
+- `StateFlow<SomeEnum>` / `MutableStateFlow<SomeEnum>`: `.Value` has no enum reader. `Flow<SomeEnum>`
+  binds (it is not refused), but every element materialisation on the C# side currently faults the
+  stream instead of producing a value, for the same reason.
 - `MutableStateFlow<ByteArray>` surfaces as read-only `KotlinStateFlow<byte[]>`, not
   `KotlinMutableStateFlow<byte[]>`: `.Value` is not settable for a `ByteArray` element.
 - `CompareAndSet`, `Update`, `Emit`, `TryEmit`, `ReplayCache`, and `SubscriptionCount` on

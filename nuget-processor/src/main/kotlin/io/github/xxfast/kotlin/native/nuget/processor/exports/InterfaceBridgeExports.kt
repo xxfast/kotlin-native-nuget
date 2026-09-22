@@ -70,7 +70,8 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
             else -> append("COpaquePointer?, ")
           }
         }
-        append("COpaquePointer")
+        // ADR-161: ctx, then the trailing error slot.
+        append("COpaquePointer, COpaquePointer?")
       }
       appendLine("  val ${mName}Fn = ${mName}Ptr.reinterpret<CFunction<($cfuncArgs) -> Unit>>()")
     }
@@ -126,9 +127,10 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
             else -> append("arg${i}Ref, ")
           }
         }
-        append("${mName}Ctx")
+        append("${mName}Ctx, nugetErr")
       }
-      appendLine("      ${mName}Fn.invoke($invokeArgs)")
+      // ADR-161: the ADR-039 listener bridge's members go through the same error channel.
+      appendLine("      nugetCallbackCall { nugetErr -> ${mName}Fn.invoke($invokeArgs) }")
 
       // ADR-036 amendment (2026-09-11): a handle-passed argument belongs to the C# side once it
       // crosses. `NugetMarshal.FromHandle<string>` disposes as it reads, and an exported object

@@ -57,7 +57,7 @@ class Tier1CallbackParameterPlanTest {
       "expected a by-value Func<int,int> delegate in:\n$interop",
     )
     assertTrue(
-      result.generated.contains("CFunction<(Int, COpaquePointer) -> Int>"),
+      result.generated.contains("CFunction<(Int, COpaquePointer, COpaquePointer?) -> Int>"),
       "expected a by-value CFunction signature in:\n${result.generated}",
     )
     assertFalse(

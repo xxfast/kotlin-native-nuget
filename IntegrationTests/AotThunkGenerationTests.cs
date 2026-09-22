@@ -6,8 +6,9 @@ namespace IntegrationTests;
 /// ADR-102: the generated forward callback machinery must stop asking the runtime to build
 /// native-to-managed thunks (<c>Marshal.GetFunctionPointerForDelegate</c> / delegate-typed
 /// <c>DllImport</c> parameters) and instead hand Kotlin the address of an ahead-of-time compiled
-/// <c>[UnmanagedCallersOnly]</c> static thunk, dispatching through the GCHandle ctx that every
-/// forward callback ABI already echoes.
+/// <c>[UnmanagedCallersOnly]</c> static thunk, dispatching through the ctx that every forward
+/// callback ABI already echoes (a GCHandle when ADR-102 shipped; an ADR-161 never-reused table key
+/// on the user-code routes since part C, still one <c>IntPtr</c> on the wire either way).
 ///
 /// These tests assert on the TEXT of the generated <c>Interop.cs</c> that the consumer compiles,
 /// not on behaviour: Oreo and Mylo already meow, purr, eat and get fetched correctly under the JIT
@@ -238,7 +239,7 @@ public class AotThunkGenerationTests
     /// <summary>
     /// Shape 1, per-call lambda parameter (ADR-036): `cat.DescribeWith(name =&gt; ...)`. Today the
     /// call site passes the marshaller-built pointer and `IntPtr.Zero` for the ctx slot, with the
-    /// closure capturing the state. ADR-102: thunk pointer + the real GCHandle ctx.
+    /// closure capturing the state. ADR-102: thunk pointer + a real ctx (an ADR-161 table key).
     /// </summary>
     [Fact]
     public void PerCallLambda_PassesAThunkPointerAndTheRealCbHandleCtx()
@@ -247,7 +248,12 @@ public class AotThunkGenerationTests
 
         string args = CallArguments(interop, "Native_DescribeWith(");
         Assert.DoesNotContain("IntPtr.Zero", args);
-        Assert.Contains("GCHandle.ToIntPtr", args);
+        // ADR-161 part C re-anchored this from `GCHandle.ToIntPtr(...)`: the ctx is a never-reused
+        // key into the thunk class's table, because a freed GCHandle's slot is reused by the next
+        // allocation and a late invocation would resolve it to a foreign delegate. The ADR-102
+        // property this cell exists for is unchanged: a REAL ctx paired with a link-time thunk
+        // address, never IntPtr.Zero and never a runtime-built stub.
+        Assert.Matches(@"NugetThunks\.\w+Ptr, \w+Ctx", args);
         Assert.Contains("NugetThunks", WindowAfter(interop, "Native_DescribeWith(_handle", 6));
     }
 
@@ -263,7 +269,11 @@ public class AotThunkGenerationTests
         string args = CallArguments(interop, "Native_AddListener(");
         Assert.DoesNotContain("IntPtr.Zero", args);
         Assert.Contains("NugetThunks", args);
-        Assert.Contains("GCHandle.ToIntPtr", args);
+        // ADR-161 part C: the per-slot ctx is a table key the subscription removes on Dispose(),
+        // in place of the GCHandle it used to free. Same ADR-102 pairing, see the cell above. The
+        // anchor `Native_AddListener` is the ADR-039 listener-bridge pair, whose keys are `k0`, `k1`,
+        // one per interface method; the ADR-037 stored-callback route spells its single key `cbKey`.
+        Assert.Matches(@"NugetThunks\.\w+Ptr, (k\d+|cbKey)", args);
     }
 
     /// <summary>
@@ -299,8 +309,11 @@ public class AotThunkGenerationTests
 
         string args = CallArguments(interop, "startCollect(");
         Assert.DoesNotContain("IntPtr.Zero", args);
+        // ADR-161 widened the window from 40 lines: the onNext and onError closures each gained a
+        // materialisation-fault containment, which pushed the `startCollect` call further down the
+        // constructor. The window is only here to scope the search to this constructor.
         Assert.Contains(
-            "NugetThunks", WindowAfter(interop, "internal KotlinFlowEnumerator(", 40));
+            "NugetThunks", WindowAfter(interop, "internal KotlinFlowEnumerator(", 60));
     }
 
     /// <summary>

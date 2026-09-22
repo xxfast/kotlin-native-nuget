@@ -766,18 +766,16 @@ internal fun StringBuilder.renderDispose(
       // before `Drain` has returned the handle, the same ADR-019 window `NugetJobCell` closes for
       // the suspend call sites. The callback used to dispose a still-zero local and leak the job.
       appendLine("            var job = new NugetJobCell();")
-      appendLine("            callback = (resultPtr, errorPtr, isCancelled, userData) =>")
-      appendLine("            {")
-      appendLine("                job.CompleteFromCallback();")
-      appendLine("                callbackHandle.Free();")
-      appendLine("                TaskCompletionSource<bool> t = tcs;")
-      appendLine("                NugetScopeNative.Dispose(scopeHandle);")
-      appendLine("                Native_Dispose(handle);")
-      appendLine("                if (isCancelled != 0)")
-      appendLine("                    t.TrySetCanceled();")
-      appendLine("                else")
-      appendLine("                    t.SetResult(true);")
-      appendLine("            };")
+      // ADR-161: the same containment as every other completion closure. The two disposals are
+      // inside it (a failing dispose must fault the returned ValueTask, not the process) and the
+      // drain callback has no error arm to contain.
+      appendAsyncCompletionClosure(
+        "TaskCompletionSource<bool>",
+        "t.SetResult(true);",
+        cancellationArgument = "",
+        prelude = listOf("NugetScopeNative.Dispose(scopeHandle);", "Native_Dispose(handle);"),
+        includesErrorBranch = false,
+      )
       appendLine("            callbackHandle = GCHandle.Alloc(callback);")
       appendLine(
         "            IntPtr drainJobHandle = NugetScopeNative.Drain(scopeHandle, " +
@@ -800,14 +798,25 @@ private fun StringBuilder.renderStoredCallbackMethod(method: CirStoredCallbackMe
   appendLine("        public IDisposable ${method.csMethodName}(${method.csParamType} listener)")
   appendLine("        {")
   appendLine("            ${method.delegateName} nativeCallback = ${method.delegateParamList} => { ${method.nativeCallbackBody} };")
-  appendLine("            GCHandle cbHandle = GCHandle.Alloc(nativeCallback);")
-  // ADR-102: the AOT-compiled thunk address plus this delegate's own handle as the echoed ctx.
+  // ADR-161 part C: the ctx is a never-reused table key, not a GCHandle. A Kotlin emission that
+  // lands after `Dispose()` removed the key is a lookup miss the thunk drops, where a freed
+  // GCHandle would have resolved to whatever the next allocation put in its slot.
+  appendLine("            IntPtr cbKey = NugetThunks.RegisterCtx(nativeCallback);")
+  // ADR-102: the AOT-compiled thunk address plus this delegate's own key as the echoed ctx.
   appendLine(
     "            IntPtr sub = Native_${method.csMethodName}(_handle, " +
-        "NugetThunks.${method.delegateName}Ptr, GCHandle.ToIntPtr(cbHandle), out IntPtr error);"
+        "NugetThunks.${method.delegateName}Ptr, cbKey, out IntPtr error);"
   )
-  appendLine("            if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
-  appendLine("            return new NugetSubscription(() => { ${method.csRemoveNativeName}(_handle, sub); cbHandle.Free(); });")
+  // The un-registration on the failure path is also the fix for a pre-existing leak: the old code
+  // never freed `cbHandle` when subscribe reported an error, so the delegate stayed rooted forever.
+  appendLine(
+    "            if (error != IntPtr.Zero) { NugetThunks.UnregisterCtx(cbKey); " +
+        "throw NugetErrorNative.BuildException(error); }"
+  )
+  appendLine(
+    "            return new NugetSubscription(() => { " +
+        "${method.csRemoveNativeName}(_handle, sub); NugetThunks.UnregisterCtx(cbKey); });"
+  )
   appendLine("        }")
   appendLine()
 }
@@ -853,22 +862,23 @@ private fun StringBuilder.renderInterfaceBridgeMethod(method: CirInterfaceBridge
     )
   }
 
-  // GCHandle allocations
+  // ADR-161 part C: one never-reused table key per listener method, in place of one GCHandle each.
   method.entries.forEachIndexed { i, entry ->
-    appendLine("            GCHandle h$i = GCHandle.Alloc(${entry.methodKtName}Cb);")
+    appendLine("            IntPtr k$i = NugetThunks.RegisterCtx(${entry.methodKtName}Cb);")
   }
 
-  // Native subscribe call. ADR-102: thunk address + this slot's delegate handle as the ctx.
+  // Native subscribe call. ADR-102: thunk address + this slot's delegate key as the ctx.
   val nativeCallArgs: String = buildString {
     append("_handle")
-    method.entries.forEachIndexed { i, entry ->
-      append(", NugetThunks.${entry.delegateName}Ptr, GCHandle.ToIntPtr(h$i)")
+    method.entries.forEachIndexed { i, _ ->
+      append(", NugetThunks.${method.entries[i].delegateName}Ptr, k$i")
     }
   }
   appendLine("            IntPtr sub = Native_${method.csMethodName}($nativeCallArgs, out IntPtr error);")
 
-  // Error check with handle freeing
-  val freeHandles: String = method.entries.indices.joinToString(" ") { "h$it.Free();" }
+  // Error check with key removal
+  val freeHandles: String =
+    method.entries.indices.joinToString(" ") { "NugetThunks.UnregisterCtx(k$it);" }
   appendLine("            if (error != IntPtr.Zero) { $freeHandles throw NugetErrorNative.BuildException(error); }")
 
   // Return NugetSubscription
@@ -889,14 +899,16 @@ private fun StringBuilder.renderCallbackMethod(method: CirCallbackMethod) {
   appendLine("            {")
   appendLine(method.callbackBody)
   appendLine("            };")
-  appendLine("            GCHandle cbHandle = GCHandle.Alloc(nativeCallback);")
+  // ADR-161 part C: a never-reused key, so a lambda that escaped the call (a Kotlin author bug)
+  // is a lookup miss reported as ObjectDisposedException, not a read of a reused GCHandle slot.
+  appendLine("            IntPtr cbKey = NugetThunks.RegisterCtx(nativeCallback);")
   appendLine("            try")
   appendLine("            {")
   appendLine(method.wrapperBody)
   appendLine("            }")
   appendLine("            finally")
   appendLine("            {")
-  appendLine("                cbHandle.Free();")
+  appendLine("                NugetThunks.UnregisterCtx(cbKey);")
   appendLine("            }")
   appendLine("        }")
   appendLine()

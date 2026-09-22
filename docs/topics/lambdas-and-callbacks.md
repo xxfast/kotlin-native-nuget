@@ -101,11 +101,7 @@ a suspend lambda (`suspend (T) -> R`); a lambda type nested inside a `List`/`Set
 at a *result* position (a member returning a lambda rather than taking one; return a
 [Kotlin lambda property](#kotlin-c-lambda-properties-and-returns) instead); and a lambda parameter
 on a constructor, a data class's `copy()`, an enum-arm box constructor, or a value-class member,
-since none of those can hold the lambda's `GCHandle` open past the single call that creates them.
-
-An exception thrown inside the lambda body is not caught and turned into a Kotlin exception: it
-terminates the process (`Environment.FailFast`). Catch inside the lambda if you need to keep the
-process alive.
+since none of those can keep the callback registered past the single call that creates them.
 
 ## Ownership of a callback payload {id="ownership-of-a-callback-payload"}
 
@@ -160,8 +156,13 @@ sub.Dispose(); // no further callbacks fire
 A Kotlin `add{X}`/`remove{X}` (or `subscribe{X}`/`unsubscribe{X}`) pair, both taking the same
 lambda type, is generated as a single `AddXxx` that returns `IDisposable` instead of two separate
 methods: dispose it to unsubscribe, there is no public `RemoveXxx` method generated for you to call
-directly. Disposing the subscription while Kotlin may still be mid-invocation on another thread
-is not safe and can terminate the process; only dispose once you know no callback is in flight.
+directly. `Dispose()` does not wait for an invocation already in flight on another thread: a call
+that lands after `Dispose()` is dropped silently for a `void` listener, without running your code
+or crashing. If that dropped call carried a handle-passed payload (an exported object), the payload
+handle it minted is never released, since the code that would have read and disposed it never
+runs; this is a known, unfixed leak, not something to work around on your side. A per-call lambda
+kept past the single call that supplied it and invoked later is a different case, see
+[below](#exceptions-from-a-callback).
 
 The same pattern also binds a pair declared on a sealed arm; see
 [Stored-callback and interface-bridge pairs on a sealed arm](interfaces-abstract-sealed.md#sealed-callback-pair-generated-c).
@@ -203,11 +204,68 @@ diagnostic pointing at the cause.
 This is one narrow case of a wider capability: a C# class can implement any Kotlin interface,
 including at an ordinary parameter, property setter, or extension receiver; see
 [Implementing a Kotlin interface in C#](interfaces-abstract-sealed.md#implementing-a-kotlin-interface-in-c).
-Exception behavior for an interface method is the same fail-fast rule as a per-call lambda, above.
+A throwing member follows the same rule as a per-call lambda, below.
+
+## Exceptions from a callback {id="exceptions-from-a-callback"}
+
+A per-call lambda, a stored callback, or a C#-implemented interface member that throws no longer
+takes the whole process down with it. Kotlin sees the throw at its own invocation site and can
+catch it there:
+
+```kotlin
+fun recoverWith(format: (String) -> String): String =
+  try {
+    "described ${format("Oreo")}"
+  } catch (e: Exception) {
+    "recovered ${e::class.simpleName}: ${e.message}"
+  }
+```
+
+```C#
+using var cat = new CallbackFaults();
+string report = cat.RecoverWith(_ => throw new InvalidOperationException("no vase left"));
+// report == "recovered NugetManagedException: <managed type>: no vase left"
+```
+
+Catch `Exception`, not a named type: the runtime class this throws,
+`io.github.xxfast.kotlin.native.nuget.runtime.NugetManagedException`, is nameable only from a
+per-target source set (`mingwMain`, `posixMain`, ...), not from the shared `nativeMain` file where
+you write your callback bodies. Its message is `"<C# exception type>: <message>"`, so a broad catch
+can still tell you what actually failed on the other side.
+
+If Kotlin does not catch it, the exception reaches the C# caller of the *outer* call: the original
+C# exception, unchanged, when nothing on the Kotlin side rethrew a different one:
+
+```C#
+var ex = Assert.Throws<InvalidOperationException>(
+    () => cat.DescribeWith(_ => throw new InvalidOperationException("Oreo knocked the vase")));
+```
+
+If Kotlin caught the exception and threw its own instead, the C# caller sees that Kotlin exception
+(a `KotlinException`, or one of its mapped subtypes, see [Exceptions](exceptions.md)) rather than
+the original, so a Kotlin author's own wrapper is never silently replaced.
+
+An `OperationCanceledException` thrown from a callback cancels the Kotlin coroutine that invoked
+it; if that cancellation is never caught, it reaches C# again as `KotlinType ==
+"kotlin.coroutines.cancellation.CancellationException"`, not the original .NET cancellation type.
+
+A callback that throws on a Kotlin coroutine or worker with no `try`/`catch` around the call still
+terminates the process, the same as any other uncaught Kotlin exception on that thread: catching
+at the Kotlin call site, as above, is what keeps the process alive, not merely the fact that the
+exception is now catchable in principle.
+
+Invoking a per-call lambda after the call that supplied it already returned (holding onto it past
+its documented lifetime) is an authoring bug, not a supported pattern; Kotlin sees an
+`ObjectDisposedException` reported through the same channel, since there is no result left to make
+up, rather than a use-after-free read.
 
 <seealso>
     <category ref="related">
         <a href="coroutines-and-flow.md">Coroutines and Flow</a>
         <a href="interfaces-abstract-sealed.md">Interfaces, abstract and sealed classes</a>
+        <a href="exceptions.md">Exceptions</a>
+    </category>
+    <category ref="external">
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/161-csharp-callback-exception-into-kotlin.md">ADR-161: A C# callback exception reaches Kotlin</a>
     </category>
 </seealso>
