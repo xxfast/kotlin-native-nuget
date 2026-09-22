@@ -343,6 +343,7 @@ public class CallbackFaultTests
     {
         using var faults = new CallbackFaults();
         using var stop = new CancellationTokenSource();
+        using var started = new ManualResetEventSlim();
         long emitted = 0;
 
         Task emitter = Task.Run(() =>
@@ -351,8 +352,19 @@ public class CallbackFaultTests
             {
                 faults.Emit("zoomies");
                 Interlocked.Increment(ref emitted);
+                started.Set();
             }
         });
+
+        // Wait for the first emit before racing it: on a cold thread pool the emitter may not be
+        // scheduled until after ten thousand subscribe/dispose cycles have already finished.
+        bool ran = started.Wait(TimeSpan.FromSeconds(30));
+        if (!ran)
+        {
+            stop.Cancel();
+            await emitter;
+        }
+        Assert.True(ran, "the emitter thread never ran, so nothing raced");
 
         for (int i = 0; i < 10_000; i++)
         {
@@ -362,7 +374,7 @@ public class CallbackFaultTests
         stop.Cancel();
         await emitter;
 
-        Assert.True(Volatile.Read(ref emitted) > 0, "the emitter thread never ran, so nothing raced");
+        Assert.True(Volatile.Read(ref emitted) > 0);
         Assert.Equal(0, faults.ListenerCount());
         Assert.Equal("Oreo.", faults.DescribeWith(name => name + "."));
     }
