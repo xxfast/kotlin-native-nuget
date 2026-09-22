@@ -141,7 +141,8 @@ class Tier1InterfaceBridgeFactoryTest {
     assertContains(cs, "NugetBridgeObjectObjectCallback fetch = (arg0, _) => {")
     assertContains(cs, "NugetMarshal.FromHandle<string>(arg0)")
     assertContains(cs, "NugetBridgeVoidCallback release = _ => state.FreeAll();")
-    // ADR-102: each pin is also that slot's echoed ctx, so `Pin` hands the handle back one slot at
+    // ADR-102: each pin is also that slot's echoed ctx (an ADR-161 table key since part C, not a
+    // GCHandle), so `Pin` hands the ctx back one slot at
     // a time and the factory passes the AOT-compiled thunk address rather than a marshalled
     // delegate pointer.
     assertContains(cs, "IntPtr nameGetCtx = state.Pin(nameGet);")

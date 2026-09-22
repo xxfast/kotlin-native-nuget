@@ -6,8 +6,9 @@ namespace IntegrationTests;
 /// ADR-102: the generated forward callback machinery must stop asking the runtime to build
 /// native-to-managed thunks (<c>Marshal.GetFunctionPointerForDelegate</c> / delegate-typed
 /// <c>DllImport</c> parameters) and instead hand Kotlin the address of an ahead-of-time compiled
-/// <c>[UnmanagedCallersOnly]</c> static thunk, dispatching through the GCHandle ctx that every
-/// forward callback ABI already echoes.
+/// <c>[UnmanagedCallersOnly]</c> static thunk, dispatching through the ctx that every forward
+/// callback ABI already echoes (a GCHandle when ADR-102 shipped; an ADR-161 never-reused table key
+/// on the user-code routes since part C, still one <c>IntPtr</c> on the wire either way).
 ///
 /// These tests assert on the TEXT of the generated <c>Interop.cs</c> that the consumer compiles,
 /// not on behaviour: Oreo and Mylo already meow, purr, eat and get fetched correctly under the JIT

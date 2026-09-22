@@ -102,6 +102,7 @@ internal fun StringBuilder.appendCtxDispatchThunk(
   paramList: String,
   returnType: String,
   viaKeyTable: Boolean = true,
+  errOut: Boolean = viaKeyTable,
 ) {
   val types: List<String> = thunkParameterTypes(paramList)
   val parameters: String = types.mapIndexed { index, type -> "$type a$index" }.joinToString(", ")
@@ -112,19 +113,24 @@ internal fun StringBuilder.appendCtxDispatchThunk(
   } else {
     "(($name)GCHandle.FromIntPtr($ctx).Target!)($arguments)"
   }
-  // ADR-161: only the user-code thunks (this function's callers, which are the four rows of the
-  // memo's table plus the bridge release thunk) take the trailing error slot. The Flow and async
-  // thunk families call `appendThunkBody` directly and keep today's arity and FailFast, because the
-  // published `nuget-runtime` klib invokes them and they run no user C# code.
+  // ADR-161: only the user-code thunks take the trailing error slot and the key-table lookup, and
+  // [viaKeyTable] selects exactly that set. The async completion family renders through here too
+  // (`renderAsyncHelper`), and it is NOT user code: the published `nuget-runtime` klib invokes it,
+  // at the arity its own `CFunction` type spells (`launchForCSharp`, four parameters), so it must
+  // keep today's arity and FailFast. Giving it the slot anyway means the thunk reads `errOut` from a
+  // stack slot the caller never supplied and, on its catch path, writes a managed handle through
+  // whatever is there -- ADR-104's stated failure mode and the ADR-053 `SIGBUS` family.
+  // `Tier1CallbackArityAgreementTest` pins both halves, including this family against the runtime's
+  // signature. The Flow family calls `appendThunkBody` directly and was never affected.
   appendThunkBody(
     name,
-    "$parameters, IntPtr* errOut",
+    if (errOut) "$parameters, IntPtr* errOut" else parameters,
     returnType,
     invocation,
-    errOut = true,
+    errOut = errOut,
     preamble = if (viaKeyTable) ctxLookupPreamble(name, ctx, returnType) else emptyList(),
   )
-  appendThunkPointer(name, types + "IntPtr*", returnType)
+  appendThunkPointer(name, if (errOut) types + "IntPtr*" else types, returnType)
 }
 
 /**

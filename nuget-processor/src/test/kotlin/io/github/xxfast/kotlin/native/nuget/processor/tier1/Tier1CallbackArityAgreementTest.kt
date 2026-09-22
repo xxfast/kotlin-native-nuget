@@ -21,10 +21,16 @@ import kotlin.test.assertTrue
  * both halves move together and it still passes; if only one half moves, it fails here rather than
  * in a consumer's process.
  *
- * Deliberately excluded: `NugetFlowOn*` and `NugetAsyncCallback`. Those two thunk families are
- * invoked by the published `nuget-runtime` klib (`collectForCSharp`, `launchForCSharp`), not by
- * KSP-generated Kotlin, so there is no generated `CFunction` in this module to compare them with,
- * and part B leaves their arity alone.
+ * The `NugetFlowOn*` and `NugetAsyncCallback` families used to be excluded here, on the grounds that
+ * the published `nuget-runtime` klib invokes them (`collectForCSharp`, `launchForCSharp`) so there is
+ * no generated `CFunction` in this module to compare against. That exclusion hid a real ADR-161 part
+ * B defect for one commit: `renderAsyncHelper` renders through the same
+ * `appendCtxDispatchThunk` as the user-code shapes, so `NugetAsyncCallback` silently grew the
+ * trailing `IntPtr* errOut` while `launchForCSharp` kept invoking it with four arguments -- a thunk
+ * reading a fifth parameter off a stack slot the caller never supplied, writing a managed handle
+ * through it on the catch path. So they are no longer excluded: their expected arity is a LITERAL
+ * transcription of the runtime's `CFunction` types, which is the only other half that exists. If the
+ * runtime's wire ever changes, that is a deliberate act and this table is the place it is recorded.
  *
  * Oreo is called back four different ways. Every one of them counts to the same number.
  */
@@ -74,6 +80,80 @@ class Tier1CallbackArityAgreementTest {
   """.trimIndent()
 
   private fun run(): Tier1Result = Tier1Harness.run(source)
+
+  /**
+   * A second fixture, for the two families the published runtime invokes: this one has a suspend
+   * member (the `NugetAsyncCallback` route) and a `Flow` member (the `NugetFlowOn*` trio). The main
+   * fixture deliberately has neither, so that its set-equality cells compare only the shapes whose
+   * other half is generated Kotlin in this same module.
+   */
+  private val runtimeInvokedSource: String = """
+    package tier1.arityruntime
+
+    import kotlinx.coroutines.flow.Flow
+    import kotlinx.coroutines.flow.flowOf
+
+    class Cat(val name: String) {
+      suspend fun nap(): String = name
+      fun moods(): Flow<String> = flowOf("happy")
+    }
+  """.trimIndent()
+
+  private fun runRuntimeInvoked(): Tier1Result = Tier1Harness.run(
+    runtimeInvokedSource,
+    fileName = "Cat.kt",
+    processorOptions = mapOf("nuget.rootPackage" to "tier1"),
+    libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+  )
+
+  /**
+   * The runtime-invoked families, pinned against `nuget-runtime`'s own `CFunction` types. These are
+   * the ONLY four thunks whose other half is not in this module, so the expectation is transcribed
+   * from `NugetLaunch.kt` rather than parsed out of generated Kotlin:
+   *
+   *  - `launchForCSharp`: `(COpaquePointer?, COpaquePointer?, Byte, COpaquePointer) -> Unit`, 4
+   *  - `collectForCSharp`: `onNext` `(COpaquePointer?, Byte, COpaquePointer) -> Unit`, 3;
+   *    `onComplete` `(COpaquePointer) -> Unit`, 1; `onError` `(COpaquePointer?, COpaquePointer) ->
+   *    Unit`, 2.
+   *
+   * A trailing `IntPtr* errOut` on any of them is therefore a defect, not an addition: the runtime
+   * supplies no such slot, so the thunk would read a fifth argument off the caller's stack and write
+   * a managed handle through it on the catch path. ADR-161 part B added exactly that to the async
+   * family for one commit, because it renders through the same `appendCtxDispatchThunk` as the
+   * user-code shapes.
+   */
+  @Test
+  fun `the runtime-invoked thunk families keep the arity the runtime calls them at`() {
+    val result = runRuntimeInvoked()
+
+    val expected: Map<String, Int> = mapOf(
+      "NugetAsyncCallback" to 4,
+      "NugetFlowOnNext" to 3,
+      "NugetFlowOnComplete" to 1,
+      "NugetFlowOnError" to 2,
+    )
+
+    val actual: Map<String, Int> = result.generatedCSharp
+      .split("(delegate* unmanaged[Cdecl]<").drop(1)
+      .associate { chunk ->
+        chunk.substringAfter(">)&").substringBefore("Thunk") to
+            parameterCount(chunk.substringBefore(">)&")) - 1
+      }
+      .filterKeys { name -> name in expected.keys }
+
+    assertEquals(
+      expected,
+      actual,
+      "expected every runtime-invoked thunk to keep the arity nuget-runtime's own CFunction type " +
+          "spells; an extra trailing slot here is read off a stack slot the caller never supplied " +
+          "and, on the catch path, written through",
+    )
+    assertTrue(
+      result.generatedCSharp.contains("NugetAsyncCallbackThunk(IntPtr a0, IntPtr a1, byte a2, IntPtr a3)"),
+      "expected the async thunk's own signature to carry no error slot either; got: " +
+          result.generatedCSharp.lines().filter { it.contains("NugetAsyncCallbackThunk") },
+    )
+  }
 
   /**
    * The headline cell. Every arity the generated Kotlin invokes a callback at is an arity some
