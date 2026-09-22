@@ -67,7 +67,7 @@ Alternatives rejected:
 Generator: `nuget-processor/src/main/kotlin/.../cir/CirMarshalRenderer.kt` (`Materialize`, `Wrap`, object-typed resolve), `cir/CirTranslator.kt` (`factoryEntries`), `cir/CirModel.kt` (`CirFactoryEntry` / `CirClass` marker), `cir/CirClassTranslator.kt` (`translateInterfaceBackingClass` marker; lambda property spelling), `cir/CirFunctionRenderer.kt` (`WrapArg` x2, owned-dispose in `Invoke`/`InvokeAsync`; sequence with the `WrapArg<T>` ROADMAP item), `cir/CirFunctionTranslator.kt` (lambda return spelling, legacy generic body), `cir/CirTypeMapping.kt` (`csTypeArgument` interface arm). Possibly `exports/SealedClassExports.kt` (its own `KotlinFunc` arm). No Kotlin emission, runtime or ABI change expected (inferred; `nuget_csharp_token` already in `ForwardAbiContract.kt`).
 Fixtures: `test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/test/cat/Cat.kt` or `PetSitter.kt` (add `fun friendSupplier(): () -> Pet`), `cat/Helpers.kt` (existing `adoptPet`, no change).
 Tests: `IntegrationTests/BidirectionalTests.cs`, `IntegrationTests/GenericConstraintTests.cs`, `LeakTests/LiveHandleTests.cs` (new rows beside the existing 6e/6f rows: one per route, because the freeing site moves from the consumer's `using` to the read, and step 2 adds a minted transfer handle per argument), Tier 1: a new interface-spelling Tier 1 test (lambda type-argument spelling) plus a `Factories` text pin.
-Docs: `docs/topics/generics.md`, `docs/topics/interfaces-abstract-sealed.md`, `FEATURES.md` row, ADR-136 deferral paragraph becomes historical.
+Docs: `docs/topics/generics.md`, `docs/topics/interfaces-abstract-sealed.md`, `docs/topics/supported-features.md` row, ADR-136 deferral paragraph becomes historical.
 
 ## Sample test
 

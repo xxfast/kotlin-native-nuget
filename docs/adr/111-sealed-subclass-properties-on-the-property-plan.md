@@ -268,7 +268,7 @@ sealed base binds on every subclass, verified against the `test-library` fixture
 
 All four defects (ROADMAP lines 26-29) and the `isReferenceType` skip for `Instant`/`Duration`/
 `Uuid` (ROADMAP line 37) and the orphan `Shape.Circle.listener` export (ROADMAP line 51) are
-closed by this migration; see [FEATURES.md](../../FEATURES.md) and
+closed by this migration; see [supported features](../topics/supported-features.md) and
 [interfaces-abstract-sealed.md](../topics/interfaces-abstract-sealed.md) for the consumer-facing
 shape. Sealed-subclass **methods** (ROADMAP line 52) remain out of scope, unaffected by this ADR.
 

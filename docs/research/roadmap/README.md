@@ -8,7 +8,7 @@ The files one level up in `docs/research/` are project-level research (the origi
 
 - **Created** by the `research` agent at the end of Step 1, named `docs/research/roadmap/<slug>.md` where the slug is the branch slug the item will use (`ir/<slug>`).
 - **Read** at Step 0 of a later feature-design run: if a memo exists for the item, the main thread checks its date against the ROADMAP line and the ADRs it cites, then goes to Step 2 with it instead of re-dispatching research. A memo older than a change to any file it cites by `file:line` is stale: re-run research, do not trust the line numbers.
-- **Deleted** by the `documenter` in Step 5 when the item closes, in the same commit that deletes the ROADMAP line. Its durable content by then lives in the ADR, FEATURES.md and the topic pages. A memo whose item is struck from the ROADMAP without shipping (settled as "not a bug", folded into a backlog file) is deleted in that same commit.
+- **Deleted** by the `documenter` in Step 5 when the item closes, in the same commit that deletes the ROADMAP line. Its durable content by then lives in the ADR, docs/topics/supported-features.md and the topic pages. A memo whose item is struck from the ROADMAP without shipping (settled as "not a bug", folded into a backlog file) is deleted in that same commit.
 
 ## Format
 

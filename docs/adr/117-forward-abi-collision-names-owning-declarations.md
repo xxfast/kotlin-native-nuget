@@ -10,7 +10,7 @@ Accepted
 > `generateCNameWrappers` is no longer reached by any export and is scheduled for deletion (kept
 > dead in this change for reviewability); the "route-owned export" wording it rendered is replaced
 > by the exact owner with a role label for a generated member. The Phase 3 roadmap item this closed
-> is recorded in [FEATURES.md](../../FEATURES.md) and this amendment; see "Implementation notes
+> is recorded in [supported features](../topics/supported-features.md) and this amendment; see "Implementation notes
 > (2026-09-13)" below for what shipped and how it differs from the amendment's own draft.
 
 > **Amended by [ADR-118](118-suspend-route-sealed-arm-owners-and-overload-numbering.md) (2026-09-09).**

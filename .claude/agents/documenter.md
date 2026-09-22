@@ -96,6 +96,8 @@ generated file or a NuGet cache to manufacture evidence. Report missing evidence
   builder via Docker and does not touch Gradle output. Fix failures and rerun. If Docker is
   unavailable, report the check as blocked, never passed. On macOS with Colima, the builder
   needs an 8 GiB VM (`colima start --memory 8`).
+- Run `scripts/verify-features.sh` after editing `docs/topics/supported-features.md`; it needs
+  no Docker.
 
 ## Feature records and scope
 
@@ -112,9 +114,13 @@ A topic-only editorial rewrite does not need feature closeout changes.
   Keep each item to one line; put details longer than two sentences in `docs/backlog/<slug>.md`.
   Include the observable symptom, established cause and location, coverage gap, and discovering
   feature's ADR where known. Do not invent causes or promote style preferences into defects.
-- `FEATURES.md`: amend the mapping row and ADR link, preserving direction (`→` Kotlin to C#,
-  `←` C# to Kotlin, `⇄` both) and any meaningful asymmetry. Skip pure plugin or DSL changes
-  that add no mapping.
+- `docs/topics/supported-features.md`: amend the mapping row and its ADR links, preserving
+  direction (`→` Kotlin to C#, `←` C# to Kotlin, `⇄` both) and any meaningful asymmetry. Notes
+  is one clause of at most 200 characters: what the consumer gets and the one thing that
+  differs from naive expectation, never history, diagnostic-code inventories or footnotes.
+  Detail that does not fit goes in the owning topic page (how) or stays in the ADR (why). Run
+  `scripts/verify-features.sh` after editing. Skip pure plugin or DSL changes that add no
+  mapping.
 - `docs/adr/`: mark the implemented ADR `Accepted`. Report any contradiction with the actual
   implementation explicitly; do not rewrite historical decisions as part of documentation closeout.
 

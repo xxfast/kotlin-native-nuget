@@ -509,7 +509,7 @@ Generated files with async methods need `System.Threading.Tasks` added to usings
   `removeSuffix("?")` so a nullable primitive hits [ADR-067](067-nullable-stateflow-mapping.md)'s
   existing `Nullable.GetUnderlyingType` branch, reused rather than duplicated. See
   [Coroutines and Flow](../topics/coroutines-and-flow.md#suspend-fun-returning-a-nullable-type) and
-  [FEATURES.md](../../FEATURES.md).
+  [supported features](../topics/supported-features.md).
 
 ## Amendments after implementation (2026-09-09)
 

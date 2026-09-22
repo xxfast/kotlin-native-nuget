@@ -2,7 +2,7 @@
 name: documenter
 description: >
   Document a shipped bridge feature. Writerside pages in docs/topics/, ROADMAP tick,
-  FEATURES.md mapping row, ADR Accepted. Runs before the refactorer (never alongside it);
+  docs/topics/supported-features.md mapping row, ADR Accepted. Runs before the refactorer (never alongside it);
   the refactorer's verify cleans the build/ output this agent reads snippets from.
 model: inherit
 agents_md: true

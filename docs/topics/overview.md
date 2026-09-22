@@ -29,6 +29,8 @@ It works in two directions:
 - [How-to guides](how-to-guide.md): follow a complete walkthrough to
   [publish a Kotlin/Native library as NuGet](publish-kotlin-library-as-nuget.md) or
   [bind a NuGet package for Kotlin](bind-nuget-package-for-kotlin.md).
+- [Supported features](supported-features.md): the catalogue of every mapping the bridge ships, in
+  both directions, each row linking the topic that explains it and the ADR that decided it.
 - [Publishing Kotlin to C#](forward-overview.md): the forward direction, what Kotlin constructs
   map to what C#.
 - [Consuming C# in Kotlin](reverse-overview.md): the reverse direction, binding a NuGet package

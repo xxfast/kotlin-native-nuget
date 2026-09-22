@@ -7,6 +7,7 @@ on:
     paths:
       - 'docs/**'
       - '.github/workflows/docs.yml'
+      - 'scripts/verify-features.sh'
   workflow_dispatch:
 
 permissions:
@@ -65,6 +66,15 @@ jobs:
         with:
           instance: ${{ env.INSTANCE }}
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check the supported-features catalogue
+        run: bash scripts/verify-features.sh
+
   deploy:
     if: github.event_name != 'pull_request'
     permissions:
@@ -77,7 +87,7 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    needs: [build, test]
+    needs: [build, test, lint]
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
