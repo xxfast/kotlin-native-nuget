@@ -4,6 +4,11 @@
 
 Accepted
 
+[ADR-161](161-csharp-callback-exception-into-kotlin.md) supersedes the "Exception discipline"
+section below for the four user-code thunk families: a throwing C# callback body no longer
+fail-fasts there, it reports through a trailing `errOut` slot. The thunk mechanism this ADR
+decided (`[UnmanagedCallersOnly]` static, ctx-echoed) is unchanged.
+
 ## Context
 
 Every place the forward direction lets Kotlin call back into C# — per-call lambda parameters

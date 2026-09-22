@@ -4,6 +4,11 @@
 
 Accepted
 
+[ADR-161](161-csharp-callback-exception-into-kotlin.md) implements the "Forward-direction
+convergence" section below, with one recorded deviation: the forward `errOut` slot carries a
+Kotlin-owned holder pushed by C# through one new runtime export, not a `GCHandle` read through
+registered accessors, since a forward-only library has no registration step to hang accessors off.
+
 Implemented as designed (Alternative 1, all four forks as gated). The Decision's "Mechanism claims
 ledger" flagged two inferred claims as unspiked; both held and are now verified by
 `OreoExamine_StructReturn_Throws_SurfacesArgumentException` and

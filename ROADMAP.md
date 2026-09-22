@@ -117,18 +117,21 @@ Complete.
 - [ ] Map `Flow<T>` as a generic type argument (e.g., `Box<Flow<String>>`)
 - [ ] Flow backpressure support (bounded `Channel<T>` with explicit resume signaling)
 - [ ] Add `@ExperimentalNugetCoroutineApi` opt-in annotation and KSP warning for classes with suspend methods (see [ADR-021](docs/adr/021-structured-concurrency.md))
-- [ ] **A materialisation throw inside a `Flow<T>`'s `onNext` callback kills the host process** ([details](docs/backlog/flow-onnext-materialisation-throw-kills-host.md))
 - [ ] Re-evaluate the generated `@OptIn` for `CoroutineStart.ATOMIC` (marker moved since kotlinx.coroutines 1.9) ([details](docs/backlog/coroutine-optin-atomic-delicate.md))
 - [ ] The `_has_value`/`_set_value` StateFlow exports gained collection-parameter support alongside `_collect`/`_value` ([ADR-114](docs/adr/114-collection-parameters-on-legacy-flow-and-suspend-routes.md)), but no fixture reaches either arm: both need a nullable-or-`MutableStateFlow` return **plus** a collection parameter on the same member, a combination nothing in `test-library` declares. Cold on purpose, discovered alongside ADR-114.
 - [ ] An enum parameter on a `Flow`/`StateFlow`-returning or `suspend` legacy route is refused (`SKIPPED_UNSUPPORTED_INPUT`) rather than bound, even though `(int)x` in C# and `Q.entries[x]` in Kotlin would bind it: the legacy routes have no per-parameter projection plumbing beyond a native-argument expression, and widening to a second type family had no issue behind it. Deferred by [ADR-122](docs/adr/122-handle-parameters-on-the-legacy-routes.md) Alternative 6.
 - [ ] A collection element on ADR-068's `suspend fun` returning `StateFlow<T>` is refused, not bound, since `nuget_stateflow_collect`/`nuget_stateflow_value` are emitted once per module keyed on an already-obtained handle and box `value as Any` generically, with no per-member seam to hang a projection on the way the property and method routes now have. Giving that route its own per-member export pair would fix it but multiplies a module-wide pair by every suspend-StateFlow member for a shape no issue has asked for. Verified by reading, split out of [ADR-123](docs/adr/123-collection-elements-on-the-flow-routes.md) Alternative 5.
 
 ## Phase 7: Bidirectional support (C# → Kotlin)
-- [ ] Exception propagation from a C# callback into Kotlin (mirror of ADR-024/028/029); ADR-102 sets the v1 fail-fast policy this replaces. [ADR-104](docs/adr/104-reverse-thunk-error-channel.md)'s "Forward-direction convergence" section concludes this should use the same trailing-`errOut`-parameter wire shape and the same `NugetManagedException`, not a new envelope ([details](docs/backlog/csharp-callback-exception-into-kotlin.md))
 - [ ] `Flow<T>` / suspend lambda (`suspend (T) -> R`) as a function parameter
 - [ ] **The `add*/remove*` subscription route silently mis-handles two member shapes it doesn't restrict for.** ([details](docs/backlog/add-remove-subscription-route-silently-mis-handles.md))
 - [ ] **The same route's object/string parameter marshalling disposes the argument `StableRef` up to three times.** ([details](docs/backlog/same-route-s-object-string-parameter-marshalling.md))
-- [ ] **A callback invocation racing past `removeListener`/`Dispose()` can now trip `Environment.FailFast`** ([details](docs/backlog/callback-race-past-dispose-failfast.md))
+- [ ] Fold the reverse template's internal `NugetManagedException` onto the runtime class over the ADR-130 expect/actual seam ([details](docs/backlog/fold-reverse-managed-exception-onto-runtime-class.md))
+- [ ] A `Flow<T>` item whose materialisation fails leaks one `StableRef` per failed item ([details](docs/backlog/flow-item-materialisation-failure-leaks-a-handle.md))
+- [ ] A dropped late callback invocation with a handle-passed argument leaks that argument's handle ([details](docs/backlog/dropped-late-callback-leaks-argument-handle.md))
+- [ ] A cancelled C# callback re-crosses to an uncaught C# caller typed as Kotlin's `CancellationException`, not the original .NET cancellation type ([details](docs/backlog/cancelled-callback-loses-original-exception-type.md))
+- [ ] `NugetErrorNative._lastManagedFault` keeps one exception rooted per thread until the next fault ([details](docs/backlog/managed-fault-stash-roots-one-exception-per-thread.md))
+- [ ] `NugetManagedException` carries no `@NugetRuntimeApi`, unlike every other public runtime export ([details](docs/backlog/managed-exception-missing-runtime-api-marker.md))
 
 ## Phase 8: Ecosystem – consuming NuGet packages from Kotlin
 
