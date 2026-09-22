@@ -22,16 +22,16 @@ mean the generated Kotlin or C# compiles; nothing here compiles anything.
 | MimeMapping 4.0.0 | `lib/netstandard2.0/MimeMapping.dll` | ok | ok | 1 | 4 | 25.0 percent | 0 | 1 |
 | NuGet.Versioning 6.12.1 | `lib/netstandard2.0/NuGet.Versioning.dll` | ok | ok | 108 | 153 | 70.6 percent | 0 | 45 |
 | Humanizer.Core 2.14.1 | `lib/net6.0/Humanizer.dll` | ok | ok | 111 | 1488 | 7.5 percent | 0 | 65 |
-| NodaTime 3.2.2 | `lib/net8.0/NodaTime.dll` | ok | ok | 224 | 1153 | 19.4 percent | 0 | 102 |
-| Polly.Core 8.5.2 | `lib/net8.0/Polly.Core.dll` | ok | ok | 44 | 342 | 12.9 percent | 0 | 8 |
-| Serilog 4.2.0 | `lib/net8.0/Serilog.dll` | ok | ok | 117 | 430 | 27.2 percent | 0 | 66 |
-| Markdig 0.40.0 | `lib/net8.0/Markdig.dll` | ok | ok | 757 | 1177 | 64.3 percent | 0 | 279 |
+| NodaTime 3.2.2 | `lib/net8.0/NodaTime.dll` | ok | ok | 221 | 1153 | 19.2 percent | 0 | 100 |
+| Polly.Core 8.5.2 | `lib/net8.0/Polly.Core.dll` | ok | ok | 46 | 342 | 13.5 percent | 0 | 10 |
+| Serilog 4.2.0 | `lib/net8.0/Serilog.dll` | ok | ok | 129 | 430 | 30.0 percent | 0 | 78 |
+| Markdig 0.40.0 | `lib/net8.0/Markdig.dll` | ok | ok | 753 | 1177 | 64.0 percent | 0 | 278 |
 | CsvHelper 33.0.1 | `lib/net8.0/CsvHelper.dll` | failed | not_reached | 0 | 0 | n/a | 0 | 0 |
-| Newtonsoft.Json 13.0.3 | `lib/net6.0/Newtonsoft.Json.dll` | ok | ok | 588 | 1278 | 46.0 percent | 0 | 279 |
+| Newtonsoft.Json 13.0.3 | `lib/net6.0/Newtonsoft.Json.dll` | ok | ok | 580 | 1278 | 45.4 percent | 0 | 278 |
 
 ## Collapsed overload sets (ADR-155)
 
-Measured across the whole run: **0** collapsed set(s), **0** member(s) dropped, out of **845** bridgeable methods.
+Measured across the whole run: **0** collapsed set(s), **0** member(s) dropped, out of **855** bridgeable methods.
 
 This is the frequency measurement the ROADMAP line asks for: how often a C#
 overload pair really does collapse onto one Kotlin collection signature in
@@ -41,25 +41,27 @@ bridgeable, so array and `Nullable<T>` siblings never get there.
 ## Diagnostics by kind, whole run
 
 - `info_async_not_yet_mapped`: 5
-- `info_cancellation_token_not_yet_mapped`: 12
-- `info_oblivious_nullability`: 127
-- `info_uninstantiated_generic_type`: 32
+- `info_cancellation_token_not_yet_mapped`: 4
+- `info_oblivious_nullability`: 126
+- `info_uninstantiated_generic_type`: 31
 - `skipped_ambiguous_generic_constructor`: 4
-- `skipped_array`: 71
-- `skipped_collection_element`: 47
+- `skipped_array`: 72
+- `skipped_collection_element`: 51
 - `skipped_collection_position`: 1
 - `skipped_default_interface_method`: 79
-- `skipped_empty_interface`: 27
+- `skipped_delegate_position`: 4
+- `skipped_delegate_signature`: 77
+- `skipped_empty_interface`: 28
 - `skipped_event`: 18
 - `skipped_generic_interface`: 6
 - `skipped_generic_type_argument`: 26
 - `skipped_indexer`: 43
 - `skipped_member_name_collision`: 15
 - `skipped_open_generic`: 78
-- `skipped_unbound_generic_instantiation`: 233
-- `skipped_unbound_type_reference`: 679
+- `skipped_unbound_generic_instantiation`: 166
+- `skipped_unbound_type_reference`: 649
 - `skipped_unsupported_enum`: 48
-- `skipped_unsupported_struct`: 275
+- `skipped_unsupported_struct`: 270
 
 ## Most demanded unmapped type references
 
@@ -75,14 +77,14 @@ to map next by real demand rather than by guess.
 - `System.IO.TextWriter`: 31
 - `System.DateTimeOffset`: 20
 - `System.IFormatProvider`: 15
-- `System.IAsyncResult`: 12
 - `System.Uri`: 10
 - `NuGet.Versioning.IVersionComparer`: 8
-- `System.AsyncCallback`: 8
 - `System.Decimal`: 8
 - `System.Guid`: 8
 - `NodaTime.IClock`: 7
 - `System.TimeOnly`: 7
 - `System.Diagnostics.TraceLevel`: 6
-- `System.Runtime.Serialization.StreamingContext`: 6
 - `System.TimeProvider`: 6
+- `System.Runtime.Serialization.SerializationInfo`: 5
+- `System.StringComparison`: 5
+- `Humanizer.ICulturedStringTransformer`: 4

@@ -446,3 +446,17 @@ To be explicit about what this change proves and does not: process isolation rem
 cross-test contamination the three flakes above belong to. It does not root-cause the `+28` reading;
 the only thing established about it is that the string-parameter-and-return route mints no
 `StableRef` handle, so whatever moved the count that run was not a leak on that route.
+
+## Amendment 3 (2026-09-22, ADR-158): a Kotlin object living inside a C# bridge is now counted too
+
+[ADR-158](158-reverse-delegate-parameters.md) found that the ctx `StableRef` behind a
+Kotlin-implemented C# interface bridge ([ADR-085](085-kotlin-implemented-csharp-interfaces.md)) and
+behind a reverse delegate parameter was minted with a bare `StableRef.create(impl)` and released
+with a bare `dispose()`, outside `NugetHandles.retain`/`release` entirely. `nuget_live_handles`
+therefore never counted a Kotlin object handed *into* C# this way; every `LiveHandleTests` row over
+such a bridge was measuring only the transfer-scope traffic around it, not the bridge ctx itself.
+Both mint and release now go through a counted pair reached via an `expect`/`actual` seam
+(`nugetRetainCtx`/`nugetReleaseCtx`) across the runtime-klib boundary, the same seam
+`nugetKotlinError` already used. `LiveHandleTests.cs` rows 13-15 (ADR-158) are the first rows that
+can observe this half of the counter at all; no earlier row's baseline changes, since retain and
+release still net to zero when nothing leaks.

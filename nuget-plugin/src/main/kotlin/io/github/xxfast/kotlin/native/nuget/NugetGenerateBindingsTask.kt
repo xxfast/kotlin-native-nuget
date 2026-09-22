@@ -9,6 +9,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirCollectionKind
 import io.github.xxfast.kotlin.native.nuget.rir.RirCollectionType
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
+import io.github.xxfast.kotlin.native.nuget.rir.RirDelegateType
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnostic
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnum
@@ -52,6 +53,12 @@ import io.github.xxfast.kotlin.native.nuget.rir.classInterfaceSupertypes
 import io.github.xxfast.kotlin.native.nuget.rir.collisionDiagnostics
 import io.github.xxfast.kotlin.native.nuget.rir.collapsedOverloadSets
 import io.github.xxfast.kotlin.native.nuget.rir.collectionPositionDiagnostics
+import io.github.xxfast.kotlin.native.nuget.rir.KotlinDelegatePlan
+import io.github.xxfast.kotlin.native.nuget.rir.delegateContractHash
+import io.github.xxfast.kotlin.native.nuget.rir.delegatePlans
+import io.github.xxfast.kotlin.native.nuget.rir.delegatePositionDiagnostics
+import io.github.xxfast.kotlin.native.nuget.rir.isPackageDeclared
+import io.github.xxfast.kotlin.native.nuget.rir.shapeKey
 import io.github.xxfast.kotlin.native.nuget.rir.identity
 import io.github.xxfast.kotlin.native.nuget.rir.contractHash
 import io.github.xxfast.kotlin.native.nuget.rir.fnv1a64
@@ -223,8 +230,10 @@ private fun isScopedRef(type: RirTypeRef): Boolean =
 
 // ADR-155: a collection whose elements are bound interfaces mints a bridge per element, so the
 // call site needs the same nugetTransferScope an interface-typed parameter does.
+// ADR-158: a delegate parameter mints a bridge too, and its transfer handle needs the same
+// after-the-call free, so it rides the same scope.
 private fun isInterfaceLike(type: RirTypeRef): Boolean =
-  type is RirInterfaceType ||
+  type is RirInterfaceType || type is RirDelegateType ||
       (type is RirCollectionType && type.typeArguments.any(::isInterfaceLike))
 
 private fun isEnumRef(type: RirTypeRef): Boolean = type is RirEnumType
@@ -419,6 +428,12 @@ fun generateKotlinStubs(
   val qualifiedTypeNames: Map<RirTypeKey, String> = qualifiedTypeNames(
     file, packageNameOverrides, namespaceAliases,
   )
+  // ADR-158 step 4: the package-declared delegates whose C# name has to survive as a Kotlin
+  // `typealias`, keyed by the Kotlin package the delegate's OWN C# namespace maps to and then by
+  // the alias name. Collected from the ADMITTED shapes (the same plans both generators mint a
+  // holder for), never from a namespace's type list: a delegate TypeDef is no longer extracted as a
+  // type, so a namespace that declares nothing else may not appear in the RIR at all.
+  val delegateAliases: MutableMap<String, MutableMap<String, RirDelegateType>> = mutableMapOf()
 
   file.assemblies.forEach { assembly ->
     assembly.namespaces.forEach { namespace ->
@@ -533,6 +548,35 @@ fun generateKotlinStubs(
             .toSet()
 
           if (registrables.isEmpty()) return@forEach
+
+          // ADR-158 step 4: one `typealias` per package-declared delegate this class admits, in
+          // the Kotlin package its own C# namespace maps to. The parameter itself is spelled as
+          // the bare function type (a lambda is the surface), so the alias is additive: a
+          // consumer who wants the C# name can declare `val t: Transform = { it * 3 }` and pass
+          // that.
+          delegatePlans(registrables, cls.name)
+            .map { it.delegate.copy(nullable = false) }
+            .filter { it.isPackageDeclared() }
+            .forEach { delegate ->
+              val delegateNs: String = delegate.definition.substringBeforeLast('.', "")
+              val aliasPkg: String =
+                if (delegateNs.isEmpty()) kotlinPkg
+                else kotlinPackage(
+                  assembly.packageId, delegateNs, packageNameOverrides, namespaceAliases,
+                )
+              // A position whose Kotlin name is only spellable with an import (an enum, handle or
+              // interface declared in another package) would make the alias file itself not
+              // compile, which is strictly worse than having no alias: the parameter binds either
+              // way. Skipped rather than half-emitted.
+              val spellable: Boolean = (delegate.parameters + delegate.returnType).all { position ->
+                aliasPositionPackage(position, enumPkgs, handlePkgs, interfacePkgs)
+                  .let { it == null || it == aliasPkg }
+              }
+              if (!spellable) return@forEach
+              delegateAliases.getOrPut(aliasPkg) { mutableMapOf() }[
+                delegate.definition.substringAfterLast('.')
+              ] = delegate
+            }
 
           val allMethods: List<RirMethod> = staticMethods + instanceMethods
           val methodsHaveString: Boolean = allMethods.any { method ->
@@ -692,6 +736,17 @@ fun generateKotlinStubs(
     }
   }
 
+  // ADR-158 step 4: one file per package rather than one per delegate, and named NugetDelegates.kt
+  // so it can never collide with a bound C# type's own generated file.
+  delegateAliases.forEach { (aliasPkg, aliases) ->
+    result.add(
+      GeneratedFile(
+        relativePath = "nativeMain/${aliasPkg.replace('.', '/')}/NugetDelegates.kt",
+        content = delegateAliasFileContent(aliasPkg, aliases, qualifiedTypeNames),
+      )
+    )
+  }
+
   // ADR-104: every reverse call site now goes through nugetCall, whose throw path reads two
   // managed strings and frees them with freeManagedString, so NugetInterop.kt and NugetRuntime.kt
   // are needed whenever ANY registration exists, not only when a bound signature happens to
@@ -833,6 +888,9 @@ private fun genericAwareKotlinType(type: RirTypeRef): String = when (type) {
 // v1 vocabulary fails fast (the reader is responsible for never emitting such an instantiation as
 // "discovered" in the first place; reaching here means that contract was violated).
 internal fun instantiationArgTag(type: RirTypeRef): String = when (type) {
+  // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+  // member with a delegate anywhere in its signature reaches a Kotlin renderer.
+  is RirDelegateType -> error("[nuget] a delegate type must not reach the Kotlin renderer")
   is RirPrimitiveType -> kotlinType(type)
   is RirStringType -> (if (type.nullable) "Nullable" else "") + "String"
   is RirObjectHandleType -> (if (type.nullable) "Nullable" else "") + type.name
@@ -1935,6 +1993,42 @@ private fun String.toEnumScreamingSnake(): String = buildString {
   }
 }
 
+// ADR-158 step 4: the Kotlin package a delegate Invoke position's own type is generated into, or
+// null when the position needs no package at all (void, a primitive, a string). Used only to decide
+// whether a `typealias` can be spelled with bare names in the alias file's package.
+private fun aliasPositionPackage(
+  position: RirTypeRef,
+  enumPkgs: Map<RirTypeKey, String>,
+  handlePkgs: Map<RirTypeKey, String>,
+  interfacePkgs: Map<RirTypeKey, String>,
+): String? = when (position) {
+  is RirEnumType -> enumPkgs[RirTypeKey(position.namespace, position.name)]
+  is RirObjectHandleType -> handlePkgs[RirTypeKey(position.namespace, position.name)]
+  is RirInterfaceType -> interfacePkgs[RirTypeKey(position.namespace, position.name)]
+  else -> null
+}
+
+// ADR-158 step 4: the package-declared delegates of one Kotlin package, as typealiases. The RHS is
+// spelled by the SAME declKotlinType a parameter of that delegate type is spelled by, so the alias
+// and the bound parameter can never denote different function types.
+private fun delegateAliasFileContent(
+  kotlinPkg: String,
+  aliases: Map<String, RirDelegateType>,
+  qualifiedTypeNames: Map<RirTypeKey, String>,
+): String {
+  val body: String = aliases.entries.sortedBy { it.key }.joinToString("\n\n") { (name, delegate) ->
+    """
+      |// Generated: C# `${delegate.definition}`
+      |typealias $name = ${declKotlinType(delegate, qualifiedTypeNames)}
+    """.trimMargin()
+  }
+  return """
+    |package $kotlinPkg
+    |
+    |$body
+  """.trimMargin().trim()
+}
+
 private fun enumFileContent(kotlinPkg: String, enum: RirEnum, packageId: String): String {
   val entries: String = enum.entries.joinToString(",\n") { it.name.toEnumScreamingSnake() }
   return """
@@ -2427,6 +2521,9 @@ private fun buildStructStubMethod(
   val invokeArgsBase: List<String> = receiverArgs + paramArgs
 
   return when (val retType: RirTypeRef = method.returnType) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature reaches a Kotlin renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the Kotlin renderer")
     is RirVoidType -> {
       val invokeArgs: String = invokeArgsBase.joinToString(", ")
       val invokeCall: String =
@@ -2553,6 +2650,9 @@ private fun buildStructStubProperty(
     struct.components.any { typeContains(it.type, structs, ::isStringRef) }
 
   val getterBlock: String = when (val type: RirTypeRef = property.type) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature reaches a Kotlin renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the Kotlin renderer")
     is RirVoidType -> error("[nuget] a property cannot have void type")
     is RirStringType -> {
       val invokeArgs: String = receiverArgs.joinToString(", ")
@@ -2790,7 +2890,25 @@ private fun collectionWrite(type: RirCollectionType, name: String): String {
   return "nugetWriteSlots($slots)"
 }
 
+// ADR-158: the Kotlin function type for a delegate, with [spell] deciding how each Invoke
+// position is rendered (unqualified, or cross-package qualified). Parenthesised when the delegate
+// reference itself is nullable, so the caller's trailing `?` lands on the FUNCTION and not on its
+// return type.
+private fun delegateKotlinType(type: RirDelegateType, spell: (RirTypeRef) -> String): String {
+  val params: String = type.parameters.joinToString(", ") { spell(it) }
+  val ret: String = if (type.returnType is RirVoidType) "Unit" else spell(type.returnType)
+  val bare = "($params) -> $ret"
+  return if (type.nullable) "($bare)" else bare
+}
+
 private fun kotlinType(type: RirTypeRef): String = when (type) {
+  // ADR-158: a C# delegate is an ordinary Kotlin function type, so a consumer passes a lambda and
+  // never a generated wrapper. A `void`-returning delegate returns `Unit`; each Invoke position
+  // carries its own nullability, so `Action<string?>` is `(String?) -> Unit`.
+  // Parenthesised when the delegate REFERENCE is nullable, because declKotlinType appends the `?`
+  // and `(Int) -> Int?` is a function returning `Int?`, not a nullable function.
+  is RirDelegateType -> delegateKotlinType(type) { declKotlinType(it) }
+
   is RirVoidType -> "Unit"
   is RirStringType -> "String"
   is RirEnumType -> type.name
@@ -2858,6 +2976,12 @@ private fun declKotlinType(
     return "$base<$args>" + if (type.isNullable) "?" else ""
   }
   if (type is RirTypeParameterType) return type.name
+  // ADR-158: an Invoke position is a reference like any other and needs the same cross-package
+  // qualification a parameter of that type would get.
+  if (type is RirDelegateType) {
+    return delegateKotlinType(type) { declKotlinType(it, qualifiedTypeNames) } +
+        if (type.nullable) "?" else ""
+  }
   // ADR-155: an element is a reference like any other and needs the same cross-package
   // qualification; rendering it unqualified is a silent name collision in the generated stub.
   if (type is RirCollectionType) {
@@ -2897,6 +3021,9 @@ private fun qualifiedTypeNames(
 }
 
 private fun cfnType(type: RirTypeRef): String = when (type) {
+  // ADR-158: a delegate crosses the ordinary thunk as ONE transfer GCHandle, the same wire an
+  // ADR-070 interface parameter uses.
+  is RirDelegateType -> "COpaquePointer?"
   is RirVoidType -> "Unit"
   is RirStringType -> "COpaquePointer?"
   is RirEnumType -> "Int"
@@ -2946,6 +3073,9 @@ private fun cfnType(type: RirTypeRef): String = when (type) {
 // ADR-056: the kotlinx.cinterop CVariable subtype an out-pointer component allocates via
 // `alloc<...>()`, per the wire table (component type -> Kotlin CFunction out-ptr).
 private fun cVarType(type: RirTypeRef): String = when (type) {
+  // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+  // member with a delegate anywhere in its signature reaches a Kotlin renderer.
+  is RirDelegateType -> error("[nuget] a delegate type must not reach the Kotlin renderer")
   is RirPrimitiveType -> when (type.name) {
     "bool" -> "UByteVar"
     "byte" -> "UByteVar"
@@ -2993,6 +3123,9 @@ private data class ComponentRead(val statements: List<String>, val expression: S
 private fun componentRead(type: RirTypeRef, arg: AbiArg): ComponentRead {
   val raw = "${arg.name}.value"
   return when (type) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature reaches a Kotlin renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the Kotlin renderer")
     is RirPrimitiveType -> when (type.name) {
       // UByteVar.value is UByte (0 or 1) — see cVarType: there is no BooleanVar in
       // kotlinx.cinterop, so the out-pointer slot is UByte and must be narrowed back to Boolean
@@ -3212,6 +3345,29 @@ private fun bindingsFileContent(
     add("import kotlinx.cinterop.reinterpret")
     add("import kotlin.experimental.ExperimentalNativeApi")
     structOutVarTypes.forEach { add("import kotlinx.cinterop.$it") }
+    // ADR-158: the delegate mint + slot half, the class-side twin of the interface bridge's import
+    // block below. Only what a one-slot delegate body can name.
+    if (delegatePlans(registrables, cls.name).isNotEmpty()) {
+      val plansForImports: List<KotlinDelegatePlan> = delegatePlans(registrables, cls.name)
+      add("import $INTERNAL_PKG.NugetObjectHandle")
+      add("import $INTERNAL_PKG.NugetBridgeTable")
+      add("import $INTERNAL_PKG.nugetKotlinError")
+      add("import $INTERNAL_PKG.nugetRetainCtx")
+      add("import kotlinx.cinterop.asStableRef")
+      add("import kotlinx.cinterop.staticCFunction")
+      add("import kotlinx.cinterop.invoke")
+      add("import kotlinx.cinterop.pointed")
+      add("import kotlinx.cinterop.value")
+      val slotTypes: List<RirTypeRef> = plansForImports.flatMap { plan ->
+        plan.delegate.parameters + plan.delegate.returnType
+      }
+      if (slotTypes.any { it is RirStringType }) {
+        add("import $INTERNAL_PKG.nugetKotlinString")
+        add("import kotlinx.cinterop.ByteVar")
+        add("import kotlinx.cinterop.toKString")
+      }
+      if (slotTypes.any { it is RirEnumType }) add("import $INTERNAL_PKG.nugetEnumEntry")
+    }
   }
 
   // ADR-052: rendered directly off the shared bridgeableRegistrables() ordering — constructor
@@ -3357,8 +3513,33 @@ private fun bindingsFileContent(
   }.joinToString("\n  ")
 
   // ADR-152: slots, not registrables, an async method occupies two of them (Begin, End).
-  val expectedSlots: Int = registrables.slotCount()
-  val expectedHash: Long = contractHash(cls, registrables, structs)
+  // ADR-158: plus one factory slot per distinct delegate shape this type's members take, appended
+  // after the member slots in shape-key order, and folded into the contract hash.
+  val plans: List<KotlinDelegatePlan> = delegatePlans(registrables, cls.name)
+  val expectedSlots: Int = registrables.slotCount() + plans.size
+  val expectedHash: Long =
+    delegateContractHash(contractHash(cls, registrables, structs), plans)
+
+  // ADR-158: one factory pointer per shape, in shape-key order, appended AFTER every member slot,
+  // in the same order the C# [ModuleInitializer] passes them.
+  val delegateFnVars: String = plans.joinToString("\n\n") { plan ->
+    """
+      |@Suppress("NOTHING_TO_INLINE")
+      |internal var create${plan.shapeKey}DelegateFn:
+      |  CPointer<CFunction<(COpaquePointer?, COpaquePointer?) -> COpaquePointer?>>? = null
+    """.trimMargin()
+  }.let { if (it.isEmpty()) "" else "\n\n$it" }
+  val delegateParams: String = plans.joinToString("") { plan ->
+    "\n  create${plan.shapeKey}DelegatePtr: COpaquePointer?,"
+  }
+  val delegateAssignments: String = plans.joinToString("") { plan ->
+    "\n  $objectName.create${plan.shapeKey}DelegateFn = " +
+        "requireNotNull(create${plan.shapeKey}DelegatePtr) " +
+        "{ \"$exportName passed a null ${plan.shapeKey} delegate factory pointer.\" }.reinterpret()"
+  }
+  val delegateBlocks: String = plans.joinToString("\n\n") { plan ->
+    kotlinDelegateBlock(plan, objectName, cls.name, packageId, namespaceName)
+  }.let { if (it.isEmpty()) "" else "\n\n$it" }
 
   return """
     |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
@@ -3373,7 +3554,7 @@ private fun bindingsFileContent(
     |// bound classes sharing a namespace, or two types sharing a method name, would otherwise emit
     |// the same top-level var twice and fail to compile.
     |internal object $objectName {
-    |${fnVars.indented("  ")}
+    |${fnVars.indented("  ")}${delegateFnVars.indented("  ")}
     |}
     |
     |@OptIn(ExperimentalNativeApi::class)
@@ -3387,7 +3568,7 @@ private fun bindingsFileContent(
     |fun $exportName(
     |  slotCount: Int,
     |  contractHash: Long,
-    |  $regParams,
+    |  $regParams,$delegateParams
     |) {
     |  // ADR-054: refuses to store any pointer if the caller's counts disagree with this build's —
     |  // a stale C# shim (fewer args than declared here) is read-only-safe up to this point: only
@@ -3401,10 +3582,70 @@ private fun bindingsFileContent(
     |    expectedSlots = $expectedSlots,
     |    expectedHash = ${expectedHash}L,
     |  )
-    |  $regBody
+    |  $regBody$delegateAssignments
     |  NugetRegistry.record("$qualifiedType", $expectedSlots)
-    |}
+    |}$delegateBlocks
   """.trimMargin().trim()
+}
+
+// ADR-158: the Kotlin half of one delegate shape: the single `staticCFunction`-able slot the C#
+// holder calls back through, this shape's ADR-089 reuse table, and the mint entry point the call
+// site lowers a lambda into. The interface twin is kotlinBridgeBlock; the differences are that
+// there is exactly one slot, that the ctx StableRef holds a FUNCTION rather than an interface
+// implementation, and that the slot calls the function itself instead of a named member.
+private fun kotlinDelegateBlock(
+  plan: KotlinDelegatePlan,
+  objectName: String,
+  typeName: String,
+  packageId: String,
+  namespaceName: String,
+): String {
+  val shape: String = plan.shapeKey
+  val prefix: String = shape.replaceFirstChar { it.lowercaseChar() }
+  val fnType: String =
+    delegateKotlinType(plan.delegate.copy(nullable = false)) { declKotlinType(it) }
+  val method: RirMethod = plan.invoke.method
+  val declaredParams: String = (listOf("ctx: COpaquePointer?") +
+      method.parameters.mapIndexed { i, p -> "a$i: ${cfnType(p.type)}" } + ERR_OUT_PARAM)
+    .joinToString(", ")
+  val args: String = method.parameters
+    .mapIndexed { i, p -> kotlinBridgeInbound(p.type, "a$i") }
+    .joinToString(", ")
+  // A delegate slot never receives a handle-backed OUT cell (a handle return is outside the slot
+  // vocabulary here), so the dup thunk this shape would need does not exist and is never read.
+  val call = "ctx!!.asStableRef<$fnType>().get()($args)"
+  val body: String = kotlinBridgeOutbound(method.returnType, call, "null")
+  val ret: String = cfnType(method.returnType)
+  val failMsg: String = bindingsNotRegisteredMessage(typeName, packageId, namespaceName)
+  return """
+    |private fun $prefix${'D'}elegateSlot($declaredParams): $ret = ${kotlinSlotEnvelope(body, ret)}
+    |
+    |// ADR-089: this shape's reuse table, keyed on the lambda's identity and holding the C# delegate
+    |// WEAKLY, so it never roots what the .NET GC owns.
+    |private val ${prefix}DelegateTable: NugetBridgeTable = NugetBridgeTable()
+    |
+    |// ADR-158: mint a real C# ${plan.delegate.definition} over a Kotlin lambda. The returned
+    |// GCHandle is a TRANSFER handle, freed by the call site once the native call returns; the C#
+    |// delegate strongly roots its holder, whose KotlinRefHandle releases this ctx StableRef when
+    |// the .NET GC collects the delegate. Resolve-or-mint, so a lambda passed twice while C# still
+    |// holds the first delegate crosses as the SAME delegate instance (what an event's
+    |// add/remove pair needs, and what stops a stored callback from being duplicated).
+    |internal fun mint${shape}Delegate(f: $fnType): COpaquePointer {
+    |  val reused: COpaquePointer? = ${prefix}DelegateTable.resolve(f)
+    |  if (reused != null) return reused
+    |  val fn = requireNotNull($objectName.create${shape}DelegateFn) {
+    |    $failMsg
+    |  }
+    |  val ctx: COpaquePointer = nugetRetainCtx(f)
+    |  val delegate: COpaquePointer = requireNotNull(
+    |    fn.invoke(staticCFunction(::$prefix${'D'}elegateSlot), ctx),
+    |  ) {
+    |    "[nuget] Create${shape}Delegate returned a null delegate handle."
+    |  }
+    |  ${prefix}DelegateTable.store(f, delegate, ctx)
+    |  return delegate
+    |}
+  """.trimMargin()
 }
 
 private fun stubFileContent(
@@ -3707,12 +3948,14 @@ private fun classWrapperContent(
   // ADR-070 Decision 4: an interface-typed parameter's argConversion(...) calls the shared
   // `nugetHandle()` extension — needed whenever this class has an instance method/property/ctor
   // parameter typed as an interface.
+  // ADR-158: a delegate parameter mints a bridge through the same scope, so it needs the same
+  // import (isInterfaceLike is the shared predicate the call sites use).
   val methodsHaveInterfaceParam: Boolean =
-    allMethods.any { m -> m.parameters.any { it.type is RirInterfaceType } }
+    allMethods.any { m -> m.parameters.any { isInterfaceLike(it.type) } }
   val ctorsHaveInterfaceParam: Boolean =
-    ctors.any { it.parameters.any { p -> p.type is RirInterfaceType } }
+    ctors.any { it.parameters.any { p -> isInterfaceLike(p.type) } }
   val settablePropertiesHaveInterfaceParam: Boolean =
-    instancePropertyGetters.any { it.type is RirInterfaceType && it.name in propertySetterNames }
+    instancePropertyGetters.any { isInterfaceLike(it.type) && it.name in propertySetterNames }
   val hasInterfaceParam: Boolean =
     methodsHaveInterfaceParam || ctorsHaveInterfaceParam || settablePropertiesHaveInterfaceParam
   if (hasInterfaceParam) imports.add("import $INTERNAL_PKG.nugetTransferScope")
@@ -3952,6 +4195,16 @@ private fun wrapInvoke(
 }
 
 private fun argConversion(type: RirTypeRef, name: String): String = when {
+  // ADR-158: a Kotlin lambda becomes a real C# delegate here. `mint{Shape}Delegate` is generated
+  // into this same package (one per distinct shape on this class) and returns a TRANSFER handle;
+  // `delegateOf` hands it to the NugetTransferScope this call site is wrapped in, so it is freed
+  // after the native call and C#'s own reference (if the callee stored the delegate) is the only
+  // root left. ADR-089 reuse means the same lambda passed twice resolves to the same C# delegate
+  // while C# still holds it.
+  type is RirDelegateType && type.nullable ->
+    "if ($name == null) null else delegateOf(mint${type.shapeKey()}Delegate($name))"
+
+  type is RirDelegateType -> "delegateOf(mint${type.shapeKey()}Delegate($name))"
   type is RirStringType && type.nullable -> "if ($name == null) null else $name.cstr.ptr"
   type is RirStringType -> "$name.cstr.ptr"
   // ADR-051: unwrap the opaque pointer via handle.require() which also guards against
@@ -4249,6 +4502,9 @@ private fun buildStubMethod(
   // so the caller can shift the whole block to its actual embedding depth with a single
   // String.prependIndent() call, rather than baking one specific nesting depth into this function.
   val rendered: String = when (val retType = method.returnType) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature reaches a Kotlin renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the Kotlin renderer")
     is RirVoidType -> """
       |$fnKeyword $name($params)$retSuffix {
       |$prelude
@@ -4525,6 +4781,9 @@ private fun buildStubProperty(
   // so it can be shifted under the property declaration with a single String.prependIndent() call,
   // the same composition buildStubMethod above uses for its own fun blocks.
   val getterBlock: String = when (val type = property.type) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature reaches a Kotlin renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the Kotlin renderer")
     is RirVoidType -> error("[nuget] a property cannot have void type")
 
     // ADR-056: "property getter -> as a return (out-pointers)" (Decision, wire-format table) —
@@ -4875,6 +5134,7 @@ private fun nugetKotlinErrorsActual(): String = """
   |
   |import io.github.xxfast.kotlin.native.nuget.runtime.NugetError
   |import io.github.xxfast.kotlin.native.nuget.runtime.awaitForKotlin
+  |import io.github.xxfast.kotlin.native.nuget.runtime.NugetHandles
   |import io.github.xxfast.kotlin.native.nuget.runtime.buildError
   |import io.github.xxfast.kotlin.native.nuget.runtime.flowForKotlin
   |import kotlinx.coroutines.flow.Flow
@@ -4886,6 +5146,14 @@ private fun nugetKotlinErrorsActual(): String = """
   |
   |internal actual fun nugetKotlinError(t: Throwable): COpaquePointer =
   |  StableRef.create(buildError(t)).asCPointer()
+  |
+  |// ADR-158: the counted half of a bridge/delegate ctx (see the `expect` for why it is counted and
+  |// why it must stay paired with the release inside nuget_kotlin_release below).
+  |internal actual fun nugetRetainCtx(value: Any): COpaquePointer = NugetHandles.retain(value)
+  |
+  |internal actual fun nugetReleaseCtx(ctx: COpaquePointer) {
+  |  NugetHandles.release(ctx)
+  |}
   |
   |// ADR-152: one line of delegation to the runtime's awaitForKotlin. `release` is only ever
   |// reached on the cancel-then-complete path, where the coroutine was cancelled before the C#
@@ -5383,6 +5651,19 @@ private fun nugetRuntimeContent(): String = """
   |// visible. Every call site keeps calling nugetKotlinError(t) unchanged.
   |internal expect fun nugetKotlinError(t: Throwable): COpaquePointer
   |
+  |// ADR-158: the ctx StableRef a minted bridge or delegate holds, COUNTED through the same
+  |// NugetHandles.retain/release pair `nuget_live_handles` reports, so a Kotlin object handed INTO
+  |// C# is observable by the leak harness exactly like a C# object handed into Kotlin. Before this,
+  |// the bridge ctx was a raw StableRef.create and every leak row over a Kotlin-implemented
+  |// interface or a Kotlin lambda was measuring nothing. `NugetHandles` lives in the runtime klib,
+  |// which this shared nativeMain file cannot see (ADR-130), hence the same expect/actual seam
+  |// nugetKotlinError uses. Retain and release MUST stay a pair: half of it (a counted mint with an
+  |// uncounted release) makes every such row fail by one handle per crossing, forever.
+  |internal expect fun nugetRetainCtx(value: Any): COpaquePointer
+  |
+  |// The release half, across the same seam and for the same reason.
+  |internal expect fun nugetReleaseCtx(ctx: COpaquePointer)
+  |
   |// ADR-152: the reverse async crossing, across the SAME source-set seam and for the same reason.
   |// `awaitForKotlin` lives in the runtime klib (it owns the cancellable suspension), which is
   |// declared `api` on the PER-TARGET source set, so this
@@ -5462,6 +5743,14 @@ private fun nugetRuntimeContent(): String = """
   |  fun handleOfOrNull(value: Any?, interfaceName: String): COpaquePointer? =
   |    if (value == null) null else handleOf(value, interfaceName)
   |
+  |  // ADR-158: a delegate handle is ALWAYS minted (a Kotlin lambda is never a wrapper), so unlike
+  |  // handleOf there is nothing to distinguish: every handle passed here is a transfer handle this
+  |  // call site owns and frees once the native call returns.
+  |  fun delegateOf(handle: COpaquePointer): COpaquePointer {
+  |    minted.add(NugetObjectHandle(handle))
+  |    return handle
+  |  }
+  |
   |  fun releaseMinted() {
   |    minted.forEach { it.free() }
   |    minted.clear()
@@ -5515,10 +5804,11 @@ private fun nugetRuntimeContent(): String = """
   |  // loses its last root. Offered to every table because the release path is interface-agnostic;
   |  // the ctx guard inside evict() means at most one table owns this ctx, and a table holding a
   |  // NEWER bridge for the same impl is left alone.
-  |  val ref = ctx.asStableRef<Any>()
-  |  val impl: Any = ref.get()
+  |  val impl: Any = ctx.asStableRef<Any>().get()
   |  nugetBridgeTables.value.forEach { it.evict(impl, ctx) }
-  |  ref.dispose()
+  |  // ADR-158: the counted release, the pair of nugetRetainCtx. Was a bare `dispose()`, which left
+  |  // `nuget_live_handles` blind to every Kotlin object living inside a C# bridge or delegate.
+  |  nugetReleaseCtx(ctx)
   |}
 """.trimMargin().trim()
 
@@ -6088,6 +6378,9 @@ private fun interfaceHandleReturnBlock(
   val nullMsg = "$memberQualifiedName returned null, expected a non-null string pointer"
   val nonNullHandleMsg = "$memberQualifiedName returned null, but the C# API annotates it non-null."
   return when (returnType) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature reaches a Kotlin renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the Kotlin renderer")
     is RirVoidType -> """
       |$signature {
       |  val fn = requireNotNull($fnVar) {
@@ -6251,7 +6544,7 @@ private fun interfaceBindingsFileContent(
       add("import $INTERNAL_PKG.nugetKotlinString")
       // ADR-089: the per-interface bridge reuse table beside mint{Iface}Bridge.
       add("import $INTERNAL_PKG.NugetBridgeTable")
-      add("import kotlinx.cinterop.StableRef")
+      add("import $INTERNAL_PKG.nugetRetainCtx")
       add("import kotlinx.cinterop.staticCFunction")
       if (bridgeHasString) add("import kotlinx.cinterop.toKString")
       val hasEnumSlot: Boolean = bridgePlan.slots.any { r ->
@@ -6498,7 +6791,7 @@ private fun kotlinBridgeBlock(
     |  val fn = requireNotNull($objectName.createBridgeFn) {
     |    $failMsg
     |  }
-    |  val ctx: COpaquePointer = StableRef.create(impl).asCPointer()
+    |  val ctx: COpaquePointer = nugetRetainCtx(impl)
     |  val bridge: COpaquePointer = requireNotNull(
     |    fn.invoke(
     |    $mintArgs,
@@ -6726,8 +7019,82 @@ internal fun allDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> {
   // members), the positions that do not ride the shared conversion path.
   val fromCollectionPositions: List<Pair<String, RirDiagnostic>> =
     collectionPositionDiagnostics(rir)
+  // ADR-158: the plugin-side half of the delegate skips. The reader now ADMITS a BCL delegate whose
+  // Invoke shape it can derive, so without this a member the generators still decline would vanish
+  // with no warning at all: the reader's own named skip no longer covers it.
+  val fromDelegatePositions: List<Pair<String, RirDiagnostic>> =
+    delegatePositionDiagnostics(rir)
+  // ADR-158 Decision 9: the bound overload sets a BARE Kotlin lambda cannot call. Not a skip: every
+  // member binds, which is exactly why it needs saying, since the failure is a compile error in the
+  // CONSUMER's own source with nothing in the build log to explain it.
+  val fromDelegateOverloads: List<Pair<String, RirDiagnostic>> =
+    rir.assemblies.flatMap { assembly ->
+      assembly.namespaces.flatMap { namespace ->
+        namespace.types.filterIsInstance<RirClass>().flatMap { cls ->
+          delegateOverloadAmbiguityDiagnostics(
+            cls, boundTypes, boundInterfaceTypes(rir), genericDefs, structs,
+          ).map { assembly.packageId to it }
+        }
+      }
+    }
   return fromReader + fromCollisions + fromArityLimits + fromAmbiguousGenericConstructors +
-      fromDeferredAsync + fromCollapsedOverloads + fromCollectionPositions
+      fromDeferredAsync + fromCollapsedOverloads + fromCollectionPositions +
+      fromDelegatePositions + fromDelegateOverloads
+}
+
+// ADR-158 Decision 9: one note per bound overload SET (not per member: the ambiguity is a property
+// of the set, and the note names both members in its reason) whose members differ only by
+// delegate shape. Computed over the registrables that SURVIVED the shared filter and the ADR-057
+// collapse, so it can never name a member that does not bind: if one of the pair were dropped, the
+// survivor is callable with a bare lambda and there is nothing to warn about.
+//
+// The workarounds are quoted verbatim because both were verified to resolve by spike (Kotlin
+// 2.4.10) while every bare-lambda form failed, including `{ }`.
+internal fun delegateOverloadAmbiguityDiagnostics(
+  cls: RirClass,
+  boundHandleTypes: Set<RirTypeKey>,
+  boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
+  boundGenericClassDefinitions: Map<RirTypeKey, RirClass> = emptyMap(),
+  structs: Map<RirTypeKey, RirStruct> = emptyMap(),
+): List<RirDiagnostic> {
+  val bound: List<RirMethod> = bridgeableRegistrables(
+    cls, boundHandleTypes, structs, boundInterfaceTypes, boundGenericClassDefinitions,
+  ).filterIsInstance<RirRegistrable.Method>().map { it.method }
+
+  return bound
+    .groupBy { Triple(it.name.toMethodCamelCase(), it.isStatic, it.parameters.size) }
+    .values
+    .filter { set -> set.size > 1 && differsOnlyByDelegateShape(set) }
+    .map { set ->
+      val signatures: String = set.joinToString(", ") { method ->
+        "`${method.name}(${method.parameters.joinToString(", ") { declKotlinType(it.type) }})`"
+      }
+      RirDiagnostic(
+        kind = RirDiagnosticKind.INFO_DELEGATE_OVERLOAD_AMBIGUITY,
+        typeName = cls.name,
+        memberName = set.first().name,
+        memberSignature = set.first().identity(),
+        reason = "these overloads differ only by delegate shape ($signatures), and all of them " +
+            "bind. A BARE Kotlin lambda cannot call them: it resolves against every candidate, " +
+            "so the call site is an `Overload resolution ambiguity` error",
+        hint = "Pass a typed function value (`val pick: () -> Int = { 1 }; run(pick)`) or an " +
+            "anonymous function (`run(fun(): Int = 1)`); both pick one overload.",
+      )
+    }
+}
+
+// ADR-158 Decision 9: every non-delegate position agrees and at least one delegate position
+// differs. A set where two positions differ (`Apply(int, Func<int,int>)` beside
+// `Apply(string, Action)`) is resolvable on the other argument and must not be named, which is
+// what makes this a per-position comparison rather than "the set contains a delegate".
+private fun differsOnlyByDelegateShape(set: List<RirMethod>): Boolean {
+  val positions: List<List<RirTypeRef>> = set.map { method -> method.parameters.map { it.type } }
+  // Compared by the KOTLIN spelling, which is the thing overload resolution actually sees: two C#
+  // types that render the same Kotlin type are not a difference a call site could resolve on.
+  val differing: List<Int> = positions.first().indices.filter { i ->
+    positions.map { declKotlinType(it[i]) }.distinct().size > 1
+  }
+  return differing.isNotEmpty() && differing.all { i -> positions.all { it[i] is RirDelegateType } }
 }
 
 // ADR-155 Q8: one skipped_overload_set per DROPPED MEMBER (never one per set: a user reading the

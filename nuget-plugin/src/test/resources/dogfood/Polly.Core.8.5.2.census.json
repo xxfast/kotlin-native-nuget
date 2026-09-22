@@ -32,25 +32,26 @@
   },
   "members": {
     "constructor": { "seen": 21, "bound": 20 },
-    "instanceMethod": { "seen": 6, "bound": 6 },
-    "property": { "seen": 17, "bound": 16 },
-    "readerSkippedMember": { "seen": 109, "bound": 0 },
+    "instanceMethod": { "seen": 8, "bound": 8 },
+    "property": { "seen": 18, "bound": 16 },
+    "readerSkippedMember": { "seen": 114, "bound": 0 },
     "staticMethod": { "seen": 2, "bound": 2 }
   },
   "diagnostics": {
     "info_async_not_yet_mapped": 2,
-    "info_cancellation_token_not_yet_mapped": 12,
+    "info_cancellation_token_not_yet_mapped": 4,
     "info_uninstantiated_generic_type": 15,
     "skipped_collection_element": 1,
+    "skipped_delegate_position": 1,
+    "skipped_delegate_signature": 28,
     "skipped_generic_type_argument": 9,
     "skipped_indexer": 5,
     "skipped_open_generic": 14,
-    "skipped_unbound_generic_instantiation": 28,
-    "skipped_unbound_type_reference": 17,
+    "skipped_unbound_generic_instantiation": 6,
+    "skipped_unbound_type_reference": 16,
     "skipped_unsupported_struct": 35
   },
   "unboundTypeReferences": {
-    "System.Action": 1,
     "System.Exception": 5,
     "System.TimeProvider": 2,
     "System.TimeSpan": 9
@@ -58,7 +59,7 @@
   "collapsedOverloads": {
     "sets": 0,
     "membersDropped": 0,
-    "bridgeableMethods": 8,
+    "bridgeableMethods": 10,
     "examples": []
   },
   "errors": []

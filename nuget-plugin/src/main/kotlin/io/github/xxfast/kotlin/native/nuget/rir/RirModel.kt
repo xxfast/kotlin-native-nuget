@@ -359,6 +359,32 @@ data class RirCollectionType(
   val nullable: Boolean = false,
 ) : RirTypeRef
 
+// ADR-158: a C# delegate in a signature (`Func<int,int>`, `Action<string?>`, `Predicate<T>`, a
+// package-declared `delegate`), which binds as a Kotlin function type. First-class rather than
+// folded into [RirGenericInstanceType] because the non-generic shapes (`System.Action`, a custom
+// `delegate int Transform(int)`) have no type arguments at all, and because the events design needs
+// a delegate type ref it can point an `add_`/`remove_` pair at.
+//
+// [definition] is the CLR full name (`System.Func`2`, `Test.Workshop.Transform`): the C# shim has
+// to spell the DECLARED delegate type when it constructs the instance, for the same
+// overload-resolution reason ADR-155 keeps a collection's definition.
+// [typeArguments] spells the closed C# type and is empty for a non-generic delegate.
+// [parameters]/[returnType] are the `Invoke` signature AFTER type-argument substitution and AFTER
+// nullability has been applied to [typeArguments]: the reader derives them last, because a
+// generator reads these and not the arguments, so deriving them first binds `Action<string?>` as
+// `(String) -> Unit` with no diagnostic anywhere (ADR-158, finding 7a trap 2).
+// [nullable] is this delegate REFERENCE's own annotation (`Action? onDone`, a nullable Kotlin
+// function type), independent of its arguments' (`Action<string?>`).
+@Serializable
+@SerialName("delegate")
+data class RirDelegateType(
+  val definition: String,
+  val typeArguments: List<RirTypeRef> = emptyList(),
+  val parameters: List<RirTypeRef> = emptyList(),
+  val returnType: RirTypeRef = RirVoidType,
+  val nullable: Boolean = false,
+) : RirTypeRef
+
 @Serializable
 data class RirDiagnostic(
   val kind: RirDiagnosticKind,
@@ -528,6 +554,29 @@ enum class RirDiagnosticKind {
   // definition when the element is the thing the bridge cannot carry.
   @SerialName("skipped_collection_element")
   SKIPPED_COLLECTION_ELEMENT,
+
+  // ADR-158: a member that takes or returns a C# delegate (`Func<>`, `Action<>`, `Predicate<T>`, a
+  // package-declared `delegate`). Named, because the two diagnostics these used to get both blamed
+  // the wrong thing: `skipped_unbound_type_reference` says to include System.Private.CoreLib in the
+  // extraction run, and `skipped_unbound_generic_instantiation` says to expose a BCL collection.
+  @SerialName("skipped_delegate_signature")
+  SKIPPED_DELEGATE_SIGNATURE,
+
+  // ADR-158: a delegate the READER admitted (it carries a derivable Invoke shape inside the v1
+  // vocabulary) that the GENERATORS still decline: a return or property position, a struct or
+  // bound-interface or generic-class member, or a delegate nested in a collection. Plugin-derived,
+  // the mirror of SKIPPED_COLLECTION_POSITION, so no admitted-then-dropped member is silent.
+  @SerialName("skipped_delegate_position")
+  SKIPPED_DELEGATE_POSITION,
+
+  // ADR-158 Decision 9: a bound overload set whose members differ ONLY by delegate shape
+  // (`Run(Action)` beside `Run(Func<int>)`, the `Task.Run` shape). Every member BINDS; the note
+  // exists because a BARE Kotlin lambda never resolves against such a pair (verified by spike on
+  // Kotlin 2.4.10: `Overload resolution ambiguity`, in both directions, including the `{ }` form),
+  // while a typed function value or an anonymous function does. Not a skip: dropping the set would
+  // delete members that stay perfectly callable.
+  @SerialName("info_delegate_overload_ambiguity")
+  INFO_DELEGATE_OVERLOAD_AMBIGUITY,
 
   // ADR-155: an array (`T[]`). Deferred with the rest of the array work (`byte[]` → `ByteArray`
   // wants the ADR-151 blit, not slots). Today such a member vanishes with no diagnostic at all.

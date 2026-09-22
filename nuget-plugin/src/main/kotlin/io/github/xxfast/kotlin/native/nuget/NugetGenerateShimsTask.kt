@@ -9,6 +9,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirCollectionKind
 import io.github.xxfast.kotlin.native.nuget.rir.RirCollectionType
 import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
+import io.github.xxfast.kotlin.native.nuget.rir.RirDelegateType
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
 import io.github.xxfast.kotlin.native.nuget.rir.RirGenericInstanceType
@@ -46,6 +47,9 @@ import io.github.xxfast.kotlin.native.nuget.rir.contractHash
 import io.github.xxfast.kotlin.native.nuget.rir.fnv1a64
 import io.github.xxfast.kotlin.native.nuget.rir.isNullable
 import io.github.xxfast.kotlin.native.nuget.rir.isHandleBacked
+import io.github.xxfast.kotlin.native.nuget.rir.KotlinDelegatePlan
+import io.github.xxfast.kotlin.native.nuget.rir.delegateContractHash
+import io.github.xxfast.kotlin.native.nuget.rir.delegatePlans
 import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgeContractHash
 import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgePlan
 import io.github.xxfast.kotlin.native.nuget.rir.mapSlots
@@ -195,6 +199,7 @@ fun generateCSharpShims(
                 exportName = exportName,
                 nativeLibraryName = nativeLibraryName,
                 structs = structs,
+                errorNamespace = errorNamespace,
               ),
             )
           )
@@ -267,6 +272,8 @@ fun generateCSharpShims(
 // "two non-obvious blittability corrections"); every other primitive crosses directly.
 // ADR-051: handles also cross as IntPtr (GCHandle.ToIntPtr).
 private fun csAbiType(type: RirTypeRef): String = when (type) {
+  // ADR-158: a delegate crosses as ONE transfer GCHandle, wire-identical to an interface.
+  is RirDelegateType -> "IntPtr"
   is RirVoidType -> "void"
   is RirStringType -> "IntPtr"
   is RirObjectHandleType -> "IntPtr"
@@ -311,6 +318,18 @@ private fun csAbiType(type: RirTypeRef): String = when (type) {
 // The real, natural C# type for the actual method call/return (as opposed to the ABI-level type
 // that crosses [UnmanagedCallersOnly] — see csAbiType above).
 private fun csNativeType(type: RirTypeRef): String = when (type) {
+  // ADR-158: the DECLARED closed delegate type, spelled globally qualified so a package type named
+  // `Func` cannot shadow it, and with each argument's own nullability, because the factory
+  // constructs exactly this type and C# overload resolution picks the overload the thunk was made
+  // for. A non-generic delegate (`System.Action`) has no argument list at all.
+  is RirDelegateType -> {
+    val base = "global::${type.definition.substringBefore('`')}"
+    if (type.typeArguments.isEmpty()) base else "$base<${
+      type.typeArguments.joinToString(", ") {
+        csNativeType(it) + if (it.isNullable) "?" else ""
+      }
+    }>"
+  }
   is RirVoidType -> "void"
   is RirStringType -> "string"
   // ADR-051: the natural C# type for a handle is the simple type name (e.g. Template).
@@ -457,6 +476,9 @@ private fun csGenericArgumentType(type: RirTypeRef): String =
 // not in the v1 struct component vocabulary anyway (ADR-056), so callBodyLines' RirObjectHandleType
 // branch stays hand-written.
 private fun csReturnConversion(type: RirTypeRef, valueExpr: String): String = when (type) {
+  // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+  // member with a delegate anywhere in its signature is ever handed to a shim renderer.
+  is RirDelegateType -> error("[nuget] a delegate type must not reach the C# shim renderer")
   is RirVoidType -> error("[nuget] void has no return conversion")
   is RirStringType -> "Marshal.StringToCoTaskMemUTF8($valueExpr)"
   is RirObjectHandleType -> error(
@@ -545,6 +567,17 @@ private fun thunkParamName(p: RirParameter): String = when (p.type) {
 // ADR-053: a nullable-annotated string parameter drops the null-forgiving `!` — the parameter may
 // legitimately be null, and Marshal.PtrToStringUTF8 already returns `string?`.
 private fun paramConversion(p: RirParameter): String = when (p.type) {
+  // ADR-158: the transfer handle Kotlin minted, unpacked to the real delegate instance the factory
+  // built. A nullable delegate parameter carries `IntPtr.Zero` for `null`, the same encoding a null
+  // collection uses, so the null arm is spelled out rather than dereferenced.
+  is RirDelegateType -> {
+    val cast = "(${csNativeType(p.type)})GCHandle.FromIntPtr(${thunkParamName(p)}).Target!"
+    if (p.type.nullable) {
+      "${thunkParamName(p)} == IntPtr.Zero ? null : $cast"
+    } else {
+      cast
+    }
+  }
   is RirStringType ->
     if (p.type.nullable) "Marshal.PtrToStringUTF8(${thunkParamName(p)})"
     else "Marshal.PtrToStringUTF8(${thunkParamName(p)})!"
@@ -1159,6 +1192,9 @@ private fun registrationFileContent(
   exportName: String,
   nativeLibraryName: String,
   structs: Map<RirTypeKey, RirStruct>,
+  // ADR-158: the forward bindings namespace the delegate holder throws its mapped Kotlin exception
+  // from, exactly as an interface bridge member does.
+  errorNamespace: String = "",
 ): String {
   // A shim renders inside `namespace $namespaceName`, so an enum declared in any other namespace
   // (a C# enum in `Test.Enums` referenced by a class in `Test.Text`, say) is out of scope for
@@ -1217,10 +1253,23 @@ private fun registrationFileContent(
   // contractHash() function NugetGenerateBindingsTask calls, so within one build the two
   // generated sides can never disagree on either value.
   // ADR-152: slots, not registrables, an async method occupies two of them (Begin, End).
-  val slotCount: Int = registrables.slotCount()
-  val hash: Long = contractHash(cls, registrables, structs)
+  // ADR-158: one factory slot per distinct delegate shape this type's members take, appended after
+  // the member slots in shape-key order and folded into the contract hash, off the SAME shared
+  // delegatePlans call the Kotlin generator makes.
+  val plans: List<KotlinDelegatePlan> = delegatePlans(registrables, cls.name)
+  val slotCount: Int = registrables.slotCount() + plans.size
+  val hash: Long = delegateContractHash(contractHash(cls, registrables, structs), plans)
   val qualifiedType: String = "$namespaceName.${cls.name}"
   val slotWord: String = if (slotCount == 1) "slot" else "slots"
+  val delegateImportParams: String = plans.joinToString("") { plan ->
+    ", IntPtr create${plan.shapeKey}DelegatePtr"
+  }
+  val delegateInitArgs: List<String> = plans.map { plan ->
+    "(IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr>)(&Create${plan.shapeKey}Delegate)"
+  }
+  val delegateHolders: String = plans.joinToString("\n\n") { plan ->
+    kotlinDelegateCsharp(plan, errorNamespace)
+  }.let { if (it.isEmpty()) "" else "\n\n$it" }
 
   // ADR-052: rendered directly off the shared bridgeableRegistrables() ordering — ctorPtr first
   // (if any), then method pointers — matching NugetGenerateBindingsTask's register signature.
@@ -1238,7 +1287,8 @@ private fun registrationFileContent(
       is RirRegistrable.PropertySetter -> "IntPtr ${r.property.name.toMethodCamelCase()}SetterPtr"
     }
   }.joinToString(", ")
-  val dllImportParams: String = "int slotCount, long contractHash, $registrableParams"
+  val dllImportParams: String =
+    "int slotCount, long contractHash, $registrableParams$delegateImportParams"
 
   val slotIntroArgs: List<String> = listOf("$slotCount", "${hash}L")
   val moduleInitArgs: String = (slotIntroArgs + registrables.mapSlots { r, role ->
@@ -1330,7 +1380,7 @@ private fun registrationFileContent(
         "(IntPtr)(delegate* unmanaged[Cdecl]<$allParamTypes, void>)(&${r.property.name}_Set_Thunk)"
       }
     }
-  }).joinToString(",\n                    ")
+  } + delegateInitArgs).joinToString(",\n                    ")
 
   val thunks: String = registrables.mapSlots { r, role ->
     when (r) {
@@ -1389,7 +1439,7 @@ private fun registrationFileContent(
     |            NugetTrace.Write("register ok    $qualifiedType");
     |        }
     |
-    |$thunks
+    |$thunks$delegateHolders
     |    }
     |}
   """.trimMargin()
@@ -1578,6 +1628,9 @@ private fun buildInterfaceThunkMethod(iface: RirInterface, method: RirMethod): S
   val retAbiType: String = csAbiType(method.returnType)
 
   val callBodyLines: List<String> = when (val retType: RirTypeRef = method.returnType) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature is ever handed to a shim renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the C# shim renderer")
     is RirVoidType -> listOf("$callExpr;")
     is RirStringType -> listOf(
       "${if (retType.isNullable) "string?" else "string"} result = $callExpr;",
@@ -1641,6 +1694,9 @@ private fun buildInterfacePropertyGetterThunk(iface: RirInterface, property: Rir
   val retAbiType: String = csAbiType(property.type)
 
   val bodyLines: List<String> = when (val type: RirTypeRef = property.type) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature is ever handed to a shim renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the C# shim renderer")
     is RirVoidType -> error("[nuget] a property cannot have void type")
     is RirStringType -> listOf(
       "${if (type.isNullable) "string?" else "string"} result = $getExpr;",
@@ -1774,6 +1830,9 @@ private fun returnBodyLines(
   outArgs: List<AbiArg>,
   structs: Map<RirTypeKey, RirStruct>,
 ): List<String> = when (val retType = returnType) {
+  // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+  // member with a delegate anywhere in its signature is ever handed to a shim renderer.
+  is RirDelegateType -> error("[nuget] a delegate type must not reach the C# shim renderer")
   is RirVoidType -> listOf("$callExpr;")
 
   // ADR-053: a nullable-annotated string return declares its local as `string?` — the shim's
@@ -2046,6 +2105,9 @@ private fun buildPropertyGetterThunkMethod(
   val retAbiType: String = csAbiType(abiRetType)
 
   val bodyLines: List<String> = when (val type = property.type) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature is ever handed to a shim renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the C# shim renderer")
     is RirVoidType -> error("[nuget] a property cannot have void type")
 
     // ADR-056: "property getter -> as a return (out-pointers)" — same shape as buildThunkMethod's
@@ -2377,6 +2439,9 @@ private fun buildStructMethodThunk(
   }
 
   val callBodyLines: List<String> = when (val retType: RirTypeRef = method.returnType) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature is ever handed to a shim renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the C# shim renderer")
     is RirVoidType -> listOf("$callExpr;")
     is RirStringType -> listOf(
       "string result = $callExpr;",
@@ -2454,6 +2519,9 @@ private fun buildStructPropertyGetterThunk(
   val getExpr: String = "${structReceiverReconstruction(struct, structs)}.${property.name}"
 
   val bodyLines: List<String> = when (val type: RirTypeRef = property.type) {
+    // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
+    // member with a delegate anywhere in its signature is ever handed to a shim renderer.
+    is RirDelegateType -> error("[nuget] a delegate type must not reach the C# shim renderer")
     is RirVoidType -> error("[nuget] a property cannot have void type")
     is RirStringType -> listOf(
       "string result = $getExpr;",
@@ -3190,6 +3258,50 @@ abstract class NugetGenerateShimsTask : DefaultTask() {
 // thunk Kotlin invokes to build one and the identity-token probe Kotlin's return path uses to
 // recover the original Kotlin object. Slot order comes from the SAME KotlinBridgePlan the Kotlin
 // generator projects, so field i here is `staticCFunction` i there.
+// ADR-158: the C# half of one delegate shape. A holder object owns the Kotlin ctx (a
+// KotlinRefHandle SafeHandle, so .NET collection of the DELEGATE releases the Kotlin lambda) plus
+// the single slot pointer, and its `Invoke` member is rendered by the SAME bridgeMethodMember the
+// ADR-085 interface bridge uses, so the error channel, the string marshalling and the slot
+// argument order cannot drift between the two. The factory returns a real delegate over
+// `holder.Invoke`: a closed delegate over an instance method is `ldftn` + `newobj`, no reflection,
+// so it is AOT and trimmer safe, and the delegate strongly roots the holder (spike-verified,
+// 2026-09-21).
+private fun kotlinDelegateCsharp(plan: KotlinDelegatePlan, errorNamespace: String): String {
+  val shape: String = plan.shapeKey
+  val holder = "${shape}Holder"
+  val slotType: String = slotFnPtrType(plan.invoke)
+  val member: String = bridgeMethodMember(plan.invoke, errorNamespace)
+  return """
+    |        // ADR-158: a Kotlin lambda, seen by C# as a real ${plan.delegate.definition}.
+    |        private sealed unsafe class $holder : INugetKotlinBridge
+    |        {
+    |            private readonly KotlinRefHandle _ctx;
+    |            private readonly $slotType ${slotFieldName(plan.invoke)};
+    |
+    |            internal $holder(IntPtr invokePtr, IntPtr ctx)
+    |            {
+    |                ${slotFieldName(plan.invoke)} = ($slotType)invokePtr;
+    |                _ctx = new KotlinRefHandle(ctx);
+    |            }
+    |
+    |            // The Kotlin StableRef pointer, the identity token Kotlin's reuse table probes for.
+    |            public IntPtr NugetToken => _ctx.DangerousGetHandle();
+    |
+    |$member
+    |        }
+    |
+    |        // Transfer handle: the Kotlin call site that minted this frees the GCHandle once the
+    |        // native call returns. If C# STORED the delegate, its own reference keeps the delegate
+    |        // (and through it the holder, and through the holder the Kotlin lambda) alive; if not,
+    |        // the .NET GC collects it and KotlinRefHandle releases the Kotlin StableRef.
+    |        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    |        private static unsafe IntPtr Create${shape}Delegate(IntPtr invokePtr, IntPtr ctx) =>
+    |            GCHandle.ToIntPtr(GCHandle.Alloc(
+    |                new ${csNativeType(plan.delegate.copy(nullable = false))}(
+    |                    new $holder(invokePtr, ctx).Invoke)));
+  """.trimMargin()
+}
+
 private fun kotlinBridgeCsharp(plan: KotlinBridgePlan, errorNamespace: String): String {
   val iface: String = plan.iface.name
   val bridge = "${iface}Bridge"

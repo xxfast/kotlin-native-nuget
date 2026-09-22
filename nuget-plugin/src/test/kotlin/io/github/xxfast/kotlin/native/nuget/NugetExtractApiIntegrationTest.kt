@@ -481,6 +481,199 @@ class NugetExtractApiIntegrationTest {
     }
   }
 
+  // ADR-158, first commit: a package-declared `delegate` stops being extracted as an ordinary
+  // class, and every delegate-shaped member becomes ONE named skip instead of two misleading ones.
+  // Verified against the shipped reader before the fix (spike a, 2026-09-21): `Transform` came out
+  // as `{"kind":"class","name":"Transform"}` with an `Invoke` method and an empty constructor list,
+  // `ApplyNamed` bound with an unconstructible handle parameter, `Apply`/`Shout` were
+  // `skipped_unbound_generic_instantiation` (hint: expose a BCL collection) and `Act` was
+  // `skipped_unbound_type_reference` (hint: include System.Private.CoreLib).
+  @Test
+  fun `metadata reader carries a delegate as a delegate and never as a class`() {
+    val dotnet: String = findDotnet() ?: return
+
+    val source: String = """
+      using System;
+
+      namespace Probe.Delegates;
+
+      public delegate int Transform(int value);
+
+      public delegate TOut Transformer<TIn, TOut>(TIn value);
+
+      public delegate void Sink(string? line);
+
+      public delegate bool TryParseNamed(string text, out int value);
+
+      public delegate System.Threading.Tasks.Task<int> LaterNamed();
+
+      public sealed class Workbench
+      {
+          public void Pour(Sink sink) { sink(null); }
+          public bool Parse(TryParseNamed parse) => parse("1", out _);
+          public System.Threading.Tasks.Task<int> Later(LaterNamed work) => work();
+          public int Apply(int seed, Func<int, int> step) => step(seed);
+          public void Shout(Action<string?> sink) { sink("Oreo"); }
+          public bool AnyLong(Predicate<string> test) => test("Oreo");
+          public string Act(Action act) { act(); return "ran"; }
+          public int ApplyNamed(int seed, Transform step) => step(seed);
+          public int ApplyGeneric(int seed, Transformer<int, int> step) => step(seed);
+          public Transform MakeDoubler() => value => value * 2;
+          public int Plain(int seed) => seed + 1;
+          public string Maybe(Func<int, int>? step) => step is null ? "none" : "some";
+          public int Sum5(Func<int, int, int, int, int, int> add) => add(1, 2, 3, 4, 5);
+          public System.Threading.Tasks.Task<int> LaterAsync(
+              Func<System.Threading.Tasks.Task<int>> work) => work();
+      }
+    """.trimIndent()
+
+    val dll: File = compileFixture(dotnet, source, "DelegateReaderFixture")
+    val toolDir: File = Files.createTempDirectory("NugetMetadataReader-delegate-fixture").toFile()
+    unpackMetadataReader(toolDir, javaClass.classLoader)
+    val root: JsonObject = Json.parseToJsonElement(
+      runMetadataReader(dotnet, toolDir, mapOf("DelegateFixture" to listOf(dll.absolutePath))),
+    ).jsonObject
+
+    val types: List<String> = root.getValue("assemblies").jsonArray.single().jsonObject
+      .getValue("namespaces").jsonArray.single().jsonObject
+      .getValue("types").jsonArray.map { it.jsonObject.getValue("name").jsonPrimitive.content }
+    assertEquals(
+      listOf("Workbench"),
+      types,
+      "a delegate TypeDef is a sealed class in metadata, but it is not a bindable type: neither " +
+          "`Transform` nor the generic `Transformer`2` may reach the RIR",
+    )
+
+    val workbench: JsonObject = root.type("Probe.Delegates", "Workbench")
+    val methods: List<JsonObject> = workbench.getValue("methods").jsonArray.map { it.jsonObject }
+    fun method(name: String): JsonObject =
+      methods.single { it.getValue("name").jsonPrimitive.content == name }
+    fun delegateOf(member: String, parameter: Int = 0): JsonObject = method(member)
+      .getValue("parameters").jsonArray[parameter].jsonObject.getValue("type").jsonObject
+    fun kind(o: JsonObject): String = o.getValue("kind").jsonPrimitive.content
+    fun nullable(o: JsonObject): Boolean = o["nullable"]?.jsonPrimitive?.boolean ?: false
+    fun list(o: JsonObject, field: String): List<JsonObject> =
+      o[field]?.jsonArray?.map { it.jsonObject } ?: emptyList()
+
+    // A BCL delegate whose Invoke shape the reader can derive positionally reaches the RIR as a
+    // first-class `delegate` type ref. The three routes: a generic TypeSpec (Apply), a non-generic
+    // TypeReference (Act), and a name-table shape that is neither Func nor Action (AnyLong).
+    assertEquals("delegate", kind(delegateOf("Apply", parameter = 1)))
+    assertEquals(
+      "System.Func`2",
+      delegateOf("Apply", 1).getValue("definition").jsonPrimitive.content,
+      "the C# holder factory spells the DECLARED delegate type, so it must survive",
+    )
+    val applyParam: JsonObject = list(delegateOf("Apply", 1), "parameters").single()
+    assertEquals("int", applyParam.getValue("name").jsonPrimitive.content)
+    val applyReturn: JsonObject = delegateOf("Apply", 1).getValue("returnType").jsonObject
+    assertEquals("int", applyReturn.getValue("name").jsonPrimitive.content)
+    assertEquals("System.Action", delegateOf("Act").getValue("definition").jsonPrimitive.content)
+    assertEquals(emptyList(), list(delegateOf("Act"), "parameters"))
+    assertEquals("void", kind(delegateOf("Act").getValue("returnType").jsonObject))
+    assertEquals(
+      "System.Predicate`1",
+      delegateOf("AnyLong").getValue("definition").jsonPrimitive.content,
+    )
+    val anyLongReturn: JsonObject = delegateOf("AnyLong").getValue("returnType").jsonObject
+    assertEquals(
+      "bool",
+      anyLongReturn.getValue("name").jsonPrimitive.content,
+      "Predicate<T>'s bool return is synthetic: it is not a type argument",
+    )
+
+    // ADR-053/ADR-158 finding 7a. `Action<string?>` is [1, 2] pre-order with the delegate node
+    // first, and the bytes land on the type ARGUMENTS: the derived `parameters` must carry the
+    // annotation too, because that is the list a generator reads.
+    assertEquals(false, nullable(delegateOf("Shout")))
+    assertEquals(true, nullable(list(delegateOf("Shout"), "typeArguments").single()))
+    assertEquals(
+      true,
+      nullable(list(delegateOf("Shout"), "parameters").single()),
+      "deriving parameters BEFORE the nullability walk binds `Action<string?>` as `(String) -> " +
+          "Unit` with no diagnostic anywhere",
+    )
+    // The other encoding: every node agrees, so Roslyn writes no per-parameter attribute at all and
+    // the information lives in a method-level NullableContextAttribute(2).
+    assertEquals(
+      true,
+      nullable(delegateOf("Maybe")),
+      "`Func<int,int>? step` is a nullable DELEGATE carried by a context attribute",
+    )
+
+    // ADR-158 step 4: a PACKAGE-DECLARED delegate, whose shape comes from its own `Invoke`
+    // MethodDef rather than from type arguments (it has none), and whose definition is the CLR full
+    // name the C# holder factory constructs and the Kotlin typealias is named after.
+    assertEquals("delegate", kind(delegateOf("ApplyNamed", parameter = 1)))
+    assertEquals(
+      "Probe.Delegates.Transform",
+      delegateOf("ApplyNamed", 1).getValue("definition").jsonPrimitive.content,
+    )
+    assertEquals(
+      emptyList(),
+      list(delegateOf("ApplyNamed", 1), "typeArguments"),
+      "a non-generic custom delegate has no type arguments at all: the Invoke MethodDef is the " +
+          "only source of its shape",
+    )
+    val applyNamedParam: JsonObject = list(delegateOf("ApplyNamed", 1), "parameters").single()
+    assertEquals("int", applyNamedParam.getValue("name").jsonPrimitive.content)
+    val applyNamedReturn: JsonObject = delegateOf("ApplyNamed", 1).getValue("returnType").jsonObject
+    assertEquals("int", applyNamedReturn.getValue("name").jsonPrimitive.content)
+
+    // The custom route's own nullability trap: the USING parameter's NullableAttribute annotates
+    // the delegate REFERENCE (one node), so a `string?` INVOKE parameter can only come from the
+    // Invoke MethodDef's own rows, resolved with the delegate TypeDef as the type tier. Skipping
+    // that resolution is silent: `Sink` would bind as `(String) -> Unit`.
+    assertEquals("delegate", kind(delegateOf("Pour")))
+    assertEquals("void", kind(delegateOf("Pour").getValue("returnType").jsonObject))
+    assertEquals(
+      true,
+      nullable(list(delegateOf("Pour"), "parameters").single()),
+      "`delegate void Sink(string? line)` carries its nullability on its own Invoke parameter row",
+    )
+
+    val diagnostics: List<JsonObject> = root.getValue("assemblies").jsonArray.single().jsonObject
+      .getValue("diagnostics").jsonArray.map { it.jsonObject }
+    fun diagnosedKinds(member: String): List<String> = diagnostics
+      .filter { it.getValue("memberName").jsonPrimitive.content == member }
+      .map { it.getValue("kind").jsonPrimitive.content }
+
+    // A delegate RETURN is refused by the PLUGIN's shared filter, not by the reader, exactly as a
+    // BCL delegate return is: the reader's job is to carry the shape, and a position rule that
+    // lived in two places would drift. So `MakeDoubler` reaches the RIR with a delegate return and
+    // carries no reader diagnostic (`delegatePositionDiagnostics` names it later).
+    assertEquals("delegate", kind(method("MakeDoubler").getValue("returnType").jsonObject))
+    assertEquals(emptyList(), diagnosedKinds("MakeDoubler"))
+
+    // Still named skips, from the reader: a GENERIC custom delegate (which must not become an
+    // ADR-072 generic instance), an ASYNC delegate in either spelling (a BCL `Func<Task<int>>` and
+    // a package-declared one), an arity above the v1 ceiling of 4, and a custom delegate with an
+    // `out` parameter. The last two are the custom route's own vocabulary guards: `out int`
+    // decodes to a byref with no type ref at all, and a `Task<int>` Invoke return is outside the
+    // slot vocabulary.
+    listOf("ApplyGeneric", "LaterAsync", "Sum5", "Parse", "Later").forEach { member ->
+      assertEquals(
+        listOf("skipped_delegate_signature"),
+        diagnosedKinds(member),
+        "`$member` must carry exactly one delegate-shaped diagnostic",
+      )
+      assertTrue(
+        methods.none { it.getValue("name").jsonPrimitive.content == member },
+        "`$member` must not bind",
+      )
+    }
+
+    // `Invoke`, `BeginInvoke` and `EndInvoke` are never extracted, so the two noise diagnostics
+    // `BeginInvoke`/`EndInvoke` produced (AsyncCallback, IAsyncResult) are gone with them.
+    assertTrue(
+      diagnostics.none {
+        it.getValue("memberName").jsonPrimitive.content in
+            setOf("Invoke", "BeginInvoke", "EndInvoke")
+      },
+      "a delegate TypeDef must never enter member extraction: $diagnostics",
+    )
+  }
+
   @Test
   fun `metadata reader maps Task returns to an async method and skips the rest`() {
     val dotnet: String = findDotnet() ?: return
