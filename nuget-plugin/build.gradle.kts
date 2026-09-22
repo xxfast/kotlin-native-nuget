@@ -78,7 +78,36 @@ tasks.processResources {
 }
 
 tasks.test {
-  useJUnitPlatform()
+  // The reverse dogfooding census restores nine real packages from nuget.org. A feed outage
+  // must never turn the ordinary gate (and every PR's matrix) red, so it is tagged out of
+  // `test` and lives in `dogfoodCensus` below. The PURE half (RirCensusTest) is untagged and
+  // runs here.
+  useJUnitPlatform { excludeTags("dogfood") }
+}
+
+// scripts/verify-dogfood.sh runs this. `--update` there maps to -Pdogfood.update=true, which
+// rewrites every golden in place: the goldens live in the SOURCE tree, not on the test
+// classpath, because a classpath copy under build/ would let an update write into the void.
+tasks.register<Test>("dogfoodCensus") {
+  group = "verification"
+  description =
+    "Runs the real reverse pipeline over nine pinned published NuGet packages and compares " +
+        "the per-package census against its committed golden."
+  testClassesDirs = sourceSets.test.get().output.classesDirs
+  classpath = sourceSets.test.get().runtimeClasspath
+  useJUnitPlatform { includeTags("dogfood") }
+  systemProperty(
+    "dogfood.goldenDir",
+    project.file("src/test/resources/dogfood").absolutePath,
+  )
+  systemProperty(
+    "dogfood.update",
+    project.findProperty("dogfood.update")?.toString() ?: "false",
+  )
+  // Every run reaches the network on a cold NuGet cache and the goldens are exact, so caching a
+  // pass would hide upstream drift the weekly schedule exists to catch.
+  outputs.upToDateWhen { false }
+  testLogging { showStandardStreams = true }
 }
 
 gradlePlugin {

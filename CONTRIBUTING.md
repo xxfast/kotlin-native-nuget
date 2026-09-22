@@ -22,6 +22,23 @@ generator is correct *given* its input; it proves nothing about whether the read
 input. Never quote a result you did not run, and never hand-edit generated output or copy files into
 `~/.nuget/packages/` to shortcut a rebuild.
 
+## Real-package dogfooding census
+
+`scripts/verify-dogfood.sh` runs the real plugin (restore, the metadata reader, `parseReverseIr`, both
+generators) over nine pinned published NuGet packages and compares the result against the committed
+goldens in `nuget-plugin/src/test/resources/dogfood/*.census.json`. It is deliberately **not** part of
+`scripts/verify.sh`: it reaches nuget.org, and a feed outage must not turn the local gate or a PR red.
+The `dogfood` CI job runs it path-filtered on PRs that touch the reader or the reverse pipeline, and on
+a weekly schedule; it is not a required check.
+
+```sh
+scripts/verify-dogfood.sh            # check the goldens
+scripts/verify-dogfood.sh --update   # rewrite the goldens and SUMMARY.md, then review the diff
+```
+
+If a change moves how many members bind or which diagnostics fire on a real package, rerun with
+`--update` and put the golden diff in the pull request; that diff is the review signal.
+
 ## Commits
 
 One commit per pull request. PRs are squash-merged, so **the PR title becomes the commit subject on

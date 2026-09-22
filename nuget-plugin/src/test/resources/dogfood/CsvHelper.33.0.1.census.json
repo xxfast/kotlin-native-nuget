@@ -1,0 +1,33 @@
+{
+  "package": "CsvHelper",
+  "version": "33.0.1",
+  "asset": "lib/net8.0/CsvHelper.dll",
+  "includes": [],
+  "reader": "failed",
+  "readerError": "error: failed to read 'lib/net8.0/CsvHelper.dll': type `CsvContext` contains duplicate canonical managed signature `method|instance|CsvHelper.CsvContext|UnregisterClassMap|()|System.Void`",
+  "generation": "not_reached",
+  "generationError": null,
+  "nullability": {
+    "assemblyOblivious": false,
+    "obliviousMembers": 0
+  },
+  "publicSurface": null,
+  "types": {
+    "class": 0,
+    "staticClass": 0,
+    "interface": 0,
+    "enum": 0,
+    "struct": 0,
+    "genericDefinition": 0
+  },
+  "members": {},
+  "diagnostics": {},
+  "unboundTypeReferences": {},
+  "collapsedOverloads": {
+    "sets": 0,
+    "membersDropped": 0,
+    "bridgeableMethods": 0,
+    "examples": []
+  },
+  "errors": []
+}

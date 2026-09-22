@@ -244,10 +244,11 @@ fun bridgeableStaticMethods(
       isV1Bridgeable(it, boundHandleTypes, boundInterfaceTypes, boundGenericClassDefinitions)
 }
 
-// ADR-052: mirrors bridgeableStaticMethods, but for public instance constructors. v1 supports at
-// most one public instance constructor per type — the metadata reader emits either zero or one
-// RirConstructor per class; multiple public `.ctor`s are grouped and skipped as an overload set
-// upstream (skipped_overload_set diagnostic) and never reach either generator.
+// ADR-052: mirrors bridgeableStaticMethods, but for public instance constructors. ADR-057
+// replaced the old "one constructor per type, the rest skipped as an overload set upstream"
+// rule: the reader now emits every public `.ctor` with its own identity and assesses each
+// independently, so this filter really does see overload siblings. The reverse census confirms
+// it, there is no skipped_overload_set anywhere in nine real published packages.
 fun bridgeableConstructors(
   cls: RirClass,
   boundHandleTypes: Set<RirTypeKey>,

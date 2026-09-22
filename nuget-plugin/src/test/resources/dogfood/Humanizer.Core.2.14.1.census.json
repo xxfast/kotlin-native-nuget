@@ -1,0 +1,76 @@
+{
+  "package": "Humanizer.Core",
+  "version": "2.14.1",
+  "asset": "lib/net6.0/Humanizer.dll",
+  "includes": [],
+  "reader": "ok",
+  "readerError": null,
+  "generation": "ok",
+  "generationError": null,
+  "nullability": {
+    "assemblyOblivious": false,
+    "obliviousMembers": 84
+  },
+  "publicSurface": {
+    "types": 126,
+    "nestedTypes": 47,
+    "structs": 1,
+    "methods": 535,
+    "constructors": 45,
+    "properties": 897,
+    "operators": 11,
+    "events": 0,
+    "genericMethods": 13
+  },
+  "types": {
+    "class": 17,
+    "staticClass": 31,
+    "interface": 5,
+    "enum": 14,
+    "struct": 0,
+    "genericDefinition": 1
+  },
+  "members": {
+    "constructor": { "seen": 17, "bound": 16 },
+    "instanceMethod": { "seen": 40, "bound": 38 },
+    "property": { "seen": 7, "bound": 6 },
+    "readerSkippedMember": { "seen": 271, "bound": 0 },
+    "staticMethod": { "seen": 51, "bound": 51 }
+  },
+  "diagnostics": {
+    "info_oblivious_nullability": 84,
+    "skipped_array": 4,
+    "skipped_collection_element": 12,
+    "skipped_empty_interface": 9,
+    "skipped_generic_type_argument": 4,
+    "skipped_open_generic": 1,
+    "skipped_unbound_generic_instantiation": 11,
+    "skipped_unbound_type_reference": 184,
+    "skipped_unsupported_enum": 1,
+    "skipped_unsupported_struct": 54
+  },
+  "unboundTypeReferences": {
+    "Humanizer.DateTimeHumanizeStrategy.IDateOnlyHumanizeStrategy": 1,
+    "Humanizer.DateTimeHumanizeStrategy.IDateTimeHumanizeStrategy": 1,
+    "Humanizer.DateTimeHumanizeStrategy.IDateTimeOffsetHumanizeStrategy": 1,
+    "Humanizer.DateTimeHumanizeStrategy.ITimeOnlyHumanizeStrategy": 1,
+    "Humanizer.ICulturedStringTransformer": 4,
+    "System.DateOnly": 33,
+    "System.DateTime": 37,
+    "System.DateTimeOffset": 4,
+    "System.Enum": 2,
+    "System.Exception": 1,
+    "System.Globalization.CultureInfo": 31,
+    "System.IFormatProvider": 4,
+    "System.TimeOnly": 6,
+    "System.TimeSpan": 57,
+    "System.Type": 1
+  },
+  "collapsedOverloads": {
+    "sets": 0,
+    "membersDropped": 0,
+    "bridgeableMethods": 65,
+    "examples": []
+  },
+  "errors": []
+}
