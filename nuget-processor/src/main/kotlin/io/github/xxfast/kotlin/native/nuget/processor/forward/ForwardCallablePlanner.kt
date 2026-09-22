@@ -75,6 +75,19 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  helpers have no bytes arm yet). Either way a genuine drop with no legacy route. */
   BYTE_ARRAY(droppedFromCSharp = true),
 
+  /**
+   * ADR-083 amendment (boundary nullability part B): a `Map`/`MutableMap` whose KEY is nullable, at
+   * ANY position. ADR-083 declined it at an input position already; the result, property-read and
+   * nested positions admitted it and rendered `NugetMarshal.ReadMap<string?, int>` against a helper
+   * declared `where TKey : notnull`, which is CS8714 and a hard error under the ADR-138 gate's
+   * csproj -- a `packNuget` abort, not a consumer-side warning.
+   *
+   * Its own reason rather than the COLLECTION bucket because the hint slot carries no per-detail
+   * text, and COLLECTION's hint ("use components that are primitives, Char, String, ...") would
+   * send the author looking at their key's TYPE when the problem is its nullability.
+   */
+  NULLABLE_MAP_KEY(droppedFromCSharp = true),
+
   /** ADR-107: `kotlin.Throwable` binds at a **property getter** and nowhere else in v1, so a
    *  callable carrying one (a method return, a parameter, a constructor argument) is a genuine
    *  drop with no legacy route -- named here rather than folded into HANDLE, whose hint would
@@ -1969,7 +1982,11 @@ internal class ForwardCallablePlanner(
     // the `_value` call returning the underlying's own wire.
     if (origin == ForwardCallableOrigin.TOP_LEVEL &&
       result is BridgeType.Nullable &&
-      (result.type is BridgeType.Primitive || result.type == BridgeType.Instant ||
+      // ADR-098 amendment (boundary nullability part C): `Char?` joins the same reroute, its
+      // by-value CHAR16 slot in the `_value` call. ADR-076, ADR-079 and ADR-080 each added their
+      // type here; when this legacy route retires, `Char?` moves with the rest of the set.
+      (result.type is BridgeType.Primitive || result.type == BridgeType.Char ||
+          result.type == BridgeType.Instant ||
           result.type == BridgeType.Duration ||
           result.type is BridgeType.Enum ||
           (result.type as? BridgeType.ValueClass)?.underlying?.isHasValueFanOutUnderlying() == true)
@@ -2025,7 +2042,8 @@ internal class ForwardCallablePlanner(
   ): ForwardCallableCatalogEntry {
     val inner: BridgeType = result.type
     require(
-      inner is BridgeType.Primitive || inner == BridgeType.Instant ||
+      inner is BridgeType.Primitive || inner == BridgeType.Char ||
+          inner == BridgeType.Instant ||
           inner == BridgeType.Duration ||
           inner is BridgeType.Enum ||
           (inner as? BridgeType.ValueClass)?.underlying?.isHasValueFanOutUnderlying() == true
@@ -2068,6 +2086,11 @@ internal class ForwardCallablePlanner(
     )
     val valueWireType: ForwardAbiWireType = when (inner) {
       is BridgeType.Primitive -> inner.wireType()
+      // ADR-098 amendment (boundary nullability part C): CHAR16 by value, so the `_value` import
+      // renders `char` and inherits ADR-098's `[return: MarshalAs(UnmanagedType.U2)]`. Without this
+      // arm the plan claimed INT64 while the projection rendered `char`, which the ADR-055 contract
+      // check catches as `expected ... -> short, actual ... -> long`.
+      BridgeType.Char -> ForwardAbiWireType.CHAR16
       // ADR-079: the `_value` call returns the underlying's wire (the primitive's own, INT32 for
       // an enum ordinal); the box step composes in the emitted expressions at both ends.
       is BridgeType.ValueClass -> inner.underlying.underlyingWireType()
@@ -2946,7 +2969,12 @@ internal class ForwardCallablePlanner(
         )
       }
 
-      is BridgeType.Primitive -> listOf(
+      // ADR-098 amendment (boundary nullability part C): `Char?` takes the identical adjacent pair,
+      // the value slot carrying CHAR16 by value. A by-value `char` slot is exactly what a
+      // non-null `Char` parameter already uses, so ADR-098's `[MarshalAs(UnmanagedType.U2)]`
+      // covers it and no `out char` (which silently narrows every non-ASCII character) is ever
+      // minted.
+      is BridgeType.Primitive, BridgeType.Char -> listOf(
         ForwardAbiParameter(
           name = "${name}HasValue",
           wireType = ForwardAbiWireType.BOOLEAN,
@@ -3403,6 +3431,42 @@ internal class ForwardCallablePlanner(
       helperRequirements = setOf(ForwardHelperRequirement.ENUM_ORDINAL),
     )
 
+    // ADR-098 amendment (boundary nullability part C): `Char?` is the Enum arm above with the
+    // ordinal step replaced by `.code`. `valueOut` carries Primitive(USHORT), so it renders as a
+    // blittable `out ushort` and Kotlin writes through a `UShortVar` (kotlinx.cinterop has no
+    // `CharVar`). Deliberately NOT an `out char`: a BARE `out char` marshals one ANSI byte and
+    // silently corrupts every non-ASCII character ('e-acute' to U+FFFD), and while
+    // `[MarshalAs(UnmanagedType.U2)] out char` measures correct on JIT it is unverified under
+    // NativeAOT and would need a second arm in `outParameterMarshalPrefix`. `ushort` is blittable
+    // by construction and reuses the Enum `valueOutTransferType()` path unchanged.
+    BridgeType.Char -> ForwardResultShape(
+      wireType = ForwardAbiWireType.BOOLEAN,
+      transfer = ForwardTransfer(
+        subject = "result",
+        type = BridgeType.Nullable(type),
+        flow = ForwardFlow.OUT_OF_KOTLIN,
+        passing = ForwardPassing.VALUE,
+        ownership = ForwardOwnership.BORROWED,
+        conversion = ForwardConversion.DIRECT,
+      ),
+      extraParameters = listOf(
+        ForwardAbiParameter(
+          name = "valueOut",
+          wireType = ForwardAbiWireType.POINTER,
+          direction = ForwardAbiDirection.OUT,
+          transfer = ForwardTransfer(
+            subject = "valueOut",
+            type = BridgeType.Primitive(PrimitiveKind.USHORT),
+            flow = ForwardFlow.OUT_OF_KOTLIN,
+            passing = ForwardPassing.OUT,
+            ownership = ForwardOwnership.BORROWED,
+            conversion = ForwardConversion.DIRECT,
+          ),
+          role = ForwardAbiRole.VALUE_OUT,
+        )
+      ),
+    )
+
     else -> null
   }
 
@@ -3499,6 +3563,8 @@ internal class ForwardCallablePlanner(
   private fun BridgeType.isHasValueFanOutInput(): Boolean {
     val inner: BridgeType = (this as? BridgeType.Nullable)?.type ?: return false
     return inner.isHasValueFanOutUnderlying() ||
+        // ADR-098 amendment (boundary nullability part C): `Char?` fans out too.
+        inner == BridgeType.Char ||
         inner == BridgeType.Instant || inner == BridgeType.Duration ||
         (inner as? BridgeType.ValueClass)?.underlying?.isHasValueFanOutUnderlying() == true
   }
@@ -3626,6 +3692,9 @@ internal class ForwardCallablePlanner(
       // PARAMETER skipped while a nullable interface RETURN and PROPERTY both bound.
       is BridgeType.Interface,
       // ADR-106: `Uuid?` rides the null pointer, like `String?`.
+      // ADR-098 amendment (boundary nullability part C): `Char?` fans out to the has-value pair
+      // with a by-value `char` in the value slot, the same way a nullable primitive does.
+      BridgeType.Char,
       BridgeType.Instant, BridgeType.Duration, BridgeType.Uuid -> null
 
       // ADR-080: a bare nullable enum fans out to the has-value pair with the ordinal in the
@@ -3650,9 +3719,34 @@ internal class ForwardCallablePlanner(
       // the trap issue #54 fixed for undeclared types. Narrow on purpose: every other nullable
       // protocol (Flow, lambda, generic) keeps the shipped NULLABLE wording, since those are
       // separate deferrals with their own routes.
-      is BridgeType.SpecializedProtocol ->
-        if (inner.isSealedProtocol()) ForwardPlanSkipReason.SEALED_POSITION
-        else ForwardPlanSkipReason.NULLABLE
+      // Boundary nullability part A2: a nullable lambda TYPE (`cb: ((Int) -> Unit)?`) is routed by
+      // the legacy per-call/stored selector exactly as the non-null spelling is (that selector keys
+      // on the expanded declaration's qualified name only), so it BINDS -- while this arm reported
+      // it as NULLABLE, a `droppedFromCSharp = true` reason. The member therefore existed in
+      // `Interop.cs` AND carried a `SKIPPED_UNSUPPORTED_INPUT` warning, a `NugetDiagnostics.json`
+      // row and a "Not generated from Kotlin ..." remark on the very class that declared it. The
+      // diagnostic was the wrong half: the nullable spelling takes the same silent legacy-deferral
+      // reason the non-null one does, so the tool stops contradicting itself.
+      //
+      // Narrow to a plain `lambda ` protocol on purpose. Every other nullable protocol (Flow,
+      // StateFlow, suspend lambda, generic) genuinely has no route at an input position, so its
+      // NULLABLE/UNROUTED wording -- which names the offending parameter, issue #131 -- is the
+      // right answer and must not be swapped for a silent deferral.
+      is BridgeType.SpecializedProtocol -> when {
+        inner.isSealedProtocol() -> ForwardPlanSkipReason.SEALED_POSITION
+        inner.name.startsWith("lambda ") -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
+        else -> ForwardPlanSkipReason.NULLABLE
+      }
+
+      // ADR-160 interaction: a nullable lambda whose payload and result the plan's own callback
+      // lowering DOES carry classifies as `Nullable(Callback)`, not as a `lambda ...` protocol, so
+      // it needs the identical silent legacy deferral the arm above gives the declined shapes. The
+      // plan itself cannot take it -- a `Callback` ABI slot is a function pointer plus user data,
+      // with no has-value companion -- and `hasPlannedCallbackParameter` therefore leaves the
+      // member on the hand-written route, which binds it and guards the delegate with
+      // `ArgumentNullException.ThrowIfNull`. Without this arm the member binds in `Interop.cs` AND
+      // reports itself skipped, which is the contradiction part A2 removed.
+      is BridgeType.Callback -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
 
       // ADR-088: `IFeedable?` is on this ADR's deferred list. The null-pointer ride is natural,
       // but it needs its own lowering in four emitter positions; until then the skip names the
@@ -3682,14 +3776,20 @@ internal class ForwardCallablePlanner(
    */
   private fun BridgeType.collectionComponentDetail(): String? {
     val collection: BridgeType.Collection = unwrapNullable() as? BridgeType.Collection ?: return null
-    if (collection.collectionInputSkipReason() != ForwardPlanSkipReason.COLLECTION) return null
+    // ADR-083 amendment (boundary nullability part B): NULLABLE_MAP_KEY gets the same "key type
+    // String?" detail COLLECTION gets, so its hint can name the offending slot; every other reason
+    // keeps its own unnamed wording.
+    val reason: ForwardPlanSkipReason? = collection.collectionInputSkipReason()
+    if (reason == ForwardPlanSkipReason.NULLABLE_MAP_KEY) {
+      return "key type ${collection.key?.diagnosticTypeName() ?: "unknown"}"
+    }
+    if (reason != ForwardPlanSkipReason.COLLECTION) return null
     val isMap: Boolean =
       collection.kind == CollectionKind.MAP || collection.kind == CollectionKind.MUTABLE_MAP
     if (!isMap) {
       return "element type ${collection.element?.diagnosticTypeName() ?: "unknown"}"
     }
-    val keyOk: Boolean =
-      collection.key?.let { it !is BridgeType.Nullable && it.isWrappableComponent() } == true
+    val keyOk: Boolean = collection.key?.isWrappableComponent() == true
     val valueOk: Boolean = collection.value?.isWrappableComponent() == true
     val key: String = collection.key?.diagnosticTypeName() ?: "unknown"
     val value: String = collection.value?.diagnosticTypeName() ?: "unknown"
@@ -3710,9 +3810,12 @@ internal class ForwardCallablePlanner(
     // (isWrappableComponent). ADR-083: the *key* additionally has to be non-nullable -- a C#
     // Dictionary cannot hold a null key, so a nullable-key map has no idiomatic projection and
     // skips named, even though its value slot would be fine.
+    // ADR-083 amendment (boundary nullability part B): the key's nullability is no longer tested
+    // here. `declinesNullableMapKey` makes `isBridgeableComponent()` false, so the arm above fires
+    // first and attributes the skip to NULLABLE_MAP_KEY at an input position exactly as it does at
+    // a return one -- one rule, one wording, every position.
     kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP -> {
-      val keyAdmitted: Boolean =
-        key?.let { it !is BridgeType.Nullable && it.isWrappableComponent() } == true
+      val keyAdmitted: Boolean = key?.isWrappableComponent() == true
       val valueAdmitted: Boolean = value?.isWrappableComponent() == true
       if (keyAdmitted && valueAdmitted) null else ForwardPlanSkipReason.COLLECTION
     }
@@ -3870,7 +3973,12 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   is BridgeType.Nullable -> type !is BridgeType.Nullable && type != BridgeType.Unit &&
       type.isBridgeableComponent()
 
-  is BridgeType.Collection -> if (declinesByteArrayComponent()) false else {
+  // ADR-083 amendment (boundary nullability part B): a nullable map KEY fails here too, which is
+  // what carries the rule to the result, property-read and NESTED positions -- this function
+  // recurses, so `List<Map<String?, Int>>` is covered by the same one consult.
+  is BridgeType.Collection -> if (declinesByteArrayComponent() || declinesNullableMapKey()) {
+    false
+  } else {
     val isMap: Boolean = kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
     if (isMap) {
       key?.isBridgeableComponent() == true && value?.isBridgeableComponent() == true
@@ -3939,6 +4047,46 @@ internal fun BridgeType.Collection.declinesByteArrayComponent(): Boolean = when 
 }
 
 /**
+ * ADR-083 amendment (boundary nullability part B): whether this collection is a map whose KEY is
+ * nullable, which is declined at EVERY position rather than only at an input one.
+ *
+ * ADR-083 refused a nullable key at the input positions and deliberately left the result-position
+ * gates untouched. Measured consequence: `fun perchScores(): Map<String?, Int>` rendered
+ * `IReadOnlyDictionary<string?, int>` over `NugetMarshal.ReadMap<string?, int>`, and that helper is
+ * `where TKey : notnull`, so the generated file raised CS8714 -- an ERROR under the generated
+ * bindings csproj (`<Nullable>enable</Nullable>` plus `<TreatWarningsAsErrors>true`), at the member
+ * return, the property read, a nested component, a top-level function, a `suspend fun` and a
+ * `Flow` element alike. So the shape never compiled anywhere, which is why declining it removes
+ * nothing that worked.
+ *
+ * Declining rather than binding is also the idiomatic answer: `Dictionary`, `ImmutableDictionary`
+ * and `FrozenDictionary` all throw on a null key, as do Java's `Map.of` and Swift's ObjC bridge. A
+ * Kotlin `Map<String?, V>` is the outlier.
+ */
+/**
+ * The "key type String?" detail for the innermost map [declinesNullableMapKey] refuses, searched
+ * recursively so a nested `List<Map<String?, Int>>` names the key rather than the list. `null`
+ * when nothing here is a nullable-key map, which is what keeps the shared `skipDetail()` chain
+ * intact for every other reason.
+ */
+internal fun BridgeType.nullableMapKeyDetail(): String? {
+  val collection: BridgeType.Collection =
+    (if (this is BridgeType.Nullable) type else this) as? BridgeType.Collection ?: return null
+  if (collection.declinesNullableMapKey()) {
+    return "key type ${collection.key?.diagnosticTypeName() ?: "unknown"}"
+  }
+  return listOfNotNull(collection.element, collection.key, collection.value)
+    .firstNotNullOfOrNull { component -> component.nullableMapKeyDetail() }
+}
+
+internal fun BridgeType.Collection.declinesNullableMapKey(): Boolean = when (kind) {
+  CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> key is BridgeType.Nullable
+  CollectionKind.SET, CollectionKind.MUTABLE_SET,
+  CollectionKind.LIST, CollectionKind.MUTABLE_LIST,
+    -> false
+}
+
+/**
  * ADR-073: the component types the C# write side can actually box, for an input-position
  * `Map`/`Set` (and their mutable variants): the six `nuget_wrap_*` primitives plus an object
  * handle (via `CreateMap`/`CreateSet`'s reflective `_handle` fallback), plus (ADR-081) a value
@@ -4003,11 +4151,15 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   // same CreateList/CreateSet/CreateMap the outer one uses and read back through the matching
   // Read* helper. Recursive, so depth 3 is the same code as depth 1. The map-key rule mirrors the
   // top-level one: a C# Dictionary cannot hold a null key.
-  is BridgeType.Collection -> if (declinesByteArrayComponent()) false else {
+  // ADR-083 amendment (boundary nullability part B): the inline "key is not Nullable" test that
+  // used to sit in the map arm below now lives in [declinesNullableMapKey], so the write side and
+  // every read side consult one predicate instead of four copies of the rule.
+  is BridgeType.Collection -> if (declinesByteArrayComponent() || declinesNullableMapKey()) {
+    false
+  } else {
     val isMap: Boolean = kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
     if (isMap) {
-      key?.let { it !is BridgeType.Nullable && it.isWrappableComponent() } == true &&
-          value?.isWrappableComponent() == true
+      key?.isWrappableComponent() == true && value?.isWrappableComponent() == true
     } else {
       element?.isWrappableComponent() == true
     }
@@ -4292,6 +4444,11 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
     // would find nothing and fall back to whichever slot is first. Named here instead, so the
     // author reads "BYTE_ARRAY" and gets the identity-versus-copy hint.
     declinesByteArrayComponent() -> ForwardPlanSkipReason.BYTE_ARRAY
+    // ADR-083 amendment (boundary nullability part B): named here for the same reason BYTE_ARRAY
+    // is. `Nullable(String)` is a perfectly good component on its own, so the failing-component
+    // search below would find nothing and fall back to whichever slot is first, reporting NULLABLE
+    // with a hint about non-nullable wrappers instead of naming the KEY.
+    declinesNullableMapKey() -> ForwardPlanSkipReason.NULLABLE_MAP_KEY
     isBridgeableComponent() -> ForwardPlanSkipReason.COLLECTION
     // ROADMAP Phase 4: the component that actually FAILED, not whichever slot is listed first.
     // `Map<String, Sequence<Int>>` used to report `STRING` -- naming the one component that was
@@ -4394,6 +4551,9 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
  * ("Collection (element type ...)") for that case.
  */
 internal fun BridgeType.skipDetail(): String? = optInMarkerDetail()
+  // ADR-083 amendment (boundary nullability part B): ahead of the generic arms so the property
+  // route's NULLABLE_MAP_KEY sentence names the key slot, matching the callable route's.
+  ?: nullableMapKeyDetail()
   ?: actualTypeAliasTargetDetail()
   ?: unexportedDependencyDetail()
   ?: undeclaredTypeDetail()

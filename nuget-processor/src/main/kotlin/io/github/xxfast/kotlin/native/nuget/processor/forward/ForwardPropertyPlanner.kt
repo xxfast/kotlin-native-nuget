@@ -965,6 +965,12 @@ internal class ForwardPropertyPlanner(
     // ROADMAP Phase 4: the `Set` element and `Map` KEY slots a `ByteArray` is declined at, the same
     // rule `isBridgeableComponent` applies -- identity equality against a copied array.
     if (declinesByteArrayComponent()) return false
+    // ADR-083 amendment (boundary nullability part B): the read side is the position ADR-083 left
+    // open. `val tallies: Map<Int?, String>` rendered `IReadOnlyDictionary<int?, string>` over
+    // `NugetMarshal.ReadMap<int?, string>`, whose `where TKey : notnull` made the generated file
+    // fail to compile (CS8714), so the property dropped the whole module's build rather than
+    // binding.
+    if (declinesNullableMapKey()) return false
     val isMap: Boolean = kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
     return if (isMap) {
       key?.isReadableComponent() == true && value?.isReadableComponent() == true
@@ -1013,7 +1019,13 @@ internal class ForwardPropertyPlanner(
     if (this !is BridgeType.Nullable) return null
     return when (type) {
       // ADR-080: a bare enum wires as its `int` ordinal, which has no spare null either.
-      is BridgeType.Primitive, BridgeType.Instant, BridgeType.Duration, is BridgeType.Enum -> type
+      // ADR-098 amendment (boundary nullability part C): `Char` wires as CHAR16 (`unsigned short`),
+      // which has no spare null either -- U+0000 is a legitimate character. It is its own
+      // `BridgeType` rather than a `PrimitiveKind`, which is the only reason it was not already in
+      // this set; before this arm existed the getter planned `Direct` and the Kotlin emitter threw
+      // out of `KotlinSymbolProcessing.execute`, aborting generation for the whole module.
+      is BridgeType.Primitive, BridgeType.Char, BridgeType.Instant, BridgeType.Duration,
+      is BridgeType.Enum -> type
       is BridgeType.ValueClass ->
         if (type.underlying is BridgeType.Primitive || type.underlying is BridgeType.Enum) type
         else null

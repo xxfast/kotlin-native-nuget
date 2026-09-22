@@ -77,4 +77,86 @@ public class CharPositionMarshallingTests
 
         Assert.Equal('日', patient.Initial());
     }
+
+    // ---------------------------------------------------------------------------------------------
+    // Boundary nullability, part C: a bare `Char?`. The wire above is ADR-098's; what is missing is
+    // the ADR-079/080 has-value fan-out, which `Char` misses at every position because it is its own
+    // `BridgeType` and not a `PrimitiveKind`. The failures differ by position and the property one
+    // is not a skip: it is an uncaught processor exception ("Forward property direct nullable getter
+    // is invalid for ...Tag.initial: Char") that aborts generation for the WHOLE module, so nothing
+    // else in this assembly compiles until it is fixed. The other three positions are named skips
+    // today, so their cells are red at C# compile time (no such member).
+    //
+    // Payloads: null, 'é' (U+00E9, BMP but non-ASCII) and '한' (U+D55C, above 0x7FFF). The last is
+    // the sign/width seam -- every value below 0x8000 reads the same through a signed 16-bit slot
+    // and an unsigned one, so only a character with the top bit set can catch a `short` where the
+    // wire wants `ushort`.
+    // ---------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The PROPERTY position, both directions. The getter is where generation crashes today, so this
+    /// is the cell that has to go green first: until it does, no other test in this assembly exists.
+    /// A null is written and read back after a non-null one, so a setter that ignores the has-value
+    /// flag (and keeps the previous character) fails rather than passing on the initial state.
+    /// </summary>
+    [Fact]
+    public void Tag_NullableCharProperty_ReadsAndWritesNullAndNonAscii()
+    {
+        using var tag = new Tag(null);
+        Assert.Null(tag.Initial);
+
+        tag.Initial = 'é';
+        Assert.Equal('é', tag.Initial);
+
+        // Above 0x7FFF: the one value that distinguishes a signed slot from an unsigned one.
+        tag.Initial = '한';
+        Assert.Equal('한', tag.Initial);
+
+        tag.Initial = null;
+        Assert.Null(tag.Initial);
+    }
+
+    /// <summary>
+    /// The PARAMETER and MEMBER-RETURN positions in one call. Those are two different planner gates
+    /// (<c>inputSkipReason</c> and <c>nullableResultShape</c>) and today both name the same hint,
+    /// "expose a non-nullable wrapper, or a separate has-value/value pair, instead" -- which is
+    /// precisely what this feature builds, so that sentence stops being true for <c>Char?</c>.
+    /// </summary>
+    [Fact]
+    public void Tag_NullableCharParameterAndReturn_RoundTripInOneCall()
+    {
+        // The cast is not decoration. `Tag`'s public constructor takes `char?` and its internal
+        // handle constructor takes `nint`; a bare `char` literal converts implicitly to BOTH
+        // (`char` -> `char?` lifted, `char` -> `int` -> `nint` numeric) and neither is better, so
+        // `new Tag('O')` is CS0121. That collision is not specific to `Char?` -- any single
+        // nullable-numeric constructor parameter has it -- and it is reported as a separate defect
+        // rather than papered over here; `new Tag(null)` above is unambiguous because `null` has no
+        // conversion to `nint` at all.
+        using var tag = new Tag((char?)'O');
+
+        Assert.Null(tag.Echo(null));
+        Assert.Equal('é', tag.Echo('é'));
+        Assert.Equal('한', tag.Echo('한'));
+
+        // ASCII stays exactly as it was: the change is a has-value pair, not a re-encoding.
+        Assert.Equal('O', tag.Echo('O'));
+    }
+
+    /// <summary>
+    /// The TOP-LEVEL function return, a different (legacy two-call) route from the member return
+    /// above, plus the TOP-LEVEL property, which crashes through a different caller than a class
+    /// property and so cannot be covered by the <c>Tag.Initial</c> cell.
+    /// </summary>
+    [Fact]
+    public void TagKt_NullableCharAtTopLevel_CoversTheFunctionAndThePropertyRoute()
+    {
+        Assert.Equal('O', TagKt.FirstLetter("Oreo"));
+        Assert.Equal('é', TagKt.FirstLetter("époque"));
+
+        // The empty name is the null arm of the two-call route: no character, no exception.
+        Assert.Null(TagKt.FirstLetter(""));
+
+        // Mylo's tag, above 0x7FFF, at the top-level property position.
+        Assert.Equal('한', TagKt.MascotInitial);
+    }
 }

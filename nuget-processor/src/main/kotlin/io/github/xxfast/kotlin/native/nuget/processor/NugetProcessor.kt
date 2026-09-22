@@ -37,6 +37,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.translate
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addCompanionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addEnumExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedNullableLambdaPayload
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowMethodExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowPropertyExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.declaresOrInheritsFlowMember
@@ -613,6 +614,30 @@ internal fun warnRefusedLegacyRouteMembers(
     add(refusedReturn(member, declaration, returned, owner))
   }
 
+  // Boundary nullability part A2: the callback routes' own refusal, named. Both halves filter a
+  // nullable-payload lambda member out before they partition, so this walk is the only thing that
+  // tells the author the member is gone -- and before the refusal existed, nothing did: the member
+  // either aborted their `packNuget` inside generated Kotlin or crossed and killed the process.
+  fun refusedCallbackPayload(
+    member: KSFunctionDeclaration,
+    declaration: String,
+    refused: String,
+    owner: ForwardDiagnosticOwner?,
+  ): ForwardDiagnostic = ForwardDiagnostic(
+    kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+    symbol = member,
+    declaration = declaration,
+    reason = "a callback parameter can carry a primitive/String/Char, a class handle or an enum, " +
+        "but not $refused",
+    hint = "make the lambda's own parameter and return types non-null (a C# delegate slot has no " +
+        "way to say \"absent\" for a by-value payload, and the handle payloads have no null " +
+        "arm on this route); if the absent case matters, pass it as a separate flag parameter, " +
+        "or use a sentinel value the callback can recognise. the lambda's OWN type may still be " +
+        "nullable (`listener: ((Int) -> Unit)?`): that binds, and C# must pass a non-null delegate",
+    owner = owner,
+    member = member.simpleName.asString(),
+  )
+
   val diagnostics: List<ForwardDiagnostic> = buildList {
     classes.forEach { cls ->
       val owner: String = cls.simpleName.asString()
@@ -622,6 +647,16 @@ internal fun warnRefusedLegacyRouteMembers(
         .filter { method -> method.isForwardLegacyAsyncRoute() }
         .forEach { method ->
           nameRefused(method, "$owner.${method.simpleName.asString()}", ownerDeclaration)
+        }
+      cls.getAllFunctions()
+        .filter { method -> method.getVisibility() == Visibility.PUBLIC }
+        .forEach { method ->
+          val refused: String = method.refusedNullableLambdaPayload() ?: return@forEach
+          add(
+            refusedCallbackPayload(
+              method, "$owner.${method.simpleName.asString()}", refused, ownerDeclaration,
+            ),
+          )
         }
       // ADR-123: a Flow/StateFlow *property* whose element cannot cross. Both halves drop it
       // silently, exactly as they drop a method, so this walk is the only thing that names it.
@@ -657,6 +692,22 @@ internal fun warnRefusedLegacyRouteMembers(
           .filter { method -> method.isForwardLegacyAsyncRoute() }
           .forEach { method ->
             nameRefused(method, "$owner.${method.simpleName.asString()}", ownerDeclaration)
+          }
+        // Boundary nullability part A2, the sealed-arm twin of the class walk above: the arm's
+        // callback routes refuse a nullable payload through `isArmCallbackRoutable`, silently, so
+        // this is the only thing that names it. ADR-116's amendment re-keyed the per-call and stored
+        // callback routes onto the arm, and the arm's CALLBACK_PROTOCOL skip is deliberately not
+        // named by the planner, so nothing else would tell the author the member is gone.
+        subclass.getAllFunctions()
+          .filter { method -> method.getVisibility() == Visibility.PUBLIC }
+          .filter { method -> method.parentDeclaration == subclass }
+          .forEach { method ->
+            val refused: String = method.refusedNullableLambdaPayload() ?: return@forEach
+            add(
+              refusedCallbackPayload(
+                method, "$owner.${method.simpleName.asString()}", refused, ownerDeclaration,
+              ),
+            )
           }
         // ADR-124: and the arm's flow *properties*, whose refused element has no
         // `KSFunctionDeclaration` to hang a return diagnostic on. All-properties, ADR-111's rule.

@@ -566,6 +566,14 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   }
 
   ForwardPlanSkipReason.COLLECTION -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
+
+  // ADR-083 amendment (boundary nullability part B): unlike COLLECTION, this reason genuinely fires
+  // at BOTH an input and a read position (ADR-083 only ever declined the input one), so it reads
+  // [position] rather than fixing the input kind. The shipped input-position wording and kind are
+  // unchanged, which is what keeps the ADR-083 pins green.
+  ForwardPlanSkipReason.NULLABLE_MAP_KEY ->
+    if (position == ForwardSkipPosition.INPUT) ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
+    else ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN
   // ADR-132: always an input-position skip by construction — the extension receiver, which the
   // planner treats as input zero — so it is fixed rather than reading [position].
   //
@@ -809,6 +817,13 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
 
       else -> "no bridge route carries it at this position"
     }
+
+    // ADR-083 amendment (boundary nullability part B): its own sentence, so the reason "owns" it
+    // (`ownsSentence`) and the PROPERTY route pairs it with the null-key hint instead of falling
+    // through to "its type ... has no property getter or setter shape", which says nothing about
+    // the key. Names the slot, never the whole collection: a nullable map VALUE binds.
+    ForwardPlanSkipReason.NULLABLE_MAP_KEY ->
+      "its ${detail ?: "map key type"} is nullable, and a .NET dictionary cannot hold a null key"
 
     ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED ->
       "it is a ${detail ?: "specialized"} member of a sealed subclass, which has no route yet " +
@@ -1131,13 +1146,19 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // Issue #131: it can name the offending *parameter* though, which is what the reader needs to
   // find the type in their own source. Without a name (a return, or an extension receiver) the
   // shipped sentence is unchanged.
+  // ADR-098 amendment (boundary nullability part C): the old wording recommended "a separate
+  // has-value/value pair", which described the generator's OWN wire shape rather than anything the
+  // author could write, and for `Char?` it recommended exactly the shape the generator now builds
+  // itself (that type no longer reaches this reason at all). The replacement names the two things
+  // an author can actually do to their own API.
   ForwardPlanSkipReason.NULLABLE ->
     if (parameter != null) {
       "the nullable parameter `$parameter` has no wire at an input position; expose a " +
-          "non-nullable wrapper, or a separate has-value/value pair, instead"
+          "non-nullable wrapper, or split the member in two (one overload that takes the value " +
+          "and one that takes none), instead"
     } else {
-      "expose a non-nullable wrapper, or a separate has-value/value pair, instead of a nullable " +
-          "value at this position"
+      "expose a non-nullable wrapper, or split the member in two (one that reports whether there " +
+          "is a value and one that returns it), instead of a nullable value at this position"
     }
 
   ForwardPlanSkipReason.UNSUPPORTED_COMBINATION ->
@@ -1328,6 +1349,19 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "you need, or key the map by a `String` or a value class over one, such as a hex or " +
         "Base64 digest. a `ByteArray` binds everywhere else: at a `List`/`MutableList` element, " +
         "a `Map`/`MutableMap` VALUE, and at any ordinary parameter, return or property"
+
+  // ADR-083 amendment (boundary nullability part B): names the KEY, because a nullable VALUE binds
+  // fine and an author reading "collection" would look at the wrong slot. The detail, when the
+  // planner has one, is the shared "key type String?" wording.
+  ForwardPlanSkipReason.NULLABLE_MAP_KEY -> {
+    val component: String = detail ?: "nullable map key"
+    "a .NET dictionary cannot hold a null key: `Dictionary`, `ImmutableDictionary` and " +
+        "`FrozenDictionary` all throw on one, and the generated read helper is declared " +
+        "`where TKey : notnull`, so the $component would not compile. make the key non-null and " +
+        "expose the null-keyed entry as its own member, or key the map by a type that has no " +
+        "absent case. a nullable map VALUE (`Map<String, Int?>`) binds, and so does a nullable " +
+        "`List`/`Set` element"
+  }
 
   else -> genericSkipHint
 }

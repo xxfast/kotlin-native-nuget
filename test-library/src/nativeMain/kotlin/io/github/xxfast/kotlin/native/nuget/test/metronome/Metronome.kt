@@ -176,6 +176,28 @@ class Metronome(private val beats: Int) {
     }
     return fired
   }
+
+  /**
+   * Boundary-nullability part A2, the opposite case from the dropped cells in `skipremarks`: the
+   * lambda's own TYPE is nullable while its payload is not. This one KEEPS binding. The payload has
+   * a wire, so nothing about the crossing is unsupported; the only thing Kotlin can express that C#
+   * cannot is `listener == null`, and a C# caller who wants "do not listen" simply does not call
+   * this method.
+   *
+   * It is a cell rather than an accident because today the tool contradicts itself here: the member
+   * binds as `OnMaybeTick(Action<int>)` AND a `SKIPPED_UNSUPPORTED_INPUT` warning, a
+   * `NugetDiagnostics.json` row and a "Not generated from Kotlin `onMaybeTick`" remark are emitted
+   * for it on the very class that declares it. Whichever way that is resolved, the two must agree:
+   * a member that exists must not be reported as absent.
+   *
+   * The consumer-visible obligation that comes with keeping it: a null delegate has nowhere to go
+   * (the thunk would dereference a null `GCHandle.Target` inside `[UnmanagedCallersOnly]`, a
+   * fail-fast that no `catch` can see), so the generated wrapper must reject it up front with
+   * `ArgumentNullException`. That is what `NullableLambdaArgumentTests` asserts.
+   *
+   * Oreo listens to every third tick at most, which is close enough to `null` for him.
+   */
+  fun onMaybeTick(listener: ((Int) -> Unit)?) = repeat(beats) { listener?.invoke(it + 1) }
 }
 
 /** A chime Oreo or Mylo can set off. Exported, so [Metronome.firstChime] returns a handle. */

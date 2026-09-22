@@ -29,9 +29,23 @@ and disposal works the same way. Each property access mints a new native handle,
 property once into a `using var` rather than calling `cat.OnPet.Invoke(...)` inline, which leaks
 the handle.
 
-Calling `Invoke` with an argument accepts `string`, `int`, `long`, `float`, `double`, `bool`, or any
-exported object; an `sbyte`, `short`, `char`, `uint`, or a Kotlin value class that maps to a C#
-`record struct` throws `NotSupportedException` at runtime rather than failing to build.
+`Invoke` accepts and returns `string`, any narrow or wide primitive (including `char`), any
+exported object, or a nullable spelling of any of those (`string?`, `int?`, `char?`, and so on): a
+lambda's type argument carries `?` when the Kotlin declaration is nullable at that position, and
+`null` reaches the Kotlin lambda, or comes back from it, exactly as written.
+
+```kotlin
+fun signIn(): (String?) -> Unit = { seen = it }
+fun describer(): (Int?) -> String = { if (it == null) "none" else "n=$it" }
+```
+
+```C#
+using KotlinAction<string?> record = Recorder.SignIn();
+record.Invoke(null);
+
+using KotlinFunc<int?, string> describe = Recorder.Describer();
+string result = describe.Invoke(null); // "none"
+```
 
 ### A lambda's type arguments across a namespace boundary {id="type-arguments-across-a-namespace-boundary"}
 
@@ -96,12 +110,32 @@ top-level function, or an extension function.
 
 A few shapes are not supported and are refused by name (a build-time skip, not broken generated
 code): `Char` as either the lambda's payload or its own return; an exported object or enum as the
-lambda's *own* return (as opposed to the member's return, which supports both); a nullable lambda;
-a suspend lambda (`suspend (T) -> R`); a lambda type nested inside a `List`/`Set`/`Map`; a callback
+lambda's *own* return (as opposed to the member's return, which supports both); a suspend lambda (`suspend (T) -> R`); a lambda type nested inside a `List`/`Set`/`Map`; a callback
 at a *result* position (a member returning a lambda rather than taking one; return a
 [Kotlin lambda property](#kotlin-c-lambda-properties-and-returns) instead); and a lambda parameter
 on a constructor, a data class's `copy()`, an enum-arm box constructor, or a value-class member,
 since none of those can keep the callback registered past the single call that creates them.
+
+### A nullable lambda parameter {id="a-nullable-lambda-parameter"}
+
+A parameter whose own type is nullable (`listener: ((Int) -> Unit)?`) still binds, spelled as an
+ordinary non-nullable delegate (`Action<int>`); pass `null` to mean "no listener", and the generated
+wrapper throws `ArgumentNullException` rather than crashing the process:
+
+```kotlin
+fun onMaybeTick(listener: ((Int) -> Unit)?) = repeat(beats) { listener?.invoke(it + 1) }
+```
+
+```C#
+metronome.OnMaybeTick(tick => ticks.Add(tick)); // works
+metronome.OnMaybeTick(null!);                   // throws ArgumentNullException
+```
+
+A parameter whose *payload* is nullable (`listener: (Int?) -> Unit`) or whose lambda *returns* a
+nullable value has no generated member at all: it is a named skip, because the payload cannot cross
+this route today. Change the lambda's own type to carry the "no listener" case instead, as above,
+or wrap the payload in a non-nullable type before it crosses. The same skip applies on a sealed arm
+and to both halves of a stored-callback `add`/`remove` pair, which go together.
 
 ## Ownership of a callback payload {id="ownership-of-a-callback-payload"}
 
@@ -166,6 +200,10 @@ kept past the single call that supplied it and invoked later is a different case
 
 The same pattern also binds a pair declared on a sealed arm; see
 [Stored-callback and interface-bridge pairs on a sealed arm](interfaces-abstract-sealed.md#sealed-callback-pair-generated-c).
+
+A stored callback whose payload is nullable (`listener: (Mood?) -> Unit`) has no generated member:
+both the `add` and `remove` half are declined together, since a subscription that could not be made
+should not have a matching unsubscribe either.
 
 ## C# implementing a Kotlin interface as a parameter {id="c-implementing-a-kotlin-interface-as-a-parameter"}
 

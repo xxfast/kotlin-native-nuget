@@ -56,9 +56,26 @@ and ensure their result stays stable between evaluations. Ordinary instance meth
 `Char` maps to C# `char`, including non-ASCII characters. It works in properties, parameters,
 returns, and [collections](collections.md#narrow-primitives-and-char-as-collection-components).
 
-A standalone `Char?` is unsupported and can cause packaging to fail; nullable characters inside
-collections, such as `List<Char?>`, are supported. Use `String` for characters that need a surrogate
-pair; lone surrogate values do not reliably survive the conversion.
+`Char?` becomes C# `char?` everywhere a bare `Char?` appears: a property, a constructor or method
+parameter, a method return, and a top-level function return. `null` stays distinct from every
+character, including non-ASCII ones.
+
+```kotlin
+class Tag(var initial: Char?) {
+  fun echo(c: Char?): Char? = c
+}
+```
+
+```C#
+// A bare char literal converts to both char? and the internal handle constructor, so cast it.
+using var tag = new Tag((char?)'O');
+
+char? echoed = tag.Echo(null); // null
+tag.Initial = '한';
+```
+
+Use `String` for characters that need a surrogate pair; lone surrogate values do not reliably
+survive the conversion.
 
 ## Instant
 

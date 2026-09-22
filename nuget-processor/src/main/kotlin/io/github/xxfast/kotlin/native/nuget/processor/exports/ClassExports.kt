@@ -75,6 +75,55 @@ internal fun KSFunctionDeclaration.hasPlannedCallbackParameter(
 }
 
 /**
+ * Boundary nullability part A2: the first lambda PARAMETER whose own payload or return type is
+ * nullable, as `name: description`, or null when every lambda on this member crosses non-null.
+ *
+ * ADR-160's plan route never sees this shape: `classify` wraps a nullable component in
+ * [BridgeType.Nullable], which is neither an admitted callback payload nor an admitted callback
+ * result, so `callbackType` declines and the member falls through to the HAND-WRITTEN per-call
+ * (ADR-036/102) and stored (ADR-037) routes. Those two decide "by value or by handle" from the
+ * payload's simple name and never read its nullability, so a nullable payload is not a degraded
+ * binding there: it is a broken build or an uncatchable crash, measured per shape.
+ *  - `(Int?) -> Unit`: Kotlin `cbFn.invoke(it0, cbUserData)` against
+ *    `CFunction<(Int, COpaquePointer) -> Unit>` -- "actual type is 'Int?', but 'Int' was expected",
+ *    so the author's `packNuget` fails in GENERATED code with no diagnostic first.
+ *  - `(Cat?) -> Unit`: `NugetHandles.retain(it0)` against `retain(value: Any)` -- same abort.
+ *  - `(String?) -> Unit`: compiles, then `retain(it0 as Any)` throws an uncaught
+ *    `NullPointerException` inside a `@CName` export with no error slot, which terminates the host
+ *    process; no C# `catch` can see it.
+ *  - `(Int) -> String?`: compiles, then the generated `cbFn.invoke(...)!!` NPEs when a C# callback
+ *    legitimately returns null.
+ *  - the STORED route is stricter still: its bridge lambda is declared with the nullability
+ *    stripped, so even the reference payload fails the generated-Kotlin compile.
+ * So the named skip only ever replaces a broken build or a process death.
+ *
+ * Deliberately NOT the lambda's own nullability (`listener: ((Int) -> Unit)?`): that payload has a
+ * wire, the crossing is fine, and the only thing Kotlin can express that C# cannot is "no
+ * listener", which a C# caller expresses by not calling the method. That shape keeps binding on the
+ * hand-written route too -- `classify` wraps it as `Nullable(Callback)`, which
+ * [hasPlannedCallbackParameter] declines, so the legacy selector (which keys on the expanded
+ * declaration name only) carries it exactly as it carries the non-null spelling -- and the
+ * generated wrapper rejects a null delegate with `ArgumentNullException` instead.
+ *
+ * Reads the UNEXPANDED argument types: `expandAliases()` drops use-site nullability, so a
+ * `typealias Name = String` payload spelled `Name?` would otherwise read as non-null.
+ */
+internal fun KSFunctionDeclaration.refusedNullableLambdaPayload(): String? =
+  parameters.firstNotNullOfOrNull { param ->
+    val expanded: KSType = param.type.resolve().expandAliases()
+    val expandedName: String? = expanded.declaration.qualifiedName?.asString()
+    if (expandedName !in LAMBDA_TYPES) return@firstNotNullOfOrNull null
+    // Every argument, the last of which is the lambda's RETURN type: both positions are refused,
+    // and they are dropped by separate lines of the route's own selector, so neither is redundant.
+    val nullable: KSType = expanded.arguments
+      .mapNotNull { argument -> argument.type?.resolve() }
+      .firstOrNull { argument -> argument.isMarkedNullable }
+      ?: return@firstNotNullOfOrNull null
+    "${param.name?.asString() ?: "_"}: a lambda carrying the nullable type " +
+        "${nullable.declaration.simpleName.asString()}?"
+  }
+
+/**
  * ADR-147: whether this member belongs to ANY specialized legacy route rather than to the ADR-062
  * plan. Every one of them spells the receiver as the bare owner name, so a generic owner's member
  * is refused on both halves through this one predicate instead of three parallel tests.
@@ -200,6 +249,11 @@ internal fun FileSpec.Builder.addClassExports(
 
   val allNonFlowMethods: List<KSFunctionDeclaration> = allRegularMethods
     .filterNot { method -> method.hasLegacyFlowReturn() }
+    // Boundary nullability part A2: refused BEFORE the partition, so a nullable-payload lambda
+    // member reaches neither the per-call route nor the stored pair detection (a pair whose halves
+    // both vanish is never found, so `removeRinger` cannot survive as a cancel for a subscription
+    // nobody can make) nor the ordinary `methods` list. `warnRefusedLegacyRouteMembers` names it.
+    .filterNot { method -> method.refusedNullableLambdaPayload() != null }
 
   val (lambdaParamMethods, methods) = allNonFlowMethods.partition { method ->
     method.hasLegacyLambdaParameter()

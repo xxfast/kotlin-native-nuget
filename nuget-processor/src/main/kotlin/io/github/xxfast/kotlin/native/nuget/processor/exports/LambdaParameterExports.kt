@@ -303,4 +303,11 @@ internal fun KSClassDeclaration.forwardArmCallbackCandidates(): List<KSFunctionD
 internal fun KSFunctionDeclaration.isArmCallbackRoutable(
   classifier: ForwardBridgeTypeClassifier,
 ): Boolean = optInMarker(classifier.exportMarkers) == null &&
-    classifier.legacyRefusedReturn(this) == null
+    classifier.legacyRefusedReturn(this) == null &&
+    // Boundary nullability part A2: a sealed ARM's callback member takes the same refusal an
+    // ordinary class's does. Applied here rather than in the three arm selectors so the per-call
+    // route, the stored pair route and the interface-bridge route cannot drift, and because the
+    // filter runs AFTER pair detection: a refused add half cannot leave its partner behind as a
+    // per-call callback. Without it a `(Int?) -> Unit` on an arm still aborted the
+    // generated-Kotlin compile with no diagnostic.
+    refusedNullableLambdaPayload() == null

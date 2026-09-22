@@ -292,13 +292,15 @@ internal object ForwardCirPlanProjection {
     val inner: BridgeType = nullable.type
     // ADR-079: a Primitive/Enum-underlying value class rides the same two-call shape, with the
     // `_value` DllImport declared at the underlying's wire.
+    // ADR-098 amendment (boundary nullability part C): and so does `Char?`.
     require(
-      inner is BridgeType.Primitive || inner == BridgeType.Instant ||
+      inner is BridgeType.Primitive || inner == BridgeType.Char ||
+          inner == BridgeType.Instant ||
           inner == BridgeType.Duration ||
           inner is BridgeType.ValueClass || inner is BridgeType.Enum
     ) {
-      "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive, Instant, " +
-          "Duration, enum or value class"
+      "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive, Char, " +
+          "Instant, Duration, enum or value class"
     }
     val presence: ForwardNativeCall = plan.nativeImports[0]
     val value: ForwardNativeCall = plan.nativeImports[1]
@@ -308,6 +310,10 @@ internal object ForwardCirPlanProjection {
     // for Instant); the public return type is the semantic one (`DateTimeOffset?`).
     val dllImportReturnType: String = when (inner) {
       is BridgeType.Primitive -> inner.csharpType()
+      // ADR-098 amendment (boundary nullability part C): the `_value` call returns a by-value
+      // `char`, which `charReturnMarshal` decorates with `[return: MarshalAs(UnmanagedType.U2)]`
+      // by native-type text, the same way every other by-value `char` slot is decorated.
+      BridgeType.Char -> "char"
       is BridgeType.ValueClass -> valueClassUnderlyingWireCs(inner.underlying)
       // ADR-080: the `_value` call returns the bare `int` ordinal.
       is BridgeType.Enum -> "int"
@@ -642,7 +648,9 @@ internal object ForwardCirPlanProjection {
         // ADR-083/147: `Wrap<T>` already maps a null to `IntPtr.Zero`, so `T?` needs no guard.
         is BridgeType.TypeParameter -> listOf("${parameter.csharpName}Box")
 
-        is BridgeType.Primitive -> listOf(
+        // ADR-098 amendment (boundary nullability part C): `char?` contributes the identical pair;
+        // the value half stays a `char`, so the by-value slot keeps ADR-098's U2 marshalling.
+        is BridgeType.Primitive, BridgeType.Char -> listOf(
           "${parameter.csharpName}.HasValue", "${parameter.csharpName}.GetValueOrDefault()",
         )
         // ADR-080: same HasValue/GetValueOrDefault pair, the value half lowered to the ordinal.
@@ -1192,6 +1200,19 @@ internal object ForwardCirPlanProjection {
           body = checkedNullableValueBody(
             nativeName, callArguments, prelude, cleanup,
             "hasValue ? (${type.csharpType()})valueOut : (${type.csharpType()}?)null",
+          ),
+        )
+
+        // ADR-098 amendment (boundary nullability part C): the Enum arm's shape with `.code` in
+        // place of the ordinal. `valueOut` is declared `out ushort` (its transfer type is
+        // Primitive(USHORT), blittable under NativeAOT by construction) and cast back to `char`
+        // here; an `out char` slot is never minted, bare or U2-decorated.
+        BridgeType.Char -> CirResultProjection(
+          returnType = "char?",
+          nativeReturnType = "bool",
+          body = checkedNullableValueBody(
+            nativeName, callArguments, prelude, cleanup,
+            "hasValue ? (char)valueOut : (char?)null",
           ),
         )
 

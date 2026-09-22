@@ -567,3 +567,15 @@ None. Stored-callback pairs are new methods. Existing per-call lambda exports ar
   (annotation carries `removeFunction` name), deferred until a real-world case arises.
 - **Arity-1 stored callbacks where `T` is non-nullable object returning a value** — arity-0 and
   arity-1 `Unit`-returning covers the overwhelming majority of observer patterns.
+
+## Amendment (2026-09-22): a nullable payload refuses the whole pair
+
+A `T` that is itself nullable (`listener: (Mood?) -> Unit`) is stricter here than on the per-call
+route: the generated bridge lambda is declared with the nullability stripped
+(`val bridge: (String) -> Unit = ...`) and then handed to a member expecting `(String?) -> Unit`, so
+**both** halves of the pair fail the generated-Kotlin compile, including a reference payload
+(`String?`) that compiles fine on the per-call route. `isArmCallbackRoutable` (shared with ADR-036's
+per-call and interface-bridge routes) now refuses a nullable payload before either export is
+generated, naming the argument with `SKIPPED_UNSUPPORTED_INPUT`, and refuses the pair together: a
+skip on `add{X}` alone would leave a `remove{X}` with nothing to remove, or vice versa. No consumer
+could have shipped this shape, since it never compiled.

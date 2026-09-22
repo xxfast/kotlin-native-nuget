@@ -625,3 +625,34 @@ reading, not mere arrival; `PrimitiveLambdaPayloadTests` asserts that sequence a
 `NugetBoolVoidCallback(byte ...)` and `NugetByteVoidCallback(sbyte ...)`, exactly once each. No
 `LiveHandleTests` row is needed: a by-value primitive payload mints no `StableRef` on the Kotlin side,
 and the per-call `GCHandle` is freed in the method's `finally`.
+
+## Amendment (2026-09-22): a nullable lambda parameter, decided one way; a nullable payload, another
+
+Two different things can be nullable on this route, and they were both wrong, in opposite
+directions. `hasLegacyLambdaParameter` and its CIR twin keyed on the expanded declaration's qualified
+name only, so neither read nullability at all.
+
+**A lambda whose own type is nullable** (`listener: ((Int) -> Unit)?`) already bound, spelled as the
+plain non-nullable delegate (`Action<int>`), which is honest about what the route can express: the
+payload has a wire, and the only thing Kotlin can say that C# cannot is "no listener", which a C#
+caller who wants that simply does not express by passing `null` to this signature. But the tool also
+reported the member as skipped (a `SKIPPED_UNSUPPORTED_INPUT` warning, a diagnostics-JSON row, and an
+XML remark on the class saying the member was not generated) — the diagnostic and the generated code
+disagreed. Resolved by making the diagnostic true: the member keeps binding, and the generated
+wrapper now calls `ArgumentNullException.ThrowIfNull` on the delegate argument before crossing, so a
+`null` argument fails at the managed boundary instead of reaching a `[UnmanagedCallersOnly]` thunk
+that dereferences a null `GCHandle.Target` (a fail-fast no `catch` can see).
+
+**A lambda whose payload or return is nullable** (`(Int?) -> Unit`, `(Cat?) -> Unit`, `(Int) ->
+String?`) had no wire and no diagnostic either: `(Int?) -> Unit` and `(Cat?) -> Unit` render
+generated Kotlin that fails to compile (`actual type is 'Int?', but 'Int' was expected` against the
+`CFunction` the export reinterprets), aborting `packNuget` with no diagnostic first; `(String?) ->
+Unit` and `(Int) -> String?` compile but NPE at runtime on a real null payload or return (`retain(it0
+as Any)`, `cbFn.invoke(...)!!`), a fail-fast no `catch` can see either. Resolved with a named skip:
+`isArmCallbackRoutable` (consulted by the per-call, stored-pair, and interface-bridge routes alike, so
+a sealed arm's callback method is covered too) now refuses a lambda whose argument or return type is
+nullable, reporting `SKIPPED_UNSUPPORTED_INPUT` and naming the argument, so the author sees a named
+reason instead of a build abort or an uncatchable crash. The full route — an `Action<int?>` spelling
+riding a has-value pair or a null-pointer thunk — has no consumer asking and is deferred.
+
+See [Lambdas and callbacks: a nullable lambda parameter](../topics/lambdas-and-callbacks.md#a-nullable-lambda-parameter).

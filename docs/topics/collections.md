@@ -147,11 +147,12 @@ A nullable spelling of any of those (`Map<String, Int?>`, `Set<String?>`, `List<
 `List<Short?>`, `List<List<String?>>`) is also supported: a `null` element, set member, or map value
 rides a null pointer in that component's slot, both reading and writing.
 
-Two shapes are not supported and fail with a named `SKIPPED_UNSUPPORTED_INPUT` diagnostic rather than
-binding incorrectly: a **nullable nested collection** (`List<List<String>?>`), and a plain interface
-component. A nullable map **key** (`Map<String?, Int>`) is also unsupported at a parameter position,
-since a C# `Dictionary` can't hold a null key. A `ByteArray` is unsupported as a `Set` element or a
-map **key**, for the reason given below.
+Two shapes are not supported and fail with a named diagnostic rather than binding incorrectly: a
+**nullable nested collection** (`List<List<String>?>`), and a plain interface component. A nullable
+map **key** (`Map<String?, Int>`) is also unsupported, at every position a map appears (parameter,
+return, property, and nested), since a C# `Dictionary` can't hold a null key and the generated read
+path would otherwise fail to compile. A nullable map **value** (`Map<String, Int?>`) is unaffected.
+A `ByteArray` is unsupported as a `Set` element or a map **key**, for the reason given below.
 
 ### ByteArray as a collection component {id="bytearray-as-a-collection-component"}
 

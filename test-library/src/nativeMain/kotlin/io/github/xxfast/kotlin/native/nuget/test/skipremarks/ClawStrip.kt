@@ -12,7 +12,9 @@ package io.github.xxfast.kotlin.native.nuget.test.skipremarks
  * fixture's drop.
  *
  * Every owner seam once, and the two shapes that are NOT owner-level:
- * - [ClawStrip] -- one dropped property AND one dropped method beside surviving members, plus the
+ * - [ClawStrip] -- dropped properties AND dropped methods beside surviving members (including
+ *   the boundary-nullability cells: nullable map keys at a return, a property and a nested
+ *   position, and nullable lambda payloads on the per-call and stored callback routes), plus the
  *   ADR-075 partial case ([ClawStrip.lastTumble]: the setter drops, the property survives, so the
  *   remark belongs on the C# PROPERTY rather than on the class),
  * - [KibbleBin] -- an `object` (static class) with a dropped method,
@@ -82,6 +84,88 @@ class ClawStrip(val name: String) {
    * feature.
    */
   var lastTumble: Throwable? = null
+
+  /**
+   * Part B, the RETURN position of a nullable map key (`SKIPPED_UNSUPPORTED_INPUT`'s missing twin).
+   * ADR-083 declined `Map<String?, Int>` at an INPUT position by name -- that is [rankPerches]
+   * above -- but left the result-position gates untouched, so this member binds today and renders
+   * `IReadOnlyDictionary<string?, int>` whose body calls `NugetMarshal.ReadMap<string?, int>`. That
+   * helper is declared `where TKey : notnull`, so the generated file does not compile: CS8714,
+   * which the generated-bindings build turns into an error. A `Map<String?, Int>` return is
+   * therefore a `packNuget` abort, not a consumer-side warning, and the fix is the same named skip
+   * the input side already ships, attributed to the KEY and not to the slot.
+   */
+  fun perchScores(): Map<String?, Int> = mapOf(null to 1, "windowsill" to 2)
+
+  /**
+   * Part B, the PROPERTY-READ position of the same gap, through a different planner
+   * (`ForwardPropertyPlanner.isReadable`, which has no key-nullability test either). The key is
+   * `Int?` rather than `String?` so the cell also pins that the skip is about key NULLABILITY and
+   * not about `String?` in particular: a value-typed nullable key raises the identical CS8714.
+   */
+  val tallies: Map<Int?, String> = emptyMap()
+
+  /**
+   * Part B, NESTED: the same key one level down. `isBridgeableComponent` recurses, so a fix that
+   * consults the new predicate at the recursive site covers this for free and a fix that special
+   * cases the outermost type does not. Red the same way today (`ReadMap<string?, int>` inside a
+   * `ReadList`).
+   */
+  fun nestedScores(): List<Map<String?, Int>> = emptyList()
+
+  /**
+   * Part A2, per-call callback route, VALUE payload. The legacy lambda selector keys on the
+   * expanded type's qualified name only, so the `?` on the payload is dropped: C# is handed
+   * `Action<int>` and the generated Kotlin passes `it0: Int?` into a
+   * `CFunction<(Int, COpaquePointer) -> Unit>`. That does not compile ("actual type is 'Int?', but
+   * 'Int' was expected"), with no KSP diagnostic first, so today this shape aborts the author's
+   * build with a Kotlin compiler error in generated code. The named skip replaces a broken build,
+   * which is why it owes no removal note.
+   */
+  fun eachTumble(onTumble: (Int?) -> Unit) = onTumble(null)
+
+  /**
+   * Part A2, per-call route, REFERENCE payload. This one compiles and is worse for it: the
+   * generated Kotlin is `NugetHandles.retain(it0 as Any)`, so a real null payload is an uncaught
+   * `NullPointerException` inside a `@CName` export with no error slot, i.e. the host process dies
+   * and no C# `catch` can see it. There is no xunit cell for that outcome on purpose: it would take
+   * the test host down rather than fail.
+   */
+  fun eachStrip(onStrip: (String?) -> Unit) = onStrip(null)
+
+  /**
+   * Part A2, per-call route, HANDLE payload. `NugetHandles.retain` takes `Any`, so the generated
+   * `retain(it0)` against a `ClawStrip?` does not compile either. Declared with a payload from this
+   * same package so the cell does not drag an unrelated fixture type into the skip pool.
+   */
+  fun eachNeighbour(onNeighbour: (ClawStrip?) -> Unit) = onNeighbour(null)
+
+  /**
+   * Part A2, per-call route, nullable RETURN inside the lambda. The generated Kotlin ends in
+   * `cbFn.invoke(it0, cbUserData)!!`, so a C# callback that legitimately returns null NPEs at the
+   * `!!`. Nullability at the lambda's return is a separate seam from its argument and is dropped by
+   * a separate line of the same selector, so it is its own cell.
+   */
+  fun askWeave(onAsk: (Int) -> String?): String? = onAsk(1)
+
+  /**
+   * Part A2, STORED callback route (ADR-037), the add half of the pair. Stricter than the per-call
+   * route: the generated bridge lambda is declared with the nullability stripped
+   * (`val bridge: (String) -> Unit = ...`) and then handed to a member expecting
+   * `(String?) -> Unit`, so BOTH halves of the pair fail the generated-Kotlin compile even for the
+   * reference payload that survives compilation on the per-call route. The pair must be named as a
+   * pair: a skip on the add alone would leave a remove with nothing to remove.
+   */
+  fun addRinger(listener: (String?) -> Unit) {
+    ringers += listener
+  }
+
+  /** Part A2, the remove half of the [addRinger] pair. */
+  fun removeRinger(listener: (String?) -> Unit) {
+    ringers -= listener
+  }
+
+  private var ringers: List<(String?) -> Unit> = emptyList()
 }
 
 /** An `object` owner: its static class carries the remark for the dropped [tallyShelves]. */

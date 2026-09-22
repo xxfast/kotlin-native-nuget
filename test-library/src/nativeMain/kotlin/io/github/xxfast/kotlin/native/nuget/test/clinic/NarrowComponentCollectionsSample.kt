@@ -31,9 +31,11 @@ package io.github.xxfast.kotlin.native.nuget.test.clinic
  * [glyph] is the property-getter position of the same wire -- `Patient.grade` is `'A'`, so no
  * shipped cell can tell a correct getter from a truncated one.
  *
- * A bare `Char?` is deliberately **not** a cell: ADR-098 mints the wire but not the has-value
- * fan-out, so a nullable `Char` property still aborts `packNuget`. `List<Char?>` would work, but
- * `List<Short?>` already proves the same `Nullable` composition without needing a second wire.
+ * A bare `Char?` is deliberately **not** a cell here, but the reason has changed: the ADR-098
+ * amendment gave it the ADR-079/080 has-value fan-out at every ordinary position, so it binds and
+ * its cells live in `clinic/Tag.kt` beside the `CharPositionMarshallingTests` that exercise them.
+ * `List<Char?>` would work too, but `List<Short?>` already proves the same `Nullable` composition
+ * without needing a second wire.
  *
  * Lone surrogates are deliberately not a cell either: they fail to round-trip under every
  * candidate wire shape, which makes them degenerate input rather than a marshalling question.
@@ -99,7 +101,8 @@ class Readings {
    * ADR-098 part B · the property-getter position of the same `Char` wire. `Patient.grade` is
    * `'A'`, so no shipped cell distinguishes a correct getter from an ANSI-truncated one, and the
    * ADR's claim that the fix spans parameters, returns *and* property getters is otherwise
-   * untested. Non-null: a bare `Char?` still has no has-value fan-out and aborts `packNuget`.
+   * untested. Non-null on purpose: the bare `Char?` property position is `Tag.initial`'s cell, on
+   * the has-value fan-out the ADR-098 amendment added, so this one stays the plain by-value wire.
    */
   val glyph: Char = 'Ω'
 }

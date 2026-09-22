@@ -194,3 +194,28 @@ consumer cannot get `int total = metronome.CountTicks(...)` back at all.
   members onto the same plan one shape at a time.
 - **ADR-080** established the two-slot fan-out for a single logical input (`HasValue` plus the
   value); `${name}Ptr`/`${name}UserData` is the same idea for a callback.
+
+## Amendment (2026-09-22): a nullable lambda type binds on the legacy route
+
+This corrects two sentences above that are no longer accurate: the classifier list under "What the
+classifier admits as a `Callback`" (:97, "a nullable lambda" among the shapes that fall through to
+the legacy protocol) and the "Deliberately still refused by name" bullet in Consequences (:176,
+"a nullable lambda" among the refused shapes). Both conflated two different axes of nullability that
+[ADR-036's 2026-09-22 amendment](036-reverse-interop-mechanism.md#amendment-2026-09-22-a-nullable-lambda-parameter-decided-one-way-a-nullable-payload-another)
+decided in opposite directions.
+
+A `FunctionN` parameter whose own type is nullable (`listener: ((Int) -> Unit)?`) is a
+`Nullable(Callback)` at the plan's classifier, which is not a `BridgeType.Callback` leaf: the plan
+declines it silently, reporting skip reason `CALLBACK_PROTOCOL` with no diagnostic (the same "or is
+named `CALLBACK_PROTOCOL` if it has none" clause on line 99 doing its job here too). That decline is
+not a refusal: it hands the member to the legacy per-call route (`translateCallbackMethod`/
+`addLambdaParamMethodExport`), which still binds it as the plain non-nullable delegate and now
+guards the argument with `ArgumentNullException.ThrowIfNull` before it crosses. See
+[Lambdas and callbacks: a nullable lambda parameter](../topics/lambdas-and-callbacks.md#a-nullable-lambda-parameter).
+
+A lambda whose **payload** or **return** is nullable (`(Int?) -> Unit`, `(Int) -> String?`) is the
+shape the original wording meant to describe: that one stays a named `SKIPPED_UNSUPPORTED_INPUT`
+skip, on this route, on a sealed arm, and on a stored-callback pair alike, unchanged by this
+amendment. Do not conflate either of these with the outer, non-lambda return the member itself
+declares (":116, `a nullable return`"), which is still refused by name on the legacy route
+regardless of the lambda parameter's own nullability.
