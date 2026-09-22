@@ -40,6 +40,9 @@ What the pipeline does today:
   `rir/RirModel.kt:345`, and one test feeds it from hand-written JSON). Two C# overloads that
   project to the same Kotlin signature reach the Kotlin compiler as a "conflicting overloads"
   error in the consumer's build.
+  Amended 2026-09-22: a collision is now reported as `error_kotlin_signature_collision` before any
+  Kotlin is written, not left to reach the consumer's Kotlin compiler (ADR-057's 2026-09-22
+  amendment).
 
 ## Alternatives Considered
 
@@ -126,8 +129,8 @@ try { kennel.bolt() } catch (e: CancellationException) { /* C# cancelled itself 
 - `FooAsync()` beside `FooAsync(CancellationToken)`: after elision both are `suspend fun foo()`.
   The reader folds the pair: the token overload is kept, the token-less sibling (same name, same
   static-ness, same remaining parameter types) is dropped with an info diagnostic
-  `info_cancellation_overload_folded`. Without this the consumer's Kotlin does not compile
-  (Context, last bullet).
+  `info_cancellation_overload_folded`. Without this, generation fails with
+  `error_kotlin_signature_collision` (Context, last bullet; ADR-057's 2026-09-22 amendment).
 - **Where the fold sits (amended during implementation).** It is a post-pass over the per-type
   mapped method list in `MapType` (`FoldCancellationOverloads`, `Program.cs`), not a rule inside
   `TryMapMethod`: the decision needs both siblings and `TryMapMethod` sees one member at a time.

@@ -1788,17 +1788,51 @@ private fun handleImports(
 // namespace rendered a bare unqualified name with no import and did not compile. No fixture had
 // that shape until ADR-152's `Kennel.BoardAsync(IFeedable)`, where the interface lives in
 // `Test.Menagerie` and the class in `Test.Kennel`.
+// [readPositionTypes] is the subset that occurs in a READ position (a method return, a property
+// type, a collection element of either): those lower through `nuget{Name}Value(ptr)`, which is
+// `internal` in the INTERFACE's own Kotlin package, so the type import alone leaves an unresolved
+// reference whenever the two land in different Kotlin packages (a namespaceAliases entry, or two
+// bound packages). The parameter position never calls the resolver (`argConversion` uses
+// `handleOf`), which is why only read positions get the second line — an import nothing uses
+// would be a warning in generated source for no gain. Mirrors slotHandleImports, which already
+// emits both.
 private fun interfaceImports(
   interfaceTypes: List<RirInterfaceType>,
+  readPositionTypes: List<RirInterfaceType>,
   interfacePkgs: Map<RirTypeKey, String>,
   kotlinPkg: String,
-): List<String> = interfaceTypes
-  .mapNotNull { type ->
-    val pkg: String? = interfacePkgs[RirTypeKey(type.namespace, type.name)]
-    if (pkg == null || pkg == kotlinPkg) null else "import $pkg.${type.name}"
-  }
-  .distinct()
-  .sorted()
+): List<String> {
+  val readKeys: Set<RirTypeKey> =
+    readPositionTypes.map { RirTypeKey(it.namespace, it.name) }.toSet()
+  return interfaceTypes
+    .flatMap { type ->
+      val key: RirTypeKey = RirTypeKey(type.namespace, type.name)
+      val pkg: String? = interfacePkgs[key]
+      if (pkg == null || pkg == kotlinPkg) emptyList()
+      else if (key in readKeys) {
+        listOf("import $pkg.${type.name}", "import $pkg.nuget${type.name}Value")
+      } else listOf("import $pkg.${type.name}")
+    }
+    .distinct()
+    .sorted()
+}
+
+// The READ-position subset of [referencedInterfaceTypes]: a method return, a property type
+// (a settable property's type is a read position too, since its getter reads it), and a collection
+// element of either. Constructor parameters are never read positions.
+private fun readPositionInterfaceTypes(
+  methods: List<RirMethod>,
+  properties: List<RirProperty>,
+): List<RirInterfaceType> = (
+    methods.flatMap {
+      listOfNotNull(it.returnType as? RirInterfaceType) +
+          collectionElements(it.returnType).filterIsInstance<RirInterfaceType>()
+    } +
+        properties.flatMap {
+          listOfNotNull(it.type as? RirInterfaceType) +
+              collectionElements(it.type).filterIsInstance<RirInterfaceType>()
+        }
+    ).distinct()
 
 private fun referencedInterfaceTypes(
   methods: List<RirMethod>,
@@ -3768,7 +3802,10 @@ private fun classWrapperContent(
   )
   imports.addAll(
     interfaceImports(
-      referencedInterfaceTypes(allMethods, ctors, allPropertyGetters), interfacePkgs, kotlinPkg,
+      referencedInterfaceTypes(allMethods, ctors, allPropertyGetters),
+      readPositionInterfaceTypes(allMethods, allPropertyGetters),
+      interfacePkgs,
+      kotlinPkg,
     )
   )
 
@@ -4325,7 +4362,13 @@ private fun buildStubMethod(
           "  " + wrapInvoke(
             fullInvokeArgs,
             hasStringArg = false,
-            hasInterfaceArg = false,
+            // ADR-085: `handleOf(...)` is a MEMBER of NugetTransferScope, so an interface-typed
+            // parameter needs the scope open around the invoke whatever the return shape is. This
+            // branch used to hard-code `false` and emitted a receiverless `handleOf(...)`, an
+            // unresolved reference in the consumer's compileKotlin. The async/flow arms above pass
+            // `task` / `nugetEnumeration` as the only in-argument (the parameters were consumed by
+            // the Begin/Enumerate half, which threads the flag itself), so they stay false.
+            hasInterfaceArg = !isAsync && !isFlow && hasInterfaceParam,
             callee = if (isAsync) "end" else if (isFlow) "current" else "fn",
           ),
         )
@@ -5852,9 +5895,17 @@ private fun interfaceHandleFileContent(
     imports.add("import kotlinx.cinterop.reinterpret")
     imports.add("import kotlinx.cinterop.toKString")
   }
+  // A string INPUT to the handle-backed wrapper needs `.cstr.ptr` inside a `memScoped` block. Two
+  // kinds of position produce one, not just method parameters: a settable string property's setter
+  // is the other (`argConversion(type, "value")` is the same `.cstr.ptr`). Counting only methods
+  // generated a `{Name}Handle.kt` whose setter used memScoped/cstr/ptr with none of the three
+  // imported, for any interface with a settable string property and no string-parameter method.
   val hasStringParam: Boolean = effective.any { m ->
-    (m.registrable as? RirRegistrable.Method)?.method?.parameters
-      ?.any { it.type is RirStringType } == true
+    when (val r = m.registrable) {
+      is RirRegistrable.Method -> r.method.parameters.any { it.type is RirStringType }
+      is RirRegistrable.PropertySetter -> r.property.type is RirStringType
+      else -> false
+    }
   }
   if (hasStringParam) {
     imports.add("import kotlinx.cinterop.cstr")
@@ -5956,7 +6007,11 @@ private fun interfaceHandleMethodMember(
   val retSuffix: String =
     if (r.method.returnType is RirVoidType) "" else ": ${declKotlinType(r.method.returnType)}"
   val hasStringParam: Boolean = r.method.parameters.any { it.type is RirStringType }
-  val hasInterfaceParam: Boolean = r.method.parameters.any { it.type is RirInterfaceType }
+  // ADR-155: the same predicate the class route uses (`isInterfaceLike`), not a bare
+  // `is RirInterfaceType` — a COLLECTION of interfaces also converts through `handleOf(...)` and
+  // so also needs the transfer scope. Latent until the interface route stops skipping collection
+  // positions, but the two routes must not disagree about what an interface argument is.
+  val hasInterfaceParam: Boolean = r.method.parameters.any { isInterfaceLike(it.type) }
   val paramArgs: List<String> = r.method.parameters.map { argConversion(it.type, it.name) }
   val invokeArgs: String = (listOf(receiverArg) + paramArgs).joinToString(", ")
   val invokeCall: String =
@@ -6704,63 +6759,154 @@ private fun validateDiagnostics(rir: RirFile) {
       .map { assembly.packageId to it }
   }
   require(errors.isEmpty()) {
-    errors.joinToString("\n") { (packageId, diagnostic) ->
-      "[nuget:$packageId] ${diagnostic.kind.name.lowercase()}: ${diagnostic.reason}. " +
-          diagnostic.hint
-    }
+    errors.joinToString("\n") { (packageId, d) -> errorLine(packageId, d) }
   }
 }
 
+// The one rendering of a fatal reverse diagnostic, whether the READER produced it or the plugin
+// did (ADR-057: a Kotlin signature collision is derived here, from Kotlin's own overload rules, and
+// the reader cannot know them).
+private fun errorLine(packageId: String, diagnostic: RirDiagnostic): String =
+  "[nuget:$packageId] ${diagnostic.kind.name.lowercase()}: ${diagnostic.reason}. " + diagnostic.hint
+
+// ADR-057 finishing move: collisions were already detected and already fatal, but through a bare
+// `require(false)` that carried no diagnostic kind and no package id, and they never reached the
+// one rendering path. Now every colliding group becomes an ERROR_KOTLIN_SIGNATURE_COLLISION and
+// they are reported TOGETHER (the old form threw on the first group it found). Behaviour stays
+// fatal: ADR-057 decided not to silently select, public-rename or warn-and-continue.
 private fun validateKotlinSignatures(rir: RirFile) {
+  val collisions: List<Pair<String, RirDiagnostic>> = kotlinSignatureCollisions(rir)
+  require(collisions.isEmpty()) {
+    collisions.joinToString("\n") { (packageId, d) -> errorLine(packageId, d) }
+  }
+}
+
+private fun signatureCollision(
+  typeName: String,
+  memberName: String,
+  managed: List<String>,
+  kotlinSignature: String,
+): RirDiagnostic = RirDiagnostic(
+  kind = RirDiagnosticKind.ERROR_KOTLIN_SIGNATURE_COLLISION,
+  typeName = typeName,
+  memberName = memberName,
+  memberSignature = managed.joinToString(" and "),
+  reason = "Kotlin signature collision: " + managed.joinToString(" and ") { "`$it`" } +
+      " both map to `$kotlinSignature`",
+  hint = "Expose a differently named C# adapter.",
+)
+
+// Every group of bridgeable members that collapses to ONE Kotlin declaration. Kotlin/Native has
+// no erasure rule: two declarations conflict when the same scope has the same name and the same
+// value-parameter types, and neither the return type nor `suspend` disambiguates (nullability
+// does, which kotlinCollisionType models by appending `?`). Static members land in the companion,
+// instance members in the class, hence the `scope:` prefix. A property and a function may share a
+// name, so properties are grouped among themselves.
+internal fun kotlinSignatureCollisions(rir: RirFile): List<Pair<String, RirDiagnostic>> {
   val structs: Map<RirTypeKey, RirStruct> = boundStructTypes(rir)
   val genericDefs: Map<RirTypeKey, RirClass> = boundGenericClassDefinitions(rir)
-  rir.assemblies.forEach { assembly ->
-    assembly.namespaces.forEach { namespace ->
+  val handles: Set<RirTypeKey> = boundHandleTypes(rir)
+  val ifaces: Map<RirTypeKey, RirInterface> = boundInterfaceTypes(rir)
+  return rir.assemblies.flatMap { assembly ->
+    assembly.namespaces.flatMap { namespace ->
       // ADR-072: a generic class definition's members are RirTypeParameterType/
       // RirGenericInstanceType-shaped by construction: kotlinCollisionType() has no ordinary
       // rendering for those (they route through the dedicated generic-class path instead), so
       // this ordinary (non-generic) collision check must not run on cls.constructors/cls.methods
       // for a generic definition at all. An ordinary member mentioning a bridgeable generic
       // instantiation, however, is a normal registrable and must still be checked here.
-      namespace.types.filterIsInstance<RirClass>().filterNot { it.typeParameters.isNotEmpty() }
-        .forEach { cls ->
+      val fromClasses: List<RirDiagnostic> = namespace.types.filterIsInstance<RirClass>()
+        .filterNot { it.typeParameters.isNotEmpty() }
+        .flatMap { cls ->
           val registrables: List<RirRegistrable> = bridgeableRegistrables(
-            cls, boundHandleTypes(rir), structs, boundGenericClassDefinitions = genericDefs,
+            cls, handles, structs, boundGenericClassDefinitions = genericDefs,
           )
           val methods: List<RirMethod> = cls.methods.filter { method ->
-            registrables.any { registrable ->
-              registrable is RirRegistrable.Method && registrable.method === method
-            }
+            registrables.any { it is RirRegistrable.Method && it.method === method }
           }
-          methods.groupBy { method ->
+          // ADR-153: keyed on kotlinMemberName, the name actually EMITTED, not the raw camelCase
+          // one. The two differ for an async member (`ReadAsync` renders `read`), so keying on the
+          // raw name let `read` beside `ReadAsync` through to a Kotlin redeclaration.
+          val methodCollisions: List<RirDiagnostic> = methods.groupBy { method ->
             val scope: String = if (method.isStatic) "static" else "instance"
-            "$scope:${method.name.toMethodCamelCase()}(" +
+            "$scope:${kotlinMemberName(cls, method)}(" +
                 method.parameters.joinToString(",") { it.type.kotlinCollisionType() } + ")"
-          }.values.filter { it.size > 1 }.forEach { collision ->
+          }.values.filter { it.size > 1 }.map { collision ->
             val first: RirMethod = collision.first()
             val params: String = first.parameters.joinToString(", ") { p ->
               "${p.name}: ${declKotlinType(p.type)}"
             }
-            require(false) {
-              "[nuget] Kotlin signature collision: " +
-                  collision.joinToString(" and ") { "`${it.managedSignature}`" } +
-                  " both map to `fun ${first.name.toMethodCamelCase()}($params)`. " +
-                  "Expose a differently named C# adapter."
-            }
+            signatureCollision(
+              cls.name, kotlinMemberName(cls, first), collision.map { it.managedSignature },
+              "fun ${kotlinMemberName(cls, first)}($params)",
+            )
           }
 
-          cls.constructors.groupBy { ctor ->
+          val ctorCollisions: List<RirDiagnostic> = cls.constructors.groupBy { ctor ->
             ctor.parameters.joinToString(",") { it.type.kotlinCollisionType() }
-          }.values.filter { it.size > 1 }.forEach { collision ->
-            require(false) {
-              "[nuget] Kotlin constructor signature collision: " +
-                  collision.joinToString(" and ") { "`${it.managedSignature}`" } +
-                  ". Expose a differently named C# adapter."
+          }.values.filter { it.size > 1 }.map { collision ->
+            val params: String = collision.first().parameters.joinToString(", ") { p ->
+              "${p.name}: ${declKotlinType(p.type)}"
             }
+            signatureCollision(
+              cls.name, cls.name, collision.map { it.managedSignature }, "constructor($params)",
+            )
           }
+
+          val properties: List<RirProperty> = registrables
+            .filterIsInstance<RirRegistrable.PropertyGetter>().map { it.property }
+          methodCollisions + ctorCollisions + propertyCollisions(cls.name, properties)
         }
+
+      // The interface route never went through this check at all: two case-folded C# members on a
+      // bound interface emitted the same Kotlin declaration twice, in the interface AND in its
+      // `{Name}Handle`, with no error and no diagnostic.
+      val fromInterfaces: List<RirDiagnostic> = namespace.types.filterIsInstance<RirInterface>()
+        .flatMap { iface ->
+          val registrables: List<RirRegistrable> =
+            bridgeableInterfaceRegistrables(iface, handles, ifaces)
+          val methods: List<RirMethod> =
+            registrables.filterIsInstance<RirRegistrable.Method>().map { it.method }
+          val methodCollisions: List<RirDiagnostic> = methods.groupBy { method ->
+            "${method.name.toMethodCamelCase()}(" +
+                method.parameters.joinToString(",") { it.type.kotlinCollisionType() } + ")"
+          }.values.filter { it.size > 1 }.map { collision ->
+            val first: RirMethod = collision.first()
+            val params: String = first.parameters.joinToString(", ") { p ->
+              "${p.name}: ${declKotlinType(p.type)}"
+            }
+            signatureCollision(
+              iface.name, first.name.toMethodCamelCase(), collision.map { it.managedSignature },
+              "fun ${first.name.toMethodCamelCase()}($params)",
+            )
+          }
+          val properties: List<RirProperty> = registrables
+            .filterIsInstance<RirRegistrable.PropertyGetter>().map { it.property }
+          methodCollisions + propertyCollisions(iface.name, properties)
+        }
+
+      (fromClasses + fromInterfaces).map { assembly.packageId to it }
     }
   }
+}
+
+// Two C# properties differing only in case (`Name` beside `name`, both legal and both public)
+// render one Kotlin name, which is a redeclaration. Never checked before: the old validator
+// looked at methods and constructors only.
+private fun propertyCollisions(
+  typeName: String,
+  properties: List<RirProperty>,
+): List<RirDiagnostic> = properties.groupBy { property ->
+  val scope: String = if (property.isStatic) "static" else "instance"
+  "$scope:${property.name.toMethodCamelCase()}"
+}.values.filter { it.size > 1 }.map { collision ->
+  val first: RirProperty = collision.first()
+  val keyword: String = if (first.isReadOnly) "val" else "var"
+  signatureCollision(
+    typeName, first.name.toMethodCamelCase(),
+    collision.map { "$typeName.${it.name}" },
+    "$keyword ${first.name.toMethodCamelCase()}: ${declKotlinType(first.type)}",
+  )
 }
 
 private fun RirTypeRef.kotlinCollisionType(): String = when (this) {

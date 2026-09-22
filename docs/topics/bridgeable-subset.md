@@ -138,6 +138,16 @@ struct-typed member, a generic-instance-typed member, a collection-typed member
 (`List`/`Map`/`Set`), or a `Task`-returning member is out of scope and named on a build warning
 instead of bridged; a class with one of those members can't be passed at that interface position.
 
+An `init`-only interface property (`string Label { get; init; }`) is a `val` on the generated Kotlin
+interface, same as on a bound class. Implement it with an ordinary `val`:
+
+```kotlin
+private class OreosBadge : IBadge {
+  override val label: String = "Oreo's rosette"
+  override val serial: Int = 1
+}
+```
+
 <note>
 <p>While C# holds a live reference to a Kotlin-implemented object, repeated crossings resolve to
 the <b>same</b> C#-side bridge instance, so <code>ReferenceEquals</code> holds; storing the object

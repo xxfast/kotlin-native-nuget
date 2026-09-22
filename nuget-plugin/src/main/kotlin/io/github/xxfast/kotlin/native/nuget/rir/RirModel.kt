@@ -187,6 +187,13 @@ data class RirProperty(
   val type: RirTypeRef,
   val isReadOnly: Boolean = true,
   val isStatic: Boolean = false,
+  // A setter EXISTS but is `init`-only, so [isReadOnly] is true as well: readable forever,
+  // assignable only in an object initializer. Only the ADR-085 Kotlin-implementable interface
+  // bridge cares about the difference (a bridge property with `set` is CS8854 and a get-only one is
+  // CS0535, so an `init` accessor is the one shape that compiles); every other consumer wants
+  // exactly what [isReadOnly] already says. Defaults to false so a reverse-ir.json written before
+  // the flag existed still parses.
+  val isInitOnly: Boolean = false,
 )
 
 @Serializable

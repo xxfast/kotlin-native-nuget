@@ -12,8 +12,11 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import test.kennel.IBadge
 import test.kennel.Kennel
+import test.menagerie.Ferret
 import test.menagerie.IFeedable
+import test.structs.Collar
 
 // ADR-152: a C# `Task` / `Task<T>` member consumed from Kotlin as a `suspend fun`.
 //
@@ -429,6 +432,102 @@ suspend fun howlsFaultRepeatedly(times: Int): Int = Kennel().use { kennel ->
   }
   pollFor { kennel.howlFinallyRuns >= times }
   kennel.howlFinallyRuns
+}
+
+// The reverse compile-break rows (memo sub-items A, B and E). None of them is async: each one is
+// the shortest Kotlin that puts a generated-source defect in front of a real compiler.
+//
+// EXPECTED TO FAIL TODAY, and each failure is a DIFFERENT mechanism:
+//   A, class half      the C# thunk assigns an `init`-only property (`receiver.Motto = ...`),
+//                      which is CS8852. Kotlin reads a `var` today and a `val` after the fix, so
+//                      the read below compiles either way — the C# side is where it breaks.
+//   A, interface half  [OreosBadge] implements `IBadge` with `val`s. The generated Kotlin
+//                      interface declares `var`, so this is a Kotlin override error today; the
+//                      bridge C# it needs is CS8854 besides.
+//   B                  `fit(...)` emits a bare `handleOf(guest, ...)` with no
+//                      `nugetTransferScope` receiver: an unresolved reference in `compileKotlin`.
+//   E                  `resident()` and `favourite` call `nugetIFeedableValue(...)` declared in
+//                      another Kotlin package, with only the TYPE imported: also unresolved.
+
+/**
+ * A, class half: both `init`-only properties read back off a bound class. One CONVERTING member
+ * type and one DIRECT, because a setter thunk for the `Int` is exactly as illegal in C# and would
+ * be just as invisible from a fixture that only carried the `String`.
+ */
+fun kennelMotto(): String = Kennel().use { "${it.motto}|${it.capacity}" }
+
+/**
+ * A, interface half, INBOUND: a Kotlin-implemented [IBadge] whose `{ get; init; }` members are
+ * plain `val`s, read by C# through the ADR-085 bridge. The whole point of binding `init` as a `val`
+ * rather than skipping it is that this is writable Kotlin.
+ */
+fun inspectAKotlinBadge(): String = Kennel().use { it.inspect(OreosBadge()) }
+
+/**
+ * A, interface half, OUTBOUND: a C#-originated [IBadge], read through the handle-backed
+ * implementation. After the fix there is no setter slot at all on either member.
+ */
+fun issuedBadge(): String = Kennel().use { kennel ->
+  val badge: IBadge = kennel.issue()
+  "${badge.label}#${badge.serial}"
+}
+
+/**
+ * B: an interface-typed PARAMETER with a STRUCT return, the argument being a KOTLIN-implemented
+ * [IFeedable]. C# reads `guest.legs` while the call is in flight, so the transfer scope that owns
+ * the bridge handle has to be open around the invoke — which is exactly what the struct-return
+ * branch forgets to open. Every Collar component comes back, so a wrong out-pointer order or a
+ * dropped string is visible rather than implied.
+ */
+fun fitAKotlinGuest(): String = Kennel().use { kennel ->
+  val goat = Nibbles()
+  val collar: Collar = kennel.fit(goat)
+  "${collar.girth}:${collar.colour}:${collar.belled}:${collar.initial}:${collar.mood}"
+}
+
+/**
+ * B coupled to E in one expression: the argument is the C#-originated [IFeedable] from
+ * [test.kennel.Kennel.resident], so the interface value crosses the read path (E's resolver call)
+ * and then the argument path (B's `handleOf`) in the same statement.
+ */
+fun fitTheResident(): String = Kennel().use { kennel ->
+  val collar: Collar = kennel.fit(kennel.resident())
+  "${collar.girth}:${collar.colour}"
+}
+
+/**
+ * E, METHOD RETURN position: a cross-namespace interface resolved through
+ * `test.menagerie.nugetIFeedableValue`, which the generated `test.kennel.Kennel` file does not
+ * import. Dispatches a member on the result so the row is not satisfied by a resolver that returns
+ * a broken handle.
+ */
+fun residentDescribed(): String = Kennel().use { kennel ->
+  val resident: IFeedable = kennel.resident()
+  "${resident.describe()}|${resident.legs}|${resident.nickname}"
+}
+
+/**
+ * E, NULLABLE PROPERTY position: a different generated line from the method return above
+ * (`ptr?.let { ... }`). The setter direction never needed the resolver, so writing then reading
+ * then clearing pins that the fix did not disturb it.
+ */
+fun favouriteRoundTrip(): String = Kennel().use { kennel ->
+  val startsNull: Boolean = kennel.favourite == null
+  kennel.favourite = Ferret().also { it.nickname = "Mylo" }
+  val described: String? = kennel.favourite?.describe()
+  val nickname: String? = kennel.favourite?.nickname
+  kennel.favourite = null
+  "$startsNull|$described|$nickname|${kennel.favourite == null}"
+}
+
+/**
+ * A Kotlin implementation of the `{ get; init; }` interface: two `val`s, which is the surface the
+ * decision buys. One member needs marshalling on the way out, one does not.
+ */
+private class OreosBadge : IBadge {
+  override val label: String = "Oreo's rosette"
+
+  override val serial: Int = 1
 }
 
 /**

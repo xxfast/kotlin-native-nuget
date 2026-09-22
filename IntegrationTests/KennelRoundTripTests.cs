@@ -323,4 +323,70 @@ public class KennelRoundTripTests
         await KennelSample.HowlsFaultAsync();
         Assert.Equal(2, await KennelSample.KennelCountAsync());
     }
+
+    // ------------------------------------------------------------------------------------------
+    // The reverse compile-break rows (memo sub-items A, B and E). For these the GREEN BUILD is
+    // most of the assertion: each row's Kotlin or C# counterpart does not compile today, and the
+    // value only proves the wiring once it does. Three separate mechanisms, none of which the other
+    // two would catch:
+    //
+    //   A  an `init`-only property is read-only in metadata but the reader calls it writable, so the
+    //      generated C# thunk assigns it (CS8852) and the Kotlin surface is a `var`. On an interface
+    //      the same mistake makes the ADR-085 Kotlin-implementable bridge CS8854.
+    //   B  an interface-typed parameter with a struct return emits `handleOf(...)` outside any
+    //      `nugetTransferScope`, an unresolved reference in `compileKotlin`.
+    //   E  an interface declared in another bound namespace, in a READ position, lowers through
+    //      `nugetIFeedableValue(...)` without importing it: also unresolved.
+    // ------------------------------------------------------------------------------------------
+
+    // A, class half: both `init`-only properties read back. One needs UTF-8 marshalling, one is a
+    // pass-through `int` — the int is here because its setter thunk would compile cleanly in C#
+    // while still being illegal, so a string-only fixture proves less than it looks.
+    [Fact]
+    public void Motto_InitOnlyProperties_BindAsReadableValues() =>
+        Assert.Equal("sit, stay|2", KennelSample.KennelMotto());
+
+    // A, interface half, INBOUND: a Kotlin object implementing `{ get; init; }` with two `val`s,
+    // read by C# through the bridge. This is the row the decision "init becomes a Kotlin val" is
+    // for: if the bridge could not carry an `init` accessor, Kotlin could not implement IBadge at
+    // all and this member would be unreachable.
+    [Fact]
+    public void Inspect_KotlinImplementedInitOnlyInterface_ReadsBothMembers() =>
+        Assert.Equal("Oreo's rosette#1", KennelSample.InspectAKotlinBadge());
+
+    // A, interface half, OUTBOUND: the same interface handed back from C#, read through the
+    // handle-backed implementation. Getter slots only — a setter slot on an `init` member is the
+    // thing that must NOT be generated.
+    [Fact]
+    public void Issue_CSharpOriginatedInitOnlyInterface_ReadsThroughTheHandle() =>
+        Assert.Equal("Oreo's rosette#1", KennelSample.IssuedBadge());
+
+    // B: interface parameter + struct return, with a KOTLIN-implemented argument, so the bridge
+    // handle has to stay valid for the duration of the call (`Fit` reads `guest.Legs` inside). All
+    // five Collar components come back: `girth` is read off the Kotlin goat (4), the rest are C#
+    // literals, so a dropped string or a swapped out-pointer is visible here rather than implied.
+    [Fact]
+    public void Fit_InterfaceParameterWithStructReturn_MarshalsEveryComponent() =>
+        Assert.Equal("4:red:true:O:PLAYFUL", KennelSample.FitAKotlinGuest());
+
+    // B coupled to E: the argument is the C#-originated IFeedable from `Resident()`, so one Kotlin
+    // statement crosses the read path (E's resolver) and then the argument path (B's handleOf).
+    [Fact]
+    public void Fit_ResidentAsArgument_CrossesBothInterfacePositions() =>
+        Assert.Equal("4:red", KennelSample.FitTheResident());
+
+    // E, METHOD RETURN: the cross-namespace interface resolved through
+    // `test.menagerie.nugetIFeedableValue` from inside the `test.kennel` file. Dispatches a method,
+    // a property and a NULLABLE property on the result, so a resolver that returned a handle Kotlin
+    // cannot actually call would fail here rather than pass on construction alone.
+    [Fact]
+    public void Resident_CrossNamespaceInterfaceReturn_Dispatches() =>
+        Assert.Equal("a ferret|4|Bandit", KennelSample.ResidentDescribed());
+
+    // E, NULLABLE PROPERTY: a different generated line from the method return above
+    // (`ptr?.let { ... }` rather than `requireNotNull`). The setter direction uses `handleOf` and
+    // never needed the resolver, so the round trip pins that the import fix did not disturb it.
+    [Fact]
+    public void Favourite_NullableCrossNamespaceInterfaceProperty_RoundTrips() =>
+        Assert.Equal("true|a ferret|Mylo|true", KennelSample.FavouriteRoundTrip());
 }

@@ -1,8 +1,43 @@
 using System.Runtime.CompilerServices;
 
 using Test.Menagerie;
+using Test.Structs;
 
 namespace Test.Kennel;
+
+/// <summary>
+/// Reverse compile-break fixture, the `init`-only half on an INTERFACE (memo sub-item A, spike A7).
+/// `{ get; init; }` on an interface is legal C#, and the ADR-085 Kotlin-implementable bridge for it
+/// is where it bites: a bridge property with `set` is CS8854, get-only is CS0535, and only an
+/// `init` accessor compiles. So the RIR has to tell "init-only" apart from "no setter at all",
+/// which is the new `isInitOnly` flag.
+///
+/// Both member vocabularies on purpose, one that needs marshalling and one that does not:
+///   <see cref="Label"/> — string, UTF-8 conversion on the crossing;
+///   <see cref="Serial"/> — int, pass-through, no conversion anywhere.
+/// A fixture with only the int would compile its bridge and prove nothing about the string thunk.
+/// </summary>
+public interface IBadge
+{
+    /// <summary>`init`-only, CONVERTING member type. Kotlin implements it with a `val`.</summary>
+    string Label { get; init; }
+
+    /// <summary>`init`-only, DIRECT member type (no marshalling at all).</summary>
+    int Serial { get; init; }
+}
+
+/// <summary>
+/// A C# implementation of <see cref="IBadge"/>, so <see cref="Kennel.Issue"/> has a real
+/// handle-backed direction to return: Kotlin then reads an `init`-only interface property off a
+/// C#-originated object (getter slot only, no setter slot), the other half of the crossing from
+/// Kotlin implementing <see cref="IBadge"/> itself.
+/// </summary>
+public sealed class Ribbon : IBadge
+{
+    public string Label { get; init; } = "kennel ribbon";
+
+    public int Serial { get; init; } = 7;
+}
 
 /// <summary>
 /// ADR-152 fixture (reverse `Task` / `Task&lt;T&gt;` → Kotlin `suspend fun`): a bound handle class
@@ -476,6 +511,81 @@ public class Kennel
         yield return 1;
         yield return null;
     }
+
+    // ----------------------------------------------------------------------------------------
+    // The reverse compile-break fixture (memo sub-items A, B and E). Nothing below is async: each
+    // member is the shortest C# that makes one generated-source defect show up in a real build.
+    //
+    //   Motto / Capacity  A: `{ get; init; }` on a bound CLASS. The reader calls them writable, so
+    //                     Kotlin gets a `var` and the C# thunk gets `receiver.Motto = ...`, which
+    //                     is CS8852. One CONVERTING member type (string) and one DIRECT (int),
+    //                     because a setter thunk for an `int` would compile just as wrongly.
+    //   Inspect / Issue   A, interface half: IBadge's `{ get; init; }` through both directions —
+    //                     a Kotlin-implemented badge handed IN (the ADR-085 bridge, CS8854 today),
+    //                     and a C#-originated one handed BACK (getter slot only).
+    //   Fit               B: an interface-typed PARAMETER together with a STRUCT return. The
+    //                     struct-return branch hard-codes `hasInterfaceArg = false`, so the
+    //                     emitted `handleOf(guest, ...)` has no `nugetTransferScope` receiver.
+    //                     The body reads `guest.Legs` so C# genuinely calls back into Kotlin
+    //                     DURING the call, which is what the missing scope guards.
+    //   Resident/Favourite E: an interface declared in ANOTHER bound namespace (Test.Menagerie,
+    //                     aliased to a different Kotlin package) in a READ position. The type
+    //                     import is emitted; the `nugetIFeedableValue` resolver import is not.
+    //                     Method return AND nullable property getter, two distinct emit sites.
+    // ----------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A: `init`-only, CONVERTING member type. Readable forever, assignable only in an object
+    /// initializer, so the faithful Kotlin surface is a `val` and no setter thunk may exist.
+    /// </summary>
+    public string Motto { get; init; } = "sit, stay";
+
+    /// <summary>
+    /// A: `init`-only, DIRECT member type. Here so the fix cannot be mistaken for something the
+    /// string marshalling path happens to do — an `int` setter thunk compiles fine and is still
+    /// wrong, because `receiver.Capacity = ...` is CS8852 whatever the type.
+    /// </summary>
+    public int Capacity { get; init; } = 2;
+
+    /// <summary>
+    /// A, interface half, INBOUND: reads both `init`-only members off a possibly Kotlin-implemented
+    /// <see cref="IBadge"/>, so the ADR-085 bridge has to exist and compile for this to be callable
+    /// at all.
+    /// </summary>
+    public string Inspect(IBadge badge) => $"{badge.Label}#{badge.Serial}";
+
+    /// <summary>
+    /// A, interface half, OUTBOUND: a C#-originated <see cref="IBadge"/>, which Kotlin reads through
+    /// the handle-backed implementation (getter slots only, no setter slot after the fix).
+    /// </summary>
+    public IBadge Issue() => new Ribbon { Label = "Oreo's rosette", Serial = 1 };
+
+    /// <summary>
+    /// B: interface-typed PARAMETER plus a Shape B STRUCT return
+    /// (<see cref="Test.Structs.Collar"/>: int field, string, two `init` components and an enum).
+    /// Calls back into <paramref name="guest"/> while the call is in flight.
+    /// </summary>
+    public Collar Fit(IFeedable guest) => new Collar
+    {
+        Girth = guest.Legs,
+        Colour = "red",
+        Belled = true,
+        Initial = 'O',
+        Mood = Test.Enums.CatMood.Playful,
+    };
+
+    /// <summary>
+    /// E: returns an interface declared in a DIFFERENT bound namespace (<see cref="Test.Menagerie"/>
+    /// is aliased to its own Kotlin package), in the METHOD RETURN position.
+    /// </summary>
+    public IFeedable Resident() => new Ferret { Nickname = "Bandit" };
+
+    /// <summary>
+    /// E, second emit site: the same cross-namespace interface as a NULLABLE PROPERTY. The getter
+    /// lowers through `ptr?.let { nugetIFeedableValue(it) }`, a different generated line from the
+    /// method return above, and the setter proves the inbound direction was never broken.
+    /// </summary>
+    public IFeedable? Favourite { get; set; }
 
     /// <summary>
     /// Plain <c>int</c>, the element shape needing NO conversion, and the MID-STREAM THROW: two

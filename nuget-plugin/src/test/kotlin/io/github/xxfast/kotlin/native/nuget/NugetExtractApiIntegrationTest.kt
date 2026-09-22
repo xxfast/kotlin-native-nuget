@@ -4,7 +4,9 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnostic
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
+import io.github.xxfast.kotlin.native.nuget.rir.RirInterface
 import io.github.xxfast.kotlin.native.nuget.rir.RirNamespace
+import io.github.xxfast.kotlin.native.nuget.rir.RirProperty
 import io.github.xxfast.kotlin.native.nuget.rir.deriveDllPaths
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import java.io.File
@@ -20,6 +22,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -843,5 +846,61 @@ class NugetExtractApiIntegrationTest {
       "KnownMimeTypes must not expose any bridgeable methods (LookupType is internal, not " +
           "public) but found: ${knownMimeTypes?.methods?.map { it.name }}",
     )
+  }
+
+  @Test
+  fun `an init-only property is read-only and flagged init-only on a class and on an interface`() {
+    val dotnet: String = findDotnet() ?: return
+
+    // An `init` accessor reaches metadata as a public setter carrying
+    // `modreq(System.Runtime.CompilerServices.IsExternalInit)` on its RETURN type: nothing in the
+    // property loop used to look at the setter's signature, so all three of these read back
+    // identically writable and the generated C# thunk assigned the init-only ones (CS8852/CS8854).
+    val source: String = """
+      namespace Probe.Init;
+
+      public interface IBadge
+      {
+          string Label { get; init; }
+      }
+
+      public sealed class Kennel
+      {
+          public Kennel() { }
+          public string Motto { get; init; } = "sit, stay";
+          public int Capacity { get; init; } = 2;
+          public string Mutable { get; set; } = "";
+          public string Fixed { get; } = "";
+      }
+    """.trimIndent()
+
+    val dll: File = compileFixture(dotnet, source, "InitReaderFixture")
+    val toolDir: File = Files.createTempDirectory("NugetMetadataReader-init-fixture").toFile()
+    unpackMetadataReader(toolDir, javaClass.classLoader)
+    val file: RirFile = parseReverseIr(
+      runMetadataReader(dotnet, toolDir, mapOf("InitFixture" to listOf(dll.absolutePath))),
+    )
+    val ns: RirNamespace = file.assemblies.single().namespaces.single { it.name == "Probe.Init" }
+    val kennel: RirClass = ns.types.filterIsInstance<RirClass>().single { it.name == "Kennel" }
+    fun property(name: String): RirProperty = kennel.properties.single { it.name == name }
+
+    // init-only: read-only AND flagged, one converting member type and one direct.
+    assertTrue(property("Motto").isReadOnly, "an init-only property is read-only after construction")
+    assertTrue(property("Motto").isInitOnly)
+    assertTrue(property("Capacity").isReadOnly)
+    assertTrue(property("Capacity").isInitOnly)
+
+    // An ordinary setter is untouched, and a genuinely get-only property is read-only but NOT
+    // init-only (the interface bridge must still emit a get-only property for that one).
+    assertFalse(property("Mutable").isReadOnly)
+    assertFalse(property("Mutable").isInitOnly)
+    assertTrue(property("Fixed").isReadOnly)
+    assertFalse(property("Fixed").isInitOnly)
+
+    // The interface half, which is where the flag is load-bearing (ADR-085 bridge accessor).
+    val badge: RirInterface = ns.types.filterIsInstance<RirInterface>()
+      .single { it.name == "IBadge" }
+    assertTrue(badge.properties.single().isReadOnly)
+    assertTrue(badge.properties.single().isInitOnly)
   }
 }
