@@ -809,9 +809,9 @@ class NugetProcessor(
     ForwardDiagnosticSink.reset()
 
     // ADR-163: every forward symbol this round mints starts with the sanitised library name, so a
-    // library literally called `nuget` would mint into ADR-127's reserved runtime ABI space. Checked
-    // before anything is planned, because there is no per-declaration fix for it: the option is
-    // wrong, not the code.
+    // library literally called `nuget` would mint into ADR-127's reserved runtime ABI space.
+    // Checked before anything is planned, because there is no per-declaration fix for it: the
+    // option is wrong, not the code.
     if (context.symbols.librarySegment == RESERVED_LIBRARY_SEGMENT) {
       ForwardDiagnosticSink.emit(
         listOf(
@@ -823,9 +823,9 @@ class NugetProcessor(
                 "'$RESERVED_LIBRARY_SEGMENT', the leading segment ADR-127 reserves for the " +
                 "nuget-runtime ABI. Every C entry point this build would mint " +
                 "('${RESERVED_LIBRARY_SEGMENT}_...') could collide with a runtime export.",
-            hint = "Rename the library: set `nuget { libraryName = \"...\" }` (or the Kotlin/Native " +
-                "binary's base name) to anything whose lowercased, `[a-z0-9_]`-sanitised form is " +
-                "not '$RESERVED_LIBRARY_SEGMENT'.",
+            hint = "Rename the library: set `nuget { libraryName = \"...\" }` (or the " +
+                "Kotlin/Native binary's base name) to anything whose lowercased, " +
+                "`[a-z0-9_]`-sanitised form is not '$RESERVED_LIBRARY_SEGMENT'.",
             owner = null,
           ),
         ),
@@ -1574,7 +1574,8 @@ class NugetProcessor(
     // deliberately NOT merged below, or every reachable interface's skip would be reported twice
     // (a reachable interface is planned by both).
     val declarationPlanner = ForwardCallablePlanner(forwardClassifier, context.symbols, expects)
-    val declarationPropertyPlanner = ForwardPropertyPlanner(forwardClassifier, context.symbols, expects)
+    val declarationPropertyPlanner =
+      ForwardPropertyPlanner(forwardClassifier, context.symbols, expects)
 
     // ADR-075 amendment (2026-09-13): the UNEXPORTED supertypes of exported classes, planned onto
     // the same declaration catalog. ADR-101 drops `: INesting` from the base list, but the members
@@ -1612,7 +1613,8 @@ class NugetProcessor(
     // A THIRD planner instance, for the same reason the declaration planner above is a second one:
     // its drop channel must not be merged, or every declared member of an unexported supertype the
     // class implements concretely would be warned about on every build.
-    val supertypePropertyPlanner = ForwardPropertyPlanner(forwardClassifier, context.symbols, expects)
+    val supertypePropertyPlanner =
+      ForwardPropertyPlanner(forwardClassifier, context.symbols, expects)
     val interfaceDeclarationCatalog = ForwardCallablePlanCatalog(
       // Issue #249: the interface is the C# owner of whatever `IFoo` loses.
       // ADR-162: guarded per interface, same reasoning as the reachable loops above.
@@ -2005,16 +2007,22 @@ class NugetProcessor(
 
     classes.forEach { cls ->
       guardDeclaration(cls) {
-        builder.addClassExports(cls, callableCatalog, forwardClassifier, exportedTypes, context.symbols)
+        builder.addClassExports(
+          cls, callableCatalog, forwardClassifier, exportedTypes, context.symbols,
+        )
       }
     }
     classes.forEach { cls ->
       guardDeclaration(cls) { builder.addCompanionExports(cls, callableCatalog) }
     }
-    enums.forEach { enum -> guardDeclaration(enum) { builder.addEnumExports(enum, context.symbols) } }
+    enums.forEach { enum ->
+      guardDeclaration(enum) { builder.addEnumExports(enum, context.symbols) }
+    }
     sealedClasses.forEach { sealed ->
       guardDeclaration(sealed) {
-        builder.addSealedClassExports(sealed, callableCatalog, context.exportMarkers, context.symbols)
+        builder.addSealedClassExports(
+          sealed, callableCatalog, context.exportMarkers, context.symbols,
+        )
       }
     }
     objects.forEach { obj ->
@@ -2024,7 +2032,9 @@ class NugetProcessor(
       guardDeclaration(cls) { builder.addValueClassExports(cls, callableCatalog) }
     }
     reachableInterfaces.forEach { iface ->
-      guardDeclaration(iface) { builder.addInterfaceExports(iface, callableCatalog, context.symbols) }
+      guardDeclaration(iface) {
+        builder.addInterfaceExports(iface, callableCatalog, context.symbols)
+      }
     }
     // ADR-084 stage 1: the per-interface bridge factory, projected from the same slot plan the C#
     // `{Iface}BridgeState` is projected from (see `ForwardInterfaceBridgePlanner`).

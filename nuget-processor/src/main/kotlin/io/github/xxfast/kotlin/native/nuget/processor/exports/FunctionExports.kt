@@ -3,7 +3,6 @@ package io.github.xxfast.kotlin.native.nuget.processor.exports
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.importIfDefaultPackage
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinPackageReference
-
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
@@ -105,7 +104,6 @@ internal fun FileSpec.Builder.addFunctionExports(
     // IntPtr / defaultValueFor("0") garbage (Phase 10 / MIGRATION invariants).
     return
   }
-
 
   val paramCall: String = func.parameters.joinToString(", ") { param ->
     val resolved: KSType = param.type.resolve().expandAliases()

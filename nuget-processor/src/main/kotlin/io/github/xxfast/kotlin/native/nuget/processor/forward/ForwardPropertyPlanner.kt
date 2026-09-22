@@ -1,7 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
-
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration

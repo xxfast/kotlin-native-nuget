@@ -211,7 +211,10 @@ class CirDocLinksTest {
       listOf(
         CirStaticClass("DeskKt", listOf(method)),
         CirObject("Jar", "lib", "jar", listOf(method)),
-        CirEnum("Mood", "lib", nativePrefix = "mood", entries = listOf(CirEnumEntry("Happy", 0, docOf("Blanket")))),
+        CirEnum(
+          "Mood", "lib", nativePrefix = "mood",
+          entries = listOf(CirEnumEntry("Happy", 0, docOf("Blanket"))),
+        ),
         classOf("Blanket"),
       ),
     ).resolveDocLinks()

@@ -3,7 +3,6 @@ package io.github.xxfast.kotlin.native.nuget.processor.exports
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.importIfDefaultPackage
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinPackageReference
-
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.squareup.kotlinpoet.ClassName
@@ -56,7 +55,6 @@ internal fun FileSpec.Builder.addGenericFunctionExports(
 
   // ADR-163: the default package has no qualifier to spell, so the bare call needs this import.
   importIfDefaultPackage(func)
-
 
   val paramName: String = func.parameters[paramIndex].name?.asString() ?: "value"
 

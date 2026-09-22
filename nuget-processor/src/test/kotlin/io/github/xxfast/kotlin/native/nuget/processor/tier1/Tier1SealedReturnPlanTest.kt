@@ -129,7 +129,9 @@ class Tier1SealedReturnPlanTest {
 
     assertEquals(
       1,
-      Regex("""@CName\("library_tier1_sealedreturn__anyShape"\)""").findAll(result.generated).count(),
+      Regex("""@CName\("library_tier1_sealedreturn__anyShape"\)""")
+        .findAll(result.generated)
+        .count(),
       "expected exactly one export for the top-level sealed return; generated=${result.generated}",
     )
     assertTrue(

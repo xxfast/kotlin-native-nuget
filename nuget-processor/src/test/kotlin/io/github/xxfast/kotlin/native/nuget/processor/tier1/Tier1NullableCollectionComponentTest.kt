@@ -283,7 +283,9 @@ class Tier1NullableCollectionComponentTest {
     )
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "export_library_tier1_nullablecollectionnarrowing__chartbook_tallyShorts")
+    assertContains(
+      kotlin, "export_library_tier1_nullablecollectionnarrowing__chartbook_tallyShorts",
+    )
     assertContains(kotlin, "export_library_tier1_nullablecollectionnarrowing__chartbook_initials")
     assertContains(kotlin, "it as kotlin.Short?")
     assertContains(kotlin, "it as kotlin.Char?")

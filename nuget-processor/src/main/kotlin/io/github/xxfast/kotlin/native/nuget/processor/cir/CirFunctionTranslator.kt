@@ -531,8 +531,8 @@ internal fun translateFunction(
 
     // ROADMAP line 76 / ADR-163's sibling fix: the OUTER type name was still the bare simple name,
     // so a top-level function whose return type is declared in another Kotlin package rendered
-    // `Box<int>` inside the *function's* namespace and the consumer's build failed with CS0246. Issue
-    // #111 qualified the type ARGUMENTS here; the enum arm 15 lines below already spells
+    // `Box<int>` inside the *function's* namespace and the consumer's build failed with CS0246.
+    // Issue #111 qualified the type ARGUMENTS here; the enum arm 15 lines below already spells
     // `global::$ns.$name`. This is that same spelling, on the outer name.
     val returnNamespace: String = mapPackageToNamespace(
       requireNotNull(returnDecl).packageName.asString(), context.rootPackage, context.rootNamespace,

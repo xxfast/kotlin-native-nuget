@@ -652,8 +652,8 @@ internal class ForwardCallablePlanner(
   private val classifier: ForwardBridgeTypeClassifier,
   /**
    * ADR-163: the one forward symbol table. Every export name a plan carries is library- and
-   * package-qualified through it, so the plan's two projections cannot disagree and two same-simple-
-   * name owners in two packages no longer derive one C entry point.
+   * package-qualified through it, so the plan's two projections cannot disagree and two
+   * same-simple-name owners in two packages no longer derive one C entry point.
    */
   private val symbols: ForwardSymbolTable,
   /**

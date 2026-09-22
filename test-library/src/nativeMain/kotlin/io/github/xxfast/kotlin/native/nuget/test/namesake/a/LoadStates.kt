@@ -18,6 +18,9 @@ sealed class LoadState {
   class Failed(val cause: String) : LoadState()
 }
 
-/** Returns [LoadState.Ready] for Oreo, who is always on time for dinner, and [LoadState.Failed] otherwise. */
+/**
+ * Returns [LoadState.Ready] for Oreo, who is always on time for dinner, and [LoadState.Failed]
+ * otherwise.
+ */
 fun loadFor(name: String): LoadState =
   if (name == "Oreo") LoadState.Ready("a:$name") else LoadState.Failed("a: $name is not in house A")

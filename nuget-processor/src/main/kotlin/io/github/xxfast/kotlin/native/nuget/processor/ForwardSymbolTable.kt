@@ -12,14 +12,14 @@ import com.google.devtools.ksp.symbol.KSDeclaration
  *    `fun signal(dbm: Int)` bind: `ld.lld`'s MinGW auto-exporter silently drops any exported name
  *    that an import library on the link line already exports (`signal`, `read`, `qsort`, `Beep`),
  *    and the match is exact, so `<lib>_signal` is safe by mechanism rather than by luck.
- *  - `<package>` is the declaring Kotlin package RELATIVE to `rootPackage` when it is under it (the
- *    same segment-bounded [isUnderPackage] rule admission and `mapPackageToNamespace` use), else the
- *    whole package; lowercased with `.` replaced by `_`. It is omitted together with its separator
- *    when empty, so a root-package declaration reads `<lib>_kitten_create`.
+ *  - `<package>` is the declaring Kotlin package RELATIVE to `rootPackage` when it is under it
+ *    (the same segment-bounded [isUnderPackage] rule admission and `mapPackageToNamespace` use),
+ *    else the whole package; lowercased with `.` replaced by `_`. It is omitted together with its
+ *    separator when empty, so a root-package declaration reads `<lib>_kitten_create`.
  *  - `__` (a double underscore) separates the package part from the owner chain, so `a.b` + `C`
- *    (`a_b__c`) and `a` + `B.C` (`a__b_c`) differ. Kotlin identifiers may themselves contain `_`, so
- *    this is best-effort rather than a JNI-grade escape: ADR-117's collision diagnostic stays as the
- *    loud backstop for the residue.
+ *    (`a_b__c`) and `a` + `B.C` (`a__b_c`) differ. Kotlin identifiers may themselves contain `_`,
+ *    so this is best-effort rather than a JNI-grade escape: ADR-117's collision diagnostic stays
+ *    as the loud backstop for the residue.
  *
  * Built once in [NugetProcessor] and handed to the planners, the CIR translators and the legacy
  * `exports/` builders, because the routes that mint a symbol do not share a code path: three
@@ -37,9 +37,12 @@ internal class ForwardSymbolTable(
 ) {
   private val qualifiers: MutableMap<String, String> = mutableMapOf()
 
-  /** `<lib>_` for the root package, `<lib>_<relative package>__` for anything under or outside it. */
+  /**
+   * `<lib>_` for the root package, `<lib>_<relative package>__` for anything under or outside it.
+   */
   fun qualifier(packageName: String): String = qualifiers.getOrPut(packageName) {
-    val relative: String = if (rootPackage.isNotEmpty() && isUnderPackage(packageName, rootPackage)) {
+    val underRoot: Boolean = rootPackage.isNotEmpty() && isUnderPackage(packageName, rootPackage)
+    val relative: String = if (underRoot) {
       packageName.removePrefix(rootPackage).removePrefix(".")
     } else {
       packageName
@@ -63,11 +66,13 @@ internal class ForwardSymbolTable(
   /**
    * A top-level callable's entry point: its own package's qualifier plus its C-escaped name. The
    * `toCName` escape lives here so no route can mint the symbol from the raw Kotlin name (two
-   * `exports/GenericFunctionExports.kt` sites did, and agreed with their C# twin only while the name
-   * was not a C keyword).
+   * `exports/GenericFunctionExports.kt` sites did, and agreed with their C# twin only while the
+   * name was not a C keyword).
    */
-  fun topLevel(declaration: KSDeclaration, name: String = declaration.simpleName.asString()): String =
-    qualifier(declaration) + toCName(name)
+  fun topLevel(
+    declaration: KSDeclaration,
+    name: String = declaration.simpleName.asString(),
+  ): String = qualifier(declaration) + toCName(name)
 
   /**
    * An extension callable's entry point. The package part is the EXTENSION's own package, not the
@@ -99,15 +104,15 @@ internal class ForwardSymbolTable(
    * ADR-163: [exportName] with THIS table's own qualification removed, and returned unchanged when
    * it does not carry it.
    *
-   * For the few C# identifiers that are (historically) folded out of the C symbol rather than out of
-   * the declaration: the property projection's `Native_ChartrefGetPatientName` extern names. Leaving
-   * them to read the qualified symbol is the defect memo finding 11 found on the legacy top-level
-   * route, where a public C# method silently renamed itself to `Testlib_gen_b__Make` because its
-   * name was derived from the entry point.
+   * For the few C# identifiers that are (historically) folded out of the C symbol rather than out
+   * of the declaration: the property projection's `Native_ChartrefGetPatientName` extern names.
+   * Leaving them to read the qualified symbol is the defect memo finding 11 found on the legacy
+   * top-level route, where a public C# method silently renamed itself to `Testlib_gen_b__Make`
+   * because its name was derived from the entry point.
    *
-   * Exact rather than heuristic: it strips only a leading `<librarySegment>_` it actually finds, so a
-   * hand-built plan (every unit test that constructs a `ForwardNativeCall` itself) is a fixed point
-   * instead of silently losing its first segment.
+   * Exact rather than heuristic: it strips only a leading `<librarySegment>_` it actually finds,
+   * so a hand-built plan (every unit test that constructs a `ForwardNativeCall` itself) is a fixed
+   * point instead of silently losing its first segment.
    */
   fun stem(exportName: String): String {
     val head = "${librarySegment}_"

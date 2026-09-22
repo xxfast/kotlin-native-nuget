@@ -1,6 +1,5 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
-
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirExtraNative
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMember

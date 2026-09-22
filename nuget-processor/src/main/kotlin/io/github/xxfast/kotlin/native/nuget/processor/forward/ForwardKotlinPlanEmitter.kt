@@ -966,7 +966,9 @@ private fun BridgeType.TypeParameter.stableRefTypeName(): String = boundQualifie
 internal fun kotlinPackageReference(packageName: String): String {
   if (packageName.isEmpty()) return ""
   return packageName.split(".")
-    .joinToString(".") { segment -> if (segment in KOTLIN_HARD_KEYWORDS) "`$segment`" else segment } + "."
+    .joinToString(".") { segment ->
+      if (segment in KOTLIN_HARD_KEYWORDS) "`$segment`" else segment
+    } + "."
 }
 
 /**
@@ -1011,7 +1013,8 @@ private fun invocationExpression(
     // ADR-163: fully qualified, never imported by simple name. Two `rollCall()` in two packages
     // both become exported symbols now that the C name is package-qualified, and a bare call with
     // two simple-name imports beside it is an overload-resolution ambiguity in the generated file
-    // (verified by spike: `CNameExports.kt:35:3: Overload resolution ambiguity between candidates`).
+    // (verified by spike: `CNameExports.kt:35:3: Overload resolution ambiguity between
+    // candidates`).
     // The generated wrapper names are `export_$cname`, so they are already unique.
     // A DEFAULT-package declaration's qualified name carries no `.`, and `substringBeforeLast` on a
     // string without its separator returns the whole string: that spelled `rollCall.rollCall()`.
