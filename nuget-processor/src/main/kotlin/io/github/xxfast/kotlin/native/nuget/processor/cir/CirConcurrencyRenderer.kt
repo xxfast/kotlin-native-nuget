@@ -7,11 +7,18 @@ internal fun StringBuilder.renderAsyncHelper(helper: CirAsyncHelper) {
   // ADR-102: the suspend continuation's ctx is the GCHandle of the completion closure itself. The
   // closure already captures its TaskCompletionSource, so the separate tcs handle that used to
   // travel through userData collapses into this one.
+  // ADR-161 part C: this family stays on GCHandle dispatch, deliberately. It is not user code (the
+  // published `nuget-runtime` klib invokes it through `launchForCSharp`), its ctx is a one-shot
+  // handle the completion closure frees itself, and a `void` shape's table MISS is a DROP -- which
+  // on this route would mean the Task never completes and every awaiting caller hangs forever
+  // instead of failing. The never-reused key table is for the routes where C# can dispose the ctx
+  // while Kotlin still holds the pointer.
   renderThunkClass {
     appendCtxDispatchThunk(
       "NugetAsyncCallback",
       "(IntPtr result, IntPtr error, byte isCancelled, IntPtr userData)",
       "void",
+      viaKeyTable = false,
     )
   }
 }

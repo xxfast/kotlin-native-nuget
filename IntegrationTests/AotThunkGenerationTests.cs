@@ -238,7 +238,7 @@ public class AotThunkGenerationTests
     /// <summary>
     /// Shape 1, per-call lambda parameter (ADR-036): `cat.DescribeWith(name =&gt; ...)`. Today the
     /// call site passes the marshaller-built pointer and `IntPtr.Zero` for the ctx slot, with the
-    /// closure capturing the state. ADR-102: thunk pointer + the real GCHandle ctx.
+    /// closure capturing the state. ADR-102: thunk pointer + a real ctx (an ADR-161 table key).
     /// </summary>
     [Fact]
     public void PerCallLambda_PassesAThunkPointerAndTheRealCbHandleCtx()
@@ -247,7 +247,12 @@ public class AotThunkGenerationTests
 
         string args = CallArguments(interop, "Native_DescribeWith(");
         Assert.DoesNotContain("IntPtr.Zero", args);
-        Assert.Contains("GCHandle.ToIntPtr", args);
+        // ADR-161 part C re-anchored this from `GCHandle.ToIntPtr(...)`: the ctx is a never-reused
+        // key into the thunk class's table, because a freed GCHandle's slot is reused by the next
+        // allocation and a late invocation would resolve it to a foreign delegate. The ADR-102
+        // property this cell exists for is unchanged: a REAL ctx paired with a link-time thunk
+        // address, never IntPtr.Zero and never a runtime-built stub.
+        Assert.Matches(@"NugetThunks\.\w+Ptr, \w+Ctx", args);
         Assert.Contains("NugetThunks", WindowAfter(interop, "Native_DescribeWith(_handle", 6));
     }
 
@@ -263,7 +268,11 @@ public class AotThunkGenerationTests
         string args = CallArguments(interop, "Native_AddListener(");
         Assert.DoesNotContain("IntPtr.Zero", args);
         Assert.Contains("NugetThunks", args);
-        Assert.Contains("GCHandle.ToIntPtr", args);
+        // ADR-161 part C: the per-slot ctx is a table key the subscription removes on Dispose(),
+        // in place of the GCHandle it used to free. Same ADR-102 pairing, see the cell above. The
+        // anchor `Native_AddListener` is the ADR-039 listener-bridge pair, whose keys are `k0`, `k1`,
+        // one per interface method; the ADR-037 stored-callback route spells its single key `cbKey`.
+        Assert.Matches(@"NugetThunks\.\w+Ptr, (k\d+|cbKey)", args);
     }
 
     /// <summary>

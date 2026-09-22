@@ -193,7 +193,10 @@ class Tier1InterfaceBridgeFactoryTest {
     assertContains(cs, "state.Root();")
     assertContains(cs, "internal static int ReleasedCount;")
     assertContains(cs, "if (System.Threading.Interlocked.Exchange(ref _freed, 1) != 0) return;")
-    assertContains(cs, "if (pin.IsAllocated) pin.Free();")
+    // ADR-161 part C: the slot pins are table keys, so the release un-roots them by removing the
+    // entry. `_self` and `_token` stay GCHandles: neither is a thunk ctx (`_token` is read back by
+    // the identity probe in `NugetMarshal`), so neither can be read after a free.
+    assertContains(cs, "NugetThunks.UnregisterCtx(pin);")
     assertContains(cs, "if (_self.IsAllocated) _self.Free();")
     assertContains(cs, "System.Threading.Interlocked.Increment(ref ReleasedCount);")
     assertContains(cs, "EntryPoint = \"nuget_gc_collect\"")

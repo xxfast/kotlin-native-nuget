@@ -72,9 +72,9 @@ internal fun forwardCallbackPrelude(
     "{",
     "    $body",
     "};",
-    "GCHandle ${name}Ctx = default;",
+    "IntPtr ${name}Ctx = IntPtr.Zero;",
   )
-  val statement = "${name}Ctx = GCHandle.Alloc(${name}Native);"
+  val statement = "${name}Ctx = NugetThunks.RegisterCtx(${name}Native);"
   return ForwardCirHandleStep(
     flat = (declarations + statement).joinToString("\n"),
     declarations = declarations,
@@ -82,15 +82,20 @@ internal fun forwardCallbackPrelude(
   )
 }
 
-/** The `finally` half of [forwardCallbackPrelude]: the GCHandle is freed on every exit path. */
+/**
+ * The `finally` half of [forwardCallbackPrelude]: the ADR-161 key is removed from the table on every
+ * exit path, which is what makes an invocation that outlives this frame a lookup miss rather than a
+ * read of whatever took the freed GCHandle's slot. `IntPtr.Zero` means the registration itself is
+ * the statement that threw, so there is nothing to remove.
+ */
 internal fun forwardCallbackCleanup(name: String): String =
-  "if (${name}Ctx.IsAllocated) ${name}Ctx.Free();"
+  "if (${name}Ctx != IntPtr.Zero) NugetThunks.UnregisterCtx(${name}Ctx);"
 
 /** The two native arguments a callback parameter contributes, in the planner's slot order. */
 internal fun forwardCallbackArguments(name: String, type: BridgeType.Callback): List<String> =
   listOf(
     "NugetThunks.${type.forwardCallbackDelegateName()}Ptr",
-    "GCHandle.ToIntPtr(${name}Ctx)",
+    "${name}Ctx",
   )
 
 /**

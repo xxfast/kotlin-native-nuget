@@ -3431,10 +3431,10 @@ private fun translateCallbackMethod(
   }
 
   // C# wrapper body (inside try{})
-  // ADR-102: the thunk address is a link-time constant and the ctx is the closure's own GCHandle,
-  // both inlined at the call so the pair cannot drift apart.
+  // ADR-102: the thunk address is a link-time constant and the ctx is the closure's own ADR-161
+  // table key, both inlined at the call so the pair cannot drift apart.
   val nativeCall: String = "Native_$csMethodName(_handle, NugetThunks.${delegateName}Ptr, " +
-      "GCHandle.ToIntPtr(cbHandle), out IntPtr error)"
+      "cbKey, out IntPtr error)"
   val wrapperBody: String = buildString {
     when {
       isOuterRetUnit -> appendLine("            $nativeCall;")

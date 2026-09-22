@@ -8,11 +8,12 @@ import kotlinx.coroutines.flow.flow
  * ADR-161 fixture: a C# callback that **throws** while Kotlin is calling it, a bridge-internal
  * materialisation failure, and a Kotlin invocation that lands after C# disposed the subscription.
  *
- * Today every throwing cell below ends the host process: the generated thunk's catch-all
- * (`CirCallbackRenderer.appendThunkBody`) turns the managed exception into
- * `Environment.FailFast("nuget: unhandled exception in <delegate>", ex)`, so the FailFast happens
- * *before* any Kotlin `catch` on this class can run. That is why [recoverWith] and its siblings are
- * red in the same way as [describeWith]: the Kotlin `try` is not the thing that is missing.
+ * Before ADR-161 every throwing member below ended the host process: the generated thunk's catch-all
+ * (`CirCallbackRenderer.appendThunkBody`) turned the managed exception into
+ * `Environment.FailFast("nuget: unhandled exception in <delegate>", ex)`, which happens *below* the
+ * Kotlin frame, so no `catch` on this class could run. The throw now arrives at the Kotlin
+ * invocation site as a `NugetManagedException` carrying the managed type and message, which is what
+ * [recoverWith] and its siblings catch.
  *
  * The fixture crosses every mechanism that runs user C# code inline (the four rows of the memo's
  * table), because a fixture trimmed to the per-call lambda would go green against a fix applied to
@@ -38,13 +39,17 @@ import kotlinx.coroutines.flow.flow
  *    the value-returning shape: there is no value to make up, so it must report an error into
  *    Kotlin rather than read a freed `GCHandle`.
  *
- * Both currently read a freed handle, whose slot the next `GCHandle.Alloc` deterministically reuses
- * (memo spike (b)), so today they either fail fast or silently invoke a foreign delegate.
+ * Both used to read a freed handle, whose slot the next `GCHandle.Alloc` deterministically reuses
+ * (memo spike (b)), so they either failed fast or silently invoked a foreign delegate. Part C made
+ * the ctx a never-reused key, so both are now lookup misses: the `Unit` one is dropped, the
+ * value-returning one reports `System.ObjectDisposedException` through the part B channel.
  *
  * [moodStream] is the materialisation-failure trigger (memo item 2, what-question 5): `Flow<Mood>`
  * is admitted by the flow route but `NugetMarshal.FromHandle<T>` has no enum branch
  * (`docs/backlog/fromhandle-no-enum-branch.md`), so reading an item inside the generated `onNext`
- * throws inside the thunk and fails fast instead of faulting the `IAsyncEnumerable<Mood>`.
+ * throws inside the thunk. Part A contains that throw: the `IAsyncEnumerable<Mood>` faults and the
+ * Kotlin collector is cancelled, where the host process used to die. The materialisation gap itself
+ * is still open, which is why this member is a fault trigger and not a round trip.
  *
  * The stored-listener list is copy-on-write behind a `@Volatile` reference so the C# stress test can
  * subscribe and dispose on one thread while another thread emits: a plain `mutableListOf` would

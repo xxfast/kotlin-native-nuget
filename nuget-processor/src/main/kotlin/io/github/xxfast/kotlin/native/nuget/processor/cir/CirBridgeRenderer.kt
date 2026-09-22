@@ -60,19 +60,23 @@ internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
   // runs on its own worker thread, so a test cannot see the callback any other way.
   appendLine("        internal static int ReleasedCount;")
   appendLine()
-  appendLine("        private readonly System.Collections.Generic.List<GCHandle> _pins = new();")
+  // ADR-161 part C: the slot ctxs are table KEYS now, because the bridge delegates share the one
+  // thunk shell with the stored-callback and per-call routes. Had they stayed GCHandles every
+  // ADR-084 slot call would miss the table and report ObjectDisposedException.
+  appendLine("        private readonly System.Collections.Generic.List<IntPtr> _pins = new();")
   appendLine("        private GCHandle _self;")
   appendLine("        private GCHandle _token;")
   appendLine("        private int _freed;")
   appendLine()
-  // ADR-102: the pin is now also the slot's ctx -- the thunk recovers this exact delegate from it
-  // -- so Pin hands the handle back instead of swallowing it. Lifetime is unchanged: the handle
-  // lives in `_pins` and is released by `FreeAll`.
+  // ADR-102: the pin is also the slot's ctx -- the thunk recovers this exact delegate from it -- so
+  // Pin hands the ctx back instead of swallowing it. ADR-161 part C: the table entry IS the strong
+  // reference that used to be the GCHandle, so lifetime is unchanged (rooted until `FreeAll`) and
+  // `TryRemove` un-roots it exactly as `Free()` did.
   appendLine("        internal IntPtr Pin(Delegate value)")
   appendLine("        {")
-  appendLine("            GCHandle pin = GCHandle.Alloc(value);")
-  appendLine("            _pins.Add(pin);")
-  appendLine("            return GCHandle.ToIntPtr(pin);")
+  appendLine("            IntPtr key = NugetThunks.RegisterCtx(value);")
+  appendLine("            _pins.Add(key);")
+  appendLine("            return key;")
   appendLine("        }")
   appendLine()
   // The strong self handle is both the slots' ctx and what keeps this state (and through its
@@ -99,9 +103,9 @@ internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
   appendLine("        internal void FreeAll()")
   appendLine("        {")
   appendLine("            if (System.Threading.Interlocked.Exchange(ref _freed, 1) != 0) return;")
-  appendLine("            foreach (GCHandle pin in _pins)")
+  appendLine("            foreach (IntPtr pin in _pins)")
   appendLine("            {")
-  appendLine("                if (pin.IsAllocated) pin.Free();")
+  appendLine("                NugetThunks.UnregisterCtx(pin);")
   appendLine("            }")
   appendLine("            _pins.Clear();")
   appendLine("            if (_self.IsAllocated) _self.Free();")

@@ -158,6 +158,34 @@ class Tier1CallbackFaultContainmentTest {
     )
   }
 
+  /**
+   * ADR-161 part C: the two runtime-invoked thunk families stay on `GCHandle` dispatch and must NOT
+   * take the key-table lookup. A `void` thunk answers a table MISS by dropping the call, which on
+   * the async route means the `TaskCompletionSource` is never completed and every awaiting caller
+   * hangs forever -- silently, with no failing assertion anywhere. That is exactly what happened
+   * when the async family shared the lookup by accident: 1234 cells passed and the test host then
+   * hung with every suspend cell in flight.
+   */
+  @Test
+  fun `the runtime-invoked thunk families keep GCHandle dispatch`() {
+    val result = run()
+
+    val async: String = result.generatedCSharp
+      .split("[UnmanagedCallersOnly")
+      .first { part -> part.contains("NugetAsyncCallbackThunk(") }
+
+    assertTrue(
+      async.contains("GCHandle.FromIntPtr("),
+      "expected the async completion thunk to dispatch through its own one-shot GCHandle; got: $async",
+    )
+    assertTrue(
+      !async.contains("LookupCtx("),
+      "expected the async completion thunk NOT to look up the ADR-161 key table: its ctx is a " +
+          "GCHandle, so every completion would miss, and a void miss is a DROP -- the Task would " +
+          "never complete and the awaiting caller would hang; got: $async",
+    )
+  }
+
   private fun occurrences(text: String, needle: String): Int =
     text.split(needle).size - 1
 

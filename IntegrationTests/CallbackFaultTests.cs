@@ -6,16 +6,16 @@ namespace IntegrationTests;
 /// <summary>
 /// ADR-161: a forward callback that fails must not take the host process with it.
 ///
-/// <para><b>Every throwing cell in this file is process-fatal against the build of 2026-09-22.</b>
-/// The generated thunk catches the managed exception and calls
-/// <c>Environment.FailFast("nuget: unhandled exception in &lt;delegate&gt;", ex)</c>
-/// (<c>CirCallbackRenderer.appendThunkBody</c>), so the whole <c>dotnet test</c> host aborts before
-/// any assertion is reached. That includes the cells whose Kotlin fixture member wraps the call in
-/// <c>try/catch</c>: the FailFast happens inside the thunk, below the Kotlin frame, so the Kotlin
-/// <c>catch</c> never runs. Because a FailFast aborts the whole suite rather than reporting one
-/// failure, those fifteen cells carry <c>Skip</c> until parts B and C land; removing the attributes
-/// is the first step of the PR that lands the error channel. The one live cell is the part A flow
-/// cell, which passes.</para>
+/// <para>Every cell here was process-fatal before ADR-161. The generated thunk caught the managed
+/// exception and called <c>Environment.FailFast("nuget: unhandled exception in &lt;delegate&gt;",
+/// ex)</c> below the Kotlin frame, so no Kotlin <c>catch</c> could run and the whole
+/// <c>dotnet test</c> host aborted before any assertion. Parts A, B and C have all landed and no
+/// cell is skipped: a bridge-internal materialisation failure faults the stream (A), a user-code
+/// throw rides the trailing <c>errOut</c> slot to the Kotlin call site as
+/// <c>NugetManagedException</c> (B), and a late invocation is a miss in the never-reused key table
+/// that the thunk drops or reports as <c>ObjectDisposedException</c> (C). A regression in any of the
+/// three shows up as an aborted suite rather than one red cell, which is the signal to read the
+/// <c>nuget:</c> line on stderr.</para>
 ///
 /// Three mechanisms run user C# code inline and each one gets its own cells, because a fix applied
 /// to one emitter leaves the other two fail-fasting:
@@ -278,10 +278,11 @@ public class CallbackFaultTests
     /// The deterministic version of the race, void shape. The Kotlin fixture keeps the listener
     /// reference handed to <c>removeFaultListener</c>, so <c>CallLastRemoved</c> invokes a delegate
     /// whose <c>GCHandle</c> the subscription already freed. What-question 4, approved: for a
-    /// <c>void</c> listener the invocation is DROPPED. Today the freed slot is reused by the next
-    /// allocation (memo spike (b)), so this either fails fast or silently runs a foreign delegate.
+    /// <c>void</c> listener the invocation is DROPPED. Before part C the freed slot was reused by the
+    /// next allocation (memo spike (b)), so this either failed fast or silently ran a foreign
+    /// delegate, which is what the second subscription below is here to provoke.
     /// </summary>
-    [Fact(Skip = "ADR-161 part C (the late-callback key table) is not implemented yet: the ctx is still a GCHandle the subscription frees, so a late invocation reads a freed handle whose slot the next allocation reuses. Part B (the error channel) has landed. Remove the Skip in the PR that lands the never-reused key table.")]
+    [Fact]
     public void LateInvocationAfterDispose_VoidListener_IsDropped()
     {
         using var faults = new CallbackFaults();
@@ -307,7 +308,7 @@ public class CallbackFaultTests
     /// returned and its <c>GCHandle</c> was freed. There is no value to invent, so Kotlin must see
     /// an <c>ObjectDisposedException</c> reported through the error channel and be able to catch it.
     /// </summary>
-    [Fact(Skip = "ADR-161 part C (the late-callback key table) is not implemented yet: the ctx is still a GCHandle the subscription frees, so a late invocation reads a freed handle whose slot the next allocation reuses. Part B (the error channel) has landed. Remove the Skip in the PR that lands the never-reused key table.")]
+    [Fact]
     public void LateInvocationAfterCallReturned_ValueReturning_ReportsObjectDisposed()
     {
         using var faults = new CallbackFaults();
@@ -320,7 +321,7 @@ public class CallbackFaultTests
     }
 
     /// <summary>Uncaught, the same late call: the C# caller gets the disposal error, not a crash.</summary>
-    [Fact(Skip = "ADR-161 part C (the late-callback key table) is not implemented yet: the ctx is still a GCHandle the subscription frees, so a late invocation reads a freed handle whose slot the next allocation reuses. Part B (the error channel) has landed. Remove the Skip in the PR that lands the never-reused key table.")]
+    [Fact]
     public void LateInvocationAfterCallReturned_Uncaught_ReachesTheCSharpCaller()
     {
         using var faults = new CallbackFaults();
@@ -337,7 +338,7 @@ public class CallbackFaultTests
     /// only for the interleavings it happened to hit), which is why the two cells above exist; it is
     /// still the only cell that exercises a genuinely concurrent free.
     /// </summary>
-    [Fact(Skip = "ADR-161 part C (the late-callback key table) is not implemented yet: the ctx is still a GCHandle the subscription frees, so a late invocation reads a freed handle whose slot the next allocation reuses. Part B (the error channel) has landed. Remove the Skip in the PR that lands the never-reused key table.")]
+    [Fact]
     public async Task DisposeRacingEmit_NeverKillsTheHost()
     {
         using var faults = new CallbackFaults();
