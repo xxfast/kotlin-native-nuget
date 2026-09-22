@@ -391,6 +391,37 @@ internal enum class ForwardDiagnosticKind(
     ForwardDiagnosticSeverity.WARNING,
     declaredVerb = "Keeping",
   ),
+
+  /** ADR-162: a planner, emitter, projection or translator invariant that a legal public Kotlin
+   *  declaration reached — a raw `error(...)`, `require(...)`, `check(...)` or `!!` that fired
+   *  because some `when` did not learn about a new `BridgeType` variant or route. Before this kind
+   *  such a failure aborted the whole KSP round at the first occurrence as one unlocated
+   *  `e: [ksp] java.lang.IllegalStateException: ...` line, so an API surface with several such
+   *  shapes surfaced them one build at a time, with nothing to grep for.
+   *
+   *  Fatal, deliberately, and at every site (see ADR-162's Q1): the failure is a generator bug, and
+   *  quietly shipping a package with a hole in its C# surface because of one is worse than a build
+   *  that stops. What the kind buys is *containment*, not tolerance: every offending declaration of
+   *  the round is reported, with its own `file:line`, in one build, and the round still returns
+   *  before `CNameExports.kt` is written. The hint names the `exclude(...)` line that unblocks the
+   *  author while the bug is fixed upstream.
+   *
+   *  Deliberately NOT attributed per renderer site: a `CirRenderer` throw has no `KSNode` to point
+   *  at without threading nodes through the whole CIR model (ADR-162 Deferred scope), so the
+   *  whole-round guard reports one nodeless diagnostic of this kind for those. */
+  ERROR_INTERNAL_GENERATOR_FAILURE(ForwardDiagnosticSeverity.ERROR),
+
+  /** ADR-162 (ROADMAP line 236): enum parameters on a top-level function whose return shape is
+   *  carried by a legacy route that hand-builds its native call and so never casts an enum
+   *  parameter down to its ordinal (a nullable, lambda, `Flow`, collection or handle return).
+   *  Emitting the bridge anyway would produce C# that does not compile.
+   *
+   *  The last fatal forward diagnostic to live outside this enum: it was a bare `logger.error` in
+   *  `CirFunctionTranslator` with no `[nuget:KIND]` tag, so it was the one build failure from this
+   *  processor a consumer could not grep for by kind. Kept fatal rather than downgraded to a
+   *  `SKIPPED_*` (ADR-162 Q5 records the downgrade as a follow-up): the translator already returns
+   *  `emptyList()`, so the behaviour is preserved and only the label changes here. */
+  ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE(ForwardDiagnosticSeverity.ERROR),
   ;
 
   /** The word [ForwardDiagnostic.format] opens the message with, derived from the name prefix so
@@ -442,11 +473,16 @@ internal fun ForwardDiagnostic.format(): String {
  * `KSNode` so KSP/Gradle can render the message at the author's own Kotlin source.
  */
 internal object ForwardDiagnosticSink {
-  // ADR-100: every non-fatal diagnostic, in emission order, for `NugetDiagnostics.json`. The
-  // KSPLogger calls stay (free, observed by the Tier 1 harness, and they start working the day the
-  // Gradle/KSP worker-stdout gap closes upstream), but they reach no console today, so the file is
-  // what a consumer actually gets. Synchronized because KSP runs the processor on a Worker API
-  // thread and two targets' rounds can share one daemon; the processor resets before each round.
+  // ADR-100: every non-fatal diagnostic, in emission order, for `NugetDiagnostics.json`.
+  //
+  // Corrected 2026-09-21 (ADR-162, verified by spike on `:test-library:kspKotlinMingwX64`, Windows,
+  // Gradle 9.1.0, `--console=plain`): these KSPLogger lines DO reach the console, as
+  // `e:`/`w: [ksp] <path>:<line>: <message>`, and every failure of a round is printed, not only the
+  // first. This comment used to claim they reach no console at all. What ADR-100 measured remains
+  // true of the task-level gap it was written for: `packNuget` usually does not run the KSP task
+  // (FROM-CACHE, then UP-TO-DATE), so on most builds nothing is emitted here to see and the file is
+  // still what a consumer gets. Synchronized because KSP runs the processor on a Worker API thread
+  // and two targets' rounds can share one daemon; the processor resets before each round.
   private val recorded: MutableList<ForwardDiagnosticRecord> =
     Collections.synchronizedList(mutableListOf())
 
@@ -472,6 +508,14 @@ internal object ForwardDiagnosticSink {
             owner = diagnostic.owner,
             member = diagnostic.member,
             reason = diagnostic.reason,
+            // ADR-162 (ROADMAP line 58): the same location [format] already appended as a trailing
+            // `at <path>:<line>` line, carried as its own two fields so the Gradle re-emitter can
+            // lead its console line with the kotlinc/KSP `<path>:<line>: ` shape an IDE linkifies.
+            // Additive, and `format()` is deliberately NOT reordered: KSP's own Gradle logger
+            // already prefixes that location to every `logger.warn`/`logger.error` line, so a
+            // leading location inside `format()` would print it twice on the KSP path.
+            file = (diagnostic.symbol?.location as? FileLocation)?.filePath,
+            line = (diagnostic.symbol?.location as? FileLocation)?.lineNumber,
           )
         }
       }
@@ -479,7 +523,12 @@ internal object ForwardDiagnosticSink {
   }
 
   /** Starts a fresh round; the object is a singleton in a long-lived Gradle daemon. */
-  fun reset() = recorded.clear()
+  fun reset() {
+    recorded.clear()
+    // ADR-162: the containment guards dedupe on (declaration, failure) for the round, since one
+    // declaration can fail in both halves; that memory is per round for the same daemon reason.
+    ForwardInternalFailures.reset()
+  }
 
   fun recorded(): List<ForwardDiagnosticRecord> = synchronized(recorded) { recorded.toList() }
 }
@@ -539,6 +588,11 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   // ADR-116 amendment (2026-09-11): the base-declared twin, same kind for the same reason.
   ForwardPlanSkipReason.SEALED_BASE_UNROUTED,
     -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION
+
+  // ADR-162: the one reason that maps to an ERROR_* kind by construction. It is not a "cannot
+  // express this" decision at all; it is the generator failing on something it was meant to handle.
+  ForwardPlanSkipReason.INTERNAL_FAILURE ->
+    ForwardDiagnosticKind.ERROR_INTERNAL_GENERATOR_FAILURE
 
   ForwardPlanSkipReason.INHERITED_MEMBER -> ForwardDiagnosticKind.SKIPPED_INHERITED_MEMBER
 
@@ -712,6 +766,13 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
     ForwardPlanSkipReason.EXCLUDED_DEPENDENCY_TYPE ->
       "its type `${detail ?: "in an excluded package"}` is excluded from the export scope by " +
           "your own exclude(...)"
+
+    // ADR-162: the generator's fault, said plainly, with the exception class and message so the
+    // bug is findable. Never the generic sentence, which would read as a claim about the author's
+    // types.
+    ForwardPlanSkipReason.INTERNAL_FAILURE ->
+      "the generator's own invariant failed while planning it " +
+          "(${detail ?: "no failure detail was captured"})"
 
     // ADR-115: the author's own signal, named as such.
     ForwardPlanSkipReason.OPT_IN_MARKER ->
@@ -942,6 +1003,15 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
    *  a package derived from the type name. Empty keeps the derived-package wording. */
   excludeEntries: List<String> = emptyList(),
 ): String = when (this) {
+  // ADR-162: the author did nothing wrong, so the hint says so and names the one line that unblocks
+  // their build while the bug is fixed upstream. The declaration name is not in hand here (the hint
+  // takes only the detail slots), so the `exclude(...)` line is spelled generically; the
+  // [guarded]-reported half of the same kind, which does have the name, spells it out.
+  ForwardPlanSkipReason.INTERNAL_FAILURE ->
+    "this is a bug in the bridge generator, not a mistake in your Kotlin: add an exclude(...) " +
+        "entry for this declaration to nuget { publish { } } to unblock this build, and report " +
+        "the failure with this whole message"
+
   // ADR-151: an unmapped stdlib type no longer reaches here at all (the classifier refuses it as
   // plainly unsupported), so this arm is about a real dependency module. The stdlib sentence moved
   // to [ForwardPlanSkipReason.UNSUPPORTED] below; the guard stays because `refusedDependencyTypes`

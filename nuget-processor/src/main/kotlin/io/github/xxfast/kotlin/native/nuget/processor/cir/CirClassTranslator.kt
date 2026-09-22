@@ -1121,6 +1121,9 @@ internal fun translateClass(
     container = name,
     symbol = cls,
     logger = logger,
+    // ADR-162: every generated handle class renders `public void Dispose()` (CirClassRenderer), so
+    // an authored zero-argument `dispose()` is CS0111 against it.
+    reservedSignatures = HANDLE_RESERVED_SIGNATURES,
   )
 
   // Phase 6: route data-class copy() through the shared plan when it is eligible (same symbol
@@ -1965,7 +1968,9 @@ internal fun translateSealedClass(
         isVirtual = plan.publicSignature.isVirtual,
       )
     }
-  emitCsharpSignatureCollisions(baseMethods, name, cls, logger)
+  // ADR-162: the sealed base renders `: IDisposable, INugetHandle` with its own `Dispose()`
+  // (CirSealedRenderer), so the reserved signature applies here too.
+  emitCsharpSignatureCollisions(baseMethods, name, cls, logger, HANDLE_RESERVED_SIGNATURES)
 
   val subclasses: List<CirSealedSubclass> = cls.getSealedSubclasses()
     .map { subclass ->
@@ -2199,11 +2204,14 @@ internal fun translateSealedClass(
       // signatures agree (`set(x: Foo)` / `set(x: Foo?)`) are CS0111 in the generated file.
       // ADR-159: below the async and Flow projection, so two `suspend` overloads that render one
       // `PlayAsync(string)` are named here rather than reaching the generated file.
+      // ADR-162: an arm INHERITS the base's `Dispose()`, so an authored `dispose()` on the arm is
+      // the same CS0111 pair one level down.
       emitCsharpSignatureCollisions(
         methods + (asyncMembers + flowMembers).filterIsInstance<CirMethod>(),
         "$name.$subName",
         subclass,
         logger,
+        HANDLE_RESERVED_SIGNATURES,
       )
 
       CirSealedSubclass(
@@ -2288,19 +2296,72 @@ private fun CirMethod.againstSealedBase(baseMethods: List<CirMethod>): CirMethod
  * extension is already the first [CirParameter], which is exactly how C# distinguishes extension
  * overloads, so no special case is needed for it.
  */
+/**
+ * ADR-162: the renderer-owned signatures of a generated handle container, in
+ * [emitCsharpSignatureCollisions]'s encoding (member name, then rendered parameter types).
+ *
+ * Only `Dispose()` for now, because it is the only renderer-owned *member* an author can collide
+ * with by accident (`FromHandle`, `Handle` and the `Native_*` externs are either static factories
+ * ADR-009 already name-checks or `internal`). Kept as a set so the next one is a line, not a
+ * refactor.
+ */
+internal val HANDLE_RESERVED_SIGNATURES: Set<List<String>> = setOf(listOf("Dispose"))
+
 internal fun emitCsharpSignatureCollisions(
   methods: List<CirMethod>,
   container: String,
   symbol: KSNode?,
   logger: KSPLogger,
+  /**
+   * ADR-162 (ROADMAP line 87): signatures the *renderer* puts on this container, which are
+   * therefore not in [methods] and cannot collide with each other, only with an authored member.
+   * A handle container declares `IDisposable.Dispose()`, so `class Closer { fun dispose() {} }`
+   * is CS0111 exactly like any other duplicate pair — but the generated half is not a
+   * `CirMethod`, so it used to sail past this guard and surface much later as the generic
+   * `ERROR_C_ENTRY_POINT_COLLISION` (two owners of `closer_dispose`), which reads as an ABI
+   * accident rather than as the C# rule it is.
+   *
+   * Each entry is a signature in this function's own encoding: the member name followed by its
+   * rendered parameter types.
+   */
+  reservedSignatures: Set<List<String>> = emptySet(),
 ) {
-  methods
+  val authored: List<List<String>> = methods
     .map { method ->
       listOf(method.name) + method.parameters.map { param ->
         val stripReferenceNullability: Boolean = param.isReferenceType && param.type.endsWith("?")
         if (stripReferenceNullability) param.type.dropLast(1) else param.type
       }
     }
+
+  // A renderer-owned signature an authored member claims. Reported with the member's own wording,
+  // because the remedy is different from the two-overloads case: there is no second overload of
+  // the author's to rename, and `close()` already binds as `Close()` beside `Dispose()`.
+  authored
+    .filter { signature -> signature in reservedSignatures }
+    .distinct()
+    .forEach { signature ->
+      ForwardDiagnosticSink.emit(
+        listOf(
+          ForwardDiagnostic(
+            kind = ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION,
+            symbol = symbol,
+            declaration = "$container.${signature.first()}",
+            reason = "it renders as " +
+                "`${signature.first()}(${signature.drop(1).joinToString(", ")})`" +
+                ", which collides with the `${signature.first()}()` every generated handle class " +
+                "declares for `IDisposable`; C# cannot declare two members with the same " +
+                "signature (ADR-034)",
+            hint = "rename the Kotlin member: `close()` binds as `Close()` beside the generated " +
+                "`Dispose()`, and the generated one already frees the handle",
+            owner = null,
+          ),
+        ),
+        logger,
+      )
+    }
+
+  authored
     .groupBy { signature -> signature }
     .filterValues { group -> group.size > 1 }
     .keys

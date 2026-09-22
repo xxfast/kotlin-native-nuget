@@ -85,6 +85,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardGuardName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.guarded
+import io.github.xxfast.kotlin.native.nuget.processor.forward.internalFailureDetail
+import io.github.xxfast.kotlin.native.nuget.processor.forward.internalFailureDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.PackageScope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.matchesDeclaration
 import io.github.xxfast.kotlin.native.nuget.processor.forward.escalatedForStrictDependencyTypes
@@ -718,7 +722,33 @@ class NugetProcessor(
   // surfaces after `process()` returns.
   private val logger: ForwardDiagnosticTrackingLogger = ForwardDiagnosticTrackingLogger(logger)
 
-  override fun process(resolver: Resolver): List<KSAnnotated> {
+  /**
+   * ADR-162: the last line of containment. The per-declaration guards cover the loops, but the
+   * round also does whole-file work no declaration owns — the ADR-066 closure, the post-passes,
+   * and the single `CirRenderer.render` call, which cannot name a declaration without threading
+   * `KSNode` through the whole CIR model (deferred). A failure there used to leave KSP printing one
+   * bare `e: [ksp] java.lang.IllegalStateException: ...` with no `[nuget:...]` kind to grep for;
+   * now it is labelled, at the cost of having no source location to attach.
+   *
+   * `Exception` only, so an `OutOfMemoryError` or a `StackOverflowError` still aborts the round.
+   */
+  override fun process(resolver: Resolver): List<KSAnnotated> = try {
+    processRound(resolver)
+  } catch (failure: Exception) {
+    ForwardDiagnosticSink.emit(
+      listOf(
+        internalFailureDiagnostic(
+          declaration = "this Kotlin module",
+          node = null,
+          detail = internalFailureDetail(failure),
+        ),
+      ),
+      logger,
+    )
+    emptyList()
+  }
+
+  private fun processRound(resolver: Resolver): List<KSAnnotated> {
     if (processed) return emptyList()
     processed = true
 
@@ -1422,16 +1452,24 @@ class NugetProcessor(
     val reachableInterfaces: List<KSClassDeclaration> = interfaces
       .filter { iface -> iface.qualifiedName?.asString() in reachableInterfaceNames }
 
+    // ADR-162: the interface planning loops are guarded per interface for the same reason the
+    // callable planner's `planOrSkip` is: an interface whose planning throws used to abort the
+    // round before any other interface was even looked at. A contained one contributes no
+    // entries, which is safe here precisely because the round is going to fail at the gate anyway.
     val interfaceEntries: List<ForwardCallableCatalogEntry> = reachableInterfaces.flatMap { iface ->
-      // Issue #249: a REACHABLE interface's entries are stamped here too, not only on the
-      // declaration catalog. This catalog is the one that reports for a reachable interface (the
-      // declaration catalog's copy carries the same symbol and is suppressed by the symbol guard
-      // below), so leaving it unstamped would silently leave `IFoo` with no `<remarks>` in exactly
-      // the shape a consumer meets: an interface something returns.
-      forwardPlanner.interfaceEntries(iface).ownedBy(iface.forwardDiagnosticOwner())
+      guarded(iface.forwardGuardName(), iface, logger) {
+        // Issue #249: a REACHABLE interface's entries are stamped here too, not only on the
+        // declaration catalog. This catalog is the one that reports for a reachable interface (the
+        // declaration catalog's copy carries the same symbol and is suppressed by the symbol
+        // guard below), so leaving it unstamped would silently leave `IFoo` with no `<remarks>` in
+        // exactly the shape a consumer meets: an interface something returns.
+        forwardPlanner.interfaceEntries(iface).ownedBy(iface.forwardDiagnosticOwner())
+      }.orEmpty()
     }
     val interfacePropertyPlans: List<ForwardPropertyPlan> = reachableInterfaces.flatMap { iface ->
-      forwardPropertyPlanner.interfaceProperties(iface)
+      guarded(iface.forwardGuardName(), iface, logger) {
+        forwardPropertyPlanner.interfaceProperties(iface)
+      }.orEmpty()
     }
     val callableCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanCatalog(
       entries = ordinaryCatalog.entries + interfaceEntries,
@@ -1499,13 +1537,20 @@ class NugetProcessor(
     val supertypePropertyPlanner = ForwardPropertyPlanner(forwardClassifier, expects)
     val interfaceDeclarationCatalog = ForwardCallablePlanCatalog(
       // Issue #249: the interface is the C# owner of whatever `IFoo` loses.
+      // ADR-162: guarded per interface, same reasoning as the reachable loops above.
       entries = interfaces.flatMap { iface ->
-        declarationPlanner.interfaceEntries(iface).ownedBy(iface.forwardDiagnosticOwner())
+        guarded(iface.forwardGuardName(), iface, logger) {
+          declarationPlanner.interfaceEntries(iface).ownedBy(iface.forwardDiagnosticOwner())
+        }.orEmpty()
       },
       propertyPlans = interfaces.flatMap { iface ->
-        declarationPropertyPlanner.interfaceProperties(iface)
+        guarded(iface.forwardGuardName(), iface, logger) {
+          declarationPropertyPlanner.interfaceProperties(iface)
+        }.orEmpty()
       } + unexportedSupertypes.flatMap { supertype ->
-        supertypePropertyPlanner.interfaceProperties(supertype)
+        guarded(supertype.forwardGuardName(), supertype, logger) {
+          supertypePropertyPlanner.interfaceProperties(supertype)
+        }.orEmpty()
       },
       // `docs/backlog/interface-own-dropped-member-diagnosed-nowhere.md`: this planner's own drop
       // channel was built and thrown away, so an interface property `IFoo` silently lost was
@@ -1835,44 +1880,70 @@ class NugetProcessor(
         .build()
     )
 
+    // ADR-162: the Kotlin half's containment seam. One guard per declaration per adder call, which
+    // is exactly the granularity the `exports/*` builders iterate at: an emitter invariant that a
+    // legal shape reaches is reported against that declaration's own source location and the loop
+    // keeps going, so every offending declaration of the round is named in ONE build. The round
+    // still stops at the fatal-diagnostic gate before this FileSpec is written, so a half-built
+    // export set never ships.
+    fun guardDeclaration(declaration: KSDeclaration, block: () -> Unit) {
+      guarded(declaration.forwardGuardName(), declaration, logger, block)
+    }
+
     functions.forEach { func ->
-      // ADR-095: node identity, not a name-derived symbol — top-level overloads number per
-      // (package, name), so the n-th namesake's plan is keyed `..._$n`.
-      // ADR-096: plural — a defaulted top-level function also carries its synthesized omitting
-      // overloads on the same node.
-      val planned: List<ForwardCallablePlan> = callableCatalog.plansFor(func)
-      // ADR-064: the import goes behind the gate, never ahead of it. A skipped function used to
-      // leave a line importing a symbol the generated file never mentions. The legacy route
-      // imports its own, after its own early returns.
-      if (planned.isNotEmpty()) {
-        builder.addImport(func.packageName.asString(), func.simpleName.asString())
-        planned.forEach { builder.addForwardKotlinPlanExport(it) }
-      } else {
-        builder.addFunctionExports(func)
+      guardDeclaration(func) {
+        // ADR-095: node identity, not a name-derived symbol — top-level overloads number per
+        // (package, name), so the n-th namesake's plan is keyed `..._$n`.
+        // ADR-096: plural — a defaulted top-level function also carries its synthesized omitting
+        // overloads on the same node.
+        val planned: List<ForwardCallablePlan> = callableCatalog.plansFor(func)
+        // ADR-064: the import goes behind the gate, never ahead of it. A skipped function used to
+        // leave a line importing a symbol the generated file never mentions. The legacy route
+        // imports its own, after its own early returns.
+        if (planned.isNotEmpty()) {
+          builder.addImport(func.packageName.asString(), func.simpleName.asString())
+          planned.forEach { builder.addForwardKotlinPlanExport(it) }
+        } else {
+          builder.addFunctionExports(func)
+        }
       }
     }
 
     genericFunctions.forEach { func ->
       // The import lives inside addGenericFunctionExports, behind its own gate (ADR-064).
-      builder.addGenericFunctionExports(func)
+      guardDeclaration(func) { builder.addGenericFunctionExports(func) }
     }
 
-    classes.forEach {
-      builder.addClassExports(it, callableCatalog, forwardClassifier, exportedTypes)
+    classes.forEach { cls ->
+      guardDeclaration(cls) {
+        builder.addClassExports(cls, callableCatalog, forwardClassifier, exportedTypes)
+      }
     }
-    classes.forEach { builder.addCompanionExports(it, callableCatalog) }
-    enums.forEach { builder.addEnumExports(it) }
-    sealedClasses.forEach {
-      builder.addSealedClassExports(it, callableCatalog, context.exportMarkers)
+    classes.forEach { cls ->
+      guardDeclaration(cls) { builder.addCompanionExports(cls, callableCatalog) }
     }
-    objects.forEach { builder.addObjectExports(it, callableCatalog) }
-    valueClasses.forEach { builder.addValueClassExports(it, callableCatalog) }
-    reachableInterfaces.forEach { builder.addInterfaceExports(it, callableCatalog) }
+    enums.forEach { enum -> guardDeclaration(enum) { builder.addEnumExports(enum) } }
+    sealedClasses.forEach { sealed ->
+      guardDeclaration(sealed) {
+        builder.addSealedClassExports(sealed, callableCatalog, context.exportMarkers)
+      }
+    }
+    objects.forEach { obj ->
+      guardDeclaration(obj) { builder.addObjectExports(obj, callableCatalog) }
+    }
+    valueClasses.forEach { cls ->
+      guardDeclaration(cls) { builder.addValueClassExports(cls, callableCatalog) }
+    }
+    reachableInterfaces.forEach { iface ->
+      guardDeclaration(iface) { builder.addInterfaceExports(iface, callableCatalog) }
+    }
     // ADR-084 stage 1: the per-interface bridge factory, projected from the same slot plan the C#
     // `{Iface}BridgeState` is projected from (see `ForwardInterfaceBridgePlanner`).
     val bridgePlans: List<ForwardBridgeInterfacePlan> =
       reachableInterfaces.mapNotNull { iface ->
-        ForwardInterfaceBridgePlanner.plan(iface, forwardClassifier)
+        guarded(iface.forwardGuardName(), iface, logger) {
+          ForwardInterfaceBridgePlanner.plan(iface, forwardClassifier)
+        }
       }
     bridgePlans.forEach { plan -> builder.addInterfaceBridgeFactoryExport(plan) }
     // ADR-127: `nuget_gc_collect`, `nuget_csharp_token` and the `NugetCSharpBridge` marker moved
@@ -2090,24 +2161,26 @@ class NugetProcessor(
     suspendFunctions.forEach { func ->
       // The import lives inside addSuspendFunctionExports, behind its legacy-refusal gates
       // (ADR-064): a refused suspend function used to leave a dead import behind.
-      builder.addSuspendFunctionExports(func, forwardClassifier)
+      guardDeclaration(func) { builder.addSuspendFunctionExports(func, forwardClassifier) }
     }
 
     classes.forEach { cls ->
-      // ADR-159: the same selector the export builder and the C# half read, so this gate cannot
-      // admit a class whose suspend members all belong to a kept base (which is how
-      // `paddedwindowseat_settle_async` used to be exported with no C# import behind it).
-      if (cls.forwardSuspendRouteMethods(
+      guardDeclaration(cls) {
+        // ADR-159: the same selector the export builder and the C# half read, so this gate cannot
+        // admit a class whose suspend members all belong to a kept base (which is how
+        // `paddedwindowseat_settle_async` used to be exported with no C# import behind it).
+        val hasSuspendRouteMethods: Boolean = cls.forwardSuspendRouteMethods(
           forwardClassifier,
           cls.forwardSuperClass(exportedTypes),
         ).isNotEmpty()
-      ) {
-        builder.addSuspendClassMethodExports(
-          cls,
-          forwardClassifier,
-          callableCatalog,
-          exportedTypes = exportedTypes,
-        )
+        if (hasSuspendRouteMethods) {
+          builder.addSuspendClassMethodExports(
+            cls,
+            forwardClassifier,
+            callableCatalog,
+            exportedTypes = exportedTypes,
+          )
+        }
       }
     }
 
@@ -2118,14 +2191,17 @@ class NugetProcessor(
     sealedClasses.forEach { sealed ->
       val sealedPrefix: String = sealed.simpleName.asString().lowercase()
       sealed.getSealedSubclasses().forEach { subclass ->
-        if (!subclass.declaresSuspendMember()) return@forEach
-        builder.addSuspendClassMethodExports(
-          cls = subclass,
-          classifier = forwardClassifier,
-          callableCatalog = callableCatalog,
-          prefix = "${sealedPrefix}_${subclass.simpleName.asString().lowercase()}",
-          declaredOnly = true,
-        )
+        // ADR-162: guarded on the ARM, which is the declaration the author would have to change.
+        guardDeclaration(subclass) {
+          if (!subclass.declaresSuspendMember()) return@guardDeclaration
+          builder.addSuspendClassMethodExports(
+            cls = subclass,
+            classifier = forwardClassifier,
+            callableCatalog = callableCatalog,
+            prefix = "${sealedPrefix}_${subclass.simpleName.asString().lowercase()}",
+            declaredOnly = true,
+          )
+        }
       }
     }
 
@@ -2138,21 +2214,24 @@ class NugetProcessor(
     sealedClasses.forEach { sealed ->
       val sealedPrefix: String = sealed.simpleName.asString().lowercase()
       sealed.getSealedSubclasses().forEach { subclass ->
-        val subQualifiedName: String = subclass.qualifiedName?.asString() ?: return@forEach
-        val armPrefix: String =
-          "${sealedPrefix}_${subclass.simpleName.asString().lowercase()}"
-        val armFlowProperties: List<KSPropertyDeclaration> =
-          subclass.forwardArmFlowProperties(forwardClassifier)
-        val armFlowMethods: List<KSFunctionDeclaration> =
-          subclass.forwardArmFlowMethods(forwardClassifier)
-        if (armFlowProperties.isEmpty() && armFlowMethods.isEmpty()) return@forEach
-        armFlowProperties.forEach { prop ->
-          builder.addFlowPropertyExports(prop, subQualifiedName, armPrefix, forwardClassifier)
-        }
-        armFlowMethods.forEach { method ->
-          builder.addFlowMethodExports(
-            method, subQualifiedName, armPrefix, forwardClassifier, callableCatalog,
-          )
+        guardDeclaration(subclass) {
+          val subQualifiedName: String =
+            subclass.qualifiedName?.asString() ?: return@guardDeclaration
+          val armPrefix: String =
+            "${sealedPrefix}_${subclass.simpleName.asString().lowercase()}"
+          val armFlowProperties: List<KSPropertyDeclaration> =
+            subclass.forwardArmFlowProperties(forwardClassifier)
+          val armFlowMethods: List<KSFunctionDeclaration> =
+            subclass.forwardArmFlowMethods(forwardClassifier)
+          if (armFlowProperties.isEmpty() && armFlowMethods.isEmpty()) return@guardDeclaration
+          armFlowProperties.forEach { prop ->
+            builder.addFlowPropertyExports(prop, subQualifiedName, armPrefix, forwardClassifier)
+          }
+          armFlowMethods.forEach { method ->
+            builder.addFlowMethodExports(
+              method, subQualifiedName, armPrefix, forwardClassifier, callableCatalog,
+            )
+          }
         }
       }
     }
@@ -2165,13 +2244,16 @@ class NugetProcessor(
     sealedClasses.forEach { sealed ->
       val sealedPrefix: String = sealed.simpleName.asString().lowercase()
       sealed.getSealedSubclasses().forEach { subclass ->
-        val subQualifiedName: String = subclass.qualifiedName?.asString() ?: return@forEach
-        val armPrefix: String = "${sealedPrefix}_${subclass.simpleName.asString().lowercase()}"
-        val armLambdaMethods: List<KSFunctionDeclaration> =
-          subclass.forwardArmLambdaMethods(forwardClassifier)
-        if (armLambdaMethods.isEmpty()) return@forEach
-        armLambdaMethods.forEach { method ->
-          builder.addLambdaParamMethodExport(method, subQualifiedName, armPrefix)
+        guardDeclaration(subclass) {
+          val subQualifiedName: String =
+            subclass.qualifiedName?.asString() ?: return@guardDeclaration
+          val armPrefix: String = "${sealedPrefix}_${subclass.simpleName.asString().lowercase()}"
+          val armLambdaMethods: List<KSFunctionDeclaration> =
+            subclass.forwardArmLambdaMethods(forwardClassifier)
+          if (armLambdaMethods.isEmpty()) return@guardDeclaration
+          armLambdaMethods.forEach { method ->
+            builder.addLambdaParamMethodExport(method, subQualifiedName, armPrefix)
+          }
         }
       }
     }
@@ -2185,18 +2267,21 @@ class NugetProcessor(
     sealedClasses.forEach { sealed ->
       val sealedPrefix: String = sealed.simpleName.asString().lowercase()
       sealed.getSealedSubclasses().forEach { subclass ->
-        val subQualifiedName: String = subclass.qualifiedName?.asString() ?: return@forEach
-        val armPrefix: String = "${sealedPrefix}_${subclass.simpleName.asString().lowercase()}"
-        val storedPairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
-          subclass.forwardArmStoredCallbackPairs(forwardClassifier)
-        val bridgePairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
-          subclass.forwardArmInterfaceBridgePairs(forwardClassifier)
-        if (storedPairs.isEmpty() && bridgePairs.isEmpty()) return@forEach
-        storedPairs.forEach { (addMethod, removeMethod) ->
-          builder.addStoredCallbackExports(addMethod, removeMethod, subQualifiedName, armPrefix)
-        }
-        bridgePairs.forEach { (addMethod, removeMethod) ->
-          builder.addInterfaceBridgeExports(addMethod, removeMethod, subQualifiedName, armPrefix)
+        guardDeclaration(subclass) {
+          val subQualifiedName: String =
+            subclass.qualifiedName?.asString() ?: return@guardDeclaration
+          val armPrefix: String = "${sealedPrefix}_${subclass.simpleName.asString().lowercase()}"
+          val storedPairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
+            subclass.forwardArmStoredCallbackPairs(forwardClassifier)
+          val bridgePairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
+            subclass.forwardArmInterfaceBridgePairs(forwardClassifier)
+          if (storedPairs.isEmpty() && bridgePairs.isEmpty()) return@guardDeclaration
+          storedPairs.forEach { (addMethod, removeMethod) ->
+            builder.addStoredCallbackExports(addMethod, removeMethod, subQualifiedName, armPrefix)
+          }
+          bridgePairs.forEach { (addMethod, removeMethod) ->
+            builder.addInterfaceBridgeExports(addMethod, removeMethod, subQualifiedName, armPrefix)
+          }
         }
       }
     }
@@ -2204,18 +2289,18 @@ class NugetProcessor(
     properties.forEach { prop ->
       // The import lives inside addPropertyExports, behind the plan gate (ADR-064), so the gate
       // and the import cannot drift apart.
-      builder.addPropertyExports(prop, callableCatalog)
+      guardDeclaration(prop) { builder.addPropertyExports(prop, callableCatalog) }
     }
 
     extensionFunctions.forEach { func ->
       // The import lives inside addExtensionFunctionExports, behind the plan gate (ADR-064).
-      builder.addExtensionFunctionExports(func, callableCatalog)
+      guardDeclaration(func) { builder.addExtensionFunctionExports(func, callableCatalog) }
     }
 
     // The import lives inside addExtensionPropertyExports, behind the plan gate: adding it here
     // left a dead import for every dropped extension property.
     extensionProperties.forEach { prop ->
-      builder.addExtensionPropertyExports(prop, callableCatalog)
+      guardDeclaration(prop) { builder.addExtensionPropertyExports(prop, callableCatalog) }
     }
 
 

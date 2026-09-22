@@ -116,11 +116,24 @@ internal fun translateFunction(
   // primitive, Unit) cast an enum param down to its ordinal at the native call site. The others
   // hand-build their native call and would silently emit a bridge that does not compile.
   fun enumParamsUnsupported(returnShape: String): List<CirMember> {
-    logger.error(
-      "Enum parameters are not supported on a top-level function with a $returnShape return " +
-          "type ('${func.simpleName.asString()}'). They are supported on top-level functions " +
-          "returning an enum, a String, a primitive, or Unit.",
-      func,
+    // ADR-162 (ROADMAP line 236): the last fatal forward diagnostic outside ForwardDiagnosticKind.
+    // Same severity, same node, same `emptyList()`, and now the same `[nuget:KIND]` tag as every
+    // other build failure this processor raises, so a consumer can grep for it by kind.
+    ForwardDiagnosticSink.emit(
+      listOf(
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE,
+          symbol = func,
+          declaration = func.qualifiedName?.asString() ?: func.simpleName.asString(),
+          reason = "it takes an enum parameter and returns a $returnShape, a return shape whose " +
+              "bridge hand-builds its native call and so never casts the enum down to its ordinal",
+          hint = "take the enum's ordinal as an Int, or return an enum, a String, a primitive or " +
+              "Unit, which are the return shapes that carry an enum parameter",
+          // ERROR_*: the round returns before anything generated is read.
+          owner = null,
+        ),
+      ),
+      logger,
     )
     return emptyList()
   }

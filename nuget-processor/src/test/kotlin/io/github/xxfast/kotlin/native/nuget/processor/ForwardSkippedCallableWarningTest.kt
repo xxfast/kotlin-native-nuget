@@ -348,6 +348,10 @@ class ForwardSkippedCallableWarningTest {
         // declares. The base carries its ordinary members now, but no legacy route is keyed to it
         // at all, so `Job.rest` (an `open suspend fun`) is a real drop and finally names itself.
         ForwardPlanSkipReason.SEALED_BASE_UNROUTED,
+        // ADR-162: the generator's own invariant failing on a callable. `droppedFromCSharp`, so the
+        // catalog's drop-reporting path carries it, which is the only thing that reports it at all;
+        // unlike every other entry here it maps to an ERROR_* kind and fails the build.
+        ForwardPlanSkipReason.INTERNAL_FAILURE,
       ),
       dropped,
     )

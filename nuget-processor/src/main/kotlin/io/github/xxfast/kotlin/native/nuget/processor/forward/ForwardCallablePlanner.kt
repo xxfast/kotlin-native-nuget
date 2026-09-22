@@ -100,6 +100,22 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  individually. */
   UNSUPPORTED_COMBINATION(droppedFromCSharp = true),
 
+  /**
+   * ADR-162: the planner's own invariant failed on this callable (a raw `error(...)`, a failed
+   * `require(...)`, a null `!!` in classification, shaping or plan validation). Mapped to the fatal
+   * [ForwardDiagnosticKind.ERROR_INTERNAL_GENERATOR_FAILURE], not to a `SKIPPED_*` warning: it is a
+   * generator bug, and shipping a package quietly missing the declaration is worse than a build
+   * that stops.
+   *
+   * A `Skipped` entry rather than an omitted one, which is the load-bearing part (verified by
+   * spike, ADR-162 F2): omitting the entry makes the Kotlin emitter throw `Forward callable
+   * catalog has no entry for ...` before the fatal-diagnostic gate, which masks every later
+   * failure of the round and takes over Gradle's headline — the exact one-at-a-time behaviour
+   * this containment exists to end. [ForwardCallableCatalogEntry.Skipped.detail] carries the
+   * exception class and message.
+   */
+  INTERNAL_FAILURE(droppedFromCSharp = true),
+
   /** ADR-116: a member function declared on a sealed subclass that the plan declined for a reason
    *  an ordinary class defers to a named legacy route (`suspend`, `Flow`, a generic, a
    *  lambda/stored-callback pair). No legacy route is keyed to a sealed subclass — the ordinary
@@ -2320,7 +2336,50 @@ internal class ForwardCallablePlanner(
         classifier.classify(parameter.type.resolve()).optInMarkerDetail()
       }
 
+  /**
+   * ADR-162: every ordinary callable funnels through here, so this is the one place a plan-time
+   * generator invariant can be contained per declaration. A caught failure becomes a
+   * [ForwardPlanSkipReason.INTERNAL_FAILURE] entry, which the catalog's own drop-reporting path
+   * turns into a located fatal [ForwardDiagnosticKind.ERROR_INTERNAL_GENERATOR_FAILURE] — so the
+   * planner still needs no logger, exactly as before.
+   *
+   * `Exception` only, never `Throwable`: an `OutOfMemoryError` is not a fact about one declaration.
+   */
   private fun planOrSkip(
+    symbol: String,
+    publicName: String,
+    exportName: String,
+    receiver: ForwardReceiver,
+    parameters: List<Pair<String, BridgeType>>,
+    result: BridgeType,
+    origin: ForwardCallableOrigin,
+    target: String? = null,
+    ownerType: String? = null,
+    invocationReceiver: String? = null,
+    includeError: Boolean = true,
+    valueClassProperty: Boolean = false,
+    member: String? = null,
+    isOverride: Boolean = false,
+    isVirtual: Boolean = false,
+    node: KSNode? = null,
+    droppedOptInMarker: String? = null,
+    doc: ForwardKdoc? = null,
+  ): ForwardCallableCatalogEntry = try {
+    planOrSkipUnguarded(
+      symbol, publicName, exportName, receiver, parameters, result, origin, target, ownerType,
+      invocationReceiver, includeError, valueClassProperty, member, isOverride, isVirtual, node,
+      droppedOptInMarker, doc,
+    )
+  } catch (failure: Exception) {
+    ForwardCallableCatalogEntry.Skipped(
+      symbol,
+      ForwardPlanSkipReason.INTERNAL_FAILURE,
+      node = node,
+      detail = internalFailureDetail(failure),
+    )
+  }
+
+  private fun planOrSkipUnguarded(
     symbol: String,
     publicName: String,
     exportName: String,

@@ -55,9 +55,13 @@ abstract class NugetReportDiagnosticsTask : DefaultTask() {
 
     files
       .flatMap { file -> parseForwardDiagnostics(file.readText(), file.path) }
-      // The message is the exact string ForwardDiagnostic.format() produced, source location
-      // included. Printed verbatim: one renderer, no drift between the two sides.
-      .forEach { entry -> logger.warn(entry.message) }
+      // The message body is the exact string ForwardDiagnostic.format() produced: one renderer, no
+      // drift between the two sides. ADR-162 (ROADMAP line 58) adds the one thing this side owns,
+      // the LEADING `<path>:<line>: ` that `format()` deliberately does not carry (KSP's own Gradle
+      // logger already prefixes it on the `e:`/`w:` path, so putting it in `format()` would print
+      // it twice there). Gradle's Logger has no source-location overload, so the kotlinc shape in
+      // plain text is the linkifiable form available without the incubating Problems API.
+      .forEach { entry -> logger.warn(entry.consoleLine()) }
   }
 
   private companion object {
@@ -71,7 +75,26 @@ internal data class ForwardDiagnosticEntry(
   val kind: String,
   val declaration: String,
   val message: String,
+  /**
+   * ADR-162: the originating Kotlin source location, additive and optional. Absent for a
+   * diagnostic with no single declaration to point at (a scope-level one) and for a
+   * `NugetDiagnostics.json` written by a processor from before these fields existed, which is why
+   * neither field is required.
+   */
+  val file: String? = null,
+  val line: String? = null,
 )
+
+/**
+ * ADR-162: the console line, leading with `<path>:<line>: ` when the entry carries a location.
+ *
+ * The composition lives here rather than in the processor's `ForwardDiagnostic.format()` because
+ * the two consumers of that one string need opposite things: KSP's Gradle logger prefixes the
+ * location itself, so `format()` staying location-led-free is what keeps the `e: [ksp] ...` line
+ * from printing it twice.
+ */
+internal fun ForwardDiagnosticEntry.consoleLine(): String =
+  if (file != null && line != null) "$file:$line: $message" else message
 
 /**
  * ADR-100: reads the processor-written diagnostics file.
@@ -115,6 +138,9 @@ internal fun parseForwardDiagnostics(
           kind = fields.field("kind", source),
           declaration = fields.field("declaration", source),
           message = fields.field("message", source),
+          // ADR-162: optional, so an older processor's file stays readable.
+          file = fields["file"],
+          line = fields["line"],
         )
         tokens.clear()
         index++

@@ -344,3 +344,31 @@ by a JVM unit test. That is not a gap to close: faking it in a JVM test would re
 ADR was written to close, since `Tier1Harness` injects its own `RecordingKSPLogger` straight past the
 production transport, which is why the existing sink test stayed green while the transport it claimed
 to prove was broken end to end. A future coverage sweep should not "fix" this method's number.
+
+## Amendment (2026-09-22): the `ERROR_*` visibility deferral is closed, and `file`/`line` are additive
+
+[ADR-162](162-per-declaration-error-containment.md) needed to know, load-bearing, whether an
+`ERROR_*` diagnostic reaches a real console the same way a `WARNING`/`INFO` one does, and spiked it:
+`logger.error(message, symbol)` **is** visible on `--console=plain`, as
+`e: [ksp] <path>:<line>: [nuget:KIND] ...`, for every failure of a round, not only the first (two
+classes each declaring `fun dispose()`, both `ERROR_C_ENTRY_POINT_COLLISION` lines printed). This
+closes the "Deferred: `ERROR_*` visibility" item above: the evidence conflict it named is resolved in
+favour of "errors are visible the same way warnings are", and the aggregate-throw fallback that
+deferred item's own text sketched as a possible follow-up was evaluated and rejected (see ADR-162's
+Alternatives Considered) rather than built.
+
+That still leaves the file-based channel this ADR built with nothing to say about an `ERROR_*`: an
+error aborts the round before `NugetDiagnostics.json` is written, exactly as designed, so a consumer
+of a *cached* `packNuget` run still never sees one — only the console, on the build where KSP actually
+ran, does. Nothing here changes that; it only closes the open question about the console path.
+
+`ForwardDiagnosticRecord` and the JSON format in "The format" above gain two additive fields,
+`file` and `line`, both JSON strings and both written only when the diagnostic carries a location
+(never as `null`): the same `KSNode.location` the trailing `at <path>:<line>` suffix inside `message`
+already carries, split out so `NugetReportDiagnosticsTask` can compose a *leading* `<path>:<line>: `
+on its own console line — the kotlinc/KSP shape a build window linkifies — without reordering
+`ForwardDiagnostic.format()` itself. `format()` is deliberately left alone: it feeds
+`logger.warn`/`logger.error` directly on the KSP path, where the Gradle/KSP integration already
+prefixes that same location, so a leading location inside `format()` would print it twice there. Both
+fields are optional on read, so a `NugetDiagnostics.json` written by a pre-ADR-162 processor still
+parses.

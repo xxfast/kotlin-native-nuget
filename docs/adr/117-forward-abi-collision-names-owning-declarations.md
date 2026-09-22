@@ -45,7 +45,7 @@ guards firing on user-writable Kotlin:
 | Two `class Kitten` in different packages ([backlog](../backlog/two-exported-types-same-simple-name-different.md)) | `kitten_create` | structural (`CirDllImport`, planned constructor) | `addForwardKotlinPlanExport` (plan, `node = constructor`, **Verified** `ForwardCallablePlanner.kt:1083/1097`) |
 | Two same-named top-level functions in different packages | `<name>` | structural (planned, [ADR-095](095-static-route-overloads.md)) | `addForwardKotlinPlanExport` (plan, `node = function`, **Verified** `:1428`) |
 | Two `sealed class LoadState` in different packages | `loadstate_get_type` | legacy text (`CirSealedRenderer.kt:32`, **Verified**) | `SealedClassExports.kt` (6 `cNameAnnotation` sites, sealed class known, no per-export owner) |
-| `fun dispose()` on an exported class ([backlog](../backlog/fun-dispose-crashes-ksp-raw-stack-trace.md)) | `closer_dispose` | user method structural; generated `Dispose` legacy text (`CirClassRenderer.kt:57`, **Verified**) | user method via plan; generated one at `ClassExports.kt:74` |
+| `fun dispose()` on an exported class (no longer reaches this route, see the 2026-09-22 amendment below) | `closer_dispose` | user method structural; generated `Dispose` legacy text (`CirClassRenderer.kt:57`, **Verified**) | user method via plan; generated one at `ClassExports.kt:74` |
 | Two `suspend` overloads (ROADMAP line 54) | `radio_play_async` | legacy text (`CirClassTranslator.kt:711/766`) | `SuspendFunctionExports.kt:56/101` |
 | Two enum-extension properties on cross-package `enum class Mood` (backlog, fourth shape) | `mood_get_*` | structural (planned extension) | `addForwardKotlinPlanExport` |
 
@@ -503,3 +503,32 @@ recorded as its own roadmap item rather than folded into this ADR's scope.
 > `loadstate_ready_create` (the `Ready` arm's plan-derived structural constructor import, ADR-148)
 > reaches `DUPLICATE_CSHARP_IMPORT` in the same round, unasserted by name but present in
 > `kspErrors`.
+
+## Amendment (2026-09-22): `fun dispose()` no longer reaches this route at all
+
+[ADR-162](162-per-declaration-error-containment.md) closes the residual the
+`fun-dispose-crashes-ksp-raw-stack-trace.md` backlog file recorded against this ADR: a user
+`fun dispose()` colliding with the generated `Dispose()` fired the generic
+`ERROR_C_ENTRY_POINT_COLLISION` this ADR describes, naming `sample.Closer.dispose()` and
+`sample.Closer (generated Dispose)` as the two owners of `closer_dispose` — correct, but generic,
+since the real defect is CS0111 (two members of one C# type, same name, same parameter list), ADR-034's
+own kind, not an ABI-symbol accident.
+
+`emitCsharpSignatureCollisions` (`CirClassTranslator.kt`, `ERROR_CSHARP_SIGNATURE_COLLISION`'s
+producer) now takes an optional `reservedSignatures` set of renderer-owned signatures no `CirMethod`
+in its input list can name; the ordinary class route, the sealed base, and the sealed arm all pass
+`Dispose()` (zero parameters) as one. A zero-parameter Kotlin `dispose()` now collides there, during
+`translate`, **before** the ABI contract ever runs — so this ADR's own guard machinery
+(`DUPLICATE_CSHARP_IMPORT` / `DUPLICATE_KOTLIN_EXPORT` / `CONFLICTING_LEGACY_IMPORTS`) is never
+reached for this shape at all, on any of the three sites. `fun close()` is unaffected: it renders
+`Close()` beside the generated `Dispose()` with no collision. Verified for a plain class, a sealed
+base's own `dispose()`, and a sealed arm's own `dispose()` colliding with the base's *inherited*
+`Dispose()` — the arm's own `HANDLE_RESERVED_SIGNATURES` cell was previously inferred from reading the
+renderers, never reproduced by a fixture; it now is, and both the base and arm collisions are reported
+in the same round, which is ADR-162's own containment claim.
+
+The `fun-dispose-crashes-ksp-raw-stack-trace.md` backlog file is deleted with this amendment; its
+residual is closed. `docs/backlog/fun-dispose-collision-located-at-class-not-member.md` records the
+one thing this amendment does *not* fix: the collision is still located at the containing class (or
+arm), not the offending member, because `emitCsharpSignatureCollisions` receives the container's
+`KSNode`.
