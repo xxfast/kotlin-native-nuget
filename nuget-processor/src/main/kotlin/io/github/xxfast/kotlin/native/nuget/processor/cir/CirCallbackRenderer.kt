@@ -31,9 +31,9 @@ internal fun StringBuilder.renderCallbackDelegateHelper(helper: CirCallbackDeleg
  * thrown for a thunk to catch. A monotonic key is never handed out twice, so a late invocation is a
  * lookup MISS and the thunk can say so.
  *
- * `ConcurrentDictionary` because the three parties (the subscribing thread, the disposing thread and
- * the Kotlin thread that invokes) are unsynchronised by construction. `TryRemove` drops the only
- * strong reference the table holds, so a removed delegate is collectable exactly as the freed
+ * `ConcurrentDictionary` because the three parties (the subscribing thread, the disposing thread
+ * and the Kotlin thread that invokes) are unsynchronised by construction. `TryRemove` drops the
+ * only strong reference the table holds, so a removed delegate is collectable exactly as the freed
  * `GCHandle` made it collectable before.
  */
 private fun StringBuilder.appendCtxKeyTable() {
@@ -117,11 +117,11 @@ internal fun StringBuilder.appendCtxDispatchThunk(
   // [viaKeyTable] selects exactly that set. The async completion family renders through here too
   // (`renderAsyncHelper`), and it is NOT user code: the published `nuget-runtime` klib invokes it,
   // at the arity its own `CFunction` type spells (`launchForCSharp`, four parameters), so it must
-  // keep today's arity and FailFast. Giving it the slot anyway means the thunk reads `errOut` from a
-  // stack slot the caller never supplied and, on its catch path, writes a managed handle through
+  // keep today's arity and FailFast. Giving it the slot anyway means the thunk reads `errOut` from
+  // a stack slot the caller never supplied and, on its catch path, writes a managed handle through
   // whatever is there -- ADR-104's stated failure mode and the ADR-053 `SIGBUS` family.
-  // `Tier1CallbackArityAgreementTest` pins both halves, including this family against the runtime's
-  // signature. The Flow family calls `appendThunkBody` directly and was never affected.
+  // `Tier1CallbackArityAgreementTest` pins both halves, including this family against the
+  // runtime's signature. The Flow family calls `appendThunkBody` directly and was never affected.
   appendThunkBody(
     name,
     if (errOut) "$parameters, IntPtr* errOut" else parameters,
@@ -138,13 +138,13 @@ internal fun StringBuilder.appendCtxDispatchThunk(
  * table, i.e. Kotlin invoked after C# disposed the subscription or after the per-call frame
  * returned.
  *
- * What-question 4, approved: a `void` shape is **dropped**. The consumer unsubscribed, so silence is
- * what they asked for, and it is also the only answer the racing-emitter cell can survive: reporting
- * an error there would surface a `KotlinException` on the emitting thread. A value-returning shape
- * has nothing honest to return (a `default` would become an NPE at the Kotlin call site, and `0` or
- * `""` would be a lie), so it throws `ObjectDisposedException`, which the shared catch below reports
- * through part B's `errOut` channel: Kotlin sees a `NugetManagedException` naming it and can catch
- * it at the invocation site.
+ * What-question 4, approved: a `void` shape is **dropped**. The consumer unsubscribed, so silence
+ * is what they asked for, and it is also the only answer the racing-emitter cell can survive:
+ * reporting an error there would surface a `KotlinException` on the emitting thread. A
+ * value-returning shape has nothing honest to return (a `default` would become an NPE at the
+ * Kotlin call site, and `0` or `""` would be a lie), so it throws `ObjectDisposedException`, which
+ * the shared catch below reports through part B's `errOut` channel: Kotlin sees a
+ * `NugetManagedException` naming it and can catch it at the invocation site.
  */
 private fun ctxLookupPreamble(name: String, ctx: String, returnType: String): List<String> =
   listOf(

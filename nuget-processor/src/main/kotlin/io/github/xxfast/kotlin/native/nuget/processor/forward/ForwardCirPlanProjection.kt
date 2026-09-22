@@ -720,9 +720,10 @@ internal object ForwardCirPlanProjection {
    */
   /**
    * ADR-160: the managed delegate plus its ADR-161 table key, declared before the `try` so
-   * [callbackCleanup]'s `finally` can remove the key on every exit path (including a Kotlin exception
-   * rethrown by the error check, which is exactly the leak the ADR-099 handle scope was built for).
-   * Removing it on exit is also what makes a call that outlives this frame a lookup MISS.
+   * [callbackCleanup]'s `finally` can remove the key on every exit path (including a Kotlin
+   * exception rethrown by the error check, which is exactly the leak the ADR-099 handle scope was
+   * built for). Removing it on exit is also what makes a call that outlives this frame a lookup
+   * MISS.
    */
   private fun ForwardCallablePlan.callbackPrelude(
     parameter: ForwardPublicParameter,

@@ -8,8 +8,8 @@ import kotlinx.coroutines.flow.flow
  * ADR-161 fixture: a C# callback that **throws** while Kotlin is calling it, a bridge-internal
  * materialisation failure, and a Kotlin invocation that lands after C# disposed the subscription.
  *
- * Before ADR-161 every throwing member below ended the host process: the generated thunk's catch-all
- * (`CirCallbackRenderer.appendThunkBody`) turned the managed exception into
+ * Before ADR-161 every throwing member below ended the host process: the generated thunk's
+ * catch-all (`CirCallbackRenderer.appendThunkBody`) turned the managed exception into
  * `Environment.FailFast("nuget: unhandled exception in <delegate>", ex)`, which happens *below* the
  * Kotlin frame, so no `catch` on this class could run. The throw now arrives at the Kotlin
  * invocation site as a `NugetManagedException` carrying the managed type and message, which is what
@@ -24,17 +24,17 @@ import kotlinx.coroutines.flow.flow
  *    (Kotlin catches, `Int` payload, which crosses by value and needs none), [wrapWith] (Kotlin
  *    catches and rethrows its OWN exception type, the discriminating cell for "rethrow the original
  *    C# exception only when the escaping Kotlin error is the managed-exception type"),
- *  - **stored callback** (ADR-037): [addFaultListener]/[removeFaultListener]/[emit] with a `String`
- *    payload, [addTickListener]/[emitTick] with an `Int` payload, and [emitSafely], which counts the
- *    listeners that failed instead of letting the throw escape,
+ *  - **stored callback** (ADR-037): [addFaultListener]/[removeFaultListener]/[emit] with a
+ *    `String` payload, [addTickListener]/[emitTick] with an `Int` payload, and [emitSafely], which
+ *    counts the listeners that failed instead of letting the throw escape,
  *  - **C#-implemented interface member** (ADR-084 bridge slots): [greetVia] and [countVia], one
  *    value-returning member per payload kind. The ADR-039 add/remove listener pair is already
  *    covered by [CatEventSource], so this file does not duplicate it.
  *
  * The late-call half (memo item 3) is deterministic here rather than statistical:
  *
- *  - [callLastRemoved] invokes the stored listener whose subscription C# just disposed. The listener
- *    returns `Unit`, so the invocation must be dropped,
+ *  - [callLastRemoved] invokes the stored listener whose subscription C# just disposed. The
+ *    listener returns `Unit`, so the invocation must be dropped,
  *  - [callStashed] invokes a per-call lambda after the member that received it returned, which is
  *    the value-returning shape: there is no value to make up, so it must report an error into
  *    Kotlin rather than read a freed `GCHandle`.
@@ -51,8 +51,8 @@ import kotlinx.coroutines.flow.flow
  * Kotlin collector is cancelled, where the host process used to die. The materialisation gap itself
  * is still open, which is why this member is a fault trigger and not a round trip.
  *
- * The stored-listener list is copy-on-write behind a `@Volatile` reference so the C# stress test can
- * subscribe and dispose on one thread while another thread emits: a plain `mutableListOf` would
+ * The stored-listener list is copy-on-write behind a `@Volatile` reference so the C# stress test
+ * can subscribe and dispose on one thread while another thread emits: a plain `mutableListOf` would
  * crash on concurrent mutation and prove nothing about the bridge.
  *
  * Oreo throws the tantrums. Mylo just watches the process die.

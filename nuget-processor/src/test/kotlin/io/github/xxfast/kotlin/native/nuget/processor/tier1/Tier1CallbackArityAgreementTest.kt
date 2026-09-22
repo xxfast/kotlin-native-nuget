@@ -8,8 +8,8 @@ import kotlin.test.assertTrue
  * ADR-161, the guard finding 6 of the research memo asks for: **nothing in the build compares a
  * forward callback's two halves**.
  *
- * A callback pointer crosses as a bare `IntPtr` in every `DllImport`, and the Kotlin side spells the
- * `CFunction<...>` type it `reinterpret`s to itself. So neither compiler sees the other half: a
+ * A callback pointer crosses as a bare `IntPtr` in every `DllImport`, and the Kotlin side spells
+ * the `CFunction<...>` type it `reinterpret`s to itself. So neither compiler sees the other half: a
  * Kotlin export that calls an N-ary function pointer through an (N+1)-ary `CFunction` type, or the
  * reverse, links and runs, and corrupts the stack or writes through a slot the caller never
  * supplied. That is the exact bug class ADR-053's `SIGBUS` came from, and it is the one thing that
@@ -17,20 +17,21 @@ import kotlin.test.assertTrue
  * the slot has to appear on BOTH halves in one commit.
  *
  * The cell compares parameter counts, which is all the two spellings have in common (`IntPtr`
- * against `COpaquePointer?`, `int` against `Int`). It passes at today's arity N. When part B lands,
- * both halves move together and it still passes; if only one half moves, it fails here rather than
- * in a consumer's process.
+ * against `COpaquePointer?`, `int` against `Int`). It passes at today's arity N. When part B
+ * lands, both halves move together and it still passes; if only one half moves, it fails here
+ * rather than in a consumer's process.
  *
- * The `NugetFlowOn*` and `NugetAsyncCallback` families used to be excluded here, on the grounds that
- * the published `nuget-runtime` klib invokes them (`collectForCSharp`, `launchForCSharp`) so there is
- * no generated `CFunction` in this module to compare against. That exclusion hid a real ADR-161 part
- * B defect for one commit: `renderAsyncHelper` renders through the same
+ * The `NugetFlowOn*` and `NugetAsyncCallback` families used to be excluded here, on the grounds
+ * that the published `nuget-runtime` klib invokes them (`collectForCSharp`, `launchForCSharp`) so
+ * there is no generated `CFunction` in this module to compare against. That exclusion hid a real
+ * ADR-161 part B defect for one commit: `renderAsyncHelper` renders through the same
  * `appendCtxDispatchThunk` as the user-code shapes, so `NugetAsyncCallback` silently grew the
- * trailing `IntPtr* errOut` while `launchForCSharp` kept invoking it with four arguments -- a thunk
- * reading a fifth parameter off a stack slot the caller never supplied, writing a managed handle
- * through it on the catch path. So they are no longer excluded: their expected arity is a LITERAL
- * transcription of the runtime's `CFunction` types, which is the only other half that exists. If the
- * runtime's wire ever changes, that is a deliberate act and this table is the place it is recorded.
+ * trailing `IntPtr* errOut` while `launchForCSharp` kept invoking it with four arguments -- a
+ * thunk reading a fifth parameter off a stack slot the caller never supplied, writing a managed
+ * handle through it on the catch path. So they are no longer excluded: their expected arity is a
+ * LITERAL transcription of the runtime's `CFunction` types, which is the only other half that
+ * exists. If the runtime's wire ever changes, that is a deliberate act and this table is the place
+ * it is recorded.
  *
  * Oreo is called back four different ways. Every one of them counts to the same number.
  */
@@ -117,10 +118,10 @@ class Tier1CallbackArityAgreementTest {
    *    Unit`, 2.
    *
    * A trailing `IntPtr* errOut` on any of them is therefore a defect, not an addition: the runtime
-   * supplies no such slot, so the thunk would read a fifth argument off the caller's stack and write
-   * a managed handle through it on the catch path. ADR-161 part B added exactly that to the async
-   * family for one commit, because it renders through the same `appendCtxDispatchThunk` as the
-   * user-code shapes.
+   * supplies no such slot, so the thunk would read a fifth argument off the caller's stack and
+   * write a managed handle through it on the catch path. ADR-161 part B added exactly that to the
+   * async family for one commit, because it renders through the same `appendCtxDispatchThunk` as
+   * the user-code shapes.
    */
   @Test
   fun `the runtime-invoked thunk families keep the arity the runtime calls them at`() {
@@ -144,12 +145,14 @@ class Tier1CallbackArityAgreementTest {
     assertEquals(
       expected,
       actual,
-      "expected every runtime-invoked thunk to keep the arity nuget-runtime's own CFunction type " +
-          "spells; an extra trailing slot here is read off a stack slot the caller never supplied " +
-          "and, on the catch path, written through",
+      "expected every runtime-invoked thunk to keep the arity nuget-runtime's own CFunction " +
+          "type spells; an extra trailing slot here is read off a stack slot the caller never " +
+          "supplied and, on the catch path, written through",
     )
     assertTrue(
-      result.generatedCSharp.contains("NugetAsyncCallbackThunk(IntPtr a0, IntPtr a1, byte a2, IntPtr a3)"),
+      result.generatedCSharp.contains(
+        "NugetAsyncCallbackThunk(IntPtr a0, IntPtr a1, byte a2, IntPtr a3)"
+      ),
       "expected the async thunk's own signature to carry no error slot either; got: " +
           result.generatedCSharp.lines().filter { it.contains("NugetAsyncCallbackThunk") },
     )
@@ -169,16 +172,16 @@ class Tier1CallbackArityAgreementTest {
 
     assertTrue(
       kotlinArities.isNotEmpty(),
-      "expected the fixture to emit generated CFunction call sites at all; a fixture that stopped " +
-          "reaching the callback emitters would make this guard vacuous; lines: " +
+      "expected the fixture to emit generated CFunction call sites at all; a fixture that " +
+          "stopped reaching the callback emitters would make this guard vacuous; lines: " +
           "${result.generated.lines().filter { it.contains("CFunction") }.map(String::trim)}",
     )
     assertEquals(
       csharpArities,
       kotlinArities,
       "expected the Kotlin CFunction arities and the C# user-code thunk arities to agree; the " +
-          "pointer crosses as a bare IntPtr, so a disagreement links and runs and writes through a " +
-          "slot the caller never supplied",
+          "pointer crosses as a bare IntPtr, so a disagreement links and runs and writes through " +
+          "a slot the caller never supplied",
     )
   }
 

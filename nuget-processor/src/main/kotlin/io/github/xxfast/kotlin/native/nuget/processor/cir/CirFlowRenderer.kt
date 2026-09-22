@@ -96,10 +96,10 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine("        private IntPtr _jobHandle;")
   appendLine("        private NugetFlowCallbacks? _callbacks;")
   appendLine("        private bool _done;")
-  // ADR-161: set by the onNext closure when an ITEM failed to materialise, read by the constructor
-  // straight after `startCollect` returns. A flow whose first emission is synchronous can fault
-  // before `_jobHandle` has been assigned, in which case the closure has no handle to cancel and the
-  // constructor does it instead.
+  // ADR-161: set by the onNext closure when an ITEM failed to materialise, read by the
+  // constructor straight after `startCollect` returns. A flow whose first emission is synchronous
+  // can fault before `_jobHandle` has been assigned, in which case the closure has no handle to
+  // cancel and the constructor does it instead.
   appendLine("        private volatile bool _faulted;")
   appendLine("        private readonly Func<IntPtr, T> _read;")
   appendLine()
@@ -120,13 +120,14 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
         "callbacks.Release(); return; }"
   )
   // ADR-161: the read is a managed-to-native call plus a materialisation (`new T(handle)`, a
-  // collection read, or `FromHandle<T>`, which has no branch for every element kind). It runs inside
-  // the NugetFlowOnNext thunk, whose catch-all is `Environment.FailFast` (ADR-102), so a failed item
-  // used to end the host process. It now faults the channel -- which `MoveNextAsync` already
-  // rethrows out of `await foreach` -- and cancels the Kotlin collector, so the consumer sees the
-  // materialisation exception on the stream it was enumerating. Accepted residue, named in the ADR
-  // and in LeakTests: the item handle whose read failed is not released here, because a read that
-  // threw may or may not have taken ownership of it, and a dispose on that path risks a double free.
+  // collection read, or `FromHandle<T>`, which has no branch for every element kind). It runs
+  // inside the NugetFlowOnNext thunk, whose catch-all is `Environment.FailFast` (ADR-102), so a
+  // failed item used to end the host process. It now faults the channel -- which `MoveNextAsync`
+  // already rethrows out of `await foreach` -- and cancels the Kotlin collector, so the consumer
+  // sees the materialisation exception on the stream it was enumerating. Accepted residue, named in
+  // the ADR and in LeakTests: the item handle whose read failed is not released here, because a
+  // read that threw may or may not have taken ownership of it, and a dispose on that path risks a
+  // double free.
   appendLine("                try")
   appendLine("                {")
   appendLine("                    T value = _read(itemPtr);")
@@ -153,7 +154,10 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   // channel must still complete, with whatever failure actually happened, or the collector hangs.
   appendLine("                try")
   appendLine("                {")
-  appendLine("                    _channel.Writer.TryComplete(NugetErrorNative.BuildException(errorPtr));")
+  appendLine(
+    "                    _channel.Writer.TryComplete(" +
+        "NugetErrorNative.BuildException(errorPtr));"
+  )
   appendLine("                }")
   appendLine("                catch (Exception ex)")
   appendLine("                {")
@@ -171,11 +175,11 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   appendLine("                NugetThunks.NugetFlowOnCompletePtr,")
   appendLine("                NugetThunks.NugetFlowOnErrorPtr,")
   appendLine("                callbacks.Root());")
-  // ADR-161: the publication half of the ordering window part A left open. The onNext closure reads
-  // this field from the Kotlin emitter's thread with a `Volatile.Read`, so the store has to be a
-  // release, not a plain write, or the reader can see `IntPtr.Zero` after the handle exists and skip
-  // its cancel. Paired with the local below, which is what this frame cancels through: re-reading
-  // the field would be a second race for no gain.
+  // ADR-161: the publication half of the ordering window part A left open. The onNext closure
+  // reads this field from the Kotlin emitter's thread with a `Volatile.Read`, so the store has to
+  // be a release, not a plain write, or the reader can see `IntPtr.Zero` after the handle exists
+  // and skip its cancel. Paired with the local below, which is what this frame cancels through:
+  // re-reading the field would be a second race for no gain.
   appendLine("            Interlocked.Exchange(ref _jobHandle, job);")
   appendLine()
   // ADR-161: a synchronous first emission runs onNext before the store above, so the closure's own

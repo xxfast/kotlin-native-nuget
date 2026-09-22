@@ -99,12 +99,14 @@ class Tier1PrimitiveLambdaParameterTest {
     listOf("Int", "Byte", "Double").forEach { wire ->
       assertTrue(
         result.generated.contains("CFunction<($wire, COpaquePointer, COpaquePointer?) -> Unit>"),
-        "expected a by-value `CFunction<($wire, COpaquePointer, COpaquePointer?) -> Unit>` reinterpret; " +
-            "got: ${lambdaLines(result.generated)}",
+        "expected a by-value `CFunction<($wire, COpaquePointer, COpaquePointer?) -> Unit>` " +
+            "reinterpret; got: ${lambdaLines(result.generated)}",
       )
     }
     assertFalse(
-      result.generated.contains("CFunction<(COpaquePointer?, COpaquePointer, COpaquePointer?) -> Unit>"),
+      result.generated.contains(
+        "CFunction<(COpaquePointer?, COpaquePointer, COpaquePointer?) -> Unit>"
+      ),
       "no primitive payload may still cross as a boxed handle; " +
           "got: ${lambdaLines(result.generated)}",
     )

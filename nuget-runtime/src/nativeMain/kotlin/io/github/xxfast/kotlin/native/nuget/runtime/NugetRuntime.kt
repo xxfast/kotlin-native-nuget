@@ -12,6 +12,7 @@ import kotlin.coroutines.SuspendFunction0
 import kotlin.coroutines.SuspendFunction1
 import kotlin.coroutines.SuspendFunction2
 import kotlin.coroutines.SuspendFunction3
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.experimental.ExperimentalNativeApi
 import kotlin.native.CName
 import kotlin.native.runtime.GC
@@ -27,15 +28,14 @@ import kotlinx.cinterop.COpaquePointerVar
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.StableRef
-import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.asStableRef
-import kotlinx.cinterop.memScoped
-import kotlinx.cinterop.ptr
 import kotlinx.cinterop.convert
 import kotlinx.cinterop.invoke
+import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.pointed
+import kotlinx.cinterop.ptr
 import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.usePinned

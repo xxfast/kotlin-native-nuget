@@ -18,9 +18,10 @@ internal val KOTLIN_EXCEPTION_TYPES: Map<String, String> = linkedMapOf(
 )
 
 /**
- * ADR-161: the one type a forward callback's managed failure arrives as on the Kotlin side, declared
- * in `nuget-runtime`. Pinned here because the C# half has to recognise it by name when it decides
- * whether the escaping Kotlin error is the managed exception or an author's wrapper around it.
+ * ADR-161: the one type a forward callback's managed failure arrives as on the Kotlin side,
+ * declared in `nuget-runtime`. Pinned here because the C# half has to recognise it by name when
+ * it decides whether the escaping Kotlin error is the managed exception or an author's wrapper
+ * around it.
  */
 internal const val NUGET_MANAGED_EXCEPTION_TYPE: String =
   "io.github.xxfast.kotlin.native.nuget.runtime.NugetManagedException"
@@ -65,8 +66,8 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   // `CreateManagedError` PUSHES a Kotlin-owned holder instead of reading a `GCHandle` back through
   // registered accessors (the recorded deviation from ADR-104's convergence note): a forward-only
   // library has no init-time registration step to hang accessors off, and the push costs one
-  // P/Invoke and no new state. The trailing-slot shape and the single `NugetManagedException` type,
-  // which are ADR-104's two stated convergence points, are unchanged.
+  // P/Invoke and no new state. The trailing-slot shape and the single `NugetManagedException`
+  // type, which are ADR-104's two stated convergence points, are unchanged.
   appendLine(
     "        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, " +
         "EntryPoint = \"nuget_managed_error_create\")]"
@@ -77,10 +78,10 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("            int kind);")
   appendLine()
   // The stash is what lets an escaping managed exception reach its C# caller as ITSELF rather than
-  // as a `KotlinException` wrapper. `BuildException` only takes it when the escaping Kotlin error IS
-  // the managed-exception type AND the message matches exactly, so a stash left behind by a callback
-  // whose throw Kotlin caught cannot be mistaken for a fresh one, and a Kotlin author who wraps the
-  // exception in their own type keeps their wrapper (the discriminating cell).
+  // as a `KotlinException` wrapper. `BuildException` only takes it when the escaping Kotlin error
+  // IS the managed-exception type AND the message matches exactly, so a stash left behind by a
+  // callback whose throw Kotlin caught cannot be mistaken for a fresh one, and a Kotlin author who
+  // wraps the exception in their own type keeps their wrapper (the discriminating cell).
   appendLine("        [ThreadStatic] private static Exception? _lastManagedFault;")
   appendLine()
   appendLine("        internal static IntPtr CreateManagedError(Exception ex)")
@@ -98,7 +99,10 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("        private const string ManagedExceptionType =")
   appendLine("            \"$NUGET_MANAGED_EXCEPTION_TYPE\";")
   appendLine()
-  appendLine("        private static Exception? TakeOriginalManagedFault(string kotlinType, string message)")
+  appendLine(
+    "        private static Exception? TakeOriginalManagedFault(string kotlinType, " +
+        "string message)"
+  )
   appendLine("        {")
   appendLine("            if (kotlinType != ManagedExceptionType) return null;")
   appendLine("            Exception? fault = _lastManagedFault;")
@@ -125,10 +129,10 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("            string msg = Message(errorPtr);")
   appendLine("            string stackTrace = StackTrace(errorPtr);")
   appendLine("            NugetMarshal.Dispose(errorPtr);")
-  // ADR-161: when the escaping Kotlin error IS the managed exception this process threw a moment ago
-  // inside a callback thunk, the C# caller gets the ORIGINAL exception back, so
-  // `Assert.Throws<InvalidOperationException>` works on `cat.DescribeWith(_ => throw ...)`. Anything
-  // else, including a Kotlin author's own wrapper around it, keeps the ordinary mapping.
+  // ADR-161: when the escaping Kotlin error IS the managed exception this process threw a moment
+  // ago inside a callback thunk, the C# caller gets the ORIGINAL exception back, so
+  // `Assert.Throws<InvalidOperationException>` works on `cat.DescribeWith(_ => throw ...)`.
+  // Anything else, including a Kotlin author's own wrapper around it, keeps the ordinary mapping.
   appendLine("            Exception? original = TakeOriginalManagedFault(kotlinType, msg);")
   appendLine("            if (original != null) return original;")
   appendLine("            return BuildMapped(kotlinType, msg, stackTrace, inner);")

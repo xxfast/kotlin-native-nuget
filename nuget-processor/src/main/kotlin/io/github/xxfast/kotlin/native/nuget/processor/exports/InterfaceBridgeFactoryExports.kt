@@ -44,8 +44,9 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
       )
     }
     // ADR-161: the release thunk shares the one thunk shell, so it carries the slot too, but the
-    // cleaner passes `null`: there is nowhere to throw to from a GC worker, so a failure there keeps
-    // ADR-102's `Environment.FailFast` backstop. `null` is what selects that branch in the thunk.
+    // cleaner passes `null`: there is nowhere to throw to from a GC worker, so a failure there
+    // keeps ADR-102's `Environment.FailFast` backstop. `null` is what selects that branch in the
+    // thunk.
     appendLine(
       "  val releaseFn = releasePtr" +
           ".reinterpret<CFunction<(COpaquePointer, COpaquePointer?) -> Unit>>()"

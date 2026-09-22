@@ -799,8 +799,8 @@ private fun StringBuilder.renderStoredCallbackMethod(method: CirStoredCallbackMe
   appendLine("        {")
   appendLine("            ${method.delegateName} nativeCallback = ${method.delegateParamList} => { ${method.nativeCallbackBody} };")
   // ADR-161 part C: the ctx is a never-reused table key, not a GCHandle. A Kotlin emission that
-  // lands after `Dispose()` removed the key is a lookup miss the thunk drops, where a freed GCHandle
-  // would have resolved to whatever the next allocation put in its slot.
+  // lands after `Dispose()` removed the key is a lookup miss the thunk drops, where a freed
+  // GCHandle would have resolved to whatever the next allocation put in its slot.
   appendLine("            IntPtr cbKey = NugetThunks.RegisterCtx(nativeCallback);")
   // ADR-102: the AOT-compiled thunk address plus this delegate's own key as the echoed ctx.
   appendLine(
@@ -813,7 +813,10 @@ private fun StringBuilder.renderStoredCallbackMethod(method: CirStoredCallbackMe
     "            if (error != IntPtr.Zero) { NugetThunks.UnregisterCtx(cbKey); " +
         "throw NugetErrorNative.BuildException(error); }"
   )
-  appendLine("            return new NugetSubscription(() => { ${method.csRemoveNativeName}(_handle, sub); NugetThunks.UnregisterCtx(cbKey); });")
+  appendLine(
+    "            return new NugetSubscription(() => { " +
+        "${method.csRemoveNativeName}(_handle, sub); NugetThunks.UnregisterCtx(cbKey); });"
+  )
   appendLine("        }")
   appendLine()
 }
@@ -896,8 +899,8 @@ private fun StringBuilder.renderCallbackMethod(method: CirCallbackMethod) {
   appendLine("            {")
   appendLine(method.callbackBody)
   appendLine("            };")
-  // ADR-161 part C: a never-reused key, so a lambda that escaped the call (a Kotlin author bug) is a
-  // lookup miss reported as ObjectDisposedException, not a read of a reused GCHandle slot.
+  // ADR-161 part C: a never-reused key, so a lambda that escaped the call (a Kotlin author bug)
+  // is a lookup miss reported as ObjectDisposedException, not a read of a reused GCHandle slot.
   appendLine("            IntPtr cbKey = NugetThunks.RegisterCtx(nativeCallback);")
   appendLine("            try")
   appendLine("            {")

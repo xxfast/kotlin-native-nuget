@@ -1308,9 +1308,10 @@ private fun loweredCallbackExpression(name: String, type: BridgeType.Callback): 
     appendLine(
       "  val ${name}Fn = ${name}Ptr.reinterpret<CFunction<($signature) -> $resultWire>>()"
     )
-    // ADR-161: the ADR-160 plan route's per-call callback goes through the same error channel as the
-    // three legacy routes. The `!!` stays outside `nugetCallbackCall` so the managed exception is
-    // read and thrown before a null result can become an NPE (ADR-104's check-before-deref rule).
+    // ADR-161: the ADR-160 plan route's per-call callback goes through the same error channel as
+    // the three legacy routes. The `!!` stays outside `nugetCallbackCall` so the managed exception
+    // is read and thrown before a null result can become an NPE (ADR-104's check-before-deref
+    // rule).
     val invocation: String = "nugetCallbackCall { nugetErr -> ${name}Fn.invoke($arguments) }"
     when (val result: BridgeType = type.result) {
       BridgeType.Unit -> appendLine("  $invocation")

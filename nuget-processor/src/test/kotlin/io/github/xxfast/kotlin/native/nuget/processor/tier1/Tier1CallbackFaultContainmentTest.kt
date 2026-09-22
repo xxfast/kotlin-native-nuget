@@ -93,15 +93,16 @@ class Tier1CallbackFaultContainmentTest {
     )
     assertTrue(
       result.generatedCSharp.contains("Interlocked.Exchange(ref _jobHandle, job);"),
-      "expected the job handle to be PUBLISHED with a release store, not a plain write: the onNext " +
-          "closure reads it from the Kotlin emitter's thread, so a plain write lets that reader see " +
-          "IntPtr.Zero after the handle exists and skip its own cancel; got: " +
+      "expected the job handle to be PUBLISHED with a release store, not a plain write: the " +
+          "onNext closure reads it from the Kotlin emitter's thread, so a plain write lets that " +
+          "reader see IntPtr.Zero after the handle exists and skip its own cancel; got: " +
           csharpLinesFor(result, "_jobHandle"),
     )
     assertTrue(
       result.generatedCSharp.contains("private volatile bool _faulted;"),
-      "expected the flag the two parties share to be volatile: the onNext closure runs on a Kotlin " +
-          "thread and the constructor on the caller's; got: ${csharpLinesFor(result, "_faulted;")}",
+      "expected the flag the two parties share to be volatile: the onNext closure runs on a " +
+          "Kotlin thread and the constructor on the caller's; got: " +
+          "${csharpLinesFor(result, "_faulted;")}",
     )
   }
 
@@ -112,7 +113,8 @@ class Tier1CallbackFaultContainmentTest {
 
     assertTrue(
       result.generatedCSharp.contains(
-        "                    _channel.Writer.TryComplete(NugetErrorNative.BuildException(errorPtr));"
+        "                    _channel.Writer.TryComplete(" +
+            "NugetErrorNative.BuildException(errorPtr));"
       ),
       "expected the onError BuildException call to sit inside the containment; got: " +
           "${csharpLinesFor(result, "BuildException(errorPtr)")}",
@@ -176,7 +178,8 @@ class Tier1CallbackFaultContainmentTest {
 
     assertTrue(
       async.contains("GCHandle.FromIntPtr("),
-      "expected the async completion thunk to dispatch through its own one-shot GCHandle; got: $async",
+      "expected the async completion thunk to dispatch through its own one-shot GCHandle; got: " +
+          async,
     )
     assertTrue(
       !async.contains("LookupCtx("),

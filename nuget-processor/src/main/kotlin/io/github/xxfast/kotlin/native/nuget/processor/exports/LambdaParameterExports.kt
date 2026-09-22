@@ -77,7 +77,8 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
     }
     append("COpaquePointer, ")  // userData
     // ADR-161: the trailing error slot. Every user-code thunk takes it, so this type and the C#
-    // `delegate* unmanaged[Cdecl]<..., IntPtr*, R>` move in one commit (Tier1CallbackArityAgreement).
+    // `delegate* unmanaged[Cdecl]<..., IntPtr*, R>` move in one commit
+    // (Tier1CallbackArityAgreement).
     append("COpaquePointer?")
   }
 

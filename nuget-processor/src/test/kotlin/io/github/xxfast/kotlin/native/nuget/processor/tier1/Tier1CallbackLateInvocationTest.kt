@@ -9,16 +9,17 @@ import kotlin.test.assertTrue
  * per-call frame returned, must never read a freed `GCHandle`.
  *
  * A freed `GCHandle` cannot be validated. Its slots come off a LIFO free list, so the next
- * `GCHandle.Alloc` deterministically takes the slot the disposed subscription released and the stale
- * ctx resolves to a LIVE delegate belonging to somebody else: the memo's spike (b) measured
+ * `GCHandle.Alloc` deterministically takes the slot the disposed subscription released and the
+ * stale ctx resolves to a LIVE delegate belonging to somebody else: the memo's spike (b) measured
  * `invokedWrongListener=5000` of 5000, with nothing thrown for the thunk to catch. So the ctx is a
  * never-reused key into a table, and a late call is a lookup MISS the thunk can answer honestly:
  * dropped for a `void` shape (what-question 4, approved), reported as `ObjectDisposedException`
  * through part B's `errOut` channel where a value must be returned.
  *
- * These are text cells (ADR-060 tier 1) because the defect is the ABSENCE of a lookup: a thunk that
- * kept dispatching through `GCHandle.FromIntPtr(ctx).Target` has the same signature, the same arity
- * and the same `DllImport`s as one that does not, so no structural assertion can see the difference.
+ * These are text cells (ADR-060 tier 1) because the defect is the ABSENCE of a lookup: a thunk
+ * that kept dispatching through `GCHandle.FromIntPtr(ctx).Target` has the same signature, the same
+ * arity and the same `DllImport`s as one that does not, so no structural assertion can see the
+ * difference.
  *
  * The bridge cells are not decoration: the ADR-084 slot delegates are merged into the one shared
  * thunk shell, so if `_pins` had stayed `GCHandle`s every slot call would MISS the table and report
@@ -146,8 +147,8 @@ class Tier1CallbackLateInvocationTest {
     val voidThunk: String = thunkBody(result, "NugetObjectVoidCallbackThunk")
     assertTrue(
       voidThunk.contains("if (target is null)") && voidThunk.contains("return;"),
-      "expected a void shape's miss to be DROPPED: the consumer unsubscribed, and reporting would " +
-          "surface a KotlinException on whatever thread happened to emit; got: $voidThunk",
+      "expected a void shape's miss to be DROPPED: the consumer unsubscribed, and reporting " +
+          "would surface a KotlinException on whatever thread happened to emit; got: $voidThunk",
     )
     assertTrue(
       !voidThunk.contains("ObjectDisposedException"),
@@ -157,9 +158,9 @@ class Tier1CallbackLateInvocationTest {
     val stringThunk: String = thunkBody(result, "NugetStringStringCallbackThunk")
     assertTrue(
       stringThunk.contains("throw new ObjectDisposedException(\"NugetStringStringCallback\");"),
-      "expected a value-returning shape's miss to throw ObjectDisposedException, which the shell's " +
-          "catch reports through part B's errOut slot: there is no value to invent, and a default " +
-          "would become an NPE at the Kotlin call site; got: $stringThunk",
+      "expected a value-returning shape's miss to throw ObjectDisposedException, which the " +
+          "shell's catch reports through part B's errOut slot: there is no value to invent, and " +
+          "a default would become an NPE at the Kotlin call site; got: $stringThunk",
     )
     // Inside the `try`, so the throw is contained by the same catch that contains a user throw.
     assertTrue(
@@ -192,8 +193,8 @@ class Tier1CallbackLateInvocationTest {
 
     assertTrue(
       missing.isEmpty(),
-      "expected every ctx owner to hand out a table key and to remove it on its own release path; " +
-          "missing: $missing; got: ${csharpLinesFor(result, "RegisterCtx")}",
+      "expected every ctx owner to hand out a table key and to remove it on its own release " +
+          "path; missing: $missing; got: ${csharpLinesFor(result, "RegisterCtx")}",
     )
   }
 

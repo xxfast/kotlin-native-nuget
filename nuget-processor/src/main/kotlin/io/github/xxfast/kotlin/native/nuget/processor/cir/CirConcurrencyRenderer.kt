@@ -18,8 +18,8 @@ internal fun StringBuilder.renderAsyncHelper(helper: CirAsyncHelper) {
   // No key-table lookup: its ctx is a one-shot GCHandle the completion closure frees itself, and a
   // `void` shape answers a table MISS by DROPPING the call -- on this route that means the
   // `TaskCompletionSource` is never completed and every awaiting caller hangs forever, silently,
-  // rather than failing. The table is for the routes where C# can dispose the ctx while Kotlin still
-  // holds the pointer.
+  // rather than failing. The table is for the routes where C# can dispose the ctx while Kotlin
+  // still holds the pointer.
   renderThunkClass {
     appendCtxDispatchThunk(
       "NugetAsyncCallback",

@@ -43,8 +43,8 @@ internal fun BridgeType.Callback.forwardCallbackDelegateParameterList(): String 
 /**
  * The call-site prelude: the managed delegate instance that calls the consumer's lambda, then the
  * ADR-161 table key the thunk dispatches through. Both are declared before the `try` so the
- * `finally` [forwardCallbackCleanup] writes can name the key; the registration itself is the guarded
- * statement.
+ * `finally` [forwardCallbackCleanup] writes can name the key; the registration itself is the
+ * guarded statement.
  */
 internal fun forwardCallbackPrelude(
   name: String,
@@ -75,7 +75,7 @@ internal fun forwardCallbackPrelude(
     "};",
     "IntPtr ${name}Ctx = IntPtr.Zero;",
   )
-  val statement = "${name}Ctx = NugetThunks.RegisterCtx(${name}Native);"
+  val statement: String = "${name}Ctx = NugetThunks.RegisterCtx(${name}Native);"
   return ForwardCirHandleStep(
     flat = (declarations + statement).joinToString("\n"),
     declarations = declarations,
@@ -84,10 +84,10 @@ internal fun forwardCallbackPrelude(
 }
 
 /**
- * The `finally` half of [forwardCallbackPrelude]: the ADR-161 key is removed from the table on every
- * exit path, which is what makes an invocation that outlives this frame a lookup miss rather than a
- * read of whatever took the freed GCHandle's slot. `IntPtr.Zero` means the registration itself is
- * the statement that threw, so there is nothing to remove.
+ * The `finally` half of [forwardCallbackPrelude]: the ADR-161 key is removed from the table on
+ * every exit path, which is what makes an invocation that outlives this frame a lookup miss rather
+ * than a read of whatever took the freed GCHandle's slot. `IntPtr.Zero` means the registration
+ * itself is the statement that threw, so there is nothing to remove.
  */
 internal fun forwardCallbackCleanup(name: String): String =
   "if (${name}Ctx != IntPtr.Zero) NugetThunks.UnregisterCtx(${name}Ctx);"
