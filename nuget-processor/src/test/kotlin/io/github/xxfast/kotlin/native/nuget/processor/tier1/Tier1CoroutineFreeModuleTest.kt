@@ -44,6 +44,31 @@ class Tier1CoroutineFreeModuleTest {
   }
 
   /**
+   * ADR-159: `using System.Threading` is unconditional in the generated `Interop.cs`. Every
+   * class's `Dispose()` calls `Interlocked.Exchange(ref _handle, IntPtr.Zero)`, but the using was
+   * added only for an async or subscription surface, so a coroutine-free module -- one ordinary
+   * class, nothing else -- did not compile under the ADR-138 gate's csproj, which has no implicit
+   * usings: `error CS0103: The name 'Interlocked' does not exist in the current context`.
+   *
+   * It never surfaced because `test-library` always has async members, CI packs only
+   * `test-library`, and every C# consumer project in this repo enables implicit usings. It
+   * matters here because the refused-only class ([Tier1RefusedSuspendOrdinaryClassTest]) lands
+   * exactly on it once its scope flag goes false.
+   */
+  @Test
+  fun `a coroutine-free module still imports System Threading for Interlocked`() {
+    val result = Tier1Harness.run(coroutineFreeFixture, coroutinesOnCompileClasspath = false)
+
+    assertContains(
+      result.generatedCSharp,
+      "using System.Threading;",
+      message = "every Dispose() calls Interlocked.Exchange, so the using cannot be gated on an " +
+          "async surface; generatedCSharp=${result.generatedCSharp}",
+    )
+    assertContains(result.generatedCSharp, "Interlocked.Exchange(ref _handle")
+  }
+
+  /**
    * The compile half, and the one that reproduces the reported failure: the same fixture built
    * with `kotlinx-coroutines-core` genuinely absent from the classpath, as it is for a consumer
    * library that never took the dependency.

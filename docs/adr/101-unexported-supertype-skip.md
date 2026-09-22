@@ -832,3 +832,13 @@ Not changed: the direct `findOverridee()` stage and its class-kind trust rule (t
 shape, `Cat.speak` over an `Animal : Pet` that leaves `speak` abstract, still answers `override`
 through the fallback), the property fallback, the ABI (no export minted or removed),
 `translateGenericClass`.
+
+### Cross-reference (2026-09-22): `IAsyncDisposable` is the one inherited member that isn't always on the base
+
+This ADR's reasoning that "a derived class inherits `_handle`, `INugetHandle` and `IDisposable` from
+the base" still holds for those three. [ADR-159](159-async-member-on-kotlin-subclass.md) found the
+one member of that set for which it does not: `IAsyncDisposable`/`DisposeAsync` sit wherever the
+first async member in the kept chain is *projected*, which can be the derived class itself. A
+derived class over a dropped (unexported) base needs no special case either way: its async members
+re-home onto the derived class the same way its other members do, which makes the derived class the
+scope owner automatically.

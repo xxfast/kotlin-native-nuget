@@ -424,3 +424,12 @@ Creating a scope on class instantiation adds memory and GC overhead, even if no 
 
 **Since kotlinx.coroutines 1.9, `CoroutineStart.ATOMIC`'s opt-in marker is `@DelicateCoroutinesApi`, not `@ExperimentalCoroutinesApi`.** Both are `WARNING`-level `@RequiresOptIn` annotations, so this was never the cause of the gating bug above, but it means suspend/Flow-using generated output built against coroutines >= 1.9 likely emits a `DelicateCoroutinesApi` warning today. Adding that marker to the now-gated `@OptIn` is deferred, tracked in ROADMAP.md's Phase 6.
 
+## Implementation Addendum (2026-09-22)
+
+This ADR's Deferred list named "sealed class / abstract class hierarchy scope management."
+[ADR-159](159-async-member-on-kotlin-subclass.md) closes the ordinary-class and abstract-owner half
+of that: one scope per instance, owned by the root-most class in a Kotlin inheritance chain that
+projects an async or Flow member, with an abstract owner declaring `DisposeAsync` abstractly and
+each concrete class below carrying the body as `override`. A sealed arm's own scope ownership was
+already closed separately by ADR-118/ADR-124, declared-only per arm.
+

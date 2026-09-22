@@ -219,6 +219,61 @@ public class NapPod : INapper, IDisposable, IAsyncDisposable, INugetHandle
 
 Hold it as `IAsyncDisposable` through a field, a cast, or `await using`, and it resolves correctly.
 
+### A class with a Kotlin superclass {id="a-class-with-a-kotlin-superclass"}
+
+One coroutine scope exists per instance, owned by whichever class is **first**, top to bottom, to
+declare a `suspend` or `Flow`/`StateFlow`-returning member. It does not have to be the base:
+
+```kotlin
+open class SunShelf(val spot: String) {
+  fun describeLounge(): String = "$spot is warm"
+}
+
+class NapLounge(spot: String) : SunShelf(spot) {
+  suspend fun rest(cat: String): String {
+    delay(10.milliseconds)
+    return "$cat napped on $spot"
+  }
+}
+```
+
+```C#
+await using var lounge = new NapLounge("the windowsill");
+Assert.Equal("Oreo napped on the windowsill", await lounge.RestAsync("Oreo"));
+// SunShelf itself is IDisposable but not IAsyncDisposable: it declares no async member.
+```
+
+The other direction works the same way: if the **base** declares the first async member, a subclass
+that declares none of its own is not `IAsyncDisposable` a second time, it inherits `Dispose()`/
+`DisposeAsync()` from the owner, and calling the member through either a base- or subclass-typed
+reference reaches the one scope:
+
+```kotlin
+open class Feeder(val bowls: Int) {
+  open suspend fun fill(): String { /* ... */ }
+}
+
+class TimedFeeder(bowls: Int, val hour: Int) : Feeder(bowls) {
+  override suspend fun fill(): String { /* ... */ } // not re-declared in C#; dispatches dynamically
+  suspend fun schedule(): Int { /* ... */ }
+}
+```
+
+```C#
+Feeder feeder = new TimedFeeder(2, 7);
+await feeder.FillAsync();                              // reaches TimedFeeder.fill
+await ((TimedFeeder)feeder).ScheduleAsync();
+await feeder.DisposeAsync();                            // drains both, one scope
+```
+
+An `override suspend fun` is not declared as a second C# method: `Feeder.FillAsync` is the only one,
+and Kotlin's own dynamic dispatch reaches the override. An abstract class that declares the first
+async member declares `DisposeAsync` abstractly, and each concrete subclass carries the body as
+`override`, so `await using` and a cast to `IAsyncDisposable` both work through the abstract type.
+
+A class whose only `suspend`/`Flow` member was refused (see [Limitations](#limitations)) gets no
+scope and no `IAsyncDisposable` anywhere in its chain, since nothing on it uses one.
+
 ## `Flow<T>` {id="flow-t"}
 
 ```kotlin

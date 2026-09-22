@@ -167,7 +167,21 @@ data class CirClass(
   // `IPet` rather than subclass this handle wrapper.
   val isSealed: Boolean = false,
   val companionMembers: List<CirMember> = emptyList(),
+  // ADR-159: `hasScope` -- this class, or a kept ancestor, owns the one coroutine scope. Drives the
+  // scope block in `Dispose()`, which every level below the owner must repeat (a derived `Dispose`
+  // replaces the base body rather than chaining into it).
   val hasSuspendMethods: Boolean = false,
+  // ADR-159: this class is the scope OWNER, i.e. the root-most class in the kept chain that
+  // projects a scope-using member. The owner alone declares `_scopeHandle`, `GetOrCreateScope()`,
+  // `DisposeAsync` and the `IAsyncDisposable` base-list entry, wherever in the chain it sits;
+  // descendants inherit all four. Split out of [hasSuspendMethods] because deriving one flag from
+  // projected members alone would have made a derived class drop the base's scope cleanup silently.
+  val ownsScope: Boolean = false,
+  // ADR-159: this concrete class carries the `DisposeAsync` BODY as an `override`, because the
+  // owner above it is abstract and could only declare it (an abstract class has no
+  // `Native_Dispose` import to drain into). `DisposeAsync` follows `Dispose`'s spelling, which is
+  // the rule that makes `IAsyncDisposable` satisfiable on an abstract owner at all.
+  val overridesDisposeAsync: Boolean = false,
   // ADR-064 amendment (2026-09-10): plain-text prose for the class's `<remarks>` doc comment, set
   // only when WARNING_NO_PUBLIC_CONSTRUCTOR fires, off the same detail string the diagnostic uses.
   // Text, not markup: `renderDoc` owns the XML escaping, because the detail names Kotlin

@@ -117,6 +117,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParam
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnCollectionKinds
 import io.github.xxfast.kotlin.native.nuget.processor.forward.optInMarker
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuspendRouteMethods
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ownsSentence
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toDiagnosticKind
@@ -2082,10 +2084,20 @@ class NugetProcessor(
     }
 
     classes.forEach { cls ->
-      val hasSuspendMethods: Boolean = cls.getAllFunctions()
-        .any { it.modifiers.contains(Modifier.SUSPEND) }
-      if (hasSuspendMethods) {
-        builder.addSuspendClassMethodExports(cls, forwardClassifier, callableCatalog)
+      // ADR-159: the same selector the export builder and the C# half read, so this gate cannot
+      // admit a class whose suspend members all belong to a kept base (which is how
+      // `paddedwindowseat_settle_async` used to be exported with no C# import behind it).
+      if (cls.forwardSuspendRouteMethods(
+          forwardClassifier,
+          cls.forwardSuperClass(exportedTypes),
+        ).isNotEmpty()
+      ) {
+        builder.addSuspendClassMethodExports(
+          cls,
+          forwardClassifier,
+          callableCatalog,
+          exportedTypes = exportedTypes,
+        )
       }
     }
 

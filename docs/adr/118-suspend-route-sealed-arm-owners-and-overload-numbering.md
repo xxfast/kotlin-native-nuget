@@ -696,3 +696,12 @@ Still open on this route, deliberately:
 > now gates on `Modifier.SEALED` and reads a base return through a new `Discriminated` shape,
 > completing with `Base.FromHandle(resultPtr)` on all three suspend owners. `global::` qualification
 > on this route stays open, as this item names.
+
+### Cross-reference (2026-09-22)
+
+This ADR's declared-only, per-arm scope model (`hasSuspendMethods` derived from
+`asyncMembers.isNotEmpty() || flowMembers.isNotEmpty() || properties.any { it.isFlow }`) is what
+[ADR-159](159-async-member-on-kotlin-subclass.md) generalizes to an ordinary class's inheritance
+chain, where the raw `getAllFunctions()` scan this ADR deliberately avoided for arms was still in
+use. A sealed arm's own scope ownership is unchanged; ADR-159 also lets an **open** arm serve as the
+base of an ordinary class, walked by the same shared selector.

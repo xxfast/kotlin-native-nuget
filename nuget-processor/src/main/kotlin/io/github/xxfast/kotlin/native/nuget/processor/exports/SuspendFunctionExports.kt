@@ -20,6 +20,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyPrelude
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyLoweredName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShapes
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuspendRouteMethods
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
@@ -89,27 +91,22 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
   callableCatalog: ForwardCallablePlanCatalog,
   prefix: String = cls.nativePrefix(),
   declaredOnly: Boolean = false,
+  exportedTypes: Set<String> = emptySet(),
 ) {
   val qualifiedName: String = cls.qualifiedName?.asString() ?: return
-  // ADR-147: the suspend route spells `asStableRef<Crate>()`, which does not compile for a generic
-  // owner. Refused there, on both halves, until the route learns the applied receiver spelling.
-  if (cls.typeParameters.isNotEmpty()) return
 
-  val suspendMethods: List<KSFunctionDeclaration> = cls.getAllFunctions()
-    .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { it.modifiers.contains(Modifier.SUSPEND) }
-    .filter { method -> !method.isCompilerOwnedMember(cls) }
-    // ADR-118: declared-only for a sealed arm. Without it a base `open suspend fun` no arm
-    // overrides exports once per arm under the arm's prefix, with `overloadSuffix` answering ""
-    // on its lenient path; `ForwardAbiContract.kotlin` filters Kotlin exports down to the C#
-    // import set, so that stray export would never be flagged.
-    .filter { !declaredOnly || it.parentDeclaration == cls }
-    // ADR-114: a generic parameter this route cannot marshal skips the member named, rather than
-    // emitting `ids: Set` and breaking the whole generated file's compile.
-    .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
-    // ADR-119: same for a generic return that is not a marshallable collection.
-    .filter { method -> classifier.legacyRefusedReturn(method) == null }
-    .toList()
+  // ADR-159: one selector, shared with the C# half (`translateClass`'s `allSuspendMethods`) and
+  // with the gate in `NugetProcessor`. It owns the ADR-147 generic-owner refusal, the ADR-114/119
+  // parameter and return refusals, ADR-118's declared-only rule for a sealed arm, the
+  // `isForwardMemberOf` membership rule the C# half always applied and the new
+  // `override suspend fun` skip. This half used to filter on strictly less and emitted a stray
+  // export per inherited suspend member, which `ForwardAbiContract.kotlin` cannot see because it
+  // filters Kotlin exports down to the C# import set.
+  val suspendMethods: List<KSFunctionDeclaration> = cls.forwardSuspendRouteMethods(
+    classifier = classifier,
+    superClass = if (declaredOnly) null else cls.forwardSuperClass(exportedTypes),
+    declaredOnly = declaredOnly,
+  )
 
   suspendMethods.forEach { method ->
     val methodName: String = method.simpleName.asString()

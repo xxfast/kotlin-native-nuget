@@ -11,6 +11,7 @@ using TestLibrary.Issue127;
 using TestLibrary.Issue131;
 using TestLibrary.Issue236;
 using TestLibrary.Kennel;
+using TestLibrary.Lounge;
 using TestLibrary.Models;
 using TestLibrary.Nested;
 using TestLibrary.Objectprops;
@@ -1476,6 +1477,76 @@ public class LiveHandleTests
     public void ObjectCollectionProperty_StaticGetter_ReturnsToBaseline()
     {
         AssertNoLeak(() => Assert.Equal(new[] { "tuna", "salmon" }, TreatPantry.Flavours));
+    }
+
+    // Rows 13 to 13b. The scope owner sitting on a SUPERCLASS. Every other async row in this file
+    // has its scope on the class the consumer holds, so none of them can see a scope that is
+    // created at one level of the chain and cleaned up (or not) at another.
+
+    // Row 13. The shape that ships today and leaks: `WindowSeat` owns the scope (it declares the Flow
+    // member), `PaddedWindowSeat` declares no async member, so the subclass renders an
+    // `override Dispose()` that REPLACES the owner's body and drops the `_scopeHandle` cancel and
+    // dispose entirely. Collect the base's Flow through a derived instance, then take the SYNC
+    // dispose path: the scope StableRef created by the collect is never released. Red today
+    // (text-verified in the research pass; this row is the runtime proof). The async path is Row
+    // 8-style and stays green, which is why the row must use `Dispose()` and not `await using`.
+    //
+    // Oreo and Mylo take the cushioned perch fifty times, and the perch has to come back empty.
+    [Fact]
+    public async Task SuperclassOwnedScope_SyncDisposeThroughTheSubclass_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            var perch = new PaddedWindowSeat(9);
+            var watchers = new List<string>();
+            await foreach (string watcher in perch.Watchers()) watchers.Add(watcher);
+            Assert.Equal(2, watchers.Count);
+            perch.Dispose();
+        });
+    }
+
+    // Row 13a. The mirror image: the owner is the SUBCLASS (`NapLounge` declares the first async
+    // member in a chain whose base declares none), measured after a real async call so the scope
+    // exists by the time `DisposeAsync` drains it. A scope minted on the derived level and drained
+    // on a level that does not own it would show here and not on Row 13.
+    [Fact]
+    public async Task SubclassOwnedScope_AfterAnAsyncCall_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using var lounge = new NapLounge("the windowsill");
+            Assert.Equal("Oreo napped on the windowsill", await lounge.RestAsync("Oreo"));
+            Assert.Equal(12, await lounge.RestMinutesAsync());
+        });
+    }
+
+    // Row 13b. The TIGHT LOOP row for the inherited scope, and the same ADR-019 race as Row 9b one
+    // level up the chain: `WindowSeat.settleHeight` is a `suspend fun` with NO suspension point, so the
+    // coroutine can finish and fire its completion callback before the P/Invoke that launched it has
+    // returned the job handle to C#. When the scope that launched it belongs to the BASE and the
+    // handle bookkeeping is spelled on the subclass, that window is a fresh one: it reads as +1 per
+    // thousand rather than +1 per call, so the fifty crossings of Row 13 cannot see it. Called
+    // through the derived type on purpose.
+    [Fact]
+    public async Task SuperclassOwnedScope_NoSuspensionPoint_TightLoop_ReturnsToBaseline()
+    {
+        var perch = new PaddedWindowSeat(7);
+        try
+        {
+            // Warm the scope OUTSIDE the window. `GetOrCreateScope()` is lazy and its StableRef is
+            // counted, so a first call inside the window reads as +1 and fails on attempt 1 (a
+            // positive delta is never retried). This row measures the per-call race, not the
+            // one-off scope creation.
+            Assert.Equal(7, await perch.SettleHeightAsync());
+
+            await AssertNoLeakAsync(
+                async () => Assert.Equal(7, await perch.SettleHeightAsync()),
+                iterations: 5000);
+        }
+        finally
+        {
+            await perch.DisposeAsync();
+        }
     }
 
     // Row 12. ADR-154: the admitted-dependency-class route. `dev.other.bytype.Waterbowl` reaches

@@ -805,17 +805,20 @@ internal fun translate(
     namespaces.add(0, CirNamespace(context.rootNamespace, listOf(runtimeHelper)))
   }
 
-  val usings: MutableList<String> = mutableListOf("System", "System.Runtime.InteropServices")
+  // ADR-159: `System.Threading` is unconditional. Every class's `Dispose()` calls
+  // `Interlocked.Exchange(ref _handle, ...)`, so a coroutine-free module -- one ordinary class,
+  // nothing async -- did not compile under the ADR-138 gate's csproj, which has no implicit
+  // usings: `error CS0103: The name 'Interlocked' does not exist in the current context`. It
+  // never surfaced because `test-library` always has async members and every consumer project
+  // here enables implicit usings.
+  val usings: MutableList<String> =
+    mutableListOf("System", "System.Runtime.InteropServices", "System.Threading")
   if (tracker.needsList || tracker.needsMap || tracker.needsSet) {
     usings.add("System.Collections.Generic")
   }
   if (tracker.needsAsync) {
     usings.add("System.Runtime.CompilerServices")
-    usings.add("System.Threading")
     usings.add("System.Threading.Tasks")
-  }
-  if (tracker.needsSubscription && "System.Threading" !in usings) {
-    usings.add("System.Threading")
   }
   if (tracker.needsFlow) {
     usings.add("System.Threading.Channels")
