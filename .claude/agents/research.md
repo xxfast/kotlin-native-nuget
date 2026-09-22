@@ -67,7 +67,7 @@ These are the closest analogues for the reverse direction: study how each **cons
 ## Where to look for prior decisions
 
 - `docs/adr/`: existing Architecture Decision Records for prior design choices
-- `docs/adr/README.md`: index of all ADRs with one-line summaries
+- `docs/adr/README.md`: index of all ADRs with one-line summaries, plus a **By mapping** section listing which ADRs shaped each mapping on the features page
 - `docs/research/`: prior research already done. **Check here before researching to avoid repeating work already covered:**
   - `preliminary-research.md`: how Kotlin/Native interop with C# works today without any tooling; the raw boundary mechanics
   - `cocoapods-plugin-architecture.md`: architecture study of the Kotlin CocoaPods Gradle plugin (bidirectional prior art)

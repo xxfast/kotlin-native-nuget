@@ -122,10 +122,13 @@ A feature is not done until these are updated:
   the one most often left carrying a line that is now false
 - [ROADMAP.md](ROADMAP.md): tick the item, link its ADR, and file anything you found but did not fix
 - [docs/topics/supported-features.md](docs/topics/supported-features.md): the mapping row, with its
-  direction glyph (`→` Kotlin to C#, `←` C# to Kotlin, `⇄` both), a Docs link to the owning topic and
-  the ADR links. Notes is one clause of at most 200 characters: what the consumer gets and the one
-  thing that differs from naive expectation. How-to lives in the topic page, why lives in the ADR.
-  `scripts/verify-features.sh` enforces it and the Docs CI runs it.
+  direction glyph (`→` Kotlin to C#, `←` C# to Kotlin, `⇄` both, `⇸` no C# projection) and a Docs
+  link to the owning topic. Notes is one clause of at most 200 characters: what the consumer gets
+  and the one thing that differs from naive expectation. How-to lives in the topic page, why lives
+  in the ADR, and the page links neither ADRs nor history. `scripts/verify-features.sh` enforces it
+  and the Docs CI runs it.
+- [docs/adr/README.md](docs/adr/README.md): the ADR's index line, and its number on the mapping's
+  line under **By mapping**, the maintainer record of which decisions shaped each row
 
 Every snippet must be lifted from output that actually compiles: the generated `Interop.cs`, the
 reverse output under `build/nuget-interop/`, `test-library/`, or `IntegrationTests/`. Do not write one

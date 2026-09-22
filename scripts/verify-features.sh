@@ -2,10 +2,11 @@
 set -euo pipefail
 
 # Lints docs/topics/supported-features.md, the catalogue of Kotlin <-> C#
-# mappings. The page is an index, not a manual: every row is six cells
-# (Kotlin | direction | C# | Notes | Docs | ADRs), the Notes cell is one short
-# clause, and the long-form explanation lives in the linked topic page and the
-# linked ADRs. This script is what keeps that shape, and the Docs CI runs it.
+# mappings. The page is an index, not a manual: every row is five cells
+# (Kotlin | direction | C# | Notes | Docs), the Notes cell is one short
+# clause, and the long-form explanation lives in the linked topic page. The
+# ADRs behind a mapping are indexed in docs/adr/README.md, not on the page.
+# This script is what keeps that shape, and the Docs CI runs it.
 #
 # Portability: the whole pass is one awk program, written for mawk (the awk on
 # ubuntu-latest) as well as the gawk or busybox awk on a dev box. No gensub, no
@@ -30,14 +31,10 @@ if [ ! -f "$FILE" ]; then
 fi
 
 TOPIC_FILES="$(ls docs/topics)"
-ADR_FILES="$(ls docs/adr)"
-ADR_BASE="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/"
 
 LC_ALL=C awk \
   -v file="$FILE" \
-  -v topic_files="$TOPIC_FILES" \
-  -v adr_files="$ADR_FILES" \
-  -v adr_base="$ADR_BASE" '
+  -v topic_files="$TOPIC_FILES" '
 function trim(s) {
   gsub(/^[ \t]+/, "", s)
   gsub(/[ \t]+$/, "", s)
@@ -50,8 +47,6 @@ function err(msg) {
 BEGIN {
   n = split(topic_files, tf, "\n")
   for (i = 1; i <= n; i++) if (tf[i] != "") topic[tf[i]] = 1
-  n = split(adr_files, af, "\n")
-  for (i = 1; i <= n; i++) if (af[i] != "") adr[af[i]] = 1
   esc = sprintf("%c", 1)
   bar = sprintf("%c", 2)
   bs = sprintf("%c", 92)
@@ -101,15 +96,15 @@ BEGIN {
 
   rows++
 
-  # 2. Every body row is exactly six cells.
-  if (nc != 6) {
-    err("row has " nc " cells, expected 6 (Kotlin | direction | C# | Notes | Docs | ADRs)")
+  # 2. Every body row is exactly five cells.
+  if (nc != 5) {
+    err("row has " nc " cells, expected 5 (Kotlin | direction | C# | Notes | Docs)")
     next
   }
 
-  # 3. The direction cell is one of the three glyphs.
-  if (cell[2] != "\342\206\222" && cell[2] != "\342\206\220" && cell[2] != "\342\207\204")
-    err("direction cell is \"" cell[2] "\", expected one of the three legend glyphs")
+  # 3. The direction cell is one of the four legend glyphs.
+  if (cell[2] != "\342\206\222" && cell[2] != "\342\206\220" && cell[2] != "\342\207\204" && cell[2] != "\342\207\270")
+    err("direction cell is \"" cell[2] "\", expected one of the four legend glyphs")
 
   # 4. Notes is one short clause and carries no footnote marker.
   notes = cell[4]
@@ -138,25 +133,7 @@ BEGIN {
     }
   }
 
-  # 6. ADRs is empty, or absolute ADR links joined by a comma.
-  adrs = cell[6]
-  if (adrs != "") {
-    na = split(adrs, al, ", ")
-    for (i = 1; i <= na; i++) {
-      link = trim(al[i])
-      if (link !~ /^\[ADR-[0-9]+\]\([^()]+\.md\)$/ || index(link, "](" adr_base) == 0) {
-        err("ADRs entry \"" link "\" is not an [ADR-NNN](" adr_base "<file>.md) link")
-        continue
-      }
-      name = link
-      sub(/^.*\/docs\/adr\//, "", name)
-      sub(/\)$/, "", name)
-      if (!(name in adr))
-        err("ADRs links docs/adr/" name ", which does not exist")
-    }
-  }
-
-  # 8. No two rows describe the same mapping.
+  # 6. No two rows describe the same mapping.
   key = cell[1] SUBSEP cell[2] SUBSEP cell[3]
   if (key in seen)
     err("duplicate row: \"" cell[1] "\" " cell[2] " \"" cell[3] "\" already appears on line " seen[key])
