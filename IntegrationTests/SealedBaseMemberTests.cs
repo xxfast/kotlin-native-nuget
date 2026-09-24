@@ -150,16 +150,16 @@ public class SealedBaseMemberTests
     /// The subject. <c>Pose.squish</c> overrides <c>Squishy.squish</c>, whose <c>factor</c> carries
     /// the default, and Kotlin forbids the override from restating it. The sealed base pass reads
     /// the raw <c>hasDefault</c> bit off the override's own parameters, and KSP 2.3.10 reports
-    /// that bit as <c>true</c> there, so <c>Squish()</c> is synthesized on the C# base and every
-    /// arm inherits it. The short call below pins that on the static types in the hierarchy.
+    /// that bit as <c>true</c> there, so under ADR-164 the C# base's <c>Squish</c> takes an optional
+    /// <c>double? factor = null</c> and every arm inherits or overrides that one signature. The short call below pins that on the static types in the hierarchy.
     /// <para>
     /// Read through the <em>base</em> static type, on the arm that overrides the member. The
-    /// omitting overload must agree with the explicit-default call, and Oreo's curl must be what
+    /// unset argument must agree with the explicit-default call, and Oreo's curl must be what
     /// answers, not some base default.
     /// </para>
     /// </summary>
     [Fact]
-    public void Squish_OmittingOverloadIsInheritedFromTheBase_OnTheOverridingArm()
+    public void Squish_OmittedFactorIsInheritedFromTheBase_OnTheOverridingArm()
     {
         using Pose oreo = PoseSample.CurledPose(2);
 
@@ -172,7 +172,7 @@ public class SealedBaseMemberTests
     /// (ADR-116 makes the base the carrier); C# inheritance is what has to supply this.
     /// </summary>
     [Fact]
-    public void Squish_OmittingOverloadIsInheritedFromTheBase_ThroughTheArmStaticType()
+    public void Squish_OmittedFactorIsInheritedFromTheBase_ThroughTheArmStaticType()
     {
         using Pose pose = PoseSample.CurledPose(3);
 
@@ -188,7 +188,7 @@ public class SealedBaseMemberTests
     /// ask, which for the omitted argument is the interface's <c>1.0</c>.
     /// </summary>
     [Fact]
-    public void Squish_OmittingOverloadReachesTheInheritingObjectArm()
+    public void Squish_OmittedFactorReachesTheInheritingObjectArm()
     {
         using Pose mylo = PoseSample.AnyPose();
 
@@ -203,12 +203,11 @@ public class SealedBaseMemberTests
     /// <summary>
     /// The control, and the one cell here that does not depend on reading defaults through the
     /// override chain: <c>Pose.settle</c>'s default is declared on the base itself, so the raw bit
-    /// is already <c>true</c>. No shipped fixture has had a base-synthesized omitting overload
-    /// before (<c>Job.tag</c>'s base member is ADR-115-declined), so this pins that the sealed base
-    /// pass renders its own synthesized arity end to end. If this is red, that is a second defect.
+    /// is already <c>true</c>. This pins that the sealed base pass widens its own default end to
+    /// end. If this is red, that is a second defect.
     /// </summary>
     [Fact]
-    public void Settle_BaseOwnedDefault_SynthesizesTheBasesOwnOmittingOverload()
+    public void Settle_BaseOwnedDefault_WidensTheBasesOwnParameter()
     {
         using Pose mylo = PoseSample.AnyPose();
 
@@ -217,25 +216,27 @@ public class SealedBaseMemberTests
     }
 
     /// <summary>
-    /// The shape of the fix, not just its effect: the zero-argument overload is declared once, on
-    /// the base, and the arm that overrides <c>squish</c> declares only the full arity. An arm-side
-    /// synthesis would compile the calls above too, and would duplicate <c>Squish()</c> on every
-    /// arm.
+    /// The shape of the fix, not just its effect: the base declares one <c>Squish(double?)</c>
+    /// with an optional <c>factor</c>, there is no zero-argument overload anywhere, and any arm
+    /// that declares <c>Squish</c> itself declares the same widened signature (C# overriding
+    /// demands it), never a separate full arity beside it.
     /// </summary>
     [Fact]
-    public void Squish_ZeroArgumentOverload_IsDeclaredOnTheBaseOnly()
+    public void Squish_WidenedSignature_IsTheOnlyShape_OnBaseAndArm()
     {
-        MethodInfo? omitting = typeof(Pose.Croissant).GetMethod("Squish", Type.EmptyTypes);
+        Assert.Null(typeof(Pose.Croissant).GetMethod("Squish", Type.EmptyTypes));
 
-        Assert.NotNull(omitting);
-        Assert.Equal(typeof(Pose), omitting!.DeclaringType);
+        MethodInfo? widened = typeof(Pose).GetMethod("Squish", [typeof(double?)]);
+        Assert.NotNull(widened);
+        Assert.True(widened!.GetParameters()[0].IsOptional);
 
         MethodInfo[] onTheArm = typeof(Pose.Croissant)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
             .Where(method => method.Name == "Squish")
             .ToArray();
 
-        Assert.All(onTheArm, method => Assert.Single(method.GetParameters()));
+        Assert.All(onTheArm, method =>
+            Assert.Equal(typeof(double?), Assert.Single(method.GetParameters()).ParameterType));
     }
 
     // ---- The same base member, with the default rooted one module away: Biscuit, Burrito. ----
@@ -245,13 +246,13 @@ public class SealedBaseMemberTests
     /// <c>dev.other.core.UnexportedFluffy.fluff</c>, whose <c>pats</c> carries the default and which
     /// resolves out of <c>:test-models</c>' klib rather than out of source. The sealed base pass
     /// reads the raw bit, and this pins that klib metadata carries it onto the override just as
-    /// source does, so <c>Fluff()</c> is present for the same reason <c>Squish()</c> is.
+    /// source does, so <c>Fluff()</c> compiles for the same reason <c>Squish()</c> does.
     /// <para>
     /// Through the base static type, on the arm that overrides the member. Oreo, making biscuits.
     /// </para>
     /// </summary>
     [Fact]
-    public void Fluff_KlibRootedInterfaceDefault_InheritsTheOmittingOverloadFromTheBase()
+    public void Fluff_KlibRootedInterfaceDefault_InheritsTheOptionalParameterFromTheBase()
     {
         using Biscuit oreo = QuiltSample.AnyBiscuit(3);
 
@@ -277,7 +278,7 @@ public class SealedBaseMemberTests
     /// overrides its defaulted <c>tuck</c>. Mylo, rolled up and staying there.
     /// </summary>
     [Fact]
-    public void Tuck_KlibRootedSuperclassDefault_InheritsTheOmittingOverloadFromTheBase()
+    public void Tuck_KlibRootedSuperclassDefault_InheritsTheOptionalParameterFromTheBase()
     {
         using Burrito mylo = QuiltSample.AnyBurrito(2);
 
@@ -298,19 +299,21 @@ public class SealedBaseMemberTests
     }
 
     /// <summary>
-    /// Same shape assertion as the <c>Pose</c> cell: the zero-argument overloads belong to the
-    /// bases, not to the arms, so a fix that synthesizes on the arm instead would fail here even
-    /// though the calls above would compile.
+    /// Same shape assertion as the <c>Pose</c> cell: no zero-argument overload exists, and the
+    /// widened signature with an optional <c>int?</c> is reachable from the arm's static type.
     /// </summary>
     [Fact]
-    public void KlibRootedOmittingOverloads_AreDeclaredOnTheBasesOnly()
+    public void KlibRootedDefaults_AreOneWidenedSignature()
     {
-        MethodInfo? fluff = typeof(Biscuit.Shortbread).GetMethod("Fluff", Type.EmptyTypes);
-        MethodInfo? tuck = typeof(Burrito.Snug).GetMethod("Tuck", Type.EmptyTypes);
+        Assert.Null(typeof(Biscuit.Shortbread).GetMethod("Fluff", Type.EmptyTypes));
+        Assert.Null(typeof(Burrito.Snug).GetMethod("Tuck", Type.EmptyTypes));
+
+        MethodInfo? fluff = typeof(Biscuit.Shortbread).GetMethod("Fluff", [typeof(int?)]);
+        MethodInfo? tuck = typeof(Burrito.Snug).GetMethod("Tuck", [typeof(int?)]);
 
         Assert.NotNull(fluff);
         Assert.NotNull(tuck);
-        Assert.Equal(typeof(Biscuit), fluff!.DeclaringType);
-        Assert.Equal(typeof(Burrito), tuck!.DeclaringType);
+        Assert.True(fluff!.GetParameters()[0].IsOptional);
+        Assert.True(tuck!.GetParameters()[0].IsOptional);
     }
 }

@@ -159,7 +159,6 @@ class ForwardAbiContractTest {
     assertEquals(
       """
       class_companion(in int) -> int
-      sample_copy(in pointer, out pointer) -> pointer
       sample_create(out pointer) -> pointer
       sample_create_2(in int, out pointer) -> pointer
       sample_dispose(in pointer) -> void

@@ -50,11 +50,11 @@ public class UnexportedBaseClassTests
     }
 
     [Fact]
-    public void Farewell_OmittingOverload_UsesTheBaseDefault()
+    public void Farewell_OmittedWarmly_UsesTheBaseDefault()
     {
         // ADR-096 meets ADR-101: the `warmly = false` default is declared on the dropped base and
         // the override cannot restate it, so this one-argument call is the whole point. It is
-        // CS1501 until the planner reads defaults off the root overridee.
+        // CS7036 unless the planner widens `warmly` off the root overridee (ADR-164).
         using var derived = new Issue42Derived();
 
         Assert.Equal("bye Mylo from Oreo", derived.Farewell("Mylo"));

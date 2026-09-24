@@ -83,6 +83,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ownedBy
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardDiagnosticOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardFileClassOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.MAX_OPTIONAL_DEFAULTS
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwners
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
@@ -317,8 +318,30 @@ internal fun warnDroppedForwardCallables(
       member = dropped.memberName,
     )
   }
-  ForwardDiagnosticSink.emit(diagnostics, logger)
+  ForwardDiagnosticSink.emit(diagnostics + cappedDefaultDiagnostics(catalog), logger)
 }
+
+/**
+ * ADR-164: the callables whose defaulted parameters outnumber [MAX_OPTIONAL_DEFAULTS]. Ownerless:
+ * the C# member exists and nothing on it is missing, so there is no hole to name in `<remarks>`.
+ */
+private fun cappedDefaultDiagnostics(catalog: ForwardCallablePlanCatalog): List<ForwardDiagnostic> =
+  catalog.entries
+    .filterIsInstance<ForwardCallableCatalogEntry.Planned>()
+    .filter { entry -> entry.cappedDefaults.isNotEmpty() }
+    .map { entry ->
+      val names: String = entry.cappedDefaults.joinToString { name -> "`$name`" }
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.WARNING_DEFAULT_PARAMETER_CAP_EXCEEDED,
+        symbol = entry.node,
+        declaration = entry.symbol,
+        reason = "it has more than $MAX_OPTIONAL_DEFAULTS defaulted parameters, so only the last " +
+            "$MAX_OPTIONAL_DEFAULTS are optional in C# and $names stay required",
+        hint = "pass the required ones explicitly from C#, or split the callable so no more than " +
+            "$MAX_OPTIONAL_DEFAULTS of its parameters have defaults",
+        owner = null,
+      )
+    }
 
 /**
  * ADR-064 amendment (2026-09-13): the structural top-level generic functions the planner never
@@ -1974,13 +1997,11 @@ class NugetProcessor(
       guardDeclaration(func) {
         // ADR-095: node identity, not a name-derived symbol — top-level overloads number per
         // (package, name), so the n-th namesake's plan is keyed `..._$n`.
-        // ADR-096: plural — a defaulted top-level function also carries its synthesized omitting
-        // overloads on the same node.
-        val planned: List<ForwardCallablePlan> = callableCatalog.plansFor(func)
+        val planned: ForwardCallablePlan? = callableCatalog.planFor(func)
         // ADR-064: the import goes behind the gate, never ahead of it. A skipped function used to
         // leave a line importing a symbol the generated file never mentions. The legacy route
         // imports its own, after its own early returns.
-        if (planned.isNotEmpty()) {
+        if (planned != null) {
           // ADR-163: no simple-name import. The plan emitter spells a top-level call fully
           // qualified, because two same-named functions in two packages now both export and an
           // import pair would make the generated call ambiguous.
@@ -1993,7 +2014,7 @@ class NugetProcessor(
           if (func.packageName.asString().isEmpty()) {
             builder.addImport("", func.simpleName.asString())
           }
-          planned.forEach { builder.addForwardKotlinPlanExport(it) }
+          builder.addForwardKotlinPlanExport(planned)
         } else {
           builder.addFunctionExports(func, context.symbols)
         }

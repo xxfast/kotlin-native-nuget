@@ -32,7 +32,7 @@ internal fun StringBuilder.renderInterface(iface: CirInterface) {
 
   for (method in iface.methods) {
     renderDoc(method.doc, "        ")
-    val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+    val paramStr: String = method.parameters.joinToString(", ") { it.declaration }
     appendLine("        ${method.returnType} ${method.name}($paramStr);")
   }
 
@@ -395,7 +395,7 @@ internal fun StringBuilder.renderConstructor(
   hasSuperClass: Boolean = false,
 ) {
   renderDoc(ctor.doc, "        ")
-  val paramStr: String = ctor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+  val paramStr: String = ctor.parameters.joinToString(", ") { it.declaration }
   val paramNames: String = ctor.parameters.joinToString(", ") { it.name }
   val nativeCallArgs: String = if (paramNames.isEmpty()) "out IntPtr error" else "$paramNames, out IntPtr error"
 
@@ -422,6 +422,13 @@ internal fun StringBuilder.renderConstructor(
     appendLine("        }")
   }
 
+  appendLine()
+
+  val exact: String = ctor.handleDisambiguation ?: return
+  val first: CirParameter = ctor.parameters.first()
+  appendLine("        public $className($exact ${first.name}) : this((${first.type})${first.name})")
+  appendLine("        {")
+  appendLine("        }")
   appendLine()
 }
 
@@ -573,8 +580,8 @@ internal fun StringBuilder.renderMethod(method: CirMethod, className: String = "
   }
   val abstract: String = if (method.isAbstract) "abstract " else ""
   val paramStr: String = method.parameters.mapIndexed { index, param ->
-    if (method.isExtension && index == 0) "this ${param.type} ${param.name}"
-    else "${param.type} ${param.name}"
+    if (method.isExtension && index == 0) "this ${param.declaration}"
+    else param.declaration
   }.joinToString(", ")
 
   // A standalone `T` type-parameter *token* — never a substring match. The old
@@ -632,27 +639,7 @@ internal fun StringBuilder.renderMethod(method: CirMethod, className: String = "
 internal fun StringBuilder.renderDataClassMethods(cls: CirClass) {
   cls.dataClassNativeImports().forEach { nativeImport -> renderDllImport(nativeImport) }
 
-  if (cls.copyMethod != null) {
-    renderMethod(cls.copyMethod, cls.name)
-  } else if (cls.constructor != null) {
-    val copyParams: String = cls.constructor.parameters.joinToString(", ") { "${it.type} ${it.name}" }
-    val copyParamNames: String = cls.constructor.parameters.joinToString(", ") { it.name }
-    val copyNativeArgs: String = if (copyParamNames.isEmpty()) {
-      "_handle, out IntPtr error"
-    } else {
-      "_handle, $copyParamNames, out IntPtr error"
-    }
-    appendLine("        public ${cls.name} Copy($copyParams)")
-    appendLine("        {")
-    appendLine("            IntPtr handle = Native_Copy($copyNativeArgs);")
-    appendLine("            if (error != IntPtr.Zero)")
-    appendLine("            {")
-    appendLine("                throw NugetErrorNative.BuildException(error);")
-    appendLine("            }")
-    appendLine("            return new ${cls.name}(handle);")
-    appendLine("        }")
-    appendLine()
-  }
+  if (cls.copyMethod != null) renderMethod(cls.copyMethod, cls.name)
 
   appendLine("        public override bool Equals(object? obj)")
   appendLine("        {")

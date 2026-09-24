@@ -5,11 +5,11 @@ using TestLibrary.Platform;
 namespace IntegrationTests;
 
 /// <summary>
-/// ADR-091: Kotlin constructor default parameters surfaced as C# constructor overloads, using the
-/// <c>@JvmOverloads</c> rule. For each maximal TRAILING run of defaulted parameters, one omitting
-/// overload per suffix length is synthesized; Kotlin computes the default at call time (KSP only
-/// ever exposes the <c>hasDefault</c> bit, never the value). A default with a required parameter
-/// after it produces nothing.
+/// ADR-164 (superseding ADR-091's omitting overloads): a Kotlin constructor default parameter
+/// surfaces as the nullable C# form of its type on ONE constructor. A trailing defaulted parameter
+/// is optional (<c>= null</c>); <c>null</c> means unset and Kotlin computes the default at call
+/// time (KSP only ever exposes the <c>hasDefault</c> bit, never the value). A default with a
+/// required parameter after it is required-but-nullable.
 ///
 /// Oreo travels a lot. His carrier, his kennel booking and his scratch post all have sensible
 /// defaults that a human should never have to spell out, and neither should a C# caller.
@@ -43,8 +43,8 @@ public class ConstructorDefaultParameterTests
     [Fact]
     public void Cat_BothArities_ReachTheSameKotlinConstructor()
     {
-        // Same class, two exports (cat_create and a synthesized cat_create_N). If the synthesized
-        // one were wired to a different Kotlin target, `Meow()` would not agree.
+        // One export, two presence masks. If the unset arm were wired to a different Kotlin
+        // target, `Meow()` would not agree.
         using var defaulted = new Cat("Oreo");
         using var explicitLives = new Cat("Oreo", 9);
 
@@ -66,8 +66,8 @@ public class ConstructorDefaultParameterTests
     [Fact]
     public void Carrier_OmittingOneTrailingArgument_UsesPaddedDefault()
     {
-        // k = 1: `padded` omitted, `size` supplied. Distinct default values (3 / true) mean a
-        // mis-wired suffix shows up as a wrong string, not a plausible one.
+        // `padded` unset, `size` supplied. Distinct default values (3 / true) mean a mis-wired
+        // mask arm shows up as a wrong string, not a plausible one.
         using var carrier = new Carrier("Mylo's crate", 5);
 
         Assert.Equal("Mylo's crate size 5 padded", carrier.Describe());
@@ -76,18 +76,33 @@ public class ConstructorDefaultParameterTests
     [Fact]
     public void Carrier_OmittingBothTrailingArguments_UsesBothDefaults()
     {
-        // k = 2: the deepest suffix. Both defaults come from Kotlin.
+        // Both unset. Both defaults come from Kotlin.
         using var carrier = new Carrier("Mylo's crate");
 
         Assert.Equal("Mylo's crate size 3 padded", carrier.Describe());
     }
 
     [Fact]
-    public void Carrier_ExposesExactlyThreePublicConstructors()
+    public void Carrier_SettingOnlyTheLastDefault_ByName_UsesTheEarlierDefault()
     {
-        // d = 2 trailing defaults => d extra exports, linear and not the 2^n combinatorial set.
-        // `internal Carrier(IntPtr handle)` is excluded: GetConstructors() is public-only.
-        Assert.Equal(3, typeof(Carrier).GetConstructors().Length);
+        // Issue #297: the shape the omitting overloads could never express. `size` is skipped.
+        using var carrier = new Carrier("Oreo's crate", padded: false);
+
+        Assert.Equal("Oreo's crate size 3 bare", carrier.Describe());
+    }
+
+    [Fact]
+    public void Carrier_ExposesExactlyOnePublicConstructor_WithTwoOptionalNullableParameters()
+    {
+        // One widened signature, no omitting overloads. `internal Carrier(IntPtr handle)` is
+        // excluded: GetConstructors() is public-only.
+        var ctor = Assert.Single(typeof(Carrier).GetConstructors());
+        var parameters = ctor.GetParameters();
+
+        Assert.Equal([typeof(string), typeof(int?), typeof(bool?)], parameters.Select(p => p.ParameterType));
+        Assert.False(parameters[0].IsOptional);
+        Assert.True(parameters[1].IsOptional);
+        Assert.True(parameters[2].IsOptional);
     }
 
     [Fact]
@@ -112,21 +127,24 @@ public class ConstructorDefaultParameterTests
     }
 
     [Fact]
-    public void Kennel_ExposesExactlyOnePublicConstructor()
+    public void Kennel_NullCapacity_UsesKotlinDefault()
     {
-        // `capacity` has a required parameter after it, so a positional Kotlin call can never skip
-        // it and the JvmOverloads rule synthesizes nothing. This is documented behaviour, not a
-        // gap: assert it structurally so a future "helpful" combinatorial expansion trips here.
-        Assert.Single(typeof(Kennel).GetConstructors());
+        // Middle default: required-but-nullable, so `null` is written positionally.
+        using var kennel = new Kennel("Paws", null, "Colombo");
+
+        Assert.Equal("Paws holds 10 in Colombo", kennel.Describe());
     }
 
     [Fact]
-    public void Kennel_HasNoTwoArgumentConstructor()
+    public void Kennel_ExposesExactlyOnePublicConstructor_WithRequiredButNullableCapacity()
     {
-        // The negative half, stated by type rather than by count: no `Kennel(string, int)` and no
-        // `Kennel(string)` may exist.
-        Assert.Null(typeof(Kennel).GetConstructor([typeof(string), typeof(int)]));
-        Assert.Null(typeof(Kennel).GetConstructor([typeof(string)]));
+        // `capacity` has a required parameter after it, so C# cannot make it optional. It is
+        // nullable (null = unset) but NOT optional.
+        var ctor = Assert.Single(typeof(Kennel).GetConstructors());
+        var parameters = ctor.GetParameters();
+
+        Assert.Equal([typeof(string), typeof(int?), typeof(string)], parameters.Select(p => p.ParameterType));
+        Assert.All(parameters, p => Assert.False(p.IsOptional));
     }
 
     // --- Secondary constructor with a trailing default: ScratchPost ---
@@ -142,23 +160,25 @@ public class ConstructorDefaultParameterTests
     [Fact]
     public void ScratchPost_SecondaryConstructor_OmittingTrailingDefault_UsesSturdy()
     {
-        // The synthesized overload belongs to the SECONDARY constructor (ADR-034 numbering
-        // continues into the synthesized entries), so it must route to the secondary's body and
-        // pick up `sturdy = true`, not fall back to the primary.
+        // The widened `sturdy` belongs to the SECONDARY constructor, so the unset arm must route
+        // to the secondary's body and pick up `sturdy = true`, not fall back to the primary.
         using var post = new ScratchPost("tower", 60);
 
         Assert.Equal("scratch post tower/60cm/sturdy", post.Describe());
     }
 
     [Fact]
-    public void ScratchPost_PrimaryConstructor_GetsNoSynthesizedOverload()
+    public void ScratchPost_PrimaryConstructor_IsUntouched()
     {
-        // Primary is `(String)` with no defaults, so the public set is exactly:
-        // (string), (string, int, bool) and the synthesized (string, int).
+        // Primary is `(String)` with no defaults, so the public set is exactly (string) and the
+        // secondary's widened (string, int, bool? = null). `new ScratchPost("plain")` resolves to
+        // the primary without CS0121.
         using var post = new ScratchPost("plain");
 
         Assert.Equal("scratch post plain", post.Describe());
-        Assert.Equal(3, typeof(ScratchPost).GetConstructors().Length);
+        Assert.Equal(2, typeof(ScratchPost).GetConstructors().Length);
+        Assert.NotNull(typeof(ScratchPost).GetConstructor([typeof(string)]));
+        Assert.NotNull(typeof(ScratchPost).GetConstructor([typeof(string), typeof(int), typeof(bool?)]));
     }
 
     // --- expect/actual: the default lives on the expect, never on the exported actual ---
@@ -190,8 +210,13 @@ public class ConstructorDefaultParameterTests
     }
 
     [Fact]
-    public void Beacon_ExposesExactlyTwoPublicConstructors()
+    public void Beacon_ExposesExactlyOnePublicConstructor_WithOptionalInterval()
     {
-        Assert.Equal(2, typeof(Beacon).GetConstructors().Length);
+        // The expect-declared default widens the exported actual's parameter.
+        var ctor = Assert.Single(typeof(Beacon).GetConstructors());
+        var parameters = ctor.GetParameters();
+
+        Assert.Equal([typeof(string), typeof(int?)], parameters.Select(p => p.ParameterType));
+        Assert.True(parameters[1].IsOptional);
     }
 }

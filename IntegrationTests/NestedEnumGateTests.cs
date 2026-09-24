@@ -134,7 +134,11 @@ public class NestedEnumGateTests
             .ToArray();
 
         Assert.Empty(types.Where(type => type.Name == "Airwave").Select(type => type.FullName));
-        Assert.Empty(types.Where(type => !type.IsNested).Select(type => type.FullName));
+        // Scoped to the owner's namespace: the flattening would land there, and an unrelated
+        // top-level `Mode` elsewhere (ADR-164's Issue297 fixture) is not a twin of this one.
+        Assert.Empty(types
+            .Where(type => !type.IsNested && type.Namespace == typeof(NestedModeOwner).Namespace)
+            .Select(type => type.FullName));
         Assert.Single(types.Where(type => type.Name == "AdBand"));
         // `Mode` is a common name: at least the one under NestedModeOwner must exist, and no
         // namespace-root twin of it may (asserted above).

@@ -63,11 +63,12 @@ class Tier1SealedArmOmittingOverloadDeclinedBaseTest {
   private fun run(): Tier1Result = Tier1Harness.run(fixture, fileName = "JobSample.kt")
 
   /**
-   * The Kotlin half. The arm exports both arities off its own prefix, the numbered symbol is the
-   * synthesized short one, and nothing at all is exported for the declined base member.
+   * The Kotlin half. ADR-164: the arm exports its one widened signature off its own prefix (the
+   * default bit comes through the override chain), and nothing at all is exported for the declined
+   * base member.
    */
   @Test
-  fun `an arm's override of a declined base member exports both arities under the arm's prefix`() {
+  fun `an arm's override of a declined base member exports the widened signature under the arm's prefix`() {
     val result = run()
 
     assertTrue(
@@ -77,10 +78,10 @@ class Tier1SealedArmOmittingOverloadDeclinedBaseTest {
 
     val kotlin: String = result.generated
     assertContains(kotlin, "@CName(\"library_tier1_armdeclinedbase__job_running_tag\")")
-    assertContains(kotlin, "@CName(\"library_tier1_armdeclinedbase__job_running_tag_2\")")
-    // The synthesized arity calls Kotlin with one positional argument, letting the overridee's
-    // default supply the rest. A truncation that passed both would read as the wrong value.
-    assertContains(kotlin, "tag(prefix)")
+    assertFalse(kotlin.contains("job_running_tag_2"), "no synthesized export; generated=$kotlin")
+    // The unset arm calls Kotlin with one positional argument, letting the overridee's default
+    // supply the rest.
+    assertContains(kotlin, ".tag(prefix)")
 
     val leaked: List<String> = listOf("job_tag", "job_tag_2", "job_idle_tag")
       .filter { entryPoint -> kotlin.contains("@CName(\"$entryPoint\")") }
@@ -97,18 +98,14 @@ class Tier1SealedArmOmittingOverloadDeclinedBaseTest {
    * **inside the arm's own class body**, because a base-typed call cannot exist at all here.
    */
   @Test
-  fun `the arm declares both Tag arities and the declining base declares none`() {
+  fun `the arm declares the widened Tag and the declining base declares none`() {
     val result = run()
 
     val running: String = armBody(result.generatedCSharp, "Running")
 
     assertTrue(
-      running.contains("public string Tag(string prefix)"),
-      "expected the synthesized omitting overload on the arm; got: ${linesFor(result, "Tag(")}",
-    )
-    assertTrue(
-      running.contains("public string Tag(string prefix, string suffix)"),
-      "expected the declared arity on the arm; got: ${linesFor(result, "Tag(")}",
+      running.contains("public string Tag(string prefix, string? suffix = null)"),
+      "expected the widened signature on the arm; got: ${linesFor(result, "Tag(")}",
     )
     assertTrue(
       running.contains("EntryPoint = \"library_tier1_armdeclinedbase__job_running_tag\""),

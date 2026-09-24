@@ -250,9 +250,9 @@ public static string Pat(this Mitten receiver);
 public static string Pat(this Mitten receiver, string style);
 ```
 
-A trailing run of defaulted parameters synthesizes the same omitting overloads a class method or
-top-level function gets. The receiver itself is never part of that truncation, so it is always
-present, even when every declared parameter is defaulted:
+A defaulted extension parameter widens the same way a class method or top-level function's does
+(`null` means "use the Kotlin default"). The receiver is never a parameter the widening rule
+considers, so it is always required:
 
 ```kotlin
 fun Paw.knead(times: Int = 2, surface: String = "blanket"): String =
@@ -260,12 +260,13 @@ fun Paw.knead(times: Int = 2, surface: String = "blanket"): String =
 ```
 
 ```C#
-paw.Knead();               // "Oreo kneads the blanket 2 times"
+paw.Knead();                 // "Oreo kneads the blanket 2 times"
 paw.Knead(3);
 paw.Knead(3, "sofa");
 ```
 
-A trailing default the bridge cannot carry costs only that arity.
+A defaulted parameter the bridge cannot route to any non-null C# form is dropped from the C#
+signature when it is trailing, and Kotlin always evaluates its default.
 
 ```kotlin
 fun Logger.call(level: Int = 0, events: Flow<Int>? = null): String =
@@ -278,8 +279,8 @@ logger.Call();
 logger.Call(3);
 ```
 
-The events arity does not exist. See
-[Method default parameters](classes-and-objects.md#method-default-parameters).
+The `events` parameter does not exist in C# at all. See
+[Constructor and method default parameters](classes-and-objects.md#constructor-and-method-default-parameters).
 
 ## Return values
 

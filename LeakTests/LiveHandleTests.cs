@@ -10,6 +10,7 @@ using TestLibrary.Issue126;
 using TestLibrary.Issue127;
 using TestLibrary.Issue131;
 using TestLibrary.Issue236;
+using Issue297 = TestLibrary.Issue297;
 using TestLibrary.Kennel;
 using TestLibrary.Lounge;
 using TestLibrary.Metronome;
@@ -1821,6 +1822,55 @@ public class LiveHandleTests
 
             using KotlinFunc<string, string?> find = Recorder.Finder();
             Assert.Null(find.Invoke("Mylo"));
+        });
+    }
+
+    // Row 1f. Issue #297 / ADR-164: the widened constructor and `Copy` dispatch through a Kotlin
+    // `when (mask)` to one named-argument call per subset. Every arm mints exactly one handle, so a
+    // mask arm that mints twice (or a `Copy` that retains the receiver) is a rising count here.
+    // Oreo reconfigures his feeder fifty times, only ever naming the field he cares about.
+    [Fact]
+    public void WidenedDefaultConstructorAndCopy_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var config = new Issue297.Config(mode: Issue297.Mode.Always);
+            using var copy = config.Copy(retries: 7);
+            Assert.Equal(7, copy.Retries);
+            Assert.Equal(Issue297.Mode.Always, copy.Mode);
+        });
+    }
+
+    // Row 1g. The same widening at a handle parameter: an unset `cat` crosses as a null pointer and
+    // Kotlin mints its own default `Cat("Momo")` (never retained on the bridge), a set `cat` crosses
+    // as a borrowed handle. Both paths must leave the count flat. Mylo gets greeted by Momo, then by
+    // Oreo, fifty times each.
+    [Fact]
+    public void WidenedDefaultHandleParameter_UnsetAndSet_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            Assert.Equal("hi Mylo, from Momo", Issue297.Issue297Sample.Greet("Mylo"));
+
+            using var oreo = new Cat("Oreo", 9);
+            Assert.Equal("hi Mylo, from Oreo", Issue297.Issue297Sample.Greet("Mylo", cat: oreo));
+        });
+    }
+
+    [Fact]
+    public void WidenedDefaultLambda_UnsetAndSet_ReturnsToBaseline()
+    {
+        // ADR-164: unset mints no ctx (nothing registered, IntPtr.Zero); set registers one and the
+        // `finally` removes it.
+        AssertNoLeak(() =>
+        {
+            for (int i = 0; i < 50; i++)
+            {
+                Assert.Equal("sent purr", Issue297.Issue297Sample.Notify("purr"));
+                int calls = 0;
+                Assert.Equal("sent meow", Issue297.Issue297Sample.Notify("meow", onDone: _ => calls++));
+                Assert.Equal(1, calls);
+            }
         });
     }
 }

@@ -49,12 +49,15 @@ internal fun BridgeType.Callback.forwardCallbackDelegateParameterList(): String 
 internal fun forwardCallbackPrelude(
   name: String,
   type: BridgeType.Callback,
+  // ADR-164: an omittable defaulted lambda may be null. Unset, nothing is registered and the ctx
+  // stays `IntPtr.Zero`, so no handle is minted; Kotlin reads its `IsSet` slot and never calls it.
+  omittable: Boolean = false,
 ): ForwardCirHandleStep {
   val delegateName: String = type.forwardCallbackDelegateName()
   val arguments: String = type.parameters
     .mapIndexed { index, parameter -> parameter.callbackArgumentExpression("a$index") }
     .joinToString(", ")
-  val call: String = "$name($arguments)"
+  val call: String = if (omittable) "$name!($arguments)" else "$name($arguments)"
   val body: String = when (val result: BridgeType = type.result) {
     BridgeType.Unit -> "$call;"
     // `WrapString` mints a StableRef box over the managed string; the Kotlin side reads it and
@@ -75,7 +78,8 @@ internal fun forwardCallbackPrelude(
     "};",
     "IntPtr ${name}Ctx = IntPtr.Zero;",
   )
-  val statement: String = "${name}Ctx = NugetThunks.RegisterCtx(${name}Native);"
+  val register: String = "${name}Ctx = NugetThunks.RegisterCtx(${name}Native);"
+  val statement: String = if (omittable) "if ($name is not null) $register" else register
   return ForwardCirHandleStep(
     flat = (declarations + statement).joinToString("\n"),
     declarations = declarations,

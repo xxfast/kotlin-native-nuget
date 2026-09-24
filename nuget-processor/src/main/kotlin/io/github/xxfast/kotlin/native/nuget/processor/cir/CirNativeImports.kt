@@ -221,25 +221,11 @@ internal fun CirClass.dataClassNativeImports(): List<CirDllImport> = buildList {
     )
   )
 
+  // ADR-164: `Copy` exists exactly when the planner planned `copy`. The constructor-shaped fallback
+  // that stood here had no Kotlin export behind it, and once a widened constructor could drop an
+  // opt-in-marked trailing parameter that `copy` still refuses, it became reachable.
   val copy: CirMethod? = copyMethod
-  if (copy != null) {
-    add(methodNativeImport(copy))
-  } else {
-    constructor?.let { ctor ->
-      add(
-        CirDllImport(
-          libraryName = libraryName,
-          entryPoint = "${nativePrefix}_copy",
-          returnType = "IntPtr",
-          name = "Native_Copy",
-          parameters = listOf(CirParameter("handle", "IntPtr")) +
-              ctor.parameters.map { parameter -> parameter.copy(nativeType = parameter.type) },
-          visibility = CirVisibility.PRIVATE,
-          hasSyncErrorOut = true,
-        )
-      )
-    }
-  }
+  if (copy != null) add(methodNativeImport(copy))
 }
 
 internal fun CirClass.disposeNativeImport(): CirDllImport? {

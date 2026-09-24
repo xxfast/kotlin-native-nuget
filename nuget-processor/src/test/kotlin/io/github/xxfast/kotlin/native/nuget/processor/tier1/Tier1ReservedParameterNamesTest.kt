@@ -103,14 +103,18 @@ class Tier1ReservedParameterNamesTest {
   fun `the data class copy route renames a parameter that shadows the receiver slot`() {
     assertContains(
       result.generatedCSharp,
-      "private static extern IntPtr Native_Copy(IntPtr handle, int handle_, out IntPtr error);",
+      "private static extern IntPtr Native_Copy(IntPtr handle, bool handle_HasValue, int handle_, out IntPtr error);",
     )
-    assertContains(result.generatedCSharp, "public Widget Copy(int handle_)")
+    assertContains(result.generatedCSharp, "public Widget Copy(int? handle_ = null)")
     assertContains(
       result.generatedCSharp,
-      "IntPtr nativeResult = Native_Copy(_handle, handle_, out IntPtr error);",
+      "IntPtr nativeResult = Native_Copy(_handle, handle_.HasValue, handle_.GetValueOrDefault(), out IntPtr error);",
     )
-    assertContains(result.generated, "  handle: COpaquePointer,\n  handle_: Int,\n  errorOut:")
+    assertContains(
+      result.generated, "  handle: COpaquePointer,\n  handle_HasValue: Boolean,\n  handle_: Int,\n  errorOut:",
+    )
+    // ADR-164: the named argument is the KOTLIN parameter name, never the shifted bridge name.
+    assertContains(result.generated, "copy(handle = default_handle_!!)")
   }
 
   /**

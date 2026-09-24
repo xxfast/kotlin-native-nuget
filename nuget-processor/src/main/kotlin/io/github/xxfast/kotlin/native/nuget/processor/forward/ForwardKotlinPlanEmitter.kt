@@ -56,13 +56,10 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
     builder.addParameter(parameter.name, kotlinType(parameter, index == 0))
   }
 
-  val arguments: String = plan.publicSignature.parameters.joinToString(", ") { parameter ->
-    loweredArgument(parameter)
-  }
   // ADR-108: a `Result<T>` return was lowered to `T` by the planner; unwrap it here, inside the
   // invocation string every result body drops into its existing `try`, so a `Result.failure(e)`
   // takes exactly the path a thrown `e` takes.
-  val invocation: String = invocationExpression(plan, receiver, arguments)
+  val invocation: String = dispatchedInvocation(plan, receiver)
     .let { call -> if (plan.invocation.unwrapsKotlinResult) "$call.getOrThrow()" else call }
 
   when (val result: BridgeType = plan.publicSignature.result) {
@@ -284,10 +281,7 @@ private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallableP
     "Legacy two-call value export must return the primitive wire type: ${plan.invocation.symbol}"
   }
 
-  val arguments: String = plan.publicSignature.parameters.joinToString(", ") { parameter ->
-    loweredArgument(parameter)
-  }
-  val invocation: String = invocationExpression(plan, receiver = null, arguments = arguments)
+  val invocation: String = dispatchedInvocation(plan, receiver = null)
 
   fun exportBuilder(call: ForwardNativeCall): FunSpec.Builder {
     val builder: FunSpec.Builder = FunSpec.builder("export_${call.exportName}")
@@ -994,6 +988,70 @@ private val KOTLIN_HARD_KEYWORDS: Set<String> = setOf(
   "interface", "is", "null", "object", "package", "return", "super", "this", "throw",
   "true", "try", "typealias", "typeof", "val", "var", "when", "while",
 )
+
+/**
+ * ADR-164: the Kotlin call for [plan], with its defaulted parameters dispatched.
+ *
+ * Kotlin evaluates a default only at a call site that omits the argument, and no source-level
+ * route reaches the compiler's `$default` stub, so "forward only the set arguments" is one literal
+ * call per subset: each defaulted parameter's lowered value is bound to a local (inside the `try`
+ * the result body wraps this in, so a failing lowering still reaches `errorOut`), a presence mask
+ * is computed from them, and `when (mask)` picks the call. Arguments stay positional until the
+ * first defaulted parameter and are named from there on. A callable with no defaulted parameter is
+ * the single positional call it always was.
+ */
+private fun dispatchedInvocation(plan: ForwardCallablePlan, receiver: ForwardAbiParameter?): String {
+  val parameters: List<ForwardPublicParameter> = plan.publicSignature.parameters
+  val defaulted: List<ForwardPublicParameter> = parameters.filter { it.default != null }
+  if (defaulted.isEmpty()) {
+    return invocationExpression(
+      plan, receiver, parameters.joinToString(", ") { parameter -> loweredArgument(parameter) },
+    )
+  }
+  fun local(parameter: ForwardPublicParameter): String = "default_${parameter.name}"
+  val arms: List<String> = (0 until (1 shl defaulted.size)).map { mask ->
+    val set: Set<ForwardPublicParameter> = defaulted
+      .filterIndexed { bit, _ -> mask and (1 shl bit) != 0 }
+      .toSet()
+    // Named from the first defaulted parameter on: an omitted one shifts every later position, and
+    // so does an unroutable trailing default the plan dropped, which this list cannot see.
+    var named = false
+    val arguments: String = parameters.mapNotNull { parameter ->
+      if (parameter.default != null) named = true
+      val value: String = when {
+        parameter.default == null -> loweredArgument(parameter)
+        parameter !in set -> return@mapNotNull null
+        // An `Optional<T>` value is the declared nullable type itself: null is a real argument.
+        parameter.isOptional -> local(parameter)
+        parameter.default?.encoding == ForwardDefaultEncoding.PRESENCE -> loweredArgument(parameter)
+        else -> "${local(parameter)}!!"
+      }
+      if (named) "${parameter.kotlinName.kotlinIdentifier()} = $value" else value
+    }.joinToString(", ")
+    "$mask -> ${invocationExpression(plan, receiver, arguments)}"
+  }
+  return buildString {
+    appendLine("run {")
+    // ADR-164: a PRESENCE value's slots carry an inert filler when unset, so it gets no local: it
+    // is lowered inside the arms that set it, the only place its lambda type can be inferred.
+    defaulted.filter { parameter -> parameter.default?.encoding != ForwardDefaultEncoding.PRESENCE }
+      .forEach { parameter -> appendLine("  val ${local(parameter)} = ${loweredArgument(parameter)}") }
+    appendLine("  var mask = 0")
+    defaulted.forEachIndexed { bit, parameter ->
+      val present: String =
+        if (parameter.hasPresenceSlot) "${parameter.name}IsSet" else "${local(parameter)} != null"
+      appendLine("  if ($present) mask = mask or ${1 shl bit}")
+    }
+    appendLine("  when (mask) {")
+    arms.forEach { arm -> appendLine("    $arm") }
+    appendLine("    else -> error(\"unreachable\")")
+    appendLine("  }")
+    append("}")
+  }
+}
+
+/** A Kotlin parameter name as a named-argument label, backticked when it is a hard keyword. */
+private fun String.kotlinIdentifier(): String = if (this in KOTLIN_HARD_KEYWORDS) "`$this`" else this
 
 private fun invocationExpression(
   plan: ForwardCallablePlan,

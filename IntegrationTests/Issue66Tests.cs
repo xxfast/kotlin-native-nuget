@@ -44,11 +44,11 @@ public class Issue66Tests
     }
 
     [Fact]
-    public void Constructor_OmittingOverload_KeepsErrorAndDefaultsEdition()
+    public void Constructor_OmittedEdition_KeepsErrorAndDefaultsEdition()
     {
-        // The synthesized overload drops the trailing defaulted `edition` but still declares the
-        // colliding `error` parameter, so it is a render path of its own. Edition defaults to 3,
-        // not 0: an overload wired to the wrong Kotlin constructor shows up as a wrong value.
+        // ADR-164: `edition` is a trailing optional `int?`; `error` is a middle, already-nullable
+        // default, so it is a required `Optional<string?>` and the string converts implicitly.
+        // Edition defaults to 3, not 0: a mis-wired mask arm shows up as a wrong value.
         using var state = new Issue66StoryState("Oreo raided the treat jar", "Biscuit Heist");
 
         Assert.Equal("Oreo raided the treat jar", state.Error);

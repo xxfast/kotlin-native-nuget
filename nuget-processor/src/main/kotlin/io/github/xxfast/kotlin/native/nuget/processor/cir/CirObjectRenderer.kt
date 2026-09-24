@@ -154,7 +154,7 @@ private fun StringBuilder.renderValueClassMembers(cls: CirValueClass) {
   cls.methods.forEach { method ->
     renderDllImport(cls.methodNativeImport(method))
     renderDoc(method.doc, "        ")
-    val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+    val paramStr: String = method.parameters.joinToString(", ") { it.declaration }
     if (method.returnType == "void") {
       appendLine("        public void ${method.name}($paramStr) => ${method.body};")
     } else {

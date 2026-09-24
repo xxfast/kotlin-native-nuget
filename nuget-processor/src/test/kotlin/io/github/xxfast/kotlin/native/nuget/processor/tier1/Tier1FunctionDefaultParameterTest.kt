@@ -8,22 +8,20 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * ADR-096: function default parameters surface as ADR-091's trailing-omitting overloads on the five
- * function routes.
+ * ADR-164 (superseding ADR-096's omitting overloads): function default parameters widen to their
+ * nullable C# form on the five function routes, one signature per declaration.
  *
- * The end-to-end half lives in `whiskers/WhiskersSample.kt` / `FunctionDefaultParameterTests.cs`,
- * which arbitrates numbering, dispatch and the resulting C# overload sets. What is only reachable
- * here is the shape whose correct outcome is a **failed** generation (it can never ship in the
- * fixture library) and the `override` exclusion, whose evidence is the *absence* of an export.
+ * The end-to-end half lives in `whiskers/WhiskersSample.kt` / `FunctionDefaultParameterTests.cs`
+ * and `issue297/Issue297Sample.kt` / `Issue297Tests.cs`.
  */
 class Tier1FunctionDefaultParameterTest {
 
   /**
-   * Diagnostic. A synthesized overload that collides with a declared namesake must fail generation
-   * with the ADR-034 kind rather than emit CS0111 C#.
+   * ADR-164: a widened `Describe(string, bool?)` is a different C# signature from a declared
+   * `Describe(string)`, so the ADR-096 collision no longer fails generation.
    */
   @Test
-  fun `a synthesized overload colliding with a declared method fires ERROR_CSHARP_SIGNATURE_COLLISION`() {
+  fun `a widened method beside a declared shorter namesake does not collide`() {
     val result = Tier1Harness.run(
       """
       package tier1.fundefaultscollision
@@ -35,26 +33,21 @@ class Tier1FunctionDefaultParameterTest {
       """.trimIndent(),
     )
 
-    assertTrue(
+    assertFalse(
       result.kspErrors.any {
         it.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name)
       },
-      "expected the synthesized-overload collision to fail generation; kspErrors=${result.kspErrors}",
+      "expected no collision; kspErrors=${result.kspErrors}",
     )
-    assertTrue(
-      result.kspErrors.any { it.contains("remove the default value whose synthesized") },
-      "expected the hint to name the defaulted-parameter cause; kspErrors=${result.kspErrors}",
-    )
+    assertContains(result.generatedCSharp, "public string Describe(string p, bool? excited = null)")
   }
 
   /**
-   * Structural. The two routes whose emitters walk declarations rather than the catalog: a
-   * synthesized entry shares its declaration's node, so both halves only see it once `plansFor` is
-   * plural. The extension receiver is not a plan parameter, so truncating every parameter leaves it
-   * intact.
+   * Structural. The two routes whose emitters walk declarations rather than the catalog. The
+   * extension receiver is not a plan parameter, so it is never widened and every arm keeps it.
    */
   @Test
-  fun `top-level and extension defaults synthesize omitting overloads on both halves`() {
+  fun `top-level and extension defaults widen one signature on both halves`() {
     val result = Tier1Harness.run(
       """
       package tier1.fundefaultsstatic
@@ -71,26 +64,29 @@ class Tier1FunctionDefaultParameterTest {
     assertTrue(result.compiledClean, "expected clean compile; got: ${result.compileErrors}")
     val kotlin: String = result.generated
     assertContains(kotlin, "@CName(\"library_tier1_fundefaultsstatic__hail\")")
-    assertContains(kotlin, "@CName(\"library_tier1_fundefaultsstatic__hail_2\")")
+    assertFalse(kotlin.contains("hail_2"), "no synthesized export; generated=$kotlin")
     assertContains(kotlin, "@CName(\"library_tier1_fundefaultsstatic__mitten_knead\")")
-    assertContains(kotlin, "@CName(\"library_tier1_fundefaultsstatic__mitten_knead_2\")")
-    assertContains(kotlin, "@CName(\"library_tier1_fundefaultsstatic__mitten_knead_3\")")
-    // The load-bearing assertion: the truncated plans call Kotlin with fewer positional arguments,
-    // and the extension keeps its receiver even when every parameter is dropped.
-    assertContains(kotlin, "hail(name)")
+    assertFalse(kotlin.contains("mitten_knead_2"), "no synthesized export; generated=$kotlin")
+    // The load-bearing assertion: the unset arm calls Kotlin without the argument, and the
+    // extension keeps its receiver even when every parameter is left unset.
+    assertContains(kotlin, "0 -> tier1.fundefaultsstatic.hail(name)")
     assertContains(kotlin, ".get().knead()")
+    assertContains(kotlin, ".get().knead(surface = default_surface!!)")
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "EntryPoint = \"library_tier1_fundefaultsstatic__hail_2\"")
-    assertContains(cs, "EntryPoint = \"library_tier1_fundefaultsstatic__mitten_knead_3\"")
-    assertContains(cs, "public static string Knead(this global::Interop.Mitten receiver)")
+    assertContains(cs, "public static string Hail(string name, bool? loud = null)")
+    assertContains(
+      cs,
+      "public static string Knead(this global::Interop.Mitten receiver, int? times = null, " +
+          "string? surface = null)",
+    )
   }
 
   /**
    * Structural. Two `expect` overloads share one qualified name, so the index has to resolve them
-   * by signature: only the second namesake carries a trailing default, and the omitting overload
-   * must wrap *its* parameters. Attributing the wrong declaration's defaults would truncate
-   * `beam(name, tag)` into a `beam(name)` whose Kotlin call site does not compile.
+   * by signature: only the second namesake carries a trailing default, and only *its* parameter
+   * may widen. Attributing the wrong declaration's defaults would widen `tag` into a
+   * `beam(name)` arm whose Kotlin call site does not compile.
    */
   @Test
   fun `overloaded top-level expects each resolve their own defaults`() {
@@ -119,14 +115,11 @@ class Tier1FunctionDefaultParameterTest {
     val kotlin: String = result.generated
     assertContains(kotlin, "@CName(\"library_tier1_fundefaultsexpectoverload__beam\")")
     assertContains(kotlin, "@CName(\"library_tier1_fundefaultsexpectoverload__beam_2\")")
-    // Exactly one synthesized overload, and it truncates the *second* namesake (`level`), not the
-    // first (`tag`), whose parameters carry no default at all.
-    assertContains(kotlin, "@CName(\"library_tier1_fundefaultsexpectoverload__beam_3\")")
-    assertFalse(
-      kotlin.contains("beam_4"),
-      "only the defaulted namesake may synthesize; generated=$kotlin",
-    )
-    assertContains(kotlin, "beam(name)")
+    assertFalse(kotlin.contains("beam_3"), "no synthesized export; generated=$kotlin")
+    // The *second* namesake (`level`) widens, not the first (`tag`).
+    assertContains(kotlin, "0 -> tier1.fundefaultsexpectoverload.beam(name)")
+    assertContains(result.generatedCSharp, "public static string Beam(string name, int? level = null)")
+    assertContains(result.generatedCSharp, "public static string Beam(string name, string tag)")
   }
 
   /**
@@ -175,12 +168,12 @@ class Tier1FunctionDefaultParameterTest {
   }
 
   /**
-   * Structural. Kotlin forbids an override from restating a default, and a synthesized entry on the
-   * derived class would be `override` against a base signature that does not exist (CS0115), so the
-   * derived class synthesizes nothing and inherits the base's omitting overload instead.
+   * Structural. Kotlin forbids an override from restating a default, so the override's shape comes
+   * off its root: base and override render the same widened signature (C# `override` needs them
+   * to agree), and neither gets a second export.
    */
   @Test
-  fun `an override synthesizes nothing while its base still does`() {
+  fun `an override renders its base's widened signature`() {
     val result = Tier1Harness.run(
       """
       package tier1.fundefaultsoverride
@@ -198,11 +191,11 @@ class Tier1FunctionDefaultParameterTest {
     assertTrue(result.compiledClean, "expected clean compile; got: ${result.compileErrors}")
     val kotlin: String = result.generated
     assertContains(kotlin, "@CName(\"library_tier1_fundefaultsoverride__animal_speak\")")
-    assertContains(kotlin, "@CName(\"library_tier1_fundefaultsoverride__animal_speak_2\")")
     assertContains(kotlin, "@CName(\"library_tier1_fundefaultsoverride__cat_speak\")")
-    assertFalse(
-      kotlin.contains("cat_speak_2"),
-      "an override synthesizes nothing (it inherits the base's overload); generated=$kotlin",
-    )
+    assertFalse(kotlin.contains("speak_2"), "no synthesized export; generated=$kotlin")
+
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "public virtual string Speak(int times, bool? loud = null)")
+    assertContains(cs, "public override string Speak(int times, bool? loud = null)")
   }
 }

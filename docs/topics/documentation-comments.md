@@ -61,8 +61,8 @@ public string Book(int nights, string suite)
 public string Book(int nights)
 ```
 
-The second overload above is [the omitting overload](top-level-declarations.md#function-default-parameters)
-`suite`'s default synthesizes; it keeps the doc but drops the `<param>` it has no parameter for.
+The second overload above is the [widened signature](top-level-declarations.md#function-default-parameters)
+`suite`'s default produces; it keeps the doc but drops the `<param>` it has no parameter for.
 
 ## What carries a doc comment {id="what-carries-a-doc-comment"}
 

@@ -5,8 +5,8 @@ namespace IntegrationTests;
 
 /// <summary>
 /// Issue <a href="https://github.com/xxfast/kotlin-native-nuget/issues/128">#128</a>: a parameter
-/// whose <em>type</em> is opt-in-marked makes every arity of the callable illegal, so ADR-096's
-/// trailing-omitting overload cannot repair the constructor ADR-115 dropped. Every arity is skipped
+/// whose <em>type</em> is opt-in-marked makes every call of the callable illegal, so no default
+/// (ADR-164's widened signature included) can repair the constructor ADR-115 dropped. Every arity is skipped
 /// and the type becomes factory-only in C#.
 ///
 /// <para>
@@ -85,13 +85,18 @@ public class Issue128Tests
     }
 
     [Fact]
-    public void GroomingLog_KeepsItsOmittingOverloads()
+    public void GroomingLog_KeepsAConstructorWithoutTheMarkedParameter()
     {
         // The over-skip guard. `ledger`'s marker sits on the PROPERTY and its type is a plain
         // string, so omitting it is legal Kotlin and ADR-115 gate (b) still repairs the
-        // constructor. A fix keyed on the marker rather than on the parameter's type deletes both
-        // of these, and no absence assertion elsewhere would notice.
-        Assert.Equal(2, typeof(GroomingLog).GetConstructors(PublicInstance).Length);
+        // constructor. Under ADR-164 that is ONE constructor, `GroomingLog(string? note = null)`,
+        // with `ledger` left out (Kotlin always evaluates its default). A fix keyed on the marker
+        // rather than on the parameter's type deletes it, and no absence assertion elsewhere
+        // would notice.
+        ConstructorInfo constructor = Assert.Single(typeof(GroomingLog).GetConstructors(PublicInstance));
+        ParameterInfo note = Assert.Single(constructor.GetParameters());
+        Assert.Equal("note", note.Name);
+        Assert.True(note.IsOptional);
 
         using var log = new GroomingLog("tidy");
         using var fallback = new GroomingLog();

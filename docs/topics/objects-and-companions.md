@@ -152,8 +152,8 @@ same rule on class methods, top-level functions, and extension functions.
 
 ## Method default parameters
 
-A trailing run of defaulted parameters on an `object` or companion member generates one overload
-per omitted trailing default, each using the Kotlin default for the parameters it drops:
+A defaulted parameter on an `object` or companion member widens to its nullable C# form, using
+the Kotlin default when the caller passes `null`:
 
 ```kotlin
 object Kibble {
@@ -165,9 +165,10 @@ object Kibble {
 string oneFlavour = Kibble.Scoop("tuna"); // "2 scoops of tuna"; scoops defaults to 2
 ```
 
-Only a *trailing* run of defaults gets an omitting overload: a defaulted parameter followed by a
-non-defaulted one does not, so pass it explicitly. A trailing default the bridge cannot carry
-costs only that arity.
+A defaulted parameter followed by a non-defaulted one stays required-but-nullable instead of
+optional, so pass it explicitly (`null` for it still means "use the Kotlin default"). A defaulted
+parameter the bridge cannot route to any non-null C# form is dropped from the trailing signature
+entirely.
 
 ```kotlin
 object Switchboard {
@@ -181,5 +182,6 @@ Switchboard.Patch();
 Switchboard.Patch(3);
 ```
 
-The events arity does not exist. See
-[Method default parameters](classes-and-objects.md#method-default-parameters) for the full rule.
+The `events` parameter does not exist in C#. See
+[Constructor and method default parameters](classes-and-objects.md#constructor-and-method-default-parameters)
+for the full rule.

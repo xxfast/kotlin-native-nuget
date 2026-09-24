@@ -8,22 +8,22 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * ADR-091: constructor default parameters surface as `@JvmOverloads`-style trailing-omitting
- * overloads, synthesized in the planner and numbered into ADR-034's `_$n` sequence.
+ * ADR-164 (superseding ADR-091's omitting overloads): a constructor's defaulted parameters widen to
+ * their nullable C# form on ONE constructor, and the Kotlin wrapper dispatches on which were set.
  *
- * The end-to-end half lives in `cat/DefaultsSample.kt` / `ConstructorDefaultParameterTests.cs`.
- * What is only reachable here is the collision case (its correct outcome is a *failed*
- * generation, so it cannot ship in the fixture library) and the byte-level naming regression.
+ * The end-to-end half lives in `cat/DefaultsSample.kt` / `ConstructorDefaultParameterTests.cs` and
+ * `issue297/Issue297Sample.kt` / `Issue297Tests.cs`. What is only reachable here is the byte-level
+ * naming, and the expect/actual lookup.
  */
 class Tier1ConstructorDefaultParameterTest {
 
   /**
-   * Structural. Two trailing defaults produce both suffix lengths: the synthesized Kotlin wrapper
-   * calls the constructor with *fewer positional arguments* and Kotlin computes the defaults, and
-   * the C# half gets numbered private externs behind one natural overload set.
+   * Structural. Two trailing defaults widen on the one export: the Kotlin wrapper names only the
+   * arguments that were set and Kotlin computes the rest, and the C# constructor is optional from
+   * the first default on.
    */
   @Test
-  fun `trailing defaults synthesize omitting overloads on both halves`() {
+  fun `trailing defaults widen one constructor on both halves`() {
     val result = Tier1Harness.run(
       """
       package tier1.ctordefaults
@@ -36,38 +36,31 @@ class Tier1ConstructorDefaultParameterTest {
 
     assertTrue(
       result.compiledClean,
-      "expected the synthesized wrappers to compile; got: ${result.compileErrors}",
+      "expected the dispatching wrapper to compile; got: ${result.compileErrors}",
     )
 
     val kotlin: String = result.generated
     assertContains(kotlin, "@CName(\"library_tier1_ctordefaults__carrier_create\")")
-    assertContains(kotlin, "@CName(\"library_tier1_ctordefaults__carrier_create_2\")")
-    assertContains(kotlin, "@CName(\"library_tier1_ctordefaults__carrier_create_3\")")
-    // The load-bearing assertion: the truncated plans call the constructor with fewer positional
-    // arguments. Kotlin, not the generator, supplies `size` / `padded`.
-    assertContains(kotlin, "Carrier(label, size, padded)")
-    assertContains(kotlin, "Carrier(label, size)")
-    assertContains(kotlin, "Carrier(label)")
+    assertFalse(kotlin.contains("carrier_create_2"), "no synthesized export; generated=$kotlin")
+    // The load-bearing assertion: each arm names only what was set, so Kotlin supplies the rest.
+    assertContains(kotlin, "0 -> tier1.ctordefaults.Carrier(label)")
+    assertContains(kotlin, "2 -> tier1.ctordefaults.Carrier(label, padded = default_padded!!)")
+    assertContains(
+      kotlin, "3 -> tier1.ctordefaults.Carrier(label, size = default_size!!, padded = default_padded!!)",
+    )
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "EntryPoint = \"library_tier1_ctordefaults__carrier_create\"")
-    assertContains(cs, "EntryPoint = \"library_tier1_ctordefaults__carrier_create_2\"")
-    assertContains(cs, "EntryPoint = \"library_tier1_ctordefaults__carrier_create_3\"")
-    assertContains(cs, "private static extern IntPtr Native_Create_2(")
-    assertContains(cs, "private static extern IntPtr Native_Create_3(")
-    // One natural C# overload set: the numbering never reaches the public surface.
-    assertContains(cs, "public Carrier(string label, int size, bool padded)")
-    assertContains(cs, "public Carrier(string label, int size)")
-    assertContains(cs, "public Carrier(string label)")
+    assertFalse(cs.contains("Native_Create_2"), "no synthesized extern; generatedCSharp=$cs")
+    assertContains(cs, "public Carrier(string label, int? size = null, bool? padded = null)")
   }
 
   /**
-   * Structural. A secondary constructor carries its own trailing default, and its synthesized
-   * entry continues the sequence *after* every full signature (primary, then secondaries), so the
-   * secondary keeps `_2` and only the new overload takes `_3`.
+   * Structural. A secondary constructor's default widens that secondary in place, so the ADR-034
+   * `_2` it always had is still the only number.
    */
   @Test
-  fun `a secondary constructor's trailing default is synthesized after the full signatures`() {
+  fun `a secondary constructor's trailing default widens in place`() {
     val result = Tier1Harness.run(
       """
       package tier1.ctordefaultssecondary
@@ -84,20 +77,20 @@ class Tier1ConstructorDefaultParameterTest {
     val kotlin: String = result.generated
     assertContains(kotlin, "@CName(\"library_tier1_ctordefaultssecondary__scratchpost_create\")")
     assertContains(kotlin, "@CName(\"library_tier1_ctordefaultssecondary__scratchpost_create_2\")")
-    assertContains(kotlin, "@CName(\"library_tier1_ctordefaultssecondary__scratchpost_create_3\")")
     assertFalse(
-      kotlin.contains("scratchpost_create_4"),
-      "the primary has no defaults, so nothing is synthesized for it; generated=$kotlin",
+      kotlin.contains("scratchpost_create_3"),
+      "no synthesized entry continues the sequence; generated=$kotlin",
     )
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "public ScratchPost(string label, int height)")
+    assertContains(cs, "public ScratchPost(string label)")
+    assertContains(cs, "public ScratchPost(string label, int height, bool? sturdy = null)")
   }
 
   /**
-   * ADR-091's expect/actual clause. Kotlin forbids an `actual` from restating a default, so the
-   * bit exists only on the `expect` header; without the `ExpectIndex` lookup the planner would
-   * silently and "correctly" conclude the class has no defaults.
+   * ADR-091's expect/actual clause, kept by ADR-164. Kotlin forbids an `actual` from restating a
+   * default, so the bit exists only on the `expect` header; without the `ExpectIndex` lookup the
+   * planner would silently and "correctly" conclude the class has no defaults.
    */
   @Test
   fun `an expect class primary-constructor default is read off the expect`() {
@@ -128,18 +121,18 @@ class Tier1ConstructorDefaultParameterTest {
     assertEquals("OK", result.kspExitCode, "kspErrors=${result.kspErrors}")
     val kotlin: String = result.generated
     assertContains(kotlin, "@CName(\"library_tier1_ctordefaultsexpect__beacon_create\")")
-    assertContains(kotlin, "@CName(\"library_tier1_ctordefaultsexpect__beacon_create_2\")")
-    assertContains(kotlin, "Beacon(name, interval)")
-    assertContains(kotlin, "Beacon(name)")
-    assertContains(result.generatedCSharp, "public Beacon(string name)")
+    assertContains(kotlin, "0 -> tier1.ctordefaultsexpect.Beacon(name)")
+    assertContains(kotlin, "1 -> tier1.ctordefaultsexpect.Beacon(name, interval = default_interval!!)")
+    assertContains(result.generatedCSharp, "public Beacon(string name, int? interval = null)")
   }
 
   /**
-   * Diagnostic. A synthesized overload that collides with a real constructor must fail generation
-   * with the ADR-034 kind (extended hint) rather than emit CS0111 C#.
+   * ADR-164: the widened `Foo(string, int?)` is a different C# signature from a real `Foo(string)`,
+   * so the collision ADR-091 had to fail generation for is gone (C# prefers the candidate with no
+   * omitted optional, so `new Foo("x")` is not ambiguous either).
    */
   @Test
-  fun `a synthesized overload colliding with a real constructor fires ERROR_CSHARP_SIGNATURE_COLLISION`() {
+  fun `a widened constructor beside a real shorter one does not collide`() {
     val result = Tier1Harness.run(
       """
       package tier1.ctordefaultscollision
@@ -150,24 +143,23 @@ class Tier1ConstructorDefaultParameterTest {
       """.trimIndent(),
     )
 
-    assertTrue(
+    assertFalse(
       result.kspErrors.any {
         it.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name)
       },
-      "expected the synthesized-overload collision to fail generation; kspErrors=${result.kspErrors}",
+      "expected no collision; kspErrors=${result.kspErrors}",
     )
-    assertTrue(
-      result.kspErrors.any { it.contains("remove the default value whose synthesized") },
-      "expected the hint to name the defaulted-parameter cause; kspErrors=${result.kspErrors}",
-    )
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "public Foo(string name, int? lives = null)")
+    assertContains(cs, "public Foo(string name)")
   }
 
   /**
-   * Regression. A middle default (a required parameter sits after it) cannot be omitted by a
-   * positional Kotlin call, so nothing is synthesized: exactly one public C# constructor.
+   * ADR-164: a middle default (a required parameter sits after it) is required-but-nullable. The
+   * C# caller passes `null` positionally and Kotlin still evaluates the default.
    */
   @Test
-  fun `a middle default synthesizes nothing`() {
+  fun `a middle default is required but nullable`() {
     val result = Tier1Harness.run(
       """
       package tier1.ctordefaultsmiddle
@@ -179,15 +171,14 @@ class Tier1ConstructorDefaultParameterTest {
     assertTrue(result.compiledClean, "expected clean compile; got: ${result.compileErrors}")
     val kotlin: String = result.generated
     assertContains(kotlin, "@CName(\"library_tier1_ctordefaultsmiddle__kennel_create\")")
-    assertFalse(
-      kotlin.contains("kennel_create_2"),
-      "a middle default gets no omitting overload (the JvmOverloads rule); generated=$kotlin",
-    )
+    assertFalse(kotlin.contains("kennel_create_2"), "no synthesized export; generated=$kotlin")
+    assertContains(kotlin, "0 -> tier1.ctordefaultsmiddle.Kennel(name, city = city)")
     assertEquals(
       1,
       Regex("""public Kennel\(""").findAll(result.generatedCSharp).count(),
       "expected exactly one public constructor; generatedCSharp=${result.generatedCSharp}",
     )
+    assertContains(result.generatedCSharp, "public Kennel(string name, int? capacity, string city)")
   }
 
   /**

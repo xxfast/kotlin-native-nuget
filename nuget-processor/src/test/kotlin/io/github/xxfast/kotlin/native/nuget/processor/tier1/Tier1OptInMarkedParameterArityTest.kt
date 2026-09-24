@@ -71,18 +71,16 @@ class Tier1OptInMarkedParameterArityTest {
       "no arity of the constructor may be called; generated:\n${result.generated}",
     )
     val skipped: List<String> = optInWarnings(result)
-    // The trailing `:` is load-bearing: `<init>` is a prefix of `<init>_2`.
-    listOf("GroomingPlan.<init>:", "GroomingPlan.<init>_2:", "GroomingPlan.<init>_3:")
-      .forEach { symbol ->
-        assertEquals(
-          1,
-          skipped.count { it.contains(symbol) },
-          "expected `$symbol` skipped exactly once; kspWarnings=${result.kspWarnings}",
-        )
-      }
-    assertTrue(
-      skipped.any { it.contains("GroomingPlan.<init>_3:") && it.contains("Grooming`") },
-      "the skip names the marked type it dropped; kspWarnings=${result.kspWarnings}",
+    // ADR-164: one signature, so one skip. A marked TYPE never widens or drops (no call that omits
+    // it is legal Kotlin either), so the constructor stays unroutable rather than losing it.
+    assertEquals(
+      1,
+      skipped.count { it.contains("GroomingPlan.<init>:") },
+      "expected the constructor skipped exactly once; kspWarnings=${result.kspWarnings}",
+    )
+    assertFalse(
+      skipped.any { it.contains("GroomingPlan.<init>_2") },
+      "no synthesized arity to skip; kspWarnings=${result.kspWarnings}",
     )
     assertFalse(
       "public GroomingPlan(" in result.generatedCSharp,
@@ -136,28 +134,24 @@ class Tier1OptInMarkedParameterArityTest {
       "schedule(" in result.generated,
       "requirement 4: the function half, not just constructors; generated:\n${result.generated}",
     )
-    // ADR-149: one skip per numbered arity, matching `GroomingPlan.<init>` / `.<init>_2` /
-    // `.<init>_3`. A marked parameter type still poisons every suffix via `droppedOptInMarker`.
-    // The trailing `:` is load-bearing: `schedule` is a prefix of `schedule_2`.
-    listOf(
-      "tier1.optin.arity.schedule:",
-      "tier1.optin.arity.schedule_2:",
-      "tier1.optin.arity.schedule_3:",
-    ).forEach { symbol ->
-      assertEquals(
-        1,
-        optInWarnings(result).count { it.contains(symbol) },
-        "expected `$symbol` skipped exactly once; kspWarnings=${result.kspWarnings}",
-      )
-    }
+    // ADR-164: one signature, one skip; the marked type is never widened away.
+    assertEquals(
+      1,
+      optInWarnings(result).count { it.contains("tier1.optin.arity.schedule:") },
+      "expected `schedule` skipped exactly once; kspWarnings=${result.kspWarnings}",
+    )
   }
 
   @Test
   fun `a property-targeted marker on an unmarked type keeps its reduced arity`() {
     val result = Tier1Harness.run(source)
 
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    // ADR-164: the marked trailing parameter is dropped from the one widened signature, and the
+    // Kotlin call never names it.
     assertTrue(
-      "groominglog_create_2" in result.generated,
+      "public GroomingLog(string? note = null)" in result.generatedCSharp &&
+          "ledger" !in result.generated,
       "ADR-115 gate (b) is unchanged: omitting a marked PROPERTY with an unmarked type is " +
           "legal Kotlin; generated:\n${result.generated}",
     )

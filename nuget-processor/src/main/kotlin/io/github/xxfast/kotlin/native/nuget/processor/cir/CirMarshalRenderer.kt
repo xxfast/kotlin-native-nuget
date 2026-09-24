@@ -711,3 +711,33 @@ internal fun StringBuilder.renderSetHelper(helper: CirSetHelper) {
   appendLine()
 }
 
+
+/**
+ * ADR-164: `default` is unset; any value, `null` included, converts through the implicit operator
+ * and is set. That is what lets `Describe("Oreo", owner: null)` differ from `Describe("Oreo")`.
+ */
+internal fun StringBuilder.renderOptionalHelper() {
+  appendLine("    /// <summary>")
+  appendLine("    /// A parameter that may be left unset, so Kotlin evaluates its default. Omitting it, or")
+  appendLine("    /// passing <c>default</c>, leaves it unset; any value, <c>null</c> included, sets it.")
+  appendLine("    /// </summary>")
+  appendLine("    public readonly struct Optional<T>")
+  appendLine("    {")
+  appendLine("        private Optional(T value)")
+  appendLine("        {")
+  appendLine("            HasValue = true;")
+  appendLine("            Value = value;")
+  appendLine("        }")
+  appendLine()
+  appendLine("        /// <summary>Whether a value, possibly <c>null</c>, was given.</summary>")
+  appendLine("        public bool HasValue { get; }")
+  appendLine()
+  appendLine("        /// <summary>The given value; meaningless when <see cref=\"HasValue\"/> is false.</summary>")
+  appendLine("        public T Value { get; }")
+  appendLine()
+  appendLine("        /// <summary>The unset value.</summary>")
+  appendLine("        public static Optional<T> None => default;")
+  appendLine()
+  appendLine("        public static implicit operator Optional<T>(T value) => new Optional<T>(value);")
+  appendLine("    }")
+}

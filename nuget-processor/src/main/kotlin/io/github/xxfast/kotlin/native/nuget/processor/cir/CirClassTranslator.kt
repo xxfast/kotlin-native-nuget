@@ -650,17 +650,25 @@ internal fun translateClass(
     .map { it.nestedInterfaceCsName() }
     .toList()
 
-  // ADR-091: constructors come off the catalog, the same move ADR-090 made for methods. The
-  // ADR-034 `_$n` sequence now also carries planner-synthesized omitting overloads, so the extern
+  // ADR-091: constructors come off the catalog, the same move ADR-090 made for methods. The extern
   // suffix is derived from the plan symbol's tail after `<init>` ("" or `_$n`) rather than from a
   // declaration index. C# constructors all share the class name, so the numbering stays invisible:
   // the surface is one natural overload set.
   val constructorPlans: List<ForwardCallablePlan> =
     callableCatalog.constructors(cls.qualifiedName?.asString() ?: name)
-  val cirConstructors: List<CirConstructor> = constructorPlans.map { plan ->
+  val projected: List<CirConstructor> = constructorPlans.map { plan ->
     tracker.trackPlan(plan)
     val suffix: String = plan.invocation.symbol.substringAfterLast('.').removePrefix("<init>")
     ForwardCirPlanProjection.constructor(plan, suffix)
+  }
+  // ADR-164: a declared one-parameter constructor of the exact type already disambiguates, and a
+  // second one would be CS0111.
+  val singleParameterTypes: Set<String> = projected
+    .mapNotNull { ctor -> ctor.parameters.singleOrNull()?.type }
+    .toSet()
+  val cirConstructors: List<CirConstructor> = projected.map { ctor ->
+    if (ctor.handleDisambiguation in singleParameterTypes) ctor.copy(handleDisambiguation = null)
+    else ctor
   }
   // An unsuffixed plan is the primary; everything else renders as an overload. A primary skipped
   // by the planner leaves `constructor` null with no IntPtr fallthrough, exactly as before.
@@ -701,9 +709,8 @@ internal fun translateClass(
           declaration = "$name.<init>",
           reason = "two or more constructors render identical C# parameter types; C# cannot " +
               "declare two constructors with the same signature (ADR-034)",
-          hint = "rename or remove the duplicate constructor, change one parameter's type so " +
-              "the rendered C# signatures differ, or remove the default value whose synthesized " +
-              "omitting overload collides (ADR-091)",
+          hint = "rename or remove the duplicate constructor, or change one parameter's type so " +
+              "the rendered C# signatures differ",
           // Nothing generated loses a member here (a note, or an ERROR_* that fails the
           // build before anything is read), so there is no owner to name it on.
           owner = null,
@@ -2869,9 +2876,9 @@ internal fun translateInterface(
     CirInterfaceMethod(
       name = plan.publicSignature.csharpName,
       returnType = plan.publicSignature.result.forwardPublicCsharpType(),
-      parameters = plan.publicSignature.parameters.map { parameter ->
-        CirParameter(parameter.csharpName, parameter.type.forwardPublicCsharpType())
-      },
+      // ADR-164: the same widened parameters (nullable form, `Optional<T>`, defaults) the
+      // implementing class renders, so `IFoo` and its implementer declare one signature.
+      parameters = ForwardCirPlanProjection.interfaceParameters(plan),
       doc = plan.publicSignature.cirDoc(),
     )
   }

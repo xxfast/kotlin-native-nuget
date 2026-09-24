@@ -371,7 +371,7 @@ class Tier1SealedInterfaceTest {
 
     val csharp: String = result.generatedCSharp
     assertContains(csharp, "public Packet(global::Interop.Transmission signal)")
-    assertContains(csharp, "public Packet Copy(global::Interop.Transmission signal)")
+    assertContains(csharp, "public Packet Copy(global::Interop.Transmission? signal = null)")
     assertTrue(
       result.kspWarnings.none {
         it.contains(ForwardDiagnosticKind.SKIPPED_SEALED_POSITION.name) &&
@@ -460,7 +460,7 @@ class Tier1SealedInterfaceTest {
     val csharp: String = result.generatedCSharp
     // The cascade the issue counts: the holder gets its constructor and its copy back.
     assertContains(csharp, "public Portrait(global::Interop.Marking marking)")
-    assertContains(csharp, "public Portrait Copy(global::Interop.Marking marking)")
+    assertContains(csharp, "public Portrait Copy(global::Interop.Marking? marking = null)")
     // Two enum arms of one hierarchy, and the mixed hierarchy's one beside a data arm.
     assertContains(csharp, "public sealed class PatchArm : Marking")
     assertContains(csharp, "public sealed class SwirlArm : Marking")
