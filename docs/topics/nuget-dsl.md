@@ -33,6 +33,7 @@ the DSL itself enforces they're set, but `packNuget` fails once it reads an unse
 | `snapshot` | `Boolean` | no | `false`; when `true`, `packNuget` mints `<version>-snapshot.<epochMillis>` at execution time instead of using `version` literally, and always writes an MSBuild props file. Requires `packageId` and a non-blank `version` |
 | `versionPropsFile` | `File?` | no | `null`; only consulted when `snapshot` is `true`. Default `<rootProject>/build/<packageId>Versions.props` |
 | `prebuiltRuntimes` | `File?` | no | `null`; a directory laid out `<rid>/native/*.{dll,dylib,so}`, exactly the `runtimes/` tree `packNuget` stages, merged with the RIDs this host links itself into one package |
+| `repositories { }` | function | no | empty; declares named feeds `publishNuget` pushes the packed `.nupkg` to, see below |
 
 ```kotlin
 nuget {
@@ -66,6 +67,28 @@ property name derived from `packageId`: every character outside `[A-Za-z0-9_]` i
 leading digit gets a `_` prefix, and `Version` is appended (`MyCatLib` becomes `MyCatLibVersion`).
 See [Publish a Kotlin/Native library as NuGet](publish-kotlin-library-as-nuget.md) for the full
 local-iteration flow and the consumer-side props import.
+
+### Publishing repositories
+
+`repositories { }` declares named feeds inside `publish { }`; each `nuget(name) { }` block gets its
+own `publishNugetTo<Name>Repository` task:
+
+```kotlin
+nuget {
+  publish {
+    // packageId, version, authors, description, rootPackage as above
+    repositories {
+      nuget("nugetOrg") {
+        url = "https://api.nuget.org/v3/index.json"
+        // apiKey unset: falls back to the `nugetOrgApiKey` Gradle property
+      }
+    }
+  }
+}
+```
+
+See [Publish a Kotlin/Native library as NuGet](publish-kotlin-library-as-nuget.md#5-publish-the-package-to-a-feed)
+for credential resolution, `--dryRun`, and `--skipDuplicate`.
 
 ### Multi-RID packages
 

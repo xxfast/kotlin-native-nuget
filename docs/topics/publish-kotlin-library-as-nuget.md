@@ -294,22 +294,81 @@ not the version that actually gets published.</p>
 ## 5. Publish the package to a feed
 
 The local package source above is useful while developing and testing the library. To distribute
-`MyCatLib`, publish the generated package to NuGet.org or a private NuGet feed instead.
+`MyCatLib`, push the generated package to NuGet.org, GitHub Packages, or a private feed with the
+`publishNuget` task. It pushes over plain HTTP, so no .NET SDK is required for this step either.
 
-`packNuget` creates the `.nupkg`, but does not upload it. With the .NET SDK installed and
-credentials for the destination feed, push the package with
-[`dotnet nuget push`](https://learn.microsoft.com/dotnet/core/tools/dotnet-nuget-push):
+Declare a named repository inside `publish { }`:
+
+```kotlin
+nuget {
+  publish {
+    packageId = "MyCatLib"
+    version = "1.0.0"
+    // authors, description, rootPackage as before
+
+    repositories {
+      nuget("nugetOrg") {
+        url = "https://api.nuget.org/v3/index.json"
+        // apiKey unset: falls back to the `nugetOrgApiKey` Gradle property
+      }
+      nuget("github") {
+        url = "https://nuget.pkg.github.com/xxfast/index.json"
+        apiKey = providers.environmentVariable("GITHUB_TOKEN")
+      }
+    }
+  }
+}
+```
+
+Each repository gets its own `publishNugetTo<Name>Repository` task (`publishNugetToNugetOrgRepository`,
+`publishNugetToGithubRepository`, both depending on `packNuget`), plus an aggregate `publishNuget`
+that runs all of them:
+
+```bash
+./gradlew publishNuget
+# or push to just one feed
+./gradlew publishNugetToNugetOrgRepository
+```
+
+An unset `apiKey`, `username`, or `password` on a repository named `"nugetOrg"` resolves from the
+Gradle properties `nugetOrgApiKey`, `nugetOrgUsername`, `nugetOrgPassword` when the task runs, so a
+credential never has to sit in the build file:
+
+```bash
+./gradlew publishNuget -PnugetOrgApiKey=<NUGET_API_KEY>
+# or, for CI:
+ORG_GRADLE_PROJECT_nugetOrgApiKey=<NUGET_API_KEY> ./gradlew publishNuget
+```
+
+`username`/`password` send HTTP basic auth alongside the key header, which is what GitHub Packages
+and Azure Artifacts PATs expect; leave them unset for a plain API-key feed like nuget.org.
+
+Two task options:
+
+- `--dryRun` resolves the feed and validates the package and credential without pushing anything.
+- `--skipDuplicate` turns an already-published version (HTTP 409) into a warning instead of a
+  build failure; it is also settable per repository with `skipDuplicate = true`.
+
+```bash
+./gradlew publishNuget --dryRun
+./gradlew publishNuget --skipDuplicate
+```
+
+Consumers then reference `MyCatLib` with the same normal `PackageReference` shown above and restore
+it from the published feed. They do not need the `mycatlib-local` entry in their `NuGet.Config`.
+
+<note>
+<p>A repository needs a <code>NuGet.Config</code>-based credential provider or interactive sign-in
+(for example Azure Artifacts without a PAT)? <code>publishNuget</code> does not support that; fall
+back to <a href="https://learn.microsoft.com/dotnet/core/tools/dotnet-nuget-push"><code>dotnet nuget
+push</code></a> with the .NET SDK installed.</p>
+</note>
 
 ```bash
 dotnet nuget push build/nuget/MyCatLib.1.0.0.nupkg \
   --source https://api.nuget.org/v3/index.json \
   --api-key <NUGET_API_KEY>
 ```
-
-For a private feed, replace `--source` with that feed's endpoint and use credentials accepted by
-the feed. Consumers then reference `MyCatLib` with the same normal `PackageReference` shown above
-and restore it from the published feed. They do not need the `mycatlib-local` entry in their
-`NuGet.Config`.
 
 <seealso>
     <category ref="related">

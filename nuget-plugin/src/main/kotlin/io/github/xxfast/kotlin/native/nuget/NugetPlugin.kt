@@ -4,6 +4,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.deriveResolvedVersions
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.file.Directory
+import org.gradle.api.file.RegularFile
 import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.TaskProvider
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
@@ -538,44 +539,99 @@ class NugetPlugin : Plugin<Project> {
             }
           }
 
-        project.tasks.register("packNuget", PackNugetTask::class.java)
-          .configure { task ->
-            task.group = "nuget"
-            task.description = "Packages the Kotlin/Native shared library as a NuGet package"
-            task.packageId.set(pub.packageId)
+        val packNuget: TaskProvider<PackNugetTask> =
+          project.tasks.register("packNuget", PackNugetTask::class.java)
+        packNuget.configure { task ->
+          task.group = "nuget"
+          task.description = "Packages the Kotlin/Native shared library as a NuGet package"
+          task.packageId.set(pub.packageId)
 
-            if (snapshot == null) {
-              task.packageVersion.set(pub.version)
-            } else {
-              task.packageVersion.set(snapshot.version)
-              task.dependsOn(snapshot.versionTask, snapshot.propsTask)
-            }
-
-            task.authors.set(pub.authors)
-            task.packageDescription.set(pub.description)
-            task.nativeLibDirs.set(libDirs)
-            task.nativeLibFiles.from(libDirs.values.map { project.fileTree(it) })
-
-            if (pub.prebuiltRuntimes != null) {
-              task.prebuiltRuntimesDir.set(pub.prebuiltRuntimes)
-            }
-
-            task.generatedCsDirs.from(kspOutputDir)
-            task.outputDir.set(project.layout.buildDirectory.dir("nuget"))
-
-            linkTasks.forEach { task.dependsOn(it) }
-
-            task.dependsOn(kspTask)
-            task.dependsOn(reportDiagnostics)
-            task.dependsOn(compileInterop)
-            task.dependencyVersions.set(resolvedVersions)
-
-            if (nugetGenerateShims != null) {
-              task.generatedCsDirs.from(nugetGenerateShims.flatMap { it.csharpOutputDir })
-              task.dependsOn(nugetGenerateShims)
-            }
+          if (snapshot == null) {
+            task.packageVersion.set(pub.version)
+          } else {
+            task.packageVersion.set(snapshot.version)
+            task.dependsOn(snapshot.versionTask, snapshot.propsTask)
           }
+
+          task.authors.set(pub.authors)
+          task.packageDescription.set(pub.description)
+          task.nativeLibDirs.set(libDirs)
+          task.nativeLibFiles.from(libDirs.values.map { project.fileTree(it) })
+
+          if (pub.prebuiltRuntimes != null) {
+            task.prebuiltRuntimesDir.set(pub.prebuiltRuntimes)
+          }
+
+          task.generatedCsDirs.from(kspOutputDir)
+          task.outputDir.set(project.layout.buildDirectory.dir("nuget"))
+
+          linkTasks.forEach { task.dependsOn(it) }
+
+          task.dependsOn(kspTask)
+          task.dependsOn(reportDiagnostics)
+          task.dependsOn(compileInterop)
+          task.dependencyVersions.set(resolvedVersions)
+
+          if (nugetGenerateShims != null) {
+            task.generatedCsDirs.from(nugetGenerateShims.flatMap { it.csharpOutputDir })
+            task.dependsOn(nugetGenerateShims)
+          }
+        }
+
+        registerPublishing(project, pub, packNuget)
       }
+    }
+  }
+
+  // ADR-165: one push task per named repository plus the `publishNuget` aggregate, which exists
+  // even with no repositories so `publishNuget` is always a valid task name on a packing project.
+  private fun registerPublishing(
+    project: Project,
+    pub: NugetPublishConfig,
+    packNuget: TaskProvider<PackNugetTask>,
+  ) {
+    val file: Provider<RegularFile> = packNuget.flatMap { task ->
+      val name: Provider<String> =
+        task.packageId.zip(task.packageVersion) { id, version -> "$id.$version.nupkg" }
+      task.outputDir.file(name)
+    }
+
+    val tasks: List<TaskProvider<PublishNugetTask>> = pub.repositories.map { repository ->
+      val name: String = repository.name
+      val url: String = requireNotNull(repository.url) {
+        "nuget { publish { repositories { nuget(\"$name\") { url = ... } } } } " +
+          "needs the feed's v3 service index url"
+      }
+
+      project.tasks.register(
+        "publishNugetTo${name.replaceFirstChar { it.uppercase() }}Repository",
+        PublishNugetTask::class.java,
+      ) { task ->
+        task.group = "publishing"
+        task.description = "Pushes the NuGet package built by packNuget to the '$name' repository"
+        task.dependsOn(packNuget)
+        task.packageFile.set(file)
+        task.repositoryName.set(name)
+        task.repositoryUrl.set(url)
+        task.apiKey.set(
+          repository.apiKey ?: project.providers.gradleProperty(repository.apiKeyProperty),
+        )
+        task.username.set(
+          repository.username ?: project.providers.gradleProperty(repository.usernameProperty),
+        )
+        task.password.set(
+          repository.password ?: project.providers.gradleProperty(repository.passwordProperty),
+        )
+        task.dryRun.convention(false)
+        task.skipDuplicate.convention(repository.skipDuplicate)
+      }
+    }
+
+    project.tasks.register("publishNuget") { task ->
+      task.group = "publishing"
+      task.description =
+        "Pushes the NuGet package built by packNuget to every configured repository"
+      task.dependsOn(tasks)
     }
   }
 }
