@@ -114,112 +114,133 @@ IFoo` renders `public class X : Base, IFoo`, not `Base` alone with `IFoo` droppe
 [Interfaces, abstract classes, and sealed classes](interfaces-abstract-sealed.md) for when a base
 class or interface is dropped instead of kept.
 
-## Constructor default parameters
+## Constructor and method default parameters
 
-Each exported constructor gets one additional C# overload per maximal trailing run of defaulted
-parameters, omitting that suffix; Kotlin supplies the omitted arguments, evaluated on the Kotlin
-side. A default followed by a required parameter (a **middle default**) produces no overload,
-since a positional call can't skip over it.
+A Kotlin defaulted parameter binds as one C# signature: a non-nullable type widens to its
+nullable C# form, and `null` means "use the Kotlin default". A parameter that is already
+nullable in Kotlin widens to the generated `Optional<T>` struct instead, since `null` there is
+already a real value; `default` means unset. Whichever way it widens, any subset of the
+defaulted parameters can be set by name in one call, and Kotlin evaluates the rest.
 
 ```kotlin
-class Carrier(
-  val label: String,
-  val size: Int = 3,
-  val padded: Boolean = true,
+data class Config(
+  val id: Uuid = Uuid.random(),
+  val retries: Int = 3,
+  val mode: Mode = Mode.Never,
 )
 
-class Kennel(
-  val name: String,
-  val capacity: Int = 10,
-  val city: String,
-)
-```
-
-`Carrier` gets three public constructors: the full signature, one omitting `padded`, and one
-omitting both `padded` and `size`. `Kennel`'s `capacity` sits before the required `city`, so
-nothing is synthesized: exactly one public constructor.
-
-```C#
-using var mouse = new Cat("Mouse");               // lives defaults to Kotlin's 9
-Assert.Equal(9, mouse.Lives);
-
-using var carrier = new Carrier("Mylo's crate");  // both size and padded default
-Assert.Single(typeof(Kennel).GetConstructors());
-```
-
-A trailing default the bridge cannot carry costs only the arities that still have it.
-
-```kotlin
-class Sill(val settings: Settings = Settings(), events: Flow<Int>? = null)
-```
-
-```C#
-using var sill = new Sill();
-using var settings = new Settings(3);
-using var withLevel = new Sill(settings);
-```
-
-The constructor that would still take `events` does not exist.
-
-### Generated C# {id="ctordefaults-generated-c"}
-
-Every constructor overload, synthesized or not, carries the same `out IntPtr error` shape as any
-other constructor call:
-
-```C#
-[DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "carrier_create")]
-private static extern IntPtr Native_Create(string label, int size, bool padded, out IntPtr error);
-```
-
-A constructor overload that collides with another, declared or synthesized, fails generation with
-the same `ERROR_CSHARP_SIGNATURE_COLLISION` diagnostic used for method overloads, naming the
-defaulted parameter as the cause.
-
-## Method default parameters
-
-The same rule extends to class methods, and to `object`/companion members, top-level functions,
-and extension functions, each with its own overload-numbering scope; see
-[Objects and companions](objects-and-companions.md#method-overloads),
-[Top-level declarations](top-level-declarations.md#method-overloads), and
-[Extensions](extensions.md#method-overloads).
-
-```kotlin
-class Announcer(val prefix: String) {
-  fun announce(message: String, loud: Boolean = false): String =
-    if (loud) "$prefix: ${message.uppercase()}!" else "$prefix: $message"
+object Registry {
+  fun describe(name: String, owner: String? = "nobody"): String = "..."
 }
 ```
 
 ```C#
-using var announcer = new Announcer("Oreo");
-Assert.Equal("Oreo: morning", announcer.Announce("morning")); // loud defaults to false
+new Config(mode: Mode.Always);       // id and retries: Kotlin evaluates Uuid.random() and 3
+Registry.Describe("Momo");           // owner unset -> Kotlin's "nobody"
+Registry.Describe("Momo", owner: null); // owner set to null, distinct from unset
 ```
 
-A trailing default the bridge cannot carry costs only the overloads that still have that
-parameter. Shorter fully-bridgeable overloads still bind; the unsupported arity stays a named skip.
+A defaulted parameter followed by a required one (a **middle default**) can't be widened to
+optional, since C# can't skip over a required positional argument either: it stays
+required-but-nullable instead of optional.
+
+```kotlin
+class Book(val title: String, val pages: Int = 100, val city: String)
+```
+
+```C#
+new Book("Paws", null, "Colombo"); // pages must be passed, but null still means "use 100"
+```
+
+`Copy` on a data class gets the same widened shape, so a **partial copy** works: an omitted
+parameter keeps the receiver's current value, which is `copy`'s own Kotlin default.
+
+```C#
+original.Copy(mode: Mode.Always); // every other field is the receiver's own value
+```
+
+The rule is the same for class constructors, class methods, `object`/companion members,
+top-level functions, and extension functions; see
+[Objects and companions](objects-and-companions.md#method-overloads),
+[Top-level declarations](top-level-declarations.md#function-default-parameters), and
+[Extensions](extensions.md#method-overloads). An `override` widens with the same C# signature as
+its root overridee, so a base and derived class agree without restating the default:
+
+```kotlin
+open class Base { open fun rate(score: Int = 5): Int = score }
+class Derived : Base() { override fun rate(score: Int): Int = score * 10 }
+```
+
+```C#
+new Derived().Rate(); // score defaults to 5, the base's default, then multiplied by 10
+```
+
+An exported Kotlin interface's defaulted member widens the same way, so the interface and every
+implementer's C# signature agree; there is no separate rule for members reached through an
+interface.
+
+A defaulted parameter the bridge cannot route to any non-null C# form at all (a `Flow`, a sealed
+type, or a bound interface) is dropped from the C# signature entirely when it is part of the
+trailing all-defaulted run, and Kotlin always evaluates its default; call the shorter C#
+signature. One that sits before a required parameter leaves the whole callable unroutable, same
+as an unsupported required parameter would.
 
 ```kotlin
 class Desk(val name: String) {
-  fun open(settings: Settings = Settings(), events: Flow<Int>? = null): String =
-    "$name desk ${settings.level}/${events?.toString() ?: "-"}"
+  fun open(settings: Settings = Settings(), events: Flow<Int>? = null): String = "..."
 }
 ```
 
 ```C#
 using var desk = new Desk("Oreo");
 desk.Open();
-using var settings = new Settings(3);
-desk.Open(settings);
+desk.Open(settings); // settings still widens; `events` never reaches C#
 ```
 
-`desk.Open(settings, events)` does not exist. The build still warns `SKIPPED_UNSUPPORTED_INPUT`
-naming `events`. The same cut applies to constructors, top-level functions, `object` and companion
-members, and extensions.
+A defaulted lambda parameter (a `(T) -> R` used only for the duration of the call, never stored)
+widens to its nullable delegate form the same way as any other type:
 
-An `override` does not synthesize its own omitting overload when its C# base already carries one:
-the override just inherits it through ordinary C# inheritance. When there is no C# base to
-inherit from, or the member comes through an interface, no omitting overload is generated;
-call the override with every argument.
+```kotlin
+fun notify(message: String, onDone: (String) -> Unit = {}): String { onDone(message); return "sent $message" }
+```
+
+```C#
+Issue297Sample.Notify("meow", onDone: message => heard = message);
+Issue297Sample.Notify("meow"); // onDone unset: Kotlin's no-op default runs
+```
+
+A lambda parameter a **constructor stores** past the call (assigned to a property, called later)
+never reaches C# at all, widened or not: a per-call native handle for it cannot outlive the
+constructor call, so the class keeps only its non-lambda constructor and Kotlin's default always
+runs for the stored one.
+
+```kotlin
+class Button(val label: String = "ok", val onClick: () -> Unit = {})
+```
+
+```C#
+new Button("go"); // the only constructor; onClick is always Kotlin's no-op default
+```
+
+At most 8 parameters per callable can widen. Past that cap, only the **last** 8 in declaration
+order widen and the earlier ones stay required; a `WARNING_DEFAULT_PARAMETER_CAP_EXCEEDED`
+diagnostic names the parameters left required, so split the callable or pass them explicitly.
+
+### Generated C# {id="ctordefaults-generated-c"}
+
+A widened non-nullable parameter renders as `= null`; a widened already-nullable one renders as
+`Optional<T> = default`:
+
+```C#
+public Config(Guid? id = null, int? retries = null, Mode? mode = null)
+public string Describe(string name, Optional<string?> owner = default)
+```
+
+A signature that would otherwise collide with another constructor still fails generation with
+`ERROR_CSHARP_SIGNATURE_COLLISION`, naming the defaulted parameter as the cause. When the first
+widened parameter is an integer type, an internal handle constructor `Settings(IntPtr)` would
+make `new Settings(3)` ambiguous (CS0121); the generator adds a delegating `Settings(int)`
+overload in that case so the plain integer call still resolves.
 
 ## No public constructor
 
@@ -392,11 +413,6 @@ its refused-arm exception.
 
 - `Map`/`Set` are not yet supported as method or constructor **parameters**; see
   [Collections](collections.md).
-- Value classes don't get default-parameter overloads on their constructor or methods, and
-  `Copy(...)` can't omit arguments.
-- An `override` with no exported C# base to inherit an omitting overload from, or a member reached
-  through an interface, gets no synthesized overload; call it with every argument. An override on
-  a sealed class arm never gets one either, even when its sealed base has none to inherit.
 - An exported Kotlin interface doesn't number same-named methods at all; avoid declaring an
   overload directly on an interface.
 - Defaults on an `expect`/`actual` class member are only synthesized for the top-level-function

@@ -182,7 +182,7 @@ internal object ForwardCirPlanProjection {
       )
     } + plan.publicParameters()
     val needsCustomParams: Boolean =
-      inputs.any { parameter -> !parameter.type.isTrivialInput() }
+      inputs.any { parameter -> !parameter.isTrivialInput() }
     if (!needsCustomParams) {
       return CirConstructor(
         parameters = publicParams,
@@ -193,19 +193,20 @@ internal object ForwardCirPlanProjection {
       )
     }
     val prelude: List<ForwardCirHandleStep> =
-      inputs.mapNotNull { parameter ->
-        plan.bytesPrelude(parameter)
-          ?: plan.collectionPrelude(parameter)
-          ?: plan.interfacePrelude(parameter)
-          ?: plan.boundInterfacePrelude(parameter)
-          ?: plan.typeParameterPrelude(parameter)
-      }
+      inputs.mapNotNull { parameter -> parameter.optionalPrelude() } +
+          inputs.unwrapped().mapNotNull { parameter ->
+            plan.bytesPrelude(parameter)
+              ?: plan.collectionPrelude(parameter)
+              ?: plan.interfacePrelude(parameter)
+              ?: plan.boundInterfacePrelude(parameter)
+              ?: plan.typeParameterPrelude(parameter)
+          }
     val cleanup: List<String> =
-      inputs.mapNotNull {
+      inputs.unwrapped().mapNotNull {
         plan.bytesCleanup(it) ?: plan.collectionCleanup(it) ?: plan.interfaceCleanup(it)
           ?: plan.typeParameterCleanup(it)
       }
-    val argumentList: List<String> = inputs.flatMap { plan.callArgument(it) }
+    val argumentList: List<String> = inputs.flatMap { plan.inputArguments(it) }
     val callArgs: String = (argumentList + "out IntPtr error").joinToString(", ")
     val body: String = forwardCirHandleScope(
       prelude,
@@ -223,8 +224,30 @@ internal object ForwardCirPlanProjection {
       nativeSuffix = nativeSuffix,
       nativeParameters = plan.nativeInCirParameters(nativeCall.parameters),
       doc = plan.publicSignature.cirDoc(),
+      handleDisambiguation = if (receiver == null) plan.handleDisambiguation() else null,
     )
   }
+
+  /**
+   * ADR-164: the exact overload a one-argument call needs when the first public parameter is a
+   * widened integral type and nothing after it is required, since `int` converts implicitly to
+   * both `int?` and the internal handle constructor's `nint`, and C# ranks neither higher.
+   */
+  private fun ForwardCallablePlan.handleDisambiguation(): String? {
+    val first: ForwardPublicParameter = publicSignature.parameters.firstOrNull() ?: return null
+    if (first.default?.encoding != ForwardDefaultEncoding.NULLABLE) return null
+    val inner: BridgeType = first.type.unwrapNullable()
+    val integral: Boolean = inner == BridgeType.Char ||
+        (inner is BridgeType.Primitive && inner.kind !in NON_INTEGRAL_KINDS)
+    if (!integral) return null
+    if (publicSignature.parameters.drop(1).any { parameter -> parameter.default?.omittable != true }) {
+      return null
+    }
+    return inner.csharpType()
+  }
+
+  private val NON_INTEGRAL_KINDS: Set<PrimitiveKind> =
+    setOf(PrimitiveKind.BOOLEAN, PrimitiveKind.FLOAT, PrimitiveKind.DOUBLE)
 
   fun static(plan: ForwardCallablePlan, libraryName: String): List<CirMember> {
     require(
@@ -321,7 +344,7 @@ internal object ForwardCirPlanProjection {
     }
     val publicReturnType: String = "${inner.csharpType()}?"
     val callArgs: String = plan.publicSignature.parameters
-      .flatMap { parameter -> plan.callArgument(parameter) }
+      .flatMap { parameter -> plan.inputArguments(parameter) }
       .joinToString(", ")
     val hasValueCallArgs: String = if (callArgs.isEmpty()) {
       "out IntPtr __nuget_hasValueError"
@@ -351,6 +374,8 @@ internal object ForwardCirPlanProjection {
     }
     val body: String = buildString {
       appendLine()
+      plan.publicSignature.parameters.mapNotNull { parameter -> parameter.optionalPrelude() }
+        .forEach { step -> appendLine("            ${step.flat}") }
       appendLine("            bool __nuget_hasValue = $presenceName($hasValueCallArgs);")
       appendLine("            if (__nuget_hasValueError != IntPtr.Zero)")
       appendLine("            {")
@@ -432,7 +457,7 @@ internal object ForwardCirPlanProjection {
       receiverArgument = "_handle",
     )
     val needsCustomParams: Boolean =
-      plan.publicSignature.parameters.any { parameter -> !parameter.type.isTrivialInput() }
+      plan.publicSignature.parameters.any { parameter -> !parameter.isTrivialInput() }
     val nativeParams: List<CirParameter>? = if (needsCustomParams) {
       plan.nativeInCirParameters(nativeCall.parameters.drop(1))
     } else {
@@ -548,13 +573,61 @@ internal object ForwardCirPlanProjection {
    * of the native ABI's shape (which may fan a single public parameter into several native ones,
    * or dispose of a materialized handle the public type never mentions).
    */
+  /** ADR-164: the public parameters, for the interface declaration, which renders no body. */
+  fun interfaceParameters(plan: ForwardCallablePlan): List<CirParameter> = plan.publicParameters()
+
   private fun ForwardCallablePlan.publicParameters(): List<CirParameter> =
     publicSignature.parameters.map { parameter ->
+      // ADR-164: a widened parameter's type is already its nullable form; an already-nullable one
+      // is wrapped in the generated `Optional<T>` struct, a value type.
+      val type: String = parameter.type.csharpType()
       CirParameter(
         name = parameter.csharpName,
-        type = parameter.type.csharpType(),
-        isReferenceType = parameter.type.isCSharpReferenceType(),
+        type = when (parameter.default?.encoding) {
+          ForwardDefaultEncoding.OPTIONAL -> "Optional<$type>"
+          ForwardDefaultEncoding.PRESENCE -> "$type?"
+          else -> type
+        },
+        isReferenceType = !parameter.isOptional && parameter.type.isCSharpReferenceType(),
+        defaultValue = when {
+          parameter.default?.omittable != true -> null
+          parameter.isOptional -> "default"
+          else -> "null"
+        },
       )
+    }
+
+  /**
+   * ADR-164: an `Optional<T>` parameter's value, read once into a local named after the parameter
+   * so every existing prelude, argument and cleanup works on it unchanged, and its `IsSet` slot
+   * argument. The local is declared before any `try`, since reading `.Value` cannot fail.
+   */
+  private fun ForwardPublicParameter.optionalValue(): ForwardPublicParameter =
+    copy(name = "${name}Value", default = null)
+
+  private fun ForwardPublicParameter.optionalPrelude(): ForwardCirHandleStep? {
+    if (!isOptional) return null
+    val local = "var ${optionalValue().csharpName} = $csharpName.Value;"
+    return ForwardCirHandleStep(flat = local, declarations = listOf(local), statement = "")
+  }
+
+  /** ADR-164: [parameters] as the preludes and cleanups see them, each `Optional<T>` unwrapped. */
+  private fun List<ForwardPublicParameter>.unwrapped(): List<ForwardPublicParameter> =
+    map { parameter -> if (parameter.isOptional) parameter.optionalValue() else parameter }
+
+  /** ADR-164: an `Optional<T>` never passes straight through, whatever its inner type. */
+  private fun ForwardPublicParameter.isTrivialInput(): Boolean = !isOptional && type.isTrivialInput()
+
+  /** ADR-164: the call arguments of [parameter], led by the `IsSet` slot when it is optional. */
+  private fun ForwardCallablePlan.inputArguments(parameter: ForwardPublicParameter): List<String> =
+    when (parameter.default?.encoding) {
+      ForwardDefaultEncoding.OPTIONAL ->
+        listOf("${parameter.csharpName}.HasValue") + callArgument(parameter.optionalValue())
+      // Unset, the callback's own slots still carry the static thunk and a zero ctx.
+      ForwardDefaultEncoding.PRESENCE ->
+        listOf("${parameter.csharpName} is not null") + callArgument(parameter)
+
+      else -> callArgument(parameter)
     }
 
   /** The DllImport-only native parameter list: every native ABI IN parameter in [nativeParameters]
@@ -737,7 +810,10 @@ internal object ForwardCirPlanProjection {
     parameter: ForwardPublicParameter,
   ): ForwardCirHandleStep? {
     val type: BridgeType.Callback = parameter.type as? BridgeType.Callback ?: return null
-    return forwardCallbackPrelude(parameter.csharpName, type)
+    return forwardCallbackPrelude(
+      parameter.csharpName, type,
+      omittable = parameter.default?.encoding == ForwardDefaultEncoding.PRESENCE,
+    )
   }
 
   private fun ForwardCallablePlan.callbackCleanup(parameter: ForwardPublicParameter): String? {
@@ -942,16 +1018,17 @@ internal object ForwardCirPlanProjection {
   ): CirResultProjection {
     val nativeCall: ForwardNativeCall = singleNativeImport()
     val prelude: List<ForwardCirHandleStep> =
-      parameters.mapNotNull { parameter ->
-        bytesPrelude(parameter)
-          ?: collectionPrelude(parameter)
-          ?: interfacePrelude(parameter)
-          ?: boundInterfacePrelude(parameter)
-          ?: typeParameterPrelude(parameter)
-          ?: callbackPrelude(parameter)
-      }
+      parameters.mapNotNull { parameter -> parameter.optionalPrelude() } +
+          parameters.unwrapped().mapNotNull { parameter ->
+            bytesPrelude(parameter)
+              ?: collectionPrelude(parameter)
+              ?: interfacePrelude(parameter)
+              ?: boundInterfacePrelude(parameter)
+              ?: typeParameterPrelude(parameter)
+              ?: callbackPrelude(parameter)
+          }
     val cleanup: List<String> =
-      parameters.mapNotNull { parameter ->
+      parameters.unwrapped().mapNotNull { parameter ->
         bytesCleanup(parameter)
           ?: collectionCleanup(parameter)
           ?: interfaceCleanup(parameter)
@@ -959,9 +1036,9 @@ internal object ForwardCirPlanProjection {
           ?: callbackCleanup(parameter)
       }
     val argumentList: List<String> =
-      listOfNotNull(receiverArgument) + parameters.flatMap { parameter -> callArgument(parameter) }
+      listOfNotNull(receiverArgument) + parameters.flatMap { parameter -> inputArguments(parameter) }
     val callArguments: String = (argumentList + nativeOutParameters(nativeCall) + "out IntPtr error").joinToString(", ")
-    val needsCustomParams: Boolean = forceCustomBody || parameters.any { parameter -> !parameter.type.isTrivialInput() }
+    val needsCustomParams: Boolean = forceCustomBody || parameters.any { parameter -> !parameter.isTrivialInput() }
     val result: BridgeType = publicSignature.result
     return when (result) {
       is BridgeType.ObjectHandle -> CirResultProjection(

@@ -164,10 +164,9 @@ internal fun FileSpec.Builder.addClassExports(
   // override is bound here too, and the ABI contract check is what would catch any drift.
   val superClass: KSClassDeclaration? = cls.forwardSuperClass(exportedTypes)
 
-  // ADR-091: constructors come off the catalog rather than a `getConstructors()` walk, because the
-  // planner also synthesizes trailing-default omitting overloads that no declaration walk can see.
-  // Truncated plans need no emitter support: the wrapper's call is built from the plan's
-  // parameters, so Kotlin supplies the omitted defaults.
+  // ADR-091: constructors come off the catalog rather than a `getConstructors()` walk. ADR-164's
+  // widened defaults need no emitter support here: the wrapper's dispatch is built from the plan,
+  // so Kotlin supplies every default that was left unset.
   callableCatalog.constructors(qualifiedName).forEach { plan -> addForwardKotlinPlanExport(plan) }
 
   addFunction(

@@ -286,11 +286,10 @@ internal sealed interface ForwardCallableCatalogEntry {
     val plan: ForwardCallablePlan,
     override val node: KSNode? = null,
     /**
-     * ADR-096: this entry is a planner-synthesized omitting overload of a declared one, so it
-     * shares [node] with the entry it was synthesized from. Planner-internal: the plan model,
-     * `validate()` and the ABI contract never see it.
+     * ADR-164: the defaulted parameters left required because the callable has more than
+     * [MAX_OPTIONAL_DEFAULTS] of them, for the `WARNING_DEFAULT_PARAMETER_CAP_EXCEEDED` diagnostic.
      */
-    val synthesized: Boolean = false,
+    val cappedDefaults: List<String> = emptyList(),
   ) : ForwardCallableCatalogEntry {
     override val symbol: String = plan.invocation.symbol
   }
@@ -533,12 +532,10 @@ internal data class ForwardCallablePlanCatalog(
   }
 
   /**
-   * ADR-091: the planned constructors of [owner], in planning order (primary, secondaries, then
-   * the synthesized omitting overloads).
+   * ADR-091: the planned constructors of [owner], in planning order (primary, then secondaries).
    *
-   * Same reason as [classMethods]: the ADR-034 `_$n` sequence now also carries planner-synthesized
-   * entries that no `getConstructors()` walk can see, so both emitters read constructors off the
-   * catalog instead of re-deriving a plan key per declaration. Owner-exact matching.
+   * Same reason as [classMethods]: both emitters read constructors off the catalog instead of
+   * re-deriving a plan key per declaration. Owner-exact matching.
    */
   // ADR-157: a boxed enum arm's constructor answers here too. It is a constructor at every site
   // that reads this query (the Kotlin export loop, the CIR arm projection, the C# renderer); only
@@ -586,8 +583,7 @@ internal data class ForwardCallablePlanCatalog(
   }
 
   /**
-   * ADR-095/ADR-096: the plans for [declaration], matched by node identity rather than by symbol,
-   * in planning order (the declared plan first, then its synthesized omitting overloads).
+   * ADR-095: the plan for [declaration], matched by node identity rather than by symbol.
    *
    * The top-level and extension emitters keep their declaration walks — the C# halves group by
    * (namespace, file class) and by receiver simple name, and the Kotlin top-level loop has a
@@ -595,11 +591,10 @@ internal data class ForwardCallablePlanCatalog(
    * matching is sound because `NugetProcessor` collects `functions` / `extensionFunctions` once and
    * hands the *same list instances* to the planner and to both emitters (verified).
    *
-   * Returns an empty list only for a declaration this planner explicitly skipped; a declaration the
-   * catalog never saw is a wiring bug and fails loudly rather than silently binding to a namesake's
-   * plan.
+   * Returns null only for a declaration this planner explicitly skipped; a declaration the catalog
+   * never saw is a wiring bug and fails loudly rather than silently binding to a namesake's plan.
    */
-  fun plansFor(declaration: KSFunctionDeclaration): List<ForwardCallablePlan> {
+  fun planFor(declaration: KSFunctionDeclaration): ForwardCallablePlan? {
     val matches: List<ForwardCallableCatalogEntry> = entries
       .filter { entry -> entry.node === declaration }
     require(matches.isNotEmpty()) {
@@ -609,14 +604,12 @@ internal data class ForwardCallablePlanCatalog(
     }
     val planned: List<ForwardCallableCatalogEntry.Planned> = matches
       .filterIsInstance<ForwardCallableCatalogEntry.Planned>()
-    // ADR-074, restated by ADR-096 in terms of *declared* plans: synthesized omitting overloads
-    // legitimately share their declaration's node, a route planning one declaration twice does not.
-    require(planned.count { entry -> !entry.synthesized } <= 1) {
-      "Forward callable catalog has ${planned.count { entry -> !entry.synthesized }} declared " +
-          "plans for one declaration of ${declaration.simpleName.asString()}; a route planned it " +
-          "more than once"
+    // ADR-074: a route planning one declaration twice is a wiring bug.
+    require(planned.size <= 1) {
+      "Forward callable catalog has ${planned.size} plans for one declaration of " +
+          "${declaration.simpleName.asString()}; a route planned it more than once"
     }
-    return planned.map { entry -> entry.plan }
+    return planned.singleOrNull()?.plan
   }
 
   /**
@@ -626,7 +619,7 @@ internal data class ForwardCallablePlanCatalog(
    * `_has_value` / `_set_value` entry points must carry that number or two same-name overloads
    * collide on one C symbol.
    *
-   * Lenient where [plansFor] is strict: `CirClassTranslator`'s flow walk admits an inherited
+   * Lenient where [planFor] is strict: `CirClassTranslator`'s flow walk admits an inherited
    * abstract interface member the planner filters out, and that member has no number to carry.
    */
   fun overloadSuffix(declaration: KSFunctionDeclaration): String {
@@ -689,26 +682,12 @@ internal class ForwardCallablePlanner(
         val base: List<ForwardCallableCatalogEntry> =
           sealedBaseEntries(sealed).ownedBy(sealed.forwardDiagnosticOwner())
         addAll(base)
-        // ADR-116 amendment (2026-09-13): *which* base members actually planned, as the ADR-096
-        // synthesis gate on the arms. A base member the planner declined (an opt-in marker, an
-        // unshapeable return type) has no C# carrier at all, so an arm that overrides it owes the
-        // omitting overloads itself. The catalog cannot answer this -- it is mid-construction here
-        // and `plansFor` requires it complete -- so the entries are read directly. Synthesized
-        // entries are excluded: they are the overloads, not the declared members being asked about.
-        val plannedBaseMembers: Set<KSNode> = base
-          .filterIsInstance<ForwardCallableCatalogEntry.Planned>()
-          .filter { entry -> !entry.synthesized }
-          .mapNotNull { entry -> entry.node }
-          .toSet()
         sealed.getSealedSubclasses().forEach { sub ->
           // ADR-157: an enum arm has no members of its own on this route. What Kotlin declares on
           // the enum belongs to `{Enum}Extensions` (ADR-006) and is planned there; the arm carries
           // the box constructor (below) and `Value` (the property planner) and nothing else.
           if (sub.isEnumArm()) return@forEach
-          addAll(
-            sealedSubclassEntries(sealed, sub, plannedBaseMembers)
-              .ownedBy(sub.forwardDiagnosticOwner()),
-          )
+          addAll(sealedSubclassEntries(sealed, sub).ownedBy(sub.forwardDiagnosticOwner()))
         }
       }
       classes.forEach { cls -> addAll(constructorEntries(cls)) }
@@ -752,21 +731,6 @@ internal class ForwardCallablePlanner(
           .ownedBy(function.forwardFileClassOwner())
       }
       addAll(topLevel)
-      // ADR-096: the omitting overloads, appended after *every* declared entry of this counter
-      // scope so declared exports keep their numbers, since the synthesized pass advances the same
-      // counter.
-      // ADR-149: synthesis proceeds even when the declared entry is Skipped; `planOrSkip` on the
-      // truncated list is the judge.
-      functions.forEach { function ->
-        val defaults: List<Boolean> = topLevelDefaultFlags(function)
-        repeat(defaults.trailingCount()) { omitted ->
-          add(
-            topLevelEntry(
-              function, overloadSuffix(topLevelOccurrences, function), omitted = omitted + 1,
-            ).synthesized().ownedBy(function.forwardFileClassOwner())
-          )
-        }
-      }
       val extensionOccurrences: MutableMap<String, Int> = mutableMapOf()
       val extensions: List<ForwardCallableCatalogEntry> = extensionFunctions.map { function ->
         extensionEntry(
@@ -774,29 +738,6 @@ internal class ForwardCallablePlanner(
         )
       }
       addAll(extensions)
-      // ADR-149: synthesis proceeds even when the declared entry is Skipped; `planOrSkip` on the
-      // truncated list is the judge.
-      //
-      // ADR-064 amendment (2026-09-20): with one exception, the RECEIVER. Truncation drops trailing
-      // PARAMETERS, so a parameter-type skip can genuinely be rescued by an omitting overload and
-      // has to be re-judged; the receiver is never truncated (see [extensionEntry]'s `omitted`), so
-      // every omitting overload of a fan-out receiver skips for the identical reason and the author
-      // read the same drop once per overload (`f` and `f_2`) for a single declaration they wrote.
-      extensionFunctions.forEachIndexed { index, function ->
-        val declared: ForwardCallableCatalogEntry? = extensions.getOrNull(index)
-        if (declared is ForwardCallableCatalogEntry.Skipped &&
-          declared.reason == ForwardPlanSkipReason.RECEIVER_FAN_OUT
-        ) return@forEachIndexed
-        repeat(function.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
-          add(
-            extensionEntry(
-              function,
-              overloadSuffix(extensionOccurrences, function, function.extensionOwnerChain()),
-              omitted = omitted + 1,
-            ).synthesized()
-          )
-        }
-      }
       objects.forEach { obj -> addAll(objectEntries(obj).ownedBy(obj.forwardDiagnosticOwner())) }
       // ADR-013 renders a companion's members as the owning class's statics, so the hole is on the
       // class -- which is what `forwardDiagnosticOwner()` returns for a companion.
@@ -1092,6 +1033,10 @@ internal class ForwardCallablePlanner(
           result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
           node = method,
+          // ADR-164: an interface member widens like any other. ADR-096 excluded interfaces to
+          // avoid synthesizing overloads every implementer would owe; one widened signature is
+          // what `memberDefaultFlags` already gives every implementer through the root.
+          defaults = declaredDefaults(method.parameters, method.parameters.map { it.hasDefault }),
           doc = method.forwardKdoc(expects).forParameters(method.parameters),
         )
       }
@@ -1153,28 +1098,26 @@ internal class ForwardCallablePlanner(
     // `getAllFunctions()` order — the counter increments before the structural check, so a
     // skipped namesake still consumes its number and numbering stays declaration-order stable.
     val occurrences: MutableMap<String, Int> = mutableMapOf()
-    // ADR-096 amendment (2026-09-11): the single question both the C# `override` modifier and the
-    // ADR-096 synthesis gate ask, hoisted so the two cannot drift apart again. It is *not* the
-    // Kotlin `override` keyword: what matters to C# is whether a generated base class declares
-    // this member and therefore already carries its omitting overload.
+    // ADR-096 amendment (2026-09-11): the C# `override` question. It is *not* the Kotlin
+    // `override` keyword: what matters to C# is whether a generated base class declares this
+    // member. ADR-164: the widened shape comes off the root's default flags either way, so the
+    // override and its base render one signature.
     fun isCsharpOverride(method: KSFunctionDeclaration): Boolean =
       method.overridesBaseClassMember(superClass)
-    fun entryFor(method: KSFunctionDeclaration, omitted: Int): ForwardCallableCatalogEntry {
+    fun entryFor(method: KSFunctionDeclaration): ForwardCallableCatalogEntry {
       val name: String = method.simpleName.asString()
       val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
       val suffix: String = if (occurrence == 1) "" else "_$occurrence"
       val symbol: String = "$owner.$name$suffix"
       // ADR-090: the C# modifiers, computed here because a planned entry keeps no declaration.
-      // ADR-096: a synthesized entry is never `override`/`virtual` (the base has no such
-      // signature, so `override` would be CS0115); overrides synthesize nothing anyway.
       // ADR-101 amendment (2026-09-11): keyed on a base *class* overridee, not on the Kotlin
       // modifier. `Ledge : Shelf(), Groomable` overrides `Groomable.groom`, which `Shelf` never
       // declares, so C# spells it `virtual`; `public override string Groom()` is CS0115.
-      val isOverride: Boolean = omitted == 0 && isCsharpOverride(method)
+      val isOverride: Boolean = isCsharpOverride(method)
       // ADR-101 (2026-09-11): a *declared* `open fun` is virtual too, not just the
       // `override && !final` arm, or a subclass's `override` is CS0506 in C#. Same predicate the
       // property route uses (`CirClassTranslator`), so both halves of a class agree.
-      val isVirtual: Boolean = omitted == 0 && !isOverride && method.modifiers.isOpenForOverride()
+      val isVirtual: Boolean = !isOverride && method.modifiers.isOpenForOverride()
       val structuralReason: ForwardPlanSkipReason? = when {
         method.modifiers.contains(Modifier.ABSTRACT) -> ForwardPlanSkipReason.ABSTRACT
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
@@ -1190,7 +1133,7 @@ internal class ForwardCallablePlanner(
           publicName = name.replaceFirstChar { it.uppercase() },
           exportName = "${prefix}_$name$suffix",
           receiver = ForwardReceiver.Handle(receiverType),
-          parameters = method.parameters.dropLast(omitted).map { parameter ->
+          parameters = method.parameters.map { parameter ->
             parameter.bridgeName() to classifier.classify(parameter.type.resolve())
           },
           result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
@@ -1201,31 +1144,12 @@ internal class ForwardCallablePlanner(
           isOverride = isOverride,
           isVirtual = isVirtual,
           node = method,
-          droppedOptInMarker = droppedOptInMarker(method.parameters, omitted),
-          doc = method.forwardKdoc(expects).forParameters(method.parameters.dropLast(omitted)),
+          defaults = declaredDefaults(method.parameters, memberDefaultFlags(method)),
+          doc = method.forwardKdoc(expects).forParameters(method.parameters),
         )
       }
     }
-    return buildList {
-      val declared: List<ForwardCallableCatalogEntry> =
-        methods.map { method -> entryFor(method, 0) }
-      addAll(declared)
-      // ADR-096: the omitting overloads, appended after every declared entry of this
-      // per-(class, name) counter scope so declared exports keep their numbers.
-      // ADR-149: synthesis proceeds even when the declared entry is Skipped; `planOrSkip` on the
-      // truncated list is the judge.
-      methods.forEach { method ->
-        // ADR-096 amendment (2026-09-11): keyed on the C# fact, not on Kotlin's `override`. When a
-        // generated base class declares the member it also carries the member's omitting overload,
-        // which the generated subclass inherits, so synthesizing here would be a duplicate. When
-        // ADR-101 drops the base there is no such carrier and the subclass owes the overload
-        // itself, or the consumer's short call is CS1501.
-        if (isCsharpOverride(method)) return@forEach
-        repeat(memberDefaultFlags(method).trailingCount()) { omitted ->
-          add(entryFor(method, omitted + 1).synthesized())
-        }
-      }
-    }.nameUnroutedPositions { skipped ->
+    return methods.map { method -> entryFor(method) }.nameUnroutedPositions { skipped ->
       // ADR-064 amendment (2026-09-13): an ordinary class is the owner with the MOST legacy
       // routes, and still only two — the Flow/StateFlow return (ADR-012/065) and the lambda
       // parameter, per-call (ADR-036) or as a stored/interface-bridge add-remove pair. Each is
@@ -1290,16 +1214,15 @@ internal class ForwardCallablePlanner(
       .toSet()
 
     val occurrences: MutableMap<String, Int> = mutableMapOf()
-    fun entryFor(method: KSFunctionDeclaration, omitted: Int): ForwardCallableCatalogEntry {
+    fun entryFor(method: KSFunctionDeclaration): ForwardCallableCatalogEntry {
       val name: String = method.simpleName.asString()
       val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
       val suffix: String = if (occurrence == 1) "" else "_$occurrence"
       val symbol: String = "$owner.$name$suffix"
       // Every declared member of the base is overridable in Kotlin (`abstract` or `open`), and an
-      // arm that overrides needs a `virtual` C# base member to override. A synthesized omitting
-      // overload is never virtual: no arm declares that signature.
-      val isVirtual: Boolean = omitted == 0 &&
-          (method.modifiers.contains(Modifier.ABSTRACT) || method.modifiers.isOpenForOverride())
+      // arm that overrides needs a `virtual` C# base member to override.
+      val isVirtual: Boolean =
+        method.modifiers.contains(Modifier.ABSTRACT) || method.modifiers.isOpenForOverride()
       val structuralReason: ForwardPlanSkipReason? = when {
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
         method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
@@ -1316,7 +1239,7 @@ internal class ForwardCallablePlanner(
           publicName = name.replaceFirstChar { it.uppercase() },
           exportName = "${prefix}_$name$suffix",
           receiver = ForwardReceiver.Handle(receiverType),
-          parameters = method.parameters.dropLast(omitted).map { parameter ->
+          parameters = method.parameters.map { parameter ->
             parameter.bridgeName() to classifier.classify(parameter.type.resolve())
           },
           result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
@@ -1325,26 +1248,14 @@ internal class ForwardCallablePlanner(
           isOverride = false,
           isVirtual = isVirtual,
           node = method,
-          droppedOptInMarker = droppedOptInMarker(method.parameters, omitted),
-          doc = method.forwardKdoc(expects).forParameters(method.parameters.dropLast(omitted)),
+          // ADR-164: the base is the carrier of the widened signature every overriding arm shares.
+          defaults = declaredDefaults(method.parameters, memberDefaultFlags(method)),
+          doc = method.forwardKdoc(expects).forParameters(method.parameters),
         )
       }
     }
 
-    val entries: List<ForwardCallableCatalogEntry> = buildList {
-      val declared: List<ForwardCallableCatalogEntry> =
-        methods.map { method -> entryFor(method, 0) }
-      addAll(declared)
-      // ADR-096: the base is the carrier, so it owes its own omitting overloads; every arm that
-      // overrides the member inherits them.
-      // ADR-149: synthesis proceeds even when the declared entry is Skipped; `planOrSkip` on the
-      // truncated list is the judge.
-      methods.forEach { method ->
-        repeat(method.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
-          add(entryFor(method, omitted + 1).synthesized())
-        }
-      }
-    }
+    val entries: List<ForwardCallableCatalogEntry> = methods.map { method -> entryFor(method) }
 
     // The same posture `sealedSubclassEntries` takes: `droppedFromCSharp = false` means "a named
     // legacy route re-emits it", and no legacy route is keyed to a sealed *base* at all -- not
@@ -1387,10 +1298,6 @@ internal class ForwardCallablePlanner(
   private fun sealedSubclassEntries(
     sealed: KSClassDeclaration,
     subclass: KSClassDeclaration,
-    // ADR-116 amendment (2026-09-13): the base's own declared members that produced a `Planned`
-    // entry, i.e. the ones the generated C# base really carries. Keyed on node identity, since a
-    // `KSFunctionDeclaration` is the only thing that identifies one overload of a name.
-    plannedBaseMembers: Set<KSNode>,
   ): List<ForwardCallableCatalogEntry> {
     val subName: String = subclass.simpleName.asString()
     val owner: String = subclass.qualifiedName?.asString() ?: return emptyList()
@@ -1419,14 +1326,12 @@ internal class ForwardCallablePlanner(
     // members in `getAllFunctions()` order, incremented before the structural check so a skipped
     // namesake still consumes its number.
     val occurrences: MutableMap<String, Int> = mutableMapOf()
-    fun entryFor(method: KSFunctionDeclaration, omitted: Int): ForwardCallableCatalogEntry {
+    fun entryFor(method: KSFunctionDeclaration): ForwardCallableCatalogEntry {
       val name: String = method.simpleName.asString()
       val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
       val suffix: String = if (occurrence == 1) "" else "_$occurrence"
       val symbol: String = "$owner.$name$suffix"
-      // ADR-096, as `classEntries` reasons: a synthesized omitting overload is never `virtual`,
-      // since no subclass declares that signature to override.
-      val isVirtual: Boolean = omitted == 0 && isOpenArm && method.modifiers.isOpenForOverride()
+      val isVirtual: Boolean = isOpenArm && method.modifiers.isOpenForOverride()
       val structuralReason: ForwardPlanSkipReason? = when {
         method.modifiers.contains(Modifier.ABSTRACT) -> ForwardPlanSkipReason.ABSTRACT
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
@@ -1444,7 +1349,7 @@ internal class ForwardCallablePlanner(
           publicName = name.replaceFirstChar { it.uppercase() },
           exportName = "${prefix}_$name$suffix",
           receiver = ForwardReceiver.Handle(receiverType),
-          parameters = method.parameters.dropLast(omitted).map { parameter ->
+          parameters = method.parameters.map { parameter ->
             parameter.bridgeName() to classifier.classify(parameter.type.resolve())
           },
           result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
@@ -1454,38 +1359,15 @@ internal class ForwardCallablePlanner(
           isOverride = false,
           isVirtual = isVirtual,
           node = method,
-          droppedOptInMarker = droppedOptInMarker(method.parameters, omitted),
-          doc = method.forwardKdoc(expects).forParameters(method.parameters.dropLast(omitted)),
+          // ADR-164: the flags come through the override chain, as `classEntries` reads them, so an
+          // arm overriding a base member renders the base's widened signature.
+          defaults = declaredDefaults(method.parameters, memberDefaultFlags(method)),
+          doc = method.forwardKdoc(expects).forParameters(method.parameters),
         )
       }
     }
 
-    val entries: List<ForwardCallableCatalogEntry> = buildList {
-      val declared: List<ForwardCallableCatalogEntry> =
-        methods.map { method -> entryFor(method, 0) }
-      addAll(declared)
-      // ADR-096, as `classEntries` does it: the omitting overloads follow every declared entry of
-      // this counter scope so declared exports keep their numbers.
-      // ADR-149: synthesis proceeds even when the declared entry is Skipped; `planOrSkip` on the
-      // truncated list is the judge.
-      methods.forEach { method ->
-        // ADR-116 amendment (2026-09-11, narrowed 2026-09-13): keyed on the C# fact, exactly as
-        // `classEntries` is since ADR-096's own amendment. Skipping every Kotlin `override` was
-        // only ever right because the sealed C# base carried nothing; now that it carries its
-        // declared members it also carries their omitting overloads, and the arm inherits them.
-        // The C# fact is "the base *planned* it", not "the base declared it": an `override` of an
-        // interface member, or of a base member the base's own plan declined, has no carrier at
-        // all, and the arm owes the overload itself or the consumer's short call is CS1501.
-        val overridee: KSNode? = method.findOverridee()
-        if (overridee != null && overridee in plannedBaseMembers) return@forEach
-        // ADR-116 amendment (2026-09-13): the flags come through the override chain, as
-        // `classEntries` already reads them. A defensive read: on KSP 2.3.10 the arm's own
-        // parameter already carries the overridee's default bit (measured 2026-09-19).
-        repeat(memberDefaultFlags(method).trailingCount()) { omitted ->
-          add(entryFor(method, omitted + 1).synthesized())
-        }
-      }
-    }
+    val entries: List<ForwardCallableCatalogEntry> = methods.map { method -> entryFor(method) }
 
     // ADR-116 Diagnostics: `droppedFromCSharp = false` means "a named legacy route re-emits it",
     // which is only true for an ordinary class. On a sealed arm the member is simply gone, so the
@@ -1581,11 +1463,9 @@ internal class ForwardCallablePlanner(
     val primary = cls.primaryConstructor
     val secondaries: List<KSFunctionDeclaration> = constructors.filter { it != primary }
     // ADR-115: a marked primary-constructor `val`. The invariant is that the marked declaration
-    // never appears in a C# signature, and a constructor parameter cannot simply lose its slot:
-    // the generated Kotlin call is positional. A trailing marked parameter WITH a default is
-    // already expressible -- ADR-096's omitting overloads truncate it away -- so only the entries
-    // that still carry one are skipped, which leaves the shorter overload binding. An undefaulted
-    // or non-trailing one drops the constructor itself; the class stays reachable through
+    // never appears in a C# signature. ADR-164: a marked parameter in the trailing all-defaulted
+    // run is dropped from the widened signature and Kotlin evaluates its default; an undefaulted
+    // or non-trailing one drops the constructor itself. The class stays reachable through
     // factories, and `copy` follows the constructor for the same reason.
     return buildList {
       if (primary != null) add(constructorEntry(primary, owner, "${prefix}_create", "Create", result, ""))
@@ -1600,31 +1480,6 @@ internal class ForwardCallablePlanner(
             "_${index + 2}",
           )
         )
-      }
-      // ADR-091: one omitting overload per trailing-defaulted suffix (the `@JvmOverloads` rule).
-      // The truncated parameter list is the *only* change: the Kotlin wrapper builds its call from
-      // the plan, so `Cat(name)` compiles and Kotlin computes `lives = 9` at the call site.
-      // Numbers continue ADR-034's `_$n` sequence, primary's suffixes first then each secondary's
-      // in declaration order, so unsuffixed/secondary exports render byte-identically to before.
-      var next: Int = secondaries.size + 2
-      (listOfNotNull(primary) + secondaries).forEach { constructor ->
-        val defaults: List<Boolean> =
-          defaultFlags(cls, constructor, isPrimary = constructor == primary)
-        val trailing: Int = defaults.reversed().takeWhile { it }.count()
-        repeat(trailing) { index ->
-          val number: Int = next++
-          add(
-            constructorEntry(
-              constructor,
-              owner,
-              "${prefix}_create_$number",
-              "Create",
-              result,
-              "_$number",
-              omitted = index + 1,
-            )
-          )
-        }
       }
       if (copy && cls.modifiers.contains(Modifier.DATA) && primary != null) {
         val receiver = ForwardReceiver.Handle(result)
@@ -1654,6 +1509,9 @@ internal class ForwardCallablePlanner(
             origin = ForwardCallableOrigin.COPY,
             ownerType = cls.forwardOwnerTypeName(),
             node = primary,
+            // ADR-164: every `copy` parameter defaults to the receiver's own value, so every one
+            // widens and unset means "keep".
+            defaults = declaredDefaults(primary.parameters, primary.parameters.map { true }),
             // ADR-150 amendment: `copy` takes the primary's `<param>` texts but never its
             // `@constructor` summary -- "Fills the bowl" does not describe a copy.
             doc = (
@@ -1718,17 +1576,6 @@ internal class ForwardCallablePlanner(
   }
 
   /**
-   * ADR-096: the number of *trailing* parameters that all have a default, i.e. how many omitting
-   * overloads to synthesize. A default followed anywhere by a required parameter contributes
-   * nothing, because the generated wrapper is a positional Kotlin call.
-   */
-  private fun List<Boolean>.trailingCount(): Int = reversed().takeWhile { it }.count()
-
-  /** ADR-096: marks a planned entry as a synthesized omitting overload; skips pass through. */
-  private fun ForwardCallableCatalogEntry.synthesized(): ForwardCallableCatalogEntry =
-    if (this is ForwardCallableCatalogEntry.Planned) copy(synthesized = true) else this
-
-  /**
    * ADR-096: per-parameter "has a default" for a **top-level** function, positionally.
    *
    * The one function route that consults the ADR-074 expect index, because Kotlin forbids an
@@ -1753,25 +1600,20 @@ internal class ForwardCallablePlanner(
     publicName: String,
     result: BridgeType.ObjectHandle,
     suffix: String,
-    omitted: Int = 0,
   ): ForwardCallableCatalogEntry {
     val cls: KSClassDeclaration? = constructor.parentDeclaration as? KSClassDeclaration
-    // ADR-115 gate (b): `.dropLast(omitted)` is deliberate, not the issue #128 blind spot. An
-    // omitted parameter whose PROPERTY carries the marker while its TYPE does not is legal to
-    // call without (verified: `PropMarked(5)` and `PropMarked()` both compile from a non-opting
-    // file), so the shorter arity is exactly the repair. A marked *type* is caught in `planOrSkip`
-    // through `droppedOptInMarker`, which does see the dropped tail.
-    val marked: String? = constructor.parameters
-      .dropLast(omitted)
-      .firstNotNullOfOrNull { parameter ->
-        parameter.constructorOptInMarker(cls, classifier.exportMarkers)
+    // ADR-115 gate (b): a parameter whose PROPERTY carries the marker while its TYPE does not is
+    // legal to call without (verified: `PropMarked(5)` and `PropMarked()` both compile from a
+    // non-opting file). ADR-164 drops it from the widened signature when it is in the trailing
+    // all-defaulted run; anywhere else `planOrSkip` skips the constructor as OPT_IN_MARKER.
+    val marked: Map<Int, String> = constructor.parameters
+      .mapIndexedNotNull { index, parameter ->
+        parameter.constructorOptInMarker(cls, classifier.exportMarkers)?.let { index to it }
       }
-    if (marked != null) {
-      return ForwardCallableCatalogEntry.Skipped(
-        "$owner.<init>$suffix", ForwardPlanSkipReason.OPT_IN_MARKER,
-        node = constructor, detail = marked,
-      )
-    }
+      .toMap()
+    val flags: List<Boolean> =
+      if (cls == null) constructor.parameters.map { false }
+      else defaultFlags(cls, constructor, isPrimary = constructor == cls.primaryConstructor)
     return planOrSkip(
       symbol = "$owner.<init>$suffix",
       publicName = publicName,
@@ -1780,7 +1622,7 @@ internal class ForwardCallablePlanner(
       // its plan carries a receiver like an extension's -- one borrowed handle slot at index 0,
       // named `outer`. Every other constructor keeps `Static` and renders byte-identically.
       receiver = innerConstructorReceiver(cls),
-      parameters = constructor.parameters.dropLast(omitted).map { parameter ->
+      parameters = constructor.parameters.map { parameter ->
         parameter.bridgeName() to classifier.classify(parameter.type.resolve())
       },
       result = result,
@@ -1790,18 +1632,17 @@ internal class ForwardCallablePlanner(
       // back and every `T`-typed constructor parameter accepts its decoded box.
       ownerType = cls?.forwardOwnerTypeName(),
       node = constructor,
-      droppedOptInMarker = droppedOptInMarker(constructor.parameters, omitted),
+      defaults = declaredDefaults(constructor.parameters, flags, marked),
       // ADR-150 amendment: a primary constructor carries no `docString` of its own, so its
       // `<summary>` and `<param>` set come off the class comment's `@constructor`/`@param`/
       // `@property` tags. A secondary constructor documents itself and never reaches the fallback.
       doc = (
           constructor.forwardKdoc(expects)
             ?: constructor.primaryConstructorKdoc(cls, expects, withSummary = true)
-          ).forParameters(constructor.parameters.dropLast(omitted)),
+          ).forParameters(constructor.parameters),
     )
-      // ADR-141: the ADR-091 truncations and ADR-034 secondaries all come through here, so each of
-      // them carries the receiver by construction -- the outer is not a plan parameter and a
-      // trailing-default truncation can never drop it.
+      // ADR-141: the ADR-034 secondaries come through here too, so each of them carries the
+      // receiver by construction -- the outer is not a plan parameter, so no default reaches it.
       // ADR-064 amendment (2026-09-13): no legacy route re-emits a CONSTRUCTOR (measured cell 24:
       // a secondary taking a lambda, a Flow or a generic type beside a bindable primary vanished
       // with no diagnostic, because `WARNING_NO_PUBLIC_CONSTRUCTOR` only fires when *every*
@@ -1837,7 +1678,6 @@ internal class ForwardCallablePlanner(
   private fun topLevelEntry(
     function: KSFunctionDeclaration,
     suffix: String,
-    omitted: Int = 0,
   ): ForwardCallableCatalogEntry = staticEntry(
     function = function,
     symbol = "${function.packageName.asString()}.${function.simpleName.asString()}$suffix",
@@ -1851,7 +1691,7 @@ internal class ForwardCallablePlanner(
     origin = ForwardCallableOrigin.TOP_LEVEL,
     target = null,
     member = function.simpleName.asString(),
-    omitted = omitted,
+    defaults = topLevelDefaultFlags(function),
   ).nameUnroutedPosition { skipped ->
     // ADR-064 amendment (2026-09-13): the top-level owner has exactly one legacy route for these
     // reasons — `addFunctionExports` / `translateSpecializedFunction`, keyed on a
@@ -1884,7 +1724,7 @@ internal class ForwardCallablePlanner(
       .filter { member -> member.isForwardPlannableMemberOf(obj, superClass = null) }
       .toList()
 
-    fun entryFor(function: KSFunctionDeclaration, omitted: Int): ForwardCallableCatalogEntry {
+    fun entryFor(function: KSFunctionDeclaration): ForwardCallableCatalogEntry {
       val name: String = function.simpleName.asString()
       val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
       val suffix: String = if (occurrence == 1) "" else "_$occurrence"
@@ -1896,24 +1736,12 @@ internal class ForwardCallablePlanner(
         origin = ForwardCallableOrigin.OBJECT,
         target = owner,
         member = name,
-        omitted = omitted,
+        defaults = function.parameters.map { it.hasDefault },
       )
     }
-    return buildList {
-      val declared: List<ForwardCallableCatalogEntry> =
-        members.map { member -> entryFor(member, 0) }
-      addAll(declared)
-      // ADR-096: omitting overloads, appended after the declared pass of this per-object counter.
-      // ADR-149: synthesis proceeds even when the declared entry is Skipped; `planOrSkip` on the
-      // truncated list is the judge.
-      members.forEach { member ->
-        repeat(member.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
-          add(entryFor(member, omitted + 1).synthesized())
-        }
-      }
-      // ADR-064 amendment (2026-09-13): no legacy route is keyed to an object owner at all —
-      // measured, cells 3a/13a/18a/22a — so every deferral here is a drop, with no exemption.
-    }.nameUnroutedPositions()
+    // ADR-064 amendment (2026-09-13): no legacy route is keyed to an object owner at all,
+    // measured, cells 3a/13a/18a/22a, so every deferral here is a drop, with no exemption.
+    return members.map { member -> entryFor(member) }.nameUnroutedPositions()
   }
 
   private fun companionEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
@@ -1928,7 +1756,7 @@ internal class ForwardCallablePlanner(
       .filter { member -> !member.isCompilerOwnedMember(companion) }
       .toList()
 
-    fun entryFor(function: KSFunctionDeclaration, omitted: Int): ForwardCallableCatalogEntry {
+    fun entryFor(function: KSFunctionDeclaration): ForwardCallableCatalogEntry {
       val name: String = function.simpleName.asString()
       val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
       val suffix: String = if (occurrence == 1) "" else "_$occurrence"
@@ -1940,24 +1768,13 @@ internal class ForwardCallablePlanner(
         origin = ForwardCallableOrigin.COMPANION,
         target = owner,
         member = name,
-        omitted = omitted,
+        defaults = function.parameters.map { it.hasDefault },
       )
     }
-    return buildList {
-      val declared: List<ForwardCallableCatalogEntry> = members.map { member -> entryFor(member, 0) }
-      addAll(declared)
-      // ADR-096: omitting overloads, appended after the declared pass of this per-companion counter.
-      // ADR-149: synthesis proceeds even when the declared entry is Skipped; `planOrSkip` on the
-      // truncated list is the judge.
-      members.forEach { member ->
-        repeat(member.parameters.map { it.hasDefault }.trailingCount()) { omitted ->
-          add(entryFor(member, omitted + 1).synthesized())
-        }
-      }
-      // ADR-064 amendment (2026-09-13): a companion is a static owner like an object, and the
-      // legacy routes are keyed to instance members; unmeasured, so a companion member appearing
-      // in the diagnostic diff is worth checking against `Interop.cs` before it is believed.
-    }.nameUnroutedPositions()
+    // ADR-064 amendment (2026-09-13): a companion is a static owner like an object, and the
+    // legacy routes are keyed to instance members; unmeasured, so a companion member appearing
+    // in the diagnostic diff is worth checking against `Interop.cs` before it is believed.
+    return members.map { member -> entryFor(member) }.nameUnroutedPositions()
   }
 
   private fun staticEntry(
@@ -1969,8 +1786,8 @@ internal class ForwardCallablePlanner(
     target: String?,
     // ADR-095: the bare declared name for the Kotlin call site, since the symbol may carry `_$n`.
     member: String? = null,
-    // ADR-096: how many trailing defaulted parameters this omitting overload drops (0 = declared).
-    omitted: Int = 0,
+    // ADR-164: per-parameter "has a default", positionally, from the route's own flag reader.
+    defaults: List<Boolean>,
   ): ForwardCallableCatalogEntry {
     val structuralReason: ForwardPlanSkipReason? = when {
       function.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
@@ -1981,10 +1798,11 @@ internal class ForwardCallablePlanner(
       return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = function)
     }
     val result: BridgeType = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit
-    val parameters: List<Pair<String, BridgeType>> = function.parameters.dropLast(omitted)
+    val parameters: List<Pair<String, BridgeType>> = function.parameters
       .map { parameter ->
         parameter.bridgeName() to classifier.classify(parameter.type.resolve())
       }
+    val declaredDefaults: ForwardDeclaredDefaults = declaredDefaults(function.parameters, defaults)
     // ADR-002 / MIGRATION: top-level nullable primitives keep the shipped two-call ABI.
     // ADR-076: a top-level nullable Instant shares the same two-call shape (ADR-069 recorded that
     // this path crashes packNuget for a shape it does not handle, rather than skipping).
@@ -2009,10 +1827,11 @@ internal class ForwardCallablePlanner(
         result = result,
         member = member,
         node = function,
+        defaults = declaredDefaults,
         // ADR-150: this route carried no doc at all, so EVERY top-level `fun f(): Int?` (also
         // `Instant?`, `Duration?`, `Enum?`, a fan-out value class) rendered undocumented, whether
         // or not it was an `expect`.
-        doc = function.forwardKdoc(expects).forParameters(function.parameters.dropLast(omitted)),
+        doc = function.forwardKdoc(expects).forParameters(function.parameters),
       )
     }
     return planOrSkip(
@@ -2026,8 +1845,8 @@ internal class ForwardCallablePlanner(
       target = target,
       member = member,
       node = function,
-      droppedOptInMarker = droppedOptInMarker(function.parameters, omitted),
-      doc = function.forwardKdoc(expects).forParameters(function.parameters.dropLast(omitted)),
+      defaults = declaredDefaults,
+      doc = function.forwardKdoc(expects).forParameters(function.parameters),
     )
   }
 
@@ -2049,6 +1868,8 @@ internal class ForwardCallablePlanner(
     // ADR-150: and it carries a doc like every other, on the same `publicSignature` slot the CIR
     // projection already reads (`staticLegacyTwoCall` renders `plan.publicSignature.cirDoc()`).
     doc: ForwardKdoc? = null,
+    // ADR-164: the same widening every other route takes.
+    defaults: ForwardDeclaredDefaults? = null,
   ): ForwardCallableCatalogEntry {
     val inner: BridgeType = result.type
     require(
@@ -2062,8 +1883,16 @@ internal class ForwardCallablePlanner(
     }
     // ADR-105 scope (d): the same parameter-position sealed rewrite `planOrSkip` applies, so a
     // top-level `fun f(shape: Shape): Int?` binds on this two-call route too.
+    val widening: ForwardWidening =
+      widen(parameters.map { (name, type) -> name to type.sealedAsHandle() }, defaults)
+    if (widening.marked != null) {
+      return ForwardCallableCatalogEntry.Skipped(
+        symbol, ForwardPlanSkipReason.OPT_IN_MARKER, node = node, detail = widening.marked,
+      )
+    }
+    val publicParameters: List<ForwardPublicParameter> = widening.parameters
     val declared: List<Pair<String, BridgeType>> =
-      parameters.map { (name, type) -> name to type.sealedAsHandle() }
+      publicParameters.map { parameter -> parameter.name to parameter.type }
     // Issue #131: the offending parameter's NAME travels with the skip, so the diagnostic can say
     // which one failed instead of "at this position".
     val ineligible: Pair<String, BridgeType>? = declared.firstOrNull { (_, type) ->
@@ -2086,8 +1915,8 @@ internal class ForwardCallablePlanner(
     }
 
     val error: ForwardAbiParameter = errorParameter()
-    val nativeInputs: List<ForwardAbiParameter> = declared.flatMap { (name, type) ->
-      nativeInputParameters(name, type)
+    val nativeInputs: List<ForwardAbiParameter> = publicParameters.flatMap { parameter ->
+      nativeInputParameters(parameter)
     }
     val presence = ForwardNativeCall(
       exportName = "${exportName}_has_value",
@@ -2193,9 +2022,9 @@ internal class ForwardCallablePlanner(
       ),
       publicSignature = ForwardPublicSignature(
         name = publicName,
-        parameters = declared.map { (name, type) -> ForwardPublicParameter(name, type) },
+        parameters = publicParameters,
         result = result,
-        doc = doc,
+        doc = doc.forPublic(publicParameters),
       ),
       evaluation = ForwardEvaluation.LEGACY_TWO_CALL,
       nativeExports = listOf(presence, value),
@@ -2207,7 +2036,7 @@ internal class ForwardCallablePlanner(
       errorSlot = error,
       helperRequirements = helpers,
     ).validate()
-    return ForwardCallableCatalogEntry.Planned(plan, node = node)
+    return ForwardCallableCatalogEntry.Planned(plan, node = node, cappedDefaults = widening.capped)
   }
 
   /**
@@ -2226,10 +2055,6 @@ internal class ForwardCallablePlanner(
   private fun extensionEntry(
     function: KSFunctionDeclaration,
     suffix: String,
-    // ADR-096: how many trailing defaulted parameters this omitting overload drops (0 = declared).
-    // The receiver is a `ForwardReceiver.Value`, not a plan parameter, so truncation never
-    // reaches it: an extension whose parameters are all defaulted still has its receiver.
-    omitted: Int = 0,
   ): ForwardCallableCatalogEntry {
     // ADR-018: expanded once here, so every spelling taken off this receiver -- the entry-point
     // prefix below, the owner chain, the classified wire type -- comes from the same type the C#
@@ -2256,10 +2081,8 @@ internal class ForwardCallablePlanner(
     // name, not per receiver). ADR-133 amendment: the receiver's enclosing-owner chain joins it,
     // because that chain now scopes the counter, so two nested receivers under different owners can
     // both take the unsuffixed name -- and the symbol identifies the dropped callable in
-    // `droppedCallables` and in the diagnostic. Duplicates are prevented upstream instead, by not
-    // synthesizing omitting overloads for a skipped declared entry (the synthesis loop's
-    // `RECEIVER_FAN_OUT` guard, ~:692). Empty for a top-level receiver, so every shipped extension
-    // symbol is unchanged.
+    // `droppedCallables` and in the diagnostic. Empty for a top-level receiver, so every shipped
+    // extension symbol is unchanged.
     val ownerChain: String = function.extensionOwnerChain()
     val symbol: String = if (ownerChain.isEmpty()) {
       "${function.packageName.asString()}.$functionName$suffix"
@@ -2325,15 +2148,17 @@ internal class ForwardCallablePlanner(
       // `ObjectHandle` already). An eligible sealed base then plans as an ordinary handle
       // receiver; an ineligible or out-of-scope one carries no `sealedHandle` and still skips.
       receiver = ForwardReceiver.Value(receiverType.sealedAsHandle()),
-      parameters = function.parameters.dropLast(omitted).map { parameter ->
+      parameters = function.parameters.map { parameter ->
         parameter.bridgeName() to classifier.classify(parameter.type.resolve())
       },
       result = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
       origin = ForwardCallableOrigin.EXTENSION,
       member = functionName,
       node = function,
-      droppedOptInMarker = droppedOptInMarker(function.parameters, omitted),
-      doc = function.forwardKdoc(expects).forParameters(function.parameters.dropLast(omitted)),
+      // ADR-164: the receiver is a `ForwardReceiver.Value`, not a plan parameter, so no default
+      // ever reaches it.
+      defaults = declaredDefaults(function.parameters, function.parameters.map { it.hasDefault }),
+      doc = function.forwardKdoc(expects).forParameters(function.parameters),
     )
       // ADR-064 amendment (2026-09-13): no legacy route is keyed to an extension for any of these
       // reasons (measured cells 6a/6b/13c/18c/22c; `translateExtensionFunction` has no caller at
@@ -2354,24 +2179,116 @@ internal class ForwardCallablePlanner(
     return returnDeclaration == "kotlin.Result"
   }
 
+  private fun declaredDefaults(
+    parameters: List<KSValueParameter>,
+    flags: List<Boolean>,
+    marked: Map<Int, String> = emptyMap(),
+  ): ForwardDeclaredDefaults = ForwardDeclaredDefaults(
+    flags = flags,
+    kotlinNames = parameters.map { parameter -> parameter.name?.asString() ?: "_" },
+    marked = marked,
+  )
+
   /**
-   * Issue #128: `"<type>-><marker fqn>"` for the first of an ADR-096 omitting overload's
-   * **dropped** parameters whose TYPE is opt-in-marked, or null.
+   * ADR-164: the one widening pass. Turns the declared parameters of an entry into its public
+   * parameters: each defaulted one whose nullable form is routable widens to it (an already
+   * nullable one becomes `Optional<T>`), the trailing all-defaulted run becomes omittable, and an
+   * unroutable defaulted parameter in that run is dropped so Kotlin evaluates its default.
    *
-   * A marked parameter type makes EVERY arity of the callable illegal, not just the declared one,
-   * so the omitting overload cannot repair it: Kotlin propagates the requirement from the callee's
-   * declared value-parameter types, never from what the default expression reads (verified against
-   * Kotlin 2.4.10, `Mixed(a = 5)` is rejected exactly like `Mixed(1, Mode.Slow)`).
-   *
-   * Only the opt-in reason is consulted. A dropped parameter of a merely *unsupported* type is the
-   * whole point of the omitting overload and stays supported, and a dropped parameter whose
-   * PROPERTY carries the marker while its type does not is legal to omit (ADR-115 gate (b)).
+   * Everything else stays as declared, so a required-position problem still reaches the ordinary
+   * skip checks and reports exactly what it did before. Two exceptions keep a defaulted parameter
+   * from being dropped: an opt-in-marked TYPE (issue #128: Kotlin propagates the requirement from
+   * the callee's declared parameter types, so no call that omits it is legal either), and a
+   * parameter left required by the [MAX_OPTIONAL_DEFAULTS] cap.
    */
-  private fun droppedOptInMarker(parameters: List<KSValueParameter>, omitted: Int): String? =
-    parameters.takeLast(omitted)
-      .firstNotNullOfOrNull { parameter ->
-        classifier.classify(parameter.type.resolve()).optInMarkerDetail()
+  private fun widen(
+    declared: List<Pair<String, BridgeType>>,
+    defaults: ForwardDeclaredDefaults?,
+    // ADR-164: whether a per-call lambda can ride the PRESENCE encoding. False where the lambda
+    // would be stored past the call (a constructor, `copy`), which ADR-160 forbids.
+    presence: Boolean = false,
+  ): ForwardWidening {
+    val plain = ForwardWidening(
+      declared.mapIndexed { index, (name, type) ->
+        ForwardPublicParameter(name, type, kotlinName = defaults?.kotlinNames?.getOrNull(index) ?: name)
+      },
+      marked = defaults?.marked?.values?.firstOrNull(),
+    )
+    if (defaults == null || defaults.flags.none { it }) return plain
+    require(defaults.flags.size == declared.size && defaults.kotlinNames.size == declared.size) {
+      "Forward planner default flags do not line up with the declared parameters"
+    }
+    val roles: MutableList<ForwardDefaultRole> = declared.mapIndexed { index, (_, type) ->
+      when {
+        !defaults.flags[index] -> ForwardDefaultRole.REQUIRED
+        index in defaults.marked -> ForwardDefaultRole.UNROUTABLE
+        type.optInMarkerDetail() != null -> ForwardDefaultRole.REQUIRED
+        type is BridgeType.Nullable ->
+          if (type.inputSkipReason() == null) ForwardDefaultRole.OPTIONAL
+          else ForwardDefaultRole.UNROUTABLE
+
+        BridgeType.Nullable(type).inputSkipReason() == null -> ForwardDefaultRole.NULLABLE
+        presence && type is BridgeType.Callback && type.inputSkipReason() == null ->
+          ForwardDefaultRole.PRESENCE
+
+        else -> ForwardDefaultRole.UNROUTABLE
       }
+    }.toMutableList()
+    val widened: List<Int> = roles.indices.filter { index -> roles[index].isWidened }
+    val capped: List<Int> = widened.dropLast(MAX_OPTIONAL_DEFAULTS)
+    capped.forEach { index -> roles[index] = ForwardDefaultRole.REQUIRED }
+    val suffix: Int = roles.indexOfLast { role -> role == ForwardDefaultRole.REQUIRED } + 1
+    val marked: String? = defaults.marked.entries
+      .firstOrNull { (index, _) -> index < suffix }
+      ?.value
+    val parameters: List<ForwardPublicParameter> = declared.mapIndexedNotNull { index, (name, type) ->
+      val kotlinName: String = defaults.kotlinNames[index]
+      val omittable: Boolean = index >= suffix
+      when (roles[index]) {
+        ForwardDefaultRole.REQUIRED -> ForwardPublicParameter(name, type, kotlinName = kotlinName)
+        ForwardDefaultRole.UNROUTABLE ->
+          if (omittable) null else ForwardPublicParameter(name, type, kotlinName = kotlinName)
+
+        ForwardDefaultRole.NULLABLE -> ForwardPublicParameter(
+          name, BridgeType.Nullable(type),
+          ForwardParameterDefault(ForwardDefaultEncoding.NULLABLE, omittable), kotlinName,
+        )
+
+        ForwardDefaultRole.OPTIONAL -> ForwardPublicParameter(
+          name, type, ForwardParameterDefault(ForwardDefaultEncoding.OPTIONAL, omittable), kotlinName,
+        )
+
+        ForwardDefaultRole.PRESENCE -> ForwardPublicParameter(
+          name, type, ForwardParameterDefault(ForwardDefaultEncoding.PRESENCE, omittable), kotlinName,
+        )
+      }
+    }
+    return ForwardWidening(
+      parameters = parameters,
+      capped = capped.map { index -> defaults.kotlinNames[index] },
+      marked = marked,
+    )
+  }
+
+  /**
+   * ADR-164: the native slots of one public parameter: an `Optional<T>` one leads with its BOOLEAN
+   * `${name}IsSet` presence slot, then the nullable encoding every other nullable input uses.
+   */
+  private fun nativeInputParameters(parameter: ForwardPublicParameter): List<ForwardAbiParameter> {
+    val encoded: List<ForwardAbiParameter> = nativeInputParameters(parameter.name, parameter.type)
+    if (!parameter.hasPresenceSlot) return encoded
+    val presence = ForwardAbiParameter(
+      name = "${parameter.name}IsSet",
+      wireType = ForwardAbiWireType.BOOLEAN,
+      direction = ForwardAbiDirection.IN,
+      transfer = ForwardTransfer(
+        "${parameter.name}IsSet", BridgeType.Primitive(PrimitiveKind.BOOLEAN),
+        ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE, ForwardOwnership.BORROWED,
+        ForwardConversion.DIRECT,
+      ),
+    )
+    return listOf(presence) + encoded
+  }
 
   /**
    * ADR-162: every ordinary callable funnels through here, so this is the one place a plan-time
@@ -2399,13 +2316,13 @@ internal class ForwardCallablePlanner(
     isOverride: Boolean = false,
     isVirtual: Boolean = false,
     node: KSNode? = null,
-    droppedOptInMarker: String? = null,
+    defaults: ForwardDeclaredDefaults? = null,
     doc: ForwardKdoc? = null,
   ): ForwardCallableCatalogEntry = try {
     planOrSkipUnguarded(
       symbol, publicName, exportName, receiver, parameters, result, origin, target, ownerType,
       invocationReceiver, includeError, valueClassProperty, member, isOverride, isVirtual, node,
-      droppedOptInMarker, doc,
+      defaults, doc,
     )
   } catch (failure: Exception) {
     ForwardCallableCatalogEntry.Skipped(
@@ -2434,11 +2351,9 @@ internal class ForwardCallablePlanner(
     isOverride: Boolean = false,
     isVirtual: Boolean = false,
     node: KSNode? = null,
-    // Issue #128: [droppedOptInMarker] for the parameters this entry omits, since [parameters]
-    // above is already truncated and cannot show them.
-    droppedOptInMarker: String? = null,
-    // ADR-150: the author's KDoc, already keyed by the bridge parameter names in [parameters] and
-    // already stripped of an omitting overload's dropped `@param`s.
+    // ADR-164: which of [parameters] have a Kotlin default, for the widening pass.
+    defaults: ForwardDeclaredDefaults? = null,
+    // ADR-150: the author's KDoc, already keyed by the bridge parameter names in [parameters].
     doc: ForwardKdoc? = null,
   ): ForwardCallableCatalogEntry {
     // ADR-115: the author's own signal, checked before any type is looked at -- nothing about the
@@ -2451,23 +2366,27 @@ internal class ForwardCallablePlanner(
         symbol, ForwardPlanSkipReason.OPT_IN_MARKER, node = node, detail = optInMarker,
       )
     }
-    // Issue #128: the same check for the parameters an ADR-096 omitting overload dropped, which
-    // `parameters` no longer carries. Reuses OPT_IN_MARKER_TYPE, so the kind, the hint and the
-    // `droppedFromCSharp` behaviour are the declared arity's own.
-    if (droppedOptInMarker != null) {
-      return ForwardCallableCatalogEntry.Skipped(
-        symbol, ForwardPlanSkipReason.OPT_IN_MARKER_TYPE, node = node,
-        detail = droppedOptInMarker,
-      )
-    }
     // ADR-105 scope (d): the sealed rewrite is applied to every declared PARAMETER here, once,
     // rather than at each catalog site's `classifier.classify(...)` call, so the plan's public
     // signature, its ABI parameters and its input eligibility check all see the same rewritten
     // type. The receiver arrives already rewritten where one can be sealed at all: `extensionEntry`
     // applies the same rewrite to its receiver before calling in, and every other route builds a
     // bare `ObjectHandle` receiver, so this function stays receiver-agnostic.
+    // ADR-164: then widened once, so every check below sees the public (possibly nullable) type.
+    // A lambda is per-call only (ADR-160), so it widens only where it cannot be stored.
+    val widening: ForwardWidening = widen(
+      parameters.map { (name, type) -> name to type.sealedAsHandle() },
+      defaults,
+      presence = origin !in STORED_CALLBACK_ORIGINS,
+    )
+    if (widening.marked != null) {
+      return ForwardCallableCatalogEntry.Skipped(
+        symbol, ForwardPlanSkipReason.OPT_IN_MARKER, node = node, detail = widening.marked,
+      )
+    }
+    val publicParameters: List<ForwardPublicParameter> = widening.parameters
     val declared: List<Pair<String, BridgeType>> =
-      parameters.map { (name, type) -> name to type.sealedAsHandle() }
+      publicParameters.map { parameter -> parameter.name to parameter.type }
     // Issue #131: name-carrying, so a skip can name the parameter that failed. The receiver rides
     // a null name: it is an input too, just not one the author named.
     val namedInputs: List<Pair<String?, BridgeType>> = buildList {
@@ -2484,13 +2403,7 @@ internal class ForwardCallablePlanner(
     // normally STORES the lambda, and the first later invocation would dispatch the ADR-102 thunk
     // through a freed GCHandle. Those positions keep the `CALLBACK_PROTOCOL` skip, which is what
     // ADR-037's stored-callback route exists for.
-    val storedCallbackOrigins: Set<ForwardCallableOrigin> = setOf(
-      ForwardCallableOrigin.CONSTRUCTOR,
-      ForwardCallableOrigin.COPY,
-      ForwardCallableOrigin.ENUM_ARM_BOX,
-      ForwardCallableOrigin.VALUE_CLASS,
-    )
-    val storedCallback: Pair<String?, BridgeType>? = if (origin in storedCallbackOrigins) {
+    val storedCallback: Pair<String?, BridgeType>? = if (origin in STORED_CALLBACK_ORIGINS) {
       declared.firstOrNull { (_, type) -> type is BridgeType.Callback }
         ?.let { (name, type) -> name to type }
     } else {
@@ -2565,7 +2478,7 @@ internal class ForwardCallablePlanner(
 
     val error: ForwardAbiParameter? = if (includeError) errorParameter() else null
     val nativeParameters: List<ForwardAbiParameter> = receiverParameter(receiver) +
-        declared.flatMap { (name, type) -> nativeInputParameters(name, type) } +
+        publicParameters.flatMap { parameter -> nativeInputParameters(parameter) } +
         resultShape.extraParameters + listOfNotNull(error)
     val nativeCall = ForwardNativeCall(
       exportName = exportName,
@@ -2631,11 +2544,11 @@ internal class ForwardCallablePlanner(
       ),
       publicSignature = ForwardPublicSignature(
         name = publicName,
-        parameters = declared.map { (name, type) -> ForwardPublicParameter(name, type) },
+        parameters = publicParameters,
         result = effectiveResult,
         isOverride = isOverride,
         isVirtual = isVirtual,
-        doc = doc,
+        doc = doc.forPublic(publicParameters),
       ),
       evaluation = ForwardEvaluation.EXACTLY_ONCE,
       nativeExports = listOf(nativeCall),
@@ -2648,7 +2561,7 @@ internal class ForwardCallablePlanner(
       cleanup = resultShape.cleanup,
       helperRequirements = helpers,
     ).validate()
-    return ForwardCallableCatalogEntry.Planned(plan, node = node)
+    return ForwardCallableCatalogEntry.Planned(plan, node = node, cappedDefaults = widening.capped)
   }
 
   /**
@@ -4274,9 +4187,8 @@ private fun KSFunctionDeclaration.primaryConstructorKdoc(
 
 /**
  * ADR-150: re-keys `@param` entries from the Kotlin parameter names the author wrote to the bridge
- * names the plan carries (`bridgeName()` respells a C#-owned name), and drops the entries of the
- * trailing parameters an ADR-096/091 omitting overload does not declare. A `@param` naming nothing
- * in [parameters] is dropped, which is what keeps a CS1572 off the generated file.
+ * names the plan carries (`bridgeName()` respells a C#-owned name). A `@param` naming nothing in
+ * [parameters] is dropped, which is what keeps a CS1572 off the generated file.
  */
 private fun ForwardKdoc?.forParameters(parameters: List<KSValueParameter>): ForwardKdoc? {
   val doc: ForwardKdoc = this ?: return null
@@ -4287,6 +4199,17 @@ private fun ForwardKdoc?.forParameters(parameters: List<KSValueParameter>): Forw
       }
       .toMap(),
   )
+}
+
+/**
+ * ADR-164: only the `@param` entries of parameters the widened signature still declares. A trailing
+ * unroutable default dropped from it would otherwise document a parameter C# does not have
+ * (CS1572).
+ */
+private fun ForwardKdoc?.forPublic(parameters: List<ForwardPublicParameter>): ForwardKdoc? {
+  val doc: ForwardKdoc = this ?: return null
+  val names: Set<String> = parameters.map { parameter -> parameter.name }.toSet()
+  return doc.copy(params = doc.params.filterKeys { name -> name in names })
 }
 
 private fun KSValueParameter.bridgeName(): String =
@@ -4582,3 +4505,44 @@ internal fun BridgeType.skipDetail(): String? = optInMarkerDetail()
  *  every type whose refusal is about a position rather than the type itself. */
 internal fun BridgeType.unsupportedTypeDetail(): String? =
   (unwrapNullable() as? BridgeType.Unsupported)?.rendered
+
+/**
+ * ADR-164: the most defaulted parameters one callable widens. The Kotlin dispatch has one arm per
+ * subset, so 8 is 256 arms (about 36 KB of dylib, measured); beyond it only the last 8 widen.
+ */
+internal const val MAX_OPTIONAL_DEFAULTS: Int = 8
+
+/** ADR-164: the defaulted-parameter facts of one entry, aligned with its declared parameters. */
+internal data class ForwardDeclaredDefaults(
+  val flags: List<Boolean>,
+  val kotlinNames: List<String>,
+  /** ADR-115: index to marker detail of a constructor parameter whose PROPERTY is opt-in marked. */
+  val marked: Map<Int, String> = emptyMap(),
+)
+
+/** ADR-164: the outcome of the widening pass. [marked] set means the entry is an OPT_IN_MARKER skip. */
+internal data class ForwardWidening(
+  val parameters: List<ForwardPublicParameter>,
+  val capped: List<String> = emptyList(),
+  val marked: String? = null,
+)
+
+private enum class ForwardDefaultRole(val isWidened: Boolean) {
+  REQUIRED(false),
+  UNROUTABLE(false),
+  NULLABLE(true),
+  OPTIONAL(true),
+  PRESENCE(true),
+}
+
+/**
+ * ADR-160: the origins whose callable normally STORES a lambda argument past the call, so a
+ * per-call GCHandle would be freed under it. ADR-164 reads the same set to keep a defaulted lambda
+ * there dropped rather than widened.
+ */
+private val STORED_CALLBACK_ORIGINS: Set<ForwardCallableOrigin> = setOf(
+  ForwardCallableOrigin.CONSTRUCTOR,
+  ForwardCallableOrigin.COPY,
+  ForwardCallableOrigin.ENUM_ARM_BOX,
+  ForwardCallableOrigin.VALUE_CLASS,
+)

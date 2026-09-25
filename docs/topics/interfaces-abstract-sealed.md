@@ -516,7 +516,7 @@ A `suspend fun` returning a nested arm spells the same way: `Task<Job.Running>`,
 ### Members of a sealed arm
 
 A public method or property a sealed subclass **itself declares**, including its own `override`,
-binds the same as it would on an ordinary class: overloads, default-argument omitting overloads,
+binds the same as it would on an ordinary class: overloads, widened default parameters,
 nullable types, collections, and `Duration`/`Uuid`/value-class/interface shapes all work on an arm
 too, exported under the arm's own name. This is **declared-only**: an arm never re-exports a member
 it merely inherits unchanged.

@@ -125,10 +125,9 @@ public class ExtensionFunctionTests
     // the `expect` half only, because Kotlin forbids the `actual` from restating one. The extension
     // route reads the exported declaration's own `hasDefault` bits and never consults the expect
     // index (ADR-096: "class/object/companion/extension read the exported declaration's own bit
-    // only"), so exactly ONE overload is generated and the C# caller always supplies `minutes`.
-    // The parameterless call is deliberately absent, not forgotten: a `perch.StretchFor()` here
-    // would be CS1501. The generator-side proof of the absence is the Tier 1 cell
-    // `an expect extension's default parameter does not add an omitting overload`.
+    // only", a boundary ADR-164 leaves in place), so `minutes` is NOT widened to `int?` and the C#
+    // caller always supplies it. The parameterless call is deliberately absent, not forgotten: a
+    // `perch.StretchFor()` here would be CS7036.
     [Fact]
     public void SunSpot_StretchFor_TakesItsMinutesFromTheCaller()
     {

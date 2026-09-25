@@ -138,9 +138,9 @@ class Tier1OptInMarkerSkipTest {
   }
 
   @Test
-  fun `a trailing marked parameter with a default keeps the omitting overload`() {
-    // ADR-096's machinery is the reuse: the shorter overload never names the marked parameter, so
-    // C# can still construct one. The full-arity constructor is the only entry dropped.
+  fun `a trailing marked parameter with a default is dropped from the widened constructor`() {
+    // ADR-164: the widened signature never names the marked parameter, so C# can still construct
+    // one and Kotlin evaluates the default.
     val result = Tier1Harness.run(
       """
       package tier1.optin.trailing
@@ -153,8 +153,14 @@ class Tier1OptInMarkerSkipTest {
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     assertTrue(
-      "export_library_tier1_optin_trailing__litter_create_2" in result.generated,
-      "the omitting overload must still be exported; generated:\n${result.generated}",
+      "export_library_tier1_optin_trailing__litter_create" in result.generated &&
+          "tier1.optin.trailing.Litter(name)" in result.generated,
+      "the constructor must still be exported without the marked parameter; " +
+          "generated:\n${result.generated}",
+    )
+    assertTrue(
+      "public Litter(string name)" in result.generatedCSharp,
+      "generated C#:\n${result.generatedCSharp}",
     )
   }
 

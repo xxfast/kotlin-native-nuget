@@ -399,6 +399,14 @@ internal enum class ForwardDiagnosticKind(
     declaredVerb = "Keeping",
   ),
 
+  /** ADR-164: a callable with more than `MAX_OPTIONAL_DEFAULTS` defaulted parameters. Only the last
+   *  ones in declaration order become optional in C#; the earlier ones stay required, with their
+   *  declared (non-widened) type. Nothing is dropped, so the verb says what happened. */
+  WARNING_DEFAULT_PARAMETER_CAP_EXCEEDED(
+    ForwardDiagnosticSeverity.WARNING,
+    declaredVerb = "Capping",
+  ),
+
   /** ADR-162: a planner, emitter, projection or translator invariant that a legal public Kotlin
    *  declaration reached — a raw `error(...)`, `require(...)`, `check(...)` or `!!` that fired
    *  because some `when` did not learn about a new `BridgeType` variant or route. Before this kind

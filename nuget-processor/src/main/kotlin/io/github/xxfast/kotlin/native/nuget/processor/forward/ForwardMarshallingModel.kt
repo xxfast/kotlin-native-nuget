@@ -528,7 +528,53 @@ internal data class ForwardNativeCall(
   val csharpStem: String = exportName,
 )
 
-internal data class ForwardPublicParameter(val name: String, val type: BridgeType)
+internal data class ForwardPublicParameter(
+  val name: String,
+  val type: BridgeType,
+  /**
+   * ADR-164: set when the Kotlin parameter has a default. [type] is then already the widened
+   * (nullable) form for [ForwardDefaultEncoding.NULLABLE], so every encoder downstream reads it as
+   * an ordinary nullable input and needs no branch of its own.
+   */
+  val default: ForwardParameterDefault? = null,
+  /**
+   * ADR-164: the Kotlin parameter name, for the named arguments of the default dispatch. Differs
+   * from [name] only when the bridge name took a `_` suffix off a plan-owned name.
+   */
+  val kotlinName: String = name,
+) {
+  val isOptional: Boolean get() = default?.encoding == ForwardDefaultEncoding.OPTIONAL
+
+  /** ADR-164: whether presence crosses as its own `${name}IsSet` slot rather than in the value. */
+  val hasPresenceSlot: Boolean
+    get() = default?.encoding == ForwardDefaultEncoding.OPTIONAL ||
+        default?.encoding == ForwardDefaultEncoding.PRESENCE
+}
+
+/** ADR-164: how "not set" crosses for one defaulted parameter. */
+internal enum class ForwardDefaultEncoding {
+  /** A non-nullable Kotlin type widened to its nullable form: `null` means unset. */
+  NULLABLE,
+
+  /** An already-nullable Kotlin type, as C# `Optional<T>` behind an `${name}IsSet` slot. */
+  OPTIONAL,
+
+  /**
+   * A non-null type with no nullable encoding (a per-call lambda), as its nullable C# form behind
+   * an `${name}IsSet` slot; when unset the value slots carry an inert filler Kotlin never reads.
+   */
+  PRESENCE,
+}
+
+/**
+ * ADR-164: a defaulted parameter's encoding, and whether it sits in the trailing all-defaulted run
+ * so C# can omit it (`= null` / `= default`). A widened parameter before a required one is
+ * required-but-nullable.
+ */
+internal data class ForwardParameterDefault(
+  val encoding: ForwardDefaultEncoding,
+  val omittable: Boolean,
+)
 
 internal data class ForwardPublicSignature(
   val name: String,
@@ -673,6 +719,26 @@ internal object ForwardCallablePlanValidator {
         "Forward plan ${plan.publicSignature.name} has a blank public parameter name"
       }
       validateType(parameter.type, "public parameter ${parameter.name}")
+      // ADR-164: a widened parameter is nullable by construction, and an `Optional<T>` one
+      // carries its `IsSet` presence slot on every native call.
+      if (parameter.default != null && parameter.default.encoding != ForwardDefaultEncoding.PRESENCE) {
+        require(parameter.type is BridgeType.Nullable) {
+          "Forward plan ${plan.publicSignature.name} defaulted parameter ${parameter.name} must " +
+              "be planned at its nullable form"
+        }
+      }
+      if (parameter.hasPresenceSlot) {
+        plan.nativeExports.forEach { call ->
+          require(
+            call.parameters.any { slot ->
+              slot.name == "${parameter.name}IsSet" && slot.wireType == ForwardAbiWireType.BOOLEAN
+            }
+          ) {
+            "Forward plan ${plan.publicSignature.name} defaulted parameter ${parameter.name} is " +
+                "missing its ${parameter.name}IsSet slot on ${call.exportName}"
+          }
+        }
+      }
     }
     plan.nativeExports.forEach { call -> validateCall(plan, call) }
     validateWireType(plan.publicSignature.name, "result", plan.result.wireType)

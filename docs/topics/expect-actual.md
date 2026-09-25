@@ -69,8 +69,8 @@ SystemClock clock = PlatformApi.DefaultClock();  // typed SystemClock, not Clock
 ## Constructor default parameters
 
 Kotlin forbids an `actual` from restating a default value, so the default lives only on the
-`expect` declaration's primary constructor. The generator still produces the omitting overload for
-a class's primary constructor:
+`expect` declaration's primary constructor. The generator still widens a class's primary
+constructor the usual way:
 
 ```kotlin
 // shared
@@ -85,18 +85,18 @@ actual class Beacon actual constructor(private val name: String, private val int
 using var beacon = new Beacon("Oreo's collar"); // interval defaults to 5
 ```
 
-A secondary constructor on an `expect`/`actual class` gets no synthesized default-parameter
-overload; pass every parameter explicitly. See
-[Constructor default parameters](classes-and-objects.md#constructor-default-parameters) for the
-general mechanism.
+A secondary constructor on an `expect`/`actual class` widens none of its defaulted parameters;
+pass every parameter explicitly. See
+[Constructor and method default parameters](classes-and-objects.md#constructor-and-method-default-parameters)
+for the general mechanism.
 
 ## Function default parameters on a top-level `expect` function
 
 The same restatement rule applies to an ordinary function, and the generator resolves the default
 from the matching `expect fun`, but **only for a top-level function**. A class method, `object`
-member, companion member, or extension declared on an `expect` class gets no synthesized
-overload, even though the equivalent constructor case above does; call those with every parameter
-explicit.
+member, companion member, or extension declared on an `expect` class widens none of its defaulted
+parameters, even though the equivalent constructor case above does; call those with every
+parameter explicit.
 
 ```kotlin
 expect fun beaconLabel(prefix: String, level: Int = 7): String

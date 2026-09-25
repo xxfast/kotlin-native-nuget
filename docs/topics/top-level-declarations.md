@@ -97,11 +97,8 @@ int? wait = GroomingSample.WaitTime("   "); // null, resolved by the string over
 
 ## Function default parameters
 
-A trailing run of defaulted parameters on a top-level function synthesizes one additional C#
-overload per omitted suffix length, so a positional Kotlin call that skips only trailing defaults
-still has a matching overload. A default that sits before a required parameter (a "middle"
-default) synthesizes nothing, since a positional call can never skip it; there is exactly one
-overload for that function.
+A defaulted top-level parameter widens to its nullable C# form (`null` means "use the Kotlin
+default"); a required parameter after it stays required-but-nullable instead of optional.
 
 ```kotlin
 fun hail(name: String, loud: Boolean = false): String =
@@ -114,13 +111,15 @@ fun book(name: String, capacity: Int = 3, city: String): String =
 ```C#
 string greeting = WhiskersSample.Hail("Oreo"); // loud omitted; Kotlin supplies false
 
-// book has no omitting overload: capacity is followed by the required `city`
-string booking = WhiskersSample.Book("Oreo", 3, "Bristol");
+// capacity is followed by the required `city`, so it stays required-but-nullable
+string booking = WhiskersSample.Book("Oreo", null, "Bristol"); // null still means "use 3"
 ```
 
-A trailing default the bridge cannot carry costs only the arities that still have it. Shorter
-fully-bridgeable overloads still bind; the unsupported arity stays a named skip. See
-[Method default parameters](classes-and-objects.md#method-default-parameters).
+A defaulted parameter the bridge cannot route to any non-null C# form is dropped from the C#
+signature when it is part of the trailing all-defaulted run, and Kotlin always evaluates its
+default. See
+[Constructor and method default parameters](classes-and-objects.md#constructor-and-method-default-parameters)
+for the full rule, the cap, and `Optional<T>`.
 
 ```kotlin
 fun hubWithEvents(settings: Settings = Settings(), events: Flow<Int>? = null): Hub =

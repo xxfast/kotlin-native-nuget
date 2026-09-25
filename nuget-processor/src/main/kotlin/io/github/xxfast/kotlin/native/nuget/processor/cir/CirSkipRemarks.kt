@@ -26,9 +26,9 @@ internal fun CirFile.withSkipRemarks(
 ): CirFile {
   val skips: List<ForwardSkipRemark> = records
     .mapNotNull { record -> record.toSkipRemark(namespaceOf) }
-    // Spike 4 (2026-09-20, measured): ADR-149 synthesizes an omitting overload even when the
-    // declared entry was Skipped, so one dropped top-level function with two defaulted parameters
-    // records three identical diagnostics. Deduped on (owner, member, kind) rather than on the
+    // Spike 4 (2026-09-20, measured): one dropped member can record the same diagnostic more than
+    // once (ADR-149's omitting overloads did, before ADR-164 replaced them). Deduped on
+    // (owner, member, kind) rather than on the
     // rendered text, so two genuinely different drops of one member (a refused parameter AND an
     // unsupported return) still read as two paragraphs.
     .distinctBy { skip -> Triple(skip.owner, skip.member, skip.kind) }

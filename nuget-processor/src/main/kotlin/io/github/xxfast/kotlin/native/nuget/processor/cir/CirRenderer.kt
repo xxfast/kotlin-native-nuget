@@ -86,6 +86,7 @@ private fun nestedEnumsOf(declaration: CirDeclaration): List<CirEnum> =
 internal fun StringBuilder.renderDeclaration(declaration: CirDeclaration, nested: Boolean = false) {
   when (declaration) {
     is CirMarshalHelper -> renderMarshalHelper(declaration)
+    CirOptionalHelper -> renderOptionalHelper()
     is CirListHelper -> renderListHelper(declaration)
     is CirBytesHelper -> renderBytesHelper(declaration)
     is CirMapHelper -> renderMapHelper(declaration)

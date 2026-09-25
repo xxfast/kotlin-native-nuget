@@ -48,7 +48,7 @@ internal class ExpectIndex(declarations: List<KSDeclaration> = emptyList()) {
    * extension never matches one on a different receiver.
    *
    * Ambiguity resolves to `null` rather than to a guess, because a wrong match hands one overload's
-   * defaults to another and emits an omitting overload whose Kotlin call site does not compile.
+   * defaults to another and widens a parameter whose Kotlin call site does not compile.
    */
   fun functionOrNull(actual: KSFunctionDeclaration): KSFunctionDeclaration? {
     val candidates: List<KSFunctionDeclaration> = byName[actual.qualifiedName?.asString()]

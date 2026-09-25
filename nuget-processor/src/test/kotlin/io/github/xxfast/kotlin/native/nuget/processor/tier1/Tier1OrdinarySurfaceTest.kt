@@ -23,7 +23,7 @@ class Tier1OrdinarySurfaceTest {
     assertTrue(result.compiledClean, "expected data class exports to compile; got: ${result.compileErrors}")
     val cs = result.generatedCSharp
     assertContains(cs, "public class Point : IDisposable")
-    assertContains(cs, "public Point Copy(int x, int y)")
+    assertContains(cs, "public Point Copy(int? x = null, int? y = null)")
     assertContains(cs, "public override bool Equals(object? obj)")
     assertContains(cs, "public override int GetHashCode()")
     assertContains(cs, "public override string ToString()")

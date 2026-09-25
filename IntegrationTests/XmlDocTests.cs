@@ -179,15 +179,20 @@ public class XmlDocTests
     }
 
     [Fact]
-    public void Book_OmittingOverload_KeepsTheDocWithoutTheOmittedParam()
+    public void Book_OmittedSuite_IsOneMember_WithOneDoc()
     {
+        // ADR-164: `suite` is an optional `string?` on the one widened member, so there is no
+        // separate omitting member to document and the one doc still names `suite`.
         using var desk = new BoardingDesk("Mylo");
         Assert.Equal("Mylo/sunny/3", desk.Book(3));
 
-        XElement member = Required($"M:{Ns}.BoardingDesk.Book(System.Int32)");
+        Assert.DoesNotContain(
+            Doc.Descendants("member"),
+            entry => (string?)entry.Attribute("name") == $"M:{Ns}.BoardingDesk.Book(System.Int32)");
+        XElement member = Required($"M:{Ns}.BoardingDesk.Book(System.Int32,System.String)");
         Assert.Equal("Books a stay for the cat.", Tag(member, "summary"));
         Assert.Equal("how many nights", Param(member, "nights"));
-        Assert.False(HasParam(member, "suite"), "the omitting overload has no suite parameter");
+        Assert.True(HasParam(member, "suite"), "the widened member keeps its suite parameter");
         Assert.Equal("the booking reference", Tag(member, "returns"));
     }
 

@@ -79,20 +79,12 @@ class Tier1KdocXmlDocTest {
   }
 
   @Test
-  fun `the omitting overload drops the omitted param tag and keeps the rest`() {
+  fun `the widened member is documented once, with every param tag`() {
     val generated: String = Tier1Harness.run(fixture).generatedCSharp
 
-    assertTrue(
-      generated.contains(
-        "        /// <summary>Books a stay.</summary>\n" +
-            "        /// <remarks>\n" +
-            "        /// <para>Second paragraph, a remark since the ADR-150 amendment.</para>\n" +
-            "        /// </remarks>\n" +
-            "        /// <param name=\"nights\">how many nights</param>\n" +
-            "        /// <returns>the booking reference</returns>\n",
-      ),
-      generated,
-    )
+    // ADR-164: one signature, so one doc block; the optional `suite` keeps its tag.
+    assertEquals(1, Regex("/// <summary>Books a stay.</summary>").findAll(generated).count(), generated)
+    assertTrue(generated.contains("public string Book(int nights, string? suite = null)"), generated)
   }
 
   @Test

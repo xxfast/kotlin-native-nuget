@@ -141,8 +141,8 @@ public class SealedSubclassMethodTests
     /// <summary>
     /// <c>Job.tag</c> is <c>@Unstable</c> (an ADR-115 <c>@RequiresOptIn</c> marker), so the base's
     /// own plan is structurally declined and the base binds no <c>Tag</c> at all. The arm's
-    /// <c>@OptIn</c> override binds, and because nothing on the base carries the ADR-096 omitting
-    /// overload for it, the arm owes its own: the short-arity call has to compile on a
+    /// <c>@OptIn</c> override binds, and because nothing on the base carries the ADR-164 widened
+    /// signature for it, the arm owes its own: the short call has to compile on a
     /// <c>Job.Running</c>-typed reference and answer exactly what the full-arity call with the
     /// declared default answers.
     /// <para>
@@ -162,8 +162,8 @@ public class SealedSubclassMethodTests
     }
 
     /// <summary>
-    /// The declared arity, which binds today: the pair is what tells "the overload was synthesized"
-    /// apart from "the declared binding silently changed shape".
+    /// Both arguments given: the pair is what tells "unset reached the Kotlin default" apart from
+    /// "the binding silently dropped the argument".
     /// </summary>
     [Fact]
     public void Tag_FullArityOnTheArm_PassesBothArgumentsThrough()
@@ -205,20 +205,21 @@ public class SealedSubclassMethodTests
     }
 
     /// <summary>
-    /// Both arities exist as two declared methods on the arm, not one binding with a C#-side
-    /// default parameter answering both calls.
+    /// ADR-164: one method on the arm, whose trailing defaulted parameter is an optional nullable
+    /// answering both calls, not two declared arities.
     /// </summary>
     [Fact]
-    public void Tag_IsDeclaredTwiceOnTheArm_OnceForEachArity()
+    public void Tag_IsDeclaredOnceOnTheArm_WithAnOptionalTrailingParameter()
     {
-        int[] arities = typeof(Job.Running)
-            .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-            .Where(method => method.Name == "Tag")
-            .Select(method => method.GetParameters().Length)
-            .OrderBy(arity => arity)
-            .ToArray();
+        MethodInfo tag = Assert.Single(
+            typeof(Job.Running).GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+            method => method.Name == "Tag");
+        ParameterInfo[] parameters = tag.GetParameters();
 
-        Assert.Equal([1, 2], arities);
+        Assert.Equal(2, parameters.Length);
+        Assert.False(parameters[0].IsOptional);
+        Assert.True(parameters[1].IsOptional);
+        Assert.Equal(typeof(string), parameters[1].ParameterType);
     }
 
     /// <summary>

@@ -575,12 +575,12 @@ public class Issue42Derived : IDisposable, INugetHandle
 ```
 
 `Farewell` overrides `UnexportedBase.farewell(name, warmly: Boolean = false)`: Kotlin forbids the
-override from restating the default, so the `= false` lives only on the dropped base. With no C#
-base to inherit the omitting overload from, `Issue42Derived` synthesizes it itself, reading the
-default flag off the root of the override chain, the same [ADR-096](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/096-function-default-parameters.md)
-rule described under [Method default parameters](classes-and-objects.md#method-default-parameters).
-An override of an **exported** C# base still synthesizes nothing: the base carries the overload,
-and a generated subclass reaches it through ordinary C# inheritance.
+override from restating the default, so the `= false` lives only on the dropped base.
+`Issue42Derived` widens `warmly` itself, reading the default flag off the root of the override
+chain, the same [ADR-164](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/164-optional-default-parameters.md)
+rule described under [Constructor and method default parameters](classes-and-objects.md#constructor-and-method-default-parameters).
+An override of an **exported** C# base widens the same way, since a base and its override always
+share one C# signature.
 
 The hint picks the clause that is true for the base at hand instead of hedging: a same-module base
 gets told to add `include("...")` alongside the existing `rootPackage`/`include(...)` scope, since
@@ -705,11 +705,13 @@ bring a marked type into scope. `Shelter.rules()` returns `HouseRules`, and the 
 ```
 
 A marked primary-constructor `val` follows one invariant: the marked declaration never appears in a
-C# signature. A trailing marked parameter with a default keeps the shorter constructor overload
-that already omits it ([ADR-091](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/091-constructor-default-parameters.md)'s
-own omitting-overload machinery); an undefaulted or non-trailing one has no such overload, so the
-constructor itself is dropped, `copy` along with it, and the class stays reachable only through a
-Kotlin factory, with `WARNING_NO_PUBLIC_CONSTRUCTOR` naming `OPT_IN_MARKER` among the reasons. See
+C# signature. A trailing marked parameter with a default is dropped from the widened constructor
+signature the same way a `Flow` or sealed defaulted parameter is
+([ADR-164](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/164-optional-default-parameters.md)),
+and Kotlin always evaluates its default; an undefaulted or non-trailing marked parameter has no
+routable form at all, so the constructor itself is dropped, `copy` along with it, and the class
+stays reachable only through a Kotlin factory, with `WARNING_NO_PUBLIC_CONSTRUCTOR` naming
+`OPT_IN_MARKER` among the reasons. See
 [Classes and objects: No public constructor](classes-and-objects.md#no-public-constructor).
 
 A marker declared one Gradle module away resolves the same way: `Cattery.crossModuleName`, marked
@@ -783,13 +785,13 @@ class itself is never exported, only the declarations that use it.
 
 ### An opt-in-marked parameter *type* takes every arity with it {id="opt-in-marked-parameter-type-every-arity"}
 
-A trailing defaulted parameter whose own *type* is opt-in-marked is a stronger case than a marked
-property or default target: it makes every arity of the constructor or function illegal, not only
-the declared one, so the trailing-omitting overload above cannot repair it either. Kotlin propagates
-the opt-in requirement from a callee's declared parameter types, at every arity, and never from what
-a default expression happens to read, so a `data class` whose sole parameter is a marked-typed
-default reduces to zero callable arities. Every arity is skipped `OPT_IN_MARKER_TYPE` (still rendered
-as `SKIPPED_OPT_IN_MARKER`), and the class ends up factory-only; see [Classes and objects: No public
+A defaulted parameter whose own *type* is opt-in-marked is a stronger case than a marked
+property or default target: it makes the constructor or function illegal outright, since the
+widened signature still names the parameter's type. Kotlin propagates the opt-in requirement from
+a callee's declared parameter types, never from what a default expression happens to read, so a
+`data class` whose sole parameter is a marked-typed default has no callable constructor at all. It
+is skipped `OPT_IN_MARKER_TYPE` (still rendered as `SKIPPED_OPT_IN_MARKER`), and the class ends up
+factory-only; see [Classes and objects: No public
 constructor](classes-and-objects.md#no-public-constructor).
 
 From `test-library/.../issue128/Issue128Sample.kt`, where `Grooming` is an opt-in-marked enum
@@ -835,9 +837,9 @@ public class GroomingPlan : IDisposable, INugetHandle
     }
 ```
 
-The same check applies to a function's trailing defaulted parameters, not only constructors: a
-top-level `fun schedule(name: String = "Oreo", grooming: Grooming = Grooming.DAILY)` synthesizes no
-omitting overload either, and `schedule` is absent from the generated C# at every arity.
+The same check applies to a function's defaulted parameters, not only constructors: a top-level
+`fun schedule(name: String = "Oreo", grooming: Grooming = Grooming.DAILY)` has no callable
+signature either, and `schedule` is absent from the generated C# entirely.
 
 ### A class with no reachable constructor stays, and says so {id="no-reachable-constructor"}
 

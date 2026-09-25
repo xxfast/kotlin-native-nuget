@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-164](164-optional-default-parameters.md)
 
 ## Context
 

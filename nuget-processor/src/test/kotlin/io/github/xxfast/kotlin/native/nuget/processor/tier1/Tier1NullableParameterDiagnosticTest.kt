@@ -15,6 +15,10 @@ import kotlin.test.assertTrue
  * The control is the return half: a nullable specialized protocol at a return position still has
  * nowhere to put the absence, so it keeps `SKIPPED_UNSUPPORTED_RETURN` and the unnamed sentence.
  *
+ * ADR-164: a trailing defaulted `Flow<Int>?` is dropped from the widened signature, so
+ * `hubWithEvents` binds without it and says nothing. The skip is exercised by `relay`, whose
+ * unroutable default sits before a required parameter and so still leaves the callable unroutable.
+ *
  * `hub` / `Hub` are the second half of the issue (part 2): a nullable exported class handle *is* a
  * supported parameter, on the top-level and constructor routes as well as the class-method one, so
  * nothing here may skip. The end-to-end half lives in `HubSample.kt` / `Issue131Tests.cs`.
@@ -38,6 +42,8 @@ class Tier1NullableParameterDiagnosticTest {
     fun hubWithEvents(settings: Settings = Settings(), events: Flow<Int>? = null): Hub =
       Hub(settings, null)
 
+    fun relay(events: Flow<Int>? = null, settings: Settings): Hub = Hub(settings, null)
+
     fun latest(): Flow<Int>? = null
   """.trimIndent()
 
@@ -50,13 +56,12 @@ class Tier1NullableParameterDiagnosticTest {
   fun `a nullable parameter with no wire is named an input skip, not a return one`() {
     val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
 
-    diagnostic(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, "hubWithEvents")
+    diagnostic(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, "relay")
     assertTrue(
       result.kspWarnings.none {
-        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN.name) &&
-            it.contains("hubWithEvents")
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN.name) && it.contains("relay")
       },
-      "expected no return-position skip for hubWithEvents; kspWarnings=${result.kspWarnings}",
+      "expected no return-position skip for relay; kspWarnings=${result.kspWarnings}",
     )
   }
 
@@ -65,7 +70,7 @@ class Tier1NullableParameterDiagnosticTest {
     val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
 
     val diagnostic: String =
-      diagnostic(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, "hubWithEvents")
+      diagnostic(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT, "relay")
     assertTrue(
       diagnostic.contains("`events`"),
       "expected the diagnostic to name the offending parameter; got: $diagnostic",
@@ -77,17 +82,17 @@ class Tier1NullableParameterDiagnosticTest {
   }
 
   @Test
-  fun `shorter HubWithEvents arities bind and the events arity stays absent`() {
+  fun `HubWithEvents binds one widened signature without the events parameter`() {
     val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
 
     val cs: String = result.generatedCSharp
     assertTrue(
-      cs.contains("HubWithEvents()"),
-      "expected the zero-arg omitting overload; generated C#:\n$cs",
+      cs.contains("HubWithEvents(global::Interop.Settings? settings = null)"),
+      "expected the widened Settings parameter; generated C#:\n$cs",
     )
     assertTrue(
-      cs.contains("HubWithEvents(global::Interop.Settings settings)"),
-      "expected the Settings omitting overload; generated C#:\n$cs",
+      result.kspWarnings.none { it.contains("hubWithEvents") },
+      "a dropped trailing default is not a skip; kspWarnings=${result.kspWarnings}",
     )
     assertFalse(
       cs.withoutDocComments().contains("events"),

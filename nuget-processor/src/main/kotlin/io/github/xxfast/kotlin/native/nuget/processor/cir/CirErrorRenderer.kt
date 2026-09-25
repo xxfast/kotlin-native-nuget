@@ -221,8 +221,8 @@ internal fun StringBuilder.renderSyncErrorCheckMethod(method: CirMethod, classNa
   val static: String = if (method.isStatic) "static " else ""
   val override: String = if (method.isOverride) "override " else if (method.isVirtual) "virtual " else ""
   val paramStr: String = method.parameters.mapIndexed { index, param ->
-    if (method.isExtension && index == 0) "this ${param.type} ${param.name}"
-    else "${param.type} ${param.name}"
+    if (method.isExtension && index == 0) "this ${param.declaration}"
+    else param.declaration
   }.joinToString(", ")
 
   // For static methods (top-level functions), nativeName is the full native function name.

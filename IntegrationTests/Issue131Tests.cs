@@ -15,8 +15,10 @@ namespace IntegrationTests;
 /// </para>
 /// <para>
 /// ADR-149 is the diagnostic half's arity question: a trailing defaulted <c>Flow</c> costs only
-/// the arities that still carry it. <c>HubWithEvents()</c> and <c>HubWithEvents(Settings)</c>
-/// bind; the events arity stays absent. The KSP-side wording is still pinned by
+/// the arities that still carry it. Under ADR-164 there is one widened signature per callable, and
+/// the unroutable defaulted <c>events</c> is left out of it (Kotlin always evaluates its default),
+/// so <c>HubWithEvents()</c> and <c>HubWithEvents(settings)</c> still bind through that one
+/// signature. The KSP-side wording is still pinned by
 /// <c>Tier1NullableParameterDiagnosticTest</c>.
 /// </para>
 /// <para>
@@ -52,8 +54,8 @@ public class Issue131Tests
     }
 
     /// <summary>
-    /// ADR-096's omitting overloads are minted over the nullable handle parameter too, so the
-    /// defaults-only call the issue asked for exists.
+    /// ADR-164 widens over the nullable handle parameter too (<c>Optional&lt;Logger?&gt;</c>), so
+    /// the defaults-only call the issue asked for exists.
     /// </summary>
     [Fact]
     public void TopLevelFactory_OmittingEveryDefault_UsesTheKotlinDefaults()
@@ -127,17 +129,13 @@ public class Issue131Tests
     }
 
     [Fact]
-    public void HubWithEvents_LeavesOnlyTheUnsupportedArityAbsent()
+    public void HubWithEvents_IsOneSignature_WithoutTheUnsupportedParameter()
     {
-        MethodInfo[] methods = typeof(HubSample).GetMethods()
-            .Where(method => method.Name == "HubWithEvents")
-            .ToArray();
+        MethodInfo method = Assert.Single(typeof(HubSample).GetMethods(), m => m.Name == "HubWithEvents");
 
-        Assert.Contains(methods, method => method.GetParameters().Length == 0);
-        Assert.Contains(methods, method =>
-            method.GetParameters() is [{ ParameterType.Name: "Settings" }]);
-        Assert.DoesNotContain(methods, method =>
-            method.GetParameters().Any(parameter => parameter.Name == "events"));
+        ParameterInfo settings = Assert.Single(method.GetParameters());
+        Assert.Equal(typeof(Settings), settings.ParameterType);
+        Assert.True(settings.IsOptional);
     }
 
     [Fact]
@@ -170,20 +168,18 @@ public class Issue131Tests
     }
 
     [Fact]
-    public void HubWithLoggerAndEvents_LeavesOnlyTheUnsupportedArityAbsent()
+    public void HubWithLoggerAndEvents_IsOneSignature_WithoutTheUnsupportedParameter()
     {
-        MethodInfo[] methods = typeof(HubSample).GetMethods()
-            .Where(method => method.Name == "HubWithLoggerAndEvents")
-            .ToArray();
+        // `logger` is already nullable, so it widens to Optional<Logger?>.
+        MethodInfo method = Assert.Single(
+            typeof(HubSample).GetMethods(), m => m.Name == "HubWithLoggerAndEvents");
+        ParameterInfo[] parameters = method.GetParameters();
 
-        Assert.Contains(methods, method => method.GetParameters().Length == 0);
-        Assert.Contains(methods, method =>
-            method.GetParameters() is [{ ParameterType.Name: "Settings" }]);
-        Assert.Contains(methods, method =>
-            method.GetParameters() is
-                [{ ParameterType.Name: "Settings" }, { ParameterType.Name: "Logger" }]);
-        Assert.DoesNotContain(methods, method =>
-            method.GetParameters().Any(parameter => parameter.Name == "events"));
+        Assert.Equal(["settings", "logger"], parameters.Select(parameter => parameter.Name));
+        Assert.Equal(typeof(Settings), parameters[0].ParameterType);
+        Assert.Equal("Optional`1", parameters[1].ParameterType.Name);
+        Assert.Equal(typeof(Logger), parameters[1].ParameterType.GetGenericArguments()[0]);
+        Assert.All(parameters, parameter => Assert.True(parameter.IsOptional));
     }
 
     [Fact]
@@ -205,14 +201,13 @@ public class Issue131Tests
     }
 
     [Fact]
-    public void Sill_LeavesOnlyTheUnsupportedArityAbsent()
+    public void Sill_IsOneConstructor_WithoutTheUnsupportedParameter()
     {
-        ConstructorInfo[] constructors = typeof(Sill).GetConstructors();
+        ConstructorInfo constructor = Assert.Single(typeof(Sill).GetConstructors());
 
-        Assert.NotNull(typeof(Sill).GetConstructor(Type.EmptyTypes));
-        Assert.NotNull(typeof(Sill).GetConstructor([typeof(Settings)]));
-        Assert.DoesNotContain(constructors, constructor =>
-            constructor.GetParameters().Any(parameter => parameter.Name == "events"));
+        ParameterInfo settings = Assert.Single(constructor.GetParameters());
+        Assert.Equal(typeof(Settings), settings.ParameterType);
+        Assert.True(settings.IsOptional);
     }
 
     [Fact]

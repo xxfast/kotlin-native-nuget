@@ -523,11 +523,11 @@ class Tier1CompileCellsTest {
     )
     val cs: String = result.generatedCSharp
     assertTrue(
-      "public Visit(string patient, IReadOnlyList<string>? notes)" in cs,
+      "public Visit(string patient, Optional<IReadOnlyList<string>?> notes = default)" in cs,
       "expected the constructor to take the nullable collection parameter; generatedCSharp:\n$cs",
     )
     assertTrue(
-      "notes != null ? NugetMarshal.CreateList(notes) : IntPtr.Zero" in cs,
+      "notesValue != null ? NugetMarshal.CreateList(notesValue) : IntPtr.Zero" in cs,
       "expected the null-guarded CreateList prelude; generatedCSharp:\n$cs",
     )
   }

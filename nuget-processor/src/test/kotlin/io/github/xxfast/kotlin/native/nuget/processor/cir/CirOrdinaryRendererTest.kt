@@ -168,7 +168,7 @@ class CirOrdinaryRendererTest {
   }
 
   @Test
-  fun `data class renders equals hashcode tostring and legacy copy`() {
+  fun `data class renders equals hashcode tostring and no copy the planner did not plan`() {
     val cls = CirClass(
       name = "Point",
       libraryName = "geo",
@@ -188,8 +188,10 @@ class CirOrdinaryRendererTest {
 
     val rendered: String = render(cls)
 
-    assertContains(rendered, "public Point Copy(int x, int y)")
-    assertContains(rendered, "Native_Copy(_handle, x, y, out IntPtr error)")
+    // ADR-164: the constructor-shaped fallback had no Kotlin export behind it; `Copy` exists only
+    // when the planner planned `copy`.
+    assertFalse(rendered.contains("Copy("), "no unplanned Copy; rendered=$rendered")
+    assertFalse(rendered.contains("Native_Copy"), "no unplanned copy import; rendered=$rendered")
     assertContains(rendered, "public override bool Equals(object? obj)")
     assertContains(rendered, "Native_Equals(_handle, other._handle)")
     assertContains(rendered, "public override int GetHashCode() => Native_HashCode(_handle);")

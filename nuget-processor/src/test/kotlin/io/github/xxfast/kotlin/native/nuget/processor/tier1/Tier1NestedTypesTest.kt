@@ -410,22 +410,15 @@ class Tier1NestedTypesTest {
   }
 
   @Test
-  fun `an inner class omitting overload keeps the outer instance`() {
+  fun `an inner class widened default keeps the outer instance`() {
     val result = Tier1Harness.run(innerSource, fileName = "Inner.kt")
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
-    // ADR-091 truncates the trailing defaulted parameter; the receiver is not a plan parameter, so
-    // it survives the truncation and the overload is `(outer)`, never `()`.
-    assertContains(
-      result.generated,
-      "public fun export_library_tier1_nestedinner__host_tag_create_2(outer: COpaquePointer, errorOut: COpaquePointer?):",
-    )
-    assertContains(
-      result.generated,
-      "outer.asStableRef<tier1.nestedinner.Host>().get().Tag()",
-    )
-    assertContains(result.generatedCSharp, "public Tag(Host outer)")
-    assertContains(result.generatedCSharp, "public Tag(Host outer, string text)")
+    // ADR-164 widens the trailing defaulted parameter; the receiver is not a plan parameter, so it
+    // is never widened, and the unset arm is `(outer)`, never `()`.
+    assertFalse(result.generated.contains("host_tag_create_2"), "no synthesized export")
+    assertContains(result.generated, "0 -> outer.asStableRef<tier1.nestedinner.Host>().get().Tag()")
+    assertContains(result.generatedCSharp, "public Tag(Host outer, string? text = null)")
   }
 
   @Test

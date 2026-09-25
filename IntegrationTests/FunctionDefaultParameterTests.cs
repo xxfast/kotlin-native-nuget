@@ -5,15 +5,11 @@ using TestLibrary.Whiskers;
 namespace IntegrationTests;
 
 /// <summary>
-/// ADR-096: Kotlin <em>function</em> default parameters surfaced as C# overloads, the same
-/// <c>@JvmOverloads</c> trailing rule ADR-091 shipped for constructors, now on the five function
-/// routes: class method, <c>object</c> member, companion member, top-level function and extension
-/// function.
-///
-/// For parameters <c>p1..pn</c>, <c>d</c> is the number of <em>trailing</em> parameters that all
-/// have a default; for each <c>k</c> in <c>1..d</c> there is one extra overload taking
-/// <c>p1..p(n-k)</c>. The full signature is always kept. A default followed by a required parameter
-/// synthesizes nothing, because the generated wrapper is a positional Kotlin call.
+/// ADR-164 (superseding ADR-096's omitting overloads): Kotlin <em>function</em> default parameters
+/// on the five function routes (class method, <c>object</c> member, companion member, top-level
+/// function and extension function) surface as ONE C# method whose defaulted parameters take the
+/// nullable form of their type. <c>null</c> means unset. The trailing all-defaulted run is
+/// optional (<c>= null</c>); a default followed by a required parameter is required-but-nullable.
 ///
 /// Every test here calls through to Kotlin and asserts the <em>value</em> the omitted argument took,
 /// not merely that the overload compiles: KSP only ever exposes the <c>hasDefault</c> bit, so the
@@ -41,8 +37,7 @@ public class FunctionDefaultParameterTests
     [Fact]
     public void AnnouncerAnnounce_FullSignature_StillWorksUnchanged()
     {
-        // The declared entry must render byte-identically, so the synthesized one cannot have
-        // displaced it.
+        // A positional value still binds to the widened `bool?`.
         using var announcer = new Announcer("Oreo");
 
         Assert.Equal("Oreo: MORNING!", announcer.Announce("morning", true));
@@ -51,7 +46,7 @@ public class FunctionDefaultParameterTests
     [Fact]
     public void AnnouncerTally_OmittingBothTrailingArguments_UsesBothKotlinDefaults()
     {
-        // k = 2, the deepest suffix. "cats" and false are declared only in Kotlin.
+        // Both unset. "cats" and false are declared only in Kotlin.
         using var announcer = new Announcer("Mylo");
 
         Assert.Equal("Mylo counted 3 cats", announcer.Tally(3));
@@ -60,8 +55,8 @@ public class FunctionDefaultParameterTests
     [Fact]
     public void AnnouncerTally_OmittingOneTrailingArgument_UsesExcitedDefault()
     {
-        // k = 1. Distinct defaults mean a mis-wired suffix shows up as a wrong string rather than
-        // a plausible one.
+        // Only `excited` unset. Distinct defaults mean a mis-wired mask arm shows up as a wrong
+        // string rather than a plausible one.
         using var announcer = new Announcer("Mylo");
 
         Assert.Equal("Mylo counted 3 kittens", announcer.Tally(3, "kittens"));
@@ -76,22 +71,32 @@ public class FunctionDefaultParameterTests
     }
 
     [Fact]
-    public void AnnouncerTally_ExposesExactlyThreeArities()
+    public void AnnouncerTally_SettingOnlyTheLastDefault_ByName_UsesTheEarlierDefault()
     {
-        // d = 2 trailing defaults => d extra entries, linear and not the 2^n combinatorial set.
-        Assert.NotNull(typeof(Announcer).GetMethod("Tally", [typeof(int)]));
-        Assert.NotNull(typeof(Announcer).GetMethod("Tally", [typeof(int), typeof(string)]));
-        Assert.NotNull(typeof(Announcer).GetMethod("Tally", [typeof(int), typeof(string), typeof(bool)]));
-        Assert.Equal(3, typeof(Announcer).GetMethods().Count(m => m.Name == "Tally"));
+        // Issue #297: skip `label`, set `excited`. Impossible under the omitting overloads.
+        using var announcer = new Announcer("Mylo");
+
+        Assert.Equal("Mylo counted 3 cats!!", announcer.Tally(3, excited: true));
     }
 
-    // ---- Route 2: a synthesized overload next to DECLARED ones (Narrator) ----
+    [Fact]
+    public void AnnouncerTally_ExposesExactlyOneSignature_WithTwoOptionalNullableParameters()
+    {
+        var tally = Assert.Single(typeof(Announcer).GetMethods(), m => m.Name == "Tally");
+        var parameters = tally.GetParameters();
+
+        Assert.Equal([typeof(int), typeof(string), typeof(bool?)], parameters.Select(p => p.ParameterType));
+        Assert.False(parameters[0].IsOptional);
+        Assert.True(parameters[1].IsOptional);
+        Assert.True(parameters[2].IsOptional);
+    }
+
+    // ---- Route 2: a widened overload next to a DECLARED one (Narrator) ----
 
     [Fact]
-    public void NarratorRate_DeclaredIntOverload_IsUnaffectedByTheSynthesizedEntry()
+    public void NarratorRate_DeclaredIntOverload_IsUnaffectedByTheWidenedSibling()
     {
-        // ADR-095 numbers the two declared `rate`s first; synthesized entries are appended after
-        // them in the same per-(class, name) counter, so this one must keep dispatching to itself.
+        // ADR-095 numbers the two declared `rate`s; widening `boost` must not steal `Rate(4)`.
         using var narrator = new Narrator("Mylo");
 
         Assert.Equal("Mylo rates 4 naps", narrator.Rate(4));
@@ -106,25 +111,25 @@ public class FunctionDefaultParameterTests
     }
 
     [Fact]
-    public void NarratorRate_SynthesizedOverload_UsesBoostDefaultOfOne()
+    public void NarratorRate_OmittingBoost_UsesBoostDefaultOfOne()
     {
-        // "smug".length + 1 = 5. If the synthesized entry were wired to the OTHER declared `rate`
-        // (the numbering hazard this cell exists for), this would not compile or would answer with
-        // the naps sentence instead.
+        // "smug".length + 1 = 5. If the unset arm were wired to the OTHER declared `rate` (the
+        // numbering hazard this cell exists for), this would answer with the naps sentence.
         using var narrator = new Narrator("Mylo");
 
         Assert.Equal("Mylo rates smug at 5", narrator.Rate("smug"));
     }
 
     [Fact]
-    public void NarratorRate_ExposesExactlyTheThreeExpectedSignatures()
+    public void NarratorRate_ExposesExactlyTheTwoDeclaredSignatures()
     {
-        // ADR-096's worked example: Rate(int), Rate(string, int), Rate(string). One natural
-        // overload set, no visible numbering.
+        // Rate(int) and Rate(string, int? boost = null). One natural overload set, no visible
+        // numbering, no synthesized third entry.
         Assert.NotNull(typeof(Narrator).GetMethod("Rate", [typeof(int)]));
-        Assert.NotNull(typeof(Narrator).GetMethod("Rate", [typeof(string), typeof(int)]));
-        Assert.NotNull(typeof(Narrator).GetMethod("Rate", [typeof(string)]));
-        Assert.Equal(3, typeof(Narrator).GetMethods().Count(m => m.Name == "Rate"));
+        var widened = typeof(Narrator).GetMethod("Rate", [typeof(string), typeof(int?)]);
+        Assert.NotNull(widened);
+        Assert.True(widened.GetParameters()[1].IsOptional);
+        Assert.Equal(2, typeof(Narrator).GetMethods().Count(m => m.Name == "Rate"));
     }
 
     // ---- Route 3: object members (Kibble) ----
@@ -164,9 +169,7 @@ public class FunctionDefaultParameterTests
     [Fact]
     public void Hail_OmittingLoud_UsesKotlinDefaultOfFalse()
     {
-        // Top-level is one of the two routes where the synthesized entry shares its declaration
-        // node with the declared one, so `planFor` has to become plural before this can exist at
-        // all. Both the declared and the synthesized entry are PascalCase (ADR-110).
+        // Top-level route: the widened entry is PascalCase (ADR-110) and there is only one.
         Assert.Equal("hi Oreo", WhiskersSample.Hail("Oreo"));
     }
 
@@ -181,7 +184,7 @@ public class FunctionDefaultParameterTests
     [Fact]
     public void PawKnead_OmittingEveryParameter_KeepsTheReceiverAndUsesBothDefaults()
     {
-        // All parameters are defaulted, so at k = 2 the plan carries ZERO parameters. The receiver
+        // All parameters are defaulted, so the empty mask arm carries ZERO arguments. The receiver
         // is a ForwardReceiver.Value rather than a plan parameter, so it must survive: `Knead()`
         // still has to know it is Oreo's paw.
         using var paw = new Paw("Oreo");
@@ -206,14 +209,26 @@ public class FunctionDefaultParameterTests
     }
 
     [Fact]
-    public void PawKnead_ExposesEveryAritySignatureWithTheReceiverFirst()
+    public void PawKnead_SettingOnlySurface_ByName_UsesTimesDefault()
     {
-        Assert.NotNull(typeof(PawExtensions).GetMethod("Knead", [typeof(Paw)]));
-        Assert.NotNull(typeof(PawExtensions).GetMethod("Knead", [typeof(Paw), typeof(int)]));
-        Assert.NotNull(typeof(PawExtensions).GetMethod("Knead", [typeof(Paw), typeof(int), typeof(string)]));
+        using var paw = new Paw("Oreo");
+
+        Assert.Equal("Oreo kneads the couch 2 times", paw.Knead(surface: "couch"));
     }
 
-    // ---- The middle-default negative: absent output, not wrong output ----
+    [Fact]
+    public void PawKnead_ExposesOneSignatureWithTheReceiverFirst()
+    {
+        var knead = Assert.Single(typeof(PawExtensions).GetMethods(), m => m.Name == "Knead");
+        var parameters = knead.GetParameters();
+
+        Assert.Equal([typeof(Paw), typeof(int?), typeof(string)], parameters.Select(p => p.ParameterType));
+        Assert.False(parameters[0].IsOptional);
+        Assert.True(parameters[1].IsOptional);
+        Assert.True(parameters[2].IsOptional);
+    }
+
+    // ---- The middle default: required-but-nullable ----
 
     [Fact]
     public void Book_FullSignature_Works()
@@ -222,13 +237,21 @@ public class FunctionDefaultParameterTests
     }
 
     [Fact]
-    public void Book_HasNoOmittingOverload()
+    public void Book_NullCapacity_UsesKotlinDefault()
     {
-        // `capacity` has a required parameter after it, so a positional Kotlin call can never skip
-        // it. Stated by signature so a future "helpful" combinatorial expansion trips here.
-        Assert.Null(typeof(WhiskersSample).GetMethod("Book", [typeof(string), typeof(int)]));
-        Assert.Null(typeof(WhiskersSample).GetMethod("Book", [typeof(string)]));
-        Assert.Equal(1, typeof(WhiskersSample).GetMethods().Count(m => m.Name == "Book"));
+        Assert.Equal("Paws booked 3 spots in Colombo", WhiskersSample.Book("Paws", null, "Colombo"));
+    }
+
+    [Fact]
+    public void Book_CapacityIsRequiredButNullable()
+    {
+        // `capacity` has a required parameter after it, so C# cannot make it optional. One
+        // signature, `capacity` typed `int?`, nothing optional.
+        var book = Assert.Single(typeof(WhiskersSample).GetMethods(), m => m.Name == "Book");
+        var parameters = book.GetParameters();
+
+        Assert.Equal([typeof(string), typeof(int?), typeof(string)], parameters.Select(p => p.ParameterType));
+        Assert.All(parameters, p => Assert.False(p.IsOptional));
     }
 
     // ---- expect/actual: the default lives on the expect, never on the exported actual ----
@@ -290,15 +313,13 @@ public class FunctionDefaultParameterTests
     }
 
     [Fact]
-    public void Nuzzle_ExposesBothOverloadsAtEveryArity()
+    public void Nuzzle_ExposesBothDeclaredOverloads_EachWidened()
     {
-        // Four entries: two declared, two synthesized. Stated by signature so a collapse of the two
-        // namesakes into one shows up here as a missing overload rather than a wrong value.
-        Assert.NotNull(typeof(PlatformApi).GetMethod("Nuzzle", [typeof(string)]));
-        Assert.NotNull(typeof(PlatformApi).GetMethod("Nuzzle", [typeof(string), typeof(bool)]));
-        Assert.NotNull(typeof(PlatformApi).GetMethod("Nuzzle", [typeof(int)]));
+        // Two entries, one per declared namesake, each with its own widened default. Stated by
+        // signature so a collapse of the two namesakes into one shows up as a missing overload.
+        Assert.NotNull(typeof(PlatformApi).GetMethod("Nuzzle", [typeof(string), typeof(bool?)]));
         Assert.NotNull(typeof(PlatformApi).GetMethod("Nuzzle", [typeof(int), typeof(string)]));
-        Assert.Equal(4, typeof(PlatformApi).GetMethods().Count(m => m.Name == "Nuzzle"));
+        Assert.Equal(2, typeof(PlatformApi).GetMethods().Count(m => m.Name == "Nuzzle"));
     }
 
     // ---- The numbering is a native-export detail and must not leak ----

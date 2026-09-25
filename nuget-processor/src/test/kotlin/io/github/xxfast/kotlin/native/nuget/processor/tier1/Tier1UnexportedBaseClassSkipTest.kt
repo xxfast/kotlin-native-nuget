@@ -260,7 +260,7 @@ class Tier1UnexportedBaseClassSkipTest {
    * path answers; what this cell measures is that the overload lands on the subclass.
    */
   @Test
-  fun `an override of a dropped base's defaulted member synthesizes the omitting overload`() {
+  fun `an override of a dropped base's defaulted member widens on the subclass`() {
     val result = Tier1Harness.run(
       """
       package tier1.issue42base
@@ -282,13 +282,10 @@ class Tier1UnexportedBaseClassSkipTest {
       "@CName(\"library_api_farewell\")" in kotlin,
       "the full-arity override still exports; generated:\n$kotlin",
     )
+    assertFalse("@CName(\"library_api_farewell_2\")" in kotlin, "no synthesized export; generated:\n$kotlin")
+    // ADR-164: the root's default bit reaches the subclass, so the one signature is optional.
     assertTrue(
-      "@CName(\"library_api_farewell_2\")" in kotlin,
-      "the dropped base carries no C# overload to inherit, so the omitting overload has to be " +
-          "synthesized here; generated:\n$kotlin",
-    )
-    assertTrue(
-      "Farewell(string name)" in result.generatedCSharp,
+      "Farewell(string name, bool? warmly = null)" in result.generatedCSharp,
       "the consumer's one-argument call is CS1501 without it; " +
           "generated C#:\n${result.generatedCSharp}",
     )

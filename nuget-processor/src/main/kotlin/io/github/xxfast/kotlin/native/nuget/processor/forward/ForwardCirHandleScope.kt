@@ -45,7 +45,9 @@ internal fun forwardCirHandleScope(
     prelude.flatMap { step -> step.declarations }.forEach { line -> appendLine("$indent$line") }
     appendLine("${indent}try")
     appendLine("$indent{")
-    prelude.forEach { step -> appendLine("$inner${step.statement}") }
+    // ADR-164: a step whose whole effect is its hoisted declaration has no statement left.
+    prelude.filter { step -> step.statement.isNotEmpty() }
+      .forEach { step -> appendLine("$inner${step.statement}") }
     val indentedCore: String =
       core.trim('\n').lines().joinToString("\n") { line ->
         if (line.isBlank()) line else "    $line"
