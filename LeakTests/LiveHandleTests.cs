@@ -11,6 +11,7 @@ using TestLibrary.Issue127;
 using TestLibrary.Issue131;
 using TestLibrary.Issue236;
 using Issue297 = TestLibrary.Issue297;
+using Perchvar = TestLibrary.Perchvar;
 using TestLibrary.Kennel;
 using Lineage = TestLibrary.Lineage;
 using TestLibrary.Lounge;
@@ -913,6 +914,39 @@ public class LiveHandleTests
                 doorstep.LetIn(mylo));
             Assert.Equal("Mylo is 4 and Mylo laps up the kibble", doorstep.Weigh(mylo));
             Assert.Equal("Mylo blinks slowly (Mylo)", doorstep.CallOut(mylo));
+        });
+    }
+
+    // Row 6p. An interface `var` written through `ITally`. `AsTally()` mints one
+    // ADR-040 backing handle per crossing over the same Kotlin `TrainingClicker`, and the case D
+    // explicit `ITally.X` setters on the class itself borrow the receiver and, for `Toy`, the
+    // `Pompom` handle. A setter consumes handles and returns none, so a count that rises here is
+    // either the backing wrapper not releasing or a setter retaining what it should borrow. Mylo
+    // gets fifty clicks, Oreo steals the pompom fifty times.
+    [Fact]
+    public void InterfaceVarSetters_BackingWrapperAndExplicitCaseD_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var clicker = new Perchvar.TrainingClicker();
+            using var pompom = new Perchvar.Pompom("orange");
+
+            using (Perchvar.ITally wrapper = clicker.AsTally())
+            {
+                wrapper.Count = 1;
+                wrapper.Toy = pompom;
+                wrapper.Names = new[] { "Mylo" };
+                wrapper.Toy = null;
+            }
+
+            Perchvar.ITally explicitTally = clicker;
+            explicitTally.Count = 2;
+            explicitTally.Label = "clicker";
+            explicitTally.Toy = pompom;
+            explicitTally.Names = new[] { "Mylo", "Oreo" };
+            explicitTally.Toy = null;
+
+            Assert.Equal("clicker: 2 clicks for Mylo, Oreo with no pompom", clicker.Describe());
         });
     }
 

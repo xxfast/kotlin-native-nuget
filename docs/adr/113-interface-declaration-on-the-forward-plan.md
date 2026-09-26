@@ -307,7 +307,8 @@ report itself rather than by a compiler run here.
 - `CirInterfaceProperty.hasSetter` stays `false` for every member, exactly as today. A `var`
   interface property continues to render `{ get; }`. Deriving it from `plan.setter != null` would
   render `{ get; set; }` and risk CS0535 against an implementing class whose own setter was dropped
-  by ADR-075's getter/setter independence. Follow-up item, below.
+  by ADR-075's getter/setter independence. Follow-up item, below. **Closed by the 2026-09-26
+  amendment.**
 - Super-interface members. After this change they disappear from `IFoo` (no plan entry, see
   question 1), where today they appear untyped and unimplementable. That is strictly closer to the
   restatement (the class compiles), but it loses API surface, so it is called out in Consequences and
@@ -448,8 +449,9 @@ satisfies the restatement.
    gives every class-family route the same guard this Decision gave the interface route, plus the
    related inherited-member (CS0108) shape.
 3. `CirInterfaceProperty.hasSetter` is never set, so a `var` interface property renders get-only.
-   Needs reconciling with ADR-075's getter/setter independence and with the CS0546 hazard recorded at
-   `docs/archive/roadmap.md:67` before it can be derived from the plan.
+   Needs reconciling with ADR-075's getter/setter independence and with a CS0535 hazard (the live
+   hazard recorded at `docs/archive/roadmap.md:67` was mislabelled CS0546; see the 2026-09-26
+   amendment) before it can be derived from the plan. **Closed by that amendment.**
 4. An interface that is neither reachable nor implemented by any exported class now silently loses
    unbridgeable members with no diagnostic anywhere (Decision C's residual hole).
 
@@ -526,3 +528,41 @@ such as `fun read(n: Int): T`. No fixture has that shape.
 No interface in `test-library` extends another, so the "inherited members now drop" behaviour
 (deferred item 1 above) has no live fixture; the code-level argument is the
 `.filter { it.parentDeclaration == iface }` on both planner helpers, verified by reading only.
+
+## 2026-09-26 amendment: interface `var` setters
+
+Closes the "Not decided here" bullet and deferred item 3 above (ROADMAP line 28). `translateInterface`
+now renders `hasSetter = plan.setter != null`, so `CirInterfaceProperty` agrees with the getter's own
+plan instead of defaulting to false. The type-parameter carve-out (a member typed with the interface's
+own type parameter) stays get-only deliberately: a generic implementer's setter is refused by ADR-147
+regardless, so widening the carve-out member would be CS0535 against it.
+
+The live hazard this deferral was guarding against turned out to be **CS0535, not CS0546** as the
+original archive note said: a class whose public setter ADR-075's read-only-base guard refuses no
+longer satisfies a `{ get; set; }` interface. [ADR-168](168-interface-var-explicit-setter.md) decides
+that shape: the class keeps its get-only public override and gains an explicit `IFoo.X { get; set; }`
+member beside it, so no shape that compiled before this amendment regresses.
+
+Decision D's "the declaration planner's drops are not merged" still holds for **getter** drops
+(`droppedProperties`), unchanged. It is now partially reversed for **setter** drops
+(`droppedPropertySetters`): a reachable interface's refused setter must be named once, not twice, so
+`NugetProcessor.kt` filters the declaration catalog's setter drops by the symbols the reachable
+catalog already warned (`warnedSetterSymbols`) before emitting the rest. This does not resurrect
+Decision D's original double-report risk, because the filter, not an unconditional merge, is what
+runs. Decision C's residual hole ("an interface neither reachable nor implemented gets a silently
+thinner `IFoo`") is now closed for setters specifically: a merely-implemented interface's refused
+setter (no reachable-catalog entry to already have warned it) is named through this same filtered
+emit, at exactly one occurrence.
+
+`CirInterfaceProperty` gains a `remarks` slot, filled from the same skip records a class property's
+`<remarks>` already carries, so a refused setter is named on the member (`ITally.LastSlip`) rather
+than only in the build log, whether or not the interface is reachable.
+
+An inherited `var`'s refusal is named once, on the declaring super-interface only (`IBase.err`, not
+also `IDerived.err`): the declaration catalog's inherited-property planning pass now discards a
+setter drop the same way it already discarded a getter drop for an inherited member, since the
+super's own planning pass already recorded it.
+
+Pinned by `Tier1InterfaceVarPropertyTest.kt`, `test-library/.../test/perchvar/TrainingClicker.kt`,
+`IntegrationTests/InterfaceVarPropertyTests.cs`, and the `aviary`/`Feathered` control in
+`AbstractInterfacePropertyTests.cs`.

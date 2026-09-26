@@ -19,7 +19,7 @@ internal fun StringBuilder.renderInterface(iface: CirInterface) {
   appendLine("    {")
 
   for (prop in iface.properties) {
-    renderDoc(prop.doc, "        ")
+    renderDoc(prop.doc, "        ", generated = prop.remarks)
     val modifier: String = if (prop.isNew) "new " else ""
     if (prop.hasSetter) {
       appendLine("        $modifier${prop.type} ${prop.name} { get; set; }")
@@ -433,6 +433,30 @@ internal fun StringBuilder.renderConstructor(
 }
 
 internal fun StringBuilder.renderProperty(prop: CirProperty) {
+  // ROADMAP line 28, case D: the public property overrides a get-only base property, so it renders
+  // get-only (CS0546 otherwise), and the setter the interface declares is implemented explicitly
+  // beside it. The `Native_Set_` import still comes off `setter`, so it is emitted either way.
+  if (prop.explicitSetterInterfaces.isNotEmpty()) {
+    renderProperty(prop.copy(setter = null, explicitSetterInterfaces = emptyList()))
+    val setter: String = checkNotNull(prop.setter) {
+      "Property ${prop.name} has explicit interface setters but no setter body"
+    }
+    prop.explicitSetterInterfaces.forEach { iface ->
+      appendLine("        ${prop.type} $iface.${prop.name}")
+      appendLine("        {")
+      appendLine("            get => ${prop.name};")
+      if (setter.contains('\n')) {
+        appendLine("            set")
+        appendLine("            {$setter")
+        appendLine("            }")
+      } else {
+        appendLine("            set => $setter;")
+      }
+      appendLine("        }")
+      appendLine()
+    }
+    return
+  }
   // ADR-150: above the abstract early return, so both spellings carry the doc. ADR-075's
   // getter/setter pair is one C# property, so it gets one `<summary>`.
   renderDoc(prop.doc, "        ", generated = prop.remarks)
