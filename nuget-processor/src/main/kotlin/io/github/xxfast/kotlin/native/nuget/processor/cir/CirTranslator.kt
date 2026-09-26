@@ -446,7 +446,7 @@ internal fun translate(
     }
     interfaces.filter { isOwnedBy(owner, it) }.forEach { iface ->
       add(
-        translateInterface(iface, interfaceDeclarationCatalog, logger, expects)
+        translateInterface(iface, interfaceDeclarationCatalog, logger, tracker, expects)
           // ADR-134: an interface owner carries children at any depth, exactly as a class does.
           .copy(nestedDeclarations = translateNestedOf(iface)),
       )
@@ -505,7 +505,7 @@ internal fun translate(
 
   interfaces.filter { !it.isNestedDeclaration() }.forEach { iface ->
     val declaration: CirDeclaration = guarded(iface.forwardGuardName(), iface, logger) {
-      translateInterface(iface, interfaceDeclarationCatalog, logger, expects)
+      translateInterface(iface, interfaceDeclarationCatalog, logger, tracker, expects)
         // ADR-134: the interface block owns its nested declarations (`ICage.Bar`).
         .copy(nestedDeclarations = translateNestedOf(iface))
     } ?: return@forEach

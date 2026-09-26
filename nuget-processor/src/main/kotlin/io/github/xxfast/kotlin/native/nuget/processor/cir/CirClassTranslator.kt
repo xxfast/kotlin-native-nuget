@@ -24,6 +24,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKdoc
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toCirDoc
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedCallbackMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedInterfaceBridgePair
+import io.github.xxfast.kotlin.native.nuget.processor.forward.InterfaceBridgeWire
+import io.github.xxfast.kotlin.native.nuget.processor.forward.interfaceBridgeWire
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasPlannedCallbackParameter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMethods
@@ -957,7 +959,7 @@ internal fun translateClass(
 
   val interfaceBridgeMembers: List<CirInterfaceBridgeMethod> = interfaceBridgePairs
     // ADR-090 amendment (2026-09-26): the C# half of the same named refusal.
-    .filter { (addMethod, _) -> legacyRefusedInterfaceBridgePair(addMethod) == null }
+    .filter { (addMethod, _) -> classifier.legacyRefusedInterfaceBridgePair(addMethod) == null }
     .mapNotNull { (addMethod, removeMethod) ->
       translateInterfaceBridgeMethod(
         addMethod, removeMethod, libraryName, prefix, name, tracker, classifier, context,
@@ -2902,6 +2904,9 @@ internal fun translateInterface(
   iface: KSClassDeclaration,
   callableCatalog: ForwardCallablePlanCatalog,
   logger: KSPLogger,
+  // ADR-113 (2026-09-26): an interface whose only collection use is on its own members must still
+  // pull in `System.Collections.Generic` (CS0246 on `IReadOnlyList<>` under no implicit usings).
+  tracker: CollectionHelperTracker,
   // ADR-150: the expect index. A bare `forwardKdoc()` here cannot reach the `expect` half,
   // so a documented `expect` declaration of this family rendered with no summary at all.
   expects: ExpectIndex = ExpectIndex(),
@@ -2927,6 +2932,7 @@ internal fun translateInterface(
   val propertyPlans: List<ForwardPropertyPlan> = callableCatalog.propertyPlans
     .filter { plan -> plan.symbol.substringBeforeLast('.') == qualified }
   val plannedProperties: List<CirInterfaceProperty> = propertyPlans.map { plan ->
+    tracker.trackProperty(plan)
     // `hasSetter` deliberately stays at its default: ADR-113 leaves a `var` interface property
     // rendering `{ get; }`, since `{ get; set; }` would be CS0535 against an implementing class
     // whose own setter ADR-075 dropped.
@@ -2941,6 +2947,7 @@ internal fun translateInterface(
 
   val methodPlans: List<ForwardCallablePlan> = callableCatalog.classMethods(qualified)
   val plannedMethods: List<CirInterfaceMethod> = methodPlans.map { plan ->
+    tracker.trackPlan(plan)
     CirInterfaceMethod(
       name = plan.publicSignature.csharpName,
       returnType = plan.publicSignature.result.forwardPublicCsharpType(),
@@ -3843,18 +3850,21 @@ private fun translateInterfaceBridgeMethod(
     val params = method.parameters.toList()
     val arity: Int = params.size
 
+    // ADR-039 amendment (2026-09-26): one classification per parameter, the same one the pair gate
+    // (`legacyRefusedInterfaceBridgePair`) admitted it by, so the wire cannot drift from the gate.
+    val bridgeTypes: List<BridgeType> = params.map { param ->
+      classifier.classify(param.type.resolve())
+    }
+    val wires: List<InterfaceBridgeWire> = bridgeTypes.map { type -> type.interfaceBridgeWire() }
+
     // Delegate suffix naming follows stored-callback convention
-    val argSuffixes: List<String> = params.map { param ->
-      val pType = param.type.resolve().expandAliases()
-      val pSimple: String = pType.declaration.simpleName.asString()
-      val pQualified: String = pType.declaration.qualifiedName?.asString() ?: ""
-      val isEnum: Boolean = (pType.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
-      val isPrimitive: Boolean = pQualified.startsWith("kotlin.") && pSimple != "String"
-      when {
-        isEnum -> "Int"
-        pSimple == "Boolean" -> "Bool"
-        isPrimitive -> pSimple
-        else -> "Object"
+    val argSuffixes: List<String> = params.mapIndexed { i, param ->
+      val pSimple: String = param.type.resolve().expandAliases().declaration.simpleName.asString()
+      when (wires[i]) {
+        InterfaceBridgeWire.ORDINAL -> "Int"
+        InterfaceBridgeWire.BOOL -> "Bool"
+        InterfaceBridgeWire.BY_VALUE -> pSimple
+        InterfaceBridgeWire.HANDLE -> "Object"
       }
     }
     val delegateName: String = "Nuget${argSuffixes.joinToString("")}VoidCallback"
@@ -3864,16 +3874,12 @@ private fun translateInterfaceBridgeMethod(
       "(IntPtr _)"
     } else {
       val argParams: String = params.mapIndexed { i, param ->
-        val pType = param.type.resolve().expandAliases()
-        val pSimple: String = pType.declaration.simpleName.asString()
-        val pQualified: String = pType.declaration.qualifiedName?.asString() ?: ""
-        val isEnum: Boolean = (pType.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
-        val isPrimitive: Boolean = pQualified.startsWith("kotlin.") && pSimple != "String"
-        when {
-          isEnum -> "int arg${i}Ord"
-          pSimple == "Boolean" -> "byte arg${i}"
-          isPrimitive -> "${KOTLIN_TO_CSHARP_PARAM[pSimple] ?: "int"} arg${i}"
-          else -> "IntPtr arg${i}Ptr"
+        val pSimple: String = param.type.resolve().expandAliases().declaration.simpleName.asString()
+        when (wires[i]) {
+          InterfaceBridgeWire.ORDINAL -> "int arg${i}Ord"
+          InterfaceBridgeWire.BOOL -> "byte arg${i}"
+          InterfaceBridgeWire.BY_VALUE -> "${byValueCsType(pSimple)} arg${i}"
+          InterfaceBridgeWire.HANDLE -> "IntPtr arg${i}Ptr"
         }
       }.joinToString(", ")
       "($argParams, IntPtr _)"
@@ -3888,28 +3894,27 @@ private fun translateInterfaceBridgeMethod(
     val callbackBody: String = buildString {
       params.forEachIndexed { i, param ->
         val pType = param.type.resolve().expandAliases()
-        val pSimple: String = pType.declaration.simpleName.asString()
-        val pQualified: String = pType.declaration.qualifiedName?.asString() ?: ""
-        val isEnum: Boolean = (pType.declaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
-        val isPrimitive: Boolean = pQualified.startsWith("kotlin.") && pSimple != "String"
-        val csType: String = when {
-          isEnum -> qualifiedElementCsType(pType, context)
-          pSimple == "Boolean" -> "bool"
-          isPrimitive -> KOTLIN_TO_CSHARP_PARAM[pSimple] ?: pSimple
-          pSimple == "String" -> "string"
-          // Issue #41 again, one level down: the unmarshal declares a local of the argument's own
-          // type, which the ADR-037 stored-callback sibling already qualifies (`csParamType`).
-          else -> qualifiedElementCsType(pType, context)
-        }
-        when {
-          isEnum -> append("$csType arg$i = ($csType)arg${i}Ord; ")
-          pSimple == "Boolean" -> append("$csType arg$i = arg${i} != 0; ")
-          isPrimitive -> { /* arg is already the right type, no unmarshal needed */
+        when (wires[i]) {
+          InterfaceBridgeWire.ORDINAL -> {
+            val csType: String = qualifiedElementCsType(pType, context)
+            append("$csType arg$i = ($csType)arg${i}Ord; ")
+          }
+          InterfaceBridgeWire.BOOL -> append("bool arg$i = arg${i} != 0; ")
+          InterfaceBridgeWire.BY_VALUE -> {
+            /* arg is already the right type, no unmarshal needed */
           }
 
           // ADR-036 amendment (2026-09-11): see the stored-callback route above; `FromHandle` is
           // the owner, so there is no second dispose here.
-          else -> append("$csType arg$i = NugetMarshal.FromHandle<$csType>(arg${i}Ptr); ")
+          InterfaceBridgeWire.HANDLE -> {
+            // Issue #41 again, one level down: the unmarshal declares a local of the argument's
+            // own type, which the ADR-037 stored-callback sibling already qualifies
+            // (`csParamType`).
+            val csType: String =
+              if (bridgeTypes[i] == BridgeType.String) "string"
+              else qualifiedElementCsType(pType, context)
+            append("$csType arg$i = NugetMarshal.FromHandle<$csType>(arg${i}Ptr); ")
+          }
         }
       }
       val callArgs: String = params.indices.joinToString(", ") { "arg$it" }
@@ -3943,3 +3948,11 @@ private fun translateInterfaceBridgeMethod(
  * whenever the author documented any of the declared ones.
  */
 private const val ASYNC_CANCELLATION_PARAMETER: String = "cancellationToken"
+
+/**
+ * ADR-039 amendment (2026-09-26): a by-value listener parameter's C# type; the gate admits only
+ * primitives.
+ */
+private fun byValueCsType(kotlinSimpleName: String): String =
+  KOTLIN_TO_CSHARP_PARAM[kotlinSimpleName]
+    ?: error("ADR-039: the subscription pair gate admitted `$kotlinSimpleName` by value")

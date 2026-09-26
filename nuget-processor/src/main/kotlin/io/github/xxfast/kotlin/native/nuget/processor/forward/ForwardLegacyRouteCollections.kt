@@ -769,18 +769,122 @@ internal fun KSFunctionDeclaration.isForwardLegacyAsyncRoute(): Boolean {
  * (`Conflicting declarations: onMeowFn`). The route is legacy, so it is not numbered: both halves
  * drop the pair and `warnRefusedLegacyRouteMembers` names it.
  */
-internal fun legacyRefusedInterfaceBridgePair(addMethod: KSFunctionDeclaration): String? {
+internal fun ForwardBridgeTypeClassifier.legacyRefusedInterfaceBridgePair(
+  addMethod: KSFunctionDeclaration,
+): LegacyRefusedInterfaceBridgePair? {
   val listener: KSClassDeclaration = addMethod.parameters.firstNotNullOfOrNull { parameter ->
     (parameter.type.resolve().expandAliases().declaration as? KSClassDeclaration)
       ?.takeIf { it.classKind == ClassKind.INTERFACE }
   } ?: return null
-  val repeated: String = listener.getAllFunctions()
+  val listenerName: String = listener.simpleName.asString()
+  val members: List<KSFunctionDeclaration> = listener.getAllFunctions()
     .filter { method -> method.getVisibility() == Visibility.PUBLIC }
     .filter { method -> !method.isCompilerOwnedMember(listener) }
+    .toList()
+  val repeated: String? = members
     .groupBy { method -> method.simpleName.asString() }
     .entries
-    .firstOrNull { (_, members) -> members.size > 1 }
-    ?.key ?: return null
-  return "its listener interface `${listener.simpleName.asString()}` declares `$repeated` more " +
-      "than once, and this subscription route binds one callback slot per member name"
+    .firstOrNull { (_, named) -> named.size > 1 }
+    ?.key
+  if (repeated != null) {
+    return LegacyRefusedInterfaceBridgePair(
+      kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+      reason = "its listener interface `$listenerName` declares `$repeated` more than once, and " +
+          "this subscription route binds one callback slot per member name",
+      hint = "give each listener member its own name (`onMeow()` / `onMeowTimes(times)`)",
+    )
+  }
+  return members.firstNotNullOfOrNull { member -> refusedListenerMember(listener, member) }
+}
+
+/**
+ * ADR-039 amendment (2026-09-26): why the subscription route cannot carry one listener member, or
+ * null when it can. The route has one `Void` delegate per member and wires each parameter by
+ * value, as an ordinal, or over a handle, so a member is carried only when every parameter is in
+ * ADR-160's callback payload set and it returns `Unit`. A member inherited from a super-interface
+ * is refused too: the generated `IFoo` has no base list, so the C# half would call a member the
+ * implementer's interface does not declare (CS1061).
+ */
+private fun ForwardBridgeTypeClassifier.refusedListenerMember(
+  listener: KSClassDeclaration,
+  member: KSFunctionDeclaration,
+): LegacyRefusedInterfaceBridgePair? {
+  val listenerName: String = listener.simpleName.asString()
+  val signature: String = "`$listenerName.${member.simpleName.asString()}(" +
+      member.parameters.joinToString(", ") { parameter ->
+        "${parameter.name?.asString() ?: "_"}: ${parameter.type.resolve().kotlinSpelling()}"
+      } + ")`"
+  val owner: KSClassDeclaration? = member.parentDeclaration as? KSClassDeclaration
+  if (owner != null && owner.qualifiedName?.asString() != listener.qualifiedName?.asString()) {
+    return LegacyRefusedInterfaceBridgePair(
+      kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+      reason = "its listener member $signature is inherited from `${owner.simpleName.asString()}`" +
+          ", and the generated `I$listenerName` declares only `$listenerName`'s own members",
+      hint = "redeclare the member on `$listenerName` (`override fun " +
+          "${member.simpleName.asString()}(...)`) so `I$listenerName` declares it",
+    )
+  }
+  member.parameters.forEach { parameter ->
+    val type: KSType = parameter.type.resolve()
+    if (parameter.isVararg || !classify(type).isCallbackPayload()) {
+      val spelled: String = (if (parameter.isVararg) "vararg " else "") + type.kotlinSpelling()
+      return LegacyRefusedInterfaceBridgePair(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+        reason = "its listener member $signature takes `$spelled`, which an interface callback " +
+            "cannot carry (it carries a non-null primitive, String, enum, or exported " +
+            "class/interface)",
+        hint = "give `$listenerName` members only those parameter types (a collection, a " +
+            "nullable, `Char`, `Any` or an array has no crossing on this route), or split the " +
+            "member that needs one into a separate listener",
+      )
+    }
+  }
+  val returned: KSType? = member.returnType?.resolve()
+  if (returned != null && classify(returned) != BridgeType.Unit) {
+    return LegacyRefusedInterfaceBridgePair(
+      kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
+      reason = "its listener member $signature returns `${returned.kotlinSpelling()}`, and this " +
+          "subscription route only calls back members that return `Unit`",
+      hint = "make `$listenerName`'s members return `Unit`; hand a result back through a method " +
+          "on the subscribing class instead",
+    )
+  }
+  return null
+}
+
+/** A Kotlin source spelling for a diagnostic: simple names, type arguments and `?` kept. */
+private fun KSType.kotlinSpelling(): String {
+  val arguments: String =
+    if (this.arguments.isEmpty()) ""
+    else this.arguments.joinToString(", ", "<", ">") { argument ->
+      argument.type?.resolve()?.kotlinSpelling() ?: "*"
+    }
+  return "${declaration.simpleName.asString()}$arguments${if (isMarkedNullable) "?" else ""}"
+}
+
+/**
+ * Why an ADR-039 subscription pair is refused: the diagnostic kind (a refused parameter or a
+ * refused return), the reason naming the listener member and type, and the author's way out.
+ * `warnRefusedLegacyRouteMembers` reports it on both halves of the pair.
+ */
+internal data class LegacyRefusedInterfaceBridgePair(
+  val kind: ForwardDiagnosticKind,
+  val reason: String,
+  val hint: String,
+)
+
+/**
+ * ADR-039 amendment (2026-09-26): how one admitted listener parameter crosses the subscription
+ * route. Read by both halves (`exports/InterfaceBridgeExports.kt`, `cir/CirClassTranslator.kt`)
+ * off one classification, so the wire cannot drift from the gate above.
+ */
+internal enum class InterfaceBridgeWire { BOOL, BY_VALUE, ORDINAL, HANDLE }
+
+internal fun BridgeType.interfaceBridgeWire(): InterfaceBridgeWire = when (this) {
+  is BridgeType.Primitive ->
+    if (kind == PrimitiveKind.BOOLEAN) InterfaceBridgeWire.BOOL else InterfaceBridgeWire.BY_VALUE
+  is BridgeType.Enum -> InterfaceBridgeWire.ORDINAL
+  BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface ->
+    InterfaceBridgeWire.HANDLE
+  else -> error("ADR-039: the subscription pair gate admitted $this, which has no wire")
 }

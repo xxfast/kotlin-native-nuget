@@ -13,6 +13,47 @@ Accepted
 > parameter](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/topics/lambdas-and-callbacks.md#c-implementing-a-kotlin-interface-as-a-parameter),
 > discovered alongside [ADR-133](133-nested-types.md).
 
+> **Amended (2026-09-26): refusing a pair the route cannot carry.** The Detection rule below only
+> checked the `add`/`remove` naming, arity, and interface parameter type; it never checked whether
+> the listener's members could actually cross this route. The generator's `isPrimitive` test
+> (`pQualified.startsWith("kotlin.") && pSimple != "String"`) admitted `List`, `Map`, `Pair`, `Any`
+> and arrays, and dropped nullability outright; the route has only `Void` delegates, so a member
+> with any non-`Unit` return still generated `override fun count() { ... }`. Every one of those
+> shapes broke the build, on one half or both, with an error naming generated code instead of the
+> author's declaration (Kotlin "One type argument expected"; C# `CS1503`/`CS1061`).
+>
+> Now the whole `add`/`remove` pair is refused, named on both halves, when any listener member has:
+> a parameter outside [ADR-160](160-callback-parameter-on-the-forward-plan.md)'s callback payload
+> set (a non-null primitive other than `Char`, `String`, an enum, or an exported class/interface;
+> a collection, `Any`, an array, a nullable, or `Char` itself is refused); a vararg parameter; a
+> non-`Unit` return; or a member inherited from a super-interface (the generated `IFoo` has no base
+> list, so the C# half would call a member the implementer's own interface never declares, `CS1061`).
+> `Char` is newly refused here: it used to wire as a by-value `char`, unverified against
+> Kotlin/Native, and no fixture used it.
+>
+> The refusal covers the whole pair, never one member, because the Kotlin bridge builds
+> `object : Foo { ... }`, which must override every abstract member of `Foo`, and the C#
+> implementer must implement every member of `IFoo`; one member the route cannot carry makes the
+> whole pair unbindable regardless of the rest. The pair stays claimed by
+> `findInterfaceBridgePairs` rather than falling through to ordinary parameter planning: an
+> un-selected pair would still fail, only later and worse, as a runtime `NotSupportedException`
+> from `HandleOf` (or from `NugetBridge.HandleFor`'s fallthrough) instead of a build-time named
+> skip. Both halves report the reason through the same walk that already names a repeated-member
+> pair (`warnRefusedLegacyRouteMembers`), as `SKIPPED_UNSUPPORTED_INPUT` (a refused parameter or an
+> inherited member) or `SKIPPED_UNSUPPORTED_RETURN` (a non-`Unit` return), naming the member and its
+> type.
+>
+> Alternatives rejected: narrowing the old `isPrimitive` test to `simple in KOTLIN_TO_CSHARP_PARAM`
+> fixes `List`/`Any` spelling only, leaves `Map`, `Pair`, nullable parameters, arrays and non-`Unit`
+> returns failing unnamed, and is a fourth hand-written predicate beside the ones this change
+> replaces. Dropping the pair from `findInterfaceBridgePairs` was rejected for the reason above.
+> Reusing [ADR-084](084-csharp-implemented-interfaces.md)'s bridge-factory planner as the gate was
+> rejected: its vocabulary is narrower (no object or interface slots, at most two parameters) and
+> would refuse shapes this route already ships, such as `CatEventListener`'s `String` parameter.
+>
+> See [Lambdas and callbacks: C# implementing a Kotlin interface as a
+> parameter](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/topics/lambdas-and-callbacks.md#c-implementing-a-kotlin-interface-as-a-parameter).
+
 ## Context
 
 ADR-036 introduced reverse interop for single-lambda parameters (`(T) -> R`) and explicitly deferred
