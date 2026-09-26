@@ -19,8 +19,8 @@ import kotlin.test.assertTrue
  * that numbers only the entry point still compiles whenever the two externs agree on argument
  * types, and the second overload's body silently calls the first overload's extern.
  *
- * The end-to-end half lives in `AsyncCatService`/`AsyncCatSitter`/`CatMoodTracker` and
- * `SuspendMethodOverloadTests.cs`.
+ * The end-to-end half lives in `AsyncCatService`/`AsyncCatSitter`/`CatMoodTracker`, the top-level
+ * `AsyncFunctions.kt` (ROADMAP line 29) and `SuspendMethodOverloadTests.cs`.
  */
 class Tier1SuspendMethodOverloadTest {
 
@@ -156,6 +156,140 @@ class Tier1SuspendMethodOverloadTest {
     assertContains(csharp, "public sealed class Idle : Job, IAsyncDisposable")
     assertContains(csharp, "public sealed class Done : Job\n")
     assertContains(csharp, "public abstract class Job : IDisposable, INugetHandle")
+  }
+
+  /**
+   * ROADMAP line 29, the top-level twin of the first cell: `addSuspendFunctionExports` and
+   * `translateSuspendFunction` composed `${cname}_async` with no overload suffix, so this pair
+   * failed the round with ERROR_C_ENTRY_POINT_COLLISION. Arity cell: the externs differ in
+   * parameter count, so only the C symbol needed the number.
+   */
+  @Test
+  fun `top-level suspend overloads of different arity get numbered entry points`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.suspendtoplevelarity
+
+      suspend fun fetch(name: String): Int = name.length
+      suspend fun fetch(name: String, lives: Int): Int = name.length + lives
+      """.trimIndent(),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected the top-level arity pair to compile; got: ${result.compileErrors} " +
+          "${result.kspErrors}",
+    )
+    assertEntryPointsOnBothHalves(
+      result,
+      "library_tier1_suspendtoplevelarity__fetch_async",
+      "library_tier1_suspendtoplevelarity__fetch_2_async",
+    )
+    listOf("FetchAsync_native", "Fetch_2Async_native").forEach { externName ->
+      assertExternDeclaredAndCalled(result.generatedCSharp, externName)
+    }
+    // The public name carries no number: one natural C# overload set.
+    assertEquals(
+      2,
+      Regex("Task<int> FetchAsync\\(").findAll(result.generatedCSharp).count(),
+      "generatedCSharp=${result.generatedCSharp}",
+    )
+  }
+
+  /**
+   * The load-bearing top-level cell: both parameters cross as one IntPtr to a boxed wire container,
+   * so the two externs have identical native parameters. Numbering the entry point alone is CS0111
+   * on the externs; numbering the extern but not the wrapper's call site binds the second body to
+   * the first overload silently. Hence the declared-and-called count on each extern.
+   */
+  @Test
+  fun `top-level same-wire suspend overloads number the extern and its call site`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.suspendtoplevelwire
+
+      suspend fun tally(ids: List<Int>): String = "list"
+      suspend fun tally(ids: Set<String>): String = "set"
+      """.trimIndent(),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected the top-level same-wire pair to compile; got: ${result.compileErrors} " +
+          "${result.kspErrors}",
+    )
+    assertEntryPointsOnBothHalves(
+      result,
+      "library_tier1_suspendtoplevelwire__tally_async",
+      "library_tier1_suspendtoplevelwire__tally_2_async",
+    )
+    listOf("TallyAsync_native", "Tally_2Async_native").forEach { externName ->
+      assertExternDeclaredAndCalled(result.generatedCSharp, externName)
+    }
+  }
+
+  /**
+   * The shared-counter decision (ADR-095 parity with the class route, human decision 2026-09-26):
+   * an ordinary `ping()` declared first keeps `ping`, the `suspend ping(Int)` takes number 2 on its
+   * `_async` symbol, and the ordinary `ping(String)` after it takes 3. A suspend-only counter would
+   * have given `ping` / `ping_2` / `ping_async`, which is asserted absent.
+   */
+  @Test
+  fun `top-level suspend and ordinary namesakes share one declaration-order counter`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.suspendtoplevelmixed
+
+      fun ping(): Int = 1
+      suspend fun ping(x: Int): Int = x
+      fun ping(x: String): Int = 3
+      """.trimIndent(),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected the mixed namesakes to compile; got: ${result.compileErrors} ${result.kspErrors}",
+    )
+    assertEntryPointsOnBothHalves(
+      result,
+      "library_tier1_suspendtoplevelmixed__ping",
+      "library_tier1_suspendtoplevelmixed__ping_2_async",
+      "library_tier1_suspendtoplevelmixed__ping_3",
+    )
+    listOf(
+      "library_tier1_suspendtoplevelmixed__ping_2",
+      "library_tier1_suspendtoplevelmixed__ping_async",
+    ).forEach { absent ->
+      assertTrue(
+        "@CName(\"$absent\")" !in result.generated &&
+            "EntryPoint = \"$absent\"" !in result.generatedCSharp,
+        "expected no $absent symbol under the shared counter",
+      )
+    }
+    assertExternDeclaredAndCalled(result.generatedCSharp, "Ping_2Async_native")
+  }
+
+  private fun assertEntryPointsOnBothHalves(result: Tier1Result, vararg entryPoints: String) {
+    entryPoints.forEach { entryPoint ->
+      assertContains(result.generated, "@CName(\"$entryPoint\")")
+      assertEquals(
+        1,
+        Regex("EntryPoint = \"$entryPoint\"").findAll(result.generatedCSharp).count(),
+        "expected exactly one C# import for $entryPoint; generatedCSharp=${result.generatedCSharp}",
+      )
+    }
+  }
+
+  /** Declared once as the extern and called once from its wrapper body. */
+  private fun assertExternDeclaredAndCalled(csharp: String, externName: String) {
+    assertEquals(
+      2,
+      Regex("\\b$externName\\(").findAll(csharp).count(),
+      "expected $externName declared and called once each; generatedCSharp=$csharp",
+    )
   }
 
   /**

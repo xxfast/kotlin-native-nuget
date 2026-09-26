@@ -136,7 +136,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 
 | Kotlin | ⇄ | C# | Notes | Docs |
 |---|:-:|---|---|---|
-| `suspend fun` | → | `async` / `Task<T>` | Two `suspend` overloads on a class or a sealed arm collapse into one C# overload set; a top-level `suspend` overload pair still collides and fails the build. | [Coroutines and Flow](coroutines-and-flow.md) |
+| `suspend fun` | → | `async` / `Task<T>` | Two `suspend` overloads, on a class, a sealed arm, or at the top level, collapse into one C# overload set. | [Coroutines and Flow](coroutines-and-flow.md) |
 | `suspend fun` returning `T?` | → | `Task<T?>` | A nullable string, object or primitive return carries its `?` on both sides of the bridge. | [Coroutines and Flow](coroutines-and-flow.md) |
 | `suspend fun` returning an interface type, top-level or nested | ⇄ | `Task<IFoo>` | → completes with the interface itself, nullable included · ← a value stored through a C# implementation comes back as the caller's own instance, not a fresh wrapper | [Coroutines and Flow](coroutines-and-flow.md) · [Interfaces, abstract and sealed](interfaces-abstract-sealed.md) |
 | `suspend () -> R` lambda | → | `KotlinSuspendFunc<R>` / `Task<R>` | The same mechanism as a `suspend fun`. | [Coroutines and Flow](coroutines-and-flow.md) |

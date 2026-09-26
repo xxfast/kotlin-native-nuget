@@ -724,6 +724,10 @@ internal class ForwardCallablePlanner(
       // deliberately receiver-agnostic because its plan symbol is (`fun Cat.pat()` then
       // `fun Dog.pat()` in one package are one counter). Both counters live here rather than in the
       // per-declaration entry builders, because the scope spans the whole collected list.
+      // ROADMAP line 29 (ADR-118 amendment): `functions` carries the top-level `suspend` functions
+      // too, in declaration order, so a suspend overload shares this counter with its ordinary
+      // namesakes (`ping`, `ping_2_async`) exactly as a class's suspend method does. It lands as
+      // a silent SUSPEND skip that the top-level suspend route reads its number from.
       val topLevelOccurrences: MutableMap<String, Int> = mutableMapOf()
       val topLevel: List<ForwardCallableCatalogEntry> = functions.map { function ->
         topLevelEntry(function, overloadSuffix(topLevelOccurrences, function))
@@ -1713,8 +1717,9 @@ internal class ForwardCallablePlanner(
     // at all, and an element-carried one (`List<Box<Int>>`) is unmeasured and therefore named.
     //
     // The structural GENERIC deferral never reaches this entry builder: `catalog()` is called with
-    // the non-generic `functions` only, so a `fun <T> f(...)` is named from `NugetProcessor`
-    // instead (`warnUnroutedGenericFunctions`).
+    // non-generic top-level functions only, so a `fun <T> f(...)` is named from `NugetProcessor`
+    // instead (`warnUnroutedGenericFunctions`). A `suspend` one does arrive (ROADMAP line 29) and
+    // leaves `staticEntry` as a structural SUSPEND skip, which is not an unrouted candidate.
     skipped.position == ForwardSkipPosition.RETURN && function.hasLegacyGenericReturnRoute()
   }
 

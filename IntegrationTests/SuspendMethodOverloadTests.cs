@@ -29,6 +29,12 @@ namespace IntegrationTests;
 /// </para>
 ///
 /// <para>
+/// Section (d) is ROADMAP line 29, the top-level twin: overloaded top-level <c>suspend fun</c>s in
+/// <c>AsyncFunctions.kt</c>, which reach C# through <c>translateSuspendFunction</c> rather than the
+/// class route and so need the same number read on their own three literals.
+/// </para>
+///
+/// <para>
 /// Oreo counts his portions, Mylo insists on being called by name, and both of them are still
 /// sleepy.
 /// </para>
@@ -142,6 +148,62 @@ public class SuspendMethodOverloadTests
         Assert.Equal("Oreo is zoomy", prefixed.Value);
     }
 
+    // ---- (d) ROADMAP line 29: the TOP-LEVEL suspend route. `addSuspendFunctionExports` and
+    // ---- `translateSuspendFunction` composed `${cname}_async` with no overload suffix, so each
+    // ---- pair in `AsyncFunctions.kt` collided on one C symbol and the build failed with
+    // ---- ERROR_C_ENTRY_POINT_COLLISION. Same cells as the class route (arity, same wire), plus
+    // ---- the mixed ordinary/suspend namesake that the shared ADR-095 counter now numbers.
+
+    [Fact]
+    public async Task FetchTreatAsync_TopLevelFirstOverload_GivesOreoHisOneTreat()
+    {
+        Assert.Equal("one treat for Oreo", await AsyncFunctions.FetchTreatAsync());
+    }
+
+    [Fact]
+    public async Task FetchTreatAsync_TopLevelSecondOverload_DispatchesToTheCountBody()
+    {
+        Assert.Equal("3 treats for Mylo", await AsyncFunctions.FetchTreatAsync(3));
+    }
+
+    [Fact]
+    public async Task ServeTreatsAsync_TopLevelListOverload_ServesByCount()
+    {
+        Assert.Equal(
+            "served 5 portions: 2+3",
+            await AsyncFunctions.ServeTreatsAsync(new[] { 2, 3 }));
+    }
+
+    [Fact]
+    public async Task ServeTreatsAsync_TopLevelSetOverload_CallsByNameAndNotByCount()
+    {
+        // Both overloads cross one IntPtr, so if `_2` missed the extern name this call would bind
+        // the List extern by argument type and answer "served ... portions" instead.
+        Assert.Equal(
+            "called Mylo and Oreo to the bowl",
+            await AsyncFunctions.ServeTreatsAsync(new HashSet<string> { "Oreo", "Mylo" }));
+    }
+
+    [Fact]
+    public async Task ServeTreatsAsync_BothTopLevelSameWireOverloads_StayDistinctWhenInterleaved()
+    {
+        Assert.Equal("served 7 portions: 7", await AsyncFunctions.ServeTreatsAsync(new[] { 7 }));
+        Assert.Equal(
+            "called Oreo to the bowl",
+            await AsyncFunctions.ServeTreatsAsync(new HashSet<string> { "Oreo" }));
+        Assert.Equal("served 1 portions: 1", await AsyncFunctions.ServeTreatsAsync(new[] { 1 }));
+    }
+
+    [Fact]
+    public async Task Ping_OrdinaryAndSuspendNamesakes_EachAnswerTheirOwnBody()
+    {
+        // The ordinary `ping()` shares the counter with the suspend `ping(Int)` (ADR-095 parity),
+        // so the native symbols become `ping` and `ping_2_async`. Neither public name changes:
+        // `Ping()` and `PingAsync(int)`.
+        Assert.Equal("Oreo pinged back", AsyncFunctions.Ping());
+        Assert.Equal("Mylo pinged back after 4 pings", await AsyncFunctions.PingAsync(4));
+    }
+
     // ---- The surface: one overload set each, numbering confined to the native symbols. ----
 
     [Fact]
@@ -168,6 +230,26 @@ public class SuspendMethodOverloadTests
         }
     }
 
+    [Fact]
+    public void TopLevelSuspendOverloads_AreOneNaturalSetWithoutNumberedPublicNames()
+    {
+        Assert.NotNull(typeof(AsyncFunctions).GetMethod(
+            "FetchTreatAsync", new[] { typeof(CancellationToken) }));
+        Assert.NotNull(typeof(AsyncFunctions).GetMethod(
+            "FetchTreatAsync", new[] { typeof(int), typeof(CancellationToken) }));
+        Assert.NotNull(typeof(AsyncFunctions).GetMethod(
+            "ServeTreatsAsync", new[] { typeof(IReadOnlyList<int>), typeof(CancellationToken) }));
+        Assert.NotNull(typeof(AsyncFunctions).GetMethod(
+            "ServeTreatsAsync", new[] { typeof(IReadOnlySet<string>), typeof(CancellationToken) }));
+        Assert.NotNull(typeof(AsyncFunctions).GetMethod("Ping", Type.EmptyTypes));
+        Assert.NotNull(typeof(AsyncFunctions).GetMethod(
+            "PingAsync", new[] { typeof(int), typeof(CancellationToken) }));
+
+        Assert.DoesNotContain(
+            typeof(AsyncFunctions).GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly),
+            method => method.Name.Contains("_2", StringComparison.Ordinal));
+    }
+
     /// <summary>
     /// The numbering itself, read off the generated <c>[DllImport]</c>s. The value assertions above
     /// prove the right Kotlin body ran; this one proves it ran through a distinctly-named symbol
@@ -190,6 +272,28 @@ public class SuspendMethodOverloadTests
         Assert.Contains("test_cat__asynccatsitter_feed_2_async", sitter);
         Assert.Contains("test_cat__catmoodtracker_awaitMoodReport_async", tracker);
         Assert.Contains("test_cat__catmoodtracker_awaitMoodReport_2_async", tracker);
+    }
+
+    /// <summary>
+    /// ROADMAP line 29, the top-level half. <c>fetchGreeting</c> is the unnumbered canary. The
+    /// <c>ping</c> pair encodes the shared-counter decision (ADR-095 parity): the ordinary
+    /// <c>ping()</c> is declared first and keeps <c>ping</c>, the suspend <c>ping(Int)</c> takes
+    /// number 2. A suspend-only counter would give <c>ping_async</c> instead, which is asserted
+    /// absent so the two policies are distinguishable from C#.
+    /// </summary>
+    [Fact]
+    public void TopLevelSuspendOverloads_TakeNumberedNativeEntryPoints()
+    {
+        string[] functions = EntryPointsOf(typeof(AsyncFunctions));
+
+        Assert.Contains("test_cat__fetchGreeting_async", functions);
+        Assert.Contains("test_cat__fetchTreat_async", functions);
+        Assert.Contains("test_cat__fetchTreat_2_async", functions);
+        Assert.Contains("test_cat__serveTreats_async", functions);
+        Assert.Contains("test_cat__serveTreats_2_async", functions);
+        Assert.Contains("test_cat__ping", functions);
+        Assert.Contains("test_cat__ping_2_async", functions);
+        Assert.DoesNotContain("test_cat__ping_async", functions);
     }
 
     /// <summary>Every <c>[DllImport]</c> EntryPoint declared on <paramref name="type"/>.</summary>
