@@ -1089,7 +1089,7 @@ internal fun translateClass(
     val companionConsts: List<CirMember> = companion.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { it.modifiers.contains(Modifier.CONST) }
-      .mapNotNull { translateConstProperty(it) }
+      .mapNotNull { translateConstProperty(it, logger) }
       .toList()
 
     val companionProperties: List<CirMember> = companion.getAllProperties()
@@ -2521,7 +2521,7 @@ internal fun translateObject(
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { it.modifiers.contains(Modifier.CONST) }
     .mapNotNull { prop ->
-      translateConstProperty(prop)
+      translateConstProperty(prop, logger)
         ?.also {
           kotlinSpellings.record(it.name, KotlinSpelling("const val", prop.simpleName.asString()))
         }

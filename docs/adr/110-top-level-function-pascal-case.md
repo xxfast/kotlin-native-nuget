@@ -374,3 +374,21 @@ generic top-level function and a `{Receiver}Extensions` merge since it runs once
 `CirNamespace` rather than per contributing loop); `forward/ForwardDiagnostic.kt` kdoc. No fixture
 changes (every shape here is fatal, so it cannot live in `test-library`); new Tier 1 coverage in
 `Tier1MemberNameCollisionTest.kt`.
+
+## Amendment (2026-09-26): const values come from ADR-166, not this ADR's search-start fix
+
+The paragraph above ("This exposed and fixed a pre-existing bug...") and the "Declined" line's
+klib clause both describe the source-text `extractConstValue` route, since deleted. Read literally,
+they claim a `const val` with no source location (a klib dependency) "falls back to the whole-file
+search" and stays first-match. That is not what the code did: `extractConstValue` returned `null`
+when the declaration's `containingFile` was null, and every caller silently `mapNotNull`-dropped a
+`null`, so a dependency-klib `const val` was not first-match, it was **dropped with no diagnostic
+at all**. There never was a whole-file fallback branch for that case.
+
+[ADR-166](166-const-value-from-the-evaluated-constant.md) now owns where a `const val`'s C# value
+comes from, for every position (top-level, object, companion) and every source (same-module or
+dependency): the compiler's evaluated constant, read reflectively, never source text.
+`extractConstValue` and the regex it was built on are deleted with no replacement of their
+text-scanning behaviour. A same-file same-name collision (this amendment's original motivation) is
+moot under the evaluated route, since the value now comes from the specific declaration's own
+analysis symbol, never a name search over file text.
