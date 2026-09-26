@@ -1819,6 +1819,9 @@ class NugetProcessor(
       // channel was built and thrown away, so an interface property `IFoo` silently lost was
       // named in no channel at all.
       droppedProperties = declarationPropertyPlanner.droppedProperties,
+      // ROADMAP line 28: the setter half of the same hole. `IFoo` now renders `{ get; set; }` off
+      // this catalog, so a refused setter on a merely-implemented interface has to be named here.
+      droppedPropertySetters = declarationPropertyPlanner.droppedPropertySetters,
     )
 
     warnDroppedForwardCallables(
@@ -1878,6 +1881,18 @@ class NugetProcessor(
       logger,
       context.excludePackages,
       context.strictDependencyTypes,
+    )
+    // ROADMAP line 28: and the setter-only half, under the same symbol guard, so a reachable
+    // interface's refused setter is named once and a merely-implemented one is named at all.
+    val warnedSetterSymbols: Set<String> =
+      callableCatalog.droppedPropertySetters.map { it.symbol }.toSet()
+    warnDroppedForwardPropertySetters(
+      ForwardCallablePlanCatalog(
+        entries = emptyList(),
+        droppedPropertySetters = interfaceDeclarationCatalog.droppedPropertySetters
+          .filter { dropped -> dropped.symbol !in warnedSetterSymbols },
+      ),
+      logger,
     )
 
     val cNameExports: FileSpec = generateCNameWrappers(

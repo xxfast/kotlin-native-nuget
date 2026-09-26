@@ -577,18 +577,54 @@ private fun forwardBaseSpelling(
 }
 
 /**
+ * ROADMAP line 28, case D: the C# names of the interfaces [plan]'s setter is implemented through
+ * explicitly (`int ITally.Count { ... }`). Spelled by [forwardSuperInterfaceSpelling], the base
+ * list's own function, off the class's own supertype (type arguments applied), so the explicit
+ * member names the interface exactly as the base list does, `global::` qualification included.
+ * An interface with no spelling is left out: the base list drops it too, so there is nothing to
+ * implement.
+ */
+internal fun KSClassDeclaration.explicitSetterInterfaceSpellings(
+  plan: ForwardPropertyPlan,
+  classifier: ForwardBridgeTypeClassifier,
+): List<String> {
+  if (plan.explicitSetterInterfaces.isEmpty()) return emptyList()
+  val supertypes: List<KSType> = getAllSuperTypes().toList()
+  return plan.explicitSetterInterfaces.mapNotNull { qualified ->
+    val type: KSType = supertypes
+      .firstOrNull { it.declaration.qualifiedName?.asString() == qualified }
+      ?: return@mapNotNull null
+    forwardSuperInterfaceSpelling(type, classifier, from = this)
+  }
+}
+
+/**
  * Interface super-interfaces: the C# spelling of a kept super-interface reference, type arguments
  * included (`IHolder<int>`), shared by the class route's interface list and `translateInterface`'s
  * base list. A bare `IHolder` for a generic interface is CS0305. Null when an argument has no
  * public C# spelling (a star projection, an unbridgeable type): the caller drops the entry with a
  * named skip rather than render something that cannot compile.
+ *
+ * ROADMAP line 28 (measured 2026-09-26): an interface in ANOTHER namespace than [from], the type
+ * whose base list this is, is `global::Ns.IFoo`. The bare name resolved only in the same namespace:
+ * `class TrainingClicker : Scoreboard, ITally` in `Interop.Impl` with `ITally` in `Interop.Api`
+ * was CS0246, on both the class and the interface base list. The same-namespace spelling stays
+ * bare.
  */
 internal fun forwardSuperInterfaceSpelling(
   type: KSType,
   classifier: ForwardBridgeTypeClassifier,
+  from: KSDeclaration,
 ): String? {
   val declaration: KSClassDeclaration = type.declaration as? KSClassDeclaration ?: return null
-  val name: String = declaration.nestedInterfaceCsName()
+  val targetNamespace: String? = classifier.csharpNamespaceOf(declaration)
+  val qualifier: String =
+    if (targetNamespace != null && targetNamespace != classifier.csharpNamespaceOf(from)) {
+      "global::$targetNamespace."
+    } else {
+      ""
+    }
+  val name: String = qualifier + declaration.nestedInterfaceCsName()
   if (declaration.typeParameters.isEmpty()) return name
   if (type.arguments.size != declaration.typeParameters.size) return null
   val spelled: List<String> = type.arguments.map { argument ->
@@ -736,7 +772,7 @@ internal fun translateClass(
     // `IKeeper` names nothing at namespace level (CS0234). Interface super-interfaces: with its
     // type arguments, since `: IHolder` for `Holder<Int>` is CS0305.
     .mapNotNull { type ->
-      forwardSuperInterfaceSpelling(type, classifier)
+      forwardSuperInterfaceSpelling(type, classifier, from = cls)
         ?: run {
           emitUnspellableSuperInterface(cls, name, type, logger)
           null
@@ -828,6 +864,7 @@ internal fun translateClass(
           // `isForwardPlannableMemberOf` uses. The abstract *method* walk keys on the same
           // property as of the 2026-09-11 amendment, so both routes now agree.
           isAbstract = prop.isAbstract(),
+          explicitSetterInterfaces = cls.explicitSetterInterfaceSpellings(planned, classifier),
         )
       }
       // ADR-075 amendment (2026-09-11): a property this class inherits from an interface
@@ -3027,7 +3064,7 @@ internal fun translateInterface(
     keepsSupertype(iface, name, dropped, SupertypeKind.SUPER_INTERFACE, exportedTypes, logger)
   }
   val superInterfaces: List<String> = hierarchy.keptSupers.mapNotNull { type ->
-    forwardSuperInterfaceSpelling(type, classifier)
+    forwardSuperInterfaceSpelling(type, classifier, from = iface)
       ?: run {
         emitUnspellableSuperInterface(iface, interfaceName.removePrefix("I"), type, logger)
         null
@@ -3050,12 +3087,14 @@ internal fun translateInterface(
     .filter { plan -> declared(propertyPlacements[plan.symbol]) }
   val plannedProperties: List<CirInterfaceProperty> = propertyPlans.map { plan ->
     tracker.trackProperty(plan)
-    // `hasSetter` deliberately stays at its default: ADR-113 leaves a `var` interface property
-    // rendering `{ get; }`, since `{ get; set; }` would be CS0535 against an implementing class
-    // whose own setter ADR-075 dropped.
+    // ROADMAP line 28: the setter comes off the same plan the getter does, so ADR-075's
+    // independence holds on `IFoo` too (`var err: Throwable?` stays `{ get; }`). An implementing
+    // class whose own setter the read-only-base guard refused (CS0546) satisfies the setter through
+    // an explicit `IFoo.X` member instead (case D, `explicitSetterInterfaces`).
     CirInterfaceProperty(
       plan.publicName,
       ForwardCirPropertyProjection.publicType(plan),
+      hasSetter = plan.setter != null,
       doc = plan.doc?.toCirDoc(),
       isNew = propertyPlacements[plan.symbol] == ForwardInterfaceMemberPlacement.DIAMOND_OVERRIDE,
     )

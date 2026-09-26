@@ -69,6 +69,20 @@ internal class ForwardBridgeTypeClassifier(
    *  opt-in marker read has to consult the identical waiver list this classifier does. */
   internal val exportMarkers: Set<String> get() = context.exportMarkers
 
+  /**
+   * The C# namespace [declaration] is rendered into, by the same mapping [interfaceType] qualifies
+   * with; null when there is no root namespace to qualify against. Exposed for the base-list
+   * spellings, which name a type bare only when it shares the referencing type's namespace.
+   */
+  internal fun csharpNamespaceOf(declaration: KSDeclaration): String? {
+    if (context.rootNamespace.isEmpty()) return null
+    return mapPackageToNamespace(
+      declaration.packageName.asString(),
+      context.rootPackage,
+      context.rootNamespace,
+    )
+  }
+
   fun classify(type: KSType): BridgeType {
     val expanded: KSType = type.expandAliases()
     val classified: BridgeType = classifyNonNullable(expanded)

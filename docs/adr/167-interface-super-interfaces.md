@@ -157,3 +157,17 @@ Fixture: `test-library/.../test/lineage/Lineage.kt` (the base-list, own-member, 
 unexported-super and both-direction cells) and `.../test/lineage/Moggy.kt` (the diamond);
 unexported super `.../hidden/Pedigree.kt`. Tests: `Tier1InterfaceSuperInterfacesTest.kt`;
 `IntegrationTests/InterfaceSuperInterfaceTests.cs`; `LeakTests/LiveHandleTests.cs` rows 6n/6o.
+
+**2026-09-26 amendment: a base-list reference across namespaces is now `global::`-qualified.**
+`forwardSuperInterfaceSpelling` took no namespace context, so it always spelled a bare `IFoo`, which
+resolves only when the referencing type's own C# namespace can see it. Measured by scratch compile
+(net8.0/net10.0, `TreatWarningsAsErrors`): a class in one namespace implementing an interface
+declared in another (`Interop.Impl.TrainingClicker : Interop.Api.ITally`) was `CS0246` on both the
+class's own base list and, separately, on a *derived* interface's base list (`IDerived : IBase`
+across the same boundary). `forwardSuperInterfaceSpelling` now takes the referencing declaration
+(`from`) and compares its C# namespace against the target's; a different namespace spells
+`global::Ns.IFoo`, the same namespace stays bare. This is the same helper both the class route and
+`translateInterface`'s own base list already shared, so the fix applies to both call sites at once,
+and it is also what [ADR-168](168-interface-var-explicit-setter.md)'s explicit interface member
+reuses to name its own interface, so `int ITally.Count` and `int global::Ns.ITally.Count` never
+diverge from what the base list itself would print.

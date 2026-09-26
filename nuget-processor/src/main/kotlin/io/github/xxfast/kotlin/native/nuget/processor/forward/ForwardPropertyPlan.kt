@@ -62,6 +62,14 @@ internal data class ForwardPropertyPlan(
   val type: BridgeType,
   val getter: ForwardPropertyGetter,
   val setter: ForwardPropertySetter? = null,
+  /**
+   * ROADMAP line 28, case D: qualified Kotlin names of the exported interfaces the [setter] is
+   * rendered through as an EXPLICIT implementation (`T ITally.Count { get; set; }`), because the
+   * public C# property overrides a get-only base property and cannot carry it (CS0546). Empty for
+   * every ordinary property. The export itself is unchanged: the Kotlin half mints `_set_` either
+   * way.
+   */
+  val explicitSetterInterfaces: List<String> = emptyList(),
   val helperRequirements: Set<ForwardHelperRequirement> = emptySet(),
   /** ADR-150: the author's KDoc, parsed once at planning time. `@param` never applies here. */
   val doc: ForwardKdoc? = null,

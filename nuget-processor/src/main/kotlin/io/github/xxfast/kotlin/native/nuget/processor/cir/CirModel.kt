@@ -126,6 +126,9 @@ data class CirInterfaceProperty(
   // Interface super-interfaces: a diamond member two kept supers both declare is redeclared with
   // `new`, which hides both and makes `d.Name` unambiguous (CS0121 / CS0108 otherwise).
   val isNew: Boolean = false,
+  // ROADMAP line 28 x issue #249: a partial skip (ADR-075's refused setter) names the property it
+  // left get-only, on `IFoo` exactly as on a class.
+  val remarks: List<String> = emptyList(),
 )
 
 data class CirInterfaceMethod(
@@ -834,6 +837,11 @@ data class CirProperty(
   // overriding it: two C# members over one Kotlin property, each reading through its own export.
   // Only the sealed route sets it; an ordinary class's covariant override is not a shipped shape.
   val isNew: Boolean = false,
+  // ROADMAP line 28, case D: the interfaces (spelled for the C# explicit-member name, `ITally` or
+  // `global::Ns.ITally`) whose `set` this property implements EXPLICITLY. Non-empty only when the
+  // public property must stay get-only (it overrides a get-only base, CS0546); [setter] still
+  // holds the body, so the `Native_Set_` import is emitted exactly as for a public setter.
+  val explicitSetterInterfaces: List<String> = emptyList(),
   // ADR-075 amendment (2026-09-10): the property-side twin of [CirMethod.isAbstract]: an
   // `abstract val`/`abstract var` the class declares without implementing. Renders bodiless
   // (`public abstract T Name { get; }`) so a subclass `override` compiles instead of CS0506.

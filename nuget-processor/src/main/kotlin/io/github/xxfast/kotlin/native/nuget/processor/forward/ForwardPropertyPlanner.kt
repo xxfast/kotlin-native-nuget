@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
+import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
@@ -259,6 +260,12 @@ internal class ForwardPropertyPlanner(
           prop = prop,
           getExport = "${prefix}_get_${prop.simpleName.asString()}",
           setExport = "${prefix}_set_${prop.simpleName.asString()}",
+          // ROADMAP line 28 (measured 2026-09-26): the ADR-075 read-only-base guard needs the
+          // sealed base too. Without it an arm's `override var count` over the base's
+          // `open val count` rendered `public override int Count { get; set; }`, CS0546 against
+          // the base's get-only `Count`. No `implementer`: an arm's C# base list names only the
+          // sealed base, never its interfaces, so an explicit `ITally.Count` would be CS0540.
+          superClass = sealed,
         )
       }
       .toList()
@@ -323,9 +330,58 @@ internal class ForwardPropertyPlanner(
           getExport = "${cls.nativePrefix(symbols)}_get_${prop.simpleName.asString()}",
           setExport = "${cls.nativePrefix(symbols)}_set_${prop.simpleName.asString()}",
           superClass = superClass,
+          implementer = cls,
         )
       }
       .toList()
+  }
+
+  /**
+   * ROADMAP line 28, case D: the exported interfaces whose C# declaration carries a settable [prop]
+   * (`ITally.Count { get; set; }`) and that [this] class implements through its own base list.
+   * When the read-only-base guard refuses the class's public setter (CS0546), these are the
+   * interfaces the setter is still reachable through, as an explicit `ITally.Count` member.
+   *
+   * Only a DECLARED (or diamond-redeclared) placement counts: an inherited member lives on the
+   * super-interface that declares it, and the explicit member has to name that one. A member typed
+   * by the interface's own type parameter is excluded: the ADR-113 carve-out renders it get-only,
+   * so an explicit `set` against it would be CS0550.
+   */
+  private fun KSClassDeclaration.explicitSetterInterfaces(
+    prop: KSPropertyDeclaration,
+  ): List<String> {
+    val exported: Set<String> = classifier.exportedObjectHandles
+    val name: String = prop.simpleName.asString()
+    fun KSClassDeclaration.isExportedInterface(): Boolean =
+      classKind == com.google.devtools.ksp.symbol.ClassKind.INTERFACE &&
+          qualifiedName?.asString() in exported
+    val direct: List<KSClassDeclaration> = superTypes
+      .mapNotNull { it.resolve().declaration as? KSClassDeclaration }
+      .filter { it.isExportedInterface() }
+      .toList()
+    val implemented: List<KSClassDeclaration> = (
+        direct + direct.flatMap { iface ->
+          iface.getAllSuperTypes()
+            .mapNotNull { it.declaration as? KSClassDeclaration }
+            .filter { it.isExportedInterface() }
+            .toList()
+        }
+        ).distinctBy { it.qualifiedName?.asString() }
+    return implemented
+      .filter { iface ->
+        val member: KSPropertyDeclaration = iface.getAllProperties()
+          .firstOrNull { it.simpleName.asString() == name } ?: return@filter false
+        val placement: ForwardInterfaceMemberPlacement =
+          ForwardInterfaceHierarchy(iface, exported).placement(member)
+        val isNotTypeParameter: Boolean =
+          member.type.resolve().declaration !is com.google.devtools.ksp.symbol.KSTypeParameter
+        member.isMutable &&
+            member.getVisibility() == Visibility.PUBLIC &&
+            isNotTypeParameter &&
+            (placement == ForwardInterfaceMemberPlacement.DECLARED ||
+                placement == ForwardInterfaceMemberPlacement.DIAMOND_OVERRIDE)
+      }
+      .mapNotNull { it.qualifiedName?.asString() }
   }
 
   /**
@@ -352,6 +408,7 @@ internal class ForwardPropertyPlanner(
           val placement: ForwardInterfaceMemberPlacement = hierarchy.placement(prop)
           // A kept super's unplannable property is that super's drop, named once on it.
           val droppedBefore: Int = dropped.size
+          val droppedSettersBefore: Int = droppedSetters.size
           val plan: ForwardPropertyPlan? = propertyPlan(
             symbol = "$owner.${prop.simpleName.asString()}",
             position = ForwardPropertyPosition.CLASS,
@@ -369,6 +426,13 @@ internal class ForwardPropertyPlanner(
           val inherited: Boolean = placement == ForwardInterfaceMemberPlacement.INHERITED
           if (plan == null && (inherited || restored)) {
             while (dropped.size > droppedBefore) dropped.removeAt(dropped.lastIndex)
+          }
+          // ROADMAP line 28: the same rule for a refused SETTER. `IBase.X` is where C# declares
+          // the member (and where the remark lands), so `Derived.x` naming it again is noise.
+          if (inherited) {
+            while (droppedSetters.size > droppedSettersBefore) {
+              droppedSetters.removeAt(droppedSetters.lastIndex)
+            }
           }
           plan
         }
@@ -609,6 +673,9 @@ internal class ForwardPropertyPlanner(
     superClass: KSClassDeclaration? = null,
     // Interface super-interfaces: a covariant override plans at the kept super's type.
     typeOverride: KSType? = null,
+    // ROADMAP line 28, case D: the exported class this property is rendered on, when an explicit
+    // interface implementation may carry a setter the public property cannot. Class route only.
+    implementer: KSClassDeclaration? = null,
   ): ForwardPropertyPlan? {
     // ADR-115: the author's own signal, ahead of any type question -- nothing about the property
     // is unsupported. `@set:Marker` on a `var` skips the whole property rather than exporting it
@@ -645,8 +712,20 @@ internal class ForwardPropertyPlanner(
     } else {
       ForwardPropertyGetter.Direct(nativeCall(getExport, type.wireType(), receiver, emptyList()))
     }
+    // ROADMAP line 28, case D: only the class route passes an [implementer], and only a `var` the
+    // read-only-base guard is about to refuse needs the interface walk at all.
+    val explicitInterfaces: List<String> =
+      if (
+        implementer != null &&
+        prop.isMutable &&
+        prop.readOnlyOverrideeOwner(superClass) != null
+      ) {
+        implementer.explicitSetterInterfaces(prop)
+      } else {
+        emptyList()
+      }
     val setter: ForwardPropertySetter? = collectionSetterOrNull(
-      symbol, publicName, prop, type, setExport, receiver, superClass,
+      symbol, publicName, prop, type, setExport, receiver, superClass, explicitInterfaces,
     )
     return ForwardPropertyPlan(
       symbol = symbol,
@@ -658,6 +737,7 @@ internal class ForwardPropertyPlanner(
       type = type,
       getter = getter,
       setter = setter,
+      explicitSetterInterfaces = if (setter != null) explicitInterfaces else emptyList(),
       helperRequirements = helperRequirements(type, receiver, getter, setter),
     ).validate()
   }
@@ -680,10 +760,40 @@ internal class ForwardPropertyPlanner(
     setExport: String,
     receiver: ForwardPropertyReceiver,
     superClass: KSClassDeclaration?,
+    explicitInterfaces: List<String> = emptyList(),
   ): ForwardPropertySetter? {
     if (!prop.isMutable || !prop.hasPublicSetter()) return null
     val readOnlyBase: KSClassDeclaration? = prop.readOnlyOverrideeOwner(superClass)
     if (readOnlyBase != null) {
+      val cs0546: String = "it overrides a property with no public setter on the exported base " +
+          "class ${readOnlyBase.simpleName.asString()}; C# cannot add a set accessor to an " +
+          "override (CS0546)"
+      // ROADMAP line 28, case D: the same `override var` also implements an exported interface
+      // `var`. The setter is still built (and exported), but rendered only as an explicit
+      // `IFoo.X` member beside the get-only override. Every OTHER refusal below still applies:
+      // decided first, so a `Throwable?` gets its own one diagnostic and no explicit member.
+      if (explicitInterfaces.isNotEmpty()) {
+        val built: ForwardPropertySetter? = collectionSetterOrNull(
+          symbol, publicName, prop, type, setExport, receiver, superClass = null,
+        )
+        if (built != null) {
+          val through: String = explicitInterfaces.joinToString(" and ") { qualified ->
+            "I${qualified.substringAfterLast('.')}.$publicName"
+          }
+          droppedSetters.add(
+            ForwardDroppedPropertySetter(
+              symbol = symbol,
+              node = prop,
+              publicName = publicName,
+              owner = ownerScope,
+              componentDescription = type.diagnosticTypeName(),
+              reason = "$cs0546; it is reachable only through the explicit $through " +
+                  "implementation",
+            ),
+          )
+        }
+        return built
+      }
       droppedSetters.add(
         ForwardDroppedPropertySetter(
           symbol = symbol,
@@ -691,9 +801,7 @@ internal class ForwardPropertyPlanner(
           publicName = publicName,
           owner = ownerScope,
           componentDescription = type.diagnosticTypeName(),
-          reason = "it overrides a property with no public setter on the exported base class " +
-              "${readOnlyBase.simpleName.asString()}; C# cannot add a set accessor to an " +
-              "override (CS0546)",
+          reason = cs0546,
         ),
       )
       return null

@@ -148,6 +148,13 @@ it or which ancestor-typed reference it's read through; a C# implementation of t
 interface in a hierarchy still mints exactly one transfer handle per parameter crossing, reused for
 every inherited member the call reaches on it, not one per ancestor interface.
 
+Writing an [interface `var` property](interfaces-abstract-sealed.md#an-interface-s-own-var-property)
+adds no new handle kind either: a setter only ever borrows the receiver it's called on and, for a
+handle-typed value, the argument's own handle; it consumes both and returns neither. This holds for
+the explicit-interface-implementation shape too, so a class whose public property stays get-only and
+whose setter is only reachable by casting to the interface still returns to baseline once every
+handle the call borrowed is disposed, the same as any other setter.
+
 For a [cancellation-token-taking async call](instance-members.md#async-cancellation), this count
 only proves the pending-continuation and `Task` handles came back to baseline: the bridge-owned
 `CancellationTokenSource` is a plain .NET `GCHandle`, not one of the Kotlin `StableRef`s
