@@ -189,6 +189,14 @@ internal enum class ForwardDiagnosticKind(
    *  ratified permanent by ADR-082, not a silently-bridged member. */
   SKIPPED_INHERITED_MEMBER(ForwardDiagnosticSeverity.WARNING),
 
+  /** A function declared in an `enum class` body or in an enum's `companion object`. ADR-006 binds
+   *  an enum's own instance properties only today (as `{Enum}Extensions` methods), and no route
+   *  declares an enum's functions, so they used to vanish from both halves with no diagnostic.
+   *  Named per ADR-064 so nothing on an enum disappears silently; binding them as extension
+   *  methods is separate ROADMAP work. The companion's *properties* report under
+   *  [SKIPPED_UNSUPPORTED_PROPERTY], the position kind. */
+  SKIPPED_ENUM_MEMBER_FUNCTION(ForwardDiagnosticSeverity.WARNING),
+
   /** `out`/`in` variance on a class type parameter is dropped; the member still binds, so this is
    *  a note, not a skip. */
   INFO_DROPPED_VARIANCE(ForwardDiagnosticSeverity.INFO),

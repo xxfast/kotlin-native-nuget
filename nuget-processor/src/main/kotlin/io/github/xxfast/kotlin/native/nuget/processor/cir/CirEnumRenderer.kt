@@ -38,9 +38,10 @@ internal fun StringBuilder.renderEnumExtensions(enum: CirEnum) {
   appendLine("    {")
 
   for (prop in enum.properties) {
-    val enumLowercase: String = enum.nativePrefix
-    val propLowercase: String = prop.nativeName.lowercase()
-    val entryPoint: String = "${enumLowercase}_get_$propLowercase"
+    // The Kotlin property name verbatim (`mood_get_isSleepy`), as `EnumExports` spells the export
+    // and as every other property route does. Lowercasing it here aborted generation for any
+    // camelCase enum property (`Forward ABI missing Kotlin export`).
+    val entryPoint: String = "${enum.nativePrefix}_get_${prop.nativeName}"
     // ADR-133: the C# parameter name of the extension's `this` receiver, with the enclosing
     // scope's dots stripped (`ownerkind`, not `owner.kind`, which is not a legal identifier).
     val receiverParam: String = enum.csName.lowercase().replace(".", "")
@@ -48,6 +49,8 @@ internal fun StringBuilder.renderEnumExtensions(enum: CirEnum) {
     appendLine("        [DllImport(\"${enum.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$entryPoint\")]")
     // ADR-098: an enum's `Char` property getter is an extern slot like any other.
     charReturnMarshal(prop.nativeReturnType)?.let { appendLine(it) }
+    // Kotlin/Native `Boolean` is a 1-byte C `bool`; without I1 .NET reads a 4-byte Win32 `BOOL`.
+    if (prop.nativeReturnType == "bool") appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
     appendLine("        private static extern ${prop.nativeReturnType} Native_Get${prop.name}(int ordinal);")
     appendLine()
 
