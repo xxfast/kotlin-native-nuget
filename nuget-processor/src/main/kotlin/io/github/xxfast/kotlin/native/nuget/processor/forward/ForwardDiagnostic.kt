@@ -357,7 +357,21 @@ internal enum class ForwardDiagnosticKind(
    *  contract requires every planned export to appear in each, so a callable cannot be planned,
    *  exported from Kotlin, and then absent from the C# (`ForwardAbiContract`: "missing C#
    *  projection"). Failing the build names both declarations and asks for the same one-word fix
-   *  the skip would have. */
+   *  the skip would have.
+   *
+   *  ADR-110 amendment (2026-09-26, ROADMAP line 32): one shared guard,
+   *  `emitMemberNameCollisions` (`cir/CirMemberNameCollisions.kt`), over the PROJECTED member list
+   *  of every C# type that holds properties and methods: the merged top-level file class, `object`,
+   *  interface (ADR-113 Decision E), ordinary and generic class (instance, companion, async, Flow
+   *  and callback members together), sealed base and arm, value class (its underlying property
+   *  included) and interface backing class. Rule 1 (CS0102): a C# name held by a property or
+   *  `const` and by any other member of the same type, which also covers two `const val`s meeting
+   *  after casing and an instance property beside a companion property. Rule 2 (CS0108): a
+   *  declared member taking the C# name of an inherited member of the other kind, in either
+   *  direction, checked by a post-pass over each kept-base chain; a method hiding a base property
+   *  also makes the property unreadable through the derived type (CS0428). Enum entries keep their
+   *  own guard. Post-projection on purpose: a property beside an UNBRIDGEABLE namesake method
+   *  (issue #112's shipped shape) renders one member and stays green. */
   ERROR_CSHARP_NAME_COLLISION(ForwardDiagnosticSeverity.ERROR),
 
   /** ADR-110: a top-level function whose PascalCase C# name equals its file class's name

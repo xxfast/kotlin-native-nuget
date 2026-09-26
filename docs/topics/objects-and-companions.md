@@ -85,7 +85,12 @@ it is itself exported, because the C# shape has no base list to put it in).
 
 Declaring a property and a function that render the same C# name on one object — `val count` beside
 `fun count()`, or an inherited method colliding with a declared property — fails the build with
-`ERROR_CSHARP_NAME_COLLISION` (CS0102), naming both Kotlin declarations; rename one of them.
+`ERROR_CSHARP_NAME_COLLISION` (CS0102), naming both Kotlin declarations; rename one of them. This is
+the same shared guard as an ordinary class's (see
+[Classes and objects](classes-and-objects.md#property-and-method-name-collisions)), which also
+covers a companion member colliding with an instance member on the enclosing class, and, wherever a
+real base class exists, a declared member that hides an inherited one of the other kind instead of
+colliding with it directly.
 
 An `Int?`-style nullable property round-trips its null branch the same way a class property does. A
 `lateinit var` read before it is assigned surfaces in C# as a `KotlinException`, not a crash. A
@@ -146,7 +151,10 @@ same rule on class methods, top-level functions, and extension functions.
         A companion static and an instance method on the same class share one generated C# class,
         and C# does not distinguish an overload by <code>static</code>-ness. Giving a companion
         member the same signature as an instance method on the enclosing class fails generation
-        with <code>ERROR_CSHARP_SIGNATURE_COLLISION</code>; rename one of them.
+        with <code>ERROR_CSHARP_SIGNATURE_COLLISION</code>; rename one of them. The same sharing
+        applies to a companion <code>val</code>/<code>const val</code> against an instance property
+        or method of the same C# name: <code>ERROR_CSHARP_NAME_COLLISION</code> (CS0102) fires
+        there too.
     </p>
 </note>
 

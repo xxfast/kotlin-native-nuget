@@ -210,9 +210,13 @@ member, and a compiler plugin's synthesized surface such as kotlinx.serializatio
   otherwise render, correctly but uncompilably, as `Referral(Patient from)` and
   `Referral(Patient? from)` (`CS0111`). Nullable **value** types are unaffected and keep working:
   `constructor(n: Int)` next to `constructor(n: Int?)` render genuinely distinct signatures and are
-  not treated as a collision. A second case is a top-level `val` and `fun` that PascalCase to the
-  same C# name (`ERROR_CSHARP_NAME_COLLISION`, CS0102); see
-  [Top-level declarations](top-level-declarations.md) for that one. This page covers the third:
+  not treated as a collision. A second case is a property and a method that render the same C# name
+  on one generated type -- a top-level file class, `object`, class and companion, sealed base or
+  arm, value class, or interface alike (`ERROR_CSHARP_NAME_COLLISION`, CS0102); the same diagnostic
+  also fires when a declared member takes the C# name of an **inherited** member of the other kind
+  (CS0108 hiding). See [Classes and objects](classes-and-objects.md#property-and-method-name-collisions)
+  for the general rule and [Top-level declarations](top-level-declarations.md) for the file-class
+  shape. This page covers the third:
   `ERROR_C_ENTRY_POINT_COLLISION`, two *different* Kotlin declarations deriving the same underlying C
   entry point; see [Two declarations can't share one C entry point](#entry-point-collision) below.
   A fourth, opt-in only: with `publish { strictDependencyTypes = true }`, an un-admitted dependency

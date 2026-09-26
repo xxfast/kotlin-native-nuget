@@ -296,3 +296,81 @@ does.
 **Declined, not deferred:** a member extension property declared inside an object (no route for a
 member extension's two receivers); a klib-declared object's `const val` keeps the pre-existing
 first-match literal lookup (no file location to anchor to).
+
+## Amendment (2026-09-26): every class-family route and inherited members
+
+ROADMAP line 32 recorded that the CS0102 property/method name-collision guard this ADR introduced
+for the top-level file class, and the `object` amendment above extended to a static class, still had
+no equivalent on the **ordinary class** route (a class, its companion, a sealed base and arms, a
+`value class`, a generic class), and that a related but distinct shape was unguarded on every route:
+a declared member taking the C# name of an **inherited** member of the other kind compiles as CS0108
+hiding rather than failing.
+
+**One shared guard, not a sixth copy.** `emitMemberNameCollisions`
+(`nuget-processor/.../cir/CirMemberNameCollisions.kt`, new) now runs, over each route's own
+*projected* member list, at every C# type that renders both properties and methods: `translateClass`
+(instance, companion, async, Flow and callback members together, since they land on one C# type),
+the sealed base and each arm, `translateValueClass` (its underlying property included), and
+`translateInterfaceBackingClass`. The two existing copies (`object`, the file class above; the
+interface route, Decision E of [ADR-113](113-interface-declaration-on-the-forward-plan.md)) migrate
+onto the same helper, keeping their own reason and hint wording so the tests that pin it stay green.
+The enum-entry guard (issue #285's amendment) stays separate; it compares entries against each other,
+a different rule.
+
+- **Rule 1 (CS0102), unchanged in shape, generalized in reach:** a C# name held by a property or
+  `const` and by any other member of the same type. This also closes the folded backlog item
+  `docs/backlog/const-val-no-cross-owner-collision-guard.md`: two `const val`s meeting after casing
+  (`MAX_RETRIES` and `maxRetries` both to `MaxRetries`) collide under the same rule, whether on an
+  `object`, a companion, or the top-level file class, and so does an instance property against a
+  companion property of the same name.
+- **Rule 2 (CS0108), new:** a declared member whose C# name equals an inherited member of the
+  *other* kind, in either direction, checked by a post-pass (`CsMemberRegistry.emitInheritedCollisions`)
+  over each kept-base chain once every class, sealed base and arm has translated (a base can
+  translate after its own subclass). A method hiding an inherited property also makes the property
+  unreadable through the derived type (`n.Value` is `CS0428`); the reverse direction (a property
+  hiding an inherited method) leaves the method callable, but CS0108 still fails
+  `nugetCompileInterop` (ADR-138) and any consumer build under `TreatWarningsAsErrors`, so both
+  directions are fatal, not one warned and one failed.
+
+**Post-projection is load-bearing, not incidental.** The guard runs over each route's rendered
+member list, never over Kotlin declarations directly. The shipped `Issue112Sample.kt`
+([ADR-113](113-interface-declaration-on-the-forward-plan.md) post-implementation note 4) keeps
+`val collarTag` beside an unbridgeable `fun collarTag(code: Int): Sequence<Int>` on the class route
+too; only `CollarTag` survives projection, so it stays green. A guard placed before the plan drops
+unbridgeable members would fail that shipped, working fixture.
+
+**Knowing cost, accepted the same way as the `object` amendment above.** A class-route CS0102
+collision already failed the consumer's own C# compile before this change; the guard only moves the
+failure earlier and names it. The CS0108 shape is the one that actually changes behavior: a library
+with it used to build fine whenever `dotnet` was absent or `nugetCompileInterop` was skipped
+(ADR-138's opt-in strict mode is still a separate ROADMAP item), and now fails generation instead.
+
+**Message fix, no behavior change.** An overloaded interface method's collision hint used to name
+the numbered exported symbol (e.g. `tag_2`) when two same-named overloads existed; it now reads the
+plan's own Kotlin member name first, falling back to the symbol's tail only when the plan has none.
+
+### Alternatives rejected
+
+- **A `new` modifier on the derived member,** to silence CS0108 rather than fail: rejected by spike.
+  The consumer's `n.Value` read still resolves to the method, not the inherited property (`CS0428`),
+  so it papers over the exact break this guard exists to name.
+- **Warn-only for the "benign" reverse direction** (a declared property hiding an inherited method,
+  where the method stays callable): rejected. CS0108 still fails `nugetCompileInterop` and any
+  consumer build under `TreatWarningsAsErrors`, so "benign" only holds for a caller who never invokes
+  the hidden member; the build still breaks.
+- **Rename or skip the colliding member:** rejected for the same reason as the original Decision:
+  a rename is a silently different API, and ADR-055's both-halves contract forbids exporting a
+  planned callable from Kotlin while dropping it from the C# side alone.
+- **A pre-projection guard over `KSClassDeclaration`s** instead of the rendered member lists:
+  rejected. It would fail the shipped `Issue112Sample.kt` fixture, which relies on one of the two
+  colliding members already having been dropped by the plan.
+
+### Files touched
+
+`cir/CirMemberNameCollisions.kt` (new: the shared helper, `CsMemberRegistry`, and the Kotlin-spelling
+bookkeeping); `cir/CirClassTranslator.kt` and `cir/CirTranslator.kt` (new call sites per route, the
+two migrated copies deleted, and the merged-file-class check, which now also covers a suspend or
+generic top-level function and a `{Receiver}Extensions` merge since it runs once over each finished
+`CirNamespace` rather than per contributing loop); `forward/ForwardDiagnostic.kt` kdoc. No fixture
+changes (every shape here is fatal, so it cannot live in `test-library`); new Tier 1 coverage in
+`Tier1MemberNameCollisionTest.kt`.
