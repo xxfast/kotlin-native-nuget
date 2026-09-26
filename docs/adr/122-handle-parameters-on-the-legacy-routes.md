@@ -333,7 +333,8 @@ Refused, named `SKIPPED_UNSUPPORTED_INPUT`:
 - An *unexported* class (one outside the export scope), which previously rendered a public `IntPtr`
   with no diagnostic at all.
 - A nullable object parameter (`Observation?`), keeping ADR-114's nullable deferral rule: nullable
-  threading on the legacy routes is done once, or not at all.
+  threading on the legacy routes is done once, or not at all (satisfied for scalars and `String` by
+  the 2026-09-26 amendment below; a nullable class handle stays refused).
 - Every generic parameter that is not a supported collection, unchanged from ADR-114.
 
 Not touched:
@@ -401,3 +402,32 @@ before and after.
 > which this ADR did not touch. Those branches inspected only the return, so a skip caused by a
 > parameter left the route open and rendered that parameter as a public `IntPtr`. Closed with a
 > `check(...)` regression guard, pinned by `tier1/Tier1SkipMeansAbsentTest.kt`.
+
+### 2026-09-26: nullable scalar and `String` parameters (issue #299)
+
+A nullable primitive/`Char` parameter and a nullable `String` parameter on these same four legacy
+routes were still bound as their non-null spelling on both halves (Kotlin `limit: Int`, C#
+`int limit`), so a C# caller had no way to pass `null`. This satisfies the "done once, or not at
+all" nullable-threading rule this ADR set for the legacy routes: it is now done for every scalar and
+`String`, and remains not-done (refused) only for a nullable class handle.
+
+The fix reuses the plan route's own wire (ADR-098's `${name}HasValue` amendment, ADR-164's Context)
+rather than inventing a second encoding: a nullable primitive or `Char` fans out to a
+`${name}HasValue: Boolean` slot followed by the inner value slot, rebuilt in Kotlin as
+`if (${name}HasValue) name else null` and passed from C# as `x.HasValue, x.GetValueOrDefault()`; a
+nullable `String` stays a single slot, typed `string?` on both the public signature and the
+`DllImport`. Threaded through the same one classifier and four builders this ADR already owns
+(`ForwardLegacyRouteCollections.kt`, `SuspendFunctionExports.kt`, `FlowExports.kt`,
+`CirCollectionParameters.kt`), so the suspend member, sealed-arm, top-level-suspend, and Flow/
+StateFlow member routes all gained it in the one change, per this ADR's own scope-coupling finding.
+
+Default arguments (`= null`) are still not honoured on these routes: the parameter becomes a
+*required* `int?`/`string?`, not an optional one. `renderAsyncMethod` renders the parameter's type
+and name, never its `declaration`, and `legacyRouteParameters` never sets a `defaultValue`; tracked
+as a separate Phase 4 item.
+
+No new `LeakTests/LiveHandleTests.cs` row: a `HasValue`/value pair is two by-value scalar slots, and
+a nullable `String` is a runtime-marshalled UTF-8 buffer freed after the call, so neither mints a
+`NugetMarshal` handle (inferred from the generator source, the same reasoning as ADR-155's reverse
+collections). Verified by `nuget-processor`'s `Tier1LegacyRouteNullableParameterTest` (generated
+Kotlin and C# text) and `IntegrationTests/SuspendNullableParameterTests.cs` (consumer behaviour).

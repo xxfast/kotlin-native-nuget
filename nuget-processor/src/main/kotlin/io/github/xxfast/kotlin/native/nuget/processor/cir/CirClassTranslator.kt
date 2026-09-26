@@ -1496,7 +1496,8 @@ internal fun flowMembers(
         entryPoint = "${prefix}_$cname",
         returnType = "IntPtr",
         name = nativeStem,
-        parameters = listOf(CirParameter("handle", "IntPtr")) + methodParams,
+        parameters = listOf(CirParameter("handle", "IntPtr")) +
+            methodParams.nativeImportParameters(),
         visibility = CirVisibility.PRIVATE,
       )
 
@@ -1541,7 +1542,7 @@ internal fun flowMembers(
     val nativeParams: List<CirParameter> = listOf(
       CirParameter("handle", "IntPtr"),
       CirParameter("scopeHandle", "IntPtr"),
-    ) + methodParams + listOf(
+    ) + methodParams.nativeImportParameters() + listOf(
       CirParameter("onNext", "IntPtr"),
       CirParameter("onComplete", "IntPtr"),
       CirParameter("onError", "IntPtr"),
@@ -1572,7 +1573,8 @@ internal fun flowMembers(
         entryPoint = "${prefix}_${cname}_value",
         returnType = "IntPtr",
         name = "${nativeStem}Value",
-        parameters = listOf(CirParameter("handle", "IntPtr")) + methodParams,
+        parameters = listOf(CirParameter("handle", "IntPtr")) +
+            methodParams.nativeImportParameters(),
         visibility = CirVisibility.PRIVATE,
       )
 
@@ -1584,7 +1586,8 @@ internal fun flowMembers(
           entryPoint = "${prefix}_${cname}_has_value",
           returnType = "bool",
           name = "${nativeStem}HasValue",
-          parameters = listOf(CirParameter("handle", "IntPtr")) + methodParams,
+          parameters = listOf(CirParameter("handle", "IntPtr")) +
+              methodParams.nativeImportParameters(),
           visibility = CirVisibility.PRIVATE,
           marshalBooleanReturn = true,
         )
@@ -1728,7 +1731,7 @@ internal fun suspendMembers(
     val nativeParams: List<CirParameter> = listOf(
       CirParameter("handle", "IntPtr"),
       CirParameter("scopeHandle", "IntPtr"),
-    ) + methodParams +
+    ) + methodParams.nativeImportParameters() +
         listOf(
           // ADR-102: a raw thunk address, not a delegate the marshaller would have to build a
           // native-to-managed stub for. The native symbol is unchanged; Kotlin is untouched.
@@ -1841,7 +1844,7 @@ internal fun suspendMembers(
     val nativeParams: List<CirParameter> = listOf(
       CirParameter("handle", "IntPtr"),
       CirParameter("scopeHandle", "IntPtr"),
-    ) + methodParams +
+    ) + methodParams.nativeImportParameters() +
         listOf(
           // ADR-102: a raw thunk address, not a delegate the marshaller would have to build a
           // native-to-managed stub for. The native symbol is unchanged; Kotlin is untouched.

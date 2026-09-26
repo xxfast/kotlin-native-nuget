@@ -2,6 +2,8 @@ package io.github.xxfast.kotlin.native.nuget.test.cat
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flow
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -57,5 +59,26 @@ class CatFeeder(val catName: String) {
     emit(150)
     delay(50.milliseconds)
     emit(200)
+  }
+
+  // Issue #299: the Flow/StateFlow member routes share the legacy parameter classifier with the
+  // suspend route, so a nullable parameter was exported as non-null here too.
+
+  /** Nullable Int parameter on a Flow member: one emission spelling what Kotlin received. */
+  fun snacks(limit: Int?): Flow<String> = flow {
+    emit(if (limit == null) "$catName snacks: unlimited" else "$catName snacks: $limit")
+  }
+
+  /** Nullable String parameter on a StateFlow member: an unlabelled bowl is still a bowl. */
+  fun bowlStatus(bowl: String?): StateFlow<String> =
+    MutableStateFlow(if (bowl == null) "$catName bowl: unlabelled" else "$catName bowl: $bowl")
+
+  /**
+   * Nullable Char parameter on a suspend member returning StateFlow (ADR-068): the third legacy
+   * bucket sharing the classifier. The letter stamped on the bowl, if anyone stamped one.
+   */
+  suspend fun awaitBowlInitial(initial: Char?): StateFlow<String> {
+    delay(10.milliseconds)
+    return MutableStateFlow(initial?.let { "$catName bowl initial: $it" } ?: "$catName bowl initial: none")
   }
 }
