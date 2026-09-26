@@ -54,6 +54,18 @@ internal sealed interface ForwardLegacyParameterShape {
    */
   data class Handle(val type: BridgeType.ObjectHandle) : ForwardLegacyParameterShape
 
+  /**
+   * Issue #299 (ADR-122 amendment): a nullable primitive, `Char` or `String`, crossing on the plan
+   * route's own wire. [type] is the non-null inner type. A primitive or `Char` fans out to a
+   * `${name}HasValue` BOOLEAN slot followed by the inner value slot (ADR-098 amendment, ADR-164
+   * Context); a `String` stays one nullable pointer slot.
+   */
+  data class NullableScalar(val type: BridgeType) : ForwardLegacyParameterShape {
+    /** Whether this parameter takes the has-value slot pair rather than one nullable slot. */
+    val fansOut: Boolean
+      get() = type !is BridgeType.String
+  }
+
   /** Any other parameter, named so the skip diagnostic can quote it. */
   data class Refused(val description: String) : ForwardLegacyParameterShape
 }
@@ -69,9 +81,9 @@ internal sealed interface ForwardLegacyParameterShape {
  *
  * Nullable collections (`List<T>?`) and nullable objects land in
  * [ForwardLegacyParameterShape.Refused] on purpose: threading nullability through these routes is
- * ADR-067 territory and ADR-114 defers it. A nullable *scalar* stays [ForwardLegacyParameterShape
- * .Plain], keeping the non-null spelling both halves already ship for it, rather than dropping a
- * member that binds today.
+ * ADR-067 territory and ADR-114 defers it. A nullable *scalar* is
+ * [ForwardLegacyParameterShape.NullableScalar] (issue #299): it used to stay `Plain`, which bound
+ * `Int?` as a non-null `int` on both halves, so a C# caller could not pass `null`.
  */
 internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
   type: KSType,
@@ -86,7 +98,7 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
     classified.isLegacyScalar() -> ForwardLegacyParameterShape.Plain
     classified is BridgeType.ObjectHandle -> ForwardLegacyParameterShape.Handle(classified)
     classified is BridgeType.Nullable && classified.type.isLegacyScalar() ->
-      ForwardLegacyParameterShape.Plain
+      ForwardLegacyParameterShape.NullableScalar(classified.type)
 
     else -> ForwardLegacyParameterShape.Refused(expanded.legacyDescription())
   }
@@ -680,14 +692,46 @@ internal fun legacyHandleStatement(parameter: String, type: BridgeType.ObjectHan
  */
 internal fun ForwardLegacyParameterShape.isLegacyLowered(): Boolean = when (this) {
   is ForwardLegacyParameterShape.Marshalled, is ForwardLegacyParameterShape.Handle -> true
-  ForwardLegacyParameterShape.Plain, is ForwardLegacyParameterShape.Refused -> false
+  ForwardLegacyParameterShape.Plain,
+  is ForwardLegacyParameterShape.NullableScalar,
+  is ForwardLegacyParameterShape.Refused -> false
 }
+
+/**
+ * Issue #299: the name of the BOOLEAN slot a fanned-out
+ * [ForwardLegacyParameterShape.NullableScalar] adds before [parameter]'s value slot, or null when
+ * this parameter has no such slot. The same name the plan route gives it, so the two routes spell
+ * one wire.
+ */
+internal fun ForwardLegacyParameterShape.legacyHasValueSlot(parameter: String): String? =
+  if (this is ForwardLegacyParameterShape.NullableScalar && fansOut) "${parameter}HasValue"
+  else null
+
+/**
+ * The Kotlin expression the member is called with for [parameter]: a lowered shape reads its
+ * eagerly-built local, a fanned-out nullable scalar is rebuilt from its has-value pair (the plan
+ * route's `ForwardKotlinPlanEmitter` text), everything else is the parameter itself.
+ */
+internal fun ForwardLegacyParameterShape.legacyArgument(parameter: String): String {
+  if (isLegacyLowered()) return legacyLoweredName(parameter)
+  val hasValue: String = legacyHasValueSlot(parameter) ?: return parameter
+  return "if ($hasValue) $parameter else null"
+}
+
+/**
+ * Issue #299: the C# arguments a fanned-out nullable scalar [name] is passed to the native call as,
+ * matching its two slots (the plan route's `ForwardCirPlanProjection` text).
+ */
+internal fun legacyNullableScalarArgument(name: String): String =
+  "$name.HasValue, $name.GetValueOrDefault()"
 
 /** The prelude line this parameter contributes, or null when it is passed through as-is. */
 internal fun ForwardLegacyParameterShape.legacyPrelude(parameter: String): String? = when (this) {
   is ForwardLegacyParameterShape.Marshalled -> legacyLoweringStatement(parameter, type)
   is ForwardLegacyParameterShape.Handle -> legacyHandleStatement(parameter, type)
-  ForwardLegacyParameterShape.Plain, is ForwardLegacyParameterShape.Refused -> null
+  ForwardLegacyParameterShape.Plain,
+  is ForwardLegacyParameterShape.NullableScalar,
+  is ForwardLegacyParameterShape.Refused -> null
 }
 
 /** The C# expression that builds [name]'s native wire handle, with per-element projection. */

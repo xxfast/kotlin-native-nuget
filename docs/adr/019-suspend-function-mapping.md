@@ -610,3 +610,7 @@ Verified: two new xunit rows in `IntegrationTests/LiveHandleTests.cs`,
 `Suspend_NoSuspensionPoint_CompletesBeforeNativeReturns_ReturnsToBaseline` and
 `Suspend_NoSuspensionPoint_WithCancellationToken_ReturnsToBaseline`, 5000 crossings each: red 3/3 and
 2/3 before the fix, 14/14 green across three full `scripts/verify.sh` runs after.
+
+> **Pointer (2026-09-26):** a nullable primitive/`Char`/`String` *parameter* on this route (as
+> opposed to the nullable return covered above) was still bound as non-null; see
+> [ADR-122](122-handle-parameters-on-the-legacy-routes.md)'s 2026-09-26 amendment.
