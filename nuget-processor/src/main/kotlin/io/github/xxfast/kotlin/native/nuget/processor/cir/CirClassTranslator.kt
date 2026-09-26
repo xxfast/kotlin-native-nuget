@@ -23,6 +23,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.cirDoc
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKdoc
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toCirDoc
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedCallbackMember
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedInterfaceBridgePair
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasPlannedCallbackParameter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMethods
@@ -961,6 +962,8 @@ internal fun translateClass(
     (interfaceBridgePairs.map { it.first } + interfaceBridgePairs.map { it.second }).toSet()
 
   val interfaceBridgeMembers: List<CirInterfaceBridgeMethod> = interfaceBridgePairs
+    // ADR-090 amendment (2026-09-26): the C# half of the same named refusal.
+    .filter { (addMethod, _) -> legacyRefusedInterfaceBridgePair(addMethod) == null }
     .mapNotNull { (addMethod, removeMethod) ->
       translateInterfaceBridgeMethod(
         addMethod, removeMethod, libraryName, prefix, name, tracker, classifier, context,
@@ -2330,6 +2333,26 @@ internal fun emitCsharpSignatureCollisions(
   container: String,
   symbol: KSNode?,
   logger: KSPLogger,
+  reservedSignatures: Set<List<String>> = emptySet(),
+) = emitCsharpSignatureCollisionsOf(
+  methods.map { method -> method.name to method.parameters },
+  container,
+  symbol,
+  logger,
+  reservedSignatures,
+)
+
+/**
+ * The guard over bare (member name, parameters) pairs, so a container whose members are not
+ * [CirMethod]s can run it too. ADR-090 amendment (2026-09-26): the generated `IFoo` declares
+ * [CirInterfaceMethod]s, and an interface `tag(s: String)` / `tag(s: String?)` pair emitted CS0111
+ * on `IFoo` with no KSP error at all.
+ */
+internal fun emitCsharpSignatureCollisionsOf(
+  methods: List<Pair<String, List<CirParameter>>>,
+  container: String,
+  symbol: KSNode?,
+  logger: KSPLogger,
   /**
    * ADR-162 (ROADMAP line 87): signatures the *renderer* puts on this container, which are
    * therefore not in [methods] and cannot collide with each other, only with an authored member.
@@ -2346,7 +2369,7 @@ internal fun emitCsharpSignatureCollisions(
 ) {
   val authored: List<List<String>> = methods
     .map { method ->
-      listOf(method.name) + method.parameters.map { param ->
+      listOf(method.first) + method.second.map { param ->
         val stripReferenceNullability: Boolean = param.isReferenceType && param.type.endsWith("?")
         if (stripReferenceNullability) param.type.dropLast(1) else param.type
       }
@@ -2890,6 +2913,14 @@ internal fun translateInterface(
     plannedMethods + typeParameterMethods(iface, typeParamNames, plannedMethods)
 
   emitInterfaceNameCollisions(interfaceName, iface, propertyPlans, methodPlans, logger)
+  // ADR-090 amendment (2026-09-26): the same ADR-034 guard every other container runs. Here, not on
+  // the reachable-only backing class, because `IFoo` is emitted for every exported interface.
+  emitCsharpSignatureCollisionsOf(
+    plannedMethods.map { method -> method.name to method.parameters },
+    interfaceName,
+    iface,
+    logger,
+  )
 
   return CirInterface(
     interfaceName, typeParams, properties, methods, doc = iface.forwardKdoc(expects)?.toCirDoc(),
@@ -2939,7 +2970,8 @@ private fun typeParameterMethods(
   planned: List<CirInterfaceMethod>,
 ): List<CirInterfaceMethod> {
   if (typeParamNames.isEmpty()) return emptyList()
-  val plannedShapes: Set<Pair<String, Int>> = planned.map { it.name to it.parameters.size }.toSet()
+  val plannedShapes: Set<List<String>> =
+    planned.map { method -> listOf(method.name) + method.parameters.map { it.type } }.toSet()
 
   return iface.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -2956,11 +2988,6 @@ private fun typeParameterMethods(
       if (!mentionsTypeParameter) return@mapNotNull null
 
       val csMethodName: String = method.simpleName.asString().replaceFirstChar { it.uppercase() }
-      // A planned member of the same shape would be a duplicate declaration (CS0111). Cannot
-      // happen today, since a class type parameter never classifies into a BridgeType, but the
-      // carve-out must not be the thing that discovers otherwise.
-      if (csMethodName to method.parameters.size in plannedShapes) return@mapNotNull null
-
       val csReturnType: String = when {
         returnName in typeParamNames -> requireNotNull(returnName)
         returnName == "String" -> "string"
@@ -2974,6 +3001,12 @@ private fun typeParameterMethods(
           else mapParamType(kotlinType)
         CirParameter((param.name?.asString() ?: "_").csharpParameterName(), csType)
       }
+      // A planned member of the same C# signature would be a duplicate declaration (CS0111).
+      // Cannot happen today, since a class type parameter never classifies into a BridgeType, but
+      // the carve-out must not be the thing that discovers otherwise. ADR-090 amendment
+      // (2026-09-26): keyed on the rendered parameter types, not the arity, so `peek(x: T)`
+      // beside a planned `peek(x: Int)` is a legal C# overload and is no longer silently dropped.
+      if (listOf(csMethodName) + params.map { it.type } in plannedShapes) return@mapNotNull null
       CirInterfaceMethod(csMethodName, csReturnType, params)
     }
     .toList()
@@ -3000,7 +3033,9 @@ private fun emitInterfaceNameCollisions(
   methodPlans.forEach { plan ->
     val property: ForwardPropertyPlan =
       propertyNames[plan.publicSignature.csharpName] ?: return@forEach
-    val kotlinName: String = plan.invocation.symbol.substringAfterLast('.')
+    // ADR-090 amendment: the Kotlin member, never the overload-numbered symbol tail (`speak_2`).
+    val kotlinName: String =
+      plan.invocation.member ?: plan.invocation.symbol.substringAfterLast('.')
     ForwardDiagnosticSink.emit(
       listOf(
         ForwardDiagnostic(
@@ -3054,18 +3089,13 @@ internal fun translateInterfaceBackingClass(
     }
     .toList()
 
-  val methods: List<CirMethod> = iface.getAllFunctions()
-    .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { method -> !method.isCompilerOwnedMember(iface) }
-    .filter { method -> method.parentDeclaration == iface }
-    .mapNotNull { method ->
-      val symbol = "$ifaceQualified.${method.simpleName.asString()}"
-      callableCatalog.planFor(symbol)?.let { plan ->
-        tracker.trackPlan(plan)
-        ForwardCirPlanProjection.classMethod(plan, prefix, isOverride = false)
-      }
-    }
-    .toList()
+  // ADR-090 amendment (2026-09-26): owner-exact catalog read, the same one `translateInterface`
+  // and the Kotlin half (`InterfaceExports`) use, so an overload pair binds each numbered plan
+  // once.
+  val methods: List<CirMethod> = callableCatalog.classMethods(ifaceQualified).map { plan ->
+    tracker.trackPlan(plan)
+    ForwardCirPlanProjection.classMethod(plan, prefix, isOverride = false)
+  }
 
   return CirClass(
     name = name,

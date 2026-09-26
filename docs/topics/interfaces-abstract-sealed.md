@@ -182,6 +182,47 @@ private sealed class DeskClerk : Boarding.IClerk
 Boarding.FileVia(new DeskClerk()); // "stamped filed at boarding"
 ```
 
+### Method overloads on an interface {id="method-overloads-on-an-interface"}
+
+Two or more same-named methods on a Kotlin interface collapse into one natural C# overload set on
+the generated interface, exactly like [an ordinary class's overloads](classes-and-objects.md#method-overloads);
+the numbering that keeps the export symbols distinct never reaches the C# surface:
+
+```kotlin
+interface Brusher {
+  fun brush(): String
+  fun brush(strokes: Int): String
+  fun brush(mood: Mood): String
+  fun trim(claws: Int = 4): String
+  fun trim(paw: String, claws: Int = 1): String
+}
+```
+
+```C#
+public interface IBrusher : IDisposable
+{
+    string Brush();
+    string Brush(int strokes);
+    string Brush(global::TestLibrary.Cat.Mood mood);
+    string Trim(int? claws = null);
+    string Trim(string paw, int? claws = null);
+}
+```
+
+This works the same way whether the interface reaches C# through
+[a return value](#interface-typed-return-values) or [a parameter](#implementing-a-kotlin-interface-in-c):
+
+```C#
+using IBrusher brusher = BrusherKt.HouseBrusher();
+brusher.Brush(Mood.Grumpy); // "Oreo is brushed while grumpy" - not Brush(2)'s overload
+
+salon.BrushAll(new MyloBrusher()); // each Kotlin call reaches Mylo's matching C# overload
+```
+
+As on the class route, C# cannot overload on reference nullability alone: a `fun tag(s: String)` /
+`fun tag(s: String?)` pair on an interface fails generation with `ERROR_CSHARP_SIGNATURE_COLLISION`
+instead of producing invalid C#.
+
 ### Nested interfaces {id="nested-interfaces-skip-named"}
 
 An interface nested inside a non-generic, non-`inner` `class` or `object` is declared as a real
