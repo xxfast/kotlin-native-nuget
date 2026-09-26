@@ -20,6 +20,7 @@ import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.Modifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.enumArmName
@@ -36,50 +37,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.PublishedScope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
-
-/**
- * ADR-110's collision guard for one top-level function's projected [members].
- *
- * C# forbids two members of a type sharing a name unless both are methods, so a top-level function
- * whose PascalCase name is already held by a top-level property of the same file class is
- * uncompilable C# (CS0102). camelCase used to keep the two apart. Unlike the file-class shape
- * (CS0542), which `resolveStaticClassName` renames away with ADR-007's `Kt` suffix, there is no
- * rename to fall back on here: renaming either member would be a silently different API
- * (ADR-034/ADR-082's diagnostic model).
- *
- * Fatal, where ADR-110 wrote "skip the function, keep the property": a planned callable is
- * projected into both halves and ADR-055's contract requires it in each, so it cannot be exported
- * from Kotlin and dropped from the C#. See [ForwardDiagnosticKind.ERROR_CSHARP_NAME_COLLISION].
- */
-private fun emitCsharpNameCollisions(
-  members: List<CirMember>,
-  className: String,
-  propertyNames: Set<String>,
-  function: KSFunctionDeclaration,
-  logger: KSPLogger,
-) {
-  val collision: String = members.filterIsInstance<CirMethod>()
-    .map { method -> method.name }
-    .firstOrNull { name -> name in propertyNames }
-    ?: return
-
-  ForwardDiagnosticSink.emit(
-    listOf(
-      ForwardDiagnostic(
-        kind = ForwardDiagnosticKind.ERROR_CSHARP_NAME_COLLISION,
-        symbol = function,
-        declaration = "$className.$collision",
-        reason = "the top-level property '$collision' on the same file class already claims " +
-            "that C# name, and C# cannot declare a property and a method with one name (CS0102)",
-        hint = "rename the Kotlin function '${function.simpleName.asString()}'; a top-level " +
-            "function renders PascalCase in C# (ADR-110)",
-        // ERROR_*: the build fails before anything generated is read.
-        owner = null,
-      ),
-    ),
-    logger,
-  )
-}
 
 private fun syncErrorArguments(parameters: String): String = if (parameters.isEmpty()) {
   "out IntPtr error"
@@ -315,31 +272,50 @@ internal fun translate(
 
   val namespaces: MutableList<CirNamespace> = mutableListOf()
   val tracker = CollectionHelperTracker()
+  // ADR-110 amendment (ROADMAP line 32): every class-shaped route records its rendered names and
+  // kept base here; the inherited CS0108 check runs once, after all of them translated.
+  val memberRegistry = CsMemberRegistry()
 
   // ADR-110: top-level functions render PascalCase, so a function can now claim a C# name that a
   // top-level property of the same file class already holds (`val name` + `fun name()`, CS0102).
   // The file-class shape (CS0542) is renamed away above; this one has no rename to fall back on.
-  val staticPropertyNames: Map<Pair<String, String>, Set<String>> = buildMap {
-    groupPropertiesByNamespaceAndFile(properties).forEach { (key, props) ->
-      val names: Set<String> = props.mapNotNullTo(mutableSetOf()) { prop ->
-        callableCatalog
-          .propertyFor("${prop.packageName.asString()}.${prop.simpleName.asString()}")
-          ?.publicName
+  // The file class is `partial` and merged from several loops (functions, generic and suspend
+  // functions, properties, consts, same-named extension classes), so the check runs once over the
+  // MERGED class before returning, which is also what catches two consts meeting after casing
+  // (`MAX_RETRIES` + `maxRetries`). Each loop records the Kotlin declaration behind every name.
+  val staticSpellings: MutableMap<Pair<String, String>, KotlinSpellings> = mutableMapOf()
+  val staticSymbols: MutableMap<Pair<String, String>, MutableMap<String, KSDeclaration>> =
+    mutableMapOf()
+  fun recordStatic(
+    namespace: String,
+    className: String,
+    emitted: List<CirMember>,
+    declaration: KSDeclaration,
+    spelling: KotlinSpelling,
+  ) {
+    val key: Pair<String, String> = namespace to className
+    val spellings: KotlinSpellings = staticSpellings.getOrPut(key) { KotlinSpellings() }
+    val symbols: MutableMap<String, KSDeclaration> = staticSymbols.getOrPut(key) { mutableMapOf() }
+    emitted.csMemberNames().forEach { member ->
+      spellings.record(member.name, spelling)
+      // The function is the declaration the pinned ADR-110 message asks the author to rename.
+      val existing: KSDeclaration? = symbols[member.name]
+      val functionOutranksNonFunction: Boolean =
+        spelling.isFunction && existing !is KSFunctionDeclaration
+      if (existing == null || functionOutranksNonFunction) {
+        symbols[member.name] = declaration
       }
-      put(key, getOrElse(key) { emptySet() } + names)
     }
-    groupPropertiesByNamespaceAndFile(constProperties).forEach { (key, props) ->
-      val names: Set<String> = props.mapNotNullTo(mutableSetOf()) { prop ->
-        translateConstProperty(prop)?.name
-      }
-      put(key, getOrElse(key) { emptySet() } + names)
-    }
+  }
+  fun KSPropertyDeclaration.topLevelSpelling(): KotlinSpelling = when {
+    modifiers.contains(Modifier.CONST) -> KotlinSpelling("const val", simpleName.asString())
+    isMutable -> KotlinSpelling("var", simpleName.asString())
+    else -> KotlinSpelling("val", simpleName.asString())
   }
 
   groupByNamespaceAndFile(functions).forEach { (key, funcs) ->
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
-    val propertyNames: Set<String> = staticPropertyNames[key] ?: emptySet()
     val members: List<CirMember> = funcs.flatMap { function ->
       // ADR-095: node identity — the walk stays (this grouping needs the declaration), but the
       // plan of an overload is keyed `..._$n` and is no longer derivable from the name.
@@ -358,7 +334,10 @@ internal fun translate(
           logger,
         )
       }
-      emitCsharpNameCollisions(emitted, finalClassName, propertyNames, function, logger)
+      recordStatic(
+        namespace, finalClassName, emitted, function,
+        KotlinSpelling("fun", function.simpleName.asString()),
+      )
       emitted
     }
     // ADR-095: top-level overloads land on one static class per (namespace, file class).
@@ -375,7 +354,14 @@ internal fun translate(
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
     val members: List<CirMember> =
-      funcs.flatMap { translateGenericFunction(it, context.libraryName, context) }
+      funcs.flatMap { function ->
+        translateGenericFunction(function, context.libraryName, context).also { emitted ->
+          recordStatic(
+            namespace, finalClassName, emitted, function,
+            KotlinSpelling("fun", function.simpleName.asString()),
+          )
+        }
+      }
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
 
@@ -385,7 +371,12 @@ internal fun translate(
     val members: List<CirMember> = funcs.flatMap { function ->
       translateSuspendFunction(
         function, context.libraryName, context.symbols, tracker, exportedTypes, logger, classifier,
-      )
+      ).also { emitted ->
+        recordStatic(
+          namespace, finalClassName, emitted, function,
+          KotlinSpelling("fun", function.simpleName.asString()),
+        )
+      }
     }
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
@@ -399,6 +390,9 @@ internal fun translate(
       if (plan != null) {
         tracker.trackProperty(plan)
         ForwardCirPropertyProjection.staticProperty(plan, context.libraryName)
+          .also { emitted ->
+            recordStatic(namespace, finalClassName, emitted, prop, prop.topLevelSpelling())
+          }
       } else {
         emptyList()
       }
@@ -409,7 +403,11 @@ internal fun translate(
   groupPropertiesByNamespaceAndFile(constProperties).forEach { (key, props) ->
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
-    val members: List<CirMember> = props.mapNotNull { translateConstProperty(it) }
+    val members: List<CirMember> = props.mapNotNull { prop ->
+      translateConstProperty(prop)?.also { emitted ->
+        recordStatic(namespace, finalClassName, listOf(emitted), prop, prop.topLevelSpelling())
+      }
+    }
     namespaces.mergeStaticClass(namespace, finalClassName, members)
   }
 
@@ -430,7 +428,7 @@ internal fun translate(
       add(
         translateClass(
           cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
-          classifier, interfaceDeclarationCatalog, expects,
+          classifier, interfaceDeclarationCatalog, expects, memberRegistry,
         ).copy(nestedDeclarations = translateNestedOf(cls)),
       )
     }
@@ -456,7 +454,7 @@ internal fun translate(
         .forEach { backing ->
           add(
             translateInterfaceBackingClass(
-              backing, context.libraryName, context.symbols, callableCatalog, tracker,
+              backing, context.libraryName, context.symbols, callableCatalog, tracker, logger,
             ),
           )
         }
@@ -480,7 +478,7 @@ internal fun translate(
     val declaration: CirDeclaration = guarded(cls.forwardGuardName(), cls, logger) {
       translateClass(
         cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
-        classifier, interfaceDeclarationCatalog, expects,
+        classifier, interfaceDeclarationCatalog, expects, memberRegistry,
       ).copy(nestedDeclarations = translateNestedOf(cls))
     } ?: return@forEach
     namespaces.addDeclaration(namespaceOf(cls.packageName.asString()), declaration)
@@ -570,7 +568,7 @@ internal fun translate(
     namespaces.addDeclaration(
       namespace,
       translateInterfaceBackingClass(
-        iface, context.libraryName, context.symbols, callableCatalog, tracker,
+        iface, context.libraryName, context.symbols, callableCatalog, tracker, logger,
       ),
     )
   }
@@ -585,6 +583,7 @@ internal fun translate(
         // translation an ordinary owner's does.
         nestedOf = ::translateNestedOf,
         expects = expects,
+        memberRegistry = memberRegistry,
       ),
     )
   }
@@ -643,6 +642,11 @@ internal fun translate(
       val planned: ForwardCallablePlan = callableCatalog.planFor(func) ?: return@flatMap emptyList()
       tracker.trackPlan(planned)
       ForwardCirPlanProjection.extension(planned, context.libraryName)
+        .also { emitted ->
+          recordStatic(
+            namespace, className, emitted, func, KotlinSpelling("fun", func.simpleName.asString()),
+          )
+        }
     }
 
     // A group whose members are all unplanned would otherwise emit an empty
@@ -684,6 +688,9 @@ internal fun translate(
       if (plan != null) {
         tracker.trackProperty(plan)
         ForwardCirPropertyProjection.extension(plan, context.libraryName)
+          .also { emitted ->
+            recordStatic(namespace, className, emitted, prop, prop.topLevelSpelling())
+          }
       } else {
         emptyList()
       }
@@ -864,6 +871,50 @@ internal fun translate(
     usings.add("System.Threading.Channels")
     if ("System.Collections.Generic" !in usings) usings.add("System.Collections.Generic")
   }
+
+  // ADR-110 (and its 2026-09-26 amendment, ROADMAP line 32): the merged-file-class check. A
+  // top-level function beside a top-level property of its C# name keeps ADR-110's original
+  // wording (the pinned "rename the Kotlin function" hint); two values meeting after casing get
+  // the generic one.
+  namespaces.forEach { namespace ->
+    namespace.declarations.filterIsInstance<CirStaticClass>().forEach { staticClass ->
+      val key: Pair<String, String> = namespace.name to staticClass.name
+      val symbols: Map<String, KSDeclaration> = staticSymbols[key].orEmpty()
+      emitMemberNameCollisions(
+        container = staticClass.name,
+        ownerPhrase = "file class ${staticClass.name}",
+        symbol = null,
+        members = staticClass.members.csMemberNames(),
+        spellings = staticSpellings[key] ?: KotlinSpellings(),
+        logger = logger,
+        symbolFor = { name -> symbols[name] },
+        reason = { collision ->
+          if (collision.methods.isEmpty()) {
+            "file class ${staticClass.name} declares ${collision.declarations()}, which " +
+                "${collision.quantifier} render the C# name '${collision.name}', and C# cannot " +
+                "declare two members with one name (CS0102)"
+          } else {
+            "the top-level property '${collision.name}' on the same file class already claims " +
+                "that C# name, and C# cannot declare a property and a method with one name (CS0102)"
+          }
+        },
+        hint = { collision ->
+          val function: String? = collision.methods.firstOrNull()?.name
+          if (function == null) {
+            "rename one of them; a top-level property and a `const val` both render PascalCase " +
+                "in C# (ADR-110)"
+          } else {
+            "rename the Kotlin function '$function'; a top-level function renders PascalCase in " +
+                "C# (ADR-110)"
+          }
+        },
+      )
+    }
+  }
+
+  // ADR-110 amendment (ROADMAP line 32): the inherited CS0108 half, once every class, sealed base
+  // and arm has registered, since a base can translate after its subclass.
+  memberRegistry.emitInheritedCollisions(logger)
 
   // ADR-064 amendment (issue #249): the husk sweep moved OUT of here, to the processor, so it runs
   // after `withSkipRemarks` and can spare a holder that carries a remark. Translation returns what

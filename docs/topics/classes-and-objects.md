@@ -131,6 +131,48 @@ C# cannot overload on reference nullability alone: a pair like `fun tag(s: Strin
 (`ERROR_CSHARP_SIGNATURE_COLLISION`) instead of producing invalid C#. Give one of them a distinct
 name.
 
+## Property and method name collisions {id="property-and-method-name-collisions"}
+
+Kotlin keeps properties and functions in separate namespaces; C# does not. A property and a method
+that render the same C# name on one class fail generation with `ERROR_CSHARP_NAME_COLLISION`
+(CS0102), naming both Kotlin declarations, rather than producing C# that cannot compile:
+
+```kotlin
+class Counter(val start: Int) {
+  val count: Int get() = start
+  fun count(): Int = start + 1
+}
+```
+
+Renaming either `count` fixes it; there is no automatic rename, since either direction would
+silently change the API. Casing counts too: `val size` beside `fun Size()` collides once both
+PascalCase to `Size`, and a `const val` collides with an ordinary property or method the same way.
+The same check runs on every C# type a Kotlin declaration can render into: a class and its companion
+together (they share one C# type), a sealed base and each of its arms, a `value class`'s own
+underlying property, and a generic class.
+
+It also catches the shape where a subclass declares a member that takes the C# name of an
+**inherited** member of the other kind, instead of colliding with it directly:
+
+```kotlin
+open class Parcel<T>(val value: T)
+
+class NamedParcel(name: String) : Parcel<String>(name) {
+  fun value(prefix: String): String = prefix
+}
+```
+
+`NamedParcel.Value(string)` would hide the inherited `Parcel<string>.Value` property (C#'s CS0108),
+and a caller typed as `NamedParcel` could never read it again (`n.Value` resolves to the method, a
+`CS0428` compile error); only an upcast to `Parcel<string>` would. This fails generation the same
+way, naming the declaring class, the base, and both Kotlin declarations; rename the derived member
+instead. The reverse direction (a declared property hiding an inherited method) fails for the same
+reason: C# still reports CS0108, which fails a consumer build under `TreatWarningsAsErrors`, even
+though the method stays callable through the derived type.
+
+A property beside an unrelated, unbridgeable method of the same Kotlin name is unaffected: only one
+of the two ever reaches C#, so nothing collides.
+
 ## A class's own interface beside a kept base class
 
 A class with an exported base class keeps its own exported interfaces too: `class X : Base(),
