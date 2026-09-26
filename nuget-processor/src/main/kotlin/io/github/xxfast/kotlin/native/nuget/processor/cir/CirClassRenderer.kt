@@ -14,15 +14,17 @@ internal fun StringBuilder.renderInterface(iface: CirInterface) {
   } else ""
 
   renderDoc(iface.doc, generated = iface.remarks)
-  appendLine("    public interface ${iface.name}$typeParamStr : IDisposable")
+  val bases: String = (iface.superInterfaces + "IDisposable").joinToString(", ")
+  appendLine("    public interface ${iface.name}$typeParamStr : $bases")
   appendLine("    {")
 
   for (prop in iface.properties) {
     renderDoc(prop.doc, "        ")
+    val modifier: String = if (prop.isNew) "new " else ""
     if (prop.hasSetter) {
-      appendLine("        ${prop.type} ${prop.name} { get; set; }")
+      appendLine("        $modifier${prop.type} ${prop.name} { get; set; }")
     } else {
-      appendLine("        ${prop.type} ${prop.name} { get; }")
+      appendLine("        $modifier${prop.type} ${prop.name} { get; }")
     }
   }
 
@@ -33,7 +35,8 @@ internal fun StringBuilder.renderInterface(iface: CirInterface) {
   for (method in iface.methods) {
     renderDoc(method.doc, "        ")
     val paramStr: String = method.parameters.joinToString(", ") { it.declaration }
-    appendLine("        ${method.returnType} ${method.name}($paramStr);")
+    val modifier: String = if (method.isNew) "new " else ""
+    appendLine("        $modifier${method.returnType} ${method.name}($paramStr);")
   }
 
   // ADR-134: a type Kotlin declares inside the interface is declared inside the generated

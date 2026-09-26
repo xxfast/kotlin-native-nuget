@@ -334,23 +334,43 @@ internal class ForwardPropertyPlanner(
    * position). Shaped exactly like [classProperties], with the interface's own qualified name as
    * both the symbol owner and the `asStableRef` receiver type.
    */
-  fun interfaceProperties(iface: KSClassDeclaration): List<ForwardPropertyPlan> {
+  fun interfaceProperties(
+    iface: KSClassDeclaration,
+    // Interface super-interfaces: the ADR-040 backing class implements every inherited member, so
+    // an interface plans them all. The unexported-supertype lookup (ADR-075) keeps own-only.
+    inherited: Boolean = true,
+  ): List<ForwardPropertyPlan> {
     val owner: String = iface.qualifiedName?.asString() ?: return emptyList()
     val prefix: String = iface.nativePrefix(symbols)
+    val hierarchy = ForwardInterfaceHierarchy(iface, classifier.exportedObjectHandles)
     return inOwner(iface.forwardDiagnosticOwner()) {
       iface.getAllProperties()
         .filter { it.getVisibility() == Visibility.PUBLIC }
         .filter { prop -> !prop.isCompilerOwnedMember(iface) }
-        .filter { prop -> prop.parentDeclaration == iface }
+        .filter { prop -> if (inherited) true else prop.parentDeclaration == iface }
         .mapNotNull { prop ->
-          propertyPlan(
+          val placement: ForwardInterfaceMemberPlacement = hierarchy.placement(prop)
+          // A kept super's unplannable property is that super's drop, named once on it.
+          val droppedBefore: Int = dropped.size
+          val plan: ForwardPropertyPlan? = propertyPlan(
             symbol = "$owner.${prop.simpleName.asString()}",
             position = ForwardPropertyPosition.CLASS,
             receiver = ForwardPropertyReceiver.Handle(owner),
             prop = prop,
             getExport = "${prefix}_get_${prop.simpleName.asString()}",
             setExport = "${prefix}_set_${prop.simpleName.asString()}",
+            typeOverride = if (placement == ForwardInterfaceMemberPlacement.COVARIANT_OVERRIDE) {
+              hierarchy.keptPropertyType(prop)
+            } else {
+              null
+            },
           )
+          val restored: Boolean = prop.restoredByTypeParameterCarveOut(iface)
+          val inherited: Boolean = placement == ForwardInterfaceMemberPlacement.INHERITED
+          if (plan == null && (inherited || restored)) {
+            while (dropped.size > droppedBefore) dropped.removeAt(dropped.lastIndex)
+          }
+          plan
         }
         .toList()
     }
@@ -587,6 +607,8 @@ internal class ForwardPropertyPlanner(
     // accessor set an `override` here has to match. Null for every position without one
     // (top-level, extension, companion, interface dispatch).
     superClass: KSClassDeclaration? = null,
+    // Interface super-interfaces: a covariant override plans at the kept super's type.
+    typeOverride: KSType? = null,
   ): ForwardPropertyPlan? {
     // ADR-115: the author's own signal, ahead of any type question -- nothing about the property
     // is unsupported. `@set:Marker` on a `var` skips the whole property rather than exporting it
@@ -600,7 +622,7 @@ internal class ForwardPropertyPlanner(
       )
       return null
     }
-    val type: BridgeType = classifier.classify(prop.type.resolve()).sealedAsHandle()
+    val type: BridgeType = classifier.classify(typeOverride ?: prop.type.resolve()).sealedAsHandle()
     // ADR-075: getter eligibility never depended on mutability or on the collection facet — a
     // `Collection` (nullable or not) plans whenever the C# read can spell every component
     // (`isReadable`; `isPlannable` already recurses through `Nullable`). Whether a *setter* can

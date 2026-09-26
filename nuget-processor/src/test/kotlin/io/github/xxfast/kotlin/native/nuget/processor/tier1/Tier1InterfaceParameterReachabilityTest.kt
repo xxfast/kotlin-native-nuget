@@ -59,7 +59,7 @@ class Tier1InterfaceParameterReachabilityTest {
     assertContains(cs, "EntryPoint = \"library_tier1_paramreach__boarding_clerk_bridge_create\"")
     assertContains(cs, "EntryPoint = \"library_tier1_paramreach__doorman_bridge_create\"")
     // The bridge layer exists at all, so the ADR-040 boundary throw is gone.
-    assertContains(cs, "return NugetBridge.HandleFor(value);")
+    assertContains(cs, "return NugetBridge.HandleFor(value, declared);")
     assertFalse(
       cs.contains("passing a C#-implemented interface is not supported yet"),
       "a parameter-only interface is bridgeable, so the boundary exception must be gone",
@@ -103,6 +103,6 @@ class Tier1InterfaceParameterReachabilityTest {
       "if (receiverOwned && receiverHandle != IntPtr.Zero) { NugetMarshal.Dispose(receiverHandle); }",
     )
     // And `owned` is only true once a handle was actually minted.
-    assertContains(cs, "IntPtr handle = HandleOf(value);")
+    assertContains(cs, "IntPtr handle = HandleOf((object)value!, typeof(T));")
   }
 }

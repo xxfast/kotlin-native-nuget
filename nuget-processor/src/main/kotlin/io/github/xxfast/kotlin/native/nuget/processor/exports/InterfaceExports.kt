@@ -36,7 +36,8 @@ internal fun FileSpec.Builder.addInterfaceExports(
 
   iface.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { prop -> prop.parentDeclaration == iface }
+    // Interface super-interfaces: every member, own and inherited, since the backing class
+    // implements `IDerived` and through it every `IBase`.
     .forEach { prop ->
       val planned: ForwardPropertyPlan? =
         callableCatalog.propertyFor("$qualifiedName.${prop.simpleName.asString()}")

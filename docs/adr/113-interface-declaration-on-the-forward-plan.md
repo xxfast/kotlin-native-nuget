@@ -439,7 +439,8 @@ satisfies the restatement.
 
 1. `CirInterface` has no super-interface list, so an interface hierarchy is flattened and, after this
    ADR, truncated: `IDerived` should render `: IBase` and inherit its members rather than redeclare or
-   drop them. Verified by reading `CirModel.kt:22-28` and `CirClassRenderer.kt:139`.
+   drop them. Verified by reading `CirModel.kt:22-28` and `CirClassRenderer.kt:139`. Closed by
+   [ADR-167](167-interface-super-interfaces.md).
 2. The same CS0102 property/method name collision on the **ordinary class route** is still unguarded.
    Issue #112's class escaped it only because the colliding method happened to be unbridgeable.
    ADR-034's guard is signature-based and does not cover it (verified by reading all three call sites).

@@ -566,3 +566,17 @@ one `releasePtr`/`releaseCtx` pair, and each Kotlin call (`brush()`, `brush(2)`,
 `brush(Mood.GRUMPY)`) invokes the matching numbered slot, so a C#-implemented `IBrusher` dispatches
 every overload to its own C# member. See ADR-090's amendment for the export-symbol and plan-lookup
 half of the same fix.
+
+## Amendment (2026-09-26): bridge selection reads the parameter's declared type
+
+[ADR-167](167-interface-super-interfaces.md) makes `IDerived : IBase` a real C# base list, so one
+C# object can now satisfy several bridged interfaces at once (`MyloHouseCat : IHouseCat`, which is
+transitively an `IPet` and an `INamed`). `NugetMarshal.HandleOf<T>` used to resolve which bridge
+factory to mint through runtime `is` checks alone; it now passes `typeof(T)` (the call site's
+*static*, declared parameter type) to `NugetBridge.HandleFor(object impl, Type declared)`, which
+tries that interface's own factory first. Passing `MyloHouseCat` at an `IPet` parameter now always
+builds the `IPet` bridge, never `IHouseCat`'s or `INamed`'s, even though the object implements all
+three; an `object`-typed value with no static interface to read still falls back to the runtime
+`is` order. This also fixes a latent hazard the flattened interface hierarchy had hidden: a class
+implementing two unrelated bridged interfaces could previously match either one depending on
+declaration order.

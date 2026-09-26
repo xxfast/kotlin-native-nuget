@@ -12,6 +12,7 @@ using TestLibrary.Issue131;
 using TestLibrary.Issue236;
 using Issue297 = TestLibrary.Issue297;
 using TestLibrary.Kennel;
+using Lineage = TestLibrary.Lineage;
 using TestLibrary.Lounge;
 using TestLibrary.Metronome;
 using TestLibrary.Models;
@@ -851,6 +852,67 @@ public class LiveHandleTests
                 "Mylo has 4 claws trimmed / Mylo has 1 claws trimmed on the front-left paw / "
                     + "Mylo has 2 claws trimmed on the back-right paw",
                 salon.TrimAll(mylo));
+        });
+    }
+
+    // Row 6n. Interface inheritance (`HouseCat : Pet : Named, Aged`) at the RETURN position:
+    // `adoptHouseCat()` mints one handle behind the ADR-040 backing wrapper, which now has to carry
+    // every inherited member as its own `housecat_*` dispatch export, not only `purr`. Each
+    // inherited export borrows the receiver handle; one that retains instead leaks per call while
+    // the functional cells stay green. The same wrapper is then passed back to Kotlin at the
+    // deepest and the root parameter, which must unwrap it rather than bridge it. Oreo is adopted
+    // fifty times and is still one cat.
+    [Fact]
+    public void InterfaceInheritance_ReturnedDerivedInterface_EveryInheritedMember_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var doorstep = new Lineage.Doorstep();
+            using Lineage.IHouseCat oreo = Lineage.Lineage.AdoptHouseCat();
+            Lineage.INamed named = oreo;
+            Lineage.IAged aged = oreo;
+            Lineage.IPet pet = oreo;
+            Assert.Equal("Oreo", named.Name);
+            Assert.Equal("Cookie", named.Nickname);
+            Assert.Equal("Purr, I'm Oreo", named.Greet());
+            Assert.Equal(5, aged.Age);
+            Assert.Equal("Oreo crunches the tuna", pet.Feed("tuna"));
+            Assert.Equal("Oreo purrs x2", oreo.Purr(2));
+            Assert.Equal(
+                "Oreo / Cookie / age 5 / Purr, I'm Oreo / Oreo crunches the tuna / Oreo purrs x3",
+                doorstep.LetIn(oreo));
+            Assert.Equal("Purr, I'm Oreo (Oreo)", doorstep.CallOut(oreo));
+        });
+    }
+
+    // Row 6o. The C#-implemented half of Row 6n: the ADR-084 transfer StableRef of Row 6, minted
+    // for a DERIVED interface whose bridge slots include every inherited member. The same Mylo
+    // crosses at the deepest, middle and root parameter in one iteration, so three bridge
+    // factories (IHouseCat, IPet, INamed) each mint and must dispose exactly one transfer handle,
+    // and nothing per inherited-slot call.
+    private sealed class LeakMyloHouseCat : Lineage.IHouseCat
+    {
+        public string Name => "Mylo";
+        public string? Nickname => "Creamy";
+        public int Age => 4;
+        public string Greet() => "Mylo blinks slowly";
+        public string Feed(string food) => $"Mylo laps up the {food}";
+        public string Purr(int times) => $"Mylo purrs x{times}";
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void InterfaceInheritance_CSharpImplementedDerivedArgument_EveryLevel_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var doorstep = new Lineage.Doorstep();
+            using var mylo = new LeakMyloHouseCat();
+            Assert.Equal(
+                "Mylo / Creamy / age 4 / Mylo blinks slowly / Mylo laps up the tuna / Mylo purrs x3",
+                doorstep.LetIn(mylo));
+            Assert.Equal("Mylo is 4 and Mylo laps up the kibble", doorstep.Weigh(mylo));
+            Assert.Equal("Mylo blinks slowly (Mylo)", doorstep.CallOut(mylo));
         });
     }
 
