@@ -641,7 +641,8 @@ internal class ForwardPropertyPlanner(
   }
 
   /**
-   * ADR-075 Decision 2. `null` when [prop] is not `var` (an ordinary, expected get-only shape —
+   * ADR-075 Decision 2. `null` when [prop] is not `var`, or is a `var` whose setter is narrower
+   * than public ([hasPublicSetter], ADR-075 amendment) (both ordinary, expected get-only shapes —
    * no diagnostic). For a `var`, every non-`Collection` type keeps its pre-existing setter shape
    * unchanged; a `Collection` (or `Nullable` of one) is eligible only when every component
    * (element for list/set, key **and** value for map) satisfies [isWrappableComponent] — the
@@ -658,7 +659,7 @@ internal class ForwardPropertyPlanner(
     receiver: ForwardPropertyReceiver,
     superClass: KSClassDeclaration?,
   ): ForwardPropertySetter? {
-    if (!prop.isMutable) return null
+    if (!prop.isMutable || !prop.hasPublicSetter()) return null
     val readOnlyBase: KSClassDeclaration? = prop.readOnlyOverrideeOwner(superClass)
     if (readOnlyBase != null) {
       droppedSetters.add(
@@ -668,7 +669,7 @@ internal class ForwardPropertyPlanner(
           publicName = publicName,
           owner = ownerScope,
           componentDescription = type.diagnosticTypeName(),
-          reason = "it overrides a read-only property of the exported base class " +
+          reason = "it overrides a property with no public setter on the exported base class " +
               "${readOnlyBase.simpleName.asString()}; C# cannot add a set accessor to an " +
               "override (CS0546)",
         ),
@@ -740,7 +741,8 @@ internal class ForwardPropertyPlanner(
   }
 
   /**
-   * The exported base *class* declaring the read-only property this `var` overrides, or `null`
+   * The exported base *class* declaring the read-only property this `var` overrides (a `val`, or a
+   * `var` whose setter is narrower than public, which also binds get-only), or `null`
    * when the setter is free to be built.
    *
    * Kotlin lets an override widen `val` to `var`; C# does not. The base class renders whatever
@@ -759,7 +761,7 @@ internal class ForwardPropertyPlanner(
   ): KSClassDeclaration? {
     val overridee: KSPropertyDeclaration =
       baseClassOverridee(superClass) as? KSPropertyDeclaration ?: return null
-    return if (overridee.isMutable) null else superClass
+    return if (overridee.isMutable && overridee.hasPublicSetter()) null else superClass
   }
 
   /** ADR-075 Question A alternative A1: every component must satisfy [isWrappableComponent],
@@ -1245,4 +1247,19 @@ internal fun BridgeType.conversion(flow: ForwardFlow): ForwardConversion? = when
   }
 
   else -> ForwardConversion.DIRECT
+}
+
+/**
+ * ADR-075 amendment (2026-09-26): a setter narrower than public (`private set`, `protected set`,
+ * `internal set`) is not public Kotlin API, so it is not C# API either and the property binds
+ * get-only, exactly like a `val`. Written as an absence check so an explicit `set(v) { ... }` with
+ * no modifier counts as public whether or not KSP reports `PUBLIC` for it. `internal` is folded in
+ * even for a module-local owner: the C# consumer sits outside the Kotlin module (ObjC export does
+ * the same), and for a dependency-module owner the call would not compile at all.
+ */
+private fun KSPropertyDeclaration.hasPublicSetter(): Boolean {
+  val modifiers: Set<Modifier> = setter?.modifiers ?: return false
+  return Modifier.PRIVATE !in modifiers &&
+      Modifier.PROTECTED !in modifiers &&
+      Modifier.INTERNAL !in modifiers
 }
