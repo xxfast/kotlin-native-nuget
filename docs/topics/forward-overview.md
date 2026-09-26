@@ -282,6 +282,14 @@ sealed interface itself rather than the outer collection shape:
 `Flow`, or `StateFlow` (nullable or not): those are unplannable by design and still bind through a
 named legacy route, so warning would tell a consumer a working property had vanished.
 
+A `const val`'s C# value comes from the compiler's own evaluated constant (see
+[Top-level declarations](top-level-declarations.md)), read through an internal KSP2 accessor this
+plugin's pinned KSP version is known to have. If a future KSP upgrade removes or renames that
+accessor, every `const val` in the build is skipped instead of rendering a wrong or unreadable
+value, named `SKIPPED_UNREADABLE_CONST_VALUE`. This is a build-environment problem, not something
+in the author's own Kotlin: pin the plugin's supported KSP version, or declare the value as a plain
+`val` instead, which binds as an ordinary get-only property.
+
 ### Unrouted positions for a lambda, `Flow`, or a generic declaration {id="unrouted-positions"}
 
 The three legacy routes above (`Flow`/`StateFlow`, a lambda, a generic declaration) each bind at a

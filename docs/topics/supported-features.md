@@ -73,7 +73,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | instance method return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, …) | → | matching C# return type | Same plan cascade as a property getter, except a nullable numeric return uses a single call: a method may have side effects and cannot be invoked twice. | [Classes and objects](classes-and-objects.md) |
 | top-level function | → | `static class` method, `PascalCase` | One static class per source file. A file whose every declaration skips emits no class at all, and a name colliding with a same-file top-level property fails generation. | [Top-level declarations](top-level-declarations.md) |
 | top-level property | → | static property | get and set, including nullable. | [Top-level declarations](top-level-declarations.md) |
-| `const val` | → | `const` |  | [Top-level declarations](top-level-declarations.md) |
+| `const val` | → | `const` | Value is the compiler's evaluated constant, so an expression or a dependency const binds; hex/underscore literal spelling isn't kept. | [Top-level declarations](top-level-declarations.md) |
 | extension function | → | static method | A real C# extension method. The receiver may be a class, `String`, a primitive, enum, value class, interface, sealed base or a nullable handle; a has-value receiver skips, named. | [Extensions](extensions.md) |
 | extension property | → | static accessor | The same receiver set as an extension function, plus a collection and a bound C# interface. A nullable collection, a nullable bound interface and a has-value receiver skip, named. | [Extensions](extensions.md) |
 
