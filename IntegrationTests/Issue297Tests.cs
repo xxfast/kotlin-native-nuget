@@ -320,4 +320,28 @@ public class Issue297Tests
         using var button = new Button("go");
         Assert.Equal("go clicked 1", button.Click());
     }
+
+    // ---- Button.clicks: `var` with `private set` binds get-only (ADR-075 amendment) ----
+
+    [Fact]
+    public void Button_Clicks_ReadsZeroThenOneAfterClick()
+    {
+        // Oreo stares at the button, then paws it exactly once.
+        using var button = new Button();
+
+        Assert.Equal(0, button.Clicks);
+        button.Click();
+        Assert.Equal(1, button.Clicks);
+    }
+
+    [Fact]
+    public void Button_Clicks_HasNoSetter()
+    {
+        // A private Kotlin setter is not API: C# gets a get-only property, not a private set.
+        PropertyInfo? clicks = typeof(Button).GetProperty("Clicks");
+
+        Assert.NotNull(clicks);
+        Assert.NotNull(clicks!.GetMethod);
+        Assert.Null(clicks.SetMethod);
+    }
 }

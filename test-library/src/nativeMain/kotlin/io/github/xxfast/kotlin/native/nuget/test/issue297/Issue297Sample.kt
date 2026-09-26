@@ -94,9 +94,14 @@ fun notify(message: String, onDone: (String) -> Unit = {}): String {
   return "sent $message"
 }
 
-/** A constructor STORES its lambda, so ADR-160 keeps it off C#; the default is Kotlin's. */
+/**
+ * A constructor STORES its lambda, so ADR-160 keeps it off C#; the default is Kotlin's.
+ * [clicks] is public to read and private to write (ADR-075 amendment), so C# sees it get-only.
+ */
 class Button(val label: String = "ok", val onClick: () -> Unit = {}) {
-  private var clicks: Int = 0
+  /** How many times Oreo has pawed the button. Only [click] may change it. */
+  var clicks: Int = 0
+    private set
 
   fun click(): String {
     clicks++
