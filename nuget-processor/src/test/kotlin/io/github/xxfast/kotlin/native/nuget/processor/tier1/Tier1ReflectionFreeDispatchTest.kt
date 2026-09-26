@@ -34,7 +34,7 @@ class Tier1ReflectionFreeDispatchTest {
     assertContains(cs, "public class Cat : IDisposable, INugetHandle")
     assertContains(cs, "IntPtr INugetHandle.Handle => _handle;")
     assertContains(cs, "Dictionary<Type, Func<IntPtr, object>> Factories")
-    assertContains(cs, "[typeof(global::Tier1.Cat)] = static handle => new global::Tier1.Cat(handle),")
+    assertContains(cs, "[typeof(global::Tier1.Cat)] = static handle => new global::Tier1.Cat(handle, out _),")
     assertContains(cs, "internal static T Materialize<T>(IntPtr handle)")
   }
 
@@ -86,11 +86,11 @@ class Tier1ReflectionFreeDispatchTest {
     assertContains(cs, "public abstract class ApiResult : IDisposable, INugetHandle")
     assertContains(
       cs,
-      "[typeof(global::Tier1.ApiResult.Success)] = static handle => new global::Tier1.ApiResult.Success(handle),",
+      "[typeof(global::Tier1.ApiResult.Success)] = static handle => new global::Tier1.ApiResult.Success(handle, out _),",
     )
     assertContains(
       cs,
-      "[typeof(global::Tier1.ApiResult.Failure)] = static handle => new global::Tier1.ApiResult.Failure(handle),",
+      "[typeof(global::Tier1.ApiResult.Failure)] = static handle => new global::Tier1.ApiResult.Failure(handle, out _),",
     )
     // Issue #40: the base is not constructible, but it IS the `T` an erased `StateFlow<Sealed>` or
     // `Flow<Sealed>` materialises, so it registers through its generated discriminator.
@@ -125,7 +125,7 @@ class Tier1ReflectionFreeDispatchTest {
     assertTrue(result.compiledClean, "expected the fixture to compile; got: ${result.compileErrors}")
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "[typeof(global::Tier1.Cat)] = static handle => new global::Tier1.Cat(handle),")
+    assertContains(cs, "[typeof(global::Tier1.Cat)] = static handle => new global::Tier1.Cat(handle, out _),")
     assertFalse(cs.contains("[typeof(global::Tier1.Mood)]"), "an enum has no handle constructor")
     assertFalse(cs.contains("[typeof(global::Tier1.ChartId)]"), "a value class round-trips as its underlying")
     assertFalse(cs.contains("[typeof(global::Tier1.Registry)]"), "an object is rendered without a handle")

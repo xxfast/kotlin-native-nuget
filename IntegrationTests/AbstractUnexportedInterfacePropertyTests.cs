@@ -119,7 +119,7 @@ public class AbstractUnexportedInterfacePropertyTests
     /// <summary>
     /// The literal ROADMAP case: a subclass written in C#. It compiles only because `Interop.cs`
     /// ships as NuGet `contentFiles` and is `&lt;Compile Include&gt;`d into this assembly, so the
-    /// generated `internal Nester(IntPtr)` constructor is in-assembly and reachable. The abstract
+    /// generated `internal Nester(IntPtr, out NugetHandleTag)` constructor is in-assembly and reachable. The abstract
     /// members it has to satisfy are exactly `Material`, `Height` and the generated
     /// `public abstract void Dispose()`.
     ///
@@ -128,7 +128,7 @@ public class AbstractUnexportedInterfacePropertyTests
     /// </summary>
     private sealed class PaperWren : Nester
     {
-        public PaperWren() : base(IntPtr.Zero)
+        public PaperWren() : base(IntPtr.Zero, out _)
         {
         }
 

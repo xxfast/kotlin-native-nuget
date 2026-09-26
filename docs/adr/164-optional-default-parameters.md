@@ -248,6 +248,12 @@ is described here. The constructor collision check
 synthesized omitting overload is removed, since a widened `Cat(string, int?)` no longer collides
 with a real `Cat(string)`.
 
+**2026-09-26: superseded by [ADR-169](169-handle-constructor-out-marker.md).** The internal handle
+constructor now carries a trailing `out NugetHandleTag tag`, which no ordinary call can bind, so
+this delegating `Settings(int level) : this((int?)level)` overload is deleted rather than kept: the
+exact `Settings(int)` overload described above no longer exists, and `new Settings(3)` binds the
+widened `Settings(int? level = null)` directly with no extra overload needed.
+
 ### Docs
 
 `<param>` rendering (ADR-149/150) needs nothing: `CirDocRenderer.kt:30` keys on the bridge

@@ -389,7 +389,8 @@ internal enum class ForwardDiagnosticKind(
   ),
 
   /** ROADMAP Phase 3: every public constructor of an exported class is skipped, so the generated
-   *  C# type carries only its `internal Foo(IntPtr handle)` and C# can never construct one.
+   *  C# type carries only its `internal Foo(IntPtr handle, out NugetHandleTag tag)` and C# can
+   *  never construct one.
    *
    *  The type is kept, deliberately: `exportedTypes` and the `ObjectHandle` classifier admit a
    *  class by declaration, not by constructor outcome, and a Kotlin factory returning it (the

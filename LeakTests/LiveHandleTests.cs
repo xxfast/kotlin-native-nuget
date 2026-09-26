@@ -1335,7 +1335,7 @@ public class LiveHandleTests
                 NugetMarshal.Dispose(handle);
                 throw new InvalidOperationException("Oreo swatted the archive off the desk");
             }
-            return new TopStory(handle);
+            return new TopStory(handle, out _);
         };
 
         try

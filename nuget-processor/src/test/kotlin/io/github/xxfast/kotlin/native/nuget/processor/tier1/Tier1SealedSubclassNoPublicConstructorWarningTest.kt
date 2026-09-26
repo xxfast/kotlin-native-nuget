@@ -69,7 +69,7 @@ class Tier1SealedSubclassNoPublicConstructorWarningTest {
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
     val cs: String = result.generatedCSharp
 
-    assertContains(cs, "internal Groomed(IntPtr handle) : base(handle)")
+    assertContains(cs, "internal Groomed(IntPtr handle, out NugetHandleTag tag) : base(handle, out tag)")
     assertFalse(
       cs.contains("public Groomed("),
       "an opt-in-marked constructor parameter must reach neither artifact; generated=$cs",
@@ -97,7 +97,7 @@ class Tier1SealedSubclassNoPublicConstructorWarningTest {
 
     // The control: one refused arm must not cost the hierarchy its other constructors, and must
     // not fire the warning for an arm that has one.
-    assertContains(result.generatedCSharp, "public Circle(int radius) : base(IntPtr.Zero)")
+    assertContains(result.generatedCSharp, "public Circle(int radius) : base(IntPtr.Zero, out _)")
     assertTrue(
       warnings(result).none { it.contains("Circle") },
       "expected no warning for a constructible arm; got: ${warnings(result)}",

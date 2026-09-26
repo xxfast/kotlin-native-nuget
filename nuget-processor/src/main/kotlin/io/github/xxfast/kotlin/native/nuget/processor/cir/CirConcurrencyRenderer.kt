@@ -272,11 +272,11 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
     // over a null handle, so the null is tested on the wire pointer instead.
     method.asyncReturnType.endsWith("?") -> {
       val nonNullableType: String = method.asyncReturnType.removeSuffix("?")
-      "t.SetResult(resultPtr == IntPtr.Zero ? null : new $nonNullableType(resultPtr));"
+      "t.SetResult(resultPtr == IntPtr.Zero ? null : new $nonNullableType(resultPtr, out _));"
     }
 
     else ->
-      "t.SetResult(new ${method.asyncReturnType}(resultPtr));"
+      "t.SetResult(new ${method.asyncReturnType}(resultPtr, out _));"
   }
 
   appendLine("        $visibility ${static}${method.returnType} ${method.name}($methodParams)")

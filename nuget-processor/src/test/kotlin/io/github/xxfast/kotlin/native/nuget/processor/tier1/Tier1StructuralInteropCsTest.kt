@@ -519,7 +519,7 @@ class Tier1StructuralInteropCsTest {
     val offenders: List<String> = declarations
       // A public wrapper constructor forwarding `IntPtr.Zero` to its abstract base declares no
       // pointer of its own.
-      .filterNot { line -> line.contains(": base(IntPtr.Zero)") }
+      .filterNot { line -> line.contains(": base(IntPtr.Zero, out _)") }
       .filterNot { line -> allowed.any(line::startsWith) }
 
     assertTrue(

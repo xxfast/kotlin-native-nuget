@@ -182,7 +182,7 @@ class Tier1ExpectActualDeclarationsTest {
     )
     assertTrue(cs.contains("public class Device : IDisposable"))
     assertTrue(cs.contains("public Device(string name)"))
-    assertTrue(cs.contains("internal Device(IntPtr handle)"))
+    assertTrue(cs.contains("internal Device(IntPtr handle, out NugetHandleTag tag)"))
     assertTrue(cs.contains("public string Describe()"))
     assertTrue(cs.contains("public string Id"))
   }
@@ -218,7 +218,7 @@ class Tier1ExpectActualDeclarationsTest {
     )
     assertTrue(cs.contains("public class Sensor : IDisposable"))
     assertTrue(cs.contains("public Sensor()"))
-    assertTrue(cs.contains("internal Sensor(IntPtr handle)"))
+    assertTrue(cs.contains("internal Sensor(IntPtr handle, out NugetHandleTag tag)"))
     assertTrue(cs.contains("public int Reading()"))
   }
 

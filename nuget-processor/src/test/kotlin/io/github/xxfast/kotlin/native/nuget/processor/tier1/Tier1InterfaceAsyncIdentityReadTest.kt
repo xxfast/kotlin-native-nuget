@@ -61,7 +61,7 @@ class Tier1InterfaceAsyncIdentityReadTest {
 
     val suspendRead =
       "(NugetMarshal.TryResolveCSharp(resultPtr, out global::Interop.IPet csharpOriginal) " +
-          "? csharpOriginal : new global::Interop.Pet(resultPtr))"
+          "? csharpOriginal : new global::Interop.Pet(resultPtr, out _))"
     assertContains(
       csharp,
       "t.SetResult($suspendRead);",
@@ -71,7 +71,7 @@ class Tier1InterfaceAsyncIdentityReadTest {
 
     val flowRead =
       "read: static h => (NugetMarshal.TryResolveCSharp(h, out global::Interop.IPet " +
-          "csharpOriginal) ? csharpOriginal : new global::Interop.Pet(h))"
+          "csharpOriginal) ? csharpOriginal : new global::Interop.Pet(h, out _))"
     assertContains(
       csharp,
       flowRead,
@@ -82,8 +82,8 @@ class Tier1InterfaceAsyncIdentityReadTest {
     // The defect this replaces: a bare wrapper construction over the crossing handle. It made
     // `Assert.Same` fail and forced the consumer to dispose a wrapper over their own object.
     assertFalse(
-      csharp.contains("t.SetResult(new global::Interop.Pet(resultPtr))") ||
-          csharp.contains("read: static h => new global::Interop.Pet(h)"),
+      csharp.contains("t.SetResult(new global::Interop.Pet(resultPtr, out _))") ||
+          csharp.contains("read: static h => new global::Interop.Pet(h, out _)"),
       "expected no bare wrapper read on either async route; csharp=" +
           "${csharp.lines().filter { it.contains("Pet(resultPtr)") || it.contains("Pet(h)") }}",
     )
@@ -120,7 +120,7 @@ class Tier1InterfaceAsyncIdentityReadTest {
       csharp,
       "t.SetResult(resultPtr == IntPtr.Zero ? null : (NugetMarshal.TryResolveCSharp(resultPtr, " +
           "out global::Interop.IPet csharpOriginal) ? csharpOriginal : " +
-          "new global::Interop.Pet(resultPtr)));",
+          "new global::Interop.Pet(resultPtr, out _)));",
       message = "expected the nullable completion to guard the pointer first; csharp=" +
           "${csharp.lines().filter { it.contains("SetResult") }}",
     )
@@ -133,7 +133,7 @@ class Tier1InterfaceAsyncIdentityReadTest {
     assertContains(
       csharp,
       "read: static h => h == IntPtr.Zero ? null : (NugetMarshal.TryResolveCSharp(h, out " +
-          "global::Interop.IPet csharpOriginal) ? csharpOriginal : new global::Interop.Pet(h))",
+          "global::Interop.IPet csharpOriginal) ? csharpOriginal : new global::Interop.Pet(h, out _))",
       message = "expected the nullable element delegate to guard the pointer first; csharp=" +
           "${csharp.lines().filter { it.contains("read: static h") }}",
     )

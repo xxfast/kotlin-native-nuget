@@ -81,7 +81,7 @@ class Tier1InterfaceBridgeFactoryTest {
       cs,
       "return (NugetMarshal.TryResolveCSharp(nativeResult, " +
           "out global::Interop.IPet csharpOriginal) " +
-          "? csharpOriginal : new global::Interop.Pet(nativeResult));",
+          "? csharpOriginal : new global::Interop.Pet(nativeResult, out _));",
     )
   }
 

@@ -67,8 +67,7 @@ class Tag(var initial: Char?) {
 ```
 
 ```C#
-// A bare char literal converts to both char? and the internal handle constructor, so cast it.
-using var tag = new Tag((char?)'O');
+using var tag = new Tag('O');
 
 char? echoed = tag.Echo(null); // null
 tag.Initial = '한';
