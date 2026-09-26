@@ -112,6 +112,9 @@ data class CirInterface(
   // ADR-064 amendment (issue #249): generated `<remarks>` prose, one paragraph per member the
   // bridge dropped from this declaration. Attached by `CirFile.withSkipRemarks` after translation.
   val remarks: List<String> = emptyList(),
+  // Interface super-interfaces: the kept (exported) direct supers, spelled for C# with their type
+  // arguments (`INamed`, `IHolder<int>`), rendered ahead of `IDisposable`.
+  val superInterfaces: List<String> = emptyList(),
 ) : CirDeclaration
 
 data class CirInterfaceProperty(
@@ -120,6 +123,9 @@ data class CirInterfaceProperty(
   val hasSetter: Boolean = false,
   // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
   val doc: CirDoc? = null,
+  // Interface super-interfaces: a diamond member two kept supers both declare is redeclared with
+  // `new`, which hides both and makes `d.Name` unambiguous (CS0121 / CS0108 otherwise).
+  val isNew: Boolean = false,
 )
 
 data class CirInterfaceMethod(
@@ -128,6 +134,8 @@ data class CirInterfaceMethod(
   val parameters: List<CirParameter>,
   // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
   val doc: CirDoc? = null,
+  // Interface super-interfaces: see [CirInterfaceProperty.isNew].
+  val isNew: Boolean = false,
 )
 
 data class CirClass(

@@ -177,7 +177,7 @@ class Tier1InterfaceBridgeFactoryTest {
     val result = Tier1Harness.run(source)
     val cs: String = result.generatedCSharp
 
-    assertContains(cs, "return NugetBridge.HandleFor(value);")
+    assertContains(cs, "return NugetBridge.HandleFor(value, declared);")
     assertFalse(
       cs.contains("passing a C#-implemented interface is not supported yet"),
       "the ADR-040 boundary exception must be gone once a bridge layer is emitted",

@@ -1013,8 +1013,12 @@ internal class ForwardCallablePlanner(
     val methods: List<KSFunctionDeclaration> = iface.getAllFunctions()
       .filter { method -> method.getVisibility() == Visibility.PUBLIC }
       .filter { method -> !method.isCompilerOwnedMember(iface) }
-      .filter { method -> method.parentDeclaration == iface }
       .toList()
+    // Interface super-interfaces: every member, own and inherited, is planned under this
+    // interface's prefix, because the ADR-040 backing class implements `IDerived` and through it
+    // every `IBase`. `translateInterface` narrows the declaration back to the DECLARED placement.
+    val hierarchy = ForwardInterfaceHierarchy(iface, classifier.exportedObjectHandles)
+    val placements: List<ForwardInterfaceMemberPlacement> = methods.map(hierarchy::placement)
 
     // ADR-090 amendment (2026-09-26): the interface route numbers same-name members exactly as
     // `classEntries` does -- a per-interface counter in declaration order, incremented BEFORE the
@@ -1022,11 +1026,19 @@ internal class ForwardCallablePlanner(
     // same-name members shared one symbol and one export name, and a reachable interface aborted
     // generation on a duplicate plan.
     val occurrences: MutableMap<String, Int> = mutableMapOf()
-    return methods.map { method ->
+    return methods.mapIndexed { index, method ->
       val name: String = method.simpleName.asString()
       val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
       val suffix: String = if (occurrence == 1) "" else "_$occurrence"
       val symbol: String = "$ifaceName.$name$suffix"
+      // A covariant override is planned at the kept super's (substituted) return type: the backing
+      // class then implements `IBase`'s member exactly, and the narrower Kotlin value still fits.
+      val resultType: KSType? =
+        if (placements[index] == ForwardInterfaceMemberPlacement.COVARIANT_OVERRIDE) {
+          hierarchy.keptReturnType(method)
+        } else {
+          method.returnType?.resolve()
+        }
       val structuralReason: ForwardPlanSkipReason? = when {
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
         method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
@@ -1043,7 +1055,7 @@ internal class ForwardCallablePlanner(
           parameters = method.parameters.map { parameter ->
             parameter.bridgeName() to classifier.classify(parameter.type.resolve())
           },
-          result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+          result = resultType?.let(classifier::classify) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
           // The symbol carries the overload suffix; the Kotlin call site must not.
           member = name,
@@ -1077,6 +1089,13 @@ internal class ForwardCallablePlanner(
 
         else -> false
       }
+    }.filterIndexed { index, entry ->
+      // A member inherited from a kept super that did not plan is that super's drop, named once
+      // on its own declaration; re-reporting it under every derived interface is duplicate noise.
+      // ADR-113: a member the type-parameter carve-out restores on `IFoo<T>` is not dropped.
+      val isInheritedDrop: Boolean = placements[index] == ForwardInterfaceMemberPlacement.INHERITED
+      val isCarvedOut: Boolean = methods[index].restoredByTypeParameterCarveOut(iface)
+      entry !is ForwardCallableCatalogEntry.Skipped || (!isInheritedDrop && !isCarvedOut)
     }
   }
 
