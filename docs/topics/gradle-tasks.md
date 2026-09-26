@@ -1,8 +1,9 @@
 # Gradle tasks
 
-All tasks the plugin registers live in the `nuget` task group. There are two independent
-registration paths: publishing (`publish {}`, requires Kotlin Multiplatform) and consuming
-(`dependencies {}`). A project can use either, both, or neither.
+Most tasks the plugin registers live in the `nuget` task group; `publishNuget` and the per-repository
+push tasks live in the `publishing` group instead, alongside Gradle's own `maven-publish` tasks.
+There are two independent registration paths: publishing (`publish {}`, requires Kotlin
+Multiplatform) and consuming (`dependencies {}`). A project can use either, both, or neither.
 
 ## Publishing (Kotlin → C#)
 
@@ -13,6 +14,14 @@ Registered when `nuget { publish { } }` is set **and** the Kotlin Multiplatform 
 | `packNuget` | Packages the Kotlin/Native shared library as a NuGet package | the shared-lib link tasks, `kspKotlin{Target}`, `nugetReportDiagnostics`, `nugetCompileInterop`, `nugetGenerateShims` (only if the project also binds a dependency), and `nugetSnapshotVersion`/`nugetSnapshotVersionProps` (only when `snapshot = true`) |
 | `nugetReportDiagnostics` | Reports declarations the forward bridge could not generate | `kspKotlin{Target}` |
 | `nugetCompileInterop` | Compiles the generated C# bindings with dotnet before packNuget stages them | `kspKotlin{Target}`, `nugetGenerateShims` (only if the project also binds a dependency) |
+| `publishNugetTo<Name>Repository` | Pushes the packed `.nupkg` to the named `repositories { nuget("<name>") { } }` feed | `packNuget` |
+| `publishNuget` | Runs every `publishNugetTo<Name>Repository` task | each repository's push task |
+
+`publishNuget` and its per-repository tasks are registered even with no `repositories { }` block,
+so `publishNuget` is always a valid task name on a project that packs; with no repositories
+configured it simply does nothing. Neither task is ever up to date: a push is a side effect, not a
+build output. See [Publish a Kotlin/Native library as NuGet](publish-kotlin-library-as-nuget.md#5-publish-the-package-to-a-feed)
+for the DSL and credential setup.
 
 `packNuget` writes the staged package to `build/nuget/{packageId}.{version}/` and the zipped
 `.nupkg` to `build/nuget/{packageId}.{version}.nupkg`. When the project also binds a dependency,

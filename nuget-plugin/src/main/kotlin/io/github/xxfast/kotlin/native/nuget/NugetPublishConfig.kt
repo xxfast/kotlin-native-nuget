@@ -48,6 +48,13 @@ class NugetPublishConfig {
   val admit: List<String> get() = _admit.toList()
   val exportMarkers: List<String> get() = _exportMarkers.toList()
 
+  private val _repositories = mutableListOf<NugetRepository>()
+  val repositories: List<NugetRepository> get() = _repositories.toList()
+
+  fun repositories(configure: NugetRepositoriesScope.() -> Unit) {
+    NugetRepositoriesScope(_repositories).configure()
+  }
+
   // ADR-154 §6: opt-in. Every skip whose reason is a dependency-scope refusal the author can act
   // on (`NOT_INCLUDED`, `CROSS_MODULE_ADMISSION_DISABLED`) becomes an ERROR instead of a warning,
   // so every dependency type in a public signature is either admitted or excluded BY NAME. A skip
