@@ -183,3 +183,37 @@ of this amendment (see ROADMAP Phase 10).
 > entries that convert to the same C# name now fail the build with `ERROR_CSHARP_NAME_COLLISION`
 > instead of silently compiling two same-named members (previously `CS0102` at the *consumer's*
 > compile with no warning from the generator).
+
+## 2026-09-26 amendment: camelCase property entry points and enum member skips
+
+The Decision's Bridge mechanism section always meant the property's own name to reach both halves of
+the bridge, but the implementation didn't: the C# renderer (`CirEnumRenderer.kt`) lowercased the
+property name into the C entry point (`mood_get_issleepy`), while the Kotlin `@CName` export kept it
+verbatim (`mood_get_isSleepy`, `EnumExports.kt`). Any camelCase property name disagreed between the
+two halves and failed the ADR-055 ABI contract check, aborting generation for the *whole module*
+rather than naming a skip for the one property. This was never specific to an `is`-prefixed
+`Boolean`; a plain camelCase `String` property (`displayName`) reproduced it identically. The entry
+point now keeps the Kotlin spelling verbatim on both sides, exactly like every other property route.
+No already-shipping export moves: a single-lowercase-word property name (`description`) was already
+spelled identically whether lowercased or not, so the fix is invisible to every enum published before
+it. The public C# extension-method spelling this ADR's Decision describes is unchanged
+(`IsSleepy(this Mood mood)`).
+
+The same fix carries one more correction: a `Boolean` enum property getter's extern now carries
+`[return: MarshalAs(UnmanagedType.I1)]`, the 1-byte marshal every other `bool`-returning route
+already emits (without it, .NET reads a 4-byte Win32 `BOOL` over a 1-byte Kotlin `bool` and garbage
+in the upper three bytes can turn `false` into `true`). It was missing on this one route because no
+enum `Boolean` property had shipped before to notice.
+
+Two shapes the Decision's "Properties → extension methods ... Methods → same pattern (extension
+methods)" line describes are still not delivered, and now say so instead of vanishing silently
+(ADR-064's per-declaration diagnostic discipline applied to the enum route): a property declared in
+an enum's `companion object` is a named skip, `SKIPPED_UNSUPPORTED_PROPERTY`, the kind every dropped
+property reports under; a function declared in the enum class body, or in its companion object, is a
+named skip under a new kind, `SKIPPED_ENUM_MEMBER_FUNCTION`. Binding an enum's own methods as
+extension methods, the way its properties already are, remains open; see ROADMAP.md's Phase 4 item
+"An enum member function, and a function declared in an enum's companion object, are not bound at
+all."
+
+**Scope.** Generator-only (`nuget-processor`), like the 2026-09-22 amendment: no ABI, runtime, or
+plugin-side effect.
