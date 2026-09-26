@@ -69,7 +69,7 @@ class ForwardInterfacePropertyProjectionTest {
     assertTrue(
       property.getter.contains(
         "return (NugetMarshal.TryResolveCSharp(nativeResult, out IPet csharpOriginal) " +
-            "? csharpOriginal : new Pet(nativeResult));",
+            "? csharpOriginal : new Pet(nativeResult, out _));",
       ),
     )
   }
@@ -105,7 +105,7 @@ class ForwardInterfacePropertyProjectionTest {
       property.getter.contains(
         "return nativeResult == IntPtr.Zero ? null : " +
             "(NugetMarshal.TryResolveCSharp(nativeResult, out IPet csharpOriginal) " +
-            "? csharpOriginal : new Pet(nativeResult));",
+            "? csharpOriginal : new Pet(nativeResult, out _));",
       ),
       "expected the nullable getter to null-guard then construct the backing class; got: ${property.getter}",
     )

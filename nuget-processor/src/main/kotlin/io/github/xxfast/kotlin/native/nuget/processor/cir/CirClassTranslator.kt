@@ -208,8 +208,8 @@ private fun KSClassDeclaration.hasPublicConstructor(): Boolean =
 
 /**
  * ROADMAP Phase 3: every public constructor of [cls] was skipped, so the generated C# type has
- * only its `internal $name(IntPtr handle)`. The type is kept on purpose (see
- * [ForwardDiagnosticKind.WARNING_NO_PUBLIC_CONSTRUCTOR]); this says so, and names each
+ * only its `internal $name(IntPtr handle, out NugetHandleTag tag)`. The type is kept on purpose
+ * (see [ForwardDiagnosticKind.WARNING_NO_PUBLIC_CONSTRUCTOR]); this says so, and names each
  * constructor with the reason it went.
  *
  * The reasons come off the catalog's skipped entries rather than being re-derived: they are the
@@ -657,19 +657,10 @@ internal fun translateClass(
   // the surface is one natural overload set.
   val constructorPlans: List<ForwardCallablePlan> =
     callableCatalog.constructors(cls.qualifiedName?.asString() ?: name)
-  val projected: List<CirConstructor> = constructorPlans.map { plan ->
+  val cirConstructors: List<CirConstructor> = constructorPlans.map { plan ->
     tracker.trackPlan(plan)
     val suffix: String = plan.invocation.symbol.substringAfterLast('.').removePrefix("<init>")
     ForwardCirPlanProjection.constructor(plan, suffix)
-  }
-  // ADR-164: a declared one-parameter constructor of the exact type already disambiguates, and a
-  // second one would be CS0111.
-  val singleParameterTypes: Set<String> = projected
-    .mapNotNull { ctor -> ctor.parameters.singleOrNull()?.type }
-    .toSet()
-  val cirConstructors: List<CirConstructor> = projected.map { ctor ->
-    if (ctor.handleDisambiguation in singleParameterTypes) ctor.copy(handleDisambiguation = null)
-    else ctor
   }
   // An unsuffixed plan is the primary; everything else renders as an overload. A primary skipped
   // by the planner leaves `constructor` null with no IntPtr fallthrough, exactly as before.
@@ -2813,7 +2804,7 @@ internal fun translateCompanionFunction(
         appendLine("                {")
         appendLine("                    throw NugetErrorNative.BuildException(error);")
         appendLine("                }")
-        append("                return new $kotlinReturnType(nativeResult);")
+        append("                return new $kotlinReturnType(nativeResult, out _);")
       },
       isStatic = true,
       isSyncErrorCheckEnabled = true,
@@ -3575,7 +3566,7 @@ private fun translateCallbackMethod(
         append("            return result.AsReadOnly();")
       }
 
-      !isOuterRetUnit -> append("            return new $outerRetKotlin(nativeHandle);")
+      !isOuterRetUnit -> append("            return new $outerRetKotlin(nativeHandle, out _);")
     }
   }
 

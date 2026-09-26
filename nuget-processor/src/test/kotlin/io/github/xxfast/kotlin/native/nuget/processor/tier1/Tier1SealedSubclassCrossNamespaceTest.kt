@@ -80,7 +80,7 @@ class Tier1SealedSubclassCrossNamespaceTest {
     )
     assertContains(
       result.generatedCSharp,
-      "                return new $remote.IssPosition(nativeResult);",
+      "                return new $remote.IssPosition(nativeResult, out _);",
     )
     // ADR-111 (ROADMAP:27): ONE native call for the nullable reference. The legacy spelling called
     // the export twice, so the null test and the wrapped handle came from two different
@@ -88,7 +88,7 @@ class Tier1SealedSubclassCrossNamespaceTest {
     assertContains(result.generatedCSharp, "public $remote.IssPosition? Maybe")
     assertContains(
       result.generatedCSharp,
-      "                return nativeResult == IntPtr.Zero ? null : new $remote.IssPosition(nativeResult);",
+      "                return nativeResult == IntPtr.Zero ? null : new $remote.IssPosition(nativeResult, out _);",
     )
   }
 

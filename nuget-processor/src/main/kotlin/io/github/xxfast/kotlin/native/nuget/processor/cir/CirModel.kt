@@ -893,11 +893,6 @@ data class CirConstructor(
   val nativeParameters: List<CirParameter>? = null,
   // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
   val doc: CirDoc? = null,
-  // ADR-164: the non-nullable C# type of a widened integral first parameter (`int` for
-  // `Settings(int? level = null)`). `Interop.cs` compiles into the consumer, so the internal
-  // `Settings(IntPtr handle)` competes, and `new Settings(3)` is CS0121 between `int?` and `nint`.
-  // Set, it renders a `Settings(int level) : this((int?)level)` overload that wins exactly.
-  val handleDisambiguation: String? = null,
 )
 
 data class CirParameter(

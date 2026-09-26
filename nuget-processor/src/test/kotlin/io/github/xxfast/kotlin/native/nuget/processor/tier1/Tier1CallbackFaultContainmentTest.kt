@@ -127,7 +127,7 @@ class Tier1CallbackFaultContainmentTest {
     val result = run()
 
     val missing: List<String> = listOf(
-      "                        t.SetResult(new Cat(resultPtr));",
+      "                        t.SetResult(new Cat(resultPtr, out _));",
       "                catch (Exception ex)",
       "                    t.TrySetException(ex);",
     ).filterNot(result.generatedCSharp::contains)

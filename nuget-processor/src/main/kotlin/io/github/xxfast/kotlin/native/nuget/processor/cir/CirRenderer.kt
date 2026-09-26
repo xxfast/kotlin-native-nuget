@@ -22,6 +22,17 @@ class CirRenderer {
     appendLine("    IntPtr Handle { get; }")
     appendLine("}")
     appendLine()
+    // ROADMAP line 26: `Interop.cs` compiles into the consumer, so `internal` does not hide the
+    // handle constructor from overload resolution. A trailing `out` parameter of this type is one
+    // no ordinary call binds, so `new Tag('O')` and `new Circle(5)` always reach the public one.
+    appendLine("/// <summary>")
+    appendLine("/// Marks internal constructors that adopt an existing Kotlin handle, so no")
+    appendLine("/// ordinary call binds one accidentally.")
+    appendLine("/// </summary>")
+    appendLine("internal readonly struct NugetHandleTag")
+    appendLine("{")
+    appendLine("}")
+    appendLine()
 
     for (namespace in file.namespaces) {
       renderNamespace(namespace)

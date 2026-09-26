@@ -79,12 +79,12 @@ class Tier1SuspendNestedArmReturnTest {
     // The top-level route, `CirFunctionTranslator.translateSuspendFunction`.
     assertContains(csharp, "Task<Shape.Circle> AnyCircleLaterAsync")
 
-    assertContains(csharp, "new Shape.Circle(resultPtr)")
-    assertContains(csharp, "new Shape.Dot(resultPtr)")
+    assertContains(csharp, "new Shape.Circle(resultPtr, out _)")
+    assertContains(csharp, "new Shape.Dot(resultPtr, out _)")
 
     // The defect: a bare arm name at namespace scope is unresolvable (CS0246).
     assertFalse(
-      csharp.contains("new Circle(resultPtr)") || csharp.contains("new Dot(resultPtr)"),
+      csharp.contains("new Circle(resultPtr, out _)") || csharp.contains("new Dot(resultPtr, out _)"),
       "expected no bare arm construction; got: ${linesFor(csharp, "resultPtr")}",
     )
     assertFalse(

@@ -133,13 +133,13 @@ class Tier1SuspendSealedBaseReturnTest {
     val result = run()
 
     assertFalse(
-      result.generatedCSharp.contains("new Shape(resultPtr)"),
-      "expected no `new Shape(resultPtr)` against the abstract base; got: " +
+      result.generatedCSharp.contains("new Shape(resultPtr, out _)"),
+      "expected no `new Shape(resultPtr, out _)` against the abstract base; got: " +
           "${csharpLinesFor(result, "new Shape(")}",
     )
     assertFalse(
-      result.generatedCSharp.contains("new Pulse(resultPtr)"),
-      "expected no `new Pulse(resultPtr)` against the abstract sealed-interface base; got: " +
+      result.generatedCSharp.contains("new Pulse(resultPtr, out _)"),
+      "expected no `new Pulse(resultPtr, out _)` against the abstract sealed-interface base; got: " +
           "${csharpLinesFor(result, "new Pulse(")}",
     )
   }
@@ -197,7 +197,7 @@ class Tier1SuspendSealedBaseReturnTest {
   fun `a sealed arm return still constructs the arm directly`() {
     val result = run()
 
-    assertContainsCSharp(result, "t.SetResult(new Shape.Circle(resultPtr));", "new Shape.Circle")
+    assertContainsCSharp(result, "t.SetResult(new Shape.Circle(resultPtr, out _));", "new Shape.Circle")
   }
 
   /**

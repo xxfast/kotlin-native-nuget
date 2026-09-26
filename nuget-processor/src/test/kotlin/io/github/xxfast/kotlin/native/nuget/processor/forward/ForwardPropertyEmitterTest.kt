@@ -79,7 +79,7 @@ class ForwardPropertyEmitterTest {
 
     val csharp = renderClassProperty(plan)
     assertContains(csharp, "public Friend Friend")
-    assertContains(csharp, "return new Friend(nativeResult);")
+    assertContains(csharp, "return new Friend(nativeResult, out _);")
     assertContains(csharp, "Native_Set_friend(_handle, value._handle, out IntPtr error)")
   }
 
@@ -184,7 +184,7 @@ class ForwardPropertyEmitterTest {
 
     val csharp = renderClassProperty(plan)
     assertContains(csharp, "public Friend? Buddy")
-    assertContains(csharp, "return nativeResult == IntPtr.Zero ? null : new Friend(nativeResult);")
+    assertContains(csharp, "return nativeResult == IntPtr.Zero ? null : new Friend(nativeResult, out _);")
   }
 
   @Test

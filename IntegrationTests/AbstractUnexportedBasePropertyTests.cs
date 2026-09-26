@@ -137,7 +137,7 @@ public class AbstractUnexportedBasePropertyTests
     /// <summary>
     /// The literal ROADMAP case: a subclass written in C#. It compiles only because `Interop.cs`
     /// ships as NuGet `contentFiles` and is `&lt;Compile Include&gt;`d into this assembly, so the
-    /// generated `internal Lounger(IntPtr)` constructor is in-assembly and reachable. The abstract
+    /// generated `internal Lounger(IntPtr, out NugetHandleTag)` constructor is in-assembly and reachable. The abstract
     /// members it has to satisfy are exactly `Weave`, `Loft`, `Squish()` and the generated
     /// `public abstract void Dispose()`.
     ///
@@ -146,7 +146,7 @@ public class AbstractUnexportedBasePropertyTests
     /// </summary>
     private sealed class PaperBeanbag : Lounger
     {
-        public PaperBeanbag() : base(IntPtr.Zero)
+        public PaperBeanbag() : base(IntPtr.Zero, out _)
         {
         }
 

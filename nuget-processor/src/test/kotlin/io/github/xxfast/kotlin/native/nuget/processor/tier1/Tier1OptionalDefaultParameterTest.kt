@@ -164,15 +164,18 @@ class Tier1OptionalDefaultParameterTest {
   }
 
   @Test
-  fun `a widened integral sole parameter gets an exact overload over the handle constructor`() {
+  fun `a widened integral sole parameter needs no exact overload over the handle constructor`() {
+    // ROADMAP line 26 retired ADR-164's `Settings(int level) : this((int?)level)`: the handle
+    // constructor's trailing `out NugetHandleTag` already keeps `new Settings(3)` off it.
     val cs: String = result.generatedCSharp
     assertContains(cs, "public Settings(int? level = null)")
-    assertContains(cs, "public Settings(int level) : this((int?)level)")
-    assertFalse(cs.contains("public Book(string title) :"), "only a one-argument call needs it")
+    assertContains(cs, "internal Settings(IntPtr handle, out NugetHandleTag tag)")
+    assertFalse(Regex("""Settings\(int level\)""").containsMatchIn(cs), cs)
+    assertFalse(Regex("""internal Settings\(IntPtr handle\)\r?\n""").containsMatchIn(cs), cs)
   }
 
   @Test
-  fun `a declared exact one-parameter constructor suppresses the extra overload`() {
+  fun `a declared one-parameter constructor renders once beside the widened primary`() {
     val cs: String = result.generatedCSharp
     assertContains(cs, "public Pad(int? size = null, string? tag = null)")
     assertEquals(1, Regex("""public Pad\(int size\)""").findAll(cs).count(), cs)

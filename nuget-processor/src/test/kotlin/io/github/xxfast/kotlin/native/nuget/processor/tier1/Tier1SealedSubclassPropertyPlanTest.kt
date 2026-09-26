@@ -117,7 +117,7 @@ class Tier1SealedSubclassPropertyPlanTest {
       |                    {
       |                        throw NugetErrorNative.BuildException(error);
       |                    }
-      |                    return nativeResult == IntPtr.Zero ? null : new global::Interop.Friend(nativeResult);
+      |                    return nativeResult == IntPtr.Zero ? null : new global::Interop.Friend(nativeResult, out _);
       """.trimMargin(),
     )
   }

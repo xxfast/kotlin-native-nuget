@@ -559,7 +559,7 @@ internal fun translateFunction(
       appendLine("            {")
       appendLine("                throw NugetErrorNative.BuildException(error);")
       appendLine("            }")
-      append("            return new $qualifiedReturn(nativeResult);")
+      append("            return new $qualifiedReturn(nativeResult, out _);")
     }
 
     val wrapper = CirMethod(
@@ -902,42 +902,42 @@ internal fun translateGenericFunction(
     if (!isConstrained) {
       appendLine("      if (typeof(T) == typeof(string))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_string_native((string)(object)$paramName!, out error), error));")
+        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_string_native((string)(object)$paramName!, out error), error), out _);")
       } else {
         appendLine("        return (T)(object)Marshal.PtrToStringUTF8(NugetErrorNative.Check(${csName}_string_native((string)(object)$paramName!, out error), error))!;")
       }
 
       appendLine("      if (typeof(T) == typeof(int))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_int_native((int)(object)$paramName!, out error), error));")
+        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_int_native((int)(object)$paramName!, out error), error), out _);")
       } else {
         appendLine("        return (T)(object)NugetErrorNative.Check(${csName}_int_native((int)(object)$paramName!, out error), error);")
       }
 
       appendLine("      if (typeof(T) == typeof(long))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_long_native((long)(object)$paramName!, out error), error));")
+        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_long_native((long)(object)$paramName!, out error), error), out _);")
       } else {
         appendLine("        return (T)(object)NugetErrorNative.Check(${csName}_long_native((long)(object)$paramName!, out error), error);")
       }
 
       appendLine("      if (typeof(T) == typeof(float))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_float_native((float)(object)$paramName!, out error), error));")
+        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_float_native((float)(object)$paramName!, out error), error), out _);")
       } else {
         appendLine("        return (T)(object)NugetErrorNative.Check(${csName}_float_native((float)(object)$paramName!, out error), error);")
       }
 
       appendLine("      if (typeof(T) == typeof(double))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_double_native((double)(object)$paramName!, out error), error));")
+        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_double_native((double)(object)$paramName!, out error), error), out _);")
       } else {
         appendLine("        return (T)(object)NugetErrorNative.Check(${csName}_double_native((double)(object)$paramName!, out error), error);")
       }
 
       appendLine("      if (typeof(T) == typeof(bool))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_bool_native((bool)(object)$paramName!, out error), error));")
+        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_bool_native((bool)(object)$paramName!, out error), error), out _);")
       } else {
         appendLine("        return (T)(object)NugetErrorNative.Check(${csName}_bool_native((bool)(object)$paramName!, out error), error);")
       }
@@ -949,7 +949,7 @@ internal fun translateGenericFunction(
     if (returnsGenericClass) {
       appendLine("      IntPtr handle = ((INugetHandle)$paramName!).Handle;")
       appendLine("      IntPtr result = NugetErrorNative.Check(${csName}_object_native(handle, out error), error);")
-      appendLine("      return new ${returnTypeName}<T>(result);")
+      appendLine("      return new ${returnTypeName}<T>(result, out _);")
     } else {
       appendLine("      IntPtr handle = ((INugetHandle)$paramName!).Handle;")
       appendLine("      IntPtr result = NugetErrorNative.Check(${csName}_object_native(handle, out error), error);")
