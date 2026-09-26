@@ -9,6 +9,7 @@ import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedInterfaceBridgePair
 
 /**
  * Detects `add{X}`/`remove{X}` (or `subscribe{X}`/`unsubscribe{X}`) method pairs where the
@@ -286,3 +287,5 @@ internal fun KSClassDeclaration.forwardArmInterfaceBridgePairs(
     .filter { (add, remove) ->
       add.isArmCallbackRoutable(classifier) && remove.isArmCallbackRoutable(classifier)
     }
+    // ADR-090 amendment (2026-09-26): an overloaded listener member is refused by name.
+    .filter { (add, _) -> legacyRefusedInterfaceBridgePair(add) == null }

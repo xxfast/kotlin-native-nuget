@@ -237,7 +237,10 @@ generated `IFoo` interface, one function pointer per method, and returns `IDispo
 a stored callback does. The generated interface extends `IDisposable`, so every implementation
 needs a `Dispose()` even when it does nothing. Every member of such an interface must return `Unit`
 and the interface must declare no properties; violating either rule fails the build with no
-diagnostic pointing at the cause.
+diagnostic pointing at the cause. A listener interface that declares a member more than once (an
+overload) is refused by name on both `add` and `remove` instead: this route names one callback slot
+per member name, so an overload pair is not numbered the way [an ordinary interface
+method](interfaces-abstract-sealed.md#method-overloads-on-an-interface) is.
 
 This is one narrow case of a wider capability: a C# class can implement any Kotlin interface,
 including at an ordinary parameter, property setter, or extension receiver; see

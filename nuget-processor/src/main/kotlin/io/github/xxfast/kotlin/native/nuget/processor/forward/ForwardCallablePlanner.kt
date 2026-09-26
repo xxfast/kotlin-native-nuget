@@ -1012,8 +1012,17 @@ internal class ForwardCallablePlanner(
       .filter { method -> method.parentDeclaration == iface }
       .toList()
 
+    // ADR-090 amendment (2026-09-26): the interface route numbers same-name members exactly as
+    // `classEntries` does -- a per-interface counter in declaration order, incremented BEFORE the
+    // structural skip so a skipped `suspend` namesake still consumes its number. Without it two
+    // same-name members shared one symbol and one export name, and a reachable interface aborted
+    // generation on a duplicate plan.
+    val occurrences: MutableMap<String, Int> = mutableMapOf()
     return methods.map { method ->
-      val symbol: String = "$ifaceName.${method.simpleName.asString()}"
+      val name: String = method.simpleName.asString()
+      val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
+      val suffix: String = if (occurrence == 1) "" else "_$occurrence"
+      val symbol: String = "$ifaceName.$name$suffix"
       val structuralReason: ForwardPlanSkipReason? = when {
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
         method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
@@ -1024,14 +1033,16 @@ internal class ForwardCallablePlanner(
       } else {
         planOrSkip(
           symbol = symbol,
-          publicName = method.simpleName.asString().replaceFirstChar { it.uppercase() },
-          exportName = "${prefix}_${method.simpleName.asString()}",
+          publicName = name.replaceFirstChar { it.uppercase() },
+          exportName = "${prefix}_$name$suffix",
           receiver = ForwardReceiver.Handle(receiverType),
           parameters = method.parameters.map { parameter ->
             parameter.bridgeName() to classifier.classify(parameter.type.resolve())
           },
           result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
+          // The symbol carries the overload suffix; the Kotlin call site must not.
+          member = name,
           node = method,
           // ADR-164: an interface member widens like any other. ADR-096 excluded interfaces to
           // avoid synthesizing overloads every implementer would owe; one widened signature is

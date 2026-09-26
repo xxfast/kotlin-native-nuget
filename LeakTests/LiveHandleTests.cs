@@ -803,6 +803,57 @@ public class LiveHandleTests
         });
     }
 
+    // Row 6l. ADR-090's numbering on the INTERFACE route: `houseBrusher()` mints one handle for an
+    // anonymous Kotlin `Brusher` behind the ADR-040 backing wrapper, and every overload then goes
+    // through its own `brusher_*` dispatch export. No new handle kind, but five dispatch exports,
+    // three of them numbered (`_2`, `_3`, `trim_2`), each borrowing the receiver handle; one that
+    // retains instead of borrowing (or a defaulted overload whose mask arm does) leaks per call
+    // while every functional cell stays green. Oreo is brushed fifty times and keeps his coat.
+    [Fact]
+    public void InterfaceOverloads_ReturnedKotlinInterface_EveryOverload_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using IBrusher brusher = BrusherKt.HouseBrusher();
+            Assert.Equal("Oreo is brushed", brusher.Brush());
+            Assert.Equal("Oreo is brushed 2 times", brusher.Brush(2));
+            Assert.Equal("Oreo is brushed while grumpy", brusher.Brush(TestLibrary.Cat.Mood.Grumpy));
+            Assert.Equal("Oreo has 4 claws trimmed", brusher.Trim());
+            Assert.Equal("Oreo has 1 claws trimmed on the front-left paw", brusher.Trim("front-left"));
+        });
+    }
+
+    // Row 6m. The C#-implemented half of Row 6l: the ADR-084 transfer StableRef of Row 6, minted
+    // for a bridge factory whose slot list now carries numbered same-name slots. Kotlin calls every
+    // overload through those slots inside one crossing, so the row pins that the wider factory
+    // still disposes the one transfer handle it minted and nothing per slot call.
+    private sealed class LeakMyloBrusher : IBrusher
+    {
+        public string Brush() => "Mylo is brushed";
+        public string Brush(int strokes) => $"Mylo is brushed {strokes} times";
+        public string Brush(TestLibrary.Cat.Mood mood) => $"Mylo is brushed while {mood.ToString().ToLowerInvariant()}";
+        public string Trim(int? claws = null) => $"Mylo has {claws} claws trimmed";
+        public string Trim(string paw, int? claws = null) => $"Mylo has {claws} claws trimmed on the {paw} paw";
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void InterfaceOverloads_CSharpImplementedArgument_EveryOverload_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var salon = new GroomingSalon();
+            using var mylo = new LeakMyloBrusher();
+            Assert.Equal(
+                "Mylo is brushed / Mylo is brushed 2 times / Mylo is brushed while grumpy",
+                salon.BrushAll(mylo));
+            Assert.Equal(
+                "Mylo has 4 claws trimmed / Mylo has 1 claws trimmed on the front-left paw / "
+                    + "Mylo has 2 claws trimmed on the back-right paw",
+                salon.TrimAll(mylo));
+        });
+    }
+
     // Row 7. Flow enumerated to completion: per-item box disposed by the enumerator, job handle
     // disposed when the flow completes.
     [Fact]

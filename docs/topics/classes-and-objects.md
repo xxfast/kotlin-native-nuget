@@ -184,10 +184,12 @@ original.Copy(mode: Mode.Always); // every other field is the receiver's own val
 ```
 
 The rule is the same for class constructors, class methods, `object`/companion members,
-top-level functions, and extension functions; see
+top-level functions, extension functions, and interface methods; see
 [Objects and companions](objects-and-companions.md#method-overloads),
-[Top-level declarations](top-level-declarations.md#function-default-parameters), and
-[Extensions](extensions.md#method-overloads). An `override` widens with the same C# signature as
+[Top-level declarations](top-level-declarations.md#function-default-parameters),
+[Extensions](extensions.md#method-overloads), and
+[Interfaces, abstract classes, and sealed classes](interfaces-abstract-sealed.md#method-overloads-on-an-interface).
+An `override` widens with the same C# signature as
 its root overridee, so a base and derived class agree without restating the default:
 
 ```kotlin
@@ -437,8 +439,6 @@ its refused-arm exception.
 
 - `Map`/`Set` are not yet supported as method or constructor **parameters**; see
   [Collections](collections.md).
-- An exported Kotlin interface doesn't number same-named methods at all; avoid declaring an
-  overload directly on an interface.
 - Defaults on an `expect`/`actual` class member are only synthesized for the top-level-function
   route and the primary constructor; a class method, companion member, extension, or secondary
   constructor on an `expect`/`actual` class gets no synthesized overload. See
