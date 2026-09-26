@@ -287,5 +287,6 @@ internal fun KSClassDeclaration.forwardArmInterfaceBridgePairs(
     .filter { (add, remove) ->
       add.isArmCallbackRoutable(classifier) && remove.isArmCallbackRoutable(classifier)
     }
-    // ADR-090 amendment (2026-09-26): an overloaded listener member is refused by name.
-    .filter { (add, _) -> legacyRefusedInterfaceBridgePair(add) == null }
+    // ADR-090 / ADR-039 amendments (2026-09-26): an overloaded listener member, or one whose
+    // parameter or return the route cannot carry, is refused by name.
+    .filter { (add, _) -> classifier.legacyRefusedInterfaceBridgePair(add) == null }

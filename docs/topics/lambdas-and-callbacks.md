@@ -235,12 +235,35 @@ source.Trigger();
 An interface used only as an `add`/`remove`-paired subscription parameter binds against the
 generated `IFoo` interface, one function pointer per method, and returns `IDisposable` the same way
 a stored callback does. The generated interface extends `IDisposable`, so every implementation
-needs a `Dispose()` even when it does nothing. Every member of such an interface must return `Unit`
-and the interface must declare no properties; violating either rule fails the build with no
-diagnostic pointing at the cause. A listener interface that declares a member more than once (an
-overload) is refused by name on both `add` and `remove` instead: this route names one callback slot
-per member name, so an overload pair is not numbered the way [an ordinary interface
-method](interfaces-abstract-sealed.md#method-overloads-on-an-interface) is.
+needs a `Dispose()` even when it does nothing.
+
+Every listener member's parameters must be a non-null primitive other than `Char`, a `String`, an
+enum, or an exported class/interface, and every member must return `Unit`. A member outside that
+set, one inherited from a super-interface, or one declared more than once (an overload) refuses the
+*whole* pair, named on both `add` and `remove`, rather than generating code that fails to build:
+
+```kotlin
+interface Watcher { fun onBatch(items: List<Int>) }
+class Kennel {
+  fun addWatcher(w: Watcher) { /* ... */ }
+  fun removeWatcher(w: Watcher) { /* ... */ }
+}
+```
+
+```
+[nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping Kennel.addWatcher: the `addWatcher` / `removeWatcher`
+subscription pair is not bound: its listener member `Watcher.onBatch(items: List<Int>)` takes
+`List<Int>`, which an interface callback cannot carry (it carries a non-null primitive, String,
+enum, or exported class/interface). give `Watcher` members only those parameter types (a
+collection, a nullable, `Char`, `Any` or an array has no crossing on this route), or split the
+member that needs one into a separate listener
+    at Kennel.kt:<line>
+```
+
+Neither `AddWatcher` nor any wire for `onBatch` is generated; nothing else in `Kennel` is affected.
+The same warning names a non-`Unit` return, as `SKIPPED_UNSUPPORTED_RETURN`, and a member inherited
+from a super-interface. A listener interface that declares a property, rather than only methods,
+still fails the build with no diagnostic pointing at the cause; keep the listener method-only.
 
 This is one narrow case of a wider capability: a C# class can implement any Kotlin interface,
 including at an ordinary parameter, property setter, or extension receiver; see

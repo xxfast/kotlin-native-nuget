@@ -122,6 +122,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionKinds
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollectionKinds
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElement
+import io.github.xxfast.kotlin.native.nuget.processor.forward.LegacyRefusedInterfaceBridgePair
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedInterfaceBridgePair
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
@@ -770,7 +771,10 @@ internal fun warnRefusedLegacyRouteMembers(
   // ADR-090 amendment (2026-09-26): the ADR-039 subscription route refuses a pair whose listener
   // interface declares a member name twice (it names one callback slot per member name). Both
   // halves drop the pair silently and the planner's CALLBACK_PROTOCOL skip is not named, so this
-  // walk is the only thing that tells the author `addX` / `removeX` are gone.
+  // walk is the only thing that tells the author `addX` / `removeX` are gone. The ADR-039
+  // amendment (2026-09-26) adds the listener members the route cannot carry (a parameter outside
+  // ADR-160's payload set, a non-`Unit` return, an inherited member), named with the member and
+  // the type, as SKIPPED_UNSUPPORTED_INPUT / SKIPPED_UNSUPPORTED_RETURN.
   fun MutableList<ForwardDiagnostic>.nameRefusedSubscriptionPairs(
     members: List<KSFunctionDeclaration>,
     owner: String,
@@ -778,17 +782,18 @@ internal fun warnRefusedLegacyRouteMembers(
   ) {
     findInterfaceBridgePairs(members.filterNot { it.hasLegacyLambdaParameter() })
       .forEach { (addMethod, removeMethod) ->
-        val refused: String = legacyRefusedInterfaceBridgePair(addMethod) ?: return@forEach
+        val refused: LegacyRefusedInterfaceBridgePair =
+          classifier.legacyRefusedInterfaceBridgePair(addMethod) ?: return@forEach
         listOf(addMethod, removeMethod).forEach { member ->
           add(
             ForwardDiagnostic(
-              kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+              kind = refused.kind,
               symbol = member,
               declaration = "$owner.${member.simpleName.asString()}",
               reason = "the `${addMethod.simpleName.asString()}` / " +
                   "`${removeMethod.simpleName.asString()}` subscription pair is not bound: " +
-                  refused,
-              hint = "give each listener member its own name (`onMeow()` / `onMeowTimes(times)`)",
+                  refused.reason,
+              hint = refused.hint,
               owner = ownerDeclaration,
               member = member.simpleName.asString(),
             ),
@@ -2389,7 +2394,10 @@ class NugetProcessor(
     // Interface-bridge pairs also need invoke/CFunction/COpaquePointer (each method's fn.invoke).
     val hasInterfaceBridgeMethods: Boolean = armsHaveInterfaceBridgePairs || classes.any { cls ->
       val allMethods: List<KSFunctionDeclaration> = cls.getAllFunctions().toList()
-      findInterfaceBridgePairs(allMethods).isNotEmpty()
+      // ADR-039 amendment (2026-09-26): a refused pair emits nothing, so it imports nothing.
+      findInterfaceBridgePairs(allMethods).any { (addMethod, _) ->
+        forwardClassifier.legacyRefusedInterfaceBridgePair(addMethod) == null
+      }
     }
 
     // ADR-084: every bridge factory slot is a `fn.invoke(...)` on a reinterpreted CFunction too.
@@ -2561,7 +2569,9 @@ class NugetProcessor(
             builder.addStoredCallbackExports(addMethod, removeMethod, subQualifiedName, armPrefix)
           }
           bridgePairs.forEach { (addMethod, removeMethod) ->
-            builder.addInterfaceBridgeExports(addMethod, removeMethod, subQualifiedName, armPrefix)
+            builder.addInterfaceBridgeExports(
+              addMethod, removeMethod, subQualifiedName, armPrefix, forwardClassifier,
+            )
           }
         }
       }
