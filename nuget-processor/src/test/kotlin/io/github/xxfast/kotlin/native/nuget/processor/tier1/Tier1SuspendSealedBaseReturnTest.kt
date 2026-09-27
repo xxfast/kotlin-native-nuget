@@ -197,7 +197,11 @@ class Tier1SuspendSealedBaseReturnTest {
   fun `a sealed arm return still constructs the arm directly`() {
     val result = run()
 
-    assertContainsCSharp(result, "t.SetResult(new Shape.Circle(resultPtr, out _));", "new Shape.Circle")
+    assertContainsCSharp(
+      result,
+      "t.SetResult(new global::Interop.Shape.Circle(resultPtr, out _));",
+      "Shape.Circle(resultPtr",
+    )
   }
 
   /**

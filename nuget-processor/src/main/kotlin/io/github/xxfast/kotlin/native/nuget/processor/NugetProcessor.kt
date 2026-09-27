@@ -130,6 +130,13 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.LegacyRefusedInter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedInterfaceBridgePair
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturnShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElementShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameterShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardSkipPosition
+import io.github.xxfast.kotlin.native.nuget.processor.forward.skipReason
+import io.github.xxfast.kotlin.native.nuget.processor.forward.skipDetail
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnCollectionKinds
 import io.github.xxfast.kotlin.native.nuget.processor.forward.optInMarker
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
@@ -680,7 +687,35 @@ internal fun warnRefusedLegacyRouteMembers(
   suspendFunctions: List<KSFunctionDeclaration>,
   classifier: ForwardBridgeTypeClassifier,
   logger: KSPLogger,
+  // ROADMAP Phase 4 line 23: an out-of-scope dependency type on a legacy route is named with the
+  // plan route's own `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` wording, so it needs the same two inputs.
+  excludeEntries: List<String> = emptyList(),
+  strictDependencyTypes: Boolean = false,
 ) {
+  // ROADMAP Phase 4 line 23: the plan route's diagnostic for a dependency type the closure
+  // refused (reason, `admit(...)` / `exclude(...)` hint, ADR-154 strict escalation), so a suspend
+  // or Flow member names the remedy a synchronous one does.
+  fun refusedDependency(
+    member: KSDeclaration,
+    declaration: String,
+    refusal: BridgeType.Unsupported,
+    position: ForwardSkipPosition,
+    owner: ForwardDiagnosticOwner?,
+  ): ForwardDiagnostic? {
+    val reason: ForwardPlanSkipReason = refusal.skipReason() ?: return null
+    val detail: String? = refusal.skipDetail()
+    return ForwardDiagnostic(
+      kind = reason.toDiagnosticKind(position)
+        .escalatedForStrictDependencyTypes(reason, strictDependencyTypes),
+      symbol = member,
+      declaration = declaration,
+      reason = reason.diagnosticReason(detail),
+      hint = reason.diagnosticHint(detail, excludeEntries = excludeEntries),
+      owner = owner,
+      member = member.simpleName.asString(),
+    )
+  }
+
   fun refusedParameter(
     member: KSFunctionDeclaration,
     declaration: String,
@@ -729,13 +764,18 @@ internal fun warnRefusedLegacyRouteMembers(
   fun refusedFlowProperty(
     property: KSPropertyDeclaration,
     declaration: String,
-    refused: String,
+    refused: Pair<String, BridgeType.Unsupported?>,
     owner: ForwardDiagnosticOwner?,
-  ): ForwardDiagnostic = ForwardDiagnostic(
+  ): ForwardDiagnostic = refused.second?.let {
+    // ROADMAP Phase 4 line 23 fold-in: an out-of-scope dependency element names the `admit(...)`
+    // remedy, exactly as a synchronous member of that type does.
+    refusedDependency(property, declaration, it, ForwardSkipPosition.RETURN, owner)
+  } ?: ForwardDiagnostic(
     kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
     symbol = property,
     declaration = declaration,
-    reason = "a Flow or StateFlow element can be a List/Set/Map, but not the generic type $refused",
+    reason = "a Flow or StateFlow element can be a List/Set/Map, but not the generic type " +
+        refused.first,
     hint = "make the element a non-nullable List/Set/Map, or a non-generic type",
     owner = owner,
     member = property.simpleName.asString(),
@@ -746,13 +786,24 @@ internal fun warnRefusedLegacyRouteMembers(
     declaration: String,
     owner: ForwardDiagnosticOwner?,
   ) {
-    val parameter: String? = classifier.legacyRefusedParameter(member.parameters)
+    val parameter: Pair<String, ForwardLegacyParameterShape.Refused>? =
+      classifier.legacyRefusedParameterShape(member.parameters)
     if (parameter != null) {
-      add(refusedParameter(member, declaration, parameter, owner))
+      val (name, shape) = parameter
+      add(
+        shape.refusal?.let {
+          refusedDependency(member, declaration, it, ForwardSkipPosition.INPUT, owner)
+        } ?: refusedParameter(member, declaration, "$name: ${shape.description}", owner),
+      )
       return
     }
-    val returned: String = classifier.legacyRefusedReturn(member) ?: return
-    add(refusedReturn(member, declaration, returned, owner))
+    val (returned: String, refusal: BridgeType.Unsupported?) =
+      classifier.legacyRefusedReturnShape(member) ?: return
+    add(
+      refusal?.let {
+        refusedDependency(member, declaration, it, ForwardSkipPosition.RETURN, owner)
+      } ?: refusedReturn(member, declaration, returned, owner),
+    )
   }
 
   // Boundary nullability part A2: the callback routes' own refusal, named. Both halves filter a
@@ -879,8 +930,8 @@ internal fun warnRefusedLegacyRouteMembers(
       cls.getAllProperties()
         .filter { property -> property.getVisibility() == Visibility.PUBLIC }
         .forEach { property ->
-          val refused: String =
-            classifier.legacyRefusedFlowElement(property.type.resolve()) ?: return@forEach
+          val refused: Pair<String, BridgeType.Unsupported?> =
+            classifier.legacyRefusedFlowElementShape(property.type.resolve()) ?: return@forEach
           add(
             refusedFlowProperty(
               property, "$owner.${property.simpleName.asString()}", refused, ownerDeclaration,
@@ -938,8 +989,8 @@ internal fun warnRefusedLegacyRouteMembers(
         subclass.getAllProperties()
           .filter { property -> property.getVisibility() == Visibility.PUBLIC }
           .forEach { property ->
-            val refused: String =
-              classifier.legacyRefusedFlowElement(property.type.resolve()) ?: return@forEach
+            val refused: Pair<String, BridgeType.Unsupported?> =
+              classifier.legacyRefusedFlowElementShape(property.type.resolve()) ?: return@forEach
             add(
               refusedFlowProperty(
                 property, "$owner.${property.simpleName.asString()}", refused, ownerDeclaration,
@@ -1413,7 +1464,7 @@ class NugetProcessor(
       objects = rootObjects,
       enums = rootEnums,
       interfaces = rootInterfaces,
-      functions = functions + genericFunctions,
+      functions = functions + genericFunctions + suspendFunctions,
       extensionFunctions = extensionFunctions,
       properties = properties + constProperties,
       extensionProperties = extensionProperties,
@@ -1918,6 +1969,7 @@ class NugetProcessor(
     warnEnumMemberFunctions(enums, logger)
     warnRefusedLegacyRouteMembers(
       classes, sealedClasses, suspendFunctions, forwardClassifier, logger,
+      context.excludePackages, context.strictDependencyTypes,
     )
     // ADR-064 amendment (2026-09-13): the structural generic functions, which never reach the
     // planner (see the function's own KDoc).

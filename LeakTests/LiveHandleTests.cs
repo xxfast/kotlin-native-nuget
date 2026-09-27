@@ -3,6 +3,8 @@ using TestLibrary;
 using TestLibrary.Admission;
 using TestLibrary.Cat;
 using TestLibrary.Dev.Other.Bytype;
+using TestLibrary.Dev.Other.Bysuspend;
+using TestLibrary.Errand;
 using TestLibrary.Clinic;
 using TestLibrary.Dispenser;
 using TestLibrary.Issue115;
@@ -2184,5 +2186,69 @@ public class LiveHandleTests
                 Assert.Equal(1, calls);
             }
         });
+    }
+
+    // Row 9i. ROADMAP Phase 4 line 23: an admitted DEPENDENCY class returned from a top-level
+    // `suspend fun` (the type reached the closure only through that member). The completion
+    // constructs the `global::`-qualified wrapper over the handle Kotlin retained; `using` frees it.
+    // The parameter half hands a C#-built one straight back in, which must borrow, not mint.
+    [Fact]
+    public async Task TopLevelSuspendDependencyClass_ReturnAndParameter_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using Mousetoy toy = await Errands.FetchMousetoyAsync("Oreo");
+            Assert.Equal("black-and-white", toy.Squeak);
+            Assert.Equal("Mylo bats the black-and-white mouse under the sofa", await Errands.SqueakOfAsync(toy));
+        });
+    }
+
+    // Row 9j. The value-class suspend return: Kotlin retains a BOXED value class, and the
+    // completion's `NugetUnbox` reads the underlying and disposes the box in its `finally`. The
+    // struct itself owns nothing, so there is nothing for the caller to dispose; a box left behind
+    // is +1 per call. Top-level (dependency and module-local) and class-level, non-null and null.
+    [Fact]
+    public async Task SuspendValueClassReturn_UnboxedOnce_ReturnsToBaseline()
+    {
+        using var oreo = new ErrandRunner("Oreo");
+        using var mylo = new ErrandRunner("Mylo");
+        // Warm-up: each runner creates its coroutine scope ONCE, on its first suspend call
+        // (`GetOrCreateScope`), and holds that scope handle until it is disposed. Without these two
+        // calls the window counts those two one-off scopes (a flat +2 measured, not per call) instead
+        // of the completions it is here to measure.
+        await oreo.LookUpNametagAsync();
+        await mylo.LookUpNametagAsync();
+        await AssertNoLeakAsync(async () =>
+        {
+            Assert.Equal(new Chipcode("oreo-985112"), await Errands.ScanChipAsync("Oreo"));
+            Assert.Equal(new Nametag("Oreo, if found please return to the sofa"), await Errands.FetchNametagAsync("Oreo"));
+            Assert.Null(await Errands.FindNametagAsync("Mylo"));
+            Assert.Equal(new Nametag("Oreo's spare tag"), await oreo.LookUpNametagAsync());
+            Assert.Null(await mylo.LookUpNametagAsync());
+            // The enum arm: a boxed Int ordinal, freed by `FromHandle<int>`; null mints nothing.
+            Assert.Equal(Chore.Fetch, await Errands.ChoreForAsync("Oreo"));
+            Assert.Null(await Errands.ChoreForAsync("Stray"));
+        });
+    }
+
+    // Row 9j-race. The TIGHT LOOP twin of Rows 9i and 9j (see Row 6f-race for why fifty cannot
+    // see it): `grabMousetoyNow` and `findNametagNow` never suspend, so the completion can beat the
+    // P/Invoke's return. Alternates the value and null arms so the null path shares the window.
+    //
+    // Oreo and Mylo fetch the mouse and check their tags two thousand times in a row.
+    [Fact]
+    public async Task SuspendDependencyClassAndValueClass_TightLoop_ReturnsToBaseline()
+    {
+        int round = 0;
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                string cat = (round++ % 2) == 0 ? "Oreo" : "Mylo";
+                using Mousetoy toy = await Errands.GrabMousetoyNowAsync(cat);
+                Assert.Equal(cat == "Oreo" ? "black-and-white" : "milky-brown", toy.Squeak);
+                Nametag? tag = await Errands.FindNametagNowAsync(cat);
+                Assert.Equal(cat == "Oreo", tag.HasValue);
+            },
+            iterations: 2000);
     }
 }

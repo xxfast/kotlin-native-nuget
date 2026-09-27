@@ -219,6 +219,10 @@ nuget {
     // `admit("dev.other")` — that would also admit `dev.other.core`, the load-bearing negative
     // fixture for ADR-066.
     admit("dev.other.bykind")
+    // ROADMAP Phase 4 line 23: a dependency package reached ONLY through `suspend` members
+    // (`errand/Errands.kt`, `errand/ErrandRunner.kt`). In scope on purpose, so the fixture is about
+    // the closure reaching the types, not about the scope admitting them.
+    admit("dev.other.bysuspend")
     // ADR-115 amendment: one waived marker, so this build shows both halves of the feature. Every
     // other `@RequiresOptIn` marker in `issue113/` stays unlisted and keeps being dropped.
     exportMarkers("io.github.xxfast.kotlin.native.nuget.test.issue113.ExperimentalDiet")

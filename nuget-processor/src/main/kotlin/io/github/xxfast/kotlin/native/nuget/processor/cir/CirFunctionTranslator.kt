@@ -29,6 +29,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParam
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyInterfaceRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyHandleRead
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyValueClassRead
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnumRead
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
@@ -787,6 +790,11 @@ internal fun translateSuspendFunction(
     // ADR-040: the class route's own line -- the projected interface, not the backing wrapper
     // `nestedCsName()` would spell below. `strayPetLater()` is `Task<IPet>`, ADR-040's own example.
     returnShape is ForwardLegacyReturnShape.Interface -> returnShape.declaredCsharpType()
+    // ROADMAP Phase 4 line 23: `global::`-qualified, so a dependency type in another namespace
+    // resolves; a value class is the record struct `NugetUnbox` returns.
+    returnShape is ForwardLegacyReturnShape.Handle -> returnShape.declaredCsharpType()
+    returnShape is ForwardLegacyReturnShape.ValueClass -> returnShape.declaredCsharpType()
+    returnShape is ForwardLegacyReturnShape.Enum -> returnShape.declaredCsharpType()
     else -> {
       // ADR-118: same speller as the class route -- a nested sealed arm return carries its
       // enclosing base, a top-level type stays bare.
@@ -848,6 +856,15 @@ internal fun translateSuspendFunction(
 
       // ROADMAP Phase 4: `NugetMarshal.ReadBytes(resultPtr)`, the class route's own line.
       is ForwardLegacyReturnShape.Bytes -> legacyBytesRead("resultPtr", returnShape.nullable)
+
+      // ROADMAP Phase 4 line 23: the qualified handle constructor, and `NugetUnbox` for a value
+      // class.
+      is ForwardLegacyReturnShape.Handle -> returnShape.legacyHandleRead("resultPtr")
+
+      is ForwardLegacyReturnShape.ValueClass -> returnShape.legacyValueClassRead("resultPtr")
+
+      // The boxed ordinal, cast back to the enum (never handed back as an `int`).
+      is ForwardLegacyReturnShape.Enum -> returnShape.legacyEnumRead("resultPtr")
 
       ForwardLegacyReturnShape.Plain, is ForwardLegacyReturnShape.Refused -> null
     },

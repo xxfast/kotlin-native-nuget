@@ -961,10 +961,7 @@ internal class ForwardCallablePlanner(
       classifier.classify(cls.asStarProjectedType()).sealedAsHandle() as? BridgeType.ValueClass
         ?: return emptyList()
     // The four underlying kinds both value-class wires already implement (ADR-077 sub-item 4).
-    val underlying: BridgeType = type.underlying
-    val crosses: Boolean = underlying == BridgeType.String || underlying is BridgeType.Primitive ||
-        underlying is BridgeType.Enum || underlying is BridgeType.ObjectHandle
-    if (!crosses) return emptyList()
+    if (!type.hasErasedCrossing()) return emptyList()
     val box: ForwardCallableCatalogEntry = planOrSkip(
       symbol = "$owner.<box>",
       publicName = "NugetBox",
@@ -2131,7 +2128,16 @@ internal class ForwardCallablePlanner(
     if (structuralReason != null) {
       // The structural half of the same amendment: `fun <T> Depot.tagged(value: T)` has no route
       // either (the generic-function route takes top-level functions only), so its GENERIC
-      // deferral is named here too. SUSPEND is not a candidate and stays silent.
+      // deferral is named here too. SUSPEND is not a candidate on any other owner (the suspend
+      // route is keyed to every one of them), but it is here: no route emits a suspend EXTENSION
+      // at all (ROADMAP Phase 4 line 23 fold-in, verified silent by the memo's spike), so it is
+      // named directly rather than through the candidate set the other owners share.
+      if (structuralReason == ForwardPlanSkipReason.SUSPEND) {
+        return ForwardCallableCatalogEntry.Skipped(
+          symbol, ForwardPlanSkipReason.UNROUTED_POSITION, node = function,
+          detail = ForwardPlanSkipReason.SUSPEND.name, structural = true,
+        )
+      }
       return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = function)
         .nameUnroutedPosition { false }
     }
