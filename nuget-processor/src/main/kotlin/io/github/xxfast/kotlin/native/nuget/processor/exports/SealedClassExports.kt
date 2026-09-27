@@ -66,9 +66,11 @@ internal fun FileSpec.Builder.addSealedClassExports(
   // generated body reads `handle.asStableRef<Job>().get().describe()` and Kotlin's own virtual
   // dispatch answers with the arm's implementation -- which is what lets the C# member be
   // concrete rather than abstract.
+  // ADR-101 amendment (2026-09-27): no declared-only filter. The catalog lookup is the gate, so an
+  // inherited property re-homed by `ForwardPropertyPlanner.sealedBaseProperties` exports here, in
+  // lockstep with the C# getter `translateSealedClass` renders off the same plan.
   sealed.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { prop -> prop.parentDeclaration == sealed }
     .forEach { prop ->
       val planned: ForwardPropertyPlan =
         callableCatalog.propertyFor("$qualifiedName.${prop.simpleName.asString()}")

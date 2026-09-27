@@ -202,18 +202,23 @@ internal class ForwardPropertyPlanner(
    * ADR-111 amendment (2026-09-11): the sealed **base**'s own declared properties, planned like
    * [classProperties] under the base's own `${sealed}_get_x` export prefix.
    *
-   * Declared-only (`parentDeclaration == sealed`), because the arms carry what they declare
-   * themselves and nothing else. An `abstract val` plans exactly like a concrete one: the plan is
-   * only an ABI, and the generated export reads `handle.asStableRef<Base>().get().sides`, which is
-   * Kotlin's own virtual dispatch and therefore answers with the arm's value.
+   * ADR-101 amendment (2026-09-27): declared properties plus every inherited one no rendered C#
+   * supertype carries (an unexported base's, and any interface's), re-homed onto the base, the
+   * only C# carrier they have; a kept exported base's own properties stay on it. It used to be
+   * declared-only, which silently lost them all. `isForwardMemberOf`, not the plannable variant:
+   * an inherited abstract property the base does not implement plans like a declared
+   * `abstract val`. The plan is only an ABI, and the generated export reads
+   * `handle.asStableRef<Base>().get().sides`, which is Kotlin's own virtual dispatch and therefore
+   * answers with the arm's value.
    */
   private fun sealedBaseProperties(sealed: KSClassDeclaration): List<ForwardPropertyPlan> {
     val owner: String = sealed.qualifiedName?.asString() ?: return emptyList()
     val prefix: String = sealed.nativePrefix(symbols)
+    val keptBase: KSClassDeclaration? = sealed.forwardSuperClass(classifier.exportedObjectHandles)
     return sealed.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
       .filter { prop -> !prop.isCompilerOwnedMember(sealed) }
-      .filter { prop -> prop.parentDeclaration == sealed }
+      .filter { prop -> prop.isForwardMemberOf(sealed, keptBase) }
       .mapNotNull { prop ->
         propertyPlan(
           symbol = "$owner.${prop.simpleName.asString()}",
@@ -222,6 +227,7 @@ internal class ForwardPropertyPlanner(
           prop = prop,
           getExport = "${prefix}_get_${prop.simpleName.asString()}",
           setExport = "${prefix}_set_${prop.simpleName.asString()}",
+          superClass = keptBase,
         )
       }
       .toList()

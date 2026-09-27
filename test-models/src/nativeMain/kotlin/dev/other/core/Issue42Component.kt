@@ -6,8 +6,9 @@ package dev.other.core
  * *supertype* rather than as a member type: an exported class implements it, so today the class
  * renders `: IIssue42Component` and `Interop.cs` fails with CS0246. It must instead be skipped
  * with `SKIPPED_UNEXPORTED_SUPERTYPE`, leaving the implementing class and its own members
- * exported, and never a build break. Everything here is default-implemented on purpose: an
- * unexported supertype carries no members the C# side could call, so dropping it loses nothing.
+ * exported, and never a build break. Everything here is default-implemented on purpose: its
+ * member re-homes onto the implementing class, so nothing callable is lost -- only the `is`/`as`
+ * relation to the interface is gone.
  */
 interface Issue42Component {
   fun componentTag(): String = "issue42"

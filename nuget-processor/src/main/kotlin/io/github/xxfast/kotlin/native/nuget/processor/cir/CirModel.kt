@@ -290,17 +290,31 @@ data class CirSealedClass(
   val nativePrefix: String,
   val subclasses: List<CirSealedSubclass>,
   /**
-   * ADR-111 amendment (2026-09-11): the base's **own** declared properties, projected from
-   * base-keyed ADR-062 plans exactly as an ordinary [CirClass]'s are. They render `virtual` rather
-   * than `abstract` even when Kotlin declares them `abstract`: the export is keyed to the base
-   * type, so Kotlin's own dispatch picks the arm's body, and an `abstract` C# member would force
-   * every arm to declare an override, which a covariant arm cannot spell (CS1715 then CS0534).
+   * ADR-101 amendment (2026-09-27): the nearest exported base class, spelled for C#, or null when
+   * the whole declared chain is outside the export set. When set, the sealed base inherits
+   * `_handle`, `INugetHandle` and `IDisposable` from it rather than declaring them.
+   */
+  val superClass: String? = null,
+  /**
+   * ADR-101 amendment (2026-09-27): the exported interfaces the sealed base lists, spelled for C#,
+   * so `is`/`as` against them hold. An unexported one is dropped with
+   * `SKIPPED_UNEXPORTED_SUPERTYPE` and its members re-home onto [properties] / [methods].
+   */
+  val interfaces: List<String> = emptyList(),
+  /**
+   * ADR-111 amendment (2026-09-11): the base's properties, projected from base-keyed ADR-062 plans
+   * exactly as an ordinary [CirClass]'s are. ADR-101 amendment (2026-09-27): declared ones plus
+   * every inherited one no rendered C# supertype carries (an unexported base's, and any
+   * interface's). They render `virtual` rather than `abstract` even when Kotlin declares them
+   * `abstract`: the export is keyed to the base type, so Kotlin's own dispatch picks the arm's
+   * body, and an `abstract` C# member would force every arm to declare an override, which a
+   * covariant arm cannot spell (CS1715 then CS0534).
    */
   val properties: List<CirProperty> = emptyList(),
   /**
-   * ADR-116 amendment (2026-09-11): the method half of [properties]. A base `open fun` an arm does
-   * not override lives here and nowhere else, which is what lets the arm inherit it in C# the way
-   * it already inherits it in Kotlin.
+   * ADR-116 amendment (2026-09-11): the method half of [properties], on the same membership rule.
+   * A base `open fun` an arm does not override lives here and nowhere else, which is what lets
+   * the arm inherit it in C# the way it already inherits it in Kotlin.
    */
   val methods: List<CirMethod> = emptyList(),
   /**

@@ -842,3 +842,35 @@ first async member in the kept chain is *projected*, which can be the derived cl
 derived class over a dropped (unexported) base needs no special case either way: its async members
 re-home onto the derived class the same way its other members do, which makes the derived class the
 scope owner automatically.
+
+## 2026-09-27 amendment: the sealed-class route
+
+`translateSealedClass` never named a supertype at all: `CirSealedRenderer` hardcoded `: IDisposable,
+INugetHandle` for every sealed base, and every base-member walk (`sealedBaseEntries`,
+`sealedBaseProperties`, `SealedClassExports`, the C# base-property projection) was declared-only,
+filtering to `parentDeclaration == sealed`. So a sealed base's inherited members were dropped with
+**no** diagnostic at all, whether the dropped supertype was exported or not — a silent loss this
+ADR's ordinary-class and interface routes never had.
+
+The sealed route now takes the ordinary class's base list outright: `forwardSuperClass(exportedTypes)`
+and the interface filter decide the base the same way `translateClass` decides one, and `keepsSupertype`
+fires from `translateSealedClass` too. An **exported** supertype (open class or interface) is named in
+the sealed base's C# base list, so `is`/`as` against it hold and its own members stay on it, not
+re-homed. An **unexported** one is dropped with `SKIPPED_UNEXPORTED_SUPERTYPE`, exactly as for an
+ordinary class, and its public members — including an interface's abstract ones the sealed base never
+implements — are re-homed onto the generated sealed base, reachable there and, by C# inheritance, on
+every arm. An arm that overrides a member of a *kept* exported base renders `override`
+(`overridesKeptBaseOf`), not a fresh `virtual` slot.
+
+The `SupertypeKind.INTERFACE` diagnostic text is reworded because it is now used by a route that can
+re-home an *abstract* member, not only a defaulted one: the old wording ("carries no members the C#
+side could call, so nothing is lost") was already imprecise for a defaulted method and is plainly false
+here. It now says the dropped interface's public members "are bound on `$name` directly" (matching the
+ordinary-class wording of the same kind), which the sealed route's own re-homing makes true too. No new
+`SupertypeKind` was needed: `INTERFACE` and `BASE_CLASS` serve both routes.
+
+Fixture: `test-library/.../test/snuggery/SnuggerySample.kt` (`Swaddle : UnexportedBlanket()`, `Purrito
+: UnexportedPurring`, `Ottoman : Pouffe()`, `Slumber : Dreamer`) with `test-models/.../dev/other/core/
+UnexportedBedding.kt` supplying the unexported base and interface. Tests: `IntegrationTests/
+SealedSupertypeTests.cs` and `Tier1SealedSupertypeTest.kt`. No new handle-minting route, so no
+`LiveHandleTests` row: an arm still mints its handle through the existing sealed-arm constructor route.

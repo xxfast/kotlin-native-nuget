@@ -87,6 +87,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedSubclass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverride
 import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesBaseClassMember
+import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesKeptBaseOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyDiscriminatedRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
@@ -107,9 +108,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
-/** Which half of issue #42 a dropped supertype is: the two lose genuinely different things, so
- *  they get genuinely different messages (an interface carries nothing C# could have called; a
- *  base class carries members that are re-homed onto the subclass). */
+/** Which half of issue #42 a dropped supertype is: both re-home their public members onto the
+ *  owner, but they lose different relations, so they get different messages. */
 private enum class SupertypeKind { INTERFACE, SUPER_INTERFACE, BASE_CLASS }
 
 /**
@@ -150,9 +150,13 @@ private fun keepsSupertype(
           "interface; I$name is generated without it and its public members are declared on " +
           "I$name directly"
 
+    // ADR-101 amendment (2026-09-27): the old text said the interface "carries no members the C#
+    // side could call", which was never true of a defaulted member and is plainly false on a
+    // sealed base, which re-homes the interface's abstract members as well.
     SupertypeKind.INTERFACE ->
       "supertype '$supertypeName' is not in the export set, so it has no generated C# " +
-          "interface; the class is generated without it and its own members still export"
+          "interface; $name is generated without it and its public members are bound on " +
+          "$name directly"
 
     // ADR-101 amendment (2026-09-11): "no base at all" is only true when the whole declared
     // chain is unexported. With `Dinghy : Skiff : Vessel` the walk keeps `Vessel`, so the middle
@@ -178,9 +182,10 @@ private fun keepsSupertype(
           "does not help here — the export reachability closure never walks supertypes"
 
     SupertypeKind.INTERFACE ->
-      "an unexported supertype carries no members the C# side could call, so nothing " +
-          "is lost; note that include(\"...\") does not help here — the export reachability " +
-          "closure never walks supertypes"
+      "nothing callable is lost ($simpleName's implemented members export as members of " +
+          "$name), but C# sees no $simpleName type, so `is`/`as` against it is gone; note that " +
+          "include(\"...\") does not help here — the export reachability closure never walks " +
+          "supertypes"
 
     // ADR-101's 2026-09-11 amendment: which of the two clauses is true here is decided by
     // `containingFile`, the same cross-module signal the reachability closure keys on
@@ -520,6 +525,84 @@ private fun inheritedAbstractProperty(
 }
 
 /**
+ * The C# base list for [cls]: the nearest exported base class, spelled by [forwardBaseSpelling],
+ * paired with the exported interfaces [cls] declares directly, spelled by
+ * [forwardSuperInterfaceSpelling]. Shared by [translateClass] and [translateSealedClass], so an
+ * ordinary class and a sealed base derive their C# base list the same way.
+ *
+ * A dropped base or interface -- outside the export set, or with no generated C# spelling -- is
+ * named once by [keepsSupertype] rather than rendered, so a build never fails on a dangling
+ * `: Base` or `: IFace`.
+ */
+private fun forwardBaseList(
+  cls: KSClassDeclaration,
+  name: String,
+  superClassDeclaration: KSClassDeclaration?,
+  exportedTypes: Set<String>,
+  classifier: ForwardBridgeTypeClassifier,
+  logger: KSPLogger,
+): Pair<String?, List<String>> {
+  // ADR-101 amendment (2026-09-11): one diagnostic per *dropped* hop, not one per class. The
+  // chain prefix before the kept base is what has no generated C# class, and each of those hops
+  // re-homes its own members, so each is named. A class whose direct base is exported drops
+  // nothing and says nothing, exactly as before.
+  // Neither planner nor the Kotlin emitter holds a logger, so the translator (the ordinary-class
+  // and, since the 2026-09-27 amendment, the sealed-base route) is the only site it can fire from.
+  cls.droppedBaseChain(superClassDeclaration).forEach { dropped ->
+    keepsSupertype(
+      cls,
+      name,
+      dropped,
+      SupertypeKind.BASE_CLASS,
+      exportedTypes,
+      logger,
+      keptBase = superClassDeclaration,
+    )
+  }
+  // ADR-009 amendment (2026-09-11): spelled by nested C# name, so a class extending a nested
+  // sealed arm renders `: Roost.Perch` and not the unresolvable `: Perch` (CS0246). A top-level
+  // base is unchanged: `nestedCsName()` stops at the first non-class parent.
+  // ADR-101 amendment (2026-09-11): a generic base carries its type arguments too.
+  val superClass: String? = superClassDeclaration?.let { base ->
+    forwardBaseSpelling(cls, name, base, classifier)
+  }
+
+  // ADR-101 amendment (2026-09-11): a kept base no longer empties the interface list. `class
+  // Ledge : Shelf(), Groomable` renders `: Shelf, IGroomable`, and `ForwardClassMembership` binds
+  // `Groomable`'s members on `Ledge` to match, or the declaration is CS0535.
+  val baseSupertypes: Set<String> = superClassDeclaration?.forwardSupertypeNames().orEmpty()
+  val interfaces: List<String> = cls.superTypes
+    .map { it.resolve() }
+    .filter { type ->
+      (type.declaration as? KSClassDeclaration)?.classKind == ClassKind.INTERFACE
+    }
+    // An interface the base already implements is carried by the base. Listing it again compiles
+    // but says nothing, and re-binding its members here would hide the base's (CS0108), so it is
+    // dropped before the export-set filter: it owes no diagnostic either, nothing is lost.
+    .filter { type -> type.declaration.qualifiedName?.asString() !in baseSupertypes }
+    // ADR-101 / issue #42: a supertype outside the export set has no generated C# interface, so
+    // naming it in the base list is a guaranteed CS0246 (the reporter's `: IKoinComponent`).
+    // Drop it and say so. Its public members still bind on the class itself
+    // (`ForwardClassMembership.kt`), so only the `is`/`as` relation is lost.
+    .filter { type ->
+      val iface = type.declaration as KSClassDeclaration
+      keepsSupertype(cls, name, iface, SupertypeKind.INTERFACE, exportedTypes, logger)
+    }
+    // ADR-133: the enclosing scope with the `I` on the last segment (`Aviary.IKeeper`); a bare
+    // `IKeeper` names nothing at namespace level (CS0234). Interface super-interfaces: with its
+    // type arguments, since `: IHolder` for `Holder<Int>` is CS0305.
+    .mapNotNull { type ->
+      forwardSuperInterfaceSpelling(type, classifier, from = cls)
+        ?: run {
+          emitUnspellableSuperInterface(cls, name, type, logger)
+          null
+        }
+    }
+    .toList()
+  return superClass to interfaces
+}
+
+/**
  * ADR-101 amendment (2026-09-11): the C# base list entry for [base], with its type arguments
  * spelled when it is generic (`Crate<string>`), so a closed generic base resolves.
  *
@@ -721,64 +804,8 @@ internal fun translateClass(
   // ADR-101 amendment / issue #42: gated on the export set, so a base class nothing generates is
   // dropped here exactly as an unexported interface is, instead of rendering a dangling `: Base`.
   val superClassDeclaration: KSClassDeclaration? = cls.forwardSuperClass(exportedTypes)
-  // ADR-101 amendment (2026-09-11): one diagnostic per *dropped* hop, not one per class. The
-  // chain prefix before the kept base is what has no generated C# class, and each of those hops
-  // re-homes its own members, so each is named. A class whose direct base is exported drops
-  // nothing and says nothing, exactly as before.
-  // `translateClass` is the one place a class is translated (the regular-class loop in
-  // `CirTranslator`), and neither planner nor the Kotlin emitter holds a logger, so this is the
-  // only site the diagnostic can fire from.
-  cls.droppedBaseChain(superClassDeclaration).forEach { dropped ->
-    keepsSupertype(
-      cls,
-      name,
-      dropped,
-      SupertypeKind.BASE_CLASS,
-      exportedTypes,
-      logger,
-      keptBase = superClassDeclaration,
-    )
-  }
-  // ADR-009 amendment (2026-09-11): spelled by nested C# name, so a class extending a nested
-  // sealed arm renders `: Roost.Perch` and not the unresolvable `: Perch` (CS0246). A top-level
-  // base is unchanged: `nestedCsName()` stops at the first non-class parent.
-  // ADR-101 amendment (2026-09-11): a generic base carries its type arguments too.
-  val superClass: String? = superClassDeclaration?.let { base ->
-    forwardBaseSpelling(cls, name, base, classifier)
-  }
-
-  // ADR-101 amendment (2026-09-11): a kept base no longer empties the interface list. `class
-  // Ledge : Shelf(), Groomable` renders `: Shelf, IGroomable`, and `ForwardClassMembership` binds
-  // `Groomable`'s members on `Ledge` to match, or the declaration is CS0535.
-  val baseSupertypes: Set<String> = superClassDeclaration?.forwardSupertypeNames().orEmpty()
-  val interfaces: List<String> = cls.superTypes
-    .map { it.resolve() }
-    .filter { type ->
-      (type.declaration as? KSClassDeclaration)?.classKind == ClassKind.INTERFACE
-    }
-    // An interface the base already implements is carried by the base. Listing it again compiles
-    // but says nothing, and re-binding its members here would hide the base's (CS0108), so it is
-    // dropped before the export-set filter: it owes no diagnostic either, nothing is lost.
-    .filter { type -> type.declaration.qualifiedName?.asString() !in baseSupertypes }
-    // ADR-101 / issue #42: a supertype outside the export set has no generated C# interface, so
-    // naming it in the base list is a guaranteed CS0246 (the reporter's `: IKoinComponent`).
-    // Drop it and say so. Nothing is lost: an unexported interface has no C# members to call,
-    // and its defaulted members still bind on the class itself (`ForwardClassMembership.kt`).
-    .filter { type ->
-      val iface = type.declaration as KSClassDeclaration
-      keepsSupertype(cls, name, iface, SupertypeKind.INTERFACE, exportedTypes, logger)
-    }
-    // ADR-133: the enclosing scope with the `I` on the last segment (`Aviary.IKeeper`); a bare
-    // `IKeeper` names nothing at namespace level (CS0234). Interface super-interfaces: with its
-    // type arguments, since `: IHolder` for `Holder<Int>` is CS0305.
-    .mapNotNull { type ->
-      forwardSuperInterfaceSpelling(type, classifier, from = cls)
-        ?: run {
-          emitUnspellableSuperInterface(cls, name, type, logger)
-          null
-        }
-    }
-    .toList()
+  val (superClass: String?, interfaces: List<String>) =
+    forwardBaseList(cls, name, superClassDeclaration, exportedTypes, classifier, logger)
 
   // ADR-091: constructors come off the catalog, the same move ADR-090 made for methods. The extern
   // suffix is derived from the plan symbol's tail after `<init>` ("" or `_$n`) rather than from a
@@ -2109,21 +2136,35 @@ internal fun translateSealedClass(
   val prefix: String = cls.nativePrefix(context.symbols)
   val qualifiedName: String? = cls.qualifiedName?.asString()
 
-  // ADR-111/ADR-116 amendment (2026-09-11): the base's own declared members, off base-keyed plans
-  // and the same projections an ordinary class uses. Always `virtual`, never `abstract`: the
-  // export dispatches through the base type in Kotlin, so the C# member has a body, and an
-  // `abstract` one would oblige every arm to declare an override -- which the covariant arm
-  // (`Empty.sides: Int` over `Int?`) cannot spell at all (CS1715, then CS0534 for the member it
-  // could not declare).
+  // ADR-101 amendment (2026-09-27): the sealed route takes the ordinary class's base list. An
+  // exported supertype is named, so `is`/`as` against it hold; an unexported one is dropped with
+  // `SKIPPED_UNEXPORTED_SUPERTYPE`, and both planners re-home its public members onto the base
+  // (`ForwardClassMembership.isForwardMemberOf`), the only C# carrier it has.
+  val superClassDeclaration: KSClassDeclaration? = cls.forwardSuperClass(exportedTypes)
+  val (superClass: String?, interfaces: List<String>) =
+    forwardBaseList(cls, name, superClassDeclaration, exportedTypes, classifier, logger)
+
+  // ADR-111/ADR-116 amendment (2026-09-11): the base's members, off base-keyed plans and the same
+  // projections an ordinary class uses. Always `virtual`, never `abstract`: the export dispatches
+  // through the base type in Kotlin, so the C# member has a body, and an `abstract` one would
+  // oblige every arm to declare an override -- which the covariant arm (`Empty.sides: Int` over
+  // `Int?`) cannot spell at all (CS1715, then CS0534 for the member it could not declare).
+  // ADR-101 amendment (2026-09-27): no declared-only filter here. The catalog lookup is the gate,
+  // so an inherited property is rendered exactly when the property planner re-homed it.
   val baseProperties: List<CirProperty> = cls.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { prop -> prop.parentDeclaration == cls }
     .mapNotNull { prop ->
       val planned: ForwardPropertyPlan? =
         qualifiedName?.let { callableCatalog.propertyFor("$it.${prop.simpleName.asString()}") }
       if (planned == null) return@mapNotNull null
       tracker.trackProperty(planned)
-      ForwardCirPropertyProjection.classProperty(planned, isVirtual = true)
+      // An `override val` of the kept base's own open member overrides it in C# as well.
+      val isOverride: Boolean = prop.overridesBaseClassMember(superClassDeclaration)
+      ForwardCirPropertyProjection.classProperty(
+        planned,
+        isOverride = isOverride,
+        isVirtual = !isOverride,
+      )
     }
     .toList()
 
@@ -2133,7 +2174,7 @@ internal fun translateSealedClass(
       ForwardCirPlanProjection.classMethod(
         plan = plan,
         nativePrefix = prefix,
-        isOverride = false,
+        isOverride = plan.publicSignature.isOverride,
         isVirtual = plan.publicSignature.isVirtual,
       )
     }
@@ -2147,7 +2188,8 @@ internal fun translateSealedClass(
   qualifiedName?.let { qualified ->
     memberRegistry?.register(
       CsMemberRegistry.Entry(
-        qualified, name, "sealed class $name", cls, keptBase = null, baseNames, baseSpellings,
+        qualified, name, "sealed class $name", cls,
+        keptBase = superClassDeclaration?.qualifiedName?.asString(), baseNames, baseSpellings,
       ),
     )
   }
@@ -2192,6 +2234,13 @@ internal fun translateSealedClass(
               // inside a `public sealed class` is CS0549.
               isVirtual = isOpenArm && prop.modifiers.isOpenForOverride(),
             )
+            // ADR-101 amendment (2026-09-27): an override of the kept exported base's own member
+            // overrides it in C# too, through the sealed base's base list (CS0114 otherwise).
+            val overridesKeptBase: Boolean = prop.overridesKeptBaseOf(cls, superClassDeclaration) &&
+                baseProperties.none { it.name == projected.name }
+            if (overridesKeptBase) {
+              return@mapNotNull projected.copy(isOverride = true, isVirtual = false)
+            }
             return@mapNotNull projected.againstSealedBase(baseProperties)
           }
 
@@ -2253,10 +2302,10 @@ internal fun translateSealedClass(
       // ADR-116: the method half of ADR-111. The arm's declared member functions come off the same
       // catalog an ordinary class reads (`classMethods`), projected by the same `classMethod`, so
       // the error slot, the overload numbering and the wire types agree with the Kotlin half by
-      // construction. `isOverride` is pinned false by the planner (the generated sealed base
-      // declares nothing to override, CS0115); `isVirtual` rides the plan, which computes it from
-      // the arm being `open` the same way `classEntries` computes an ordinary class's (ADR-009
-      // amendment 2026-09-11).
+      // construction. `isOverride` rides the plan too: true only for an override of the sealed
+      // base's kept exported base class (ADR-101 amendment 2026-09-27), which C# inherits through
+      // the base list; `isVirtual` rides the plan, which computes it from the arm being `open` the
+      // same way `classEntries` computes an ordinary class's (ADR-009 amendment 2026-09-11).
       val methodPlans: List<ForwardCallablePlan> =
         subQualifiedName?.let { callableCatalog.classMethods(it) } ?: emptyList()
       val methods: List<CirMethod> = methodPlans.map { plan ->
@@ -2264,7 +2313,7 @@ internal fun translateSealedClass(
         val projected: CirMethod = ForwardCirPlanProjection.classMethod(
           plan = plan,
           nativePrefix = subPrefix,
-          isOverride = false,
+          isOverride = plan.publicSignature.isOverride,
           isVirtual = plan.publicSignature.isVirtual,
         )
         // ADR-116 amendment (2026-09-11): `override` when the base now carries the very same C#
@@ -2444,6 +2493,8 @@ internal fun translateSealedClass(
     libraryName = libraryName,
     nativePrefix = prefix,
     subclasses = subclasses,
+    superClass = superClass,
+    interfaces = interfaces,
     properties = baseProperties,
     methods = baseMethods,
     // ADR-134: a type declared beside the arms, in the block ADR-009 owns. An ADR-112 eligible
