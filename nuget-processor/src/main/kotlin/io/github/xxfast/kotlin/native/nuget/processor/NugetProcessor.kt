@@ -58,6 +58,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addStoredCallbackE
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceBridgeExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
+import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyLambdaParameter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addExtensionPropertyExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addObjectExports
@@ -121,6 +122,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionKinds
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollectionKinds
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElement
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedInterfaceBridgePair
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnCollectionKinds
@@ -765,6 +767,36 @@ internal fun warnRefusedLegacyRouteMembers(
     member = member.simpleName.asString(),
   )
 
+  // ADR-090 amendment (2026-09-26): the ADR-039 subscription route refuses a pair whose listener
+  // interface declares a member name twice (it names one callback slot per member name). Both
+  // halves drop the pair silently and the planner's CALLBACK_PROTOCOL skip is not named, so this
+  // walk is the only thing that tells the author `addX` / `removeX` are gone.
+  fun MutableList<ForwardDiagnostic>.nameRefusedSubscriptionPairs(
+    members: List<KSFunctionDeclaration>,
+    owner: String,
+    ownerDeclaration: ForwardDiagnosticOwner?,
+  ) {
+    findInterfaceBridgePairs(members.filterNot { it.hasLegacyLambdaParameter() })
+      .forEach { (addMethod, removeMethod) ->
+        val refused: String = legacyRefusedInterfaceBridgePair(addMethod) ?: return@forEach
+        listOf(addMethod, removeMethod).forEach { member ->
+          add(
+            ForwardDiagnostic(
+              kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+              symbol = member,
+              declaration = "$owner.${member.simpleName.asString()}",
+              reason = "the `${addMethod.simpleName.asString()}` / " +
+                  "`${removeMethod.simpleName.asString()}` subscription pair is not bound: " +
+                  refused,
+              hint = "give each listener member its own name (`onMeow()` / `onMeowTimes(times)`)",
+              owner = ownerDeclaration,
+              member = member.simpleName.asString(),
+            ),
+          )
+        }
+      }
+  }
+
   val diagnostics: List<ForwardDiagnostic> = buildList {
     classes.forEach { cls ->
       val owner: String = cls.simpleName.asString()
@@ -785,6 +817,11 @@ internal fun warnRefusedLegacyRouteMembers(
             ),
           )
         }
+      nameRefusedSubscriptionPairs(
+        cls.getAllFunctions().filter { it.getVisibility() == Visibility.PUBLIC }.toList(),
+        owner,
+        ownerDeclaration,
+      )
       // ADR-123: a Flow/StateFlow *property* whose element cannot cross. Both halves drop it
       // silently, exactly as they drop a method, so this walk is the only thing that names it.
       cls.getAllProperties()
@@ -836,6 +873,14 @@ internal fun warnRefusedLegacyRouteMembers(
               ),
             )
           }
+        nameRefusedSubscriptionPairs(
+          subclass.getAllFunctions()
+            .filter { it.getVisibility() == Visibility.PUBLIC }
+            .filter { method -> method.parentDeclaration == subclass }
+            .toList(),
+          owner,
+          ownerDeclaration,
+        )
         // ADR-124: and the arm's flow *properties*, whose refused element has no
         // `KSFunctionDeclaration` to hang a return diagnostic on. All-properties, ADR-111's rule.
         subclass.getAllProperties()

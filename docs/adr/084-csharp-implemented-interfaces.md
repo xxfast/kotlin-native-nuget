@@ -548,3 +548,21 @@ sync return.
 Fixtures: `nested/Aviary.kt`'s `Registry` object (the collision pair, and the return that makes it
 reachable). Tests: `NestedTypesTests.cs` reflection facts asserting distinct generated names, Tier 1.
 Verify: green, 1793 / 0 / 0, 36; processor 834.
+
+## Amendment (2026-09-26): bridge slot names carry ADR-090's overload suffix
+
+[ADR-090](090-ordinary-class-method-overloads.md)'s 2026-09-26 amendment numbers same-name methods
+on the interface route the way `classEntries` already numbers ordinary-class methods. This
+factory's slot walk (`ForwardInterfaceBridgePlanner`) names each function slot from the member's
+bare `simpleName` (`speakPtr`/`speakCtx`), and it walks every member the interface declares
+*or inherits*, so a same-name pair, whether declared directly or one inherited from a
+super-interface, minted the same slot name twice and failed to compile
+(`Conflicting declarations: speakPtr`). The n-th same-name slot now carries the same `_$n` suffix
+the export symbol carries (`speak_2Ptr`/`speak_2Ctx`), while the Kotlin `override fun speak(...)`
+the slot's lambda calls keeps its declared, unsuffixed name: the suffix is internal ABI naming for
+the slot pair, not a second overload number a C# implementer ever sees. A `Brusher` implementer's
+factory therefore declares `brushPtr`/`brush_2Ptr`/`brush_3Ptr` and `trimPtr`/`trim_2Ptr` beside the
+one `releasePtr`/`releaseCtx` pair, and each Kotlin call (`brush()`, `brush(2)`,
+`brush(Mood.GRUMPY)`) invokes the matching numbered slot, so a C#-implemented `IBrusher` dispatches
+every overload to its own C# member. See ADR-090's amendment for the export-symbol and plan-lookup
+half of the same fix.

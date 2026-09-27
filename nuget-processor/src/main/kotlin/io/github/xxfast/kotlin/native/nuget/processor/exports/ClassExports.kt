@@ -16,6 +16,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedCallbackMember
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedInterfaceBridgePair
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
@@ -287,6 +288,8 @@ internal fun FileSpec.Builder.addClassExports(
   val interfaceBridgePairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
     findInterfaceBridgePairs(methods)
   interfaceBridgePairs.forEach { (addMethod, removeMethod) ->
+    // ADR-090 amendment (2026-09-26): named by `warnRefusedLegacyRouteMembers`, dropped here.
+    if (legacyRefusedInterfaceBridgePair(addMethod) != null) return@forEach
     addInterfaceBridgeExports(addMethod, removeMethod, qualifiedName, prefix)
   }
 

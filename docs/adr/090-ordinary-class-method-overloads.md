@@ -250,3 +250,69 @@ has no callers; deleting it is a separate change.
 - Deferred with their existing routes: overloads where one namesake is Flow-returning,
   lambda-taking, or an interface-bridge pair member keep those members' current non-planned
   handling; the planner-side occurrence counter still numbers around them deterministically.
+
+## Amendment (2026-09-26): the interface route
+
+`interfaceEntries` (`ForwardCallablePlanner.kt`) named every method export `"${prefix}_${name}"`
+with no occurrence counter, the same gap this ADR closed for `classEntries`. A same-name pair on a
+*reachable* interface, one returned per [ADR-040](040-interface-return-type-mapping.md) or accepted
+as a parameter per [ADR-084](084-csharp-implemented-interfaces.md), crashed generation with the same
+`planFor` duplicate-plans message this ADR's Context quotes; an interface that is only implemented
+(never returned or taken as a parameter) already worked, since its members reach C# only through
+the *implementing class's* `classEntries` plans.
+
+The interface route adopts this ADR's scheme exactly: a per-interface occurrence counter over
+`getAllFunctions()` order, incremented before the SUSPEND/GENERIC structural skip so a skipped
+namesake still consumes its number, `member = name` so the call site keeps the declared name. A
+reachable `interface Brusher { fun brush(): String; fun brush(strokes: Int): String; fun
+brush(mood: Mood): String }` numbers `brusher_brush` / `brusher_brush_2` / `brusher_brush_3`; `IBrusher`
+still declares one natural `Brush()` / `Brush(int)` / `Brush(Mood)` overload set.
+
+**Plan lookups must be owner-exact, not node-keyed.** The Decision section above already required
+this for `classMethods(owner)` because `interfaceEntries` emits CLASS-origin plans too (lines
+124-127); the interface route's own two lookups (`InterfaceExports.kt`, and
+`translateInterfaceBackingClass` in `CirClassTranslator.kt`) needed the same owner-exact
+`classMethods(qualifiedName)` accessor, not a node-keyed `planFor(method)`. A node-keyed lookup
+looked sufficient until `Tier1InterfaceOverloadTest`'s inherited-default-member cell: an interface
+member with a body (`fun purr(): String = "purr"`) that an implementer never overrides is planned
+**twice** from the same `KSFunctionDeclaration` node, once under the interface's own qualified name
+(`pet_purr`, this route) and once under the implementing class's qualified name (`cat_purr`,
+`classEntries`); a node-keyed lookup cannot tell those two plans apart, but the owner-exact string
+key already used everywhere else on this route does.
+
+The ADR-084 bridge factory's per-member slot names needed the same suffix, since its slot walk
+(`ForwardInterfaceBridgePlanner`) also includes inherited members, so an overload inherited from a
+super-interface numbers there too; see [ADR-084](084-csharp-implemented-interfaces.md)'s
+2026-09-26 amendment for the slot-naming detail.
+
+The `emitCsharpSignatureCollisions` guard (this ADR's C# half, above) now runs on the interface
+route too: a `String`/`String?` pair, illegal C# overloading on reference nullability alone, fires
+`ERROR_CSHARP_SIGNATURE_COLLISION` naming `IPet.Tag` instead of reaching `packNuget` clean and
+failing the consumer's own build with `CS0111`. The collision hint that already named the
+overloaded member for the class route now does the same here, reading the plan's declared member
+name rather than the (now possibly suffixed) symbol tail.
+
+Two same-path shapes folded into this amendment, both pre-existing crashes on a same-name pair
+rather than numbering gaps of their own:
+
+- The [ADR-039](039-interface-bridging.md) `add`/`remove` subscription route names
+  one callback slot per listener member by bare name (`InterfaceBridgeExports.kt`), so a listener
+  interface that declares a member more than once generated Kotlin that failed to compile
+  (`Conflicting declarations`). The pair is now a named `SKIPPED_UNSUPPORTED_INPUT` refusal on both
+  `add` and `remove`, naming the declaring class and the repeated member ("declares `onMeow` more
+  than once"), rather than numbered: this route's slot names are legacy and out of scope for
+  numbering, see [Lambdas and callbacks](../topics/lambdas-and-callbacks.md#c-implementing-a-kotlin-interface-as-a-parameter).
+- The [ADR-113](113-interface-declaration-on-the-forward-plan.md) generic carve-out
+  (`typeParameterMethods`/`typeParameterProperties` in `CirClassTranslator.kt`) deduped a
+  type-parameter-typed member by name and arity alone, so `fun peek(x: T)` silently vanished from
+  `IReadable<T>` beside a planned `fun peek(x: Int): String`, a legal C# overload pair. The dedupe
+  now keys on the rendered parameter types too, so both members survive on the generated interface.
+
+Fixture: `test-library/.../cat/Brusher.kt` (kept off the widely-implemented `Pet.kt` on purpose,
+see the fixture's own comment). Tests: `IntegrationTests/InterfaceOverloadTests.cs`,
+`Tier1InterfaceOverloadTest.kt`; leak coverage `LeakTests/LiveHandleTests.cs`
+(`InterfaceOverloads_ReturnedKotlinInterface_EveryOverload_ReturnsToBaseline`,
+`InterfaceOverloads_CSharpImplementedArgument_EveryOverload_ReturnsToBaseline`) confirms no new
+handle kind: every numbered dispatch export or bridge slot borrows the one handle its route already
+mints, never one of its own. Verify: green, processor 1212/0, IntegrationTests 2294/0, LeakTests
+98/0, `GeneratedBindingsCheck` 0 warnings.

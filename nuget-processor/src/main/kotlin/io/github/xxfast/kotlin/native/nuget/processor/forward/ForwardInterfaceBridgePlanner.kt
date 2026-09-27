@@ -61,9 +61,19 @@ internal data class ForwardBridgeSlot(
   val isProperty: Boolean,
   val result: ForwardBridgeType,
   val parameters: List<ForwardBridgeParameter>,
+  /**
+   * ADR-090 amendment (2026-09-26): `""` for the first function slot of a name, `_$n` for the
+   * n-th (`speak_2`). Internal ABI naming only; [name] stays the Kotlin `override fun` name.
+   * Counted over the whole slot walk, inherited members included, so it need not match the
+   * export suffix.
+   */
+  val overloadSuffix: String = "",
 ) {
-  /** `nameGetPtr` / `speakPtr`: the ABI parameter prefix, shared by both projections. */
-  val slotPrefix: String = if (isProperty) "${name}Get" else name
+  /**
+   * `nameGetPtr` / `speakPtr` / `speak_2Ptr`: the ABI parameter prefix, shared by both
+   * projections.
+   */
+  val slotPrefix: String = if (isProperty) "${name}Get" else "$name$overloadSuffix"
 }
 
 internal data class ForwardBridgeInterfacePlan(
@@ -112,10 +122,18 @@ internal object ForwardInterfaceBridgePlanner {
       .filter { property -> property.getVisibility() == Visibility.PUBLIC }
       .filter { property -> !property.isCompilerOwnedMember(iface) }
       .forEach { property -> slots.add(slotOf(property, classifier) ?: return null) }
+    // ADR-090 amendment (2026-09-26): two same-name function slots declared `speakPtr` twice in
+    // the factory signature (a Kotlin `Conflicting declarations` compile error), whether both
+    // overloads are declared here or one is inherited from a super-interface.
+    val occurrences: MutableMap<String, Int> = mutableMapOf()
     iface.getAllFunctions()
       .filter { function -> function.getVisibility() == Visibility.PUBLIC }
       .filter { function -> !function.isCompilerOwnedMember(iface) }
-      .forEach { function -> slots.add(slotOf(function, classifier) ?: return null) }
+      .forEach { function ->
+        val slot: ForwardBridgeSlot = slotOf(function, classifier) ?: return null
+        val occurrence: Int = occurrences.merge(slot.name, 1, Int::plus)!!
+        slots.add(if (occurrence == 1) slot else slot.copy(overloadSuffix = "_$occurrence"))
+      }
     if (slots.isEmpty()) return null
 
     return ForwardBridgeInterfacePlan(

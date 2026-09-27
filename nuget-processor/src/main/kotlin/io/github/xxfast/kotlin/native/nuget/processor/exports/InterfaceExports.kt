@@ -7,11 +7,9 @@ import com.google.devtools.ksp.getVisibility
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardPropertyPlanExports
-import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 
 /**
@@ -45,15 +43,11 @@ internal fun FileSpec.Builder.addInterfaceExports(
       if (planned != null) addForwardPropertyPlanExports(planned)
     }
 
-  iface.getAllFunctions()
-    .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { method -> !method.isCompilerOwnedMember(iface) }
-    .filter { method -> method.parentDeclaration == iface }
-    .forEach { method ->
-      val planned: ForwardCallablePlan? =
-        callableCatalog.planFor("$qualifiedName.${method.simpleName.asString()}")
-      if (planned != null) addForwardKotlinPlanExport(planned)
-    }
+  // ADR-090 amendment (2026-09-26): read off the catalog, owner-exact, like `ClassExports`. With
+  // overload numbering the n-th namesake's symbol is `$qualifiedName.${name}_$n`, which a
+  // declaration walk cannot re-derive (it re-emitted the first overload's plan). Not node-keyed
+  // either: an implementer's inherited default member shares the interface member's node.
+  callableCatalog.classMethods(qualifiedName).forEach { plan -> addForwardKotlinPlanExport(plan) }
 
   addFunction(
     FunSpec.builder("export_${prefix}_dispose")

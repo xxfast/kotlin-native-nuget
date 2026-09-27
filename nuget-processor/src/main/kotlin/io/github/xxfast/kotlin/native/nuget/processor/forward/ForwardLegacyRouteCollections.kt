@@ -1,6 +1,10 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import com.google.devtools.ksp.getVisibility
+import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.Visibility
+import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSValueParameter
@@ -755,4 +759,28 @@ internal fun KSFunctionDeclaration.isForwardLegacyAsyncRoute(): Boolean {
   val returnQualified: String? = returnType?.resolve()
     ?.expandAliases()?.declaration?.qualifiedName?.asString()
   return returnQualified in FLOW_TYPES || returnQualified in STATE_FLOW_TYPES
+}
+
+/**
+ * ADR-090 amendment (2026-09-26): why the ADR-039 `add*`/`remove*` subscription route cannot
+ * carry the pair whose add half is [addMethod], or null when it can. That route names one
+ * function-pointer slot per listener member by its simple name (`onMeowPtr`, `onMeowFn`), so a
+ * listener interface declaring a member name twice generated Kotlin that did not compile
+ * (`Conflicting declarations: onMeowFn`). The route is legacy, so it is not numbered: both halves
+ * drop the pair and `warnRefusedLegacyRouteMembers` names it.
+ */
+internal fun legacyRefusedInterfaceBridgePair(addMethod: KSFunctionDeclaration): String? {
+  val listener: KSClassDeclaration = addMethod.parameters.firstNotNullOfOrNull { parameter ->
+    (parameter.type.resolve().expandAliases().declaration as? KSClassDeclaration)
+      ?.takeIf { it.classKind == ClassKind.INTERFACE }
+  } ?: return null
+  val repeated: String = listener.getAllFunctions()
+    .filter { method -> method.getVisibility() == Visibility.PUBLIC }
+    .filter { method -> !method.isCompilerOwnedMember(listener) }
+    .groupBy { method -> method.simpleName.asString() }
+    .entries
+    .firstOrNull { (_, members) -> members.size > 1 }
+    ?.key ?: return null
+  return "its listener interface `${listener.simpleName.asString()}` declares `$repeated` more " +
+      "than once, and this subscription route binds one callback slot per member name"
 }

@@ -136,6 +136,11 @@ A boxed [`enum class` sealed arm](interfaces-abstract-sealed.md#an-enum-class-ar
 its constructor mints a `StableRef` to a Kotlin enum entry, and reading one back through a holder's
 property mints a second, independent handle, so both must come back to baseline on `Dispose`.
 
+An [interface method overload](interfaces-abstract-sealed.md#method-overloads-on-an-interface) adds
+no new handle kind either: every numbered dispatch export or bridge slot a call reaches still
+borrows the one handle its route already mints (the returned interface's own handle, or the
+transfer handle a C# implementation mints once per crossing), never one of its own per overload.
+
 For a [cancellation-token-taking async call](instance-members.md#async-cancellation), this count
 only proves the pending-continuation and `Task` handles came back to baseline: the bridge-owned
 `CancellationTokenSource` is a plain .NET `GCHandle`, not one of the Kotlin `StableRef`s
