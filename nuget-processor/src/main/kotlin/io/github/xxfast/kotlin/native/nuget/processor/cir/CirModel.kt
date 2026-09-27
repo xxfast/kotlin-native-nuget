@@ -730,6 +730,8 @@ data class CirStoredCallbackMethod(
   val delegateParamList: String,      // "(int arg0Ord, IntPtr _)"
   val csParamType: String,            // "Action<Mood>"
   val nativeCallbackBody: String,     // body inside the nativeCallback lambda
+  // "Cat": the owner the disposed-receiver check names; a sealed arm's own name, not its base's.
+  val className: String,
 ) : CirMember
 
 // A class method that accepts a lambda parameter from C# (phase 7 reverse interop).
@@ -745,15 +747,6 @@ data class CirCallbackMethod(
   val csParamType: String,
   val callbackBody: String,
   val wrapperBody: String,
-  /**
-   * Boundary nullability part A2: the Kotlin parameter's own type was nullable
-   * (`listener: ((Int) -> Unit)?`). The member still binds -- the payload has a wire, and the only
-   * thing Kotlin expresses that the erased C# delegate slot cannot is "no listener" -- but a C#
-   * caller who passes `null` anyway would have it reach a `[UnmanagedCallersOnly]` thunk that
-   * dereferences a null `GCHandle.Target`, which is a fail-fast no `catch` anywhere can see. So the
-   * wrapper rejects it up front with `ArgumentNullException` instead.
-   */
-  val rejectsNullDelegate: Boolean = false,
 ) : CirMember
 
 data class CirMethod(

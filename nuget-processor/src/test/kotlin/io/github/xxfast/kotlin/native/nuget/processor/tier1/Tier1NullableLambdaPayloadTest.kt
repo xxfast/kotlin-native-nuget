@@ -183,9 +183,10 @@ class Tier1NullableLambdaPayloadTest {
     val cs: String = result.generatedCSharp
     assertTrue("OnMaybeTick(" in cs, "a nullable lambda type binds; only its payload matters")
     // The obligation that comes with binding it: the erased delegate slot cannot carry "absent", so
-    // a null reaches a `[UnmanagedCallersOnly]` thunk that dereferences the registered ctx, a
-    // fail-fast no `catch` can see. Rejected at the managed boundary instead, before any ctx is
-    // registered for this call.
+    // a null would be registered and invoked by the managed callback body on the first call,
+    // surfacing as a `NullReferenceException` that never names the argument. Rejected at the
+    // managed boundary instead, before any ctx is registered for this call (the guard is now
+    // unconditional; Tier1CallbackNullGuardTest covers the non-null spellings).
     assertTrue(
       "ArgumentNullException.ThrowIfNull(listener);" in cs,
       "expected the wrapper to reject a null delegate up front; cs=$cs",

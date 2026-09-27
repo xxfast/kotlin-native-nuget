@@ -108,6 +108,18 @@ handle, so the callback body receives it directly with nothing to dispose; so do
 `String` value the lambda itself returns. The member's own return can be a scalar, `String`, an
 exported object, its nullable twin, or an enum, the same set an ordinary method return supports.
 
+Passing `null` throws `ArgumentNullException` naming the Kotlin parameter, at the call site, before
+Kotlin runs anything:
+
+```C#
+metronome.CountTicks(null!); // throws ArgumentNullException, ParamName == "listener"
+```
+
+This holds regardless of the Kotlin parameter's own nullability (`listener: (Int) -> Unit` and
+`listener: ((Int) -> Unit)?` both throw the same way), and on a class member, a top-level function,
+and a sealed arm alike. The one exception is a lambda parameter with a Kotlin default value: there,
+`null` means "use the default" rather than "no listener", so no guard runs.
+
 The same route binds a method declared on a sealed arm (see
 [Lambda parameters on a sealed arm](interfaces-abstract-sealed.md#sealed-lambda-generated-c)), a
 top-level function, or an extension function.
@@ -147,8 +159,9 @@ lambda return.
 ### A nullable lambda parameter {id="a-nullable-lambda-parameter"}
 
 A parameter whose own type is nullable (`listener: ((Int) -> Unit)?`) still binds, spelled as an
-ordinary non-nullable delegate (`Action<int>`); pass `null` to mean "no listener", and the generated
-wrapper throws `ArgumentNullException` rather than crashing the process:
+ordinary non-nullable delegate (`Action<int>`). The nullable Kotlin spelling has no C# effect:
+`null` is refused here exactly as it is on the non-nullable spelling above, since the route has no
+way to express "no listener" other than not calling the method at all.
 
 ```kotlin
 fun onMaybeTick(listener: ((Int) -> Unit)?) = repeat(beats) { listener?.invoke(it + 1) }
@@ -156,7 +169,7 @@ fun onMaybeTick(listener: ((Int) -> Unit)?) = repeat(beats) { listener?.invoke(i
 
 ```C#
 metronome.OnMaybeTick(tick => ticks.Add(tick)); // works
-metronome.OnMaybeTick(null!);                   // throws ArgumentNullException
+metronome.OnMaybeTick(null!);                   // throws ArgumentNullException, same as a non-nullable listener
 ```
 
 A parameter whose *payload* is nullable (`listener: (Int?) -> Unit`) or whose lambda *returns* a
@@ -218,7 +231,21 @@ sub.Dispose(); // no further callbacks fire
 A Kotlin `add{X}`/`remove{X}` (or `subscribe{X}`/`unsubscribe{X}`) pair, both taking the same
 lambda type, is generated as a single `AddXxx` that returns `IDisposable` instead of two separate
 methods: dispose it to unsubscribe, there is no public `RemoveXxx` method generated for you to call
-directly. `Dispose()` does not wait for an invocation already in flight on another thread: a call
+directly.
+
+`AddXxx(null!)` throws `ArgumentNullException` naming the parameter, before anything subscribes,
+whatever the Kotlin listener type's own nullability; a Kotlin subscription never has a way to mean
+"subscribe to nothing", so there is no null spelling to honour. Calling `AddXxx` on an already
+disposed receiver throws `ObjectDisposedException` instead (the null check runs first, so a null
+listener on a disposed receiver still names the argument):
+
+```C#
+var ex = Assert.Throws<ArgumentNullException>(() => cat.AddMoodListener(null!));
+Assert.Equal("listener", ex.ParamName);
+
+cat.Dispose();
+Assert.Throws<ObjectDisposedException>(() => cat.AddMoodListener(mood => { }));
+``` `Dispose()` does not wait for an invocation already in flight on another thread: a call
 that lands after `Dispose()` is dropped silently for a `void` listener, without running your code
 or crashing. If that dropped call carried a handle-passed payload (an exported object), the payload
 handle it minted is never released, since the code that would have read and disposed it never
@@ -295,8 +322,9 @@ source.Trigger();
 
 An interface used only as an `add`/`remove`-paired subscription parameter binds against the
 generated `IFoo` interface, one function pointer per method, and returns `IDisposable` the same way
-a stored callback does. The generated interface extends `IDisposable`, so every implementation
-needs a `Dispose()` even when it does nothing.
+a stored callback does, including the same `null`/disposed-receiver behavior above. The generated
+interface extends `IDisposable`, so every implementation needs a `Dispose()` even when it does
+nothing.
 
 Every listener member's parameters must be a non-null primitive other than `Char`, a `String`, an
 enum, or an exported class/interface, and every member must return `Unit`. A member outside that

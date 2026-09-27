@@ -54,6 +54,17 @@ Accepted
 > See [Lambdas and callbacks: C# implementing a Kotlin interface as a
 > parameter](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/topics/lambdas-and-callbacks.md#c-implementing-a-kotlin-interface-as-a-parameter).
 
+> **Amended (2026-09-28): a null listener is rejected unconditionally, ahead of the disposed
+> check.** `AddX(IFoo listener)` had no null guard: a null listener registered successfully (the
+> Kotlin bridge object closes over the C# function pointers regardless), and the failure surfaced
+> later as a `NullReferenceException` at whatever call next fired the listener. `AddX` now starts
+> with `ArgumentNullException.ThrowIfNull(listener)`, before the existing `_handle == IntPtr.Zero`
+> disposed check — argument validation before receiver state, so a null listener on a disposed
+> receiver still names the argument. The guard is unconditional regardless of the Kotlin interface
+> parameter's own nullability, for the same reason ADR-037's stored-callback pair is: the Kotlin
+> export never forwards the C# argument through as null. See [Lambdas and
+> callbacks](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/topics/lambdas-and-callbacks.md#c-implementing-a-kotlin-interface-as-a-parameter).
+
 ## Context
 
 ADR-036 introduced reverse interop for single-lambda parameters (`(T) -> R`) and explicitly deferred

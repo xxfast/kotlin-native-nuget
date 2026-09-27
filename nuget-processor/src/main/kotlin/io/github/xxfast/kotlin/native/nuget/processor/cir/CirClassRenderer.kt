@@ -824,6 +824,15 @@ private fun StringBuilder.renderStoredCallbackMethod(method: CirStoredCallbackMe
   appendLine()
   appendLine("        public IDisposable ${method.csMethodName}(${method.csParamType} listener)")
   appendLine("        {")
+  // Unconditional, whatever the Kotlin nullability: the pair never forwards the C# argument (the
+  // export builds its own non-null bridge), so a null here would subscribe a live listener that
+  // throws on the first emission. Argument validation precedes receiver state, and both precede
+  // `RegisterCtx`, so a rejected call mints no ctx key and no Kotlin handle.
+  appendLine("            ArgumentNullException.ThrowIfNull(listener);")
+  appendLine(
+    "            if (_handle == IntPtr.Zero) " +
+        "throw new ObjectDisposedException(nameof(${method.className}));"
+  )
   appendLine("            ${method.delegateName} nativeCallback = ${method.delegateParamList} => { ${method.nativeCallbackBody} };")
   // ADR-161 part C: the ctx is a never-reused table key, not a GCHandle. A Kotlin emission that
   // lands after `Dispose()` removed the key is a lookup miss the thunk drops, where a freed
@@ -877,6 +886,8 @@ private fun StringBuilder.renderInterfaceBridgeMethod(method: CirInterfaceBridge
   // Public IDisposable method
   appendLine("        public IDisposable ${method.csMethodName}(${method.interfaceCsName} listener)")
   appendLine("        {")
+  // Same guard as the lambda pair, ahead of the disposed check: the argument is named first.
+  appendLine("            ArgumentNullException.ThrowIfNull(listener);")
   appendLine(
     "            if (_handle == IntPtr.Zero) throw new ObjectDisposedException(nameof(${method.className}));"
   )
@@ -923,13 +934,11 @@ private fun StringBuilder.renderCallbackMethod(method: CirCallbackMethod) {
   appendLine()
   appendLine("        public ${method.csReturnType} ${method.csMethodName}(${method.csParamType} ${method.lambdaParamName})")
   appendLine("        {")
-  // Boundary nullability part A2: ahead of `GCHandle.Alloc`, which accepts null perfectly happily
-  // and defers the failure to a thunk that dereferences `Target` inside `[UnmanagedCallersOnly]`.
-  if (method.rejectsNullDelegate) {
-    appendLine(
-      "            ArgumentNullException.ThrowIfNull(${method.lambdaParamName});",
-    )
-  }
+  // Boundary nullability part A2, now unconditional: ahead of `RegisterCtx`, which accepts null
+  // happily and defers the failure to the managed callback body, where the null delegate is
+  // invoked and the resulting `NullReferenceException` crosses back as a Kotlin error that never
+  // names the argument. Kotlin nullability does not matter: C# has no "no listener" spelling here.
+  appendLine("            ArgumentNullException.ThrowIfNull(${method.lambdaParamName});")
   appendLine("            ${method.delegateName} nativeCallback = ${method.delegateParamList} =>")
   appendLine("            {")
   appendLine(method.callbackBody)

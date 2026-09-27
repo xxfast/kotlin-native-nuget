@@ -1142,6 +1142,7 @@ internal fun translateClass(
         removeMethod,
         libraryName,
         prefix,
+        name,
         exportedTypes,
         tracker,
         context,
@@ -2480,7 +2481,8 @@ internal fun translateSealedClass(
       val storedCallbackMembers: List<CirMember> =
         subclass.forwardArmStoredCallbackPairs(classifier).mapNotNull { (addMethod, removeMethod) ->
           translateStoredCallbackMethod(
-            addMethod, removeMethod, libraryName, subPrefix, exportedTypes, tracker, context,
+            addMethod, removeMethod, libraryName, subPrefix, subName, exportedTypes, tracker,
+            context,
           )
         }
 
@@ -4104,10 +4106,6 @@ private fun translateCallbackMethod(
     csParamType = csParamType,
     callbackBody = callbackBody,
     wrapperBody = wrapperBody,
-    // Boundary nullability part A2: the UNEXPANDED type, because `expandAliases()` drops use-site
-    // nullability -- a `typealias Tick = (Int) -> Unit` parameter spelled `Tick?` would otherwise
-    // read as non-null and lose its guard.
-    rejectsNullDelegate = lambdaParam.type.resolve().isMarkedNullable,
   )
 }
 
@@ -4125,6 +4123,7 @@ private fun translateStoredCallbackMethod(
   removeMethod: KSFunctionDeclaration,
   libraryName: String,
   classPrefix: String,
+  className: String,
   exportedTypes: Set<String>,
   tracker: CollectionHelperTracker,
   context: NugetContext,
@@ -4214,6 +4213,7 @@ private fun translateStoredCallbackMethod(
     delegateParamList = delegateParamList,
     csParamType = csParamType,
     nativeCallbackBody = nativeCallbackBody,
+    className = className,
   )
 }
 
