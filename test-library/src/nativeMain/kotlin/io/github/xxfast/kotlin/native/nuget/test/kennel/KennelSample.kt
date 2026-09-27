@@ -304,11 +304,16 @@ suspend fun pounceRepeatedly(times: Int): Int = Kennel().use { kennel ->
 // plus whether the iterator's `finally` ran, tells those three apart.
 
 /**
- * A full second, in 10ms steps, against a 300ms uninterruptible C# step: disposal is
+ * Up to five seconds, in 10ms steps, against a 300ms uninterruptible C# step: disposal is
  * fire-and-forget (ADR-156 open question 2), so cleanup is polled rather than assumed.
+ *
+ * The ceiling is deliberately long. Each cancelled round's `finally` lands only after the C#
+ * `Dawdle` finishes plus thread-pool hops for the completion and the dispose, and on a slow CI
+ * runner a one-second ceiling returned a partial count (`BarksCancelledRepeatedlyAsync(5)` read 4).
+ * The poll returns as soon as [predicate] holds, so a green run pays nothing for the headroom.
  */
 private suspend fun pollFor(predicate: () -> Boolean): Boolean {
-  repeat(100) {
+  repeat(500) {
     if (predicate()) return true
     delay(10.milliseconds)
   }
