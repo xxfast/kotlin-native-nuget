@@ -279,6 +279,11 @@ companion of an `expect class` is a nested declaration and is not keyed in `expe
 **Verified in source**: the map is built from file-level declarations only; an extension shares the
 top-level key space but adds receiver matching on top of the uniqueness guard).
 
+**Superseded (2026-09-27).** ADR-074's 2026-09-27 amendment adds the member, companion and
+extension lookups, using the signature match rule `ExpectIndex` already applied to top-level
+overloads (ADR-096's own 2026-09-07 fix), so the unverified match-rule reason no longer holds; a
+companion is reached through its `expect` parent's declarations rather than by key.
+
 `ForwardCallablePlanner` already takes `expectsByName` (ADR-091,
 `ForwardCallablePlanner.kt:358`), so no new wiring.
 
@@ -460,4 +465,6 @@ caller for defaults, and only on the top-level route ("Defaults source" above, u
 omitting overload — pinned by the Tier 1 cell `an expect extension's default parameter does not add
 an omitting overload`. Wiring the index into extension defaults is still a deliberate v1 boundary,
 now for a narrower reason than before: not because the receiver can't be matched (it can, as of
-this amendment), but because no route has been written to consult it for defaults.
+this amendment), but because no route has been written to consult it for defaults. Superseded
+2026-09-27 by ADR-074's amendment of that date: the extension route now reads the `expect`'s
+defaults, and the cell pins the widened signature instead.

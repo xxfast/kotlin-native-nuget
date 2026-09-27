@@ -59,6 +59,42 @@ internal class ExpectIndex(declarations: List<KSDeclaration> = emptyList()) {
   }
 
   /**
+   * ADR-074 amendment (2026-09-27): the `expect` half of [actual], top-level or member alike.
+   *
+   * A top-level function, extensions included, resolves through [functionOrNull]. A member of an
+   * `actual` class is not itself indexed (the index holds top-level declarations only), so it is
+   * found by walking the `expect` owner's own declarations and matching by signature, the same
+   * rule [functionOrNull] applies. A member of a class that is not `actual` (a sealed arm declared
+   * on the `actual` side, an ordinary class) resolves to `null`.
+   */
+  fun expectFunctionOrNull(actual: KSFunctionDeclaration): KSFunctionDeclaration? {
+    val parent: KSClassDeclaration = actual.parentDeclaration as? KSClassDeclaration
+      ?: return functionOrNull(actual)
+    val expectOwner: KSClassDeclaration = expectClassOrNull(parent) ?: return null
+    val name: String = actual.simpleName.asString()
+    return expectOwner.declarations
+      .filterIsInstance<KSFunctionDeclaration>()
+      .filter { it.simpleName.asString() == name }
+      .singleOrNull { it.matches(actual) }
+  }
+
+  /**
+   * The `expect` half of the `actual` class [actual]. A top-level one is indexed by qualified name;
+   * a nested one (an `actual companion object`) is reached through its `expect` parent's own
+   * declarations by simple name, since the index keys top-level declarations only.
+   */
+  private fun expectClassOrNull(actual: KSClassDeclaration): KSClassDeclaration? {
+    if (!actual.isActual) return null
+    val parent: KSClassDeclaration = actual.parentDeclaration as? KSClassDeclaration
+      ?: return classOrNull(actual.qualifiedName?.asString())
+    val name: String = actual.simpleName.asString()
+    return expectClassOrNull(parent)
+      ?.declarations
+      ?.filterIsInstance<KSClassDeclaration>()
+      ?.singleOrNull { it.simpleName.asString() == name }
+  }
+
+  /**
    * ADR-074 Decision 3: the file the `expect` half of [declaration] was declared in, so a top-level
    * `actual` takes its C# static class name from the shared `expect` file instead of its own
    * per-target one. Functions resolve by signature, so two `expect` overloads declared in different
@@ -93,24 +129,17 @@ internal class ExpectIndex(declarations: List<KSDeclaration> = emptyList()) {
     // finds nothing.
     val declarationOrOwnerIsActual: Boolean = declaration.isActual || parent?.isActual == true
     if (!declarationOrOwnerIsActual) return null
+    if (declaration is KSFunctionDeclaration) return expectFunctionOrNull(declaration)?.docString
     if (parent == null) {
-      val expect: KSDeclaration? =
-        if (declaration is KSFunctionDeclaration) functionOrNull(declaration)
-        else byName[declaration.qualifiedName?.asString()].orEmpty().firstOrNull()
-      return expect?.docString
+      return byName[declaration.qualifiedName?.asString()].orEmpty().firstOrNull()?.docString
     }
     val expectClass: KSClassDeclaration = classOrNull(parent.qualifiedName?.asString())
       ?: return null
     val name: String = declaration.simpleName.asString()
-    val members: List<KSDeclaration> =
-      expectClass.declarations.filter { it.simpleName.asString() == name }.toList()
-    val member: KSDeclaration? =
-      if (declaration is KSFunctionDeclaration) {
-        members.filterIsInstance<KSFunctionDeclaration>().singleOrNull { it.matches(declaration) }
-      } else {
-        members.singleOrNull()
-      }
-    return member?.docString
+    return expectClass.declarations
+      .filter { it.simpleName.asString() == name }
+      .singleOrNull()
+      ?.docString
   }
 
   private fun KSFunctionDeclaration.matches(actual: KSFunctionDeclaration): Boolean {
