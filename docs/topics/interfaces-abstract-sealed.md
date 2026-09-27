@@ -255,7 +255,9 @@ public abstract class Animal : IPet, IDisposable, INugetHandle
 ```
 
 `Cat : Animal` only declares what it overrides (`Speak()`, `Dispose()`); it never redeclares
-`_handle`.
+`_handle`. A hand-written C# subclass compiles too, since the generated `Interop.cs` ships as
+`<Compile Include>`d source and lands in the same assembly; its constructor chains
+`: base(IntPtr.Zero, out _)` instead of calling the base's public constructor.
 
 An `open val`/`open var`/`open fun` the base declares itself renders `public virtual`, so a
 subclass `override` of it compiles; a member that stays the Kotlin default (final) carries no
@@ -399,7 +401,7 @@ sealed class Nap {
 ```
 
 ```C#
-public Deep(int minutes) : base(IntPtr.Zero)
+public Deep(int minutes) : base(IntPtr.Zero, out _)
 {
     IntPtr handle = Native_Create(minutes, out IntPtr error);
     // ...
@@ -725,11 +727,10 @@ A sealed base, a sealed arm, and any `interface` owner can nest their own plain
 - An eligible sealed interface arm's own extra interfaces (`class Odd : Kind, CharSequence`) are
   dropped silently from the generated class.
 - An `object` arm, or a `class`-kind arm whose every constructor is refused, has only the
-  `internal` handle constructor; an `int`-convertible literal implicitly converts to `IntPtr`
-  (`nint` on .NET 7+) there, so `new Base.Arm(9)` compiles and access-violates at runtime instead
-  of failing to build. A `class`-kind arm with bridgeable constructor parameters exports a real
-  public constructor instead; see
-  [Sealed classes and interfaces](#sealed-classes-and-interfaces).
+  `internal` handle constructor, so `new Base.Arm(9)` fails to compile rather than binding it;
+  obtain the arm from a factory or from the base's `FromHandle` discriminator instead. A
+  `class`-kind arm with bridgeable constructor parameters exports a real public constructor
+  instead; see [Sealed classes and interfaces](#sealed-classes-and-interfaces).
 - `interface Derived : Base` does not carry `Base`'s members onto `IDerived`; a `var` interface
   property always renders `{ get; }` only on the generated interface, even when an implementing
   class's own property has a setter.

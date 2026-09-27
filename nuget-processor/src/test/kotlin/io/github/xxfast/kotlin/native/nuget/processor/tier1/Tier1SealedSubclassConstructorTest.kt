@@ -61,11 +61,11 @@ class Tier1SealedSubclassConstructorTest {
 
     // Chained through the inherited handle, the route `HighPerch : Roost.Perch` already uses: the
     // base owns `internal IntPtr _handle`, so the arm sets it after the native call.
-    assertContains(cs, "public Deep(int minutes) : base(IntPtr.Zero)")
+    assertContains(cs, "public Deep(int minutes) : base(IntPtr.Zero, out _)")
     assertContains(cs, "IntPtr handle = Native_Create(minutes, out IntPtr error);")
     assertContains(cs, "EntryPoint = \"library_armctor__nap_deep_create\"")
     // The handle constructor stays, and stays internal: a consumer has no legitimate handle.
-    assertContains(cs, "internal Deep(IntPtr handle) : base(handle)")
+    assertContains(cs, "internal Deep(IntPtr handle, out NugetHandleTag tag) : base(handle, out tag)")
   }
 
   @Test
@@ -90,7 +90,7 @@ class Tier1SealedSubclassConstructorTest {
 
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
 
-    assertContains(result.generatedCSharp, "public Label(string text) : base(IntPtr.Zero)")
+    assertContains(result.generatedCSharp, "public Label(string text) : base(IntPtr.Zero, out _)")
     assertContains(result.generated, "@CName(\"library_armctor__nap_label_create\")")
   }
 
@@ -101,7 +101,7 @@ class Tier1SealedSubclassConstructorTest {
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
     val cs: String = result.generatedCSharp
 
-    assertContains(cs, "internal Zoomies(IntPtr handle) : base(handle)")
+    assertContains(cs, "internal Zoomies(IntPtr handle, out NugetHandleTag tag) : base(handle, out tag)")
     assertFalse(
       cs.contains("public Zoomies("),
       "an object arm has no public Kotlin constructor to export; generated=$cs",

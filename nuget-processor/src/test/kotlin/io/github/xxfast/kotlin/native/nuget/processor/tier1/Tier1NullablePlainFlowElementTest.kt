@@ -102,7 +102,7 @@ class Tier1NullablePlainFlowElementTest {
     val csharp: String = result.generatedCSharp
     val nullableRead =
       "read: static h => h == IntPtr.Zero ? null : (NugetMarshal.TryResolveCSharp(h, out " +
-          "global::Interop.IPet csharpOriginal) ? csharpOriginal : new global::Interop.Pet(h))"
+          "global::Interop.IPet csharpOriginal) ? csharpOriginal : new global::Interop.Pet(h, out _))"
 
     assertContains(
       csharp,

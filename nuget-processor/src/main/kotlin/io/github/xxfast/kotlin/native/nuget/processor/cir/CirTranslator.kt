@@ -908,9 +908,10 @@ private fun List<CirNamespace>.withoutEmptyStaticClasses(): List<CirNamespace> =
 
 /**
  * ADR-094: one `NugetMarshal.Factories` line per wrapper that an erased generic path could be asked
- * to materialise. A plain class only qualifies when it actually carries the `internal X(IntPtr)`
- * constructor the lambda calls, and an abstract one is not constructible at all (neither was it
- * under `Activator`). Sealed subclasses register under their nested `Base.Sub` name.
+ * to materialise. A plain class only qualifies when it actually carries the
+ * `internal X(IntPtr, out NugetHandleTag)` constructor the lambda calls, and an abstract one is
+ * not constructible at all (neither was it under `Activator`). Sealed subclasses register under
+ * their nested `Base.Sub` name.
  *
  * Issue #40: the sealed BASE registers too, via [CirFactoryEntry.viaFromHandle]. It is not
  * constructible, but it is materialisable -- its generated `FromHandle(IntPtr)` reads the Kotlin
@@ -1098,7 +1099,10 @@ internal fun translateExtensionFunction(
         appendLine("            {")
         appendLine("                throw NugetErrorNative.BuildException(error);")
         appendLine("            }")
-        append("            return nativeResult == IntPtr.Zero ? null : new $kotlinReturnType(nativeResult);")
+        append(
+          "            return nativeResult == IntPtr.Zero ? null : " +
+              "new $kotlinReturnType(nativeResult, out _);"
+        )
       }
     }
 
@@ -1113,7 +1117,7 @@ internal fun translateExtensionFunction(
         appendLine("            {")
         appendLine("                throw NugetErrorNative.BuildException(error);")
         appendLine("            }")
-        append("            return new $kotlinReturnType(nativeResult);")
+        append("            return new $kotlinReturnType(nativeResult, out _);")
       }
     }
 

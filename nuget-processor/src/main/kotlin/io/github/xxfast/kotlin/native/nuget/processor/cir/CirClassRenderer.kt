@@ -216,12 +216,16 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
 
   if (cls.hasInternalHandleConstructor) {
     if (cls.superClass != null) {
-      appendLine("        internal ${cls.name}(IntPtr handle) : base(handle)")
+      appendLine(
+        "        internal ${cls.name}(IntPtr handle, out NugetHandleTag tag) : " +
+            "base(handle, out tag)"
+      )
       appendLine("        {")
       appendLine("        }")
     } else {
-      appendLine("        internal ${cls.name}(IntPtr handle)")
+      appendLine("        internal ${cls.name}(IntPtr handle, out NugetHandleTag tag)")
       appendLine("        {")
+      appendLine("            tag = default;")
       appendLine("            _handle = handle;")
       appendLine("        }")
     }
@@ -363,8 +367,8 @@ private fun StringBuilder.renderClassConstructor(cls: CirClass, ctor: CirConstru
  * ADR-148: the extern plus the constructor, addressed by the strings rather than by a [CirClass],
  * so an ADR-009 sealed arm renders its public constructors through the same two lines an ordinary
  * class does. An arm always passes `hasSuperClass = true`: its handle lives on the generated
- * sealed base, which is exactly why `: base(IntPtr.Zero)` then `_handle = handle;` is the shape it
- * needs.
+ * sealed base, which is exactly why `: base(IntPtr.Zero, out _)` then `_handle = handle;` is the
+ * shape it needs.
  */
 internal fun StringBuilder.renderConstructorMember(
   libraryName: String,
@@ -400,7 +404,7 @@ internal fun StringBuilder.renderConstructor(
   val nativeCallArgs: String = if (paramNames.isEmpty()) "out IntPtr error" else "$paramNames, out IntPtr error"
 
   if (hasSuperClass) {
-    appendLine("        public $className($paramStr) : base(IntPtr.Zero)")
+    appendLine("        public $className($paramStr) : base(IntPtr.Zero, out _)")
   } else {
     appendLine("        public $className($paramStr)")
   }
@@ -422,13 +426,6 @@ internal fun StringBuilder.renderConstructor(
     appendLine("        }")
   }
 
-  appendLine()
-
-  val exact: String = ctor.handleDisambiguation ?: return
-  val first: CirParameter = ctor.parameters.first()
-  appendLine("        public $className($exact ${first.name}) : this((${first.type})${first.name})")
-  appendLine("        {")
-  appendLine("        }")
   appendLine()
 }
 

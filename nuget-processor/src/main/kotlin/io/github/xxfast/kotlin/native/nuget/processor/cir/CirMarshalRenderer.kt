@@ -115,7 +115,7 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
     // the sealed renderer already emits for it rather than through `new`.
     val construct: String =
       if (entry.viaFromHandle) "global::${entry.qualifiedTypeName}.FromHandle(handle)"
-      else "new global::${entry.qualifiedTypeName}(handle)"
+      else "new global::${entry.qualifiedTypeName}(handle, out _)"
     appendLine("            [typeof(global::${entry.qualifiedTypeName})] = static handle => $construct,")
   }
   appendLine("        };")

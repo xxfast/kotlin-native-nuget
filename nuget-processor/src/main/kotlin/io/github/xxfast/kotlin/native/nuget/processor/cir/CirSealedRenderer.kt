@@ -20,8 +20,9 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   appendLine()
   appendLine("        IntPtr INugetHandle.Handle => _handle;")
   appendLine()
-  appendLine("        internal ${sealed.name}(IntPtr handle)")
+  appendLine("        internal ${sealed.name}(IntPtr handle, out NugetHandleTag tag)")
   appendLine("        {")
+  appendLine("            tag = default;")
   appendLine("            _handle = handle;")
   appendLine("        }")
   appendLine()
@@ -65,7 +66,7 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   // Every subclass, nested or sibling, in the Kotlin discriminator's own order. A sibling resolves
   // bare from inside the base because it lives in the same namespace.
   for ((index, subclass) in sealed.subclasses.withIndex()) {
-    appendLine("                $index => new ${subclass.name}(handle),")
+    appendLine("                $index => new ${subclass.name}(handle, out _),")
   }
 
   appendLine("                _ => throw new InvalidOperationException(\"Unknown sealed class type\")")
@@ -112,7 +113,10 @@ private fun sealedSubclassBlock(
     append(buildString { renderScopeHandleField() }.indentNestedBody())
     appendLine()
   }
-  appendLine("            internal ${subclass.name}(IntPtr handle) : base(handle)")
+  appendLine(
+    "            internal ${subclass.name}(IntPtr handle, out NugetHandleTag tag) : " +
+        "base(handle, out tag)"
+  )
   appendLine("            {")
   appendLine("            }")
   appendLine()

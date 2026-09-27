@@ -43,7 +43,7 @@ class Tier1SealedSubclassConstructorSealedParameterTest {
     // C#: the mapped base type at the arm's constructor, not an IntPtr and not a skip.
     assertContains(
       result.generatedCSharp,
-      "public Framed(global::Interop.Shape inner, string label) : base(IntPtr.Zero)",
+      "public Framed(global::Interop.Shape inner, string label) : base(IntPtr.Zero, out _)",
     )
     // Kotlin: the same ADR-105 read-back an ordinary class's constructor gets.
     assertContains(result.generated, "inner.asStableRef<tier1.armctorsealed.Shape>().get()")
@@ -56,6 +56,6 @@ class Tier1SealedSubclassConstructorSealedParameterTest {
 
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
 
-    assertContains(result.generatedCSharp, "public Circle(int radius) : base(IntPtr.Zero)")
+    assertContains(result.generatedCSharp, "public Circle(int radius) : base(IntPtr.Zero, out _)")
   }
 }

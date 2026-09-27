@@ -393,17 +393,18 @@ internal object ForwardCirPropertyProjection {
 
   /**
    * ADR-105 (issue #54): the C# expression that turns a handle back into its declared type. An
-   * ordinary handle-backed class takes its `internal T(IntPtr)` constructor; an ADR-009 sealed
-   * *base* is `abstract`, so `new` is CS0144 and the reconstruction goes through the generated
-   * `internal static T FromHandle(IntPtr)` discriminator instead — the same spelling a top-level
-   * sealed *return* already renders, so a consumer sees one idiom either way.
+   * ordinary handle-backed class takes its `internal T(IntPtr, out NugetHandleTag)` constructor;
+   * an ADR-009 sealed *base* is `abstract`, so `new` is CS0144 and the reconstruction goes
+   * through the generated `internal static T FromHandle(IntPtr)` discriminator instead — the
+   * same spelling a top-level sealed *return* already renders, so a consumer sees one idiom
+   * either way.
    */
   private fun BridgeType.ObjectHandle.handleReconstruction(
     wireValue: String = "nativeResult",
   ): String = if (viaDiscriminator) {
     "${csharpType()}.FromHandle($wireValue)"
   } else {
-    "new ${csharpType()}($wireValue)"
+    "new ${csharpType()}($wireValue, out _)"
   }
 
   /**

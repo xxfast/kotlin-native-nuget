@@ -77,7 +77,14 @@ class CirOrdinaryRendererTest {
     assertContains(rendered, "public Patient(string name)")
     assertContains(rendered, "IntPtr handle = Native_Create(name, out IntPtr error);")
     assertContains(rendered, "throw NugetErrorNative.BuildException(error);")
-    assertContains(rendered, "internal Patient(IntPtr handle)")
+    // ROADMAP line 26: a trailing `out` tag no ordinary call binds, so `new Patient(5)` can never
+    // reach the handle constructor; a root constructor assigns it, a derived one forwards it.
+    assertContains(
+      rendered,
+      "internal Patient(IntPtr handle, out NugetHandleTag tag)\n        {\n            tag = default;\n            _handle = handle;\n        }",
+    )
+    assertFalse(Regex("""internal Patient\(IntPtr handle\)\r?\n""").containsMatchIn(rendered))
+    assertContains(rendered, "internal readonly struct NugetHandleTag")
     assertContains(
       rendered,
       "private static extern int Native_Get_age(IntPtr handle, out IntPtr error);",
@@ -218,7 +225,7 @@ class CirOrdinaryRendererTest {
             {
                 throw NugetErrorNative.BuildException(error);
             }
-            return new Point(handle);
+            return new Point(handle, out _);
       """.trimIndent().prependIndent("    "),
       isSyncErrorCheckEnabled = true,
       hasCustomBody = true,
@@ -244,7 +251,7 @@ class CirOrdinaryRendererTest {
     val rendered: String = render(cls)
 
     assertContains(rendered, "public Point Copy(int x, int y)")
-    assertContains(rendered, "return new Point(handle);")
+    assertContains(rendered, "return new Point(handle, out _);")
     // Planned copy still gets a DllImport via methodNativeImport; legacy Native_Copy block
     // from the constructor-parameter fallback must not appear as a separate hand-rolled method
     // template beyond that import.
@@ -271,8 +278,11 @@ class CirOrdinaryRendererTest {
 
     assertContains(rendered, "public class Inpatient : Patient")
     assertFalse(rendered.contains("internal IntPtr _handle;"))
-    assertContains(rendered, "public Inpatient(string name) : base(IntPtr.Zero)")
-    assertContains(rendered, "internal Inpatient(IntPtr handle) : base(handle)")
+    assertContains(rendered, "public Inpatient(string name) : base(IntPtr.Zero, out _)")
+    assertContains(
+      rendered,
+      "internal Inpatient(IntPtr handle, out NugetHandleTag tag) : base(handle, out tag)",
+    )
     assertContains(rendered, "public override void Dispose()")
   }
 
@@ -376,7 +386,7 @@ class CirOrdinaryRendererTest {
             {
                 throw NugetErrorNative.BuildException(error);
             }
-            return new Factory(handle);
+            return new Factory(handle, out _);
           """.trimIndent().prependIndent("    "),
           isStatic = true,
           isSyncErrorCheckEnabled = true,
@@ -569,7 +579,7 @@ class CirOrdinaryRendererTest {
     assertContains(rendered, "public class HandleBox")
     assertContains(rendered, "public HandleBox(IntPtr raw)")
     assertContains(rendered, "_handle = raw;")
-    assertFalse(rendered.contains("internal HandleBox(IntPtr handle)"))
+    assertFalse(rendered.contains("internal HandleBox(IntPtr handle, out NugetHandleTag tag)"))
   }
 
   /**
@@ -615,7 +625,9 @@ class CirOrdinaryRendererTest {
 
     val rendered: String = render(cls)
 
-    assertFalse(rendered.contains("///"), "expected no doc comment; got: $rendered")
+    // The file preamble documents `NugetHandleTag`; the class itself must carry none.
+    val classSection: String = rendered.substringAfter("namespace Sample")
+    assertFalse(classSection.contains("///"), "expected no doc comment; got: $rendered")
     assertEquals(rendered, render(cls.copy(remarks = emptyList())))
   }
 

@@ -60,7 +60,7 @@ class Tier1NestedSealedSubclassPositionTest {
     // Property, return type + its construction site, and parameter.
     assertContains(cs, "public $nested Unit")
     assertContains(cs, "public $nested Circle(double radius)")
-    assertContains(cs, "new $nested(nativeResult)")
+    assertContains(cs, "new $nested(nativeResult, out _)")
     assertContains(cs, "RadiusOf($nested circle)")
 
     assertFalse(

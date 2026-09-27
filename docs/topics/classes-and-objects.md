@@ -263,10 +263,7 @@ public string Describe(string name, Optional<string?> owner = default)
 ```
 
 A signature that would otherwise collide with another constructor still fails generation with
-`ERROR_CSHARP_SIGNATURE_COLLISION`, naming the defaulted parameter as the cause. When the first
-widened parameter is an integer type, an internal handle constructor `Settings(IntPtr)` would
-make `new Settings(3)` ambiguous (CS0121); the generator adds a delegating `Settings(int)`
-overload in that case so the plain integer call still resolves.
+`ERROR_CSHARP_SIGNATURE_COLLISION`, naming the defaulted parameter as the cause.
 
 ## No public constructor
 
@@ -294,7 +291,7 @@ fun quietMishap(): Issue56Failure = Issue56Failure(/* ... */)
 /// </remarks>
 public class Issue56Failure : IDisposable, INugetHandle
 {
-    internal Issue56Failure(IntPtr handle) { _handle = handle; }
+    internal Issue56Failure(IntPtr handle, out NugetHandleTag tag) { tag = default; _handle = handle; }
 }
 
 var mishap = Issue56Sample.QuietMishap(); // the only way to obtain one
@@ -428,12 +425,12 @@ The owner-name collision above is checked against the generated C# name, not the
 name is legal (`interface Cage { class Cage }` declares `ICage.Cage`, two different C# names, not
 a collision).
 
-A sealed arm's `internal Arm(IntPtr handle)` constructor still exists beside any exported public
-one. `Purr.On`'s own `level: Int` constructor parameter is bridgeable, so `On` also exports a public
-constructor, and `new Purr.On(9)` resolves to it rather than to the internal one; see
+A sealed arm's `internal Arm(IntPtr handle, out NugetHandleTag tag)` constructor still exists
+beside any exported public one; the trailing `out` parameter means it is never a candidate for an
+ordinary call. `Purr.On`'s own `level: Int` constructor parameter is bridgeable, so `On` also
+exports a public constructor, and `new Purr.On(9)` always resolves to it; see
 [Interfaces, abstract classes, and sealed classes: Sealed classes and
-interfaces](interfaces-abstract-sealed.md#sealed-classes-and-interfaces) for the general rule and
-its refused-arm exception.
+interfaces](interfaces-abstract-sealed.md#sealed-classes-and-interfaces) for the general rule.
 
 ## Limitations
 

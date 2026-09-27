@@ -92,7 +92,7 @@ class Tier1NoPublicConstructorWarningTest {
       "expected the message to point at Kotlin factories; got: ${dial.single()}",
     )
     assertTrue(
-      result.generatedCSharp.contains("internal Drawing(IntPtr handle)"),
+      result.generatedCSharp.contains("internal Drawing(IntPtr handle, out NugetHandleTag tag)"),
       "expected Drawing to keep its handle constructor; generatedCSharp=" +
           "${result.generatedCSharp.lines().filter { it.contains("Drawing") }}",
     )
@@ -114,7 +114,7 @@ class Tier1NoPublicConstructorWarningTest {
       "expected exactly one Drawing warning; got: ${warnings(result)}",
     )
     assertTrue(
-      result.generatedCSharp.contains("internal Drawing(IntPtr handle)"),
+      result.generatedCSharp.contains("internal Drawing(IntPtr handle, out NugetHandleTag tag)"),
       "expected Drawing to keep its handle constructor; generatedCSharp=" +
           "${result.generatedCSharp.lines().filter { it.contains("Drawing") }}",
     )

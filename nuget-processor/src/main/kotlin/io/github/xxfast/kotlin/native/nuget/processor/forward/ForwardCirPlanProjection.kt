@@ -224,30 +224,8 @@ internal object ForwardCirPlanProjection {
       nativeSuffix = nativeSuffix,
       nativeParameters = plan.nativeInCirParameters(nativeCall.parameters),
       doc = plan.publicSignature.cirDoc(),
-      handleDisambiguation = if (receiver == null) plan.handleDisambiguation() else null,
     )
   }
-
-  /**
-   * ADR-164: the exact overload a one-argument call needs when the first public parameter is a
-   * widened integral type and nothing after it is required, since `int` converts implicitly to
-   * both `int?` and the internal handle constructor's `nint`, and C# ranks neither higher.
-   */
-  private fun ForwardCallablePlan.handleDisambiguation(): String? {
-    val first: ForwardPublicParameter = publicSignature.parameters.firstOrNull() ?: return null
-    if (first.default?.encoding != ForwardDefaultEncoding.NULLABLE) return null
-    val inner: BridgeType = first.type.unwrapNullable()
-    val integral: Boolean = inner == BridgeType.Char ||
-        (inner is BridgeType.Primitive && inner.kind !in NON_INTEGRAL_KINDS)
-    if (!integral) return null
-    if (publicSignature.parameters.drop(1).any { parameter -> parameter.default?.omittable != true }) {
-      return null
-    }
-    return inner.csharpType()
-  }
-
-  private val NON_INTEGRAL_KINDS: Set<PrimitiveKind> =
-    setOf(PrimitiveKind.BOOLEAN, PrimitiveKind.FLOAT, PrimitiveKind.DOUBLE)
 
   fun static(plan: ForwardCallablePlan, libraryName: String): List<CirMember> {
     require(
@@ -1599,18 +1577,18 @@ internal object ForwardCirPlanProjection {
 
   /**
    * ADR-105 (issue #54): the C# expression that turns a returned handle back into its declared
-   * type. An ordinary handle-backed class takes its `internal T(IntPtr)` constructor; an ADR-009
-   * sealed *base* is `abstract`, so `new` is CS0144 and the reconstruction goes through the
-   * generated `internal static T FromHandle(IntPtr)` discriminator instead. Mirrors
-   * [ForwardCirPropertyProjection]'s reconstruction of the same name, so a property getter and a
-   * method returning the same sealed base render one idiom.
+   * type. An ordinary handle-backed class takes its `internal T(IntPtr, out NugetHandleTag)`
+   * constructor; an ADR-009 sealed *base* is `abstract`, so `new` is CS0144 and the reconstruction
+   * goes through the generated `internal static T FromHandle(IntPtr)` discriminator instead.
+   * Mirrors [ForwardCirPropertyProjection]'s reconstruction of the same name, so a property
+   * getter and a method returning the same sealed base render one idiom.
    */
   private fun BridgeType.ObjectHandle.handleReconstruction(
     wireValue: String = "nativeResult",
   ): String = if (viaDiscriminator) {
     "${csharpType()}.FromHandle($wireValue)"
   } else {
-    "new ${csharpType()}($wireValue)"
+    "new ${csharpType()}($wireValue, out _)"
   }
 
   // ADR-114: the shared spelling, so the legacy Flow/suspend routes render a collection
@@ -1696,7 +1674,7 @@ internal fun interfaceReturnExpression(
   handle: String = "nativeResult",
 ): String =
   "(NugetMarshal.TryResolveCSharp($handle, out $csharpType csharpOriginal) " +
-      "? csharpOriginal : new $backingType($handle))"
+      "? csharpOriginal : new $backingType($handle, out _))"
 
 /**
  * ADR-088: resolve the fresh transfer GCHandle Kotlin returned, then free it. `Target!` is safe by

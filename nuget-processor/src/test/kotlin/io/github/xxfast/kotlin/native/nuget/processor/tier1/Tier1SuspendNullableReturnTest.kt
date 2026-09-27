@@ -81,7 +81,7 @@ class Tier1SuspendNullableReturnTest {
 
     // The object case has no `FromHandle` null guard to lean on, so the null is tested on the
     // wire pointer; the primitive case rides ADR-067's `Nullable.GetUnderlyingType` branch.
-    assertContains(csharp, "t.SetResult(resultPtr == IntPtr.Zero ? null : new Cat(resultPtr));")
+    assertContains(csharp, "t.SetResult(resultPtr == IntPtr.Zero ? null : new Cat(resultPtr, out _));")
     assertContains(csharp, "t.SetResult(NugetMarshal.FromHandle<int?>(resultPtr));")
   }
 }

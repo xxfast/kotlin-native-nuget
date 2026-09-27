@@ -118,11 +118,11 @@ class Tier1OpenSealedArmTest {
     // Widening this switch would reopen the flat-ordinal shape and is deliberately not done here.
     assertContains(
       csharp,
-      "1 => new Perch(handle),",
+      "1 => new Perch(handle, out _),",
       message = "expected the open arm to keep its direct-arm case; generatedCSharp:\n$csharp",
     )
     assertFalse(
-      "new HighPerch(handle)," in csharp,
+      "new HighPerch(handle, out _)," in csharp,
       "the sealed discriminator must stay over direct arms only; a further subclass of an open " +
           "arm materialises as the arm; generatedCSharp:\n$csharp",
     )

@@ -65,13 +65,13 @@ class Tier1ValueClassHandleAndPrimitiveTest {
     assertContains(cs, "public global::Interop.ChartRef OwnReferral()")
     assertContains(
       cs,
-      "return new global::Interop.ChartRef(new global::Interop.Patient(nativeResult));",
+      "return new global::Interop.ChartRef(new global::Interop.Patient(nativeResult, out _));",
     )
     assertContains(cs, "public global::Interop.ChartRef? BackupReferral")
     assertContains(
       cs,
       "return nativeResult == IntPtr.Zero ? null : " +
-          "new global::Interop.ChartRef(new global::Interop.Patient(nativeResult));",
+          "new global::Interop.ChartRef(new global::Interop.Patient(nativeResult, out _));",
     )
     assertContains(cs, "Native_Set_backupReferral(_handle, value?.Patient._handle ?? IntPtr.Zero, out IntPtr error)")
     // The reference-underlying struct header: `renderReferenceValueClass`' positional record, whose

@@ -60,7 +60,7 @@ class Tier1ValueClassReferenceSecondaryConstructorTest {
     // ...then delegates to the positional constructor by rebuilding the returned handle.
     assertContains(
       cs,
-      "public Wrapper(string name) : this(new global::Interop.Cat(CreateChecked_2(name)))",
+      "public Wrapper(string name) : this(new global::Interop.Cat(CreateChecked_2(name), out _))",
     )
     // The rest of the value class is unaffected: its computed property still binds.
     assertContains(cs, "public string Label =>")

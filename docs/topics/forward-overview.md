@@ -836,8 +836,9 @@ public class GroomingPlan : IDisposable, INugetHandle
 {
     internal IntPtr _handle;
 
-    internal GroomingPlan(IntPtr handle)
+    internal GroomingPlan(IntPtr handle, out NugetHandleTag tag)
     {
+        tag = default;
         _handle = handle;
     }
 ```

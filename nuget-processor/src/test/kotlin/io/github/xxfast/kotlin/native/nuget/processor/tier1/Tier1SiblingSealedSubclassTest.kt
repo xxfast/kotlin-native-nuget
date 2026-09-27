@@ -82,14 +82,14 @@ class Tier1SiblingSealedSubclassTest {
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
     val cs: String = result.generatedCSharp
 
-    assertContains(cs, "internal Label(IntPtr handle) : base(handle)")
-    assertContains(cs, "public Label(string text) : base(IntPtr.Zero)")
+    assertContains(cs, "internal Label(IntPtr handle, out NugetHandleTag tag) : base(handle, out tag)")
+    assertContains(cs, "public Label(string text) : base(IntPtr.Zero, out _)")
     assertEquals(
       1,
       Regex(Regex.escape("public Label(")).findAll(cs).count(),
       "expected exactly one public Label constructor; generated=$cs",
     )
-    assertContains(cs, "=> new Label(handle),")
+    assertContains(cs, "=> new Label(handle, out _),")
   }
 
   @Test
