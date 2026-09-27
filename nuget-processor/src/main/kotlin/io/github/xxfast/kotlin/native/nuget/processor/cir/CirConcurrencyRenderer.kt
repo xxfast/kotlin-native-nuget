@@ -281,7 +281,11 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
     isUnit -> "t.SetResult(true);"
     isStateFlowReturn -> buildString {
       appendLine("IntPtr flowHandle = resultPtr;")
-      appendLine("                    IntPtr collectScope = GetOrCreateScope();")
+      // ADR-068 (2026-09-27 amendment): a static (top-level) member has no parent scope. It passes
+      // null and `nuget_stateflow_collect` launches on the runtime's ad-hoc scope, as the
+      // top-level suspend call itself does; the enumerator's job is still the cancellation handle.
+      val collectScope: String = if (method.isStatic) "IntPtr.Zero" else "GetOrCreateScope()"
+      appendLine("                    IntPtr collectScope = $collectScope;")
       appendLine("                    t.SetResult(new ${method.asyncReturnType}(")
       appendLine("                        (flowOnNext, flowOnComplete, flowOnError, flowUserData) =>")
       appendLine("                            NugetStateFlowNative.Collect(flowHandle, collectScope, flowOnNext, flowOnComplete, flowOnError, flowUserData),")

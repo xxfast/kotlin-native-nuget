@@ -312,9 +312,8 @@ suspend fun awaitPlaymateReport(): StateFlow<Cat> {
 
 ### Deferred
 
-- **Top-level `suspend fun` returning `StateFlow<T>`** (no parent class scope). Needs a scope decision for the
-  generic `nuget_stateflow_collect` (fresh `CoroutineScope(Dispatchers.Default)`, per ADR-022's top-level suspend
-  handling). Deferred to keep v1 to class methods, mirroring how ADR-026 scoped its method form first.
+- ~~**Top-level `suspend fun` returning `StateFlow<T>`** (no parent class scope).~~ Shipped 2026-09-27; see the
+  amendment below.
 - **`suspend fun` returning `Flow<T>`** (ROADMAP line 118) — the exact twin using an `nuget_flow_collect` shared
   export without `_value`. Not folded in here to keep this ADR StateFlow-scoped, but the machinery is deliberately
   shared-generic so that item becomes a near-trivial follow-up.
@@ -345,3 +344,44 @@ suspend fun awaitPlaymateReport(): StateFlow<Cat> {
   the handle-owning C# `KotlinStateFlow<T>` compile and round-trip on the real toolchain. Strong evidence (byte
   reuse of shipped ADR-026/065 shapes) but no Kotlin/Native spike was run; confirm via the walking-skeleton
   integration test before relying on it.
+
+## Amendment (2026-09-27): a top-level `suspend fun` returning `StateFlow<T>`
+
+The Deferred bullet asked for a scope decision: a top-level function has no parent class whose
+`GetOrCreateScope()` the awaited holder's collections could launch on. Before this amendment the
+top-level route never peeled the StateFlow return into this ADR's bucket at all, so it spelled the
+awaited value `Task<StateFlow>`, an undefined C# type, rather than skipping it.
+
+**Decision: a null scope, and `nuget_stateflow_collect` launches on an ad-hoc
+`CoroutineScope(Dispatchers.Default)`.** That is the scope the top-level suspend route's own call
+already launches on (`launchForCSharp(CoroutineScope(Dispatchers.Default), ...)`), so no new
+ownership model appears. The scope was only ever a launch parent: each collection's `Job` handle is
+the cancellation handle, and the `KotlinFlowEnumerator` already cancels and frees it on
+`DisposeAsync`. The holder still owns exactly one handle, the flow's own, released on `Dispose`.
+
+- The runtime export takes `scopeHandle: COpaquePointer?` and falls back to the ad-hoc scope on null.
+  The wire is unchanged (a pointer either way), so the class route, which still passes its scope,
+  is untouched.
+- The C# completion passes `IntPtr.Zero` on a static member and `GetOrCreateScope()` on an instance
+  member (`renderAsyncMethod`).
+- The top-level translator (`translateSuspendFunction`) now recognises a `StateFlow`/`MutableStateFlow`
+  return and spells it through the same helper as the class route (`suspendStateFlowElement`), so an
+  interface element is declared with the interface and read through its backing wrapper on both.
+  The Kotlin half needed no change: the plain top-level `_async` export already mints the awaited
+  flow through `NugetHandles.retain`.
+
+Rejected: a scope owned by the returned holder (a second handle on a wrapper that owned one, and a
+new ownership rule for one route), and a lazily minted process-wide C# scope (a live handle for the
+life of the process, which the live-handle harness would read as a leak and nothing would ever
+free).
+
+Consequence: nothing cancels a top-level holder's in-flight collections except their own
+enumerator or token. Disposing the holder frees the flow handle; it does not cancel a running
+`await foreach`, the same as a top-level `suspend fun`'s own call, which only its token cancels.
+
+A nullable element (`StateFlow<T?>`) is still refused by name here, for the reason the class route
+refuses it: `nuget_stateflow_value` has no null arm.
+
+Tests: `Tier1TopLevelSuspendStateFlowTest`, `IntegrationTests/TopLevelSuspendStateFlowTests.cs`
+over `test-library`'s `CatWatch.kt`, and `LeakTests/LiveHandleTests.cs`'s
+`TopLevelSuspendStateFlow_AwaitReadCollectDispose_ReturnsToBaseline`.

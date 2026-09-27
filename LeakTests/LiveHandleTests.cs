@@ -752,6 +752,36 @@ public class LiveHandleTests
         });
     }
 
+    // Row 6g-toplevel. Row 6g's three-owner shape on a TOP-LEVEL `suspend fun` returning
+    // `StateFlow<T>` (ADR-068, 2026-09-27 amendment): the awaited flow's StableRef (owned by the
+    // holder, freed by `using`), one element handle per `.Value`, and one per collected emission.
+    // No parent scope exists, so the collection launches on the runtime's ad-hoc scope and the
+    // enumerator's own job cancel is the only thing that ends it; a collect that outlived its
+    // `await foreach`, or a scope minted per collection and never freed, shows up here.
+    //
+    // Oreo purrs and swaps his nap buddy, ten times over.
+    [Fact]
+    public async Task TopLevelSuspendStateFlow_AwaitReadCollectDispose_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using (KotlinStateFlow<int> purrs = await CatWatch.WatchPurrCountAsync())
+            {
+                int before = purrs.Value;
+                CatWatch.PurrMore(1);
+                Assert.True(purrs.Value > before);
+
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await foreach (int _ in purrs.WithCancellation(cts.Token)) break;
+            }
+
+            using KotlinStateFlow<Cat> buddies = await CatWatch.WatchNapBuddyAsync();
+            CatWatch.SwapNapBuddy("Oreo");
+            using Cat buddy = buddies.Value;
+            Assert.Equal("Oreo", buddy.Name);
+        });
+    }
+
     // Row 6h. The same minted receiver handle as Row 6b, but read through an extension PROPERTY
     // getter rather than an extension function. The getter body is the new surface: the setter
     // route already owns a handle scope, the getter body is flat, so without a `finally`-dispose

@@ -2041,26 +2041,8 @@ internal fun suspendMembers(
     val cname: String = toCName(methodName) + suffix
     val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
     val nativeStem: String = "Native_$csMethodName${suffix}Async"
-    val returnType = method.returnType?.resolve()?.expandAliases()
-    val flowElementTypeResolved: KSType? = returnType?.arguments?.firstOrNull()?.type?.resolve()
-    // v1 scope (ADR-068): nullable element/member is deferred; mirror ADR-065's plain (non-null)
-    // shape only. The `false` passed to `legacyInterfaceElementReadArgument` below is safe rather
-    // than optimistic: since 2026-09-20 `legacyReturnShape` REFUSES a nullable element on this
-    // bucket by name, so a `suspend fun (): StateFlow<T?>` never reaches this loop at all. It has
-    // to be refused, not threaded: this bucket reads through the module-wide
-    // `nuget_stateflow_value`, which boxes `value as Any` with no null arm and no `try`, so a null
-    // would throw out of a `@CName` export. The ADR-065 property/method routes thread it because
-    // they own per-member exports they can widen to `COpaquePointer?`.
-    // ADR-040 / ADR-133 amendment (2026-09-14): an interface element is DECLARED with the
-    // projected interface and READ through the backing wrapper, the same split the property
-    // `Flow`/`StateFlow` route takes. Without it this site spelled the wrapper at a declared
-    // position, which ADR-040 says no consumer ever sees, and read every `.Value` through
-    // `FromHandle<T>` (no factory for an interface: the ADR-136 resolve of a stored C#
-    // implementation never fired). A class element keeps `qualifiedElementCsType` byte for byte.
-    val flowElementInterface: BridgeType.Interface? =
-      classifier.legacyFlowElementInterface(flowElementTypeResolved)
-    val flowCsElementType: String = flowElementInterface?.csharpType
-      ?: qualifiedElementCsType(flowElementTypeResolved, context)
+    val element: SuspendStateFlowElement =
+      suspendStateFlowElement(method.returnType?.resolve(), classifier, context)
 
     // ADR-114: a collection parameter takes the public collection type with an IntPtr native
     // slot; every other parameter keeps mapParamType's shipped spelling.
@@ -2090,7 +2072,7 @@ internal fun suspendMembers(
       visibility = CirVisibility.PRIVATE,
     )
 
-    val asyncReturnType = "KotlinStateFlow<$flowCsElementType>"
+    val asyncReturnType: String = element.asyncReturnType
 
     val asyncMethod = CirMethod(
       // ADR-150: the suspend function's own KDoc, on its `Async` projection. `@return` documents
@@ -2108,14 +2090,51 @@ internal fun suspendMembers(
       asyncReturnType = asyncReturnType,
       // The `read:` the awaited `KotlinStateFlow<T>` is constructed with (ADR-123's slot,
       // ADR-136's expression). Null for a class element, which keeps the ctor's default read.
-      flowElementRead = flowElementInterface
-        ?.let { iface -> legacyInterfaceElementReadArgument(iface, false) },
+      flowElementRead = element.read,
     )
 
     listOf(nativeImport, asyncMethod)
   }
 
   return asyncMembers + suspendStateFlowMembers
+}
+
+/**
+ * ADR-068: how the awaited `KotlinStateFlow<T>` of a `suspend fun` returning `StateFlow<T>` is
+ * spelled and read. Shared by the class-method route and (2026-09-27 amendment) the top-level
+ * route, so the two cannot answer the same element differently.
+ */
+internal data class SuspendStateFlowElement(
+  /** `KotlinStateFlow<T>`, the type the `Task` yields. */
+  val asyncReturnType: String,
+  /** The `read:` the holder is constructed with (ADR-123's slot), or null for the default read. */
+  val read: String?,
+)
+
+internal fun suspendStateFlowElement(
+  returnType: KSType?,
+  classifier: ForwardBridgeTypeClassifier,
+  context: NugetContext,
+): SuspendStateFlowElement {
+  val element: KSType? = returnType?.expandAliases()?.arguments?.firstOrNull()?.type?.resolve()
+  // v1 scope (ADR-068): nullable element/member is deferred; mirror ADR-065's plain (non-null)
+  // shape only. The `false` passed to `legacyInterfaceElementReadArgument` below is safe rather
+  // than optimistic: since 2026-09-20 `legacyReturnShape` REFUSES a nullable element on this
+  // bucket by name, so a `suspend fun (): StateFlow<T?>` never reaches here at all. It has to be
+  // refused, not threaded: this bucket reads through the module-wide `nuget_stateflow_value`,
+  // which boxes `value as Any` with no null arm and no `try`, so a null would throw out of a
+  // `@CName` export. The ADR-065 property/method routes thread it because they own per-member
+  // exports they can widen to `COpaquePointer?`.
+  // ADR-040 / ADR-133 amendment (2026-09-14): an interface element is DECLARED with the projected
+  // interface and READ through the backing wrapper, the same split the property `Flow`/`StateFlow`
+  // route takes. A class element keeps `qualifiedElementCsType` byte for byte.
+  val elementInterface: BridgeType.Interface? = classifier.legacyFlowElementInterface(element)
+  val csElementType: String = elementInterface?.csharpType
+    ?: qualifiedElementCsType(element, context)
+  return SuspendStateFlowElement(
+    asyncReturnType = "KotlinStateFlow<$csElementType>",
+    read = elementInterface?.let { iface -> legacyInterfaceElementReadArgument(iface, false) },
+  )
 }
 
 /**

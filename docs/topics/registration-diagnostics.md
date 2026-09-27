@@ -165,6 +165,14 @@ release on the C# side, unchanged from the member route. `LeakTests/LiveHandleTe
 `TwoCallCollectionParam_ThrowingListArgument_ReturnsToBaseline` cover the null-return, non-null-return
 and throwing cases for a `List` parameter.
 
+A top-level [`suspend fun` returning `StateFlow<T>`](coroutines-and-flow.md#suspend-fun-returning-stateflow-t)
+adds no new handle kind either: the awaited holder owns the flow's own handle and releases it on
+`Dispose`, each `.Value` and each collected emission mints one element handle the caller releases,
+and a collection's job handle is freed by its enumerator. There is no owning object, so no scope
+handle is minted for it. `LeakTests/LiveHandleTests.cs`'s
+`TopLevelSuspendStateFlow_AwaitReadCollectDispose_ReturnsToBaseline` covers the await, read,
+collect and dispose cycle for an `Int` and a class element.
+
 For a [cancellation-token-taking async call](instance-members.md#async-cancellation), this count
 only proves the pending-continuation and `Task` handles came back to baseline: the bridge-owned
 `CancellationTokenSource` is a plain .NET `GCHandle`, not one of the Kotlin `StableRef`s

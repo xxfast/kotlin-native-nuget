@@ -119,7 +119,7 @@ public Task<global::TestLibrary.Cat.IPet?> HandBackLaterOrNullAsync(Cancellation
 `null` crosses as `null`, checked before the identity probe runs, and a non-null, C#-implemented
 result still resolves back to the caller's own instance.
 
-## `suspend fun` returning `StateFlow<T>`
+## `suspend fun` returning `StateFlow<T>` {id="suspend-fun-returning-stateflow-t"}
 
 A `suspend fun` can suspend before handing back a `StateFlow<T>`, for example to build it lazily.
 The outer suspend stays a `Task`; once awaited, `.Value` and `await foreach` behave exactly like an
@@ -136,7 +136,22 @@ suspend fun awaitMoodReport(): StateFlow<String> {
 public Task<KotlinStateFlow<string>> AwaitMoodReportAsync(CancellationToken cancellationToken = default)
 ```
 
-Only a class method is supported; a top-level function returning `StateFlow<T>` has no binding.
+A top-level `suspend fun` gets the same holder, as a static method on its file's class:
+
+```kotlin
+suspend fun watchPurrCount(): StateFlow<Int> {
+  delay(1)
+  return purrCount.asStateFlow()
+}
+```
+
+```C#
+public static Task<KotlinStateFlow<int>> WatchPurrCountAsync(CancellationToken cancellationToken = default)
+```
+
+A top-level function has no owning object to cancel its collections, so each `await foreach` runs
+until its own enumerator is disposed or its token is cancelled. Dispose the holder when you are done
+with it, as with a class method's.
 
 ### `StateFlow<T>` element type is an interface {id="suspend-stateflow-interface-element"}
 
@@ -472,8 +487,7 @@ or split the parameter across separate members.
   `MutableStateFlow<T>` are not exposed.
 - A nullable-element or nullable-member `MutableStateFlow` write, and a `suspend fun` returning
   `MutableStateFlow<T>`, are not supported.
-- A top-level `suspend fun` returning `StateFlow<T>` (class methods only) or `Flow<T>` (no binding
-  at all) is not supported.
+- A `suspend fun` returning `Flow<T>` has no binding, on a class or at top level.
 - `StateFlow<T>` or `Flow<T>` as a function parameter, or as a generic type argument, is not
   supported.
 - A nullable `Flow<T>?` (the whole stream absent, as opposed to a nullable *element* `Flow<T?>`,
