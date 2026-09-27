@@ -24,7 +24,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyFlowRetur
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericReturnRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyLambdaParameter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
+import io.github.xxfast.kotlin.native.nuget.processor.PLAN_OWNED_NAMES
 import io.github.xxfast.kotlin.native.nuget.processor.bridgeParameterName
+import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
@@ -2159,6 +2161,7 @@ internal class ForwardCallablePlanner(
         parameters = publicParameters,
         result = result,
         doc = doc.forPublic(publicParameters),
+        dispatchMask = widening.dispatchMask,
       ),
       evaluation = ForwardEvaluation.LEGACY_TWO_CALL,
       nativeExports = listOf(presence, value),
@@ -2341,6 +2344,81 @@ internal class ForwardCallablePlanner(
     // ADR-164: whether a per-call lambda can ride the PRESENCE encoding. False where the lambda
     // would be stored past the call (a constructor, `copy`), which ADR-160 forbids.
     presence: Boolean = false,
+  ): ForwardWidening = widenDeclared(declared, defaults, presence).withDerivedNames()
+
+  /**
+   * The generator names derived from each public parameter's name, minted here once and carried on
+   * the parameter (and the dispatch mask on the widening) so every reader takes the same spelling.
+   *
+   * A derived name that a user parameter of the same callable already spells moves (`freshName`),
+   * never the user's. Two namespaces, because the halves declare these names in different places:
+   * - the Kotlin `@CName` export: its ABI slots (every user name, the plan-owned literals, the
+   *   ADR-160 callback pair, and the minted `HasValue` / `IsSet` slots) plus the ADR-164
+   *   dispatcher's body locals, which must not shadow any of them (a shadowing local compiles
+   *   clean and hands the user's parameter the generator's value);
+   * - the C# wrapper: its public parameters (the user names) plus the `Optional<T>` value local.
+   *
+   * Only a name a parameter actually uses is minted, so an unused spelling can never push a used
+   * one off its unrenamed form.
+   */
+  private fun ForwardWidening.withDerivedNames(): ForwardWidening {
+    val users: Set<String> = parameters.map { parameter -> parameter.name }.toSet()
+    val kotlin: MutableSet<String> = (users + PLAN_OWNED_NAMES).toMutableSet()
+    fun MutableSet<String>.mint(base: String): String = freshName(base, this).also { add(it) }
+    val slotted: List<ForwardPublicParameter> = parameters.map { parameter ->
+      val callback: Boolean = parameter.type is BridgeType.Callback
+      parameter.copy(
+        hasValueSlot = if (parameter.type.isHasValueFanOutInput()) {
+          kotlin.mint("${parameter.name}HasValue")
+        } else {
+          parameter.hasValueSlot
+        },
+        presenceSlot = if (parameter.hasPresenceSlot) {
+          kotlin.mint("${parameter.name}IsSet")
+        } else {
+          parameter.presenceSlot
+        },
+        callbackPtrSlot =
+          if (callback) kotlin.mint("${parameter.name}Ptr") else parameter.callbackPtrSlot,
+        callbackUserDataSlot = if (callback) {
+          kotlin.mint("${parameter.name}UserData")
+        } else {
+          parameter.callbackUserDataSlot
+        },
+      )
+    }
+    val csharp: MutableSet<String> = users.toMutableSet()
+    val named: List<ForwardPublicParameter> = slotted.map { parameter ->
+      val dispatched: Boolean = parameter.default != null &&
+          parameter.default.encoding != ForwardDefaultEncoding.PRESENCE
+      val optionalLocal: String =
+        if (parameter.isOptional) csharp.mint("${parameter.name}Value") else parameter.optionalLocal
+      parameter.copy(
+        defaultLocal = if (dispatched) {
+          kotlin.mint("default_${parameter.name}")
+        } else {
+          parameter.defaultLocal
+        },
+        optionalLocal = optionalLocal,
+      )
+    }.map { parameter ->
+      // The C# wrapper reads an `Optional<T>` through its value local, so that is the stem its
+      // composite locals were always spelled from.
+      val base: String = if (parameter.isOptional) parameter.optionalLocal else parameter.name
+      var stem: String = base
+      while (CSHARP_LOCAL_SUFFIXES.any { suffix -> "$stem$suffix" in csharp }) stem += "_"
+      csharp += CSHARP_LOCAL_SUFFIXES.map { suffix -> "$stem$suffix" }
+      parameter.copy(localStem = stem)
+    }
+    val hasDefault: Boolean = parameters.any { parameter -> parameter.default != null }
+    val dispatchMask: String = if (hasDefault) kotlin.mint("mask") else "mask"
+    return copy(parameters = named, dispatchMask = dispatchMask)
+  }
+
+  private fun widenDeclared(
+    declared: List<Pair<String, BridgeType>>,
+    defaults: ForwardDeclaredDefaults?,
+    presence: Boolean,
   ): ForwardWidening {
     val plain = ForwardWidening(
       declared.mapIndexed { index, (name, type) ->
@@ -2409,14 +2487,17 @@ internal class ForwardCallablePlanner(
    * `${name}IsSet` presence slot, then the nullable encoding every other nullable input uses.
    */
   private fun nativeInputParameters(parameter: ForwardPublicParameter): List<ForwardAbiParameter> {
-    val encoded: List<ForwardAbiParameter> = nativeInputParameters(parameter.name, parameter.type)
+    val encoded: List<ForwardAbiParameter> = nativeInputParameters(
+      parameter.name, parameter.type, hasValueSlot = parameter.hasValueSlot,
+      callbackSlots = listOf(parameter.callbackPtrSlot, parameter.callbackUserDataSlot),
+    )
     if (!parameter.hasPresenceSlot) return encoded
     val presence = ForwardAbiParameter(
-      name = "${parameter.name}IsSet",
+      name = parameter.presenceSlot,
       wireType = ForwardAbiWireType.BOOLEAN,
       direction = ForwardAbiDirection.IN,
       transfer = ForwardTransfer(
-        "${parameter.name}IsSet", BridgeType.Primitive(PrimitiveKind.BOOLEAN),
+        parameter.presenceSlot, BridgeType.Primitive(PrimitiveKind.BOOLEAN),
         ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE, ForwardOwnership.BORROWED,
         ForwardConversion.DIRECT,
       ),
@@ -2683,6 +2764,7 @@ internal class ForwardCallablePlanner(
         isOverride = isOverride,
         isVirtual = isVirtual,
         doc = doc.forPublic(publicParameters),
+        dispatchMask = widening.dispatchMask,
       ),
       evaluation = ForwardEvaluation.EXACTLY_ONCE,
       nativeExports = listOf(nativeCall),
@@ -2751,6 +2833,12 @@ internal class ForwardCallablePlanner(
     name: String,
     type: BridgeType,
     role: ForwardAbiRole = ForwardAbiRole.USER,
+    // The planner-minted name of the fan-out's BOOLEAN slot
+    // (`ForwardPublicParameter.hasValueSlot`). Only a receiver takes the default, and ADR-132
+    // drops every receiver that would fan out.
+    hasValueSlot: String = "${name}HasValue",
+    // Likewise `ForwardPublicParameter.callbackPtrSlot` / `callbackUserDataSlot`.
+    callbackSlots: List<String> = listOf("${name}Ptr", "${name}UserData"),
   ): List<ForwardAbiParameter> = when (type) {
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> listOf(
       valueParameter(name, type, ForwardFlow.INTO_KOTLIN, role),
@@ -2761,7 +2849,7 @@ internal class ForwardCallablePlanner(
     // delegate the thunk dispatches to. Both BORROWED with no conversion: the C# wrapper allocates
     // and frees the GCHandle around the call, Kotlin only reinterprets the address for the duration
     // of the invocation and stores nothing (per-call, never a stored ADR-037 subscription).
-    is BridgeType.Callback -> listOf("${name}Ptr", "${name}UserData").map { slot ->
+    is BridgeType.Callback -> callbackSlots.map { slot ->
       ForwardAbiParameter(
         name = slot,
         wireType = ForwardAbiWireType.POINTER,
@@ -2995,11 +3083,11 @@ internal class ForwardCallablePlanner(
       is BridgeType.ValueClass -> if (inner.underlying.isHasValueFanOutUnderlying()) {
         listOf(
           ForwardAbiParameter(
-            name = "${name}HasValue",
+            name = hasValueSlot,
             wireType = ForwardAbiWireType.BOOLEAN,
             direction = ForwardAbiDirection.IN,
             transfer = ForwardTransfer(
-              "${name}HasValue", BridgeType.Primitive(PrimitiveKind.BOOLEAN),
+              hasValueSlot, BridgeType.Primitive(PrimitiveKind.BOOLEAN),
               ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE, ForwardOwnership.BORROWED,
               ForwardConversion.DIRECT,
             ),
@@ -3037,11 +3125,11 @@ internal class ForwardCallablePlanner(
       // minted.
       is BridgeType.Primitive, BridgeType.Char -> listOf(
         ForwardAbiParameter(
-          name = "${name}HasValue",
+          name = hasValueSlot,
           wireType = ForwardAbiWireType.BOOLEAN,
           direction = ForwardAbiDirection.IN,
           transfer = ForwardTransfer(
-            "${name}HasValue", BridgeType.Primitive(PrimitiveKind.BOOLEAN), ForwardFlow.INTO_KOTLIN,
+            hasValueSlot, BridgeType.Primitive(PrimitiveKind.BOOLEAN), ForwardFlow.INTO_KOTLIN,
             ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
           ),
         ),
@@ -3061,11 +3149,11 @@ internal class ForwardCallablePlanner(
       // ORDINAL_TO_ENUM conversion (ADR-079's enum-underlying value class minus the box).
       is BridgeType.Enum -> listOf(
         ForwardAbiParameter(
-          name = "${name}HasValue",
+          name = hasValueSlot,
           wireType = ForwardAbiWireType.BOOLEAN,
           direction = ForwardAbiDirection.IN,
           transfer = ForwardTransfer(
-            "${name}HasValue", BridgeType.Primitive(PrimitiveKind.BOOLEAN), ForwardFlow.INTO_KOTLIN,
+            hasValueSlot, BridgeType.Primitive(PrimitiveKind.BOOLEAN), ForwardFlow.INTO_KOTLIN,
             ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
           ),
         ),
@@ -3085,11 +3173,11 @@ internal class ForwardCallablePlanner(
       // value slot carries the TICKS_TO_INSTANT conversion (the wire value is still a raw INT64).
       BridgeType.Instant -> listOf(
         ForwardAbiParameter(
-          name = "${name}HasValue",
+          name = hasValueSlot,
           wireType = ForwardAbiWireType.BOOLEAN,
           direction = ForwardAbiDirection.IN,
           transfer = ForwardTransfer(
-            "${name}HasValue", BridgeType.Primitive(PrimitiveKind.BOOLEAN), ForwardFlow.INTO_KOTLIN,
+            hasValueSlot, BridgeType.Primitive(PrimitiveKind.BOOLEAN), ForwardFlow.INTO_KOTLIN,
             ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
           ),
         ),
@@ -3108,11 +3196,11 @@ internal class ForwardCallablePlanner(
       // ADR-103: identical to the Instant pair above, TICKS_TO_DURATION on the value slot.
       BridgeType.Duration -> listOf(
         ForwardAbiParameter(
-          name = "${name}HasValue",
+          name = hasValueSlot,
           wireType = ForwardAbiWireType.BOOLEAN,
           direction = ForwardAbiDirection.IN,
           transfer = ForwardTransfer(
-            "${name}HasValue", BridgeType.Primitive(PrimitiveKind.BOOLEAN), ForwardFlow.INTO_KOTLIN,
+            hasValueSlot, BridgeType.Primitive(PrimitiveKind.BOOLEAN), ForwardFlow.INTO_KOTLIN,
             ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
           ),
         ),
@@ -4646,6 +4734,13 @@ internal fun BridgeType.unsupportedTypeDetail(): String? =
  */
 internal const val MAX_OPTIONAL_DEFAULTS: Int = 8
 
+/**
+ * The suffixes the C# plan projection spells a parameter's wrapper locals with, off
+ * [ForwardPublicParameter.localStem]. None is a suffix of another, so two stems' locals can only
+ * meet if the stems do.
+ */
+internal val CSHARP_LOCAL_SUFFIXES: List<String> = listOf("Handle", "Owned", "Box", "Ctx", "Native")
+
 /** ADR-164: the defaulted-parameter facts of one entry, aligned with its declared parameters. */
 internal data class ForwardDeclaredDefaults(
   val flags: List<Boolean>,
@@ -4659,6 +4754,8 @@ internal data class ForwardWidening(
   val parameters: List<ForwardPublicParameter>,
   val capped: List<String> = emptyList(),
   val marked: String? = null,
+  /** The ADR-164 dispatcher's bitmask local, minted beside [parameters]' derived names. */
+  val dispatchMask: String = "mask",
 )
 
 private enum class ForwardDefaultRole(val isWidened: Boolean) {

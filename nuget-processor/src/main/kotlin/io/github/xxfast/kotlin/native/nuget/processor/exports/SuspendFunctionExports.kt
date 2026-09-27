@@ -23,7 +23,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.collectionResultPr
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isLegacyLowered
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyPrelude
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyArgument
-import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyHasValueSlot
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyKotlinNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShapes
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
@@ -74,20 +75,22 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
 
   val paramShapes: List<ForwardLegacyParameterShape> =
     classifier.legacyParameterShapes(func.parameters)
-  val paramCall: String = legacyParamCall(func, paramShapes)
-  val paramPrelude: String = legacyParamPrelude(func, paramShapes)
+  val names: ForwardLegacyNames = legacyKotlinNames(func.parameters, paramShapes)
+  val paramCall: String = legacyParamCall(func, names)
+  val paramPrelude: String = legacyParamPrelude(func, paramShapes, names)
   val boxed: String = legacyBoxedResult(classifier.legacyReturnShape(returnType))
 
-  val body: String =
-    buildSuspendFunctionBody(funcName, paramCall, paramPrelude, isUnit, isNullable, boxed)
+  val body: String = buildSuspendFunctionBody(
+    funcName, paramCall, paramPrelude, isUnit, isNullable, boxed, names,
+  )
 
   val builder: FunSpec.Builder = FunSpec.builder("export_${cname}_async")
     // ADR-117: names the function as the owner, so a collision this numbering does not cover
     // (for example across routes) still reports which declarations share the symbol.
     .addAnnotation(cNameAnnotation("${cname}_async", ownedBy(func)))
-    .addLegacySuspendParameters(func, paramShapes)
-    .addParameter("callbackPtr", cOpaquePointer)
-    .addParameter("userData", cOpaquePointer)
+    .addLegacySuspendParameters(func, paramShapes, names)
+    .addParameter(names.callback, cOpaquePointer)
+    .addParameter(names.userData, cOpaquePointer)
     .returns(cOpaquePointer)
     .addCode(body)
 
@@ -139,18 +142,19 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
 
     val paramShapes: List<ForwardLegacyParameterShape> =
       classifier.legacyParameterShapes(method.parameters)
-    val paramCall: String = legacyParamCall(method, paramShapes)
-    val paramPrelude: String = legacyParamPrelude(method, paramShapes)
+    val names: ForwardLegacyNames = legacyKotlinNames(method.parameters, paramShapes)
+    val paramCall: String = legacyParamCall(method, names)
+    val paramPrelude: String = legacyParamPrelude(method, paramShapes, names)
     val boxed: String = legacyBoxedResult(classifier.legacyReturnShape(returnType))
 
     val body: String = buildSuspendMethodBody(
-      qualifiedName, methodName, paramCall, paramPrelude, isUnit, isNullable, boxed,
+      qualifiedName, methodName, paramCall, paramPrelude, isUnit, isNullable, boxed, names,
     )
 
     val builder: FunSpec.Builder = FunSpec.builder("export_${prefix}_${cname}_async")
       .addAnnotation(cNameAnnotation("${prefix}_${cname}_async", ownedBy(method)))
       .addParameter("handle", cOpaquePointer)
-      .addParameter("scopeHandle", cOpaquePointer)
+      .addParameter(names.scopeHandle, cOpaquePointer)
 
     method.parameters.forEachIndexed { index, param ->
       val paramName: String = param.name?.asString() ?: "_"
@@ -163,12 +167,14 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
       val resolved: KSType = param.type.resolve().expandAliases()
       val type: String = resolved.declaration.qualifiedName?.asString()
         ?: resolved.declaration.simpleName.asString()
-      builder.addLegacyScalarParameter(paramName, paramShapes[index], ClassName.bestGuess(type))
+      builder.addLegacyScalarParameter(
+        paramName, paramShapes[index], ClassName.bestGuess(type), names.hasValueSlots[index],
+      )
     }
 
     builder
-      .addParameter("callbackPtr", cOpaquePointer)
-      .addParameter("userData", cOpaquePointer)
+      .addParameter(names.callback, cOpaquePointer)
+      .addParameter(names.userData, cOpaquePointer)
       .returns(cOpaquePointer)
       .addCode(body)
 
@@ -183,6 +189,7 @@ private fun buildSuspendFunctionBody(
   isUnit: Boolean,
   isNullable: Boolean,
   boxed: String,
+  names: ForwardLegacyNames,
 ): String = buildString {
   // ADR-128: the launch shape -- `reinterpret`, `launch(start = CoroutineStart.ATOMIC)` and the
   // three callback arms -- belongs to the runtime's `launchForCSharp`. This route still owns its
@@ -191,7 +198,8 @@ private fun buildSuspendFunctionBody(
   append(paramPrelude)
   val resultRefCode: String = resultRefExpression(isNullable, boxed)
   appendLine(
-    "return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData) {"
+    "return launchForCSharp(CoroutineScope(Dispatchers.Default), ${names.callback}, " +
+        "${names.userData}) {"
   )
   if (isUnit) {
     appendLine("  $funcName($paramCall)")
@@ -212,20 +220,23 @@ private fun buildSuspendMethodBody(
   isUnit: Boolean,
   isNullable: Boolean,
   boxed: String,
+  names: ForwardLegacyNames,
 ): String = buildString {
-  appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
+  appendLine("val ${names.obj} = handle.asStableRef<$qualifiedName>().get()")
   // ADR-128: same helper as the top-level route, launched on the C#-owned scope this route has
   // always used (the one `nuget_scope_cancel` cancels). ADR-114/ADR-122's prelude locals stay
   // *before* the helper call, so they are still evaluated on the caller's thread, before launch.
-  appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
+  appendLine("val ${names.scope} = ${names.scopeHandle}.asStableRef<CoroutineScope>().get()")
   append(paramPrelude)
   val resultRefCode: String = resultRefExpression(isNullable, boxed)
-  appendLine("return launchForCSharp(scope, callbackPtr, userData) {")
+  appendLine("return launchForCSharp(${names.scope}, ${names.callback}, ${names.userData}) {")
+  // `result` / `resultRef` need no minting: they are declared inside the launch lambda and their
+  // initializers read the user's argument before the local is in scope.
   if (isUnit) {
-    appendLine("  obj.$methodName($paramCall)")
+    appendLine("  ${names.obj}.$methodName($paramCall)")
     appendLine("  null")
   } else {
-    appendLine("  val result = obj.$methodName($paramCall)")
+    appendLine("  val result = ${names.obj}.$methodName($paramCall)")
     appendLine("  val resultRef = $resultRefCode")
     appendLine("  resultRef")
   }
@@ -259,9 +270,9 @@ private fun legacyBoxedResult(shape: ForwardLegacyReturnShape): String =
  */
 private fun legacyParamCall(
   func: KSFunctionDeclaration,
-  shapes: List<ForwardLegacyParameterShape>,
+  names: ForwardLegacyNames,
 ): String = func.parameters
-  .mapIndexed { index, param -> shapes[index].legacyArgument(param.name?.asString() ?: "_") }
+  .mapIndexed { index, param -> names.legacyArgument(index, param.name?.asString() ?: "_") }
   .joinToString(", ")
 
 /**
@@ -271,9 +282,11 @@ private fun legacyParamCall(
 private fun legacyParamPrelude(
   func: KSFunctionDeclaration,
   shapes: List<ForwardLegacyParameterShape>,
+  names: ForwardLegacyNames,
 ): String = buildString {
   func.parameters.forEachIndexed { index, param ->
-    val prelude: String? = shapes[index].legacyPrelude(param.name?.asString() ?: "_")
+    val prelude: String? =
+      shapes[index].legacyPrelude(param.name?.asString() ?: "_", names.loweredLocals[index])
     if (prelude != null) appendLine(prelude)
   }
 }
@@ -286,6 +299,7 @@ private fun legacyParamPrelude(
 private fun FunSpec.Builder.addLegacySuspendParameters(
   func: KSFunctionDeclaration,
   shapes: List<ForwardLegacyParameterShape>,
+  names: ForwardLegacyNames,
 ): FunSpec.Builder {
   func.parameters.forEachIndexed { index, param ->
     val name: String = param.name?.asString() ?: "_"
@@ -297,6 +311,7 @@ private fun FunSpec.Builder.addLegacySuspendParameters(
       name,
       shapes[index],
       param.type.resolve().expandAliases().toBridgeTypeName(nullable = false),
+      names.hasValueSlots[index],
     )
   }
   return this
@@ -306,14 +321,15 @@ private fun FunSpec.Builder.addLegacySuspendParameters(
  * The ABI slots of one legacy-route parameter that is passed rather than lowered, [type] being its
  * non-null Kotlin spelling. Issue #299: a nullable primitive or `Char` takes the plan route's
  * has-value pair (`limitHasValue: Boolean, limit: Int`), a nullable `String` one `String?` slot.
- * Shared by every legacy parameter builder so they cannot drift apart.
+ * [hasValue] is the member's [ForwardLegacyNames.hasValueSlots] entry for this parameter. Shared by
+ * every legacy parameter builder so they cannot drift apart.
  */
 internal fun FunSpec.Builder.addLegacyScalarParameter(
   name: String,
   shape: ForwardLegacyParameterShape,
   type: TypeName,
+  hasValue: String?,
 ): FunSpec.Builder {
-  val hasValue: String? = shape.legacyHasValueSlot(name)
   if (hasValue != null) addParameter(hasValue, BOOLEAN)
   val nullable: Boolean = shape is ForwardLegacyParameterShape.NullableScalar && !shape.fansOut
   return addParameter(name, type.copy(nullable = nullable))

@@ -19,7 +19,6 @@ Complete.
 Complete.
 
 ## Phase 4: Rich type support
-- [ ] A synthesized `${name}HasValue` slot on the legacy nullable-scalar wire can collide with a real user parameter literally named `${name}HasValue`. ([details](docs/backlog/hasvalue-slot-name-collision-with-user-parameter.md)) Discovered alongside the ADR-122 2026-09-26 amendment.
 - [ ] Default arguments are not honoured on the legacy `suspend`/`Flow` routes: a Kotlin default becomes a required C# parameter. ([details](docs/backlog/legacy-route-default-arguments-not-honoured.md)) Discovered alongside the ADR-122 2026-09-26 amendment.
 - [ ] **A nullable constructor argument on a generic class crosses wrong, or doesn't compile at all.** ([details](docs/backlog/nullable-constructor-argument-generic-class-crosses-wrong.md))
 - [ ] **The legacy top-level two-call route (`staticLegacyTwoCall`) emits non-compiling C# for a collection parameter** ([details](docs/backlog/legacy-top-level-two-call-route-staticlegacytwocall.md))
@@ -92,7 +91,7 @@ Complete.
 - [ ] **`NugetMarshal.FromHandle<T>` has no enum branch, so `StateFlow<SomeEnum>` is unsupported** ([details](docs/backlog/fromhandle-no-enum-branch.md))
 - [ ] `CompareAndSet` / `Update` / `Emit` / `TryEmit` / `ReplayCache` / `SubscriptionCount` on `MutableStateFlow<T>`: deferred, additive; mirrors SKIE's wider `SkieSwiftMutableStateFlow<T>` surface (ADR-071 Alternative 4)
 - [ ] Nullable element write (`MutableStateFlow<T?>.Value = ...`) and nullable member write, and `suspend fun` returning `MutableStateFlow<T>`: deferred, mirror the read-side nullable/suspend items above
-- [ ] Top-level `suspend fun` returning `StateFlow<T>` (no parent class scope): deferred, needs a scope decision for the shared `nuget_stateflow_collect` export; v1 covers class methods only
+- [ ] Top-level `suspend fun` returning `StateFlow<T>` (no parent class scope): deferred, needs a scope decision for the shared `nuget_stateflow_collect` export; v1 covers class methods only. Today's actual output is not a diagnosed skip: it renders a non-compiling `Task<StateFlow>` (the bare generic type, no argument), found alongside the derived-name fixture (`docs/adr/062-forward-callable-plan.md`'s 2026-09-27 amendment) but not fixed.
 - [ ] Nullable `suspend fun (): StateFlow<T>?` / `StateFlow<T?>`: mirrors ADR-065's deferred nullable items composed with [ADR-068](docs/adr/068-suspend-returning-stateflow.md)'s outer-suspend-kept-as-`Task` shape; distinct from the plain `suspend fun (): T?` nullable return ADR-019 shipped 2026-09-08 (issue #108), which has no `StateFlow` involved. Since 2026-09-20 the `StateFlow<T?>` (element) half is a named `SKIPPED_UNSUPPORTED_RETURN` skip rather than a silent non-null binding (`legacyReturnShape`, `ForwardLegacyRouteCollections.kt` ~:242): the route reads its element through the module-wide `nuget_stateflow_value` export, which is `retain(flow.value as Any)` with no null arm, so binding it needs a nullable-aware version of that export first ([ADR-067](docs/adr/067-nullable-stateflow-mapping.md)'s 2026-09-20 amendment)
 - [ ] `StateFlow<T>` as a function parameter (C#→Kotlin) and as a generic type argument (e.g. `Box<StateFlow<String>>`), mirrors the `Flow<T>` items below
 - [ ] `INotifyPropertyChanged` adapter over `KotlinStateFlow<T>`: deferred, opt-in convenience for XAML data-binding, not the v1 core

@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.freshName
+
 internal fun StringBuilder.renderAsyncHelper(helper: CirAsyncHelper) {
   appendLine("    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]")
   appendLine("    internal delegate void NugetAsyncCallback(IntPtr result, IntPtr error, byte isCancelled, IntPtr userData);")
@@ -149,12 +151,15 @@ internal fun StringBuilder.appendAsyncCompletionClosure(
   cancellationArgument: String = "cancellationToken",
   prelude: List<String> = emptyList(),
   includesErrorBranch: Boolean = true,
+  // The enclosing method's locals this closure assigns or reads; [renderAsyncMethod] moves them off
+  // a user parameter spelled the same (`freshName`), every other site keeps the shipped spelling.
+  locals: CirAsyncLocals = CirAsyncLocals(),
 ) {
-  appendLine("            callback = (resultPtr, errorPtr, isCancelled, userData) =>")
+  appendLine("            ${locals.callback} = (resultPtr, errorPtr, isCancelled, userData) =>")
   appendLine("            {")
-  appendLine("                job.CompleteFromCallback();")
-  appendLine("                callbackHandle.Free();")
-  appendLine("                $tcsType t = tcs;")
+  appendLine("                ${locals.job}.CompleteFromCallback();")
+  appendLine("                ${locals.callbackHandle}.Free();")
+  appendLine("                $tcsType t = ${locals.tcs};")
   appendLine("                try")
   appendLine("                {")
   prelude.forEach { statement -> appendLine("                    $statement") }
@@ -203,7 +208,39 @@ private val primitiveAsyncTypes = setOf(
   "sbyte", "byte", "short", "ushort", "uint", "ulong",
 )
 
+/**
+ * The method-scope locals of a legacy suspend wrapper. They share a scope with the user's
+ * parameters, so a parameter named `tcs` or `job` would be CS0136; [of] mints each apart from them.
+ */
+internal data class CirAsyncLocals(
+  val tcs: String = "tcs",
+  val callback: String = "callback",
+  val callbackHandle: String = "callbackHandle",
+  val job: String = "job",
+  val jobHandle: String = "jobHandle",
+  val reg: String = "reg",
+  /**
+   * The generated trailing `CancellationToken` parameter. Public, but still the generator's name:
+   * a user parameter spelled `cancellationToken` keeps its name and this one moves. Also read by
+   * the XML-doc pass (`CirClassTranslator`), which tags it like any other parameter.
+   */
+  val cancellationToken: String = "cancellationToken",
+) {
+  companion object {
+    fun of(parameters: List<CirParameter>): CirAsyncLocals {
+      val taken: MutableSet<String> = parameters.localScopeNames()
+      fun local(base: String): String = freshName(base, taken).also { taken += it }
+      val cancellationToken: String = local("cancellationToken")
+      return CirAsyncLocals(
+        local("tcs"), local("callback"), local("callbackHandle"), local("job"), local("jobHandle"),
+        local("reg"), cancellationToken,
+      )
+    }
+  }
+}
+
 internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: String = "") {
+  val locals: CirAsyncLocals = CirAsyncLocals.of(method.parameters)
   val visibility: String = if (method.visibility == CirVisibility.PRIVATE) "private" else "public"
   val static: String = if (method.isStatic) "static " else ""
   val isUnit: Boolean = method.asyncReturnType.isEmpty()
@@ -214,15 +251,17 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   // ADR-114: the native call passes the wire handle, the public signature keeps the collection.
   val paramNames: String = method.parameters.joinToString(", ") { it.nativeArgument }
 
+  val token: String = locals.cancellationToken
   val methodParams: String = if (method.parameters.isEmpty()) {
-    "CancellationToken cancellationToken = default"
+    "CancellationToken $token = default"
   } else {
     method.parameters.joinToString(", ") { "${it.type} ${it.name}" } +
-        ", CancellationToken cancellationToken = default"
+        ", CancellationToken $token = default"
   }
 
   // ADR-102: the thunk address plus the completion closure's own GCHandle as the echoed ctx.
-  val callbackArgs: String = "NugetThunks.NugetAsyncCallbackPtr, GCHandle.ToIntPtr(callbackHandle)"
+  val callbackArgs: String =
+    "NugetThunks.NugetAsyncCallbackPtr, GCHandle.ToIntPtr(${locals.callbackHandle})"
   val nativeCallArgs: String = if (method.isStatic) {
     if (paramNames.isEmpty()) callbackArgs
     else "$paramNames, $callbackArgs"
@@ -285,33 +324,36 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
     appendLine("            if (_handle == IntPtr.Zero)")
     appendLine("                throw new ObjectDisposedException(nameof($className));")
   }
-  appendLine("            var tcs = new $tcsType(TaskCreationOptions.RunContinuationsAsynchronously);")
-  appendLine("            NugetAsyncCallback callback = null!;")
-  appendLine("            GCHandle callbackHandle = default;")
-  appendLine("            var job = new NugetJobCell();")
-  appendAsyncCompletionClosure(tcsType, resultExtraction)
-  appendLine("            callbackHandle = GCHandle.Alloc(callback);")
+  val (tcs, callback, callbackHandle, job, jobHandle, reg) = locals
+  appendLine("            var $tcs = new $tcsType(TaskCreationOptions.RunContinuationsAsynchronously);")
+  appendLine("            NugetAsyncCallback $callback = null!;")
+  appendLine("            GCHandle $callbackHandle = default;")
+  appendLine("            var $job = new NugetJobCell();")
+  appendAsyncCompletionClosure(
+    tcsType, resultExtraction, cancellationArgument = token, locals = locals,
+  )
+  appendLine("            $callbackHandle = GCHandle.Alloc($callback);")
   // ADR-114: the native call is synchronous even though the await is not, so the wire container is
   // built immediately before it and disposed in a `finally` immediately after it returns. The
   // Kotlin export copies out of it before `launch`, so the coroutine never sees the handle.
   val scoped: List<String>? = method.parameters
     .collectionScopedCall(
       "            ",
-      "jobHandle = $nativeName($nativeCallArgs)",
+      "$jobHandle = $nativeName($nativeCallArgs)",
       returns = false,
     )
   if (scoped == null) {
-    appendLine("            IntPtr jobHandle = $nativeName($nativeCallArgs);")
+    appendLine("            IntPtr $jobHandle = $nativeName($nativeCallArgs);")
   } else {
     // The scoped call assigns from inside its own block, so the local is declared outside it.
-    appendLine("            IntPtr jobHandle = IntPtr.Zero;")
+    appendLine("            IntPtr $jobHandle = IntPtr.Zero;")
     scoped.forEach { appendLine(it) }
   }
-  appendLine("            CancellationTokenRegistration reg = cancellationToken.CanBeCanceled")
-  appendLine("                ? cancellationToken.Register(() => NugetJobNative.Cancel(jobHandle))")
+  appendLine("            CancellationTokenRegistration $reg = $token.CanBeCanceled")
+  appendLine("                ? $token.Register(() => NugetJobNative.Cancel($jobHandle))")
   appendLine("                : default;")
-  appendLine("            job.PublishFromCaller(jobHandle, reg);")
-  appendLine("            return tcs.Task;")
+  appendLine("            $job.PublishFromCaller($jobHandle, $reg);")
+  appendLine("            return $tcs.Task;")
   appendLine("        }")
   appendLine()
 }

@@ -794,6 +794,11 @@ data class CirMethod(
   // and kin. Null leaves the shipped construction untouched, so a non-collection element still
   // reads through the constructors' default `NugetMarshal.FromHandle<T>`.
   val flowElementRead: String? = null,
+  // The collect lambda's four parameters (`onNext, onComplete, onError, userData`), minted apart
+  // from this method's own parameters (`ForwardLegacyNames`): a lambda parameter spelled like a
+  // user parameter would shadow it, and the native call inside the lambda would pass the callback
+  // where the user's argument belongs. [body] spells the same names.
+  val flowCallbackNames: List<String> = listOf("onNext", "onComplete", "onError", "userData"),
   // The native method name (e.g. "Native_MoodReportValue") of the sibling `_value` DllImport
   // this StateFlow method's companion-member list also carries. Empty unless [isStateFlow].
   val stateFlowValueNativeName: String = "",
@@ -985,6 +990,9 @@ data class CirParameter(
   // to (`limitHasValue`), placed before this parameter's own [nativeType] slot by
   // `nativeImportParameters()`. Null for every other parameter.
   val hasValueSlot: String? = null,
+  // The wire-handle local a [collectionCreate] is built into, minted apart from the member's user
+  // parameters (`ForwardLegacyNames.handleLocals`). Null means the unrenamed `<name>Handle`.
+  val collectionHandle: String? = null,
 ) {
   /** The parameter as declared in a public C# signature, with its default when it has one. */
   val declaration: String

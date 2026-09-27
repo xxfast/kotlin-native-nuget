@@ -200,6 +200,29 @@ internal fun String.bridgeParameterName(): String =
   if (shadows(PLAN_OWNED_NAMES)) "${this}_" else this
 
 /**
+ * A generator identifier that is *derived* from a user parameter's name (`${name}HasValue`,
+ * `${name}IsSet`, `default_${name}`, `${name}Arg`, ...) or is a fixed slot or local of one route
+ * (`mask`, `scopeHandle`, `userData`): [base] itself when it is free, otherwise [base] with one
+ * more `_` until it is not in [taken].
+ *
+ * The opposite direction to [bridgeParameterName]: there the *user's* parameter moves off a fixed
+ * generator literal. Here the generator's name moves, and only on a real collision, because every
+ * one of these names is private (the extern and the `@CName` export are positional) while the
+ * user's is a public named-argument label. Collision-only keeps every non-colliding callable's
+ * output byte-identical.
+ *
+ * [taken] must hold every user parameter name of the callable, not only the earlier ones: a user
+ * `limitHasValue` declared *before* `limit` still owns that name. A caller minting several names
+ * adds each result to [taken] before minting the next, so no two minted names converge either.
+ * Route-agnostic by design: the plan route and the legacy suspend / Flow routes share it.
+ */
+internal fun freshName(base: String, taken: Set<String>): String {
+  var candidate: String = base
+  while (candidate in taken) candidate += "_"
+  return candidate
+}
+
+/**
  * The C# spelling of a Kotlin parameter name, at both its declaration and every use site. Two
  * render-time rules, kept in one function so they cannot disagree (a name can only ever hit one of
  * them: `error` is not a C# keyword):

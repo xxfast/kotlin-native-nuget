@@ -5,7 +5,7 @@ import com.google.devtools.ksp.symbol.KSValueParameter
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
-import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyHasValueSlot
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyNullableScalarArgument
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionCreate
@@ -29,7 +29,7 @@ internal val CirParameter.nativeArgument: String
     // ADR-122: a borrowed handle (`observation._handle`), passed straight through with no
     // call-scoped allocation, so it deliberately does not reach the create/dispose block below.
     nativeArgumentExpression != null -> nativeArgumentExpression
-    collectionCreate != null -> "${name}Handle"
+    collectionCreate != null -> collectionHandle ?: "${name}Handle"
     else -> name
   }
 
@@ -46,6 +46,17 @@ internal fun List<CirParameter>.nativeImportParameters(): List<CirParameter> =
       CirParameter(parameter.name, parameter.nativeType),
     )
   }
+
+/**
+ * Every name these parameters already occupy in a wrapper method's scope: the parameters
+ * themselves (without a verbatim `@`) and the wire-handle locals built for them. A renderer's own
+ * locals mint against this with `freshName`, so they move off a user parameter rather than
+ * colliding with it.
+ */
+internal fun List<CirParameter>.localScopeNames(): MutableSet<String> =
+  (map { parameter -> parameter.name.removePrefix("@") } +
+      filter { parameter -> parameter.collectionCreate != null }
+        .map { parameter -> parameter.nativeArgument }).toMutableSet()
 
 /** Whether any parameter needs a wire handle built before the native call. */
 internal fun List<CirParameter>.hasCollectionHandles(): Boolean =
@@ -93,9 +104,36 @@ internal fun legacyRouteParameters(
   parameters: List<KSValueParameter>,
   classifier: ForwardBridgeTypeClassifier,
   tracker: CollectionHelperTracker,
-): List<CirParameter> = parameters.map { param ->
+): List<CirParameter> {
+  val names: ForwardLegacyNames = legacyCsharpNames(parameters, classifier)
+  return parameters.mapIndexed { index, param ->
+    legacyRouteParameter(param, index, classifier, tracker, names)
+  }
+}
+
+/**
+ * [ForwardLegacyNames] for a legacy member's parameters in their C# spelling, which is what the
+ * `DllImport` declares its slots under. The translators read the fixed `scopeHandle` / `userData`
+ * slot names off this same instance, so a user parameter spelled like either keeps its name.
+ */
+internal fun legacyCsharpNames(
+  parameters: List<KSValueParameter>,
+  classifier: ForwardBridgeTypeClassifier,
+): ForwardLegacyNames = ForwardLegacyNames(
+  parameters.map { param -> (param.name?.asString() ?: "_").csharpParameterName() },
+  parameters.map { param -> classifier.legacyParameterShape(param.type.resolve()) },
+  csharp = true,
+)
+
+private fun legacyRouteParameter(
+  param: KSValueParameter,
+  index: Int,
+  classifier: ForwardBridgeTypeClassifier,
+  tracker: CollectionHelperTracker,
+  names: ForwardLegacyNames,
+): CirParameter {
   val name: String = (param.name?.asString() ?: "_").csharpParameterName()
-  when (val shape: ForwardLegacyParameterShape =
+  return when (val shape: ForwardLegacyParameterShape =
     classifier.legacyParameterShape(param.type.resolve())) {
     is ForwardLegacyParameterShape.Marshalled -> {
       tracker.trackCollection(shape.type)
@@ -104,6 +142,7 @@ internal fun legacyRouteParameters(
         type = shape.type.forwardPublicCsharpType(),
         nativeType = "IntPtr",
         collectionCreate = legacyCollectionCreate(name, shape.type),
+        collectionHandle = names.handleLocals[index],
       )
     }
 
@@ -131,7 +170,7 @@ internal fun legacyRouteParameters(
           nativeType = inner,
           isReferenceType = false,
           nativeArgumentExpression = legacyNullableScalarArgument(name),
-          hasValueSlot = shape.legacyHasValueSlot(name),
+          hasValueSlot = names.hasValueSlots[index],
         )
       } else {
         CirParameter(name, "$inner?")

@@ -5,6 +5,13 @@ import kotlin.test.assertEquals
 
 class ReservedTest {
   @Test
+  fun `freshName keeps a free base and walks the underscore chain past taken names`() {
+    assertEquals("limitHasValue", freshName("limitHasValue", setOf("limit")))
+    assertEquals("limitHasValue_", freshName("limitHasValue", setOf("limit", "limitHasValue")))
+    assertEquals("mask__", freshName("mask", setOf("mask", "mask_")))
+  }
+
+  @Test
   fun `toCName suffixes a C reserved word`() {
     assertEquals("int_", toCName("int"))
     assertEquals("void_", toCName("void"))

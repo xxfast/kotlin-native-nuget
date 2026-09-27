@@ -208,6 +208,75 @@ name again. See `ForwardCirPlanProjectionTest`. The extern fallback for CIR that
 refuses an escaped name outright, see [ADR-090](090-ordinary-class-method-overloads.md)'s
 2026-09-10 amendment.
 
+## Amendment (2026-09-27): generator-derived names yield to user parameter names
+
+The 2026-09-07 amendment above covers *fixed* generator literals (`handle`, `receiver`, `value`,
+`errorOut`, `valueOut`): a user parameter spelled the same shifts one underscore, because those
+literals are spelled by name at hundreds of call sites and cannot move. A second, larger family of
+generator identifiers is not fixed but *derived* from a sibling parameter's own name: the nullable
+presence flag `${name}HasValue` (ADR-076/079/080/098/103, plan route, and ADR-122's legacy suspend
+/ Flow / StateFlow routes), ADR-164's dispatcher slots `${name}IsSet`, its Kotlin locals
+`default_${name}` and `mask`, and its C# `${name}Value` local, the legacy routes' lowered
+`${name}Arg` local, the ADR-160 callback pair `${name}Ptr` / `${name}UserData` (and the C# wrapper's
+`${name}Native` / `${name}Ctx` locals), and the C# collection-handle local `${name}Handle`. A user
+is free to name a second parameter `limitHasValue` next to `limit: Int?`, or a parameter `mask` next
+to a defaulted one, and nothing checked that name against the generator's own before this amendment.
+
+Most of these shapes were loud: the generated Kotlin `@CName` export declared the same parameter
+name twice and failed with `Conflicting declarations`. Two were not. `ForwardKotlinPlanEmitter`'s
+dispatcher declares `val default_limit = ...` and `var mask = 0` as plain Kotlin locals inside the
+wrapper body; a user parameter of either name is a real parameter in the same scope, so Kotlin's own
+shadowing rule let the local win silently. `fun fill(limit: Int? = 3, default_limit: Int?)` and
+`fun fill(limit: Int = 3, mask: Int)` both compiled clean and misrouted the caller's argument to
+`limit`'s resolved value or the dispatch bitmask instead. See [ADR-164](164-optional-default-parameters.md)'s
+2026-09-27 cross-reference for that half.
+
+**The fix moves the generator's identifier, never the user's, and only on an actual collision.**
+This is the opposite direction to the 2026-09-07 amendment: those literals are fixed and spelled at
+too many call sites to rename per callable, but every name in this family is already computed once
+per parameter, is private (it appears only on the `private static extern` DllImport and the
+`@CName` export's parameter list, both positional; the public C# wrapper keeps the user's name
+regardless), and costs a consumer nothing to move. `Reserved.kt`'s `freshName(base, taken)` returns
+`base`, else `base_`, `base__`, ... until the candidate is not in `taken` (every user parameter's
+bridge name on that callable, plus every name already minted for it). Non-colliding output is
+therefore byte-identical to before this amendment.
+
+**Each minted name is chosen once and stored on the plan, and every reader consumes that field.**
+`ForwardPublicParameter` gains `hasValueSlot`, `presenceSlot`, `defaultLocal`, `optionalLocal` and
+`localStem`; `ForwardPublicSignature` gains `dispatchMask`. The legacy routes carry the equivalent
+names in `ForwardLegacyNames`, Flow callbacks in `CirMethod.flowCallbackNames`, and suspend wrappers
+in `CirAsyncLocals`. This is the same lesson [ADR-118](118-suspend-route-sealed-arm-owners-and-overload-numbering.md)
+recorded for its suffix: a mint-site-only fix, where the planner mints `limitHasValue_` but an
+emitter still rebuilds the string `"${parameter.name}HasValue"` by hand, resolves to the user's real
+`limitHasValue` parameter and compiles clean — turning today's loud break into a new silent
+misroute. Every reader that used to rebuild the name from `parameter.name` now reads the stored
+field instead.
+
+One collision reaches the public C# surface rather than staying an invisible extern detail: a
+`suspend` member or top-level function with a parameter named `cancellationToken` keeps that name on
+the public parameter, and the generated trailing token becomes `cancellationToken_`:
+
+```kotlin
+suspend fun pour(cancellationToken: Int): String = "poured $cancellationToken"
+```
+
+```C#
+public Task<string> PourAsync(int cancellationToken, CancellationToken cancellationToken_ = default)
+```
+
+A callback parameter named like the C# call site's own delegate lambda parameters (`a0`, `ctx`) is
+the other visible case: the lambda body still invokes the user's callback correctly, because it is
+the *lambda's own* parameters that move, not the user's.
+
+No new ADR was drafted for this: it is a new rule for a class of name ADR-062 did not cover (names
+derived from a user's own spelling, not fixed literals), and it deliberately inverts this ADR's
+2026-09-07 direction, so it is recorded as an amendment here rather than as a separate document.
+
+See `test-library/.../test/reserved/DerivedNamesSample.kt` and
+`IntegrationTests/DerivedNamesTests.cs` for the fixture (including the two previously-silent
+`Pantry.pour`/`Pantry.ration` cells and the `Kettle.pour`/`steep` `cancellationToken` cells), and
+`Reserved.kt`'s `freshName()` for the mechanism.
+
 ## References
 
 - [ADR-004](004-cir-intermediate-representation.md) — CIR model and dual emission

@@ -24,7 +24,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.collectionResultPr
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isLegacyLowered
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyArgument
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyKotlinNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShapes
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyPrelude
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElement
@@ -280,14 +282,16 @@ internal fun FileSpec.Builder.addFlowMethodExports(
   // handle. Every other parameter keeps its shipped spelling.
   val paramShapes: List<ForwardLegacyParameterShape> =
     classifier.legacyParameterShapes(method.parameters)
+  val names: ForwardLegacyNames = legacyKotlinNames(method.parameters, paramShapes)
 
   val paramCall: String = method.parameters
-    .mapIndexed { index, param -> paramShapes[index].legacyArgument(param.name?.asString() ?: "_") }
+    .mapIndexed { index, param -> names.legacyArgument(index, param.name?.asString() ?: "_") }
     .joinToString(", ")
 
   val paramPrelude: String = buildString {
     method.parameters.forEachIndexed { index, param ->
-      val prelude: String? = paramShapes[index].legacyPrelude(param.name?.asString() ?: "_")
+      val prelude: String? =
+        paramShapes[index].legacyPrelude(param.name?.asString() ?: "_", names.loweredLocals[index])
       if (prelude != null) appendLine(prelude)
     }
   }
@@ -306,7 +310,9 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       val resolved: KSType = param.type.resolve().expandAliases()
       val type: String = resolved.declaration.qualifiedName?.asString()
         ?: resolved.declaration.simpleName.asString()
-      addLegacyScalarParameter(paramName, paramShapes[index], ClassName.bestGuess(type))
+      addLegacyScalarParameter(
+        paramName, paramShapes[index], ClassName.bestGuess(type), names.hasValueSlots[index],
+      )
     }
   }
 
@@ -327,7 +333,11 @@ internal fun FileSpec.Builder.addFlowMethodExports(
 
     acquireBuilder
       .returns(cOpaquePointer)
-      .addCode(buildStateFlowAcquireMethodBody(qualifiedName, methodName, paramCall, paramPrelude))
+      .addCode(
+        buildStateFlowAcquireMethodBody(
+          qualifiedName, methodName, paramCall, paramPrelude, names.obj,
+        )
+      )
 
     addFunction(acquireBuilder.build())
 
@@ -355,20 +365,20 @@ internal fun FileSpec.Builder.addFlowMethodExports(
     .builder("export_${prefix}_${cname}_collect")
     .addAnnotation(cNameAnnotation("${prefix}_${cname}_collect", ownedBy(method)))
     .addParameter("handle", cOpaquePointer)
-    .addParameter("scopeHandle", cOpaquePointer)
+    .addParameter(names.scopeHandle, cOpaquePointer)
 
   builder.addFlowParameters()
 
   builder
-    .addParameter("onNextPtr", cOpaquePointer)
-    .addParameter("onCompletePtr", cOpaquePointer)
-    .addParameter("onErrorPtr", cOpaquePointer)
-    .addParameter("userData", cOpaquePointer)
+    .addParameter(names.onNext, cOpaquePointer)
+    .addParameter(names.onComplete, cOpaquePointer)
+    .addParameter(names.onError, cOpaquePointer)
+    .addParameter(names.userData, cOpaquePointer)
     .returns(cOpaquePointer)
     .addCode(
       buildFlowMethodCollectBody(
         qualifiedName, methodName, paramCall, paramPrelude, flowElementQualified,
-        elementNullable, memberNullable, flowElementCollection,
+        elementNullable, memberNullable, flowElementCollection, names,
       )
     )
 
@@ -394,7 +404,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       .addCode(
         buildStateFlowValueMethodBody(
           qualifiedName, methodName, paramCall, paramPrelude, elementNullable, memberNullable,
-          flowElementCollection,
+          flowElementCollection, names.obj,
         )
       )
 
@@ -413,7 +423,9 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       hasValueBuilder
         .returns(Boolean::class)
         .addCode(
-          buildStateFlowHasValueMethodBody(qualifiedName, methodName, paramCall, paramPrelude)
+          buildStateFlowHasValueMethodBody(
+            qualifiedName, methodName, paramCall, paramPrelude, names.obj,
+          )
         )
 
       addFunction(hasValueBuilder.build())
@@ -490,22 +502,28 @@ private fun buildFlowMethodCollectBody(
   elementNullable: Boolean = false,
   memberNullable: Boolean = false,
   elementCollection: BridgeType.Collection?,
+  // Every fixed slot and local below is minted apart from the member's own parameter names.
+  names: ForwardLegacyNames,
 ): String = buildString {
-  appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
+  val obj: String = names.obj
+  val scope: String = names.scope
+  val emit: String = names.emit
+  appendLine("val $obj = handle.asStableRef<$qualifiedName>().get()")
   // ADR-128: as the property route above, with ADR-114's eager parameter copy still emitted
   // *before* the helper call. The member call itself stays inside the body lambda: a Flow-returning
   // method that throws on the way to its Flow reaches C# as `onError`, which is the shipped
   // behaviour and the reason the helper takes a body rather than a `Flow` argument.
-  appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
+  appendLine("val $scope = ${names.scopeHandle}.asStableRef<CoroutineScope>().get()")
   append(paramPrelude)
   appendLine(
-    "return collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData) { emit ->"
+    "return collectForCSharp($scope, ${names.onNext}, ${names.onComplete}, ${names.onError}, " +
+        "${names.userData}) { $emit ->"
   )
   appendLine(
-    "  obj.${memberAccessor("$methodName($paramCall)", memberNullable)}.collect { value ->",
+    "  $obj.${memberAccessor("$methodName($paramCall)", memberNullable)}.collect { value ->",
   )
   appendLine("    val itemRef = ${itemBoxExpr(elementNullable, elementCollection)}")
-  appendLine("    emit(itemRef)")
+  appendLine("    $emit(itemRef)")
   appendLine("  }")
   append("}")
 }
@@ -539,15 +557,16 @@ private fun buildStateFlowValueMethodBody(
   elementNullable: Boolean = false,
   memberNullable: Boolean = false,
   elementCollection: BridgeType.Collection?,
+  obj: String,
 ): String = buildString {
-  appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
+  appendLine("val $obj = handle.asStableRef<$qualifiedName>().get()")
   append(paramPrelude)
   if (!elementNullable && !memberNullable) {
     val read: String =
-      flowValueExpression("obj.$methodName($paramCall).value", elementCollection)
+      flowValueExpression("$obj.$methodName($paramCall).value", elementCollection)
     append("return NugetHandles.retain($read as Any)")
   } else {
-    appendLine("val v = obj.${memberAccessor("$methodName($paramCall)", memberNullable)}.value")
+    appendLine("val v = $obj.${memberAccessor("$methodName($paramCall)", memberNullable)}.value")
     append("return if (v != null) NugetHandles.retain(v) else null")
   }
 }
@@ -567,10 +586,11 @@ private fun buildStateFlowHasValueMethodBody(
   methodName: String,
   paramCall: String,
   paramPrelude: String,
+  obj: String,
 ): String = buildString {
-  appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
+  appendLine("val $obj = handle.asStableRef<$qualifiedName>().get()")
   append(paramPrelude)
-  append("return obj.$methodName($paramCall) != null")
+  append("return $obj.$methodName($paramCall) != null")
 }
 
 /**
@@ -625,10 +645,11 @@ private fun buildStateFlowAcquireMethodBody(
   methodName: String,
   paramCall: String,
   paramPrelude: String,
+  obj: String,
 ): String = buildString {
-  appendLine("val obj = handle.asStableRef<$qualifiedName>().get()")
+  appendLine("val $obj = handle.asStableRef<$qualifiedName>().get()")
   append(paramPrelude)
-  append("return NugetHandles.retain(obj.$methodName($paramCall) as Any)")
+  append("return NugetHandles.retain($obj.$methodName($paramCall) as Any)")
 }
 
 /**
