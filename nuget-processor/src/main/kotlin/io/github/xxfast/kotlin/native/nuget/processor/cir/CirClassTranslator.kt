@@ -47,6 +47,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceMe
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declared
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declaresLexically
 import io.github.xxfast.kotlin.native.nuget.processor.forward.interfaceMethodSymbols
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
@@ -1722,15 +1723,16 @@ internal fun flowMembers(
       return@flatMap listOf(acquireImport, heldSetValueImport, heldMethod)
     }
 
+    // The fixed slots and the collect lambda's parameters move off a user parameter spelled like
+    // one of them; the lambda's would otherwise shadow the user's argument inside the native call.
+    val flowNames: ForwardLegacyNames = legacyCsharpNames(method.parameters, classifier)
+    val callbackNames: List<String> =
+      listOf(flowNames.onNext, flowNames.onComplete, flowNames.onError, flowNames.userData)
     val nativeParams: List<CirParameter> = listOf(
       CirParameter("handle", "IntPtr"),
-      CirParameter("scopeHandle", "IntPtr"),
-    ) + methodParams.nativeImportParameters() + listOf(
-      CirParameter("onNext", "IntPtr"),
-      CirParameter("onComplete", "IntPtr"),
-      CirParameter("onError", "IntPtr"),
-      CirParameter("userData", "IntPtr"),
-    )
+      CirParameter(flowNames.scopeHandle, "IntPtr"),
+    ) + methodParams.nativeImportParameters() +
+        callbackNames.map { name -> CirParameter(name, "IntPtr") }
 
     val nativeImport = CirDllImport(
       libraryName = libraryName,
@@ -1742,10 +1744,11 @@ internal fun flowMembers(
     )
 
     val paramNames: String = methodParams.joinToString(", ") { it.nativeArgument }
+    val callbackArgs: String = callbackNames.joinToString(", ")
     val nativeCallArgs: String = if (paramNames.isEmpty()) {
-      "_handle, GetOrCreateScope(), onNext, onComplete, onError, userData"
+      "_handle, GetOrCreateScope(), $callbackArgs"
     } else {
-      "_handle, GetOrCreateScope(), $paramNames, onNext, onComplete, onError, userData"
+      "_handle, GetOrCreateScope(), $paramNames, $callbackArgs"
     }
 
     if (isStateFlowMethod) {
@@ -1792,6 +1795,7 @@ internal fun flowMembers(
         isStateFlowNullableMember = isNullableMember,
         stateFlowHasValueNativeName =
           if (isNullableMember) "${nativeStem}HasValue" else "",
+        flowCallbackNames = callbackNames,
       )
 
       return@flatMap listOfNotNull(
@@ -1811,6 +1815,7 @@ internal fun flowMembers(
       isFlow = true,
       flowElementType = flowCsElementType,
       flowElementRead = flowElementRead,
+      flowCallbackNames = callbackNames,
     )
 
     listOf(nativeImport, flowMethod)
@@ -1911,15 +1916,18 @@ internal fun suspendMembers(
       }
     }
 
+    // The fixed slots move off a user parameter spelled `scopeHandle` / `userData`, never the
+    // user's parameter; the Kotlin export mints the same way (`legacyKotlinNames`).
+    val slotNames: ForwardLegacyNames = legacyCsharpNames(method.parameters, classifier)
     val nativeParams: List<CirParameter> = listOf(
       CirParameter("handle", "IntPtr"),
-      CirParameter("scopeHandle", "IntPtr"),
+      CirParameter(slotNames.scopeHandle, "IntPtr"),
     ) + methodParams.nativeImportParameters() +
         listOf(
           // ADR-102: a raw thunk address, not a delegate the marshaller would have to build a
           // native-to-managed stub for. The native symbol is unchanged; Kotlin is untouched.
-          CirParameter("callback", "IntPtr"),
-          CirParameter("userData", "IntPtr"),
+          CirParameter(slotNames.callback, "IntPtr"),
+          CirParameter(slotNames.userData, "IntPtr"),
         )
 
     val nativeImport = CirDllImport(
@@ -1940,7 +1948,7 @@ internal fun suspendMembers(
       // (ADR-023), which is a parameter of the C# member and therefore needs a tag of its own the
       // moment any other parameter has one (CS1573, fatal under `GeneratedBindingsCheck`).
       doc = method.forwardKdoc(expects)?.toCirDoc(
-        methodParams.map { it.name } + ASYNC_CANCELLATION_PARAMETER,
+        methodParams.map { it.name } + asyncCancellationParameter(methodParams),
         hasResult = !isUnit,
       ),
       name = "${csMethodName}Async",
@@ -2024,15 +2032,18 @@ internal fun suspendMembers(
     val methodParams: List<CirParameter> =
       legacyRouteParameters(method.parameters, classifier, tracker)
 
+    // The fixed slots move off a user parameter spelled `scopeHandle` / `userData`, never the
+    // user's parameter; the Kotlin export mints the same way (`legacyKotlinNames`).
+    val slotNames: ForwardLegacyNames = legacyCsharpNames(method.parameters, classifier)
     val nativeParams: List<CirParameter> = listOf(
       CirParameter("handle", "IntPtr"),
-      CirParameter("scopeHandle", "IntPtr"),
+      CirParameter(slotNames.scopeHandle, "IntPtr"),
     ) + methodParams.nativeImportParameters() +
         listOf(
           // ADR-102: a raw thunk address, not a delegate the marshaller would have to build a
           // native-to-managed stub for. The native symbol is unchanged; Kotlin is untouched.
-          CirParameter("callback", "IntPtr"),
-          CirParameter("userData", "IntPtr"),
+          CirParameter(slotNames.callback, "IntPtr"),
+          CirParameter(slotNames.userData, "IntPtr"),
         )
 
     val nativeImport = CirDllImport(
@@ -2050,7 +2061,7 @@ internal fun suspendMembers(
       // ADR-150: the suspend function's own KDoc, on its `Async` projection. `@return` documents
       // the awaited value, which is what the `Task<T>` yields.
       doc = method.forwardKdoc(expects)?.toCirDoc(
-        methodParams.map { it.name } + ASYNC_CANCELLATION_PARAMETER,
+        methodParams.map { it.name } + asyncCancellationParameter(methodParams),
         hasResult = true,
       ),
       name = "${csMethodName}Async",
@@ -4278,9 +4289,11 @@ private fun translateInterfaceBridgeMethod(
 /**
  * ADR-150: the generator's own trailing parameter on every `Async` projection (ADR-023). It is a
  * C# parameter like any other as far as the XML-doc pass is concerned, so it takes an (empty) tag
- * whenever the author documented any of the declared ones.
+ * whenever the author documented any of the declared ones. Its name is the one `renderAsyncMethod`
+ * declares, `cancellationToken` unless a user parameter already has it.
  */
-private const val ASYNC_CANCELLATION_PARAMETER: String = "cancellationToken"
+private fun asyncCancellationParameter(parameters: List<CirParameter>): String =
+  CirAsyncLocals.of(parameters).cancellationToken
 
 /**
  * ADR-039 amendment (2026-09-26): a by-value listener parameter's C# type; the gate admits only

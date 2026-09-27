@@ -18,6 +18,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticS
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesCsharpType
@@ -784,10 +785,12 @@ internal fun translateSuspendFunction(
 
   // ADR-102: raw thunk address (NugetThunks.NugetAsyncCallbackPtr), not a marshalled delegate.
   val callbackType: String = "IntPtr"
+  // The trailing slot moves off a user parameter spelled `userData`, as the Kotlin export's does.
+  val slotNames: ForwardLegacyNames = legacyCsharpNames(func.parameters, classifier)
   val nativeParams: List<CirParameter> = params.nativeImportParameters() +
       listOf(
-        CirParameter("callback", callbackType),
-        CirParameter("userData", "IntPtr"),
+        CirParameter(slotNames.callback, callbackType),
+        CirParameter(slotNames.userData, "IntPtr"),
       )
 
   val nativeImport = CirDllImport(

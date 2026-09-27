@@ -1008,10 +1008,13 @@ private fun dispatchedInvocation(plan: ForwardCallablePlan, receiver: ForwardAbi
       plan, receiver, parameters.joinToString(", ") { parameter -> loweredArgument(parameter) },
     )
   }
-  fun local(parameter: ForwardPublicParameter): String = "default_${parameter.name}"
-  val arms: List<String> = (0 until (1 shl defaulted.size)).map { mask ->
+  // The planner minted these apart from every ABI slot of this export, so neither can shadow a
+  // user parameter spelled `default_limit` or `mask`.
+  fun local(parameter: ForwardPublicParameter): String = parameter.defaultLocal
+  val mask: String = plan.publicSignature.dispatchMask
+  val arms: List<String> = (0 until (1 shl defaulted.size)).map { bits ->
     val set: Set<ForwardPublicParameter> = defaulted
-      .filterIndexed { bit, _ -> mask and (1 shl bit) != 0 }
+      .filterIndexed { bit, _ -> bits and (1 shl bit) != 0 }
       .toSet()
     // Named from the first defaulted parameter on: an omitted one shifts every later position, and
     // so does an unroutable trailing default the plan dropped, which this list cannot see.
@@ -1028,7 +1031,7 @@ private fun dispatchedInvocation(plan: ForwardCallablePlan, receiver: ForwardAbi
       }
       if (named) "${parameter.kotlinName.kotlinIdentifier()} = $value" else value
     }.joinToString(", ")
-    "$mask -> ${invocationExpression(plan, receiver, arguments)}"
+    "$bits -> ${invocationExpression(plan, receiver, arguments)}"
   }
   return buildString {
     appendLine("run {")
@@ -1036,13 +1039,13 @@ private fun dispatchedInvocation(plan: ForwardCallablePlan, receiver: ForwardAbi
     // is lowered inside the arms that set it, the only place its lambda type can be inferred.
     defaulted.filter { parameter -> parameter.default?.encoding != ForwardDefaultEncoding.PRESENCE }
       .forEach { parameter -> appendLine("  val ${local(parameter)} = ${loweredArgument(parameter)}") }
-    appendLine("  var mask = 0")
+    appendLine("  var $mask = 0")
     defaulted.forEachIndexed { bit, parameter ->
       val present: String =
-        if (parameter.hasPresenceSlot) "${parameter.name}IsSet" else "${local(parameter)} != null"
-      appendLine("  if ($present) mask = mask or ${1 shl bit}")
+        if (parameter.hasPresenceSlot) parameter.presenceSlot else "${local(parameter)} != null"
+      appendLine("  if ($present) $mask = $mask or ${1 shl bit}")
     }
-    appendLine("  when (mask) {")
+    appendLine("  when ($mask) {")
     arms.forEach { arm -> appendLine("    $arm") }
     appendLine("    else -> error(\"unreachable\")")
     appendLine("  }")
@@ -1317,7 +1320,9 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
     // author wrote it. The reinterpret lives inside the lambda deliberately: it is a cast, it costs
     // nothing per invocation, and it keeps the expression self-contained (a second callback
     // parameter on the same member cannot collide with this one's locals).
-    is BridgeType.Callback -> loweredCallbackExpression(parameter.name, type)
+    is BridgeType.Callback -> loweredCallbackExpression(
+      parameter.name, type, parameter.callbackPtrSlot, parameter.callbackUserDataSlot,
+    )
 
     // ADR-151: the handle holds the Kotlin ByteArray `nuget_bytes_create` built from the caller's
     // buffer, so the lowering is the plain handle read an object parameter uses.
@@ -1345,20 +1350,20 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
       // ADR-098 amendment (boundary nullability part C): `Char?` arrives as the same adjacent pair
       // and needs no conversion -- the by-value slot already IS a Kotlin `Char`.
       is BridgeType.Primitive, BridgeType.Char ->
-        "if (${parameter.name}HasValue) ${parameter.name} else null"
+        "if (${parameter.hasValueSlot}) ${parameter.name} else null"
 
       // ADR-080: same HasValue guard, with the ordinal lookup the non-null enum branch uses.
       is BridgeType.Enum ->
-        "if (${parameter.name}HasValue) ${inner.qualifiedName}.entries[${parameter.name}] else null"
+        "if (${parameter.hasValueSlot}) ${inner.qualifiedName}.entries[${parameter.name}] else null"
 
       // ADR-076: same HasValue-guard shape as the nullable Primitive case above, plus the same
       // TICKS_TO_INSTANT conversion the non-nullable Instant branch above uses.
       BridgeType.Instant ->
-        "if (${parameter.name}HasValue) instantFromDotNetTicks(${parameter.name}) else null"
+        "if (${parameter.hasValueSlot}) instantFromDotNetTicks(${parameter.name}) else null"
 
       // ADR-103: the same, into a Duration.
       BridgeType.Duration ->
-        "if (${parameter.name}HasValue) durationFromDotNetTicks(${parameter.name}) else null"
+        "if (${parameter.hasValueSlot}) durationFromDotNetTicks(${parameter.name}) else null"
 
       // ADR-075: a nullable collection *parameter* (e.g. a data class's `notes: List<String>?`
       // constructor parameter, mirroring `Visit.notes` as a property) is now planned when its
@@ -1377,7 +1382,7 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
       is BridgeType.ValueClass ->
         if (inner.underlying is BridgeType.Primitive || inner.underlying is BridgeType.Enum) {
           val lowered: String = valueClassUnderlyingLowering(parameter.name, inner.underlying)
-          "if (${parameter.name}HasValue) ${inner.qualifiedName}($lowered) else null"
+          "if (${parameter.hasValueSlot}) ${inner.qualifiedName}($lowered) else null"
         } else {
           val lowered: String = valueClassUnderlyingLowering("it", inner.underlying)
           "${parameter.name}?.let { ${inner.qualifiedName}($lowered) }"
@@ -1400,7 +1405,13 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
  * the box with `WrapString` and no C# owner ever frees it, so this side releases it after reading.
  * A by-value scalar (and an enum ordinal) mints nothing in either direction.
  */
-private fun loweredCallbackExpression(name: String, type: BridgeType.Callback): String {
+private fun loweredCallbackExpression(
+  name: String,
+  type: BridgeType.Callback,
+  // The planner-minted slot names (`ForwardPublicParameter.callbackPtrSlot` / `...UserDataSlot`).
+  ptrSlot: String,
+  userDataSlot: String,
+): String {
   fun wireKotlinType(component: BridgeType): String = when (component) {
     is BridgeType.Primitive ->
       if (component.kind == PrimitiveKind.BOOLEAN) "Byte" else component.kind.simpleKotlinName()
@@ -1436,7 +1447,7 @@ private fun loweredCallbackExpression(name: String, type: BridgeType.Callback): 
           BridgeType.String -> "NugetHandles.retain($argument as Any)"
           else -> "NugetHandles.retain($argument)"
         }
-      } + "${name}UserData" + "nugetErr"
+      } + userDataSlot + "nugetErr"
       ).joinToString(", ")
 
   val header: String =
@@ -1444,7 +1455,7 @@ private fun loweredCallbackExpression(name: String, type: BridgeType.Callback): 
   return buildString {
     appendLine(header)
     appendLine(
-      "  val ${name}Fn = ${name}Ptr.reinterpret<CFunction<($signature) -> $resultWire>>()"
+      "  val ${name}Fn = $ptrSlot.reinterpret<CFunction<($signature) -> $resultWire>>()"
     )
     // ADR-161: the ADR-160 plan route's per-call callback goes through the same error channel as
     // the three legacy routes. The `!!` stays outside `nugetCallbackCall` so the managed exception

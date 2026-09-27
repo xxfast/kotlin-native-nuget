@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.freshName
+
 /**
  * One flow thunk: unlike every other shape the ctx is not the delegate itself but the shared
  * [NugetFlowCallbacks] state, so the thunk selects [member] out of it.
@@ -338,7 +340,7 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
   appendLine("        {")
   appendLine("            if (_handle == IntPtr.Zero)")
   appendLine("                throw new ObjectDisposedException(nameof($className));")
-  appendLine("            return new KotlinFlow<${method.flowElementType}>((onNext, onComplete, onError, userData) =>")
+  appendLine("            return new KotlinFlow<${method.flowElementType}>((${method.flowCallbackNames.joinToString(", ")}) =>")
   // ADR-114: the collect delegate runs per subscription, so the wire container is built inside it
   // and disposed the moment the native call returns. Kotlin has already copied it out.
   // ADR-123: a collection element adds its own materialiser after the delegate; every other
@@ -416,7 +418,7 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
       appendLine("                return null;")
     }
   }
-  appendLine("            return new KotlinStateFlow<${method.flowElementType}>((onNext, onComplete, onError, userData) =>")
+  appendLine("            return new KotlinStateFlow<${method.flowElementType}>((${method.flowCallbackNames.joinToString(", ")}) =>")
   appendScopedNativeCall(method, "                ", "$nativeName(${method.body})", ",")
   // ADR-123: `read:` is named, so it skips the optional `ownedHandle` slot only the ADR-068
   // awaited-suspend variant fills. A non-collection element passes nothing at all.
@@ -447,29 +449,34 @@ private fun StringBuilder.renderHeldStateFlowMethod(method: CirMethod, className
   // ADR-114: a collection argument's wire handle lives only for the acquire call, which is the
   // one call that reads it; the flow the call returns owns nothing of it.
   val acquire: String = "${method.nativeName}(${method.body})"
+  // The body's own locals share the method scope with the user's parameters, so they move off a
+  // parameter spelled like either; only this renderer declares or reads them.
+  val taken: MutableSet<String> = method.parameters.localScopeNames()
+  val flow: String = freshName("flow", taken).also { taken += it }
+  val collectScope: String = freshName("collectScope", taken)
   val scoped: List<String>? =
-    method.parameters.collectionScopedCall("            ", "flow = $acquire", returns = false)
+    method.parameters.collectionScopedCall("            ", "$flow = $acquire", returns = false)
   if (scoped == null) {
-    appendLine("            IntPtr flow = $acquire;")
+    appendLine("            IntPtr $flow = $acquire;")
   } else {
-    appendLine("            IntPtr flow = IntPtr.Zero;")
+    appendLine("            IntPtr $flow = IntPtr.Zero;")
     scoped.forEach { appendLine(it) }
   }
-  appendLine("            IntPtr collectScope = GetOrCreateScope();")
+  appendLine("            IntPtr $collectScope = GetOrCreateScope();")
   appendLine("            return new KotlinMutableStateFlow<$element>(")
   appendLine("                (onNext, onComplete, onError, userData) =>")
-  appendLine("                    NugetStateFlowNative.Collect(flow, collectScope, onNext, onComplete, onError, userData),")
-  appendLine("                () => NugetStateFlowNative.Value(flow),")
+  appendLine("                    NugetStateFlowNative.Collect($flow, $collectScope, onNext, onComplete, onError, userData),")
+  appendLine("                () => NugetStateFlowNative.Value($flow),")
   appendLine("                v =>")
   appendLine("                {")
   if (method.isMutableStateFlowElementObject) {
     appendLine("                    if (v is null) throw new ArgumentNullException(nameof(v));")
   }
   val writeReceiver: String = if (method.isMutableStateFlowElementObject) "v._handle" else "v"
-  appendLine("                    ${method.stateFlowSetValueNativeName}(flow, $writeReceiver, out IntPtr error);")
+  appendLine("                    ${method.stateFlowSetValueNativeName}($flow, $writeReceiver, out IntPtr error);")
   appendLine("                    if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
   appendLine("                },")
-  appendLine("                flow);")
+  appendLine("                $flow);")
   appendLine("        }")
   appendLine()
 }

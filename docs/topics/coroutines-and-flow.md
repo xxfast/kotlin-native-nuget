@@ -208,6 +208,10 @@ Task<string> napTask = service.LongNapAsync(cts.Token);
 cts.Cancel(); // napTask throws TaskCanceledException
 ```
 
+If the Kotlin function itself declares a parameter literally named `cancellationToken`, that name
+stays on the user's own parameter and the generated token is renamed `cancellationToken_` instead
+(see [C# names](primitives-and-strings.md#c-names)).
+
 `DisposeAsync()` drains instead of cancelling: it waits for in-flight coroutines to finish
 naturally before releasing the handle.
 

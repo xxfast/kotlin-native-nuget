@@ -5,6 +5,7 @@ import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
+import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSValueParameter
@@ -667,18 +668,109 @@ private fun KSType.legacyDescription(): String {
 }
 
 /**
- * The Kotlin local a legacy export binds a lowered collection argument to. Named apart from the
- * parameter so the export still names its ABI slot after the declaration.
+ * The generator names one legacy-route member derives from its parameters, minted once per member
+ * by `freshName` so a user parameter spelled like one of them keeps its name and the generator's
+ * moves instead (the plan route's `ForwardPublicParameter.hasValueSlot` rule, on a route that has
+ * no plan to carry it). Every builder of either half takes its names from here, never rebuilds
+ * them: a rebuilt `"${name}HasValue"` would resolve to the user's own `limitHasValue` after a
+ * rename and compile clean.
+ *
+ * Each half builds its own instance from its own spelling of the parameter names (Kotlin from the
+ * declaration, C# from `csharpParameterName`), because each declares these names in its own
+ * signature. The ABI is positional and ADR-055 compares wire types, so the two can never disagree
+ * on the wire.
+ *
+ * Only a name a parameter actually uses is minted.
  */
-internal fun legacyLoweredName(parameter: String): String = "${parameter}Arg"
+internal class ForwardLegacyNames(
+  parameters: List<String>,
+  shapes: List<ForwardLegacyParameterShape>,
+  // Which half this instance names: the two spell their callback slots differently (`onNextPtr`
+  // in the Kotlin export, `onNext` in the `DllImport` and the collect lambda) and each has locals
+  // the other lacks.
+  csharp: Boolean = false,
+) {
+  private val taken: MutableSet<String> = parameters.toMutableSet()
+
+  private fun mint(base: String): String = freshName(base, taken).also { taken += it }
+
+  /**
+   * Issue #299: per parameter, the BOOLEAN slot a fanned-out
+   * [ForwardLegacyParameterShape.NullableScalar] adds before its value slot, or null.
+   * `${name}HasValue` unless taken, the same spelling the plan route gives the same wire.
+   */
+  val hasValueSlots: List<String?> = parameters.mapIndexed { index, name ->
+    val shape: ForwardLegacyParameterShape = shapes[index]
+    val fansOut: Boolean = shape is ForwardLegacyParameterShape.NullableScalar && shape.fansOut
+    if (fansOut) mint("${name}HasValue") else null
+  }
+
+  /**
+   * Per parameter, the Kotlin local a lowered shape is bound to (`${name}Arg` unless taken), or
+   * null. Named apart from the parameter so the export still names its ABI slot after the
+   * declaration.
+   */
+  val loweredLocals: List<String?> = parameters.mapIndexed { index, name ->
+    if (!csharp && shapes[index].isLegacyLowered()) mint("${name}Arg") else null
+  }
+
+  /**
+   * C# only: per parameter, the wire-handle local a marshalled collection is built into
+   * (`${name}Handle` unless taken), or null.
+   */
+  val handleLocals: List<String?> = parameters.mapIndexed { index, name ->
+    val marshalled: Boolean = csharp && shapes[index] is ForwardLegacyParameterShape.Marshalled
+    if (marshalled) mint("${name}Handle") else null
+  }
+
+  /** The member routes' class-scope slot. */
+  val scopeHandle: String = mint("scopeHandle")
+
+  /**
+   * The Flow routes' three callback slots: `onNextPtr` / ... in the Kotlin export, `onNext` / ...
+   * in the `DllImport` and as the C# collect lambda's parameters. A lambda parameter spelled like a
+   * user parameter would shadow it, and the user's argument would silently become the callback.
+   */
+  val onNext: String = mint(if (csharp) "onNext" else "onNextPtr")
+  val onComplete: String = mint(if (csharp) "onComplete" else "onCompletePtr")
+  val onError: String = mint(if (csharp) "onError" else "onErrorPtr")
+
+  /** The suspend routes' completion-callback slot: `callbackPtr` in Kotlin, `callback` in C#. */
+  val callback: String = mint(if (csharp) "callback" else "callbackPtr")
+
+  /**
+   * The suspend and Flow routes' trailing callback-context slot (and C# collect-lambda parameter).
+   */
+  val userData: String = mint("userData")
+
+  /** Kotlin only: the export body's receiver and scope locals. */
+  val obj: String = if (csharp) "obj" else mint("obj")
+  val scope: String = if (csharp) "scope" else mint("scope")
+
+  /**
+   * Kotlin only: the Flow body's `collectForCSharp { emit -> ... }` lambda parameter, which the
+   * member call sits inside: spelled like a user parameter it would shadow the argument.
+   */
+  val emit: String = if (csharp) "emit" else mint("emit")
+}
+
+/** [ForwardLegacyNames] for a member's declared parameters, in the Kotlin export's spelling. */
+internal fun legacyKotlinNames(
+  parameters: List<KSValueParameter>,
+  shapes: List<ForwardLegacyParameterShape>,
+): ForwardLegacyNames =
+  ForwardLegacyNames(parameters.map { parameter -> parameter.name?.asString() ?: "_" }, shapes)
 
 /**
  * ADR-114 alternative 1: the eager Kotlin copy. Emitted *before* `scope.launch`, so the wire
  * container has been copied out by the time the export returns and the C# side's `finally`-dispose
  * can never be a use-after-free. Reuses the ordinary route's lowering verbatim.
  */
-internal fun legacyLoweringStatement(parameter: String, type: BridgeType.Collection): String =
-  "val ${legacyLoweredName(parameter)} = ${loweredCollectionExpression(parameter, type)}"
+internal fun legacyLoweringStatement(
+  parameter: String,
+  local: String,
+  type: BridgeType.Collection,
+): String = "val $local = ${loweredCollectionExpression(parameter, type)}"
 
 /**
  * ADR-122: the eager dereference of a borrowed handle parameter, the same expression the ordinary
@@ -688,8 +780,11 @@ internal fun legacyLoweringStatement(parameter: String, type: BridgeType.Collect
  * Inlined at the call site it would instead be evaluated inside `scope.launch`, after the export
  * has returned, which is exactly the lifetime hazard ADR-114 designed out.
  */
-internal fun legacyHandleStatement(parameter: String, type: BridgeType.ObjectHandle): String =
-  "val ${legacyLoweredName(parameter)} = $parameter.asStableRef<${type.qualifiedName}>().get()"
+internal fun legacyHandleStatement(
+  parameter: String,
+  local: String,
+  type: BridgeType.ObjectHandle,
+): String = "val $local = $parameter.asStableRef<${type.qualifiedName}>().get()"
 
 /**
  * Whether the Kotlin export binds this parameter to an eagerly-evaluated local rather than calling
@@ -704,23 +799,14 @@ internal fun ForwardLegacyParameterShape.isLegacyLowered(): Boolean = when (this
 }
 
 /**
- * Issue #299: the name of the BOOLEAN slot a fanned-out
- * [ForwardLegacyParameterShape.NullableScalar] adds before [parameter]'s value slot, or null when
- * this parameter has no such slot. The same name the plan route gives it, so the two routes spell
- * one wire.
+ * The Kotlin expression the member is called with for parameter [index], spelled [parameter]: a
+ * lowered shape reads its eagerly-built local, a fanned-out nullable scalar is rebuilt from its
+ * has-value pair (the plan route's `ForwardKotlinPlanEmitter` text), everything else is the
+ * parameter itself.
  */
-internal fun ForwardLegacyParameterShape.legacyHasValueSlot(parameter: String): String? =
-  if (this is ForwardLegacyParameterShape.NullableScalar && fansOut) "${parameter}HasValue"
-  else null
-
-/**
- * The Kotlin expression the member is called with for [parameter]: a lowered shape reads its
- * eagerly-built local, a fanned-out nullable scalar is rebuilt from its has-value pair (the plan
- * route's `ForwardKotlinPlanEmitter` text), everything else is the parameter itself.
- */
-internal fun ForwardLegacyParameterShape.legacyArgument(parameter: String): String {
-  if (isLegacyLowered()) return legacyLoweredName(parameter)
-  val hasValue: String = legacyHasValueSlot(parameter) ?: return parameter
+internal fun ForwardLegacyNames.legacyArgument(index: Int, parameter: String): String {
+  loweredLocals[index]?.let { local -> return local }
+  val hasValue: String = hasValueSlots[index] ?: return parameter
   return "if ($hasValue) $parameter else null"
 }
 
@@ -731,10 +817,18 @@ internal fun ForwardLegacyParameterShape.legacyArgument(parameter: String): Stri
 internal fun legacyNullableScalarArgument(name: String): String =
   "$name.HasValue, $name.GetValueOrDefault()"
 
-/** The prelude line this parameter contributes, or null when it is passed through as-is. */
-internal fun ForwardLegacyParameterShape.legacyPrelude(parameter: String): String? = when (this) {
-  is ForwardLegacyParameterShape.Marshalled -> legacyLoweringStatement(parameter, type)
-  is ForwardLegacyParameterShape.Handle -> legacyHandleStatement(parameter, type)
+/**
+ * The prelude line this parameter contributes, or null when it is passed through as-is. [local] is
+ * its [ForwardLegacyNames.loweredLocals] entry, non-null exactly when this shape is lowered.
+ */
+internal fun ForwardLegacyParameterShape.legacyPrelude(
+  parameter: String,
+  local: String?,
+): String? = when (this) {
+  is ForwardLegacyParameterShape.Marshalled ->
+    legacyLoweringStatement(parameter, requireNotNull(local), type)
+  is ForwardLegacyParameterShape.Handle ->
+    legacyHandleStatement(parameter, requireNotNull(local), type)
   ForwardLegacyParameterShape.Plain,
   is ForwardLegacyParameterShape.NullableScalar,
   is ForwardLegacyParameterShape.Refused -> null

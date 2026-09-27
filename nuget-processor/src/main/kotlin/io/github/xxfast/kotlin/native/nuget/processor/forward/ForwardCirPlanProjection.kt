@@ -626,10 +626,12 @@ internal object ForwardCirPlanProjection {
   /**
    * ADR-164: an `Optional<T>` parameter's value, read once into a local named after the parameter
    * so every existing prelude, argument and cleanup works on it unchanged, and its `IsSet` slot
-   * argument. The local is declared before any `try`, since reading `.Value` cannot fail.
+   * argument. The local is declared before any `try`, since reading `.Value` cannot fail. Its name
+   * is the planner's [ForwardPublicParameter.optionalLocal], so a sibling user parameter spelled
+   * `limitValue` keeps its name and the local moves.
    */
   private fun ForwardPublicParameter.optionalValue(): ForwardPublicParameter =
-    copy(name = "${name}Value", default = null)
+    copy(name = optionalLocal, default = null)
 
   private fun ForwardPublicParameter.optionalPrelude(): ForwardCirHandleStep? {
     if (!isOptional) return null
@@ -705,24 +707,24 @@ internal object ForwardCirPlanProjection {
       BridgeType.Duration -> listOf("${parameter.csharpName}.Ticks")
       is BridgeType.ObjectHandle -> listOf("${parameter.csharpName}._handle")
       // ADR-147: the box [typeParameterPrelude] minted; the `finally` disposes it when owned.
-      is BridgeType.TypeParameter -> listOf("${parameter.csharpName}Box")
+      is BridgeType.TypeParameter -> listOf("${parameter.csharpLocal}Box")
       // ADR-040 sub-decision B: an interface-typed parameter's public static type is `IFoo`, which
       // does not carry `._handle` (that is only true of the generated `Foo` backing class). The
       // one shared reflective helper extracts it regardless of which concrete type implements
       // `IFoo`, and throws NotSupportedException for a C#-implemented (non-Kotlin-backed) one.
       // ADR-084 stage 3: the extraction moved into the prelude, because a C#-implemented value
       // mints a transfer handle that [interfaceCleanup] disposes once the crossing is done.
-      is BridgeType.Interface -> listOf("${parameter.csharpName}Handle")
+      is BridgeType.Interface -> listOf("${parameter.csharpLocal}Handle")
       // ADR-088: the transfer GCHandle allocated by [boundInterfacePrelude]. No `HandleOf`
       // reflection here: a bound interface's implementations are ordinary managed objects on this
       // side, Kotlin-backed or not, so the handle is simply an alloc over whatever came in.
-      is BridgeType.BoundInterface -> listOf("${parameter.csharpName}Handle")
-      is BridgeType.Collection -> listOf("${parameter.csharpName}Handle")
+      is BridgeType.BoundInterface -> listOf("${parameter.csharpLocal}Handle")
+      is BridgeType.Collection -> listOf("${parameter.csharpLocal}Handle")
       // ADR-151: the handle [bytesPrelude] minted with `NugetMarshal.CreateBytes`.
-      BridgeType.ByteArray -> listOf("${parameter.csharpName}Handle")
+      BridgeType.ByteArray -> listOf("${parameter.csharpLocal}Handle")
       // ADR-160: the two-slot ADR-102 pair -- the link-time thunk address, then the ADR-161 table
       // key [forwardCallbackPrelude] registered the managed delegate under.
-      is BridgeType.Callback -> forwardCallbackArguments(parameter.csharpName, type)
+      is BridgeType.Callback -> forwardCallbackArguments(parameter.csharpLocal, type)
       // ADR-077: the generated `readonly record struct` capitalizes the Kotlin underlying
       // property (`value` -> `Value`, CirClassTranslator); the unwrapped value is lowered to its
       // wire form per underlying (sub-item 4), and Kotlin re-wraps it on the other side.
@@ -743,9 +745,9 @@ internal object ForwardCirPlanProjection {
         // ADR-106: `Guid?` -- a null stays a null string, so the wire's null pointer is the null.
         BridgeType.Uuid -> listOf("${parameter.csharpName}?.ToString()")
         is BridgeType.ObjectHandle -> listOf("${parameter.csharpName}?._handle ?? IntPtr.Zero")
-        is BridgeType.Interface -> listOf("${parameter.csharpName}Handle")
+        is BridgeType.Interface -> listOf("${parameter.csharpLocal}Handle")
         // ADR-083/147: `Wrap<T>` already maps a null to `IntPtr.Zero`, so `T?` needs no guard.
-        is BridgeType.TypeParameter -> listOf("${parameter.csharpName}Box")
+        is BridgeType.TypeParameter -> listOf("${parameter.csharpLocal}Box")
 
         // ADR-098 amendment (boundary nullability part C): `char?` contributes the identical pair;
         // the value half stays a `char`, so the by-value slot keeps ADR-098's U2 marshalling.
@@ -773,9 +775,9 @@ internal object ForwardCirPlanProjection {
         // constructor parameter) shares [ForwardPropertyPlan]'s setter route exactly: the local
         // handle variable [collectionPrelude] built already folds the null check in, so the call
         // argument itself is unconditional either way.
-        is BridgeType.Collection -> listOf("${parameter.csharpName}Handle")
+        is BridgeType.Collection -> listOf("${parameter.csharpLocal}Handle")
         // ADR-151: the prelude folds the null into `IntPtr.Zero`, same as the collection arm.
-        BridgeType.ByteArray -> listOf("${parameter.csharpName}Handle")
+        BridgeType.ByteArray -> listOf("${parameter.csharpLocal}Handle")
         // ADR-077 sub-items 3/4: null propagation into the pointer-shaped marshalling; a C# null
         // ships the null pointer (null string reference, or IntPtr.Zero for a handle underlying).
         // ADR-079: a Primitive/Enum underlying has no null pointer, so it contributes the same
@@ -839,12 +841,13 @@ internal object ForwardCirPlanProjection {
     return forwardCallbackPrelude(
       parameter.csharpName, type,
       omittable = parameter.default?.encoding == ForwardDefaultEncoding.PRESENCE,
+      local = parameter.csharpLocal,
     )
   }
 
   private fun ForwardCallablePlan.callbackCleanup(parameter: ForwardPublicParameter): String? {
     if (parameter.type !is BridgeType.Callback) return null
-    return forwardCallbackCleanup(parameter.csharpName)
+    return forwardCallbackCleanup(parameter.csharpLocal)
   }
 
   private fun ForwardCallablePlan.bytesPrelude(
@@ -853,15 +856,16 @@ internal object ForwardCirPlanProjection {
     if (parameter.type.unwrapNullable() != BridgeType.ByteArray) return null
     val nullable: Boolean = parameter.type is BridgeType.Nullable
     val name: String = parameter.csharpName
+    val local: String = parameter.csharpLocal
     val value: String = if (nullable) {
       "$name != null ? NugetMarshal.CreateBytes($name) : IntPtr.Zero"
     } else {
       "NugetMarshal.CreateBytes($name)"
     }
     return ForwardCirHandleStep(
-      flat = "IntPtr ${name}Handle = $value;",
-      declarations = listOf("IntPtr ${name}Handle = IntPtr.Zero;"),
-      statement = "${name}Handle = $value;",
+      flat = "IntPtr ${local}Handle = $value;",
+      declarations = listOf("IntPtr ${local}Handle = IntPtr.Zero;"),
+      statement = "${local}Handle = $value;",
     )
   }
 
@@ -870,8 +874,8 @@ internal object ForwardCirPlanProjection {
    *  null-safe). */
   private fun ForwardCallablePlan.bytesCleanup(parameter: ForwardPublicParameter): String? {
     if (parameter.type.unwrapNullable() != BridgeType.ByteArray) return null
-    return "if (${parameter.csharpName}Handle != IntPtr.Zero) { " +
-        "NugetBytesNative.Dispose(${parameter.csharpName}Handle); }"
+    return "if (${parameter.csharpLocal}Handle != IntPtr.Zero) { " +
+        "NugetBytesNative.Dispose(${parameter.csharpLocal}Handle); }"
   }
 
   private fun ForwardCallablePlan.collectionPrelude(
@@ -891,9 +895,9 @@ internal object ForwardCirPlanProjection {
       "NugetMarshal.$factory($source)"
     }
     return ForwardCirHandleStep(
-      flat = "IntPtr ${parameter.csharpName}Handle = $value;",
-      declarations = listOf("IntPtr ${parameter.csharpName}Handle = IntPtr.Zero;"),
-      statement = "${parameter.csharpName}Handle = $value;",
+      flat = "IntPtr ${parameter.csharpLocal}Handle = $value;",
+      declarations = listOf("IntPtr ${parameter.csharpLocal}Handle = IntPtr.Zero;"),
+      statement = "${parameter.csharpLocal}Handle = $value;",
     )
   }
 
@@ -909,14 +913,14 @@ internal object ForwardCirPlanProjection {
     if (!parameter.type.isInterfaceInput()) return null
     val helper: String = if (nullable) "HandleOfOrZero" else "HandleOf"
     return ForwardCirHandleStep(
-      flat = "IntPtr ${parameter.csharpName}Handle = " +
-          "NugetMarshal.$helper(${parameter.csharpName}, out bool ${parameter.csharpName}Owned);",
+      flat = "IntPtr ${parameter.csharpLocal}Handle = " +
+          "NugetMarshal.$helper(${parameter.csharpName}, out bool ${parameter.csharpLocal}Owned);",
       declarations = listOf(
-        "IntPtr ${parameter.csharpName}Handle = IntPtr.Zero;",
-        "bool ${parameter.csharpName}Owned = false;",
+        "IntPtr ${parameter.csharpLocal}Handle = IntPtr.Zero;",
+        "bool ${parameter.csharpLocal}Owned = false;",
       ),
-      statement = "${parameter.csharpName}Handle = " +
-          "NugetMarshal.$helper(${parameter.csharpName}, out ${parameter.csharpName}Owned);",
+      statement = "${parameter.csharpLocal}Handle = " +
+          "NugetMarshal.$helper(${parameter.csharpName}, out ${parameter.csharpLocal}Owned);",
     )
   }
 
@@ -931,8 +935,8 @@ internal object ForwardCirPlanProjection {
     // ADR-135: the same zero guard `collectionCleanup` carries, for the same reason. This
     // `finally` is also reached by a throw from the mint itself, where the handle is still Zero,
     // and `nuget_dispose` is not null-safe.
-    return "if (${parameter.csharpName}Owned && ${parameter.csharpName}Handle != IntPtr.Zero) { " +
-        "NugetMarshal.Dispose(${parameter.csharpName}Handle); }"
+    return "if (${parameter.csharpLocal}Owned && ${parameter.csharpLocal}Handle != IntPtr.Zero) " +
+        "{ NugetMarshal.Dispose(${parameter.csharpLocal}Handle); }"
   }
 
   /**
@@ -946,19 +950,20 @@ internal object ForwardCirPlanProjection {
     val type: BridgeType.TypeParameter =
       parameter.type.unwrapNullable() as? BridgeType.TypeParameter ?: return null
     val name: String = parameter.csharpName
+    val local: String = parameter.csharpLocal
     val wrap = "NugetMarshal.Wrap<${type.name}>($name!, out"
     return ForwardCirHandleStep(
-      flat = "IntPtr ${name}Box = $wrap bool ${name}Owned);",
-      declarations = listOf("IntPtr ${name}Box = IntPtr.Zero;", "bool ${name}Owned = false;"),
-      statement = "${name}Box = $wrap ${name}Owned);",
+      flat = "IntPtr ${local}Box = $wrap bool ${local}Owned);",
+      declarations = listOf("IntPtr ${local}Box = IntPtr.Zero;", "bool ${local}Owned = false;"),
+      statement = "${local}Box = $wrap ${local}Owned);",
     )
   }
 
   /** ADR-099/147: dispose only a box this call site minted, and only once it exists. */
   private fun ForwardCallablePlan.typeParameterCleanup(parameter: ForwardPublicParameter): String? {
     if (parameter.type.unwrapNullable() !is BridgeType.TypeParameter) return null
-    return "if (${parameter.csharpName}Owned && ${parameter.csharpName}Box != IntPtr.Zero) { " +
-        "NugetMarshal.Dispose(${parameter.csharpName}Box); }"
+    return "if (${parameter.csharpLocal}Owned && ${parameter.csharpLocal}Box != IntPtr.Zero) { " +
+        "NugetMarshal.Dispose(${parameter.csharpLocal}Box); }"
   }
 
   /**
@@ -974,7 +979,7 @@ internal object ForwardCirPlanProjection {
     if (parameter.type !is BridgeType.BoundInterface) return null
     // No cleanup, so nothing to hoist: the local stays declared where it is used.
     return ForwardCirHandleStep(
-      "IntPtr ${parameter.csharpName}Handle = " +
+      "IntPtr ${parameter.csharpLocal}Handle = " +
           "GCHandle.ToIntPtr(GCHandle.Alloc(${parameter.csharpName}));",
     )
   }
@@ -995,8 +1000,8 @@ internal object ForwardCirPlanProjection {
     // `nuget_dispose`'s `handle.asStableRef<Any>().dispose()` is not null-safe. ROADMAP:130: the
     // guard is now unconditional rather than keyed on [nullable], because this runs in a `finally`
     // that a throw *from the creation itself* also reaches, where any handle is still Zero.
-    return "if (${parameter.csharpName}Handle != IntPtr.Zero) { " +
-        "$native.Dispose(${parameter.csharpName}Handle); }"
+    return "if (${parameter.csharpLocal}Handle != IntPtr.Zero) { " +
+        "$native.Dispose(${parameter.csharpLocal}Handle); }"
   }
 
   // ADR-069: default P/Invoke `out bool` marshalling reads 4 bytes; Kotlin's `BooleanVar` writes 1
@@ -1767,6 +1772,13 @@ internal val ForwardPublicSignature.csharpName: String get() = toCSharpName(name
 
 /** The C# spelling of a public parameter, at both its declaration and every use site. */
 internal val ForwardPublicParameter.csharpName: String get() = name.csharpParameterName()
+
+/**
+ * The C# stem of a parameter's wrapper locals (`${csharpLocal}Handle`, `...Owned`, `...Box`,
+ * `...Ctx`, `...Native`), from the planner's [ForwardPublicParameter.localStem]: the same as
+ * [csharpName] unless one of those locals is spelled like a sibling user parameter.
+ */
+internal val ForwardPublicParameter.csharpLocal: String get() = localStem.csharpParameterName()
 
 /**
  * ADR-150: this signature's KDoc as the C# tags of the member being rendered: `@param` entries

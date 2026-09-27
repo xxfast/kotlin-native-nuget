@@ -168,9 +168,32 @@ result, and as a `List` element or a `Map` value (`List<ByteArray>` is `IReadOnl
 compare by identity and every crossing copies, so a lookup could never succeed, nor as another array
 type (`IntArray`, `Array<T>`), nor as an extension receiver.
 
-## C# names
+## C# names {id="c-names"}
 
 Function and property names use PascalCase: `string()` becomes `String()`.
 For named arguments, use the generated parameter name. C# keywords are escaped, such as
 `@abstract`; reserved names such as `error`, `value`, and `handle` gain a trailing underscore
 (`error_`, `value_`, `handle_`). Positional calls are unaffected.
+
+Your own parameter names are kept even when they match a name the generator would otherwise use
+internally for a sibling parameter, such as a boolean flag next to a nullable value or a body local
+of a defaulted parameter's dispatch:
+
+```kotlin
+fun fill(limit: Int?, limitHasValue: Boolean): String = "$limit|$limitHasValue"
+```
+
+```C#
+public string Fill(int? limit, bool limitHasValue) // both arguments keep their own values
+```
+
+The one visible exception is a `suspend` parameter literally named `cancellationToken`: the user's
+name wins, and the generated cancellation token becomes `cancellationToken_`.
+
+```kotlin
+suspend fun pour(cancellationToken: Int): String = "poured $cancellationToken"
+```
+
+```C#
+public Task<string> PourAsync(int cancellationToken, CancellationToken cancellationToken_ = default)
+```

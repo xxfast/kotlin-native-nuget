@@ -259,6 +259,26 @@ widened `Settings(int? level = null)` directly with no extra overload needed.
 `<param>` rendering (ADR-149/150) needs nothing: `CirDocRenderer.kt:30` keys on the bridge
 parameter name, which is unchanged (**Verified** in source).
 
+## 2026-09-27: `default_`/`mask` collisions
+
+The dispatcher's own body locals could shadow a real parameter of the same name. `${name}IsSet`
+(the presence slot above) and the C# `${name}Value` local (the `Optional<T>` unwrap) were loud on a
+collision: the generated `@CName` export declared the colliding name twice and Kotlin/Native refused
+to compile it. The two Kotlin locals the dispatcher declares in the wrapper body, `val default_limit
+= ...` and `var mask = 0`, were not: a same-named user parameter is a real parameter in the same
+scope, so it was silently shadowed rather than rejected. `fun fill(limit: Int? = 3, default_limit:
+Int?)` compiled clean and read back `limit`'s resolved value for the user's `default_limit`
+argument; `fun fill(limit: Int = 3, mask: Int)` compiled clean and read back the dispatch bitmask
+(`0`/`1`) for the user's `mask` argument, never what C# actually passed.
+
+[ADR-062](062-forward-callable-plan.md)'s 2026-09-27 amendment covers the general rule and the fix:
+all four of this ADR's derived names (`presenceSlot`, `defaultLocal`, `dispatchMask`, `optionalLocal`
+on `ForwardPublicParameter` / `ForwardPublicSignature`) are now minted once through `freshName()` and
+read from the stored field everywhere, so a colliding user parameter keeps its own name and the
+generator's local moves instead (`default_limit` -> `default_limit_`). See that amendment for the
+mechanism and the fixture; this note exists only so a reader of this ADR's `default_`/`mask` locals
+does not conclude they are unguarded.
+
 ## Consequences
 
 - `new Config(mode: Mode.Always)` and `original.Copy(mode: Mode.Always)` compile and Kotlin

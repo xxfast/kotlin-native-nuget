@@ -542,6 +542,33 @@ internal data class ForwardPublicParameter(
    * from [name] only when the bridge name took a `_` suffix off a plan-owned name.
    */
   val kotlinName: String = name,
+  /**
+   * The generator names derived from [name], minted once by the planner (`freshName`) so a user
+   * parameter spelled like one of them keeps its own name and the generator's moves instead. Every
+   * reader takes the name from here: rebuilding `"${name}HasValue"` at a read site would resolve to
+   * the user's own `limitHasValue` parameter after a rename and compile clean, which is a silent
+   * misroute. The defaults are the unrenamed spellings, which is what a hand-built parameter (a
+   * receiver re-entering a projection as parameter zero) wants.
+   *
+   * [hasValueSlot]: the BOOLEAN slot a nullable value-type input fans out to before its value slot
+   * (ADR-076/079/080/098/103).
+   */
+  val hasValueSlot: String = "${name}HasValue",
+  /** ADR-164: the BOOLEAN `IsSet` presence slot of an `Optional<T>` or PRESENCE parameter. */
+  val presenceSlot: String = "${name}IsSet",
+  /** ADR-164: the Kotlin dispatcher's local holding this defaulted parameter's lowered value. */
+  val defaultLocal: String = "default_$name",
+  /** ADR-164: the C# wrapper's local holding an `Optional<T>` parameter's unwrapped `.Value`. */
+  val optionalLocal: String = "${name}Value",
+  /** ADR-160: the thunk-address and GCHandle-ctx slots a callback parameter fans out to. */
+  val callbackPtrSlot: String = "${name}Ptr",
+  val callbackUserDataSlot: String = "${name}UserData",
+  /**
+   * The stem of the C# wrapper's per-parameter locals (`${stem}Handle`, `${stem}Owned`,
+   * `${stem}Box`, `${stem}Ctx`, `${stem}Native`): the name the wrapper reads the value under
+   * unless one of those spellings is a sibling user parameter, then shifted by `_` until none is.
+   */
+  val localStem: String = name,
 ) {
   val isOptional: Boolean get() = default?.encoding == ForwardDefaultEncoding.OPTIONAL
 
@@ -596,6 +623,11 @@ internal data class ForwardPublicSignature(
    * removed. The planner is the only place that holds both the declaration and the omitted count.
    */
   val doc: ForwardKdoc? = null,
+  /**
+   * ADR-164: the Kotlin dispatcher's presence-bitmask local, `mask` unless a user parameter of this
+   * callable is spelled that way (minted with the per-parameter names of [parameters]).
+   */
+  val dispatchMask: String = "mask",
 )
 
 /** Symbol-level invocation information. Renderers decide syntax later. */
@@ -740,11 +772,11 @@ internal object ForwardCallablePlanValidator {
         plan.nativeExports.forEach { call ->
           require(
             call.parameters.any { slot ->
-              slot.name == "${parameter.name}IsSet" && slot.wireType == ForwardAbiWireType.BOOLEAN
+              slot.name == parameter.presenceSlot && slot.wireType == ForwardAbiWireType.BOOLEAN
             }
           ) {
             "Forward plan ${plan.publicSignature.name} defaulted parameter ${parameter.name} is " +
-                "missing its ${parameter.name}IsSet slot on ${call.exportName}"
+                "missing its ${parameter.presenceSlot} slot on ${call.exportName}"
           }
         }
       }

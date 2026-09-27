@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirCallbackDelegate
+import io.github.xxfast.kotlin.native.nuget.processor.freshName
 
 /**
  * ADR-160: the C# half of a per-call callback parameter on the ADR-062 plan.
@@ -32,12 +33,30 @@ internal fun BridgeType.Callback.forwardCallbackDelegateName(): String {
 internal fun BridgeType.Callback.forwardCallbackDelegateReturnType(): String =
   result.callbackWireCsharpType()
 
-/** The delegate's own parameter list, ending in the echoed ADR-102 ctx slot. */
-internal fun BridgeType.Callback.forwardCallbackDelegateParameterList(): String {
+/**
+ * The delegate's own parameter list, ending in the echoed ADR-102 ctx slot. [names] are the
+ * parameter names, `a0`, `a1`, ... then `ctx` unless the call site moved them
+ * ([forwardCallbackLambdaNames]).
+ */
+internal fun BridgeType.Callback.forwardCallbackDelegateParameterList(
+  names: List<String> = forwardCallbackLambdaNames(),
+): String {
   val payload: List<String> = parameters.mapIndexed { index, parameter ->
-    "${parameter.callbackWireCsharpType()} a$index"
+    "${parameter.callbackWireCsharpType()} ${names[index]}"
   }
-  return (payload + "IntPtr ctx").joinToString(", ", "(", ")")
+  return (payload + "IntPtr ${names.last()}").joinToString(", ", "(", ")")
+}
+
+/**
+ * The call-site lambda's parameter names: `a0`, `a1`, ... then `ctx`, each moved by `freshName` off
+ * [lambda], the user's callback parameter the lambda body invokes. Spelled the same, a lambda
+ * parameter would shadow the user's lambda inside its own call (the other user parameters are
+ * never read in that body, so only this one can collide).
+ */
+internal fun BridgeType.Callback.forwardCallbackLambdaNames(lambda: String? = null): List<String> {
+  val taken: MutableSet<String> = listOfNotNull(lambda?.removePrefix("@")).toMutableSet()
+  fun mint(base: String): String = freshName(base, taken).also { taken += it }
+  return parameters.indices.map { index -> mint("a$index") } + mint("ctx")
 }
 
 /**
@@ -52,10 +71,14 @@ internal fun forwardCallbackPrelude(
   // ADR-164: an omittable defaulted lambda may be null. Unset, nothing is registered and the ctx
   // stays `IntPtr.Zero`, so no handle is minted; Kotlin reads its `IsSet` slot and never calls it.
   omittable: Boolean = false,
+  // The stem of the `${local}Native` / `${local}Ctx` locals (`ForwardPublicParameter.localStem`),
+  // which moves off a sibling user parameter spelled like either; [name] stays the user's lambda.
+  local: String = name,
 ): ForwardCirHandleStep {
   val delegateName: String = type.forwardCallbackDelegateName()
+  val lambdaNames: List<String> = type.forwardCallbackLambdaNames(name)
   val arguments: String = type.parameters
-    .mapIndexed { index, parameter -> parameter.callbackArgumentExpression("a$index") }
+    .mapIndexed { index, parameter -> parameter.callbackArgumentExpression(lambdaNames[index]) }
     .joinToString(", ")
   val call: String = if (omittable) "$name!($arguments)" else "$name($arguments)"
   val body: String = when (val result: BridgeType = type.result) {
@@ -72,13 +95,13 @@ internal fun forwardCallbackPrelude(
     else -> error("Forward CIR callback projection has no result lowering for $result")
   }
   val declarations: List<String> = listOf(
-    "$delegateName ${name}Native = ${type.forwardCallbackDelegateParameterList()} =>",
+    "$delegateName ${local}Native = ${type.forwardCallbackDelegateParameterList(lambdaNames)} =>",
     "{",
     "    $body",
     "};",
-    "IntPtr ${name}Ctx = IntPtr.Zero;",
+    "IntPtr ${local}Ctx = IntPtr.Zero;",
   )
-  val register: String = "${name}Ctx = NugetThunks.RegisterCtx(${name}Native);"
+  val register: String = "${local}Ctx = NugetThunks.RegisterCtx(${local}Native);"
   val statement: String = if (omittable) "if ($name is not null) $register" else register
   return ForwardCirHandleStep(
     flat = (declarations + statement).joinToString("\n"),
