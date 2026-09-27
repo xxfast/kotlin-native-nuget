@@ -73,6 +73,21 @@ the extension on the non-null receiver `Int`
 An extension property typed `Flow`, `StateFlow`, or a lambda is skipped the same way, even on an
 otherwise-supported receiver.
 
+An extension property is also skipped, named `SHADOWED_BY_MEMBER`, when the receiver already has a
+visible member property of the same name (declared or inherited):
+
+```kotlin
+class Foo { val x: Int = 1 }
+val Foo.x: Int get() = 2 // skipped: Foo already has a member `x`
+```
+
+Kotlin resolves `receiver.x` to the member in both the generated export body and in your own call
+sites, so the extension is unreachable either way, not merely un-exported. Rename the extension
+property or expose a top-level function instead. A private or protected member does not shadow, and
+neither does a nullable receiver (`val Foo?.x`). The extension-**function** equivalent
+(`fun Foo.y()` beside a member `Foo.y()`) is not caught yet and still exports, silently calling the
+member; avoid giving an extension function the same name as a member on its receiver.
+
 `Instant`, `Duration`, and `Uuid` map to `DateTimeOffset`, `TimeSpan`, and `Guid` at a receiver the
 same way they do everywhere else (see
 [Primitives and strings](primitives-and-strings.md#instant)). A nullable collection or a nullable

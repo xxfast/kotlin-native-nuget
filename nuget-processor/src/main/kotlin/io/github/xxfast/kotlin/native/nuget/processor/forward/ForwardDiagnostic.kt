@@ -629,6 +629,8 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   // `SKIPPED_UNSUPPORTED_PROPERTY` for the same ADR-064 rule: the kind names where the drop
   // happened.
   ForwardPlanSkipReason.RECEIVER_FAN_OUT -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
+  // Only the extension-PROPERTY route records it, so it reports under that route's kind.
+  ForwardPlanSkipReason.SHADOWED_BY_MEMBER -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY
   ForwardPlanSkipReason.NULLABLE ->
     if (position == ForwardSkipPosition.INPUT) ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
     else ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN
@@ -972,6 +974,12 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       "its extension receiver ${detail?.let { "`$it`" } ?: "type"} crosses the bridge as a " +
           "has-value flag plus a value (two slots), and an extension receiver can carry only " +
           "one ($name)"
+
+    // Kotlin's own resolution: a member always beats an extension of the same name.
+    ForwardPlanSkipReason.SHADOWED_BY_MEMBER ->
+      "the member property ${detail?.let { "`$it`" } ?: "of the same name"} shadows it: Kotlin " +
+          "resolves `receiver.${detail?.substringAfterLast('.') ?: "name"}` to the member, so " +
+          "the extension is unreachable by call syntax ($name)"
 
     // Issue #131: guarded on the name being there, so a return-position nullable keeps the
     // shipped generic sentence.
@@ -1390,6 +1398,10 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "a parameter instead of as the receiver; or declare the extension on the non-null " +
         "receiver $nonNull"
   }
+
+  ForwardPlanSkipReason.SHADOWED_BY_MEMBER ->
+    "rename the extension property so the member no longer shadows it, or expose a top-level " +
+        "function that computes the value instead"
 
   // ROADMAP Phase 4 (ADR-151 amendment): since a `ByteArray` binds as a `List` element and as a
   // `Map` VALUE, the only shapes that still reach this reason are the two DECLINED equality slots,

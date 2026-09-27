@@ -106,6 +106,13 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  RECEIVER-role slot and it must come first. A genuine drop, named rather than crashing plan
    *  validation. */
   RECEIVER_FAN_OUT(droppedFromCSharp = true),
+
+  /** An extension property shadowed by a member property of the same name on its receiver type
+   *  (declared or inherited). Kotlin call syntax always resolves `receiver.name` to the member, so
+   *  the generated `receiver.name` body would read the member and the C# extension would silently
+   *  return the member's value. Only the extension-property route records it. The shadowing
+   *  member (`Owner.name`) rides in the detail slot. */
+  SHADOWED_BY_MEMBER(droppedFromCSharp = true),
   OBJECT(droppedFromCSharp = true),
   STRING(droppedFromCSharp = true),
   UNSUPPORTED(droppedFromCSharp = true),

@@ -578,6 +578,27 @@ internal class ForwardPropertyPlanner(
     )
   }
 
+  /**
+   * The `Owner.name` of a member property (declared or inherited) that shadows an extension
+   * property [name] on [receiver], or null. A nullable receiver is never shadowed: the emitter's
+   * `(receiver).name` has a nullable static type, so no member is a candidate and the extension
+   * resolves. A private or protected member is not visible from the generated file, and a member
+   * *extension* property is not a candidate for plain `receiver.name`, so neither shadows.
+   */
+  private fun shadowingMember(receiver: KSType, name: String): String? {
+    if (receiver.isMarkedNullable) return null
+    val declaration: KSClassDeclaration = receiver.declaration as? KSClassDeclaration ?: return null
+    val member: KSPropertyDeclaration = declaration.getAllProperties().firstOrNull { candidate ->
+      candidate.simpleName.asString() == name &&
+          candidate.extensionReceiver == null &&
+          candidate.getVisibility() != Visibility.PRIVATE &&
+          candidate.getVisibility() != Visibility.PROTECTED
+    } ?: return null
+    val owner: String = (member.parentDeclaration as? KSClassDeclaration)?.nestedCsName()
+      ?: declaration.nestedCsName()
+    return "$owner.$name"
+  }
+
   private fun extensionProperty(prop: KSPropertyDeclaration): ForwardPropertyPlan? {
     val receiver: KSType = prop.extensionReceiver?.resolve()?.expandAliases() ?: return null
     // ADR-105 amendment: the extension *property* receiver gets the same sealed rewrite the
@@ -618,6 +639,22 @@ internal class ForwardPropertyPlanner(
           receiverDescription = receiverType.diagnosticTypeName(),
           reason = if (fanOut) ForwardPlanSkipReason.RECEIVER_FAN_OUT else null,
           detail = if (fanOut) receiverType.diagnosticTypeName() else null,
+        ),
+      )
+      return null
+    }
+    // Kotlin's own resolution: `receiver.name` picks a visible member property over any extension,
+    // so the export body the emitter writes would read the MEMBER and the C# extension would
+    // silently return the wrong value. Kotlin call syntax cannot reach this extension either, so
+    // it is a named skip rather than a rewrite.
+    shadowingMember(receiver, name)?.let { member ->
+      droppedReceivers.add(
+        ForwardDroppedExtensionReceiver(
+          symbol = "${prop.packageName.asString()}.$receiverName.$name",
+          node = prop,
+          receiverDescription = receiverType.diagnosticTypeName(),
+          reason = ForwardPlanSkipReason.SHADOWED_BY_MEMBER,
+          detail = member,
         ),
       )
       return null

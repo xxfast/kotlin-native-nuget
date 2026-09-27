@@ -295,6 +295,7 @@ class ForwardSkippedCallableWarningTest {
         // Every other admitted receiver shape lowers like a parameter now; this one cannot be
         // expressed as a single first RECEIVER-role slot, and no legacy route re-emits it.
         ForwardPlanSkipReason.RECEIVER_FAN_OUT,
+        ForwardPlanSkipReason.SHADOWED_BY_MEMBER,
         ForwardPlanSkipReason.OBJECT,
         ForwardPlanSkipReason.STRING,
         ForwardPlanSkipReason.UNSUPPORTED,
