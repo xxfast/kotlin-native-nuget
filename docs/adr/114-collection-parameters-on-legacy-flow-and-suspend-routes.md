@@ -542,9 +542,9 @@ Deferred:
 - The non-generic sibling defect: an *object*-typed parameter on these routes renders `IntPtr` in C#
   with no way for a caller to produce one. It compiles today, so it is not issue #109, and it should
   become a ROADMAP item.
-- `docs/backlog/legacy-top-level-two-call-route-staticlegacytwocall.md` (ROADMAP line 67), a sibling
-  of the same defect class on a *plan-driven* route that fails on the C# half with CS0103. Different
-  route, different fix, not closed here.
+- The top-level two-call route's own CS0103 defect on the same defect class, a *plan-driven* route,
+  different fix, not closed here: resolved separately by
+  [ADR-170](170-top-level-nullable-scalar-single-call.md), which retired that route.
 
 ## Consequences
 

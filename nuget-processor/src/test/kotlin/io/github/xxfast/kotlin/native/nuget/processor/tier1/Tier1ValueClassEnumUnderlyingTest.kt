@@ -119,7 +119,7 @@ class Tier1ValueClassEnumUnderlyingTest {
         fun mood(): Temperament? = restingTemperament
       }
 
-      // ADR-002's two-call `_has_value` + `_value`, the top-level return's own shape.
+      // ADR-170: the top-level return takes the same single-call valueOut shape as the method.
       fun standardDosage(kind: Int): Dosage? = if (kind < 0) null else Dosage(kind * 0.5)
       """.trimIndent(),
     )
@@ -136,10 +136,13 @@ class Tier1ValueClassEnumUnderlyingTest {
     // Return: the unboxed underlying is written through the underlying's own CVar.
     assertContains(kotlin, "valueOut.reinterpret<DoubleVar>().pointed.value = result.milligrams")
     assertContains(kotlin, "valueOut.reinterpret<IntVar>().pointed.value = result.mood.ordinal")
-    // Top-level return: ADR-002's two-call pair, the `_value` half unboxing to the underlying.
-    assertContains(kotlin, "@CName(\"library_tier1_valueclassnullableskip__standardDosage_has_value\")")
-    assertContains(kotlin, "@CName(\"library_tier1_valueclassnullableskip__standardDosage_value\")")
-    assertContains(kotlin, "standardDosage(kind)!!.milligrams")
+    // Top-level return (ADR-170): one export, the unboxed underlying written through valueOut.
+    assertContains(kotlin, "@CName(\"library_tier1_valueclassnullableskip__standardDosage\")")
+    assertContains(kotlin, "val result = tier1.valueclassnullableskip.standardDosage(kind)")
+    assertTrue(
+      "standardDosage_has_value" !in kotlin,
+      "the retired two-call pair must not be emitted",
+    )
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "public global::Interop.Temperament? RestingTemperament")
@@ -159,8 +162,11 @@ class Tier1ValueClassEnumUnderlyingTest {
       "hasValue ? new global::Interop.Temperament((global::Interop.Mood)valueOut) : " +
           "(global::Interop.Temperament?)null;",
     )
-    assertContains(cs, "private static extern double StandardDosage_value(int kind, out IntPtr error);")
+    assertContains(
+      cs,
+      "private static extern bool Native_StandardDosage(int kind, out double valueOut, " +
+          "out IntPtr error);",
+    )
     assertContains(cs, "public static global::Interop.Dosage? StandardDosage(int kind)")
-    assertContains(cs, "return new global::Interop.Dosage(__nuget_value);")
   }
 }

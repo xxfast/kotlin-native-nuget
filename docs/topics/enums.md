@@ -92,9 +92,9 @@ journal.CurrentMood = Mood.Grumpy;
 Mood? soothed = journal.Soothe(Mood.Grumpy); // Mood.Sleepy
 ```
 
-A top-level function or property getter returning `Mood?` is evaluated twice when it returns a
-value. Keep those functions and getters free of side effects and ensure their result stays stable
-between evaluations. Ordinary instance methods, such as `Soothe` above, evaluate once.
+A property getter returning `Mood?` is evaluated twice when it returns a value. Keep those getters
+free of side effects and ensure their result stays stable between evaluations. A top-level function
+returning `Mood?`, and ordinary instance methods such as `Soothe` above, evaluate once.
 
 ## As a collection component {id="as-a-collection-component"}
 

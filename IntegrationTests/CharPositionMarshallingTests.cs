@@ -136,8 +136,8 @@ public class CharPositionMarshallingTests
     }
 
     /// <summary>
-    /// The TOP-LEVEL function return, a different (legacy two-call) route from the member return
-    /// above, plus the TOP-LEVEL property, which crashes through a different caller than a class
+    /// The TOP-LEVEL function return (the static-origin projection of ADR-170's single-call
+    /// route, not the member projection above), plus the TOP-LEVEL property, which crashes through a different caller than a class
     /// property and so cannot be covered by the <c>Tag.Initial</c> cell.
     /// </summary>
     [Fact]
@@ -146,7 +146,7 @@ public class CharPositionMarshallingTests
         Assert.Equal('O', TagKt.FirstLetter("Oreo"));
         Assert.Equal('é', TagKt.FirstLetter("époque"));
 
-        // The empty name is the null arm of the two-call route: no character, no exception.
+        // The empty name is the null arm of the valueOut route: no character, no exception.
         Assert.Null(TagKt.FirstLetter(""));
 
         // Mylo's tag, above 0x7FFF, at the top-level property position.

@@ -30,10 +30,9 @@ package io.github.xxfast.kotlin.native.nuget.test.grooming
  *    from the unsuffixed public name instead of the numbered symbol tail. They cover the three
  *    extern-name sites the ADR lists separately (`Native_$tail`, `Native_Companion_$tail`, and
  *    the extension's own `Native_$tail`).
- *  - [waitTime] returns `Int?`, which routes top-level overloads through
- *    `topLevelNullablePrimitivePlan` / `staticLegacyTwoCall` (`${name}_has_value` +
- *    `${name}_value`) instead of the single-call static shape the rest of this file uses. Without
- *    it, that planner entry point could keep its unnumbered symbol and never be noticed.
+ *  - [waitTime] returns `Int?`, a top-level nullable scalar. It used to take the ADR-002 two-call
+ *    route (`${name}_has_value` + `${name}_value`); since ADR-170 it takes the same single-call
+ *    static shape as the rest of this file, with a `valueOut` slot, and must still be numbered.
  *  - [Tomcat.pat] is the same name as [Mitten.pat] on a **different receiver** in the same
  *    package. The extension symbol omits the receiver, so this pair crashes generation today too,
  *    even though `mitten_pat` and `tomcat_pat` would never collide as C exports.

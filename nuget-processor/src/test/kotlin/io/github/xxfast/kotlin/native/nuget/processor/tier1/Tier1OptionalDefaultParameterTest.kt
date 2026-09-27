@@ -182,11 +182,17 @@ class Tier1OptionalDefaultParameterTest {
   }
 
   @Test
-  fun `the top-level two-call route unwraps an Optional on both calls`() {
+  fun `the top-level nullable route unwraps an Optional on its single call`() {
     val cs: String = result.generatedCSharp
     assertContains(cs, "public static int? Maybe(Optional<int?> n = default)")
     assertContains(cs, "var nValue = n.Value;")
-    assertContains(cs, "Maybe_has_value(n.HasValue, nValue.HasValue, nValue.GetValueOrDefault(), ")
+    // ADR-170: one native call, the Optional's IsSet slot and the nullable pair ahead of valueOut.
+    assertContains(
+      cs,
+      "Native_Maybe(n.HasValue, nValue.HasValue, nValue.GetValueOrDefault(), out int valueOut, " +
+          "out IntPtr error);",
+    )
+    assertFalse("Maybe_has_value" in cs, "the retired two-call pair must not be emitted")
     assertContains(result.generated, "1 -> tier1.optionaldefaults.maybe(n = default_n)")
   }
 

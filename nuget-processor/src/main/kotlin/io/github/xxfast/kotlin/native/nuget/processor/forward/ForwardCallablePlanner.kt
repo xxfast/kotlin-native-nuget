@@ -1944,37 +1944,9 @@ internal class ForwardCallablePlanner(
         parameter.bridgeName() to classifier.classify(parameter.type.resolve())
       }
     val declaredDefaults: ForwardDeclaredDefaults = declaredDefaults(function.parameters, defaults)
-    // ADR-002 / MIGRATION: top-level nullable primitives keep the shipped two-call ABI.
-    // ADR-076: a top-level nullable Instant shares the same two-call shape (ADR-069 recorded that
-    // this path crashes packNuget for a shape it does not handle, rather than skipping).
-    // ADR-079: a top-level `Dosage?` / `Temperament?` return shares the same two-call shape, with
-    // the `_value` call returning the underlying's own wire.
-    if (origin == ForwardCallableOrigin.TOP_LEVEL &&
-      result is BridgeType.Nullable &&
-      // ADR-098 amendment (boundary nullability part C): `Char?` joins the same reroute, its
-      // by-value CHAR16 slot in the `_value` call. ADR-076, ADR-079 and ADR-080 each added their
-      // type here; when this legacy route retires, `Char?` moves with the rest of the set.
-      (result.type is BridgeType.Primitive || result.type == BridgeType.Char ||
-          result.type == BridgeType.Instant ||
-          result.type == BridgeType.Duration ||
-          result.type is BridgeType.Enum ||
-          (result.type as? BridgeType.ValueClass)?.underlying?.isHasValueFanOutUnderlying() == true)
-    ) {
-      return topLevelNullablePrimitivePlan(
-        symbol = symbol,
-        publicName = publicName,
-        exportName = exportName,
-        parameters = parameters,
-        result = result,
-        member = member,
-        node = function,
-        defaults = declaredDefaults,
-        // ADR-150: this route carried no doc at all, so EVERY top-level `fun f(): Int?` (also
-        // `Instant?`, `Duration?`, `Enum?`, a fan-out value class) rendered undocumented, whether
-        // or not it was an `expect`.
-        doc = function.forwardKdoc(expects).forParameters(function.parameters),
-      )
-    }
+    // ADR-170: a top-level nullable scalar (`Int?`, `Char?`, `Instant?`, `Duration?`, an enum, a
+    // scalar value class) takes the same ADR-061 single-call `valueOut` route as a member, object
+    // or companion function; the ADR-002 two-call pair is gone for functions.
     return planOrSkip(
       symbol = symbol,
       publicName = publicName,
@@ -1989,196 +1961,6 @@ internal class ForwardCallablePlanner(
       defaults = declaredDefaults,
       doc = function.forwardKdoc(expects).forParameters(function.parameters),
     )
-  }
-
-  /**
-   * Plans a top-level `fun f(...): Primitive?` (or, per ADR-076, `Instant?`) as
-   * [ForwardEvaluation.LEGACY_TWO_CALL]: `${export}_has_value` (BOOLEAN) + `${export}_value`
-   * (primitive/ticks wire), matching ADR-002. Method/extension nullable primitives stay on the
-   * ADR-061 single-call `valueOut` shape.
-   */
-  private fun topLevelNullablePrimitivePlan(
-    symbol: String,
-    publicName: String,
-    exportName: String,
-    parameters: List<Pair<String, BridgeType>>,
-    result: BridgeType.Nullable,
-    // ADR-095: the two-call route numbers like every other, so its plan carries the bare name too.
-    member: String? = null,
-    node: KSNode? = null,
-    // ADR-150: and it carries a doc like every other, on the same `publicSignature` slot the CIR
-    // projection already reads (`staticLegacyTwoCall` renders `plan.publicSignature.cirDoc()`).
-    doc: ForwardKdoc? = null,
-    // ADR-164: the same widening every other route takes.
-    defaults: ForwardDeclaredDefaults? = null,
-  ): ForwardCallableCatalogEntry {
-    val inner: BridgeType = result.type
-    require(
-      inner is BridgeType.Primitive || inner == BridgeType.Char ||
-          inner == BridgeType.Instant ||
-          inner == BridgeType.Duration ||
-          inner is BridgeType.Enum ||
-          (inner as? BridgeType.ValueClass)?.underlying?.isHasValueFanOutUnderlying() == true
-    ) {
-      "Forward planner topLevelNullablePrimitivePlan received unsupported inner type $inner"
-    }
-    // ADR-105 scope (d): the same parameter-position sealed rewrite `planOrSkip` applies, so a
-    // top-level `fun f(shape: Shape): Int?` binds on this two-call route too.
-    val widening: ForwardWidening =
-      widen(parameters.map { (name, type) -> name to type.sealedAsHandle() }, defaults)
-    if (widening.marked != null) {
-      return ForwardCallableCatalogEntry.Skipped(
-        symbol, ForwardPlanSkipReason.OPT_IN_MARKER, node = node, detail = widening.marked,
-      )
-    }
-    val publicParameters: List<ForwardPublicParameter> = widening.parameters
-    val declared: List<Pair<String, BridgeType>> =
-      publicParameters.map { parameter -> parameter.name to parameter.type }
-    // Issue #131: the offending parameter's NAME travels with the skip, so the diagnostic can say
-    // which one failed instead of "at this position".
-    val ineligible: Pair<String, BridgeType>? = declared.firstOrNull { (_, type) ->
-      type.inputSkipReason() != null
-    }
-    if (ineligible != null) {
-      val ineligibleType: BridgeType = ineligible.second
-      return ForwardCallableCatalogEntry.Skipped(
-        symbol, requireNotNull(ineligibleType.inputSkipReason()), node = node,
-        detail = ineligibleType.optInMarkerDetail()
-          ?: ineligibleType.actualTypeAliasTargetDetail()
-          ?: ineligibleType.unexportedDependencyDetail()
-          ?: ineligibleType.undeclaredTypeDetail()
-          ?: ineligibleType.sealedTypeDetail()
-          ?: ineligibleType.collectionComponentDetail()
-          ?: ineligibleType.unsupportedTypeDetail(),
-        position = ForwardSkipPosition.INPUT,
-        parameter = ineligible.first,
-      )
-    }
-
-    val error: ForwardAbiParameter = errorParameter()
-    val nativeInputs: List<ForwardAbiParameter> = publicParameters.flatMap { parameter ->
-      nativeInputParameters(parameter)
-    }
-    val presence = ForwardNativeCall(
-      exportName = "${exportName}_has_value",
-      result = ForwardAbiWireType.BOOLEAN,
-      parameters = nativeInputs + error,
-    )
-    val valueWireType: ForwardAbiWireType = when (inner) {
-      is BridgeType.Primitive -> inner.wireType()
-      // ADR-098 amendment (boundary nullability part C): CHAR16 by value, so the `_value` import
-      // renders `char` and inherits ADR-098's `[return: MarshalAs(UnmanagedType.U2)]`. Without this
-      // arm the plan claimed INT64 while the projection rendered `char`, which the ADR-055 contract
-      // check catches as `expected ... -> short, actual ... -> long`.
-      BridgeType.Char -> ForwardAbiWireType.CHAR16
-      // ADR-079: the `_value` call returns the underlying's wire (the primitive's own, INT32 for
-      // an enum ordinal); the box step composes in the emitted expressions at both ends.
-      is BridgeType.ValueClass -> inner.underlying.underlyingWireType()
-      // ADR-080: a bare nullable enum returns its `int` ordinal on the same `_value` call.
-      is BridgeType.Enum -> ForwardAbiWireType.INT32
-      else -> ForwardAbiWireType.INT64
-    }
-    val value = ForwardNativeCall(
-      exportName = "${exportName}_value",
-      result = valueWireType,
-      parameters = nativeInputs + error,
-    )
-    val helpers: Set<ForwardHelperRequirement> = buildSet {
-      add(ForwardHelperRequirement.STABLE_REF)
-      // ADR-077: same value-class input helper as `planOrSkip`, so a top-level
-      // `fun f(id: ChartId): Int?` on this two-call route validates too.
-      declared
-        .mapNotNull { (_, type) -> (type.unwrapNullable() as? BridgeType.ValueClass)?.underlying }
-        .forEach { underlying ->
-          add(ForwardHelperRequirement.VALUE_CLASS)
-          if (underlying == BridgeType.String) add(ForwardHelperRequirement.UTF8)
-          if (underlying is BridgeType.Enum) add(ForwardHelperRequirement.ENUM_ORDINAL)
-        }
-      if (declared.any { (_, type) -> type.unwrapNullable() == BridgeType.String }) {
-        add(ForwardHelperRequirement.UTF8)
-      }
-      if (declared.any { (_, type) -> type.unwrapNullable() is BridgeType.Enum }) {
-        add(ForwardHelperRequirement.ENUM_ORDINAL)
-      }
-      if (declared.any { (_, type) -> type.unwrapNullable() is BridgeType.Collection }) {
-        add(ForwardHelperRequirement.COLLECTION)
-      }
-      // ADR-151: the bytes helpers ride the collection row's slot, with their own P/Invoke class.
-      // ROADMAP Phase 4: recursive, for the reason the input-side twin is.
-      if (declared.any { (_, type) -> type.containsByteArray() }) {
-        add(ForwardHelperRequirement.BYTES)
-      }
-      val resultIsInstant: Boolean = inner == BridgeType.Instant
-      val hasInstantParameter: Boolean =
-        declared.any { (_, type) -> type.unwrapNullable() == BridgeType.Instant }
-      if (resultIsInstant || hasInstantParameter) {
-        add(ForwardHelperRequirement.INSTANT)
-      }
-      // ADR-103: the same pair for Duration.
-      val resultIsDuration: Boolean = inner == BridgeType.Duration
-      val hasDurationParameter: Boolean =
-        declared.any { (_, type) -> type.unwrapNullable() == BridgeType.Duration }
-      if (resultIsDuration || hasDurationParameter) {
-        add(ForwardHelperRequirement.DURATION)
-      }
-      // ADR-079: the value-class *result* on this two-call route carries its own helpers, the
-      // same way `nullableResultShape`'s new branch does for the single-call route.
-      if (inner is BridgeType.ValueClass) {
-        add(ForwardHelperRequirement.VALUE_CLASS)
-        if (inner.underlying is BridgeType.Enum) add(ForwardHelperRequirement.ENUM_ORDINAL)
-      }
-      // ADR-080: a bare nullable enum result needs the ordinal helper too.
-      if (inner is BridgeType.Enum) add(ForwardHelperRequirement.ENUM_ORDINAL)
-    }
-    // ADR-076: the generic `transfer()` helper only special-cases String; an Instant result needs
-    // its own INSTANT_TO_TICKS conversion tagged explicitly, or plan validation rejects it.
-    // ADR-079: likewise a value-class result must carry UNBOX_VALUE_CLASS explicitly.
-    val resultConversion: ForwardConversion? = when {
-      inner == BridgeType.Instant -> ForwardConversion.INSTANT_TO_TICKS
-      // ADR-103: likewise for Duration.
-      inner == BridgeType.Duration -> ForwardConversion.DURATION_TO_TICKS
-      inner is BridgeType.ValueClass -> ForwardConversion.UNBOX_VALUE_CLASS
-      // ADR-080: the ordinal lowering is explicit for the same reason.
-      inner is BridgeType.Enum -> ForwardConversion.ENUM_TO_ORDINAL
-      else -> null
-    }
-    val resultTransfer: ForwardTransfer = if (resultConversion != null) {
-      ForwardTransfer(
-        subject = "result",
-        type = result,
-        flow = ForwardFlow.OUT_OF_KOTLIN,
-        passing = ForwardPassing.VALUE,
-        ownership = ForwardOwnership.BORROWED,
-        conversion = resultConversion,
-      )
-    } else {
-      transfer("result", result, ForwardFlow.OUT_OF_KOTLIN)
-    }
-    val plan = ForwardCallablePlan(
-      invocation = ForwardInvocation(
-        symbol = symbol,
-        origin = ForwardCallableOrigin.TOP_LEVEL,
-        target = null,
-        member = member,
-      ),
-      publicSignature = ForwardPublicSignature(
-        name = publicName,
-        parameters = publicParameters,
-        result = result,
-        doc = doc.forPublic(publicParameters),
-        dispatchMask = widening.dispatchMask,
-      ),
-      evaluation = ForwardEvaluation.LEGACY_TWO_CALL,
-      nativeExports = listOf(presence, value),
-      nativeImports = listOf(presence, value),
-      result = ForwardResultConvention(
-        wireType = ForwardAbiWireType.BOOLEAN,
-        transfer = resultTransfer,
-      ),
-      errorSlot = error,
-      helperRequirements = helpers,
-    ).validate()
-    return ForwardCallableCatalogEntry.Planned(plan, node = node, cappedDefaults = widening.capped)
   }
 
   /**
@@ -3351,7 +3133,7 @@ internal class ForwardCallablePlanner(
 
   private fun nullableResultShape(type: BridgeType): ForwardResultShape? = when (type) {
     // ADR-106: `Uuid?` returns over the same single pointer slot as `String?`; a null pointer is
-    // the null, so no has-value channel and no LEGACY_TWO_CALL reroute.
+    // the null, so no has-value channel.
     BridgeType.Uuid -> ForwardResultShape(
       wireType = ForwardAbiWireType.POINTER,
       transfer = ForwardTransfer(

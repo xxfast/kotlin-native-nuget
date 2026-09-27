@@ -155,6 +155,16 @@ the explicit-interface-implementation shape too, so a class whose public propert
 whose setter is only reachable by casting to the interface still returns to baseline once every
 handle the call borrowed is disposed, the same as any other setter.
 
+A top-level function returning a [nullable scalar](primitives-and-strings.md#nullable-values) with
+a `List`, `Map`, `Set`, `ByteArray` or Kotlin interface parameter adds no new handle kind either: it
+now takes the same single-call route as a member function with the same signature, so those
+parameter handles release on every exit path, including a throw, the same as that route already
+does. A bound C# interface parameter on the same route still transfers its handle to Kotlin with no
+release on the C# side, unchanged from the member route. `LeakTests/LiveHandleTests.cs`'s
+`TwoCallCollectionParam_ListArgument_ReturnsToBaseline` and
+`TwoCallCollectionParam_ThrowingListArgument_ReturnsToBaseline` cover the null-return, non-null-return
+and throwing cases for a `List` parameter.
+
 For a [cancellation-token-taking async call](instance-members.md#async-cancellation), this count
 only proves the pending-continuation and `Task` handles came back to baseline: the bridge-owned
 `CancellationTokenSource` is a plain .NET `GCHandle`, not one of the Kotlin `StableRef`s

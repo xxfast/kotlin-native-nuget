@@ -268,36 +268,27 @@ class Tier1ReservedParameterNamesTest {
   }
 
   /**
-   * The top-level nullable route, which fans out into `probe_has_value` / `probe_value`. Its own
-   * locals are `__nuget_`-prefixed so nothing collides in the body, but both exports still declare
-   * the user's `errorOut` beside the generator's, on both sides.
+   * The top-level nullable route (ADR-170: one export with a real `valueOut` slot, no longer the
+   * `probe_has_value` / `probe_value` pair). The user's `valueOut` and `errorOut` now sit beside
+   * the generator's own slots of the same spelling, on both sides, so both must be renamed.
    */
   @Test
-  fun `the top level two call route renames both out slot names`() {
+  fun `the top level nullable route renames both out slot names`() {
     assertContains(
       result.generatedCSharp,
-      "private static extern bool Probe_has_value(int errorOut_, int valueOut_, " +
-          "out IntPtr error);",
-    )
-    assertContains(
-      result.generatedCSharp,
-      "private static extern int Probe_value(int errorOut_, int valueOut_, " +
-          "out IntPtr error);",
+      "private static extern bool Native_Probe(int errorOut_, int valueOut_, " +
+          "out int valueOut, out IntPtr error);",
     )
     assertContains(result.generatedCSharp, "public static int? Probe(int errorOut_, int valueOut_)")
     assertContains(
       result.generatedCSharp,
-      "Probe_has_value(errorOut_, valueOut_, out IntPtr __nuget_hasValueError);",
+      "Native_Probe(errorOut_, valueOut_, out int valueOut, out IntPtr error);",
     )
-    assertContains(
-      result.generatedCSharp,
-      "Probe_value(errorOut_, valueOut_, out IntPtr __nuget_valueError);",
-    )
-    assertContains(result.generated, "probe(errorOut_, valueOut_) != null")
+    assertContains(result.generated, "probe(errorOut_, valueOut_)")
     assertContains(
       result.generated,
-      "public fun export_library_tier1_reserved__probe_has_value(\n  errorOut_: Int,\n  valueOut_: Int,\n" +
-          "  errorOut: COpaquePointer?,\n)",
+      "public fun export_library_tier1_reserved__probe(\n  errorOut_: Int,\n  valueOut_: Int,\n" +
+          "  valueOut: COpaquePointer?,\n  errorOut: COpaquePointer?,\n)",
     )
   }
 
