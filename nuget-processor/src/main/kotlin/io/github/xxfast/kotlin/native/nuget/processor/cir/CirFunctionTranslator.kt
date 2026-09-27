@@ -755,7 +755,11 @@ internal fun translateSuspendFunction(
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
   val isUnit: Boolean = kotlinReturnType == "Unit"
 
-  val params: List<CirParameter> = legacyRouteParameters(func.parameters, classifier, tracker)
+  val params: List<CirParameter> = legacyRouteParameters(
+    func.parameters, classifier, tracker,
+    callableCatalog.legacyDefaultFlags(func),
+    callableCatalog.legacySuspendSiblingArities(func),
+  )
 
   // ADR-068 (2026-09-27 amendment): the class route's StateFlow bucket, on a top-level function.
   // The Kotlin half is the plain top-level export (the awaited flow is already minted as a handle);
@@ -798,7 +802,8 @@ internal fun translateSuspendFunction(
   // ADR-102: raw thunk address (NugetThunks.NugetAsyncCallbackPtr), not a marshalled delegate.
   val callbackType: String = "IntPtr"
   // The trailing slot moves off a user parameter spelled `userData`, as the Kotlin export's does.
-  val slotNames: ForwardLegacyNames = legacyCsharpNames(func.parameters, classifier)
+  val slotNames: ForwardLegacyNames =
+    legacyCsharpNames(func.parameters, classifier, callableCatalog.legacyDefaultFlags(func))
   val nativeParams: List<CirParameter> = params.nativeImportParameters() +
       listOf(
         CirParameter(slotNames.callback, callbackType),

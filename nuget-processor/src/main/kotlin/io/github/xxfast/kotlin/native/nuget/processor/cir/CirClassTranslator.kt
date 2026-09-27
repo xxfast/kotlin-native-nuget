@@ -1700,7 +1700,11 @@ internal fun flowMembers(
     // ADR-114: a collection parameter takes the public collection type with an IntPtr native
     // slot; every other parameter keeps mapParamType's shipped spelling.
     val methodParams: List<CirParameter> =
-      legacyRouteParameters(method.parameters, classifier, tracker)
+      legacyRouteParameters(
+        method.parameters, classifier, tracker,
+        callableCatalog.legacyDefaultFlags(method),
+        callableCatalog.legacySuspendSiblingArities(method),
+      )
 
     // ADR-071 (2026-09-11): a `MutableStateFlow<T>`-declared return is HELD -- the Kotlin half
     // invokes the function once and hands the flow's own handle back, so this member's imports are
@@ -1761,7 +1765,8 @@ internal fun flowMembers(
 
     // The fixed slots and the collect lambda's parameters move off a user parameter spelled like
     // one of them; the lambda's would otherwise shadow the user's argument inside the native call.
-    val flowNames: ForwardLegacyNames = legacyCsharpNames(method.parameters, classifier)
+    val flowNames: ForwardLegacyNames =
+      legacyCsharpNames(method.parameters, classifier, callableCatalog.legacyDefaultFlags(method))
     val callbackNames: List<String> =
       listOf(flowNames.onNext, flowNames.onComplete, flowNames.onError, flowNames.userData)
     val nativeParams: List<CirParameter> = listOf(
@@ -1929,7 +1934,11 @@ internal fun suspendMembers(
     // ADR-114: a collection parameter takes the public collection type with an IntPtr native
     // slot; every other parameter keeps mapParamType's shipped spelling.
     val methodParams: List<CirParameter> =
-      legacyRouteParameters(method.parameters, classifier, tracker)
+      legacyRouteParameters(
+        method.parameters, classifier, tracker,
+        callableCatalog.legacyDefaultFlags(method),
+        callableCatalog.legacySuspendSiblingArities(method),
+      )
 
     // Issue #108: carry the nullability through, same as the top-level suspend route.
     val asyncReturnType: String = when {
@@ -1953,7 +1962,8 @@ internal fun suspendMembers(
 
     // The fixed slots move off a user parameter spelled `scopeHandle` / `userData`, never the
     // user's parameter; the Kotlin export mints the same way (`legacyKotlinNames`).
-    val slotNames: ForwardLegacyNames = legacyCsharpNames(method.parameters, classifier)
+    val slotNames: ForwardLegacyNames =
+      legacyCsharpNames(method.parameters, classifier, callableCatalog.legacyDefaultFlags(method))
     val nativeParams: List<CirParameter> = listOf(
       CirParameter("handle", "IntPtr"),
       CirParameter(slotNames.scopeHandle, "IntPtr"),
@@ -2047,11 +2057,16 @@ internal fun suspendMembers(
     // ADR-114: a collection parameter takes the public collection type with an IntPtr native
     // slot; every other parameter keeps mapParamType's shipped spelling.
     val methodParams: List<CirParameter> =
-      legacyRouteParameters(method.parameters, classifier, tracker)
+      legacyRouteParameters(
+        method.parameters, classifier, tracker,
+        callableCatalog.legacyDefaultFlags(method),
+        callableCatalog.legacySuspendSiblingArities(method),
+      )
 
     // The fixed slots move off a user parameter spelled `scopeHandle` / `userData`, never the
     // user's parameter; the Kotlin export mints the same way (`legacyKotlinNames`).
-    val slotNames: ForwardLegacyNames = legacyCsharpNames(method.parameters, classifier)
+    val slotNames: ForwardLegacyNames =
+      legacyCsharpNames(method.parameters, classifier, callableCatalog.legacyDefaultFlags(method))
     val nativeParams: List<CirParameter> = listOf(
       CirParameter("handle", "IntPtr"),
       CirParameter(slotNames.scopeHandle, "IntPtr"),

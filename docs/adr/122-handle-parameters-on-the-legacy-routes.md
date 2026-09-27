@@ -168,6 +168,10 @@ change to a second type family with no issue behind it, and the legacy routes ha
 projection plumbing beyond a native-argument expression. Deferred; alternative 1's refusal arm names
 it loudly in the meantime, which is a strictly better state than today's silent `IntPtr`.
 
+**2026-09-27: bound.** An enum parameter on these routes now binds exactly as described here, one
+of a batch of legacy-route fixes; see the
+[ADR-164](164-optional-default-parameters.md) 2026-09-27 amendment.
+
 ### 7. Move the legacy routes onto the ADR-062 callable plan
 
 ADR-062's stated direction, rejected here on the same terms ADR-118 and ADR-119 rejected it: the

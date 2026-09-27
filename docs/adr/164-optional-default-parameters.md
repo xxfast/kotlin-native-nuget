@@ -279,6 +279,99 @@ generator's local moves instead (`default_limit` -> `default_limit_`). See that 
 mechanism and the fixture; this note exists only so a reader of this ADR's `default_`/`mask` locals
 does not conclude they are unguarded.
 
+## 2026-09-27 amendment: legacy suspend/Flow routes, enum parameters and shadowed overloads
+
+Three gaps closed together, since all three touch `ForwardLegacyRouteCollections.kt` and the fixture
+that exercises the legacy routes' defaults.
+
+**1. The rule now reaches the legacy routes.** A defaulted parameter on a class or sealed-arm
+`suspend` member, a `suspend` member returning `StateFlow` (ADR-068), a top-level `suspend`
+function, or a `Flow`/`StateFlow`/held-`MutableStateFlow` member widens exactly like a plan-route
+parameter (rules 1, 2 and 5 above), including an ADR-074 `expect`/`actual` default on a top-level
+function. Omitting the widened argument runs the *Kotlin* default, not a C# copy: the shared
+`forwardMaskArms` helper (`ForwardKotlinPlanEmitter.kt`) builds the same `when (mask)` dispatch used
+by the plan route, now shared by both. A defaulted handle or collection parameter stays required, as
+it was before this amendment:
+
+```kotlin
+class Dinnerbell(val bowl: Int) {
+  suspend fun feed(
+    cat: String,
+    portion: Int = bowl + ++served,
+    note: String = "for $cat",
+    treats: Int? = 5,
+  ): String = "$cat|$portion|$note|$treats"
+
+  suspend fun share(
+    mat: Placemat = Placemat("house"),
+    cats: List<String> = listOf("Oreo"),
+    grams: Int = bowl,
+  ): String = "${mat.owner}|${cats.joinToString(",")}|$grams"
+}
+```
+
+```csharp
+public Task<string> FeedAsync(string cat, int? portion = null, string? note = null,
+                               Optional<int?> treats = default, CancellationToken cancellationToken = default);
+public Task<string> ShareAsync(Placemat mat, IReadOnlyList<string> cats, int? grams = null,
+                                CancellationToken cancellationToken = default); // mat and cats stay required
+```
+
+A same-name `suspend` overload pair whose shorter C# signature is a strict prefix of the widened one
+hits CS0121 once every trailing optional (including `cancellationToken`) can be omitted from both
+candidates: `suspend fun count(): Int` beside `suspend fun count(limit: Int = 3): Int` would make
+`CountAsync()` ambiguous between `CountAsync(CancellationToken)` and `CountAsync(int?,
+CancellationToken)`. Detected by arity against the sibling overload's own C# arity, the wider
+`limit` stays required-but-nullable instead of gaining `= null`:
+
+```csharp
+public Task<int> CountAsync(CancellationToken cancellationToken = default);
+public Task<int> CountAsync(int? limit, CancellationToken cancellationToken = default); // no `= null`
+```
+
+Fixture: `test-library/.../test/suppertime/SuppertimeSample.kt`. Tests:
+`IntegrationTests/LegacyRouteDefaultsTests.cs`, `tier1/Tier1LegacyRouteDefaultsTest.kt`.
+
+**2. An enum parameter on these same legacy routes now binds**, defaulted or not, instead of being
+refused with `SKIPPED_UNSUPPORTED_INPUT`: `(int)x` on the C# side, `Q.entries[x]` on the Kotlin side,
+the same ordinal encoding [ADR-122](122-handle-parameters-on-the-legacy-routes.md) Alternative 6
+deferred.
+
+```kotlin
+suspend fun beg(asked: Hunger, hunger: Hunger = if (bowl > 30) Hunger.PECKISH else Hunger.STARVING,
+                 fallback: Hunger? = Hunger.STARVING): String = "$asked|$hunger|$fallback"
+```
+
+```csharp
+public Task<string> BegAsync(Hunger asked, Hunger? hunger = null,
+                              Optional<Hunger?> fallback = default, CancellationToken cancellationToken = default);
+```
+
+**3. The plan route (constructors, methods, top-level functions and top-level extensions) no
+longer widens a defaulted parameter whose omission would exactly match a real, shorter sibling
+overload.** The Consequences section below recorded this resolution-against-a-shorter-overload
+behaviour as inferred and pre-existing; `shadowedDefaultIndices`
+(`ForwardLegacyRouteCollections.kt`) now keeps such a parameter required in C#, so the call a Kotlin
+caller would expect to reach the real overload does, on both sides of the bridge:
+
+```kotlin
+class Kitten(val name: String, val lives: Int = 9) {
+  constructor(name: String) : this(name, 1) // the real, shorter overload
+}
+```
+
+```csharp
+new Kitten("Oreo");            // reaches Kitten(name), lives == 1, never the widened default 9
+new Kitten("Oreo", lives: 9);  // reaches the widened constructor explicitly
+```
+
+`copy` is exempt: a data class's synthesized `copy` has no user-declared sibling overload to
+shadow. Fixture: `test-library/.../test/shadowed/ShadowedOverloadSample.kt`. Tests:
+`IntegrationTests/ShadowedOverloadDefaultTests.cs`, `tier1/Tier1ShadowedDefaultTest.kt`.
+
+No new `LiveHandleTests.cs` row: none of the three changes mints a handle route that did not already
+exist.
+
 ## Consequences
 
 - `new Config(mode: Mode.Always)` and `original.Copy(mode: Mode.Always)` compile and Kotlin
@@ -300,9 +393,11 @@ does not conclude they are unguarded.
   the internal `IntPtr` constructor (**Verified** by the implementer's build).
 - Interface-route defaults widen like every other route; ADR-096's interface exclusion is
   retired (**Verified** by the implementer's build, `Greeter`/`Parrot`).
-- The Kotlin named-argument call in each arm resolves against a real shorter Kotlin overload if
-  one exists (`Foo(name)` beside `Foo(name, lives = 9)`), which is the same resolution the old
-  omitting overload's positional call produced (pre-existing, **Inferred**).
+- **Fixed by the 2026-09-27 amendment above**: a defaulted parameter whose omission would exactly
+  match a real, shorter sibling overload (`Foo(name)` beside `Foo(name, lives = 9)`) stays required
+  in C# instead of widening, so the widened call can no longer silently resolve against that
+  shorter overload the way the old omitting overload's positional call did. `copy` is exempt, since
+  it has no user-declared sibling to shadow.
 - Beyond 8 defaults per callable, the earlier ones stay required with a WARNING.
 - The fallback `Copy` built directly from constructor parameters (`CirClassRenderer.renderDataClassMethods`,
   previously also referenced from `CirNativeImports.kt:224`) had no Kotlin export behind it and is

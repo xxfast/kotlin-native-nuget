@@ -466,14 +466,63 @@ public Task<string> CountNapsAsync(int? limit, CancellationToken cancellationTok
 await feeder.Snacks(null); // limit reaches Kotlin as null, not 0
 ```
 
-A default argument on the Kotlin parameter (`limit: Int? = null`) is not honoured here: the C#
-parameter is always required, never `= null`. Pass the value explicitly.
+An enum parameter binds too, by ordinal (`(int)x` in C#, `Q.entries[x]` in Kotlin):
 
-Any other generic parameter (`Pair<A, B>`, `Array<T>`, a lambda), an enum, `Instant`/`Duration`/
-`Uuid`, a value class, an interface, or a nullable class/object parameter (`Observation?`) is not
-supported at these positions and is skipped with a diagnostic naming the member. Pass a
-class/object/sealed handle, a `List`/`Set`/`Map`, or a primitive/`String` (nullable or not) instead,
-or split the parameter across separate members.
+```kotlin
+fun meows(asked: Hunger, hunger: Hunger = if (bowl > 30) Hunger.PECKISH else Hunger.STARVING): Flow<String> =
+  flow { emit("$asked|$hunger") }
+```
+
+```C#
+public KotlinFlow<string> Meows(Hunger asked, Hunger? hunger = null)
+```
+
+### Default arguments on these parameters {id="flow-suspend-parameter-defaults"}
+
+A default on a scalar, `String`, or enum parameter here widens the same way a
+[constructor or method default](classes-and-objects.md#constructor-and-method-default-parameters)
+does: a non-nullable type widens to its nullable C# form (`null` means unset), an already-nullable
+one widens to `Optional<T>`, and omitting the argument runs the Kotlin default:
+
+```kotlin
+class Dinnerbell(val bowl: Int) {
+  suspend fun feed(cat: String, portion: Int = bowl + ++served, treats: Int? = 5): String =
+    "$cat|$portion|$treats"
+}
+```
+
+```C#
+public Task<string> FeedAsync(string cat, int? portion = null, Optional<int?> treats = default,
+                               CancellationToken cancellationToken = default);
+```
+
+```C#
+using var bell = new Dinnerbell(10);
+await bell.FeedAsync("Oreo"); // portion and treats: Kotlin evaluates bowl + ++served and 5
+```
+
+A defaulted handle or collection parameter (a class, `object`, sealed type, or `List`/`Set`/`Map`)
+stays required; it does not widen. A same-name `suspend` overload whose shorter C# signature would
+otherwise become ambiguous with the widened one (`CountAsync()` beside `CountAsync(int?, ...)`,
+CS0121) keeps the widened parameter required-but-nullable instead of gaining `= null`:
+
+```kotlin
+class Dinnerbell {
+  suspend fun count(): Int = -1
+  suspend fun count(limit: Int = 3): Int = limit * 10
+}
+```
+
+```C#
+public Task<int> CountAsync(CancellationToken cancellationToken = default);
+public Task<int> CountAsync(int? limit, CancellationToken cancellationToken = default); // no `= null`
+```
+
+Any other generic parameter (`Pair<A, B>`, `Array<T>`, a lambda), `Instant`/`Duration`/`Uuid`, a
+value class, an interface, or a nullable class/object parameter (`Observation?`) is not supported at
+these positions and is skipped with a diagnostic naming the member. Pass a class/object/sealed
+handle, a `List`/`Set`/`Map`, an enum, or a primitive/`String` (nullable or not) instead, or split
+the parameter across separate members.
 
 ## Limitations
 

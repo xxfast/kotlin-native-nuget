@@ -255,7 +255,7 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   val methodParams: String = if (method.parameters.isEmpty()) {
     "CancellationToken $token = default"
   } else {
-    method.parameters.joinToString(", ") { "${it.type} ${it.name}" } +
+    method.parameters.joinToString(", ") { it.declaration } +
         ", CancellationToken $token = default"
   }
 

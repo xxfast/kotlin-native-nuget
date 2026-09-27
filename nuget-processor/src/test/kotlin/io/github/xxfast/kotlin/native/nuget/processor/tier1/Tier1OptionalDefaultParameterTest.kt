@@ -177,7 +177,9 @@ class Tier1OptionalDefaultParameterTest {
   @Test
   fun `a declared one-parameter constructor renders once beside the widened primary`() {
     val cs: String = result.generatedCSharp
-    assertContains(cs, "public Pad(int? size = null, string? tag = null)")
+    // `tag` stays required: `Pad(size)` resolves to the declared one-parameter constructor, so
+    // `tag`'s default is unreachable from Kotlin. `size` still widens, required-but-nullable.
+    assertContains(cs, "public Pad(int? size, string tag)")
     assertEquals(1, Regex("""public Pad\(int size\)""").findAll(cs).count(), cs)
   }
 

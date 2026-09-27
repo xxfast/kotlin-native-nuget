@@ -37,7 +37,7 @@ import kotlin.test.assertTrue
  * `global::Ns.Lamp` at namespace level, and the sealed **base** renders `global::Ns.Observation`.
  *
  * **The refusal arm** (ADR-122 alternative 1's second half): every remaining non-scalar
- * non-generic parameter, an enum here, skips the member *named* rather than silently rendering a
+ * non-generic parameter, a `Duration` here, skips the member *named* rather than silently rendering a
  * public `IntPtr` nobody can call.
  *
  * Oreo (black with the white bib) reports in alive. Mylo (brown and creamy) is only ever a rumour.
@@ -95,8 +95,11 @@ class Tier1LegacyRouteHandleParameterTest {
       fun tally(kinds: List<String>, observation: Observation.Alive): StateFlow<Int> =
         MutableStateFlow(kinds.size)
 
-      // Refusal arm: an enum parameter is the same defect and has no wire shape here yet.
+      // An enum parameter binds by ordinal on this route (it was the refusal arm's instance).
       fun moods(mood: Mood): Flow<String> = flowOf(mood.name)
+
+      // Refusal arm: a `Duration` parameter is the same defect and has no wire shape here yet.
+      fun waits(span: kotlin.time.Duration): Flow<String> = flowOf(span.toString())
 
       // Refusal arm: a NULLABLE handle. The type binds, the nullability does not (ADR-114's
       // deferral), so it is refused rather than silently crossing a null as IntPtr.Zero.
@@ -318,35 +321,40 @@ class Tier1LegacyRouteHandleParameterTest {
   /**
    * The refusal arm ADR-122 adds: `Plain` narrows from "no type arguments" to "a scalar", so every
    * other non-generic shape skips the member *named* instead of silently rendering a public
-   * `IntPtr`. An enum is the cheapest instance of the family (`Instant`, `Duration`, `Uuid`, a
-   * value class, an interface and an unexported class are the rest).
+   * `IntPtr`. A `Duration` is the cheapest instance of the family (`Instant`, `Uuid`, a value
+   * class, an interface and an unexported class are the rest). An enum used to be the instance
+   * here; it now binds by ordinal, `(int)mood` in C# and `Mood.entries[mood]` in Kotlin.
    */
   @Test
   fun `a non-scalar non-handle parameter on a legacy route skips the member named`() {
     val result = run()
 
-    assertFalse(
-      result.generatedCSharp.contains("Moods("),
-      "expected no Moods member: an enum parameter has no wire shape on this route yet; got: " +
-          "${csharpLinesFor(result, "Moods")}",
+    assertTrue(
+      result.generatedCSharp.contains("(int)mood"),
+      "expected Moods to bind by ordinal; got: ${csharpLinesFor(result, "Moods")}",
     )
     assertFalse(
-      result.generated.contains("radio_moods_collect"),
-      "expected no _moods_collect export either; got: " +
-          "${result.generated.lines().filter { it.contains("moods") }.map(String::trim)}",
+      result.generatedCSharp.contains("Waits("),
+      "expected no Waits member: a Duration parameter has no wire shape on this route yet; got: " +
+          "${csharpLinesFor(result, "Waits")}",
+    )
+    assertFalse(
+      result.generated.contains("radio_waits_collect"),
+      "expected no _waits_collect export either; got: " +
+          "${result.generated.lines().filter { it.contains("waits") }.map(String::trim)}",
     )
 
     val diagnostic: String? = result.kspWarnings.firstOrNull {
       it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name}]") &&
-          it.contains("moods")
+          it.contains("waits")
     }
     assertTrue(
       diagnostic != null,
-      "expected a SKIPPED_UNSUPPORTED_INPUT naming Radio.moods rather than a silent vanish or a " +
+      "expected a SKIPPED_UNSUPPORTED_INPUT naming Radio.waits rather than a silent vanish or a " +
           "public IntPtr; kspWarnings=${result.kspWarnings}",
     )
     assertTrue(
-      diagnostic.contains("mood: Mood"),
+      diagnostic.contains("span: Duration"),
       "expected the diagnostic to name the offending parameter and its type, so the author knows " +
           "which one to change; got: $diagnostic",
     )

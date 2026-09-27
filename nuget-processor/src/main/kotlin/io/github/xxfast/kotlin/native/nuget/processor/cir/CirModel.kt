@@ -1002,6 +1002,9 @@ data class CirParameter(
   // to (`limitHasValue`), placed before this parameter's own [nativeType] slot by
   // `nativeImportParameters()`. Null for every other parameter.
   val hasValueSlot: String? = null,
+  // ADR-164 rule 2 on the legacy routes: the leading `bool` slot an `Optional<T?>` parameter adds
+  // (`treatsIsSet`), placed before [hasValueSlot] by `nativeImportParameters()`. Null otherwise.
+  val isSetSlot: String? = null,
   // The wire-handle local a [collectionCreate] is built into, minted apart from the member's user
   // parameters (`ForwardLegacyNames.handleLocals`). Null means the unrenamed `<name>Handle`.
   val collectionHandle: String? = null,

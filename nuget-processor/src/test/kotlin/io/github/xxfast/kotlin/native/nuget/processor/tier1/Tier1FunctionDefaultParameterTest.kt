@@ -17,8 +17,9 @@ import kotlin.test.assertTrue
 class Tier1FunctionDefaultParameterTest {
 
   /**
-   * ADR-164: a widened `Describe(string, bool?)` is a different C# signature from a declared
-   * `Describe(string)`, so the ADR-096 collision no longer fails generation.
+   * ADR-164: `excited`'s default is unreachable beside the declared `describe(p)` (Kotlin resolves
+   * `describe(p)` to it), so `excited` stays required: `Describe(string, bool)` beside
+   * `Describe(string)`, and the ADR-096 collision still does not fail generation.
    */
   @Test
   fun `a widened method beside a declared shorter namesake does not collide`() {
@@ -39,7 +40,7 @@ class Tier1FunctionDefaultParameterTest {
       },
       "expected no collision; kspErrors=${result.kspErrors}",
     )
-    assertContains(result.generatedCSharp, "public string Describe(string p, bool? excited = null)")
+    assertContains(result.generatedCSharp, "public string Describe(string p, bool excited)")
   }
 
   /**

@@ -127,9 +127,9 @@ class Tier1ConstructorDefaultParameterTest {
   }
 
   /**
-   * ADR-164: the widened `Foo(string, int?)` is a different C# signature from a real `Foo(string)`,
-   * so the collision ADR-091 had to fail generation for is gone (C# prefers the candidate with no
-   * omitted optional, so `new Foo("x")` is not ambiguous either).
+   * ADR-164: Kotlin resolves `Foo(name)` to the real `Foo(name)`, so `lives`'s default is
+   * unreachable beside it and `lives` stays required: `Foo(string, int)` beside `Foo(string)`,
+   * no collision, and `new Foo("x")` reaches the same overload a Kotlin `Foo("x")` does.
    */
   @Test
   fun `a widened constructor beside a real shorter one does not collide`() {
@@ -150,7 +150,7 @@ class Tier1ConstructorDefaultParameterTest {
       "expected no collision; kspErrors=${result.kspErrors}",
     )
     val cs: String = result.generatedCSharp
-    assertContains(cs, "public Foo(string name, int? lives = null)")
+    assertContains(cs, "public Foo(string name, int lives)")
     assertContains(cs, "public Foo(string name)")
   }
 
