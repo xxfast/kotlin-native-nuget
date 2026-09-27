@@ -162,23 +162,22 @@ class Tier1SealedParameterPositionTest {
     )
   }
 
-  /** The ADR-002 two-call route builds its parameters in `topLevelNullablePrimitivePlan`, not in
-   *  `planOrSkip`, so the rewrite has to be applied there as well or a `Double?` return silently
-   *  drops the sealed parameter its sibling shapes accept. */
+  /** A top-level `Double?` return (ADR-170: the single-call `valueOut` route `planOrSkip` builds)
+   *  keeps the sealed parameter its sibling shapes accept. */
   @Test
-  fun `a sealed parameter binds on the two-call nullable primitive route`() {
+  fun `a sealed parameter binds on the top-level nullable primitive route`() {
     val result = Tier1Harness.run(source)
 
     assertTrue(
-      result.generated.contains("""@CName("library_tier1_sealedparameterposition__radius_has_value")""") &&
-          result.generated.contains("""@CName("library_tier1_sealedparameterposition__radius_value")"""),
-      "expected both halves of the two-call route to bind; generated=${result.generated}",
+      result.generated.contains("""@CName("library_tier1_sealedparameterposition__radius")""") &&
+          !result.generated.contains("radius_has_value"),
+      "expected the single export to bind; generated=${result.generated}",
     )
     assertTrue(
       result.generatedCSharp.contains(
-        "Radius_has_value(shape._handle, out IntPtr __nuget_hasValueError)",
+        "Native_Radius(shape._handle, out double valueOut, out IntPtr error)",
       ),
-      "expected the presence call to pass the handle; generatedCSharp=" +
+      "expected the single call to pass the handle; generatedCSharp=" +
           "${result.generatedCSharp.lines().filter { it.contains("Radius") }}",
     )
   }

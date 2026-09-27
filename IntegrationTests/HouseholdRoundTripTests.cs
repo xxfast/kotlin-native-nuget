@@ -83,7 +83,7 @@ public class HouseholdRoundTripTests
     public void FetchFavoriteToyLabelOrThrow_BlankCatName_ThrowsArgumentException()
     {
         // Guards bug 3: an *exported* nullable-returning function that throws instead of
-        // returning null — the forward two-call nullable P/Invoke's throwing path (the pattern
+        // returning null — the forward nullable P/Invoke's throwing path (the pattern
         // that used to omit hasSyncErrorOut and SIGBUS the host process).
         Assert.ThrowsAny<ArgumentException>(
             () => HouseholdSample.FetchFavoriteToyLabelOrThrow(""));

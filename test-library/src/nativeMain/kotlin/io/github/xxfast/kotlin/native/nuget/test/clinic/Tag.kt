@@ -20,9 +20,8 @@ package io.github.xxfast.kotlin.native.nuget.test.clinic
  *    pair, instead") and the return alone is `SKIPPED_UNSUPPORTED_RETURN` with the same hint. Those
  *    two hint sentences become false for `Char?` the moment the has-value pair exists, which is
  *    what this cell is here to notice.
- *  - [firstLetter] is the **top-level function return**, a different (legacy two-call) route from
- *    the member return, reached through a reroute that ADR-076, ADR-079 and ADR-080 each had to add
- *    their own type to.
+ *  - [firstLetter] is the **top-level function return**, which since ADR-170 takes the same
+ *    single-call `valueOut` shape as the member return, through the static-origin projection.
  *  - [mascotInitial] is the **top-level property**, which crashes through a different caller
  *    (`PropertyExports`) than a class property (`ClassExports`), so it is not covered by [initial].
  *

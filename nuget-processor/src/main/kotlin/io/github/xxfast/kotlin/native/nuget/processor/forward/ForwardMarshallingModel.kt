@@ -351,7 +351,6 @@ internal enum class ForwardPassing { VALUE, OUT, IN_OUT }
 /** The number of native invocations that implement a single public callable. */
 internal enum class ForwardEvaluation(val nativeCallCount: Int) {
   EXACTLY_ONCE(1),
-  LEGACY_TWO_CALL(2),
 }
 
 /** Who is responsible for the resource represented by a transferred value. */

@@ -155,7 +155,7 @@ public class NullableBooleanTests
         Assert.Null(CatRecord.IsArchived(2));
     }
 
-    // ---- Cell 7: top-level function return (two-call route; hard-crashes packNuget today) ----
+    // ---- Cell 7: top-level function return (ADR-170 single-call valueOut route) ----
 
     [Fact]
     public void NullableBooleanSample_ChipImplanted_False()

@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -115,7 +116,7 @@ class Tier1BareNullableEnumTest {
   }
 
   @Test
-  fun `top-level bare nullable enum return keeps ADR-002's two-call shape`() {
+  fun `top-level bare nullable enum return takes the single-call valueOut shape`() {
     val result = Tier1Harness.run(
       """
       package tier1.barenullableenumtoplevel
@@ -129,13 +130,17 @@ class Tier1BareNullableEnumTest {
     assertTrue(result.compiledClean, "expected a top-level nullable enum return to bind; got: ${result.compileErrors}")
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "@CName(\"library_tier1_barenullableenumtoplevel__napMood_has_value\")")
-    assertContains(kotlin, "@CName(\"library_tier1_barenullableenumtoplevel__napMood_value\")")
-    assertContains(kotlin, "napMood(hour)!!.ordinal")
+    // ADR-170: one export, the ordinal written through the valueOut slot.
+    assertContains(kotlin, "@CName(\"library_tier1_barenullableenumtoplevel__napMood\")")
+    assertFalse("napMood_has_value" in kotlin, "the retired two-call pair must not be emitted")
+    assertContains(kotlin, "valueOut.reinterpret<IntVar>().pointed.value = result.ordinal")
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "private static extern int NapMood_value(int hour, out IntPtr error);")
+    assertContains(
+      cs,
+      "private static extern bool Native_NapMood(int hour, out int valueOut, out IntPtr error);",
+    )
     assertContains(cs, "public static global::Interop.Mood? NapMood(int hour)")
-    assertContains(cs, "return (global::Interop.Mood)__nuget_value;")
+    assertContains(cs, "hasValue ? (global::Interop.Mood)valueOut : (global::Interop.Mood?)null;")
   }
 }

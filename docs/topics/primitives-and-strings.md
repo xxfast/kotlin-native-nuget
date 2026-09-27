@@ -47,9 +47,10 @@ fun nullableInt(hasValue: Boolean): Int? = if (hasValue) 42 else null
 int? result = Mappings.NullableInt(false); // null
 ```
 
-A top-level function or property getter returning a nullable primitive, `Instant?`, or `Duration?`
-is evaluated twice when it returns a value. Keep those functions and getters free of side effects
-and ensure their result stays stable between evaluations. Ordinary instance methods evaluate once.
+A property getter returning a nullable primitive, `Instant?`, or `Duration?` is evaluated twice
+when it returns a value. Keep those getters free of side effects and ensure their result stays
+stable between evaluations. A top-level function with the same return evaluates once, like an
+ordinary instance method.
 
 ## Char
 

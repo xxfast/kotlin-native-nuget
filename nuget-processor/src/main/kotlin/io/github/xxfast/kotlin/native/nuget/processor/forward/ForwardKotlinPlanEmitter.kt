@@ -18,10 +18,6 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
   if (plan.invocation.origin == ForwardCallableOrigin.VALUE_CLASS) {
     return addForwardValueClassPlanExport(plan)
   }
-  if (plan.evaluation == ForwardEvaluation.LEGACY_TWO_CALL) {
-    return addLegacyTwoCallKotlinExport(plan)
-  }
-
   plan.validate()
   require(plan.evaluation == ForwardEvaluation.EXACTLY_ONCE) {
     "Forward Kotlin plan emitter only supports exactly-once callables: ${plan.invocation.symbol}"
@@ -236,101 +232,6 @@ private fun addValueClassOrdinaryResult(
       "Forward Kotlin plan emitter has no ordinary value-class result for underlying $underlying",
     )
   }
-}
-
-/**
- * ADR-002 top-level nullable-primitive two-call: `${export}_has_value` + `${export}_value`.
- * Both invoke the same Kotlin function; presence returns BOOLEAN, value unwraps with `!!`.
- */
-private fun FileSpec.Builder.addLegacyTwoCallKotlinExport(plan: ForwardCallablePlan): FileSpec.Builder {
-  plan.validate()
-  require(plan.evaluation == ForwardEvaluation.LEGACY_TWO_CALL) {
-    "Legacy two-call emitter received ${plan.evaluation}: ${plan.invocation.symbol}"
-  }
-  require(plan.invocation.origin == ForwardCallableOrigin.TOP_LEVEL) {
-    "Legacy two-call is only planned for top-level functions: ${plan.invocation.symbol}"
-  }
-  require(plan.nativeExports.size == 2) {
-    "Legacy two-call plan ${plan.invocation.symbol} must have two native exports"
-  }
-  val result: BridgeType.Nullable = plan.publicSignature.result as? BridgeType.Nullable
-    ?: error("Legacy two-call plan ${plan.invocation.symbol} requires a nullable result")
-  // ADR-076: a top-level nullable Instant shares this shape too.
-  val inner: BridgeType = result.type
-  // ADR-079: a Primitive/Enum-underlying value class rides the same two-call shape, unboxing to
-  // the underlying on the `_value` call.
-  // ADR-098 amendment (boundary nullability part C): and so does `Char?`, its by-value CHAR16 slot
-  // on the `_value` call.
-  require(
-    inner is BridgeType.Primitive || inner == BridgeType.Char ||
-        inner == BridgeType.Instant || inner == BridgeType.Duration ||
-        inner is BridgeType.ValueClass || inner is BridgeType.Enum
-  ) {
-    "Legacy two-call plan ${plan.invocation.symbol} requires a nullable primitive, Char, " +
-        "Instant, Duration, enum or value class"
-  }
-  val error: ForwardAbiParameter = requireNotNull(plan.errorSlot) {
-    "Legacy two-call plan ${plan.invocation.symbol} is missing its error slot"
-  }
-  val presence: ForwardNativeCall = plan.nativeExports[0]
-  val value: ForwardNativeCall = plan.nativeExports[1]
-  require(presence.result == ForwardAbiWireType.BOOLEAN) {
-    "Legacy two-call presence export must return BOOLEAN: ${plan.invocation.symbol}"
-  }
-  require(value.result != ForwardAbiWireType.VOID) {
-    "Legacy two-call value export must return the primitive wire type: ${plan.invocation.symbol}"
-  }
-
-  val invocation: String = dispatchedInvocation(plan, receiver = null)
-
-  fun exportBuilder(call: ForwardNativeCall): FunSpec.Builder {
-    val builder: FunSpec.Builder = FunSpec.builder("export_${call.exportName}")
-      .addAnnotation(
-        cNameAnnotation(call.exportName, ForwardExportOwnerTag(symbol = plan.invocation.symbol)),
-      )
-    call.parameters.forEach { parameter ->
-      builder.addParameter(parameter.name, kotlinType(parameter, isReceiver = false))
-    }
-    require(call.parameters.lastOrNull() == error) {
-      "Legacy two-call export ${call.exportName} must place its error slot last"
-    }
-    return builder
-  }
-
-  val presenceBuilder: FunSpec.Builder = exportBuilder(presence).returns(kotlinType("Boolean"))
-  presenceBuilder.addCode(
-    errorHandlingValueBody("$invocation != null", error.name, "false"),
-    cOpaquePointerVar,
-    nugetHandles,
-  )
-  addFunction(presenceBuilder.build())
-
-  val valueExpression: String = when {
-    inner == BridgeType.Instant || inner == BridgeType.Duration -> "$invocation!!.toDotNetTicks()"
-    // ADR-079: unbox to the underlying (the ordinal for an enum underlying) on the `_value` call.
-    inner is BridgeType.ValueClass -> "$invocation!!.${inner.underlyingPropertyName}" +
-        if (inner.underlying is BridgeType.Enum) ".ordinal" else ""
-
-    // ADR-080: the bare enum's own ordinal, no unbox step in front of it.
-    inner is BridgeType.Enum -> "$invocation!!.ordinal"
-    else -> "$invocation!!"
-  }
-  val valueDefault: String = when {
-    inner == BridgeType.Instant || inner == BridgeType.Duration -> "0L"
-    inner is BridgeType.Enum -> "0"
-    inner is BridgeType.ValueClass ->
-      if (inner.underlying is BridgeType.Enum) "0" else defaultResult(inner.underlying)
-
-    else -> defaultResult(inner)
-  }
-  val valueBuilder: FunSpec.Builder = exportBuilder(value).returns(kotlinResultType(value.result))
-  valueBuilder.addCode(
-    errorHandlingValueBody(valueExpression, error.name, valueDefault),
-    cOpaquePointerVar,
-    nugetHandles,
-  )
-  addFunction(valueBuilder.build())
-  return this
 }
 
 /**

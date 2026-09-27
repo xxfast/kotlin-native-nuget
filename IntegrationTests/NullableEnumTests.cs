@@ -153,7 +153,7 @@ public class NullableEnumTests
         Assert.False(oreo.MatchesMood(Mood.Grumpy));
     }
 
-    // ---- Top-level function nullable return (ADR-002 two-call) ----
+    // ---- Top-level function nullable return (ADR-170 single-call valueOut) ----
 
     [Fact]
     public void NullableEnumSample_NapMood_NegativeHourIsNull()
@@ -164,7 +164,7 @@ public class NullableEnumTests
     [Fact]
     public void NullableEnumSample_NapMood_ZeroHourReturnsOrdinalZeroAsNonNull()
     {
-        // Mood.Happy is a legitimate entry, not the in-band sentinel this two-call shape exists to
+        // Mood.Happy is a legitimate entry, not the in-band sentinel this has-value shape exists to
         // avoid confusing with null.
         Mood? mood = NullableEnumSample.NapMood(0);
 

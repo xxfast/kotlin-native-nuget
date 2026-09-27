@@ -4,6 +4,10 @@
 
 Accepted
 
+Partly superseded by [ADR-170](170-top-level-nullable-scalar-single-call.md) (2026-09-27): a
+top-level function returning a nullable scalar now calls Kotlin once on the ADR-061 `valueOut`
+route. The two-call pair below remains the shape for property getters only.
+
 ## Context
 
 When bridging nullable Kotlin types (`Int?`, `String?`) across the C boundary to C#, we need a way to represent "null" since C primitives have no null concept.

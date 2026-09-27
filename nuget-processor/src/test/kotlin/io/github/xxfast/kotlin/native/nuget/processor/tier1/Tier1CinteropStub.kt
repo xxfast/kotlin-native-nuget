@@ -110,6 +110,14 @@ internal object Tier1CinteropStub {
       get() = 0.toUShort()
       set(_) {}
 
+    // ADR-170: a top-level `Long?` / `Instant?` / `Duration?` return now takes the same single-call
+    // shape, writing its value (or its .NET ticks) through a `LongVar`.
+    class LongVar : COpaquePointerVar()
+
+    var LongVar.value: Long
+      get() = 0L
+      set(_) {}
+
     @Suppress("UNCHECKED_CAST")
     fun <T : COpaquePointer> COpaquePointer.reinterpret(): T = this as T
 

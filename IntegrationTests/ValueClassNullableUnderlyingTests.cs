@@ -149,7 +149,7 @@ public class ValueClassNullableUnderlyingTests
     [Fact]
     public void ClinicSample_StandardDosage_NullablePrimitiveUnderlyingTopLevelReturn_ZeroSurvivesAsNonNull()
     {
-        // 0.0 is a legitimate Dosage, not the in-band sentinel this two-call shape exists to avoid
+        // 0.0 is a legitimate Dosage, not the in-band sentinel this has-value shape exists to avoid
         // confusing with null.
         Dosage? dosage = ClinicSample.StandardDosage(0);
 

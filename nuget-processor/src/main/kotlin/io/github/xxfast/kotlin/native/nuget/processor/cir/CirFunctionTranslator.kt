@@ -40,8 +40,9 @@ private fun syncErrorArguments(parameters: String): String = if (parameters.isEm
 
 /**
  * Named specialized-protocol CIR adapter for top-level functions that are not planned:
- * generic-declaration returns. Ordinary callables (including ADR-002 nullable-primitive two-call)
- * are projected from [ForwardCallablePlan].
+ * generic-declaration returns. Ordinary callables (including a nullable-scalar return, ADR-170)
+ * are projected from [ForwardCallablePlan]. A nullable return never reaches this route: its gate,
+ * `hasLegacyGenericReturnRoute()`, refuses one.
  *
  * ADR-105 (issue #54): a *sealed* return no longer arrives here. It is planned at every origin now
  * (the planner rewrites the result through `sealedAsHandle()`), and this route is entered only
@@ -89,7 +90,6 @@ internal fun translateFunction(
   // already names its externs from member names; this is that rule, on the legacy top-level route.
   val csName: String = toCSharpName(func.simpleName.asString().replaceFirstChar { it.uppercase() })
   val returnType = func.returnType?.resolve()?.expandAliases()
-  val isNullable: Boolean = returnType?.isMarkedNullable == true
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
 
   // Enums cross the C ABI as their ordinal Int (ADR-006), so the public C# param keeps the enum
@@ -145,12 +145,6 @@ internal fun translateFunction(
       logger,
     )
     return emptyList()
-  }
-
-  if (isNullable) {
-    if (hasEnumParams) return enumParamsUnsupported("nullable")
-
-    return translateNullableFunction(cname, csName, kotlinReturnType, params, libraryName)
   }
 
   val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
@@ -1015,90 +1009,4 @@ internal fun translateGenericFunction(
   )
 
   return result
-}
-
-internal fun translateNullableFunction(
-  cname: String,
-  csName: String,
-  kotlinReturnType: String,
-  params: List<CirParameter>,
-  libraryName: String,
-): List<CirMember> {
-  val csharpReturnType: String = mapReturnType(kotlinReturnType)
-  val paramNames: String = params.joinToString(", ") { it.name }
-
-  // Both crossings throw synchronously (ADR-024), so both DllImports need an error out-param;
-  // see the isNullableValueType property getter in CirClassTranslator.kt for the same
-  // has_value/value two-call shape this mirrors.
-  val hasValueImport = CirDllImport(
-    libraryName = libraryName,
-    entryPoint = "${cname}_has_value",
-    returnType = "bool",
-    name = "${csName}_has_value",
-    parameters = params,
-    visibility = CirVisibility.PRIVATE,
-    hasSyncErrorOut = true,
-  )
-
-  val valueImport = CirDllImport(
-    libraryName = libraryName,
-    entryPoint = "${cname}_value",
-    returnType = csharpReturnType,
-    name = "${csName}_value",
-    parameters = params,
-    visibility = CirVisibility.PRIVATE,
-    hasSyncErrorOut = true,
-  )
-
-  // Local names are prefixed to avoid colliding with a Kotlin parameter of the same name
-  // (e.g. `fun nullableInt(hasValue: Boolean)` would otherwise shadow a plain `hasValue` local).
-  // The has_value/value error outs get their own descriptive suffix (rather than a bare `error`/
-  // `error2`) since both are read in the same method body and must stay distinguishable.
-  val hasValueCallArgs: String = if (paramNames.isEmpty()) {
-    "out IntPtr __nuget_hasValueError"
-  } else {
-    "$paramNames, out IntPtr __nuget_hasValueError"
-  }
-  val valueCallArgs: String = if (paramNames.isEmpty()) {
-    "out IntPtr __nuget_valueError"
-  } else {
-    "$paramNames, out IntPtr __nuget_valueError"
-  }
-
-  val body: String = buildString {
-    appendLine()
-    appendLine("            bool __nuget_hasValue = ${csName}_has_value($hasValueCallArgs);")
-    appendLine("            if (__nuget_hasValueError != IntPtr.Zero)")
-    appendLine("            {")
-    appendLine("                throw NugetErrorNative.BuildException(__nuget_hasValueError);")
-    appendLine("            }")
-    appendLine("            if (!__nuget_hasValue) return null;")
-    if (kotlinReturnType == "String") {
-      appendLine("            IntPtr __nuget_nativeResult = ${csName}_value($valueCallArgs);")
-      appendLine("            if (__nuget_valueError != IntPtr.Zero)")
-      appendLine("            {")
-      appendLine("                throw NugetErrorNative.BuildException(__nuget_valueError);")
-      appendLine("            }")
-      append("            return Marshal.PtrToStringUTF8(__nuget_nativeResult);")
-    } else {
-      appendLine("            $csharpReturnType __nuget_value = ${csName}_value($valueCallArgs);")
-      appendLine("            if (__nuget_valueError != IntPtr.Zero)")
-      appendLine("            {")
-      appendLine("                throw NugetErrorNative.BuildException(__nuget_valueError);")
-      appendLine("            }")
-      append("            return __nuget_value;")
-    }
-  }
-
-  val returnTypeStr: String = if (kotlinReturnType == "String") "string?" else "$csharpReturnType?"
-
-  val wrapper = CirMethod(
-    name = csName,
-    returnType = returnTypeStr,
-    parameters = params,
-    body = body,
-    isStatic = true,
-  )
-
-  return listOf(hasValueImport, valueImport, wrapper)
 }

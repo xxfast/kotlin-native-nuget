@@ -130,7 +130,7 @@ class Tier1BareNullableCharTest {
   }
 
   @Test
-  fun `top-level bare nullable Char return and property keep ADR-002's two-call shape`() {
+  fun `top-level bare nullable Char return is single-call while the property keeps two-call`() {
     val result = Tier1Harness.run(
       """
       package tier1.barenullablechartop
@@ -147,9 +147,13 @@ class Tier1BareNullableCharTest {
     )
 
     val kotlin: String = result.generated
-    // The top-level function return takes the LEGACY two-call reroute (`_has_value` + `_value`),
-    // which ADR-076, ADR-079 and ADR-080 each had to add their own type to.
-    assertContains(kotlin, "_has_value")
+    // ADR-170: the top-level function return takes ADR-061's single call, one export writing the
+    // `.code` through a `UShortVar` valueOut, instead of the retired `_has_value` + `_value` pair.
+    assertFalse("firstLetter_has_value" in kotlin, "the top-level function is single-call now")
+    assertContains(
+      kotlin,
+      "valueOut.reinterpret<UShortVar>().pointed.value = result.code.toUShort()",
+    )
     // The top-level PROPERTY crashes through a different caller (`PropertyExports`) than a class
     // property, so it is its own cell.
     assertContains(kotlin, "mascotInitial != null")

@@ -31,8 +31,8 @@ class Tier1ValueClassParameterTest {
 
       fun chartSummary(id: ChartId): String = "Chart ${'$'}{id.value}"
 
-      // The ADR-002 two-call route (`_has_value` + `_value`) builds its helper set separately
-      // from `planOrSkip`, so a value-class parameter has to be admitted there too.
+      // A top-level nullable-scalar return (ADR-170's single-call valueOut route) admits a
+      // value-class parameter like every other planned shape.
       fun chartLength(id: ChartId): Int? = if (id.isValid()) id.value.length else null
       """.trimIndent(),
     )

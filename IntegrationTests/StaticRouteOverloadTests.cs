@@ -9,8 +9,8 @@ namespace IntegrationTests;
 /// <list type="bullet">
 ///   <item>object member — <c>Parlour.describe</c> / <c>Parlour.rate</c></item>
 ///   <item>companion member — <c>Groomer.Companion.of</c></item>
-///   <item>top-level function — <c>bookGrooming</c>, and <c>waitTime</c> on the two-call
-///   nullable-primitive shape</item>
+///   <item>top-level function — <c>bookGrooming</c>, and <c>waitTime</c> on the
+///   nullable-primitive <c>valueOut</c> shape (ADR-170)</item>
 ///   <item>extension function — <c>Mitten.pat</c> / <c>Mitten.brush</c>, plus <c>Tomcat.pat</c>,
 ///   the cross-receiver namesake that shares one package-scoped symbol with <c>Mitten.pat</c></item>
 /// </list>
@@ -90,8 +90,8 @@ public class StaticRouteOverloadTests
     [Fact]
     public void WaitTime_NoArguments_DispatchesToFirstTwoCallOverload()
     {
-        // Nullable primitive return: the ADR-002 two-call shape (waitTime_has_value +
-        // waitTime_value), a different planner entry point from every other cell here.
+        // Nullable primitive return: since ADR-170 the single-call valueOut shape (it was the
+        // ADR-002 waitTime_has_value + waitTime_value pair), numbered like every other cell here.
         Assert.Equal(15, GroomingSample.WaitTime());
     }
 
@@ -104,8 +104,8 @@ public class StaticRouteOverloadTests
     [Fact]
     public void WaitTime_WithBlankCat_ReturnsNullFromTheNumberedPresenceCall()
     {
-        // The presence half of the numbered pair has to belong to *this* overload; a mis-numbered
-        // _has_value would answer for waitTime() instead, which is never null.
+        // The numbered export has to belong to *this* overload; a mis-numbered one would answer
+        // for waitTime() instead, which is never null.
         Assert.Null(GroomingSample.WaitTime("   "));
     }
 

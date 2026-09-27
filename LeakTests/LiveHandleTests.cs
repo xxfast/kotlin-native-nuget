@@ -14,6 +14,7 @@ using Issue297 = TestLibrary.Issue297;
 using Perchvar = TestLibrary.Perchvar;
 using TestLibrary.Kennel;
 using Lineage = TestLibrary.Lineage;
+using Litterbox = TestLibrary.Litterbox;
 using TestLibrary.Lounge;
 using TestLibrary.Metronome;
 using TestLibrary.Models;
@@ -296,6 +297,29 @@ public class LiveHandleTests
             using var oreo = new Patient("Oreo");
             Assert.Equal(2, oreo.AddTags(new[] { "fluffy", "loud" }));
         });
+    }
+
+    // Row 3a-bis. ADR-170: the same List<String> parameter on a *top-level* function returning
+    // `Int?`, which takes the ADR-061 single-call route. Both the null and the non-null return
+    // must release the list handle and its element boxes in the shim's finally.
+    [Fact]
+    public void TwoCallCollectionParam_ListArgument_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            Assert.Equal(2, Litterbox.ScoopLedger.CountVisits(new[] { "Oreo", "Mylo" }));
+            Assert.Null(Litterbox.ScoopLedger.CountVisits(Array.Empty<string>()));
+        });
+    }
+
+    // Row 3a-ter. ADR-170 fault injection: Kotlin throws with the list handle live (Rex is not
+    // allowed in the litter box), and the finally still releases the list and its boxes.
+    [Fact]
+    public void TwoCallCollectionParam_ThrowingListArgument_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+            Assert.ThrowsAny<ArgumentException>(
+                () => Litterbox.ScoopLedger.CountVisits(new[] { "Mylo", "Rex" })));
     }
 
     // Row 3b. Map<String, Int> parameter: boxed key and boxed value per entry.

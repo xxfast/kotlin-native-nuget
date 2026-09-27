@@ -3,10 +3,10 @@ using Xunit.Abstractions;
 
 namespace IntegrationTests;
 
-// Regression coverage: a nullable-returning top-level function (ADR-002's `_has_value` /
-// `_value` two-call pattern) previously crashed the host process (SIGBUS) the instant it threw,
-// because the generated DllImports never declared the synchronous error out-param the native
-// side always writes (ADR-024). See ADR-002 and ADR-024.
+// Regression coverage: a nullable-returning top-level function (then on ADR-002's `_has_value` /
+// `_value` two-call pattern, since ADR-170 a single call with a `valueOut` slot) previously
+// crashed the host process (SIGBUS) the instant it threw, because the generated DllImports never
+// declared the synchronous error out-param the native side always writes (ADR-024).
 public class NullableFunctionExceptionPropagationTests
 {
     private readonly ITestOutputHelper _testOutputHelper;

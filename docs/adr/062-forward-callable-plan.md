@@ -87,6 +87,9 @@ are **skipped** with no emission — never `IntPtr` / `"0"` garbage.
   `EXACTLY_ONCE` with an OUT parameter.
 - Switching property/top-level nullable primitives to single-call `valueOut` requires a separate
   versioned ADR.
+  - **Amended (2026-09-27) by [ADR-170](170-top-level-nullable-scalar-single-call.md):** top-level
+    functions have switched, and `LEGACY_TWO_CALL` is gone. Property getters keep
+    `ForwardPropertyGetter.LegacyTwoCall`, and switching them still requires its own ADR.
 
 ## Consequences
 
