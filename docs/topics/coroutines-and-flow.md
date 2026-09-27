@@ -39,10 +39,18 @@ using var service = new AsyncCatService("toys");
 using var cat = await service.FetchCatAsync("Oreo");
 ```
 
-Every `suspend fun` becomes an `async Task<T>` method suffixed `Async`. Overloads on the same class
-resolve as an ordinary C# overload set. A top-level `suspend fun` (not a class method) cannot be
-overloaded: a second overload with the same name collides on one native symbol. Move it onto a
-class or object, or give it a distinct name.
+Every `suspend fun` becomes an `async Task<T>` method suffixed `Async`. Overloads resolve as an
+ordinary C# overload set, whether declared on a class or at the top level:
+
+```kotlin
+suspend fun fetchTreat(): String = "one treat for Oreo"
+suspend fun fetchTreat(count: Int): String = "$count treats for Mylo"
+```
+
+```C#
+await AsyncFunctions.FetchTreatAsync();  // "one treat for Oreo"
+await AsyncFunctions.FetchTreatAsync(3); // "3 treats for Mylo"
+```
 
 ## `suspend fun` returning a nullable type {id="suspend-fun-returning-a-nullable-type"}
 

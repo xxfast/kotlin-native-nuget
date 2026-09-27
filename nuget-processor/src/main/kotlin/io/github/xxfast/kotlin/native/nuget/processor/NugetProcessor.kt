@@ -1654,9 +1654,16 @@ class NugetProcessor(
     )
     val forwardPlanner = ForwardCallablePlanner(forwardClassifier, context.symbols, expects)
     val forwardPropertyPlanner = ForwardPropertyPlanner(forwardClassifier, context.symbols, expects)
+    // ROADMAP line 29 (ADR-118 amendment): the planner sees every non-generic top-level function,
+    // suspend ones included and in declaration order, so a `suspend` overload consumes its ADR-095
+    // number from the same counter as its ordinary namesakes (`staticEntry` skips it as SUSPEND)
+    // and the suspend route reads that number back. `functions` itself stays non-suspend: it also
+    // feeds the synchronous translate loop.
+    val topLevelCatalogFunctions: List<KSFunctionDeclaration> =
+      allFunctions.filter { it.typeParameters.isEmpty() }
     val ordinaryCatalog: ForwardCallablePlanCatalog = forwardPlanner.catalog(
-      classes, functions, extensionFunctions, objects, properties, extensionProperties, valueClasses,
-      sealedClasses,
+      classes, topLevelCatalogFunctions, extensionFunctions, objects, properties,
+      extensionProperties, valueClasses, sealedClasses,
     )
 
     // ADR-040 sub-decision C.1 (reachability-driven): a Kotlin interface gets a concrete backing
@@ -2432,7 +2439,7 @@ class NugetProcessor(
       // The import lives inside addSuspendFunctionExports, behind its legacy-refusal gates
       // (ADR-064): a refused suspend function used to leave a dead import behind.
       guardDeclaration(func) {
-        builder.addSuspendFunctionExports(func, context.symbols, forwardClassifier)
+        builder.addSuspendFunctionExports(func, context.symbols, forwardClassifier, callableCatalog)
       }
     }
 

@@ -609,6 +609,8 @@ The StateFlow variant is not optional under line 54's wording ("`asyncMembers` a
      as line 54's class case did. **Gate decision: a ROADMAP line, not built here.** The fix is
      ADR-095's per-`(package, name)` counter applied to the suspend top-level route, which first
      needs a planner entry (a `SUSPEND` skip in `topLevelEntry`) for `overloadSuffix` to read.
+     > **Closed by the 2026-09-26 amendment** below, at the same time as correcting this section's
+     > adjoining premise (`:176-180`) about why that planner entry was thought to be missing.
 - Deferred, each a ROADMAP line: **top-level suspend overload numbering** (item 6, gate-decided);
   `Flow`-returning, lambda-parameter and generic members on a sealed arm (line 39's other halves,
   still `SEALED_SUBCLASS_UNROUTED`); `SUSPEND_CALLBACK_PROTOCOL` on an arm; suspend overloads on
@@ -662,7 +664,6 @@ Sites that changed beyond the ADR's file list: none. `warnRefusedLegacyRoutePara
 became two functions (`renderScopeHandleField`, `renderGetOrCreateScope`) rather than one, because
 the ordinary class renders the field and the method at different points in its body.
 
-
 ## Amendment (2026-09-11, `ir/suspend-nested-arm-return`): consequence item 4 closed
 
 Item 4 above is fixed. Both suspend routes now spell an object return through the ADR-105 speller,
@@ -705,3 +706,51 @@ This ADR's declared-only, per-arm scope model (`hasSuspendMethods` derived from
 chain, where the raw `getAllFunctions()` scan this ADR deliberately avoided for arms was still in
 use. A sealed arm's own scope ownership is unchanged; ADR-159 also lets an **open** arm serve as the
 base of an ordinary class, walked by the same shared selector.
+
+## Amendment (2026-09-26, `ir/top-level-suspend-overloads`): deferred item 6 closed
+
+ROADMAP line 29 (Phase 4). Two top-level `suspend fun` overloads with one name in one package
+collided on one C symbol, `ERROR_C_ENTRY_POINT_COLLISION`, since `addSuspendFunctionExports`
+composed `${cname}_async` with no overload suffix and had no planner entry to read one from.
+
+**The item A premise at `:176-180` (Bridge mechanism, per change) was wrong, corrected here.** It
+reasoned that a top-level `suspend fun` reaching `topLevelEntry` would make `planOrSkip` plan a
+synchronous export of a suspend body, which cannot compile. In fact `staticEntry`'s first act is a
+`SUSPEND` structural skip, before `planOrSkip` ever runs, returning a numbered `Skipped(symbol,
+SUSPEND, node = function)` exactly as the class and sealed-arm routes already did. Top-level suspend
+functions never reached that skip only because `NugetProcessor.kt` partitioned them out of the list
+handed to `forwardPlanner.catalog(...)` before this change; the counter's number was available all
+along, the input was missing.
+
+The fix feeds all top-level functions, suspend included, into the one planner counter (declaration
+order, not partitioned by suspend-ness, so numbering stays ADR-095's declaration-order rule) and
+reads `ForwardCallablePlanCatalog.overloadSuffix` on both the Kotlin `@CName`/export name and every
+C# field the extern needs: `CirDllImport.entryPoint`, `CirDllImport.name` (the private extern), and
+`CirMethod.nativeName` (the call site). Numbering only `entryPoint` on a same-wire pair (two
+overloads whose arguments erase to the identical C# extern signature, e.g. two `IntPtr`-handle
+parameters) fails loudly with CS0111, two externs of the same name and parameter types. Numbering
+`entryPoint` and `CirDllImport.name` but leaving `nativeName` unsuffixed compiles and is the silent
+hazard: the second overload's body calls the first overload's extern by argument-type resolution
+and returns the first overload's value.
+
+**Shared counter, by design.** The counter is one per `(package, name)`, shared with ordinary
+(non-suspend) namesakes in declaration order, matching the class route's existing behaviour and
+ADR-095's rule that "a skipped namesake still consumes its number". A same-name pair of one ordinary
+`fun ping()` and one `suspend fun ping(Int)`, declared in that order, exports `test_cat__ping` (the
+ordinary function, unnumbered) and `test_cat__ping_2_async` (the suspend one) rather than each
+keeping its own separate `_async`/non-`_async` count. This is an internal ABI shift only for a
+pre-existing mixed pair: no public C# name changes, and no shipped fixture had such a pair before
+this change (verified by grep). Public names stay natural: both `fetchTreat()` overloads render
+`FetchTreatAsync()`/`FetchTreatAsync(int)`, the numbering lives only on the private extern and the
+native symbol.
+
+Verified by execution (`ir/top-level-suspend-overloads`, Tier 1 + IntegrationTests): an arity pair
+(`fetchTreat()` / `fetchTreat(count: Int)`), a same-wire pair sharing one `IntPtr` argument shape
+(`serveTreats(List<Int>)` / `serveTreats(Set<String>)`, the cell that pins the suffix onto the
+extern name and not only the `EntryPoint`), and the mixed ordinary/suspend pair (`ping()` /
+`ping(times: Int)`) all number correctly and each overload answers its own distinguishable value.
+
+Not touched: the interface route's total absence of overload numbering (a separate, pre-existing
+ROADMAP item). `ForwardCallablePlanner`'s comments describing `catalog()`'s inputs were reworded to
+say suspend top-level functions now arrive as `SUSPEND` skips rather than being absent from the
+catalog entirely (`:723-730`, `:1708-1711`).

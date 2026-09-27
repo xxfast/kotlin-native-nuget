@@ -52,13 +52,18 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
   // ADR-114: same classification the class-method route below uses. This route compiles today
   // (`addParameters` keeps the type arguments), but it hands C# an IntPtr no caller can produce.
   classifier: ForwardBridgeTypeClassifier,
+  // ROADMAP line 29 (ADR-118 amendment): the planner's ADR-095 number for this function, shared
+  // with its ordinary top-level namesakes. `translateSuspendFunction` reads the same catalog.
+  callableCatalog: ForwardCallablePlanCatalog,
 ) {
   if (classifier.legacyRefusedParameter(func.parameters) != null) return
   // ADR-119: a generic return that is not a marshallable collection skips on both halves too.
   if (classifier.legacyRefusedReturn(func) != null) return
   // ADR-163: library- and package-qualified, and the Kotlin call fully qualified rather than
   // imported by simple name (two same-named suspend functions in two packages both export now).
-  val cname: String = symbols.topLevel(func)
+  // ROADMAP line 29: plus the overload number, so two top-level `suspend` overloads take two C
+  // symbols. The Kotlin call below stays bare -- the suffix names the export, not the function.
+  val cname: String = symbols.topLevel(func) + callableCatalog.overloadSuffix(func)
   val funcName: String =
     kotlinPackageReference(func.packageName.asString()) + func.simpleName.asString()
   val returnType = func.returnType?.resolve()?.expandAliases()
@@ -77,8 +82,8 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
     buildSuspendFunctionBody(funcName, paramCall, paramPrelude, isUnit, isNullable, boxed)
 
   val builder: FunSpec.Builder = FunSpec.builder("export_${cname}_async")
-    // ADR-117: the one live legacy route that can collide *within* a class (two suspend
-    // overloads share `${cname}_async`), so it names the method, not the class.
+    // ADR-117: names the function as the owner, so a collision this numbering does not cover
+    // (for example across routes) still reports which declarations share the symbol.
     .addAnnotation(cNameAnnotation("${cname}_async", ownedBy(func)))
     .addLegacySuspendParameters(func, paramShapes)
     .addParameter("callbackPtr", cOpaquePointer)

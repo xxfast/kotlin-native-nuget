@@ -17,6 +17,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticK
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesCsharpType
@@ -699,6 +700,9 @@ internal fun translateSuspendFunction(
   // arguments), but hands C# an IntPtr no caller can produce. Same classification as every other
   // legacy route.
   classifier: ForwardBridgeTypeClassifier,
+  // ROADMAP line 29 (ADR-118 amendment): the planner's ADR-095 number, the same one
+  // `addSuspendFunctionExports` reads.
+  callableCatalog: ForwardCallablePlanCatalog,
 ): List<CirMember> {
   if (classifier.legacyRefusedParameter(func.parameters) != null) return emptyList()
   val returnType = func.returnType?.resolve()?.expandAliases()
@@ -711,11 +715,18 @@ internal fun translateSuspendFunction(
   // ROADMAP Phase 4: the class route's bytes arm, for a top-level `suspend fun f(): ByteArray`.
   if (returnShape is ForwardLegacyReturnShape.Bytes) tracker.needsBytes = true
 
+  // ROADMAP line 29: the overload number goes on the entry point, the extern's name AND the
+  // wrapper's call site. On a same-wire pair (both externs take identical native parameters)
+  // numbering the entry point alone is CS0111, and numbering the extern but not the call site
+  // silently binds the second body to the first overload's extern.
+  val suffix: String = callableCatalog.overloadSuffix(func)
   // ADR-163: library- and package-qualified; `_async` is appended by the entry points below.
-  val cname: String = symbols.topLevel(func)
+  val cname: String = symbols.topLevel(func) + suffix
   // ADR-110: escape after the case change, so `suspend fun lock()` renders `LockAsync`.
   // ADR-163: from the declaration name, not from [cname] (see `translateFunction`).
   val csName: String = toCSharpName(func.simpleName.asString().replaceFirstChar { it.uppercase() })
+  // The public name stays `${csName}Async`: the overloads are one natural C# overload set.
+  val nativeName: String = "${csName}${suffix}Async_native"
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
   val isUnit: Boolean = kotlinReturnType == "Unit"
 
@@ -755,7 +766,7 @@ internal fun translateSuspendFunction(
     libraryName = libraryName,
     entryPoint = "${cname}_async",
     returnType = "IntPtr",
-    name = "${csName}Async_native",
+    name = nativeName,
     parameters = nativeParams,
     visibility = CirVisibility.PRIVATE,
   )
@@ -765,7 +776,7 @@ internal fun translateSuspendFunction(
   val asyncMethod = CirMethod(
     name = "${csName}Async",
     returnType = taskReturnType,
-    nativeName = "${csName}Async_native",
+    nativeName = nativeName,
     parameters = params,
     body = "",
     isStatic = true,
