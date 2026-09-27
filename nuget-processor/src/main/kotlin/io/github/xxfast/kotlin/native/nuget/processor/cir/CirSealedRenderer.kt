@@ -14,17 +14,36 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
  */
 internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   renderDoc(sealed.doc, generated = sealed.remarks)
-  appendLine("    public abstract class ${sealed.name} : IDisposable, INugetHandle")
+  // ADR-101 amendment (2026-09-27): the ordinary class's base-list rule (ADR-094). With a kept
+  // exported base, that base declares `_handle`, implements `INugetHandle` and carries
+  // `IDisposable`, so the sealed base inherits all three and chains its handle constructor;
+  // without one it declares them itself, beside whatever exported interfaces it lists.
+  val superClass: String? = sealed.superClass
+  val baseList: List<String> = if (superClass != null) {
+    listOf(superClass) + sealed.interfaces
+  } else {
+    sealed.interfaces + listOf("IDisposable", "INugetHandle")
+  }
+  appendLine("    public abstract class ${sealed.name} : ${baseList.joinToString(", ")}")
   appendLine("    {")
-  appendLine("        internal IntPtr _handle;")
-  appendLine()
-  appendLine("        IntPtr INugetHandle.Handle => _handle;")
-  appendLine()
-  appendLine("        internal ${sealed.name}(IntPtr handle, out NugetHandleTag tag)")
-  appendLine("        {")
-  appendLine("            tag = default;")
-  appendLine("            _handle = handle;")
-  appendLine("        }")
+  if (superClass == null) {
+    appendLine("        internal IntPtr _handle;")
+    appendLine()
+    appendLine("        IntPtr INugetHandle.Handle => _handle;")
+    appendLine()
+    appendLine("        internal ${sealed.name}(IntPtr handle, out NugetHandleTag tag)")
+    appendLine("        {")
+    appendLine("            tag = default;")
+    appendLine("            _handle = handle;")
+    appendLine("        }")
+  } else {
+    appendLine(
+      "        internal ${sealed.name}(IntPtr handle, out NugetHandleTag tag) : " +
+          "base(handle, out tag)",
+    )
+    appendLine("        {")
+    appendLine("        }")
+  }
   appendLine()
 
   // ADR-111/ADR-116 amendment (2026-09-11): the base's own declared members, ahead of the arms so
@@ -73,7 +92,10 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   appendLine("            };")
   appendLine("        }")
   appendLine()
-  appendLine("        public abstract void Dispose();")
+  // A kept base's `Dispose` is `virtual` (open) or `abstract`, and re-abstracting it without
+  // `override` is CS0114.
+  val disposeModifier: String = if (superClass != null) "abstract override" else "abstract"
+  appendLine("        public $disposeModifier void Dispose();")
   appendLine("    }")
 
   for (subclass in sealed.subclasses.filterNot { it.isNested }) {
@@ -88,9 +110,10 @@ private fun sealedSubclassBlock(
   subclass: CirSealedSubclass,
 ): String = buildString {
   // ADR-118: an arm that declares a `suspend fun` owns its own coroutine scope and therefore its
-  // own async disposal. The base stays `: IDisposable, INugetHandle` -- its `Native_Dispose` is
-  // per arm, so it has no scope to drain, and putting `IAsyncDisposable` there would advertise
-  // `DisposeAsync` on arms that never suspend.
+  // own async disposal. The base's own base list is unaffected -- whether it declares
+  // `IDisposable` itself or inherits it through a kept exported base (ADR-101) -- because the
+  // base's `Native_Dispose` is per arm, so it has no scope to drain, and putting
+  // `IAsyncDisposable` there would advertise `DisposeAsync` on arms that never suspend.
   val asyncDisposable: String = if (subclass.hasSuspendMethods) ", IAsyncDisposable" else ""
   // ADR-009 amendment (2026-09-11): an `open` arm drops `sealed`, so a Kotlin subclass of it (an
   // ordinary class, with the arm as its base) compiles and the arm's `open` members can be

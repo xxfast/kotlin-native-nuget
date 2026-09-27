@@ -592,6 +592,73 @@ string message = result switch
 };
 ```
 
+### A sealed base's own supertype {id="sealed-base-supertype"}
+
+A sealed class's own supertype crosses the same way an ordinary class's does. An **exported**
+supertype is named in the sealed base's C# base list, so `is`/`as` against it work and its own
+members stay on it:
+
+```kotlin
+open class Pouffe {
+  val stuffing: String = "beans"
+  open fun sink(): Int = 1
+}
+
+sealed class Ottoman : Pouffe() {
+  data class Tall(val shelf: Int) : Ottoman() {
+    override fun sink(): Int = shelf
+  }
+
+  data class Squat(val step: Int) : Ottoman() // inherits Pouffe's Sink() unchanged
+}
+```
+
+```C#
+public abstract class Ottoman : Pouffe // Stuffing stays on Pouffe, not re-declared here
+{
+    public sealed class Tall : Ottoman
+    {
+        public override int Sink() { /* ... */ } // overrides Pouffe's own member
+    }
+}
+```
+
+An **unexported** supertype (a dependency-module or unbound-package type) is dropped from the base
+list instead, named `SKIPPED_UNEXPORTED_SUPERTYPE`, and its public members are re-homed onto the
+sealed base, reachable there and, through ordinary C# inheritance, on every arm:
+
+```kotlin
+// UnexportedBlanket lives outside the export scope
+open class UnexportedBlanket {
+  val fabric: String = "fleece"
+  open fun shake(): Int = 1
+}
+
+sealed class Swaddle : UnexportedBlanket() {
+  data class Wriggling(val turns: Int) : Swaddle() {
+    override fun shake(): Int = turns
+  }
+
+  data class Still(val limbs: Int) : Swaddle() // inherits the re-homed Shake() unchanged
+}
+```
+
+```C#
+public abstract class Swaddle : IDisposable, INugetHandle
+{
+    public virtual string Fabric { get { /* ... */ } } // re-homed from UnexportedBlanket
+    public virtual int Shake() { /* ... */ }            // re-homed from UnexportedBlanket
+}
+```
+
+`Swaddle.Wriggling`'s override of `Shake()` renders `override`, since the base now declares it
+`virtual`; `Swaddle.Still` declares nothing of its own and inherits the base's re-homed `Shake()`
+through ordinary C# dispatch. This applies to an unexported *interface* supertype too, including an
+abstract member with no default the sealed base itself never implements: it still re-homes onto the
+base and every arm implements it as it would any other inherited abstract member.
+
+### Subclass placement and pattern matching
+
 A subclass declared *inside* the sealed base stays nested (`Observation.Alive`); one declared
 *beside* the base in the same file is still discriminated by `FromHandle`, but is declared at
 namespace level instead (`public sealed class Label : FlatShape`, not `FlatShape.Label`): match on

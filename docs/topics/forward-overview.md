@@ -536,9 +536,11 @@ Gradle module the export set never admits.
 ```
 [nuget:SKIPPED_UNEXPORTED_SUPERTYPE] Skipping Issue42Api : Issue42Component: supertype
     'dev.other.core.Issue42Component' is not in the export set, so it has no generated C#
-    interface; the class is generated without it and its own members still export. an unexported
-    supertype carries no members the C# side could call, so nothing is lost; note that
-    include("...") does not help here — the export reachability closure never walks supertypes
+    interface; Issue42Api is generated without it and its public members are bound on Issue42Api
+    directly. nothing callable is lost (Issue42Component's implemented members export as members
+    of Issue42Api), but C# sees no Issue42Component type, so `is`/`as` against it is gone; note
+    that include("...") does not help here — the export reachability closure never walks
+    supertypes
     at Issue42Api.kt:15
 ```
 

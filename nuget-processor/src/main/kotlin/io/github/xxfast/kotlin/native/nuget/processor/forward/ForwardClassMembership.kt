@@ -447,6 +447,22 @@ internal fun KSDeclaration.baseClassOverridee(
   }
 }
 
+/**
+ * ADR-101 amendment (2026-09-27): whether a sealed arm's member overrides a member of the sealed
+ * base's kept exported base class [keptBase], rather than one the sealed base itself declares.
+ * The sealed base lists [keptBase] in its C# base list, so the arm's member is a C# `override` of
+ * it (CS0114 otherwise), while a member the sealed base declares is matched by signature instead.
+ */
+internal fun KSDeclaration.overridesKeptBaseOf(
+  sealed: KSClassDeclaration,
+  keptBase: KSClassDeclaration?,
+): Boolean {
+  if (keptBase == null) return false
+  val overridee: KSDeclaration = baseClassOverridee(keptBase) ?: return false
+  return overridee.parentDeclaration?.qualifiedName?.asString() !=
+      sealed.qualifiedName?.asString()
+}
+
 /** [baseClassOverridee] as the boolean the `override` / `virtual` pair is keyed on. */
 internal fun KSDeclaration.overridesBaseClassMember(superClass: KSClassDeclaration?): Boolean =
   baseClassOverridee(superClass) != null

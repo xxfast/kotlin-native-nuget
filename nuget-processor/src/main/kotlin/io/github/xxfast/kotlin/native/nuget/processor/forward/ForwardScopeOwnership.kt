@@ -39,9 +39,11 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsForwardFlow
  * `paddedwindowseat_settle_async`, invisible to `ForwardAbiContract` because it filters Kotlin
  * exports down to the C# import set.
  *
- * [declaredOnly] is the sealed-arm rule (ADR-118): an arm carries what it declares, because the
- * generated sealed base carries nothing. [superClass] is the *kept* base (`forwardSuperClass`), so
- * a member inherited from a base with a generated C# class of its own belongs to that base.
+ * [declaredOnly] is the sealed-arm rule (ADR-118): an arm's own suspend surface is declared-only,
+ * since the generated sealed base still declares no suspend member for it to inherit (ADR-101
+ * re-homes a base's ordinary members onto the sealed base, not its suspend ones). [superClass] is
+ * the *kept* base (`forwardSuperClass`), so a member inherited from a base with a generated C#
+ * class of its own belongs to that base.
  */
 internal fun KSClassDeclaration.forwardSuspendRouteMethods(
   classifier: ForwardBridgeTypeClassifier,

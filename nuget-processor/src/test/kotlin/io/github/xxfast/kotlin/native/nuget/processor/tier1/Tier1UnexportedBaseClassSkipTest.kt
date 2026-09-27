@@ -14,11 +14,12 @@ import kotlin.test.assertTrue
  * [Tier1UnexportedSupertypeSkipTest] closed for interfaces, through the hole that ADR named and
  * deferred.
  *
- * The fix is deliberately *not* symmetric with the interface case, and these cells are written to
- * catch the asymmetry: an unexported interface carries nothing C# could have called, but an
- * unexported base class carries real members. Dropping the base must re-home them onto the
- * subclass, under the subclass's own export prefix, with no `override` (which would be CS0115
- * against a base that does not exist).
+ * Both halves re-home the dropped supertype's public members the same way
+ * (`isForwardMemberOf`), and these cells are written to catch what still differs: an unexported
+ * interface only loses the `is`/`as` relation, but an unexported base class loses the base type
+ * itself, and with it every `override` an overriding member would otherwise declare against it.
+ * Dropping the base must re-home its members onto the subclass, under the subclass's own export
+ * prefix, with no `override` (which would be CS0115 against a base that does not exist).
  *
  * Cell (a) crosses a real compilation-unit boundary via [Tier1DependencyLibrary] — the shape a
  * Gradle-module dependency has (`Origin.KOTLIN_LIB`, `containingFile == null`) — because the
