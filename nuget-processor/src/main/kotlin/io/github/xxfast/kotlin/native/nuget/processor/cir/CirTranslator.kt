@@ -375,7 +375,7 @@ internal fun translate(
     val members: List<CirMember> = funcs.flatMap { function ->
       translateSuspendFunction(
         function, context.libraryName, context.symbols, tracker, exportedTypes, logger, classifier,
-        callableCatalog,
+        callableCatalog, context,
       ).also { emitted ->
         recordStatic(
           namespace, finalClassName, emitted, function,

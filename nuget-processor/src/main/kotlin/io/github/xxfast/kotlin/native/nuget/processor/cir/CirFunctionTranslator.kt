@@ -726,6 +726,8 @@ internal fun translateSuspendFunction(
   // ROADMAP line 29 (ADR-118 amendment): the planner's ADR-095 number, the same one
   // `addSuspendFunctionExports` reads.
   callableCatalog: ForwardCallablePlanCatalog,
+  /** ADR-068 (2026-09-27 amendment): the namespace a `StateFlow<T>` element is spelled in. */
+  context: NugetContext,
 ): List<CirMember> {
   if (classifier.legacyRefusedParameter(func.parameters) != null) return emptyList()
   val returnType = func.returnType?.resolve()?.expandAliases()
@@ -755,10 +757,26 @@ internal fun translateSuspendFunction(
 
   val params: List<CirParameter> = legacyRouteParameters(func.parameters, classifier, tracker)
 
+  // ADR-068 (2026-09-27 amendment): the class route's StateFlow bucket, on a top-level function.
+  // The Kotlin half is the plain top-level export (the awaited flow is already minted as a handle);
+  // only the C# spelling and the completion differ, and those come from the class route's helper.
+  val stateFlowElement: SuspendStateFlowElement? =
+    if (returnType?.declaration?.qualifiedName?.asString() in STATE_FLOW_TYPES) {
+      suspendStateFlowElement(returnType, classifier, context)
+    } else {
+      null
+    }
+  if (stateFlowElement != null) {
+    tracker.needsFlow = true
+    tracker.needsStateFlow = true
+    tracker.needsSuspendStateFlow = true
+  }
+
   // Issue #108: a nullable Kotlin return has to reach C# as `Task<T?>`, otherwise a null result
   // is read back as a `0` primitive or as a live wrapper over `IntPtr.Zero`.
   val asyncReturnType: String = when {
     isUnit -> ""
+    stateFlowElement != null -> stateFlowElement.asyncReturnType
     collectionReturn != null -> collectionReturn.forwardPublicCsharpType()
     // ROADMAP Phase 4: `Task<byte[]>`, the class route's own line.
     returnShape is ForwardLegacyReturnShape.Bytes -> legacyBytesCsharpType(returnShape.nullable)
@@ -807,6 +825,7 @@ internal fun translateSuspendFunction(
     isStatic = true,
     isAsync = true,
     asyncReturnType = asyncReturnType,
+    flowElementRead = stateFlowElement?.read,
     // ADR-119 / ADR-131: the top-level route's own copy of the class route's decision, exhaustive
     // for the same reason -- the two routes have to answer a new return shape identically.
     asyncResultRead = when (returnShape) {

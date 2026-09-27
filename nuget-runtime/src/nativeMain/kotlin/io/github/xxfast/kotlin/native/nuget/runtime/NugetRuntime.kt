@@ -743,14 +743,19 @@ public fun export_nuget_gc_collect() {
 @CName("nuget_stateflow_collect")
 public fun export_nuget_stateflow_collect(
   flowHandle: COpaquePointer,
-  scopeHandle: COpaquePointer,
+  scopeHandle: COpaquePointer?,
   onNextPtr: COpaquePointer,
   onCompletePtr: COpaquePointer,
   onErrorPtr: COpaquePointer,
   userData: COpaquePointer,
 ): COpaquePointer {
   val flow = flowHandle.asStableRef<StateFlow<*>>().get()
-  val scope = scopeHandle.asStableRef<CoroutineScope>().get()
+  // ADR-068 (2026-09-27 amendment): a top-level `suspend fun` returning `StateFlow<T>` has no
+  // parent class scope and passes null. The collection then launches on an ad-hoc scope, the
+  // same one the top-level suspend call itself launches on; the returned job is still the only
+  // cancellation handle, and the C# enumerator cancels and frees it.
+  val scope = scopeHandle?.asStableRef<CoroutineScope>()?.get()
+    ?: CoroutineScope(Dispatchers.Default)
   // ADR-128: `collectForCSharp` owns the trio of callbacks and the launch; the flow handle is
   // still dereferenced before the launch, as today, and only `.collect` moves into the body.
   return collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData) { emit ->
