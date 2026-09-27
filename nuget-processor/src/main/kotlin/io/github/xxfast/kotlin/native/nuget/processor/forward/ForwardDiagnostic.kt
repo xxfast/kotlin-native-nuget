@@ -179,6 +179,13 @@ internal enum class ForwardDiagnosticKind(
    *  silent is what shipped `KotlinFunc<CamId, Flow>` and CS0246 to a consumer. */
   SKIPPED_UNSUPPORTED_PROPERTY(ForwardDiagnosticSeverity.WARNING),
 
+  /** ROADMAP line 25: a `const val` whose evaluated value could not be read from KSP (the
+   *  reflective `KotlinConstValue` route found no accessor on this KSP version, or the compiler
+   *  reported no constant initializer). The const is absent from the generated C#; its value is
+   *  never recovered from source text, which is what shipped illegal C# and silently wrong
+   *  values. */
+  SKIPPED_UNREADABLE_CONST_VALUE(ForwardDiagnosticSeverity.WARNING),
+
   /** Cell 23 / BUG-010: a generic + `suspend` + `inline` + `reified` extension returning
    *  `Result<T>` — the *combination* has no working legacy route, even though `suspend` and
    *  `generic` each have one individually. */

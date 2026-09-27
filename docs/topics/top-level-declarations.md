@@ -20,18 +20,41 @@ var catNickname: String? = null
 
 ```kotlin
 const val MAX_LIVES: Int = 9
+const val LEG_COUNT: Int = 1 shl 3
+const val WHISKER_MASK: Int = 0xFF_FF
+const val TREATS_EVER: UInt = 4_000_000_000u
+const val MYSTERY_WEIGHT: Float = Float.NaN
+const val SNAKE_TOY: String = "snake_case_value"
+const val TOY_TAG: String = "v$SNAKE_TOY"
 ```
 
 ```C#
 string breed = Properties.CatBreed;
 Properties.CatNickname = "Whiskers";
+```
 
-int maxLives = Constants.MaxLives; // a real C# const, no bridge call
+Generated onto `Constants`:
+
+```C#
+public const int MaxLives = 9;
+public const int LegCount = 8;               // 1 shl 3, evaluated
+public const int WhiskerMask = 65535;        // 0xFF_FF; the hex/underscore spelling is not kept
+public const uint TreatsEver = 4000000000U;  // the declared type (UInt) picks the suffix
+public const float MysteryWeight = float.NaN;
+public const string SnakeToy = "snake_case_value";
+public const string ToyTag = "vsnake_case_value"; // the template's evaluated value, not its text
 ```
 
 `const val` becomes a genuine C# `const` field with the value baked in at build time; reading it
-never crosses the bridge. Ordinary top-level `val`/`var` become a static property with a getter
-(and setter for `var`), including nullable types.
+never crosses the bridge. The value is the compiler's own evaluated constant, never a re-parse of
+the Kotlin source text, so an expression, a shift, an `Int.MIN_VALUE`-style constant, or a template
+over another `const val` renders its evaluated result, and a `const val` in a dependency's admitted
+companion (see [Cross-module export closure](nuget-dsl.md#cross-module-export-closure)) binds too;
+Kotlin's own hex/underscore/binary literal presentation is not preserved. When the value cannot be
+read at all (a KSP version the reflective reader does not recognise), the const is skipped and
+named `SKIPPED_UNREADABLE_CONST_VALUE`; see [Diagnostics](forward-overview.md#diagnostics). Ordinary
+top-level `val`/`var` become a static property with a getter (and setter for `var`), including
+nullable types.
 
 Top-level functions follow the same grouping. `Arithmetic.kt` (`add`, `multiply`, ...) becomes a
 static class named after its file, in the C# namespace that matches its package

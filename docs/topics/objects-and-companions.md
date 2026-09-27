@@ -75,6 +75,24 @@ string origin = TreatPantry.Origin;               // inherited from Stockroom, f
 int restocked = TreatPantry.Restock();
 ```
 
+A `const val` on an object or companion follows the same evaluated-constant rule as a top-level
+one (see [Top-level declarations](top-level-declarations.md)): an expression over another const,
+even one declared on a different owner, renders its evaluated value, not its source text:
+
+```kotlin
+object PantryTally {
+  const val TRAILING: Int = 5
+  const val REF: Int = TRAILING + 1
+  const val DOUBLED: Int = TreatPantry.CAPACITY * 2
+}
+```
+
+```C#
+public const int Trailing = 5;
+public const int Ref = 6;
+public const int Doubled = 24;
+```
+
 A `val` renders get-only, a `var` renders `get`/`set`. A member the object only *inherits* — a base
 class property or method it does not redeclare — is flattened directly onto the static class,
 methods included: a C# static class cannot extend or implement anything, so an inherited member has

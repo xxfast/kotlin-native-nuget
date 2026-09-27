@@ -69,6 +69,34 @@ object SparePantry {
   const val CAPACITY: Int = 3
 }
 
+/**
+ * ROADMAP line 25: a ONE-LINE object body holding a semicolon-separated pair. The source-text
+ * regex captures to end of line, so today the first value swallows the second declaration and
+ * the closing brace, and the second value swallows the closing brace: both illegal C#. `TOP` ends
+ * in a string then a semicolon, `BOTTOM` ends in an int then a brace, and `BOTTOM` has no type
+ * annotation. The top shelf is Oreo's tuna; the bottom shelf holds two treats for Mylo.
+ */
+object PantryShelf { const val TOP: String = "tuna"; const val BOTTOM = 2 }
+
+/**
+ * ROADMAP line 25, the companion twin: a one-line `companion object` body inside a one-line class
+ * body, so today the value captures BOTH closing braces. The name is already PascalCase in Kotlin
+ * and stays `DefaultName` (ADR-006, issue #285).
+ */
+class PantryJar { companion object { const val DefaultName = "Oreo's jar" } }
+
+/** ROADMAP line 25: a trailing comment and expressions over other consts, in an object body. */
+object PantryTally {
+  /** Today the generated terminating semicolon lands INSIDE the trailing comment. */
+  const val TRAILING: Int = 5 // Mylo's five favourite treats
+
+  /** An expression over a sibling const: evaluated to `6`, not the expression text. */
+  const val REF: Int = TRAILING + 1
+
+  /** An expression over ANOTHER owner's const: evaluated to `24`, not the expression text. */
+  const val DOUBLED: Int = TreatPantry.CAPACITY * 2
+}
+
 /** The interface [TreatPantry] implements, so that its `label` is an `override val`. */
 interface Labelled {
   val label: String

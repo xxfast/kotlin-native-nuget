@@ -14,7 +14,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardCallbackDel
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
 import com.google.devtools.ksp.symbol.ClassKind
-import com.google.devtools.ksp.symbol.FileLocation
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
@@ -31,6 +30,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardDiagnosticOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardFileClassOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceBridgePlanner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.PublishedScope
@@ -405,7 +407,7 @@ internal fun translate(
     val (namespace, fileClassName) = key
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
     val members: List<CirMember> = props.mapNotNull { prop ->
-      translateConstProperty(prop)?.also { emitted ->
+      translateConstProperty(prop, logger)?.also { emitted ->
         recordStatic(namespace, finalClassName, listOf(emitted), prop, prop.topLevelSpelling())
       }
     }
@@ -1607,8 +1609,18 @@ internal fun translateProperty(
   return members
 }
 
+/**
+ * A `const val` as a C# `const`, its value the compiler's EVALUATED constant ([KotlinConstValue]),
+ * rendered from that value and the declared type: never from source text (ROADMAP line 25).
+ *
+ * When the value cannot be read (a KSP version without the reflective accessor, or no constant
+ * initializer), the const is skipped and, when [logger] is given, named with
+ * `SKIPPED_UNREADABLE_CONST_VALUE`. [logger] is null only for a caller that asks for the name alone
+ * (the top-level static-name collision set), so each skip is reported once, by the translation.
+ */
 internal fun translateConstProperty(
   prop: KSPropertyDeclaration,
+  logger: KSPLogger?,
 ): CirConst? {
   val propName: String = prop.simpleName.asString()
   val propTypeResolved: KSType = prop.type.resolve().expandAliases()
@@ -1617,59 +1629,46 @@ internal fun translateConstProperty(
   // `const val MaxRetries` was only reachable as `Maxretries`. Same helper, same rule, one place.
   val csPropName: String = propName.kotlinConstantToPascalCase()
   val csType: String = KOTLIN_TO_CSHARP_PARAM[propType] ?: return null
-  val value: String = extractConstValue(prop) ?: return null
-  val csValue: String = kotlinLiteralToCSharp(value, propType)
+  val csValue: String = when (val read = KotlinConstValue.read(prop)) {
+    is KotlinConstValue.Read.Evaluated -> KotlinConstValue.csharpLiteral(read.value, propType)
+      ?: return null.also {
+        reportUnreadableConst(
+          prop,
+          logger,
+          "the compiler's evaluated constant `${read.value}` " +
+              "(${read.value.javaClass.name}) is not a $propType value",
+        )
+      }
+    is KotlinConstValue.Read.Unreadable ->
+      return null.also { reportUnreadableConst(prop, logger, read.reason) }
+  }
 
   return CirConst(name = csPropName, type = csType, value = csValue)
 }
 
-/**
- * The literal a `const val` is initialised with, read out of the declaring source file: KSP does
- * not surface a compile-time constant's value, so the text is the only source.
- *
- * ROADMAP Phase 4: the search starts at the property's OWN line rather than at the top of the
- * file. It used to take the first `const val NAME` in the whole file, so two declarations sharing a
- * const name -- two objects, or two companions -- both rendered the FIRST one's value, silently.
- * Searching forward from the declaration's line is robust to whether [FileLocation] points at the
- * `const val` line itself or at a preceding KDoc/annotation line: in both cases the first match
- * at-or-after it is this property's own. A declaration with no file location (a dependency klib)
- * falls back to the whole-file search, which is what it has always done.
- */
-private fun extractConstValue(prop: KSPropertyDeclaration): String? {
-  val filePath: String = prop.containingFile?.filePath ?: return null
-  val propName: String = prop.simpleName.asString()
-  val sourceText: String = java.io.File(filePath).readText()
-  val pattern = Regex("""const\s+val\s+${Regex.escape(propName)}\s*(?::\s*\S+)?\s*=\s*(.+)""")
-  val match: MatchResult =
-    pattern.find(sourceText, sourceText.offsetOfLine(prop.declarationLine())) ?: return null
-  return match.groupValues[1].trim()
-}
-
-/** The 1-based source line this declaration starts on, or 1 when it has no file location. */
-private fun KSDeclaration.declarationLine(): Int = (location as? FileLocation)?.lineNumber ?: 1
-
-/**
- * The character offset [line] (1-based) starts at, counted over the RAW text so a CRLF file is not
- * off by one per preceding line. Clamped to the text length for a line number past the end.
- */
-private fun String.offsetOfLine(line: Int): Int {
-  var offset: Int = 0
-  repeat(line - 1) {
-    val next: Int = indexOf('\n', offset)
-    if (next < 0) return length
-    offset = next + 1
+private fun reportUnreadableConst(prop: KSPropertyDeclaration, logger: KSPLogger?, reason: String) {
+  logger ?: return
+  val name: String = prop.simpleName.asString()
+  // A companion's const is a static on its owning class (ADR-013); `forwardDiagnosticOwner` folds
+  // the companion away. A dependency-klib top-level const has no file holder: owner null.
+  val owner: ForwardDiagnosticOwner? = when (val parent = prop.parentDeclaration) {
+    is KSClassDeclaration -> parent.forwardDiagnosticOwner()
+    else -> prop.forwardFileClassOwner()
   }
-  return offset
-}
-
-private fun kotlinLiteralToCSharp(value: String, kotlinType: String): String {
-  val cleaned: String = value.replace("_", "")
-  return when (kotlinType) {
-    "String" -> cleaned
-    "Float" -> if (cleaned.endsWith("f", ignoreCase = true)) cleaned else "${cleaned}f"
-    "Long" -> if (cleaned.endsWith("L")) cleaned else "${cleaned}L"
-    "UInt" -> if (cleaned.endsWith("u", ignoreCase = true)) cleaned else "${cleaned}U"
-    "ULong" -> if (cleaned.endsWith("uL", ignoreCase = true) || cleaned.endsWith("UL")) cleaned else "${cleaned}UL"
-    else -> cleaned
-  }
+  ForwardDiagnosticSink.emit(
+    listOf(
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNREADABLE_CONST_VALUE,
+        symbol = prop,
+        declaration = prop.qualifiedName?.asString() ?: name,
+        reason = "the value of `const val $name` is not readable: $reason",
+        hint = "a const's C# value is only ever the compiler's evaluated constant, never its " +
+            "source text; build with the KSP version this plugin pins, or declare it as a plain " +
+            "`val` to bind it as a get-only property instead",
+        owner = owner,
+        member = name,
+      ),
+    ),
+    logger,
+  )
 }
