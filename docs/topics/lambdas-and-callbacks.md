@@ -109,12 +109,36 @@ The same route binds a method declared on a sealed arm (see
 top-level function, or an extension function.
 
 A few shapes are not supported and are refused by name (a build-time skip, not broken generated
-code): `Char` as either the lambda's payload or its own return; an exported object or enum as the
-lambda's *own* return (as opposed to the member's return, which supports both); a suspend lambda (`suspend (T) -> R`); a lambda type nested inside a `List`/`Set`/`Map`; a callback
-at a *result* position (a member returning a lambda rather than taking one; return a
+code): `Char` as either the lambda's payload or its own return; a payload that is a Kotlin builtin
+non-scalar (`List`, `Set`, `Map`, `Any`, `Pair`, an array, `Duration`, or anything else under
+`kotlin`/`kotlinx` outside a primitive, `String` or `Char`); a lambda's *own* return outside `Unit`,
+a primitive or `String` (an object, an enum, `Char`, or one of those same builtins); a suspend
+lambda (`suspend (T) -> R`); a lambda type nested inside a `List`/`Set`/`Map`; a callback at a
+*result* position (a member returning a lambda rather than taking one; return a
 [Kotlin lambda property](#kotlin-c-lambda-properties-and-returns) instead); and a lambda parameter
 on a constructor, a data class's `copy()`, an enum-arm box constructor, or a value-class member,
 since none of those can keep the callback registered past the single call that creates them.
+
+```kotlin
+fun onBatch(cb: (List<Int>) -> Unit) = cb(listOf(1))
+fun makeCat(cb: () -> Cat) { cb() }
+```
+
+```
+[nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping Walker.onBatch: a callback parameter can carry a
+primitive/String/Char, a class handle or an enum, but not `cb: (List<Int>) -> Unit`, whose payload
+`List<Int>` is a Kotlin builtin with no crossing on a callback
+    at Walker.kt:<line>
+
+[nuget:SKIPPED_UNSUPPORTED_RETURN] Skipping Walker.makeCat: a callback can return `Unit`, a
+primitive or a `String`, but `cb: () -> Cat` returns `Cat`
+    at Walker.kt:<line>
+```
+
+Neither member is generated on either half, Kotlin included, so nothing calls a delegate that
+doesn't exist on the C# side. Pass the collection one element at a time, or wrap it in an exported
+class and pass that; hand an object or enum result back through a method on the class instead of a
+lambda return.
 
 ### A nullable lambda parameter {id="a-nullable-lambda-parameter"}
 
@@ -201,9 +225,42 @@ kept past the single call that supplied it and invoked later is a different case
 The same pattern also binds a pair declared on a sealed arm; see
 [Stored-callback and interface-bridge pairs on a sealed arm](interfaces-abstract-sealed.md#sealed-callback-pair-generated-c).
 
-A stored callback whose payload is nullable (`listener: (Mood?) -> Unit`) has no generated member:
+A stored callback whose payload is nullable (`listener: (Mood?) -> Unit`), or a Kotlin builtin
+non-scalar (`List`, `Map`, `Set`, `Any`, `Pair`, an array, `Duration`), has no generated member:
 both the `add` and `remove` half are declined together, since a subscription that could not be made
-should not have a matching unsubscribe either.
+should not have a matching unsubscribe either. A listener must also return `Unit`: Kotlin calls it
+back as a bare `Action`, so a listener returning anything else drops both halves the same way,
+named `SKIPPED_UNSUPPORTED_RETURN`:
+
+```kotlin
+fun addCounter(listener: () -> Int) {}
+fun removeCounter(listener: () -> Int) {}
+```
+
+```
+[nuget:SKIPPED_UNSUPPORTED_RETURN] Skipping Walker.addCounter: the `addCounter` / `removeCounter`
+stored-callback pair is not bound: its listener `listener: () -> Int` returns `Int`, and a stored
+listener is called back as an `Action`, which returns nothing
+    at Walker.kt:<line>
+```
+
+A `Boolean` listener binds like any other primitive, over the same handle wire every other scalar
+listener uses:
+
+```kotlin
+fun addPurrListener(listener: (Boolean) -> Unit) = purrListeners.add(listener)
+fun removePurrListener(listener: (Boolean) -> Unit) = purrListeners.remove(listener)
+fun purr(loud: Boolean) = purrListeners.forEach { it(loud) }
+```
+
+```C#
+using var cat = new Cat("Oreo", 9);
+var recorded = new List<bool>();
+using IDisposable sub = cat.AddPurrListener(loud => recorded.Add(loud));
+
+cat.Purr(true);
+cat.Purr(false); // recorded == [true, false]
+```
 
 ## C# implementing a Kotlin interface as a parameter {id="c-implementing-a-kotlin-interface-as-a-parameter"}
 

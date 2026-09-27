@@ -151,9 +151,11 @@ private val LEGACY_CALLBACK_RETURNS: Set<String> = setOf(
  *    generated Kotlin then failed to compile with `No value passed for parameter 'x'`.
  *
  * Members whose lambda the ADR-062 plan owns never reach here: the plan carries every outer return
- * its own result matrix carries, mixed parameters included. What is left on this route is exactly
- * the payload/result shapes the plan's callback lowering declines (`Char`, an object or enum lambda
- * return, a suspend lambda), and those keep working at the returns listed above.
+ * its own result matrix carries, mixed parameters included. What is left on this route is the
+ * payload shapes the plan's callback lowering declines (`Char`, a sealed base, a value class, a
+ * suspend lambda), and those keep working at the returns listed above. A lambda RESULT outside
+ * `Unit`/primitive/`String` and a Kotlin-builtin non-scalar payload never reach here: both are
+ * refused upstream, before the partition, by `refusedLegacyLambdaShape`.
  */
 internal fun legacyRefusedCallbackMember(method: KSFunctionDeclaration): String? {
   val lambdas: List<KSValueParameter> = method.parameters.filter { parameter ->
@@ -852,8 +854,19 @@ private fun ForwardBridgeTypeClassifier.refusedListenerMember(
   return null
 }
 
-/** A Kotlin source spelling for a diagnostic: simple names, type arguments and `?` kept. */
-private fun KSType.kotlinSpelling(): String {
+/**
+ * A Kotlin source spelling for a diagnostic: simple names, type arguments and `?` kept. A
+ * `kotlin.FunctionN` is spelled in arrow syntax (`(Int) -> Unit`), as the author wrote it.
+ */
+internal fun KSType.kotlinSpelling(): String {
+  val qualifiedName: String? = declaration.qualifiedName?.asString()
+  if (qualifiedName in LEGACY_CALLBACK_TYPES && this.arguments.isNotEmpty()) {
+    val spelled: List<String> = this.arguments.map { argument ->
+      argument.type?.resolve()?.kotlinSpelling() ?: "*"
+    }
+    val lambda: String = "(${spelled.dropLast(1).joinToString(", ")}) -> ${spelled.last()}"
+    return if (isMarkedNullable) "($lambda)?" else lambda
+  }
   val arguments: String =
     if (this.arguments.isEmpty()) ""
     else this.arguments.joinToString(", ", "<", ">") { argument ->
@@ -872,6 +885,39 @@ internal data class LegacyRefusedInterfaceBridgePair(
   val reason: String,
   val hint: String,
 )
+
+/**
+ * The stored-callback (ADR-037) twin of [legacyRefusedInterfaceBridgePair]: why the `add`/`remove`
+ * pair whose add half is [addMethod] cannot be carried, or null when it can. The route's bridge
+ * lambda is always typed `(...) -> Unit` and its C# half is always an `Action`, so a listener that
+ * returns anything else generated Kotlin that did not compile (`actual type is '() -> Unit', but
+ * '() -> Int' was expected`).
+ *
+ * Applied AFTER pair detection, never before the per-call/stored partition: a non-`Unit` result is
+ * a working shape on the per-call route (`fun ask(cb: (Int) -> String): String`), so a
+ * pre-partition rule would drop members that bind. Pair detection keeps claiming both halves, so a
+ * refused pair cannot fall through to the per-call route either.
+ */
+internal fun legacyRefusedStoredCallbackPair(
+  addMethod: KSFunctionDeclaration,
+): LegacyRefusedInterfaceBridgePair? {
+  val lambda: KSValueParameter = addMethod.parameters.firstOrNull { parameter ->
+    parameter.type.resolve().expandAliases().declaration.qualifiedName?.asString() in
+        LEGACY_CALLBACK_TYPES
+  } ?: return null
+  val lambdaType: KSType = lambda.type.resolve().expandAliases()
+  val result: KSType = lambdaType.arguments.lastOrNull()?.type?.resolve()?.expandAliases()
+    ?: return null
+  if (result.declaration.qualifiedName?.asString() == "kotlin.Unit") return null
+  return LegacyRefusedInterfaceBridgePair(
+    kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
+    reason = "its listener `${lambda.name?.asString() ?: "_"}: ${lambdaType.kotlinSpelling()}` " +
+        "returns `${result.kotlinSpelling()}`, and a stored listener is called back as an " +
+        "`Action`, which returns nothing",
+    hint = "make the listener return `Unit`; hand a result back through a method on the " +
+        "subscribing class instead",
+  )
+}
 
 /**
  * ADR-039 amendment (2026-09-26): how one admitted listener parameter crosses the subscription

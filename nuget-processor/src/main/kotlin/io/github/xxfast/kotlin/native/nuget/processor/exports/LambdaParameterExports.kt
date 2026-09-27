@@ -310,4 +310,4 @@ internal fun KSFunctionDeclaration.isArmCallbackRoutable(
     // filter runs AFTER pair detection: a refused add half cannot leave its partner behind as a
     // per-call callback. Without it a `(Int?) -> Unit` on an arm still aborted the
     // generated-Kotlin compile with no diagnostic.
-    refusedNullableLambdaPayload() == null
+    refusedLegacyLambdaShape() == null
