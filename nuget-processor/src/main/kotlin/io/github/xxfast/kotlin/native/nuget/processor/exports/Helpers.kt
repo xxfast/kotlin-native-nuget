@@ -228,7 +228,11 @@ internal fun KSFunctionDeclaration.isCompilerOwnedMember(owner: KSClassDeclarati
   if (owner.modifiers.contains(Modifier.DATA) && (name == "copy" || name.startsWith("component"))) {
     return true
   }
-  if (origin == Origin.SYNTHETIC) return true
+  // Interface super-interfaces: an intersection override (`interface D : A, B`, both declaring
+  // `val x`, no override in D) is SYNTHETIC but stands for real author members. KSP reports it
+  // owned by D; filtering it dropped `x` from every route, and the ADR-084 bridge `object : D`
+  // then failed to compile (it no longer implemented `x`).
+  if (origin == Origin.SYNTHETIC && !isIntersectionOverride()) return true
   if (isHiddenByDeprecation()) return true
   if (!owner.isCompilerPluginMarkedOwner()) return false
   val signatureTypes: List<KSType?> =
@@ -242,7 +246,11 @@ internal fun KSFunctionDeclaration.isCompilerOwnedMember(owner: KSClassDeclarati
  * `KSerializer.descriptor` off the property routes when a serializer-ish owner is walked.
  */
 internal fun KSPropertyDeclaration.isCompilerOwnedMember(owner: KSClassDeclaration): Boolean {
-  if (origin == Origin.SYNTHETIC) return true
+  // Interface super-interfaces: an intersection override (`interface D : A, B`, both declaring
+  // `val x`, no override in D) is SYNTHETIC but stands for real author members. KSP reports it
+  // owned by D; filtering it dropped `x` from every route, and the ADR-084 bridge `object : D`
+  // then failed to compile (it no longer implemented `x`).
+  if (origin == Origin.SYNTHETIC && !isIntersectionOverride()) return true
   if (isHiddenByDeprecation()) return true
   if (!owner.isCompilerPluginMarkedOwner()) return false
   return type.resolve().isPluginRuntimeType()
@@ -323,3 +331,19 @@ private val PLUGIN_MARKER_ANNOTATIONS: Set<String> = setOf("kotlinx.serializatio
 
 /** The runtime packages those plugins spell their generated signatures with. */
 private val PLUGIN_RUNTIME_PACKAGES: List<String> = listOf("kotlinx.serialization.")
+
+/**
+ * Interface super-interfaces: KSP's SYNTHETIC intersection override on an INTERFACE, which merges
+ * two supers' identical abstract members (`interface D : A, B`, both declaring `fun y(): Int`) and
+ * stands for an author-written member. Scoped to interface owners: a class must implement such a
+ * member itself, so it never reaches the class routes this way.
+ */
+private fun KSDeclaration.isIntersectionOverride(): Boolean {
+  if ((parentDeclaration as? KSClassDeclaration)?.classKind != ClassKind.INTERFACE) return false
+  val overridee: KSDeclaration? = when (this) {
+    is KSFunctionDeclaration -> findOverridee()
+    is KSPropertyDeclaration -> findOverridee()
+    else -> null
+  }
+  return overridee != null && overridee.origin != Origin.SYNTHETIC
+}

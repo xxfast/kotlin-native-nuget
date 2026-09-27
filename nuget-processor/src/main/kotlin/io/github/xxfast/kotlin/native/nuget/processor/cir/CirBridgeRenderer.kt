@@ -24,8 +24,23 @@ internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
   // transfer the call site disposes once the native call is done, which is what leaves Kotlin's own
   // reference as the bridge's only root; caching it would hand out a disposed StableRef next time.
   // C#-side identity does not depend on the reuse: it comes from the token (facet 5).
-  appendLine("        internal static IntPtr HandleFor(object impl)")
+  appendLine("        internal static IntPtr HandleFor(object impl, Type declared)")
   appendLine("        {")
+  // Interface super-interfaces: the declared parameter type selects the bridge first. A C# class
+  // implementing `IHouseCat` is also an `IPet` and an `INamed`, so an `is` test alone picks by
+  // generation order; at an `INamed` parameter it must be the `INamed` bridge (and a class
+  // implementing two unrelated bridged interfaces must get the one the parameter names). No
+  // pattern variable here: the compiler already guarantees `impl` is the declared type.
+  helper.interfaces.forEach { entry ->
+    val plan: ForwardBridgeInterfacePlan = entry.plan
+    val implCast: String = "(${entry.csQualifiedName})impl"
+    appendLine("            if (declared == typeof(${entry.csQualifiedName}))")
+    appendLine("            {")
+    appendLine("                return ${plan.stateClassName}.Create($implCast).KotlinHandle;")
+    appendLine("            }")
+  }
+  // Fallback for a static type that names no bridgeable interface directly (`object`, a class
+  // type): the runtime type, in generation order.
   helper.interfaces.forEach { entry ->
     val plan: ForwardBridgeInterfacePlan = entry.plan
     // ADR-133: spelled off the state class, not off the simple name -- every arm of this one

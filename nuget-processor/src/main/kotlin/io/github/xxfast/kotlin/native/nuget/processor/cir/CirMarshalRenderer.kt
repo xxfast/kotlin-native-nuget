@@ -514,11 +514,15 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   // it into a Kotlin-side `object : Foo` handle so the ordinary handle path below it is reused
   // unchanged. Without a bridge layer in this module there is nothing to fall back to, so the
   // ADR-040 boundary exception stands.
-  appendLine("        internal static IntPtr HandleOf(object value)")
+  //
+  // Interface super-interfaces: `declared` is the parameter's static type, so with
+  // `IHouseCat : IPet : INamed` a C# object crossing at an `INamed` parameter gets the `INamed`
+  // bridge, not whichever interface it happens to implement first in generation order.
+  appendLine("        internal static IntPtr HandleOf(object value, Type declared)")
   appendLine("        {")
   appendLine("            if (value is INugetHandle wrapper) return wrapper.Handle;")
   if (helper.includesBridge) {
-    appendLine("            return NugetBridge.HandleFor(value);")
+    appendLine("            return NugetBridge.HandleFor(value, declared);")
   } else {
     appendLine("            throw new NotSupportedException(")
     appendLine("                $\"{value.GetType().Name} is not a Kotlin-backed object; passing a C#-implemented interface is not supported yet.\");")
@@ -528,7 +532,9 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   // ADR-084 stage 3: the same extraction, reporting whether it *minted* a transfer handle. A
   // Kotlin-backed wrapper's `_handle` belongs to that wrapper and must never be disposed here; a
   // bridge handle is a one-crossing transfer the call site frees once the native call returns.
-  appendLine("        internal static IntPtr HandleOf(object value, out bool owned)")
+  // Generic so the call site's static parameter type reaches `HandleFor` as `typeof(T)` with no
+  // call-site change: every call site passes the declared-typed parameter itself.
+  appendLine("        internal static IntPtr HandleOf<T>(T value, out bool owned)")
   appendLine("        {")
   appendLine("            if (value is INugetHandle wrapper)")
   appendLine("            {")
@@ -540,12 +546,12 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   // the call site reads `owned` in its `finally`: assigning it first meant a failed mint ran
   // `NugetMarshal.Dispose(IntPtr.Zero)`, whose non-nullable `COpaquePointer` export took the host
   // down with a Kotlin NullPointerException instead of surfacing the managed throw.
-  appendLine("            IntPtr handle = HandleOf(value);")
+  appendLine("            IntPtr handle = HandleOf((object)value!, typeof(T));")
   appendLine("            owned = true;")
   appendLine("            return handle;")
   appendLine("        }")
   appendLine()
-  appendLine("        internal static IntPtr HandleOfOrZero(object? value, out bool owned)")
+  appendLine("        internal static IntPtr HandleOfOrZero<T>(T value, out bool owned)")
   appendLine("        {")
   appendLine("            if (value == null)")
   appendLine("            {")

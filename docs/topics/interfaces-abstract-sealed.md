@@ -7,7 +7,7 @@ a C# `abstract class` whose subclasses share one inherited `_handle`, and `seale
 
 | Kotlin | C# | Notes |
 |---|---|---|
-| `interface` | `interface` (`I`-prefixed) | default methods delegate to Kotlin |
+| `interface` | `interface` (`I`-prefixed) | default methods delegate to Kotlin; a super-interface's members are inherited, not redeclared |
 | `abstract class` | `abstract class` | `_handle` inherited by every subclass |
 | `sealed class` | `abstract class` | each subtype its own class, nested inside the base or declared beside it, reconstructed through a generated `FromHandle` |
 | eligible `sealed interface` (no type parameters; every subclass a `class`/`object` or `enum class`, no other superclass, no sub-interface, no second sealed-interface parent) | `abstract class` | same shape as `sealed class`; no C# interface is declared for it; an `enum class` arm binds as a boxed `{Enum}Arm` |
@@ -222,6 +222,143 @@ salon.BrushAll(new MyloBrusher()); // each Kotlin call reaches Mylo's matching C
 As on the class route, C# cannot overload on reference nullability alone: a `fun tag(s: String)` /
 `fun tag(s: String?)` pair on an interface fails generation with `ERROR_CSHARP_SIGNATURE_COLLISION`
 instead of producing invalid C#.
+
+### An interface extending another interface {id="interface-super-interfaces"}
+
+`interface Derived : Base` renders real C# interface inheritance: `IDerived` declares only its own
+members and inherits the rest, the way C#'s own `IList<T> : ICollection<T>` does:
+
+```kotlin
+interface Named {
+  val name: String
+  fun greet(): String
+}
+
+interface Aged {
+  val age: Int
+}
+
+interface Pet : Named, Aged {
+  fun feed(food: String): String
+}
+
+interface HouseCat : Pet {
+  fun purr(times: Int): String
+  override fun greet(): String = "Purr, I'm $name" // identical signature: not redeclared below
+}
+```
+
+```C#
+public interface INamed : IDisposable
+{
+    string Name { get; }
+    string Greet();
+}
+
+public interface IAged : IDisposable
+{
+    int Age { get; }
+}
+
+public interface IPet : INamed, IAged, IDisposable
+{
+    string Feed(string food);
+}
+
+public interface IHouseCat : IPet, IDisposable
+{
+    string Purr(int times); // Greet() stays on INamed; redeclaring it here would be CS0108
+}
+```
+
+A C# reference typed as any ancestor works, including one returned from Kotlin behind the
+[return-value backing wrapper](#interface-typed-return-values) and one a plain C# class
+implements:
+
+```C#
+using IHouseCat oreo = Lineage.AdoptHouseCat();
+INamed named = oreo;               // compiles because IHouseCat is transitively an INamed
+named.Greet();                     // "Purr, I'm Oreo" - HouseCat's own override, reached via INamed
+
+private sealed class MyloHouseCat : IHouseCat { /* must implement every inherited member too */ }
+```
+
+Implementing `IHouseCat` in C# obliges every member the whole hierarchy declares, `Name`/`Nickname`/
+`Greet()`/`Age`/`Feed(string)`/`Purr(int)`: that full set is exactly what the
+[C#-implemented-interface bridge](#implementing-a-kotlin-interface-in-c) reads when Kotlin calls
+back into it, whichever ancestor's parameter position it crosses at.
+
+A generic super-interface keeps its type argument on the derived interface, the same as a class
+implementing one does:
+
+```kotlin
+interface Holder<T> {
+  val size: Int
+  fun peek(): T
+}
+
+interface IntHolder : Holder<Int> {
+  fun shake(): String
+}
+```
+
+```C#
+public interface IIntHolder : IHolder<int>, IDisposable
+{
+    string Shake(); // Size/Peek() stay on IHolder<int>, not redeclared here
+}
+```
+
+A super-interface outside the plugin's export scope (a dependency-module or unbound-package type)
+is dropped from the base list, `SKIPPED_UNEXPORTED_SUPERTYPE`, and its members are declared
+directly on the derived interface instead, so a C# implementer can still satisfy them:
+
+```kotlin
+interface Pedigree { // never exported
+  val breed: String
+  fun registry(): String
+}
+
+interface ShowCat : Named, Pedigree {
+  fun pose(): String
+}
+```
+
+```C#
+public interface IShowCat : INamed, IDisposable
+{
+    string Breed { get; }   // re-homed from the unexported Pedigree
+    string Pose();
+    string Registry();      // re-homed from the unexported Pedigree
+}
+```
+
+Two unrelated supers declaring the *same* member (a diamond) redeclare it with `new` instead of
+being dropped, since C# would otherwise leave the call ambiguous:
+
+```kotlin
+interface Whiskered { val whiskers: Int; fun twitch(): String = "Whiskers twitch" }
+interface Tailed { val whiskers: Int; fun twitch(): String = "Tail swishes" }
+
+interface Moggy : Whiskered, Tailed {
+  override fun twitch(): String = "twitches and swishes" // Kotlin forces this override
+  fun nap(): String
+}
+```
+
+```C#
+public interface IMoggy : IWhiskered, ITailed, IDisposable
+{
+    new int Whiskers { get; }
+    new string Twitch();
+    string Nap();
+}
+```
+
+An override that **narrows** a kept super's return type (`override fun greet(): Cat` over a
+super's `fun greet(): Pet`) cannot be redeclared without also generating an explicit interface
+implementation on every implementer, so it stays off the derived interface entirely, named
+`SKIPPED_UNSUPPORTED_COMBINATION`: call it through the ancestor interface, at the ancestor's type.
 
 ### Nested interfaces {id="nested-interfaces-skip-named"}
 
@@ -731,9 +868,8 @@ A sealed base, a sealed arm, and any `interface` owner can nest their own plain
   obtain the arm from a factory or from the base's `FromHandle` discriminator instead. A
   `class`-kind arm with bridgeable constructor parameters exports a real public constructor
   instead; see [Sealed classes and interfaces](#sealed-classes-and-interfaces).
-- `interface Derived : Base` does not carry `Base`'s members onto `IDerived`; a `var` interface
-  property always renders `{ get; }` only on the generated interface, even when an implementing
-  class's own property has a setter.
+- A `var` interface property always renders `{ get; }` only on the generated interface, even when
+  an implementing class's own property has a setter.
 - The sealed base's own `open suspend fun` and any `Flow`/`StateFlow` member it declares have no
   carrier on the C# base at all: only an arm that itself declares one binds, and only that arm
   gains `IAsyncDisposable`. A consumer holding the sealed base must pattern-match to the concrete

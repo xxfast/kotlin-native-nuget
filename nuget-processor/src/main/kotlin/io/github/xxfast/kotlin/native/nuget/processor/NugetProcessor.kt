@@ -1812,7 +1812,7 @@ class NugetProcessor(
         }.orEmpty()
       } + unexportedSupertypes.flatMap { supertype ->
         guarded(supertype.forwardGuardName(), supertype, logger) {
-          supertypePropertyPlanner.interfaceProperties(supertype)
+          supertypePropertyPlanner.interfaceProperties(supertype, inherited = false)
         }.orEmpty()
       },
       // `docs/backlog/interface-own-dropped-member-diagnosed-nowhere.md`: this planner's own drop

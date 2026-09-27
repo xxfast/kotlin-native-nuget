@@ -141,6 +141,13 @@ no new handle kind either: every numbered dispatch export or bridge slot a call 
 borrows the one handle its route already mints (the returned interface's own handle, or the
 transfer handle a C# implementation mints once per crossing), never one of its own per overload.
 
+An [interface extending another interface](interfaces-abstract-sealed.md#interface-super-interfaces)
+adds no new handle kind either: a derived interface returned from Kotlin still mints exactly one
+handle behind its backing wrapper, no matter how many inherited members a caller reaches through
+it or which ancestor-typed reference it's read through; a C# implementation of the deepest
+interface in a hierarchy still mints exactly one transfer handle per parameter crossing, reused for
+every inherited member the call reaches on it, not one per ancestor interface.
+
 For a [cancellation-token-taking async call](instance-members.md#async-cancellation), this count
 only proves the pending-continuation and `Task` handles came back to baseline: the bridge-owned
 `CancellationTokenSource` is a plain .NET `GCHandle`, not one of the Kotlin `StableRef`s

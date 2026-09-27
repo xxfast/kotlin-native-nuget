@@ -7,6 +7,7 @@ import com.google.devtools.ksp.isAbstract
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
@@ -40,6 +41,11 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardLegacyRou
 import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedNullableLambdaPayload
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceHierarchy
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceMemberPlacement
+import io.github.xxfast.kotlin.native.nuget.processor.forward.declared
+import io.github.xxfast.kotlin.native.nuget.processor.forward.declaresLexically
+import io.github.xxfast.kotlin.native.nuget.processor.forward.interfaceMethodSymbols
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
@@ -104,7 +110,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.toCName
 /** Which half of issue #42 a dropped supertype is: the two lose genuinely different things, so
  *  they get genuinely different messages (an interface carries nothing C# could have called; a
  *  base class carries members that are re-homed onto the subclass). */
-private enum class SupertypeKind { INTERFACE, BASE_CLASS }
+private enum class SupertypeKind { INTERFACE, SUPER_INTERFACE, BASE_CLASS }
 
 /**
  * ADR-101 (+ its 2026-09-05 base-class amendment): is [supertype] one the generated C# base list
@@ -137,6 +143,13 @@ private fun keepsSupertype(
   val supertypeName: String = qualified ?: simpleName
   val packageName: String = supertype.packageName.asString()
   val reason: String = when (kind) {
+    // Interface super-interfaces: an INTERFACE owner re-homes the dropped super's members onto
+    // `I$name` itself (the ADR-101 mirror), so a C# implementer still owes and gets them.
+    SupertypeKind.SUPER_INTERFACE ->
+      "super-interface '$supertypeName' is not in the export set, so it has no generated C# " +
+          "interface; I$name is generated without it and its public members are declared on " +
+          "I$name directly"
+
     SupertypeKind.INTERFACE ->
       "supertype '$supertypeName' is not in the export set, so it has no generated C# " +
           "interface; the class is generated without it and its own members still export"
@@ -159,6 +172,11 @@ private fun keepsSupertype(
     }
   }
   val hint: String = when (kind) {
+    SupertypeKind.SUPER_INTERFACE ->
+      "nothing callable is lost ($simpleName's members are declared on I$name), but C# sees " +
+          "no $simpleName type, so `is`/`as` against it is gone; note that include(\"...\") " +
+          "does not help here — the export reachability closure never walks supertypes"
+
     SupertypeKind.INTERFACE ->
       "an unexported supertype carries no members the C# side could call, so nothing " +
           "is lost; note that include(\"...\") does not help here — the export reachability " +
@@ -202,6 +220,36 @@ private fun keepsSupertype(
     logger,
   )
   return false
+}
+
+/**
+ * Interface super-interfaces: a kept super-interface whose type argument has no public C#
+ * spelling (`: Holder<List<Map<String?, Int>>>`, a star projection) is dropped from the base list
+ * rather than rendered unclosed (CS0305). Its members still bind on [owner] itself.
+ */
+private fun emitUnspellableSuperInterface(
+  owner: KSClassDeclaration,
+  name: String,
+  type: KSType,
+  logger: KSPLogger,
+) {
+  val simpleName: String = type.declaration.simpleName.asString()
+  ForwardDiagnosticSink.emit(
+    listOf(
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNEXPORTED_SUPERTYPE,
+        symbol = owner,
+        declaration = "$name : $type",
+        reason = "super-interface '$type' has a type argument with no public C# spelling, so " +
+            "the generated C# base list cannot close I$simpleName over it; $name is generated " +
+            "without it and its members still bind on $name directly",
+        hint = "C# sees no relation between $name and I$simpleName, so `is`/`as` against it is " +
+            "gone; close the super-interface over a bridgeable type argument to keep it",
+        owner = null,
+      ),
+    ),
+    logger,
+  )
 }
 
 /** Does the author's own Kotlin declaration offer a constructor C# could have called? */
@@ -529,6 +577,37 @@ private fun forwardBaseSpelling(
 }
 
 /**
+ * Interface super-interfaces: the C# spelling of a kept super-interface reference, type arguments
+ * included (`IHolder<int>`), shared by the class route's interface list and `translateInterface`'s
+ * base list. A bare `IHolder` for a generic interface is CS0305. Null when an argument has no
+ * public C# spelling (a star projection, an unbridgeable type): the caller drops the entry with a
+ * named skip rather than render something that cannot compile.
+ */
+internal fun forwardSuperInterfaceSpelling(
+  type: KSType,
+  classifier: ForwardBridgeTypeClassifier,
+): String? {
+  val declaration: KSClassDeclaration = type.declaration as? KSClassDeclaration ?: return null
+  val name: String = declaration.nestedInterfaceCsName()
+  if (declaration.typeParameters.isEmpty()) return name
+  if (type.arguments.size != declaration.typeParameters.size) return null
+  val spelled: List<String> = type.arguments.map { argument ->
+    val argumentType: KSType = argument.type?.resolve() ?: return null
+    val argumentDeclaration = argumentType.declaration
+    if (argumentDeclaration is com.google.devtools.ksp.symbol.KSTypeParameter) {
+      argumentDeclaration.simpleName.asString()
+    } else {
+      try {
+        classifier.classify(argumentType).forwardPublicCsharpType()
+      } catch (_: IllegalStateException) {
+        return null
+      }
+    }
+  }
+  return "$name<${spelled.joinToString(", ")}>"
+}
+
+/**
  * ADR-147: a class's own type parameters, projected for the C# carrier. Lifted verbatim out of the
  * retired `translateGenericClass`, including the ADR-133 nested-bound qualification and the
  * dropped-variance INFO: a generic class is an ordinary class with this list filled now, so the
@@ -637,23 +716,32 @@ internal fun translateClass(
   // `Groomable`'s members on `Ledge` to match, or the declaration is CS0535.
   val baseSupertypes: Set<String> = superClassDeclaration?.forwardSupertypeNames().orEmpty()
   val interfaces: List<String> = cls.superTypes
-    .map { it.resolve().declaration }
-    .filterIsInstance<KSClassDeclaration>()
-    .filter { it.classKind == ClassKind.INTERFACE }
+    .map { it.resolve() }
+    .filter { type ->
+      (type.declaration as? KSClassDeclaration)?.classKind == ClassKind.INTERFACE
+    }
     // An interface the base already implements is carried by the base. Listing it again compiles
     // but says nothing, and re-binding its members here would hide the base's (CS0108), so it is
     // dropped before the export-set filter: it owes no diagnostic either, nothing is lost.
-    .filter { iface -> iface.qualifiedName?.asString() !in baseSupertypes }
+    .filter { type -> type.declaration.qualifiedName?.asString() !in baseSupertypes }
     // ADR-101 / issue #42: a supertype outside the export set has no generated C# interface, so
     // naming it in the base list is a guaranteed CS0246 (the reporter's `: IKoinComponent`).
     // Drop it and say so. Nothing is lost: an unexported interface has no C# members to call,
     // and its defaulted members still bind on the class itself (`ForwardClassMembership.kt`).
-    .filter { iface ->
+    .filter { type ->
+      val iface = type.declaration as KSClassDeclaration
       keepsSupertype(cls, name, iface, SupertypeKind.INTERFACE, exportedTypes, logger)
     }
     // ADR-133: the enclosing scope with the `I` on the last segment (`Aviary.IKeeper`); a bare
-    // `IKeeper` names nothing at namespace level (CS0234).
-    .map { it.nestedInterfaceCsName() }
+    // `IKeeper` names nothing at namespace level (CS0234). Interface super-interfaces: with its
+    // type arguments, since `: IHolder` for `Holder<Int>` is CS0305.
+    .mapNotNull { type ->
+      forwardSuperInterfaceSpelling(type, classifier)
+        ?: run {
+          emitUnspellableSuperInterface(cls, name, type, logger)
+          null
+        }
+    }
     .toList()
 
   // ADR-091: constructors come off the catalog, the same move ADR-090 made for methods. The extern
@@ -2910,6 +2998,10 @@ internal fun translateInterface(
   // ADR-150: the expect index. A bare `forwardKdoc()` here cannot reach the `expect` half,
   // so a documented `expect` declaration of this family rendered with no summary at all.
   expects: ExpectIndex = ExpectIndex(),
+  // Interface super-interfaces: the export set decides which direct supers the base list keeps
+  // (`keepsSupertype`), and the classifier spells their type arguments.
+  exportedTypes: Set<String>,
+  classifier: ForwardBridgeTypeClassifier,
 ): CirInterface {
   val name: String = iface.simpleName.asString()
   val interfaceName: String = "I$name"
@@ -2926,11 +3018,36 @@ internal fun translateInterface(
 
   val typeParamNames: Set<String> = typeParams.map { it.name }.toSet()
 
+  // Interface super-interfaces: `IDerived : IBase` inherits rather than flattens. The catalog plans
+  // every member (own and inherited) for the ADR-040 backing class; the declaration keeps only the
+  // DECLARED placement: lexically declared here or in a re-homed unexported super, and not an
+  // identical-signature override of a kept super's member (CS0108 under warnings-as-errors).
+  val hierarchy = ForwardInterfaceHierarchy(iface, exportedTypes)
+  hierarchy.rehomed.forEach { dropped ->
+    keepsSupertype(iface, name, dropped, SupertypeKind.SUPER_INTERFACE, exportedTypes, logger)
+  }
+  val superInterfaces: List<String> = hierarchy.keptSupers.mapNotNull { type ->
+    forwardSuperInterfaceSpelling(type, classifier)
+      ?: run {
+        emitUnspellableSuperInterface(iface, interfaceName.removePrefix("I"), type, logger)
+        null
+      }
+  }
+  val methodPlacements: Map<String, ForwardInterfaceMemberPlacement> =
+    iface.interfaceMethodSymbols().associate { (symbol, method) ->
+      symbol to hierarchy.placement(method)
+    }
+  val propertyPlacements: Map<String, ForwardInterfaceMemberPlacement> = iface.getAllProperties()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .associate { prop -> "$qualified.${prop.simpleName.asString()}" to hierarchy.placement(prop) }
+  emitCovariantOverrideSkips(interfaceName, iface, hierarchy, logger)
+
   // Read off the catalog rather than re-deriving a plan key per `getAllProperties()` /
   // `getAllFunctions()` entry: the planner owns member ordering and naming, and a declaration walk
   // re-derives the wrong plan as soon as two declared members share a simple name (ADR-090).
   val propertyPlans: List<ForwardPropertyPlan> = callableCatalog.propertyPlans
     .filter { plan -> plan.symbol.substringBeforeLast('.') == qualified }
+    .filter { plan -> declared(propertyPlacements[plan.symbol]) }
   val plannedProperties: List<CirInterfaceProperty> = propertyPlans.map { plan ->
     tracker.trackProperty(plan)
     // `hasSetter` deliberately stays at its default: ADR-113 leaves a `var` interface property
@@ -2940,12 +3057,14 @@ internal fun translateInterface(
       plan.publicName,
       ForwardCirPropertyProjection.publicType(plan),
       doc = plan.doc?.toCirDoc(),
+      isNew = propertyPlacements[plan.symbol] == ForwardInterfaceMemberPlacement.DIAMOND_OVERRIDE,
     )
   }
   val properties: List<CirInterfaceProperty> =
     plannedProperties + typeParameterProperties(iface, typeParamNames, plannedProperties)
 
   val methodPlans: List<ForwardCallablePlan> = callableCatalog.classMethods(qualified)
+    .filter { plan -> declared(methodPlacements[plan.invocation.symbol]) }
   val plannedMethods: List<CirInterfaceMethod> = methodPlans.map { plan ->
     tracker.trackPlan(plan)
     CirInterfaceMethod(
@@ -2955,6 +3074,8 @@ internal fun translateInterface(
       // implementing class renders, so `IFoo` and its implementer declare one signature.
       parameters = ForwardCirPlanProjection.interfaceParameters(plan),
       doc = plan.publicSignature.cirDoc(),
+      isNew = methodPlacements[plan.invocation.symbol] ==
+          ForwardInterfaceMemberPlacement.DIAMOND_OVERRIDE,
     )
   }
 
@@ -2962,6 +3083,21 @@ internal fun translateInterface(
     plannedMethods + typeParameterMethods(iface, typeParamNames, plannedMethods)
 
   emitInterfaceNameCollisions(interfaceName, iface, propertyPlans, methodPlans, logger)
+  // Interface super-interfaces: the same CS0102-family guard across the base list. A declared
+  // method named like an INHERITED property (or the reverse) hides it, CS0108, which the
+  // warnings-as-errors consumer build turns into a break.
+  emitInheritedInterfaceNameCollisions(
+    interfaceName,
+    iface,
+    declaredProperties = propertyPlans,
+    declaredMethods = methodPlans,
+    inheritedProperties = callableCatalog.propertyPlans
+      .filter { plan -> plan.symbol.substringBeforeLast('.') == qualified }
+      .filterNot { plan -> declared(propertyPlacements[plan.symbol]) },
+    inheritedMethods = callableCatalog.classMethods(qualified)
+      .filterNot { plan -> declared(methodPlacements[plan.invocation.symbol]) },
+    logger = logger,
+  )
   // ADR-090 amendment (2026-09-26): the same ADR-034 guard every other container runs. Here, not on
   // the reachable-only backing class, because `IFoo` is emitted for every exported interface.
   emitCsharpSignatureCollisionsOf(
@@ -2973,6 +3109,48 @@ internal fun translateInterface(
 
   return CirInterface(
     interfaceName, typeParams, properties, methods, doc = iface.forwardKdoc(expects)?.toCirDoc(),
+    superInterfaces = superInterfaces,
+  )
+}
+
+/**
+ * Interface super-interfaces (Step 2 decision: skip and name). `override fun greet(): Cat` over a
+ * kept super's `fun greet(): Pet` cannot be redeclared on `IDerived` without `new` plus explicit
+ * implementation on every implementer; v1 leaves it off `IDerived`, where C# reaches it through
+ * `IBase` at the base's type. The backing class implements it at that type too
+ * (`interfaceEntries` plans a covariant override at the kept super's return type).
+ */
+private fun emitCovariantOverrideSkips(
+  interfaceName: String,
+  iface: KSClassDeclaration,
+  hierarchy: ForwardInterfaceHierarchy,
+  logger: KSPLogger,
+) {
+  val functions: List<KSDeclaration> = iface.getAllFunctions()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { hierarchy.placement(it) == ForwardInterfaceMemberPlacement.COVARIANT_OVERRIDE }
+    .toList()
+  val properties: List<KSDeclaration> = iface.getAllProperties()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { hierarchy.placement(it) == ForwardInterfaceMemberPlacement.COVARIANT_OVERRIDE }
+    .toList()
+  ForwardDiagnosticSink.emit(
+    (functions + properties).map { member ->
+      val memberName: String = member.simpleName.asString()
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION,
+        symbol = member,
+        declaration = "$interfaceName.${memberName.replaceFirstChar { it.uppercase() }}",
+        reason = "'$memberName' overrides a super-interface member with a narrower (covariant) " +
+            "type, which $interfaceName cannot redeclare without hiding the inherited member " +
+            "(CS0108), so it is not declared on $interfaceName; C# still calls it through the " +
+            "super-interface, at the super-interface's type",
+        hint = "cast the result to the narrower type on the C# side, or declare the member with " +
+            "the super-interface's type in Kotlin",
+        owner = null,
+      )
+    },
+    logger,
   )
 }
 
@@ -3002,7 +3180,7 @@ private fun typeParameterProperties(
 
   return iface.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { prop -> prop.parentDeclaration == iface }
+    .filter { prop -> iface.declaresLexically(prop) }
     .mapNotNull { prop ->
       val typeName: String = prop.type.resolve().expandAliases().declaration.simpleName.asString()
       if (typeName !in typeParamNames) return@mapNotNull null
@@ -3025,7 +3203,7 @@ private fun typeParameterMethods(
   return iface.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { method -> !method.isCompilerOwnedMember(iface) }
-    .filter { method -> method.parentDeclaration == iface }
+    .filter { method -> iface.declaresLexically(method) }
     .mapNotNull { method ->
       val returnName: String? = method.returnType?.resolve()?.expandAliases()
         ?.declaration?.simpleName?.asString()
@@ -3121,6 +3299,59 @@ private fun emitInterfaceNameCollisions(
 }
 
 /**
+ * Interface super-interfaces: [emitInterfaceNameCollisions] across the base list. `interface Pet :
+ * Named { fun name(): String }` over `Named`'s `val name` renders `string Name()` on `IPet` beside
+ * the inherited `string Name { get; }`, which C# reports as CS0108 (hiding), a build break under
+ * the consumer's TreatWarningsAsErrors. Fatal with no rename, for ADR-110's reason: renaming
+ * either member would be a silently different API.
+ */
+private fun emitInheritedInterfaceNameCollisions(
+  interfaceName: String,
+  iface: KSClassDeclaration,
+  declaredProperties: List<ForwardPropertyPlan>,
+  declaredMethods: List<ForwardCallablePlan>,
+  inheritedProperties: List<ForwardPropertyPlan>,
+  inheritedMethods: List<ForwardCallablePlan>,
+  logger: KSPLogger,
+) {
+  val inheritedPropertyNames: Map<String, ForwardPropertyPlan> =
+    inheritedProperties.associateBy { it.publicName }
+  val inheritedMethodNames: Map<String, ForwardCallablePlan> =
+    inheritedMethods.associateBy { it.publicSignature.csharpName }
+  val methodCollisions: List<ForwardDiagnostic> = declaredMethods.mapNotNull { plan ->
+    val property: ForwardPropertyPlan =
+      inheritedPropertyNames[plan.publicSignature.csharpName] ?: return@mapNotNull null
+    val kotlinName: String =
+      plan.invocation.member ?: plan.invocation.symbol.substringAfterLast('.')
+    ForwardDiagnostic(
+      kind = ForwardDiagnosticKind.ERROR_CSHARP_NAME_COLLISION,
+      symbol = iface,
+      declaration = "$interfaceName.${plan.publicSignature.csharpName}",
+      reason = "the inherited interface property '${property.kotlinName}' already claims that C# " +
+          "name, and a method of that name on $interfaceName hides it (CS0108)",
+      hint = "rename the Kotlin function '$kotlinName' or the inherited property",
+      owner = null,
+    )
+  }
+  val propertyCollisions: List<ForwardDiagnostic> = declaredProperties.mapNotNull { plan ->
+    val method: ForwardCallablePlan =
+      inheritedMethodNames[plan.publicName] ?: return@mapNotNull null
+    val kotlinName: String =
+      method.invocation.member ?: method.invocation.symbol.substringAfterLast('.')
+    ForwardDiagnostic(
+      kind = ForwardDiagnosticKind.ERROR_CSHARP_NAME_COLLISION,
+      symbol = iface,
+      declaration = "$interfaceName.${plan.publicName}",
+      reason = "the inherited interface function '$kotlinName' already claims that C# name, and " +
+          "a property of that name on $interfaceName hides it (CS0108)",
+      hint = "rename the Kotlin property '${plan.kotlinName}' or the inherited function",
+      owner = null,
+    )
+  }
+  ForwardDiagnosticSink.emit(methodCollisions + propertyCollisions, logger)
+}
+
+/**
  * ADR-040: the concrete handle-backed wrapper class generated alongside `IFoo` for a reachable
  * Kotlin interface (one that appears in a planned return position — see the reachable-interfaces
  * computation in [io.github.xxfast.kotlin.native.nuget.processor.NugetProcessor]). Deliberately
@@ -3146,7 +3377,6 @@ internal fun translateInterfaceBackingClass(
   val properties: List<CirProperty> = iface.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { property -> !property.isCompilerOwnedMember(iface) }
-    .filter { prop -> prop.parentDeclaration == iface }
     .mapNotNull { prop ->
       val symbol = "$ifaceQualified.${prop.simpleName.asString()}"
       callableCatalog.propertyFor(symbol)?.let { plan ->
