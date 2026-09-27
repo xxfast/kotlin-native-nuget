@@ -24,7 +24,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.collectionResultPr
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isLegacyLowered
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
-import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyLoweredName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyArgument
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShapes
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyPrelude
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElement
@@ -282,10 +282,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
     classifier.legacyParameterShapes(method.parameters)
 
   val paramCall: String = method.parameters
-    .mapIndexed { index, param ->
-      val paramName: String = param.name?.asString() ?: "_"
-      if (paramShapes[index].isLegacyLowered()) legacyLoweredName(paramName) else paramName
-    }
+    .mapIndexed { index, param -> paramShapes[index].legacyArgument(param.name?.asString() ?: "_") }
     .joinToString(", ")
 
   val paramPrelude: String = buildString {
@@ -309,7 +306,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       val resolved: KSType = param.type.resolve().expandAliases()
       val type: String = resolved.declaration.qualifiedName?.asString()
         ?: resolved.declaration.simpleName.asString()
-      addParameter(paramName, ClassName.bestGuess(type))
+      addLegacyScalarParameter(paramName, paramShapes[index], ClassName.bestGuess(type))
     }
   }
 

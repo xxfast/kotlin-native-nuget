@@ -35,3 +35,23 @@ suspend fun countTreatsLeft(catName: String): Int? {
   delay(100.milliseconds)
   return if (catName == "Oreo") 7 else null
 }
+
+// Issue #299: the top-level twin of `AsyncCatService`'s nullable parameters. The top-level suspend
+// route has its own Kotlin parameter builder (`addLegacySuspendParameters`), so it needs its own
+// fixtures. `false` and `null` must stay distinct, which is why the Boolean? result has three arms.
+
+/** Nullable Boolean parameter: nobody is sure whether Mylo is an indoor cat. */
+suspend fun describeIndoor(indoor: Boolean?): String {
+  delay(10.milliseconds)
+  return when (indoor) {
+    null -> "unknown"
+    true -> "indoor"
+    false -> "outdoor"
+  }
+}
+
+/** Nullable String parameter on the top-level route: a collar with no name tag. */
+suspend fun nameTagFor(name: String?): String {
+  delay(10.milliseconds)
+  return name?.let { "tag: $it" } ?: "tag: blank"
+}

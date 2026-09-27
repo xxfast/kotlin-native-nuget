@@ -50,4 +50,27 @@ class AsyncCatService(private val prefix: String) {
     delay(100.milliseconds)
     return if (catName == "Oreo") 24 else null
   }
+
+  // Issue #299: nullable parameters on the legacy suspend member route used to be exported as
+  // non-null (`int limit`, `string name`), so C# could not pass null. Every fixture returns a
+  // String that spells what Kotlin actually received, so "null" and "a default value" (0, a NUL char,
+  // false, "") are distinguishable on the C# side.
+
+  /** Nullable Int parameter: Oreo naps without limit, unless someone sets one. */
+  suspend fun countNaps(limit: Int?): String {
+    delay(10.milliseconds)
+    return if (limit == null) "$prefix naps: unlimited" else "$prefix naps: $limit"
+  }
+
+  /** Nullable Char parameter: the initial engraved on the food bowl, if any. */
+  suspend fun initialOf(initial: Char?): String {
+    delay(10.milliseconds)
+    return initial?.toString() ?: "none"
+  }
+
+  /** Nullable String parameter: an anonymous visitor is still greeted, just not by name. */
+  suspend fun greet(name: String?): String {
+    delay(10.milliseconds)
+    return if (name == null) "$prefix hisses at a stranger" else "$prefix purrs at $name"
+  }
 }

@@ -5,6 +5,8 @@ import com.google.devtools.ksp.symbol.KSValueParameter
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyHasValueSlot
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyNullableScalarArgument
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionCreate
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShape
@@ -29,6 +31,20 @@ internal val CirParameter.nativeArgument: String
     nativeArgumentExpression != null -> nativeArgumentExpression
     collectionCreate != null -> "${name}Handle"
     else -> name
+  }
+
+/**
+ * The `DllImport` slots these parameters occupy, in order. Issue #299: a nullable scalar on a
+ * legacy route takes two (`bool xHasValue, int x`), matching its two [nativeArgument]s; every
+ * other parameter takes the one slot it is.
+ */
+internal fun List<CirParameter>.nativeImportParameters(): List<CirParameter> =
+  flatMap { parameter ->
+    val hasValue: String = parameter.hasValueSlot ?: return@flatMap listOf(parameter)
+    listOf(
+      CirParameter(hasValue, "bool"),
+      CirParameter(parameter.name, parameter.nativeType),
+    )
   }
 
 /** Whether any parameter needs a wire handle built before the native call. */
@@ -101,6 +117,26 @@ internal fun legacyRouteParameters(
       nativeType = "IntPtr",
       nativeArgumentExpression = "$name._handle",
     )
+
+    // Issue #299: the plan route's wire. A nullable primitive or `Char` is public `int?` / `char?`
+    // over a `bool` has-value slot plus the inner value slot (`char` keeps its U2 marshalling,
+    // keyed on the native type); a nullable `String` is one `string?` slot.
+    is ForwardLegacyParameterShape.NullableScalar -> {
+      val resolved: KSType = param.type.resolve().expandAliases()
+      val inner: String = mapParamType(resolved.declaration.simpleName.asString())
+      if (shape.fansOut) {
+        CirParameter(
+          name,
+          type = "$inner?",
+          nativeType = inner,
+          isReferenceType = false,
+          nativeArgumentExpression = legacyNullableScalarArgument(name),
+          hasValueSlot = shape.legacyHasValueSlot(name),
+        )
+      } else {
+        CirParameter(name, "$inner?")
+      }
+    }
 
     // A scalar keeps the shipped spelling. A refused parameter never reaches here: both halves
     // filter its member out first, and `warnRefusedLegacyRouteMembers` names it once.

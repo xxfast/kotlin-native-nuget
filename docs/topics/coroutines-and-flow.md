@@ -426,11 +426,27 @@ public KotlinStateFlow<string> Watch(global::TestLibrary.Cat.Observation.Alive o
 public Task<int> ForgetAsync(IReadOnlySet<string> ids, CancellationToken cancellationToken = default)
 ```
 
+A nullable primitive, `Char`, `Boolean`, or `String` parameter on these same members carries its `?`
+through as `int?`/`char?`/`bool?`/`string?`, and `null` reaches Kotlin as `null`:
+
+```kotlin
+suspend fun countNaps(limit: Int?): String { /* ... */ }
+fun snacks(limit: Int?): Flow<String> { /* ... */ }
+```
+
+```C#
+public Task<string> CountNapsAsync(int? limit, CancellationToken cancellationToken = default)
+await feeder.Snacks(null); // limit reaches Kotlin as null, not 0
+```
+
+A default argument on the Kotlin parameter (`limit: Int? = null`) is not honoured here: the C#
+parameter is always required, never `= null`. Pass the value explicitly.
+
 Any other generic parameter (`Pair<A, B>`, `Array<T>`, a lambda), an enum, `Instant`/`Duration`/
-`Uuid`, a value class, an interface, or a nullable object parameter is not supported at these
-positions and is skipped with a diagnostic naming the member. Pass a class/object/sealed handle, a
-`List`/`Set`/`Map`, or a primitive/`String` instead, or split the parameter across separate
-members.
+`Uuid`, a value class, an interface, or a nullable class/object parameter (`Observation?`) is not
+supported at these positions and is skipped with a diagnostic naming the member. Pass a
+class/object/sealed handle, a `List`/`Set`/`Map`, or a primitive/`String` (nullable or not) instead,
+or split the parameter across separate members.
 
 ## Limitations
 

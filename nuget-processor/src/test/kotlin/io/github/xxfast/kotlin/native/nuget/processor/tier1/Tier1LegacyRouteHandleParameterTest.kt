@@ -105,8 +105,8 @@ class Tier1LegacyRouteHandleParameterTest {
       // Control: a scalar parameter must render exactly as it does today.
       fun label(text: String): StateFlow<String> = MutableStateFlow(text)
 
-      // Control: a NULLABLE scalar keeps the non-null spelling both halves already ship for it,
-      // rather than being swept up by the new refusal arm (ADR-114's nullable deferral, kept).
+      // Control: a NULLABLE scalar is not swept up by the refusal arm; since issue #299 it binds
+      // nullable on both halves rather than keeping the old non-null spelling.
       fun maybe(text: String?): StateFlow<String> = MutableStateFlow(text ?: "")
     }
 
@@ -399,18 +399,18 @@ class Tier1LegacyRouteHandleParameterTest {
   }
 
   /**
-   * Control, and ADR-122's one deliberate hole. Narrowing `Plain` must not sweep up a nullable
-   * *scalar*: both halves already ship the non-null spelling for it, so refusing it would drop a
-   * member that binds today for the sake of a nullability rule the legacy routes do not thread
-   * anywhere yet (ADR-114's deferral). A nullable *object* is refused, which is the same rule.
+   * Control. Narrowing `Plain` must not sweep up a nullable *scalar* into the refusal arm: it binds
+   * today. Issue #299 then made it bind *nullable* (`string?`) instead of ADR-122's original
+   * non-null spelling; `Tier1LegacyRouteNullableParameterTest` owns the full wire. A nullable
+   * *object* is still refused.
    */
   @Test
-  fun `a nullable scalar parameter keeps its shipped spelling`() {
+  fun `a nullable scalar parameter is bound, and bound nullable`() {
     val result = run()
 
     assertTrue(
-      result.generatedCSharp.contains("public KotlinStateFlow<string> Maybe(string text)"),
-      "control: a nullable scalar keeps the shipped non-null spelling; got: " +
+      result.generatedCSharp.contains("public KotlinStateFlow<string> Maybe(string? text)"),
+      "control: a nullable scalar binds as nullable (issue #299); got: " +
           "${csharpLinesFor(result, "Maybe")}",
     )
   }

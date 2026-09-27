@@ -927,6 +927,10 @@ data class CirParameter(
   // ADR-164: the C# default (`null`, or `default` for an `Optional<T>`) of a defaulted Kotlin
   // parameter in the trailing all-defaulted run. Null for every required parameter.
   val defaultValue: String? = null,
+  // Issue #299: the leading `bool` slot a nullable scalar on a legacy Flow/suspend route fans out
+  // to (`limitHasValue`), placed before this parameter's own [nativeType] slot by
+  // `nativeImportParameters()`. Null for every other parameter.
+  val hasValueSlot: String? = null,
 ) {
   /** The parameter as declared in a public C# signature, with its default when it has one. */
   val declaration: String

@@ -745,7 +745,7 @@ internal fun translateSuspendFunction(
 
   // ADR-102: raw thunk address (NugetThunks.NugetAsyncCallbackPtr), not a marshalled delegate.
   val callbackType: String = "IntPtr"
-  val nativeParams: List<CirParameter> = params +
+  val nativeParams: List<CirParameter> = params.nativeImportParameters() +
       listOf(
         CirParameter("callback", callbackType),
         CirParameter("userData", "IntPtr"),

@@ -11,7 +11,9 @@ import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
+import com.squareup.kotlinpoet.BOOLEAN
 import com.squareup.kotlinpoet.FunSpec
+import com.squareup.kotlinpoet.TypeName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
@@ -20,7 +22,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyRetur
 import io.github.xxfast.kotlin.native.nuget.processor.forward.collectionResultProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isLegacyLowered
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyPrelude
-import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyLoweredName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyArgument
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyHasValueSlot
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShapes
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
@@ -155,7 +158,7 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
       val resolved: KSType = param.type.resolve().expandAliases()
       val type: String = resolved.declaration.qualifiedName?.asString()
         ?: resolved.declaration.simpleName.asString()
-      builder.addParameter(paramName, ClassName.bestGuess(type))
+      builder.addLegacyScalarParameter(paramName, paramShapes[index], ClassName.bestGuess(type))
     }
 
     builder
@@ -253,10 +256,7 @@ private fun legacyParamCall(
   func: KSFunctionDeclaration,
   shapes: List<ForwardLegacyParameterShape>,
 ): String = func.parameters
-  .mapIndexed { index, param ->
-    val name: String = param.name?.asString() ?: "_"
-    if (shapes[index].isLegacyLowered()) legacyLoweredName(name) else name
-  }
+  .mapIndexed { index, param -> shapes[index].legacyArgument(param.name?.asString() ?: "_") }
   .joinToString(", ")
 
 /**
@@ -288,7 +288,28 @@ private fun FunSpec.Builder.addLegacySuspendParameters(
       addParameter(name, cOpaquePointer)
       return@forEachIndexed
     }
-    addParameter(name, param.type.resolve().expandAliases().toBridgeTypeName(nullable = false))
+    addLegacyScalarParameter(
+      name,
+      shapes[index],
+      param.type.resolve().expandAliases().toBridgeTypeName(nullable = false),
+    )
   }
   return this
+}
+
+/**
+ * The ABI slots of one legacy-route parameter that is passed rather than lowered, [type] being its
+ * non-null Kotlin spelling. Issue #299: a nullable primitive or `Char` takes the plan route's
+ * has-value pair (`limitHasValue: Boolean, limit: Int`), a nullable `String` one `String?` slot.
+ * Shared by every legacy parameter builder so they cannot drift apart.
+ */
+internal fun FunSpec.Builder.addLegacyScalarParameter(
+  name: String,
+  shape: ForwardLegacyParameterShape,
+  type: TypeName,
+): FunSpec.Builder {
+  val hasValue: String? = shape.legacyHasValueSlot(name)
+  if (hasValue != null) addParameter(hasValue, BOOLEAN)
+  val nullable: Boolean = shape is ForwardLegacyParameterShape.NullableScalar && !shape.fansOut
+  return addParameter(name, type.copy(nullable = nullable))
 }
