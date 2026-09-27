@@ -12,6 +12,9 @@ import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.BOOLEAN
+import com.squareup.kotlinpoet.INT
+import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyInvocation
 import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.TypeName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
@@ -22,7 +25,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyRetur
 import io.github.xxfast.kotlin.native.nuget.processor.forward.collectionResultProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isLegacyLowered
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyPrelude
-import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyArgument
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyKotlinNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShapes
@@ -73,15 +75,17 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
   // Issue #108: a nullable return cannot go straight into `StableRef.create`, whose T is `Any`.
   val isNullable: Boolean = returnType?.isMarkedNullable == true
 
+  // ADR-164: the catalog's default flags (the ADR-074 expect index included) widen the defaulted
+  // parameters, exactly as `translateSuspendFunction` reads them for the C# half.
   val paramShapes: List<ForwardLegacyParameterShape> =
-    classifier.legacyParameterShapes(func.parameters)
+    classifier.legacyParameterShapes(func.parameters, callableCatalog.legacyDefaultFlags(func))
   val names: ForwardLegacyNames = legacyKotlinNames(func.parameters, paramShapes)
-  val paramCall: String = legacyParamCall(func, names)
-  val paramPrelude: String = legacyParamPrelude(func, paramShapes, names)
+  val call: String = names.legacyInvocation(funcName, func.legacyParameterNames())
+  val paramPrelude: String = names.legacyPrelude(func.legacyParameterNames())
   val boxed: String = legacyBoxedResult(classifier.legacyReturnShape(returnType))
 
   val body: String = buildSuspendFunctionBody(
-    funcName, paramCall, paramPrelude, isUnit, isNullable, boxed, names,
+    call, paramPrelude, isUnit, isNullable, boxed, names,
   )
 
   val builder: FunSpec.Builder = FunSpec.builder("export_${cname}_async")
@@ -141,15 +145,17 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
     // Issue #108: same nullable-return guard as the top-level builder.
     val isNullable: Boolean = returnType?.isMarkedNullable == true
 
-    val paramShapes: List<ForwardLegacyParameterShape> =
-      classifier.legacyParameterShapes(method.parameters)
+    val paramShapes: List<ForwardLegacyParameterShape> = classifier.legacyParameterShapes(
+      method.parameters, callableCatalog.legacyDefaultFlags(method),
+    )
     val names: ForwardLegacyNames = legacyKotlinNames(method.parameters, paramShapes)
-    val paramCall: String = legacyParamCall(method, names)
-    val paramPrelude: String = legacyParamPrelude(method, paramShapes, names)
+    val call: String =
+      names.legacyInvocation("${names.obj}.$methodName", method.legacyParameterNames())
+    val paramPrelude: String = names.legacyPrelude(method.legacyParameterNames())
     val boxed: String = legacyBoxedResult(classifier.legacyReturnShape(returnType))
 
     val body: String = buildSuspendMethodBody(
-      qualifiedName, methodName, paramCall, paramPrelude, isUnit, isNullable, boxed, names,
+      qualifiedName, call, paramPrelude, isUnit, isNullable, boxed, names,
     )
 
     val builder: FunSpec.Builder = FunSpec.builder("export_${prefix}_${cname}_async")
@@ -170,6 +176,7 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
         ?: resolved.declaration.simpleName.asString()
       builder.addLegacyScalarParameter(
         paramName, paramShapes[index], ClassName.bestGuess(type), names.hasValueSlots[index],
+        names.isSetSlots[index],
       )
     }
 
@@ -184,8 +191,8 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
 }
 
 private fun buildSuspendFunctionBody(
-  funcName: String,
-  paramCall: String,
+  // The whole call (`legacyInvocation`): positional, or ADR-164's `when (mask)` of named calls.
+  call: String,
   paramPrelude: String,
   isUnit: Boolean,
   isNullable: Boolean,
@@ -203,10 +210,10 @@ private fun buildSuspendFunctionBody(
         "${names.userData}) {"
   )
   if (isUnit) {
-    appendLine("  $funcName($paramCall)")
+    appendLine("  $call")
     appendLine("  null")
   } else {
-    appendLine("  val result = $funcName($paramCall)")
+    appendLine("  val result = $call")
     appendLine("  val resultRef = $resultRefCode")
     appendLine("  resultRef")
   }
@@ -215,8 +222,8 @@ private fun buildSuspendFunctionBody(
 
 private fun buildSuspendMethodBody(
   qualifiedName: String,
-  methodName: String,
-  paramCall: String,
+  // The whole call on `names.obj` (`legacyInvocation`).
+  call: String,
   paramPrelude: String,
   isUnit: Boolean,
   isNullable: Boolean,
@@ -234,10 +241,10 @@ private fun buildSuspendMethodBody(
   // `result` / `resultRef` need no minting: they are declared inside the launch lambda and their
   // initializers read the user's argument before the local is in scope.
   if (isUnit) {
-    appendLine("  ${names.obj}.$methodName($paramCall)")
+    appendLine("  $call")
     appendLine("  null")
   } else {
-    appendLine("  val result = ${names.obj}.$methodName($paramCall)")
+    appendLine("  val result = $call")
     appendLine("  val resultRef = $resultRefCode")
     appendLine("  resultRef")
   }
@@ -266,31 +273,12 @@ private fun legacyBoxedResult(shape: ForwardLegacyReturnShape): String =
   else "result"
 
 /**
- * ADR-114: the argument list the suspend member is called with. A marshalled collection is read
- * from its eagerly-copied local, everything else keeps its parameter name.
+ * The member's parameter names as the export declares its slots, the spelling
+ * `legacyInvocation` / `legacyPrelude` read them under. The ADR-114 eager copy those emit before
+ * `launch` is why the C# side may dispose a wire handle the moment this export returns.
  */
-private fun legacyParamCall(
-  func: KSFunctionDeclaration,
-  names: ForwardLegacyNames,
-): String = func.parameters
-  .mapIndexed { index, param -> names.legacyArgument(index, param.name?.asString() ?: "_") }
-  .joinToString(", ")
-
-/**
- * ADR-114: the eager copy, emitted before `launch`. The C# side disposes the wire handle the
- * moment this export returns, so the coroutine must never dereference it.
- */
-private fun legacyParamPrelude(
-  func: KSFunctionDeclaration,
-  shapes: List<ForwardLegacyParameterShape>,
-  names: ForwardLegacyNames,
-): String = buildString {
-  func.parameters.forEachIndexed { index, param ->
-    val prelude: String? =
-      shapes[index].legacyPrelude(param.name?.asString() ?: "_", names.loweredLocals[index])
-    if (prelude != null) appendLine(prelude)
-  }
-}
+internal fun KSFunctionDeclaration.legacyParameterNames(): List<String> =
+  parameters.map { parameter -> parameter.name?.asString() ?: "_" }
 
 /**
  * [addParameters] with ADR-114's collection arm: the top-level suspend route spelled a collection
@@ -313,6 +301,7 @@ private fun FunSpec.Builder.addLegacySuspendParameters(
       shapes[index],
       param.type.resolve().expandAliases().toBridgeTypeName(nullable = false),
       names.hasValueSlots[index],
+      names.isSetSlots[index],
     )
   }
   return this
@@ -330,8 +319,14 @@ internal fun FunSpec.Builder.addLegacyScalarParameter(
   shape: ForwardLegacyParameterShape,
   type: TypeName,
   hasValue: String?,
+  // ADR-164 rule 2: the `Optional`'s leading presence slot, [ForwardLegacyNames.isSetSlots].
+  isSet: String? = null,
 ): FunSpec.Builder {
+  if (isSet != null) addParameter(isSet, BOOLEAN)
   if (hasValue != null) addParameter(hasValue, BOOLEAN)
   val nullable: Boolean = shape is ForwardLegacyParameterShape.NullableScalar && !shape.fansOut
-  return addParameter(name, type.copy(nullable = nullable))
+  // An enum crosses as its ordinal (ADR-080), nullable or not.
+  val enum: Boolean = shape is ForwardLegacyParameterShape.Enum ||
+      (shape is ForwardLegacyParameterShape.NullableScalar && shape.type is BridgeType.Enum)
+  return addParameter(name, (if (enum) INT else type).copy(nullable = nullable))
 }

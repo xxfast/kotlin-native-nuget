@@ -913,26 +913,21 @@ private fun dispatchedInvocation(plan: ForwardCallablePlan, receiver: ForwardAbi
   // user parameter spelled `default_limit` or `mask`.
   fun local(parameter: ForwardPublicParameter): String = parameter.defaultLocal
   val mask: String = plan.publicSignature.dispatchMask
-  val arms: List<String> = (0 until (1 shl defaulted.size)).map { bits ->
-    val set: Set<ForwardPublicParameter> = defaulted
-      .filterIndexed { bit, _ -> bits and (1 shl bit) != 0 }
-      .toSet()
-    // Named from the first defaulted parameter on: an omitted one shifts every later position, and
-    // so does an unroutable trailing default the plan dropped, which this list cannot see.
-    var named = false
-    val arguments: String = parameters.mapNotNull { parameter ->
-      if (parameter.default != null) named = true
-      val value: String = when {
+  val arguments: List<ForwardDispatchArgument> = parameters.map { parameter ->
+    ForwardDispatchArgument(
+      label = parameter.kotlinName,
+      defaulted = parameter.default != null,
+      value = when {
         parameter.default == null -> loweredArgument(parameter)
-        parameter !in set -> return@mapNotNull null
         // An `Optional<T>` value is the declared nullable type itself: null is a real argument.
         parameter.isOptional -> local(parameter)
         parameter.default?.encoding == ForwardDefaultEncoding.PRESENCE -> loweredArgument(parameter)
         else -> "${local(parameter)}!!"
-      }
-      if (named) "${parameter.kotlinName.kotlinIdentifier()} = $value" else value
-    }.joinToString(", ")
-    "$bits -> ${invocationExpression(plan, receiver, arguments)}"
+      },
+    )
+  }
+  val arms: List<String> = forwardMaskArms(arguments) { call ->
+    invocationExpression(plan, receiver, call)
   }
   return buildString {
     appendLine("run {")
@@ -951,6 +946,44 @@ private fun dispatchedInvocation(plan: ForwardCallablePlan, receiver: ForwardAbi
     appendLine("    else -> error(\"unreachable\")")
     appendLine("  }")
     append("}")
+  }
+}
+
+/**
+ * One argument of an ADR-164 dispatched call: its named-argument [label], whether it is
+ * [defaulted] (and so present only in the arms whose mask bit sets it), and the Kotlin [value] it
+ * is passed as when it is present.
+ */
+internal class ForwardDispatchArgument(
+  val label: String,
+  val defaulted: Boolean,
+  val value: String,
+)
+
+/**
+ * ADR-164's `when (mask)` arms, one literal call per subset of the defaulted [arguments] (bit `i`
+ * is the `i`-th defaulted one). Arguments stay positional until the first defaulted parameter and
+ * are named from there on: an omitted one shifts every later position, and so does an unroutable
+ * trailing default a plan dropped, which this list cannot see. Shared by the plan route and the
+ * legacy `suspend` / `Flow` routes, which differ only in the call [target] and where the mask
+ * lives.
+ */
+internal fun forwardMaskArms(
+  arguments: List<ForwardDispatchArgument>,
+  target: (String) -> String,
+): List<String> {
+  val defaulted: List<ForwardDispatchArgument> = arguments.filter { it.defaulted }
+  return (0 until (1 shl defaulted.size)).map { bits ->
+    val set: Set<ForwardDispatchArgument> = defaulted
+      .filterIndexed { bit, _ -> bits and (1 shl bit) != 0 }
+      .toSet()
+    var named = false
+    val call: String = arguments.mapNotNull { argument ->
+      if (argument.defaulted) named = true
+      if (argument.defaulted && argument !in set) return@mapNotNull null
+      if (named) "${argument.label.kotlinIdentifier()} = ${argument.value}" else argument.value
+    }.joinToString(", ")
+    "$bits -> ${target(call)}"
   }
 }
 

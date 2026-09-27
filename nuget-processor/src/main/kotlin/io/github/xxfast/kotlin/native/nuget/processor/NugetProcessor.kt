@@ -335,10 +335,17 @@ internal fun warnDroppedForwardCallables(
  */
 private fun cappedDefaultDiagnostics(catalog: ForwardCallablePlanCatalog): List<ForwardDiagnostic> =
   catalog.entries
-    .filterIsInstance<ForwardCallableCatalogEntry.Planned>()
-    .filter { entry -> entry.cappedDefaults.isNotEmpty() }
-    .map { entry ->
-      val names: String = entry.cappedDefaults.joinToString { name -> "`$name`" }
+    .mapNotNull { entry ->
+      // ADR-164 on the legacy routes: a `suspend` / `Flow` member carries its capped names on its
+      // skip entry, since it never gets a plan.
+      val capped: List<String> = when (entry) {
+        is ForwardCallableCatalogEntry.Planned -> entry.cappedDefaults
+        is ForwardCallableCatalogEntry.Skipped -> entry.cappedDefaults
+      }
+      if (capped.isEmpty()) null else entry to capped
+    }
+    .map { (entry, capped) ->
+      val names: String = capped.joinToString { name -> "`$name`" }
       ForwardDiagnostic(
         kind = ForwardDiagnosticKind.WARNING_DEFAULT_PARAMETER_CAP_EXCEEDED,
         symbol = entry.node,

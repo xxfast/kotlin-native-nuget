@@ -4,6 +4,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.getConstructors
+import com.google.devtools.ksp.isConstructor
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
@@ -327,6 +328,13 @@ internal sealed interface ForwardCallableCatalogEntry {
      * not what [node]'s parent reports.
      */
     val owner: ForwardDiagnosticOwner? = null,
+    /**
+     * ADR-164 on the legacy routes: per parameter, whether it has a Kotlin default, for a
+     * `suspend` / `Flow` member that a legacy route binds. Null on every other skip.
+     */
+    val defaultFlags: List<Boolean>? = null,
+    /** ADR-164 rule 6 on the legacy routes: the defaulted parameters the cap leaves required. */
+    val cappedDefaults: List<String> = emptyList(),
   ) : ForwardCallableCatalogEntry {
 
     /** The Kotlin simple name of the dropped member, never the overload-suffixed [symbol]. */
@@ -657,6 +665,47 @@ internal data class ForwardCallablePlanCatalog(
     return if (tail.startsWith(name)) tail.substring(name.length) else ""
   }
 
+  /**
+   * ADR-164 on the legacy routes: per parameter of [declaration], whether it has a Kotlin default,
+   * read back off its catalog entry by node identity so the Kotlin export and the C# translator
+   * answer from one reading. Lenient like [overloadSuffix]: a member the planner never saw reads
+   * its own `hasDefault` bits.
+   */
+  fun legacyDefaultFlags(declaration: KSFunctionDeclaration): List<Boolean> =
+    entries.firstNotNullOfOrNull { entry ->
+      (entry as? ForwardCallableCatalogEntry.Skipped)
+        ?.takeIf { it.node === declaration }
+        ?.defaultFlags
+    } ?: declaration.parameters.map { parameter -> parameter.hasDefault }
+
+  /**
+   * ADR-164 on the legacy `suspend` routes: the parameter counts of [declaration]'s same-name
+   * `suspend` siblings on the same owner. Each renders `XAsync(..., CancellationToken = default)`,
+   * so a sibling whose arity a widened call could also stop at makes that call CS0121: the caller
+   * of `CountAsync()` cannot tell `count()` from `count(limit = 3)` once `limit` is optional. The
+   * C# half keeps the parameter at each such arity required-but-nullable instead. Arity only, not
+   * types: a false positive costs one `= null`, a miss costs the consumer's build.
+   */
+  fun legacySuspendSiblingArities(declaration: KSFunctionDeclaration): Set<Int> {
+    // A `Flow` member has no trailing token and no `Async` name: `Ticks()` still prefers the
+    // overload that omits nothing.
+    if (!declaration.modifiers.contains(Modifier.SUSPEND)) return emptySet()
+    val own: ForwardCallableCatalogEntry =
+      entries.firstOrNull { entry -> entry.node === declaration } ?: return emptySet()
+    val owner: String = own.symbol.substringBeforeLast('.')
+    val name: String = declaration.simpleName.asString()
+    return entries.asSequence()
+      .filterIsInstance<ForwardCallableCatalogEntry.Skipped>()
+      .filter { entry -> entry.reason == ForwardPlanSkipReason.SUSPEND }
+      .filter { entry ->
+        entry.node !== declaration && entry.symbol.substringBeforeLast('.') == owner
+      }
+      .mapNotNull { entry -> entry.node as? KSFunctionDeclaration }
+      .filter { sibling -> sibling.simpleName.asString() == name }
+      .map { sibling -> sibling.parameters.size }
+      .toSet()
+  }
+
   private fun valueClassMembers(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
     plan.invocation.origin == ForwardCallableOrigin.VALUE_CLASS &&
         plan.invocation.symbol.substringBeforeLast('.') == owner &&
@@ -693,6 +742,8 @@ internal class ForwardCallablePlanner(
     // ADR-111: sealed bases, whose subclass properties plan alongside the ordinary class ones.
     sealedClasses: List<KSClassDeclaration> = emptyList(),
   ): ForwardCallablePlanCatalog {
+    topLevelFunctions = functions
+    topLevelExtensions = extensionFunctions
     val entries: List<ForwardCallableCatalogEntry> = buildList {
       // Issue #249: every walk below stamps the C# owner of what it planned onto its skips, so a
       // dropped member can be named on the declaration that would have declared it. Constructors
@@ -782,8 +833,33 @@ internal class ForwardCallablePlanner(
       classes, properties, extensionProperties, sealedClasses, objects,
     )
     return ForwardCallablePlanCatalog(
-      entries, propertyPlans, planner.droppedPropertySetters, planner.droppedProperties,
+      entries.map { entry -> entry.withLegacyDefaults(functions) },
+      propertyPlans, planner.droppedPropertySetters, planner.droppedProperties,
       planner.droppedExtensionReceivers,
+    )
+  }
+
+  /**
+   * ADR-164 on the legacy routes: a `suspend` or `Flow`-returning member never gets a plan, but it
+   * is numbered here, and here is the one place both flag readers live (the member's override
+   * chain; the top-level ADR-074 expect index, the only way an `actual suspend fun` reports the
+   * default its `expect` declares). So the flags ride on the skip entry and both halves read them
+   * back through [ForwardCallablePlanCatalog.legacyDefaultFlags].
+   */
+  private fun ForwardCallableCatalogEntry.withLegacyDefaults(
+    functions: List<KSFunctionDeclaration>,
+  ): ForwardCallableCatalogEntry {
+    if (this !is ForwardCallableCatalogEntry.Skipped) return this
+    if (reason != ForwardPlanSkipReason.SUSPEND && reason != ForwardPlanSkipReason.FLOW_PROTOCOL) {
+      return this
+    }
+    val function: KSFunctionDeclaration = node as? KSFunctionDeclaration ?: return this
+    val flags: List<Boolean> =
+      if (functions.any { it === function }) topLevelDefaultFlags(function)
+      else memberDefaultFlags(function)
+    return copy(
+      defaultFlags = flags,
+      cappedDefaults = classifier.legacyCappedDefaults(function.parameters, flags),
     )
   }
 
@@ -1651,7 +1727,9 @@ internal class ForwardCallablePlanner(
             node = primary,
             // ADR-164: every `copy` parameter defaults to the receiver's own value, so every one
             // widens and unset means "keep".
-            defaults = declaredDefaults(primary.parameters, primary.parameters.map { true }),
+            defaults = declaredDefaults(
+              primary.parameters, primary.parameters.map { true }, overloads = false,
+            ),
             // ADR-150 amendment: `copy` takes the primary's `<param>` texts but never its
             // `@constructor` summary -- "Fills the bowl" does not describe a copy.
             doc = (
@@ -2107,11 +2185,55 @@ internal class ForwardCallablePlanner(
     parameters: List<KSValueParameter>,
     flags: List<Boolean>,
     marked: Map<Int, String> = emptyMap(),
-  ): ForwardDeclaredDefaults = ForwardDeclaredDefaults(
-    flags = flags,
-    kotlinNames = parameters.map { parameter -> parameter.name?.asString() ?: "_" },
-    marked = marked,
-  )
+    // False for data-class `copy`: every one of its parameters defaults and it has no user-declared
+    // siblings (Kotlin forbids declaring another `copy` beside the generated one), so nothing can
+    // shadow it. Its parameters belong to the primary constructor, whose siblings are not `copy`'s.
+    overloads: Boolean = true,
+  ): ForwardDeclaredDefaults {
+    val function: KSFunctionDeclaration? =
+      if (overloads) parameters.firstOrNull()?.parent as? KSFunctionDeclaration else null
+    val shadowed: Set<Int> =
+      function?.shadowedDefaultIndices(flags, function.overloadSiblings()).orEmpty()
+    return ForwardDeclaredDefaults(
+      flags = flags.mapIndexed { index, flag -> flag && index !in shadowed },
+      kotlinNames = parameters.map { parameter -> parameter.name?.asString() ?: "_" },
+      marked = marked,
+    )
+  }
+
+  /**
+   * The Kotlin overloads a call to this function also resolves against: the other constructors of
+   * its class, the same-name members its class sees (inherited included), or the same-name
+   * top-level functions of its package, or for a top-level extension the same-name extensions of
+   * its package on the same receiver type (a member extension is not walked: no route plans one).
+   * Private ones are invisible to the generated export, so they never shadow.
+   */
+  private fun KSFunctionDeclaration.overloadSiblings(): Sequence<KSFunctionDeclaration> {
+    val owner: KSClassDeclaration? = parentDeclaration as? KSClassDeclaration
+    val name: String = simpleName.asString()
+    val receiver: String? = extensionReceiver?.resolve()?.overloadKey()
+    val siblings: Sequence<KSFunctionDeclaration> = when {
+      receiver != null && owner != null -> emptySequence()
+      receiver != null -> topLevelExtensions.asSequence().filter { function ->
+        function.simpleName.asString() == name &&
+            function.packageName.asString() == packageName.asString() &&
+            function.extensionReceiver?.resolve()?.overloadKey() == receiver
+      }
+      owner == null -> topLevelFunctions.asSequence().filter { function ->
+        function.simpleName.asString() == name &&
+            function.packageName.asString() == packageName.asString()
+      }
+      isConstructor() -> owner.getConstructors()
+      else -> owner.getAllFunctions().filter { function -> function.simpleName.asString() == name }
+    }
+    return siblings.filter { sibling -> !sibling.modifiers.contains(Modifier.PRIVATE) }
+  }
+
+  /** ADR-164: every top-level extension function the catalog walks, for [overloadSiblings]. */
+  private var topLevelExtensions: List<KSFunctionDeclaration> = emptyList()
+
+  /** ADR-164: every top-level function the catalog walks, for [overloadSiblings]. */
+  private var topLevelFunctions: List<KSFunctionDeclaration> = emptyList()
 
   /**
    * ADR-164: the one widening pass. Turns the declared parameters of an entry into its public

@@ -7,6 +7,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeC
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyNullableScalarArgument
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyOptionalArgument
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShapes
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isLegacyDefaulted
+import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionCreate
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyParameterShape
@@ -40,9 +44,13 @@ internal val CirParameter.nativeArgument: String
  */
 internal fun List<CirParameter>.nativeImportParameters(): List<CirParameter> =
   flatMap { parameter ->
-    val hasValue: String = parameter.hasValueSlot ?: return@flatMap listOf(parameter)
-    listOf(
-      CirParameter(hasValue, "bool"),
+    if (parameter.hasValueSlot == null && parameter.isSetSlot == null) {
+      return@flatMap listOf(parameter)
+    }
+    // ADR-164 rule 2: an `Optional<T?>` parameter's `IsSet` slot leads its own nullable wire.
+    listOfNotNull(
+      parameter.isSetSlot?.let { slot -> CirParameter(slot, "bool") },
+      parameter.hasValueSlot?.let { slot -> CirParameter(slot, "bool") },
       CirParameter(parameter.name, parameter.nativeType),
     )
   }
@@ -104,11 +112,34 @@ internal fun legacyRouteParameters(
   parameters: List<KSValueParameter>,
   classifier: ForwardBridgeTypeClassifier,
   tracker: CollectionHelperTracker,
+  // ADR-164 on the legacy routes: [ForwardCallablePlanCatalog.legacyDefaultFlags] for the member.
+  defaults: List<Boolean> = emptyList(),
+  // ...and, for a `suspend` member only, [ForwardCallablePlanCatalog.legacySuspendSiblingArities].
+  siblingArities: Set<Int> = emptySet(),
 ): List<CirParameter> {
-  val names: ForwardLegacyNames = legacyCsharpNames(parameters, classifier)
+  val names: ForwardLegacyNames = legacyCsharpNames(parameters, classifier, defaults)
+  val optional: List<Boolean> = legacyCsharpDefaults(names.shapes, siblingArities)
   return parameters.mapIndexed { index, param ->
-    legacyRouteParameter(param, index, classifier, tracker, names)
+    legacyRouteParameter(param, index, names.shapes[index], tracker, names, optional[index])
   }
+}
+
+/**
+ * ADR-164 rule 5 plus the legacy CS0121 guard: per parameter, whether its widened C# form also
+ * gets a C# default (`= null` / `= default`). Only when every later parameter does too (C# puts
+ * optionals last), and never at or before an arity a same-name `suspend` sibling stops at: with
+ * the trailing `CancellationToken` both would bind that call, so the parameter there stays
+ * required-but-nullable, which is what keeps `CountAsync()` resolving to `count()`.
+ */
+private fun legacyCsharpDefaults(
+  shapes: List<ForwardLegacyParameterShape>,
+  siblingArities: Set<Int>,
+): List<Boolean> {
+  val required: List<Int> = shapes.indices.filter { index ->
+    !shapes[index].isLegacyDefaulted || index in siblingArities
+  }
+  val last: Int = required.maxOrNull() ?: -1
+  return shapes.indices.map { index -> shapes[index].isLegacyDefaulted && index > last }
 }
 
 /**
@@ -119,22 +150,23 @@ internal fun legacyRouteParameters(
 internal fun legacyCsharpNames(
   parameters: List<KSValueParameter>,
   classifier: ForwardBridgeTypeClassifier,
+  defaults: List<Boolean> = emptyList(),
 ): ForwardLegacyNames = ForwardLegacyNames(
   parameters.map { param -> (param.name?.asString() ?: "_").csharpParameterName() },
-  parameters.map { param -> classifier.legacyParameterShape(param.type.resolve()) },
+  classifier.legacyParameterShapes(parameters, defaults),
   csharp = true,
 )
 
 private fun legacyRouteParameter(
   param: KSValueParameter,
   index: Int,
-  classifier: ForwardBridgeTypeClassifier,
+  shape: ForwardLegacyParameterShape,
   tracker: CollectionHelperTracker,
   names: ForwardLegacyNames,
+  optional: Boolean,
 ): CirParameter {
   val name: String = (param.name?.asString() ?: "_").csharpParameterName()
-  return when (val shape: ForwardLegacyParameterShape =
-    classifier.legacyParameterShape(param.type.resolve())) {
+  return when (shape) {
     is ForwardLegacyParameterShape.Marshalled -> {
       tracker.trackCollection(shape.type)
       CirParameter(
@@ -160,22 +192,54 @@ private fun legacyRouteParameter(
     // Issue #299: the plan route's wire. A nullable primitive or `Char` is public `int?` / `char?`
     // over a `bool` has-value slot plus the inner value slot (`char` keeps its U2 marshalling,
     // keyed on the native type); a nullable `String` is one `string?` slot.
+    // ADR-164 on the legacy routes: a widened non-null default takes this same wire, null meaning
+    // unset; an already-nullable default is `Optional<T?>` over an extra leading `IsSet` slot.
     is ForwardLegacyParameterShape.NullableScalar -> {
-      val resolved: KSType = param.type.resolve().expandAliases()
-      val inner: String = mapParamType(resolved.declaration.simpleName.asString())
+      val enum: BridgeType.Enum? = shape.type as? BridgeType.Enum
+      val inner: String = enum?.csharpType
+        ?: mapParamType(param.type.resolve().expandAliases().declaration.simpleName.asString())
+      val public: String = if (shape.optional) "Optional<$inner?>" else "$inner?"
+      val defaultValue: String? = when {
+        !optional -> null
+        shape.optional -> "default"
+        else -> "null"
+      }
       if (shape.fansOut) {
         CirParameter(
           name,
-          type = "$inner?",
-          nativeType = inner,
+          type = public,
+          nativeType = if (enum != null) "int" else inner,
           isReferenceType = false,
-          nativeArgumentExpression = legacyNullableScalarArgument(name),
+          nativeArgumentExpression =
+            if (shape.optional) legacyOptionalArgument(name, fansOut = true, enum = enum != null)
+            else legacyNullableScalarArgument(name, enum = enum != null),
+          defaultValue = defaultValue,
           hasValueSlot = names.hasValueSlots[index],
+          isSetSlot = names.isSetSlots[index],
         )
       } else {
-        CirParameter(name, "$inner?")
+        CirParameter(
+          name,
+          type = public,
+          nativeType = "$inner?",
+          isReferenceType = !shape.optional,
+          nativeArgumentExpression =
+            if (shape.optional) legacyOptionalArgument(name, fansOut = false, enum = false)
+            else null,
+          defaultValue = defaultValue,
+          isSetSlot = names.isSetSlots[index],
+        )
       }
     }
+
+    // An exported enum crosses by ordinal, as it does on the plan route (ADR-080).
+    is ForwardLegacyParameterShape.Enum -> CirParameter(
+      name,
+      type = shape.type.csharpType,
+      nativeType = "int",
+      isReferenceType = false,
+      nativeArgumentExpression = "(int)$name",
+    )
 
     // A scalar keeps the shipped spelling. A refused parameter never reaches here: both halves
     // filter its member out first, and `warnRefusedLegacyRouteMembers` names it once.

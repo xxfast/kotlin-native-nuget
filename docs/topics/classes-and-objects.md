@@ -290,6 +290,22 @@ class Button(val label: String = "ok", val onClick: () -> Unit = {})
 new Button("go"); // the only constructor; onClick is always Kotlin's no-op default
 ```
 
+A defaulted parameter whose omission would exactly match a real, shorter overload you declared
+yourself stays required in C#, so widening it can't quietly steal calls meant for that overload:
+
+```kotlin
+class Kitten(val name: String, val lives: Int = 9) {
+  constructor(name: String) : this(name, 1) // the real, shorter overload
+}
+```
+
+```C#
+new Kitten("Oreo");            // reaches Kitten(name); lives is 1, not the widened default 9
+new Kitten("Oreo", lives: 9);  // reaches the widened constructor explicitly
+```
+
+`Copy` is exempt from this rule: a data class's `copy` has no user-declared sibling to shadow.
+
 At most 8 parameters per callable can widen. Past that cap, only the **last** 8 in declaration
 order widen and the earlier ones stay required; a `WARNING_DEFAULT_PARAMETER_CAP_EXCEEDED`
 diagnostic names the parameters left required, so split the callable or pass them explicitly.

@@ -333,7 +333,7 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
     return
   }
 
-  val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+  val paramStr: String = method.parameters.joinToString(", ") { it.declaration }
   val nativeName: String = method.nativeName
 
   appendLine("        public KotlinFlow<${method.flowElementType}> ${method.name}($paramStr)")
@@ -389,7 +389,7 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
     return
   }
 
-  val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+  val paramStr: String = method.parameters.joinToString(", ") { it.declaration }
   // ADR-114: the native call passes the wire handle, not the public collection.
   val paramNames: String = method.parameters.joinToString(", ") { it.nativeArgument }
   val nativeName: String = method.nativeName
@@ -439,7 +439,7 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
  * another.
  */
 private fun StringBuilder.renderHeldStateFlowMethod(method: CirMethod, className: String) {
-  val paramStr: String = method.parameters.joinToString(", ") { "${it.type} ${it.name}" }
+  val paramStr: String = method.parameters.joinToString(", ") { it.declaration }
   val element: String = method.flowElementType
 
   appendLine("        public KotlinMutableStateFlow<$element> ${method.name}($paramStr)")

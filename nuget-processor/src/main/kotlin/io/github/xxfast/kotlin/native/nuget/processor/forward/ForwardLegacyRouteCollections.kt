@@ -65,11 +65,30 @@ internal sealed interface ForwardLegacyParameterShape {
    * `${name}HasValue` BOOLEAN slot followed by the inner value slot (ADR-098 amendment, ADR-164
    * Context); a `String` stays one nullable pointer slot.
    */
-  data class NullableScalar(val type: BridgeType) : ForwardLegacyParameterShape {
+  data class NullableScalar(
+    val type: BridgeType,
+    /**
+     * ADR-164 on the legacy routes: a defaulted NON-null parameter crossing on this nullable wire,
+     * where null means "unset, let Kotlin run the default". The member still declares the non-null
+     * type, so the set arm passes the raw value (`limit`, `x!!`), never `if (h) limit else null`.
+     */
+    val widened: Boolean = false,
+    /**
+     * ADR-164 rule 2 on the legacy routes: a defaulted parameter that is ALREADY nullable, public
+     * `Optional<T?>` over a leading `${name}IsSet` BOOLEAN slot before its own nullable wire.
+     */
+    val optional: Boolean = false,
+  ) : ForwardLegacyParameterShape {
     /** Whether this parameter takes the has-value slot pair rather than one nullable slot. */
     val fansOut: Boolean
       get() = type !is BridgeType.String
   }
+
+  /**
+   * An exported enum, crossing by ordinal: `(int)x` in C#, `Q.entries[x]` in Kotlin, the plan
+   * route's own encoding (ADR-080). Its nullable form is a [NullableScalar] over this type.
+   */
+  data class Enum(val type: BridgeType.Enum) : ForwardLegacyParameterShape
 
   /** Any other parameter, named so the skip diagnostic can quote it. */
   data class Refused(val description: String) : ForwardLegacyParameterShape
@@ -81,8 +100,9 @@ internal sealed interface ForwardLegacyParameterShape {
  * ADR-114 classified only *generic* types here and returned [ForwardLegacyParameterShape.Plain]
  * for everything else unread, which meant `mapParamType(simpleName)` handed C# an `IntPtr` for a
  * class, an `object`, a sealed type, an enum, an `Instant`/`Duration`/`Uuid`, a value class and an
- * interface alike (issue #126). ADR-122 classifies the non-generic case too, so the three outcomes
- * are marshal it, borrow its handle, or refuse it by name. None of them is a public `IntPtr`.
+ * interface alike (issue #126). ADR-122 classifies the non-generic case too, so the outcomes are
+ * marshal it, borrow its handle, cross an enum by ordinal (ADR-164), or refuse it by name. None of
+ * them is a public `IntPtr`.
  *
  * Nullable collections (`List<T>?`) and nullable objects land in
  * [ForwardLegacyParameterShape.Refused] on purpose: threading nullability through these routes is
@@ -102,7 +122,9 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
   if (expanded.arguments.isEmpty()) return when {
     classified.isLegacyScalar() -> ForwardLegacyParameterShape.Plain
     classified is BridgeType.ObjectHandle -> ForwardLegacyParameterShape.Handle(classified)
-    classified is BridgeType.Nullable && classified.type.isLegacyScalar() ->
+    classified is BridgeType.Enum -> ForwardLegacyParameterShape.Enum(classified)
+    classified is BridgeType.Nullable &&
+        (classified.type.isLegacyScalar() || classified.type is BridgeType.Enum) ->
       ForwardLegacyParameterShape.NullableScalar(classified.type)
 
     else -> ForwardLegacyParameterShape.Refused(expanded.legacyDescription())
@@ -187,11 +209,118 @@ internal fun legacyRefusedCallbackMember(method: KSFunctionDeclaration): String?
   return null
 }
 
-/** [legacyParameterShape] for every parameter of a member, in declaration order. */
+/**
+ * [legacyParameterShape] for every parameter of a member, in declaration order, with ADR-164's
+ * widening applied to the defaulted ones ([defaults], positionally, from
+ * [ForwardCallablePlanCatalog.legacyDefaultFlags]):
+ *
+ *  - a defaulted non-null scalar or enum crosses on its nullable wire, null meaning unset
+ *    ([ForwardLegacyParameterShape.NullableScalar.widened]);
+ *  - a defaulted nullable one gains the `IsSet` slot
+ *    ([ForwardLegacyParameterShape.NullableScalar.optional]);
+ *  - a defaulted handle or collection stays required, unchanged (these routes have no nullable
+ *    encoding for either, ADR-114's deferral).
+ *
+ * At most [MAX_OPTIONAL_DEFAULTS] widen, the last ones in declaration order (ADR-164 rule 6).
+ * Both halves call this one function, so they cannot disagree on a slot.
+ */
 internal fun ForwardBridgeTypeClassifier.legacyParameterShapes(
   parameters: List<KSValueParameter>,
-): List<ForwardLegacyParameterShape> =
-  parameters.map { legacyParameterShape(it.type.resolve()) }
+  defaults: List<Boolean> = emptyList(),
+): List<ForwardLegacyParameterShape> {
+  val shapes: List<ForwardLegacyParameterShape> =
+    parameters.map { legacyParameterShape(it.type.resolve()) }
+  val widened: Set<Int> =
+    legacyWidenedIndices(shapes, defaults).takeLast(MAX_OPTIONAL_DEFAULTS).toSet()
+  return shapes.mapIndexed { index, shape ->
+    if (index !in widened) return@mapIndexed shape
+    when (shape) {
+      ForwardLegacyParameterShape.Plain -> ForwardLegacyParameterShape.NullableScalar(
+        classify(parameters[index].type.resolve()), widened = true,
+      )
+      is ForwardLegacyParameterShape.Enum ->
+        ForwardLegacyParameterShape.NullableScalar(shape.type, widened = true)
+      is ForwardLegacyParameterShape.NullableScalar -> shape.copy(optional = true)
+      else -> shape
+    }
+  }
+}
+
+/**
+ * ADR-164 rule 6 on the legacy routes: the defaulted parameters the cap leaves required, by name,
+ * for the `WARNING_DEFAULT_PARAMETER_CAP_EXCEEDED` diagnostic.
+ */
+internal fun ForwardBridgeTypeClassifier.legacyCappedDefaults(
+  parameters: List<KSValueParameter>,
+  defaults: List<Boolean>,
+): List<String> {
+  val shapes: List<ForwardLegacyParameterShape> =
+    parameters.map { legacyParameterShape(it.type.resolve()) }
+  return legacyWidenedIndices(shapes, defaults).dropLast(MAX_OPTIONAL_DEFAULTS)
+    .map { index -> parameters[index].name?.asString() ?: "_" }
+}
+
+/** The defaulted parameters a nullable encoding exists for, before the cap. */
+private fun legacyWidenedIndices(
+  shapes: List<ForwardLegacyParameterShape>,
+  defaults: List<Boolean>,
+): List<Int> = shapes.indices.filter { index ->
+  defaults.getOrElse(index) { false } && when (shapes[index]) {
+    ForwardLegacyParameterShape.Plain, is ForwardLegacyParameterShape.Enum,
+    is ForwardLegacyParameterShape.NullableScalar -> true
+    is ForwardLegacyParameterShape.Handle, is ForwardLegacyParameterShape.Marshalled,
+    is ForwardLegacyParameterShape.Refused -> false
+  }
+}
+
+/**
+ * ADR-164: the defaulted parameters of this function that must stay REQUIRED because omitting them
+ * would leave a real sibling overload's exact parameter list. Kotlin resolves `Foo(name)` to the
+ * real `Foo(name)` beside `Foo(name, lives = 9)` (the candidate using no defaults wins), so the
+ * dispatcher's "unset" arm could never reach `lives`'s default: it would silently call the
+ * sibling. Keeping `lives` required means C# `Foo(name)` binds the sibling too, which is what a
+ * Kotlin caller writing `Foo(name)` gets.
+ *
+ * A sibling of arity `m` shadows index `m` when its parameter types equal this function's first
+ * `m`, and every parameter from `m` on is defaulted (a required one there is always passed, so the
+ * call never shrinks to the sibling's). [flags] is this function's per-parameter default reading.
+ */
+internal fun KSFunctionDeclaration.shadowedDefaultIndices(
+  flags: List<Boolean>,
+  siblings: Sequence<KSFunctionDeclaration>,
+): Set<Int> {
+  val own: List<String> = parameters.map { parameter -> parameter.type.resolve().overloadKey() }
+  return siblings
+    .filter { sibling -> sibling !== this && sibling.parameters.size < parameters.size }
+    .filter { sibling -> sibling.parameters.none { parameter -> parameter.isVararg } }
+    .mapNotNull { sibling ->
+      val arity: Int = sibling.parameters.size
+      val sameTypes: Boolean = sibling.parameters.indices.all { index ->
+        sibling.parameters[index].type.resolve().overloadKey() == own[index]
+      }
+      val omittable: Boolean =
+        (arity until parameters.size).all { index -> flags.getOrElse(index) { false } }
+      arity.takeIf { sameTypes && omittable }
+    }
+    .toSet()
+}
+
+/** A structural spelling of a type for overload comparison: qualified, aliases expanded. */
+internal fun KSType.overloadKey(): String {
+  val expanded: KSType = expandAliases()
+  val name: String = expanded.declaration.qualifiedName?.asString()
+    ?: expanded.declaration.simpleName.asString()
+  val arguments: String =
+    if (expanded.arguments.isEmpty()) ""
+    else expanded.arguments.joinToString(",", "<", ">") { argument ->
+      argument.type?.resolve()?.overloadKey() ?: "*"
+    }
+  return "$name$arguments${if (expanded.isMarkedNullable) "?" else ""}"
+}
+
+/** Whether this parameter is dispatched by the ADR-164 `when (mask)`: set or unset per call. */
+internal val ForwardLegacyParameterShape.isLegacyDefaulted: Boolean
+  get() = this is ForwardLegacyParameterShape.NullableScalar && (widened || optional)
 
 /** The first refused parameter of a member, as `name: Type`, or null when every one binds. */
 internal fun ForwardBridgeTypeClassifier.legacyRefusedParameter(
@@ -684,7 +813,8 @@ private fun KSType.legacyDescription(): String {
  */
 internal class ForwardLegacyNames(
   parameters: List<String>,
-  shapes: List<ForwardLegacyParameterShape>,
+  /** The member's effective shapes (ADR-164 widening applied), read by the dispatch below. */
+  val shapes: List<ForwardLegacyParameterShape>,
   // Which half this instance names: the two spell their callback slots differently (`onNextPtr`
   // in the Kotlin export, `onNext` in the `DllImport` and the collect lambda) and each has locals
   // the other lacks.
@@ -704,6 +834,23 @@ internal class ForwardLegacyNames(
     val fansOut: Boolean = shape is ForwardLegacyParameterShape.NullableScalar && shape.fansOut
     if (fansOut) mint("${name}HasValue") else null
   }
+
+  /**
+   * ADR-164 rule 2: per parameter, the leading BOOLEAN slot an `Optional<T?>` parameter adds before
+   * its own nullable wire (`${name}IsSet` unless taken), or null.
+   */
+  val isSetSlots: List<String?> = parameters.mapIndexed { index, name ->
+    val shape: ForwardLegacyParameterShape = shapes[index]
+    val optional: Boolean = shape is ForwardLegacyParameterShape.NullableScalar && shape.optional
+    if (optional) mint("${name}IsSet") else null
+  }
+
+  /**
+   * Kotlin only: the ADR-164 presence-mask local (`mask` unless taken), or null when no parameter
+   * is defaulted. Bound in the prelude, before the coroutine launches, and read by `when (mask)`.
+   */
+  val mask: String? =
+    if (!csharp && shapes.any { shape -> shape.isLegacyDefaulted }) mint("mask") else null
 
   /**
    * Per parameter, the Kotlin local a lowered shape is bound to (`${name}Arg` unless taken), or
@@ -794,6 +941,7 @@ internal fun legacyHandleStatement(
 internal fun ForwardLegacyParameterShape.isLegacyLowered(): Boolean = when (this) {
   is ForwardLegacyParameterShape.Marshalled, is ForwardLegacyParameterShape.Handle -> true
   ForwardLegacyParameterShape.Plain,
+  is ForwardLegacyParameterShape.Enum,
   is ForwardLegacyParameterShape.NullableScalar,
   is ForwardLegacyParameterShape.Refused -> false
 }
@@ -806,16 +954,92 @@ internal fun ForwardLegacyParameterShape.isLegacyLowered(): Boolean = when (this
  */
 internal fun ForwardLegacyNames.legacyArgument(index: Int, parameter: String): String {
   loweredLocals[index]?.let { local -> return local }
-  val hasValue: String = hasValueSlots[index] ?: return parameter
-  return "if ($hasValue) $parameter else null"
+  val shape: ForwardLegacyParameterShape = shapes[index]
+  if (shape is ForwardLegacyParameterShape.Enum) return legacyEnumValue(shape.type, parameter)
+  val scalar: ForwardLegacyParameterShape.NullableScalar =
+    shape as? ForwardLegacyParameterShape.NullableScalar ?: return parameter
+  val value: String = (scalar.type as? BridgeType.Enum)
+    ?.let { enum -> legacyEnumValue(enum, parameter) } ?: parameter
+  val hasValue: String? = hasValueSlots[index]
+  return when {
+    // ADR-164: a widened non-null parameter is only ever passed in the arms that set it, where
+    // the member declares the non-null type: the raw value, not the `Int?` it was carried as.
+    scalar.widened && hasValue != null -> value
+    scalar.widened -> "$parameter!!"
+    hasValue != null -> "if ($hasValue) $value else null"
+    else -> parameter
+  }
+}
+
+/** ADR-080's ordinal lowering, the plan route's text: `Hunger.entries[asked]`. */
+private fun legacyEnumValue(type: BridgeType.Enum, parameter: String): String =
+  "${type.qualifiedName}.entries[$parameter]"
+
+/**
+ * ADR-164: the Kotlin test for whether defaulted parameter [index] was set by the C# caller: the
+ * `IsSet` slot of an `Optional`, the has-value slot of a widened value, or the widened `String?`
+ * slot being non-null.
+ */
+private fun ForwardLegacyNames.legacyPresence(index: Int, parameter: String): String =
+  isSetSlots[index] ?: hasValueSlots[index] ?: "$parameter != null"
+
+/**
+ * The member called with its arguments, as one Kotlin expression. With no defaulted parameter it
+ * is the positional `target(a, b)` it always was. With some it is ADR-164's `when (mask)` of named
+ * calls (the plan route's [forwardMaskArms]), parenthesized so a caller can hang `.collect`,
+ * `.value` or `?.` off it; [mask] is bound by [legacyPrelude], before any coroutine launches.
+ */
+internal fun ForwardLegacyNames.legacyInvocation(target: String, parameters: List<String>): String {
+  val arguments: List<ForwardDispatchArgument> = parameters.mapIndexed { index, parameter ->
+    ForwardDispatchArgument(
+      label = parameter,
+      defaulted = shapes[index].isLegacyDefaulted,
+      value = legacyArgument(index, parameter),
+    )
+  }
+  val mask: String = mask ?: return "$target(${arguments.joinToString(", ") { it.value }})"
+  val arms: List<String> = forwardMaskArms(arguments) { call -> "$target($call)" }
+  return buildString {
+    appendLine("(when ($mask) {")
+    arms.forEach { arm -> appendLine("  $arm") }
+    appendLine("  else -> error(\"unreachable\")")
+    append("})")
+  }
+}
+
+/**
+ * Every statement the export body runs before it calls (or launches the call of) the member: the
+ * eager ADR-114/ADR-122 lowerings, then ADR-164's presence mask. Evaluated on the caller's thread,
+ * so a coroutine only ever captures values.
+ */
+internal fun ForwardLegacyNames.legacyPrelude(parameters: List<String>): String = buildString {
+  parameters.forEachIndexed { index, parameter ->
+    shapes[index].legacyPrelude(parameter, loweredLocals[index])?.let { line -> appendLine(line) }
+  }
+  val mask: String = mask ?: return@buildString
+  var bit = 0
+  val terms: List<String> = parameters.mapIndexedNotNull { index, parameter ->
+    if (!shapes[index].isLegacyDefaulted) return@mapIndexedNotNull null
+    "(if (${legacyPresence(index, parameter)}) ${1 shl bit++} else 0)"
+  }
+  appendLine("val $mask = ${terms.joinToString(" or ")}")
 }
 
 /**
  * Issue #299: the C# arguments a fanned-out nullable scalar [name] is passed to the native call as,
- * matching its two slots (the plan route's `ForwardCirPlanProjection` text).
+ * matching its two slots (the plan route's `ForwardCirPlanProjection` text). An enum's value half
+ * is its ordinal (ADR-080).
  */
-internal fun legacyNullableScalarArgument(name: String): String =
-  "$name.HasValue, $name.GetValueOrDefault()"
+internal fun legacyNullableScalarArgument(name: String, enum: Boolean = false): String =
+  "$name.HasValue, ${if (enum) "(int)" else ""}$name.GetValueOrDefault()"
+
+/**
+ * ADR-164 rule 2: the C# arguments an `Optional<T?>` parameter [name] is passed as: its `IsSet`
+ * slot, then its nullable wire read off `.Value` (the has-value pair, or the one `string?` slot).
+ */
+internal fun legacyOptionalArgument(name: String, fansOut: Boolean, enum: Boolean): String =
+  if (fansOut) "$name.HasValue, ${legacyNullableScalarArgument("$name.Value", enum)}"
+  else "$name.HasValue, $name.Value"
 
 /**
  * The prelude line this parameter contributes, or null when it is passed through as-is. [local] is
@@ -830,6 +1054,7 @@ internal fun ForwardLegacyParameterShape.legacyPrelude(
   is ForwardLegacyParameterShape.Handle ->
     legacyHandleStatement(parameter, requireNotNull(local), type)
   ForwardLegacyParameterShape.Plain,
+  is ForwardLegacyParameterShape.Enum,
   is ForwardLegacyParameterShape.NullableScalar,
   is ForwardLegacyParameterShape.Refused -> null
 }
