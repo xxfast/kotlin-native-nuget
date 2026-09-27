@@ -21,6 +21,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeC
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.collectionResultProjection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardArmMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isLegacyLowered
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
@@ -41,7 +42,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.toCName
  * identical exports under its own `${sealed}_${sub}` prefix, which is the same lift ADR-118 made
  * for the suspend route. The callers keep owning membership filtering: which properties and which
  * methods belong to an owner is the caller's rule (all-properties for an arm's properties per
- * ADR-111, declared-only for its methods per ADR-116), and only the per-member emission lives here.
+ * ADR-111, the arm's own surface for its methods per ADR-116), and only the per-member emission
+ * lives here.
  *
  * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/065-stateflow-mapping.md">ADR-065: StateFlow mapping</a>
  * @see <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/124-flow-route-sealed-arm-owners.md">ADR-124: Flow route on sealed-arm owners</a>
@@ -79,15 +81,16 @@ internal fun KSClassDeclaration.forwardArmFlowProperties(
   .toList()
 
 /**
- * ADR-124: a sealed arm's flow-returning methods, **declared-only** (`parentDeclaration == this`),
- * which is ADR-116's rule for the arm's method surface and ADR-118's for its suspend members. A
- * base `open fun` returning a Flow that no arm overrides therefore belongs to no arm.
+ * ADR-124: a sealed arm's flow-returning methods, on the arm's own surface ([isForwardArmMember]),
+ * which is ADR-116's rule for the arm's method surface and ADR-118's for its suspend members:
+ * declared, plus inherited from an interface the sealed type does not carry (ADR-101 amendment
+ * 2026-09-27). A base `open fun` returning a Flow that no arm overrides still belongs to no arm.
  */
 internal fun KSClassDeclaration.forwardArmFlowMethods(
   classifier: ForwardBridgeTypeClassifier,
 ): List<KSFunctionDeclaration> = getAllFunctions()
   .filter { it.getVisibility() == Visibility.PUBLIC }
-  .filter { it.parentDeclaration == this }
+  .filter { isForwardArmMember(it) }
   .filter { !it.modifiers.contains(Modifier.SUSPEND) }
   .filter { it.returnsForwardFlow() }
   // Issue #230: the synthetic-member filter every other member route applies. A `Flow`-typed

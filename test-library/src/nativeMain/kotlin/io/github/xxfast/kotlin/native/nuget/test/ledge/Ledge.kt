@@ -37,10 +37,10 @@ class Ledge : Shelf(), Groomable {
  * The same shape as [Shelf], with one difference that decides `override` vs `virtual`: the base
  * carries an *unrelated overload* of the interface member's name.
  *
- * `baseClassOverridee`'s fallback matches a base-class function by simple name only, so
- * [Post.scratch] (which overrides [Scratchable.scratch], arity 0) matches [Perch.scratch] (arity 1)
- * and renders `public override string Scratch()` against a base that only has `Scratch(int)`:
- * CS0115. The fallback needs ADR-082's wildcard signature comparison, not a name.
+ * `baseClassOverridee`'s fallback compares base-class functions by ADR-082's wildcard signature,
+ * not simple name, so [Post.scratch] (which overrides [Scratchable.scratch], arity 0) does not
+ * match [Perch.scratch] (arity 1): a name-only comparison would render `public override string
+ * Scratch()` against a base that only has `Scratch(int)`, CS0115.
  *
  * This is a sibling of [Shelf]/[Ledge] rather than an overload added to [Shelf], because
  * `typeof(Ledge).GetMethod("Groom")` in `InterfaceBesideBaseTests` throws `AmbiguousMatchException`

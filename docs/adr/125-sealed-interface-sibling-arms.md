@@ -301,3 +301,17 @@ the interface and the class spelling).
    loudly with CS0535.
 3. `rootEnums`'s new filter is unreachable. If wrong, an enum arm that slips past the refusal is a
    missing type rather than CS0101, which is the point of keeping it.
+
+## 2026-09-27 amendment: sealed arms list their own interfaces
+
+The Consequences bullet above ("An arm's extra interfaces are dropped silently") is superseded. A
+sealed arm's `interfaces`, computed in `translateSealedClass`, now lists every reachable interface
+the arm itself implements, the same rule `translateClass` already applies to an ordinary class,
+filtered against the sealed base's own supertypes so nothing already on the base list is redeclared.
+`class Odd : Kind, CharSequence` now renders `public sealed class Odd : Kind, ICharSequence` (or
+drops `CharSequence` with `SKIPPED_UNEXPORTED_SUPERTYPE` if it has no C# shape), and every member the
+interface declares, defaulted or abstract, binds on the arm the same way
+[ADR-167](167-interface-super-interfaces.md) already binds a super-interface's members onto an
+ordinary class. See [interfaces-abstract-sealed.md](../topics/interfaces-abstract-sealed.md#sealed-arm-own-interfaces)
+for the shipped shape, and [ADR-168](168-interface-var-explicit-setter.md)'s own 2026-09-27 amendment
+for the accompanying explicit-setter fold-in this widening required.

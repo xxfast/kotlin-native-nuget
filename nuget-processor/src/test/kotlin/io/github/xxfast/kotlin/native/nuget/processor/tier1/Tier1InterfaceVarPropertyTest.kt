@@ -232,11 +232,10 @@ class Tier1InterfaceVarPropertyTest {
   }
 
   /**
-   * A sealed arm is the case D shape too, but its C# base list names only the sealed base (never
-   * `ITally`), so there is no interface to implement explicitly (CS0540 if one were rendered) and
-   * no CS0535 either. What the arm needed was the ADR-075 read-only-base guard: the sealed route
-   * never passed its base, so `override var count` over `open val count` rendered a public setter,
-   * CS0546 (measured in the same scratch compile).
+   * A sealed arm is the case D shape too. The ADR-075 read-only-base guard keeps its public
+   * `override` get-only (CS0546 against the sealed base's `open val count`), and since the arm now
+   * lists `ITally` in its own base list (ADR-101 amendment 2026-09-27) the setter is implemented
+   * explicitly, exactly as on an ordinary class; without it the listed `ITally` is CS0535.
    */
   @Test
   fun `a sealed arm over a read-only base keeps its override get-only`() {
@@ -259,13 +258,18 @@ class Tier1InterfaceVarPropertyTest {
     )
     assertTrue(sealed.compiledClean, "expected a clean compile; got: ${sealed.compileErrors}")
     val arm: String = block(sealed.generatedCSharp, "public sealed class Arm")
-    assertContains(arm, "public sealed class Arm : Perch\n")
+    assertContains(arm, "public sealed class Arm : Perch, ITally\n")
     assertContains(arm, "public override int Count\n")
-    assertFalse(Regex("""\n\s+set\b""").containsMatchIn(arm), arm)
-    assertFalse(arm.contains("ITally.Count"), arm)
+    val publicCount: String = arm.substring(
+      arm.indexOf("public override int Count\n"),
+      arm.indexOf("int ITally.Count\n"),
+    )
+    assertFalse(Regex("""\n\s+set\b""").containsMatchIn(publicCount), publicCount)
+    assertContains(arm.substringAfter("int ITally.Count\n"), "set")
     assertTrue(
       sealed.kspWarnings.any {
-        it.contains("tier1.ivarseal.Perch.Arm.count") && it.contains("CS0546")
+        it.contains("tier1.ivarseal.Perch.Arm.count") && it.contains("CS0546") &&
+            it.contains("ITally.Count")
       },
       "expected the arm's refused setter to be named; got: ${sealed.kspWarnings}",
     )

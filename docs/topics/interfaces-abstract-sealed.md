@@ -80,6 +80,38 @@ parrot.Greeting; // "hello" - Parrot never declared this
 parrot.Greet();  // "hello from a macaw"
 ```
 
+If the implementing class is itself `open` (or `abstract`), its inherited default renders `public
+virtual` instead, so a further Kotlin subclass can override it:
+
+```kotlin
+interface Scratcher {
+  fun scratch(): String = "a quick scratch"
+}
+
+open class ScratchingPost : Scratcher
+
+class CarpetPost : ScratchingPost() {
+  override fun scratch(): String = "shreds the carpet post"
+}
+```
+
+```C#
+public class ScratchingPost : IScratcher, IDisposable, INugetHandle
+{
+    public virtual string Scratch() { /* ... */ } // ScratchingPost never declared this itself
+}
+
+public class CarpetPost : ScratchingPost
+{
+    public override string Scratch() { /* ... */ }
+}
+```
+
+The same applies to an `open` [sealed arm](#open-arms-and-further-nesting) inheriting a default from
+one of its own interfaces: the arm renders it `virtual` too, so a further Kotlin subclass of the arm
+compiles. A `final` owner's inherited default stays non-virtual either way, since Kotlin agrees it
+cannot be overridden.
+
 ### Widening a read-only property to `var` {id="widening-a-read-only-property-to-var"}
 
 Kotlin lets a subclass widen an inherited `val` to `var`. Whether the C# setter survives the
@@ -172,11 +204,11 @@ clicker.Count = 5;            // does not compile: TrainingClicker.Count has no 
 
 An ordinary implementer with no read-only base in the way (`class Abacus : Tally`) needs none of
 this: its own public setter satisfies `ITally` directly, the same as any other interface member. A
-sealed subclass never gets the explicit form: its C# base list only ever names its sealed base, so
-a `var` it widens over a read-only sealed base stays a plain get-only override with the named skip,
-the same shape a non-sealed class without an implemented interface gets. Consequence for your own
-code: a C# class implementing a `var`-bearing interface must declare every setter the interface now
-asks for; one that only declared a getter before this render shipped no longer compiles.
+sealed arm gets the identical explicit-member treatment whenever its own read-only sealed base is in
+the way; see [A sealed arm's own interfaces](#sealed-arm-own-interfaces) below. Consequence for your
+own code: a C# class or sealed arm implementing a `var`-bearing interface must declare every setter
+the interface now asks for; one that only declared a getter before this render shipped no longer
+compiles.
 
 ### Implementing a Kotlin interface in C# {id="implementing-a-kotlin-interface-in-c"}
 
@@ -657,6 +689,75 @@ through ordinary C# dispatch. This applies to an unexported *interface* supertyp
 abstract member with no default the sealed base itself never implements: it still re-homes onto the
 base and every arm implements it as it would any other inherited abstract member.
 
+### A sealed arm's own interfaces {id="sealed-arm-own-interfaces"}
+
+A sealed arm that implements an interface lists it in its own C# base list, beside the sealed base,
+so `arm is IFoo` holds and every interface member is callable through the arm — including one it only
+inherits as a default, or reaches through a super-interface:
+
+```kotlin
+interface Basker {
+  val warmth: Int
+  fun bask(): String = "basking at $warmth degrees"
+}
+
+interface Sunseeker : Basker {
+  val spot: String
+  var naps: Int
+  fun stretch(): String = "stretches on the $spot after $naps naps"
+}
+
+sealed class Sunroom {
+  open val naps: Int = 0
+
+  class Beam(override val spot: String) : Sunroom(), Sunseeker {
+    override var naps: Int = 0
+    override val warmth: Int = 30
+  }
+}
+```
+
+```C#
+public sealed class Beam : Sunroom, ISunseeker
+{
+    public override int Naps { get { /* ... */ } } // get-only: widens Sunroom's read-only naps (CS0546)
+
+    int ISunseeker.Naps // ADR-168's explicit setter, now given to a sealed arm too
+    {
+        get => Naps;
+        set { /* ... */ }
+    }
+
+    public string Stretch() { /* ... */ } // Sunseeker's own default, inherited, never overridden
+    public string Bask() { /* ... */ }    // Basker's default, reached through the super-interface
+}
+```
+
+```C#
+ISunseeker seeker = beam;
+seeker.Naps = 5;    // reaches Kotlin through the explicit member
+beam.Naps;           // 5 - the public getter agrees
+```
+
+An interface an arm cannot list, because it is unexported or otherwise unspellable, is dropped from
+the arm's base list the same way it would be for an ordinary class (`SKIPPED_UNEXPORTED_SUPERTYPE`),
+with its members re-homed onto the arm directly:
+
+```kotlin
+class Draught(val gap: Int) : Sunroom(), UnexportedRadiator { // never exported
+  override val fins: Int get() = gap * 2
+}
+```
+
+```C#
+public sealed class Draught : Sunroom // no interface here: UnexportedRadiator has no C# type
+{
+    public int Fins { get { /* ... */ } }  // re-homed, not reached through an interface
+    public int Ticks { get { /* ... */ } } // UnexportedRadiator's own default, re-homed too
+    public string Hum() { /* ... */ }
+}
+```
+
 ### Subclass placement and pattern matching
 
 A subclass declared *inside* the sealed base stays nested (`Observation.Alive`); one declared
@@ -838,8 +939,11 @@ A `suspend fun` returning a nested arm spells the same way: `Task<Job.Running>`,
 A public method or property a sealed subclass **itself declares**, including its own `override`,
 binds the same as it would on an ordinary class: overloads, widened default parameters,
 nullable types, collections, and `Duration`/`Uuid`/value-class/interface shapes all work on an arm
-too, exported under the arm's own name. This is **declared-only**: an arm never re-exports a member
-it merely inherits unchanged.
+too, exported under the arm's own name. A member the arm merely **inherits from one of its own
+interfaces** — a default it never overrides itself, or one reached through a super-interface — binds
+the same way, under the arm's own name (see [A sealed arm's own interfaces](#sealed-arm-own-interfaces)
+above). Only a member inherited from the **sealed base itself** stays off the arm: it binds once, on
+the base, described next, rather than being re-exported per arm.
 
 The sealed base's own declared `abstract`/`open` member is a different carrier: it renders `public
 virtual` on the C# **base** itself (never `abstract`), so a consumer holding the sealed base can
@@ -999,11 +1103,6 @@ A sealed base, a sealed arm, and any `interface` owner can nest their own plain
 - An `enum class` arm's boxed constructor and `Value` getter cost a handle and a P/Invoke each; see
   [An `enum class` arm](#an-enum-class-arm) for the disposal obligation and the missing implicit
   conversion.
-- A sealed arm's own interfaces are dropped silently from the generated class: its C# base list
-  names only the sealed base, whether the arm implements an eligible sealed interface plus an extra
-  one (`class Odd : Kind, CharSequence`) or an ordinary exported interface with a `var` (`class Arm :
-  Perch(), Tally`). `arm is ITally` is always false in C#, and there is no explicit-member fallback
-  for a `var` setter the way a non-sealed class gets (see [above](#an-interface-s-own-var-property)).
 - An `object` arm, or a `class`-kind arm whose every constructor is refused, has only the
   `internal` handle constructor, so `new Base.Arm(9)` fails to compile rather than binding it;
   obtain the arm from a factory or from the base's `FromHandle` discriminator instead. A

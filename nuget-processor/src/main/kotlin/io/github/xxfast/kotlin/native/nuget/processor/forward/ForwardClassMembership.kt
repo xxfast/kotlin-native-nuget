@@ -186,6 +186,29 @@ internal fun KSClassDeclaration.isEnumArm(): Boolean =
 internal fun KSClassDeclaration.enumArmName(): String = "${simpleName.asString()}Arm"
 
 /**
+ * ADR-101 amendment (2026-09-27): the sealed type whose arm this is, the one the sealed route
+ * renders as the arm's C# base: its direct supertype that [isEligibleSealedType]. Read by the arm
+ * member selectors that are not handed the sealed type, so every route binds an arm's members by
+ * the planners' own rule, [isForwardMemberOf] with `superClass = sealed`.
+ */
+internal fun KSClassDeclaration.forwardArmSealedParent(): KSClassDeclaration? = superTypes
+  .map { type -> type.resolve().declaration }
+  .filterIsInstance<KSClassDeclaration>()
+  .firstOrNull { it.isEligibleSealedType() }
+
+/**
+ * ADR-101 amendment (2026-09-27): whether [member] belongs to this sealed arm's surface on a
+ * legacy route (suspend, Flow, callbacks): declared, or inherited from an interface the sealed
+ * type does not carry (listed on the arm, or re-homed onto it when unexported). The sealed base
+ * carries its own members and `Any`'s. Never `superClass = null`, which would admit `Any`'s too.
+ */
+internal fun KSClassDeclaration.isForwardArmMember(member: KSDeclaration): Boolean {
+  val sealed: KSClassDeclaration =
+    forwardArmSealedParent() ?: return member.parentDeclaration == this
+  return member.isForwardMemberOf(this, sealed)
+}
+
+/**
  * ADR-157: the module's declared type names, by package, so [armIneligibility] can refuse a
  * hierarchy whose `{Enum}Arm` box name is already taken rather than emit a CS0101 the author has to
  * decode from a C# compile. Filled once per KSP round by `NugetProcessor`, exactly as
@@ -633,3 +656,22 @@ private fun KSDeclaration.hasImplementation(): Boolean = when (this) {
  */
 internal fun Set<Modifier>.isOpenForOverride(): Boolean = !contains(Modifier.ABSTRACT) &&
     (contains(Modifier.OPEN) || (contains(Modifier.OVERRIDE) && !contains(Modifier.FINAL)))
+
+/**
+ * [isOpenForOverride] as seen from [owner], the class the member is rendered on.
+ *
+ * ADR-101 amendment (2026-09-27): an interface default that [owner] inherits without overriding
+ * carries neither `open` nor `override` (an interface member never spells `open`), yet it is
+ * exactly as overridable as a declared `open fun` once [owner] can be extended. The modifiers
+ * alone rendered it non-virtual, so a Kotlin subclass overriding it rendered `override` against a
+ * non-virtual member, CS0506. Only an `open` or `abstract` owner counts: a final class's
+ * inherited default is final in Kotlin too, and its C# spelling stays unchanged.
+ */
+internal fun KSDeclaration.isOpenForOverrideOn(owner: KSClassDeclaration): Boolean {
+  if (modifiers.isOpenForOverride()) return true
+  val fromInterface: Boolean =
+    (parentDeclaration as? KSClassDeclaration)?.classKind == ClassKind.INTERFACE
+  val isExtensible: Boolean =
+    Modifier.OPEN in owner.modifiers || Modifier.ABSTRACT in owner.modifiers
+  return fromInterface && isExtensible && hasImplementation()
+}

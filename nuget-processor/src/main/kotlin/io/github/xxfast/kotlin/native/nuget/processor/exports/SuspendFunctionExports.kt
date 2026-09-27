@@ -102,8 +102,9 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
 
 /**
  * ADR-118: the same builder now serves an ordinary class and a sealed subclass. A sealed arm passes
- * its own export [prefix] (`job_running`) and [declaredOnly], because the sealed route -- planner,
- * C# translator and this builder alike -- binds exactly what the arm declares itself.
+ * its own export [prefix] (`job_running`) and [isArm], because the sealed route -- planner, C#
+ * translator and this builder alike -- binds the arm's own surface: what it declares, plus what it
+ * inherits from an interface the sealed type does not carry (ADR-101 amendment 2026-09-27).
  */
 internal fun FileSpec.Builder.addSuspendClassMethodExports(
   cls: KSClassDeclaration,
@@ -111,22 +112,22 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
   callableCatalog: ForwardCallablePlanCatalog,
   symbols: ForwardSymbolTable,
   prefix: String = cls.nativePrefix(symbols),
-  declaredOnly: Boolean = false,
+  isArm: Boolean = false,
   exportedTypes: Set<String> = emptySet(),
 ) {
   val qualifiedName: String = cls.qualifiedName?.asString() ?: return
 
   // ADR-159: one selector, shared with the C# half (`translateClass`'s `allSuspendMethods`) and
   // with the gate in `NugetProcessor`. It owns the ADR-147 generic-owner refusal, the ADR-114/119
-  // parameter and return refusals, ADR-118's declared-only rule for a sealed arm, the
+  // parameter and return refusals, ADR-118's arm rule for a sealed arm, the
   // `isForwardMemberOf` membership rule the C# half always applied and the new
   // `override suspend fun` skip. This half used to filter on strictly less and emitted a stray
   // export per inherited suspend member, which `ForwardAbiContract.kotlin` cannot see because it
   // filters Kotlin exports down to the C# import set.
   val suspendMethods: List<KSFunctionDeclaration> = cls.forwardSuspendRouteMethods(
     classifier = classifier,
-    superClass = if (declaredOnly) null else cls.forwardSuperClass(exportedTypes),
-    declaredOnly = declaredOnly,
+    superClass = if (isArm) null else cls.forwardSuperClass(exportedTypes),
+    isArm = isArm,
   )
 
   suspendMethods.forEach { method ->
