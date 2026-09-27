@@ -121,3 +121,8 @@ object variants.
 - Constructor exception propagation — partially-constructed-object semantics;
   tracked as a separate roadmap item.
 - `@Throws`-based opt-in optimization — not needed given the wrap-all approach.
+
+**2026-09-28:** the enum member property getter was the last property route still without this
+containment, hand-written on its own path outside this ADR's scope; it now has it too, having
+moved onto the ADR-062 forward property plan
+([ADR-172](172-enum-member-properties-on-the-forward-plan.md)).

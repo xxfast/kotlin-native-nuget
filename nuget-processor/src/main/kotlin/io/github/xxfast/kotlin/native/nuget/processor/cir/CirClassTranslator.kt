@@ -58,6 +58,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.enumArmName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPlanProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPropertyProjection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.enumMembersOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardDiagnosticOwner
@@ -2756,6 +2757,58 @@ internal fun emitCsharpSignatureCollisionsOf(
     }
 }
 
+/** A projected C# method with the Kotlin declaration behind it, as the author wrote it. */
+internal data class SpelledMethod(
+  val method: CirMethod,
+  val kotlin: String,
+  val node: KSNode,
+)
+
+/**
+ * ADR-006 amendment / ADR-034: the `{Enum}Extensions` partial class is declared from two routes,
+ * the enum's own member properties ([members]) and the extensions over the enum ([extensions]).
+ * Each route's own overload guard sees only its half, so a member `val grooming` and an extension
+ * `fun Coat.grooming()` (both `Grooming(this Coat …)`) used to reach the consumer as CS0111. Only
+ * a signature at least one enum member claims is reported here: a clash between two extensions
+ * is already the extension-function loop's own report.
+ */
+internal fun emitEnumExtensionSignatureCollisions(
+  enumName: String,
+  container: String,
+  members: List<SpelledMethod>,
+  extensions: List<SpelledMethod>,
+  logger: KSPLogger,
+) {
+  fun SpelledMethod.signature(): List<String> =
+    listOf(method.name) + method.parameters.map { param ->
+      val stripReferenceNullability: Boolean = param.isReferenceType && param.type.endsWith("?")
+      if (stripReferenceNullability) param.type.dropLast(1) else param.type
+    }
+
+  (members + extensions)
+    .groupBy { spelled -> spelled.signature() }
+    .filterValues { group -> group.size > 1 && group.any { it in members } }
+    .forEach { (signature, group) ->
+      val declarations: String = group.map { it.kotlin }.distinct().joinToString(" and ")
+      ForwardDiagnosticSink.emit(
+        listOf(
+          ForwardDiagnostic(
+            kind = ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION,
+            symbol = group.first { it in members }.node,
+            declaration = "$container.${signature.first()}",
+            reason = "$declarations on enum class $enumName both render " +
+                "`${signature.first()}(${signature.drop(1).joinToString(", ")})` in $container, " +
+                "and C# cannot declare two methods with the same signature (ADR-034); an enum " +
+                "member property renders its bare name there (ADR-006)",
+            hint = "rename one of them",
+            owner = null,
+          ),
+        ),
+        logger,
+      )
+    }
+}
+
 internal fun translateObject(
   obj: KSClassDeclaration,
   libraryName: String,
@@ -3690,6 +3743,10 @@ internal fun translateEnum(
   // other C# type position spells it. Null keeps the bare nested name (the Tier 1 no-namespace
   // shape), matching `ForwardBridgeTypeClassifier.csharpTypeNameFor`'s empty-rootNamespace case.
   context: NugetContext? = null,
+  // ADR-006 amendment: the plans the enum's member properties project from, and the helper tracker
+  // a collection-typed member has to mark (or its `NugetListNative` is never emitted).
+  callableCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanCatalog(emptyList()),
+  tracker: CollectionHelperTracker = CollectionHelperTracker(),
 ): CirEnum {
   val name: String = enum.simpleName.asString()
   val entries: List<CirEnumEntry> = enum.declarations
@@ -3708,37 +3765,16 @@ internal fun translateEnum(
 
   emitEnumEntryNameCollisions(name, enum, logger)
 
-  val properties: List<CirEnumProperty> = enum.getAllProperties()
-    .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { it.simpleName.asString() !in setOf("name", "ordinal", "declaringJavaClass") }
-    .map { prop ->
-      val propName: String = prop.simpleName.asString()
-      val propTypeResolved: KSType = prop.type.resolve().expandAliases()
-      val propType: String = propTypeResolved.declaration.simpleName.asString()
-      val csPropName: String = propName.replaceFirstChar { it.uppercase() }
-
-      // An enum-typed enum member (`enum class Swirl(val patch: Patch)`) crosses as the ordinal
-      // like every other ADR-006 enum position. It fell out of `mapReturnType`'s table as `IntPtr`
-      // before, so the extension handed back a raw Kotlin object pointer no consumer could use.
-      val propEnum: KSClassDeclaration? = (propTypeResolved.declaration as? KSClassDeclaration)
-        ?.takeIf { it.classKind == ClassKind.ENUM_CLASS }
-
-      val nativeReturnType: String = if (propEnum != null) "int" else mapReturnType(propType)
-      val type: String = when {
-        propEnum != null -> csharpEnumTypeName(propEnum, context)
-        propType == "String" -> "string"
-        else -> mapReturnType(propType)
-      }
-
-      CirEnumProperty(
-        name = csPropName,
-        type = type,
-        nativeReturnType = nativeReturnType,
-        nativeName = propName,
-        isEnum = propEnum != null,
-      )
+  // ADR-006 amendment: the enum's own member properties come off their ENUM_MEMBER plans, the
+  // same plans `EnumExports` emits the Kotlin half from, so the two cannot disagree.
+  val receiverName: String = enum.nestedCsName().lowercase().replace(".", "").csharpParameterName()
+  val extensionMembers: List<CirMember> = enum.qualifiedName?.asString()
+    ?.let { qualifiedName -> callableCatalog.propertyPlans.enumMembersOf(qualifiedName) }
+    .orEmpty()
+    .flatMap { plan ->
+      tracker.trackProperty(plan)
+      ForwardCirPropertyProjection.enumMember(plan, libraryName, receiverName)
     }
-    .toList()
 
   return CirEnum(
     name = name,
@@ -3748,7 +3784,7 @@ internal fun translateEnum(
     nativePrefix = enum.nativePrefix(symbols),
     csName = enum.nestedCsName(),
     entries = entries,
-    properties = properties,
+    extensionMembers = extensionMembers,
     doc = enum.forwardKdoc(expects)?.toCirDoc(),
   )
 }

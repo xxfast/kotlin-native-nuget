@@ -158,7 +158,13 @@ internal class ForwardPropertyPlanner(
     // ROADMAP Phase 4: the object singletons, whose own properties had no route at all before --
     // neither planned nor dropped, so `object Jar { val count }` was silent on both halves.
     objects: List<KSClassDeclaration> = emptyList(),
+    // ADR-006 amendment: every exported enum, top-level, nested (ADR-133) or the enum arm of a
+    // sealed interface (ADR-157) alike; its own member properties plan as [ENUM_MEMBER].
+    enums: List<KSClassDeclaration> = emptyList(),
   ): List<ForwardPropertyPlan> = buildList {
+    enums.forEach { enum ->
+      inOwner(enum.forwardDiagnosticOwner()) { addAll(enumMemberProperties(enum)) }
+    }
     classes.forEach { cls ->
       // ADR-013: a companion's properties render as the class's statics, so both walks share the
       // class as their C# owner.
@@ -513,6 +519,40 @@ internal class ForwardPropertyPlanner(
           prop = prop,
           getExport = "${prefix}_get_${toCName(name)}",
           setExport = "${prefix}_set_${toCName(name)}",
+        )
+      }
+      .toList()
+  }
+
+  /**
+   * ADR-006 amendment: an enum's own member properties, planned on the ordinal receiver ADR-132
+   * already lowers (`Mood.entries[receiver]` / `(int)mood`), under the entry point ADR-006 always
+   * used (`{prefix}_get_{name}`, and `_set_{name}` for a `var`). Being on the plan is what gives
+   * the getter its error slot and containment, binds a `var`'s setter, gates the type (an
+   * unplannable one is a named drop through [recordDropped], never a raw `IntPtr`), and carries
+   * the KDoc.
+   *
+   * `name`, `ordinal` and `declaringJavaClass` are `Enum<E>`'s own members, which ADR-006 never
+   * bridged (the entry itself IS the C# enum value); this is the one place that filter lives.
+   */
+  private fun enumMemberProperties(enum: KSClassDeclaration): List<ForwardPropertyPlan> {
+    val owner: String = enum.qualifiedName?.asString() ?: return emptyList()
+    val type: BridgeType = classifier.classify(enum.asStarProjectedType())
+    if (type !is BridgeType.Enum) return emptyList()
+    val prefix: String = enum.nativePrefix(symbols)
+    return enum.getAllProperties()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { prop -> prop.simpleName.asString() !in ENUM_OWN_MEMBERS }
+      .filter { prop -> !prop.isCompilerOwnedMember(enum) }
+      .mapNotNull { prop ->
+        val name: String = prop.simpleName.asString()
+        propertyPlan(
+          symbol = "$owner.$name",
+          position = ForwardPropertyPosition.ENUM_MEMBER,
+          receiver = ForwardPropertyReceiver.Value(type),
+          prop = prop,
+          getExport = "${prefix}_get_$name",
+          setExport = "${prefix}_set_$name",
         )
       }
       .toList()

@@ -81,13 +81,16 @@ class Tier1EnumCamelCasePropertyTest {
         "the C# entry point must not lowercase the Kotlin name: $entry",
       )
     }
-    assertContains(cs, "public static bool IsSecond(this Mood mood)")
-    assertContains(cs, "public static string DisplayName(this Mood mood)")
-    assertContains(cs, "public static bool IsFirst(this Mood mood)")
-    // ADR-006's read-only extension spelling: a body `var` binds getter-only.
-    assertContains(cs, "public static bool IsLoud(this Mood mood)")
-    assertContains(cs, "public static bool IsOwl(this Aviary.Kind aviarykind)")
-    assertContains(cs, "public static bool IsSmall(this Aviary.Kind aviarykind)")
+    // ADR-006 amendment: the plan spells the receiver type fully qualified (the same C# type), and
+    // keeps the bare getter name and the lowercased receiver parameter name.
+    assertContains(cs, "public static bool IsSecond(this global::Interop.Mood mood)")
+    assertContains(cs, "public static string DisplayName(this global::Interop.Mood mood)")
+    assertContains(cs, "public static bool IsFirst(this global::Interop.Mood mood)")
+    assertContains(cs, "public static bool IsLoud(this global::Interop.Mood mood)")
+    // ADR-006 amendment: a body `var` binds its setter now; it was silently dropped before.
+    assertContains(cs, "public static void SetIsLoud(this global::Interop.Mood mood, bool value)")
+    assertContains(cs, "public static bool IsOwl(this global::Interop.Aviary.Kind aviarykind)")
+    assertContains(cs, "public static bool IsSmall(this global::Interop.Aviary.Kind aviarykind)")
   }
 
   @Test
@@ -95,13 +98,17 @@ class Tier1EnumCamelCasePropertyTest {
     val cs: String = result.generatedCSharp
     val lines: List<String> = cs.lines().map { it.trim() }
     for (name in listOf("IsSecond", "IsFirst", "IsLoud", "IsOwl", "IsSmall")) {
-      val extern: Int = lines.indexOf("private static extern bool Native_Get$name(int ordinal);")
+      val extern: Int = lines.indexOfFirst { line ->
+        line.startsWith("private static extern bool Native_") &&
+            line.endsWith("Get$name(int receiver, out IntPtr error);")
+      }
       assertTrue(extern > 0, "no extern for $name in:\n$cs")
       assertEquals("[return: MarshalAs(UnmanagedType.I1)]", lines[extern - 1], "for $name")
     }
     // A non-bool getter gets no bool marshal.
-    val displayName: Int =
-      lines.indexOf("private static extern IntPtr Native_GetDisplayName(int ordinal);")
+    val displayName: Int = lines.indexOf(
+      "private static extern IntPtr Native_MoodGetDisplayName(int receiver, out IntPtr error);",
+    )
     assertTrue(displayName > 0, "no extern for DisplayName in:\n$cs")
     assertFalse(lines[displayName - 1].contains("UnmanagedType.I1"))
   }

@@ -11,6 +11,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirObject
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirSealedClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirStaticClass
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirEnum
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.ordinaryNativeImports
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiDirection as PlanAbiDirection
@@ -203,6 +204,9 @@ internal object ForwardAbiContract {
             declaration.companionMembers.filterIsInstance<CirDllImport>()
 
         is CirValueClass -> declaration.ordinaryNativeImports()
+        // ADR-006 amendment: a top-level enum's member-property imports are projected plan nodes.
+        // A nested enum's render at namespace level (ADR-133) and are read by `csharpLegacy`.
+        is CirEnum -> declaration.extensionMembers.filterIsInstance<CirDllImport>()
         // ADR-078 amendment (2026-09-11): a sealed arm's plan-derived imports are nodes like any
         // ordinary class's, so they are read here rather than scraped by `csharpLegacy`.
         is CirSealedClass -> declaration.ordinaryNativeImports() +

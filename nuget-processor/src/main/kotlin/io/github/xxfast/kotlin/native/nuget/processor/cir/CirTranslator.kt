@@ -5,6 +5,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.sanitizeLibrarySegment
 import io.github.xxfast.kotlin.native.nuget.processor.csharpIdentifier
+import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardGuardName
@@ -26,6 +27,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.enumArmName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPlanProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPropertyProjection
+import io.github.xxfast.kotlin.native.nuget.processor.forward.enumMembersOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
@@ -438,7 +440,10 @@ internal fun translate(
       )
     }
     enums.filter { isOwnedBy(owner, it) }.forEach { enum ->
-      add(translateEnum(enum, context.libraryName, logger, context.symbols, expects, context))
+      add(translateEnum(
+        enum, context.libraryName, logger, context.symbols, expects, context, callableCatalog,
+        tracker,
+      ))
     }
     // ADR-134: a nested `value class` is declared as a nested `readonly record struct`. Its
     // members already export under the whole chain (`nativePrefix()`) and every type position
@@ -502,7 +507,10 @@ internal fun translate(
 
   enums.filter { !it.isNestedDeclaration() }.forEach { enum ->
     val declaration: CirDeclaration = guarded(enum.forwardGuardName(), enum, logger) {
-      translateEnum(enum, context.libraryName, logger, context.symbols, expects, context)
+      translateEnum(
+        enum, context.libraryName, logger, context.symbols, expects, context, callableCatalog,
+        tracker,
+      )
     } ?: return@forEach
     namespaces.addDeclaration(namespaceOf(enum.packageName.asString()), declaration)
   }
@@ -628,6 +636,12 @@ internal fun translate(
   fun KSDeclaration.extensionReceiverKey(): String =
     (this as? KSClassDeclaration)?.nestedCsName() ?: simpleName.asString()
 
+  // ADR-006 amendment: every C# method the `{Receiver}Extensions` partial class gains, per class,
+  // with the Kotlin declaration behind it, so an enum member property and an extension of the
+  // same C# signature are named as ADR-034's collision instead of reaching the consumer as CS0111.
+  val extensionClassMethods: MutableMap<Pair<String, String>, MutableList<SpelledMethod>> =
+    mutableMapOf()
+
   // The function and property loops below MUST key identically, or one package's extension
   // functions and its extension properties on the same receiver land in two different classes.
   val extensionsByReceiver: Map<Pair<String, String>, List<KSFunctionDeclaration>> =
@@ -652,6 +666,13 @@ internal fun translate(
       tracker.trackPlan(planned)
       ForwardCirPlanProjection.extension(planned, context.libraryName)
         .also { emitted ->
+          val receiverText: String = func.extensionReceiver?.resolve()?.declaration?.simpleName
+            ?.asString().orEmpty()
+          extensionClassMethods.getOrPut(key) { mutableListOf() } += emitted
+            .filterIsInstance<CirMethod>()
+            .map { method ->
+              SpelledMethod(method, "`fun $receiverText.${func.simpleName.asString()}()`", func)
+            }
           recordStatic(
             namespace, className, emitted, func, KotlinSpelling("fun", func.simpleName.asString()),
           )
@@ -698,6 +719,16 @@ internal fun translate(
         tracker.trackProperty(plan)
         ForwardCirPropertyProjection.extension(plan, context.libraryName)
           .also { emitted ->
+            val keyword: String = if (prop.isMutable) "var" else "val"
+            val receiverText: String = prop.extensionReceiver?.resolve()?.declaration?.simpleName
+              ?.asString().orEmpty()
+            extensionClassMethods.getOrPut(key) { mutableListOf() } += emitted
+              .filterIsInstance<CirMethod>()
+              .map { method ->
+                SpelledMethod(
+                  method, "`$keyword $receiverText.${prop.simpleName.asString()}`", prop,
+                )
+              }
             recordStatic(namespace, className, emitted, prop, prop.topLevelSpelling())
           }
       } else {
@@ -709,6 +740,34 @@ internal fun translate(
     // empty member list into an existing class is a no-op, but creating one from nothing is the
     // empty-class bug.
     if (members.isNotEmpty()) namespaces.mergeStaticClass(namespace, className, members)
+  }
+
+  // ADR-006 amendment: an enum's own member properties render into the same `{Enum}Extensions`
+  // partial class the extension loops above merge into (the enum carries its half itself, see
+  // `CirEnumRenderer`). A member `val grooming` and an extension `fun Coat.grooming()` are both
+  // `Grooming(this Coat …)` there: named here, both declarations, as ADR-034's collision.
+  enums.forEach { enum ->
+    val qualifiedName: String = enum.qualifiedName?.asString() ?: return@forEach
+    val key: Pair<String, String> =
+      namespaceOf(enum.packageName.asString()) to enum.extensionReceiverKey()
+    val receiverName: String =
+      enum.nestedCsName().lowercase().replace(".", "").csharpParameterName()
+    val memberMethods: List<SpelledMethod> = callableCatalog.propertyPlans
+      .enumMembersOf(qualifiedName)
+      .flatMap { plan ->
+        val keyword: String = if (plan.setter != null) "var" else "val"
+        ForwardCirPropertyProjection.enumMember(plan, context.libraryName, receiverName)
+          .filterIsInstance<CirMethod>()
+          .map { method -> SpelledMethod(method, "`$keyword ${plan.kotlinName}`", enum) }
+      }
+    if (memberMethods.isEmpty()) return@forEach
+    emitEnumExtensionSignatureCollisions(
+      enumName = enum.simpleName.asString(),
+      container = "${key.first}.${key.second.replace(".", "")}Extensions",
+      members = memberMethods,
+      extensions = extensionClassMethods[key].orEmpty(),
+      logger = logger,
+    )
   }
 
   // ADR-160: every per-call callback parameter the plan owns declares its delegate here, off the

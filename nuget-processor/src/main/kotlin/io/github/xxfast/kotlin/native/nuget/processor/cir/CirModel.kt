@@ -299,7 +299,14 @@ data class CirEnum(
   // which cannot itself nest (CS1109) and so stays at namespace level as `OwnerKindExtensions`.
   val csName: String = name,
   val entries: List<CirEnumEntry>,
-  val properties: List<CirEnumProperty> = emptyList(),
+  // ADR-006 amendment: the projected members of the `{Enum}Extensions` class, off the enum's
+  // ENUM_MEMBER property plans (`ForwardCirPropertyProjection.enumMember`): imports, the bare
+  // getters and any `SetX` setters, in plan order.
+  val extensionMembers: List<CirMember> = emptyList(),
+  // ADR-064 amendment (issue #249) for the ENUM_MEMBER position: one paragraph per member property
+  // the plan named a skip, rendered as `<remarks>` on the enum itself (the extension class is
+  // shared with extensions over the enum and has no single owner).
+  val remarks: List<String> = emptyList(),
   // ADR-150: the author's KDoc, as plain text in tag slots. Null when the declaration has none,
   // when it is `@suppress`ed, or when the doc came from a non-KOTLIN origin. `renderDoc` owns the
   // escaping, the same way `renderRemarks` does.
@@ -656,22 +663,6 @@ data class CirEnumEntry(
   val ordinal: Int,
   // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
   val doc: CirDoc? = null,
-)
-
-data class CirEnumProperty(
-  val name: String,
-  val type: String,
-  val nativeReturnType: String,
-  val nativeName: String,
-  /**
-   * True when [type] is itself a C# `enum`, i.e. the Kotlin enum declares a property typed as
-   * another enum (`enum class Swirl(val patch: Patch)`). The wire is the `int` ordinal, exactly as
-   * any other ADR-006 enum position, so the extension body casts the extern's `int` back to [type].
-   * Without this the property fell out of `mapReturnType`'s table as `IntPtr` and the ADR-006 route
-   * handed the caller a raw Kotlin object pointer typed `IntPtr` (fixed alongside ADR-157; no
-   * fixture had an enum-typed enum member before).
-   */
-  val isEnum: Boolean = false,
 )
 
 sealed interface CirMember

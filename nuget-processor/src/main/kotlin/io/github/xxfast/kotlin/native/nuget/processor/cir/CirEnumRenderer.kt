@@ -6,7 +6,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
  * extension methods in a nested class) and is emitted by `renderNamespace`'s post-pass.
  */
 internal fun StringBuilder.renderEnum(enum: CirEnum, nested: Boolean = false) {
-  renderDoc(enum.doc)
+  renderDoc(enum.doc, generated = enum.remarks)
   appendLine("    public enum ${enum.name}")
   appendLine("    {")
 
@@ -17,7 +17,7 @@ internal fun StringBuilder.renderEnum(enum: CirEnum, nested: Boolean = false) {
 
   appendLine("    }")
 
-  if (enum.properties.isNotEmpty() && !nested) {
+  if (enum.extensionMembers.isNotEmpty() && !nested) {
     appendLine()
     renderEnumExtensions(enum)
   }
@@ -34,40 +34,14 @@ internal fun StringBuilder.renderEnum(enum: CirEnum, nested: Boolean = false) {
  * until `Mood.rallyCry()` / `Mood.emoji` did.
  */
 internal fun StringBuilder.renderEnumExtensions(enum: CirEnum) {
-  appendLine("    public static partial class ${enum.csName.replace(".", "")}Extensions")
+  val className: String = "${enum.csName.replace(".", "")}Extensions"
+  appendLine("    public static partial class $className")
   appendLine("    {")
 
-  for (prop in enum.properties) {
-    // The Kotlin property name verbatim (`mood_get_isSleepy`), as `EnumExports` spells the export
-    // and as every other property route does. Lowercasing it here aborted generation for any
-    // camelCase enum property (`Forward ABI missing Kotlin export`).
-    val entryPoint: String = "${enum.nativePrefix}_get_${prop.nativeName}"
-    // ADR-133: the C# parameter name of the extension's `this` receiver, with the enclosing
-    // scope's dots stripped (`ownerkind`, not `owner.kind`, which is not a legal identifier).
-    val receiverParam: String = enum.csName.lowercase().replace(".", "")
-
-    appendLine("        [DllImport(\"${enum.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$entryPoint\")]")
-    // ADR-098: an enum's `Char` property getter is an extern slot like any other, and so is a
-    // `Boolean` one (ADR-069: a 1-byte C `bool`, never the 4-byte Win32 `BOOL`).
-    narrowReturnMarshal(prop.nativeReturnType)?.let { appendLine(it) }
-    appendLine("        private static extern ${prop.nativeReturnType} Native_Get${prop.name}(int ordinal);")
-    appendLine()
-
-    val body: String = if (prop.type == "string") {
-      "Marshal.PtrToStringUTF8(Native_Get${prop.name}((int)$receiverParam))!"
-    } else if (prop.isEnum) {
-      // The wire is the ordinal (ADR-006); the extern is `int` and the public spelling is the enum.
-      "(${prop.type})Native_Get${prop.name}((int)$receiverParam)"
-    } else {
-      "Native_Get${prop.name}((int)$receiverParam)"
-    }
-
-    appendLine(
-      "        public static ${prop.type} ${prop.name}(this ${enum.csName} $receiverParam)",
-    )
-    appendLine("            => $body;")
-    appendLine()
-  }
+  // ADR-006 amendment: projected off the enum's ENUM_MEMBER property plans, so each extern carries
+  // the error slot, each getter throws the mapped Kotlin exception, a `var` binds `SetX`, and the
+  // author's KDoc renders. The member renderer is the one every other projected member uses.
+  enum.extensionMembers.forEach { member -> renderMember(member, className) }
 
   appendLine("    }")
 }

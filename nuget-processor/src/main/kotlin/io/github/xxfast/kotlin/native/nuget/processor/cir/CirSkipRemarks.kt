@@ -232,6 +232,12 @@ private fun CirDeclaration.withSkipRemarks(
     properties = properties.withPropertyRemarks(skips, path + name),
   )
 
+  // ADR-006 amendment: an enum member property the plan refused (a lambda, an unexported type) is
+  // named on the enum, the declaration whose C# surface lost it.
+  is CirEnum -> copy(
+    remarks = remarks + skips.matching(path + name, forInterface = false).map { it.paragraph },
+  )
+
   is CirSealedClass -> copy(
     remarks = remarks + skips.matching(path + name, forInterface = false).map { it.paragraph },
     properties = properties.withPropertyRemarks(skips, path + name),

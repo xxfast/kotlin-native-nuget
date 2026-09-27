@@ -217,3 +217,34 @@ all."
 
 **Scope.** Generator-only (`nuget-processor`), like the 2026-09-22 amendment: no ABI, runtime, or
 plugin-side effect.
+
+## 2026-09-28 amendment: enum member properties move onto the forward property plan
+
+The Bridge mechanism section's Kotlin/C# sample above showed the getter export with no error
+channel; that was accurate at the time but is no longer how the route is generated. An enum
+member property's getter and setter now bind through
+[ADR-172](172-enum-member-properties-on-the-forward-plan.md)'s `ForwardPropertyPosition.ENUM_MEMBER`,
+the same plan every other property position uses, rather than through the hand-written
+`EnumExports.kt`/`CirEnumRenderer.kt` pair this ADR originally described.
+
+Five points from that move affect what this ADR promises a reader:
+
+- The bare getter spelling this ADR's Decision shows (`Description()`, not `GetDescription()`) is
+  kept; so is the receiver parameter name (`mood`, not `receiver`). Neither moved.
+- Every getter export gains an ABI-changing error slot (`errorOut` on Kotlin, `out IntPtr error`
+  on C#): a throwing getter now surfaces as a catchable mapped `KotlinException` instead of
+  aborting the host process. The private extern name changes alongside it
+  (`Native_GetX` → `Native_MoodGetX`); the public getter name does not.
+- An enum `var`, which this ADR never mentioned binding a setter for, now does:
+  `SetX(this Mood mood, value)`, with the same containment as the getter. This is new public
+  surface on every enum that already declares a mutable member property.
+- A keyword or `Error`-named enum now gets a legal receiver parameter name, fixed incidentally by
+  the move: the receiver name goes through the same escape every other parameter name on the plan
+  already uses.
+- A hand patch that added only the error slot to the old route (2 files, versus the plan route's
+  roughly 9) was considered and rejected: it would have fixed the getter abort alone and left the
+  setter drop, the missing type gate, and the missing KDoc unfixed. See ADR-172 for the full
+  account, including the two collision diagnostics (`ERROR_CSHARP_SIGNATURE_COLLISION`,
+  ADR-117's `ERROR_C_ENTRY_POINT_COLLISION`) a same-named member/extension pair now reaches.
+
+**Scope.** Generator-only (`nuget-processor`), like the two amendments above.

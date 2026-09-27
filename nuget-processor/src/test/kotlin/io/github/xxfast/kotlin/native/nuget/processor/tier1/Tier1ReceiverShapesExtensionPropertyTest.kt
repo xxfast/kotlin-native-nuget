@@ -544,7 +544,7 @@ class Tier1ReceiverShapesExtensionPropertyTest {
     )
     // All three members land in that one class: the enum's own property, the extension function,
     // and the extension property.
-    assertContains(cs, "public static string Description(this Mood mood)")
+    assertContains(cs, "public static string Description(this global::Interop.Mood mood)")
     assertContains(cs, "RallyCry(this global::Interop.Mood receiver)")
     assertContains(cs, "GetEmoji(this global::Interop.Mood receiver)")
   }

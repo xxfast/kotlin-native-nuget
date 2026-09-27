@@ -136,7 +136,7 @@ class Tier1OrdinarySurfaceTest {
     assertContains(cs, "Calm = 0")
     assertContains(cs, "Anxious = 1")
     assertContains(cs, "public static partial class MoodExtensions")
-    assertContains(cs, "public static string Label(this Mood mood)")
+    assertContains(cs, "public static string Label(this global::Interop.Mood mood)")
   }
 
   @Test

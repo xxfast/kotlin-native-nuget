@@ -136,6 +136,12 @@ A boxed [`enum class` sealed arm](interfaces-abstract-sealed.md#an-enum-class-ar
 its constructor mints a `StableRef` to a Kotlin enum entry, and reading one back through a holder's
 property mints a second, independent handle, so both must come back to baseline on `Dispose`.
 
+A class-typed [enum member property](enums.md) getter counts here too: every read mints a fresh
+owned wrapper the caller must dispose, the same as any other class-typed property getter.
+`LeakTests/LiveHandleTests.cs` row 1h,
+`EnumMemberClassTypedGetter_UsingDispose_ReturnsToBaseline`, measures repeated reads and disposes
+of one such member returning to baseline.
+
 An [interface method overload](interfaces-abstract-sealed.md#method-overloads-on-an-interface) adds
 no new handle kind either: every numbered dispatch export or bridge slot a call reaches still
 borrows the one handle its route already mints (the returned interface's own handle, or the

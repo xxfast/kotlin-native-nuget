@@ -117,6 +117,58 @@ internal object ForwardCirPropertyProjection {
     return imports + listOfNotNull(getter, setter)
   }
 
+  /**
+   * ADR-006 amendment: an enum's own member property, projected onto the `{Enum}Extensions` class
+   * off the same plan the Kotlin half reads. It differs from [extension] in spelling only: the
+   * getter keeps ADR-006's bare name (`Description()`, not `GetDescription()`) and the receiver
+   * parameter keeps the lowercased enum name ([receiverName], `mood`), both public surface a
+   * named-argument caller binds to. The setter mirrors ADR-132's `SetX(this Mood mood, value)`.
+   */
+  fun enumMember(
+    plan: ForwardPropertyPlan,
+    libraryName: String,
+    receiverName: String,
+  ): List<CirMember> {
+    require(plan.position == ForwardPropertyPosition.ENUM_MEMBER) {
+      "Expected enum member property plan"
+    }
+    val receiver = plan.receiver as ForwardPropertyReceiver.Value
+    val publicReceiver: String = receiver.type.csharpType()
+    val nativeReceiver: String = plan.calls().first().parameters
+      .first { parameter -> parameter.role == ForwardAbiRole.RECEIVER }
+      .wireType.csharpWireType()
+    val receiverArgument: String = receiver.type.inputArgument(receiverName)
+    val imports: List<CirMember> = plan.calls().map { call ->
+      nativeImport(call, libraryName, listOf(CirParameter("receiver", nativeReceiver)), plan)
+    }
+    val getter = CirMethod(
+      doc = plan.doc?.toCirDoc(),
+      name = plan.publicName,
+      returnType = plan.type.csharpType(),
+      nativeReturnType = plan.getter.calls().first().result.csharpWireType(),
+      parameters = listOf(CirParameter(receiverName, publicReceiver)),
+      body = getterBody(plan, receiverArgument),
+      isStatic = true,
+      isExtension = true,
+      hasCustomBody = true,
+    )
+    val setter: CirMethod? = plan.setter?.let {
+      CirMethod(
+        name = "Set${plan.publicName}",
+        returnType = "void",
+        parameters = listOf(
+          CirParameter(receiverName, publicReceiver),
+          CirParameter("value", plan.type.csharpType()),
+        ),
+        body = setterBody(plan, receiverArgument),
+        isStatic = true,
+        isExtension = true,
+        hasCustomBody = true,
+      )
+    }
+    return imports + listOfNotNull(getter, setter)
+  }
+
   private fun property(
     plan: ForwardPropertyPlan,
     receiver: String,

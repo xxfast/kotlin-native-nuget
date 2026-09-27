@@ -36,15 +36,22 @@ class Tier1EnumTypedEnumMemberTest {
     assertTrue(result.compiledClean, "expected an enum-typed enum member to bind; got: ${result.compileErrors}")
 
     val kotlin: String = result.generated
-    assertContains(kotlin, "return swirl.patch.ordinal")
+    // ADR-006 amendment: planned, so the ordinal read sits inside the contained `try`.
+    assertContains(kotlin, "tier1.enumtypedenummember.Swirl.entries[receiver].patch.ordinal")
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "private static extern int Native_GetPatch(int ordinal);")
-    assertContains(cs, "public static global::Interop.Patch Patch(this Swirl swirl)")
-    assertContains(cs, "=> (global::Interop.Patch)Native_GetPatch((int)swirl);")
+    assertContains(
+      cs,
+      "private static extern int Native_SwirlGetPatch(int receiver, out IntPtr error);",
+    )
+    assertContains(
+      cs,
+      "public static global::Interop.Patch Patch(this global::Interop.Swirl swirl)",
+    )
+    assertContains(cs, "Native_SwirlGetPatch((int)swirl, out IntPtr error)")
     // The defect: the return slot used to fall through to IntPtr on both halves.
     assertFalse(
-      cs.contains("IntPtr Patch(this Swirl swirl)"),
+      cs.contains("IntPtr Patch(this"),
       "the enum-typed member must not fall through to the IntPtr default",
     )
   }
