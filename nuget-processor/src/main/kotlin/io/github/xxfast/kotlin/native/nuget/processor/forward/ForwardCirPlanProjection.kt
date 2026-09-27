@@ -97,7 +97,6 @@ internal object ForwardCirPlanProjection {
         parameters = unbox.nativeInCirParameters(unboxCall.parameters),
         visibility = CirVisibility.PRIVATE,
         hasSyncErrorOut = unbox.errorSlot != null,
-        marshalBooleanReturn = unboxWire == "bool",
       ),
       boxParameter = boxParameter.csharpName,
       boxArguments = box.callArgument(boxParameter),
@@ -304,7 +303,6 @@ internal object ForwardCirPlanProjection {
         parameters = plan.nativeInCirParameters(nativeCall.parameters) + plan.nativeOutCirParameters(nativeCall),
         visibility = CirVisibility.PRIVATE,
         hasSyncErrorOut = plan.errorSlot != null,
-        marshalBooleanReturn = result.nativeReturnType == "bool",
       ),
       CirMethod(
         name = plan.publicSignature.csharpName,
@@ -427,7 +425,6 @@ internal object ForwardCirPlanProjection {
       parameters = plan.nativeInCirParameters(nativeCall.parameters) + plan.nativeOutCirParameters(nativeCall),
       visibility = CirVisibility.PRIVATE,
       hasSyncErrorOut = plan.errorSlot != null,
-      marshalBooleanReturn = result.nativeReturnType == "bool",
     )
     val wrapper = CirMethod(
       name = plan.publicSignature.csharpName,

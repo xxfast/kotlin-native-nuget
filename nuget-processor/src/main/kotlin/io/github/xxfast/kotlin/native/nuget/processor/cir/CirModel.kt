@@ -684,7 +684,6 @@ data class CirDllImport(
   val parameters: List<CirParameter>,
   val visibility: CirVisibility = CirVisibility.PUBLIC,
   val hasSyncErrorOut: Boolean = false,
-  val marshalBooleanReturn: Boolean = false,
   /**
    * ADR-111/ADR-116 amendment (2026-09-11): `private new static extern`, for a **nested** sealed
    * arm whose extern name collides with one on its base. The arms are declared inside the base

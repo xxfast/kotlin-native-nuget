@@ -14,7 +14,7 @@ class ForwardAbiLegacyImportTest {
   fun `collects primitive parameters and returns`() {
     val rendered: String = declaration(
       "nuget_list_size",
-      "private static extern int nuget_list_size(IntPtr handle, bool deep, double weight);",
+      "private static extern int nuget_list_size(IntPtr handle, [MarshalAs(UnmanagedType.I1)] bool deep, double weight);",
     )
 
     assertEquals(
@@ -121,7 +121,8 @@ class ForwardAbiLegacyImportTest {
   fun `collects a marshalled boolean out parameter`() {
     val rendered: String = declaration(
       "nuget_flow_try_next",
-      "private static extern bool nuget_flow_try_next(IntPtr handle, " +
+      "[return: MarshalAs(UnmanagedType.I1)]\n" +
+          "        private static extern bool nuget_flow_try_next(IntPtr handle, " +
           "[MarshalAs(UnmanagedType.I1)] out bool valueOut, out IntPtr error);",
     )
 

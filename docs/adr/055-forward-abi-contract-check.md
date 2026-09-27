@@ -214,3 +214,46 @@ successfully and throws `MarshalDirectiveException` only when the call executes,
 the failure mode this amendment now catches at generation time instead. The existing
 `removeSuffix("?")` normalization is unchanged for the one admitted case, so `string?` still
 classifies as `STRING` on a parameter and `POINTER` on a return.
+
+## 2026-09-27 amendment: `bool` crosses as one byte
+
+A C# `bool` on a `DllImport` marshals by default as the 4-byte Win32 `BOOL`, while every Kotlin
+export speaks a 1-byte C `bool` (`kotlin.Boolean`, `BooleanVar`). ADR-069 fixed this with
+`UnmanagedType.I1` on the routes it touched, through a `CirDllImport.marshalBooleanReturn` flag each
+projection had to remember to set and hand-written attribute lines on the raw-text routes. Most did
+not: a scan of the generated test-library `Interop.cs` found 104 of 204 `bool`-returning imports
+(every data-class and sealed-arm `Native_Equals`, the generic `Identity_bool_native` /
+`Put_bool_native` family, `NugetMarshal.Native_unwrap_bool`, several `*HasValue` probes) and about
+130 by-value `bool` parameters (`Native_Groom(..., bool gentle, ...)`, every `xHasValue` fan-out
+flag, `nuget_wrap_bool`) without it. Only `out bool` was consistently attributed.
+
+The decision is to keep `bool` and attribute it everywhere, matching the existing majority, rather
+than switch to `byte`: every position (return, by-value parameter, `out bool`) carries
+`[MarshalAs(UnmanagedType.I1)]` / `[return: MarshalAs(UnmanagedType.I1)]`.
+
+- **Derived from the native type, not flagged.** ADR-098's `narrowParameterMarshal` /
+  `narrowReturnMarshal` already attribute a `char` slot by its native-type text at every renderer that
+  mints an extern from a model (`renderDllImport`, the legacy method and property imports, the enum
+  property import, the sealed-arm legacy property import, the callback-method import). They now
+  attribute `bool`, `out bool` and `ref bool` the same way, and `marshalBooleanReturn` is deleted: a
+  flag a projection can forget is the bug. A `nativeType` that already carries its own leading
+  attribute (the ADR-069 `out bool` spelling) is left alone, so nothing is attributed twice.
+- **Raw-text sites attributed by hand:** the sealed-arm `Native_Equals`,
+  `NugetMarshal.Native_unwrap_bool` and `nuget_wrap_bool`.
+- **The contract refuses a regression.** `csharpLegacy` already walks every `EntryPoint` line of the
+  rendered `Interop.cs`; it now also keeps the attribute lines above each extern and, **before** the
+  ordinary-name filter (so plan-derived and legacy imports alike are covered), collects every `bool`
+  return without `[return: MarshalAs(UnmanagedType.I1)]` and every `bool` / `out bool` / `ref bool`
+  parameter without its own `[MarshalAs(UnmanagedType.I1)]` prefix. All violations are reported in
+  one `require` (a generator bug, `ERROR_INTERNAL_GENERATOR_FAILURE` per ADR-117), one
+  `entryPoint: slot` line each:
+  `Forward ABI bool without [MarshalAs(UnmanagedType.I1)] on a C# import (ADR-055): ...`.
+
+**Verified:** after the renderer fix the regenerated test-library `Interop.cs` has no unattributed
+`bool` slot, and the processor passes the new check on it. **Verified:** `IntegrationTests` cross
+`false` and `true` through a by-value `bool` parameter and return on the ordinary plan route
+(`NullableBooleanSample.FlipImplanted`), the generic route (`Helpers.Identity<bool>`), and an `out
+bool` (ADR-069's `CatChecklist.IsGroomed`). **Inferred:** those assertions passed on win-x64 before
+the fix as well (the backlog item's own observation), so on this ABI they pin behaviour rather than
+catch the defect; the generation-time check is the guard, and the other ABIs (`osx-arm64`,
+`linux-x64`) are where the 4-byte read was never verified harmless.

@@ -201,7 +201,6 @@ internal object ForwardCirPropertyProjection {
       parameters = receiver + values,
       visibility = CirVisibility.PRIVATE,
       hasSyncErrorOut = true,
-      marshalBooleanReturn = call.result == ForwardAbiWireType.BOOLEAN,
     )
   }
 

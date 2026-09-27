@@ -175,6 +175,26 @@ public class NullableBooleanTests
         Assert.Null(NullableBooleanSample.ChipImplanted(2));
     }
 
+    // ---- ADR-055 amendment: a non-null bool by value, parameter and return, crosses as one byte ----
+
+    [Fact]
+    public void NullableBooleanSample_FlipImplanted_FalseParameterReturnsTrue()
+    {
+        Assert.True(NullableBooleanSample.FlipImplanted(false));
+    }
+
+    [Fact]
+    public void NullableBooleanSample_FlipImplanted_TrueParameterReturnsFalse()
+    {
+        Assert.False(NullableBooleanSample.FlipImplanted(true));
+    }
+
+    [Fact]
+    public void Helpers_IdentityBool_FalseRoundTripsThroughGenericExtern()
+    {
+        Assert.False(Helpers.Identity<bool>(false));
+    }
+
     // ---- Cell 8: top-level function, nullable Boolean input ----
 
     [Fact]

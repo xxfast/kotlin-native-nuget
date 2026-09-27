@@ -37,6 +37,7 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("        private static extern double Native_unwrap_double(IntPtr handle);")
   appendLine()
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_unwrap_bool\")]")
+  appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
   appendLine("        private static extern bool Native_unwrap_bool(IntPtr handle);")
   appendLine()
   // ADR-098 part B: a bare `char` return marshals as one ANSI byte, which loses every non-ASCII
@@ -78,7 +79,7 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("        private static extern IntPtr nuget_wrap_double(double value);")
   appendLine()
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_bool\")]")
-  appendLine("        private static extern IntPtr nuget_wrap_bool(bool value);")
+  appendLine("        private static extern IntPtr nuget_wrap_bool([MarshalAs(UnmanagedType.I1)] bool value);")
   appendLine()
   // ADR-098 part A: the write half of the six narrow primitives `FromHandle<T>` has always read.
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_byte\")]")

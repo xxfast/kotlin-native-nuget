@@ -146,7 +146,10 @@ class Tier1DerivedNamesTest {
     // The public surface keeps the author's names exactly.
     assertCsharp("public static string Measure(int? limit, bool limitHasValue)")
     assertCsharp("public string Fill(int? limit, bool limitHasValue)")
-    assertCsharp("bool limitHasValue_, int limit, bool limitHasValue, out IntPtr error);")
+    assertCsharp(
+      "[MarshalAs(UnmanagedType.I1)] bool limitHasValue_, int limit, " +
+        "[MarshalAs(UnmanagedType.I1)] bool limitHasValue, out IntPtr error);"
+    )
   }
 
   @Test
@@ -193,7 +196,10 @@ class Tier1DerivedNamesTest {
       assertTrue(export.contains("(if (limitHasValue_) limit else null, limitHasValue)"), export)
     }
     assertCsharp("public Task<string> FillAsync(int? limit, bool limitHasValue, CancellationToken")
-    assertCsharp("IntPtr scopeHandle, bool limitHasValue_, int limit, bool limitHasValue, IntPtr callback")
+    assertCsharp(
+      "IntPtr scopeHandle, [MarshalAs(UnmanagedType.I1)] bool limitHasValue_, int limit, " +
+        "[MarshalAs(UnmanagedType.I1)] bool limitHasValue, IntPtr callback"
+    )
   }
 
   @Test

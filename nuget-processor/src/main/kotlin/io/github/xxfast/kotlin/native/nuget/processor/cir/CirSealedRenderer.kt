@@ -191,6 +191,7 @@ private fun sealedSubclassBlock(
     if (prop.usesLegacyNativeImport()) {
       require(!prop.isFlow) { "A Flow property takes the flow native-import route above" }
       appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_get_${prop.nativeName}\")]")
+      narrowReturnMarshal(prop.nativeReturnType)?.let { appendLine("    $it") }
       appendLine("            private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle, out IntPtr error);")
       appendLine()
     } else {
@@ -337,6 +338,7 @@ internal fun StringBuilder.renderSealedSubclassDataMethods(
   subclassName: String
 ) {
   appendLine("            [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_equals\")]")
+  appendLine("            [return: MarshalAs(UnmanagedType.I1)]")
   appendLine("            private static extern bool Native_Equals(IntPtr handle, IntPtr other);")
   appendLine()
   appendLine("            [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_hashcode\")]")
