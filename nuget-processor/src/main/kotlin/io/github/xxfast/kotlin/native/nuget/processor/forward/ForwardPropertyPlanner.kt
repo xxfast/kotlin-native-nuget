@@ -239,9 +239,11 @@ internal class ForwardPropertyPlanner(
    * exports still use.
    *
    * `superClass = sealed` since the 2026-09-11 amendment: the generated C# base now carries the
-   * base's own members ([sealedBaseProperties]), so an arm is declared-only like an ordinary
-   * subclass. Before that it was `null`, which flattened every implemented base property onto
-   * every arm; keeping it would be CS0108 against the base's new member.
+   * base's own members ([sealedBaseProperties]), so an arm binds only its own surface like an
+   * ordinary subclass (declared, plus what it inherits from an interface the sealed type does not
+   * carry, which the arm now lists: ADR-101 amendment 2026-09-27). Before that it was `null`,
+   * which flattened every implemented base property onto every arm; keeping it would be CS0108
+   * against the base's new member.
    */
   private fun sealedSubclassProperties(
     sealed: KSClassDeclaration,
@@ -266,12 +268,18 @@ internal class ForwardPropertyPlanner(
           prop = prop,
           getExport = "${prefix}_get_${prop.simpleName.asString()}",
           setExport = "${prefix}_set_${prop.simpleName.asString()}",
-          // ROADMAP line 28 (measured 2026-09-26): the ADR-075 read-only-base guard needs the
+          // ADR-168 (measured 2026-09-26): the ADR-075 read-only-base guard needs the
           // sealed base too. Without it an arm's `override var count` over the base's
           // `open val count` rendered `public override int Count { get; set; }`, CS0546 against
-          // the base's get-only `Count`. No `implementer`: an arm's C# base list names only the
-          // sealed base, never its interfaces, so an explicit `ITally.Count` would be CS0540.
+          // the base's get-only `Count`.
           superClass = sealed,
+          // ADR-168 on an arm (2026-09-27): the arm now lists its own interfaces, so the setter
+          // the guard refuses in public is reachable through an explicit `ITally.Count`. Only an
+          // interface the arm itself lists: one the sealed type already is (the sealed interface
+          // parent included) is not in the arm's base list, and an explicit member naming it
+          // would be CS0540.
+          implementer = subclass,
+          carriedInterfaces = sealed.forwardSupertypeNames(),
         )
       }
       .toList()
@@ -343,7 +351,7 @@ internal class ForwardPropertyPlanner(
   }
 
   /**
-   * ROADMAP line 28, case D: the exported interfaces whose C# declaration carries a settable [prop]
+   * ADR-168: the exported interfaces whose C# declaration carries a settable [prop]
    * (`ITally.Count { get; set; }`) and that [this] class implements through its own base list.
    * When the read-only-base guard refuses the class's public setter (CS0546), these are the
    * interfaces the setter is still reachable through, as an explicit `ITally.Count` member.
@@ -355,12 +363,16 @@ internal class ForwardPropertyPlanner(
    */
   private fun KSClassDeclaration.explicitSetterInterfaces(
     prop: KSPropertyDeclaration,
+    carried: Set<String> = emptySet(),
   ): List<String> {
     val exported: Set<String> = classifier.exportedObjectHandles
     val name: String = prop.simpleName.asString()
+    // [carried]: the interfaces a sealed arm's base already is, which the arm's base list leaves
+    // out (ADR-101 amendment 2026-09-27). Empty for an ordinary class.
     fun KSClassDeclaration.isExportedInterface(): Boolean =
       classKind == com.google.devtools.ksp.symbol.ClassKind.INTERFACE &&
-          qualifiedName?.asString() in exported
+          qualifiedName?.asString() in exported &&
+          qualifiedName?.asString() !in carried
     val direct: List<KSClassDeclaration> = superTypes
       .mapNotNull { it.resolve().declaration as? KSClassDeclaration }
       .filter { it.isExportedInterface() }
@@ -433,7 +445,7 @@ internal class ForwardPropertyPlanner(
           if (plan == null && (inherited || restored)) {
             while (dropped.size > droppedBefore) dropped.removeAt(dropped.lastIndex)
           }
-          // ROADMAP line 28: the same rule for a refused SETTER. `IBase.X` is where C# declares
+          // ADR-168: the same rule for a refused SETTER. `IBase.X` is where C# declares
           // the member (and where the remark lands), so `Derived.x` naming it again is noise.
           if (inherited) {
             while (droppedSetters.size > droppedSettersBefore) {
@@ -679,9 +691,11 @@ internal class ForwardPropertyPlanner(
     superClass: KSClassDeclaration? = null,
     // Interface super-interfaces: a covariant override plans at the kept super's type.
     typeOverride: KSType? = null,
-    // ROADMAP line 28, case D: the exported class this property is rendered on, when an explicit
+    // ADR-168: the exported class this property is rendered on, when an explicit
     // interface implementation may carry a setter the public property cannot. Class route only.
     implementer: KSClassDeclaration? = null,
+    // ADR-168 on an arm: the interfaces [implementer]'s C# base already carries, never explicit.
+    carriedInterfaces: Set<String> = emptySet(),
   ): ForwardPropertyPlan? {
     // ADR-115: the author's own signal, ahead of any type question -- nothing about the property
     // is unsupported. `@set:Marker` on a `var` skips the whole property rather than exporting it
@@ -718,15 +732,15 @@ internal class ForwardPropertyPlanner(
     } else {
       ForwardPropertyGetter.Direct(nativeCall(getExport, type.wireType(), receiver, emptyList()))
     }
-    // ROADMAP line 28, case D: only the class route passes an [implementer], and only a `var` the
-    // read-only-base guard is about to refuse needs the interface walk at all.
+    // ADR-168: only the class and sealed-arm routes pass an [implementer], and only
+    // a `var` the read-only-base guard is about to refuse needs the interface walk at all.
     val explicitInterfaces: List<String> =
       if (
         implementer != null &&
         prop.isMutable &&
         prop.readOnlyOverrideeOwner(superClass) != null
       ) {
-        implementer.explicitSetterInterfaces(prop)
+        implementer.explicitSetterInterfaces(prop, carriedInterfaces)
       } else {
         emptyList()
       }
@@ -774,7 +788,7 @@ internal class ForwardPropertyPlanner(
       val cs0546: String = "it overrides a property with no public setter on the exported base " +
           "class ${readOnlyBase.simpleName.asString()}; C# cannot add a set accessor to an " +
           "override (CS0546)"
-      // ROADMAP line 28, case D: the same `override var` also implements an exported interface
+      // ADR-168: the same `override var` also implements an exported interface
       // `var`. The setter is still built (and exported), but rendered only as an explicit
       // `IFoo.X` member beside the get-only override. Every OTHER refusal below still applies:
       // decided first, so a `Throwable?` gets its own one diagnostic and no explicit member.

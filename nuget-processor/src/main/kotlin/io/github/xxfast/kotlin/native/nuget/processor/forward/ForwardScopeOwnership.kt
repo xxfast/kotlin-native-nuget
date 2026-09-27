@@ -39,16 +39,18 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsForwardFlow
  * `paddedwindowseat_settle_async`, invisible to `ForwardAbiContract` because it filters Kotlin
  * exports down to the C# import set.
  *
- * [declaredOnly] is the sealed-arm rule (ADR-118): an arm's own suspend surface is declared-only,
- * since the generated sealed base still declares no suspend member for it to inherit (ADR-101
- * re-homes a base's ordinary members onto the sealed base, not its suspend ones). [superClass] is
- * the *kept* base (`forwardSuperClass`), so a member inherited from a base with a generated C#
- * class of its own belongs to that base.
+ * [isArm] is the sealed-arm rule (ADR-118, widened by the ADR-101 amendment of 2026-09-27): an
+ * arm binds its declared suspend members plus those inherited from an interface the sealed type
+ * does not carry ([isForwardArmMember]). The sealed base's own suspend members stay off the arm,
+ * and the kept-base re-projection skip does not apply: the generated sealed base declares no
+ * suspend member, so an arm's `override suspend fun` is the only carrier there is. [superClass]
+ * is the *kept* base (`forwardSuperClass`), so a member inherited from a base with a generated C#
+ * class of its own belongs to that base; unused for an arm.
  */
 internal fun KSClassDeclaration.forwardSuspendRouteMethods(
   classifier: ForwardBridgeTypeClassifier,
   superClass: KSClassDeclaration?,
-  declaredOnly: Boolean = false,
+  isArm: Boolean = false,
 ): List<KSFunctionDeclaration> {
   // ADR-147: the suspend route spells `asStableRef<Crate>()`, which does not compile for a generic
   // owner. Refused there on both halves, so a generic class projects no scope-using member either.
@@ -57,13 +59,13 @@ internal fun KSClassDeclaration.forwardSuspendRouteMethods(
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { it.modifiers.contains(Modifier.SUSPEND) }
     .filter { method -> !method.isCompilerOwnedMember(this) }
-    .filter { !declaredOnly || it.parentDeclaration == this }
+    .filter { method -> !isArm || isForwardArmMember(method) }
     // ADR-114 / ADR-119: a parameter or return this route cannot marshal drops the member on both
     // halves, named once by `warnRefusedLegacyRouteMembers`.
     .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
     .filter { method -> classifier.legacyRefusedReturn(method) == null }
-    .filter { method -> declaredOnly || method.isForwardMemberOf(this, superClass) }
-    .filter { method -> declaredOnly || !method.reProjectsKeptBaseMember(this, superClass) }
+    .filter { method -> isArm || method.isForwardMemberOf(this, superClass) }
+    .filter { method -> isArm || !method.reProjectsKeptBaseMember(this, superClass) }
     .toList()
 }
 
@@ -110,11 +112,11 @@ internal fun KSClassDeclaration.forwardDeclaresScopeMember(
   classifier: ForwardBridgeTypeClassifier,
   exportedTypes: Set<String>,
 ): Boolean {
-  // ADR-118 / ADR-124: an arm's member surface is declared-only, on all three halves.
-  val declaredOnly: Boolean = isSealedSubclass()
-  val keptBase: KSClassDeclaration? = if (declaredOnly) null else forwardSuperClass(exportedTypes)
-  if (forwardSuspendRouteMethods(classifier, keptBase, declaredOnly).isNotEmpty()) return true
-  if (declaredOnly) {
+  // ADR-118 / ADR-124: an arm's member surface is the arm route's own, on all three halves.
+  val isArm: Boolean = isSealedSubclass()
+  val keptBase: KSClassDeclaration? = if (isArm) null else forwardSuperClass(exportedTypes)
+  if (forwardSuspendRouteMethods(classifier, keptBase, isArm).isNotEmpty()) return true
+  if (isArm) {
     // The arm route's own two selectors, so an arm answers exactly what `CirSealedRenderer` emits.
     return forwardArmFlowMethods(classifier).isNotEmpty() ||
         forwardArmFlowProperties(classifier).isNotEmpty()
@@ -130,7 +132,7 @@ internal fun KSClassDeclaration.forwardDeclaresScopeMember(
  *
  * Root-most rather than nearest, because a scope per level would hide the ancestor's field (CS0108)
  * and drain twice. A sealed arm can be an open base of an ordinary class (ADR-009 amendment), so
- * the walk answers for arm owners too, through [forwardDeclaresScopeMember]'s declared-only arm.
+ * the walk answers for arm owners too, through [forwardDeclaresScopeMember]'s arm branch.
  */
 internal fun KSClassDeclaration.forwardScopeOwner(
   classifier: ForwardBridgeTypeClassifier,

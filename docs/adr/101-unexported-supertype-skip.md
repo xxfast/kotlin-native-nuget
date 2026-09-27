@@ -874,3 +874,28 @@ Fixture: `test-library/.../test/snuggery/SnuggerySample.kt` (`Swaddle : Unexport
 UnexportedBedding.kt` supplying the unexported base and interface. Tests: `IntegrationTests/
 SealedSupertypeTests.cs` and `Tier1SealedSupertypeTest.kt`. No new handle-minting route, so no
 `LiveHandleTests` row: an arm still mints its handle through the existing sealed-arm constructor route.
+
+## 2026-09-27 amendment: an interface default inherited by an open owner renders `virtual`
+
+The 2026-09-10 amendment above gave a *declared* `open`/`override` member its `virtual` rendering. An
+interface default an owner merely **inherits**, without declaring or overriding it, fell through both
+that rule and the 2026-09-11 method amendment: neither reads `Modifier.OPEN`, and an interface default
+carries neither `OPEN` nor `OVERRIDE`. `open class ScratchingPost : Scratcher` (an interface default
+the class never declares) rendered its inherited `scratch()`/`claws` with no modifier at all, so
+`class CarpetPost : ScratchingPost() { override fun scratch() ... }` failed with CS0506 the moment a
+subclass overrode what the owner only inherited. The same gap reaches an `open` sealed arm inheriting
+an interface default, now that [ADR-125](125-sealed-interface-sibling-arms.md)'s 2026-09-27 amendment
+gives an arm a reachable interface default to inherit in the first place.
+
+`isOpenForOverride()` gains an owner-aware sibling, `isOpenForOverrideOn(owner)`
+(`ForwardClassMembership.kt`): an interface default counts as overridable when the owner rendering it
+is itself `open` or `abstract`, the same test that already decides whether the owner's own declared
+`open` members are virtual. A **final** owner's inherited default stays non-virtual, since Kotlin
+agrees it cannot be overridden either. `CirClassTranslator`'s property projection and
+`ForwardCallablePlanner`'s method entries, on both the ordinary-class and the sealed-arm route, read
+the owner-aware test instead of the bare modifier set.
+
+Fixture: `test-library/.../test/windowsill/ScratchingPostSample.kt` (`ScratchingPost`/`CarpetPost` for
+the ordinary open class, `Lounger.Hammock`/`SunHammock` for the open sealed arm). See
+[interfaces-abstract-sealed.md](../topics/interfaces-abstract-sealed.md#defaulted-interface-members-on-implementing-classes)
+for the shipped shape.

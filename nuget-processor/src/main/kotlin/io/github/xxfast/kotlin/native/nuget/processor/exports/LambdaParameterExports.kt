@@ -13,6 +13,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_TO_CSHARP_PARAM
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedCallbackMember
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardArmMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.optInMarker
@@ -239,8 +240,8 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
  * the three halves that must agree on the member set (the Kotlin export loop, the C# translator
  * and the import gate), shaped after `forwardArmFlowMethods`.
  *
- * Declared-only (`parentDeclaration == this`), which is ADR-116's rule for the arm's method
- * surface: a base method the arm does not override belongs to no arm.
+ * The arm's own surface ([forwardArmCallbackCandidates]), which is ADR-116's rule for the arm's
+ * method surface: a base method the arm does not override belongs to no arm.
  *
  * An add/remove **pair** is excluded here, because ADR-116's 2026-09-13 amendment re-keys the
  * stored-callback route (ADR-037) onto the arm as well: the pair binds as one
@@ -271,20 +272,21 @@ internal fun KSClassDeclaration.forwardArmLambdaMethods(
 }
 
 /**
- * The declared-only member surface every arm-keyed callback route selects from: the per-call
+ * The arm's own member surface every arm-keyed callback route selects from: the per-call
  * lambda-parameter route ([forwardArmLambdaMethods]), the stored-callback pair route
  * ([forwardArmStoredCallbackPairs]) and the interface-bridge pair route
  * ([forwardArmInterfaceBridgePairs]). Structural only — the routability filters below are applied
  * per route, *after* pair detection, so a refused half cannot silently turn its partner into a
  * per-call callback.
  *
- * Declared-only (`parentDeclaration == this`), which is ADR-116's rule for the arm's method
- * surface: a base method the arm does not override belongs to no arm.
+ * [isForwardArmMember], which is ADR-116's rule for the arm's method surface as widened by the
+ * ADR-101 amendment (2026-09-27): declared, plus inherited from an interface the sealed type does
+ * not carry. A base method the arm does not override still belongs to no arm.
  */
 internal fun KSClassDeclaration.forwardArmCallbackCandidates(): List<KSFunctionDeclaration> =
   getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { it.parentDeclaration == this }
+    .filter { isForwardArmMember(it) }
     .filter { !it.modifiers.contains(Modifier.SUSPEND) }
     .filter { !it.returnsForwardFlow() }
     // A data class's generated `copy` can carry a lambda-typed parameter; the ordinary route

@@ -1236,7 +1236,8 @@ internal class ForwardCallablePlanner(
       // ADR-101 (2026-09-11): a *declared* `open fun` is virtual too, not just the
       // `override && !final` arm, or a subclass's `override` is CS0506 in C#. Same predicate the
       // property route uses (`CirClassTranslator`), so both halves of a class agree.
-      val isVirtual: Boolean = !isOverride && method.modifiers.isOpenForOverride()
+      // ADR-101 amendment (2026-09-27): an inherited interface default on an open class too.
+      val isVirtual: Boolean = !isOverride && method.isOpenForOverrideOn(cls)
       val structuralReason: ForwardPlanSkipReason? = when {
         method.modifiers.contains(Modifier.ABSTRACT) -> ForwardPlanSkipReason.ABSTRACT
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
@@ -1411,10 +1412,13 @@ internal class ForwardCallablePlanner(
    *   `Job.Running.cancel` exports as `job_running_cancel` beside `job_running_get_progress`.
    *   `ForwardCirPlanProjection.classMethod` requires the export to begin with it, so a mismatch
    *   fails the build rather than drifting.
-   * - **Declared-only**: `parentDeclaration == subclass`, the first disjunct of
-   *   `isForwardPlannableMemberOf`. A base `open fun` the arm does not override has no C# carrier
-   *   (`CirSealedClass` declares no methods), so it is not flattened onto the arm; an `override`
-   *   the arm declares itself is a plain method here.
+   * - **Membership**: `isForwardPlannableMemberOf(subclass, superClass = sealed)`, the ordinary
+   *   class's rule with the sealed type as the base (ADR-101 amendment 2026-09-27). Declared
+   *   members bind, and so does an implemented member inherited from an interface the sealed type
+   *   does not itself carry: the arm lists that interface (or, unexported, re-homes it), so it
+   *   must carry the member or the declaration is CS0535. A sealed base's own member, and `Any`'s,
+   *   are carried by the sealed base and fall out. `superClass` is never null here: null admits
+   *   every inherited member with a body, `Any`'s included.
    * - `isOverride` is false except for an override of the sealed base's kept exported base class
    *   (ADR-101 amendment 2026-09-27); a sealed base's own member is matched later, by signature,
    *   in `CirClassTranslator.againstSealedBase`. `isVirtual` is true only for a declared `open`
@@ -1441,10 +1445,11 @@ internal class ForwardCallablePlanner(
     val methods: List<KSFunctionDeclaration> = subclass.getAllFunctions()
       .filter { method -> method.getVisibility() == Visibility.PUBLIC }
       .filter { method -> !method.isCompilerOwnedMember(subclass) }
-      // Declared-only (ADR-116): `Any`'s members and a base `open fun` the arm does not override
-      // both fall out here, so the sealed route's own `_equals`/`_hashcode`/`_tostring` exports
-      // and the deferred base-type item stay untouched.
-      .filter { method -> method.parentDeclaration == subclass }
+      // ADR-116, widened by the ADR-101 amendment (2026-09-27): `Any`'s members and a base
+      // `open fun` the arm does not override still fall out, so the sealed route's own
+      // `_equals`/`_hashcode`/`_tostring` exports stay untouched; an interface member the sealed
+      // type does not carry now binds on the arm.
+      .filter { method -> method.isForwardPlannableMemberOf(subclass, superClass = sealed) }
       .toList()
     val interfaceBridgeMethods: Set<KSFunctionDeclaration> = findInterfaceBridgePairs(methods)
       .flatMap { pair -> listOf(pair.first, pair.second) }
@@ -1466,7 +1471,7 @@ internal class ForwardCallablePlanner(
       // is a C# `override` of it, reached through the sealed base's base list (CS0114 otherwise).
       // With no kept base this is false, so every other arm keeps its shipped modifiers.
       val isOverride: Boolean = method.overridesKeptBaseOf(sealed, keptBase)
-      val isVirtual: Boolean = !isOverride && isOpenArm && method.modifiers.isOpenForOverride()
+      val isVirtual: Boolean = !isOverride && isOpenArm && method.isOpenForOverrideOn(subclass)
       val structuralReason: ForwardPlanSkipReason? = when {
         method.modifiers.contains(Modifier.ABSTRACT) -> ForwardPlanSkipReason.ABSTRACT
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND

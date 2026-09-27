@@ -113,6 +113,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedTy
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDeclaredTypeNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardArmMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedSubclass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.sealedInterfaceIneligibility
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilityClosure
@@ -892,8 +893,9 @@ internal fun warnRefusedLegacyRouteMembers(
         val ownerDeclaration: ForwardDiagnosticOwner = subclass.forwardDiagnosticOwner()
         subclass.getAllFunctions()
           .filter { method -> method.getVisibility() == Visibility.PUBLIC }
-          // Declared-only, as everywhere else on the sealed route.
-          .filter { method -> method.parentDeclaration == subclass }
+          // The arm's own surface, as everywhere else on the sealed route (ADR-101 amendment
+          // 2026-09-27: declared, plus what it inherits from an interface the sealed type lacks).
+          .filter { method -> subclass.isForwardArmMember(method) }
           // ADR-124: the Flow half of the same route joins the suspend half here. Both are routed
           // on an arm now, so both halves drop a refused member silently and this walk is the only
           // thing left that names it.
@@ -908,7 +910,7 @@ internal fun warnRefusedLegacyRouteMembers(
         // named by the planner, so nothing else would tell the author the member is gone.
         subclass.getAllFunctions()
           .filter { method -> method.getVisibility() == Visibility.PUBLIC }
-          .filter { method -> method.parentDeclaration == subclass }
+          .filter { method -> subclass.isForwardArmMember(method) }
           .forEach { method ->
             val refused: LegacyRefusedInterfaceBridgePair =
               method.refusedLegacyLambdaShape() ?: return@forEach
@@ -920,7 +922,7 @@ internal fun warnRefusedLegacyRouteMembers(
           }
         val armMembers: List<KSFunctionDeclaration> = subclass.getAllFunctions()
           .filter { it.getVisibility() == Visibility.PUBLIC }
-          .filter { method -> method.parentDeclaration == subclass }
+          .filter { method -> subclass.isForwardArmMember(method) }
           .toList()
         nameRefusedSubscriptionPairs(armMembers, owner, ownerDeclaration)
         nameRefusedStoredPairs(armMembers, owner, ownerDeclaration)
@@ -947,13 +949,14 @@ internal fun warnRefusedLegacyRouteMembers(
 }
 
 /**
- * ADR-118: whether a sealed subclass **declares** a `suspend fun` of its own. The declared-only
- * gate is the sealed route's rule everywhere (the planner's `sealedSubclassEntries`, the C#
- * translator and the Kotlin export builder), so an inherited `open suspend fun` belongs to no arm.
+ * ADR-118: whether a sealed subclass carries a `suspend fun` on its own surface. The arm rule is
+ * the sealed route's everywhere (the planner's `sealedSubclassEntries`, the C# translator and the
+ * Kotlin export builder): declared, plus inherited from an interface the sealed type does not
+ * carry (ADR-101 amendment 2026-09-27), so the sealed base's `open suspend fun` belongs to no arm.
  */
 private fun KSClassDeclaration.declaresSuspendMember(): Boolean = getAllFunctions().any { method ->
   method.getVisibility() == Visibility.PUBLIC &&
-      method.parentDeclaration == this &&
+      isForwardArmMember(method) &&
       method.modifiers.contains(Modifier.SUSPEND)
 }
 
@@ -2560,7 +2563,7 @@ class NugetProcessor(
     }
 
     // ADR-118: a sealed arm is an owner of the legacy suspend route too, under the export prefix
-    // its getters and `_dispose` already use. Declared-only, the same gate the planner's
+    // its getters and `_dispose` already use. The arm's own surface, the same rule the planner's
     // `sealedSubclassEntries` and `translateSealedClass` apply, so all three halves agree on which
     // members exist.
     sealedClasses.forEach { sealed ->
@@ -2575,7 +2578,7 @@ class NugetProcessor(
             callableCatalog = callableCatalog,
             symbols = context.symbols,
             prefix = "${sealedPrefix}_${subclass.simpleName.asString().lowercase()}",
-            declaredOnly = true,
+            isArm = true,
           )
         }
       }
@@ -2584,7 +2587,8 @@ class NugetProcessor(
     // ADR-124: the sealed arm is an owner of the legacy Flow/StateFlow route too, under the same
     // export prefix its getters and `_dispose` use. Properties are all-properties (ADR-111's
     // `superClass = null`: the generated C# base is abstract and carries no members, so a
-    // base-declared flow property has to bind on every arm), methods declared-only (ADR-116/118).
+    // base-declared flow property has to bind on every arm), methods the arm's own surface
+    // (ADR-116/118).
     // Both rules live in `FlowExports`, so this loop, the two gates below and `translateSealedClass`
     // cannot drift about which members exist.
     sealedClasses.forEach { sealed ->

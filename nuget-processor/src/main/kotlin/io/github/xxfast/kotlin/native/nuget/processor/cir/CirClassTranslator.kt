@@ -88,6 +88,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSupertypeNa
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedSubclass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverride
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverrideOn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesBaseClassMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesKeptBaseOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionRead
@@ -572,8 +573,33 @@ private fun forwardBaseList(
   // ADR-101 amendment (2026-09-11): a kept base no longer empties the interface list. `class
   // Ledge : Shelf(), Groomable` renders `: Shelf, IGroomable`, and `ForwardClassMembership` binds
   // `Groomable`'s members on `Ledge` to match, or the declaration is CS0535.
-  val baseSupertypes: Set<String> = superClassDeclaration?.forwardSupertypeNames().orEmpty()
-  val interfaces: List<String> = cls.superTypes
+  val interfaces: List<String> = forwardInterfaceList(
+    cls,
+    name,
+    carried = superClassDeclaration?.forwardSupertypeNames().orEmpty(),
+    exportedTypes,
+    classifier,
+    logger,
+  )
+  return superClass to interfaces
+}
+
+/**
+ * The interface half of [forwardBaseList]: the exported interfaces [cls] declares directly, minus
+ * every one its C# base already carries ([carried], qualified names), spelled for C#. Shared with
+ * a sealed arm (ADR-101 amendment 2026-09-27), whose base is the sealed type itself, so an arm
+ * lists its own interfaces by exactly the ordinary class's rule.
+ */
+private fun forwardInterfaceList(
+  cls: KSClassDeclaration,
+  name: String,
+  carried: Set<String>,
+  exportedTypes: Set<String>,
+  classifier: ForwardBridgeTypeClassifier,
+  logger: KSPLogger,
+): List<String> {
+  val baseSupertypes: Set<String> = carried
+  return cls.superTypes
     .map { it.resolve() }
     .filter { type ->
       (type.declaration as? KSClassDeclaration)?.classKind == ClassKind.INTERFACE
@@ -601,7 +627,6 @@ private fun forwardBaseList(
         }
     }
     .toList()
-  return superClass to interfaces
 }
 
 /**
@@ -887,7 +912,8 @@ internal fun translateClass(
           isOverride = isOverride,
           // ADR-101 amendment (2026-09-10): everything Kotlin left overridable and C# is not
           // already spelling `override`. A declared `open val`/`open var` reaches `virtual` here.
-          isVirtual = !isOverride && prop.modifiers.isOpenForOverride(),
+          // ADR-101 amendment (2026-09-27): an inherited interface default on an open class too.
+          isVirtual = !isOverride && prop.isOpenForOverrideOn(cls),
           // ADR-075 amendment (2026-09-10): this class's own unimplemented `abstract val`/`var`.
           // `isAbstract()` (not `Modifier.ABSTRACT`) is the same predicate
           // `isForwardPlannableMemberOf` uses. The abstract *method* walk keys on the same
@@ -2233,6 +2259,20 @@ internal fun translateSealedClass(
       // `public class` in the renderer and `virtual` on its own open members below.
       val isOpenArm: Boolean = subclass.modifiers.contains(Modifier.OPEN)
 
+      // ADR-101 amendment (2026-09-27): the arm lists its own exported interfaces after the sealed
+      // base, by the ordinary class's rule, so `arm is IFoo` holds. Everything the sealed type
+      // already is (the sealed interface itself included, which has no `I` form in C#) stays on
+      // the base; an unexported one is named and dropped, and its members re-home onto the arm
+      // (`isForwardPlannableMemberOf(subclass, superClass = sealed)` in both planners).
+      val armInterfaces: List<String> = forwardInterfaceList(
+        subclass,
+        "$name.$subName",
+        carried = cls.forwardSupertypeNames(),
+        exportedTypes,
+        classifier,
+        logger,
+      )
+
       val subQualifiedName: String? = subclass.qualifiedName?.asString()
       val properties: List<CirProperty> = subclass.getAllProperties()
         .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -2251,7 +2291,12 @@ internal fun translateSealedClass(
               // ADR-009 amendment (2026-09-11): gated on the arm being open. An `open val` on a
               // final arm is effectively final in Kotlin (nothing can extend it), and `virtual`
               // inside a `public sealed class` is CS0549.
-              isVirtual = isOpenArm && prop.modifiers.isOpenForOverride(),
+              isVirtual = isOpenArm && prop.isOpenForOverrideOn(subclass),
+              // ADR-168 on an arm (2026-09-27): an `override var` over the sealed base's `open val`
+              // is get-only in public (CS0546), and the interface `var` it also implements takes
+              // its setter as an explicit `IFoo.X` member, which the arm's base list now allows.
+              explicitSetterInterfaces =
+                subclass.explicitSetterInterfaceSpellings(planned, classifier),
             )
             // ADR-101 amendment (2026-09-27): an override of the kept exported base's own member
             // overrides it in C# too, through the sealed base's base list (CS0114 otherwise).
@@ -2343,25 +2388,14 @@ internal fun translateSealedClass(
         // override something the base's own plan declined, and then there is nothing to override.
         projected.againstSealedBase(baseMethods)
       }
-      // ADR-118: the arm's declared `suspend` members ride the legacy suspend route under the
-      // arm's own export prefix, projected by the same `suspendMembers` an ordinary class calls,
-      // so the arm's externs and bodies are an ordinary class's.
-      val armSuspendMethods: List<KSFunctionDeclaration> = subclass.getAllFunctions()
-        .filter { it.getVisibility() == Visibility.PUBLIC }
-        // Declared-only, the same `parentDeclaration == subclass` gate the plan methods above and
-        // the planner's `sealedSubclassEntries` use: a base `open suspend fun` no arm overrides
-        // belongs to no arm.
-        .filter { it.parentDeclaration == subclass }
-        .filter { it.modifiers.contains(Modifier.SUSPEND) }
-        // Issue #230: the same synthetic-member filter the arm's flow selector applies. No
-        // synthesized member is `suspend` today; the two selectors agreeing is the point.
-        .filter { method -> !method.isCompilerOwnedMember(subclass) }
-        // ADR-114: the refusal `translateClass` applies upstream of its own projection. Both
-        // halves must agree, or a C# import arrives with no Kotlin export behind it.
-        .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
-        // ADR-119: the return-side refusal, same rule.
-        .filter { method -> classifier.legacyRefusedReturn(method) == null }
-        .toList()
+      // ADR-118: the arm's `suspend` members ride the legacy suspend route under the arm's own
+      // export prefix, projected by the same `suspendMembers` an ordinary class calls, so the
+      // arm's externs and bodies are an ordinary class's. The selector is the one the Kotlin
+      // export builder and its gate read (ADR-159), so the two halves cannot disagree: the arm's
+      // own surface (ADR-101 amendment 2026-09-27), the ADR-114/119 refusals, the synthetic-member
+      // filter. A base `open suspend fun` no arm overrides still belongs to no arm.
+      val armSuspendMethods: List<KSFunctionDeclaration> =
+        subclass.forwardSuspendRouteMethods(classifier, superClass = null, isArm = true)
       val asyncMembers: List<CirMember> = suspendMembers(
         suspendMethods = armSuspendMethods,
         prefix = subPrefix,
@@ -2502,6 +2536,7 @@ internal fun translateSealedClass(
         isDataClass = isDataClass,
         isNested = isNested,
         isOpen = isOpenArm,
+        interfaces = armInterfaces,
         // ADR-134: the arm is an owner in its own right (`Purr.On.Trace`).
         nestedDeclarations = nestedOf(subclass),
       )

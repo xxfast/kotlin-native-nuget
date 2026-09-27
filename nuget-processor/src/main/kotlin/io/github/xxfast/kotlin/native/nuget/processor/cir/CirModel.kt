@@ -371,18 +371,20 @@ data class CirSealedSubclass(
    */
   val remarks: List<String> = emptyList(),
   /**
-   * ADR-116: the arm's own declared member functions, projected from the ADR-062 callable plan the
-   * way an ordinary [CirClass]'s methods are. Empty for an arm that declares none. A `suspend`
-   * member rides [asyncMembers] (ADR-118), a `Flow`-returning one [flowMembers] (ADR-124), and a
-   * per-call lambda or an add/remove pair [callbackMembers] (ADR-116 amendments); a generic member
-   * or a `suspend` lambda parameter has no arm route at all and is named by a
+   * ADR-116: the arm's own member functions, projected from the ADR-062 callable plan the way an
+   * ordinary [CirClass]'s methods are: declared ones, plus those inherited from an interface the
+   * sealed type does not carry (ADR-101 amendment 2026-09-27). Empty for an arm with none. A
+   * `suspend` member rides [asyncMembers] (ADR-118), a `Flow`-returning one [flowMembers]
+   * (ADR-124), and a per-call lambda or an add/remove pair [callbackMembers] (ADR-116 amendments);
+   * a generic member or a `suspend` lambda parameter has no arm route at all and is named by a
    * `SKIPPED_UNSUPPORTED_COMBINATION` diagnostic instead.
    */
   val methods: List<CirMethod> = emptyList(),
   /**
-   * ADR-118: the arm's own declared `suspend` members, projected by the same `suspendMembers`
-   * function an ordinary class's `companionMembers` carry -- a [CirDllImport] and an async
-   * [CirMethod] per member, which is why they cannot ride [methods].
+   * ADR-118: the arm's own `suspend` members (on the same membership rule as [methods]),
+   * projected by the same `suspendMembers` function an ordinary class's `companionMembers` carry
+   * -- a [CirDllImport] and an async [CirMethod] per member, which is why they cannot ride
+   * [methods].
    */
   val asyncMembers: List<CirMember> = emptyList(),
   /**
@@ -394,7 +396,7 @@ data class CirSealedSubclass(
    */
   val flowMembers: List<CirMember> = emptyList(),
   /**
-   * ADR-116 amendment (2026-09-11): the arm's own declared **per-call lambda-parameter** methods
+   * ADR-116 amendment (2026-09-11): the arm's own **per-call lambda-parameter** methods
    * (ADR-036), projected by the same `translateCallbackMethod` an ordinary class's are. A
    * [CirDllImport] plus a `CirCallbackMethod` per member, which is why they cannot ride [methods]
    * either. Deliberately not folded into [hasSuspendMethods]: the callback route runs
@@ -438,6 +440,14 @@ data class CirSealedSubclass(
    * subclass and CS0549 on every `virtual` member the arm needs. A final arm is unchanged.
    */
   val isOpen: Boolean = false,
+  /**
+   * ADR-101 amendment (2026-09-27): the exported interfaces the arm lists after its sealed base,
+   * spelled for C#, so `arm is IFoo` holds. Built by the ordinary class's interface rule: one the
+   * sealed base already carries (itself, for a sealed interface) is left to the base, and an
+   * unexported one is dropped with `SKIPPED_UNEXPORTED_SUPERTYPE` while its members re-home onto
+   * the arm. Empty for an ADR-157 enum-arm box.
+   */
+  val interfaces: List<String> = emptyList(),
   /**
    * ADR-134: a type declared inside the *arm* in Kotlin (`Purr.On.Trace`), rendered inside the
    * arm's own block -- a different function from the base's, which is why it needs its own slot.

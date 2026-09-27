@@ -128,8 +128,12 @@ private fun sealedSubclassBlock(
   // ADR-148: the arm's own `<remarks>`, the twin of `WARNING_NO_PUBLIC_CONSTRUCTOR`, rendered at
   // the arm's declaration depth exactly as `renderClass` renders an ordinary class's.
   renderDoc(subclass.doc, "        ", generated = subclass.remarks)
+  // ADR-101 amendment (2026-09-27): the arm's own exported interfaces, in Kotlin order, between
+  // the sealed base and the runtime interface.
+  val interfaces: String = subclass.interfaces.joinToString("") { iface -> ", $iface" }
   appendLine(
-    "        public ${sealedModifier}class ${subclass.name} : ${sealed.name}$asyncDisposable"
+    "        public ${sealedModifier}class ${subclass.name} : " +
+        "${sealed.name}$interfaces$asyncDisposable"
   )
   appendLine("        {")
   if (subclass.hasSuspendMethods) {
@@ -365,6 +369,30 @@ internal fun StringBuilder.renderSealedSubclassDataMethods(
  * which the legacy route never had (it always passed `setter = null`).
  */
 private fun StringBuilder.renderSealedSubclassProperty(prop: CirProperty) {
+  // ADR-168 on an arm (2026-09-27): `CirClassRenderer.renderProperty`'s explicit branch, one
+  // nesting level deeper. The public property renders get-only (CS0546 against the sealed base's
+  // get-only slot), and each interface the arm lists takes the setter explicitly.
+  if (prop.explicitSetterInterfaces.isNotEmpty()) {
+    renderSealedSubclassProperty(prop.copy(setter = null, explicitSetterInterfaces = emptyList()))
+    val setter: String = checkNotNull(prop.setter) {
+      "Property ${prop.name} has explicit interface setters but no setter body"
+    }
+    prop.explicitSetterInterfaces.forEach { iface ->
+      appendLine()
+      appendLine("            ${prop.type} $iface.${prop.name}")
+      appendLine("            {")
+      appendLine("                get => ${prop.name};")
+      if (setter.contains('\n')) {
+        appendLine("                set")
+        appendLine("                {${setter.indentNestedBody()}")
+        appendLine("                }")
+      } else {
+        appendLine("                set => $setter;")
+      }
+      appendLine("            }")
+    }
+    return
+  }
   val isMultiLineGetter: Boolean = prop.getter.contains('\n')
   val isMultiLineSetter: Boolean = prop.setter?.contains('\n') == true
   val setter: String? = prop.setter

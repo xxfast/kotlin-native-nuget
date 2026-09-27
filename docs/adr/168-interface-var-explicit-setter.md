@@ -145,5 +145,42 @@ Fixture: `test-library/.../test/perchvar/TrainingClicker.kt` (`Tally`, `Pompom`,
 `TrainingClicker` for case D, `Abacus` as the ordinary-implementer control). Tests:
 `Tier1InterfaceVarPropertyTest.kt`, `IntegrationTests/InterfaceVarPropertyTests.cs`,
 `IntegrationTests/AbstractInterfacePropertyTests.cs` (the `aviary`/`Feathered` control),
-`LeakTests/LiveHandleTests.cs` Row 6p. See [ROADMAP.md](../../ROADMAP.md) for the sealed-arm
-base-list gap this ADR's own fixture surfaced but does not close.
+`LeakTests/LiveHandleTests.cs` Row 6p. See the 2026-09-27 amendment below for the sealed-arm
+base-list gap this ADR's own fixture surfaced, since closed.
+
+## 2026-09-27 amendment: sealed arms list their own interfaces
+
+The Decision section's sealed-route paragraph above ("The sealed route gets no explicit member ...
+rendering a get-only override with the ordinary named skip") is superseded now that a sealed arm
+lists its own interfaces in its C# base list ([ADR-125](125-sealed-interface-sibling-arms.md)'s
+2026-09-27 amendment). Once `ITally` is in an arm's base list, the previous plain get-only override
+is no longer merely a foregone setter: it is `CS0535` (`ITally.Count.set` unimplemented), so folding
+this ADR's explicit-member shape onto the arm is a precondition of the base-list widening, not
+additional scope.
+
+`sealedSubclassProperties` now passes `implementer = subclass` (the CS0540 guard that used to skip
+it is moot once the arm's base list actually names the interface), the arm property projection
+carries `explicitSetterInterfaces`, and `renderSealedSubclassProperty` gained the same
+explicit-member branch `CirClassRenderer`'s does. Shipped shape, from the `Sunroom.Beam` fixture (an
+arm whose `override var naps` widens both `Sunroom`'s read-only `open val naps` and `ISunseeker`'s
+`var naps`):
+
+```csharp
+public sealed class Beam : Sunroom, ISunseeker
+{
+    public override int Naps { get { /* ... */ } } // stays get-only: CS0546 forbids a setter here
+
+    int ISunseeker.Naps
+    {
+        get => Naps;
+        set { /* ... */ } // the same native setter export a public setter would have used
+    }
+}
+```
+
+An arm with no read-only base in the way (`Nook.Box`) needs none of this: its own public setter
+satisfies `ISunseeker` directly, the ordinary-class case unchanged. Fixture:
+`test-library/.../test/windowsill/SunroomSample.kt`. Tests:
+`IntegrationTests/SealedArmInterfaceTests.cs`, `Tier1SealedArmInterfaceTest.kt`, and the flipped
+`tier1.ivarseal` cell in `Tier1InterfaceVarPropertyTest.kt`. See
+[interfaces-abstract-sealed.md](../topics/interfaces-abstract-sealed.md#sealed-arm-own-interfaces).
