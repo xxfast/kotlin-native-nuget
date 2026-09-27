@@ -5,6 +5,12 @@ import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSVisitor
 import com.google.devtools.ksp.symbol.Location
 import com.google.devtools.ksp.symbol.Origin
+import com.squareup.kotlinpoet.AnnotationSpec
+import com.squareup.kotlinpoet.ClassName
+import com.squareup.kotlinpoet.FileSpec
+import com.squareup.kotlinpoet.FunSpec
+import com.squareup.kotlinpoet.INT
+import com.squareup.kotlinpoet.STRING
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirConstructor
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
@@ -341,6 +347,148 @@ class ForwardAbiContractTest {
     assertTrue(error.message!!.contains("count"))
     assertTrue(error.message!!.contains("long"))
     assertTrue(error.message!!.contains("int"))
+  }
+
+  /**
+   * ADR-055 amendment: a `Nullable<T>` on a `DllImport` compiles, then throws
+   * `MarshalDirectiveException` at call time, and stripping its `?` made it compare equal to the
+   * plain scalar export. Only `string?` may carry `?` on a DllImport.
+   */
+  @Test
+  fun `refuses a nullable value type on a DllImport parameter`() {
+    val error: IllegalArgumentException = assertFailsWith {
+      ForwardAbiContract.csharp(
+        nullableImportFile(parameters = listOf(CirParameter("value", "int?"))),
+      )
+    }
+
+    assertNullableRefusal(error, "static_twice", "int?")
+  }
+
+  @Test
+  fun `refuses a nullable value type on a DllImport return`() {
+    val error: IllegalArgumentException = assertFailsWith {
+      ForwardAbiContract.csharp(nullableImportFile(returnType = "bool?"))
+    }
+
+    assertNullableRefusal(error, "static_twice", "bool?")
+  }
+
+  @Test
+  fun `refuses a nullable value type behind an out prefix`() {
+    val error: IllegalArgumentException = assertFailsWith {
+      ForwardAbiContract.csharp(
+        nullableImportFile(parameters = listOf(CirParameter("valueOut", "out int?"))),
+      )
+    }
+
+    assertNullableRefusal(error, "static_twice", "out int?")
+  }
+
+  @Test
+  fun `refuses a nullable string behind an out prefix`() {
+    val error: IllegalArgumentException = assertFailsWith {
+      ForwardAbiContract.csharp(
+        nullableImportFile(parameters = listOf(CirParameter("valueOut", "out string?"))),
+      )
+    }
+
+    assertNullableRefusal(error, "static_twice", "out string?")
+  }
+
+  @Test
+  fun `refuses a nullable IntPtr on a DllImport parameter`() {
+    val error: IllegalArgumentException = assertFailsWith {
+      ForwardAbiContract.csharp(
+        nullableImportFile(parameters = listOf(CirParameter("handle", "IntPtr?"))),
+      )
+    }
+
+    assertNullableRefusal(error, "static_twice", "IntPtr?")
+  }
+
+  @Test
+  fun `admits a nullable string on a DllImport parameter and return`() {
+    val signatures: List<ForwardAbiSignature> = ForwardAbiContract.csharp(
+      nullableImportFile(
+        returnType = "string?",
+        parameters = listOf(CirParameter("value", "string?")),
+      ),
+    )
+
+    assertEquals("static_twice(in string) -> pointer", signatures.canonicalText())
+  }
+
+  @Test
+  fun `refuses a nullable Kotlin scalar on a CName export`() {
+    val export: FunSpec = FunSpec.builder("static_twice")
+      .addAnnotation(
+        AnnotationSpec.builder(ClassName("kotlin.native", "CName"))
+          .addMember("%S", "static_twice")
+          .build(),
+      )
+      .addParameter("value", INT.copy(nullable = true))
+      .returns(INT)
+      .build()
+    val file: FileSpec = FileSpec.builder("sample", "CNameExports").addFunction(export).build()
+
+    val error: IllegalArgumentException = assertFailsWith {
+      ForwardAbiContract.kotlin(file, setOf("static_twice"))
+    }
+
+    assertNullableRefusal(error, "static_twice", "kotlin.Int?")
+  }
+
+  @Test
+  fun `admits a nullable Kotlin String and pointer on a CName export`() {
+    val export: FunSpec = FunSpec.builder("static_twice")
+      .addAnnotation(
+        AnnotationSpec.builder(ClassName("kotlin.native", "CName"))
+          .addMember("%S", "static_twice")
+          .build(),
+      )
+      .addParameter("value", STRING.copy(nullable = true))
+      .returns(ClassName("kotlinx.cinterop", "COpaquePointer").copy(nullable = true))
+      .build()
+    val file: FileSpec = FileSpec.builder("sample", "CNameExports").addFunction(export).build()
+
+    assertEquals(
+      "static_twice(in string) -> pointer",
+      ForwardAbiContract.kotlin(file, setOf("static_twice")).canonicalText(),
+    )
+  }
+
+  private fun nullableImportFile(
+    returnType: String = "int",
+    parameters: List<CirParameter> = emptyList(),
+  ): CirFile = CirFile(
+    namespaces = listOf(
+      CirNamespace(
+        name = "Sample",
+        declarations = listOf(
+          CirStaticClass(
+            name = "Functions",
+            members = listOf(
+              CirDllImport(
+                libraryName = "sample",
+                entryPoint = "static_twice",
+                returnType = returnType,
+                name = "Native_Twice",
+                parameters = parameters,
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  private fun assertNullableRefusal(error: Throwable, entryPoint: String, spelling: String) {
+    val message: String = error.message!!
+    assertTrue(message.contains(entryPoint), message)
+    assertTrue(message.contains(spelling), message)
+    assertTrue(message.contains("ADR-055"), message)
+    assertTrue(message.contains("MarshalDirectiveException"), message)
   }
 
   /**

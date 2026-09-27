@@ -56,6 +56,55 @@ class ForwardAbiLegacyImportTest {
   }
 
   @Test
+  fun `admits a nullable string parameter`() {
+    val rendered: String = declaration(
+      "nuget_map_put",
+      "private static extern void nuget_map_put(IntPtr handle, string? key);",
+    )
+
+    assertEquals(
+      "nuget_map_put(in pointer, in string) -> void",
+      ForwardAbiContract.csharpLegacy(rendered, emptySet()).canonicalText(),
+    )
+  }
+
+  /**
+   * ADR-055 amendment: the text collector refuses a `Nullable<T>` the same way the node one does.
+   */
+  @Test
+  fun `refuses a nullable value type return`() {
+    val rendered: String = declaration(
+      "nuget_x",
+      "private static extern int? nuget_x(IntPtr handle);",
+    )
+
+    val error: IllegalArgumentException = assertFailsWith {
+      ForwardAbiContract.csharpLegacy(rendered, emptySet())
+    }
+
+    assertTrue(error.message!!.contains("nuget_x"))
+    assertTrue(error.message!!.contains("int?"))
+    assertTrue(error.message!!.contains("MarshalDirectiveException"))
+  }
+
+  @Test
+  fun `refuses a nullable value type behind a marshalled out prefix`() {
+    val rendered: String = declaration(
+      "nuget_flow_try_next",
+      "private static extern bool nuget_flow_try_next(IntPtr handle, " +
+          "[MarshalAs(UnmanagedType.I1)] out bool? valueOut, out IntPtr error);",
+    )
+
+    val error: IllegalArgumentException = assertFailsWith {
+      ForwardAbiContract.csharpLegacy(rendered, emptySet())
+    }
+
+    assertTrue(error.message!!.contains("nuget_flow_try_next"))
+    assertTrue(error.message!!.contains("out bool?"))
+    assertTrue(error.message!!.contains("ADR-055"))
+  }
+
+  @Test
   fun `collects the error out slot`() {
     val rendered: String = declaration(
       "nuget_suspend_func1_invoke",

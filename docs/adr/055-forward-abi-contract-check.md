@@ -185,3 +185,32 @@ reliably infer native wire types.
   exports on supported targets.
 - A normalized model can faithfully cover callback/function-pointer and string-marshalling shapes
   without false positives or false negatives.
+
+## 2026-09-27 amendment: the contract refuses `Nullable<T>` on a DllImport
+
+Both normalizers (`csharpType`/`kotlinType`, and the ADR-078 legacy text collector) strip a
+trailing `?` before mapping a spelling to a `ForwardAbiType`, so `int?` on a C# `DllImport`
+parameter and `Int` on the matching Kotlin export both normalized to `INT` and compared equal.
+Textually a `Color?` (a non-blittable `Nullable<T>`) and a `Cat?` (a reference annotation the
+normalizer already treats as `POINTER`) look identical, so the fix cannot distinguish "value type"
+from "reference type" spellings, as the backlog item this amendment closes originally proposed. It
+instead admits a whitelist: `requireMarshalable` (C# side) and `requireKotlinScalar` (Kotlin side)
+run before the existing `?`-stripping and refuse any `?` spelling other than a by-value or return
+`string?`, on a parameter, an `out`-prefixed parameter, or a return type. Both checks are `require`
+generator-bug failures (surfacing as `ERROR_INTERNAL_GENERATOR_FAILURE`, ADR-117), not consumer
+diagnostics, since no user-authored Kotlin reaches this code path:
+
+- `Forward ABI Nullable<T> on C# import for $entryPoint: "$spelling" is not P/Invoke-marshalable;
+  only a by-value or return `string?` may carry `?` on a DllImport (ADR-055), any other `?`
+  spelling compiles and then throws MarshalDirectiveException at call time`
+- `Forward ABI nullable scalar on Kotlin export for $exportName: "$spelling" has no C# DllImport
+  spelling but a Nullable<T>, which compiles and then throws MarshalDirectiveException at call
+  time (ADR-055)`
+
+**Verified (2910-extern fixture scan):** no route in the repository emits a `DllImport` spelling
+that would trip this guard today; `string?` is the only `?` any route emits. **Verified (spike
+against .NET 10):** a `DllImport` parameter or return actually declared `Nullable<T>` compiles
+successfully and throws `MarshalDirectiveException` only when the call executes, which is exactly
+the failure mode this amendment now catches at generation time instead. The existing
+`removeSuffix("?")` normalization is unchanged for the one admitted case, so `string?` still
+classifies as `STRING` on a parameter and `POINTER` on a return.
