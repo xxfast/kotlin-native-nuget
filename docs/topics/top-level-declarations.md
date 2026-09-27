@@ -163,7 +163,7 @@ Synthesized overloads are numbered after every declared overload, using the same
 
 A top-level `expect fun`'s defaults are read from the `expect` declaration, not the platform
 `actual` body that fills it in (Kotlin forbids an `actual` from restating a default); see
-[expect/actual declarations](expect-actual.md#function-default-parameters-on-a-top-level-expect-function).
+[expect/actual declarations](expect-actual.md#function-default-parameters-on-an-expect-function-or-member).
 
 See also [Objects and companions](objects-and-companions.md), [Extensions](extensions.md), and
 [Classes and objects](classes-and-objects.md) for the other three top-level export routes and

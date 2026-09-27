@@ -372,6 +372,11 @@ shadow. Fixture: `test-library/.../test/shadowed/ShadowedOverloadSample.kt`. Tes
 No new `LiveHandleTests.cs` row: none of the three changes mints a handle route that did not already
 exist.
 
+**Cross-reference (2026-09-27).** The `expect`/`actual` reading above was top-level only; ADR-074's
+2026-09-27 amendment extends it to extensions and to members of an `actual` class, sealed base and
+arm, interface, object and companion, on the plan routes and these legacy routes alike, through
+one shared flag reader.
+
 ## Consequences
 
 - `new Config(mode: Mode.Always)` and `original.Copy(mode: Mode.Always)` compile and Kotlin

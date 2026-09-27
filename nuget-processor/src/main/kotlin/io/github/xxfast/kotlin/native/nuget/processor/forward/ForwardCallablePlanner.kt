@@ -727,7 +727,9 @@ internal class ForwardCallablePlanner(
   private val symbols: ForwardSymbolTable,
   /**
    * ADR-091: the ADR-074 expect index. Only source of parameter defaults for an `expect`/`actual`
-   * pair, whose `actual` (the export root) always reports `hasDefault = false`.
+   * pair, whose `actual` (the export root) always reports `hasDefault = false`: constructors,
+   * top-level functions and extensions, and (ADR-074 amendment, 2026-09-27) members of an
+   * `actual` class, interface, object or companion.
    */
   private val expects: ExpectIndex = ExpectIndex(),
 ) {
@@ -833,7 +835,7 @@ internal class ForwardCallablePlanner(
       classes, properties, extensionProperties, sealedClasses, objects,
     )
     return ForwardCallablePlanCatalog(
-      entries.map { entry -> entry.withLegacyDefaults(functions) },
+      entries.map { entry -> entry.withLegacyDefaults() },
       propertyPlans, planner.droppedPropertySetters, planner.droppedProperties,
       planner.droppedExtensionReceivers,
     )
@@ -841,22 +843,20 @@ internal class ForwardCallablePlanner(
 
   /**
    * ADR-164 on the legacy routes: a `suspend` or `Flow`-returning member never gets a plan, but it
-   * is numbered here, and here is the one place both flag readers live (the member's override
-   * chain; the top-level ADR-074 expect index, the only way an `actual suspend fun` reports the
-   * default its `expect` declares). So the flags ride on the skip entry and both halves read them
-   * back through [ForwardCallablePlanCatalog.legacyDefaultFlags].
+   * is numbered here, and here is the one place the flag reader lives (the member's override
+   * chain plus the ADR-074 expect index, the only way an `actual suspend fun`, top-level or a
+   * member of an `actual class`, reports the default its `expect` declares). So the flags ride on
+   * the skip entry and both halves read them back through
+   * [ForwardCallablePlanCatalog.legacyDefaultFlags].
    */
-  private fun ForwardCallableCatalogEntry.withLegacyDefaults(
-    functions: List<KSFunctionDeclaration>,
-  ): ForwardCallableCatalogEntry {
+  private fun ForwardCallableCatalogEntry.withLegacyDefaults(): ForwardCallableCatalogEntry {
     if (this !is ForwardCallableCatalogEntry.Skipped) return this
     if (reason != ForwardPlanSkipReason.SUSPEND && reason != ForwardPlanSkipReason.FLOW_PROTOCOL) {
       return this
     }
     val function: KSFunctionDeclaration = node as? KSFunctionDeclaration ?: return this
-    val flags: List<Boolean> =
-      if (functions.any { it === function }) topLevelDefaultFlags(function)
-      else memberDefaultFlags(function)
+    // A top-level function has no overridee, so this is exactly [expectDefaultFlags] for it.
+    val flags: List<Boolean> = memberDefaultFlags(function)
     return copy(
       defaultFlags = flags,
       cappedDefaults = classifier.legacyCappedDefaults(function.parameters, flags),
@@ -1223,8 +1223,9 @@ internal class ForwardCallablePlanner(
           node = method,
           // ADR-164: an interface member widens like any other. ADR-096 excluded interfaces to
           // avoid synthesizing overloads every implementer would owe; one widened signature is
-          // what `memberDefaultFlags` already gives every implementer through the root.
-          defaults = declaredDefaults(method.parameters, method.parameters.map { it.hasDefault }),
+          // what `memberDefaultFlags` already gives every implementer through the root. Read
+          // through it here too, so an `actual interface` member widens from its `expect`.
+          defaults = declaredDefaults(method.parameters, memberDefaultFlags(method)),
           doc = method.forwardKdoc(expects).forParameters(method.parameters),
         )
       }
@@ -1781,33 +1782,37 @@ internal class ForwardCallablePlanner(
    * subclass has to synthesize for itself, and nothing pins the raw bit as API.
    *
    * The chain is walked to its **root**, not to the nearest `findOverridee()`, so a two-deep chain
-   * still answers if an intermediate override ever did lose the bit. Unrelated to the genuine
-   * erasure on `expect`/`actual`, which [defaultFlags] and [topLevelDefaultFlags] do depend on.
+   * still answers if an intermediate override ever did lose the bit.
+   *
+   * The `expect`/`actual` erasure, by contrast, is genuine (Kotlin forbids an `actual` from
+   * restating a default, and the exported `actual` reports `hasDefault = false`), so the bit is
+   * also read off the `expect` of the method and of its root via [expectDefaultFlags]: the root's
+   * is the only way an arm declared on the `actual` side of an `expect sealed class` reaches the
+   * default its base's `expect` member declares.
    */
   private fun memberDefaultFlags(method: KSFunctionDeclaration): List<Boolean> {
     val root: KSFunctionDeclaration? = generateSequence(
       method.findOverridee() as? KSFunctionDeclaration,
     ) { overridee -> overridee.findOverridee() as? KSFunctionDeclaration }.lastOrNull()
-    return method.parameters.mapIndexed { index, parameter ->
-      parameter.hasDefault || root?.parameters?.getOrNull(index)?.hasDefault == true
-    }
+    val own: List<Boolean> = expectDefaultFlags(method)
+    val inherited: List<Boolean> = root?.let(::expectDefaultFlags).orEmpty()
+    return own.mapIndexed { index, flag -> flag || inherited.getOrNull(index) == true }
   }
 
   /**
-   * ADR-096: per-parameter "has a default" for a **top-level** function, positionally.
+   * ADR-096 / ADR-074 amendment (2026-09-27): per-parameter "has a default", positionally, for a
+   * top-level function or a member alike: the declaration's own bit, or the bit on its `expect`.
    *
-   * The one function route that consults the ADR-074 expect index, because Kotlin forbids an
-   * `actual` from restating a default so every parameter of the exported root reports
-   * `hasDefault = false`. Overloaded `expect fun`s share one qualified name, so [ExpectIndex]
-   * resolves the pairing by signature and answers `null` when it is ambiguous, which degrades to
-   * "no defaults" rather than attributing one namesake's defaults to another. No other route
-   * consults it in v1; class/object/companion/extension read the exported declaration's own bit
-   * only.
+   * Kotlin forbids an `actual` from restating a default, so every parameter of an exported
+   * `actual` reports `hasDefault = false`. [ExpectIndex.expectFunctionOrNull] resolves the
+   * pairing by signature (through the owner's `expect class` for a member) and answers `null`
+   * when it is ambiguous, which degrades to "no defaults" rather than attributing one namesake's
+   * defaults to another.
    */
-  private fun topLevelDefaultFlags(function: KSFunctionDeclaration): List<Boolean> {
-    val expect: KSFunctionDeclaration? = expects.functionOrNull(function)
+  private fun expectDefaultFlags(function: KSFunctionDeclaration): List<Boolean> {
+    val expect: KSFunctionDeclaration? = expects.expectFunctionOrNull(function)
     return function.parameters.mapIndexed { index, parameter ->
-      parameter.hasDefault || expect?.parameters?.get(index)?.hasDefault == true
+      parameter.hasDefault || expect?.parameters?.getOrNull(index)?.hasDefault == true
     }
   }
 
@@ -1909,7 +1914,7 @@ internal class ForwardCallablePlanner(
     origin = ForwardCallableOrigin.TOP_LEVEL,
     target = null,
     member = function.simpleName.asString(),
-    defaults = topLevelDefaultFlags(function),
+    defaults = expectDefaultFlags(function),
   ).nameUnroutedPosition { skipped ->
     // ADR-064 amendment (2026-09-13): the top-level owner has exactly one legacy route for these
     // reasons — `addFunctionExports` / `translateSpecializedFunction`, keyed on a
@@ -1955,7 +1960,8 @@ internal class ForwardCallablePlanner(
         origin = ForwardCallableOrigin.OBJECT,
         target = owner,
         member = name,
-        defaults = function.parameters.map { it.hasDefault },
+        // ADR-074 amendment (2026-09-27): an `actual object` member widens from its `expect`.
+        defaults = memberDefaultFlags(function),
       )
     }
     // ADR-064 amendment (2026-09-13): no legacy route is keyed to an object owner at all,
@@ -1987,7 +1993,9 @@ internal class ForwardCallablePlanner(
         origin = ForwardCallableOrigin.COMPANION,
         target = owner,
         member = name,
-        defaults = function.parameters.map { it.hasDefault },
+        // ADR-074 amendment (2026-09-27): an `actual companion object` member widens from its
+        // `expect`, resolved through the owner's `expect class`.
+        defaults = memberDefaultFlags(function),
       )
     }
     // ADR-064 amendment (2026-09-13): a companion is a static owner like an object, and the
@@ -2158,8 +2166,9 @@ internal class ForwardCallablePlanner(
       member = functionName,
       node = function,
       // ADR-164: the receiver is a `ForwardReceiver.Value`, not a plan parameter, so no default
-      // ever reaches it.
-      defaults = declaredDefaults(function.parameters, function.parameters.map { it.hasDefault }),
+      // ever reaches it. ADR-074 amendment (2026-09-27): an `actual` extension's defaults are read
+      // off its `expect`, matched with the receiver as part of the signature.
+      defaults = declaredDefaults(function.parameters, expectDefaultFlags(function)),
       doc = function.forwardKdoc(expects).forParameters(function.parameters),
     )
       // ADR-064 amendment (2026-09-13): no legacy route is keyed to an extension for any of these

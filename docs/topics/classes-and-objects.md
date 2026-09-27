@@ -494,10 +494,10 @@ interfaces](interfaces-abstract-sealed.md#sealed-classes-and-interfaces) for the
 
 - `Map`/`Set` are not yet supported as method or constructor **parameters**; see
   [Collections](collections.md).
-- Defaults on an `expect`/`actual` class member are only synthesized for the top-level-function
-  route and the primary constructor; a class method, companion member, extension, or secondary
-  constructor on an `expect`/`actual` class gets no synthesized overload. See
-  [expect/actual declarations](expect-actual.md).
+- An `expect`-side default reaches every method, `object`, companion and extension member of an
+  `expect`/`actual` class, and its primary constructor; a secondary constructor still binds that
+  parameter as required. See
+  [expect/actual declarations](expect-actual.md#function-default-parameters-on-an-expect-function-or-member).
 - A nested type under an owner other than the shapes covered above stays a named
   `SKIPPED_NESTED_DECLARATION` skip. A member typed with a nested `value class` under a
   still-deferred owner (a generic or `enum class` owner) skips named too

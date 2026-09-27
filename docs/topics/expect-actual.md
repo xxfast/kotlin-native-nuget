@@ -90,20 +90,31 @@ pass every parameter explicitly. See
 [Constructor and method default parameters](classes-and-objects.md#constructor-and-method-default-parameters)
 for the general mechanism.
 
-## Function default parameters on a top-level `expect` function
+## Function default parameters on an `expect` function or member
 
 The same restatement rule applies to an ordinary function, and the generator resolves the default
-from the matching `expect fun`, but **only for a top-level function**. A class method, `object`
-member, companion member, or extension declared on an `expect` class widens none of its defaulted
-parameters, even though the equivalent constructor case above does; call those with every
-parameter explicit.
+from the matching `expect` declaration, for a top-level `expect fun`, an `expect` extension, and a
+member of an `expect class` (its companion included), `expect sealed class`, `expect interface`,
+or `expect object` alike, including a `suspend` member and a member returning `Flow`. A sealed
+arm declared on the `actual` side takes the default its base's `expect` member declares, so the
+base and every arm bind the same optional parameter. Omitting the argument runs the Kotlin
+default.
 
 ```kotlin
 expect fun beaconLabel(prefix: String, level: Int = 7): String
+
+expect class Bowl(grams: Int) {
+  fun fill(scoops: Int = 3): Int
+  suspend fun refill(scoops: Int = 2): Int
+}
 ```
 
 ```C#
 string label = PlatformApi.BeaconLabel("Oreo's collar"); // level defaults to 7
+
+using var bowl = new Bowl(40);
+int filled = bowl.Fill();                 // scoops defaults to 3
+int refilled = await bowl.RefillAsync();  // scoops defaults to 2
 ```
 
 When a top-level `expect fun` is overloaded, each overload's default is resolved from its own

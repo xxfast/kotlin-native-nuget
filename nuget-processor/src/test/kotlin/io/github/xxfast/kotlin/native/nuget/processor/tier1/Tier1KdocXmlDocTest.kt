@@ -336,20 +336,12 @@ class Tier1KdocXmlDocTest {
   }
 
   /**
-   * ADR-096/ADR-074: making the expect lookup receiver-aware could have widened more than docs,
-   * because an omitting overload is *generated API*, not a comment. Measured here rather than
-   * assumed, and the measurement is that it does NOT: the extension route reads the exported
-   * declaration's own `hasDefault` bits and never consults the index at all (ADR-096: "No other
-   * route consults it in v1; class/object/companion/extension read the exported declaration's own
-   * bit only", `topLevelDefaultFlags` is the sole caller and runs on the top-level route).
-   *
-   * So the cell pins BOTH halves: the doc now arrives, and the export set is unchanged — exactly
-   * one export, no `_2`, no parameterless C# overload. If someone later wires the expect index
-   * into the extension defaults route, this cell fails and that becomes a deliberate decision with
-   * its own ABI review rather than a side effect of a doc fix.
+   * ADR-074 amendment (2026-09-27): an `expect` extension's default lives on the `expect` only, so
+   * the extension route reads it through the expect index like every other function route. One
+   * widened signature, no second export, and the Kotlin body omits the argument.
    */
   @Test
-  fun `an expect extension's default parameter does not add an omitting overload`() {
+  fun `an expect extension's default parameter widens one signature`() {
     val result = Tier1Harness.run(
       sources = mapOf(
         "StretchTarget.kt" to """
@@ -391,12 +383,13 @@ class Tier1KdocXmlDocTest {
     assertEquals("OK", result.kspExitCode, "kspErrors=${result.kspErrors}")
 
     assertTrue(kotlin.contains("@CName(\"library_tier1_kdocexpectdefault__sunspot_stretchFor\")"), kotlin)
-    // The ABI is unchanged by the widening: one export, and no truncated call site to compile.
+    // One export; the mask arm omits the argument so Kotlin evaluates the `expect`'s default.
     assertFalse(kotlin.contains("sunspot_stretchFor_2"), kotlin)
-    assertFalse(kotlin.contains(".stretchFor()"), kotlin)
+    assertTrue(kotlin.contains(".stretchFor()"), kotlin)
 
-    assertTrue(cs.contains("StretchFor(this global::Interop.SunSpot receiver, int minutes)"), cs)
-    assertFalse(cs.contains("StretchFor(this global::Interop.SunSpot receiver)"), cs)
+    assertTrue(
+      cs.contains("StretchFor(this global::Interop.SunSpot receiver, int? minutes = null)"), cs,
+    )
     // ADR-150 rides along: the doc is on both overloads, and the omitting one drops the `@param`
     // it does not declare (a `<param>` naming nothing is CS1572, fatal downstream).
     assertDocuments(cs, "Stretches out for a while.", "StretchFor")

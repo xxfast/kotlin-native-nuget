@@ -806,3 +806,52 @@ No fixture: an absence assertion on an un-routed kind pins nothing.
   `expectsByName`'s `.toMap()` collapsing overloaded top-level `expect fun`s
   (`NugetProcessor.kt:338-343`, which ADR-096's default lookup would need to disambiguate); no
   diagnostic for a public `annotation class` (item 6).
+
+## Amendment (2026-09-27): `expect`-side defaults reach every member route
+
+A member of an `expect class` carries its parameter defaults on the `expect` only: Kotlin forbids
+an `actual` from restating one, so the exported `actual` member reports `hasDefault = false` on
+every parameter. Before this amendment only the top-level-function route (ADR-096) and the primary
+constructor (ADR-091) consulted the `expect` index, so `expect class Bowl { fun fill(scoops: Int =
+3): Int }` bound as a required `Fill(int scoops)` on every member route, the ADR-164 plan routes
+and the legacy `suspend`/`Flow` routes alike.
+
+**Decision.** One resolver and one flag reader serve every function route that reads the index:
+
+- `ExpectIndex.expectFunctionOrNull(actual)` resolves a top-level `actual fun` (an extension
+  included) through `functionOrNull`, and a member of an `actual` class through that class's
+  `expect` half, matching by the same signature rule (receiver, count, positional names,
+  positional types). The index holds top-level declarations only, so a nested owner (an `actual
+  companion object`) is reached through its `expect` parent's own declarations by simple name. A
+  member of a non-`actual` owner resolves to `null`. `docOrNull` now uses it for functions, so the
+  KDoc lookup and the default lookup cannot disagree about which `expect` a member pairs with.
+- `expectDefaultFlags` (`ForwardCallablePlanner.kt`) ORs a parameter's own bit with its
+  `expect`'s. `memberDefaultFlags` ORs that for the member **and** for its override root, which is
+  what reaches an arm of an `expect sealed class`: the arms are declared on the `actual` side and
+  are not `expect` themselves, so only the root (`actual abstract fun portion`) pairs with the
+  `expect` member that declares the default. The top-level and extension routes call
+  `expectDefaultFlags` directly; the class, sealed base, sealed arm, interface, object and
+  companion routes, and
+  `withLegacyDefaults` (the flags the legacy `suspend`/`Flow` routes read back through
+  `legacyDefaultFlags`, ADR-164's 2026-09-27 amendment) call `memberDefaultFlags`.
+
+The ADR-164 rules then apply unchanged: the parameter widens to a C# optional, omitting it runs the
+Kotlin default through the `when (mask)` dispatch, and a shadowing shorter overload keeps it
+required.
+
+This reverses the extension boundary ADR-096's 2026-09-20 amendment recorded: the Tier 1 cell that
+pinned "no omitting overload" for `expect fun SunSpot.stretchFor(minutes: Int = 5)` now pins the
+widened `StretchFor(this SunSpot receiver, int? minutes = null)`, still one export. A secondary
+constructor stays as ADR-091 left it; it is outside this amendment's function routes.
+
+Fixture: `test-library/.../test/platform/PlatformDefaults.kt` (`expect class Bowl` with a
+plan-route, a `suspend` and a `Flow` member; `expect sealed class Meal` whose arms `Dry`/`Wet`
+live in the per-target actual files; `expect object Cupboard`; the companion `Bowl.of` and the
+extension `Bowl.topUp`) plus `PlatformDefaultsMacos.kt` / `PlatformDefaultsMingw.kt`.
+Tests: `IntegrationTests/ExpectMemberDefaultTests.cs` (each member
+called without the argument, asserting the value only the `expect`-side default produces), and the
+Tier 1 cells `an expect class member widens from its expect-side default` (class, `suspend`,
+interface, object and companion members) and `a sealed arm widens from its expect base member's
+default` in `Tier1FunctionDefaultParameterTest.kt`, and `an expect extension's default parameter
+widens one signature` in `Tier1KdocXmlDocTest.kt`. No
+`LiveHandleTests.cs` row: no new handle route.

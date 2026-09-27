@@ -169,6 +169,119 @@ class Tier1FunctionDefaultParameterTest {
   }
 
   /**
+   * Structural. A member of an `expect class` carries its default on the `expect` only; the
+   * exported `actual` member reports `hasDefault = false`. The member routes resolve the pairing
+   * through the owner's indexed `expect class`, so the ordinary plan route and the legacy
+   * `suspend` route both widen the parameter, and the Kotlin body omits it.
+   */
+  @Test
+  fun `an expect class member widens from its expect-side default`() {
+    val result = Tier1Harness.run(
+      commonSources = mapOf(
+        "Bowl.kt" to """
+        package tier1.fundefaultsexpectmember
+
+        expect class Bowl(grams: Int) {
+          fun fill(scoops: Int = 3): Int
+          suspend fun refill(scoops: Int = 2): Int
+
+          companion object {
+            fun of(grams: Int = 25): Bowl
+          }
+        }
+
+        expect object Cupboard {
+          fun stock(tins: Int = 6): Int
+        }
+
+        expect interface Scale {
+          fun weigh(grams: Int = 5): Int
+        }
+        """.trimIndent(),
+      ),
+      sources = mapOf(
+        "BowlActual.kt" to """
+        package tier1.fundefaultsexpectmember
+
+        actual class Bowl actual constructor(private val grams: Int) {
+          actual fun fill(scoops: Int): Int = grams + scoops
+          actual suspend fun refill(scoops: Int): Int = grams + scoops
+
+          actual companion object {
+            actual fun of(grams: Int): Bowl = Bowl(grams)
+          }
+        }
+
+        actual object Cupboard {
+          actual fun stock(tins: Int): Int = tins
+        }
+
+        actual interface Scale {
+          actual fun weigh(grams: Int): Int
+        }
+
+        fun scale(): Scale = object : Scale {
+          override fun weigh(grams: Int): Int = grams
+        }
+        """.trimIndent(),
+      ),
+    )
+
+    assertEquals("OK", result.kspExitCode, "kspErrors=${result.kspErrors}")
+    val kotlin: String = result.generated
+    assertFalse(kotlin.contains("bowl_fill_2"), "no synthesized export; generated=$kotlin")
+    assertContains(kotlin, ".fill()")
+    assertContains(kotlin, ".refill()")
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "public int Fill(int? scoops = null)")
+    assertContains(cs, "RefillAsync(int? scoops = null, ")
+    assertContains(cs, "public static int Stock(int? tins = null)")
+    assertContains(cs, "Weigh(int? grams = null)")
+    assertContains(cs, "public static global::Interop.Bowl Of(int? grams = null)")
+  }
+
+  /**
+   * Structural. The arms of an `expect sealed class` live on the `actual` side and are not `expect`
+   * themselves, so an arm's override reaches the default only through its override root, the
+   * `actual` base member, whose `expect` declares it. Base and arm must agree on the widened shape.
+   */
+  @Test
+  fun `a sealed arm widens from its expect base member's default`() {
+    val result = Tier1Harness.run(
+      commonSources = mapOf(
+        "Meal.kt" to """
+        package tier1.fundefaultsexpectsealed
+
+        expect sealed class Meal {
+          abstract fun portion(extra: Int = 4): Int
+        }
+        """.trimIndent(),
+      ),
+      sources = mapOf(
+        "MealActual.kt" to """
+        package tier1.fundefaultsexpectsealed
+
+        actual sealed class Meal {
+          actual abstract fun portion(extra: Int): Int
+
+          class Kibble(val grams: Int) : Meal() {
+            override fun portion(extra: Int): Int = grams + extra
+          }
+        }
+        """.trimIndent(),
+      ),
+    )
+
+    assertEquals("OK", result.kspExitCode, "kspErrors=${result.kspErrors}")
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "Portion(int? extra = null)")
+    assertFalse(
+      Regex("""Portion\(int extra\)""").containsMatchIn(cs),
+      "no member of the pair may stay required; generated=$cs",
+    )
+  }
+
+  /**
    * Structural. Kotlin forbids an override from restating a default, so the override's shape comes
    * off its root: base and override render the same widened signature (C# `override` needs them
    * to agree), and neither gets a second export.
