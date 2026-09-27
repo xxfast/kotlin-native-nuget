@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -89,5 +90,66 @@ class Tier1NullableGenericPropertyTest {
     assertContains(cs, "return NugetMarshal.FromHandle<T>(nativeResult);")
     // ADR-147 amendment: `T : Any` is C#'s `notnull` constraint.
     assertContains(cs, "public class Crate<T> : IDisposable, INugetHandle where T : notnull")
+  }
+
+  @Test
+  fun `a concrete-typed property on a generic class keeps its own type`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.concretegenericproperty
+
+      class Cat(val name: String)
+
+      class Slot<T>(val value: T, val keeper: Cat) {
+        val label: String = "slot"
+        val count: Int = 1
+        var note: String = ""
+      }
+
+      fun slotOf(value: String): Slot<String> = Slot(value, Cat("Tom"))
+      """.trimIndent(),
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected concrete properties on a generic class to compile; got: ${result.compileErrors}",
+    )
+
+    val kotlin: String = result.generated
+    val receiver = "handle.asStableRef<tier1.concretegenericproperty.Slot<Any?>>().get()"
+    // ADR-147: each getter reads the property at its declared type; only the receiver is erased.
+    val getter = "(handle: COpaquePointer, errorOut: COpaquePointer?)"
+    assertContains(kotlin, "__slot_get_label$getter: String")
+    assertContains(kotlin, "__slot_get_count$getter: Int")
+    assertContains(kotlin, "__slot_get_note$getter: String")
+    assertContains(kotlin, "$receiver.label\n")
+    assertContains(kotlin, "$receiver.count\n")
+    assertContains(kotlin, "$receiver.note\n")
+    assertContains(kotlin, "$receiver.note = value")
+    assertContains(kotlin, "NugetHandles.retain($receiver.keeper)")
+
+    listOf("label", "count", "note", "keeper").forEach { name ->
+      assertFalse(
+        kotlin.contains("get().$name as "),
+        "a concrete property getter must not cast to the type parameter; generated=$kotlin",
+      )
+    }
+
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "public class Slot<T> : IDisposable, INugetHandle")
+    assertContains(cs, "public T Value")
+    assertContains(cs, "public string Label")
+    assertContains(cs, "public int Count")
+    assertContains(cs, "public string Note")
+    assertContains(cs, "Native_Set_note(_handle, value, out IntPtr error);")
+    assertContains(cs, "public global::Interop.Cat Keeper")
+    assertContains(cs, "return new global::Interop.Cat(nativeResult, out _);")
+
+    listOf("Label", "Count", "Note", "Keeper").forEach { name ->
+      assertFalse(cs.contains("public T $name"), "$name must not surface as T; generated=$cs")
+    }
+
+    // Only `Value` reads through the generic handle lift.
+    assertEquals(1, Regex("""FromHandle<T>\(nativeResult\)""").findAll(cs).count())
   }
 }

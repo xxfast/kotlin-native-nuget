@@ -32,12 +32,18 @@ Cat cat = box.Value;
 
 A nullable property on a generic class (`val x: T?`) is `T?` in C#. At a reference-type
 instantiation a `null` read stays `null`; at a value-type instantiation it collapses to `default(T)`,
-same as any other unconstrained C# generic.
+same as any other unconstrained C# generic. A property that doesn't mention `T` keeps its own
+declared type instead, at every instantiation:
 
 ```kotlin
 class Slot<T>(val value: T) {
   val previous: T? = null
   val current: T? = value
+
+  val label: String = "window sill"
+  val count: Int = 2
+  var note: String = "Oreo napped here"
+  val keeper: Cat = Cat("Mylo", 7)
 }
 ```
 
@@ -47,6 +53,10 @@ Assert.Null(stringSlot.Previous);
 
 using var intSlot = new Slot<int>(42);
 Assert.Equal(0, intSlot.Previous); // default(int), not null
+
+string label = intSlot.Label;         // string, not T, even though T is int here
+using Cat keeper = intSlot.Keeper;    // Cat, not T
+intSlot.Note = "Mylo stole the spot";
 ```
 
 ## Nullable type arguments
