@@ -443,6 +443,9 @@ satisfies the restatement.
 2. The same CS0102 property/method name collision on the **ordinary class route** is still unguarded.
    Issue #112's class escaped it only because the colliding method happened to be unbridgeable.
    ADR-034's guard is signature-based and does not cover it (verified by reading all three call sites).
+   **Closed** by [ADR-110](110-top-level-function-pascal-case.md)'s 2026-09-26 amendment, which
+   gives every class-family route the same guard this Decision gave the interface route, plus the
+   related inherited-member (CS0108) shape.
 3. `CirInterfaceProperty.hasSetter` is never set, so a `var` interface property renders get-only.
    Needs reconciling with ADR-075's getter/setter independence and with the CS0546 hazard recorded at
    `docs/archive/roadmap.md:67` before it can be derived from the plan.

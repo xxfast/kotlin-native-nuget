@@ -589,6 +589,9 @@ internal fun translateClass(
   interfaceDeclarationCatalog: ForwardCallablePlanCatalog = ForwardCallablePlanCatalog(emptyList()),
   // ADR-150: an `actual` class carries no KDoc of its own; the author wrote it on the `expect`.
   expects: ExpectIndex = ExpectIndex(),
+  // ADR-110 amendment (ROADMAP line 32): where this class records the names it rendered, so the
+  // inherited CS0108 post-pass can compare it against its kept base once every class translated.
+  memberRegistry: CsMemberRegistry? = null,
 ): CirClass {
   val name: String = cls.simpleName.asString()
   val prefix: String = cls.nativePrefix(context.symbols)
@@ -1144,6 +1147,30 @@ internal fun translateClass(
         ForwardCirPlanProjection.classMethod(planned, prefix, isOverride = false)
       }
   } else null
+
+  // ADR-110 amendment (ROADMAP line 32): one C# type holds the instance, companion, async, Flow
+  // and callback members alike, so a property/const sharing a name with any of them is CS0102.
+  val renderedNames: List<CsMemberName> = (
+      properties + methods + listOfNotNull(copyMethod) + callbackMembers + storedCallbackMembers +
+          interfaceBridgeMembers + companionMembers + asyncMembers + flowRouteMembers
+      ).csMemberNames()
+  val spellings: KotlinSpellings = KotlinSpellings.ofClass(cls)
+  val classPhrase: String =
+    if (cls.typeParameters.isEmpty()) "class $name" else "generic class $name"
+  emitMemberNameCollisions(name, classPhrase, cls, renderedNames, spellings, logger)
+  cls.qualifiedName?.asString()?.let { qualified ->
+    memberRegistry?.register(
+      CsMemberRegistry.Entry(
+        qualifiedName = qualified,
+        csName = name,
+        ownerPhrase = classPhrase,
+        symbol = cls,
+        keptBase = superClassDeclaration?.qualifiedName?.asString(),
+        members = renderedNames,
+        spellings = spellings,
+      ),
+    )
+  }
 
   // ADR-159: one scope per instance, owned by the root-most class in the kept chain that
   // projects a scope-using member. `null` means nothing in the chain does.
@@ -1946,6 +1973,9 @@ internal fun translateSealedClass(
   // ADR-150: the expect index. A bare `forwardKdoc()` here cannot reach the `expect` half,
   // so a documented `expect` declaration of this family rendered with no summary at all.
   expects: ExpectIndex = ExpectIndex(),
+  // ADR-110 amendment (ROADMAP line 32): the base and each arm record their rendered names here
+  // for the inherited CS0108 post-pass.
+  memberRegistry: CsMemberRegistry? = null,
 ): CirSealedClass {
   val libraryName: String = context.libraryName
   val name: String = cls.simpleName.asString()
@@ -1983,6 +2013,17 @@ internal fun translateSealedClass(
   // ADR-162: the sealed base renders `: IDisposable, INugetHandle` with its own `Dispose()`
   // (CirSealedRenderer), so the reserved signature applies here too.
   emitCsharpSignatureCollisions(baseMethods, name, cls, logger, HANDLE_RESERVED_SIGNATURES)
+  // ADR-110 amendment (ROADMAP line 32): `abstract val area` beside `fun area(scale)` on the base.
+  val baseNames: List<CsMemberName> = (baseProperties + baseMethods).csMemberNames()
+  val baseSpellings: KotlinSpellings = KotlinSpellings.ofClass(cls)
+  emitMemberNameCollisions(name, "sealed class $name", cls, baseNames, baseSpellings, logger)
+  qualifiedName?.let { qualified ->
+    memberRegistry?.register(
+      CsMemberRegistry.Entry(
+        qualified, name, "sealed class $name", cls, keptBase = null, baseNames, baseSpellings,
+      ),
+    )
+  }
 
   val subclasses: List<CirSealedSubclass> = cls.getSealedSubclasses()
     .map { subclass ->
@@ -2226,6 +2267,24 @@ internal fun translateSealedClass(
         HANDLE_RESERVED_SIGNATURES,
       )
 
+      // ADR-110 amendment (ROADMAP line 32): the arm is one C# type holding every route's members.
+      // Registered with the base as its kept base, so a method hiding a base property (and a class
+      // extending an open arm) reaches the inherited CS0108 post-pass.
+      val armNames: List<CsMemberName> =
+        (properties + methods + asyncMembers + flowMembers + callbackMembers).csMemberNames()
+      val armSpellings: KotlinSpellings = KotlinSpellings.ofClass(subclass)
+      emitMemberNameCollisions(
+        "$name.$subName", "sealed arm $subName", subclass, armNames, armSpellings, logger,
+      )
+      subQualifiedName?.let { qualified ->
+        memberRegistry?.register(
+          CsMemberRegistry.Entry(
+            qualified, subName, "sealed arm $subName", subclass, keptBase = qualifiedName,
+            armNames, armSpellings,
+          ),
+        )
+      }
+
       CirSealedSubclass(
         doc = subclass.forwardKdoc(expects)?.toCirDoc(),
         name = subName,
@@ -2441,10 +2500,7 @@ internal fun translateObject(
   // This also picks up the planner's `parentDeclaration == obj` filter, which this walk never had.
   // The Kotlin spelling behind each rendered C# member name, so the CS0102 guard below can name
   // the two declarations the author has to choose between rather than only the C# name they share.
-  val kotlinSpellings: MutableMap<String, MutableList<String>> = mutableMapOf()
-  fun record(csharpName: String, kotlinSpelling: String) {
-    kotlinSpellings.getOrPut(csharpName) { mutableListOf() }.add(kotlinSpelling)
-  }
+  val kotlinSpellings = KotlinSpellings()
 
   val methods: List<CirMember> = callableCatalog
     .objectMethods(obj.qualifiedName?.asString() ?: name)
@@ -2453,7 +2509,8 @@ internal fun translateObject(
       val members: List<CirMember> = ForwardCirPlanProjection.static(planned, libraryName)
       val kotlinName: String = planned.invocation.member
         ?: planned.invocation.symbol.substringAfterLast('.')
-      members.filterIsInstance<CirMethod>().forEach { record(it.name, "fun $kotlinName()") }
+      members.filterIsInstance<CirMethod>()
+        .forEach { kotlinSpellings.record(it.name, KotlinSpelling("fun", kotlinName)) }
       members
     }
 
@@ -2465,7 +2522,9 @@ internal fun translateObject(
     .filter { it.modifiers.contains(Modifier.CONST) }
     .mapNotNull { prop ->
       translateConstProperty(prop)
-        ?.also { record(it.name, "const val ${prop.simpleName.asString()}") }
+        ?.also {
+          kotlinSpellings.record(it.name, KotlinSpelling("const val", prop.simpleName.asString()))
+        }
     }
     .toList()
 
@@ -2482,7 +2541,7 @@ internal fun translateObject(
       if (planned != null) {
         tracker.trackProperty(planned)
         val keyword: String = if (planned.setter != null) "var" else "val"
-        record(planned.publicName, "$keyword ${planned.kotlinName}")
+        kotlinSpellings.record(planned.publicName, KotlinSpelling(keyword, planned.kotlinName))
         ForwardCirPropertyProjection.staticProperty(planned, libraryName)
       } else {
         emptyList()
@@ -2582,39 +2641,31 @@ private fun emitObjectNameCollisions(
   // Every Kotlin declaration behind a rendered C# name, in declaration order. The message names
   // them: `const val TREAT_COUNT` and `fun treatCount()` both render `TreatCount`, and the C# name
   // alone is not something the author can search their own source for.
-  kotlinSpellings: Map<String, List<String>>,
+  kotlinSpellings: KotlinSpellings,
   logger: KSPLogger,
 ) {
-  // A `const` collides with a method on exactly the same CS0102 grounds a property does.
-  val valueNames: Set<String> = buildSet {
-    members.filterIsInstance<CirProperty>().forEach { add(it.name) }
-    members.filterIsInstance<CirConst>().forEach { add(it.name) }
-  }
-  members.filterIsInstance<CirMethod>()
-    .map { method -> method.name }
-    .filter { name -> name in valueNames }
-    .distinct()
-    .forEach { collision ->
-      val declarations: String = kotlinSpellings[collision].orEmpty()
-        .joinToString(" and ") { spelling -> "`$spelling`" }
-      ForwardDiagnosticSink.emit(
-        listOf(
-          ForwardDiagnostic(
-            kind = ForwardDiagnosticKind.ERROR_CSHARP_NAME_COLLISION,
-            symbol = obj,
-            declaration = "$objectName.$collision",
-            reason = "object $objectName declares $declarations, which both render the C# name " +
-                "'$collision', and C# cannot declare a property and a method with one name on " +
-                "the static class an object becomes (CS0102)",
-            hint = "rename one of them on object $objectName; a property, a `const val` and a " +
-                "function all render PascalCase in C# (ADR-110)",
-            // Issue #249: fatal, so no C# is generated to carry a remark.
-            owner = null,
-          ),
-        ),
-        logger,
-      )
-    }
+  // A `const` collides with a method on exactly the same CS0102 grounds a property does, and two
+  // consts meeting after `kotlinConstantToPascalCase` (`MAX_RETRIES` + `maxRetries`) on the same
+  // grounds as each other.
+  emitMemberNameCollisions(
+    container = objectName,
+    ownerPhrase = "object $objectName",
+    symbol = obj,
+    members = members.csMemberNames(),
+    spellings = kotlinSpellings,
+    logger = logger,
+    reason = { collision ->
+      val what: String =
+        if (collision.methods.isEmpty()) "two members" else "a property and a method"
+      "object $objectName declares ${collision.declarations()}, which both render the C# name " +
+          "'${collision.name}', and C# cannot declare $what with one name on the static class " +
+          "an object becomes (CS0102)"
+    },
+    hint = {
+      "rename one of them on object $objectName; a property, a `const val` and a function all " +
+          "render PascalCase in C# (ADR-110)"
+    },
+  )
 }
 
 internal fun translateCompanionProperty(
@@ -3020,29 +3071,46 @@ private fun emitInterfaceNameCollisions(
   methodPlans: List<ForwardCallablePlan>,
   logger: KSPLogger,
 ) {
-  val propertyNames: Map<String, ForwardPropertyPlan> = propertyPlans.associateBy { it.publicName }
-  methodPlans.forEach { plan ->
-    val property: ForwardPropertyPlan =
-      propertyNames[plan.publicSignature.csharpName] ?: return@forEach
-    // ADR-090 amendment: the Kotlin member, never the overload-numbered symbol tail (`speak_2`).
-    val kotlinName: String =
-      plan.invocation.member ?: plan.invocation.symbol.substringAfterLast('.')
-    ForwardDiagnosticSink.emit(
-      listOf(
-        ForwardDiagnostic(
-          kind = ForwardDiagnosticKind.ERROR_CSHARP_NAME_COLLISION,
-          symbol = iface,
-          declaration = "$interfaceName.${plan.publicSignature.csharpName}",
-          reason = "the interface property '${property.kotlinName}' already claims that C# name, " +
-              "and C# cannot declare a property and a method with one name (CS0102)",
-          hint = "rename the Kotlin function '$kotlinName' or the property it collides with",
-          // ERROR_*: the build fails, so nothing generated is ever read.
-          owner = null,
-        ),
-      ),
-      logger,
-    )
+  val spellings = KotlinSpellings()
+  val members: List<CsMemberName> = buildList {
+    propertyPlans.forEach { plan ->
+      spellings.record(plan.publicName, KotlinSpelling("val", plan.kotlinName))
+      add(CsMemberName(plan.publicName, CsMemberKind.VALUE))
+    }
+    methodPlans.forEach { plan ->
+      val kotlinName: String = plan.invocation.member
+        ?: plan.invocation.symbol.substringAfterLast('.')
+      spellings.record(plan.publicSignature.csharpName, KotlinSpelling("fun", kotlinName))
+      add(CsMemberName(plan.publicSignature.csharpName, CsMemberKind.METHOD))
+    }
   }
+  emitMemberNameCollisions(
+    container = interfaceName,
+    ownerPhrase = "interface $interfaceName",
+    symbol = iface,
+    members = members,
+    spellings = spellings,
+    logger = logger,
+    reason = { collision ->
+      val property: String = collision.values.firstOrNull()?.name ?: collision.name
+      if (collision.methods.isEmpty()) {
+        "the interface declares ${collision.declarations()}, which ${collision.quantifier} " +
+            "render the C# name '${collision.name}', and C# cannot declare two members with " +
+            "one name (CS0102)"
+      } else {
+        "the interface property '$property' already claims that C# name, and C# cannot declare " +
+            "a property and a method with one name (CS0102)"
+      }
+    },
+    hint = { collision ->
+      val function: String? = collision.methods.firstOrNull()?.name
+      if (function == null) {
+        "rename one of the properties on $interfaceName"
+      } else {
+        "rename the Kotlin function '$function' or the property it collides with"
+      }
+    },
+  )
 }
 
 /**
@@ -3062,6 +3130,7 @@ internal fun translateInterfaceBackingClass(
   symbols: ForwardSymbolTable,
   callableCatalog: ForwardCallablePlanCatalog,
   tracker: CollectionHelperTracker,
+  logger: KSPLogger,
 ): CirClass {
   val name: String = iface.simpleName.asString()
   val prefix: String = iface.nativePrefix(symbols)
@@ -3087,6 +3156,14 @@ internal fun translateInterfaceBackingClass(
     tracker.trackPlan(plan)
     ForwardCirPlanProjection.classMethod(plan, prefix, isOverride = false)
   }
+
+  // ADR-110 amendment (ROADMAP line 32): the wrapper mirrors `I$name`, whose own guard
+  // (ADR-113 Decision E) runs over a different catalog; checked here too so the backing class never
+  // relies on the two catalogs agreeing.
+  emitMemberNameCollisions(
+    name, "interface $name", iface, (properties + methods).csMemberNames(),
+    KotlinSpellings.ofClass(iface), logger,
+  )
 
   return CirClass(
     name = name,
@@ -3357,6 +3434,18 @@ internal fun translateValueClass(
   // the other cross-class render sites -- a known scalar keeps its C# primitive spelling (so the
   // renderer's `== "string"` wire checks still fire), everything else becomes
   // `global::Namespace.Name` once `rootNamespace` is non-empty.
+  // ADR-110 amendment (ROADMAP line 32): the record struct declares the underlying property
+  // itself (`double Value { get; }`), so it is a VALUE here even when no plan lists it.
+  val valueClassNames: List<CsMemberName> = buildList {
+    if (properties.none { it.name == underlyingName }) {
+      add(CsMemberName(underlyingName, CsMemberKind.VALUE))
+    }
+    addAll((properties + methods).csMemberNames())
+  }
+  emitMemberNameCollisions(
+    name, "value class $name", cls, valueClassNames, KotlinSpellings.ofClass(cls), logger,
+  )
+
   val csUnderlyingType: String = qualifiedElementCsType(underlyingResolved, context)
 
   return CirValueClass(
