@@ -88,10 +88,12 @@ crossing depends on what it widens:
 - Widening an **interface**'s `val` always compiles: the implementing class's property renders
   `virtual`, not `override`, and a `virtual` declaration is free to add a setter the interface
   never declared.
-- Widening an exported **base class**'s own `val` does not: the base already renders a get-only
-  `virtual` property, so a derived `{ get; set; }` `override` of it would fail to compile
-  (`CS0546`). The setter is dropped and the property stays read-only in C#; the build emits a
-  warning explaining why.
+- Widening an exported **base class**'s own `val`, or a `var` whose own setter is narrower than
+  public (`private set`, `protected set`, `internal set`, see [Classes and objects: A setter
+  narrower than public binds get-only](classes-and-objects.md#a-setter-narrower-than-public-binds-get-only)),
+  does not: the base already renders a get-only `virtual` property, so a derived
+  `{ get; set; }` `override` of it would fail to compile (`CS0546`). The setter is dropped and the
+  property stays read-only in C#; the build emits a warning explaining why.
 
 ```kotlin
 abstract class Animal(override val name: String) : Pet {

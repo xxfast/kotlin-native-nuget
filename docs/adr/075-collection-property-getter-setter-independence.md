@@ -471,6 +471,10 @@ Everything labelled **verified** above was read in repo source this session. The
    round-trips over a by-value receiver.
 3. That `setterNativeType` needs no change for `Collection` (its `else` branch already routes through
    `wireType()`, which maps `Collection` to `POINTER`). Read, not compiled.
+4. **(2026-09-26 amendment)** That ObjC export's `shouldBeExposed(propertySetter)` check
+   (`ObjCExportTranslator.buildProperty`) reduces to effective public-API visibility, the same line
+   this amendment draws for `internal set`. The call itself and its `readonly` fallback are verified
+   from the translator source; what `shouldBeExposed` actually tests was not traced further.
 
 **2026-09-11 amendment: the abstract method walk now keys on the same body-based predicate as the
 property route.** `CirClassTranslator.kt`'s abstract method walk asked `parentDeclaration == cls ||
@@ -587,3 +591,97 @@ Deferred, not exercised: a cross-module (klib) unexported abstract base is assum
 same-module case, no cell proves it; a dropped intermediate base whose abstract property
 re-declares one the *kept* exported base also declares abstract renders `abstract` without
 `override`, hiding the kept base's member (`CS0108` warning, compiles). Both tracked on `ROADMAP.md`.
+
+## 2026-09-26 amendment: setters narrower than public
+
+This ADR's Decision 2 states the setter eligibility predicate for a *collection* property. The same
+predicate has a gap that applies to every property type, not only collections: `ForwardPropertyPlanner`
+planned a setter for any `var`, regardless of the setter's own visibility. Kotlin lets a property be
+public to read and narrower to write (`private set`, `protected set`, `internal set`), and the planner
+generated a Kotlin wrapper call to that setter anyway. The wrapper does not compile ("Cannot access
+'clicks': it is private in '...'"), for every owner shape the planner serves: an ordinary class, an
+`open`/`abstract` class, an override, a data class body, an `object`, a companion, a sealed subclass, a
+top-level property, and an extension property.
+
+**The rule.** A setter is planned only when it is public. `hasPublicSetter()` (`ForwardPropertyPlanner.kt`)
+checks the setter's own KSP modifiers for the absence of `PRIVATE`, `PROTECTED` and `INTERNAL`, and gates
+both the property route (`:662`) and the override-widening route (`:764`, next paragraph). A `var` that
+fails the check plans exactly like a `val`: `setter = null`, no `_set_` export on either language, and no
+diagnostic. A narrower setter is not public API, so its absence is unremarkable, the same reasoning the
+existing `val` route already uses.
+
+```kotlin
+class Button(val label: String = "ok") {
+  var clicks: Int = 0
+    private set
+
+  fun click(): String { clicks++; return "$label clicked $clicks" }
+}
+```
+
+```C#
+public int Clicks { get; }   // no set accessor; Click() still mutates it from Kotlin
+```
+
+**`internal set` is also get-only, even for a module-local owner.** Kotlin itself accepts an `internal`
+setter write from anywhere in the declaring module, but a generated C# consumer is never in that module:
+it is a separate compiled artifact reached only through the public wrapper. Exposing `internal set` as a
+settable C# property would leak an internal API across the module boundary the visibility modifier exists
+to hold. Kotlin/Native's ObjC export draws the same line: `ObjCExportTranslator.buildProperty` emits a
+setter only when `shouldBeExposed(propertySetter)` passes, else `readonly` (**verified** from the
+translator source; that this reduces to effective public-API visibility is **inferred**, see
+"Inferred claims in this ADR" below). This also closes a real compile error, not only a style question:
+an `internal set` on a class admitted from a **dependency** module (`nuget.admit`) was already failing
+the same "it is internal in '...'" error the `private set` case does, because the generated module never
+has internal access to a dependency's members either.
+
+**A widened override drops its setter too, with a reworded diagnostic.** Kotlin lets an override widen a
+narrower setter back toward public (`open var x; protected set` on a base, `override var x; public set` on
+a derived class). The base still binds get-only in C#, and a C# `override` cannot add a set accessor a
+base property does not have (`CS0546`), so the derived override must drop its setter as well.
+`readOnlyOverrideeOwner` (`:764`) already existed for this ADR's own `val` → `var` widening case; it now
+answers non-null (refusing the setter) whenever the overridee itself has no public setter, `val` or
+narrowed `var` alike. The existing diagnostic's wording is generalized to match: it used to say "it
+overrides a **read-only** property of the exported base class X", which was wrong for a `protected`
+setter that Kotlin itself can call. It now reads:
+
+> its setter is not generated because it overrides a property with no public setter on the exported base
+> class X; C# cannot add a set accessor to an override (CS0546)
+
+```kotlin
+open class ClawPost(val owner: String) {
+  open var scratches: Int = 0
+    protected set
+}
+
+class ClawTower(owner: String) : ClawPost(owner) {
+  override var scratches: Int = 10
+    public set   // Kotlin allows the re-widening; C# still can't follow it
+}
+```
+
+```C#
+public int Scratches { get; }              // ClawPost: protected set, get-only in C#
+public override int Scratches { get; }     // ClawTower: still get-only, CS0546 diagnostic in <remarks>
+```
+
+**Alternatives rejected.**
+
+- Gate on `private` only, the literal wording the discovering ROADMAP line used: rejected, because
+  `protected` and a dependency's `internal` hit the identical Kotlin compile error, not merely an API
+  hygiene concern.
+- Treat `internal set` as settable when the owner is module-local, since that shape does compile in
+  Kotlin: rejected as a public-API leak across the module boundary the modifier exists to enforce, and
+  inconsistent with the dependency-owner case, which must drop it regardless.
+- Emit a diagnostic for every dropped non-public setter: rejected. A non-public setter is not part of the
+  Kotlin type's public API, and this ADR's own `val` route is already silent for the same reason; only the
+  widened-override shape gets a diagnostic, because there the C# author sees a `var` and reasonably expects
+  a setter.
+- A new ADR: rejected. This is the same setter-eligibility predicate Decision 2 already owns, one more
+  reason a setter can fail eligibility, not a new mechanism.
+
+No export, handle kind, or ABI shape changes for the surviving get-only case; it renders exactly like an
+ordinary `val`. No `LiveHandleTests` row: no new route, no handle minted. Pinned by `Tier1PrivateSetterTest`,
+the `issue297/Issue297Sample.kt` (`Button.clicks`) and `scratchpost/ClawPostSample.kt` (`ClawPost`/
+`ClawTower`/`FeedingBowl`) fixtures, and `IntegrationTests/Issue297Tests.cs` /
+`IntegrationTests/NarrowSetterPropertyTests.cs`.

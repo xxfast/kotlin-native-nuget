@@ -33,6 +33,30 @@ Assert.NotSame(brother1, brother2);       // a fresh wrapper on every access
 Assert.Equal(brother1!.Name, brother2!.Name);
 ```
 
+## A setter narrower than public binds get-only
+
+A `var` whose setter is narrower than the property itself (`private set`, `protected set`,
+`internal set`) becomes a get-only C# property: it reads like a `val` from C#, and Kotlin's own
+mutators still change the value underneath it. This holds even for `internal set`, since a generated
+C# consumer is never inside the Kotlin module the modifier scopes access to.
+
+```kotlin
+class Button(val label: String = "ok") {
+  var clicks: Int = 0
+    private set
+
+  fun click(): String { clicks++; return "$label clicked $clicks" }
+}
+```
+
+```C#
+public int Clicks { get; }   // no set accessor; button.Clicks = 5 is CS0200
+```
+
+An override that widens the setter back toward public in Kotlin cannot follow in C#: the base
+property is already get-only, and an `override` cannot add a set accessor a base property does not
+have (`CS0546`), so the override drops its setter too, with a warning explaining why.
+
 ## Object identity and disposal
 
 An object-typed property or method return mints a **new** C# wrapper on every access; there is no
