@@ -16,9 +16,12 @@ internal object ForwardCirPropertyProjection {
     isOverride: Boolean = false,
     isVirtual: Boolean = false,
     isAbstract: Boolean = false,
+    // ROADMAP line 28, case D: the C# spellings of `plan.explicitSetterInterfaces`, spelled by the
+    // translator (it holds the KSP supertypes and the namespace mapping; the plan holds neither).
+    explicitSetterInterfaces: List<String> = emptyList(),
   ): CirProperty {
     require(plan.position == ForwardPropertyPosition.CLASS) { "Expected class property plan" }
-    return property(
+    val projected: CirProperty = property(
       plan,
       receiver = "_handle",
       isStatic = false,
@@ -26,6 +29,14 @@ internal object ForwardCirPropertyProjection {
       isVirtual = isVirtual,
       isAbstract = isAbstract,
     )
+    // A setter planned ONLY for an explicit implementation must never reach the public property:
+    // with no interface spelled (a caller that does not render case D, or an interface the base
+    // list could not spell either), it renders get-only, exactly as before case D existed.
+    return when {
+      plan.explicitSetterInterfaces.isEmpty() -> projected
+      explicitSetterInterfaces.isEmpty() -> projected.copy(setter = null)
+      else -> projected.copy(explicitSetterInterfaces = explicitSetterInterfaces)
+    }
   }
 
   /**

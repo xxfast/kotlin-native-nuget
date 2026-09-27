@@ -97,4 +97,42 @@ public class AbstractInterfacePropertyTests
         Assert.Equal("finch: brown on curtain rail", bird.Describe());
         Assert.Equal("finch: brown on curtain rail", finch.Describe());
     }
+
+    // ROADMAP line 28 / ADR-113: the interface itself. `Feathered.perch` is a Kotlin `var`, so
+    // `IFeathered.Perch` must carry a setter too, not only `Bird.Perch`. The `val` beside it is the
+    // control that keeps a blanket `{ get; set; }` from passing.
+
+    [Fact]
+    public void IFeathered_InterfaceVar_HasASetter()
+    {
+        PropertyInfo? perch = typeof(IFeathered).GetProperty("Perch");
+
+        Assert.NotNull(perch);
+        Assert.NotNull(perch!.GetMethod);
+        Assert.NotNull(perch.SetMethod);
+    }
+
+    [Fact]
+    public void IFeathered_InterfaceVal_StaysGetOnly()
+    {
+        PropertyInfo? plumage = typeof(IFeathered).GetProperty("Plumage");
+
+        Assert.NotNull(plumage);
+        Assert.NotNull(plumage!.GetMethod);
+        Assert.Null(plumage.SetMethod);
+    }
+
+    [Fact]
+    public void Finch_PerchWrittenThroughTheInterface_IsSeenByKotlinDispatch()
+    {
+        using var finch = new Finch();
+
+        IFeathered feathered = finch;
+
+        // Oreo has claimed the curtain rail, so the finch retreats to the bookshelf.
+        feathered.Perch = "bookshelf";
+
+        Assert.Equal("bookshelf", feathered.Perch);
+        Assert.Equal("finch: brown on bookshelf", finch.Describe());
+    }
 }

@@ -685,3 +685,15 @@ ordinary `val`. No `LiveHandleTests` row: no new route, no handle minted. Pinned
 the `issue297/Issue297Sample.kt` (`Button.clicks`) and `scratchpost/ClawPostSample.kt` (`ClawPost`/
 `ClawTower`/`FeedingBowl`) fixtures, and `IntegrationTests/Issue297Tests.cs` /
 `IntegrationTests/NarrowSetterPropertyTests.cs`.
+
+**2026-09-26 amendment: the read-only-base guard now also runs on the sealed route.** The guard
+(`collectionSetterOrNull`'s `readOnlyBase` check) is what refuses a class's public setter when it
+overrides a get-only base property; the ordinary class route already passed its `superClass` to it,
+but the sealed arm route never passed the sealed base at all, so an arm's `override var count` over
+the sealed base's `open val count` rendered `public override int Count { get; set; }`, CS0546 against
+the base's get-only `Count` (measured by scratch compile). The sealed route now passes
+`superClass = sealed`, so an arm's refused setter takes the same get-only-override-plus-named-skip
+path an ordinary class already had. [ADR-168](168-interface-var-explicit-setter.md)'s explicit-member
+fallback does not apply here: a sealed arm's C# base list never names its own interfaces (a separate,
+open gap tracked on `ROADMAP.md`), so there is no `IFoo` to attach an explicit member to. Pinned by
+`Tier1InterfaceVarPropertyTest.kt`'s `tier1.ivarseal` cell.

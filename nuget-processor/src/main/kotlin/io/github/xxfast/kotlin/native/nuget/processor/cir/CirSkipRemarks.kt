@@ -196,6 +196,18 @@ private fun CirDeclaration.withSkipRemarks(
 
   is CirInterface -> copy(
     remarks = remarks + skips.matching(path + name, forInterface = true).map { it.paragraph },
+    // ROADMAP line 28: a refused setter left `IFoo.X` get-only; the remark names it on `X`, the
+    // same member-level attachment a class property gets, never a type-level "not available".
+    properties = skips.propertySkipsFor(path + name, forInterface = true).let { propertySkips ->
+      if (propertySkips.isEmpty()) properties
+      else properties.map { property ->
+        val mine: List<ForwardSkipRemark> = propertySkips.filter { skip ->
+          (skip.owner as ForwardDiagnosticOwner.Property).publicName == property.name
+        }
+        if (mine.isEmpty()) property
+        else property.copy(remarks = property.remarks + mine.map { it.paragraph })
+      }
+    },
     nestedDeclarations = nestedDeclarations.map { nested ->
       // A nested declaration's Kotlin owner is the interface's own Kotlin name, not the
       // `I`-prefixed C# one.
@@ -282,9 +294,10 @@ private fun CirProperty.withPropertyRemarks(
 /** Every [ForwardDiagnosticOwner.Property] skip whose CONTAINER is the declaration at [path]. */
 private fun List<ForwardSkipRemark>.propertySkipsFor(
   path: List<String>,
+  forInterface: Boolean = false,
 ): List<ForwardSkipRemark> = filter { skip ->
   val owner: ForwardDiagnosticOwner = skip.owner
-  owner is ForwardDiagnosticOwner.Property && owner.container.matchesPath(path, false)
+  owner is ForwardDiagnosticOwner.Property && owner.container.matchesPath(path, forInterface)
 }
 
 private fun List<ForwardSkipRemark>.matching(

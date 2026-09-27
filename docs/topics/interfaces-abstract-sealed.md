@@ -80,7 +80,7 @@ parrot.Greeting; // "hello" - Parrot never declared this
 parrot.Greet();  // "hello from a macaw"
 ```
 
-### Widening a read-only property to `var`
+### Widening a read-only property to `var` {id="widening-a-read-only-property-to-var"}
 
 Kotlin lets a subclass widen an inherited `val` to `var`. Whether the C# setter survives the
 crossing depends on what it widens:
@@ -92,8 +92,10 @@ crossing depends on what it widens:
   public (`private set`, `protected set`, `internal set`, see [Classes and objects: A setter
   narrower than public binds get-only](classes-and-objects.md#a-setter-narrower-than-public-binds-get-only)),
   does not: the base already renders a get-only `virtual` property, so a derived
-  `{ get; set; }` `override` of it would fail to compile (`CS0546`). The setter is dropped and the
-  property stays read-only in C#; the build emits a warning explaining why.
+  `{ get; set; }` `override` of it would fail to compile (`CS0546`). The public property stays
+  get-only and the build emits a warning explaining why. If the same property also widens an
+  exported **interface**'s `var` (below), the setter is not lost: it is still reachable, just not
+  through the public property.
 
 ```kotlin
 abstract class Animal(override val name: String) : Pet {
@@ -106,6 +108,75 @@ class Cat(name: String) : Animal(name) {
 ```
 
 `Cat.Vibe` compiles as a get-only `override string Vibe`; there is no generated `Vibe` setter.
+
+### An interface's own `var` property {id="an-interface-s-own-var-property"}
+
+A `var` on an exported interface renders `{ get; set; }` on the generated interface, and any class
+that implements it, Kotlin- or C#-side, must supply a setter:
+
+```kotlin
+interface Tally {
+  var count: Int
+  var lastSlip: Throwable?
+}
+```
+
+```C#
+public interface ITally : IDisposable
+{
+    int Count { get; set; }
+    Exception? LastSlip { get; } // ADR-107: C# cannot construct a Kotlin Throwable, stays read-only
+}
+```
+
+A setter that cannot plan for a type-level reason (`Throwable?` above) stays `{ get; }` on the
+interface too, named in the build log and on the member itself, whether or not any class ever
+implements the interface.
+
+One shape needs a second render, because it would otherwise fail to compile: a class that overrides
+both an exported base class's `open val` and an exported interface's `var` with a single Kotlin
+`override var`. The public property can't gain a setter (the [widening rule above](#widening-a-read-only-property-to-var)
+still applies), so C# can't satisfy `ITally.Count { get; set; }` through it; the setter is instead
+implemented **explicitly**, reachable only by declaring the reference as the interface:
+
+```kotlin
+open class Scoreboard { open val count: Int = 0 }
+
+class TrainingClicker : Scoreboard(), Tally {
+  override var count: Int = 0
+  override var lastSlip: Throwable? = null
+}
+```
+
+```C#
+public class TrainingClicker : Scoreboard, ITally
+{
+    public override int Count { get { /* ... */ } } // stays get-only: CS0546 forbids a setter here
+
+    int ITally.Count // reaches the same setter export the public property couldn't carry
+    {
+        get => Count;
+        set { /* ... */ }
+    }
+
+    public override global::System.Exception? LastSlip { get { /* ... */ } } // no explicit member: ADR-107 refused this setter entirely
+}
+```
+
+```C#
+ITally tally = clicker;
+tally.Count = 5;             // reaches Kotlin through the explicit member
+clicker.Count;                // 5 - the public getter agrees
+clicker.Count = 5;            // does not compile: TrainingClicker.Count has no public setter
+```
+
+An ordinary implementer with no read-only base in the way (`class Abacus : Tally`) needs none of
+this: its own public setter satisfies `ITally` directly, the same as any other interface member. A
+sealed subclass never gets the explicit form: its C# base list only ever names its sealed base, so
+a `var` it widens over a read-only sealed base stays a plain get-only override with the named skip,
+the same shape a non-sealed class without an implemented interface gets. Consequence for your own
+code: a C# class implementing a `var`-bearing interface must declare every setter the interface now
+asks for; one that only declared a getter before this render shipped no longer compiles.
 
 ### Implementing a Kotlin interface in C# {id="implementing-a-kotlin-interface-in-c"}
 
@@ -861,15 +932,16 @@ A sealed base, a sealed arm, and any `interface` owner can nest their own plain
 - An `enum class` arm's boxed constructor and `Value` getter cost a handle and a P/Invoke each; see
   [An `enum class` arm](#an-enum-class-arm) for the disposal obligation and the missing implicit
   conversion.
-- An eligible sealed interface arm's own extra interfaces (`class Odd : Kind, CharSequence`) are
-  dropped silently from the generated class.
+- A sealed arm's own interfaces are dropped silently from the generated class: its C# base list
+  names only the sealed base, whether the arm implements an eligible sealed interface plus an extra
+  one (`class Odd : Kind, CharSequence`) or an ordinary exported interface with a `var` (`class Arm :
+  Perch(), Tally`). `arm is ITally` is always false in C#, and there is no explicit-member fallback
+  for a `var` setter the way a non-sealed class gets (see [above](#an-interface-s-own-var-property)).
 - An `object` arm, or a `class`-kind arm whose every constructor is refused, has only the
   `internal` handle constructor, so `new Base.Arm(9)` fails to compile rather than binding it;
   obtain the arm from a factory or from the base's `FromHandle` discriminator instead. A
   `class`-kind arm with bridgeable constructor parameters exports a real public constructor
   instead; see [Sealed classes and interfaces](#sealed-classes-and-interfaces).
-- A `var` interface property always renders `{ get; }` only on the generated interface, even when
-  an implementing class's own property has a setter.
 - The sealed base's own `open suspend fun` and any `Flow`/`StateFlow` member it declares have no
   carrier on the C# base at all: only an arm that itself declares one binds, and only that arm
   gains `IAsyncDisposable`. A consumer holding the sealed base must pattern-match to the concrete
