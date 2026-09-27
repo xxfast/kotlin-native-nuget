@@ -4,10 +4,38 @@ import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
+import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSValueParameter
 import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.InterfaceBridgeWire
+import io.github.xxfast.kotlin.native.nuget.processor.forward.interfaceBridgeWire
+
+/**
+ * ADR-039 amendment (2026-09-26): how [this] listener parameter crosses; see [interfaceBridgeWire].
+ */
+private fun KSValueParameter.wire(classifier: ForwardBridgeTypeClassifier): InterfaceBridgeWire =
+  classifier.classify(type.resolve()).interfaceBridgeWire()
+
+/**
+ * The `override` parameter's Kotlin spelling: a `kotlin.*` type by simple name, anything else
+ * qualified, with type arguments and `?` kept (the bare declaration name this used to print
+ * dropped both, so a `List<Int>` or an `Int?` member "overrode nothing").
+ */
+private fun KSType.overrideSpelling(): String {
+  val qualified: String = declaration.qualifiedName?.asString() ?: ""
+  val name: String =
+    if (qualified.startsWith("kotlin.")) declaration.simpleName.asString() else qualified
+  val arguments: String =
+    if (this.arguments.isEmpty()) ""
+    else this.arguments.joinToString(", ", "<", ">") { argument ->
+      argument.type?.resolve()?.expandAliases()?.overrideSpelling() ?: "*"
+    }
+  return "$name$arguments${if (isMarkedNullable) "?" else ""}"
+}
 
 /**
  * Generates two `@CName` exports for an interface-bridge pair:
@@ -26,6 +54,9 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
   removeMethod: KSFunctionDeclaration,
   qualifiedClassName: String,
   classPrefix: String,
+  // ADR-039 amendment (2026-09-26): one classification per listener parameter, the same one the
+  // pair gate (`legacyRefusedInterfaceBridgePair`) admitted it by.
+  classifier: ForwardBridgeTypeClassifier,
 ) {
   val addMethodName: String = addMethod.simpleName.asString()
   val removeMethodName: String = removeMethod.simpleName.asString()
@@ -57,17 +88,13 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
 
       val cfuncArgs: String = buildString {
         params.forEach { param ->
-          val pType = param.type.resolve().expandAliases()
-          val pSimple: String = pType.declaration.simpleName.asString()
-          val pQualified: String = pType.declaration.qualifiedName?.asString() ?: ""
-          val isEnum: Boolean = (pType.declaration as? KSClassDeclaration)
-            ?.classKind == ClassKind.ENUM_CLASS
-          val isPrimitive: Boolean = pQualified.startsWith("kotlin.") && pSimple != "String"
-          when {
-            pSimple == "Boolean" -> append("Byte, ")
-            isEnum -> append("Int, ")
-            isPrimitive -> append("$pSimple, ")
-            else -> append("COpaquePointer?, ")
+          val pSimple: String =
+            param.type.resolve().expandAliases().declaration.simpleName.asString()
+          when (param.wire(classifier)) {
+            InterfaceBridgeWire.BOOL -> append("Byte, ")
+            InterfaceBridgeWire.ORDINAL -> append("Int, ")
+            InterfaceBridgeWire.BY_VALUE -> append("$pSimple, ")
+            InterfaceBridgeWire.HANDLE -> append("COpaquePointer?, ")
           }
         }
         // ADR-161: ctx, then the trailing error slot.
@@ -84,11 +111,7 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
 
       val paramDecl: String = params.joinToString(", ") { param ->
         val pName: String = param.name?.asString() ?: "_"
-        val pType = param.type.resolve().expandAliases()
-        val pQualified: String = pType.declaration.qualifiedName?.asString() ?: ""
-        val pSimple: String = pType.declaration.simpleName.asString()
-        val typeStr: String = if (pQualified.startsWith("kotlin.")) pSimple else pQualified
-        "$pName: $typeStr"
+        "$pName: ${param.type.resolve().expandAliases().overrideSpelling()}"
       }
 
       appendLine("    override fun $mName($paramDecl) {")
@@ -96,35 +119,25 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
       // Marshal each param before invoking the function pointer
       params.forEachIndexed { i, param ->
         val pName: String = param.name?.asString() ?: "arg$i"
-        val pType = param.type.resolve().expandAliases()
-        val pSimple: String = pType.declaration.simpleName.asString()
-        val pQualified: String = pType.declaration.qualifiedName?.asString() ?: ""
-        val isEnum: Boolean = (pType.declaration as? KSClassDeclaration)
-          ?.classKind == ClassKind.ENUM_CLASS
-        val isPrimitive: Boolean = pQualified.startsWith("kotlin.") && pSimple != "String"
-        when {
-          pSimple == "Boolean" ->
+        when (param.wire(classifier)) {
+          InterfaceBridgeWire.BOOL ->
             appendLine("      val arg${i}Val: Byte = if ($pName) 1.toByte() else 0.toByte()")
-          isEnum -> appendLine("      val arg${i}Val: Int = $pName.ordinal")
-          isPrimitive -> { /* primitives passed by value, no extra binding needed */ }
-          else -> appendLine("      val arg${i}Ref = NugetHandles.retain($pName as Any)")
+          InterfaceBridgeWire.ORDINAL -> appendLine("      val arg${i}Val: Int = $pName.ordinal")
+          InterfaceBridgeWire.BY_VALUE -> {
+            /* primitives passed by value, no extra binding needed */
+          }
+          InterfaceBridgeWire.HANDLE ->
+            appendLine("      val arg${i}Ref = NugetHandles.retain($pName as Any)")
         }
       }
 
       val invokeArgs: String = buildString {
         params.forEachIndexed { i, param ->
           val pName: String = param.name?.asString() ?: "arg$i"
-          val pType = param.type.resolve().expandAliases()
-          val pSimple: String = pType.declaration.simpleName.asString()
-          val pQualified: String = pType.declaration.qualifiedName?.asString() ?: ""
-          val isEnum: Boolean = (pType.declaration as? KSClassDeclaration)
-            ?.classKind == ClassKind.ENUM_CLASS
-          val isPrimitive: Boolean = pQualified.startsWith("kotlin.") && pSimple != "String"
-          when {
-            pSimple == "Boolean" -> append("arg${i}Val, ")
-            isEnum -> append("arg${i}Val, ")
-            isPrimitive -> append("$pName, ")
-            else -> append("arg${i}Ref, ")
+          when (param.wire(classifier)) {
+            InterfaceBridgeWire.BOOL, InterfaceBridgeWire.ORDINAL -> append("arg${i}Val, ")
+            InterfaceBridgeWire.BY_VALUE -> append("$pName, ")
+            InterfaceBridgeWire.HANDLE -> append("arg${i}Ref, ")
           }
         }
         append("${mName}Ctx, nugetErr")

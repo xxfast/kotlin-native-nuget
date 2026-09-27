@@ -288,9 +288,11 @@ internal fun FileSpec.Builder.addClassExports(
   val interfaceBridgePairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
     findInterfaceBridgePairs(methods)
   interfaceBridgePairs.forEach { (addMethod, removeMethod) ->
-    // ADR-090 amendment (2026-09-26): named by `warnRefusedLegacyRouteMembers`, dropped here.
-    if (legacyRefusedInterfaceBridgePair(addMethod) != null) return@forEach
-    addInterfaceBridgeExports(addMethod, removeMethod, qualifiedName, prefix)
+    // ADR-090 / ADR-039 amendments (2026-09-26): an overloaded listener member, or one whose
+    // parameter or return the route cannot carry, is named by `warnRefusedLegacyRouteMembers` and
+    // dropped here.
+    if (classifier.legacyRefusedInterfaceBridgePair(addMethod) != null) return@forEach
+    addInterfaceBridgeExports(addMethod, removeMethod, qualifiedName, prefix, classifier)
   }
 
   // ADR-090: member plans come off the catalog, not from a per-declaration plan lookup. Overload

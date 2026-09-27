@@ -696,7 +696,7 @@ internal class ForwardBridgeTypeClassifier(
   }
 
   /** The payload shapes both callback halves lower, in. See [callbackType]. */
-  private fun BridgeType.isCallbackPayload(): Boolean = when (this) {
+  internal fun BridgeType.isCallbackPayload(): Boolean = when (this) {
     is BridgeType.Primitive, BridgeType.String, is BridgeType.Enum -> true
     is BridgeType.ObjectHandle -> !viaDiscriminator
     is BridgeType.Interface -> true
