@@ -480,7 +480,12 @@ internal fun csTypeArguments(
   .filterIsInstance<CsTypeArgument.Unnameable>()
   .firstOrNull()
 
-/** Issue #111: the C# spellings, valid only when [csTypeArguments] found nothing unnameable. */
+/**
+ * Issue #111: the C# spellings, valid only when [csTypeArguments] found nothing unnameable. Every
+ * caller gates on [csTypeArguments] first and skips the member named, so an unnameable argument
+ * here is a caller that forgot the gate: failing loudly beats rendering a bare simple name for the
+ * consumer's compiler to reject (CS0246).
+ */
 internal fun csTypeArgumentNames(
   arguments: List<KSTypeArgument>,
   exportedTypes: Set<String>,
@@ -488,10 +493,10 @@ internal fun csTypeArgumentNames(
 ): List<String> = arguments.map { argument ->
   when (val spelling = csTypeArgument(argument.type?.resolve(), exportedTypes, context)) {
     is CsTypeArgument.Named -> spelling.csType
-    // The generic-return route (`CirFunctionTranslator`) is qualify-only by decision: it keeps the
-    // pre-issue-#111 simple name for an argument with no C# spelling rather than skipping the
-    // function, so gating that route stays a separate question.
-    is CsTypeArgument.Unnameable -> spelling.typeArgument.substringAfterLast('.')
+    is CsTypeArgument.Unnameable -> error(
+      "Forward CIR spelled the type argument '${spelling.typeArgument}', which has no C# " +
+          "spelling, without gating on csTypeArguments first (issue #111)",
+    )
   }
 }
 
@@ -553,4 +558,40 @@ internal fun lambdaTypeArgumentDiagnostic(
   hint = "expose a lambda over bridgeable types instead: replace `$typeArgument` with a " +
       "primitive, a String, or a top-level exported class in the export scope (a Flow or a " +
       "generic type argument needs its own bridgeable wrapper type)",
+)
+
+/**
+ * Issue #111's rule on the top-level generic-return route: the [lambdaTypeArgumentDiagnostic]
+ * sibling for `fun f(): Crate<List<Int>>` (an argument C# cannot name) and
+ * `fun f(): Pair<Int, Int>` (an outer generic type nothing in `Interop.cs` declares). Its own
+ * wording, because this route is not a lambda.
+ */
+internal fun genericReturnTypeArgumentDiagnostic(
+  symbol: KSNode?,
+  declaration: String,
+  unspellable: String,
+  isOuterType: Boolean,
+  owner: ForwardDiagnosticOwner?,
+  member: String?,
+): ForwardDiagnostic = ForwardDiagnostic(
+  kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
+  symbol = symbol,
+  declaration = declaration,
+  owner = owner,
+  member = member,
+  reason = if (isOuterType) {
+    "its generic return type `$unspellable` is not declared in C#: a generic return must be a " +
+        "generic class exported from this module"
+  } else {
+    "its type argument `$unspellable` has no C# spelling on a generic return: an argument must " +
+        "be a primitive, String, or an exported class, object, enum or interface, and a type " +
+        "carrying its own type arguments (a collection, a generic class, Flow, a lambda) has none"
+  },
+  hint = if (isOuterType) {
+    "return an exported generic class of your own instead of `$unspellable`, or a non-generic " +
+        "exported class wrapping it"
+  } else {
+    "replace `$unspellable` with a primitive, a String, or an exported class in the export " +
+        "scope, or return a non-generic exported class that wraps the value"
+  },
 )

@@ -163,6 +163,44 @@ re-declared alongside it, and C# overload resolution then picks between the two 
 does. Generic **subclasses** (`class Sub<T> : Base<T>(...)`) are not supported yet; declare the
 member directly on the closed subclass instead.
 
+## Returning an instantiated generic class
+
+A top-level function returning a generic class instantiated with a primitive, `String`, or an
+exported class, object, or enum binds normally, qualified the same way any other cross-namespace
+return is:
+
+```kotlin
+class Crate<T>(val item: T)
+
+fun crateOfInt(): Crate<Int> = Crate(1)
+fun crateOfSnapshot(): Crate<Snapshot> = Crate(Snapshot("Oreo"))
+```
+
+```C#
+Crate<int> crate = Crates.CrateOfInt();
+Crate<Snapshot> snapshotCrate = Crates.CrateOfSnapshot(); // qualified: Crate<global::...Snapshot>
+```
+
+If the type argument is something this route can't spell — a collection, another generic class,
+`Flow`, a lambda, `Any`, or `ByteArray` — or the outer type is itself not an exported generic class
+(`Pair<Int, Int>`), the function is skipped instead of generating C# that fails to compile:
+
+```kotlin
+fun crateOfList(): Crate<List<Int>> = Crate(listOf(1)) // skipped, named
+fun pairOf(): Pair<Int, Int> = 1 to 2                  // skipped: Pair isn't declared in C#
+```
+
+```
+w: [nuget] [SKIPPED_UNSUPPORTED_RETURN] Skipping crateOfList(): its type argument
+   `kotlin.collections.List` has no C# spelling on a generic return: an argument must be a
+   primitive, String, or an exported class, object, enum or interface, and a type carrying its own
+   type arguments (a collection, a generic class, Flow, a lambda) has none
+```
+
+A **nullable** generic-class return (`fun f(): Crate<Int>?`) is refused the same way, named, even
+when the non-null form (`Crate<Int>`) would bind fine; return the non-null form, or wrap it in your
+own non-generic class if `null` needs to be expressible.
+
 ## Generic functions
 
 ```kotlin

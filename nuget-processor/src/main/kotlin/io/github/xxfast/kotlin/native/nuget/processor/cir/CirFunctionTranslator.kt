@@ -522,11 +522,39 @@ internal fun translateFunction(
   if (isGenericReturnType) {
     if (hasEnumParams) return enumParamsUnsupported("generic")
 
-    // Issue #111, qualify half only: the generic return carried a byte-identical copy of the
-    // lambda routes' `simpleName` spelling, so `Crate<Snapshot>` named a type from a namespace
-    // that does not contain it. Deliberately NOT gated on the export set like the lambda routes:
-    // a type parameter (`fun <T> crateOf(): Crate<T>`) must keep rendering `T`, and whether an
-    // unnameable generic argument should skip the function is a separate question.
+    // Issue #111's rule on this route: a type C# cannot name makes the whole function unspellable,
+    // so it is skipped named rather than rendered for the consumer's compiler to reject. First the
+    // outer type (`Pair<Int, Int>` rendered `global::Interop.Kotlin.Pair<int, int>`, CS0234), then
+    // its arguments (`Crate<List<Int>>` rendered `Crate<List>`, CS0246). A type parameter
+    // (`fun <T> crateOf(): Crate<T>`) is `Named("T")` and keeps binding. Binding the unnameable
+    // ones instead is not reachable: the carrier reads its `T` through
+    // `NugetMarshal.FromHandle<T>`, which has no materialiser for a collection, a constructed
+    // generic or a Flow.
+    val returnQualifiedName: String = requireNotNull(qualifiedReturnName)
+    val isOuterUndeclared: Boolean = returnQualifiedName !in exportedTypes
+    val unspellable: String? = if (isOuterUndeclared) {
+      returnQualifiedName
+    } else {
+      csTypeArguments(returnType.arguments, exportedTypes, context)?.typeArgument
+    }
+    if (unspellable != null) {
+      ForwardDiagnosticSink.emit(
+        listOf(
+          genericReturnTypeArgumentDiagnostic(
+            symbol = func,
+            declaration = func.simpleName.asString(),
+            unspellable = unspellable,
+            isOuterType = isOuterUndeclared,
+            // A top-level function, so the hole is on its ADR-007 file holder.
+            owner = func.forwardFileClassOwner(),
+            member = func.simpleName.asString(),
+          ),
+        ),
+        logger,
+      )
+      return emptyList()
+    }
+
     val typeArgs: String =
       csTypeArgumentNames(returnType.arguments, exportedTypes, context).joinToString(", ")
 

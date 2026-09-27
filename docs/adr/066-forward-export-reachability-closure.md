@@ -1062,3 +1062,47 @@ type is ever admitted on behalf of a declaration no route will export.
 No diagnostic. The filter runs ahead of skip reporting, so a compiler-owned member is not a dropped
 callable and never becomes a `SKIPPED_*` line. The invariant behind that: a diagnostic may only
 describe something the consumer can act on.
+
+## 2026-09-27 amendment: gating unnameable type arguments on the generic-return route
+
+The 2026-09-08 amendment above (issue #111) gated every lambda-type-argument site except one: the
+top-level generic-return route (`CirFunctionTranslator.kt`'s `isGenericReturnType` arm, used by a
+non-generic top-level function that returns an instantiated generic class, e.g.
+`fun crateOfList(): Crate<List<Int>>`). That route called `csTypeArgumentNames` with no
+`csTypeArguments` check first, so an unnameable type argument still fell through to a bare Kotlin
+simple name (`Crate<List>`, `CS0246`) instead of being skipped. The route's outer type had the same
+gap: `fun pairOf(): Pair<Int, Int>` qualified `Pair` as if it were declared in this module's C#
+(`Interop.Kotlin.Pair`, `CS0234`), because the route never checked the outer declaration against
+`exportedTypes` either.
+
+Both gaps are closed the same way the lambda sites already were: before spelling the return, the
+route now calls `csTypeArguments` on the type argument list, and separately checks the outer
+declaration against `exportedTypes`. Either check failing skips the function with a named
+`SKIPPED_UNSUPPORTED_RETURN` (a new `genericReturnTypeArgumentDiagnostic` in `CirTypeMapping.kt`,
+worded for a return rather than a lambda) instead of emitting C# that fails to compile. A type
+parameter argument (`fun <T> crateOf(item: T): Crate<T>`) is unaffected: it still spells as `T`.
+
+Folded into the same fix, a pre-existing defect one step over: a **nullable** generic-class return
+(`fun f(): Crate<Int>?`) took a different branch of `translateFunction` that imported
+`_has_value`/`_value` entry points the Kotlin half never exported, aborting the whole build with
+`ERROR_INTERNAL_GENERATOR_FAILURE` rather than producing a diagnosable skip — for a nameable
+`Crate<Int>?` exactly as much as for an unnameable one. `hasLegacyGenericReturnRoute()`
+(`exports/FunctionExports.kt`), the hoisted gate shared by both halves and the planner, now refuses
+a nullable generic return outright, so the planner's existing `NULLABLE` return skip names it on
+both halves instead. A non-nullable `Crate<Int>` still binds unaffected.
+
+With every caller now gated, `csTypeArgumentNames`'s `Unnameable` arm (previously a bare-simple-name
+fallback documented as "qualify-only by decision" for this one route) is unreachable and is now a
+hard `error(...)`: a future caller that forgets to gate on `csTypeArguments` first fails loudly
+during generation instead of silently emitting broken C#.
+
+As with the lambda-return skip, the Kotlin half still exports the function's `@CName`; the skip is
+C#-only, and `ForwardAbiContract` tolerates the resulting orphan export by design (see the 2026-09-08
+amendment above). No binding route exists for the skipped shapes: a generic carrier reads its `T`
+through `NugetMarshal.FromHandle<T>`, which has no materialiser for a collection, a constructed
+generic, or a `Flow`, so spelling one of these instead of skipping it would compile and then throw
+`NotSupportedException` on first read — a worse outcome than the named skip. Binding a collection,
+generic-class, enum, or `Flow` type argument on a generic carrier is a separate feature, not covered
+here.
+
+See [Generics](../topics/generics.md) for the consumer-facing shape and diagnostic text.

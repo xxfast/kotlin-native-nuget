@@ -81,7 +81,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 
 | Kotlin | ⇄ | C# | Notes | Docs |
 |---|:-:|---|---|---|
-| `class<T>` | ⇄ | `class<T>` | → type-erased bridge behind a generic C# wrapper, where a `null` read collapses to `default(T)` at a value-type instantiation · ← bound per closed instantiation; BCL ones are diagnosed | [Generics](generics.md) · [Generic types](generic-types.md) |
+| `class<T>` | ⇄ | `class<T>` | → type-erased wrapper, `null` collapses to `default(T)` for a value type; an unspellable return type argument or outer type skips, named · ← bound per closed instantiation; BCL ones are diagnosed | [Generics](generics.md) · [Generic types](generic-types.md) |
 | `class<T>(...)` constructor | ⇄ | typed constructors | → typed arguments, and one entry point serves every instantiation of `T` · ← one Kotlin constructor per unambiguous instantiation; two that erase alike are both dropped | [Generics](generics.md) · [Generic types](generic-types.md) |
 | a method declared on a `class<T>` | → | instance method on the generic carrier | Every `T` position crosses as a boxed handle; a position not naming `T` binds as on a plain class. `T` inside a collection, lambda or `Flow`, and a generic subclass, are refused. | [Generics](generics.md) |
 | `fun <T> f()` | → | typed variants | Dispatched on the runtime type. | [Generics](generics.md) |

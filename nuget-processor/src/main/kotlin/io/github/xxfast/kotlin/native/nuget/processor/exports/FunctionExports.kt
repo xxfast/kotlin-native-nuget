@@ -43,6 +43,15 @@ internal fun KSFunctionDeclaration.hasLegacyGenericReturnRoute(): Boolean {
   // they were dropped. Not ByteArray-specific: any component the plan refuses (`List<Instant>`,
   // `List<Uuid>`, `List<Sequence<Int>>`) took the same fall-through. Skip means absent.
   if (qualified in LEGACY_UNROUTED_COLLECTIONS) return false
+  // A nullable generic return (`fun f(): Crate<Int>?`) has no shape on this route: the C# half
+  // took `translateFunction`'s nullable branch and imported `_has_value`/`_value` entry points the
+  // Kotlin half never exports, so the ABI contract failed the whole build as an internal generator
+  // error. The planner already names it (a NULLABLE return skip), so refusing it here makes it
+  // absent on both halves.
+  // Read both sides: `expandAliases()` drops a use-site `?` on an alias.
+  if (returnType.isMarkedNullable || this.returnType?.resolve()?.isMarkedNullable == true) {
+    return false
+  }
   // The same hole one position over: this route's C# half spells every parameter through
   // `mapParamType`, whose fall-through is a public `IntPtr` (issue #126's class, which ADR-122
   // fixed on the async routes only). A plan skip caused by a PARAMETER left the return route open,
