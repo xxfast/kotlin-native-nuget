@@ -404,6 +404,8 @@ class ForwardBridgeTypeClassifierTest {
     "getDeclaration" to declaration,
     "isMarkedNullable" to nullable,
     "getArguments" to arguments,
+    // ADR-018 amendment: `expandAliases()` applies an alias use site's `?` to the expanded type.
+    "makeNullable" to lazy { type(declaration, nullable = true, arguments) },
   )
 
   private fun argument(type: KSType?): KSTypeArgument = proxy("getType" to type?.let(::typeReference))
@@ -480,7 +482,7 @@ class ForwardBridgeTypeClassifierTest {
         "equals" -> false
         // A stub whose value is deliberately `null` (an absent parent declaration, an absent
         // primary constructor) is a stub, not a gap: key presence decides, not the value.
-        in methods -> methods[method.name]
+        in methods -> methods[method.name].let { if (it is Lazy<*>) it.value else it }
         else -> error("Unexpected ${T::class.simpleName}.${method.name} call")
       }
     } as T

@@ -20,10 +20,50 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedIn
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.isUnderPackage
 
+/**
+ * Expands a `typealias` reference to the type it names (ADR-018).
+ *
+ * ADR-018 amendment: the alias reference's own `?` is part of the type, so `Name?` (where
+ * `typealias Name = String`) expands to `String?`; `KSTypeAlias.type.resolve()` describes only the
+ * RHS and cannot see it. A generic alias's type parameters are substituted with the use-site
+ * arguments, so `Box<Int>` (where `typealias Box<T> = List<T>`) expands to `List<Int>`, not the
+ * alias's own `List<T>`. Chained aliases compose because every level recurses through here.
+ */
 internal fun KSType.expandAliases(): KSType {
   val decl = declaration
-  return if (decl is KSTypeAlias) decl.type.resolve().expandAliases()
-  else this
+  if (decl !is KSTypeAlias) return this
+  val target: KSType = decl.type.resolve().substituteAliasParameters(decl, arguments)
+  val expanded: KSType = target.expandAliases()
+  return if (isMarkedNullable) expanded.makeNullable() else expanded
+}
+
+/**
+ * Replaces each of [alias]'s type parameters in this RHS type with the matching [useSite]
+ * argument. Only a parameter spelled directly (the whole RHS, or one of its top-level arguments)
+ * is substituted; the use-site argument object is reused as-is, so its own `?` and variance carry.
+ */
+private fun KSType.substituteAliasParameters(
+  alias: KSTypeAlias,
+  useSite: List<KSTypeArgument>,
+): KSType {
+  if (useSite.isEmpty()) return this
+  val parameters: List<String> = alias.typeParameters.map { it.name.asString() }
+  if (parameters.isEmpty() || useSite.size != parameters.size) return this
+  fun useSiteFor(type: KSType?): KSTypeArgument? {
+    // Matched by name: an alias is top-level, so its RHS can only name its own parameters (KSP2
+    // does not hand back the same `KSTypeParameter` instance through `resolve()`).
+    val parameter = type?.declaration as? KSTypeParameter ?: return null
+    val index: Int = parameters.indexOf(parameter.name.asString())
+    return if (index >= 0) useSite[index] else null
+  }
+  // Defensive: `typealias Id<T> = T` is rejected by the Kotlin compiler, so no compiling module
+  // reaches this arm; KSP still sees such a source, and it must not spell a bare `T`.
+  useSiteFor(this)?.let { argument ->
+    val resolved: KSType = argument.type?.resolve() ?: return this
+    return if (isMarkedNullable) resolved.makeNullable() else resolved
+  }
+  if (arguments.none { useSiteFor(it.type?.resolve()) != null }) return this
+  return replace(arguments.map { argument -> useSiteFor(argument.type?.resolve()) ?: argument })
 }
 
 internal val KOTLIN_TO_CSHARP_RETURN = mapOf(
@@ -445,8 +485,8 @@ internal fun csTypeArgument(
   val qualifiedName: String = declaration.qualifiedName?.asString() ?: simpleName
 
   // Boundary nullability part A1: the type argument's own nullability, read the two-sided way
-  // `ForwardBridgeTypeClassifier.classify` reads it (`expandAliases()` drops use-site nullability,
-  // so a `typealias Name = String` argument spelled `Name?` would otherwise read as non-null).
+  // `ForwardBridgeTypeClassifier.classify` reads it (since the ADR-018 amendment `expandAliases()`
+  // carries a `Name?` use site's `?` itself; the unexpanded OR is kept as belt-and-braces).
   // Without this, `(String?) -> Unit` and `(String) -> Unit` were spelled identically as
   // `KotlinAction<string>` with no diagnostic in between, and `(Int?) -> Unit` came out
   // `KotlinAction<int>`, where null is not expressible at all: a consumer could not write the call.

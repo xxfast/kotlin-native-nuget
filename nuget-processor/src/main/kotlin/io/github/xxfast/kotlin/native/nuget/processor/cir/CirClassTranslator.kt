@@ -1441,7 +1441,7 @@ internal fun flowProperty(
   // Not on this route at all: the caller's other legacy arms (lambda, suspend lambda) own it.
   if (!isFlowType && !isStateFlowType) return null
   val flowElementTypeResolved: KSType? = if (isFlowType || isStateFlowType) {
-    propTypeResolved.arguments.firstOrNull()?.type?.resolve()
+    propTypeResolved.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
   } else null
   // ADR-067, widened 2026-09-20: a nullable ELEMENT is threaded on BOTH flow shapes. It used to be
   // `isStateFlowType && ...`, which left a plain `Flow<T?>` declared as a non-null `KotlinFlow<T>`
@@ -1656,7 +1656,8 @@ internal fun flowMembers(
     val returnType = method.returnType?.resolve()?.expandAliases()
     val returnQualified: String? = returnType?.declaration?.qualifiedName?.asString()
     val isStateFlowMethod: Boolean = returnQualified in STATE_FLOW_TYPES
-    val flowElementTypeResolved: KSType? = returnType?.arguments?.firstOrNull()?.type?.resolve()
+    val flowElementTypeResolved: KSType? =
+      returnType?.arguments?.firstOrNull()?.type?.resolve()?.expandAliases()
     // ADR-067 (widened 2026-09-20): nullable ELEMENT threading mirrors the sibling property branch
     // above -- both flow shapes, since the per-item wire is the same handle either way. A nullable
     // MEMBER stays StateFlow-only (the `_has_value` probe has no plain-Flow half).

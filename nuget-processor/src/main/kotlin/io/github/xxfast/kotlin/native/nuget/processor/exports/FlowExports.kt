@@ -117,7 +117,7 @@ internal fun KSFunctionDeclaration.returnsHeldMutableStateFlow(): Boolean {
   if (resolved.declaration.qualifiedName?.asString() !in MUTABLE_STATE_FLOW_TYPES) return false
   // ADR-067's nullable element/member threading is deferred on the settable route, on both halves.
   if (resolved.isMarkedNullable) return false
-  val element: KSType? = resolved.arguments.firstOrNull()?.type?.resolve()
+  val element: KSType? = resolved.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
   if (element?.isMarkedNullable == true) return false
   return isMutableStateFlowElementSupported(element)
 }
@@ -155,7 +155,8 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
   // `NugetProcessor` names it once as a SKIPPED_UNSUPPORTED_PROPERTY.
   if (classifier.legacyRefusedFlowElement(propTypeResolved) != null) return
 
-  val flowElementType: KSType? = propTypeResolved.arguments.firstOrNull()?.type?.resolve()
+  val flowElementType: KSType? =
+    propTypeResolved.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
   val flowElementQualified: String =
     flowElementType?.declaration?.qualifiedName?.asString() ?: "kotlin.Any"
   // ADR-067, widened 2026-09-20: a nullable ELEMENT is threaded on both flow shapes, the C# half's
@@ -268,7 +269,8 @@ internal fun FileSpec.Builder.addFlowMethodExports(
   val returnType: KSType? = method.returnType?.resolve()?.expandAliases()
   val returnQualified: String? = returnType?.declaration?.qualifiedName?.asString()
   val isStateFlowMethod: Boolean = returnQualified in STATE_FLOW_TYPES
-  val flowElementType: KSType? = returnType?.arguments?.firstOrNull()?.type?.resolve()
+  val flowElementType: KSType? =
+    returnType?.arguments?.firstOrNull()?.type?.resolve()?.expandAliases()
   val flowElementQualified: String =
     flowElementType?.declaration?.qualifiedName?.asString() ?: "kotlin.Any"
   // ADR-067 (widened 2026-09-20): nullable ELEMENT threading on both flow shapes, mirroring the

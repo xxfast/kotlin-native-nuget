@@ -482,7 +482,7 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
   // export, which has no per-member projection seam, so a collection element cannot cross there
   // even though the ADR-065 property and method routes now bind one. Refused, not half-bound.
   if (expanded.declaration.qualifiedName?.asString() in STATE_FLOW_TYPES) {
-    val element: KSType? = expanded.arguments.firstOrNull()?.type?.resolve()
+    val element: KSType? = expanded.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
     // 2026-09-20: a NULLABLE element is refused here for the same reason a collection element is,
     // and more sharply. This bucket reads through the module-wide `nuget_stateflow_value`, which
     // is `NugetHandles.retain(flow.value as Any)` with no null arm and no `try` around it: a null
@@ -602,7 +602,7 @@ internal fun legacyFlowElement(type: KSType?): KSType? {
   val expanded: KSType = type?.expandAliases() ?: return null
   val qualified: String? = expanded.declaration.qualifiedName?.asString()
   if (qualified !in FLOW_TYPES && qualified !in STATE_FLOW_TYPES) return null
-  return expanded.arguments.firstOrNull()?.type?.resolve()
+  return expanded.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
 }
 
 /** The refused element of a `Flow`/`StateFlow` member, or null when it binds (or is not one). */
@@ -783,18 +783,13 @@ private fun BridgeType.Collection.isLegacyMarshallableInput(): Boolean = when {
   else -> element?.isWrappableComponent() == true
 }
 
-/** `Pair<String, Int>`: the author's own spelling, so a skip diagnostic names what to change. */
-private fun KSType.legacyDescription(): String {
-  val base: String = declaration.simpleName.asString()
-  // ADR-122: the `?` matters for a non-generic refusal too, since a nullable object is refused
-  // *for* its nullability and the author would otherwise read the message as "no objects here".
-  val nullable: String = if (isMarkedNullable) "?" else ""
-  if (arguments.isEmpty()) return "$base$nullable"
-  val rendered: String = arguments.joinToString(", ") { argument ->
-    argument.type?.resolve()?.declaration?.simpleName?.asString() ?: "*"
-  }
-  return "$base<$rendered>$nullable"
-}
+/**
+ * `Pair<String, Int>`, `Map<String?, Int>`, `List<String>?`: the declared type with every alias
+ * expanded and every `?` it carries, head and type arguments, so a skip diagnostic names the shape
+ * being refused. ADR-122: the `?` matters for a non-generic refusal too, since a nullable object is
+ * refused *for* its nullability.
+ */
+private fun KSType.legacyDescription(): String = kotlinSpelling()
 
 /**
  * The generator names one legacy-route member derives from its parameters, minted once per member
@@ -1174,24 +1169,28 @@ private fun ForwardBridgeTypeClassifier.refusedListenerMember(
 }
 
 /**
- * A Kotlin source spelling for a diagnostic: simple names, type arguments and `?` kept. A
- * `kotlin.FunctionN` is spelled in arrow syntax (`(Int) -> Unit`), as the author wrote it.
+ * A Kotlin source spelling for a diagnostic: simple names, type arguments and every `?` kept, head
+ * and arguments alike. Aliases are expanded at every level (ADR-018 amendment), so `Names?` reads
+ * `List<String>?` and `Map<Name?, Int>` reads `Map<String?, Int>`: the shape being refused, not the
+ * alias hiding it. A `kotlin.FunctionN` is spelled in arrow syntax (`(Int) -> Unit`).
  */
 internal fun KSType.kotlinSpelling(): String {
-  val qualifiedName: String? = declaration.qualifiedName?.asString()
-  if (qualifiedName in LEGACY_CALLBACK_TYPES && this.arguments.isNotEmpty()) {
-    val spelled: List<String> = this.arguments.map { argument ->
+  val type: KSType = expandAliases()
+  val qualifiedName: String? = type.declaration.qualifiedName?.asString()
+  if (qualifiedName in LEGACY_CALLBACK_TYPES && type.arguments.isNotEmpty()) {
+    val spelled: List<String> = type.arguments.map { argument ->
       argument.type?.resolve()?.kotlinSpelling() ?: "*"
     }
     val lambda: String = "(${spelled.dropLast(1).joinToString(", ")}) -> ${spelled.last()}"
-    return if (isMarkedNullable) "($lambda)?" else lambda
+    return if (type.isMarkedNullable) "($lambda)?" else lambda
   }
   val arguments: String =
-    if (this.arguments.isEmpty()) ""
-    else this.arguments.joinToString(", ", "<", ">") { argument ->
+    if (type.arguments.isEmpty()) ""
+    else type.arguments.joinToString(", ", "<", ">") { argument ->
       argument.type?.resolve()?.kotlinSpelling() ?: "*"
     }
-  return "${declaration.simpleName.asString()}$arguments${if (isMarkedNullable) "?" else ""}"
+  val nullable: String = if (type.isMarkedNullable) "?" else ""
+  return "${type.declaration.simpleName.asString()}$arguments$nullable"
 }
 
 /**

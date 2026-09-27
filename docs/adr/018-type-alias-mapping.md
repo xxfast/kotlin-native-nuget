@@ -66,3 +66,35 @@ route and a plain member, which already expanded. Closed. An external library th
 an alias-receiver extension function sees its C entry point name change on upgrade; the C# surface
 is unaffected, and since the C# shim and the native library always ship together in one package, a
 consumer of that library sees nothing.
+
+## Amendment (2026-09-28): use-site nullability and generic alias substitution
+
+`expandAliases()` returned the alias's RHS type but discarded the alias reference's own `?`
+(`Name?` where `typealias Name = String`), so the plan route's callers had grown a two-sided
+workaround (OR the unexpanded type's `isMarkedNullable` back in) while the suspend and StateFlow
+routes, which trusted the expanded type alone, either bound a nullable alias member as non-null or
+failed to generate compiling Kotlin at all. `expandAliases()` now reapplies the alias reference's
+own `?` to the expanded type, so every reader of the expanded type sees the use-site nullability
+without a workaround; the two-sided ORs in the classifier and elsewhere are now redundant but
+harmless.
+
+The same change substitutes a generic alias's type parameters with the use site's arguments when
+they appear as the RHS's own top-level type arguments: `typealias Box<T> = List<T>` used as
+`Box<Int>` now binds as `IReadOnlyList<int>` (it used to be a named skip). A parameter nested
+deeper in the RHS (`typealias Pages<T> = List<Map<String, T>>`) is not substituted and stays a
+named skip.
+
+`kotlinSpelling()` is now the one refusal-message speller for a member refused on the suspend/Flow
+legacy route (the previous per-call-site renderers are retired); each type argument carries its own
+`?` in the message (`Map<String?, Int>`, `List<String>?`), matching the expanded type the refusal
+is actually about.
+
+An alias to a nullable type at a `Flow`/`StateFlow` element position now binds `KotlinFlow<string?>`
+/ `KotlinStateFlow<string?>` (it used to bind `<string>`, with the Kotlin side risking a null write
+into a non-nullable C# read).
+
+Consequence for an existing consumer: a suspend function or `StateFlow` member that spelled a
+nullable alias previously either failed to generate (a whole-module `ERROR_INTERNAL_GENERATOR_FAILURE`)
+or bound as non-null; it now binds nullable, or takes the same named refusal the written-out type
+would get (a nullable alias to a collection is refused as a nullable collection, per ADR-119, not a
+generator crash).
