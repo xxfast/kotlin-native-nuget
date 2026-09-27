@@ -118,7 +118,8 @@ class Tier1TopLevelNullableScalarSingleCallTest {
     // ADR-164's optional default keeps its HasValue slot ahead of valueOut.
     assertContains(
       cs,
-      "private static extern bool Native_TagsWithDefault(IntPtr items, bool extraHasValue, " +
+      "private static extern bool Native_TagsWithDefault(IntPtr items, " +
+          "[MarshalAs(UnmanagedType.I1)] bool extraHasValue, " +
           "int extra, out int valueOut, out IntPtr error);",
     )
   }

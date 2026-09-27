@@ -121,6 +121,8 @@ internal fun List<ForwardAbiSignature>.canonicalText(): String =
 internal object ForwardAbiContract {
   private const val ENTRY_POINT_MARKER: String = "EntryPoint = \""
   private const val EXTERN_MARKER: String = "static extern "
+  private const val BOOL_RETURN_MARSHAL: String = "[return: MarshalAs(UnmanagedType.I1)]"
+  private const val BOOL_PARAMETER_MARSHAL: String = "[MarshalAs(UnmanagedType.I1)] "
 
   /**
    * ADR-117: returns the duplicate-entry-point collisions (a user-reachable authoring mistake) for
@@ -234,19 +236,29 @@ internal object ForwardAbiContract {
     owners: ForwardExportOwners = ForwardExportOwners.EMPTY,
   ): ForwardAbiLegacyContracts {
     val lines: List<String> = renderedCsharp.lines()
+    val unmarshalledBools: MutableList<String> = mutableListOf()
     val collected: List<ForwardAbiSignature> = lines.mapIndexedNotNull { index, line ->
       val name: String = line.entryPointName() ?: return@mapIndexedNotNull null
       // The attribute and its declaration are adjacent apart from further attribute lines a
       // marshalled return adds (`[return: MarshalAs(UnmanagedType.I1)]`). Anything else means the
       // renderer's format moved, which must fail loudly rather than silently shrink coverage.
-      val declaration: String = lines.drop(index + 1)
+      val following: List<String> = lines.drop(index + 1)
         .map { candidate -> candidate.trim() }
-        .firstOrNull { candidate -> candidate.isNotEmpty() && !candidate.startsWith("[") }
-        .orEmpty()
+        .filter { candidate -> candidate.isNotEmpty() }
+      val attributes: List<String> = following.takeWhile { candidate -> candidate.startsWith("[") }
+      val declaration: String = following.getOrNull(attributes.size).orEmpty()
       check(declaration.contains(EXTERN_MARKER)) {
         "Forward ABI legacy import for $name has no extern declaration; found \"$declaration\""
       }
+      // Read off the shipped text before the ordinary filter, so every renderer is covered.
+      unmarshalledBools += unmarshalledBoolSlots(name, attributes, declaration)
       if (name in ordinaryNames) null else externSignature(name, declaration)
+    }
+    require(unmarshalledBools.isEmpty()) {
+      "Forward ABI bool without [MarshalAs(UnmanagedType.I1)] on a C# import (ADR-055): a " +
+          "DllImport `bool` defaults to the 4-byte Win32 BOOL, while every Kotlin export speaks " +
+          "a 1-byte C bool. Unmarshalled slots:\n" +
+          unmarshalledBools.joinToString("\n") { slot -> "  - $slot" }
     }
 
     val distinct: List<ForwardAbiSignature> = collected.distinct()
@@ -474,6 +486,38 @@ internal object ForwardAbiContract {
   private fun String.entryPointName(): String? {
     if (!contains(ENTRY_POINT_MARKER)) return null
     return substringAfter(ENTRY_POINT_MARKER).substringBefore("\"")
+  }
+
+  /**
+   * ADR-055 amendment (2026-09-27): every `bool` a `DllImport` spells, at the return, by value, or
+   * behind `out`/`ref`, must be marshalled as one byte. Returns one `entryPoint: slot` line per
+   * violation so a single generation round names all of them.
+   */
+  private fun unmarshalledBoolSlots(
+    entryPoint: String,
+    attributes: List<String>,
+    declaration: String,
+  ): List<String> {
+    val violations: MutableList<String> = mutableListOf()
+    val header: String = declaration.substringAfter(EXTERN_MARKER).substringBefore("(").trim()
+    val returnType: String = header.substringBeforeLast(" ").trim()
+    if (returnType == "bool" && BOOL_RETURN_MARSHAL !in attributes) {
+      violations += "$entryPoint: return bool"
+    }
+    declaration
+      .substringAfter("(")
+      .substringBeforeLast(")")
+      .split(",")
+      .map { parameter -> parameter.trim() }
+      .filter { parameter -> parameter.isNotEmpty() }
+      .forEach { parameter ->
+        val spelling: String = parameter.substringAfterLast("] ").trim()
+        val type: String = spelling.removePrefix("out ").removePrefix("ref ").substringBefore(" ")
+        if (type == "bool" && !parameter.startsWith(BOOL_PARAMETER_MARSHAL)) {
+          violations += "$entryPoint: $spelling"
+        }
+      }
+    return violations
   }
 
   private fun externSignature(name: String, declaration: String): ForwardAbiSignature {

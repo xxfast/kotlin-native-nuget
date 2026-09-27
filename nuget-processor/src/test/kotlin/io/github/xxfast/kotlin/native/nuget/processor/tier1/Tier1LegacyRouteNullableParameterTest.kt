@@ -72,7 +72,7 @@ class Tier1LegacyRouteNullableParameterTest {
 
     assertCsharp("public Task<string> CountNapsAsync(int? limit, CancellationToken")
     assertCsharp(
-      "IntPtr handle, IntPtr scopeHandle, bool limitHasValue, int limit, IntPtr callback",
+      "IntPtr handle, IntPtr scopeHandle, [MarshalAs(UnmanagedType.I1)] bool limitHasValue, int limit, IntPtr callback",
     )
     assertCsharp("limit.HasValue, limit.GetValueOrDefault()")
   }
@@ -107,7 +107,9 @@ class Tier1LegacyRouteNullableParameterTest {
     assertTrue(indoor.contains("indoor: Boolean,"), indoor)
     assertTrue(indoor.contains("if (indoorHasValue) indoor else null"), indoor)
     assertCsharp("public static Task<string> DescribeIndoorAsync(bool? indoor, CancellationToken")
-    assertCsharp("bool indoorHasValue, bool indoor, IntPtr callback")
+    assertCsharp(
+      "[MarshalAs(UnmanagedType.I1)] bool indoorHasValue, [MarshalAs(UnmanagedType.I1)] bool indoor, IntPtr callback",
+    )
     assertCsharp("indoor.HasValue, indoor.GetValueOrDefault()")
 
     val tag: String = exportEndingWith("_nameTagFor_async")
@@ -121,7 +123,7 @@ class Tier1LegacyRouteNullableParameterTest {
     assertTrue(collect.contains("limitHasValue: Boolean,"), collect)
     assertTrue(collect.contains("snacks(if (limitHasValue) limit else null)"), collect)
     assertCsharp("public KotlinFlow<string> Snacks(int? limit)")
-    assertCsharp("IntPtr scopeHandle, bool limitHasValue, int limit, IntPtr onNext")
+    assertCsharp("IntPtr scopeHandle, [MarshalAs(UnmanagedType.I1)] bool limitHasValue, int limit, IntPtr onNext")
 
     val value: String = exportEndingWith("_feeder_bowlStatus_value")
     assertTrue(value.contains("bowl: String?"), value)
@@ -131,7 +133,7 @@ class Tier1LegacyRouteNullableParameterTest {
     assertTrue(initials.contains("initialHasValue: Boolean,"), initials)
     assertCsharp("public KotlinStateFlow<string> Initials(char? initial)")
     assertCsharp(
-      "IntPtr handle, bool initialHasValue, [MarshalAs(UnmanagedType.U2)] char initial);",
+      "IntPtr handle, [MarshalAs(UnmanagedType.I1)] bool initialHasValue, [MarshalAs(UnmanagedType.U2)] char initial);",
     )
   }
 

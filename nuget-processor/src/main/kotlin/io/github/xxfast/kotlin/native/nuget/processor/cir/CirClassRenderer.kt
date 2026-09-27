@@ -340,7 +340,7 @@ internal fun StringBuilder.renderFlowPropertyNativeImports(
       val setValueEntryPoint = "${nativePrefix}_set_${prop.nativeName}_value"
       appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$setValueEntryPoint\")]")
       // ADR-098: a MutableStateFlow<Char> setter slot is a `char` slot like any other.
-      val setValueParam: String = charParameterMarshal(prop.nativeSetterType, "value")
+      val setValueParam: String = narrowParameterMarshal(prop.nativeSetterType, "value")
       appendLine("        private static extern void Native_Set${prop.name}Value(IntPtr handle, $setValueParam, out IntPtr error);")
       appendLine()
     }
@@ -350,6 +350,7 @@ internal fun StringBuilder.renderFlowPropertyNativeImports(
 private fun StringBuilder.renderLegacyPropertyNativeImports(cls: CirClass, prop: CirProperty) {
   val getterErrorParam: String = if (prop.hasSyncErrorOut) ", out IntPtr error" else ""
   appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_get_${prop.nativeName}\")]")
+  narrowReturnMarshal(prop.nativeReturnType)?.let { appendLine(it) }
   appendLine("        private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle$getterErrorParam);")
   appendLine()
 }
@@ -386,12 +387,12 @@ internal fun StringBuilder.renderConstructorMember(
 
 private fun StringBuilder.renderLegacyMethodNativeImport(cls: CirClass, method: CirMethod) {
   val nativeParamList: MutableList<String> = (listOf("IntPtr handle") +
-      method.parameters.map { charParameterMarshal(it.nativeType, it.name) }).toMutableList()
+      method.parameters.map { narrowParameterMarshal(it.nativeType, it.name) }).toMutableList()
   nativeParamList.addAll(method.extraNativeParams)
   if (method.isSyncErrorCheckEnabled) nativeParamList.add("out IntPtr error")
   val nativeParams: String = nativeParamList.joinToString(", ")
   appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_${method.nativeName}\")]")
-  charReturnMarshal(method.nativeReturnType)?.let { appendLine(it) }
+  narrowReturnMarshal(method.nativeReturnType)?.let { appendLine(it) }
   appendLine("        private static extern ${method.nativeReturnType} Native_${method.name}($nativeParams);")
   appendLine()
 }
@@ -529,6 +530,9 @@ internal fun StringBuilder.renderConst(const: CirConst) {
 }
 
 /**
+ * The attributed spelling for a narrow `char` or `bool` parameter slot ([nativeType] `"char"`,
+ * `"bool"`, `"out bool"`, or `"ref bool"`), or the bare `nativeType name` for everything else.
+ *
  * ADR-098: every `char` slot the generator emits carries an explicit UTF-16 width. Kotlin's
  * `KChar` is `unsigned short`; a bare C# `char` marshals as ONE ANSI byte, silently truncating
  * every non-ASCII character on the way in and losing it to U+FFFD on the way out. Same class of
@@ -537,22 +541,32 @@ internal fun StringBuilder.renderConst(const: CirConst) {
  * Applied by native-type text rather than per projection, so that every renderer that mints an
  * extern slot -- the projected [renderDllImport], the legacy method import, the enum-property
  * import -- goes through the same rule and none can mint an unattributed one. Only the by-value
- * shape is matched, and that is now exhaustive: since the ADR-098 amendment gave `Char?` its
- * has-value fan-out, an OUT slot for a character is declared `out ushort` and cast on the C# side
- * (blittable by construction), so no `out char` slot exists anywhere to attribute. A BARE `out
- * char` was measured to narrow every non-ASCII character to one ANSI byte, which is the regression
- * this whole rule exists to prevent.
+ * `char` shape is matched, and that is now exhaustive: since the ADR-098 amendment gave `Char?`
+ * its has-value fan-out, an OUT slot for a character is declared `out ushort` and cast on the C#
+ * side (blittable by construction), so no `out char` slot exists anywhere to attribute. A BARE
+ * `out char` was measured to narrow every non-ASCII character to one ANSI byte, which is the
+ * regression this whole rule exists to prevent.
+ *
+ * ADR-055 amendment (2026-09-27): the same rule carries ADR-069's `bool`. A bare `bool` slot
+ * marshals as the 4-byte Win32 `BOOL` against Kotlin's 1-byte C `bool`, so a by-value `bool` and
+ * an `out bool` both gain `[MarshalAs(UnmanagedType.I1)]` here. A `nativeType` that already carries
+ * its own attribute (a leading `[`) is left alone, so no slot is attributed twice.
  */
-internal fun charParameterMarshal(nativeType: String, name: String): String =
-  if (nativeType == "char") "[MarshalAs(UnmanagedType.U2)] $nativeType $name"
-  else "$nativeType $name"
+internal fun narrowParameterMarshal(nativeType: String, name: String): String = when (nativeType) {
+  "char" -> "[MarshalAs(UnmanagedType.U2)] $nativeType $name"
+  "bool", "out bool", "ref bool" -> "[MarshalAs(UnmanagedType.I1)] $nativeType $name"
+  else -> "$nativeType $name"
+}
 
 /**
- * The `[return: MarshalAs]` line a `char`-returning extern needs, or null. See
- * [charParameterMarshal].
+ * The `[return: MarshalAs]` line a `char`- or `bool`-returning extern needs, or null. See
+ * [narrowParameterMarshal].
  */
-internal fun charReturnMarshal(returnType: String): String? =
-  if (returnType == "char") "        [return: MarshalAs(UnmanagedType.U2)]" else null
+internal fun narrowReturnMarshal(returnType: String): String? = when (returnType) {
+  "char" -> "        [return: MarshalAs(UnmanagedType.U2)]"
+  "bool" -> "        [return: MarshalAs(UnmanagedType.I1)]"
+  else -> null
+}
 
 internal fun StringBuilder.renderDllImport(import: CirDllImport) {
   val visibility: String = if (import.visibility == CirVisibility.PRIVATE) "private" else "public"
@@ -561,13 +575,12 @@ internal fun StringBuilder.renderDllImport(import: CirDllImport) {
   // type when a cast is needed at the call site (e.g. enum params: public "CatMood", native
   // "int"). CirParameter.nativeType defaults to type, so this is a no-op for every other param.
   val paramList: MutableList<String> =
-    import.parameters.map { charParameterMarshal(it.nativeType, it.name) }.toMutableList()
+    import.parameters.map { narrowParameterMarshal(it.nativeType, it.name) }.toMutableList()
   if (import.hasSyncErrorOut) paramList.add("out IntPtr error")
   val paramStr: String = paramList.joinToString(", ")
 
   appendLine("        [DllImport(\"${import.libraryName}\", CallingConvention = CallingConvention.Cdecl$entryPoint)]")
-  if (import.marshalBooleanReturn) appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
-  charReturnMarshal(import.returnType)?.let { appendLine(it) }
+  narrowReturnMarshal(import.returnType)?.let { appendLine(it) }
   val hides: String = if (import.isNew) "new " else ""
   appendLine(
     "        $visibility ${hides}static extern ${import.returnType} ${import.name}($paramStr);",
@@ -905,6 +918,7 @@ private fun StringBuilder.renderInterfaceBridgeMethod(method: CirInterfaceBridge
 
 private fun StringBuilder.renderCallbackMethod(method: CirCallbackMethod) {
   appendLine("        [DllImport(\"${method.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${method.nativeEntryPoint}\")]")
+  narrowReturnMarshal(method.nativeImportReturnType)?.let { appendLine(it) }
   appendLine("        private static extern ${method.nativeImportReturnType} Native_${method.csMethodName}(IntPtr handle, IntPtr ${method.lambdaParamName}Ptr, IntPtr userData, out IntPtr error);")
   appendLine()
   appendLine("        public ${method.csReturnType} ${method.csMethodName}(${method.csParamType} ${method.lambdaParamName})")

@@ -1811,7 +1811,6 @@ internal fun flowMembers(
           parameters = listOf(CirParameter("handle", "IntPtr")) +
               methodParams.nativeImportParameters(),
           visibility = CirVisibility.PRIVATE,
-          marshalBooleanReturn = true,
         )
       } else null
 

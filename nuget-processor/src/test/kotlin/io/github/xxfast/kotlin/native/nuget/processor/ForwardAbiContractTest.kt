@@ -458,6 +458,113 @@ class ForwardAbiContractTest {
     )
   }
 
+  /**
+   * ADR-055 amendment (2026-09-27): a C# `bool` on a `DllImport` defaults to the 4-byte Win32
+   * `BOOL`, while every Kotlin export speaks a 1-byte C `bool`. Every `bool` slot, in every
+   * position, must carry `UnmanagedType.I1`, and the rule reads the rendered text so it covers
+   * every renderer by construction.
+   */
+  @Test
+  fun `refuses a bool return without I1 marshalling`() {
+    val error: IllegalArgumentException = assertFailsWith {
+      ForwardAbiContract.csharpLegacy(
+        legacyDeclaration("cat_equals", "private static extern bool Native_Equals(IntPtr handle, IntPtr other);"),
+        emptySet(),
+      )
+    }
+
+    assertBoolRefusal(error, "cat_equals", "return bool")
+  }
+
+  @Test
+  fun `refuses a by-value bool parameter without I1 marshalling`() {
+    val error: IllegalArgumentException = assertFailsWith {
+      ForwardAbiContract.csharpLegacy(
+        legacyDeclaration("cat_groom", "private static extern void Native_Groom(IntPtr handle, bool gentle, out IntPtr error);"),
+        emptySet(),
+      )
+    }
+
+    assertBoolRefusal(error, "cat_groom", "bool gentle")
+  }
+
+  @Test
+  fun `refuses an out bool parameter without I1 marshalling`() {
+    val error: IllegalArgumentException = assertFailsWith {
+      ForwardAbiContract.csharpLegacy(
+        legacyDeclaration("cat_flag", "private static extern void Native_Flag(IntPtr handle, out bool valueOut, out IntPtr error);"),
+        emptySet(),
+      )
+    }
+
+    assertBoolRefusal(error, "cat_flag", "out bool valueOut")
+  }
+
+  @Test
+  fun `refuses an unmarshalled bool on an ordinary import too`() {
+    val error: IllegalArgumentException = assertFailsWith {
+      ForwardAbiContract.csharpLegacy(
+        legacyDeclaration("cat_set_napping", "private static extern void Native_Set_isNapping(IntPtr handle, bool value, out IntPtr error);"),
+        ordinaryNames = setOf("cat_set_napping"),
+      )
+    }
+
+    assertBoolRefusal(error, "cat_set_napping", "bool value")
+  }
+
+  @Test
+  fun `names every unmarshalled bool slot at once`() {
+    val error: IllegalArgumentException = assertFailsWith {
+      ForwardAbiContract.csharpLegacy(
+        legacyDeclaration("cat_equals", "private static extern bool Native_Equals(IntPtr handle, IntPtr other);") +
+            legacyDeclaration("dog_equals", "private static extern bool Native_Equals(IntPtr handle, IntPtr other);"),
+        emptySet(),
+      )
+    }
+
+    assertTrue(error.message!!.contains("cat_equals"), error.message)
+    assertTrue(error.message!!.contains("dog_equals"), error.message)
+  }
+
+  @Test
+  fun `admits bool slots marshalled as I1 in every position`() {
+    val rendered: String = """
+      |        [DllImport("test", CallingConvention = CallingConvention.Cdecl, EntryPoint = "cat_flag")]
+      |        [return: MarshalAs(UnmanagedType.I1)]
+      |        private static extern bool Native_Flag(IntPtr handle, [MarshalAs(UnmanagedType.I1)] bool known, [MarshalAs(UnmanagedType.I1)] out bool valueOut, [MarshalAs(UnmanagedType.U2)] char initial, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, out IntPtr error);
+      |
+    """.trimMargin()
+
+    assertEquals(
+      "cat_flag(in pointer, in bool, out pointer, in short, in string, out pointer) -> bool",
+      ForwardAbiContract.csharpLegacy(rendered, emptySet()).canonicalText(),
+    )
+  }
+
+  @Test
+  fun `renders every bool slot of a projected import as I1`() {
+    val rendered: String = CirRenderer().render(
+      nullableImportFile(
+        returnType = "bool",
+        parameters = listOf(CirParameter("known", "bool"), CirParameter("valueOut", "out bool")),
+      ),
+    )
+
+    assertEquals(
+      "static_twice(in bool, out pointer) -> bool",
+      ForwardAbiContract.csharpLegacy(rendered, emptySet()).canonicalText(),
+    )
+    assertEquals(1, Regex("""\[return: MarshalAs\(UnmanagedType\.I1\)]""").findAll(rendered).count(), rendered)
+  }
+
+  private fun assertBoolRefusal(error: Throwable, entryPoint: String, slot: String) {
+    val message: String = error.message!!
+    assertTrue(message.contains(entryPoint), message)
+    assertTrue(message.contains(slot), message)
+    assertTrue(message.contains("UnmanagedType.I1"), message)
+    assertTrue(message.contains("ADR-055"), message)
+  }
+
   private fun nullableImportFile(
     returnType: String = "int",
     parameters: List<CirParameter> = emptyList(),

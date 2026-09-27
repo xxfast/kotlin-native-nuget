@@ -47,10 +47,9 @@ internal fun StringBuilder.renderEnumExtensions(enum: CirEnum) {
     val receiverParam: String = enum.csName.lowercase().replace(".", "")
 
     appendLine("        [DllImport(\"${enum.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$entryPoint\")]")
-    // ADR-098: an enum's `Char` property getter is an extern slot like any other.
-    charReturnMarshal(prop.nativeReturnType)?.let { appendLine(it) }
-    // Kotlin/Native `Boolean` is a 1-byte C `bool`; without I1 .NET reads a 4-byte Win32 `BOOL`.
-    if (prop.nativeReturnType == "bool") appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
+    // ADR-098: an enum's `Char` property getter is an extern slot like any other, and so is a
+    // `Boolean` one (ADR-069: a 1-byte C `bool`, never the 4-byte Win32 `BOOL`).
+    narrowReturnMarshal(prop.nativeReturnType)?.let { appendLine(it) }
     appendLine("        private static extern ${prop.nativeReturnType} Native_Get${prop.name}(int ordinal);")
     appendLine()
 

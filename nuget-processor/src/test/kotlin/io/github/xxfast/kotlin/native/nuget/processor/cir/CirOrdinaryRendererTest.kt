@@ -1008,17 +1008,16 @@ class CirOrdinaryRendererTest {
   }
 
   @Test
-  fun `dllimport marshals boolean return when requested`() {
+  fun `dllimport marshals every bool slot as one byte`() {
     val members: List<CirMember> = listOf(
       CirDllImport(
         libraryName = "sample",
         entryPoint = "flag_is_set",
         returnType = "bool",
         name = "Native_IsSet",
-        parameters = listOf(CirParameter("handle", "IntPtr")),
+        parameters = listOf(CirParameter("handle", "IntPtr"), CirParameter("strict", "bool")),
         visibility = CirVisibility.PRIVATE,
         hasSyncErrorOut = true,
-        marshalBooleanReturn = true,
       ),
     )
 
@@ -1027,7 +1026,7 @@ class CirOrdinaryRendererTest {
     assertContains(rendered, "[return: MarshalAs(UnmanagedType.I1)]")
     assertContains(
       rendered,
-      "private static extern bool Native_IsSet(IntPtr handle, out IntPtr error);",
+      "private static extern bool Native_IsSet(IntPtr handle, [MarshalAs(UnmanagedType.I1)] bool strict, out IntPtr error);",
     )
   }
 

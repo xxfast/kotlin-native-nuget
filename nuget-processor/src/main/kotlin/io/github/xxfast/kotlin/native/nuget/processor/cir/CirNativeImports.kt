@@ -85,8 +85,7 @@ internal fun CirClass.propertyNativeImports(property: CirProperty): List<CirDllI
 /**
  * ADR-111: the same imports, addressed by the two strings a [CirClass] would have supplied, so an
  * ADR-009 sealed subclass (a [CirSealedSubclass], not a [CirClass]) mints its property externs
- * through this one rule instead of a hand-written `[DllImport]` line that forgot
- * `[return: MarshalAs(UnmanagedType.I1)]`.
+ * through this one rule instead of a hand-written `[DllImport]` line.
  */
 internal fun propertyNativeImports(
   libraryName: String,
@@ -105,7 +104,6 @@ internal fun propertyNativeImports(
       parameters = listOf(CirParameter("handle", "IntPtr")),
       visibility = CirVisibility.PRIVATE,
       hasSyncErrorOut = property.hasSyncErrorOut,
-      marshalBooleanReturn = property.nativeReturnType == "bool",
     )
   )
 
@@ -140,7 +138,6 @@ internal fun propertyNativeImports(
         parameters = parameters,
         visibility = CirVisibility.PRIVATE,
         hasSyncErrorOut = extra.hasSyncErrorOut,
-        marshalBooleanReturn = !extra.hasValueParam && extra.returnType == "bool",
       )
     )
   }
@@ -275,7 +272,6 @@ internal fun CirValueClass.propertyNativeImport(property: CirProperty): CirDllIm
   name = "Native_Get${property.name}",
   parameters = listOf(CirParameter("value", underlyingNativeType)),
   visibility = CirVisibility.PRIVATE,
-  marshalBooleanReturn = property.nativeReturnType == "bool",
 )
 
 internal fun CirValueClass.methodNativeImport(method: CirMethod): CirDllImport {
@@ -291,7 +287,6 @@ internal fun CirValueClass.methodNativeImport(method: CirMethod): CirDllImport {
     parameters = listOf(CirParameter("value", underlyingNativeType)) + methodParams,
     visibility = CirVisibility.PRIVATE,
     hasSyncErrorOut = method.isSyncErrorCheckEnabled,
-    marshalBooleanReturn = method.nativeReturnType == "bool",
   )
 }
 

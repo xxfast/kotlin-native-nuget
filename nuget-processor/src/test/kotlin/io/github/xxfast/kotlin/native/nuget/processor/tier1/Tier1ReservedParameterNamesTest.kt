@@ -103,7 +103,7 @@ class Tier1ReservedParameterNamesTest {
   fun `the data class copy route renames a parameter that shadows the receiver slot`() {
     assertContains(
       result.generatedCSharp,
-      "private static extern IntPtr Native_Copy(IntPtr handle, bool handle_HasValue, int handle_, out IntPtr error);",
+      "private static extern IntPtr Native_Copy(IntPtr handle, [MarshalAs(UnmanagedType.I1)] bool handle_HasValue, int handle_, out IntPtr error);",
     )
     assertContains(result.generatedCSharp, "public Widget Copy(int? handle_ = null)")
     assertContains(

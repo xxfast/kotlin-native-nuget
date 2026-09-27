@@ -50,6 +50,14 @@ class CatRecord {
  */
 fun chipImplanted(state: Int): Boolean? = tribool(state)
 
+/**
+ * ADR-055 amendment (2026-09-27): a non-null `Boolean` by value at both the parameter and the
+ * return of one ordinary `DllImport`, each attributed `UnmanagedType.I1`. Inverting makes the
+ * answer depend on the argument byte actually read, so a `false` crossing wrong in either
+ * direction is visible.
+ */
+fun flipImplanted(implanted: Boolean): Boolean = !implanted
+
 /** ADR-069 cell 8: top-level function, nullable `Boolean` input. */
 fun describeChip(flag: Boolean?): String = flag?.toString() ?: "unknown"
 
