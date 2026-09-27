@@ -19,7 +19,6 @@ Complete.
 Complete.
 
 ## Phase 4: Rich type support
-- [ ] `ForwardAbiContract` strips `?` before classifying a type on both halves, so it cannot detect a `Nullable<T>` wrongly declared on a `DllImport` against a non-nullable Kotlin export. ([details](docs/backlog/forwardabicontract-nullable-value-type-not-detected.md)) Discovered alongside the ADR-122 2026-09-26 amendment.
 - [ ] A synthesized `${name}HasValue` slot on the legacy nullable-scalar wire can collide with a real user parameter literally named `${name}HasValue`. ([details](docs/backlog/hasvalue-slot-name-collision-with-user-parameter.md)) Discovered alongside the ADR-122 2026-09-26 amendment.
 - [ ] Default arguments are not honoured on the legacy `suspend`/`Flow` routes: a Kotlin default becomes a required C# parameter. ([details](docs/backlog/legacy-route-default-arguments-not-honoured.md)) Discovered alongside the ADR-122 2026-09-26 amendment.
 - [ ] **A nullable constructor argument on a generic class crosses wrong, or doesn't compile at all.** ([details](docs/backlog/nullable-constructor-argument-generic-class-crosses-wrong.md))

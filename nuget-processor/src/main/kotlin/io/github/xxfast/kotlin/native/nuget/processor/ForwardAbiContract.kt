@@ -374,7 +374,9 @@ internal object ForwardAbiContract {
       // `[MarshalAs(UnmanagedType.I1)] ` attribute (the C# marshaller's default `out bool` read is
       // 4 bytes against Kotlin's 1-byte `BooleanVar` write); strip it before the `out `-prefix
       // check below, which recognizes the pointer shape by native-type text.
-      if (parameter.nativeType.substringAfterLast("] ").startsWith("out ")) {
+      val spelling: String = parameter.nativeType.substringAfterLast("] ").trim()
+      requireMarshalable(name, spelling)
+      if (spelling.startsWith("out ")) {
         ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT)
       } else {
         ForwardAbiSignatureParameter(csharpType(parameter.nativeType))
@@ -383,11 +385,62 @@ internal object ForwardAbiContract {
     if (hasSyncErrorOut) {
       parameters.add(ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT))
     }
+    requireMarshalable(name, returnType.trim())
     return ForwardAbiSignature(name, csharpReturnType(returnType), parameters)
   }
 
+  /**
+   * ADR-055 amendment: a `?` on a `DllImport` spelling is admitted only on a by-value or return
+   * `string`. Any other one is a `Nullable<T>` (or an `out` pointee that is never ADR-061's pointer
+   * slot) that C# compiles and the runtime refuses at call time, while the `?`-stripping
+   * normalization below would read it as the plain scalar and let it match a non-nullable export.
+   * Textually a `Color?` (a `Nullable<T>`) and a `Cat?` (a reference annotation) look alike, and
+   * only `string?` is emitted, so the rule is a whitelist. No user-authored Kotlin reaches this,
+   * so it is a generator-bug `require` (ADR-117), not a diagnostic.
+   */
+  private fun requireMarshalable(entryPoint: String, spelling: String) {
+    require(!spelling.endsWith("?") || spelling == "string?") {
+      "Forward ABI Nullable<T> on C# import for $entryPoint: \"$spelling\" is not " +
+          "P/Invoke-marshalable; only a by-value or return `string?` may carry `?` on a " +
+          "DllImport (ADR-055), any other `?` spelling compiles and then throws " +
+          "MarshalDirectiveException at call time"
+    }
+  }
+
+  /**
+   * The Kotlin mirror of [requireMarshalable]: a nullable Kotlin scalar on a `@CName` export has no
+   * C# spelling but a `Nullable<T>`, and the `?`-stripping in [kotlinType] would read it as the
+   * plain scalar. `String?` and every pointer type stay admitted.
+   */
+  private fun requireKotlinScalar(exportName: String, type: TypeName) {
+    val spelling: String = type.toString()
+    require(!(type.isNullable && spelling.removeSuffix("?") in KOTLIN_SCALARS)) {
+      "Forward ABI nullable scalar on Kotlin export for $exportName: \"$spelling\" has no C# " +
+          "DllImport spelling but a Nullable<T>, which compiles and then throws " +
+          "MarshalDirectiveException at call time (ADR-055)"
+    }
+  }
+
+  private val KOTLIN_SCALARS: Set<String> = setOf(
+    "kotlin.Unit",
+    "kotlin.Boolean",
+    "kotlin.Byte",
+    "kotlin.UByte",
+    "kotlin.Char",
+    "kotlin.Short",
+    "kotlin.UShort",
+    "kotlin.Int",
+    "kotlin.UInt",
+    "kotlin.Long",
+    "kotlin.ULong",
+    "kotlin.Float",
+    "kotlin.Double",
+  )
+
   private fun FunSpec.toSignature(): ForwardAbiSignature? {
     val name: String = annotations.cNameValue() ?: return null
+    requireKotlinScalar(name, returnType)
+    parameters.forEach { parameter -> requireKotlinScalar(name, parameter.type) }
     return ForwardAbiSignature(
       exportName = name,
       result = kotlinReturnType(returnType),
@@ -431,15 +484,18 @@ internal object ForwardAbiContract {
       .split(",")
       .map { parameter -> parameter.trim() }
       .filter { parameter -> parameter.isNotEmpty() }
-      .map { parameter -> parameter.toAbiParameter() }
-    return ForwardAbiSignature(name, csharpReturnType(header.substringBeforeLast(" ")), parameters)
+      .map { parameter -> parameter.toAbiParameter(name) }
+    val returnType: String = header.substringBeforeLast(" ")
+    requireMarshalable(name, returnType)
+    return ForwardAbiSignature(name, csharpReturnType(returnType), parameters)
   }
 
   // The same normalization the CirDllImport path applies: strip a leading `[MarshalAs(...)] `, read
   // any `out `-prefixed parameter as the (POINTER, OUT) slot it is at the C ABI, and fall through
   // to csharpType otherwise (an unknown token, such as a marshalled delegate, is a pointer).
-  private fun String.toAbiParameter(): ForwardAbiSignatureParameter {
+  private fun String.toAbiParameter(entryPoint: String): ForwardAbiSignatureParameter {
     val declaration: String = substringAfterLast("] ").trim()
+    requireMarshalable(entryPoint, declaration.substringBeforeLast(" ").trim())
     if (declaration.startsWith("out ")) {
       return ForwardAbiSignatureParameter(ForwardAbiType.POINTER, ForwardAbiDirection.OUT)
     }

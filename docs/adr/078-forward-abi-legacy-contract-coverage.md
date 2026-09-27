@@ -257,3 +257,6 @@ migration, not this amendment's.
   (`CirMarshalRenderer.kt`'s `CreateBox<T>` is deleted), and `NugetProcessor.kt`'s
   `needsCoreMarshal` flag gates the Kotlin `nuget_wrap_*`/`nuget_dispose` exports under the same
   condition as their unconditional C# `NugetMarshal` imports. See "First-run findings" above.
+- [ADR-055](055-forward-abi-contract-check.md)'s 2026-09-27 `Nullable<T>` whitelist amendment
+  applies inside `externSignature` and `toAbiParameter`, so this text collector refuses the same
+  unmarshalable `?` spellings as the structural path.
