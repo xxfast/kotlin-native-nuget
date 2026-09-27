@@ -78,16 +78,10 @@ internal fun StringBuilder.renderFuncHelper(helper: CirFuncHelper) {
       // matched no branch for `int?` and threw `NotSupportedException`), and it covers the six
       // narrow kinds plus `char`, which the copy never learned. `owned` then closes the leak: the
       // copy's boxes were never disposed by anyone, one leaked StableRef per argument per call.
-      for (i in 0 until arity) {
-        appendLine(
-          "            IntPtr boxedArg$i = $marshalRef.Wrap<T${i + 1}>(arg$i, out bool owned$i);",
-        )
-      }
-      appendLine("            IntPtr result = $funcNativeRef.Invoke$arity($invokeArgs);")
       // Disposed after the native call, never before: the export dereferences each box
       // synchronously inside `Invoke`, so this is the first safe point.
-      for (i in 0 until arity) {
-        appendLine("            if (owned$i) $funcNativeRef.Dispose(boxedArg$i);")
+      appendBoxedArguments(arity, marshalRef, funcNativeRef, "IntPtr result") {
+        appendLine("                result = $funcNativeRef.Invoke$arity($invokeArgs);")
       }
       appendLine("            return $marshalRef.FromHandle<TResult>(result);")
       appendLine("        }")
@@ -151,14 +145,8 @@ internal fun StringBuilder.renderFuncHelper(helper: CirFuncHelper) {
       appendLine("        public void Invoke($actionMethodParams)")
       appendLine("        {")
       // Boundary nullability part A1, the Unit-returning twin; see `KotlinFunc.Invoke` above.
-      for (i in 0 until arity) {
-        appendLine(
-          "            IntPtr boxedArg$i = $marshalRef.Wrap<T${i + 1}>(arg$i, out bool owned$i);",
-        )
-      }
-      appendLine("            IntPtr result = $funcNativeRef.Invoke$arity($actionInvokeArgs);")
-      for (i in 0 until arity) {
-        appendLine("            if (owned$i) $funcNativeRef.Dispose(boxedArg$i);")
+      appendBoxedArguments(arity, marshalRef, funcNativeRef, "IntPtr result") {
+        appendLine("                result = $funcNativeRef.Invoke$arity($actionInvokeArgs);")
       }
       appendLine("            if (result != IntPtr.Zero) $funcNativeRef.Dispose(result);")
       appendLine("        }")
@@ -280,20 +268,16 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
         "TaskCompletionSource<TResult>",
         "t.SetResult($marshalRef.FromHandle<TResult>(resultPtr));",
       )
-      appendLine("            callbackHandle = GCHandle.Alloc(callback);")
       // Boundary nullability part A1: `NugetMarshal.Wrap<T>` in place of the private `WrapArg<T>`
       // copy, so a null argument is `IntPtr.Zero` rather than an uncaught NPE inside the export,
       // and `owned` closes the per-call StableRef leak. LOAD-BEARING ordering: the suspend export
       // reads every box SYNCHRONOUSLY, before `launchForCSharp`, which is the only reason
       // disposing them the moment `Invoke` returns is safe rather than a use-after-free.
-      for (i in 0 until arity) {
-        appendLine(
-          "            IntPtr boxedArg$i = $marshalRef.Wrap<T${i + 1}>(arg$i, out bool owned$i);",
-        )
-      }
-      appendLine("            IntPtr jobHandle = $funcNativeRef.Invoke$arity($invokeArgs);")
-      for (i in 0 until arity) {
-        appendLine("            if (owned$i) $funcNativeRef.Dispose(boxedArg$i);")
+      // ADR-171: every box is minted before the GCHandle, so a box that throws (a value class's
+      // `init`) strands neither the callback handle nor an earlier argument's box.
+      appendBoxedArguments(arity, marshalRef, funcNativeRef, "IntPtr jobHandle") {
+        appendLine("                callbackHandle = GCHandle.Alloc(callback);")
+        appendLine("                jobHandle = $funcNativeRef.Invoke$arity($invokeArgs);")
       }
       appendLine("            CancellationTokenRegistration reg = cancellationToken.CanBeCanceled")
       appendLine(
@@ -385,17 +369,11 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
       appendLine("            var job = new NugetJobCell();")
       // ADR-161: one shared, materialisation-fault-containing closure body.
       appendAsyncCompletionClosure("TaskCompletionSource<bool>", "t.SetResult(true);")
-      appendLine("            callbackHandle = GCHandle.Alloc(callback);")
       // Boundary nullability part A1, the Unit-returning suspend twin; the same synchronous-read
       // ordering constraint applies, see `KotlinSuspendFunc.InvokeAsync` above.
-      for (i in 0 until arity) {
-        appendLine(
-          "            IntPtr boxedArg$i = $marshalRef.Wrap<T${i + 1}>(arg$i, out bool owned$i);",
-        )
-      }
-      appendLine("            IntPtr jobHandle = $funcNativeRef.Invoke$arity($invokeArgs);")
-      for (i in 0 until arity) {
-        appendLine("            if (owned$i) $funcNativeRef.Dispose(boxedArg$i);")
+      appendBoxedArguments(arity, marshalRef, funcNativeRef, "IntPtr jobHandle") {
+        appendLine("                callbackHandle = GCHandle.Alloc(callback);")
+        appendLine("                jobHandle = $funcNativeRef.Invoke$arity($invokeArgs);")
       }
       appendLine("            CancellationTokenRegistration reg = cancellationToken.CanBeCanceled")
       appendLine(
@@ -421,3 +399,36 @@ internal fun StringBuilder.renderSuspendFuncHelper(helper: CirSuspendFuncHelper)
   }
 }
 
+/**
+ * ADR-171: the argument boxing shared by the four `Invoke`/`InvokeAsync` shapes. Every box and the
+ * native call sit inside one `try` and the owned-dispose loop in its `finally`, so a box that
+ * throws (a value class's `init`, rejected by its box export) still disposes the boxes already
+ * minted for earlier arguments. Locals are declared before the `try` so the `finally` can read
+ * them, the declaration-then-assign shape `ForwardCirPlanProjection.typeParameterPrelude` uses.
+ */
+private fun StringBuilder.appendBoxedArguments(
+  arity: Int,
+  marshalRef: String,
+  funcNativeRef: String,
+  resultDeclaration: String,
+  call: StringBuilder.() -> Unit,
+) {
+  (0 until arity).forEach { i ->
+    appendLine("            IntPtr boxedArg$i = IntPtr.Zero;")
+    appendLine("            bool owned$i = false;")
+  }
+  appendLine("            $resultDeclaration;")
+  appendLine("            try")
+  appendLine("            {")
+  (0 until arity).forEach { i ->
+    appendLine("                boxedArg$i = $marshalRef.Wrap<T${i + 1}>(arg$i, out owned$i);")
+  }
+  call()
+  appendLine("            }")
+  appendLine("            finally")
+  appendLine("            {")
+  (0 until arity).forEach { i ->
+    appendLine("                if (owned$i) $funcNativeRef.Dispose(boxedArg$i);")
+  }
+  appendLine("            }")
+}

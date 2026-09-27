@@ -66,7 +66,7 @@ class Tier1NullableLambdaTypeArgumentTest {
     // The private copy is gone, on both the sync and the suspend helper.
     assertFalse("WrapArg<" in cs, "the private WrapArg<T> copy must not be emitted any more")
     assertTrue(
-      "Wrap<T1>(arg0, out bool owned0);" in cs,
+      "Wrap<T1>(arg0, out owned0);" in cs,
       "expected the argument boxed through NugetMarshal.Wrap with its ownership report; cs=$cs",
     )
     // The leak half: one StableRef per argument per call was minted and never released by anyone.
@@ -76,7 +76,7 @@ class Tier1NullableLambdaTypeArgumentTest {
     )
     // Ordering is load-bearing: the export dereferences the box synchronously inside Invoke.
     assertTrue(
-      cs.indexOf("Wrap<T1>(arg0, out bool owned0);") < cs.indexOf("if (owned0) "),
+      cs.indexOf("Wrap<T1>(arg0, out owned0);") < cs.indexOf("if (owned0) "),
       "the box must be disposed AFTER the native call, never before",
     )
   }
@@ -119,13 +119,13 @@ class Tier1NullableLambdaTypeArgumentTest {
     assertTrue("KotlinSuspendFunc<string, string> OnPlain" in cs, "non-null is unchanged; cs=$cs")
     assertFalse("WrapArg<" in cs, "the suspend helper's own WrapArg<T> copy must be gone too")
     assertTrue(
-      "Wrap<T1>(arg0, out bool owned0);" in cs,
+      "Wrap<T1>(arg0, out owned0);" in cs,
       "expected InvokeAsync to box through NugetMarshal.Wrap; cs=$cs",
     )
     // The disposal is safe ONLY because the suspend export reads every box synchronously, before
     // `launchForCSharp`; the generated order is what pins that.
     assertTrue(
-      cs.indexOf("Wrap<T1>(arg0, out bool owned0);") < cs.indexOf("if (owned0) "),
+      cs.indexOf("Wrap<T1>(arg0, out owned0);") < cs.indexOf("if (owned0) "),
       "the box must be disposed after the native call returns, never inside the continuation",
     )
   }

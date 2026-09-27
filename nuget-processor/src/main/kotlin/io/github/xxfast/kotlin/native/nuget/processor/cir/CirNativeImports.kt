@@ -244,6 +244,11 @@ internal fun CirValueClass.ordinaryNativeImports(): List<CirDllImport> = buildLi
   constructors.forEach { ctor -> add(constructorNativeImport(ctor)) }
   properties.forEach { property -> add(propertyNativeImport(property)) }
   methods.forEach { method -> add(methodNativeImport(method)) }
+  // ADR-171: the box/unbox pair, read structurally like every other plan-derived import.
+  boxing?.let { pair ->
+    add(pair.boxImport)
+    add(pair.unboxImport)
+  }
 }
 
 internal fun CirValueClass.constructorNativeImport(ctor: CirValueClassConstructor): CirDllImport =

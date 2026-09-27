@@ -947,9 +947,13 @@ internal fun translateClass(
       // Issue #111: one type argument C# cannot name (`Flow<Snapshot>`, an unexported dependency
       // type, a nested class) makes the whole property unspellable, so it is skipped named rather
       // than emitted as `KotlinFunc<CamId, Flow>` for the consumer's compiler to reject.
+      // ADR-171: a value class with a box/unbox pair is nameable too; `Wrap<T>`/`FromHandle<T>`
+      // carry it. One without a pair stays unnameable, so the lambda is refused by name here
+      // rather than bound and left to throw at the first `Invoke`.
+      val nameableTypes: Set<String> = exportedTypes + callableCatalog.boxedValueClasses
       val unnameableTypeArgument: CsTypeArgument.Unnameable? =
         if (isLambdaType || isSuspendLambdaType) {
-          csTypeArguments(propTypeResolved.arguments, exportedTypes, context)
+          csTypeArguments(propTypeResolved.arguments, nameableTypes, context)
         } else null
       if (unnameableTypeArgument != null) {
         ForwardDiagnosticSink.emit(
@@ -969,13 +973,13 @@ internal fun translateClass(
       }
 
       val lambdaTypeArgs: List<String> = if (isLambdaType) {
-        csTypeArgumentNames(propTypeResolved.arguments, exportedTypes, context)
+        csTypeArgumentNames(propTypeResolved.arguments, nameableTypes, context)
       } else emptyList()
 
       val lambdaCsType: String = if (isLambdaType) csLambdaType(lambdaTypeArgs) else ""
 
       val suspendLambdaTypeArgs: List<String> = if (isSuspendLambdaType) {
-        csTypeArgumentNames(propTypeResolved.arguments, exportedTypes, context)
+        csTypeArgumentNames(propTypeResolved.arguments, nameableTypes, context)
       } else emptyList()
 
       val suspendLambdaIsUnit: Boolean = isSuspendLambdaType &&
@@ -2269,8 +2273,10 @@ internal fun translateSealedClass(
           val lambdaArity: Int = propTypeResolved.arguments.size - 1
           tracker.lambdaArities.add(lambdaArity)
           // Issue #111, the sealed-subclass copy of the same rule as the ordinary-class arm.
+          // ADR-171: a value class with a box/unbox pair is nameable here too.
+          val nameableTypes: Set<String> = exportedTypes + callableCatalog.boxedValueClasses
           val unnameableTypeArgument: CsTypeArgument.Unnameable? =
-            csTypeArguments(propTypeResolved.arguments, exportedTypes, context)
+            csTypeArguments(propTypeResolved.arguments, nameableTypes, context)
           if (unnameableTypeArgument != null) {
             ForwardDiagnosticSink.emit(
               listOf(
@@ -2289,7 +2295,7 @@ internal fun translateSealedClass(
             return@mapNotNull null
           }
           val lambdaTypeArgs: List<String> =
-            csTypeArgumentNames(propTypeResolved.arguments, exportedTypes, context)
+            csTypeArgumentNames(propTypeResolved.arguments, nameableTypes, context)
           val lambdaCsType: String = csLambdaType(lambdaTypeArgs)
           CirProperty(
             name = propName.replaceFirstChar { it.uppercase() },
@@ -3796,6 +3802,9 @@ internal fun translateValueClass(
     // `forwardKdoc()` gives it the precedence every other property has: its own KDoc first, then
     // the class comment's `@property <name>` text, then nothing.
     underlyingDoc = underlyingProp.forwardKdoc(expects)?.toCirDoc(),
+    boxing = callableCatalog.valueClassBoxing(qualifiedName)?.let { (box, unbox) ->
+      ForwardCirPlanProjection.valueClassBoxing(box, unbox, libraryName)
+    },
   )
 }
 

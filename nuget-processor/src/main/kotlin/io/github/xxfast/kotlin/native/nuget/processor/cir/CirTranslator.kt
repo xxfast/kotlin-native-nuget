@@ -327,12 +327,14 @@ internal fun translate(
         ForwardCirPlanProjection.static(planned, context.libraryName)
       } else {
         // Named specialized adapters only (sealed / generic-declaration returns).
+        // ADR-171: its lambda-return and generic-return type arguments may name a value class
+        // that has a box/unbox pair.
         translateSpecializedFunction(
           function,
           context.libraryName,
           context,
           tracker,
-          exportedTypes,
+          exportedTypes + callableCatalog.boxedValueClasses,
           logger,
         )
       }
@@ -770,6 +772,7 @@ internal fun translate(
       // ADR-094: the walk happens here, before the helpers are prepended, because `namespaces`
       // already pairs every wrapper declaration with the namespace that names it.
       factories = factoryEntries(namespaces),
+      boxers = valueClassNames(namespaces),
     ),
   )
   helpers.add(CirOptionalHelper)
@@ -976,8 +979,12 @@ private fun List<CirNamespace>.withoutEmptyStaticClasses(): List<CirNamespace> =
  * discriminator and news up the right subclass -- and it is the type an erased `StateFlow<Sealed>`
  * or `Flow<Sealed>` instantiates `T` as, so without it those two paths throw.
  *
- * Enums, value classes, objects, interfaces and open generic wrappers register nothing: none of
- * them is a closed type reachable from a handle.
+ * ADR-171: a value class with a box/unbox pair registers too, via [CirFactoryEntry.viaNugetUnbox].
+ * A generic slot holds a boxed Kotlin value class, so `Box<ChartId>.Value` hands back a handle to
+ * one; nested value classes register under their `Outer.Inner` name ([valueClassNames]).
+ *
+ * Enums, objects, interfaces and open generic wrappers register nothing: none of them is a closed
+ * type reachable from a handle.
  */
 private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry> = namespaces
   .flatMap { namespace ->
@@ -1009,9 +1016,35 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
       }
     }
   }
+  .plus(valueClassNames(namespaces).map { name -> CirFactoryEntry(name, viaNugetUnbox = true) })
   // A duplicate key is an ArgumentException at type-initialization time, i.e. the first marshal
   // call of the consumer's process, so collapse rather than trust the walk to be unique.
   .distinctBy { it.qualifiedTypeName }
+
+/**
+ * ADR-171: the `global::`-free qualified C# name of every value class with a box/unbox pair, root
+ * or nested (ADR-134), the key both `NugetMarshal.Boxers` and `Factories` register it under. A
+ * nested one is spelled through its enclosing declarations, the name a consumer's `typeof(...)`
+ * produces; a sealed arm's scope follows its `isNested` placement, as in [factoryEntries].
+ */
+private fun valueClassNames(namespaces: List<CirNamespace>): List<String> {
+  fun CirDeclaration.walk(path: String): List<String> = when (this) {
+    is CirValueClass -> if (boxing != null) listOf("$path.$name") else emptyList()
+    is CirClass -> nestedDeclarations.flatMap { it.walk("$path.$name") }
+    is CirInterface -> nestedDeclarations.flatMap { it.walk("$path.$name") }
+    is CirObject -> nestedDeclarations.flatMap { it.walk("$path.$name") }
+    is CirSealedClass -> nestedDeclarations.flatMap { it.walk("$path.$name") } +
+        subclasses.flatMap { arm ->
+          val armPath: String = if (arm.isNested) "$path.$name.${arm.name}" else "$path.${arm.name}"
+          arm.nestedDeclarations.flatMap { it.walk(armPath) }
+        }
+
+    else -> emptyList()
+  }
+  return namespaces
+    .flatMap { namespace -> namespace.declarations.flatMap { it.walk(namespace.name) } }
+    .distinct()
+}
 
 private fun MutableList<CirNamespace>.addDeclaration(namespace: String, declaration: CirDeclaration) {
   val existing = find { it.name == namespace }

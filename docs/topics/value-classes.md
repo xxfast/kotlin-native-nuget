@@ -29,6 +29,12 @@ string name = result.Cat.Name;              // "Oreo" -- dispose result.Cat like
 another class, only a secondary constructor's validation crosses the bridge -- the primary
 constructor's `init` does not run when called from C#.
 
+Only a value class over `String`, a primitive other than `Char`, an enum, a nullable `String` or
+primitive, an object handle, or a sealed base/eligible sealed interface is declared at all. A value
+class over `Char`, a plain interface, a nullable non-scalar, `Instant`, `Duration`, `Uuid`,
+`ByteArray`, a collection, another value class, or a type outside the export set is refused by
+name; every member typed with it is a separate named skip.
+
 ## As an ordinary parameter, property, or return type
 
 A value class isn't limited to being the receiver of its own methods: it also binds as a plain
@@ -128,6 +134,52 @@ string first = issued[0].Value; // "CH-OREO-9"
 
 A nested collection of value classes (`List<List<ChartId>>`) is not supported; see
 [Collections](collections.md).
+
+## At an erased generic position {id="at-an-erased-generic-position"}
+
+A value class also crosses at a [generic class](generics.md)'s `T`, and as a
+[lambda](lambdas-and-callbacks.md) payload or result, both positions where C# only sees `T`/`object`
+and Kotlin only sees `Any?`. C# hands across the boxed value class itself, not its underlying, so
+the round trip still validates through `init` and still compares structurally:
+
+```kotlin
+class Box<T>(val value: T)
+
+class ChartCourier(val desk: String) {
+  val onChart: (ChartId) -> String = { id -> "$desk filed ${id.value}" }
+}
+```
+
+```C#
+var id = new ChartId("CH-OREO-1");
+using var box = new Box<ChartId>(id);
+Assert.Equal(id, box.Value);
+
+using var courier = new ChartCourier("Ward 9");
+using KotlinFunc<ChartId, string> onChart = courier.OnChart;
+Assert.Equal("Ward 9 filed CH-OREO-1", onChart.Invoke(new ChartId("CH-OREO-1")));
+```
+
+`init` runs at this boundary even for a value class wrapping another class, which otherwise never
+runs `init` from C# (see above): the box export is the first place it runs.
+
+```kotlin
+value class WardBand(val patient: Patient) {
+  init { require(patient.name.isNotEmpty()) { "A ward band needs the patient's name" } }
+}
+```
+
+```C#
+using var nameless = new Patient("");
+Assert.ThrowsAny<ArgumentException>(() => new Box<WardBand>(new WardBand(nameless)));
+```
+
+Not every declared value class crosses here: a value class whose underlying is itself nullable, a
+generic value class, or an ineligible sealed interface has no crossing at this position. A lambda
+over one of those is refused by name at build time, but a generic class's `T` has no build-time
+gate to refuse it with -- `Box<T>` is an open C# generic -- so `new Box<V>(v)` for such a `V` still
+compiles and throws `NotSupportedException` at the call, the same way it does for an unsupported
+`T` of any other kind.
 
 ## As an extension receiver
 

@@ -512,6 +512,31 @@ internal data class ForwardCallablePlanCatalog(
   fun valueClassProperties(owner: String): List<ForwardCallablePlan> = valueClassMembers(owner)
     .filter { plan -> plan.invocation.target?.endsWith("#property") == true }
 
+  /**
+   * ADR-171: the box/unbox pair of [owner], in that order, or `null` when the value class has none
+   * (its underlying cannot cross, so no erased generic position can carry it either). The planner
+   * adds both or neither, so a caller never renders half a pair.
+   */
+  fun valueClassBoxing(owner: String): Pair<ForwardCallablePlan, ForwardCallablePlan>? {
+    val pair: List<ForwardCallablePlan> = plans.filter { plan ->
+      plan.invocation.origin == ForwardCallableOrigin.VALUE_CLASS_BOX &&
+          plan.invocation.symbol.substringBeforeLast('.') == owner
+    }
+    if (pair.size != 2) return null
+    return pair[0] to pair[1]
+  }
+
+  /**
+   * ADR-171: every value class with a box/unbox pair, the set a lambda type argument may name. A
+   * value class outside it has no erased crossing, so a lambda over it is refused by name at build
+   * time rather than bound and left to throw in `Wrap<T>` / `Materialize<T>`.
+   */
+  val boxedValueClasses: Set<String> by lazy {
+    plans
+      .filter { plan -> plan.invocation.origin == ForwardCallableOrigin.VALUE_CLASS_BOX }
+      .mapTo(mutableSetOf()) { plan -> plan.invocation.symbol.substringBeforeLast('.') }
+  }
+
   /** ADR-082: the planned value-class methods of [owner], in planning order. See above. */
   fun valueClassMethods(owner: String): List<ForwardCallablePlan> = valueClassMembers(owner)
     .filter { plan -> plan.invocation.target?.endsWith("#property") != true }
@@ -783,7 +808,11 @@ internal class ForwardCallablePlanner(
     } else {
       classifiedUnderlying
     }
-    val isReferenceUnderlying: Boolean = underlyingType is BridgeType.ObjectHandle
+    // The one shared underlying rule (`ForwardValueClassUnderlying`): the Kotlin half emits exactly
+    // the constructors planned here, so the two can no longer disagree about a `_create` export.
+    val role: ForwardValueClassUnderlying = classifier.valueClassUnderlying(cls)
+    if (role == ForwardValueClassUnderlying.REFUSED) return emptyList()
+    val isReferenceUnderlying: Boolean = role == ForwardValueClassUnderlying.REFERENCE
 
     val receiver: ForwardReceiver = if (isReferenceUnderlying) {
       ForwardReceiver.Handle(underlyingType, name = "handle")
@@ -818,7 +847,61 @@ internal class ForwardCallablePlanner(
         valueClassPropertyEntries(cls, owner, prefix, underlyingPropName, receiver, inherited),
       )
       addAll(valueClassMethodEntries(cls, owner, prefix, receiver, inherited))
+      addAll(valueClassBoxingEntries(cls, owner, prefix))
     }
+  }
+
+  /**
+   * ADR-171: the box/unbox pair that carries a value class through an erased generic position.
+   * Kotlin boxes every value class at a generic slot, so the handle has to hold a real boxed `V`
+   * (a raw underlying fails the callee's checkcast). Box: `NugetHandles.retain(V(lowered))`, with
+   * `init` running inside the error-slot `try`. Unbox: the handle read back as `V`, returned as its
+   * underlying through the ordinary value-class result emission.
+   *
+   * Both or neither, and a refusal is silent: the pair is generated surface no author wrote, so a
+   * skip naming it would be noise. A value class whose underlying cannot cross has no erased
+   * crossing either, and `Wrap<T>` keeps throwing for it exactly as before.
+   */
+  private fun valueClassBoxingEntries(
+    cls: KSClassDeclaration,
+    owner: String,
+    prefix: String,
+  ): List<ForwardCallableCatalogEntry> {
+    if (cls.typeParameters.isNotEmpty()) return emptyList()
+    // ADR-105: an exported sealed CLASS underlying is the handle its classification carries, read
+    // back through the base's `FromHandle` discriminator, exactly as the ordinary route binds it.
+    val type: BridgeType.ValueClass =
+      classifier.classify(cls.asStarProjectedType()).sealedAsHandle() as? BridgeType.ValueClass
+        ?: return emptyList()
+    // The four underlying kinds both value-class wires already implement (ADR-077 sub-item 4).
+    val underlying: BridgeType = type.underlying
+    val crosses: Boolean = underlying == BridgeType.String || underlying is BridgeType.Primitive ||
+        underlying is BridgeType.Enum || underlying is BridgeType.ObjectHandle
+    if (!crosses) return emptyList()
+    val box: ForwardCallableCatalogEntry = planOrSkip(
+      symbol = "$owner.<box>",
+      publicName = "NugetBox",
+      exportName = "${prefix}_box",
+      receiver = ForwardReceiver.Static,
+      parameters = listOf("unboxed" to type),
+      result = BridgeType.TypeParameter("T"),
+      origin = ForwardCallableOrigin.VALUE_CLASS_BOX,
+      target = owner,
+      node = cls,
+    )
+    val unbox: ForwardCallableCatalogEntry = planOrSkip(
+      symbol = "$owner.<unbox>",
+      publicName = "NugetUnbox",
+      exportName = "${prefix}_unbox",
+      receiver = ForwardReceiver.Static,
+      parameters = listOf("boxed" to BridgeType.TypeParameter("T", boundQualifiedName = owner)),
+      result = type,
+      origin = ForwardCallableOrigin.VALUE_CLASS_BOX,
+      target = owner,
+      node = cls,
+    )
+    val pair: List<ForwardCallableCatalogEntry> = listOf(box, unbox)
+    return if (pair.all { it is ForwardCallableCatalogEntry.Planned }) pair else emptyList()
   }
 
   private fun valueClassConstructorEntries(
@@ -4596,4 +4679,5 @@ private val STORED_CALLBACK_ORIGINS: Set<ForwardCallableOrigin> = setOf(
   ForwardCallableOrigin.COPY,
   ForwardCallableOrigin.ENUM_ARM_BOX,
   ForwardCallableOrigin.VALUE_CLASS,
+  ForwardCallableOrigin.VALUE_CLASS_BOX,
 )

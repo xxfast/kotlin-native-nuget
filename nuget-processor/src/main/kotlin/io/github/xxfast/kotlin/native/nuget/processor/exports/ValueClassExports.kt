@@ -1,22 +1,15 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
-import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
-import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
-import com.google.devtools.ksp.symbol.KSValueParameter
 import com.squareup.kotlinpoet.FileSpec
-import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardValueClassUnderlying
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
-
-private val PRIMITIVE_TYPES: Set<String> = setOf(
-  "kotlin.String", "kotlin.Byte", "kotlin.UByte", "kotlin.Short", "kotlin.UShort",
-  "kotlin.Int", "kotlin.UInt", "kotlin.Long", "kotlin.ULong",
-  "kotlin.Float", "kotlin.Double", "kotlin.Boolean",
-)
+import io.github.xxfast.kotlin.native.nuget.processor.forward.valueClassUnderlying
 
 /**
  * Value-class exports: plan-only. A reference-underlying value class exports no *primary*
@@ -26,20 +19,16 @@ private val PRIMITIVE_TYPES: Set<String> = setOf(
 internal fun FileSpec.Builder.addValueClassExports(
   cls: KSClassDeclaration,
   callableCatalog: ForwardCallablePlanCatalog,
+  classifier: ForwardBridgeTypeClassifier,
 ) {
   val qualifiedName: String = cls.qualifiedName?.asString() ?: return
 
-  val underlyingProp: KSValueParameter = cls.primaryConstructor!!.parameters.first()
-  val underlyingDeclaration: KSDeclaration =
-    underlyingProp.type.resolve().expandAliases().declaration
-  val underlyingType: String = underlyingDeclaration.qualifiedName?.asString() ?: return
-  // ADR-077 sub-item 4 prerequisite: an enum underlying crosses as its int ordinal, so it is a
-  // value underlying. The qualified-name set cannot see that; misclassifying it as reference
-  // deferred the primary constructor here while the planner still planned `_create`, leaving the
-  // Kotlin half of that export missing (the contract check's crash).
-  val isEnumUnderlying: Boolean =
-    (underlyingDeclaration as? KSClassDeclaration)?.classKind == ClassKind.ENUM_CLASS
-  val isReferenceUnderlying: Boolean = !isEnumUnderlying && underlyingType !in PRIMITIVE_TYPES
+  // The planner reads the same rule, so the two halves agree on the `_create` export. A private
+  // qualified-name list here used to call `Char` and a plain interface references while the
+  // planner called them values, and KSP aborted on the missing Kotlin half.
+  val role: ForwardValueClassUnderlying = classifier.valueClassUnderlying(cls)
+  if (role == ForwardValueClassUnderlying.REFUSED) return
+  val isReferenceUnderlying: Boolean = role == ForwardValueClassUnderlying.REFERENCE
 
   val secondaryConstructors: List<KSFunctionDeclaration> = cls.declarations
     .filterIsInstance<KSFunctionDeclaration>()
@@ -66,4 +55,7 @@ internal fun FileSpec.Builder.addValueClassExports(
   // overload's export twice and the second's never.
   callableCatalog.valueClassProperties(qualifiedName).forEach { addForwardKotlinPlanExport(it) }
   callableCatalog.valueClassMethods(qualifiedName).forEach { addForwardKotlinPlanExport(it) }
+  // ADR-171: the box/unbox pair `NugetMarshal.Wrap<T>` / `Factories` call at an erased position.
+  callableCatalog.valueClassBoxing(qualifiedName)?.toList()
+    ?.forEach { addForwardKotlinPlanExport(it) }
 }

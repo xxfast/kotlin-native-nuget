@@ -622,6 +622,15 @@ internal enum class ForwardCallableOrigin {
    * ABI contract) is the ordinary route's.
    */
   ENUM_ARM_BOX,
+
+  /**
+   * ADR-171: a value class's box/unbox pair, the erased-generic crossing (`Box<ChartId>`,
+   * `KotlinFunc<ChartId, string>`). Like [ENUM_ARM_BOX], the Kotlin invocation is the identity on
+   * the lowered argument: the box lowers `V(underlying)` (re-running `init`) and retains it as an
+   * opaque [BridgeType.TypeParameter] handle; the unbox reads the handle back as `V` and returns
+   * its underlying through the ordinary value-class result emission.
+   */
+  VALUE_CLASS_BOX,
 }
 
 internal data class ForwardInvocation(
