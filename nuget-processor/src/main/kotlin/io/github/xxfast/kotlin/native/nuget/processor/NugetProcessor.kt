@@ -38,6 +38,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.translate
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addCompanionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addEnumExports
+import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
 import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedNullableLambdaPayload
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowMethodExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowPropertyExports
@@ -541,6 +542,108 @@ internal fun warnDroppedForwardExtensionReceivers(
   }
   ForwardDiagnosticSink.emit(diagnostics, logger)
 }
+
+/**
+ * ADR-064's named skip for a property declared in an enum's `companion object`. The ADR-006 route
+ * binds an enum's own instance properties as `{Enum}Extensions` methods and nothing else, and no
+ * route declares an enum companion's members, so such a property used to vanish from both halves
+ * with no diagnostic at all. Emitted from this one place (neither `addEnumExports` nor the CIR
+ * enum translator reads the companion), so the two halves cannot double-report.
+ *
+ * The kind is the position one, [ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY], per ADR-064's
+ * rule that a kind names where the drop happened.
+ */
+internal fun warnEnumCompanionProperties(
+  enums: List<KSClassDeclaration>,
+  logger: KSPLogger,
+) {
+  val diagnostics: List<ForwardDiagnostic> = enums.flatMap { enum ->
+    enum.declarations
+      .filterIsInstance<KSClassDeclaration>()
+      .filter { it.isCompanionObject && it.getVisibility() == Visibility.PUBLIC }
+      .flatMap { companion ->
+        companion.declarations
+          .filterIsInstance<KSPropertyDeclaration>()
+          .filter { it.getVisibility() == Visibility.PUBLIC }
+          .filter { !it.isCompilerOwnedMember(companion) }
+          .map { prop -> companion to prop }
+      }
+      .map { (companion, prop) ->
+        val name: String = prop.qualifiedName?.asString()
+          ?: "${enum.simpleName.asString()}.${companion.simpleName.asString()}." +
+              prop.simpleName.asString()
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+          symbol = prop.takeIf { it.containingFile != null },
+          declaration = name,
+          reason = "it is declared in the companion object of enum class " +
+              "`${enum.simpleName.asString()}`, and an enum binds only its own instance " +
+              "properties (as `${enum.simpleName.asString()}Extensions` methods, ADR-006)",
+          hint = "move it to a top-level `val` or into an `object`, or make it an instance " +
+              "property of the enum",
+          // No owner: `CirEnum` carries no `<remarks>`, and an enum companion's statics have no
+          // C# home to leave a hole in (ADR-013 folds companion members onto a CLASS).
+          owner = null,
+        )
+      }
+      .toList()
+  }
+  ForwardDiagnosticSink.emit(diagnostics, logger)
+}
+
+/**
+ * ADR-064's named skip for a function declared in an `enum class` body or in its `companion object`
+ * ([ForwardDiagnosticKind.SKIPPED_ENUM_MEMBER_FUNCTION]). ADR-006 binds an enum's instance
+ * properties only today; neither `addEnumExports` nor the CIR enum translator reads a function, so
+ * both halves used to drop it silently. One producer, beside [warnEnumCompanionProperties].
+ *
+ * `declarations`, not `getAllFunctions()`: an inherited `compareTo` or `name` is not something the
+ * author wrote on the enum. [isCompilerOwnedMember] removes `Any`'s three and the constructor, and
+ * the enum's own synthesized `values()` / `valueOf()` are removed by name.
+ */
+internal fun warnEnumMemberFunctions(
+  enums: List<KSClassDeclaration>,
+  logger: KSPLogger,
+) {
+  fun KSClassDeclaration.ownFunctions(): Sequence<KSFunctionDeclaration> = declarations
+    .filterIsInstance<KSFunctionDeclaration>()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { !it.isCompilerOwnedMember(this) }
+
+  val diagnostics: List<ForwardDiagnostic> = enums.flatMap { enum ->
+    val enumName: String = enum.simpleName.asString()
+    val members: Sequence<Pair<KSFunctionDeclaration, String>> = enum.ownFunctions()
+      .filter { it.simpleName.asString() !in ENUM_SYNTHESIZED_FUNCTIONS }
+      .map { it to "it is a member function of enum class `$enumName`" }
+    val companions: Sequence<Pair<KSFunctionDeclaration, String>> = enum.declarations
+      .filterIsInstance<KSClassDeclaration>()
+      .filter { it.isCompanionObject && it.getVisibility() == Visibility.PUBLIC }
+      .flatMap { companion -> companion.ownFunctions() }
+      .map { it to "it is declared in the companion object of enum class `$enumName`" }
+
+    (members + companions)
+      .map { (function, where) ->
+        val name: String = function.qualifiedName?.asString()
+          ?: "$enumName.${function.simpleName.asString()}"
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.SKIPPED_ENUM_MEMBER_FUNCTION,
+          symbol = function.takeIf { it.containingFile != null },
+          declaration = name,
+          reason = "$where, and ADR-006 binds an enum's instance properties only today (as " +
+              "`${enumName}Extensions` methods), not its functions",
+          hint = "expose the result as an instance property of the enum, or declare the " +
+              "function at the top level taking the enum as a parameter or receiver",
+          // No owner: `CirEnum` carries no `<remarks>` (see warnEnumCompanionProperties).
+          owner = null,
+        )
+      }
+      .toList()
+  }
+  ForwardDiagnosticSink.emit(diagnostics, logger)
+}
+
+/** The functions the compiler writes on every `enum class`, which no author declared. */
+private val ENUM_SYNTHESIZED_FUNCTIONS: Set<String> = setOf("values", "valueOf")
 
 /**
  * ADR-114: the refusal arm of the legacy Flow/StateFlow and suspend routes. Those routes marshal a
@@ -1669,6 +1772,8 @@ class NugetProcessor(
       callableCatalog, logger, context.excludePackages, context.strictDependencyTypes,
     )
     warnDroppedForwardExtensionReceivers(callableCatalog, logger)
+    warnEnumCompanionProperties(enums, logger)
+    warnEnumMemberFunctions(enums, logger)
     warnRefusedLegacyRouteMembers(
       classes, sealedClasses, suspendFunctions, forwardClassifier, logger,
     )

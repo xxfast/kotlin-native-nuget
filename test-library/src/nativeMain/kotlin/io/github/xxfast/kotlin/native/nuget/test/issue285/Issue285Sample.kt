@@ -35,8 +35,10 @@ package io.github.xxfast.kotlin.native.nuget.test.issue285
  *   rather than this one. The memo assigns them to Tier 1 cells.
  * - Any pair that collides after casing (`FOO` + `Foo`, or `FOO_BAR` + `FooBar` under the new
  *   rule): that is a fatal generation error Tier 1 pins, and it would break `packNuget` here.
- * - An `is`-prefixed Boolean property on the enum: it aborts generation for an unrelated reason
- *   (memo finding 12, `Forward ABI missing Kotlin export for ..._get_is...`).
+ * - Any property on the enum: an entry-name fixture has no use for one. The one this bullet used to
+ *   exclude, an `is`-prefixed `Boolean` (it aborted generation with `Forward ABI missing Kotlin
+ *   export for ..._get_is...`), was never `is`-specific: every camelCase enum property aborted the
+ *   same way. Those now cross in `cat/Mood.kt` (`displayName`, `isCuddly`, `isSleepy`).
  *
  * No leak rows accompany this fixture: an enum crosses the C ABI as its ordinal `Int` in both
  * directions (ADR-006), so no `StableRef` handle is created and nothing can be leaked.

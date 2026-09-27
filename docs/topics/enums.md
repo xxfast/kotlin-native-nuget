@@ -1,8 +1,9 @@
 # Enums
 
-A Kotlin `enum class` becomes a C# `enum` with matching ordinal values. Members declared on the
-enum class (properties, methods) become C# extension methods, since a C# `enum` can't carry
-behavior itself.
+A Kotlin `enum class` becomes a C# `enum` with matching ordinal values. A property declared on the
+enum class becomes a C# extension method, since a C# `enum` can't carry behavior itself. A function
+declared on the enum class, or a property or function in its companion object, isn't bound yet; see
+[Members that aren't bound](#enum-member-functions-skip-named) below.
 
 ```kotlin
 enum class Mood {
@@ -22,6 +23,28 @@ enum class Mood {
 ```C#
 Mood mood = Mood.Happy;                   // HAPPY -> Happy, ordinal 0
 string description = mood.Description();  // extension method
+```
+
+A property's own name PascalCases the same way any other bridged property does, whatever its
+casing or type: a camelCase constructor property (`displayName`) binds as `DisplayName()`, and a
+`Boolean` name keeps a leading `is` rather than dropping it (`isCuddly` binds as `IsCuddly()`, not
+`Cuddly()`).
+
+```kotlin
+enum class Mood(val displayName: String, val isCuddly: Boolean) {
+  HAPPY("Purring Oreo", true),
+  SLEEPY("Snoozing Mylo", true),
+  GRUMPY("Hissing Oreo", false);
+
+  val isSleepy: Boolean
+    get() = this == SLEEPY
+}
+```
+
+```C#
+Mood.Happy.DisplayName();  // "Purring Oreo"
+Mood.Sleepy.IsCuddly();    // true
+Mood.Grumpy.IsSleepy();    // false
 ```
 
 An entry's C# name is predictable from its Kotlin spelling alone: split the entry name on `_`, and a
@@ -125,3 +148,31 @@ see [Classes and objects: Nested types](classes-and-objects.md#nested-classes-an
 declared: the declaration itself is skipped with `SKIPPED_NESTED_DECLARATION`, and a parameter,
 return, or property typed with it is skipped with `SKIPPED_UNSUPPORTED_TYPE`/`SKIPPED_UNSUPPORTED_PROPERTY`
 naming `UNDECLARED_ENUM`; the owning class still generates with its other members.
+
+## Members that aren't bound {id="enum-member-functions-skip-named"}
+
+A `var` body property (`isLoud` below) binds getter-only; there is no generated setter. A property
+declared in an enum's `companion object`, and a function declared in the enum class body or in its
+companion object, have no route at all today: neither becomes a C# member, on either side. Each is a
+named skip rather than a silent drop:
+
+```kotlin
+enum class Mood(val isCuddly: Boolean) {
+  FIRST(false), SECOND(true);
+
+  var isLoud: Boolean = false
+  fun isLoudNow(): Boolean = isLoud  // SKIPPED_ENUM_MEMBER_FUNCTION
+
+  companion object {
+    val isDefault: Boolean = true   // SKIPPED_UNSUPPORTED_PROPERTY
+    fun fallback(): Mood = FIRST    // SKIPPED_ENUM_MEMBER_FUNCTION
+  }
+}
+```
+
+`isLoud` itself still binds, as `IsLoud(this Mood mood)`, getter-only. Move a companion property to a
+top-level `val` or into an ordinary `object` instead. There is no current workaround for a member or
+companion function beyond exposing the same logic as a top-level function taking the enum as a
+parameter or receiver; binding it as an extension method, the way an enum's own properties already
+are, is open work (see
+[ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 4).
