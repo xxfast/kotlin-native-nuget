@@ -114,6 +114,18 @@ public class WrapValueClassTests
         Assert.Null(slot.Previous);
     }
 
+    // The null half of the sibling above: a null `ChartId?` has no box to mint, so it crosses as
+    // the null pointer and every getter reads null back.
+    [Fact]
+    public void WrapValueClass_GenericClass_NullableTypeArgument_CarriesNull()
+    {
+        using var slot = new Slot<ChartId?>(null);
+
+        Assert.Null(slot.Value);
+        Assert.Null(slot.Current);
+        Assert.Null(slot.Previous);
+    }
+
     [Fact]
     public void WrapValueClass_GenericClass_ValueClassInit_ThrowsAtTheBoundary()
     {

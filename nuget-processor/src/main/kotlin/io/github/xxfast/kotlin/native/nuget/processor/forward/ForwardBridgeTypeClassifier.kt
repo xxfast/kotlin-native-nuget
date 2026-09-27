@@ -89,7 +89,17 @@ internal class ForwardBridgeTypeClassifier(
     // `KSTypeAlias.type.resolve()` describes the alias target and can lose a `?` applied at the
     // alias use site, so retain nullability from both the original use and the expanded target.
     val isNullable: Boolean = type.isMarkedNullable || expanded.isMarkedNullable
-    return if (isNullable) BridgeType.Nullable(classified) else classified
+    if (!isNullable) return classified
+    // ADR-147 amendment: a nullable-bounded `T` is already wrapped; a `T?` use site keeps the
+    // wrap and drops the bare-`T` C# spelling rather than wrapping twice.
+    val boundNullable: BridgeType.TypeParameter? =
+      ((classified as? BridgeType.Nullable)?.type as? BridgeType.TypeParameter)
+        ?.takeIf { parameter -> parameter.nullableFromBound }
+    return if (boundNullable != null) {
+      BridgeType.Nullable(boundNullable.copy(nullableFromBound = false))
+    } else {
+      BridgeType.Nullable(classified)
+    }
   }
 
   private fun classifyNonNullable(type: KSType): BridgeType {
@@ -103,10 +113,18 @@ internal class ForwardBridgeTypeClassifier(
       val onGenericClass: Boolean =
         owner is KSClassDeclaration && owner.classKind == ClassKind.CLASS
       return if (onGenericClass) {
-        BridgeType.TypeParameter(
-          declaration.simpleName.asString(),
-          declaration.forwardBoundQualifiedName(),
+        val parameter = BridgeType.TypeParameter(
+          name = (owner as KSClassDeclaration).forwardCsharpTypeParameterName(declaration),
+          boundQualifiedName = declaration.forwardBoundQualifiedName(),
+          kotlinName = declaration.simpleName.asString(),
         )
+        // ADR-147 amendment: an unconstrained `T` has upper bound `Any?`, so a bare `T` is as
+        // nullable as `T?` on the Kotlin half and crosses on the same null-pointer wire (ADR-083).
+        if (declaration.hasNullableBound()) {
+          BridgeType.Nullable(parameter.copy(nullableFromBound = true))
+        } else {
+          parameter
+        }
       } else {
         BridgeType.Unsupported(
           declaration.simpleName.asString(),
@@ -777,14 +795,63 @@ internal fun KSTypeParameter.forwardBoundQualifiedName(): String? = bounds.toLis
 internal fun KSClassDeclaration.forwardOwnerTypeName(): String? {
   if (typeParameters.isEmpty()) return null
   val owner: String = qualifiedName?.asString() ?: return null
-  // `Any`, not `Any?`: the erased argument is what every member's `T` position substitutes to, and
-  // `NugetHandles.retain` takes a non-null `Any`, so `Crate<Any?>` makes a `val item: T` getter
-  // `retain(Any?)`, which does not compile. A declared-nullable position (`val value: T?`, a `T?`
-  // parameter) still substitutes to `Any?` on its own and keeps its null-pointer route.
+  // ADR-147 amendment: the erased argument carries the bound's nullability. An unconstrained
+  // parameter erases to `Any?`, so a bare `T` member substitutes to `Any?` and takes the nullable
+  // lowering and result body the classifier gives it; a `T : Any` erases to `Any` and keeps the
+  // non-null `retain`.
   val arguments: String = typeParameters.joinToString(", ") { parameter ->
-    parameter.forwardBoundQualifiedName() ?: "Any"
+    val bound: String = parameter.forwardBoundQualifiedName() ?: "Any"
+    if (parameter.hasNullableBound()) "$bound?" else bound
   }
   return "$owner<$arguments>"
+}
+
+/**
+ * ADR-147 amendment: Kotlin's rule for whether a bare `T` may hold null -- every upper bound is
+ * nullable, an unconstrained parameter (implicit `Any?`, or no reported bound at all) included.
+ * `T : Any` and `T : Pet` are non-null; `T : Pet?` is nullable.
+ */
+internal fun KSTypeParameter.hasNullableBound(): Boolean =
+  bounds.all { bound -> bound.resolve().isMarkedNullable }
+
+/**
+ * The C# spelling of one of this class's type parameters. Its own name, unless a member of the
+ * class renders the same PascalCase identifier (`class Duo<A, B>(val a: A)` renders property `A`),
+ * which C# refuses (CS0102). The member names are the consumer-facing API, so the type parameter
+ * gives way: `A` becomes `TA`, prefixed again until it clashes with nothing. Over-inclusive on
+ * purpose (every property and function, inherited ones too): a spurious rename is harmless, a
+ * missed one breaks the build.
+ */
+internal fun KSClassDeclaration.forwardCsharpTypeParameterName(parameter: KSTypeParameter): String {
+  val name: String = parameter.simpleName.asString()
+  return forwardCsharpTypeParameterNames()[name] ?: name
+}
+
+/** Every type parameter's C# spelling, keyed by its Kotlin name, assigned in declaration order so
+ *  two renamed parameters can never land on the same spelling. */
+private fun KSClassDeclaration.forwardCsharpTypeParameterNames(): Map<String, String> {
+  val names: List<String> = typeParameters.map { it.simpleName.asString() }
+  val members: Set<String> = buildSet {
+    getAllProperties().forEach { property ->
+      add(property.simpleName.asString().replaceFirstChar { it.uppercase() })
+    }
+    getAllFunctions().forEach { function ->
+      add(function.simpleName.asString().replaceFirstChar { it.uppercase() })
+    }
+    declarations.filterIsInstance<KSClassDeclaration>().forEach { nested ->
+      add(nested.simpleName.asString())
+    }
+    add(simpleName.asString())
+  }
+  if (names.none { name -> name in members }) return names.associateWith { it }
+  val taken: MutableSet<String> = (members + names).toMutableSet()
+  return names.associateWith { name ->
+    if (name !in members) return@associateWith name
+    var candidate: String = "T$name"
+    while (candidate in taken) candidate = "T$candidate"
+    taken.add(candidate)
+    candidate
+  }
 }
 
 /**

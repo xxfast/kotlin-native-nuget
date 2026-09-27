@@ -337,15 +337,42 @@ class ForwardBridgeTypeClassifierTest {
     val generic = assertIs<BridgeType.Unsupported>(classifier.classify(type(typeParameter)))
     assertEquals("type parameters require the named generic legacy route", generic.reason)
 
-    // ADR-147: the same parameter declared on a generic CLASS is a TypeParameter, unconstrained.
+    // ADR-147: the same parameter declared on a generic CLASS is a TypeParameter. Unconstrained,
+    // its upper bound is `Any?`, so a bare `T` is nullable on the wire (ADR-147 amendment) but
+    // keeps its bare C# spelling; a `T?` use site is the same wrap without the bare spelling.
     val classParameter = proxy<KSTypeParameter>(
       "getSimpleName" to name("T"),
       "getParentDeclaration" to classDeclaration("sample.Crate"),
       "getBounds" to emptySequence<Nothing>(),
     )
     assertEquals(
-      BridgeType.TypeParameter("T"),
+      BridgeType.Nullable(BridgeType.TypeParameter("T", nullableFromBound = true)),
       classifier.classify(type(classParameter)),
+    )
+    assertEquals(
+      BridgeType.Nullable(BridgeType.TypeParameter("T")),
+      classifier.classify(type(classParameter, nullable = true)),
+    )
+    assertEquals(
+      "T",
+      BridgeType.Nullable(BridgeType.TypeParameter("T", nullableFromBound = true))
+        .forwardPublicCsharpType(),
+    )
+    assertEquals(
+      "T?",
+      BridgeType.Nullable(BridgeType.TypeParameter("T")).forwardPublicCsharpType(),
+    )
+
+    // `T : Any` is non-null: the bare use stays a plain TypeParameter.
+    val anyBound: KSType = type("kotlin.Any")
+    val nonNullParameter = proxy<KSTypeParameter>(
+      "getSimpleName" to name("T"),
+      "getParentDeclaration" to classDeclaration("sample.Tin"),
+      "getBounds" to sequenceOf(typeReference(anyBound)),
+    )
+    assertEquals(
+      BridgeType.TypeParameter("T"),
+      classifier.classify(type(nonNullParameter)),
     )
 
     assertEquals(
@@ -420,6 +447,11 @@ class ForwardBridgeTypeClassifierTest {
     // The C# spelling walks enclosing declarations (`nestedCsName`, so a sealed subclass reads
     // `Shape.Circle`); every fixture here is top-level, so the walk stops immediately.
     "getParentDeclaration" to parentDeclaration,
+    // A class type parameter's C# spelling checks the class's member names for a CS0102 clash;
+    // every fixture here declares no members.
+    "getAllProperties" to emptySequence<Any>(),
+    "getAllFunctions" to emptySequence<Any>(),
+    "getDeclarations" to emptySequence<Any>(),
     // ADR-107's `isStdlibThrowable` walks the supertypes of any declaration with no containing
     // file; no fixture here stands in for a stdlib throwable, so the walk finds nothing.
     "getSuperTypes" to emptySequence<KSTypeReference>(),

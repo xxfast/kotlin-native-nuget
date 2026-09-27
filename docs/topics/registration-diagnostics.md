@@ -170,6 +170,10 @@ only proves the pending-continuation and `Task` handles came back to baseline: t
 `CancellationTokenSource` is a plain .NET `GCHandle`, not one of the Kotlin `StableRef`s
 `nuget_live_handles` counts, so it can't tell you whether that handle itself was released.
 
+A `null` argument at a [generic class's bare `T` position](generics.md#nullable-type-arguments)
+adds no new handle kind either: `new Crate<string?>(null)` mints nothing on the way in (`Wrap<T>`
+reports the box as unowned for null), so the count never moves for the argument itself.
+
 ## Forward direction has no registration step
 
 Kotlin exports called from C# resolve by symbol name through an ordinary P/Invoke: no contract

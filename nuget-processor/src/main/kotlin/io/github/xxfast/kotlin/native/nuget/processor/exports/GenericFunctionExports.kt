@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
+import io.github.xxfast.kotlin.native.nuget.processor.forward.hasNullableBound
 import io.github.xxfast.kotlin.native.nuget.processor.forward.importIfDefaultPackage
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinPackageReference
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
@@ -141,16 +142,24 @@ internal fun FileSpec.Builder.addGenericFunctionExports(
 
   val refType: String = boundQualified ?: "Any"
 
+  // ADR-147 amendment, applied to this route: an unconstrained `T` (upper bound `Any?`) may be
+  // null, so the object variant takes the null pointer for a null argument (ADR-083) and returns
+  // it for a null result, instead of dereferencing it.
+  val nullableBound: Boolean = func.typeParameters.firstOrNull()?.hasNullableBound() ?: true
+  val argument: String =
+    if (nullableBound) "$paramName?.asStableRef<$refType>()?.get()"
+    else "$paramName.asStableRef<$refType>().get()"
+
   if (returnsGenericClass) {
     addFunction(
       FunSpec.builder("export_$cname")
         .addAnnotation(cNameAnnotation(cname, ownedBy(func, "generic variant: object")))
-        .addParameter(paramName, cOpaquePointer)
+        .addParameter(paramName, cOpaquePointer.copy(nullable = nullableBound))
         .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
         .returns(cOpaquePointer.copy(nullable = true))
         .addCode(buildString {
           appendLine("return try {")
-          appendLine("  %T.retain(%L(%L.asStableRef<$refType>().get()))")
+          appendLine("  %T.retain(%L($argument))")
           appendLine("} catch (e: Throwable) {")
           appendLine("  if (errorOut != null) {")
           appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.retain(")
@@ -159,19 +168,25 @@ internal fun FileSpec.Builder.addGenericFunctionExports(
           appendLine("  }")
           appendLine("  null")
           append("}")
-        }, nugetHandles, funcName, paramName, cOpaquePointerVar, nugetHandles)
+        }, nugetHandles, funcName, cOpaquePointerVar, nugetHandles)
         .build()
     )
   } else if (returnDecl == typeParamName) {
+    val callArguments: Array<Any> =
+      if (nullableBound) arrayOf(funcName, nugetHandles) else arrayOf(nugetHandles, funcName)
     addFunction(
       FunSpec.builder("export_$cname")
         .addAnnotation(cNameAnnotation(cname, ownedBy(func, "generic variant: object")))
-        .addParameter(paramName, cOpaquePointer)
+        .addParameter(paramName, cOpaquePointer.copy(nullable = nullableBound))
         .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
         .returns(cOpaquePointer.copy(nullable = true))
         .addCode(buildString {
           appendLine("return try {")
-          appendLine("  %T.retain(%L(%L.asStableRef<$refType>().get()))")
+          if (nullableBound) {
+            appendLine("  %L($argument)?.let { result -> %T.retain(result) }")
+          } else {
+            appendLine("  %T.retain(%L($argument))")
+          }
           appendLine("} catch (e: Throwable) {")
           appendLine("  if (errorOut != null) {")
           appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.retain(")
@@ -180,7 +195,7 @@ internal fun FileSpec.Builder.addGenericFunctionExports(
           appendLine("  }")
           appendLine("  null")
           append("}")
-        }, nugetHandles, funcName, paramName, cOpaquePointerVar, nugetHandles)
+        }, *callArguments, cOpaquePointerVar, nugetHandles)
         .build()
     )
   }

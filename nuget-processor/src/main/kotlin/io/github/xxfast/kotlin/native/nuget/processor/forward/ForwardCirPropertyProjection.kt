@@ -731,7 +731,10 @@ internal object ForwardCirPropertyProjection {
   }
 
   private fun BridgeType.csharpType(): String = when (this) {
-    is BridgeType.Nullable -> "${type.csharpType()}?"
+    // ADR-147 amendment: a nullable-bounded bare `T` spells `T`, as on the callable route.
+    is BridgeType.Nullable ->
+      if ((type as? BridgeType.TypeParameter)?.nullableFromBound == true) type.name
+      else "${type.csharpType()}?"
     is BridgeType.Primitive -> kind.csharpType()
     BridgeType.Char -> "char"
     BridgeType.String -> "string"

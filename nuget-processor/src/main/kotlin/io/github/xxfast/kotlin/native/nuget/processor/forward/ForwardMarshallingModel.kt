@@ -315,14 +315,24 @@ internal sealed interface BridgeType {
    * `NugetMarshal.Wrap<T>(value, out owned)` in (with the ADR-099 owned dispose in a `finally`)
    * and `NugetMarshal.FromHandle<T>(handle)` out.
    *
-   * @param name the type parameter's simple name, which is also its C# spelling.
+   * @param name the type parameter's C# spelling: its simple name, unless a member of the class
+   *   renders the same identifier (CS0102), in which case the renamed one (`A` becomes `TA`).
    * @param boundQualifiedName the first upper bound's Kotlin FQCN when it is not `kotlin.Any`,
    *   used for the Kotlin-side `asStableRef<Bound>()` decode and for the applied receiver
    *   spelling. `null` for an unconstrained parameter.
+   * @param nullableFromBound ADR-147 amendment: true when this parameter sits inside a
+   *   [Nullable] only because its upper bound is nullable (a bare `T` of an unconstrained
+   *   parameter), not because the use site wrote `T?`. The Kotlin half carries the null pointer
+   *   exactly as for `T?`; the C# half spells it bare `T`, since `Box<string>.Value` is no more
+   *   nullable than Kotlin's `Box<String>.value`.
+   * @param kotlinName the name the author wrote, which diagnostics quote; differs from [name]
+   *   only when the C# spelling was renamed around a member.
    */
   data class TypeParameter(
     val name: kotlin.String,
     val boundQualifiedName: kotlin.String? = null,
+    val nullableFromBound: kotlin.Boolean = false,
+    val kotlinName: kotlin.String = name,
   ) : BridgeType
 }
 

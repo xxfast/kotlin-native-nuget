@@ -37,7 +37,7 @@ class Tier1NullableGenericPropertyTest {
     // before it ever mints a StableRef. Same null-pointer wire, one route fewer.
     assertContains(
       kotlin,
-      "val result = handle.asStableRef<tier1.nullablegenericproperty.Slot<Any>>().get().previous",
+      "val result = handle.asStableRef<tier1.nullablegenericproperty.Slot<Any?>>().get().previous",
     )
     assertContains(kotlin, "if (result == null) null else NugetHandles.retain(result)")
     assertFalse(
@@ -65,7 +65,7 @@ class Tier1NullableGenericPropertyTest {
       """
       package tier1.nonnullgenericproperty
 
-      class Crate<T>(val value: T)
+      class Crate<T : Any>(val value: T)
 
       fun crateOf(value: String): Crate<String> = Crate(value)
       """.trimIndent(),
@@ -87,5 +87,7 @@ class Tier1NullableGenericPropertyTest {
     val cs: String = result.generatedCSharp
     assertContains(cs, "public T Value")
     assertContains(cs, "return NugetMarshal.FromHandle<T>(nativeResult);")
+    // ADR-147 amendment: `T : Any` is C#'s `notnull` constraint.
+    assertContains(cs, "public class Crate<T> : IDisposable, INugetHandle where T : notnull")
   }
 }

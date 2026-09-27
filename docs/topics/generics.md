@@ -49,6 +49,49 @@ using var intSlot = new Slot<int>(42);
 Assert.Equal(0, intSlot.Previous); // default(int), not null
 ```
 
+## Nullable type arguments
+
+An unconstrained `T` (no bound, so its implicit upper bound is `Any?`) accepts a `null` argument at
+a constructor, method parameter, or return, and reads back `null`, the same way any other nullable
+handle position does:
+
+```C#
+using var bowl = new Box<string?>(null);
+Assert.Null(bowl.Value);
+
+using var crate = new Crate<string?>("tuna");
+Assert.Null(crate.Pick(null));
+Assert.Equal("null:tuna", crate.Describe(null));
+```
+
+A bound rules this out. `class Tin<T : Any>(val value: T)` renders `where T : notnull`, so a
+nullable type argument is a compile-time warning (`CS8714`) in a nullable-enabled consumer, on top
+of the runtime failure a `null` argument would still hit on the Kotlin side. A nullable bound
+(`T : Pet?`) keeps its `?` and behaves like the unconstrained case.
+
+```C#
+public class Tin<T> : IDisposable, INugetHandle where T : notnull
+```
+
+The same rule applies to a [top-level generic function](#generic-functions):
+`Helpers.Identity<int?>(null)` and `fun <T : Any> handBack(treat: T): T` behave the same way as
+their generic-class counterparts.
+
+If a generic class's property name collides with one of its own type parameter names once both are
+PascalCased (`class Duo<A, B>(val a: A, val b: B)`, where property `A` and type parameter `A` would
+both render `A`), the type parameter is renamed in C# (`A` becomes `TA`, `B` becomes `TB`); the
+property keeps its ordinary name. A diagnostic about the type parameter still names it the way you
+wrote it in Kotlin.
+
+```C#
+public class Duo<TA, TB> : IDisposable, INugetHandle
+{
+    public Duo(TA a, TB b) { /* ... */ }
+    public TA A { get; }
+    public TB B { get; }
+}
+```
+
 ## Constraints
 
 A bound (`<T : Pet>`) becomes a C# `where T : ...` clause. Any type assignable to the bound works
