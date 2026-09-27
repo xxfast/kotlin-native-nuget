@@ -72,6 +72,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendFunction
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addValueClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedDeclaration
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardValueClassUnderlying
+import io.github.xxfast.kotlin.native.nuget.processor.forward.valueClassUnderlying
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiRole
@@ -1590,7 +1592,8 @@ class NugetProcessor(
     // ADR-134: the nested `value class` candidate, declared as a nested `readonly record struct`
     // under any admitted owner. One list from here on, so the KotlinPoet exports, the plan catalog
     // and the CIR translator cannot disagree about which value classes exist.
-    val valueClasses: List<KSClassDeclaration> =
+    // Narrowed to `valueClasses` below, once a classifier exists to read each underlying.
+    val valueClassCandidates: List<KSClassDeclaration> =
       declaredValueClasses + nestedDeclared.filter { it.isValueClass() }
     val objects: List<KSClassDeclaration> =
       declaredObjects + nestedDeclared.filter { it.classKind == ClassKind.OBJECT }
@@ -1643,7 +1646,7 @@ class NugetProcessor(
         extensionFunctions.isEmpty() && extensionProperties.isEmpty() &&
         classes.isEmpty() && enums.isEmpty() &&
         interfaces.isEmpty() && sealedClasses.isEmpty() && objects.isEmpty() &&
-        properties.isEmpty() && constProperties.isEmpty() && valueClasses.isEmpty() &&
+        properties.isEmpty() && constProperties.isEmpty() && valueClassCandidates.isEmpty() &&
         suspendFunctions.isEmpty()
     if (hasNothingToProcess) {
       // Issue #55: the diagnostics file is what `nugetReportDiagnostics` re-emits, so the
@@ -1678,10 +1681,7 @@ class NugetProcessor(
     // ADR-134: the value classes the renderer declares, nested ones included. Kept out of
     // `exportedObjectHandles` above: a record struct is not a handle, and that set answers a
     // different question for `forwardSuperClass` and the legacy `csTypeArguments` route.
-    val exportedValueClasses: Set<String> = buildSet {
-      valueClasses.forEach { cls -> cls.qualifiedName?.asString()?.let(::add) }
-    }
-    val forwardClassifier = ForwardBridgeTypeClassifier(
+    fun classifierFor(exportedValueClasses: Set<String>) = ForwardBridgeTypeClassifier(
       ForwardBridgeTypeContext(
         exportedObjectHandles = exportedObjectHandles,
         exportedValueClasses = exportedValueClasses,
@@ -1693,6 +1693,42 @@ class NugetProcessor(
         exportMarkers = context.exportMarkers,
       ),
     )
+    // A value class whose underlying neither wire implements (`Char`, a plain interface,
+    // `Instant`, a collection, ...) is not declared at all, and says so here, once, by name. The
+    // planner and the Kotlin export builder read the same rule, so it can no longer reach them as
+    // half a constructor and abort KSP. Members typed with it then skip as an undeclared value
+    // class on their own owners.
+    val candidateClassifier: ForwardBridgeTypeClassifier = classifierFor(
+      valueClassCandidates.mapNotNullTo(mutableSetOf()) { it.qualifiedName?.asString() },
+    )
+    val (valueClasses: List<KSClassDeclaration>, refusedValueClasses: List<KSClassDeclaration>) =
+      valueClassCandidates.partition { cls ->
+        candidateClassifier.valueClassUnderlying(cls) != ForwardValueClassUnderlying.REFUSED
+      }
+    ForwardDiagnosticSink.emit(
+      refusedValueClasses.map { cls ->
+        val name: String = cls.qualifiedName?.asString() ?: cls.simpleName.asString()
+        val underlying: String = cls.primaryConstructor?.parameters?.singleOrNull()
+          ?.type?.resolve()?.declaration?.qualifiedName?.asString() ?: "its underlying"
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
+          symbol = cls.takeIf { it.containingFile != null },
+          declaration = name,
+          reason = "value class `$name` wraps `$underlying`, which no value-class wire carries " +
+              "(a value class crosses as a String, a primitive other than Char, an enum, or an " +
+              "exported class or sealed type), so no C# record struct is declared for it",
+          hint = "change the underlying to one of those (a `Char` fits in a `String` or an " +
+              "`Int`; an interface fits behind an exported class that implements it), or make " +
+              "the value class internal",
+          owner = null,
+        )
+      },
+      logger,
+    )
+    val exportedValueClasses: Set<String> = buildSet {
+      valueClasses.forEach { cls -> cls.qualifiedName?.asString()?.let(::add) }
+    }
+    val forwardClassifier = classifierFor(exportedValueClasses)
     val forwardPlanner = ForwardCallablePlanner(forwardClassifier, context.symbols, expects)
     val forwardPropertyPlanner = ForwardPropertyPlanner(forwardClassifier, context.symbols, expects)
     // ROADMAP line 29 (ADR-118 amendment): the planner sees every non-generic top-level function,
@@ -2263,7 +2299,7 @@ class NugetProcessor(
       guardDeclaration(obj) { builder.addObjectExports(obj, callableCatalog) }
     }
     valueClasses.forEach { cls ->
-      guardDeclaration(cls) { builder.addValueClassExports(cls, callableCatalog) }
+      guardDeclaration(cls) { builder.addValueClassExports(cls, callableCatalog, forwardClassifier) }
     }
     reachableInterfaces.forEach { iface ->
       guardDeclaration(iface) {

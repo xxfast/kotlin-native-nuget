@@ -30,9 +30,13 @@ property once into a `using var` rather than calling `cat.OnPet.Invoke(...)` inl
 the handle.
 
 `Invoke` accepts and returns `string`, any narrow or wide primitive (including `char`), any
-exported object, or a nullable spelling of any of those (`string?`, `int?`, `char?`, and so on): a
-lambda's type argument carries `?` when the Kotlin declaration is nullable at that position, and
-`null` reaches the Kotlin lambda, or comes back from it, exactly as written.
+exported object, a [value class](value-classes.md#at-an-erased-generic-position), or a nullable
+spelling of any of those (`string?`, `int?`, `char?`, and so on): a lambda's type argument carries
+`?` when the Kotlin declaration is nullable at that position, and `null` reaches the Kotlin lambda,
+or comes back from it, exactly as written. A value class payload or result crosses boxed, not by
+its underlying, so its own `init` still validates; a value class with no crossing at this position
+(a nullable underlying, a generic value class, or an ineligible sealed interface) is refused by
+name instead.
 
 ```kotlin
 fun signIn(): (String?) -> Unit = { seen = it }
@@ -388,5 +392,6 @@ up, rather than a use-after-free read.
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/161-csharp-callback-exception-into-kotlin.md">ADR-161: A C# callback exception reaches Kotlin</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/171-value-classes-at-erased-generic-positions.md">ADR-171: Value classes at erased generic positions</a>
     </category>
 </seealso>

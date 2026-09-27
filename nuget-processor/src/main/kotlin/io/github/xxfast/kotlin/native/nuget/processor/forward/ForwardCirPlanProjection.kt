@@ -9,6 +9,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMember
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMethod
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirParameter
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirProperty
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClassBoxing
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClassConstructor
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirVisibility
 
@@ -54,6 +55,53 @@ internal object ForwardCirPlanProjection {
       // ADR-150 amendment: the same `cirDoc()` every other planned callable projects, so a value
       // class's constructor documents itself exactly as an ordinary class's does.
       doc = plan.publicSignature.cirDoc(),
+    )
+  }
+
+  /**
+   * ADR-171: the box/unbox externs and helper bodies, both off the plans so the DllImports carry
+   * exactly the wire the Kotlin exports declare. The box lowers the struct to its underlying wire
+   * the way an ordinary value-class parameter does ([callArgument]); the unbox rebuilds it the way
+   * an ordinary value-class result does ([valueClassReconstructionCs], so a sealed-base underlying
+   * goes through its `FromHandle` discriminator).
+   */
+  fun valueClassBoxing(
+    box: ForwardCallablePlan,
+    unbox: ForwardCallablePlan,
+    libraryName: String,
+  ): CirValueClassBoxing {
+    require(
+      box.invocation.origin == ForwardCallableOrigin.VALUE_CLASS_BOX &&
+          unbox.invocation.origin == ForwardCallableOrigin.VALUE_CLASS_BOX
+    ) { "Forward CIR value-class boxing projection received ${box.invocation.origin}" }
+    val type: BridgeType.ValueClass = unbox.publicSignature.result as BridgeType.ValueClass
+    val boxCall: ForwardNativeCall = box.singleNativeImport()
+    val unboxCall: ForwardNativeCall = unbox.singleNativeImport()
+    val unboxWire: String = valueClassUnderlyingWireCs(type.underlying)
+    val boxParameter: ForwardPublicParameter = box.publicSignature.parameters.single()
+    return CirValueClassBoxing(
+      boxImport = CirDllImport(
+        libraryName = libraryName,
+        entryPoint = boxCall.exportName,
+        returnType = "IntPtr",
+        name = "Native_NugetBox",
+        parameters = box.nativeInCirParameters(boxCall.parameters),
+        visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = box.errorSlot != null,
+      ),
+      unboxImport = CirDllImport(
+        libraryName = libraryName,
+        entryPoint = unboxCall.exportName,
+        returnType = unboxWire,
+        name = "Native_NugetUnbox",
+        parameters = unbox.nativeInCirParameters(unboxCall.parameters),
+        visibility = CirVisibility.PRIVATE,
+        hasSyncErrorOut = unbox.errorSlot != null,
+        marshalBooleanReturn = unboxWire == "bool",
+      ),
+      boxParameter = boxParameter.csharpName,
+      boxArguments = box.callArgument(boxParameter),
+      unboxResult = valueClassReconstructionCs(type, "nativeResult"),
     )
   }
 

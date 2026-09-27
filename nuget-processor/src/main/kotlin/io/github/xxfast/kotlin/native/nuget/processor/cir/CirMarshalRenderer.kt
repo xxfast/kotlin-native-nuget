@@ -113,16 +113,36 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   for (entry in helper.factories) {
     // Issue #40: a sealed base has no handle constructor, so it routes through the discriminator
     // the sealed renderer already emits for it rather than through `new`.
-    val construct: String =
-      if (entry.viaFromHandle) "global::${entry.qualifiedTypeName}.FromHandle(handle)"
-      else "new global::${entry.qualifiedTypeName}(handle, out _)"
+    // ADR-171: a value class is a record struct with no handle constructor; its `NugetUnbox` reads
+    // the boxed Kotlin value back and disposes the handle.
+    val construct: String = when {
+      entry.viaFromHandle -> "global::${entry.qualifiedTypeName}.FromHandle(handle)"
+      entry.viaNugetUnbox -> "global::${entry.qualifiedTypeName}.NugetUnbox(handle)"
+      else -> "new global::${entry.qualifiedTypeName}(handle, out _)"
+    }
     appendLine("            [typeof(global::${entry.qualifiedTypeName})] = static handle => $construct,")
+  }
+  appendLine("        };")
+  appendLine()
+  // ADR-171: the write-side twin of `Factories`, one statically written line per value class, so
+  // it is trimmer- and AOT-safe on the same argument. Keyed on the value's RUNTIME type by
+  // `Wrap<T>`, so one entry covers `T = V`, `T = V?` and `T = object`.
+  appendLine("        internal static readonly System.Collections.Generic.Dictionary<Type, Func<object, IntPtr>> Boxers =")
+  appendLine("            new System.Collections.Generic.Dictionary<Type, Func<object, IntPtr>>")
+  appendLine("        {")
+  helper.boxers.forEach { boxer ->
+    appendLine(
+      "            [typeof(global::$boxer)] = static value => " +
+          "global::$boxer.NugetBox((global::$boxer)value),",
+    )
   }
   appendLine("        };")
   appendLine()
   appendLine("        internal static T Materialize<T>(IntPtr handle)")
   appendLine("        {")
-  appendLine("            if (Factories.TryGetValue(typeof(T), out Func<IntPtr, object>? factory)) return (T)factory(handle);")
+  // ADR-171: `T = V?` is `Nullable<V>`, which never equals the `typeof(V)` key.
+  appendLine("            Type key = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);")
+  appendLine("            if (Factories.TryGetValue(key, out Func<IntPtr, object>? factory)) return (T)factory(handle);")
   appendLine("            throw new NotSupportedException($\"No generated factory materialises {typeof(T)} from a Kotlin handle\");")
   appendLine("        }")
   appendLine()
@@ -331,6 +351,18 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("            if (type == typeof(uint)) return nuget_wrap_uint((uint)(object)value!);")
   appendLine("            if (type == typeof(ulong)) return nuget_wrap_ulong((ulong)(object)value!);")
   appendLine("            if (type == typeof(char)) return nuget_wrap_char((char)(object)value!);")
+  // ADR-171: a value class crosses as a real boxed Kotlin value, minted per call. The runtime type,
+  // not `type`: a boxed `Nullable<V>` and a `V` held as `object` both report `V`. `owned` is an
+  // `out`, so it writes through to the caller's local immediately: it must read false while the
+  // box export can still throw (a value class's `init`), or the caller's `finally` disposes the
+  // IntPtr.Zero it never received and `nuget_dispose` NPEs, uncatchably, in Kotlin.
+  appendLine("            if (Boxers.TryGetValue(((object)value!).GetType(), out Func<object, IntPtr>? box))")
+  appendLine("            {")
+  appendLine("                owned = false;")
+  appendLine("                IntPtr boxed = box(value!);")
+  appendLine("                owned = true;")
+  appendLine("                return boxed;")
+  appendLine("            }")
   // ADR-094: every Kotlin-backed wrapper implements INugetHandle explicitly, so the handle comes
   // out of a type test instead of a private-field read.
   appendLine("            owned = false;")

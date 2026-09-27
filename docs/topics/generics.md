@@ -121,7 +121,12 @@ Assert.Equal("lot-2:3", crate.Label("lot", 2));
 A position that never mentions `T` (`Label` above) binds exactly as it would on a non-generic
 class. A position that does (`Describe`, `Pick`) crosses as the same boxed handle a `T`-typed
 property already uses: a value type pays one box mint and dispose per call, an exported class
-instantiation borrows the argument's own live handle and mints nothing on the way in.
+instantiation borrows the argument's own live handle and mints nothing on the way in, and a
+[value class](value-classes.md#at-an-erased-generic-position) mints and disposes a box through its
+own box/unbox pair, running `init` at the boundary. A value class with no such pair (a nullable
+underlying, a generic value class, or an ineligible sealed interface) still compiles at `T` but
+throws `NotSupportedException` at the call, since an open C# generic has no build-time way to
+refuse it.
 
 `T` is admitted only at a top-level position: a parameter, a return, a constructor parameter, or a
 property getter, optionally nullable. It is refused, named, everywhere else: nested in a
@@ -261,5 +266,6 @@ declare the generic class in the publishing module itself instead.
     </category>
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/147-generic-class-methods.md">ADR-147: Generic class methods</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/171-value-classes-at-erased-generic-positions.md">ADR-171: Value classes at erased generic positions</a>
     </category>
 </seealso>

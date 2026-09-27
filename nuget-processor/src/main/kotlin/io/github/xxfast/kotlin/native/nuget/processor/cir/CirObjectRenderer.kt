@@ -143,7 +143,52 @@ private fun StringBuilder.renderValueClassCreateChecked(
   return paramStr
 }
 
+/**
+ * ADR-171: the erased-generic crossing, beside `CreateChecked`. The externs are private like every
+ * other value-class import; the helpers are `internal` because `NugetMarshal.Boxers` and
+ * `Factories` call them from outside the struct. `NugetUnbox` owns the incoming handle, as every
+ * other `Factories` entry does, and disposes it whether or not the read succeeds.
+ */
+private fun StringBuilder.renderValueClassBoxing(cls: CirValueClass) {
+  val boxing: CirValueClassBoxing = cls.boxing ?: return
+  val wire: String = boxing.unboxImport.returnType
+  renderDllImport(boxing.boxImport)
+  renderDllImport(boxing.unboxImport)
+  appendLine("        internal static IntPtr NugetBox(${cls.name} ${boxing.boxParameter})")
+  appendLine("        {")
+  appendLine(
+    "            IntPtr boxed = ${boxing.boxImport.name}(" +
+        "${boxing.boxArguments.joinToString(", ")}, out IntPtr error);",
+  )
+  appendLine("            if (error != IntPtr.Zero)")
+  appendLine("            {")
+  appendLine("                throw NugetErrorNative.BuildException(error);")
+  appendLine("            }")
+  appendLine("            return boxed;")
+  appendLine("        }")
+  appendLine()
+  appendLine("        internal static ${cls.name} NugetUnbox(IntPtr boxed)")
+  appendLine("        {")
+  appendLine("            $wire nativeResult;")
+  appendLine("            try")
+  appendLine("            {")
+  appendLine("                nativeResult = ${boxing.unboxImport.name}(boxed, out IntPtr error);")
+  appendLine("                if (error != IntPtr.Zero)")
+  appendLine("                {")
+  appendLine("                    throw NugetErrorNative.BuildException(error);")
+  appendLine("                }")
+  appendLine("            }")
+  appendLine("            finally")
+  appendLine("            {")
+  appendLine("                NugetMarshal.Dispose(boxed);")
+  appendLine("            }")
+  appendLine("            return ${boxing.unboxResult};")
+  appendLine("        }")
+  appendLine()
+}
+
 private fun StringBuilder.renderValueClassMembers(cls: CirValueClass) {
+  renderValueClassBoxing(cls)
   cls.properties.forEach { prop ->
     renderDllImport(cls.propertyNativeImport(prop))
     renderDoc(prop.doc, "        ", generated = prop.remarks)

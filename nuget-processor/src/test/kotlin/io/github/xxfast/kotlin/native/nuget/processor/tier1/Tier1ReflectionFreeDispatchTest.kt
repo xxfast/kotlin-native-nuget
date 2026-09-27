@@ -101,7 +101,7 @@ class Tier1ReflectionFreeDispatchTest {
   }
 
   @Test
-  fun `enums, value classes and objects register no factory`() {
+  fun `enums and objects register no factory, a value class registers through its box pair`() {
     val result = Tier1Harness.run(
       """
       package tier1.reflectionfreeplain
@@ -127,7 +127,26 @@ class Tier1ReflectionFreeDispatchTest {
     val cs: String = result.generatedCSharp
     assertContains(cs, "[typeof(global::Tier1.Cat)] = static handle => new global::Tier1.Cat(handle, out _),")
     assertFalse(cs.contains("[typeof(global::Tier1.Mood)]"), "an enum has no handle constructor")
-    assertFalse(cs.contains("[typeof(global::Tier1.ChartId)]"), "a value class round-trips as its underlying")
     assertFalse(cs.contains("[typeof(global::Tier1.Registry)]"), "an object is rendered without a handle")
+
+    // ADR-171: a generic slot holds a BOXED value class, so the read registers through the
+    // struct's `NugetUnbox`, and the write side has its own statically written `Boxers` line.
+    assertContains(
+      cs,
+      "[typeof(global::Tier1.ChartId)] = static handle => global::Tier1.ChartId.NugetUnbox(handle),",
+    )
+    assertContains(
+      cs,
+      "[typeof(global::Tier1.ChartId)] = static value => " +
+          "global::Tier1.ChartId.NugetBox((global::Tier1.ChartId)value),",
+    )
+    assertContains(cs, "Type key = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);")
+    assertContains(cs, "internal static IntPtr NugetBox(ChartId unboxed)")
+    assertContains(cs, "internal static ChartId NugetUnbox(IntPtr boxed)")
+    // The Kotlin halves: `init` re-runs inside the box export, and both mint through NugetHandles.
+    val kotlin: String = result.generated
+    assertContains(kotlin, "NugetHandles.retain(tier1.reflectionfreeplain.ChartId(unboxed))")
+    assertContains(kotlin, "boxed.asStableRef<tier1.reflectionfreeplain.ChartId>().get().value")
+    assertFalse(kotlin.contains("StableRef.create("), "handles are minted only through NugetHandles")
   }
 }

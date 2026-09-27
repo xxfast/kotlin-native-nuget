@@ -1408,6 +1408,61 @@ public class LiveHandleTests
         });
     }
 
+    // ADR-171: a value class at the generic-class `T`. Unlike an exported class (borrowed, mints
+    // nothing), a record struct has no handle of its own, so `Wrap<ChartId>` mints one boxed
+    // `ChartId` through the per-value-class box export with `owned = true`, and the ctor's
+    // `finally` disposes it. The `.Value` read retains the boxed slot once and the value-class
+    // factory unboxes and disposes it.
+    // Ledger per iteration: value-class box +1/-1 (ctor), box_create +1, getter retain +1/-1
+    // (factory unbox), box_dispose -1. Net zero. A positive delta is an owned box the `finally`
+    // never released, or a factory that read the underlying and forgot the handle.
+    [Fact]
+    public void WrapValueClass_GenericClassArgument_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            var id = new ChartId("CH-OREO-1");
+            using var box = new Box<ChartId>(id);
+            Assert.Equal(id, box.Value);
+        });
+    }
+
+    // ADR-171: the box export runs the value class's `init` (a positional record struct never
+    // ran it in C#), so a nameless `WardBand` fails inside the box export, before anything is
+    // minted and before `box_create` is reached. Net zero; a positive delta means the error path
+    // minted a box (or a half-built Box<WardBand>) and nobody owns it. (`CatId` cannot drive
+    // this row: its String-underlying constructor runs `init` in C# already.)
+    [Fact]
+    public void WrapValueClass_GenericClassArgumentInitThrows_ReturnsToBaseline()
+    {
+        using var nameless = new Patient("");
+        var band = new WardBand(nameless);
+        AssertNoLeak(() =>
+        {
+            Assert.ThrowsAny<ArgumentException>(() => new Box<WardBand>(band));
+        });
+    }
+
+    // ADR-171: arity 2 on the lambda route, value classes in both slots. The first argument's
+    // box is minted, then the second argument's box export throws on `WardBand`'s `init`.
+    // `KotlinFunc.Invoke` used to dispose its owned argument boxes after the native call with no
+    // `finally`, so a throw from the second `Wrap` stranded the first box: +1 per iteration
+    // unless the dispose loop sits in a `finally`.
+    // Ledger per iteration: ChartId box +1/-1, WardBand box throws (0). Net zero.
+    [Fact]
+    public void WrapValueClass_LambdaSecondArgumentThrows_ReturnsToBaseline()
+    {
+        using var courier = new ChartCourier("Ward 9");
+        using var nameless = new Patient("");
+        var band = new WardBand(nameless);
+        using KotlinFunc<ChartId, WardBand, string> onChartForBand = courier.OnChartForBand;
+        AssertNoLeak(() =>
+        {
+            Assert.ThrowsAny<ArgumentException>(() =>
+                onChartForBand.Invoke(new ChartId("CH-MYLO-2"), band));
+        });
+    }
+
     /// <summary>
     /// The red case. `NugetMarshal.Factories` is a mutable dictionary (ADR-120 documents that
     /// mutability as a load-bearing test seam), so swapping the `TopStory` entry for a factory

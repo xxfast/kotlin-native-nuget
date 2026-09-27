@@ -83,7 +83,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 |---|:-:|---|---|---|
 | `class<T>` | ⇄ | `class<T>` | → type-erased wrapper, `null` collapses to `default(T)` for a value type; an unspellable return type argument or outer type skips, named · ← bound per closed instantiation; BCL ones are diagnosed | [Generics](generics.md) · [Generic types](generic-types.md) |
 | `class<T>(...)` constructor | ⇄ | typed constructors | → typed arguments, and one entry point serves every instantiation of `T` · ← one Kotlin constructor per unambiguous instantiation; two that erase alike are both dropped | [Generics](generics.md) · [Generic types](generic-types.md) |
-| a method declared on a `class<T>` | → | instance method on the generic carrier | Every `T` position crosses as a boxed handle; a position not naming `T` binds as on a plain class. `T` inside a collection, lambda or `Flow`, and a generic subclass, are refused. | [Generics](generics.md) |
+| a method declared on a `class<T>` | → | instance method on the generic carrier | Every `T` position, including a value class (its own box/unbox pair), crosses as a handle; `T` in a collection/lambda/`Flow`, and a generic subclass, are refused. | [Generics](generics.md) |
 | `fun <T> f()` | → | typed variants | Dispatched on the runtime type. | [Generics](generics.md) |
 | `<T : Bound>` constraint | → | `where T : ...` |  | [Generics](generics.md) |
 | `out T` / `in T` variance | → | `out T` / `in T` |  | [Generics](generics.md) |
@@ -106,7 +106,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 
 | Kotlin | ⇄ | C# | Notes | Docs |
 |---|:-:|---|---|---|
-| `(T) -> R` (Kotlin → C#) | → | `Func<>` / `Action<>` | Invoked from C#; a `Unit` return binds as `KotlinAction`. Nullable type arguments carry `?` and cross `null` both ways; an unnameable one skips the whole member, named. | [Lambdas and callbacks](lambdas-and-callbacks.md) |
+| `(T) -> R` (Kotlin → C#) | → | `Func<>` / `Action<>` | Invoked from C#; a `Unit` return binds `KotlinAction`. A value class payload/result crosses boxed; nullable args carry `?`; an unnameable one skips, named. | [Lambdas and callbacks](lambdas-and-callbacks.md) |
 | `(T) -> R` parameter (C# → Kotlin) | → | `Func<>` / `Action<>` | Per-call, arity 0-3; return may be a scalar, `String`, object or enum. Throwing lambda is catchable. Nullable, `List`/`Map`/`Any`-typed payload, or non-scalar result refuses by name. | [Lambdas and callbacks](lambdas-and-callbacks.md) |
 | stored callback parameter | → | `IDisposable` subscription | Subscribe and dispose from C#; a `Boolean` payload now compiles. A throwing listener is catchable in Kotlin; a non-`Unit` result or Kotlin-builtin payload refuses the whole pair, named. | [Lambdas and callbacks](lambdas-and-callbacks.md) |
 | Kotlin lambda at a bound delegate parameter | ← | `Func<>` / `Action<>` / `Predicate<T>` / `Comparison<T>` / `Converter<,>` / package-declared `delegate` parameter | A bound method or constructor's delegate parameter takes a plain Kotlin lambda, `Invoke` arity up to 4. The C# delegate owns its lifetime. Async delegates are not bound yet. | [Reverse delegates](reverse-delegates.md) |

@@ -239,7 +239,29 @@ data class CirValueClass(
   // ADR-064 amendment (issue #249): generated `<remarks>` prose, one paragraph per member the
   // bridge dropped from this declaration. Attached by `CirFile.withSkipRemarks` after translation.
   val remarks: List<String> = emptyList(),
+  /**
+   * ADR-171: the box/unbox pair behind `NugetMarshal.Boxers` and this struct's `Factories` entry,
+   * or null when the planner planned none (the underlying cannot cross). Both registry lines are
+   * gated on it, so a struct with no pair keeps today's erased-position behaviour.
+   */
+  val boxing: CirValueClassBoxing? = null,
 ) : CirDeclaration
+
+/**
+ * ADR-171: the two private externs and the two `internal static` helpers (`NugetBox`,
+ * `NugetUnbox`) rendered inside the record struct beside `CreateChecked`.
+ *
+ * @param boxParameter the `NugetBox` parameter name [boxArguments] read from.
+ * @param boxArguments the box extern's input arguments, the value lowered to its underlying wire.
+ * @param unboxResult the `NugetUnbox` return expression over the extern's `nativeResult`.
+ */
+data class CirValueClassBoxing(
+  val boxImport: CirDllImport,
+  val unboxImport: CirDllImport,
+  val boxParameter: String,
+  val boxArguments: List<String>,
+  val unboxResult: String,
+)
 
 data class CirValueClassConstructor(
   val parameters: List<CirParameter>,
@@ -470,6 +492,10 @@ data class CirMarshalHelper(
   // `Activator.CreateInstance` over the internal `T(IntPtr)` constructor, which AOT-only runtimes
   // (Mac Catalyst, iOS) cannot do.
   val factories: List<CirFactoryEntry> = emptyList(),
+  // ADR-171: the write-side twin of [factories], one `NugetMarshal.Boxers` line per value class
+  // with a box/unbox pair, as the same `global::`-free qualified name. `Wrap<T>` looks the value's
+  // runtime type up here before its `INugetHandle` tail.
+  val boxers: List<String> = emptyList(),
 ) : CirDeclaration
 
 // ADR-094: a registry line. [qualifiedTypeName] is the `global::`-free fully qualified C# name
@@ -483,6 +509,9 @@ data class CirFactoryEntry(
   // to that discriminator instead of a constructor, which is what lets `StateFlow<Sealed>.Value`
   // and `await foreach` over a `Flow<Sealed>` hand back the correct arm.
   val viaFromHandle: Boolean = false,
+  // ADR-171: a value class. A record struct has no handle constructor; its generated
+  // `NugetUnbox(IntPtr)` reads the boxed Kotlin value's underlying and disposes the handle.
+  val viaNugetUnbox: Boolean = false,
 )
 
 // ADR-084: the C#-implemented-interface bridge layer -- `NugetBridge`, `NugetBridgeState`, and one
