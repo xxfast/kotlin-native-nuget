@@ -72,4 +72,30 @@ public class StoredCallbackTests
 
         Assert.Equal(new[] { "Sleepy" }, recorded);
     }
+
+    [Fact]
+    public void Cat_AddPurrListener_BooleanPayloadRoundTrips()
+    {
+        using var cat = new Cat("Oreo", 9);
+        var recorded = new List<bool>();
+        using IDisposable sub = cat.AddPurrListener(loud => recorded.Add(loud));
+
+        cat.Purr(true);
+        cat.Purr(false);
+
+        Assert.Equal(new[] { true, false }, recorded);
+    }
+
+    [Fact]
+    public void Cat_AddPurrListener_NoCallbackAfterDispose()
+    {
+        using var cat = new Cat("Mylo", 9);
+        var recorded = new List<bool>();
+        IDisposable sub = cat.AddPurrListener(loud => recorded.Add(loud));
+
+        sub.Dispose();
+        cat.Purr(true);
+
+        Assert.Empty(recorded);
+    }
 }

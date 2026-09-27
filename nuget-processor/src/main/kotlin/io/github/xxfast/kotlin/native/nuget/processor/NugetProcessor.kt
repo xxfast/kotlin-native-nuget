@@ -39,7 +39,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addCompanionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addEnumExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
-import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedNullableLambdaPayload
+import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedLegacyLambdaShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStoredCallbackPair
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowMethodExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowPropertyExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.declaresOrInheritsFlowMember
@@ -745,28 +746,58 @@ internal fun warnRefusedLegacyRouteMembers(
   }
 
   // Boundary nullability part A2: the callback routes' own refusal, named. Both halves filter a
-  // nullable-payload lambda member out before they partition, so this walk is the only thing that
-  // tells the author the member is gone -- and before the refusal existed, nothing did: the member
-  // either aborted their `packNuget` inside generated Kotlin or crossed and killed the process.
+  // nullable- or builtin-payload lambda member (or one whose lambda result neither route can
+  // marshal) out before they partition, so this walk is the only thing that tells the author the
+  // member is gone -- and before the refusal existed, nothing did: the member either aborted their
+  // `packNuget` (inside generated Kotlin, or inside the generator itself) or crossed and killed
+  // the process.
   fun refusedCallbackPayload(
     member: KSFunctionDeclaration,
     declaration: String,
-    refused: String,
+    refused: LegacyRefusedInterfaceBridgePair,
     owner: ForwardDiagnosticOwner?,
   ): ForwardDiagnostic = ForwardDiagnostic(
-    kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+    kind = refused.kind,
     symbol = member,
     declaration = declaration,
-    reason = "a callback parameter can carry a primitive/String/Char, a class handle or an enum, " +
-        "but not $refused",
-    hint = "make the lambda's own parameter and return types non-null (a C# delegate slot has no " +
-        "way to say \"absent\" for a by-value payload, and the handle payloads have no null " +
-        "arm on this route); if the absent case matters, pass it as a separate flag parameter, " +
-        "or use a sentinel value the callback can recognise. the lambda's OWN type may still be " +
-        "nullable (`listener: ((Int) -> Unit)?`): that binds, and C# must pass a non-null delegate",
+    reason = refused.reason,
+    hint = refused.hint,
     owner = owner,
     member = member.simpleName.asString(),
   )
+
+  // ADR-037 amendment: the stored-callback route calls a listener back as an `Action`, so a pair
+  // whose listener returns anything but `Unit` is refused after pair detection on both halves. The
+  // planner's CALLBACK_PROTOCOL skip is suppressed for these members, so this walk names both.
+  fun MutableList<ForwardDiagnostic>.nameRefusedStoredPairs(
+    members: List<KSFunctionDeclaration>,
+    owner: String,
+    ownerDeclaration: ForwardDiagnosticOwner?,
+  ) {
+    findStoredCallbackPairs(
+      members
+        .filter { it.hasLegacyLambdaParameter() }
+        .filter { it.refusedLegacyLambdaShape() == null },
+    ).forEach { (addMethod, removeMethod) ->
+      val refused: LegacyRefusedInterfaceBridgePair =
+        legacyRefusedStoredCallbackPair(addMethod) ?: return@forEach
+      listOf(addMethod, removeMethod).forEach { member ->
+        add(
+          ForwardDiagnostic(
+            kind = refused.kind,
+            symbol = member,
+            declaration = "$owner.${member.simpleName.asString()}",
+            reason = "the `${addMethod.simpleName.asString()}` / " +
+                "`${removeMethod.simpleName.asString()}` stored-callback pair is not bound: " +
+                refused.reason,
+            hint = refused.hint,
+            owner = ownerDeclaration,
+            member = member.simpleName.asString(),
+          ),
+        )
+      }
+    }
+  }
 
   // ADR-090 amendment (2026-09-26): the ADR-039 subscription route refuses a pair whose listener
   // interface declares a member name twice (it names one callback slot per member name). Both
@@ -815,7 +846,8 @@ internal fun warnRefusedLegacyRouteMembers(
       cls.getAllFunctions()
         .filter { method -> method.getVisibility() == Visibility.PUBLIC }
         .forEach { method ->
-          val refused: String = method.refusedNullableLambdaPayload() ?: return@forEach
+          val refused: LegacyRefusedInterfaceBridgePair =
+            method.refusedLegacyLambdaShape() ?: return@forEach
           add(
             refusedCallbackPayload(
               method, "$owner.${method.simpleName.asString()}", refused, ownerDeclaration,
@@ -823,6 +855,11 @@ internal fun warnRefusedLegacyRouteMembers(
           )
         }
       nameRefusedSubscriptionPairs(
+        cls.getAllFunctions().filter { it.getVisibility() == Visibility.PUBLIC }.toList(),
+        owner,
+        ownerDeclaration,
+      )
+      nameRefusedStoredPairs(
         cls.getAllFunctions().filter { it.getVisibility() == Visibility.PUBLIC }.toList(),
         owner,
         ownerDeclaration,
@@ -871,21 +908,20 @@ internal fun warnRefusedLegacyRouteMembers(
           .filter { method -> method.getVisibility() == Visibility.PUBLIC }
           .filter { method -> method.parentDeclaration == subclass }
           .forEach { method ->
-            val refused: String = method.refusedNullableLambdaPayload() ?: return@forEach
+            val refused: LegacyRefusedInterfaceBridgePair =
+              method.refusedLegacyLambdaShape() ?: return@forEach
             add(
               refusedCallbackPayload(
                 method, "$owner.${method.simpleName.asString()}", refused, ownerDeclaration,
               ),
             )
           }
-        nameRefusedSubscriptionPairs(
-          subclass.getAllFunctions()
-            .filter { it.getVisibility() == Visibility.PUBLIC }
-            .filter { method -> method.parentDeclaration == subclass }
-            .toList(),
-          owner,
-          ownerDeclaration,
-        )
+        val armMembers: List<KSFunctionDeclaration> = subclass.getAllFunctions()
+          .filter { it.getVisibility() == Visibility.PUBLIC }
+          .filter { method -> method.parentDeclaration == subclass }
+          .toList()
+        nameRefusedSubscriptionPairs(armMembers, owner, ownerDeclaration)
+        nameRefusedStoredPairs(armMembers, owner, ownerDeclaration)
         // ADR-124: and the arm's flow *properties*, whose refused element has no
         // `KSFunctionDeclaration` to hang a return diagnostic on. All-properties, ADR-111's rule.
         subclass.getAllProperties()

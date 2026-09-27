@@ -100,6 +100,17 @@ class Cat(
     moodListeners.forEach { it(mood) }
   }
 
+  // Stored-callback `Boolean` payload: rides the handle wire like every other scalar on this route.
+  private val purrListeners: MutableList<(Boolean) -> Unit> = mutableListOf()
+
+  fun addPurrListener(listener: (Boolean) -> Unit) = purrListeners.add(listener)
+
+  fun removePurrListener(listener: (Boolean) -> Unit) = purrListeners.remove(listener)
+
+  fun purr(loud: Boolean) {
+    purrListeners.forEach { it(loud) }
+  }
+
   // ADR-061: the method-return matrix at the class-method position, mirroring the property
   // getter's already-shipped marshalling cascade (object, nullable object, collection,
   // nullable String, nullable primitive) one seam at a time. `brother`/`owner`/`age` are the

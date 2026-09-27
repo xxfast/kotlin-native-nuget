@@ -10,6 +10,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedInterfaceBridgePair
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStoredCallbackPair
 
 /**
  * Detects `add{X}`/`remove{X}` (or `subscribe{X}`/`unsubscribe{X}`) method pairs where the
@@ -176,9 +177,11 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
     argInfos.forEachIndexed { i, info ->
       if (!info.isEnum) {
         val argSimpleName: String = info.qualifiedName.substringAfterLast('.')
+        // A `Boolean` rides the handle wire like every other scalar: the `CFunction` slot above is
+        // a pointer and the C# half reads it with `FromHandle<bool>`. Passing a `Byte` here did
+        // not compile.
         when (argSimpleName) {
           "String" -> appendLine("    val arg${i}Ref = NugetHandles.retain(arg$i as Any)")
-          "Boolean" -> appendLine("    val arg${i}Val: Byte = if (arg$i) 1.toByte() else 0.toByte()")
           else -> appendLine("    val arg${i}Ref = NugetHandles.retain(arg$i)")
         }
       }
@@ -187,11 +190,7 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
     // Build fn.invoke argument list
     val invokeArgs: String = buildString {
       argInfos.forEachIndexed { i, info ->
-        if (info.isEnum) append("arg$i.ordinal, ")
-        else {
-          val argSimpleName: String = info.qualifiedName.substringAfterLast('.')
-          if (argSimpleName == "Boolean") append("arg${i}Val, ") else append("arg${i}Ref, ")
-        }
+        if (info.isEnum) append("arg$i.ordinal, ") else append("arg${i}Ref, ")
       }
       append("userData, nugetErr")
     }
@@ -268,6 +267,8 @@ internal fun KSClassDeclaration.forwardArmStoredCallbackPairs(
     .filter { (add, remove) ->
       add.isArmCallbackRoutable(classifier) && remove.isArmCallbackRoutable(classifier)
     }
+    // ADR-037 amendment: a non-`Unit` listener result, refused by name, after detection.
+    .filter { (add, _) -> legacyRefusedStoredCallbackPair(add) == null }
 
 /**
  * The interface-bridge (ADR-039) twin of [forwardArmStoredCallbackPairs]: a sealed arm's

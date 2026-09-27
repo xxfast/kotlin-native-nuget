@@ -38,7 +38,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
 import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsHeldMutableStateFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardLegacyRoute
-import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedNullableLambdaPayload
+import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedLegacyLambdaShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStoredCallbackPair
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceHierarchy
@@ -1061,9 +1062,10 @@ internal fun translateClass(
 
   // Boundary nullability part A2: the C# twin of the Kotlin half's refusal, applied at the same
   // point (before the partition) so the two halves cannot disagree about which members exist. A
-  // lambda whose payload or return is nullable has no crossing on this route at all.
+  // lambda whose payload or return is nullable, whose payload is a Kotlin builtin non-scalar, or
+  // whose result is not `Unit`/primitive/`String` has no crossing on this route at all.
   val crossableNonFlowMethods: List<KSFunctionDeclaration> = nonFlowMethods
-    .filterNot { method -> method.refusedNullableLambdaPayload() != null }
+    .filterNot { method -> method.refusedLegacyLambdaShape() != null }
 
   val (lambdaParamMethods, normalMethods) = crossableNonFlowMethods.partition { method ->
     method.parameters.any { param ->
@@ -1091,6 +1093,8 @@ internal fun translateClass(
     }
 
   val storedCallbackMembers: List<CirStoredCallbackMethod> = storedCallbackPairs
+    // ADR-037 amendment: the C# half of the Kotlin half's post-detection refusal.
+    .filter { (addMethod, _) -> legacyRefusedStoredCallbackPair(addMethod) == null }
     .mapNotNull { (addMethod, removeMethod) ->
       translateStoredCallbackMethod(
         addMethod,

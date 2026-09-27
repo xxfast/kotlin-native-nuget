@@ -10,7 +10,13 @@ import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_TO_CSHARP_PARAM
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.isKotlinBuiltinPackage
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.LegacyRefusedInterfaceBridgePair
+import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinSpelling
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStoredCallbackPair
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
@@ -77,8 +83,10 @@ internal fun KSFunctionDeclaration.hasPlannedCallbackParameter(
 }
 
 /**
- * Boundary nullability part A2: the first lambda PARAMETER whose own payload or return type is
- * nullable, as `name: description`, or null when every lambda on this member crosses non-null.
+ * Why the hand-written callback routes cannot carry one of this member's lambda parameters, or null
+ * when every lambda crosses. Named on both halves by `warnRefusedLegacyRouteMembers`.
+ *
+ * Boundary nullability part A2: a lambda PARAMETER whose own payload or return type is nullable.
  *
  * ADR-160's plan route never sees this shape: `classify` wraps a nullable component in
  * [BridgeType.Nullable], which is neither an admitted callback payload nor an admitted callback
@@ -109,21 +117,89 @@ internal fun KSFunctionDeclaration.hasPlannedCallbackParameter(
  *
  * Reads the UNEXPANDED argument types: `expandAliases()` drops use-site nullability, so a
  * `typealias Name = String` payload spelled `Name?` would otherwise read as non-null.
+ *
+ * Two more shapes neither hand-written route can carry, refused at the same five sites for the same
+ * reason (both halves, class and sealed arm, per-call and stored, before the partition so a
+ * refused stored pair loses both halves together):
+ *  - a PAYLOAD that is a Kotlin builtin but not a scalar (`List`, `Set`, `Map`, `Any`, `Pair`, an
+ *    array, `Duration`, anything under `kotlin`/`kotlinx` that [KOTLIN_TO_CSHARP_PARAM] does not
+ *    key). The stored route spells it through `qualifiedElementCsType`, whose ADR-123 check aborted
+ *    the whole KSP round; the per-call route spelled the bare simple name (`Action<List>`), which
+ *    no C# `using` resolves (CS0246). The test is exactly the condition that check fires on, so the
+ *    gate cannot drift from the abort it prevents. A denylist on purpose: ADR-160's
+ *    `isCallbackPayload` would also drop `Char`, sealed-base and value-class payloads, which these
+ *    routes carry today.
+ *  - a lambda RESULT outside `Unit`, the primitives and `String`: the per-call route reads every
+ *    other result back as a `String` box on both halves, so `() -> Cat` did not compile.
  */
-internal fun KSFunctionDeclaration.refusedNullableLambdaPayload(): String? =
+internal fun KSFunctionDeclaration.refusedLegacyLambdaShape(): LegacyRefusedInterfaceBridgePair? =
   parameters.firstNotNullOfOrNull { param ->
     val expanded: KSType = param.type.resolve().expandAliases()
     val expandedName: String? = expanded.declaration.qualifiedName?.asString()
     if (expandedName !in LAMBDA_TYPES) return@firstNotNullOfOrNull null
+    val paramName: String = param.name?.asString() ?: "_"
     // Every argument, the last of which is the lambda's RETURN type: both positions are refused,
     // and they are dropped by separate lines of the route's own selector, so neither is redundant.
-    val nullable: KSType = expanded.arguments
+    val arguments: List<KSType> = expanded.arguments
       .mapNotNull { argument -> argument.type?.resolve() }
-      .firstOrNull { argument -> argument.isMarkedNullable }
-      ?: return@firstNotNullOfOrNull null
-    "${param.name?.asString() ?: "_"}: a lambda carrying the nullable type " +
-        "${nullable.declaration.simpleName.asString()}?"
+    val nullable: KSType? = arguments.firstOrNull { argument -> argument.isMarkedNullable }
+    if (nullable != null) {
+      return@firstNotNullOfOrNull LegacyRefusedInterfaceBridgePair(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+        reason = "$CALLBACK_CARRIES$paramName: a lambda carrying the nullable type " +
+            "${nullable.declaration.simpleName.asString()}?",
+        hint = "make the lambda's own parameter and return types non-null (a C# delegate slot " +
+            "has no way to say \"absent\" for a by-value payload, and the handle " +
+            "payloads have no null arm on this route); if the absent case matters, pass it " +
+            "as a separate flag parameter, or use a sentinel value the callback can " +
+            "recognise. the lambda's OWN type may still be nullable (`listener: ((Int) -> " +
+            "Unit)?`): that binds, and C# must pass a non-null delegate",
+      )
+    }
+    val spelled: String = "`$paramName: ${expanded.kotlinSpelling()}`"
+    val builtin: KSType? = arguments.dropLast(1)
+      .map { argument -> argument.expandAliases() }
+      .firstOrNull { argument -> argument.isBuiltinNonScalar() }
+    if (builtin != null) {
+      return@firstNotNullOfOrNull LegacyRefusedInterfaceBridgePair(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+        reason = "$CALLBACK_CARRIES$spelled, whose payload `${builtin.kotlinSpelling()}` is a " +
+            "Kotlin builtin with no crossing on a callback",
+        hint = "a collection, `Any`, a `Pair`, an array or another Kotlin builtin has no " +
+            "crossing on a callback: pass the values one per call, or wrap them in an exported " +
+            "class and pass that",
+      )
+    }
+    val result: KSType = arguments.lastOrNull()?.expandAliases() ?: return@firstNotNullOfOrNull null
+    if (result.declaration.qualifiedName?.asString() in LEGACY_LAMBDA_RESULTS) {
+      return@firstNotNullOfOrNull null
+    }
+    LegacyRefusedInterfaceBridgePair(
+      kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
+      reason = "a callback can return `Unit`, a primitive or a `String`, but $spelled returns " +
+          "`${result.kotlinSpelling()}`",
+      hint = "return one of those from the lambda; hand anything else back through a method on " +
+          "the class instead",
+    )
   }
+
+private const val CALLBACK_CARRIES: String =
+  "a callback parameter can carry a primitive/String/Char, a class handle or an enum, but not "
+
+/** ADR-160's callback result set (`isCallbackResult`), by qualified name. */
+private val LEGACY_LAMBDA_RESULTS: Set<String> = setOf(
+  "kotlin.Unit", "kotlin.String", "kotlin.Boolean",
+  "kotlin.Byte", "kotlin.Short", "kotlin.Int", "kotlin.Long",
+  "kotlin.UByte", "kotlin.UShort", "kotlin.UInt", "kotlin.ULong",
+  "kotlin.Float", "kotlin.Double",
+)
+
+/** A type under `kotlin`/`kotlinx` that is not one of the scalars [KOTLIN_TO_CSHARP_PARAM] keys. */
+private fun KSType.isBuiltinNonScalar(): Boolean {
+  val declaration = declaration as? KSClassDeclaration ?: return false
+  if (!declaration.packageName.asString().isKotlinBuiltinPackage()) return false
+  return declaration.simpleName.asString() !in KOTLIN_TO_CSHARP_PARAM
+}
 
 /**
  * ADR-147: whether this member belongs to ANY specialized legacy route rather than to the ADR-062
@@ -252,11 +328,12 @@ internal fun FileSpec.Builder.addClassExports(
 
   val allNonFlowMethods: List<KSFunctionDeclaration> = allRegularMethods
     .filterNot { method -> method.hasLegacyFlowReturn() }
-    // Boundary nullability part A2: refused BEFORE the partition, so a nullable-payload lambda
-    // member reaches neither the per-call route nor the stored pair detection (a pair whose halves
-    // both vanish is never found, so `removeRinger` cannot survive as a cancel for a subscription
-    // nobody can make) nor the ordinary `methods` list. `warnRefusedLegacyRouteMembers` names it.
-    .filterNot { method -> method.refusedNullableLambdaPayload() != null }
+    // Boundary nullability part A2: refused BEFORE the partition, so a nullable- or builtin-payload
+    // lambda member reaches neither the per-call route nor the stored pair detection (a pair whose
+    // halves both vanish is never found, so `removeRinger` cannot survive as a cancel for a
+    // subscription nobody can make) nor the ordinary `methods` list.
+    // `warnRefusedLegacyRouteMembers` names it.
+    .filterNot { method -> method.refusedLegacyLambdaShape() != null }
 
   val (lambdaParamMethods, methods) = allNonFlowMethods.partition { method ->
     method.hasLegacyLambdaParameter()
@@ -270,6 +347,9 @@ internal fun FileSpec.Builder.addClassExports(
     .map { it.second }.toSet()
 
   storedCallbackPairs.forEach { (addMethod, removeMethod) ->
+    // ADR-037 amendment: a listener with a non-`Unit` result is refused after detection, so both
+    // halves stay claimed by the pair and neither falls to the per-call route.
+    if (legacyRefusedStoredCallbackPair(addMethod) != null) return@forEach
     addStoredCallbackExports(addMethod, removeMethod, qualifiedName, prefix)
   }
 

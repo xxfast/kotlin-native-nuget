@@ -368,7 +368,7 @@ internal fun qualifiedElementCsType(type: KSType?, context: NugetContext): Strin
  * `kotlin`, `kotlinx` and everything under them: the packages [mapPackageToNamespace] must never
  * see, since a root namespace is only ever a *user* package's prefix.
  */
-private fun String.isKotlinBuiltinPackage(): Boolean =
+internal fun String.isKotlinBuiltinPackage(): Boolean =
   this == "kotlin" || this == "kotlinx" ||
       startsWith("kotlin.") || startsWith("kotlinx.")
 

@@ -219,3 +219,33 @@ skip, on this route, on a sealed arm, and on a stored-callback pair alike, uncha
 amendment. Do not conflate either of these with the outer, non-lambda return the member itself
 declares (":116, `a nullable return`"), which is still refused by name on the legacy route
 regardless of the lambda parameter's own nullability.
+
+## Amendment (2026-09-27): legacy lambda routes refuse builtin payloads and non-scalar results
+
+This corrects the classifier list under "What the classifier admits as a `Callback`" above (:96-98:
+"an object or enum lambda result ... classifies as the existing `lambda <fqn>` specialized protocol
+instead, so the member keeps whatever legacy route it already had"). It does not keep working: every
+lambda result outside `Unit`/primitive/`String` (an object, an enum, `Char`, or a Kotlin builtin) was
+read back through `resultRef.asStableRef<String>().get()` on the Kotlin half and boxed with
+`NugetMarshal.WrapString` on the C# half regardless of its real type, so the generated Kotlin failed
+to compile (`Return type mismatch: expected 'List<Int>', actual 'String'`) for every one of those
+shapes. The Consequences bullet at :173-179 already listed an object/enum lambda result as
+"deliberately still refused by name", which was equally inaccurate the other way: no predicate named
+it before this amendment, it simply failed to build. No fixture in the tree ever exercised one, so
+nothing that worked is now refused; the two statements are reconciled by making the refusal real.
+
+The classifier's admitted payload set (:87-94) was also silently escaped by the legacy route: a
+payload that is a Kotlin builtin non-scalar (`List`, `Set`, `Map`, `Any`, `Pair`, an array,
+`Duration`, or anything else under `kotlin`/`kotlinx` the classifier does not key) rendered
+`Action<List>` on the C# half, which no `using` resolves (`CS0246`), and separately aborted the KSP
+round on the stored route (ADR-037) with `ERROR_INTERNAL_GENERATOR_FAILURE` when the same shape hit
+`qualifiedElementCsType`'s ADR-123 builtin-package check.
+
+Both holes are now one shared, pre-partition predicate (`refusedLegacyLambdaShape`,
+`exports/ClassExports.kt:135`), read at the same five sites the nullable-payload rule already used
+(`ForwardLegacyRouteCollections.kt:158`), naming the member `SKIPPED_UNSUPPORTED_INPUT` for a
+builtin payload and `SKIPPED_UNSUPPORTED_RETURN` for an out-of-set lambda result. `Char` is
+deliberately still admitted on both axes: this is a denylist, not ADR-160's `isCallbackPayload`
+plus `Char`, since unifying on that allowlist would also newly refuse a sealed-base or value-class
+payload whose runtime behavior on either legacy route nobody has verified. See
+[Lambdas and callbacks](../topics/lambdas-and-callbacks.md).

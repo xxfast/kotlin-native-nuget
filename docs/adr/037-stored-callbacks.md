@@ -579,3 +579,26 @@ per-call and interface-bridge routes) now refuses a nullable payload before eith
 generated, naming the argument with `SKIPPED_UNSUPPORTED_INPUT`, and refuses the pair together: a
 skip on `add{X}` alone would leave a `remove{X}` with nothing to remove, or vice versa. No consumer
 could have shipped this shape, since it never compiled.
+
+## Amendment (2026-09-27): the route also refuses a builtin payload, a non-`Unit` result, and fixes a Boolean payload
+
+Two more shapes reached this route uncaught and are now refused the same way the 2026-09-22
+amendment refuses a nullable payload: a `T` that is a Kotlin builtin non-scalar (`List`, `Set`,
+`Map`, `Any`, `Pair`, an array, `Duration`, or anything else under `kotlin`/`kotlinx` outside a
+primitive, `String` or `Char`), and a listener that returns anything other than `Unit`. Neither was
+a documented v1 boundary; both were undiagnosed generator or compile failures. A builtin payload
+spelled the C# parameter type through `qualifiedElementCsType`, whose ADR-123 builtin-package check
+aborted the whole KSP round with `ERROR_INTERNAL_GENERATOR_FAILURE` rather than emitting broken
+code. A non-`Unit` listener return failed the generated Kotlin compile, since the bridge-lambda
+this route generates for `add*` is always typed `(...) -> Unit` regardless of what the author's
+lambda declares. Both are now a named `legacyRefusedStoredCallbackPair` check, applied after pair
+detection so both `add`/`remove` halves are named or bound together, mirroring the nullable-payload
+amendment above.
+
+Separately, a stored `(Boolean) -> Unit` listener did not compile: the Kotlin-side `CFunction` for
+every non-enum payload is typed `COpaquePointer?` (a handle), but the generated bridge body passed
+`Boolean` as a raw `Byte`, which the C# half's `FromHandle<bool>` never received correctly. This was
+a bug in the existing v1 scope ("Element types for `T`: object handles, `String`, and primitives"),
+not a new refusal: `Boolean` now rides the same handle wire every other scalar payload on this
+route already used, and a stored `(Boolean) -> Unit` pair compiles and fires correctly. See
+[Lambdas and callbacks](../topics/lambdas-and-callbacks.md).
