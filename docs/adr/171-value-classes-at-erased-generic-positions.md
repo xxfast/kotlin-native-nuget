@@ -298,18 +298,20 @@ using KotlinFunc<ChartId, string> onChart = courier.OnChart;       // was skippe
 Assert.Equal("chart C-1", onChart.Invoke(id));
 ```
 
-`new Slot<ChartId?>(null)` — constructing a generic class with a `null` value-class argument — is
-deferred to the generic-ctor-nullable-arg item stacked on this one, and is not shown above.
-Reading a nullable value-class `T` back out (`.Value`, `.Current`) already works today, through the
-`Materialize<T>` normalisation below.
+`new Slot<ChartId?>(null)` — constructing a generic class with a `null` value-class argument — works
+too, through [ADR-147's 2026-09-27 amendment](147-generic-class-methods.md#amendment-2026-09-27-a-bare-t-carries-null)
+stacked on this one: `null` reaches the constructor as the in-band null pointer and every getter
+reads it back as `null`. Reading a nullable value-class `T` back out (`.Value`, `.Current`) already
+works today, through the `Materialize<T>` normalisation below.
 
 ## Consequences
 
 - `Box<V>`, `Slot<V>`, `Crate<V>` and any ADR-147 generic class work for every declared VALUE or
   REFERENCE value class, in both directions, with no fixture change: `ChartId`, `CatId`, `Dosage`,
   `Temperament`, `ChartRef`, `WardBand` and the sealed-underlying `ObservationResult` all exist. A
-  nullable `T` read (`.Value`, `.Current`) works too; constructing with a `null` value-class
-  argument is deferred (see above). The generic-return route's `Box<ChartId>` read works too.
+  nullable `T` read (`.Value`, `.Current`) works too, as does constructing with a `null` value-class
+  argument (`new Slot<ChartId?>(null)`, see above). The generic-return route's `Box<ChartId>` read
+  works too.
 - Lambdas and suspend lambdas over a VALUE or REFERENCE value class are now emitted, at a
   class-method lambda property, a sealed arm's own lambda property, and a top-level lambda return,
   where they were skipped named before. This is a new public surface, not a behaviour change of an

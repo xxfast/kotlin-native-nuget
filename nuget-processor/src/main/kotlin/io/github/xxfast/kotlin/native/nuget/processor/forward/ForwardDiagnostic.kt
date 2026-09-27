@@ -1446,10 +1446,14 @@ internal fun BridgeType.diagnosticTypeName(): String = when (this) {
   is BridgeType.BoundInterface -> qualifiedName.substringAfterLast('.')
   is BridgeType.ValueClass -> qualifiedName.substringAfterLast('.')
   is BridgeType.Collection -> "Collection"
-  is BridgeType.Nullable -> "${type.diagnosticTypeName()}?"
+  // ADR-147 amendment: a bare `T` the bound alone made nullable reads as the author wrote it.
+  is BridgeType.Nullable ->
+    if ((type as? BridgeType.TypeParameter)?.nullableFromBound == true) type.diagnosticTypeName()
+    else "${type.diagnosticTypeName()}?"
   is BridgeType.SpecializedProtocol -> name
-  // ADR-147: the parameter's own name, which is how the author spelled it.
-  is BridgeType.TypeParameter -> name
+  // ADR-147: the parameter's own name, which is how the author spelled it -- the Kotlin one, not
+  // a C# spelling renamed around a member.
+  is BridgeType.TypeParameter -> kotlinName
   is BridgeType.RawCollection -> "Collection"
   is BridgeType.RawKSType -> rendered
   is BridgeType.Unsupported -> rendered

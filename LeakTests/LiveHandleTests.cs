@@ -1432,6 +1432,23 @@ public class LiveHandleTests
         });
     }
 
+    // ADR-147 amendment: a null argument at an unbounded `T`. `Wrap<string?>` sends the null pointer
+    // with `owned = false`, so the ctor, Describe and Pick arguments mint nothing and the `finally`
+    // disposes nothing; the null `T` return of Pick takes the nullable result body and retains
+    // nothing either. Only the crate itself is live.
+    // Ledger per iteration: crate_create +1, Describe 0, Pick 0, crate_dispose -1. Net zero. A
+    // positive delta is a box minted for null; a negative one is a dispose of a handle never owned.
+    [Fact]
+    public void GenericCtorNullableArg_NullArgument_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var crate = new Crate<string?>(null);
+            Assert.Equal("null:null", crate.Describe(null));
+            Assert.Null(crate.Pick(null));
+        });
+    }
+
     // ADR-171: a value class at the generic-class `T`. Unlike an exported class (borrowed, mints
     // nothing), a record struct has no handle of its own, so `Wrap<ChartId>` mints one boxed
     // `ChartId` through the per-value-class box export with `owned = true`, and the ctor's

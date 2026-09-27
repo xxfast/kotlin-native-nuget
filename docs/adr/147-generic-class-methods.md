@@ -641,3 +641,52 @@ Expected ledger per iteration: `nuget_wrap_int` +1 / dispose -1 (ctor), `crate_c
   `Flow` and stored-callback members of a generic class (refused named, one `if` each);
   generic subclasses (ADR-101, ROADMAP); generic instantiations at a position
   (`Crate<Cat>` as a parameter); own method type parameters.
+
+## Amendment (2026-09-27): a bare `T` carries null
+
+A bare `T` at a top-level position (no `?`) was classified non-null regardless of its bound, so
+`Box<T>` (`T` unconstrained, upper bound `Any?`) treated `new Box<string?>(null)`,
+`new Box<int?>(null)`, `new Box<Cat?>(null)` and `Crate<string?>.Pick(null)` as illegal: the Kotlin
+side dereferenced the null pointer and threw `kotlin.NullPointerException`, surfaced to C# as
+`KotlinException`, even though an unconstrained `T` is legal Kotlin for a `null` argument. This
+rides [ADR-083](083-nullable-collection-components.md)'s null-pointer rule rather than inventing a
+new one: the slot is already a boxed handle, so the null pointer is the in-band null, exactly as it
+already was for a nullable *use site* (`T?`) and for `Slot.current`.
+
+The fix is on the classifier: a bare `T` whose effective bound is nullable (no explicit bound, or
+every bound written `?`) now classifies as `Nullable(TypeParameter)`, the same kind an explicit `T?`
+use site already produced. A bare `T` with a non-null bound (`T : Any`, `T : Pet`) stays non-null.
+The erased owner spelling follows the same rule, so an unconstrained `Box<T>` receives
+`Box<Any?>()` and its `NugetHandles.retain(it)` calls move under the nullable result body that
+already handles `Slot.current`; a `T : Any` owner keeps `Box<Any>()`, whose `retain` call stays
+non-null.
+
+On the C# side, `T : Any` renders `where T : notnull` (the fixture is
+`class Tin<T : Any>(val value: T)`); an unconstrained `T` keeps no `where` clause and accepts a
+`null` argument; `T : Pet?` (a nullable bound) keeps its `?` and behaves like the unconstrained
+case. This is a compile-time-only change: `NugetMarshal.Wrap<T>`/`FromHandle<T>` already sent
+`IntPtr.Zero` for null and read it back as `default!` (ADR-147's original decision); no wire or
+runtime behavior needed to change for the unconstrained case.
+
+**Applies identically to the legacy generic-function route** (`fun <T> identity(value: T): T`,
+`ForwardBridgeTypeClassifier`'s classification is shared by both routes): `Identity<int?>(null)`
+and `Identity<int?>(7)` used to throw `NullReferenceException` in the generated C# and now work;
+`Identity<string?>(null)` now crosses through the object variant's null pointer instead of the
+string width mis-dispatching a null. `fun <T : Any> handBack(treat: T): T` renders
+`where T : notnull` the same way a bounded generic class does. A second, unrelated bug on this
+route is fixed alongside it: the per-width C# body for a declared type parameter other than `T`
+hardcoded the letter `T` instead of the parameter's own declared name, so a function such as
+`fun <V> echo(value: V): V` rendered a body that referenced a nonexistent `T`; it now uses the
+declared name.
+
+**Type-parameter/property name collisions.** `BridgeType.TypeParameter` gained a `kotlinName`
+distinct from its C# `name`: when a class's own property PascalCases to the same identifier as one
+of its type parameters (`class Duo<A, B>(val a: A, val b: B)`, where property `A` collides with
+type parameter `A`, CS0102), the type parameter's C# spelling is renamed (`A` becomes `TA`, `B`
+becomes `TB`) while the property keeps its ordinary PascalCase name. Diagnostics quote `kotlinName`
+(the name the author wrote), never the renamed C# spelling, so a skip on `Duo`'s `A` still reads
+"A", not "TA".
+
+New `LeakTests/LiveHandleTests.cs` row, `GenericCtorNullableArg_NullArgument_ReturnsToBaseline`:
+`new Crate<string?>(null)`, `.Describe(null)`, `.Pick(null)`, net zero, since a null argument mints
+no box (`Wrap<T>` returns `owned = false` for null) and a null return retains nothing.

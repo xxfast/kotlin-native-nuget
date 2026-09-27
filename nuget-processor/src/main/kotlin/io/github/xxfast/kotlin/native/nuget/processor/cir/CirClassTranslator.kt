@@ -79,6 +79,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.escalatedForStrict
 import io.github.xxfast.kotlin.native.nuget.processor.forward.sealedAsHandle
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipDetail
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipReason
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardCsharpTypeParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardScopeOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
@@ -769,10 +770,16 @@ internal fun KSClassDeclaration.cirTypeParameters(
     val declaration: KSClassDeclaration? = resolved.declaration as? KSClassDeclaration
     val isInterface: Boolean = declaration?.classKind == ClassKind.INTERFACE
 
+    // ADR-147 amendment: a `T : Pet?` carries null on the Kotlin half, so its C# constraint says so
+    // too; a bare `where T : Pet` would make `Kennel<Pet?>` a CS8631 in a nullable context.
+    val nullable: String = if (resolved.isMarkedNullable) "?" else ""
     when {
-      qualifiedName == "kotlin.Any" -> null
-      isInterface && declaration != null -> declaration.legacyBoundInterfaceCsName(context)
-      else -> legacyBoundClassCsName(resolved, context)
+      // ADR-147 amendment: `T : Any` is C#'s `where T : notnull`; the implicit `Any?` of an
+      // unconstrained parameter is no constraint at all.
+      qualifiedName == "kotlin.Any" -> if (resolved.isMarkedNullable) null else NOTNULL_CONSTRAINT
+      isInterface && declaration != null ->
+        declaration.legacyBoundInterfaceCsName(context) + nullable
+      else -> legacyBoundClassCsName(resolved, context) + nullable
     }
   }
 
@@ -796,7 +803,10 @@ internal fun KSClassDeclaration.cirTypeParameters(
     )
   }
 
-  CirTypeParameter(param.name.asString(), bounds)
+  // `notnull` must come first in a C# constraint list and adds nothing next to a class bound, so
+  // it survives only as the sole constraint.
+  val constraints: List<String> = if (bounds.size > 1) bounds - NOTNULL_CONSTRAINT else bounds
+  CirTypeParameter(forwardCsharpTypeParameterName(param), constraints)
 }
 
 internal fun translateClass(
@@ -1207,7 +1217,7 @@ internal fun translateClass(
       // ADR-147: a `T` on this class's own generic carrier is a real C# name; one re-homed from a
       // generic base onto a non-generic subclass is not.
       val typeParametersInScope: Set<String> =
-        cls.typeParameters.map { param -> param.name.asString() }.toSet()
+        cls.typeParameters.map { param -> cls.forwardCsharpTypeParameterName(param) }.toSet()
 
       if (!returnBridge.isPubliclySpellable(typeParametersInScope)) {
         emitAbstractMethodSkip(

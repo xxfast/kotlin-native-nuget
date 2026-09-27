@@ -60,7 +60,11 @@ internal fun BridgeType.forwardPublicCsharpType(): String = when (this) {
       (payload + result.forwardPublicCsharpType()).joinToString(", ", "Func<", ">")
     }
   }
-  is BridgeType.Nullable -> "${type.forwardPublicCsharpType()}?"
+  // ADR-147 amendment: a nullable-bounded bare `T` is `T`, not `T?`; the instantiation says
+  // whether it holds null.
+  is BridgeType.Nullable ->
+    if ((type as? BridgeType.TypeParameter)?.nullableFromBound == true) type.name
+    else "${type.forwardPublicCsharpType()}?"
   else -> error("Forward CIR direct-value projection cannot render public type $this")
 }
 

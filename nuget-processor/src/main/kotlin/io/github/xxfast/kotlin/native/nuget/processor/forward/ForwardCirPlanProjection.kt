@@ -1077,7 +1077,8 @@ internal object ForwardCirPlanProjection {
         // ADR-083/147: `FromHandle<T>` already answers `default!` for the null pointer, which is
         // the null of whatever `T` was instantiated to.
         is BridgeType.TypeParameter -> CirResultProjection(
-          returnType = "${type.name}?",
+          // ADR-147 amendment: bare `T` when only the bound made it nullable.
+          returnType = if (type.nullableFromBound) type.name else "${type.name}?",
           nativeReturnType = "IntPtr",
           body = checkedPointerBody(
             nativeName,

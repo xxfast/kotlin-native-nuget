@@ -855,15 +855,22 @@ internal fun translateGenericFunction(
         resolved.declaration.qualifiedName?.asString()
       val declaration: KSClassDeclaration? = resolved.declaration as? KSClassDeclaration
       val isInterface: Boolean = declaration?.classKind == ClassKind.INTERFACE
+      // ADR-147 amendment, as on the generic-class route: a nullable bound keeps its `?`.
+      val nullable: String = if (resolved.isMarkedNullable) "?" else ""
 
       when {
-        qualifiedName == "kotlin.Any" -> null
+        // ADR-147 amendment: `T : Any` is C#'s `notnull`; the implicit `Any?` is no constraint.
+        qualifiedName == "kotlin.Any" -> if (resolved.isMarkedNullable) null else NOTNULL_CONSTRAINT
         // ADR-133, amended 2026-09-14: every bound carries its owner chain and its namespace,
         // nested or not. A bare bound only resolves in the bound's own namespace.
-        isInterface && declaration != null -> declaration.legacyBoundInterfaceCsName(context)
-        else -> legacyBoundClassCsName(resolved, context)
+        isInterface && declaration != null ->
+          declaration.legacyBoundInterfaceCsName(context) + nullable
+        else -> legacyBoundClassCsName(resolved, context) + nullable
       }
-    } ?: emptyList()
+    }
+    // `notnull` must come first in a C# constraint list and adds nothing next to a class bound.
+    ?.let { bounds -> if (bounds.size > 1) bounds - NOTNULL_CONSTRAINT else bounds }
+    ?: emptyList()
 
   // ADR-064 amendment (2026-09-13): the shared gate, so this half, the Kotlin half and the
   // diagnostic that now names the refusal cannot disagree about which generic functions bind.
@@ -880,7 +887,9 @@ internal fun translateGenericFunction(
 
   val result = mutableListOf<CirMember>()
 
-  val isConstrained: Boolean = typeParamBounds.isNotEmpty()
+  // `notnull` narrows nothing the primitive widths care about (`int`, `string` both satisfy it),
+  // so the width dispatch survives it; only a class or interface bound replaces it.
+  val isConstrained: Boolean = typeParamBounds.any { bound -> bound != NOTNULL_CONSTRAINT }
 
   val primitiveTypes = listOf(
     "string" to "string",
@@ -936,70 +945,81 @@ internal fun translateGenericFunction(
     appendLine("      IntPtr error;")
 
     if (!isConstrained) {
-      appendLine("      if (typeof(T) == typeof(string))")
+      // ADR-147 amendment, applied to this route: `T = int?` is `Nullable<int>`, which never
+      // equals `typeof(int)`, so dispatch on the underlying type. A null argument has no width to
+      // cross on (the string width's Kotlin parameter is a non-null `String`) and takes the object
+      // variant's null pointer instead.
+      appendLine("      Type width = Nullable.GetUnderlyingType(typeof($typeParamName)) ?? typeof($typeParamName);")
+      appendLine("      bool present = $paramName is not null;")
+      appendLine("      if (present && width == typeof(string))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_string_native((string)(object)$paramName!, out error), error), out _);")
+        appendLine("        return new ${returnTypeName}<$typeParamName>(NugetErrorNative.Check(${csName}_string_native((string)(object)$paramName!, out error), error), out _);")
       } else {
-        appendLine("        return (T)(object)Marshal.PtrToStringUTF8(NugetErrorNative.Check(${csName}_string_native((string)(object)$paramName!, out error), error))!;")
+        appendLine("        return ($typeParamName)(object)Marshal.PtrToStringUTF8(NugetErrorNative.Check(${csName}_string_native((string)(object)$paramName!, out error), error))!;")
       }
 
-      appendLine("      if (typeof(T) == typeof(int))")
+      appendLine("      if (present && width == typeof(int))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_int_native((int)(object)$paramName!, out error), error), out _);")
+        appendLine("        return new ${returnTypeName}<$typeParamName>(NugetErrorNative.Check(${csName}_int_native((int)(object)$paramName!, out error), error), out _);")
       } else {
-        appendLine("        return (T)(object)NugetErrorNative.Check(${csName}_int_native((int)(object)$paramName!, out error), error);")
+        appendLine("        return ($typeParamName)(object)NugetErrorNative.Check(${csName}_int_native((int)(object)$paramName!, out error), error);")
       }
 
-      appendLine("      if (typeof(T) == typeof(long))")
+      appendLine("      if (present && width == typeof(long))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_long_native((long)(object)$paramName!, out error), error), out _);")
+        appendLine("        return new ${returnTypeName}<$typeParamName>(NugetErrorNative.Check(${csName}_long_native((long)(object)$paramName!, out error), error), out _);")
       } else {
-        appendLine("        return (T)(object)NugetErrorNative.Check(${csName}_long_native((long)(object)$paramName!, out error), error);")
+        appendLine("        return ($typeParamName)(object)NugetErrorNative.Check(${csName}_long_native((long)(object)$paramName!, out error), error);")
       }
 
-      appendLine("      if (typeof(T) == typeof(float))")
+      appendLine("      if (present && width == typeof(float))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_float_native((float)(object)$paramName!, out error), error), out _);")
+        appendLine("        return new ${returnTypeName}<$typeParamName>(NugetErrorNative.Check(${csName}_float_native((float)(object)$paramName!, out error), error), out _);")
       } else {
-        appendLine("        return (T)(object)NugetErrorNative.Check(${csName}_float_native((float)(object)$paramName!, out error), error);")
+        appendLine("        return ($typeParamName)(object)NugetErrorNative.Check(${csName}_float_native((float)(object)$paramName!, out error), error);")
       }
 
-      appendLine("      if (typeof(T) == typeof(double))")
+      appendLine("      if (present && width == typeof(double))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_double_native((double)(object)$paramName!, out error), error), out _);")
+        appendLine("        return new ${returnTypeName}<$typeParamName>(NugetErrorNative.Check(${csName}_double_native((double)(object)$paramName!, out error), error), out _);")
       } else {
-        appendLine("        return (T)(object)NugetErrorNative.Check(${csName}_double_native((double)(object)$paramName!, out error), error);")
+        appendLine("        return ($typeParamName)(object)NugetErrorNative.Check(${csName}_double_native((double)(object)$paramName!, out error), error);")
       }
 
-      appendLine("      if (typeof(T) == typeof(bool))")
+      appendLine("      if (present && width == typeof(bool))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<T>(NugetErrorNative.Check(${csName}_bool_native((bool)(object)$paramName!, out error), error), out _);")
+        appendLine("        return new ${returnTypeName}<$typeParamName>(NugetErrorNative.Check(${csName}_bool_native((bool)(object)$paramName!, out error), error), out _);")
       } else {
-        appendLine("        return (T)(object)NugetErrorNative.Check(${csName}_bool_native((bool)(object)$paramName!, out error), error);")
+        appendLine("        return ($typeParamName)(object)NugetErrorNative.Check(${csName}_bool_native((bool)(object)$paramName!, out error), error);")
       }
     }
 
     // ADR-094: the object argument answers INugetHandle (a miss is an InvalidCastException where it
     // used to be a NullReferenceException), and the result comes back out of the generated factory
     // registry rather than Activator.CreateInstance.
+    // ADR-147 amendment: a null argument crosses as the null pointer (ADR-083), and a null result
+    // is the `default` of whatever `T` was instantiated to, never a factory lookup.
+    val handle: String =
+      "$paramName is null ? IntPtr.Zero : ((INugetHandle)$paramName).Handle"
     if (returnsGenericClass) {
-      appendLine("      IntPtr handle = ((INugetHandle)$paramName!).Handle;")
+      appendLine("      IntPtr handle = $handle;")
       appendLine("      IntPtr result = NugetErrorNative.Check(${csName}_object_native(handle, out error), error);")
-      appendLine("      return new ${returnTypeName}<T>(result, out _);")
+      appendLine("      return new ${returnTypeName}<$typeParamName>(result, out _);")
     } else {
-      appendLine("      IntPtr handle = ((INugetHandle)$paramName!).Handle;")
+      appendLine("      IntPtr handle = $handle;")
       appendLine("      IntPtr result = NugetErrorNative.Check(${csName}_object_native(handle, out error), error);")
-      appendLine("      return NugetMarshal.Materialize<T>(result);")
+      appendLine("      return result == IntPtr.Zero ? default! : NugetMarshal.Materialize<$typeParamName>(result);")
     }
   }
 
-  val methodReturnType: String = if (returnsGenericClass) "$returnTypeName<T>" else "T"
+  val methodReturnType: String =
+    if (returnsGenericClass) "$returnTypeName<$typeParamName>" else typeParamName
 
   result.add(
     CirMethod(
       name = csName,
       returnType = methodReturnType,
-      parameters = listOf(CirParameter(paramName, "T")),
+      parameters = listOf(CirParameter(paramName, typeParamName)),
       body = body.trimEnd(),
       isStatic = true,
       typeParameters = listOf(

@@ -473,6 +473,9 @@ data class CirObject(
 
 enum class CirVariance { INVARIANT, COVARIANT, CONTRAVARIANT }
 
+/** ADR-147 amendment: C#'s spelling of a Kotlin `T : Any` bound. */
+internal const val NOTNULL_CONSTRAINT: String = "notnull"
+
 data class CirTypeParameter(
   val name: String,
   val bounds: List<String> = emptyList(),
