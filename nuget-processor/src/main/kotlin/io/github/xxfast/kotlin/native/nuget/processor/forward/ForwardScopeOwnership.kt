@@ -1,7 +1,10 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getVisibility
+import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.Modifier
@@ -96,6 +99,10 @@ internal fun KSClassDeclaration.forwardClassFlowProperties(
   classifier: ForwardBridgeTypeClassifier,
   superClass: KSClassDeclaration?,
 ): List<KSPropertyDeclaration> = getAllProperties()
+  // ADR-174: the generic-owner guard its two siblings above always had. The C# property half
+  // refuses a generic owner (`CirClassTranslator`'s flow-property branch), so without it `Crate<T>`
+  // owned a scope for a StateFlow property it never projected (ADR-159's rule, broken).
+  .filter { typeParameters.isEmpty() }
   .filter { it.getVisibility() == Visibility.PUBLIC }
   .filter { prop -> prop.type.resolve().expandAliases().isForwardFlowType() }
   .filter { prop -> !prop.isOptInRefused(classifier.exportMarkers) }
@@ -116,6 +123,10 @@ internal fun KSClassDeclaration.forwardDeclaresScopeMember(
   val isArm: Boolean = isSealedSubclass()
   val keptBase: KSClassDeclaration? = if (isArm) null else forwardSuperClass(exportedTypes)
   if (forwardSuspendRouteMethods(classifier, keptBase, isArm).isNotEmpty()) return true
+  // ADR-174: a generic implementer projects none of its own async members (ADR-147, kept), but it
+  // does carry the explicit implementations of every interface async member it forwards, and those
+  // run on its scope.
+  if (forwardAsyncInterfaceForwards(classifier).isNotEmpty()) return true
   if (isArm) {
     // The arm route's own two selectors, so an arm answers exactly what `CirSealedRenderer` emits.
     return forwardArmFlowMethods(classifier).isNotEmpty() ||
@@ -162,3 +173,93 @@ private fun KSFunctionDeclaration.reProjectsKeptBaseMember(
   val qualified: String = overridee.qualifiedName?.asString() ?: return false
   return cls.droppedBaseChain(superClass).none { it.qualifiedName?.asString() == qualified }
 }
+
+/**
+ * ADR-174: the interfaces whose `suspend`/`Flow`/`StateFlow` members are declared on `I<Name>`,
+ * dispatched by the ADR-040 backing wrapper and exported under the interface's own prefix. Only a
+ * REACHABLE interface qualifies (it is the one with a backing wrapper and dispatch exports), so the
+ * set is filled once per KSP round by `NugetProcessor`, exactly as [ForwardDeclaredTypeNames] is.
+ * Empty means "no interface carries async members", which is the pre-ADR-174 behaviour.
+ */
+internal object ForwardAsyncInterfaces {
+  private val reachable: MutableSet<String> = mutableSetOf()
+
+  fun reset(interfaces: Iterable<KSClassDeclaration>) {
+    reachable.clear()
+    interfaces.mapNotNullTo(reachable) { it.qualifiedName?.asString() }
+  }
+
+  /**
+   * Whether [iface] carries the async surface: reachable, not generic (ADR-174 ruling 3: the
+   * receiver would need type arguments, the ADR-147 reason) and not sealed (ruling 2: never an
+   * interface type, so never reachable anyway; tested here too so the answer does not rest on it).
+   */
+  fun carries(iface: KSClassDeclaration): Boolean =
+    iface.classKind == ClassKind.INTERFACE &&
+        iface.qualifiedName?.asString() in reachable &&
+        iface.typeParameters.isEmpty() &&
+        !iface.isSealedInterface()
+}
+
+/**
+ * ADR-174 ruling 1: the interface's async members are the class route's own selectors, called on
+ * the interface, so one refusal predicate drops a member from every half at once. A base-less owner
+ * (`superClass = null`) binds every member, own and inherited, which is what the backing wrapper
+ * implements.
+ */
+internal fun KSClassDeclaration.forwardInterfaceSuspendMethods(
+  classifier: ForwardBridgeTypeClassifier,
+): List<KSFunctionDeclaration> =
+  if (!ForwardAsyncInterfaces.carries(this)) emptyList()
+  else forwardSuspendRouteMethods(classifier, superClass = null)
+
+/** The Flow-returning half of [forwardInterfaceSuspendMethods]. */
+internal fun KSClassDeclaration.forwardInterfaceFlowMethods(
+  classifier: ForwardBridgeTypeClassifier,
+): List<KSFunctionDeclaration> =
+  if (!ForwardAsyncInterfaces.carries(this)) emptyList()
+  else forwardClassFlowMethods(classifier, superClass = null)
+
+/** The Flow/StateFlow property half of [forwardInterfaceSuspendMethods]. */
+internal fun KSClassDeclaration.forwardInterfaceFlowProperties(
+  classifier: ForwardBridgeTypeClassifier,
+): List<KSPropertyDeclaration> =
+  if (!ForwardAsyncInterfaces.carries(this)) emptyList()
+  else forwardClassFlowProperties(classifier, superClass = null)
+
+/** Whether the interface projects any scope-using member (ruling 5: `IAsyncDisposable`). */
+internal fun KSClassDeclaration.forwardInterfaceDeclaresScopeMember(
+  classifier: ForwardBridgeTypeClassifier,
+): Boolean = forwardInterfaceSuspendMethods(classifier).isNotEmpty() ||
+    forwardInterfaceFlowMethods(classifier).isNotEmpty() ||
+    forwardInterfaceFlowProperties(classifier).isNotEmpty()
+
+/**
+ * ADR-174 ruling 4: the carrying interfaces a GENERIC class forwards async members of, through C#
+ * explicit interface implementations. Empty for a non-generic class, whose own class routes
+ * project those members (ruling 1). Each interface forwards only the members it DECLARES, which is
+ * where `I<Name>` declares them; an inherited one is forwarded under its declaring interface.
+ */
+internal fun KSClassDeclaration.forwardAsyncInterfaceForwards(
+  classifier: ForwardBridgeTypeClassifier,
+): List<KSClassDeclaration> {
+  if (typeParameters.isEmpty()) return emptyList()
+  return getAllSuperTypes()
+    .mapNotNull { it.declaration as? KSClassDeclaration }
+    .filter { iface -> ForwardAsyncInterfaces.carries(iface) }
+    .filter { iface -> iface.forwardInterfaceDeclaresOwnScopeMember(classifier) }
+    .distinctBy { it.qualifiedName?.asString() }
+    .toList()
+}
+
+/** Whether [this] interface DECLARES (not inherits) a scope-using member it carries. */
+internal fun KSClassDeclaration.forwardInterfaceDeclaresOwnScopeMember(
+  classifier: ForwardBridgeTypeClassifier,
+): Boolean = (forwardInterfaceSuspendMethods(classifier) + forwardInterfaceFlowMethods(classifier))
+  .any { it.isDeclaredOn(this) } ||
+    forwardInterfaceFlowProperties(classifier).any { it.isDeclaredOn(this) }
+
+/** ADR-174: declared (not inherited) on [owner], the placement `I<Name>` declares a member at. */
+internal fun KSDeclaration.isDeclaredOn(owner: KSClassDeclaration): Boolean =
+  (parentDeclaration as? KSClassDeclaration)?.qualifiedName?.asString() ==
+      owner.qualifiedName?.asString()

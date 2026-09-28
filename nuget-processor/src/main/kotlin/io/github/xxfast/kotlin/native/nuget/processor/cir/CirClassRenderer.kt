@@ -14,7 +14,9 @@ internal fun StringBuilder.renderInterface(iface: CirInterface) {
   } else ""
 
   renderDoc(iface.doc, generated = iface.remarks)
-  val bases: String = (iface.superInterfaces + "IDisposable").joinToString(", ")
+  // ADR-174 ruling 5: `IAsyncDisposable` when the interface projects a scope-using member.
+  val bases: String = (iface.superInterfaces + "IDisposable" +
+      listOfNotNull("IAsyncDisposable".takeIf { iface.isAsyncDisposable })).joinToString(", ")
   appendLine("    public interface ${iface.name}$typeParamStr : $bases")
   appendLine("    {")
 
@@ -34,7 +36,13 @@ internal fun StringBuilder.renderInterface(iface: CirInterface) {
 
   for (method in iface.methods) {
     renderDoc(method.doc, "        ")
-    val paramStr: String = method.parameters.joinToString(", ") { it.declaration }
+    // ADR-174: a `suspend` member ends in the class route's own `CancellationToken ... = default`,
+    // minted the same way (`CirAsyncLocals`) so an implementing class's `Async` method matches.
+    val token: String? =
+      if (method.isAsync) "CancellationToken ${CirAsyncLocals.of(method.parameters).cancellationToken} = default"
+      else null
+    val paramStr: String =
+      (method.parameters.map { it.declaration } + listOfNotNull(token)).joinToString(", ")
     val modifier: String = if (method.isNew) "new " else ""
     appendLine("        $modifier${method.returnType} ${method.name}($paramStr);")
   }
@@ -67,14 +75,18 @@ internal fun StringBuilder.renderStaticClass(cls: CirStaticClass) {
  * ordinary one cannot drift: there is exactly one renderer, and the hoist is a mechanical move.
  */
 internal fun StringBuilder.renderClass(cls: CirClass) {
-  if (cls.typeParameters.isEmpty()) {
+  // ADR-174: an interface's backing wrapper hoists into a named carrier too (`FeedNative`), the same
+  // mechanical move, so a generic implementer's explicit interface implementations can reach the
+  // interface's imports. One copy of each extern, so the ABI contract still sees it once.
+  val carrier: String = cls.nativeCarrier ?: "${cls.name}Native"
+  if (cls.typeParameters.isEmpty() && cls.nativeCarrier == null) {
     renderClassDeclaration(cls)
     return
   }
   val body: String = StringBuilder().apply { renderClassDeclaration(cls) }.toString()
-  val hoisted: HoistedDllImports = hoistDllImports(body, "${cls.name}Native")
+  val hoisted: HoistedDllImports = hoistDllImports(body, carrier)
   if (hoisted.imports.isNotEmpty()) {
-    appendLine("    internal static class ${cls.name}Native")
+    appendLine("    internal static class $carrier")
     appendLine("    {")
     hoisted.imports.forEach { import -> append(import) }
     appendLine("    }")
@@ -476,7 +488,7 @@ internal fun StringBuilder.renderProperty(prop: CirProperty) {
   val isMultiLineGetter: Boolean = prop.getter.contains('\n')
   val isMultiLineSetter: Boolean = prop.setter?.contains('\n') == true
   if (isMultiLineGetter && prop.setter != null) {
-    appendLine("        public ${static}${modifier}${prop.type} ${prop.name}")
+    appendLine("        ${prop.memberHead("public $static$modifier")}${prop.type} ${prop.explicitName}")
     appendLine("        {")
     appendLine("            get")
     appendLine("            {${prop.getter}")
@@ -486,16 +498,16 @@ internal fun StringBuilder.renderProperty(prop: CirProperty) {
     appendLine("            }")
     appendLine("        }")
   } else if (isMultiLineGetter) {
-    appendLine("        public ${static}${modifier}${prop.type} ${prop.name}")
+    appendLine("        ${prop.memberHead("public $static$modifier")}${prop.type} ${prop.explicitName}")
     appendLine("        {")
     appendLine("            get")
     appendLine("            {${prop.getter}")
     appendLine("            }")
     appendLine("        }")
   } else if (prop.setter == null) {
-    appendLine("        public ${static}${modifier}${prop.type} ${prop.name} => ${prop.getter};")
+    appendLine("        ${prop.memberHead("public $static$modifier")}${prop.type} ${prop.explicitName} => ${prop.getter};")
   } else if (isMultiLineSetter) {
-    appendLine("        public ${static}${modifier}${prop.type} ${prop.name}")
+    appendLine("        ${prop.memberHead("public $static$modifier")}${prop.type} ${prop.explicitName}")
     appendLine("        {")
     appendLine("            get => ${prop.getter};")
     appendLine("            set")
@@ -503,7 +515,7 @@ internal fun StringBuilder.renderProperty(prop: CirProperty) {
     appendLine("            }")
     appendLine("        }")
   } else {
-    appendLine("        public ${static}${modifier}${prop.type} ${prop.name}")
+    appendLine("        ${prop.memberHead("public $static$modifier")}${prop.type} ${prop.explicitName}")
     appendLine("        {")
     appendLine("            get => ${prop.getter};")
     appendLine("            set => ${prop.setter};")
@@ -591,13 +603,16 @@ internal fun StringBuilder.renderDllImport(import: CirDllImport) {
 internal fun StringBuilder.renderMethod(method: CirMethod, className: String = "") {
   // ADR-150: above the async/flow/sync-error dispatch, so all four branches carry the same doc.
   renderDoc(method.doc, "        ")
+  // ADR-174: `nameof(Crate)` does not bind inside `Crate<T>` (CS0305); an explicit implementation
+  // names its interface instead, which always does.
+  val disposedName: String = method.explicitInterface ?: className
   if (method.isAsync) {
-    renderAsyncMethod(method, className)
+    renderAsyncMethod(method, disposedName)
     return
   }
 
   if (method.isFlow) {
-    renderFlowMethod(method, className)
+    renderFlowMethod(method, disposedName)
     return
   }
 

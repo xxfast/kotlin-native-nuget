@@ -353,6 +353,13 @@ internal enum class ForwardDiagnosticKind(
    *  why there is none. */
   SKIPPED_INELIGIBLE_SEALED_INTERFACE(ForwardDiagnosticSeverity.WARNING),
 
+  /** ADR-174 ruling 3: a `suspend`/`Flow`/`StateFlow` member of a GENERIC interface
+   *  (`interface Feed<T>`). The interface-owned export would read its receiver as
+   *  `asStableRef<Feed<...>>()`, which has no type argument to spell, the ADR-147 reason the class
+   *  async routes refuse a generic owner. Named once per member, at the interface, which keeps
+   *  `IFeed<T>` free of it. */
+  SKIPPED_GENERIC_INTERFACE_ASYNC_MEMBER(ForwardDiagnosticSeverity.WARNING),
+
   /** ADR-110: a top-level function whose PascalCase C# name is already held by a top-level
    *  property of the same file class (`val name` + `fun name()`, CS0102). camelCase used to keep
    *  the two apart, since Kotlin gives properties and functions separate namespaces and C# does

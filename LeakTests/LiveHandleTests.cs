@@ -2,6 +2,7 @@ using Test.Menagerie;
 using TestLibrary;
 using TestLibrary.Admission;
 using TestLibrary.Cat;
+using Catfeed = TestLibrary.Catfeed;
 using TestLibrary.Dev.Other.Bytype;
 using TestLibrary.Dev.Other.Bysuspend;
 using TestLibrary.Errand;
@@ -2290,5 +2291,78 @@ public class LiveHandleTests
                 Assert.Equal(cat == "Oreo", tag.HasValue);
             },
             iterations: 2000);
+    }
+
+    // Row 9k. ADR-174: a suspend call owned by an INTERFACE, made through the `IFeed`-typed
+    // reference `Feeds.MakeFeed()` hands back (the ADR-040 backing wrapper around an `RssFeed`).
+    // The wrapper mints its own scope on the first suspend call and `await using` drains it, so
+    // one wrapper per crossing covers the handle, the scope and the completion together. Both the
+    // ordinary and the generic implementer (`Crate<Int>`, reached only through the interface's own
+    // dispatch export) cross in the same iteration.
+    [Fact]
+    public async Task InterfaceOwnedSuspend_ThroughIFeed_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using Catfeed.IFeed feed = Catfeed.Feeds.MakeFeed();
+            Assert.Equal("rss-3", await feed.FetchAsync(3));
+
+            await using Catfeed.IFeed crate = Catfeed.Feeds.MakeCrate();
+            Assert.Equal("crate-3", await crate.FetchAsync(3));
+        });
+    }
+
+    // Row 9k-flow. The Flow twin of Row 9k: an interface-owned `Flow` collected to completion
+    // through `IFeed`, the abstract member and the interface's DEFAULT member (`doubled`, whose body
+    // is `ticks().map { ... }` on the interface) both, then the wrapper's scope drained.
+    [Fact]
+    public async Task InterfaceOwnedFlow_CollectedThroughIFeed_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using Catfeed.IFeed feed = Catfeed.Feeds.MakeFeed();
+            var ticks = new List<int>();
+            await foreach (int tick in feed.Ticks()) ticks.Add(tick);
+            Assert.Equal(new[] { 1, 2, 3 }, ticks);
+
+            var doubled = new List<int>();
+            await foreach (int portion in feed.Doubled()) doubled.Add(portion);
+            Assert.Equal(new[] { 2, 4, 6 }, doubled);
+        });
+    }
+
+    // Row 9k-state. An interface-owned `StateFlow` property read through `IFeed`. On the class
+    // route a StateFlow PROPERTY getter hands back a `KotlinStateFlow<T>` that owns no handle (its
+    // value read and collect go through the owner's `_handle`), so the read is spelled as
+    // `StateFlowTests` spells it, with no `using`. A getter on the interface route that mints a ref
+    // to read `.Value` and never releases it is +1 per crossing here.
+    [Fact]
+    public async Task InterfaceOwnedStateFlow_ValueReadThroughIFeed_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using Catfeed.IFeed feed = Catfeed.Feeds.MakeFeed();
+            Assert.Equal(1, feed.Level.Value);
+
+            await using Catfeed.IFeed crate = Catfeed.Feeds.MakeCrate();
+            Assert.Equal(2, crate.Level.Value);
+        });
+    }
+
+    // Row 9k-race. The TIGHT LOOP twin of Row 9k (see Row 9b for the window): `count()` has no
+    // suspension point, so the completion can beat the P/Invoke that started it, on the interface
+    // owner's route. The receiver is hoisted and its lazy scope warmed before the baseline, as in
+    // Row 9g, so the loop measures nothing but the completions.
+    //
+    // Mylo counts the kibble five thousand times and gets three every time.
+    [Fact]
+    public async Task InterfaceOwnedSuspend_NoSuspensionPoint_TightLoop_ReturnsToBaseline()
+    {
+        await using Catfeed.IFeed feed = Catfeed.Feeds.MakeFeed();
+        Assert.Equal(3, await feed.CountAsync());
+
+        await AssertNoLeakAsync(
+            async () => Assert.Equal(3, await feed.CountAsync()),
+            iterations: 5000);
     }
 }

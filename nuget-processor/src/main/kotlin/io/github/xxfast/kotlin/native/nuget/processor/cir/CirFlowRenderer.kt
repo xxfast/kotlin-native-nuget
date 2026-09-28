@@ -336,7 +336,7 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
   val paramStr: String = method.parameters.joinToString(", ") { it.declaration }
   val nativeName: String = method.nativeName
 
-  appendLine("        public KotlinFlow<${method.flowElementType}> ${method.name}($paramStr)")
+  appendLine("        ${method.memberHead("public ")}KotlinFlow<${method.flowElementType}> ${method.explicitName}($paramStr)")
   appendLine("        {")
   appendLine("            if (_handle == IntPtr.Zero)")
   appendLine("                throw new ObjectDisposedException(nameof($className));")
@@ -397,7 +397,7 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
   val valueCallArgs: String = if (paramNames.isEmpty()) "_handle" else "_handle, $paramNames"
   val nullableSuffix: String = if (method.isStateFlowNullableMember) "?" else ""
 
-  appendLine("        public KotlinStateFlow<${method.flowElementType}>$nullableSuffix ${method.name}($paramStr)")
+  appendLine("        ${method.memberHead("public ")}KotlinStateFlow<${method.flowElementType}>$nullableSuffix ${method.explicitName}($paramStr)")
   appendLine("        {")
   appendLine("            if (_handle == IntPtr.Zero)")
   appendLine("                throw new ObjectDisposedException(nameof($className));")
@@ -442,7 +442,7 @@ private fun StringBuilder.renderHeldStateFlowMethod(method: CirMethod, className
   val paramStr: String = method.parameters.joinToString(", ") { it.declaration }
   val element: String = method.flowElementType
 
-  appendLine("        public KotlinMutableStateFlow<$element> ${method.name}($paramStr)")
+  appendLine("        ${method.memberHead("public ")}KotlinMutableStateFlow<$element> ${method.explicitName}($paramStr)")
   appendLine("        {")
   appendLine("            if (_handle == IntPtr.Zero)")
   appendLine("                throw new ObjectDisposedException(nameof($className));")

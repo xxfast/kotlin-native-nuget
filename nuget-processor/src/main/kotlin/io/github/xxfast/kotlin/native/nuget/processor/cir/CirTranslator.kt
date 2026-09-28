@@ -456,6 +456,7 @@ internal fun translate(
       add(
         translateInterface(
           iface, interfaceDeclarationCatalog, logger, tracker, expects, exportedTypes, classifier,
+          context = context,
         )
           // ADR-134: an interface owner carries children at any depth, exactly as a class does.
           .copy(nestedDeclarations = translateNestedOf(iface)),
@@ -468,6 +469,7 @@ internal fun translate(
           add(
             translateInterfaceBackingClass(
               backing, context.libraryName, context.symbols, callableCatalog, tracker, logger,
+              classifier = classifier, context = context, expects = expects,
             ),
           )
         }
@@ -520,6 +522,7 @@ internal fun translate(
     val declaration: CirDeclaration = guarded(iface.forwardGuardName(), iface, logger) {
       translateInterface(
         iface, interfaceDeclarationCatalog, logger, tracker, expects, exportedTypes, classifier,
+        context = context,
       )
         // ADR-134: the interface block owns its nested declarations (`ICage.Bar`).
         .copy(nestedDeclarations = translateNestedOf(iface))
@@ -587,6 +590,7 @@ internal fun translate(
       namespace,
       translateInterfaceBackingClass(
         iface, context.libraryName, context.symbols, callableCatalog, tracker, logger,
+        classifier = classifier, context = context, expects = expects,
       ),
     )
   }

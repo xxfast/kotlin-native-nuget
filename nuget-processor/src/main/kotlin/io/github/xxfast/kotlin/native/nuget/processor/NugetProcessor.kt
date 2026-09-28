@@ -112,6 +112,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isArmOfIneligibleS
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterface
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAsyncInterfaces
+import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsForwardFlow
+import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDeclaredTypeNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardArmMember
@@ -1703,6 +1706,42 @@ class NugetProcessor(
       logger,
     )
 
+    // ADR-174 ruling 3: a generic interface's async members stay off `IFeed<T>`, named once each at
+    // the member. A sealed interface is excluded silently (ruling 2: its arms bind the members).
+    ForwardDiagnosticSink.emit(
+      interfaces
+        .filter { it.typeParameters.isNotEmpty() && !it.isSealedInterface() }
+        .flatMap { iface ->
+          val name: String = iface.qualifiedName?.asString() ?: iface.simpleName.asString()
+          val members: List<KSDeclaration> = iface.declarations
+            .filter { member ->
+              when (member) {
+                is KSFunctionDeclaration -> member.modifiers.contains(Modifier.SUSPEND) ||
+                    member.returnsForwardFlow()
+                is KSPropertyDeclaration -> member.type.resolve().expandAliases().isForwardFlowType()
+                else -> false
+              }
+            }
+            .filter { it.getVisibility() == Visibility.PUBLIC }
+            .toList()
+          members.map { member ->
+            val memberName: String = member.simpleName.asString()
+            ForwardDiagnostic(
+              kind = ForwardDiagnosticKind.SKIPPED_GENERIC_INTERFACE_ASYNC_MEMBER,
+              symbol = member.takeIf { iface.containingFile != null },
+              declaration = "$name.$memberName",
+              reason = "`$memberName` is a suspend/Flow member of the generic interface `$name`: " +
+                  "its interface-owned export would need `asStableRef<${iface.simpleName.asString()}" +
+                  "<...>>()`, which has no type argument to spell (ADR-147, ADR-174)",
+              hint = "declare it on a non-generic interface, or on the implementing class, " +
+                  "which binds it through its own class route",
+              owner = null,
+            )
+          }
+        },
+      logger,
+    )
+
     // ADR-147: generic classes are ordinary classes now; one bucket, one route.
     val classes: List<KSClassDeclaration> = allClasses
 
@@ -1890,6 +1929,9 @@ class NugetProcessor(
     }
     val reachableInterfaces: List<KSClassDeclaration> = interfaces
       .filter { iface -> iface.qualifiedName?.asString() in reachableInterfaceNames }
+    // ADR-174: the reachable set is the one that carries interface async members; every selector
+    // (Kotlin exports, `I<Name>`, the backing wrapper, a generic implementer's forwards) reads it.
+    ForwardAsyncInterfaces.reset(reachableInterfaces)
 
     // ADR-162: the interface planning loops are guarded per interface for the same reason the
     // callable planner's `planOrSkip` is: an interface whose planning throws used to abort the
@@ -2410,7 +2452,7 @@ class NugetProcessor(
     }
     reachableInterfaces.forEach { iface ->
       guardDeclaration(iface) {
-        builder.addInterfaceExports(iface, callableCatalog, context.symbols)
+        builder.addInterfaceExports(iface, callableCatalog, context.symbols, forwardClassifier)
       }
     }
     // ADR-084 stage 1: the per-interface bridge factory, projected from the same slot plan the C#

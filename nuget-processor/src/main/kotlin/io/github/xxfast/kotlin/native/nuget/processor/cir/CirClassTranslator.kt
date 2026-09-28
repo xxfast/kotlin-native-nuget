@@ -21,6 +21,12 @@ import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
 import io.github.xxfast.kotlin.native.nuget.processor.forward.cirDoc
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncInterfaceForwards
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceDeclaresScopeMember
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceFlowMethods
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceFlowProperties
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceSuspendMethods
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isDeclaredOn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKdoc
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toCirDoc
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedCallbackMember
@@ -1390,6 +1396,12 @@ internal fun translateClass(
   // projects a scope-using member. `null` means nothing in the chain does.
   val scopeOwner: KSClassDeclaration? = cls.forwardScopeOwner(classifier, exportedTypes)
 
+  // ADR-174 ruling 4: a generic implementer's explicit implementations of the interface async members
+  // ADR-147 keeps off its own surface. Empty for every non-generic class.
+  val interfaceForwards: CirInterfaceAsyncMembers = interfaceAsyncForwards(
+    cls, libraryName, classifier, tracker, callableCatalog, context, expects,
+  )
+
   return CirClass(
     name = name,
     // ADR-147: empty for an ordinary class; `Crate<T>` fills it and renders as the carrier.
@@ -1398,7 +1410,7 @@ internal fun translateClass(
     nativePrefix = prefix,
     constructor = cirConstructor,
     secondaryConstructors = secondaryConstructors,
-    properties = properties,
+    properties = properties + interfaceForwards.properties,
     methods = methods,
     copyMethod = copyMethod,
     callbackMethods = callbackMembers,
@@ -1409,7 +1421,7 @@ internal fun translateClass(
     isDataClass = isDataClass,
     isAbstract = isAbstract,
     isOpen = isOpen,
-    companionMembers = companionMembers + asyncMembers + flowRouteMembers,
+    companionMembers = companionMembers + asyncMembers + flowRouteMembers + interfaceForwards.members,
     // ADR-159: derived from what PROJECTED, in one place, for the whole kept chain. The raw
     // `getAllFunctions()` scan this replaces read inherited members (so a subclass of an async
     // base rendered a second `DisposeAsync`, CS0108) and refused ones (so a class whose only
@@ -1441,6 +1453,9 @@ internal fun flowProperty(
   context: NugetContext,
   classifier: ForwardBridgeTypeClassifier,
   tracker: CollectionHelperTracker,
+  // ADR-174: the carrier a generic implementer's explicit implementation calls the interface's
+  // imports through (`FeedNative.`, dot included). Empty keeps the owner's own private externs.
+  nativeCarrier: String = "",
 ): CirProperty? {
   val propName: String = prop.simpleName.asString()
   val csPropName: String = propName.replaceFirstChar { it.uppercase() }
@@ -1534,10 +1549,10 @@ internal fun flowProperty(
       // ADR-067: a nullable member additionally probes `_has_value` before constructing.
       // ADR-071: a settable member additionally passes a third `Action<T>` write lambda,
       // backed by the sibling `_set_value` export.
-      val collectNativeName = "Native_Get${csPropName}Collect"
-      val valueNativeName = "Native_Get${csPropName}Value"
-      val hasValueNativeName = "Native_Get${csPropName}HasValue"
-      val setValueNativeName = "Native_Set${csPropName}Value"
+      val collectNativeName = "${nativeCarrier}Native_Get${csPropName}Collect"
+      val valueNativeName = "${nativeCarrier}Native_Get${csPropName}Value"
+      val hasValueNativeName = "${nativeCarrier}Native_Get${csPropName}HasValue"
+      val setValueNativeName = "${nativeCarrier}Native_Set${csPropName}Value"
       val ctorName: String =
         if (isMutableStateFlowProperty) "KotlinMutableStateFlow" else "KotlinStateFlow"
       buildString {
@@ -1577,7 +1592,7 @@ internal fun flowProperty(
         append("            ")
       }
   } else {
-      val collectNativeName = "Native_Get${csPropName}Collect"
+      val collectNativeName = "${nativeCarrier}Native_Get${csPropName}Collect"
       buildString {
         appendLine()
         appendLine("                if (_handle == IntPtr.Zero)")
@@ -3272,6 +3287,9 @@ internal fun translateInterface(
   // (`keepsSupertype`), and the classifier spells their type arguments.
   exportedTypes: Set<String>,
   classifier: ForwardBridgeTypeClassifier,
+  // ADR-174: the async members' builders need the library and the context; null (a unit caller)
+  // declares none, which is the pre-ADR-174 shape.
+  context: NugetContext? = null,
 ): CirInterface {
   val name: String = iface.simpleName.asString()
   val interfaceName: String = "I$name"
@@ -3379,9 +3397,33 @@ internal fun translateInterface(
     logger,
   )
 
+  // ADR-174: the async members this interface DECLARES, with the class route's own signatures, so
+  // an implementer's `FetchAsync`/`Ticks()`/`Level` satisfy them as they stand. The real tracker:
+  // `IFeed` spells `KotlinFlow<T>`/`Task<T>`, so it needs the same helpers the wrapper does.
+  val async: CirInterfaceAsyncMembers? = context?.let {
+    interfaceAsyncMembers(
+      iface, interfaceName, it.libraryName, classifier, tracker, callableCatalog,
+      it, expects, onlyDeclared = true,
+    )
+  }
+  val asyncMethods: List<CirInterfaceMethod> = async?.methods.orEmpty().map { method ->
+    CirInterfaceMethod(
+      name = method.name,
+      returnType = method.returnType,
+      parameters = method.parameters,
+      doc = method.doc,
+      isAsync = method.isAsync,
+    )
+  }
+  val asyncProperties: List<CirInterfaceProperty> = async?.properties.orEmpty().map { prop ->
+    CirInterfaceProperty(prop.name, prop.type, doc = prop.doc)
+  }
+
   return CirInterface(
-    interfaceName, typeParams, properties, methods, doc = iface.forwardKdoc(expects)?.toCirDoc(),
+    interfaceName, typeParams, properties + asyncProperties, methods + asyncMethods,
+    doc = iface.forwardKdoc(expects)?.toCirDoc(),
     superInterfaces = superInterfaces,
+    isAsyncDisposable = context != null && iface.forwardInterfaceDeclaresScopeMember(classifier),
   )
 }
 
@@ -3476,6 +3518,9 @@ private fun typeParameterMethods(
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { method -> !method.isCompilerOwnedMember(iface) }
     .filter { method -> iface.declaresLexically(method) }
+    // ADR-174 ruling 3: a generic interface's `suspend fun get(): T` is a named skip, never a
+    // synchronous `T Get()` this carve-out would otherwise declare for it.
+    .filter { method -> !method.modifiers.contains(Modifier.SUSPEND) }
     .mapNotNull { method ->
       val returnName: String? = method.returnType?.resolve()?.expandAliases()
         ?.declaration?.simpleName?.asString()
@@ -3641,6 +3686,10 @@ internal fun translateInterfaceBackingClass(
   callableCatalog: ForwardCallablePlanCatalog,
   tracker: CollectionHelperTracker,
   logger: KSPLogger,
+  // ADR-174: the async members' builders. Null (a unit caller) projects none, the pre-ADR-174 shape.
+  classifier: ForwardBridgeTypeClassifier? = null,
+  context: NugetContext? = null,
+  expects: ExpectIndex = ExpectIndex(),
 ): CirClass {
   val name: String = iface.simpleName.asString()
   val prefix: String = iface.nativePrefix(symbols)
@@ -3669,8 +3718,19 @@ internal fun translateInterfaceBackingClass(
   // ADR-110 amendment (ROADMAP line 32): the wrapper mirrors `I$name`, whose own guard
   // (ADR-113 Decision E) runs over a different catalog; checked here too so the backing class never
   // relies on the two catalogs agreeing.
+  // ADR-174: every async member, own and inherited, since the wrapper implements `IDerived` and
+  // through it every `IBase`. Its externs hoist into `FeedNative` (ruling 4), which is where a
+  // generic implementer's explicit implementations reach them.
+  val async: CirInterfaceAsyncMembers? = if (classifier != null && context != null) {
+    interfaceAsyncMembers(
+      iface, name, libraryName, classifier, tracker, callableCatalog, context, expects,
+      onlyDeclared = false,
+    )
+  } else null
+  val ownsScope: Boolean = async != null && !async.isEmpty()
+
   emitMemberNameCollisions(
-    name, "interface $name", iface, (properties + methods).csMemberNames(),
+    name, "interface $name", iface, (properties + methods + async?.properties.orEmpty() + async?.members.orEmpty()).csMemberNames(),
     KotlinSpellings.ofClass(iface), logger,
   )
 
@@ -3679,20 +3739,18 @@ internal fun translateInterfaceBackingClass(
     libraryName = libraryName,
     nativePrefix = prefix,
     constructor = null,
-    properties = properties,
+    properties = properties + async?.properties.orEmpty(),
     methods = methods,
     interfaces = listOf("I$name"),
     hasInternalHandleConstructor = true,
     isSealed = true,
     backsInterface = "I$name",
-    // ADR-159 (ROADMAP:49's flag-derivation half): derived from what this wrapper projects,
-    // which is never an async member -- `ForwardCallablePlanner.interfaceEntries` skips
-    // `suspend` with `ForwardPlanSkipReason.SUSPEND`, and no Flow route runs for an interface --
-    // so the wrapper owns no scope. Left explicit rather than defaulted so the day interface
-    // async members are admitted (deferred) the line to change is here, reading
-    // `forwardScopeOwner` like every other class.
-    hasSuspendMethods = false,
-    ownsScope = false,
+    companionMembers = async?.members.orEmpty(),
+    nativeCarrier = interfaceNativeCarrier(iface).takeIf { ownsScope },
+    // ADR-159 (ROADMAP:49), ADR-174 ruling 5: derived from what this wrapper projects. It has no
+    // base chain, so it is its own scope owner whenever it projects a scope-using member.
+    hasSuspendMethods = ownsScope,
+    ownsScope = ownsScope,
   )
 }
 
@@ -4444,3 +4502,117 @@ private fun asyncCancellationParameter(parameters: List<CirParameter>): String =
 private fun byValueCsType(kotlinSimpleName: String): String =
   KOTLIN_TO_CSHARP_PARAM[kotlinSimpleName]
     ?: error("ADR-039: the subscription pair gate admitted `$kotlinSimpleName` by value")
+
+/**
+ * ADR-174: an interface's `suspend`/`Flow`/`StateFlow` members, projected by the class route's own
+ * builders ([suspendMembers], [flowMembers], [flowProperty]) with the interface as owner and its
+ * own export prefix, the way ADR-118/124 reused them for a sealed arm. [onlyDeclared] narrows to
+ * the members [iface] declares itself, the placement `I<Name>` and a generic implementer's forwards
+ * use; the backing wrapper takes every member, own and inherited.
+ */
+internal class CirInterfaceAsyncMembers(
+  /** The `[DllImport]`s and `async`/flow [CirMethod]s, in the class route's own order. */
+  val members: List<CirMember>,
+  val properties: List<CirProperty>,
+) {
+  val methods: List<CirMethod> get() = members.filterIsInstance<CirMethod>()
+  fun isEmpty(): Boolean = members.isEmpty() && properties.isEmpty()
+}
+
+internal fun interfaceAsyncMembers(
+  iface: KSClassDeclaration,
+  ownerCsName: String,
+  libraryName: String,
+  classifier: ForwardBridgeTypeClassifier,
+  tracker: CollectionHelperTracker,
+  callableCatalog: ForwardCallablePlanCatalog,
+  context: NugetContext,
+  expects: ExpectIndex,
+  onlyDeclared: Boolean,
+  nativeCarrier: String = "",
+): CirInterfaceAsyncMembers {
+  val prefix: String = iface.nativePrefix(context.symbols)
+  fun KSDeclaration.kept(): Boolean = !onlyDeclared || isDeclaredOn(iface)
+  val suspend: List<CirMember> = suspendMembers(
+    suspendMethods = iface.forwardInterfaceSuspendMethods(classifier).filter { it.kept() },
+    prefix = prefix,
+    libraryName = libraryName,
+    classifier = classifier,
+    tracker = tracker,
+    callableCatalog = callableCatalog,
+    context = context,
+    expects = expects,
+  )
+  val flow: List<CirMember> = flowMembers(
+    flowMethods = iface.forwardInterfaceFlowMethods(classifier).filter { it.kept() },
+    prefix = prefix,
+    libraryName = libraryName,
+    classifier = classifier,
+    tracker = tracker,
+    callableCatalog = callableCatalog,
+    context = context,
+  )
+  val properties: List<CirProperty> = iface.forwardInterfaceFlowProperties(classifier)
+    .filter { it.kept() }
+    .mapNotNull { prop ->
+      flowProperty(prop, ownerCsName, context, classifier, tracker, nativeCarrier = nativeCarrier)
+    }
+  return CirInterfaceAsyncMembers(suspend + flow, properties)
+}
+
+/**
+ * ADR-174 ruling 4: a generic implementer's explicit interface implementations of every async
+ * member the interfaces it implements declare. Each calls the interface's own import through the
+ * backing wrapper's carrier (`FeedNative`), with this instance's `_handle` and scope; the Kotlin
+ * export reads the receiver as `asStableRef<Feed>()`, so dispatch reaches `Crate<Int>` itself.
+ */
+internal fun interfaceAsyncForwards(
+  cls: KSClassDeclaration,
+  libraryName: String,
+  classifier: ForwardBridgeTypeClassifier,
+  tracker: CollectionHelperTracker,
+  callableCatalog: ForwardCallablePlanCatalog,
+  context: NugetContext,
+  expects: ExpectIndex,
+): CirInterfaceAsyncMembers {
+  val forwards: List<CirInterfaceAsyncMembers> =
+    cls.forwardAsyncInterfaceForwards(classifier).mapNotNull { iface ->
+      val type: KSType = cls.getAllSuperTypes()
+        .firstOrNull { it.declaration.qualifiedName?.asString() == iface.qualifiedName?.asString() }
+        ?: return@mapNotNull null
+      val spelling: String = forwardSuperInterfaceSpelling(type, classifier, from = cls)
+        ?: return@mapNotNull null
+      // The wrapper nests beside its interface (ADR-133), so the carrier is spelled from the same
+      // qualifier with the wrapper's own nested name.
+      val qualifier: String = spelling.substringBeforeLast('.', missingDelimiterValue = "")
+        .let { if (it.isEmpty()) "" else "$it." }
+      val carrier: String = "$qualifier${iface.simpleName.asString()}Native"
+      val projected: CirInterfaceAsyncMembers = interfaceAsyncMembers(
+        iface, spelling, libraryName, classifier, tracker, callableCatalog, context, expects,
+        onlyDeclared = true, nativeCarrier = "$carrier.",
+      )
+      CirInterfaceAsyncMembers(
+        members = projected.methods.map { method ->
+          fun String.carried(): String = if (isEmpty()) this else "$carrier.$this"
+          method.copy(
+            explicitInterface = spelling,
+            nativeName = method.nativeName.carried(),
+            stateFlowValueNativeName = method.stateFlowValueNativeName.carried(),
+            stateFlowHasValueNativeName = method.stateFlowHasValueNativeName.carried(),
+            stateFlowSetValueNativeName = method.stateFlowSetValueNativeName.carried(),
+          )
+        },
+        properties = projected.properties.map { prop ->
+          prop.copy(explicitInterface = spelling, hasNativeImport = false)
+        },
+      )
+    }
+  return CirInterfaceAsyncMembers(
+    forwards.flatMap { it.members },
+    forwards.flatMap { it.properties },
+  )
+}
+
+/** ADR-174: the backing wrapper's carrier, `FeedNative`, when it projects an async member. */
+internal fun interfaceNativeCarrier(iface: KSClassDeclaration): String =
+  "${iface.simpleName.asString()}Native"

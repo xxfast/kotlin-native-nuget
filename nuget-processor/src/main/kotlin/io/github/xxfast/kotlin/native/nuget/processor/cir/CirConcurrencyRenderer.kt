@@ -252,11 +252,14 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   val paramNames: String = method.parameters.joinToString(", ") { it.nativeArgument }
 
   val token: String = locals.cancellationToken
+  // ADR-174: an explicit interface implementation may not carry a default (CS1066); the interface
+  // declaration already does.
+  val tokenDefault: String = if (method.explicitInterface != null) "" else " = default"
   val methodParams: String = if (method.parameters.isEmpty()) {
-    "CancellationToken $token = default"
+    "CancellationToken $token$tokenDefault"
   } else {
     method.parameters.joinToString(", ") { it.declaration } +
-        ", CancellationToken $token = default"
+        ", CancellationToken $token$tokenDefault"
   }
 
   // ADR-102: the thunk address plus the completion closure's own GCHandle as the echoed ctx.
@@ -322,7 +325,10 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       "t.SetResult(new ${method.asyncReturnType}(resultPtr, out _));"
   }
 
-  appendLine("        $visibility ${static}${method.returnType} ${method.name}($methodParams)")
+  appendLine(
+    "        ${method.memberHead("$visibility $static")}${method.returnType} " +
+        "${method.explicitName}($methodParams)",
+  )
   appendLine("        {")
   if (!method.isStatic && className.isNotEmpty()) {
     appendLine("            if (_handle == IntPtr.Zero)")

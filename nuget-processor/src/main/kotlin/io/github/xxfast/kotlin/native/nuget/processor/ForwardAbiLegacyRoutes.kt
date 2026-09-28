@@ -67,6 +67,10 @@ internal object ForwardAbiLegacyRoutes {
 
   private fun MutableSet<ForwardAbiLegacyRoute>.add(declaration: CirDeclaration) {
     when (declaration) {
+      // ADR-174: the interface owner kind lands here too. An ADR-040 backing wrapper carries its
+      // interface's suspend/Flow/StateFlow members in the same slots an ordinary class does (its
+      // externs hoisted into `FeedNative`), and a generic implementer's explicit implementations
+      // of them ride the same slots, so both are recognized structurally, as the class routes are.
       is CirClass -> {
         declaration.properties.forEach { property -> add(property) }
         declaration.methods.forEach { method -> add(method, ForwardAbiLegacyRoute.SUSPEND_METHOD) }

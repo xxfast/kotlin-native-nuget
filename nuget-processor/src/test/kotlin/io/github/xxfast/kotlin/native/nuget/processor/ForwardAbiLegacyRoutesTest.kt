@@ -231,4 +231,72 @@ class ForwardAbiLegacyRoutesTest {
       ForwardAbiLegacyRoutes.collect(file),
     )
   }
+
+  /**
+   * ADR-174: the interface owner kind. The backing wrapper carries the interface's async members
+   * exactly where an ordinary class carries its own (`companionMembers`, flow `properties`), and a
+   * generic implementer's explicit implementations ride the same slots, so both are recognized
+   * structurally as the same three routes rather than by entry-point name.
+   */
+  @Test
+  fun `an interface wrapper's and a generic implementer's async members are the legacy routes`() {
+    val fetch = CirMethod(
+      name = "FetchAsync",
+      nativeName = "FeedNative.Native_FetchAsync",
+      returnType = "Task<string>",
+      parameters = emptyList(),
+      body = "",
+      isAsync = true,
+      asyncReturnType = "string",
+    )
+    val ticks = CirMethod(
+      name = "Ticks",
+      nativeName = "FeedNative.Native_TicksCollect",
+      returnType = "KotlinFlow<int>",
+      parameters = emptyList(),
+      body = "",
+      isFlow = true,
+      flowElementType = "int",
+    )
+    val level = CirProperty(
+      name = "Level",
+      type = "KotlinStateFlow<int>",
+      nativeReturnType = "IntPtr",
+      nativeName = "level",
+      getter = "",
+      isFlow = true,
+      isStateFlow = true,
+      flowElementType = "int",
+    )
+    fun owner(name: String, explicitInterface: String?): CirClass = CirClass(
+      name = name,
+      libraryName = "sample",
+      nativePrefix = "feed",
+      constructor = null,
+      properties = listOf(level.copy(explicitInterface = explicitInterface)),
+      methods = emptyList(),
+      companionMembers = listOf(
+        fetch.copy(explicitInterface = explicitInterface),
+        ticks.copy(explicitInterface = explicitInterface),
+      ),
+      nativeCarrier = "FeedNative".takeIf { explicitInterface == null },
+    )
+    val file = CirFile(
+      namespaces = listOf(
+        CirNamespace(
+          name = "Sample",
+          declarations = listOf(owner("Feed", null), owner("Crate", "IFeed")),
+        ),
+      ),
+    )
+
+    assertEquals(
+      setOf(
+        ForwardAbiLegacyRoute.SUSPEND_METHOD,
+        ForwardAbiLegacyRoute.FLOW_METHOD,
+        ForwardAbiLegacyRoute.FLOW_PROPERTY,
+      ),
+      ForwardAbiLegacyRoutes.collect(file),
+    )
+  }
 }
