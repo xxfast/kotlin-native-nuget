@@ -110,7 +110,10 @@ class Tier1SealedArmInterfaceTest {
   @Test
   fun `an arm lists its own interfaces after the sealed base`() {
     val cs: String = result.generatedCSharp
-    assertContains(cs, "public sealed class Arm : Perch, global::Interop.ITally, global::Interop.IGroomable\n")
+    assertContains(
+      cs,
+      "public sealed class Arm : Perch, global::Interop.ITally, global::Interop.IGroomable\n",
+    )
     assertContains(cs, "public sealed class Bare : Perch\n")
   }
 
@@ -139,7 +142,10 @@ class Tier1SealedArmInterfaceTest {
   @Test
   fun `a sealed interface arm lists its interfaces but never the sealed interface`() {
     val cs: String = result.generatedCSharp
-    assertContains(cs, "public sealed class Box : Nook, global::Interop.ITally, global::Interop.IGroomable\n")
+    assertContains(
+      cs,
+      "public sealed class Box : Nook, global::Interop.ITally, global::Interop.IGroomable\n",
+    )
     assertFalse("INook" in cs, cs)
     val box: String = arm("public sealed class Box")
     assertFalse(box.contains("ITally.Count"), box)

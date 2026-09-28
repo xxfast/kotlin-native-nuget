@@ -1373,8 +1373,12 @@ class Tier1NestedTypesTest {
     // The silent shape: `public class Impl : IMarker,` builds, but implements IMarker.IMarker, and
     // the consumer's `Take(MakeImpl())` is CS1503.
     assertContains(body, "public class Impl : global::Interop.IMarker,")
-    assertFalse(body.contains("public class Impl : IMarker,"), "bare IMarker binds to IMarker.IMarker")
-    // A top-level base list is unchanged: namespace-level lookup cannot be shadowed by a member type.
+    assertFalse(
+      body.contains("public class Impl : IMarker,"),
+      "bare IMarker binds to IMarker.IMarker",
+    )
+    // A top-level base list is unchanged: namespace-level lookup cannot be shadowed by a member
+    // type.
     // (Anchored at namespace indent: the nested ADR-040 wrapper `IMarker.Marker : IMarker` is
     // deliberately bare too, and resolves to its intended nested target.)
     assertTrue(
