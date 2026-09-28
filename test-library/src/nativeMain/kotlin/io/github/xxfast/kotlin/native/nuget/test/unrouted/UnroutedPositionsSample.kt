@@ -110,6 +110,13 @@ class ManifestDesk : Manifest {
   fun okOnManifestDesk(): Int = 2
 }
 
+/**
+ * ADR-174: makes [Manifest] REACHABLE (a return position), which is what gives it the ADR-040
+ * backing wrapper and puts its default `Flow` member on `IManifest`. C# holds the result as an
+ * `IManifest`, so both interface defaults are called through the interface type.
+ */
+fun makeManifest(): Manifest = ManifestDesk()
+
 /** row 5: FLOW_PROTOCOL, type-based parameter on a top-level function. Predicted NONE. */
 fun flowParamOnTopLevel(events: Flow<Int>): Int = 0
 

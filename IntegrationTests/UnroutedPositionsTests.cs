@@ -126,10 +126,10 @@ public class UnroutedPositionsTests
     }
 
     /// <summary>
-    /// Interface defaults. Only the three genuinely-silent ones are pinned: a Flow <em>return</em>
-    /// and a lambda <em>parameter</em> declared as an interface default ARE re-emitted, on the
-    /// implementing class and not on the interface, which is a split-out bug rather than part of
-    /// this item, so neither is asserted either way here.
+    /// Interface defaults. Only the three genuinely-silent ones are absent: a Flow <em>return</em>
+    /// and a lambda <em>parameter</em> declared as an interface default are declared on
+    /// <c>IManifest</c> (ADR-160 for the lambda, ADR-174 for the Flow) and are called through it in
+    /// <see cref="InterfaceDefaultFlowAndLambdaAreCallableThroughTheInterfaceType"/>.
     /// </summary>
     [Fact]
     public void InterfaceDefaultsAtUnroutedPositionsAreAbsent()
@@ -146,6 +146,26 @@ public class UnroutedPositionsTests
             "FlowParamOnInterface",
             "GenericReturnOnInterface",
             "StructuralOnInterface");
+    }
+
+    /// <summary>
+    /// ADR-174 (backlog: interface default Flow/lambda invisible through the interface type). Every
+    /// call goes through an <c>IManifest</c>-typed reference, the ADR-040 backing wrapper around a
+    /// <c>ManifestDesk</c>: the lambda default invokes the caller's callback, and the Flow default is
+    /// collected to completion from Kotlin's own <c>flowOf(1)</c>.
+    /// </summary>
+    [Fact]
+    public async Task InterfaceDefaultFlowAndLambdaAreCallableThroughTheInterfaceType()
+    {
+        await using IManifest manifest = UnroutedPositionsSample.MakeManifest();
+
+        int seen = 0;
+        manifest.CallbackParamOnInterface(value => seen = value);
+        Assert.Equal(1, seen);
+
+        var items = new List<int>();
+        await foreach (int value in manifest.FlowReturnOnInterface()) items.Add(value);
+        Assert.Equal(new[] { 1 }, items);
     }
 
     /// <summary>

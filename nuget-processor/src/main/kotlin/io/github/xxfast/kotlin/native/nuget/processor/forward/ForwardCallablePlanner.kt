@@ -1247,10 +1247,11 @@ internal class ForwardCallablePlanner(
       // ADR-064 amendment (2026-09-13): the interface DECLARATION is where a default member's
       // unrouted position is named (`classEntries` defers to this). The two exemptions are the
       // measured PART pair: a Flow return and a lambda parameter declared as an interface default
-      // ARE re-emitted, on every implementing class, through that class's own legacy routes — a
-      // C# caller reaches them through the class rather than through `IFoo`. Warning about a
-      // member the consumer can still call is the false positive this reclassification is most
-      // likely to introduce (whether `IFoo` should declare them is a separate bug).
+      // are routed. The lambda one is planned here and declared on `IFoo` (ADR-160); the Flow one
+      // is declared on `IFoo` and dispatched by its backing wrapper when the interface is
+      // reachable (ADR-174), and every implementing class binds it through its own legacy route
+      // either way. Warning about a member the consumer can call is the false positive this
+      // reclassification is most likely to introduce.
       val method: KSFunctionDeclaration = skipped.node as? KSFunctionDeclaration
         ?: return@nameUnroutedPositions true
       when {
