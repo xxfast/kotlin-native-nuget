@@ -82,6 +82,48 @@ class Tier1InterfaceAsyncMembersTest {
   }
 
   @Test
+  fun `an interface async member with a default parameter declares the implementer's signature`() {
+    // ADR-164 on the legacy routes reads its default flags off the catalog's SUSPEND/FLOW skip
+    // entry. The interface's entries must carry them too, or `IFeed` declares `FetchAsync(int id)`
+    // while `Rss` renders the widened `FetchAsync(int? id = null)`, and `Rss : IFeed` is CS0535.
+    val result = Tier1Harness.run(
+      """
+      package tier1.asyncdefaults
+
+      import kotlinx.coroutines.flow.Flow
+      import kotlinx.coroutines.flow.flowOf
+
+      interface Feed {
+        suspend fun fetch(id: Int = 1): String
+        fun ticks(from: Int = 0): Flow<Int>
+      }
+
+      class Rss : Feed {
+        override suspend fun fetch(id: Int): String = "rss-${'$'}id"
+        override fun ticks(from: Int): Flow<Int> = flowOf(from)
+      }
+
+      fun makeFeed(): Feed = Rss()
+      """.trimIndent(),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val iface: String = result.generatedCSharp.interfaceBlock("IFeed")
+    val rss: String = result.generatedCSharp.substringAfter("public class Rss")
+      .substringBefore("\n    }\n")
+    fun String.parametersOf(member: String): String? =
+      lines().firstOrNull { it.contains(" $member(") }
+        ?.substringAfter("$member(")?.substringBeforeLast(")")
+    listOf("FetchAsync", "Ticks").forEach { member ->
+      val declared: String? = iface.parametersOf(member)
+      val implemented: String? = rss.parametersOf(member)
+      assertTrue(declared != null && declared == implemented,
+        "expected IFeed.$member($declared) to match Rss.$member($implemented);\n$iface\n$rss")
+    }
+  }
+
+  @Test
   fun `a sealed interface with a suspend member declares no Task member on its interface`() {
     // Ruling 2: never an interface type, so never reachable, so `IMixed` stays as it was. `Mixed`
     // is ineligible (its arm has a second superclass), which is the shape that keeps an `IMixed`.
