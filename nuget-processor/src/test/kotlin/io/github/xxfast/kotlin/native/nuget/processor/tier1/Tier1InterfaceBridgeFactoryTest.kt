@@ -292,7 +292,10 @@ class Tier1InterfaceBridgeFactoryTest {
   @Test
   fun `an interface with a member typed by its own nested enum gets a factory on both halves`() {
     val result = Tier1Harness.run(enumSource)
-    assertTrue(result.kspSucceeded, "expected no KSP error; got ${result.kspExitCode} ${result.kspErrors}")
+    assertTrue(
+      result.kspSucceeded,
+      "expected no KSP error; got ${result.kspExitCode} ${result.kspErrors}",
+    )
     assertTrue(result.compiledClean, "expected the fixture to bind; got: ${result.compileErrors}")
 
     val kotlin: String = result.generated
@@ -300,7 +303,10 @@ class Tier1InterfaceBridgeFactoryTest {
     assertContains(kotlin, "override fun whistleState(): tier1.bridgefactory.Kettle.Whistle")
 
     val cs: String = result.generatedCSharp
-    assertContains(cs, "internal sealed class Tier1BridgefactoryKettleBridgeState : NugetBridgeState")
+    assertContains(
+      cs,
+      "internal sealed class Tier1BridgefactoryKettleBridgeState : NugetBridgeState",
+    )
     assertContains(cs, "EntryPoint = \"library_tier1_bridgefactory__kettle_bridge_create\"")
     assertContains(cs, "global::Interop.IKettle.Whistle WhistleState();")
   }
@@ -326,11 +332,19 @@ class Tier1InterfaceBridgeFactoryTest {
       }
       """.trimIndent(),
     )
-    assertTrue(result.kspSucceeded, "expected no KSP error; got ${result.kspExitCode} ${result.kspErrors}")
-    assertTrue(result.compiledClean, "expected the fixture to bind; got: ${result.compileErrors}")
     assertTrue(
-      result.kspWarnings.any { it.contains("tier1.bridgefactorymood.Box.Mood") && it.contains("SKIPPED_NESTED_DECLARATION") },
-      "the enum must be undeclared because its generic owner is deferred; got ${result.kspWarnings}",
+      result.kspSucceeded,
+      "expected no KSP error; got ${result.kspExitCode} ${result.kspErrors}",
+    )
+    assertTrue(result.compiledClean, "expected the fixture to bind; got: ${result.compileErrors}")
+    val boxMoodUndeclared: Boolean =
+      result.kspWarnings.any {
+        it.contains("tier1.bridgefactorymood.Box.Mood") && it.contains("SKIPPED_NESTED_DECLARATION")
+      }
+    assertTrue(
+      boxMoodUndeclared,
+      "the enum must be undeclared because its generic owner is deferred; " +
+        "got ${result.kspWarnings}",
     )
 
     assertFalse(
@@ -346,7 +360,10 @@ class Tier1InterfaceBridgeFactoryTest {
   @Test
   fun `a declared enum slot is qualified on both halves`() {
     val result = Tier1Harness.run(enumSource)
-    assertTrue(result.kspSucceeded, "expected no KSP error; got ${result.kspExitCode} ${result.kspErrors}")
+    assertTrue(
+      result.kspSucceeded,
+      "expected no KSP error; got ${result.kspExitCode} ${result.kspErrors}",
+    )
     assertTrue(
       result.compiledClean,
       "expected the enum slot to compile; got: ${result.compileErrors}",
