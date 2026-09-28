@@ -31,7 +31,7 @@ at `112475a1`, 2026-09-14):
 | Top-level `suspend fun f(): Pet` | `CirFunctionTranslator.kt:711-722` → `legacyInterfaceRead("resultPtr")` (`ForwardLegacyRouteCollections.kt:416-418`) → `CirConcurrencyRenderer.kt:164` `t.SetResult(<read>)` | `new Pet(resultPtr)` (nullable: `resultPtr == IntPtr.Zero ? null : new Pet(resultPtr)`) | **no, fresh wrapper** |
 | Class member `suspend fun`, same interface | `CirClassTranslator.kt:1643-1658` → same `legacyInterfaceRead` | same | **no, fresh wrapper** |
 | `Flow<Pet>` / `StateFlow<Pet>` element | `CirClassTranslator.kt:1169-1184`, `:1364-1372` → `legacyInterfaceElementReadArgument` (`ForwardLegacyRouteCollections.kt:455-460`) → `KotlinFlow<T>._read` (`CirFlowRenderer.kt:117`, `:222`) | `read: static h => new Pet(h)` | **no, fresh wrapper** |
-| `List<Pet>` / `Set<Pet>` / `Map<_, Pet>` element | `ForwardCallablePlanner.kt:3419` `isBridgeableComponent` has no `Interface` arm | nothing emitted; `SKIPPED_UNSUPPORTED_TYPE`, pinned by `Tier1InterfaceReturnTest.kt:224-253` | **refused** |
+| `List<Pet>` / `Set<Pet>` / `Map<_, Pet>` element | `ForwardCallablePlanner.kt:3419` `isBridgeableComponent` has no `Interface` arm | nothing emitted; `SKIPPED_UNSUPPORTED_TYPE`, pinned by `Tier1InterfaceReturnTest.kt:224-253` | **resolves** (corrected 2026-09-29, [ADR-176](176-interface-collection-components.md): the property getter always bound, and every position now binds and registers the factory key; it was never "refused" at the getter) |
 | Sealed read | `CirSealedRenderer` `FromHandle` reads a Kotlin discriminator (`SealedClassExports.kt:42-46`) | `Base.FromHandle(handle)` | **not an interface read**: a sealed arm is a Kotlin class, no C# object can be behind the handle. No sealed arm in `test-library` carries an interface-typed property; if one did, the arm's property getter is the sync property read above, which resolves |
 
 So the asymmetry the ROADMAP names is real, and it is exactly two functions wide:
@@ -197,7 +197,7 @@ wanted, but the top-level `Pet` pair is the minimum.
 - Behaviour change on shipped members: a `Task<IFoo>` or `Flow<IFoo>` that used to hand back a
   wrapper over a C# object now hands back the object. A consumer that disposed that wrapper now
   disposes their own object's `Dispose()` instead, which is what the sync route already does.
-- Deferred: `List<Interface>` stays refused (ADR-040 scope, unchanged); a `suspend fun` returning
+- Deferred: `List<Interface>` stays refused (ADR-040 scope, unchanged; lifted by ADR-176); a `suspend fun` returning
   `StateFlow<Interface>` is a separate ROADMAP line (still bare-spelled, ADR-133 amendment) and
   gets the resolving read for free once it takes the `flowElementRead` path; the generic-function
   route's `FromHandle<TResult>` (`CirFunctionRenderer.kt:286`) does not resolve and has no

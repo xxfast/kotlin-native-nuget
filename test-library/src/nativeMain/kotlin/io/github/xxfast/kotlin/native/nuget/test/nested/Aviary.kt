@@ -183,6 +183,21 @@ class Aviary(val name: String) {
 
   private val onDuty: MutableStateFlow<Keeper> = MutableStateFlow(namedKeeper("on duty"))
 
+  /**
+   * ADR-176 pre-existing bug: a collection of a nested CLASS. Binds on main as
+   * `IReadOnlyList<Aviary.Perch>`, read per element through `FromHandle<Aviary.Perch>`, but
+   * `factoryEntries` never registers nested declarations, so the first element throws
+   * `NotSupportedException`. Named `perchRow`, not `perches` (CS0102 beside `Perch` is fine, but
+   * keep it unmistakable). Oreo takes the top perch, Mylo the bottom one.
+   */
+  fun perchRow(): List<Perch> = listOf(Perch(9), Perch(1))
+
+  /**
+   * ADR-176: a collection of a nested INTERFACE. Refused on main; once admitted it needs the
+   * `Aviary.IKeeper` factory key that nested declarations never get. Not `keepers` (the Flow).
+   */
+  fun keeperRoster(): List<Keeper> = listOf(namedKeeper("morning"), namedKeeper("evening"))
+
   /** Depth-2 return position. */
   fun inner(depth: Int): Middle.Inner = Middle.Inner(depth)
 

@@ -447,6 +447,9 @@ private fun elementKotlinTypeName(type: BridgeType): String = when (type) {
   is BridgeType.Primitive -> "kotlin.${type.kind.simpleKotlinName()}"
   is BridgeType.ObjectHandle -> type.qualifiedName
   is BridgeType.Enum -> type.qualifiedName
+  // ADR-176: the box holds the Kotlin object itself (a Kotlin-backed instance, or the ADR-084
+  // bridge object `nuget_list_add` dereferenced from a C# transfer handle).
+  is BridgeType.Interface -> type.qualifiedName
   // ROADMAP Phase 4 (ADR-151 amendment): the incoming box holds the real `ByteArray` --
   // `nuget_list_add` dereferenced the `nuget_bytes_create` handle before storing it -- so the
   // lowering is the plain cast every other handle-shaped component uses. Without this arm the

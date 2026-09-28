@@ -214,15 +214,14 @@ class Tier1InterfaceReturnTest {
   }
 
   /**
-   * ADR-040 Scope: "collections of interfaces" stays deferred v1 scope. `List<Pet>` as a method
-   * *return* is routed through the ordinary `BridgeType.Collection` element-plannability check
-   * (`isBridgeableComponent()`), which explicitly excludes `BridgeType.Interface` elements, so
-   * `skipReason()` attributes the drop to the element's own reason (`BridgeType.Interface ->
-   * ForwardPlanSkipReason.HANDLE`, verified through this harness) — `SKIPPED_UNSUPPORTED_TYPE`,
-   * not the generic collection bucket — rather than silently emitting an untested shape.
+   * ADR-176 (flipped from ADR-040's "collections of interfaces stays deferred" skip): `List<Pet>`
+   * as a method return binds as `IReadOnlyList<IPet>`, reads each element through the token-aware
+   * `FromHandle<IPet>`, and the collection position alone makes `Pet` reachable, so the backing
+   * wrapper and its `Factories` key exist. Without the key the member would bind and throw
+   * `NotSupportedException` at the first Kotlin-backed element.
    */
   @Test
-  fun `List of interface return fires a named skip diagnostic and is omitted`() {
+  fun `List of interface return binds as a read-only list of the interface`() {
     val result = Tier1Harness.run(
       """
       package tier1.interfacecollectionskip
@@ -239,16 +238,26 @@ class Tier1InterfaceReturnTest {
       """.trimIndent()
     )
 
-    assertTrue(result.compiledClean, "expected no broken source for Shelter.pets; got: ${result.compileErrors}")
-    assertFalse(
-      "export_library_tier1_interfacecollectionskip__shelter_pets" in result.generated,
-      "expected Shelter.pets to be entirely absent from the generated CNameExports.kt; " +
-          "generated=${result.generated}",
+    assertTrue(
+      result.compiledClean,
+      "expected Shelter.pets to compile; got: ${result.compileErrors}",
     )
     assertTrue(
+      "export_library_tier1_interfacecollectionskip__shelter_pets" in result.generated,
+      "expected Shelter.pets to be exported; generated=${result.generated}",
+    )
+    assertFalse(
       result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE.name) },
-      "expected a named skip diagnostic for Shelter.pets's List<Pet> return; " +
-          "kspWarnings=${result.kspWarnings}",
+      "expected no skip diagnostic for Shelter.pets; kspWarnings=${result.kspWarnings}",
+    )
+    val csharp: String = result.generatedCSharp
+    assertContains(csharp, "public IReadOnlyList<global::Interop.IPet> Pets()")
+    assertContains(csharp, "NugetMarshal.FromHandle<global::Interop.IPet>(")
+    assertContains(csharp, "public sealed class Pet : IPet")
+    assertContains(
+      csharp,
+      "[typeof(global::Interop.IPet)] = " +
+        "static handle => new global::Interop.Pet(handle, out _)",
     )
   }
 

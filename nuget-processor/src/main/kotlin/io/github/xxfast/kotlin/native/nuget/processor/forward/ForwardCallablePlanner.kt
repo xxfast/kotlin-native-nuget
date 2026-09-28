@@ -4080,6 +4080,14 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   is BridgeType.Enum, is BridgeType.ObjectHandle,
     -> true
 
+  // ADR-176: an interface is an ordinary collection component (lifting ADR-040's "collections of
+  // interfaces" deferral). Each element reads through the ADR-173 token-aware `Materialize<T>`
+  // (a C#-implemented element resolves to the caller's object, a Kotlin-backed one to the ADR-040
+  // backing wrapper) and writes through `Wrap<T>`'s `NugetBridge.HandleFor` fallback. The backing
+  // wrapper and its `Factories` key exist because `NugetProcessor`'s reachability walk visits every
+  // collection component.
+  is BridgeType.Interface -> true
+
   // ADR-107: `List<Throwable>` is explicitly deferred -- the component would have to be boxed by
   // `nuget_wrap_*`, which has no envelope arm -- so it skips named, issue #52's rule.
   BridgeType.Throwable -> false
@@ -4121,9 +4129,6 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
     }
   }
 
-  // ADR-040: an interface element inside a collection is deferred v1 scope ("collections of
-  // interfaces" — Scope section); routed through the ordinary COLLECTION skip rather than
-  // silently building an untested shape.
   // ADR-076: "Instant as a collection element" is explicitly deferred (its own boxing question,
   // ADR-073/075's isWrappableComponent allow-list territory) -- same route.
   // ADR-088: "bound interfaces as collection components" is on this ADR's own deferred list, for
@@ -4132,7 +4137,7 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   // ADR-147 v1: a type parameter binds at a top-level position only. `List<T>` would need a
   // per-element box the write side has no arm for, so it skips named here instead.
   is BridgeType.TypeParameter,
-  is BridgeType.Interface, is BridgeType.BoundInterface, BridgeType.Instant, BridgeType.Duration,
+  is BridgeType.BoundInterface, BridgeType.Instant, BridgeType.Duration,
   is BridgeType.RawCollection, is BridgeType.RawKSType, is BridgeType.SpecializedProtocol,
   is BridgeType.Unsupported,
     -> false
@@ -4274,6 +4279,13 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
   // `T = int`. One branch here admits it at every position the predicate guards: `List`/`Set`/`Map`
   // callable inputs and collection property setters.
   is BridgeType.Enum -> true
+
+  // ADR-176: an interface component boxes through `Wrap<T>`: a Kotlin-backed `IPet` wrapper is an
+  // `INugetHandle` (its own handle, not owned); any other C# implementation falls to ADR-173's
+  // `HandleOf` -> `NugetBridge.HandleFor` arm (an owned transfer handle the fill loop disposes).
+  // `nuget_list_add` stores the dereferenced Kotlin bridge object, so the Kotlin `it as Pet` cast
+  // holds for both.
+  is BridgeType.Interface -> true
 
   // ADR-081: a value-class component crosses as its *underlying*, projected per element at the C#
   // call site (`x.Value`, `(int)x.Mood`, `x.Patient`) before `Wrap<T>` is ever instantiated, so the

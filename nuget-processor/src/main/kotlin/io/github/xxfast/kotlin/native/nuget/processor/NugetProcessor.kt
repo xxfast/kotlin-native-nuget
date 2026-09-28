@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor
 
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.findActualType
+import com.google.devtools.ksp.getDeclaredFunctions
 import com.google.devtools.ksp.getDeclaredProperties
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.processing.CodeGenerator
@@ -113,6 +114,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedIn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAsyncInterfaces
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceFlowProperties
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceFlowMethods
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceSuspendMethods
 import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsForwardFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDeclaredTypeNames
@@ -128,6 +132,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionKinds
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementInterface
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollectionKinds
@@ -1886,6 +1891,26 @@ class NugetProcessor(
       return (unwrapped as? BridgeType.Interface)?.qualifiedName
     }
 
+    // ADR-176: every interface a type carries inside a collection component (element, map key,
+    // map value), recursively through nested collections and `Nullable`. A SET, not the first hit:
+    // `Map<Pet, Owner>` needs both backing wrappers, and a key-only `Map<Scent, String>` needs its
+    // key walked, or the member binds and throws at the first Kotlin-backed element
+    // (`Materialize<IScent>` finds no `Factories` key).
+    fun BridgeType.componentInterfaceQualifiedNames(): Set<String> = when (this) {
+      is BridgeType.Nullable -> type.componentInterfaceQualifiedNames()
+      is BridgeType.Collection -> listOfNotNull(element, key, value)
+        .flatMapTo(mutableSetOf()) { component ->
+          listOfNotNull(component.interfaceQualifiedNameOrNull()) +
+              component.componentInterfaceQualifiedNames()
+        }
+
+      else -> emptySet()
+    }
+
+    // ADR-040 top-level position plus ADR-176 components, the whole planned-type walk.
+    fun BridgeType.interfaceQualifiedNames(): Set<String> =
+      setOfNotNull(interfaceQualifiedNameOrNull()) + componentInterfaceQualifiedNames()
+
     // ADR-135's open question, settled by reading the planner: an ADR-132 extension receiver is
     // NOT in `publicSignature.parameters` (`ForwardCallablePlanner` builds `declared` from the
     // value parameters alone and carries the receiver as a separate RECEIVER-role ABI slot), so a
@@ -1935,16 +1960,60 @@ class NugetProcessor(
       }
     }
 
+    // ADR-176 (research Finding 7, verified by spike): the legacy suspend and Flow routes never
+    // become plans, yet `ForwardLegacyRouteCollections` admits a collection result, input or
+    // element through the same `isBridgeableComponent` gate, so `suspend fun pets(): List<Pet>` and
+    // `fun stream(): Flow<List<Pet>>` bind `Task<IReadOnlyList<IPet>>` / `KotlinFlow<...>`. The
+    // interface inside that collection needs its backing wrapper and `Factories` key exactly as a
+    // planned position gives it. Collection components only: a bare interface at a suspend/Flow
+    // position stays with the routes that already own it. Over-inclusive by design (a member the
+    // legacy route later skips for an unrelated reason only mints an unused wrapper, the trade
+    // `erasedPositionTypes` already accepts).
+    fun legacyComponentInterfaceNames(type: KSType?): Set<String> {
+      val expanded: KSType = type?.expandAliases() ?: return emptySet()
+      val carried: KSType = legacyFlowElement(expanded) ?: expanded
+      return forwardClassifier.classify(carried).componentInterfaceQualifiedNames()
+    }
+
+    fun legacyPositionTypes(): Sequence<KSType?> = sequence {
+      fun positionsOf(function: KSFunctionDeclaration): List<KSType?> {
+        val isSuspend: Boolean = Modifier.SUSPEND in function.modifiers
+        val result: KSType? = function.returnType?.resolve()
+        return buildList {
+          if (isSuspend || legacyFlowElement(result) != null) add(result)
+          if (isSuspend) function.parameters.forEach { parameter -> add(parameter.type.resolve()) }
+        }
+      }
+
+      fun flowTypesOf(declared: Sequence<KSPropertyDeclaration>): List<KSType> = declared
+        .filter { property -> property.getVisibility() == Visibility.PUBLIC }
+        .map { property -> property.type.resolve() }
+        .filter { type -> legacyFlowElement(type) != null }
+        .toList()
+
+      (allFunctions + extensionFunctions).forEach { function -> yieldAll(positionsOf(function)) }
+      yieldAll(flowTypesOf(properties.asSequence()))
+      val owners: List<KSClassDeclaration> = classes + objects + sealedClasses +
+          sealedClasses.flatMap { sealed -> sealed.getSealedSubclasses().toList() }
+      owners.forEach { owner ->
+        owner.getDeclaredFunctions()
+          .filter { function -> function.getVisibility() == Visibility.PUBLIC }
+          .forEach { function -> yieldAll(positionsOf(function)) }
+        yieldAll(flowTypesOf(owner.getDeclaredProperties()))
+      }
+    }
+
     val reachableInterfaceNames: Set<String> = buildSet {
       ordinaryCatalog.plans.forEach { plan ->
-        plan.publicSignature.result.interfaceQualifiedNameOrNull()?.let(::add)
+        addAll(plan.publicSignature.result.interfaceQualifiedNames())
         plan.publicSignature.parameters.forEach { parameter ->
-          parameter.type.interfaceQualifiedNameOrNull()?.let(::add)
+          addAll(parameter.type.interfaceQualifiedNames())
         }
         plan.nativeExports.receiverInterfaceQualifiedNames().forEach(::add)
       }
+      legacyPositionTypes().forEach { type -> addAll(legacyComponentInterfaceNames(type)) }
       ordinaryCatalog.propertyPlans.forEach { plan ->
-        plan.type.interfaceQualifiedNameOrNull()?.let(::add)
+        addAll(plan.type.interfaceQualifiedNames())
         // Same receiver reasoning for an extension property over an interface receiver.
         plan.calls().receiverInterfaceQualifiedNames().forEach(::add)
       }
@@ -1963,12 +2032,42 @@ class NugetProcessor(
     // keeps its output), and only one `carries` would accept (non-generic, non-sealed): promoting
     // anything else would mint a backing wrapper, factory entry and bridge arm for nothing. The
     // class-route selectors are called directly because `carries` is empty until `reset` below.
-    // Walked to a fixed point, so a promoted super's own async-carrying supers are promoted too.
     fun KSClassDeclaration.carriesInheritedAsync(): Boolean =
       typeParameters.isEmpty() && !isSealedInterface() && (
         forwardSuspendRouteMethods(forwardClassifier, superClass = null).isNotEmpty() ||
           forwardClassFlowMethods(forwardClassifier, superClass = null).isNotEmpty() ||
           forwardClassFlowProperties(forwardClassifier, superClass = null).isNotEmpty())
+
+    fun KSClassDeclaration.promotedAsyncSuperNames(): List<String> =
+      ForwardInterfaceHierarchy(this, forwardClassifier.exportedObjectHandles).keptSupers
+        .mapNotNull { type -> type.declaration as? KSClassDeclaration }
+        .filter { base -> base.carriesInheritedAsync() }
+        .mapNotNull { base -> base.qualifiedName?.asString() }
+
+    // ADR-176: reaching `Groomer` plans its members, so `fun brushes(): List<Brush>` (or a
+    // suspend / Flow member) binds `IReadOnlyList<IBrush>`; if `Brush` is reachable nowhere else it
+    // would have no backing wrapper and no `Factories` key and throw at the first Kotlin-backed
+    // element. Own AND inherited members (over-inclusive by design: an inherited member may be
+    // declared on a super's `IBase` instead, and an unused wrapper is the cheap failure).
+    fun KSClassDeclaration.memberCollectionInterfaceNames(): Set<String> {
+      val memberTypes: List<KSType?> = buildList {
+        getAllFunctions()
+          .filter { function -> function.getVisibility() == Visibility.PUBLIC }
+          .forEach { function ->
+            add(function.returnType?.resolve())
+            function.parameters.forEach { parameter -> add(parameter.type.resolve()) }
+          }
+        getAllProperties()
+          .filter { property -> property.getVisibility() == Visibility.PUBLIC }
+          .forEach { property -> add(property.type.resolve()) }
+      }
+      return memberTypes.flatMapTo(mutableSetOf()) { type -> legacyComponentInterfaceNames(type) }
+    }
+
+    // The JOINT fixed point of both closures, over one worklist, so they feed each other: a super
+    // promoted for its async members can name a new interface in a collection member, and an
+    // interface found through a collection member can have async-carrying supers of its own.
+    // Whatever either rule adds is itself walked by both rules, until neither grows the set.
     val interfacesByName: Map<String, KSClassDeclaration> =
       interfaces.associateBy { iface -> iface.qualifiedName?.asString().orEmpty() }
     val closedInterfaceNames: Set<String> = buildSet {
@@ -1976,15 +2075,9 @@ class NugetProcessor(
       val pending: ArrayDeque<String> = ArrayDeque(reachableInterfaceNames)
       while (pending.isNotEmpty()) {
         val iface: KSClassDeclaration = interfacesByName[pending.removeFirst()] ?: continue
-        ForwardInterfaceHierarchy(iface, forwardClassifier.exportedObjectHandles).keptSupers
-          .mapNotNull { type -> type.declaration as? KSClassDeclaration }
-          .filter { base -> base.qualifiedName?.asString() !in this }
-          .filter { base -> base.carriesInheritedAsync() }
-          .forEach { base ->
-            val qualified: String = base.qualifiedName?.asString() ?: return@forEach
-            add(qualified)
-            pending.addLast(qualified)
-          }
+        (iface.promotedAsyncSuperNames() + iface.memberCollectionInterfaceNames())
+          .filter { name -> add(name) }
+          .forEach { name -> pending.addLast(name) }
       }
     }
     val reachableInterfaces: List<KSClassDeclaration> = interfaces
@@ -2570,11 +2663,20 @@ class NugetProcessor(
           sealed.forwardSealedBaseFlowProperties(forwardClassifier).isNotEmpty()
     }
 
+    // ADR-174 / ADR-176: a reachable interface's own suspend members are exported on the same
+    // coroutine surface (`launchForCSharp`, `CoroutineScope`) a class's are. Without this a module
+    // whose ONLY suspend member sits on an interface generated Kotlin that did not compile. Read
+    // through the same selector the export builder uses, so the two cannot disagree.
+    val interfacesHaveSuspendMethods: Boolean = reachableInterfaces.any { iface ->
+      iface.forwardInterfaceSuspendMethods(forwardClassifier).isNotEmpty()
+    }
+
     val hasSuspendFunctions: Boolean = suspendFunctions.isNotEmpty() ||
         needsSuspendLambdaSupport ||
         classesHaveSuspendFunctions ||
         armsHaveSuspendMethods ||
-        sealedBasesHaveAsyncMembers
+        sealedBasesHaveAsyncMembers ||
+        interfacesHaveSuspendMethods
 
     val classesHaveFlowPropertiesForImports: Boolean = classes.any { cls ->
       cls.getAllProperties().any { prop ->
@@ -2599,8 +2701,15 @@ class NugetProcessor(
       }
     }
 
+    // ADR-174 / ADR-176: the Flow half of [interfacesHaveSuspendMethods].
+    val interfacesHaveFlowMembers: Boolean = reachableInterfaces.any { iface ->
+      iface.forwardInterfaceFlowMethods(forwardClassifier).isNotEmpty() ||
+          iface.forwardInterfaceFlowProperties(forwardClassifier).isNotEmpty()
+    }
+
     val needsFlowImports: Boolean = classesHaveFlowPropertiesForImports ||
-        classesHaveFlowMethodsForImports || armsHaveFlowMembers || sealedBasesHaveAsyncMembers
+        classesHaveFlowMethodsForImports || armsHaveFlowMembers || sealedBasesHaveAsyncMembers ||
+        interfacesHaveFlowMembers
 
     // The coroutines opt-in is gated on the SAME condition as the coroutines imports below: every
     // emission that names anything from `kotlinx.coroutines` (suspend functions and suspend
