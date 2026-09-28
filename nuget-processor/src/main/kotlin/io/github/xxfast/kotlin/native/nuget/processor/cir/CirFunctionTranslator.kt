@@ -61,6 +61,8 @@ internal fun translateSpecializedFunction(
   tracker: CollectionHelperTracker,
   exportedTypes: Set<String>,
   logger: KSPLogger,
+  // ADR-173: spells an exported interface type argument as `IFoo`.
+  classifier: ForwardBridgeTypeClassifier,
 ): List<CirMember> {
   // ADR-064 amendment (2026-09-13): the route's gate is one hoisted predicate now, shared with the
   // Kotlin half and with the planner's unrouted-position reclassification — including its
@@ -68,7 +70,7 @@ internal fun translateSpecializedFunction(
   // a type Interop.cs never declares (research H cell 4, a consumer-side CS0246).
   if (!func.hasLegacyGenericReturnRoute()) return emptyList()
   return translateFunction(
-    func, libraryName, context, tracker, exportedTypes, logger,
+    func, libraryName, context, tracker, exportedTypes, logger, classifier,
   )
 }
 
@@ -79,6 +81,7 @@ internal fun translateFunction(
   tracker: CollectionHelperTracker,
   exportedTypes: Set<String>,
   logger: KSPLogger,
+  classifier: ForwardBridgeTypeClassifier,
 ): List<CirMember> {
   // ADR-163: library- and package-qualified, the same string `FunctionExports` mints.
   val cname: String = context.symbols.topLevel(func)
@@ -187,7 +190,7 @@ internal fun translateFunction(
     // name makes the whole function unspellable, so it is skipped named rather than returned as
     // `KotlinFunc<CamId, Flow>` for the consumer's compiler to reject.
     val unnameableTypeArgument: CsTypeArgument.Unnameable? =
-      csTypeArguments(returnType.arguments, exportedTypes, context)
+      csTypeArguments(returnType.arguments, exportedTypes, context, classifier)
     if (unnameableTypeArgument != null) {
       ForwardDiagnosticSink.emit(
         listOf(
@@ -207,7 +210,7 @@ internal fun translateFunction(
     }
 
     val lambdaTypeArgs: List<String> =
-      csTypeArgumentNames(returnType.arguments, exportedTypes, context)
+      csTypeArgumentNames(returnType.arguments, exportedTypes, context, classifier)
     val lambdaCsType: String = csLambdaType(lambdaTypeArgs)
 
     val nativeImport = CirDllImport(
@@ -533,7 +536,7 @@ internal fun translateFunction(
     val unspellable: String? = if (isOuterUndeclared) {
       returnQualifiedName
     } else {
-      csTypeArguments(returnType.arguments, exportedTypes, context)?.typeArgument
+      csTypeArguments(returnType.arguments, exportedTypes, context, classifier)?.typeArgument
     }
     if (unspellable != null) {
       ForwardDiagnosticSink.emit(
@@ -554,7 +557,7 @@ internal fun translateFunction(
     }
 
     val typeArgs: String =
-      csTypeArgumentNames(returnType.arguments, exportedTypes, context).joinToString(", ")
+      csTypeArgumentNames(returnType.arguments, exportedTypes, context, classifier).joinToString(", ")
 
     // ROADMAP line 76 / ADR-163's sibling fix: the OUTER type name was still the bare simple name,
     // so a top-level function whose return type is declared in another Kotlin package rendered
@@ -1040,15 +1043,25 @@ internal fun translateGenericFunction(
     // registry rather than Activator.CreateInstance.
     // ADR-147 amendment: a null argument crosses as the null pointer (ADR-083), and a null result
     // is the `default` of whatever `T` was instantiated to, never a factory lookup.
-    val handle: String =
-      "$paramName is null ? IntPtr.Zero : ((INugetHandle)$paramName).Handle"
+    // ADR-173: the object argument goes through the ONE erased write function, `Wrap<T>`, the
+    // lambda and generic-class routes already use: null is the null pointer, a value class boxes
+    // (ADR-171 `Boxers`), a Kotlin-backed wrapper yields its own handle, and a C#-implemented
+    // interface mints a bridge transfer handle, disposed on `owned` once the native call returns.
+    // `!`: `Wrap<T>` takes a non-null `T` under a `T?` parameter's flow analysis (CS8604), and
+    // answers a null with the null pointer itself (ADR-083).
+    appendLine("      IntPtr handle = NugetMarshal.Wrap<$typeParamName>($paramName!, out bool owned);")
+    appendLine("      IntPtr result;")
+    appendLine("      try")
+    appendLine("      {")
+    appendLine("        result = NugetErrorNative.Check(${csName}_object_native(handle, out error), error);")
+    appendLine("      }")
+    appendLine("      finally")
+    appendLine("      {")
+    appendLine("        if (owned) NugetMarshal.Dispose(handle);")
+    appendLine("      }")
     if (returnsGenericClass) {
-      appendLine("      IntPtr handle = $handle;")
-      appendLine("      IntPtr result = NugetErrorNative.Check(${csName}_object_native(handle, out error), error);")
       appendLine("      return new ${returnTypeName}<$typeParamName>(result, out _);")
     } else {
-      appendLine("      IntPtr handle = $handle;")
-      appendLine("      IntPtr result = NugetErrorNative.Check(${csName}_object_native(handle, out error), error);")
       appendLine("      return result == IntPtr.Zero ? default! : NugetMarshal.Materialize<$typeParamName>(result);")
     }
   }

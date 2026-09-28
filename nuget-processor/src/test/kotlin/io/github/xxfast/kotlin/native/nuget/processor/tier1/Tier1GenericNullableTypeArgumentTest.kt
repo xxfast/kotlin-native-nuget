@@ -111,10 +111,10 @@ class Tier1GenericNullableTypeArgumentTest {
     assertContains(cs, "if (present && width == typeof(int))")
     // A null string used to cross the string width into a non-null Kotlin `String` parameter.
     assertContains(cs, "if (present && width == typeof(string))")
-    assertContains(
-      cs,
-      "IntPtr handle = value is null ? IntPtr.Zero : ((INugetHandle)value).Handle;",
-    )
+    // ADR-173: the object arm writes through the shared `Wrap<T>`, which answers a null with the
+    // null pointer (ADR-083) and disposes a minted handle on `owned`.
+    assertContains(cs, "IntPtr handle = NugetMarshal.Wrap<T>(value!, out bool owned);")
+    assertContains(cs, "if (owned) NugetMarshal.Dispose(handle);")
     assertContains(
       cs,
       "return result == IntPtr.Zero ? default! : NugetMarshal.Materialize<T>(result);",

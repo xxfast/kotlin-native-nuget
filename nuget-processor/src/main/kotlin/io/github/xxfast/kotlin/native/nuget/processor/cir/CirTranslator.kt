@@ -338,6 +338,7 @@ internal fun translate(
           tracker,
           exportedTypes + callableCatalog.boxedValueClasses,
           logger,
+          classifier,
         )
       }
       recordStatic(
@@ -1042,8 +1043,12 @@ private fun List<CirNamespace>.withoutEmptyStaticClasses(): List<CirNamespace> =
  * A generic slot holds a boxed Kotlin value class, so `Box<ChartId>.Value` hands back a handle to
  * one; nested value classes register under their `Outer.Inner` name ([valueClassNames]).
  *
- * Enums, objects, interfaces and open generic wrappers register nothing: none of them is a closed
- * type reachable from a handle.
+ * ADR-173: an exported interface with a backing wrapper registers under `typeof(IFoo)`,
+ * constructing the backing class ([CirFactoryEntry.constructTypeName]). `Materialize<T>` probes the
+ * C# token BEFORE this lookup for an interface key, so a C#-implemented `IFoo` is never re-wrapped.
+ *
+ * Enums, objects, interfaces without a backing wrapper and open generic wrappers register nothing:
+ * none of them is a closed type reachable from a handle.
  */
 private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry> = namespaces
   .flatMap { namespace ->
@@ -1055,7 +1060,19 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
           if (declaration.hasInternalHandleConstructor && !declaration.isAbstract &&
             declaration.typeParameters.isEmpty()
           ) {
-            listOf(CirFactoryEntry("${namespace.name}.${declaration.name}"))
+            listOf(CirFactoryEntry("${namespace.name}.${declaration.name}")) +
+                // ADR-173: an ADR-040 backing wrapper also registers under its interface, so an
+                // erased read at `T = IPet` (a Kotlin-backed pet the token probe missed)
+                // constructs the backing class. Namespace-level only: a nested interface's key
+                // is deferred until a fixture pins the ADR-134 spelling.
+                listOfNotNull(
+                  declaration.backsInterface?.let { iface ->
+                    CirFactoryEntry(
+                      "${namespace.name}.$iface",
+                      constructTypeName = "${namespace.name}.${declaration.name}",
+                    )
+                  },
+                )
           } else {
             emptyList()
           }

@@ -117,9 +117,9 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
     // ADR-171: a value class is a record struct with no handle constructor; its `NugetUnbox` reads
     // the boxed Kotlin value back and disposes the handle.
     val construct: String = when {
-      entry.viaFromHandle -> "global::${entry.qualifiedTypeName}.FromHandle(handle)"
-      entry.viaNugetUnbox -> "global::${entry.qualifiedTypeName}.NugetUnbox(handle)"
-      else -> "new global::${entry.qualifiedTypeName}(handle, out _)"
+      entry.viaFromHandle -> "global::${entry.constructTypeName}.FromHandle(handle)"
+      entry.viaNugetUnbox -> "global::${entry.constructTypeName}.NugetUnbox(handle)"
+      else -> "new global::${entry.constructTypeName}(handle, out _)"
     }
     appendLine("            [typeof(global::${entry.qualifiedTypeName})] = static handle => $construct,")
   }
@@ -143,6 +143,14 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("        {")
   // ADR-171: `T = V?` is `Nullable<V>`, which never equals the `typeof(V)` key.
   appendLine("            Type key = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);")
+  // ADR-173: a C#-implemented interface came back through an erased route. Probe the token BEFORE
+  // the interface's own `Factories` entry, or a C# `Dog` returns as a fresh backing `Pet`; probe on
+  // a `Factories` miss too (`T = Dog`, `T = object`). A value class (ADR-171) is a value type and
+  // never pays the P/Invoke, and `T = Cat` (a non-interface hit) is unchanged. The probe disposes
+  // the transfer handle on a hit.
+  appendLine("            if (!key.IsValueType && (key.IsInterface || !Factories.ContainsKey(key))")
+  appendLine("                && TryResolveCSharpObject(handle, out object original))")
+  appendLine("                return (T)original;")
   appendLine("            if (Factories.TryGetValue(key, out Func<IntPtr, object>? factory)) return (T)factory(handle);")
   appendLine("            throw new NotSupportedException($\"No generated factory materialises {typeof(T)} from a Kotlin handle\");")
   appendLine("        }")
@@ -368,7 +376,13 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   // out of a type test instead of a private-field read.
   appendLine("            owned = false;")
   appendLine("            if (value is INugetHandle wrapper) return wrapper.Handle;")
-  appendLine("            throw new NotSupportedException($\"Cannot pass {typeof(T).Name} to a Kotlin collection\");")
+  // ADR-173: a C#-implemented interface mints a bridge transfer handle through the same
+  // `HandleOf` every interface parameter uses (`NugetBridge.HandleFor`, or the ADR-040 throw when
+  // the module has no bridge layer). `typeof(T)`, not `type`, so `T = IPet` picks the `IPet`
+  // bridge first. `owned` is assigned only after the mint (ADR-135).
+  appendLine("            IntPtr bridged = HandleOf((object)value!, typeof(T));")
+  appendLine("            owned = true;")
+  appendLine("            return bridged;")
   appendLine("        }")
   appendLine()
   // ADR-151: gated on helper.includesBytes for the same CS0103 reason as the list/map/set bodies
@@ -613,6 +627,11 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("            original = (T)GCHandle.FromIntPtr(token).Target!;")
   appendLine("            return true;")
   appendLine("        }")
+  appendLine()
+  // ADR-173: the unconstrained entry `Materialize<T>` calls (its `T` has no `class` constraint).
+  // Delegates at `T = object` so the token read stays in exactly one body.
+  appendLine("        internal static bool TryResolveCSharpObject(IntPtr handle, out object original) =>")
+  appendLine("            TryResolveCSharp<object>(handle, out original);")
   appendLine("    }")
   appendLine()
 }

@@ -112,10 +112,8 @@ class Tier1LegacyRouteParameterNamesTest {
     )
     assertContains(generated, "Put_string_native((string)(object)@ref!, out error)")
     assertContains(generated, "Put_int_native((int)(object)@ref!, out error)")
-    assertContains(
-      generated,
-      "IntPtr handle = @ref is null ? IntPtr.Zero : ((INugetHandle)@ref).Handle;",
-    )
+    // ADR-173: the object arm writes through the shared `Wrap<T>`.
+    assertContains(generated, "IntPtr handle = NugetMarshal.Wrap<T>(@ref!, out bool owned);")
   }
 
   @Test
