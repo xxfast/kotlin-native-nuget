@@ -238,3 +238,16 @@ lambda half was already on `IManifest` via ADR-160. `UnroutedPositionsSample.mak
 `Manifest` reachable, and `InterfaceDefaultFlowAndLambdaAreCallableThroughTheInterfaceType` calls both
 through an `IManifest`-typed reference. No new `LeakTests` row: both routes reuse handle paths this ADR
 and ADR-160 already measure. The backlog item and its ROADMAP line are closed.
+
+## Amendment (2026-09-29): Rule 7's compile claim is verified, nested and top-level
+
+Rule 7's "inferred, not spiked" claim, that an explicit implementation compiles against the hoisted
+`{Name}Native` carrier, is now pinned. For a nested interface the carrier lands inside the owner
+(`Pantry.BowlNative` beside `Pantry.IBowl` and `Pantry.Bowl`), and a same-name top-level `Feed` and
+`Shelf.Feed` coexist. Tier 1 cells cover a class owner and an object owner; the `Pantry.IBowl`
+fixture (`Pantry.kt`) has a suspend, a Flow, a `StateFlow` and a default Flow member, with implementers
+`OreoBowl` and the generic `MyloTin<T>`. Runtime coverage of the generic implementer comes from
+`InterfaceAsyncMemberTests.cs` constructing implementers directly, including top-level
+`new Crate<int>(1)` and `new RssFeed()`. No generator change. Not covered: error and cancellation
+branches through the carrier, and a runtime fixture for an `object` owner (Tier 1 only). No new
+`LeakTests` row: the exports and scope lifecycle are the ones rows 9k onward already measure.

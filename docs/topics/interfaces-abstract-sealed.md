@@ -262,6 +262,39 @@ var direct = new Crate<int>(1);
 // direct.FetchAsync(3) does not compile: FetchAsync is IFeed's explicit member, not Crate<T>'s own
 ```
 
+An interface nested in a class or object gets the same treatment: its async members are declared on
+the nested `Outer.I<Name>`, and a generic implementer still reaches them through that interface
+reference.
+
+```kotlin
+class Pantry {
+  interface Bowl {
+    suspend fun fill(scoops: Int): String
+    fun kibbles(): Flow<Int>
+    val level: StateFlow<Int>
+  }
+  fun open(): Bowl = OreoBowl()
+}
+```
+
+```C#
+public class Pantry : IDisposable, INugetHandle
+{
+    public interface IBowl : IDisposable, IAsyncDisposable
+    {
+        KotlinStateFlow<int> Level { get; }
+        Task<string> FillAsync(int scoops, CancellationToken cancellationToken = default);
+        KotlinFlow<int> Kibbles();
+    }
+}
+```
+
+```C#
+using var pantry = new Pantry();
+await using Pantry.IBowl bowl = pantry.Open();
+string filled = await bowl.FillAsync(3);
+```
+
 `interface Feed<T>` (a generic interface) keeps its async members off `IFeed<T>` entirely, named
 `SKIPPED_GENERIC_INTERFACE_ASYNC_MEMBER`. An [eligible sealed interface](#sealed-interfaces) is
 excluded from this too, silently, since it never gets an `I<Name>` declaration in the first place;
