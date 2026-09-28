@@ -630,7 +630,9 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine()
   // ADR-173: the unconstrained entry `Materialize<T>` calls (its `T` has no `class` constraint).
   // Delegates at `T = object` so the token read stays in exactly one body.
-  appendLine("        internal static bool TryResolveCSharpObject(IntPtr handle, out object original) =>")
+  appendLine(
+    "        internal static bool TryResolveCSharpObject(IntPtr handle, out object original) =>",
+  )
   appendLine("            TryResolveCSharp<object>(handle, out original);")
   appendLine("    }")
   appendLine()

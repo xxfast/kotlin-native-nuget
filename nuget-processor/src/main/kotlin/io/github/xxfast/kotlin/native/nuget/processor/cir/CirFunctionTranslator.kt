@@ -557,7 +557,8 @@ internal fun translateFunction(
     }
 
     val typeArgs: String =
-      csTypeArgumentNames(returnType.arguments, exportedTypes, context, classifier).joinToString(", ")
+      csTypeArgumentNames(returnType.arguments, exportedTypes, context, classifier)
+        .joinToString(", ")
 
     // ROADMAP line 76 / ADR-163's sibling fix: the OUTER type name was still the bare simple name,
     // so a top-level function whose return type is declared in another Kotlin package rendered
@@ -1049,11 +1050,15 @@ internal fun translateGenericFunction(
     // interface mints a bridge transfer handle, disposed on `owned` once the native call returns.
     // `!`: `Wrap<T>` takes a non-null `T` under a `T?` parameter's flow analysis (CS8604), and
     // answers a null with the null pointer itself (ADR-083).
-    appendLine("      IntPtr handle = NugetMarshal.Wrap<$typeParamName>($paramName!, out bool owned);")
+    appendLine(
+      "      IntPtr handle = NugetMarshal.Wrap<$typeParamName>($paramName!, out bool owned);",
+    )
     appendLine("      IntPtr result;")
     appendLine("      try")
     appendLine("      {")
-    appendLine("        result = NugetErrorNative.Check(${csName}_object_native(handle, out error), error);")
+    appendLine(
+      "        result = NugetErrorNative.Check(${csName}_object_native(handle, out error), error);",
+    )
     appendLine("      }")
     appendLine("      finally")
     appendLine("      {")

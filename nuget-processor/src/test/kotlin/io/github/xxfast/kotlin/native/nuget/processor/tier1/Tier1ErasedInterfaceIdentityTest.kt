@@ -43,11 +43,16 @@ class Tier1ErasedInterfaceIdentityTest {
     val cs: String = result.generatedCSharp
     val relay: String = cs.lines().first { line -> "SqueakerRelay()" in line && "public" in line }
     assertTrue(
-      Regex("""KotlinFunc<(global::[\w.]+\.)?ISqueaker, (global::[\w.]+\.)?ISqueaker> SqueakerRelay\(\)""")
-        .containsMatchIn(relay),
+      Regex(
+        """KotlinFunc<(global::[\w.]+\.)?ISqueaker, """ +
+          """(global::[\w.]+\.)?ISqueaker> SqueakerRelay\(\)""",
+      ).containsMatchIn(relay),
       "expected KotlinFunc<ISqueaker, ISqueaker>; got: $relay",
     )
-    assertFalse(Regex("""[<.\s]Squeaker[,>]""").containsMatchIn(relay), "the backing wrapper leaked: $relay")
+    assertFalse(
+      Regex("""[<.\s]Squeaker[,>]""").containsMatchIn(relay),
+      "the backing wrapper leaked: $relay",
+    )
   }
 
   @Test
@@ -55,7 +60,10 @@ class Tier1ErasedInterfaceIdentityTest {
     val result = Tier1Harness.run(source)
     val cs: String = result.generatedCSharp
     val box: String = cs.lines().first { line -> "ChewerBox()" in line && "public" in line }
-    assertTrue(Regex("""Box<(global::[\w.]+\.)?IChewer> ChewerBox\(\)""").containsMatchIn(box), "got: $box")
+    assertTrue(
+      Regex("""Box<(global::[\w.]+\.)?IChewer> ChewerBox\(\)""").containsMatchIn(box),
+      "got: $box",
+    )
   }
 
   @Test
@@ -68,8 +76,10 @@ class Tier1ErasedInterfaceIdentityTest {
         "expected the ADR-040 backing wrapper for $name",
       )
       assertTrue(
-        Regex("""\[typeof\((global::)?[\w.]*I$name\)\] = static handle => new (global::)?[\w.]*\b$name\(handle, out _\),""")
-          .containsMatchIn(cs),
+        Regex(
+          """\[typeof\((global::)?[\w.]*I$name\)\] = static handle => """ +
+            """new (global::)?[\w.]*\b$name\(handle, out _\),""",
+        ).containsMatchIn(cs),
         "expected the interface-keyed Factories entry for I$name",
       )
       assertTrue(
@@ -83,9 +93,13 @@ class Tier1ErasedInterfaceIdentityTest {
   fun `Materialize probes the token before an interface factory and Wrap falls back to the bridge`() {
     val cs: String = Tier1Harness.run(source).generatedCSharp
     val probe: Int = cs.indexOf("TryResolveCSharpObject(handle, out object original)")
-    val factory: Int = cs.indexOf("if (Factories.TryGetValue(key, out Func<IntPtr, object>? factory))")
+    val factory: Int =
+      cs.indexOf("if (Factories.TryGetValue(key, out Func<IntPtr, object>? factory))")
     assertTrue(probe in 0 until factory, "the token probe must run before the Factories lookup")
-    assertTrue("IntPtr bridged = HandleOf((object)value!, typeof(T));" in cs, "Wrap<T> bridge fallback")
+    assertTrue(
+      "IntPtr bridged = HandleOf((object)value!, typeof(T));" in cs,
+      "Wrap<T> bridge fallback",
+    )
     assertFalse("to a Kotlin collection\")" in cs, "the old Wrap<T> throw must be gone")
   }
 }

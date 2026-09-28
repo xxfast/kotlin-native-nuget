@@ -1839,7 +1839,7 @@ class NugetProcessor(
     // when this walk makes it reachable.
     fun erasedInterfaceArguments(type: KSType?): List<String> {
       val expanded: KSType = type?.expandAliases() ?: return emptyList()
-      val declaration = expanded.declaration
+      val declaration: KSDeclaration = expanded.declaration
       val qualifiedName: String? = declaration.qualifiedName?.asString()
       val erased: Boolean = qualifiedName in LAMBDA_TYPES ||
           (declaration is KSClassDeclaration && declaration.typeParameters.isNotEmpty() &&
@@ -1850,10 +1850,11 @@ class NugetProcessor(
       }
     }
 
-    // A superset of the erased positions `csTypeArgument` spells: a top-level function's return (the
-    // lambda- and generic-return routes), a top-level property (over-inclusion), and a public property of a class, object
-    // or sealed subclass (the lambda-typed property routes). A member function's lambda return is
-    // skipped named upstream, so walking it would only mint an unused wrapper.
+    // A superset of the erased positions `csTypeArgument` spells: a top-level function's return
+    // (the lambda- and generic-return routes), a top-level property (over-inclusion), and a public
+    // property of a class, object or sealed subclass (the lambda-typed property routes). A member
+    // function's lambda return is skipped named upstream, so walking it would only mint an unused
+    // wrapper.
     fun erasedPositionTypes(): Sequence<KSType?> = sequence {
       allFunctions.forEach { function -> yield(function.returnType?.resolve()) }
       properties.forEach { property -> yield(property.type.resolve()) }

@@ -544,7 +544,8 @@ internal fun csTypeArgumentNames(
   context: NugetContext,
   classifier: ForwardBridgeTypeClassifier,
 ): List<String> = arguments.map { argument ->
-  when (val spelling = csTypeArgument(argument.type?.resolve(), exportedTypes, context, classifier)) {
+  val resolved: KSType? = argument.type?.resolve()
+  when (val spelling = csTypeArgument(resolved, exportedTypes, context, classifier)) {
     is CsTypeArgument.Named -> spelling.csType
     is CsTypeArgument.Unnameable -> error(
       "Forward CIR spelled the type argument '${spelling.typeArgument}', which has no C# " +
