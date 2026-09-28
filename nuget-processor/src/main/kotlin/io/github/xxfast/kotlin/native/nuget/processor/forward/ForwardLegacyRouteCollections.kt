@@ -1254,10 +1254,13 @@ internal fun KSFunctionDeclaration.isForwardLegacyAsyncRoute(): Boolean {
 internal fun ForwardBridgeTypeClassifier.legacyRefusedInterfaceBridgePair(
   addMethod: KSFunctionDeclaration,
 ): LegacyRefusedInterfaceBridgePair? {
-  val listener: KSClassDeclaration = addMethod.parameters.firstNotNullOfOrNull { parameter ->
-    (parameter.type.resolve().expandAliases().declaration as? KSClassDeclaration)
-      ?.takeIf { it.classKind == ClassKind.INTERFACE }
+  val listenerType: KSType = addMethod.parameters.firstNotNullOfOrNull { parameter ->
+    parameter.type.resolve().expandAliases().takeIf { type ->
+      (type.declaration as? KSClassDeclaration)?.classKind == ClassKind.INTERFACE
+    }
   } ?: return null
+  val listener: KSClassDeclaration = listenerType.declaration as KSClassDeclaration
+  undeclaredListener(listenerType)?.let { return it }
   val listenerName: String = listener.simpleName.asString()
   val members: List<KSFunctionDeclaration> = listener.getAllFunctions()
     .filter { method -> method.getVisibility() == Visibility.PUBLIC }
@@ -1277,6 +1280,37 @@ internal fun ForwardBridgeTypeClassifier.legacyRefusedInterfaceBridgePair(
     )
   }
   return members.firstNotNullOfOrNull { member -> refusedListenerMember(listener, member) }
+}
+
+/**
+ * ADR-039 amendment (2026-09-28): the refusal for a listener interface with no C# declaration
+ * (nested under an owner ADR-133 defers, dropped by its CS0102 collision gate, or outside the
+ * export scope), or null when the classifier declares it. The pairing test only reads the
+ * declaration's kind, so a nullable listener is unwrapped first, exactly as
+ * [legacyFlowElementInterface] does. The kind, sentence and hint come off the same
+ * [ForwardPlanSkipReason] the planner gives that type at an ordinary member, so an undeclared
+ * listener reads the same as an undeclared interface parameter.
+ */
+private fun ForwardBridgeTypeClassifier.undeclaredListener(
+  listenerType: KSType,
+): LegacyRefusedInterfaceBridgePair? {
+  val classified: BridgeType = classify(listenerType).let {
+    if (it is BridgeType.Nullable) it.type else it
+  }
+  if (classified !is BridgeType.Unsupported) return null
+  val reason: ForwardPlanSkipReason = classified.skipReason() ?: ForwardPlanSkipReason.UNSUPPORTED
+  val detail: String? = classified.skipDetail()
+  val kind: ForwardDiagnosticKind =
+    if (reason.droppedFromCSharp) reason.toDiagnosticKind(ForwardSkipPosition.INPUT)
+    else ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
+  val listenerName: String = listenerType.declaration.qualifiedName?.asString()
+    ?: listenerType.declaration.simpleName.asString()
+  return LegacyRefusedInterfaceBridgePair(
+    kind = kind,
+    reason = if (reason.ownsSentence(detail)) reason.diagnosticReason(detail)
+    else "its listener interface `$listenerName` has no C# declaration",
+    hint = reason.diagnosticHint(detail),
+  )
 }
 
 /**

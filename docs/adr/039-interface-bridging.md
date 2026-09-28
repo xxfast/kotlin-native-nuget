@@ -638,3 +638,23 @@ parameter type (previously not mapped at all).
   explicitly tracked on ROADMAP line 103; deferred.
 - `@NugetStoredCallback(removeFunction = "...")` annotation support for non-standard naming —
   straightforward once the base case is proven; deferred.
+
+## Amendment (2026-09-28): a listener with no C# declaration refuses the pair by name
+
+An `add*/remove*` pair whose listener interface has no C# declaration at all (nested under an
+owner ADR-133 defers, dropped by its own CS0102 collision gate, or outside the export scope, in
+any module) used to still emit `AddWatcher(IWatcher listener)` against an `IWatcher` nothing
+declares, so only the consumer's C# build failed, with CS0246 and no warning naming the cause. The
+first arm of `legacyRefusedInterfaceBridgePair` now classifies the listener parameter's type
+(unwrapping `BridgeType.Nullable` first) and refuses the pair when the classifier reports it
+`Unsupported`; both halves drop, and each member is named with the same `SKIPPED_UNSUPPORTED_TYPE`
+kind, sentence and hint an ordinary parameter of that type gets from the plan (`UNDECLARED_INTERFACE`
+for a nested listener under a deferred owner, `UNEXPORTED_DEPENDENCY_TYPE`/`EXCLUDED_DEPENDENCY_TYPE`
+for one outside the export scope). `CirClassTranslator.kt`'s `?: "I$ifaceName"` fallback, the source
+of the bare undeclared name, is now unreachable and returns `null` instead. See
+[ADR-133](133-nested-types.md)'s 2026-09-14 amendment for the sibling bare-name fixes this
+completes.
+
+A listener reached from a separate klib dependency, outside its own export scope, is expected to
+take the same refusal (same `Unsupported` classification), but is untested; tracked on the
+ROADMAP.

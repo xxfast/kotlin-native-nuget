@@ -314,7 +314,10 @@ element, which spelled the ADR-040 backing wrapper and passed no `read:`. See [G
 bound from another package](../topics/generics.md#a-generic-bound-from-another-package), [Lambdas
 and callbacks: C# implementing a Kotlin interface as a
 parameter](../topics/lambdas-and-callbacks.md), and [Coroutines and Flow: `StateFlow<T>` element
-type is an interface](../topics/coroutines-and-flow.md#suspend-stateflow-interface-element).
+type is an interface](../topics/coroutines-and-flow.md#suspend-stateflow-interface-element). The
+add/remove pair site's listener parameter still fell through a bare `I<Name>` fallback when the
+listener interface had no C# declaration at all; see [ADR-039](039-interface-bridging.md)'s
+2026-09-28 amendment.
 
 **Identity asymmetry, inherited from ADR-040/ADR-084, not introduced here.** The sync plan route
 resolves a returned handle back to its original C#-implemented instance first

@@ -4312,16 +4312,15 @@ private fun translateInterfaceBridgeMethod(
   } ?: return null
 
   val ifaceDecl = ifaceParam.type.resolve().expandAliases().declaration as? KSClassDeclaration ?: return null
-  val ifaceName: String = ifaceDecl.simpleName.asString()
   // ADR-133 amendment (2026-09-14): the projected interface name, owner-chained and qualified.
   // The bare `I$ifaceName` this used to print only resolved because every shipped pair fixture
   // sits beside its own top-level listener: a nested listener is declared `Aviary.IWatcher` and a
   // cross-package one lives in another namespace, so the bare name failed CS0246 at both.
-  // An out-of-scope listener (no C# declaration at all) still falls back to the bare name; the
-  // named skip for that shape needs the gate `exports/InterfaceBridgeExports.kt` applies, and is
-  // tracked in `docs/backlog/add-remove-subscription-route-silently-mis-handles.md`.
+  // A listener with no C# declaration at all never reaches here: the first arm of
+  // `legacyRefusedInterfaceBridgePair` refuses and names the pair on both halves (ADR-039
+  // amendment 2026-09-28), so the null branch is unreachable by construction.
   val interfaceCsName: String =
-    classifier.legacyFlowElementInterface(ifaceParam.type.resolve())?.csharpType ?: "I$ifaceName"
+    classifier.legacyFlowElementInterface(ifaceParam.type.resolve())?.csharpType ?: return null
 
   val ifaceMethods: List<KSFunctionDeclaration> = ifaceDecl.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
