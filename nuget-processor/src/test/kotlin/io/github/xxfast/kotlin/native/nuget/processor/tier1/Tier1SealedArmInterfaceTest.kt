@@ -110,7 +110,7 @@ class Tier1SealedArmInterfaceTest {
   @Test
   fun `an arm lists its own interfaces after the sealed base`() {
     val cs: String = result.generatedCSharp
-    assertContains(cs, "public sealed class Arm : Perch, ITally, IGroomable\n")
+    assertContains(cs, "public sealed class Arm : Perch, global::Interop.ITally, global::Interop.IGroomable\n")
     assertContains(cs, "public sealed class Bare : Perch\n")
   }
 
@@ -125,7 +125,7 @@ class Tier1SealedArmInterfaceTest {
   fun `an arm over a read-only base takes the interface setter explicitly`() {
     val arm: String = arm("public sealed class Arm")
     assertContains(arm, "public override int Count\n")
-    assertContains(arm, "int ITally.Count\n")
+    assertContains(arm, "int global::Interop.ITally.Count\n")
     assertContains(arm, "get => Count;")
     assertContains(result.generated, "export_library_perch_arm_set_count")
     assertTrue(
@@ -139,7 +139,7 @@ class Tier1SealedArmInterfaceTest {
   @Test
   fun `a sealed interface arm lists its interfaces but never the sealed interface`() {
     val cs: String = result.generatedCSharp
-    assertContains(cs, "public sealed class Box : Nook, ITally, IGroomable\n")
+    assertContains(cs, "public sealed class Box : Nook, global::Interop.ITally, global::Interop.IGroomable\n")
     assertFalse("INook" in cs, cs)
     val box: String = arm("public sealed class Box")
     assertFalse(box.contains("ITally.Count"), box)
@@ -177,7 +177,7 @@ class Tier1SealedArmInterfaceTest {
   fun `an interface the sealed base carries stays off the arm`() {
     val cs: String = result.generatedCSharp
     assertContains(cs, "public abstract class Roost : IGroomable, IDisposable, INugetHandle")
-    assertContains(cs, "public sealed class Ledge : Roost, ITally\n")
+    assertContains(cs, "public sealed class Ledge : Roost, global::Interop.ITally\n")
     assertFalse("export_library_roost_ledge_brushes" in result.generated, result.generated)
     assertFalse("export_library_roost_ledge_groom" in result.generated, result.generated)
   }

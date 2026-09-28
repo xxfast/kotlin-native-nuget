@@ -1279,4 +1279,109 @@ class Tier1NestedTypesTest {
       "expected no nested-declaration skip for an admitted owner; warnings=${result.kspWarnings}",
     )
   }
+
+  // ADR-133 amendment (2026-09-28): a nested type's base list is `global::`-qualified. These cells
+  // assert the generated C# *text*: Tier 1 never compiles C#, so `compiledClean` proves nothing
+  // about CS0426/CS0535/CS1503 here.
+
+  @Test
+  fun `the ADR-040 wrapper stays global-qualified inside a same-named interface owner`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.cagewrapper
+
+      interface Cage {
+        class Cage(val n: Int) {
+          fun outer(): tier1.cagewrapper.Cage = WireCage(n)
+          fun take(o: tier1.cagewrapper.Cage): Int = n
+        }
+
+        fun make(): Cage
+        fun self(): tier1.cagewrapper.Cage
+        fun peer(other: tier1.cagewrapper.Cage): Int
+      }
+
+      class WireCage(val n: Int) : tier1.cagewrapper.Cage {
+        override fun make(): Cage.Cage = Cage.Cage(n)
+        override fun self(): tier1.cagewrapper.Cage = this
+        override fun peer(other: tier1.cagewrapper.Cage): Int = n
+      }
+      """.trimIndent(),
+      fileName = "CageWrapper.kt",
+    )
+
+    val body: String = blockBody(result.generatedCSharp, "public interface ICage")
+    assertContains(body, "new global::Interop.Cage(")
+    assertFalse(body.contains("new Cage("), "a bare `new Cage(` binds to the nested ICage.Cage")
+    assertContains(body, "global::Interop.ICage Self();")
+  }
+
+  @Test
+  fun `a nested class implementing its interface owner beside a same-named nested interface names the owner`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.cageshadow
+
+      interface Cage {
+        interface Cage {
+          fun x(): Int
+        }
+
+        fun self(): tier1.cageshadow.Cage
+
+        class Impl(val n: Int) : tier1.cageshadow.Cage {
+          override fun self(): tier1.cageshadow.Cage = this
+        }
+
+        class Deep(val n: Int) : tier1.cageshadow.Cage.Cage {
+          override fun x(): Int = n
+        }
+      }
+
+      fun take(c: tier1.cageshadow.Cage): Int = 1
+      """.trimIndent(),
+      fileName = "CageShadow.kt",
+    )
+
+    val body: String = blockBody(result.generatedCSharp, "public interface ICage")
+    // Was `public class Impl : ICage,`: CS0535, the bare name binds to the nested ICage.ICage.
+    assertContains(body, "public class Impl : global::Interop.ICage,")
+    // Was `public class Deep : ICage.ICage,`: CS0426, `ICage.ICage.ICage` does not exist.
+    assertContains(body, "public class Deep : global::Interop.ICage.ICage,")
+  }
+
+  @Test
+  fun `a nested class implementing its empty-bodied interface owner is not silently retyped to the nested twin`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.markershadow
+
+      interface Marker {
+        interface Marker
+
+        class Impl(val n: Int) : tier1.markershadow.Marker
+      }
+
+      fun take(m: tier1.markershadow.Marker): Int = 1
+      fun makeImpl(): tier1.markershadow.Marker.Impl = tier1.markershadow.Marker.Impl(1)
+      """.trimIndent(),
+      fileName = "MarkerShadow.kt",
+    )
+
+    val csharp: String = result.generatedCSharp
+    val body: String = blockBody(csharp, "public interface IMarker")
+    // The silent shape: `public class Impl : IMarker,` builds, but implements IMarker.IMarker, and
+    // the consumer's `Take(MakeImpl())` is CS1503.
+    assertContains(body, "public class Impl : global::Interop.IMarker,")
+    assertFalse(body.contains("public class Impl : IMarker,"), "bare IMarker binds to IMarker.IMarker")
+    // A top-level base list is unchanged: namespace-level lookup cannot be shadowed by a member type.
+    // (Anchored at namespace indent: the nested ADR-040 wrapper `IMarker.Marker : IMarker` is
+    // deliberately bare too, and resolves to its intended nested target.)
+    assertTrue(
+      Regex("""^ {4}public sealed class Marker : IMarker\b""", RegexOption.MULTILINE)
+        .containsMatchIn(csharp),
+      "expected the top-level wrapper's base list to stay bare; csharp=" +
+          "${csharp.lines().filter { it.contains("class Marker") }}",
+    )
+  }
 }
