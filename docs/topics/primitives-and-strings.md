@@ -176,6 +176,19 @@ For named arguments, use the generated parameter name. C# keywords are escaped, 
 `@abstract`; reserved names such as `error`, `value`, and `handle` gain a trailing underscore
 (`error_`, `value_`, `handle_`). Positional calls are unaffected.
 
+The same applies to `errorOut` and `valueOut`, on plain and generic functions alike:
+
+```kotlin
+fun <T> mark(errorOut: T): T = errorOut
+```
+
+```C#
+public static T Mark<T>(T errorOut_)
+```
+
+Any other parameter name on a generic function is kept as written, including `owned`, `result`,
+`width`, and `present`.
+
 Your own parameter names are kept even when they match a name the generator would otherwise use
 internally for a sibling parameter, such as a boolean flag next to a nullable value or a body local
 of a defaulted parameter's dispatch:

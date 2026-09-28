@@ -138,4 +138,85 @@ public class KeywordRoutesTests
         var round = Assert.IsType<Round>(shape);
         Assert.Equal(5, round.R);
     }
+
+    // Generated-local collisions on the generic top-level route. Each Kotlin parameter is named
+    // after a local the generated `F<T>` body declares for itself, so the named argument below is
+    // the public label that must survive: the generator renames its own locals, never these.
+    // `int` and `string` cross the width dispatch (`width`, `present`); `KeywordTick` takes the
+    // object arm (`handle`, `owned`, `result`).
+
+    [Fact]
+    public void Keep_GenericTopLevelRoute_BindsAParameterNamedOwned()
+    {
+        // Oreo keeps three biscuits, his own name, and the tick Mylo left him.
+        Assert.Equal(3, KeywordRoutesSample.Keep<int>(owned: 3));
+        Assert.Equal("Oreo", KeywordRoutesSample.Keep<string>(owned: "Oreo"));
+        using var tick = new KeywordTick(11);
+        using var kept = KeywordRoutesSample.Keep<KeywordTick>(owned: tick);
+        Assert.Equal(11, kept.N);
+    }
+
+    [Fact]
+    public void Hold_GenericTopLevelRoute_BindsAParameterNamedHandle()
+    {
+        Assert.Equal(4, KeywordRoutesSample.Hold<int>(handle: 4));
+        Assert.Equal("Mylo", KeywordRoutesSample.Hold<string>(handle: "Mylo"));
+        using var tick = new KeywordTick(12);
+        using var held = KeywordRoutesSample.Hold<KeywordTick>(handle: tick);
+        Assert.Equal(12, held.N);
+    }
+
+    [Fact]
+    public void Pick_GenericTopLevelRoute_BindsAParameterNamedResult()
+    {
+        Assert.Equal(5, KeywordRoutesSample.Pick<int>(result: 5));
+        Assert.Equal("Oreo", KeywordRoutesSample.Pick<string>(result: "Oreo"));
+        using var tick = new KeywordTick(13);
+        using var picked = KeywordRoutesSample.Pick<KeywordTick>(result: tick);
+        Assert.Equal(13, picked.N);
+    }
+
+    [Fact]
+    public void Span_GenericTopLevelRoute_BindsAParameterNamedWidth()
+    {
+        // Mylo, stretched out on the couch, is measured in cushions.
+        Assert.Equal(6, KeywordRoutesSample.Span<int>(width: 6));
+        Assert.Equal("Mylo", KeywordRoutesSample.Span<string>(width: "Mylo"));
+        using var tick = new KeywordTick(14);
+        using var spanned = KeywordRoutesSample.Span<KeywordTick>(width: tick);
+        Assert.Equal(14, spanned.N);
+    }
+
+    [Fact]
+    public void Seen_GenericTopLevelRoute_BindsAParameterNamedPresent()
+    {
+        Assert.Equal(7, KeywordRoutesSample.Seen<int>(present: 7));
+        Assert.Equal("Oreo", KeywordRoutesSample.Seen<string>(present: "Oreo"));
+        using var tick = new KeywordTick(15);
+        using var seen = KeywordRoutesSample.Seen<KeywordTick>(present: tick);
+        Assert.Equal(15, seen.N);
+    }
+
+    [Fact]
+    public void Mark_GenericTopLevelRoute_BindsAParameterNamedErrorOut()
+    {
+        // Named after the Kotlin export's exception slot, not a C# local: like the plan routes,
+        // the label shifts to `errorOut_` so the ABI contract check reads it as user data.
+        // Mylo marks his spot.
+        Assert.Equal(8, KeywordRoutesSample.Mark<int>(errorOut_: 8));
+        Assert.Equal("Mylo", KeywordRoutesSample.Mark<string>(errorOut_: "Mylo"));
+        using var tick = new KeywordTick(16);
+        using var marked = KeywordRoutesSample.Mark<KeywordTick>(errorOut_: tick);
+        Assert.Equal(16, marked.N);
+    }
+
+    [Fact]
+    public void KeywordCollar_Constructor_ShiftsAParameterNamedHandleOffItsLocal()
+    {
+        // Oreo's collar tag. Green today: a constructor parameter goes through
+        // bridgeParameterName(), so `handle` is already `handle_` and never meets the body's
+        // own `IntPtr handle` local. Pinned so the generic-route fix cannot change it.
+        using var collar = new KeywordCollar(handle_: 21);
+        Assert.Equal(21, collar.Tag);
+    }
 }
