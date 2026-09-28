@@ -215,4 +215,18 @@ public class NestedDeferredOwnersTests
         Assert.True(heavy.IsHeavy());
         Assert.Equal(2.4, heavy.Kilos, 3);
     }
+
+    // --- ADR-133 amendment: a nested type's base list survives a same-named nested shadow ---
+
+    [Fact]
+    public void NestedClass_ImplementsItsInterfaceOwner_NotTheSameNamedNestedInterface()
+    {
+        // `ICollar` declares a nested `ICollar.ICollar`. A bare `ICollar` in `Impl`'s base list bound
+        // to the nested one: the package built, and this call was CS1503.
+        using var impl = Tagging.MakeImpl(5);
+
+        Assert.IsAssignableFrom<ICollar>(impl);
+        Assert.False(typeof(ICollar.ICollar).IsAssignableFrom(typeof(ICollar.Impl)));
+        Assert.Equal(5, Tagging.LevelOf(impl));
+    }
 }

@@ -258,14 +258,14 @@ class Tier1InterfaceVarPropertyTest {
     )
     assertTrue(sealed.compiledClean, "expected a clean compile; got: ${sealed.compileErrors}")
     val arm: String = block(sealed.generatedCSharp, "public sealed class Arm")
-    assertContains(arm, "public sealed class Arm : Perch, ITally\n")
+    assertContains(arm, "public sealed class Arm : Perch, global::Interop.ITally\n")
     assertContains(arm, "public override int Count\n")
     val publicCount: String = arm.substring(
       arm.indexOf("public override int Count\n"),
-      arm.indexOf("int ITally.Count\n"),
+      arm.indexOf("int global::Interop.ITally.Count\n"),
     )
     assertFalse(Regex("""\n\s+set\b""").containsMatchIn(publicCount), publicCount)
-    assertContains(arm.substringAfter("int ITally.Count\n"), "set")
+    assertContains(arm.substringAfter("int global::Interop.ITally.Count\n"), "set")
     assertTrue(
       sealed.kspWarnings.any {
         it.contains("tier1.ivarseal.Perch.Arm.count") && it.contains("CS0546") &&

@@ -372,5 +372,65 @@ ADR): whether every collision-skipped nested type is consistently re-gated at a 
 it, a nested `ICage.Cage` shadowing the namespace-level ADR-040 wrapper `Cage` inside `ICage`'s own
 body, and two cosmetic gaps in `nestedDeclarationKind()`/the CS0542 hint text.
 
+**Closed (2026-09-28).** The wrapper-shadow guess above was disproved, and a related, real defect
+was found and fixed one reference over; see "Amendment (2026-09-28)" below.
+
+## Amendment (2026-09-28): a nested declaration's base list is `global::`-qualified even within its own namespace
+
+The 2026-09-19 amendment above left open "a nested `ICage.Cage` shadowing the namespace-level
+ADR-040 wrapper `Cage` inside `ICage`'s own body." A spike disproved that guess: the wrapper
+reference (`BridgeType.Interface.backingType`, `ForwardBridgeTypeClassifier.kt` ~:513) is always
+built as `global::$namespace.$simpleName` whenever the configured namespace is non-empty, so every
+call site that constructs or reads the wrapper (`ForwardCirPlanProjection.kt`,
+`ForwardCirPropertyProjection.kt`, `ForwardLegacyRouteCollections.kt`) already spliced the qualified
+string. A Tier 1 cell now pins `new global::Interop.Cage(` inside `ICage`'s own body for exactly the
+`interface Cage { class Cage }` shape the guess named.
+
+**The real shadow was one reference over: a bare same-namespace base-list entry.**
+`forwardSuperInterfaceSpelling` (`CirClassTranslator.kt` ~:729) qualified a base-list interface
+only when it lived in a different namespace than the declaring type; a same-namespace target
+stayed bare. A bare name inside a type body is looked up in the enclosing types' members first, so
+`interface Collar { interface Collar; class Impl : Collar }` rendered `public class Impl : ICollar`
+and that bare `ICollar` bound to the nested `ICollar.ICollar`, not the outer `ICollar` the Kotlin
+`Impl` actually implements. The package still built. The break landed on the consumer:
+`Tagging.LevelOf(Tagging.MakeImpl(5))` failed CS1503, since `ICollar.Impl` is not an
+`ICollar`. A variant with a member declared on the nested interface (`interface Cage { interface
+Cage { fun x(): Int }; class Deep : Cage.Cage }`) was CS0426/CS0535 instead, loud but still a defect.
+
+**Fix.** A base-list entry is now `global::<Namespace>.`-qualified whenever the declaring type
+(`from`) is itself nested (`from.parentDeclaration != null`), even when the target shares `from`'s
+namespace; a top-level declaring type's same-namespace base list is unchanged and stays bare. Since
+a sealed arm and an interface's explicit setter are both nested declarations, `forwardInterfaceList`,
+`translateInterface`'s base list, and `explicitSetterInterfaceSpellings` all pick up the qualified
+spelling too. Visible spelling change, valid C# with the same meaning: a sealed arm's own
+interface list and its ADR-168 explicit setter now read `global::Interop.ISunseeker`/
+`global::Interop.ISunseeker.Naps` rather than the bare `ISunseeker`/`ISunseeker.Naps` shipped by
+ADR-009 and ADR-168 (see [Interfaces, abstract classes, and sealed classes: A sealed arm's own
+interfaces](../topics/interfaces-abstract-sealed.md#sealed-arm-own-interfaces)).
+
+`interface X { interface X }` is legal C# (`public interface IX { public interface IX { } }`
+compiles clean), so the CS0542 owner-scope-collision arm correctly does not fire for this shape; only
+the base-list spelling needed the fix. The ADR-040 wrapper's own base list
+(`interfaces = listOf("I$name")`, `CirClassTranslator.kt` ~:3674, literal string, not run through
+`forwardSuperInterfaceSpelling`) stays bare and still resolves to its intended nested target: a
+nested type's own enclosing-scope lookup is exactly what the wrapper's base list relies on, the
+same lookup rule the fix above works around for a base list naming a *different* declaration.
+
+**Verified by spike, not by fixture, that `compiledClean` proves nothing here.** Tier 1 never
+compiles the generated C#, so a spike cell that only asserted `compiledClean=true` would have
+passed on the CS0426/CS0535 shape too; the three new cells assert the base-list *text* directly.
+
+**Inferred, not checked.** `ForwardInterfaceBridgePlanner.kt:144`'s `csName =
+iface.nestedInterfaceCsName()` may carry the same bare-name hazard on the ADR-039 add/remove bridge
+proxy route; not spiked. Judged low risk because that bridge class is declared at namespace level,
+never nested, so the enclosing-scope shadow this amendment fixes does not apply to it as written.
+
+Tests: three Tier 1 cells in `Tier1NestedTypesTest.kt` (the disproved wrapper guess, the loud
+`Cage.Cage` shape, and the silent `Marker`/`Impl` shape); `NestedDeferredOwnersTests.cs`'s
+`NestedClass_ImplementsItsInterfaceOwner_NotTheSameNamedNestedInterface`, backed by the
+`nested/Tagging.kt` fixture (named `Collar`, not `Marker`: `NestedClassGateTests` forbids a
+namespace-root type named `Marker`). No new handle kind, no new marshalling, no `LiveHandleTests.cs`
+row: nothing new is minted, this is a spelling fix on an existing route.
+
 Tests: six Tier 1 cells in `Tier1NestedTypesTest.kt` (CS0542, sealed-base member, sealed-arm
 member, value-class candidate, companion member, and the interface-owner not-an-error case).

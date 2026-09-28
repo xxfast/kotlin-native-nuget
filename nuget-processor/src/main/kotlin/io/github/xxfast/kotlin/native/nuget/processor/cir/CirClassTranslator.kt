@@ -723,8 +723,15 @@ internal fun KSClassDeclaration.explicitSetterInterfaceSpellings(
  * ROADMAP line 28 (measured 2026-09-26): an interface in ANOTHER namespace than [from], the type
  * whose base list this is, is `global::Ns.IFoo`. The bare name resolved only in the same namespace:
  * `class TrainingClicker : Scoreboard, ITally` in `Interop.Impl` with `ITally` in `Interop.Api`
- * was CS0246, on both the class and the interface base list. The same-namespace spelling stays
- * bare.
+ * was CS0246, on both the class and the interface base list.
+ *
+ * ADR-133 amendment (2026-09-28): when [from] is itself nested (at any depth), a same-namespace
+ * target is qualified too. A bare name inside a type body is looked up in the enclosing types'
+ * members first, so a same-named nested type shadows it: in `interface Marker { interface Marker;
+ * class Impl : Marker }`, `public class Impl : IMarker` bound to `IMarker.IMarker` and built
+ * (silently wrong; the consumer's `Take(MakeImpl())` was CS1503), and the `Cage` variant with a
+ * member on the nested interface was CS0535/CS0426. A top-level [from]'s same-namespace spelling
+ * stays bare: namespace-level lookup cannot be shadowed by a member type.
  */
 internal fun forwardSuperInterfaceSpelling(
   type: KSType,
@@ -734,7 +741,10 @@ internal fun forwardSuperInterfaceSpelling(
   val declaration: KSClassDeclaration = type.declaration as? KSClassDeclaration ?: return null
   val targetNamespace: String? = classifier.csharpNamespaceOf(declaration)
   val qualifier: String =
-    if (targetNamespace != null && targetNamespace != classifier.csharpNamespaceOf(from)) {
+    if (
+      targetNamespace != null &&
+      (targetNamespace != classifier.csharpNamespaceOf(from) || from.parentDeclaration != null)
+    ) {
       "global::$targetNamespace."
     } else {
       ""
