@@ -140,9 +140,13 @@ class Tier1SuspendMethodOverloadTest {
               "$entryPoint in $kotlin",
         )
       }
-    assertTrue(
-      !result.generatedCSharp.contains("RestAsync"),
-      "a base-declared `open suspend fun` must not render on any arm; " +
+    // ADR-175: the base projects `rest` itself (`job_rest_async`), declared once on `Job` and
+    // inherited by every arm; no arm re-declares it.
+    assertContains(kotlin, "@CName(\"library_tier1_suspendarm__job_rest_async\")")
+    assertEquals(
+      1,
+      Regex("public Task<int> RestAsync\\(").findAll(result.generatedCSharp).count(),
+      "a base-declared `open suspend fun` renders once, on the base; " +
           "generatedCSharp=${result.generatedCSharp}",
     )
 
@@ -150,12 +154,15 @@ class Tier1SuspendMethodOverloadTest {
     listOf("Native_PauseAsync", "Native_Pause_2Async", "Native_ResumeAsync", "Native_NapAsync")
       .forEach { externName -> assertContains(csharp, "$externName(") }
 
-    // ADR-118's per-arm scope: a suspending arm is IAsyncDisposable and owns the scope; the base
-    // and a non-suspending arm are unchanged.
-    assertContains(csharp, "public sealed class Running : Job, IAsyncDisposable")
-    assertContains(csharp, "public sealed class Idle : Job, IAsyncDisposable")
+    // ADR-175: the base projects `rest`, so it owns the one scope (ADR-159's root-most rule) and is
+    // the IAsyncDisposable; every arm inherits both and declares no scope of its own.
+    assertContains(csharp, "public sealed class Running : Job\n")
+    assertContains(csharp, "public sealed class Idle : Job\n")
     assertContains(csharp, "public sealed class Done : Job\n")
-    assertContains(csharp, "public abstract class Job : IDisposable, INugetHandle")
+    assertContains(
+      csharp,
+      "public abstract class Job : IDisposable, IAsyncDisposable, INugetHandle",
+    )
   }
 
   /**

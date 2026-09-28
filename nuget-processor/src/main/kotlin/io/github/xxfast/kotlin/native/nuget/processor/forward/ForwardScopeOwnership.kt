@@ -44,9 +44,11 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsForwardFlow
  *
  * [isArm] is the sealed-arm rule (ADR-118, widened by the ADR-101 amendment of 2026-09-27): an
  * arm binds its declared suspend members plus those inherited from an interface the sealed type
- * does not carry ([isForwardArmMember]). The sealed base's own suspend members stay off the arm,
- * and the kept-base re-projection skip does not apply: the generated sealed base declares no
- * suspend member, so an arm's `override suspend fun` is the only carrier there is. [superClass]
+ * does not carry ([isForwardArmMember]). The sealed base's own suspend members stay off the arm.
+ * ADR-175: the sealed base now projects its own async members too, so an arm's `override` of one
+ * is not re-projected ([forwardArmMemberProjectedByBase], ADR-159 rule 4: the base export reaches
+ * it through Kotlin's dispatch); an arm member the base does not declare still binds on the arm.
+ * [superClass]
  * is the *kept* base (`forwardSuperClass`), so a member inherited from a base with a generated C#
  * class of its own belongs to that base; unused for an arm.
  */
@@ -63,6 +65,7 @@ internal fun KSClassDeclaration.forwardSuspendRouteMethods(
     .filter { it.modifiers.contains(Modifier.SUSPEND) }
     .filter { method -> !method.isCompilerOwnedMember(this) }
     .filter { method -> !isArm || isForwardArmMember(method) }
+    .filter { method -> !isArm || !forwardArmMemberProjectedByBase(method, classifier) }
     // ADR-114 / ADR-119: a parameter or return this route cannot marshal drops the member on both
     // halves, named once by `warnRefusedLegacyRouteMembers`.
     .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
@@ -144,15 +147,73 @@ internal fun KSClassDeclaration.forwardDeclaresScopeMember(
  * Root-most rather than nearest, because a scope per level would hide the ancestor's field (CS0108)
  * and drain twice. A sealed arm can be an open base of an ordinary class (ADR-009 amendment), so
  * the walk answers for arm owners too, through [forwardDeclaresScopeMember]'s arm branch.
+ *
+ * ADR-175: an arm's sealed base is in the chain, whichever kind it is. [declaredBaseChain] keeps
+ * only `CLASS` supertypes, so a sealed *interface* base (ADR-112's abstract class) is spliced in
+ * after the arm that lists it; the sealed base can own the scope now that it projects async
+ * members of its own.
  */
 internal fun KSClassDeclaration.forwardScopeOwner(
   classifier: ForwardBridgeTypeClassifier,
   exportedTypes: Set<String>,
 ): KSClassDeclaration? {
-  val keptChain: List<KSClassDeclaration> = listOf(this) +
-      declaredBaseChain().filter { base -> base.qualifiedName?.asString() in exportedTypes }
+  val keptChain: List<KSClassDeclaration> = (listOf(this) + declaredBaseChain())
+    .flatMap { level ->
+      val sealed: KSClassDeclaration? =
+        if (level.isSealedSubclass()) level.forwardArmSealedParent() else null
+      listOfNotNull(level, sealed)
+    }
+    .filterIndexed { index, level ->
+      index == 0 || level.qualifiedName?.asString() in exportedTypes || level.isEligibleSealedType()
+    }
+    .distinctBy { level -> level.qualifiedName?.asString() }
   return keptChain.asReversed()
     .firstOrNull { owner -> owner.forwardDeclaresScopeMember(classifier, exportedTypes) }
+}
+
+/**
+ * ADR-175: the async members a sealed base projects on its own prefix, on the ordinary class's
+ * selectors with the base's kept base (ADR-159): the suspend and Flow-returning methods, then the
+ * Flow/StateFlow properties. Empty for a generic sealed base (ADR-147, kept by both selectors).
+ */
+internal fun KSClassDeclaration.forwardSealedBaseAsyncMethods(
+  classifier: ForwardBridgeTypeClassifier,
+): List<KSFunctionDeclaration> {
+  val keptBase: KSClassDeclaration? = forwardSuperClass(classifier.exportedObjectHandles)
+  return forwardSuspendRouteMethods(classifier, keptBase) +
+      forwardClassFlowMethods(classifier, keptBase)
+}
+
+/** ADR-175: the Flow/StateFlow-property half of [forwardSealedBaseAsyncMethods]. */
+internal fun KSClassDeclaration.forwardSealedBaseFlowProperties(
+  classifier: ForwardBridgeTypeClassifier,
+): List<KSPropertyDeclaration> =
+  forwardClassFlowProperties(classifier, forwardSuperClass(classifier.exportedObjectHandles))
+
+/**
+ * ADR-175 (ADR-159 rule 4 on the sealed route): whether [member], on this sealed arm, is a member
+ * its sealed base already projects. Such an override is not re-projected on the arm, on either
+ * half: the base's export calls it on `asStableRef<Base>().get()`, so Kotlin's dispatch reaches
+ * the arm's body, and a second C# `AreaAsync` on the arm would hide the base's (CS0108). Matched
+ * on signature (ADR-082's wildcard key) for a method and on name for a property.
+ */
+internal fun KSClassDeclaration.forwardArmMemberProjectedByBase(
+  member: KSDeclaration,
+  classifier: ForwardBridgeTypeClassifier,
+): Boolean {
+  val sealed: KSClassDeclaration = forwardArmSealedParent() ?: return false
+  return when (member) {
+    is KSFunctionDeclaration -> {
+      val key: List<String> = member.forwardSignatureKey()
+      sealed.forwardSealedBaseAsyncMethods(classifier)
+        .any { projected -> projected.forwardInheritedSignatureKey().admits(key) }
+    }
+
+    is KSPropertyDeclaration -> sealed.forwardSealedBaseFlowProperties(classifier)
+      .any { projected -> projected.simpleName.asString() == member.simpleName.asString() }
+
+    else -> false
+  }
 }
 
 /**

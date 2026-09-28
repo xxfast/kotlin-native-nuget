@@ -146,7 +146,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.skipDetail
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnCollectionKinds
 import io.github.xxfast.kotlin.native.nuget.processor.forward.optInMarker
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuspendRouteMethods
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSealedBaseAsyncMethods
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSealedBaseFlowProperties
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ownsSentence
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toDiagnosticKind
@@ -947,6 +950,27 @@ internal fun warnRefusedLegacyRouteMembers(
     }
     sealedClasses.forEach { sealed ->
       val sealedName: String = sealed.simpleName.asString()
+      // ADR-175: the sealed base's own suspend and Flow members are on the legacy routes now, so
+      // the planner no longer relabels one as SEALED_BASE_UNROUTED, and a refused one is named here
+      // with the refusal's own reason. A generic base keeps the planner's unrouted name (ADR-147).
+      // A refused Flow *property* on the base is already named once per arm by the arm walk below
+      // (all-properties), so it is not repeated here.
+      if (sealed.typeParameters.isEmpty()) {
+        val keptBase: KSClassDeclaration? =
+          sealed.forwardSuperClass(classifier.exportedObjectHandles)
+        sealed.getAllFunctions()
+          .filter { method -> method.getVisibility() == Visibility.PUBLIC }
+          .filter { method -> !method.isCompilerOwnedMember(sealed) }
+          .filter { method -> method.isForwardMemberOf(sealed, keptBase) }
+          .filter { method -> method.isForwardLegacyAsyncRoute() }
+          .forEach { method ->
+            nameRefused(
+              method,
+              "$sealedName.${method.simpleName.asString()}",
+              sealed.forwardDiagnosticOwner(),
+            )
+          }
+      }
       sealed.getSealedSubclasses().forEach { subclass ->
         // ADR-157: a boxed enum arm declares no members of this route's kind, and what it does
         // declare belongs to `{Enum}Extensions`. Naming one here would report a hole in a C# type
@@ -2505,10 +2529,18 @@ class NugetProcessor(
       sealed.getSealedSubclasses().any { subclass -> subclass.declaresSuspendMember() }
     }
 
+    // ADR-175: a sealed base projecting its own async members needs them too, even when no arm
+    // declares a suspend or flow member of its own.
+    val sealedBasesHaveAsyncMembers: Boolean = sealedClasses.any { sealed ->
+      sealed.forwardSealedBaseAsyncMethods(forwardClassifier).isNotEmpty() ||
+          sealed.forwardSealedBaseFlowProperties(forwardClassifier).isNotEmpty()
+    }
+
     val hasSuspendFunctions: Boolean = suspendFunctions.isNotEmpty() ||
         needsSuspendLambdaSupport ||
         classesHaveSuspendFunctions ||
-        armsHaveSuspendMethods
+        armsHaveSuspendMethods ||
+        sealedBasesHaveAsyncMembers
 
     val classesHaveFlowPropertiesForImports: Boolean = classes.any { cls ->
       cls.getAllProperties().any { prop ->
@@ -2534,7 +2566,7 @@ class NugetProcessor(
     }
 
     val needsFlowImports: Boolean = classesHaveFlowPropertiesForImports ||
-        classesHaveFlowMethodsForImports || armsHaveFlowMembers
+        classesHaveFlowMethodsForImports || armsHaveFlowMembers || sealedBasesHaveAsyncMembers
 
     // The coroutines opt-in is gated on the SAME condition as the coroutines imports below: every
     // emission that names anything from `kotlinx.coroutines` (suspend functions and suspend
@@ -2706,6 +2738,36 @@ class NugetProcessor(
             context.symbols,
             exportedTypes = exportedTypes,
           )
+        }
+      }
+    }
+
+    // ADR-175: the sealed base is an owner of the legacy suspend and Flow routes too, under its
+    // own prefix (`shape_area_async`), receiver `asStableRef<Base>()`, so Kotlin's dispatch reaches
+    // an arm override, a default body and an enum entry alike. The selectors are the ones
+    // `translateSealedClass` and the arm filter (`forwardArmMemberProjectedByBase`) read.
+    sealedClasses.forEach { sealed ->
+      guardDeclaration(sealed) {
+        val qualifiedName: String = sealed.qualifiedName?.asString() ?: return@guardDeclaration
+        val basePrefix: String = sealed.nativePrefix(context.symbols)
+        val baseMethods: List<KSFunctionDeclaration> =
+          sealed.forwardSealedBaseAsyncMethods(forwardClassifier)
+        if (baseMethods.any { it.modifiers.contains(Modifier.SUSPEND) }) {
+          builder.addSuspendClassMethodExports(
+            sealed,
+            forwardClassifier,
+            callableCatalog,
+            context.symbols,
+            exportedTypes = exportedTypes,
+          )
+        }
+        baseMethods.filterNot { it.modifiers.contains(Modifier.SUSPEND) }.forEach { method ->
+          builder.addFlowMethodExports(
+            method, qualifiedName, basePrefix, forwardClassifier, callableCatalog,
+          )
+        }
+        sealed.forwardSealedBaseFlowProperties(forwardClassifier).forEach { prop ->
+          builder.addFlowPropertyExports(prop, qualifiedName, basePrefix, forwardClassifier)
         }
       }
     }

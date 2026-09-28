@@ -3,6 +3,7 @@ using TestLibrary;
 using TestLibrary.Admission;
 using TestLibrary.Cat;
 using Catfeed = TestLibrary.Catfeed;
+using Curlup = TestLibrary.Curlup;
 using TestLibrary.Dev.Other.Bytype;
 using TestLibrary.Dev.Other.Bysuspend;
 using TestLibrary.Errand;
@@ -2363,6 +2364,44 @@ public class LiveHandleTests
 
         await AssertNoLeakAsync(
             async () => Assert.Equal(3, await feed.CountAsync()),
+            iterations: 5000);
+    }
+
+    // Row 9l. ADR-175: the scope moves from the sealed ARM to the sealed BASE, a new owner path.
+    // A base-typed `Shape` (a `Shape.Loaf` from `ShapeSample.LoafShape`) awaits a base-dispatched
+    // override, an arm-declared member on the inherited scope, and reads the base's StateFlow
+    // property; then the arm's `DisposeAsync` override has to drain the base-owned scope. The enum
+    // arm (`CurlArm`, whose handle is a StableRef to the entry) crosses in the same iteration, since
+    // it is the arm whose box owns no member of its own.
+    [Fact]
+    public async Task SealedBaseOwnedSuspend_ThroughTheBase_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using Curlup.Shape oreo = Curlup.ShapeSample.LoafShape(2);
+            Assert.Equal(6, await oreo.AreaAsync());
+            Assert.Equal(7, await ((Curlup.Shape.Loaf)oreo).KneadAsync(3));
+            Assert.Equal(2, oreo.Level.Value);
+
+            await using Curlup.Shape curl = Curlup.ShapeSample.CurlShape(false);
+            Assert.Equal(100, await curl.AreaAsync());
+            Assert.Equal(9, await curl.FallbackAsync());
+        });
+    }
+
+    // Row 9l-race. The TIGHT LOOP twin of Row 9l (see Row 9b for the window): `Loaf.area()` has no
+    // suspension point, so the completion can beat the P/Invoke that started it, now on the sealed
+    // base's route. Receiver hoisted and the base scope warmed before the baseline, as in Row 9k-race.
+    //
+    // Oreo measures his loaf five thousand times and it is six every time.
+    [Fact]
+    public async Task SealedBaseOwnedSuspend_NoSuspensionPoint_TightLoop_ReturnsToBaseline()
+    {
+        await using Curlup.Shape oreo = Curlup.ShapeSample.LoafShape(2);
+        Assert.Equal(6, await oreo.AreaAsync());
+
+        await AssertNoLeakAsync(
+            async () => Assert.Equal(6, await oreo.AreaAsync()),
             iterations: 5000);
     }
 }

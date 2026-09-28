@@ -754,3 +754,12 @@ Not touched: the interface route's total absence of overload numbering (a separa
 ROADMAP item). `ForwardCallablePlanner`'s comments describing `catalog()`'s inputs were reworded to
 say suspend top-level functions now arrive as `SUSPEND` skips rather than being absent from the
 catalog entirely (`:723-730`, `:1708-1711`).
+
+## Amendment (2026-09-29, ADR-175): the sealed base owns the scope for members it declares
+
+Two statements here no longer hold for a sealed base that declares a `suspend` or `Flow` member. The
+rejection of a base-owned scope is narrowed: the base is now `IAsyncDisposable` and owns the one scope,
+and the named `rest` skip on `Job` is closed (`Job.RestAsync` binds on the base). An arm no longer
+exports its override of a base-declared member (`shape_circle_area_async` is gone, a binary break; C#
+source is unchanged). The declared-only filter still applies to arm members the base does not declare.
+See [ADR-175](175-sealed-base-async-members.md).

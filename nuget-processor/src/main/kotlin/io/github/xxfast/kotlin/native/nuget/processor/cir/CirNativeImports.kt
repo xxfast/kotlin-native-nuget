@@ -54,6 +54,9 @@ internal fun CirSealedClass.ordinaryNativeImports(): List<CirDllImport> = buildL
     .forEach { property -> addAll(propertyNativeImports(libraryName, nativePrefix, property)) }
 
   methods.forEach { method -> add(methodNativeImport(libraryName, nativePrefix, method)) }
+
+  // ADR-175: the base's own async and Flow members, read the way an arm's are.
+  addAll((asyncMembers + flowMembers).filterIsInstance<CirDllImport>())
 }
 
 internal fun CirClass.constructorNativeImport(ctor: CirConstructor): CirDllImport =

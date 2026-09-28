@@ -204,6 +204,12 @@ way an ordinary value-class unbox does. `LeakTests/LiveHandleTests.cs`'s
 round trip, the value-class unbox-exactly-once path, and the same pair under the completion race a
 suspend call with no suspension point can hit.
 
+A [sealed base's own async members](interfaces-abstract-sealed.md#sealed-method-suspend-generated-c)
+add no new handle kind either: the scope handle moves from the arm to the base, and the count returns
+to baseline once the base-typed reference is disposed. `LeakTests/LiveHandleTests.cs` row 9l covers
+base-typed `suspend`, `Flow` and `StateFlow` calls, and row 9l-race repeats a call with no
+suspension point (`Loaf.area`) 5000 times in a tight loop.
+
 ## Forward direction has no registration step
 
 Kotlin exports called from C# resolve by symbol name through an ordinary P/Invoke: no contract

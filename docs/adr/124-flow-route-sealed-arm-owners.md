@@ -395,3 +395,10 @@ like the ordinary class route, the arm callback route and the arm suspend select
 diagnostic: a compiler-synthesized member is filtered, not skipped, exactly as the other fifteen
 components already were. `Job.Purring` in `test-library` is the fixture, with the absence assertion
 in `IntegrationTests/SealedArmFlowComponentTests.cs`.
+
+## Amendment (2026-09-29, ADR-175): a base-declared `Flow` member leaves the arm
+
+A `Flow` or `StateFlow` member the sealed base declares is projected on the base and owned by the base's
+scope. An arm's override of it is no longer exported, and the arm no longer owns a scope for it. Arm-declared
+flow members still bind on the arm as described here. See
+[ADR-175](175-sealed-base-async-members.md).
