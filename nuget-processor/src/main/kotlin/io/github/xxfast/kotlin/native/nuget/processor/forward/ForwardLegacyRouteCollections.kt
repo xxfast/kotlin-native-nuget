@@ -90,9 +90,31 @@ internal sealed interface ForwardLegacyParameterShape {
    */
   data class Enum(val type: BridgeType.Enum) : ForwardLegacyParameterShape
 
-  /** Any other parameter, named so the skip diagnostic can quote it. */
-  data class Refused(val description: String) : ForwardLegacyParameterShape
+  /**
+   * Any other parameter, named so the skip diagnostic can quote it.
+   *
+   * [refusal] is the classifier's own [BridgeType.Unsupported] when the parameter is an
+   * out-of-scope dependency type (ROADMAP Phase 4 line 23), so the skip names ADR-154's
+   * `admit(...)` remedy instead of the route's generic "pass a class" wording.
+   */
+  data class Refused(
+    val description: String,
+    val refusal: BridgeType.Unsupported? = null,
+  ) : ForwardLegacyParameterShape
 }
+
+/** The out-of-scope dependency refusal [classified] carries, nullable unwrapped, or null. */
+internal fun legacyDependencyRefusal(classified: BridgeType): BridgeType.Unsupported? =
+  (classified.unwrapNullable() as? BridgeType.Unsupported)?.takeIf { it.isUnexportedDependency }
+
+/**
+ * ADR-171: whether a value class has the `NugetBox`/`NugetUnbox` pair generated for it. The
+ * planner builds that pair only for these four underlying kinds, and the suspend route's
+ * [ForwardLegacyReturnShape.ValueClass] arm reads through `NugetUnbox`, so both read this one rule.
+ */
+internal fun BridgeType.ValueClass.hasErasedCrossing(): Boolean =
+  underlying == BridgeType.String || underlying is BridgeType.Primitive ||
+      underlying is BridgeType.Enum || underlying is BridgeType.ObjectHandle
 
 /**
  * Classifies one legacy-route parameter.
@@ -127,7 +149,10 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
         (classified.type.isLegacyScalar() || classified.type is BridgeType.Enum) ->
       ForwardLegacyParameterShape.NullableScalar(classified.type)
 
-    else -> ForwardLegacyParameterShape.Refused(expanded.legacyDescription())
+    else -> ForwardLegacyParameterShape.Refused(
+      expanded.legacyDescription(),
+      legacyDependencyRefusal(classified),
+    )
   }
 
   // Deliberately the un-rewritten classification: a `List<Shape>` of a sealed base stays refused,
@@ -325,12 +350,20 @@ internal val ForwardLegacyParameterShape.isLegacyDefaulted: Boolean
 /** The first refused parameter of a member, as `name: Type`, or null when every one binds. */
 internal fun ForwardBridgeTypeClassifier.legacyRefusedParameter(
   parameters: List<KSValueParameter>,
-): String? = parameters.firstNotNullOfOrNull { parameter ->
-  val shape = legacyParameterShape(parameter.type.resolve())
-  if (shape is ForwardLegacyParameterShape.Refused) {
-    "${parameter.name?.asString() ?: "_"}: ${shape.description}"
-  } else null
+): String? = legacyRefusedParameterShape(parameters)?.let { (name, shape) ->
+  "$name: ${shape.description}"
 }
+
+/** [legacyRefusedParameter] with the refused shape itself, for the diagnostic walk. */
+internal fun ForwardBridgeTypeClassifier.legacyRefusedParameterShape(
+  parameters: List<KSValueParameter>,
+): Pair<String, ForwardLegacyParameterShape.Refused>? =
+  parameters.firstNotNullOfOrNull { parameter ->
+    val shape = legacyParameterShape(parameter.type.resolve())
+    if (shape is ForwardLegacyParameterShape.Refused) {
+      (parameter.name?.asString() ?: "_") to shape
+    } else null
+  }
 
 /**
  * ADR-119: the return-side twin of [ForwardLegacyParameterShape], for the suspend route only (the
@@ -397,9 +430,82 @@ internal sealed interface ForwardLegacyReturnShape {
    */
   data class Bytes(val nullable: Boolean) : ForwardLegacyReturnShape
 
-  /** Any other generic return, named so the skip diagnostic can quote it. */
-  data class Refused(val description: String) : ForwardLegacyReturnShape
+  /**
+   * ROADMAP Phase 4 line 23: an exported class or object handle (not a sealed base, which is
+   * [Discriminated]). It used to be [Plain], spelled with the bare `nestedCsName()`, which names
+   * nothing once the type lives in another namespace (an admitted dependency type does, as
+   * `TestLibrary.Dev.Other.Bysuspend.Mousetoy` inside `namespace TestLibrary.Errand`). The
+   * classifier's [BridgeType.ObjectHandle.csharpType] is `global::`-qualified, the spelling every
+   * plan-route position and the Flow route already use.
+   */
+  data class Handle(
+    val handle: BridgeType.ObjectHandle,
+    val nullable: Boolean,
+  ) : ForwardLegacyReturnShape
+
+  /**
+   * ROADMAP Phase 4 line 23: a value class with a `NugetBox`/`NugetUnbox` pair (ADR-171). The
+   * Kotlin half already pins the boxed value (`NugetHandles.retain(result)`), which is exactly the
+   * handle `NugetUnbox` reads and disposes, so only the C# completion changes: it used to be
+   * `new T(resultPtr, out _)`, which a `readonly record struct` has no constructor for (CS1729).
+   */
+  data class ValueClass(
+    val type: BridgeType.ValueClass,
+    val nullable: Boolean,
+  ) : ForwardLegacyReturnShape
+
+  /**
+   * ROADMAP Phase 4 line 23 fold-in: an exported enum. It used to be [Plain], which spelled it
+   * bare (`Task<Mood>`, unresolvable from another namespace) and completed it with
+   * `new Mood(resultPtr, out _)`, which no C# enum has. It now crosses by ordinal, the encoding
+   * every other route uses (ADR-080): the Kotlin half boxes `result.ordinal` as an `Int`, and C#
+   * reads it back with `NugetMarshal.FromHandle<int>` (which disposes the box) and casts to the
+   * `global::`-qualified enum, so the awaited value is the enum, never a bare `int`.
+   */
+  data class Enum(
+    val type: BridgeType.Enum,
+    val nullable: Boolean,
+  ) : ForwardLegacyReturnShape
+
+  /**
+   * Any other generic return, named so the skip diagnostic can quote it. [refusal] carries the
+   * out-of-scope dependency type that caused it, so the skip names ADR-154's `admit(...)`.
+   */
+  data class Refused(
+    val description: String,
+    val refusal: BridgeType.Unsupported? = null,
+  ) : ForwardLegacyReturnShape
 }
+
+/** ROADMAP Phase 4 line 23: the `global::`-qualified C# type a handle or value-class async return
+ *  is DECLARED with, `?`-suffixed when nullable. */
+internal fun ForwardLegacyReturnShape.Handle.declaredCsharpType(): String =
+  if (nullable) "${handle.csharpType}?" else handle.csharpType
+
+internal fun ForwardLegacyReturnShape.ValueClass.declaredCsharpType(): String =
+  if (nullable) "${type.csharpType}?" else type.csharpType
+
+internal fun ForwardLegacyReturnShape.Enum.declaredCsharpType(): String =
+  if (nullable) "${type.csharpType}?" else type.csharpType
+
+/** The boxed ordinal read back and cast; a null result pointer is `null`, never ordinal 0. */
+internal fun ForwardLegacyReturnShape.Enum.legacyEnumRead(handle: String): String {
+  val cast: String = "(${type.csharpType})NugetMarshal.FromHandle<int>($handle)"
+  return if (nullable) "$handle == IntPtr.Zero ? (${type.csharpType}?)null : $cast" else cast
+}
+
+/** ...and the completion's read: the handle constructor, null-guarded when nullable. */
+internal fun ForwardLegacyReturnShape.Handle.legacyHandleRead(handle: String): String =
+  if (nullable) "$handle == IntPtr.Zero ? null : new ${this.handle.csharpType}($handle, out _)"
+  else "new ${this.handle.csharpType}($handle, out _)"
+
+/** `NugetUnbox` reads the box and disposes it; a null result pointer is `null`, never unboxed. */
+internal fun ForwardLegacyReturnShape.ValueClass.legacyValueClassRead(handle: String): String =
+  if (nullable) {
+    "$handle == IntPtr.Zero ? (${type.csharpType}?)null : ${type.csharpType}.NugetUnbox($handle)"
+  } else {
+    "${type.csharpType}.NugetUnbox($handle)"
+  }
 
 /**
  * ROADMAP Phase 4: the C# type a bare-`ByteArray` async position is DECLARED with, and the
@@ -475,6 +581,33 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
     return ForwardLegacyReturnShape.Bytes(expanded.isMarkedNullable)
   }
 
+  // ROADMAP Phase 4 line 23: `Plain` means "spell it", so a type the classifier refused (an
+  // out-of-scope dependency type above all) was spelled as a C# type nothing declares. Refused
+  // by name instead, carrying the dependency refusal for the `admit(...)` hint.
+  if (classified is BridgeType.Unsupported) {
+    return ForwardLegacyReturnShape.Refused(
+      expanded.legacyDescription(),
+      legacyDependencyRefusal(classified),
+    )
+  }
+  // ...and a value class completes by `NugetUnbox`, never a handle constructor. The
+  // `arguments.isEmpty()` guard keeps `kotlin.Result<T>` on the generic refusal below.
+  if (classified is BridgeType.ValueClass && expanded.arguments.isEmpty()) {
+    return if (classified.hasErasedCrossing()) {
+      ForwardLegacyReturnShape.ValueClass(classified, expanded.isMarkedNullable)
+    } else {
+      ForwardLegacyReturnShape.Refused(expanded.legacyDescription())
+    }
+  }
+  if (classified is BridgeType.ObjectHandle && !classified.viaDiscriminator &&
+    expanded.arguments.isEmpty()
+  ) {
+    return ForwardLegacyReturnShape.Handle(classified, expanded.isMarkedNullable)
+  }
+  if (classified is BridgeType.Enum) {
+    return ForwardLegacyReturnShape.Enum(classified, expanded.isMarkedNullable)
+  }
+
   if (expanded.arguments.isEmpty()) return ForwardLegacyReturnShape.Plain
 
   // ADR-068 peels a StateFlow return into its own bucket before the plain-async path sees it.
@@ -516,11 +649,20 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
  * method whose element cannot cross is filtered by the same single call both halves already make
  * for a suspend member.
  */
-internal fun ForwardBridgeTypeClassifier.legacyRefusedReturn(func: KSFunctionDeclaration): String? {
+internal fun ForwardBridgeTypeClassifier.legacyRefusedReturn(func: KSFunctionDeclaration): String? =
+  legacyRefusedReturnShape(func)?.first
+
+/**
+ * [legacyRefusedReturn] with the dependency refusal behind it, when there is one, for the
+ * diagnostic walk's `admit(...)` wording.
+ */
+internal fun ForwardBridgeTypeClassifier.legacyRefusedReturnShape(
+  func: KSFunctionDeclaration,
+): Pair<String, BridgeType.Unsupported?>? {
   val returnType: KSType? = func.returnType?.resolve()
-  if (!func.modifiers.contains(Modifier.SUSPEND)) return legacyRefusedFlowElement(returnType)
+  if (!func.modifiers.contains(Modifier.SUSPEND)) return legacyRefusedFlowElementShape(returnType)
   val shape: ForwardLegacyReturnShape = legacyReturnShape(returnType)
-  return if (shape is ForwardLegacyReturnShape.Refused) shape.description else null
+  return if (shape is ForwardLegacyReturnShape.Refused) shape.description to shape.refusal else null
 }
 
 /**
@@ -555,7 +697,11 @@ internal sealed interface ForwardLegacyFlowElementShape {
   data class Bytes(val nullable: Boolean) : ForwardLegacyFlowElementShape
 
   /** Any other generic element, named so the skip diagnostic can quote it. */
-  data class Refused(val description: String) : ForwardLegacyFlowElementShape
+  data class Refused(
+    val description: String,
+    // ROADMAP Phase 4 line 23: the out-of-scope dependency type behind the refusal, if any.
+    val refusal: BridgeType.Unsupported? = null,
+  ) : ForwardLegacyFlowElementShape
 }
 
 /**
@@ -584,6 +730,15 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
     return ForwardLegacyFlowElementShape.Bytes(expanded.isMarkedNullable)
   }
 
+  // ROADMAP Phase 4 line 23: an element the classifier refused (an out-of-scope dependency type
+  // above all) used to be `Plain`, spelled by `qualifiedElementCsType` as a type nothing declares.
+  if (classified is BridgeType.Unsupported) {
+    return ForwardLegacyFlowElementShape.Refused(
+      expanded.legacyDescription(),
+      legacyDependencyRefusal(classified),
+    )
+  }
+
   if (expanded.arguments.isEmpty()) return ForwardLegacyFlowElementShape.Plain
 
   val collection: BridgeType.Collection? = classify(type) as? BridgeType.Collection
@@ -606,10 +761,21 @@ internal fun legacyFlowElement(type: KSType?): KSType? {
 }
 
 /** The refused element of a `Flow`/`StateFlow` member, or null when it binds (or is not one). */
-internal fun ForwardBridgeTypeClassifier.legacyRefusedFlowElement(type: KSType?): String? {
+internal fun ForwardBridgeTypeClassifier.legacyRefusedFlowElement(type: KSType?): String? =
+  legacyRefusedFlowElementShape(type)?.first
+
+/**
+ * [legacyRefusedFlowElement] with the out-of-scope dependency type behind the refusal, when there
+ * is one, so a Flow method or property can name ADR-154's `admit(...)` remedy (ROADMAP Phase 4
+ * line 23).
+ */
+internal fun ForwardBridgeTypeClassifier.legacyRefusedFlowElementShape(
+  type: KSType?,
+): Pair<String, BridgeType.Unsupported?>? {
   val element: KSType = legacyFlowElement(type) ?: return null
   val shape: ForwardLegacyFlowElementShape = legacyFlowElementShape(element)
-  return if (shape is ForwardLegacyFlowElementShape.Refused) shape.description else null
+  return if (shape is ForwardLegacyFlowElementShape.Refused) shape.description to shape.refusal
+  else null
 }
 
 /** The marshalled collection a `Flow`/`StateFlow` member's element is, or null for every other. */

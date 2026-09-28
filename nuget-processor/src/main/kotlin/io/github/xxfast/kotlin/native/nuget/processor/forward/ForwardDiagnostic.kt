@@ -855,6 +855,11 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL.name ->
         "a `suspend` lambda is not bridged at any position"
 
+      // ROADMAP Phase 4 line 23 fold-in: the suspend route covers top-level functions and class,
+      // sealed-arm members, never an extension.
+      ForwardPlanSkipReason.SUSPEND.name ->
+        "a `suspend` function binds at the top level and on a class, but not as an extension"
+
       ForwardPlanSkipReason.GENERIC.name ->
         "a generic type binds at a top-level function return, and a generic function at a " +
             "top-level function with a parameter of its own type parameter, but not at this " +
@@ -1230,6 +1235,10 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
 
     ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL.name ->
       "take a plain (non-suspend) lambda parameter on an ordinary class method instead"
+
+    ForwardPlanSkipReason.SUSPEND.name ->
+      "declare it as a top-level `suspend fun` taking the receiver as its first parameter, or as " +
+          "a `suspend` member of the receiver's class"
 
     ForwardPlanSkipReason.GENERIC.name ->
       "expose a non-generic wrapper (`fun f(value: Int)` beside `fun <T> f(value: T)`), or move " +

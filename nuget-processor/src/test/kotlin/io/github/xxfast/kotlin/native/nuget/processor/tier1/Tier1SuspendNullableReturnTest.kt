@@ -72,16 +72,19 @@ class Tier1SuspendNullableReturnTest {
   fun `nullable suspend returns carry nullability into the C# Task type`() {
     val csharp: String = Tier1Harness.run(fixture).generatedCSharp
 
-    assertContains(csharp, "Task<Cat?> FindShelterCatAsync")
+    assertContains(csharp, "Task<global::Interop.Cat?> FindShelterCatAsync")
     assertContains(csharp, "Task<int?> CountTreatsLeftAsync")
-    assertContains(csharp, "Task<Cat?> FindAdoptedCatAsync")
+    assertContains(csharp, "Task<global::Interop.Cat?> FindAdoptedCatAsync")
     assertContains(csharp, "Task<int?> CountWhiskersAsync")
     // A non-nullable return is unchanged.
     assertContains(csharp, "Task<string> FetchGreetingAsync")
 
     // The object case has no `FromHandle` null guard to lean on, so the null is tested on the
     // wire pointer; the primitive case rides ADR-067's `Nullable.GetUnderlyingType` branch.
-    assertContains(csharp, "t.SetResult(resultPtr == IntPtr.Zero ? null : new Cat(resultPtr, out _));")
+    assertContains(
+      csharp,
+      "t.SetResult(resultPtr == IntPtr.Zero ? null : new global::Interop.Cat(resultPtr, out _));",
+    )
     assertContains(csharp, "t.SetResult(NugetMarshal.FromHandle<int?>(resultPtr));")
   }
 }

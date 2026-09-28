@@ -268,9 +268,14 @@ private fun resultRefExpression(isNullable: Boolean, boxed: String): String =
  * `nuget_list_get` / `nuget_set_element_at` / `nuget_map_*_at` helpers see the same container
  * shape on both routes. Any other result stays the bare `result` the shipped route pins.
  */
-private fun legacyBoxedResult(shape: ForwardLegacyReturnShape): String =
-  if (shape is ForwardLegacyReturnShape.Marshalled) collectionResultProjection("result", shape.type)
-  else "result"
+private fun legacyBoxedResult(shape: ForwardLegacyReturnShape): String = when (shape) {
+  is ForwardLegacyReturnShape.Marshalled -> collectionResultProjection("result", shape.type)
+  // ROADMAP Phase 4 line 23 fold-in: an enum crosses by ordinal (ADR-080), which the C# half
+  // reads with `FromHandle<int>` and casts. Inside `resultRefExpression`'s null test, so a
+  // nullable enum is smart-cast by then.
+  is ForwardLegacyReturnShape.Enum -> "result.ordinal"
+  else -> "result"
+}
 
 /**
  * The member's parameter names as the export declares its slots, the spelling

@@ -256,6 +256,50 @@ Not touched:
   classify-then-marshal-or-refuse shape to the third route, the `Flow`/`StateFlow` *element*
   position, reusing `legacyCollectionRead` and `collectionResultProjection` verbatim.
 
+## Amendment (2026-09-28): the legacy suspend route now reads a refusal instead of spelling the type
+
+Found while closing ROADMAP Phase 4's top-level-suspend-reachability item, alongside
+[ADR-066](066-forward-export-reachability-closure.md)'s 2026-09-28 amendment (the closure's own
+input was missing top-level `suspend fun`): even once the closure records that a type is out of
+scope, `legacyReturnShape`'s `Plain` fall-through never consulted that record, so a refused type
+(closure-refused or genuinely unbridgeable) was still spelled bare and completed with
+`new T(resultPtr, out _)` on both the top-level and class/sealed-arm suspend halves, an undeclared
+C# type. Fixed:
+
+- **Unbridgeable return, refused on both halves.** Before the `Plain` fall-through, `legacyReturnShape`
+  now classifies the (nullable-unwrapped) return; a `BridgeType.Unsupported` result is `Refused`,
+  named `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` (carrying the closure's `admit(...)` hint) when the
+  refusal is a dependency-scope one, and the existing generic-kind wording otherwise. This applies
+  identically to a top-level, class, and sealed-arm suspend return; the ROADMAP line this closes had
+  called the class-level case "already fine" (reached through `getAllFunctions()`), which held only
+  for admission, not for this route reading the admission result.
+- **Suspend parameters get the same dependency wording.** A refused suspend parameter that is
+  `Unsupported` for a dependency-scope reason now also reads `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`
+  with the `admit(...)` hint, instead of the generic `SKIPPED_UNSUPPORTED_INPUT` naming "not a
+  class/object/sealed-type handle" for a type that in fact is one, just out of scope. An in-scope
+  dependency parameter now binds normally (`SqueakOfAsync(Mousetoy)`).
+- **New return shapes**, chosen ahead of the `Plain` fall-through:
+  - `Handle`: an admitted class/object handle, spelled fully qualified
+    (`Task<global::…Mousetoy>`, `new global::…Mousetoy(resultPtr, out _)`) rather than the bare
+    simple name every existing suspend class return used before this amendment. This is the same
+    type, only respelled; every shipped suspend-class-return fixture now emits `global::…`.
+  - `ValueClass`: chosen only when the classified type has both a `NugetBox` and a `NugetUnbox`
+    (one shared predicate the planner and this route both call, so they cannot disagree). Completes
+    with `global::Ns.T.NugetUnbox(resultPtr)`, null-guarded when nullable. A value class without
+    that pair still falls through to `Refused`, by name; this is where
+    [ADR-154](154-forward-dependency-type-admission.md)'s value-class gate now fires on the suspend
+    route too.
+  - `Enum`: boxed by ordinal on the Kotlin side (unchanged), read on the C# side with
+    `NugetMarshal.FromHandle<int>(resultPtr)` and cast to the fully qualified enum type, null-guarded
+    when nullable. Before this amendment an enum suspend return did not compile at all
+    (`new Mood(resultPtr, out _)`, a record struct with no such constructor); this covers a
+    dependency enum too.
+- **A top-level suspend extension has no route**, and is now a named `SKIPPED_UNSUPPORTED_COMBINATION`
+  skip instead of silently dropped with no diagnostic at all.
+
+An out-of-scope `Flow<Dep>` element (return or property) folds into the same fix and gets the same
+named `admit(...)` skip.
+
 ## Implementation notes (2026-09-09)
 
 - The ADR-108 probe cell `suspend method returning Result either binds correctly or skips named`

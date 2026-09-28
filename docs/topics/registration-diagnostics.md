@@ -194,6 +194,16 @@ wrapper handle, released by disposing it, the same as any other exported-class p
 `LeakTests/LiveHandleTests.cs`'s `GenericClassConcreteProperty_KeeperRead_ReturnsToBaseline` covers
 the read-and-dispose cycle.
 
+A [dependency-module type reached only through a top-level `suspend fun`](coroutines-and-flow.md#suspend-fun-returning-a-dependency-type)
+adds no new handle kind either: the returned handle and any handle-typed parameter release the same
+way any other suspend-route handle does, and a value class's box comes back to baseline the same
+way an ordinary value-class unbox does. `LeakTests/LiveHandleTests.cs`'s
+`TopLevelSuspendDependencyClass_ReturnAndParameter_ReturnsToBaseline`,
+`SuspendValueClassReturn_UnboxedOnce_ReturnsToBaseline`, and
+`SuspendDependencyClassAndValueClass_TightLoop_ReturnsToBaseline` cover the class return-and-parameter
+round trip, the value-class unbox-exactly-once path, and the same pair under the completion race a
+suspend call with no suspension point can hit.
+
 ## Forward direction has no registration step
 
 Kotlin exports called from C# resolve by symbol name through an ordinary P/Invoke: no contract

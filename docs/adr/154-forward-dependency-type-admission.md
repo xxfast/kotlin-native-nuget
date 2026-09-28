@@ -192,6 +192,14 @@ Three details the implementation settled that the Decision above did not spell o
    list — making §2's "an empty `admit` means no admission" structural rather than a condition a
    later change can forget.
 
+## Amendment (2026-09-28)
+
+The value-class gate (Decision §4) now also fires on the legacy `suspend` return route, not only the
+plan-driven one: a value class there is bridged only when it has both a `NugetBox`/`NugetUnbox` pair,
+and that predicate is one shared helper the planner and the suspend route both call, so the two
+routes cannot disagree about which value classes bind. See
+[ADR-119](119-collection-returns-on-the-legacy-suspend-route.md)'s 2026-09-28 amendment.
+
 ## Consequences
 
 - ADR-063 is untouched; ADR-066's admission predicate gains one disjunct and its "the escape hatch

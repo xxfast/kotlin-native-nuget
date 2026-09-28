@@ -139,6 +139,8 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 |---|:-:|---|---|---|
 | `suspend fun` | → | `async` / `Task<T>` | Two `suspend` overloads, on a class, a sealed arm, or at the top level, collapse into one C# overload set. | [Coroutines and Flow](coroutines-and-flow.md) |
 | `suspend fun` returning `T?` | → | `Task<T?>` | A nullable string, object or primitive return carries its `?` on both sides of the bridge. | [Coroutines and Flow](coroutines-and-flow.md) |
+| `suspend fun` returning or taking a dependency-module type, top-level or on a class | → | the same mapped C# type | Admits like any other position; out-of-scope skips named via `admit(...)`, never an undeclared spelling. | [Coroutines and Flow](coroutines-and-flow.md) |
+| `suspend fun` returning a value class or enum | → | record struct / enum, unboxed or cast on completion | Null-guarded when nullable; a value class with no box/unbox pair skips, named. | [Coroutines and Flow](coroutines-and-flow.md) |
 | `suspend fun` returning an interface type, top-level or nested | ⇄ | `Task<IFoo>` | → completes with the interface itself, nullable included · ← a value stored through a C# implementation comes back as the caller's own instance, not a fresh wrapper | [Coroutines and Flow](coroutines-and-flow.md) · [Interfaces, abstract and sealed](interfaces-abstract-sealed.md) |
 | `suspend () -> R` lambda | → | `KotlinSuspendFunc<R>` / `Task<R>` | The same mechanism as a `suspend fun`. | [Coroutines and Flow](coroutines-and-flow.md) |
 | structured concurrency | → | honoured |  | [Coroutines and Flow](coroutines-and-flow.md) |

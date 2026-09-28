@@ -261,6 +261,8 @@ the current decision.
 
 - `suspend fun` → `async` / `Task<T>`: [019](019-suspend-function-mapping.md), [102](102-aot-safe-forward-callbacks.md), [118](118-suspend-route-sealed-arm-owners-and-overload-numbering.md), [131](131-suspend-route-sealed-base-return.md)
 - `suspend fun` returning `T?` → `Task<T?>`: [019](019-suspend-function-mapping.md), [067](067-nullable-stateflow-mapping.md)
+- `suspend fun` returning or taking a dependency-module type, top-level or on a class → the same mapped C# type: [066](066-forward-export-reachability-closure.md), [119](119-collection-returns-on-the-legacy-suspend-route.md), [154](154-forward-dependency-type-admission.md)
+- `suspend fun` returning a value class or enum → record struct / enum, unboxed or cast on completion: [119](119-collection-returns-on-the-legacy-suspend-route.md), [154](154-forward-dependency-type-admission.md)
 - `suspend fun` returning an interface type, top-level or nested ⇄ `Task<IFoo>`: [040](040-interface-return-type-mapping.md), [133](133-nested-types.md), [136](136-csharp-identity-on-async-interface-reads.md)
 - `suspend () -> R` lambda → `KotlinSuspendFunc<R>` / `Task<R>`: [020](020-suspend-lambda-mapping.md), [102](102-aot-safe-forward-callbacks.md)
 - structured concurrency → honoured: [021](021-structured-concurrency.md)

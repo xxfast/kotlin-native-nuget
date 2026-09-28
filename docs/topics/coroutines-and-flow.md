@@ -95,6 +95,39 @@ of that type is. Any other generic return (`Pair<A, B>`, `Result<T>`, `Flow<T>`,
 collection `List<T>?`) has no C# binding and is skipped with a diagnostic naming the member; expose
 the values through separate `suspend` functions instead.
 
+## `suspend fun` returning a type from a dependency module {id="suspend-fun-returning-a-dependency-type"}
+
+A class or value class reached only through a top-level `suspend fun`, never through any ordinary
+member, binds the same way it would anywhere else, once its package is in scope (see
+[The nuget {} DSL: cross-module export closure](nuget-dsl.md#cross-module-export-closure)):
+
+```kotlin
+// dev.other.bysuspend, a dependency module admitted with admit("dev.other.bysuspend")
+class Mousetoy(val squeak: String) {
+  fun batted(by: String): String = "$by bats the $squeak mouse under the sofa"
+}
+value class Chipcode(val digits: String)
+
+// io.github.xxfast.kotlin.native.nuget.test.errand
+suspend fun fetchMousetoy(catName: String): Mousetoy { /* ... */ }
+suspend fun squeakOf(toy: Mousetoy): String { /* ... */ }
+suspend fun scanChip(catName: String): Chipcode { /* ... */ }
+```
+
+```C#
+public static Task<global::TestLibrary.Dev.Other.Bysuspend.Mousetoy> FetchMousetoyAsync(
+    string catName, CancellationToken cancellationToken = default);
+public static Task<string> SqueakOfAsync(
+    global::TestLibrary.Dev.Other.Bysuspend.Mousetoy toy, CancellationToken cancellationToken = default);
+public static Task<global::TestLibrary.Dev.Other.Bysuspend.Chipcode> ScanChipAsync(
+    string catName, CancellationToken cancellationToken = default);
+```
+
+`Chipcode` completes through the same unboxing a value class uses at any other position; an enum
+return completes the same way an enum parameter binds, by ordinal. A dependency type outside the
+admitted scope at this same position is a named skip pointing at `admit(...)`; it is never spelled
+as an undeclared C# type, whether it appears at a top-level or a class-member `suspend` signature.
+
 ## `suspend fun` returning an interface {id="suspend-fun-returning-an-interface"}
 
 ```kotlin
@@ -546,6 +579,8 @@ the parameter across separate members.
 - A `suspend inline fun <reified T> Receiver.f(...): Result<T>` extension has no bridge at all:
   `inline` plus `reified` erase at the native boundary, and `suspend` needs a concrete
   continuation type. It is skipped with a diagnostic naming the extension.
+- A top-level `suspend fun` declared as an **extension function** (`suspend fun String.extRet()`)
+  has no route at all and is skipped with a diagnostic naming the extension.
 - A bare `ByteArray` **parameter** on a `Flow`-, `StateFlow`-, or `suspend`-returning member is not
   supported, even though a `ByteArray` return or `Flow` element is (see
   [Collections](collections.md#bytearray-as-a-collection-component)). Pass it as a `List<ByteArray>`

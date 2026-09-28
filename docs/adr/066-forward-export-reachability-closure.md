@@ -312,6 +312,19 @@ Unchanged from ADR-063: the public declarations in `resolver.getAllFiles()` that
 `isPackageExported`. No new root syntax. **Roots are the only thing enumerated**; everything else is
 discovered. (Forced, not chosen: `getDeclarationsFromPackage` on a klib returns empty, **verified**.)
 
+> **Amendment (2026-09-28, top-level `suspend fun` was missing from the closure's own input).**
+> `NugetProcessor.kt`'s closure call passed `functions = functions + genericFunctions`, omitting the
+> `suspendFunctions` partition entirely: a non-generic top-level `suspend fun`'s return and parameter
+> types never reached this closure at all, so a klib type reached only that way got neither an
+> admission nor a refusal record, and the suspend route (below, and see
+> [ADR-119](119-collection-returns-on-the-legacy-suspend-route.md)) spelled it as an undeclared C#
+> type. Fixed: the closure call now includes `suspendFunctions`. A generic or extension top-level
+> `suspend fun` already reached the closure through `genericFunctions`/`extensionFunctions`; only the
+> plain top-level case was missing. Every route downstream of this closure (the suspend route
+> included) must **read** the closure's admission-or-refusal record for a type, never re-derive
+> whether the type is in scope by spelling it directly; that is what ADR-119's amendment below fixes
+> for the legacy suspend route specifically.
+
 ### 2. Edges followed
 
 From each root declaration, and transitively from each admitted declaration:

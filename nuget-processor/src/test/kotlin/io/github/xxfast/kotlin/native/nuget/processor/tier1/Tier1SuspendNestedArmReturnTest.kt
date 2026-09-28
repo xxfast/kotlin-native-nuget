@@ -74,13 +74,13 @@ class Tier1SuspendNestedArmReturnTest {
   fun `both suspend routes spell a nested arm return with its enclosing base`() {
     val csharp: String = run().generatedCSharp
 
-    assertContains(csharp, "Task<Shape.Circle> CircleLaterAsync")
-    assertContains(csharp, "Task<Shape.Dot> DotLaterAsync")
+    assertContains(csharp, "Task<global::Interop.Shape.Circle> CircleLaterAsync")
+    assertContains(csharp, "Task<global::Interop.Shape.Dot> DotLaterAsync")
     // The top-level route, `CirFunctionTranslator.translateSuspendFunction`.
-    assertContains(csharp, "Task<Shape.Circle> AnyCircleLaterAsync")
+    assertContains(csharp, "Task<global::Interop.Shape.Circle> AnyCircleLaterAsync")
 
-    assertContains(csharp, "new Shape.Circle(resultPtr, out _)")
-    assertContains(csharp, "new Shape.Dot(resultPtr, out _)")
+    assertContains(csharp, "new global::Interop.Shape.Circle(resultPtr, out _)")
+    assertContains(csharp, "new global::Interop.Shape.Dot(resultPtr, out _)")
 
     // The defect: a bare arm name at namespace scope is unresolvable (CS0246).
     assertFalse(
