@@ -1750,7 +1750,7 @@ class NugetProcessor(
       allFunctions.filter { it.typeParameters.isEmpty() }
     val ordinaryCatalog: ForwardCallablePlanCatalog = forwardPlanner.catalog(
       classes, topLevelCatalogFunctions, extensionFunctions, objects, properties,
-      extensionProperties, valueClasses, sealedClasses,
+      extensionProperties, valueClasses, sealedClasses, enums,
     )
 
     // ADR-040 sub-decision C.1 (reachability-driven): a Kotlin interface gets a concrete backing
@@ -2296,7 +2296,7 @@ class NugetProcessor(
       guardDeclaration(cls) { builder.addCompanionExports(cls, callableCatalog) }
     }
     enums.forEach { enum ->
-      guardDeclaration(enum) { builder.addEnumExports(enum, context.symbols) }
+      guardDeclaration(enum) { builder.addEnumExports(enum, callableCatalog) }
     }
     sealedClasses.forEach { sealed ->
       guardDeclaration(sealed) {

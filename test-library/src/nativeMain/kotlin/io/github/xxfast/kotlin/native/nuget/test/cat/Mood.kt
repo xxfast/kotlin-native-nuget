@@ -31,4 +31,38 @@ enum class Mood(val displayName: String, val isCuddly: Boolean) {
 
   val isSleepy: Boolean
     get() = this == SLEEPY
+
+  /**
+   * A throwing enum member getter: grumpy Oreo refuses to count his lives. Every other entry
+   * answers `9`. The C# read must surface as a catchable mapped `KotlinInvalidOperationException`,
+   * not abort the host process, and the route must still answer after the throw.
+   */
+  val nineLives: Int
+    get() = if (this == GRUMPY) throw IllegalStateException("Oreo refuses to count") else 9
+
+  /**
+   * An enum member `var` of a type that needs conversion (`String`), stored on the entry
+   * singleton's own backing field so a C# `SetNickname` followed by `Nickname()` round-trips
+   * observably.
+   */
+  var nickname: String = displayName
+
+  /**
+   * A class-typed enum member: every read mints a fresh [Toy] handle the C# caller owns and must
+   * dispose. The old enum route exported the raw Kotlin object as an `IntPtr`; the plan hands back
+   * the owned `Toy` wrapper (pinned by `LeakTests`).
+   */
+  val favouriteToy: Toy
+    get() = Toy(displayName, if (isCuddly) "cream" else "black")
+
+  /**
+   * An enum member `var` of a type that needs no conversion (`Int`), whose setter throws for a
+   * negative count: Mylo cannot un-eat a treat. The rejected write must surface as a catchable
+   * `KotlinArgumentException` and leave the stored value untouched.
+   */
+  var treatsEaten: Int = 0
+    set(value) {
+      require(value >= 0) { "Mylo cannot un-eat a treat" }
+      field = value
+    }
 }

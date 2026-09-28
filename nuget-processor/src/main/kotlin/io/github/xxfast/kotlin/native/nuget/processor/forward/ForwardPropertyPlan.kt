@@ -8,8 +8,37 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
  * applies unchanged. It is a position of its own rather than a reuse of [COMPANION] because no
  * legacy adapter re-emits a flow, state-flow or lambda typed property for a static owner, so it
  * must NOT inherit the silence `ForwardPropertyPlanner.recordDropped` grants a class property.
+ *
+ * [ENUM_MEMBER] (ADR-006 amendment): an `enum class`'s own member property. The receiver is the
+ * entry's `int` ordinal ([ForwardPropertyReceiver.Value] over [BridgeType.Enum]), the one ADR-132
+ * already lowers for an extension property over an enum; it is a position of its own because the
+ * C# spelling differs: ADR-006's bare `Description()` rather than the extension route's
+ * `GetDescription()`.
  */
-internal enum class ForwardPropertyPosition { CLASS, TOP_LEVEL, EXTENSION, COMPANION, OBJECT }
+internal enum class ForwardPropertyPosition {
+  CLASS,
+  TOP_LEVEL,
+  EXTENSION,
+  COMPANION,
+  OBJECT,
+  ENUM_MEMBER,
+}
+
+/** ADR-006: `Enum<E>`'s own members, never bridged as enum member properties. */
+internal val ENUM_OWN_MEMBERS: Set<String> = setOf("name", "ordinal", "declaringJavaClass")
+
+/**
+ * ADR-006 amendment: the [ForwardPropertyPosition.ENUM_MEMBER] plans of the enum [qualifiedName],
+ * in planning order. Both halves select through this one predicate, off the catalog, rather than
+ * re-walking the enum's properties and re-spelling each symbol.
+ */
+internal fun List<ForwardPropertyPlan>.enumMembersOf(
+  qualifiedName: String,
+): List<ForwardPropertyPlan> =
+  filter { plan ->
+    plan.position == ForwardPropertyPosition.ENUM_MEMBER &&
+        plan.symbol.substringBeforeLast('.') == qualifiedName
+  }
 
 /** ADR-157: the catalog-key and Kotlin-side member name of a boxed enum arm's `Value`. */
 internal const val ENUM_ARM_VALUE_MEMBER: String = "value"

@@ -25,6 +25,35 @@ Mood mood = Mood.Happy;                   // HAPPY -> Happy, ordinal 0
 string description = mood.Description();  // extension method
 ```
 
+A getter that throws surfaces as a catchable, mapped exception rather than crashing the process,
+the same as any other property getter. A `var` binds a setter too, `SetX(this Mood mood, value)`,
+alongside the getter:
+
+```kotlin
+enum class Mood {
+  HAPPY, SLEEPY, GRUMPY;
+
+  var nickname: String = name
+
+  val nineLives: Int
+    get() = if (this == GRUMPY) throw IllegalStateException("refuses to count") else 9
+}
+```
+
+```C#
+Mood.Happy.SetNickname("Oreo the Biscuit");
+string nickname = Mood.Happy.Nickname();   // "Oreo the Biscuit"
+
+try
+{
+    Mood.Grumpy.NineLives();
+}
+catch (KotlinInvalidOperationException ex)
+{
+    // ex.KotlinType == "kotlin.IllegalStateException"
+}
+```
+
 A property's own name PascalCases the same way any other bridged property does, whatever its
 casing or type: a camelCase constructor property (`displayName`) binds as `DisplayName()`, and a
 `Boolean` name keeps a leading `is` rather than dropping it (`isCuddly` binds as `IsCuddly()`, not
@@ -72,6 +101,11 @@ A property or method typed with the enum, in any parameter, return, or getter/se
 binds like any other enum-typed member: `var mood: Mood` becomes a settable `Mood` property. This
 also covers a member whose own type is a *different* enum, such as `enum class Swirl(val patch:
 Patch)`: `swirl.Patch()` returns the C# `Patch` enum, not a raw handle.
+
+An enum member property follows the same type rules as any other property: a class-typed member
+returns an owned wrapper the caller must dispose (`using var toy = mood.FavouriteToy();`), an
+`Int?`-shaped member reads through the usual nullable pair, and a member typed with something a
+property can't cross (a lambda, for example) is a named skip rather than a broken export.
 
 ## Nullable {id="nullable"}
 
@@ -151,10 +185,9 @@ naming `UNDECLARED_ENUM`; the owning class still generates with its other member
 
 ## Members that aren't bound {id="enum-member-functions-skip-named"}
 
-A `var` body property (`isLoud` below) binds getter-only; there is no generated setter. A property
-declared in an enum's `companion object`, and a function declared in the enum class body or in its
-companion object, have no route at all today: neither becomes a C# member, on either side. Each is a
-named skip rather than a silent drop:
+A property declared in an enum's `companion object`, and a function declared in the enum class
+body or in its companion object, have no route at all today: neither becomes a C# member, on
+either side. Each is a named skip rather than a silent drop:
 
 ```kotlin
 enum class Mood(val isCuddly: Boolean) {
@@ -170,9 +203,9 @@ enum class Mood(val isCuddly: Boolean) {
 }
 ```
 
-`isLoud` itself still binds, as `IsLoud(this Mood mood)`, getter-only. Move a companion property to a
-top-level `val` or into an ordinary `object` instead. There is no current workaround for a member or
-companion function beyond exposing the same logic as a top-level function taking the enum as a
-parameter or receiver; binding it as an extension method, the way an enum's own properties already
-are, is open work (see
+`isLoud` itself binds both ways, `IsLoud(this Mood mood)` and `SetIsLoud(this Mood mood, value)`.
+Move a companion property to a top-level `val` or into an ordinary `object` instead. There is no
+current workaround for a member or companion function beyond exposing the same logic as a
+top-level function taking the enum as a parameter or receiver; binding it as an extension method,
+the way an enum's own properties already are, is open work (see
 [ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 4).

@@ -30,7 +30,7 @@ internal fun FileSpec.Builder.addForwardPropertyPlanExports(plan: ForwardPropert
 }
 
 private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardNativeCall) {
-  val builder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.symbol)
+  val builder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.ownerTag())
   val access: String = plan.accessExpression()
   when (val type: BridgeType = plan.type) {
     BridgeType.Unit -> builder.addCode(
@@ -235,7 +235,7 @@ private fun FileSpec.Builder.addNullablePresenceGetter(
   call: ForwardNativeCall,
 ) {
   val builder: FunSpec.Builder =
-    exportBuilder(call, plan.receiver, plan.symbol).returns(kotlinType("Boolean"))
+    exportBuilder(call, plan.receiver, plan.ownerTag()).returns(kotlinType("Boolean"))
   builder.addCode(
     valueBody("${plan.accessExpression()} != null", "errorOut", "false"),
     cOpaquePointerVar,
@@ -251,7 +251,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
   val inner: BridgeType = (plan.type as BridgeType.Nullable).type
   val builder: FunSpec.Builder = when (inner) {
     is BridgeType.Primitive -> {
-      val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.symbol)
+      val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.ownerTag())
         .returns(kotlinType(inner))
       getterBuilder.addCode(
         valueBody("${plan.accessExpression()}!!", "errorOut", primitiveDefault(inner)),
@@ -265,7 +265,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
     // `_value` call, returning a by-value `Char` over the CHAR16 wire. The by-value slot is the one
     // a non-null `Char` property already uses, so the U2 marshalling ADR-098 minted covers it
     // unchanged; only the shape selection is new.
-    BridgeType.Char -> exportBuilder(call, plan.receiver, plan.symbol)
+    BridgeType.Char -> exportBuilder(call, plan.receiver, plan.ownerTag())
       .returns(kotlinType("Char"))
       .addCode(
         valueBody("${plan.accessExpression()}!!", "errorOut", "'\\u0000'"),
@@ -277,7 +277,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
     // ticks before it crosses the wire.
     // ADR-103: same again for Duration.
     BridgeType.Instant, BridgeType.Duration -> {
-      val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.symbol)
+      val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.ownerTag())
         .returns(kotlinType("Long"))
       getterBuilder.addCode(
         valueBody("${plan.accessExpression()}!!.toDotNetTicks()", "errorOut", "0L"),
@@ -288,7 +288,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
     }
 
     // ADR-080: a bare nullable enum rides the same LegacyTwoCall `_value` call as its ordinal.
-    is BridgeType.Enum -> exportBuilder(call, plan.receiver, plan.symbol)
+    is BridgeType.Enum -> exportBuilder(call, plan.receiver, plan.ownerTag())
       .returns(kotlinType("Int"))
       .addCode(
         valueBody("${plan.accessExpression()}!!.ordinal", "errorOut", "0"),
@@ -300,7 +300,7 @@ private fun FileSpec.Builder.addNullableValueGetter(
     // unboxed to the underlying (the ordinal for an enum underlying).
     is BridgeType.ValueClass -> {
       val unboxed = "${plan.accessExpression()}!!.${inner.underlyingPropertyName}"
-      val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.symbol)
+      val getterBuilder: FunSpec.Builder = exportBuilder(call, plan.receiver, plan.ownerTag())
       when (val underlying: BridgeType = inner.underlying) {
         is BridgeType.Primitive -> getterBuilder
           .returns(kotlinType(underlying))
@@ -333,7 +333,7 @@ private fun FileSpec.Builder.addSetter(
   assignsNull: Boolean?,
 ) {
   val builder: FunSpec.Builder =
-    exportBuilder(call, plan.receiver, plan.symbol, includeError = false)
+    exportBuilder(call, plan.receiver, plan.ownerTag(), includeError = false)
   if (assignsNull != true) {
     val valueType: BridgeType = requireNotNull(
       call.parameters.firstOrNull { it.role == ForwardAbiRole.SETTER_VALUE }?.transfer?.type,
@@ -353,15 +353,25 @@ private fun FileSpec.Builder.addSetter(
   addFunction(builder.build())
 }
 
+/**
+ * ADR-117 owner of a property export. ADR-006 amendment: an enum member property shares its plan
+ * symbol with a (shadowed) extension property of the same name on the enum, and both claim one C
+ * entry point, so the member is tagged by its role or the collision would list one name twice.
+ */
+private fun ForwardPropertyPlan.ownerTag(): ForwardExportOwnerTag = ForwardExportOwnerTag(
+  symbol = symbol,
+  role = if (position == ForwardPropertyPosition.ENUM_MEMBER) "enum member property" else null,
+)
+
 private fun exportBuilder(
   call: ForwardNativeCall,
   receiver: ForwardPropertyReceiver,
   // ADR-117: a property plan is its own owner symbol (properties cannot overload).
-  symbol: String,
+  owner: ForwardExportOwnerTag,
   includeError: Boolean = true,
 ): FunSpec.Builder {
   val builder: FunSpec.Builder = FunSpec.builder("export_${call.exportName}")
-    .addAnnotation(cNameAnnotation(call.exportName, ForwardExportOwnerTag(symbol = symbol)))
+    .addAnnotation(cNameAnnotation(call.exportName, owner))
   when (receiver) {
     is ForwardPropertyReceiver.Handle -> builder.addParameter("handle", cOpaquePointer)
     is ForwardPropertyReceiver.Value ->

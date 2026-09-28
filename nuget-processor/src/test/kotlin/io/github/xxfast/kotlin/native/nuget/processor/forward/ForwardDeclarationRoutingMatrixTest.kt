@@ -286,6 +286,10 @@ class ForwardDeclarationRoutingMatrixTest {
       ForwardPropertyPosition.EXTENSION -> ForwardPropertyReceiver.Value(
         BridgeType.Primitive(PrimitiveKind.INT),
       )
+      // ADR-006 amendment: an enum's own member property, on the entry's `int` ordinal.
+      ForwardPropertyPosition.ENUM_MEMBER -> ForwardPropertyReceiver.Value(
+        BridgeType.Enum("sample.Litter"),
+      )
     }
     val wire: ForwardAbiWireType = when (type) {
       is BridgeType.Primitive -> ForwardAbiWireType.INT32
@@ -355,6 +359,11 @@ class ForwardDeclarationRoutingMatrixTest {
 
       ForwardPropertyPosition.EXTENSION -> {
         val members = ForwardCirPropertyProjection.extension(plan, "sample")
+        assertTrue(members.isNotEmpty())
+      }
+
+      ForwardPropertyPosition.ENUM_MEMBER -> {
+        val members = ForwardCirPropertyProjection.enumMember(plan, "sample", "litter")
         assertTrue(members.isNotEmpty())
       }
     }

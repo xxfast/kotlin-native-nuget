@@ -493,7 +493,14 @@ internal data class ForwardCallablePlanCatalog(
   }
 
   fun propertyFor(symbol: String): ForwardPropertyPlan? {
-    val matches: List<ForwardPropertyPlan> = propertyPlans.filter { plan -> plan.symbol == symbol }
+    // ADR-006 amendment: an ENUM_MEMBER plan is keyed `pkg.Mood.x`, which is also the key of a
+    // (shadowed) extension `val Mood.x` in the same package. Enum member plans are never looked up
+    // by symbol (both halves select them by position through `enumMembersOf`), so they are out of
+    // this lookup's universe by position: it cannot return the member's plan to the extension
+    // route, nor trip the duplicate invariant below on a legal Kotlin pair.
+    val matches: List<ForwardPropertyPlan> = propertyPlans.filter { plan ->
+      plan.symbol == symbol && plan.position != ForwardPropertyPosition.ENUM_MEMBER
+    }
     // ADR-074: this invariant must be unreachable once the `allDeclarations` funnel filters
     // `isExpect` (an unfiltered expect/actual pair is what used to trip it). A fresh firing means
     // a *new* source of duplicate qualified names, not this one.
@@ -743,6 +750,8 @@ internal class ForwardCallablePlanner(
     valueClasses: List<KSClassDeclaration> = emptyList(),
     // ADR-111: sealed bases, whose subclass properties plan alongside the ordinary class ones.
     sealedClasses: List<KSClassDeclaration> = emptyList(),
+    // ADR-006 amendment: enums, whose own member properties plan as ENUM_MEMBER.
+    enums: List<KSClassDeclaration> = emptyList(),
   ): ForwardCallablePlanCatalog {
     topLevelFunctions = functions
     topLevelExtensions = extensionFunctions
@@ -832,7 +841,7 @@ internal class ForwardCallablePlanner(
     }
     val planner = ForwardPropertyPlanner(classifier, symbols, expects)
     val propertyPlans: List<ForwardPropertyPlan> = planner.catalog(
-      classes, properties, extensionProperties, sealedClasses, objects,
+      classes, properties, extensionProperties, sealedClasses, objects, enums,
     )
     return ForwardCallablePlanCatalog(
       entries.map { entry -> entry.withLegacyDefaults() },

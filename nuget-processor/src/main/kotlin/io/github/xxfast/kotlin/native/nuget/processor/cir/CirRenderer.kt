@@ -52,7 +52,7 @@ class CirRenderer {
     // renders inside its owner's block. A top-level enum still renders its own, in `renderEnum`.
     namespace.declarations.forEach { declaration ->
       nestedEnumsOf(declaration)
-        .filter { it.properties.isNotEmpty() }
+        .filter { it.extensionMembers.isNotEmpty() }
         .forEach { nestedEnum ->
           appendLine()
           renderEnumExtensions(nestedEnum)

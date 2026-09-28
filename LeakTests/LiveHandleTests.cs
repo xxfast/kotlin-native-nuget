@@ -279,6 +279,20 @@ public class LiveHandleTests
         });
     }
 
+    // Row 1h. ADR-006 amendment: an enum member property typed as an exported class rides the
+    // forward property plan, so each read retains a fresh `Toy` handle through `NugetHandles` and
+    // hands C# the owned wrapper; only `Dispose` releases it. Oreo picks his favourite toy fifty
+    // times and puts it back fifty times.
+    [Fact]
+    public void EnumMemberClassTypedGetter_UsingDispose_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using Toy toy = TestLibrary.Cat.Mood.Happy.FavouriteToy();
+            Assert.Equal("Purring Oreo", toy.Name);
+        });
+    }
+
     // Row 2. String parameter and string return on the ordinary route: no StableRef at all
     // (UTF-8 wire), so the count must not move even once.
     [Fact]

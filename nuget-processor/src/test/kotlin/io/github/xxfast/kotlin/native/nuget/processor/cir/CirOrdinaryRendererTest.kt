@@ -833,18 +833,25 @@ class CirOrdinaryRendererTest {
         CirEnumEntry("Calm", 0),
         CirEnumEntry("Anxious", 1),
       ),
-      properties = listOf(
-        CirEnumProperty(
-          name = "Label",
-          type = "string",
-          nativeReturnType = "IntPtr",
-          nativeName = "label",
+      extensionMembers = listOf(
+        CirDllImport(
+          libraryName = "clinic",
+          entryPoint = "mood_get_label",
+          returnType = "IntPtr",
+          name = "Native_MoodGetLabel",
+          parameters = listOf(CirParameter("receiver", "int")),
+          visibility = CirVisibility.PRIVATE,
+          hasSyncErrorOut = true,
         ),
-        CirEnumProperty(
-          name = "Severity",
-          type = "int",
-          nativeReturnType = "int",
-          nativeName = "severity",
+        CirMethod(
+          name = "Label",
+          returnType = "string",
+          parameters = listOf(CirParameter("mood", "Mood")),
+          body = "            return Marshal.PtrToStringUTF8(Native_MoodGetLabel((int)mood, " +
+              "out IntPtr error))!;",
+          isStatic = true,
+          isExtension = true,
+          hasCustomBody = true,
         ),
       ),
     )
@@ -855,17 +862,13 @@ class CirOrdinaryRendererTest {
     assertContains(rendered, "Calm = 0,")
     assertContains(rendered, "Anxious = 1,")
     assertContains(rendered, "public static partial class MoodExtensions")
+    // ADR-006 amendment: the members are the projected plan nodes, rendered by `renderMember`.
     assertContains(
       rendered,
-      "private static extern IntPtr Native_GetLabel(int ordinal);",
+      "private static extern IntPtr Native_MoodGetLabel(int receiver, out IntPtr error);",
     )
     assertContains(rendered, "public static string Label(this Mood mood)")
-    assertContains(
-      rendered,
-      "Marshal.PtrToStringUTF8(Native_GetLabel((int)mood))!",
-    )
-    assertContains(rendered, "public static int Severity(this Mood mood)")
-    assertContains(rendered, "Native_GetSeverity((int)mood)")
+    assertContains(rendered, "Native_MoodGetLabel((int)mood, out IntPtr error)")
   }
 
   // -- CirValueClass ----------------------------------------------------------
