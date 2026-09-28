@@ -34,8 +34,9 @@ import kotlin.test.assertTrue
  *
  * Deliberately NOT pinned here, each a split-out bug rather than this item (see
  * `H-observed-matrix.md` sections 2 and 3):
- *  - the two interface-default PART cells (`flowReturnOnInterface`, `callbackParamOnInterface`):
- *    they ARE re-emitted, on the *implementing class*, and are missing only from the C# interface;
+ *  - (no longer a gap) the two interface-default PART cells (`flowReturnOnInterface`,
+ *    `callbackParamOnInterface`): declared on `IManifest` since ADR-160 (the lambda) and ADR-174
+ *    (the Flow, once `Manifest` is reachable); asserted in `the interface-default PART pair...`;
  *  - the cross-namespace generic return (`fun f(): Box<Int>` at top level) — emitted unqualified,
  *    `CS0246`;
  *  - `fun callbackParamOnClass(cb: (Int) -> Unit): Int` (non-`Unit` return): ADR-160 binds it off
@@ -102,10 +103,10 @@ class Tier1UnroutedPositionsTest {
 
     // --- interface-default owner (`Manifest`) -------------------------------------------------
     // `flowParamOnInterface` is not a row of its own in the observed matrix, but it is measured:
-    // the C# `IManifest` declared only `int OkOnInterface();` and the only two members re-emitted
-    // on the implementing class were `flowReturnOnInterface` / `callbackParamOnInterface` (the
-    // PART pair, split out). So a Flow *parameter* on an interface default is silent, like
-    // everywhere else a Flow sits at a parameter.
+    // before ADR-160/174 the C# `IManifest` declared only `int OkOnInterface();`, and the only two
+    // members bound anywhere were `flowReturnOnInterface` / `callbackParamOnInterface` (the PART
+    // pair, now declared on `IManifest` itself). So a Flow *parameter* on an interface default is
+    // silent, like everywhere else a Flow sits at a parameter.
     input("tier1.unrouted.Manifest.flowParamOnInterface"),
     returns("tier1.unrouted.Manifest.genericReturnOnInterface"),
     structural("tier1.unrouted.Manifest.structuralOnInterface"),
@@ -136,9 +137,9 @@ class Tier1UnroutedPositionsTest {
   private val constructorCells: Int = 3
 
   /**
-   * The two interface-default cells that ARE re-emitted on the implementing class. They are
-   * excluded from every assertion here (including the count) because whether they should be
-   * declared on the C# interface or named as a skip is the split-out decision, not this item's.
+   * The two interface-default cells that bind: ADR-160 declares the lambda one on `IManifest`, and
+   * ADR-174 the Flow one (the fixture makes `Manifest` reachable through `makeManifest`). Excluded
+   * from the skip count because they are not skips; asserted present in their own test.
    */
   private val partMembers: List<String> = listOf(
     "flowReturnOnInterface",
@@ -203,6 +204,8 @@ class Tier1UnroutedPositionsTest {
     class ManifestDesk : Manifest {
       fun okOnManifestDesk(): Int = 2
     }
+
+    fun makeManifest(): Manifest = ManifestDesk()
 
     fun flowReturnOnTopLevel(): Flow<Int> = flowOf(1)
     fun flowParamOnTopLevel(events: Flow<Int>): Int = 0
@@ -285,16 +288,31 @@ class Tier1UnroutedPositionsTest {
       "one skip per silent cell, no more (a per-parameter and a per-callable reclassification " +
           "both firing would double-report) and no fewer. named=$named",
     )
-    // The PART pair binds through the class-owner routes, so this reclassification must not sweep
-    // it up: a skip naming a member the consumer can still call (through `ManifestDesk`) is a
-    // false positive. Asserted against every warning, not just [named] — they are not in [cells],
-    // so filtering first would make this vacuous. If the split-out later decides to declare them
-    // on the C# interface *and* name the interface half, this assertion moves with that decision.
+    // The PART pair binds (on `IManifest` and on `ManifestDesk`), so this reclassification must not
+    // sweep it up: a skip naming a member the consumer can call is a false positive. Asserted
+    // against every warning, not just [named]: they are not in [cells], so filtering first would
+    // make this vacuous.
     partMembers.forEach { member ->
       assertFalse(
         result.kspWarnings.any { it.contains(member) },
-        "$member is re-emitted on ManifestDesk (the split-out PART bug), so it must not become a " +
+        "$member binds on IManifest (ADR-160 / ADR-174), so it must not become a " +
             "skip here; kspWarnings=${result.kspWarnings}",
+      )
+    }
+  }
+
+  @Test
+  fun `the interface-default PART pair is declared on the interface`() {
+    val result: Tier1Result = run()
+
+    listOf(
+      "void CallbackParamOnInterface(Action<int> cb);",
+      "KotlinFlow<int> FlowReturnOnInterface();",
+    ).forEach { declaration ->
+      assertTrue(
+        result.generatedCSharp.contains(declaration),
+        "expected IManifest to declare `$declaration`; generatedCSharp=" +
+            "${result.generatedCSharp.lines().filter { it.contains("OnInterface") }}",
       )
     }
   }
