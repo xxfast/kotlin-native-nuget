@@ -718,11 +718,11 @@ sealed class Sunroom {
 ```
 
 ```C#
-public sealed class Beam : Sunroom, ISunseeker
+public sealed class Beam : Sunroom, global::Interop.ISunseeker
 {
     public override int Naps { get { /* ... */ } } // get-only: widens Sunroom's read-only naps (CS0546)
 
-    int ISunseeker.Naps // ADR-168's explicit setter, now given to a sealed arm too
+    int global::Interop.ISunseeker.Naps // ADR-168's explicit setter, now given to a sealed arm too
     {
         get => Naps;
         set { /* ... */ }
@@ -732,6 +732,11 @@ public sealed class Beam : Sunroom, ISunseeker
     public string Bask() { /* ... */ }    // Basker's default, reached through the super-interface
 }
 ```
+
+A sealed arm is a nested type, so its base list is qualified even for a same-namespace
+interface (`global::Interop.ISunseeker`, not bare `ISunseeker`): the qualification avoids binding
+to a differently-named nested type declared beside it. A top-level class's same-namespace base
+list stays bare (`TrainingClicker : Scoreboard, ITally` above).
 
 ```C#
 ISunseeker seeker = beam;
