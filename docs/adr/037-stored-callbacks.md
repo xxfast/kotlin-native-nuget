@@ -602,3 +602,27 @@ a bug in the existing v1 scope ("Element types for `T`: object handles, `String`
 not a new refusal: `Boolean` now rides the same handle wire every other scalar payload on this
 route already used, and a stored `(Boolean) -> Unit` pair compiles and fires correctly. See
 [Lambdas and callbacks](../topics/lambdas-and-callbacks.md).
+
+## Amendment (2026-09-28): the pair rejects a null listener unconditionally
+
+`AddX` had no null guard on either Kotlin spelling: the nullable and non-null spellings render
+byte-identical C# signatures and bodies, so a `null` listener registered successfully and the
+failure surfaced later as a `NullReferenceException` inside the stored closure, at whatever call
+next triggered the Kotlin emission — the same wrong-place, wrong-type failure the per-call route's
+own guard exists to prevent.
+
+The generated `AddX` now starts with `ArgumentNullException.ThrowIfNull(listener)`,
+**unconditionally**, before the `nativeCallback` declaration and `RegisterCtx`. This is
+deliberately not modelled on the Kotlin parameter's own nullability (there is no field like the
+per-call route's `rejectsNullDelegate` here): the Kotlin export never forwards the C# argument to
+Kotlin as null in the first place (`obj.add{X}(bridge)` always passes a non-null bridge lambda), so
+a null listener can never mean anything on this route, whatever the Kotlin spelling says.
+
+`AddX` also now checks the receiver before registering: a disposed receiver throws
+`ObjectDisposedException(nameof(Cat))` (the arm's own name on a sealed arm), matching the
+interface-bridge pair's existing check. The null check runs first, so a null listener on a disposed
+receiver still names the argument rather than the receiver.
+
+No new CIR field and no ROADMAP scope change: this closes the gap tracked as "the stored-callback
+add/remove pair route has no `ArgumentNullException.ThrowIfNull`". See
+[Lambdas and callbacks](../topics/lambdas-and-callbacks.md).

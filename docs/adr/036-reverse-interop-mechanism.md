@@ -643,6 +643,21 @@ wrapper now calls `ArgumentNullException.ThrowIfNull` on the delegate argument b
 `null` argument fails at the managed boundary instead of reaching a `[UnmanagedCallersOnly]` thunk
 that dereferences a null `GCHandle.Target` (a fail-fast no `catch` can see).
 
+> **Correction (2026-09-28):** the "fail-fast no `catch` can see" sentence above was never
+> accurate for this route, and is left here uncorrected in place rather than silently rewritten.
+> By the time this amendment landed, ADR-161 already had the C# thunk register the non-null
+> delegate closure and route any exception through the same `errOut`/rethrow channel every other
+> callback exception uses; a null `GCHandle.Target` was never dereferenced inside
+> `[UnmanagedCallersOnly]`. The observed pre-fix symptom was a `NullReferenceException` deferred to
+> whichever call next triggered the Kotlin emission, not a process fail-fast. Separately, this
+> route's own guard is now unconditional rather than keyed to `rejectsNullDelegate`: every
+> per-call callback parameter throws `ArgumentNullException.ThrowIfNull` regardless of the Kotlin
+> parameter's own nullability, on both the legacy renderer and the ADR-062 plan route, except a
+> lambda with a Kotlin default (ADR-164), where `null` means "use the default" rather than "no
+> listener". The stored-callback pair (ADR-037) and interface-bridge pair (ADR-039) gained the
+> same unconditional guard on the same date. See [Lambdas and callbacks: a nullable lambda
+> parameter](../topics/lambdas-and-callbacks.md#a-nullable-lambda-parameter).
+
 **A lambda whose payload or return is nullable** (`(Int?) -> Unit`, `(Cat?) -> Unit`, `(Int) ->
 String?`) had no wire and no diagnostic either: `(Int?) -> Unit` and `(Cat?) -> Unit` render
 generated Kotlin that fails to compile (`actual type is 'Int?', but 'Int' was expected` against the

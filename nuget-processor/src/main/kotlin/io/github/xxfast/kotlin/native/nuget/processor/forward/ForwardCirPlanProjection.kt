@@ -715,6 +715,20 @@ internal object ForwardCirPlanProjection {
     )
   }
 
+  /**
+   * A non-omittable callback is required: C# `null` has no Kotlin meaning, and left unchecked it
+   * registers and surfaces as a `NullReferenceException` rethrown from inside the callback. The
+   * guard leads the whole prelude (a declaration, so it lands before the `try` and before any
+   * other parameter's handle is minted); an exception there leaves nothing to clean up. A
+   * defaulted (ADR-164) lambda keeps `null` as "unset" under every encoding and takes no guard.
+   */
+  private fun callbackNullGuard(parameter: ForwardPublicParameter): ForwardCirHandleStep? {
+    if (parameter.type !is BridgeType.Callback) return null
+    if (parameter.default != null) return null
+    val guard = "ArgumentNullException.ThrowIfNull(${parameter.csharpName});"
+    return ForwardCirHandleStep(flat = guard, declarations = listOf(guard), statement = "")
+  }
+
   private fun ForwardCallablePlan.callbackCleanup(parameter: ForwardPublicParameter): String? {
     if (parameter.type !is BridgeType.Callback) return null
     return forwardCallbackCleanup(parameter.csharpLocal)
@@ -919,7 +933,8 @@ internal object ForwardCirPlanProjection {
   ): CirResultProjection {
     val nativeCall: ForwardNativeCall = singleNativeImport()
     val prelude: List<ForwardCirHandleStep> =
-      parameters.mapNotNull { parameter -> parameter.optionalPrelude() } +
+      parameters.mapNotNull { parameter -> callbackNullGuard(parameter) } +
+          parameters.mapNotNull { parameter -> parameter.optionalPrelude() } +
           parameters.unwrapped().mapNotNull { parameter ->
             bytesPrelude(parameter)
               ?: collectionPrelude(parameter)
