@@ -115,8 +115,9 @@ internal fun KSFunctionDeclaration.hasPlannedCallbackParameter(
  * declaration name only) carries it exactly as it carries the non-null spelling -- and the
  * generated wrapper rejects a null delegate with `ArgumentNullException` instead.
  *
- * Reads the UNEXPANDED argument types: `expandAliases()` drops use-site nullability, so a
- * `typealias Name = String` payload spelled `Name?` would otherwise read as non-null.
+ * Reads the UNEXPANDED argument types. Since the ADR-018 amendment `expandAliases()` carries a
+ * use-site `?` too (`Name?` expands to `String?`), so either spelling reads a `Name?` payload as
+ * nullable.
  *
  * Two more shapes neither hand-written route can carry, refused at the same five sites for the same
  * reason (both halves, class and sealed arm, per-call and stored, before the partition so a

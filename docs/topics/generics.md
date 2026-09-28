@@ -287,19 +287,31 @@ top-level one with no `T`-typed parameter (e.g. `fun <T> f(): List<T>`), is not 
 ## Type aliases
 
 A `typealias` erases to its underlying type; there is no separate alias type in the generated C#.
+This holds on every route, including a use-site `?` on the alias itself and a suspend or `Flow`
+member, so an aliased type behaves exactly like the written-out type would, refusals included:
 
 ```kotlin
 typealias Score = Int
-typealias CatNames = List<String>
+typealias PetName = String
+typealias Box<T> = List<T>
 
 fun topScore(): Score = 10
-fun defaultNames(): CatNames = listOf("Oreo", "Mylo")
+suspend fun greetLater(name: PetName?): PetName? { /* ... */ }
+fun boxedTallies(tallies: Box<Int>): Box<Int> = tallies.map { it * 2 }
 ```
 
 ```C#
 int score = TypeAliases.TopScore(); // Score is just Int
-IReadOnlyList<string> names = TypeAliases.DefaultNames();
+string? greeting = await TypeAliases.GreetLaterAsync(null); // PetName? is just string?
+Assert.Null(greeting);
+IReadOnlyList<int> doubled = TypeAliases.BoxedTallies([2, 3]); // Box<Int> is just List<Int>
 ```
+
+A generic alias substitutes its type parameter only when the parameter is one of the RHS's own
+top-level type arguments, as `Box<T>` above does. A parameter nested deeper in the RHS
+(`typealias Pages<T> = List<Map<String, T>>`) is not substituted; a member using it is skipped with
+a named warning instead of generating a wrong binding. Write the type out at that position if you
+need it exported.
 
 Erasure applies to an extension's receiver too, including a nested-type alias
 (see [Extensions: Nested receivers](extensions.md#nested-receivers)).

@@ -88,7 +88,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | `fun <T> f()` | → | typed variants | Dispatched on the runtime type; a bare `T` carries `null` unless bound non-null. | [Generics](generics.md) |
 | `<T : Bound>` constraint | → | `where T : ...` | `T : Any` renders `where T : notnull`; a nullable bound (`T : Pet?`) keeps its `?`. | [Generics](generics.md) |
 | `out T` / `in T` variance | → | `out T` / `in T` |  | [Generics](generics.md) |
-| `typealias` | → | C# alias / underlying | Generic type aliases included. | [Generics](generics.md) |
+| `typealias` | → | the underlying type | Use-site `?` and a substituted generic alias (`Box<Int>`) bind as the written-out type on every route; a parameter nested in the RHS stays a named skip. | [Generics](generics.md) |
 
 ## Collections
 

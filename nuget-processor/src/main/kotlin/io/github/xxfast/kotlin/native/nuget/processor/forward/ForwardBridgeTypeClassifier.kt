@@ -86,8 +86,8 @@ internal class ForwardBridgeTypeClassifier(
   fun classify(type: KSType): BridgeType {
     val expanded: KSType = type.expandAliases()
     val classified: BridgeType = classifyNonNullable(expanded)
-    // `KSTypeAlias.type.resolve()` describes the alias target and can lose a `?` applied at the
-    // alias use site, so retain nullability from both the original use and the expanded target.
+    // Since the ADR-018 amendment `expandAliases()` carries an alias use site's `?` itself, so the
+    // expanded side alone is sufficient; the unexpanded read is kept as a belt-and-braces OR.
     val isNullable: Boolean = type.isMarkedNullable || expanded.isMarkedNullable
     if (!isNullable) return classified
     // ADR-147 amendment: a nullable-bounded `T` is already wrapped; a `T?` use site keeps the
