@@ -20,8 +20,12 @@ class Tier1ListenerUndeclaredTest {
     assertFalse(generatedCSharp.contains("AddWatcher("), "no C# member over an undeclared listener")
     assertFalse(generated.contains("object : $listener"), "no Kotlin export either")
     listOf("addWatcher", "removeWatcher").forEach { member ->
+      val namedSkip: Boolean =
+        kspWarnings.any {
+          it.contains("Almanac.$member") && it.contains(listener) && it.contains(marker)
+        }
       assertTrue(
-        kspWarnings.any { it.contains("Almanac.$member") && it.contains(listener) && it.contains(marker) },
+        namedSkip,
         "expected a named skip for $member naming $listener with $marker; got $kspWarnings",
       )
     }
@@ -115,7 +119,10 @@ class Tier1ListenerUndeclaredTest {
       }
       """.trimIndent(),
     )
-    assertTrue(result.kspSucceeded, "expected no KSP error; got ${result.kspExitCode} ${result.kspErrors}")
+    assertTrue(
+      result.kspSucceeded,
+      "expected no KSP error; got ${result.kspExitCode} ${result.kspErrors}",
+    )
     assertTrue(result.compiledClean, "expected the fixture to bind; got: ${result.compileErrors}")
     assertTrue(result.generatedCSharp.contains("AddWatcher("), "a declared listener keeps its pair")
     assertTrue(result.generatedCSharp.contains("Aviary.IWatcher"), "spelled through its owner")
