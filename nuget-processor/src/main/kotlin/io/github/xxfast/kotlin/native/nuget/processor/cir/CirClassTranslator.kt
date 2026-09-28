@@ -1004,7 +1004,7 @@ internal fun translateClass(
       val nameableTypes: Set<String> = exportedTypes + callableCatalog.boxedValueClasses
       val unnameableTypeArgument: CsTypeArgument.Unnameable? =
         if (isLambdaType || isSuspendLambdaType) {
-          csTypeArguments(propTypeResolved.arguments, nameableTypes, context)
+          csTypeArguments(propTypeResolved.arguments, nameableTypes, context, classifier)
         } else null
       if (unnameableTypeArgument != null) {
         ForwardDiagnosticSink.emit(
@@ -1024,13 +1024,13 @@ internal fun translateClass(
       }
 
       val lambdaTypeArgs: List<String> = if (isLambdaType) {
-        csTypeArgumentNames(propTypeResolved.arguments, nameableTypes, context)
+        csTypeArgumentNames(propTypeResolved.arguments, nameableTypes, context, classifier)
       } else emptyList()
 
       val lambdaCsType: String = if (isLambdaType) csLambdaType(lambdaTypeArgs) else ""
 
       val suspendLambdaTypeArgs: List<String> = if (isSuspendLambdaType) {
-        csTypeArgumentNames(propTypeResolved.arguments, nameableTypes, context)
+        csTypeArgumentNames(propTypeResolved.arguments, nameableTypes, context, classifier)
       } else emptyList()
 
       val suspendLambdaIsUnit: Boolean = isSuspendLambdaType &&
@@ -2405,7 +2405,7 @@ internal fun translateSealedClass(
           // ADR-171: a value class with a box/unbox pair is nameable here too.
           val nameableTypes: Set<String> = exportedTypes + callableCatalog.boxedValueClasses
           val unnameableTypeArgument: CsTypeArgument.Unnameable? =
-            csTypeArguments(propTypeResolved.arguments, nameableTypes, context)
+            csTypeArguments(propTypeResolved.arguments, nameableTypes, context, classifier)
           if (unnameableTypeArgument != null) {
             ForwardDiagnosticSink.emit(
               listOf(
@@ -2424,7 +2424,7 @@ internal fun translateSealedClass(
             return@mapNotNull null
           }
           val lambdaTypeArgs: List<String> =
-            csTypeArgumentNames(propTypeResolved.arguments, nameableTypes, context)
+            csTypeArgumentNames(propTypeResolved.arguments, nameableTypes, context, classifier)
           val lambdaCsType: String = csLambdaType(lambdaTypeArgs)
           CirProperty(
             name = propName.replaceFirstChar { it.uppercase() },
@@ -3684,6 +3684,7 @@ internal fun translateInterfaceBackingClass(
     interfaces = listOf("I$name"),
     hasInternalHandleConstructor = true,
     isSealed = true,
+    backsInterface = "I$name",
     // ADR-159 (ROADMAP:49's flag-derivation half): derived from what this wrapper projects,
     // which is never an async member -- `ForwardCallablePlanner.interfaceEntries` skips
     // `suspend` with `ForwardPlanSkipReason.SUSPEND`, and no Flow route runs for an interface --

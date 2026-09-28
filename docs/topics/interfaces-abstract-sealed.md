@@ -249,13 +249,23 @@ garbage-collection round, not the moment the C# reference goes out of scope. The
 `IDisposable`-style prompt release for a C#-implemented interface.
 
 Reading a stored C#-implemented object back from Kotlin, whether through a property, a `suspend
-fun` completion, or a `Flow<T>` element, resolves to the **original C# instance**, not a fresh
-wrapper:
+fun` completion, a `Flow<T>` element, or any of the three erased generic routes (a
+`KotlinFunc<IPet, ...>` result, a legacy `fun <T>` return, or an [ADR-147 generic class's `T`
+member](generics.md#an-interface-at-an-erased-position)), resolves to the **original C# instance**,
+not a fresh wrapper:
 
 ```C#
 oreo.Befriend(dog);
 oreo.Friend; // the same `dog` instance, not a new Pet wrapper
+
+using KotlinFunc<IPet, IPet> relay = PetRelayKt.PetRelay();
+relay.Invoke(dog); // the same `dog` instance too
 ```
+
+An erased type argument spells an exported interface as the interface itself, never the
+ADR-040 backing wrapper: `PetRelayKt.PetRelay()` returns `KotlinFunc<IPet, IPet>`, not
+`KotlinFunc<Pet, Pet>`. A consumer that named the old wrapper type explicitly stops compiling;
+`var` and passing the result straight on keep working.
 
 This identity match is C#-side only. Passing the same C# object into Kotlin twice builds two
 separate bridge objects, so Kotlin-side `===` does not treat them as equal, the same way identity

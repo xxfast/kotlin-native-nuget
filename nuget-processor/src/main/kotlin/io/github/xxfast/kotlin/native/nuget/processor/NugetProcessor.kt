@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor
 
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.findActualType
+import com.google.devtools.ksp.getDeclaredProperties
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.processing.CodeGenerator
 import com.google.devtools.ksp.processing.Dependencies
@@ -124,6 +125,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionKinds
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementInterface
+import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollectionKinds
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.LegacyRefusedInterfaceBridgePair
@@ -1829,6 +1832,41 @@ class NugetProcessor(
     // always claimed ("reachable at a return or parameter position") but the return-only walk
     // never did. Without it, a C# class implementing a parameter-only interface reaches
     // `NugetBridge.HandleFor`'s NotSupportedException arm at runtime instead of a bridge.
+    // ADR-173: the one erased-position predicate. A type whose own type arguments reach C# through
+    // `csTypeArgument` (a lambda `KotlinFunc<...>`, or an exported generic class `Box<...>`)
+    // contributes each argument the classifier calls an interface -- the SAME classification
+    // `csTypeArgument` spells `IFoo` with, so an interface is spelled at an erased position exactly
+    // when this walk makes it reachable.
+    fun erasedInterfaceArguments(type: KSType?): List<String> {
+      val expanded: KSType = type?.expandAliases() ?: return emptyList()
+      val declaration: KSDeclaration = expanded.declaration
+      val qualifiedName: String? = declaration.qualifiedName?.asString()
+      val erased: Boolean = qualifiedName in LAMBDA_TYPES ||
+          (declaration is KSClassDeclaration && declaration.typeParameters.isNotEmpty() &&
+              qualifiedName in exportedObjectHandles)
+      if (!erased) return emptyList()
+      return expanded.arguments.mapNotNull { argument ->
+        forwardClassifier.legacyFlowElementInterface(argument.type?.resolve())?.qualifiedName
+      }
+    }
+
+    // A superset of the erased positions `csTypeArgument` spells: a top-level function's return
+    // (the lambda- and generic-return routes), a top-level property (over-inclusion), and a public
+    // property of a class, object or sealed subclass (the lambda-typed property routes). A member
+    // function's lambda return is skipped named upstream, so walking it would only mint an unused
+    // wrapper.
+    fun erasedPositionTypes(): Sequence<KSType?> = sequence {
+      allFunctions.forEach { function -> yield(function.returnType?.resolve()) }
+      properties.forEach { property -> yield(property.type.resolve()) }
+      val owners: List<KSClassDeclaration> = classes + objects +
+          sealedClasses.flatMap { sealed -> sealed.getSealedSubclasses().toList() }
+      owners.forEach { owner ->
+        owner.getDeclaredProperties()
+          .filter { property -> property.getVisibility() == Visibility.PUBLIC }
+          .forEach { property -> yield(property.type.resolve()) }
+      }
+    }
+
     val reachableInterfaceNames: Set<String> = buildSet {
       ordinaryCatalog.plans.forEach { plan ->
         plan.publicSignature.result.interfaceQualifiedNameOrNull()?.let(::add)
@@ -1842,6 +1880,13 @@ class NugetProcessor(
         // Same receiver reasoning for an extension property over an interface receiver.
         plan.calls().receiverInterfaceQualifiedNames().forEach(::add)
       }
+      // ADR-173: an ERASED type-argument position reaches an interface too. A lambda return
+      // (`(Squeaker) -> Squeaker`) or a generic-class carrier (`Box<Squeaker>`) is a legacy route
+      // that never becomes a plan, yet `csTypeArgument` spells the interface there and the
+      // consumer hands its own implementation through `Wrap<T>` and reads it back through
+      // `Materialize<T>`. So the interface needs its backing wrapper, its `Factories` entry and
+      // its `NugetBridge` arm exactly as a planned position would give it.
+      erasedPositionTypes().forEach { type -> erasedInterfaceArguments(type).forEach(::add) }
     }
     val reachableInterfaces: List<KSClassDeclaration> = interfaces
       .filter { iface -> iface.qualifiedName?.asString() in reachableInterfaceNames }

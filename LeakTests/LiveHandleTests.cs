@@ -607,6 +607,46 @@ public class LiveHandleTests
         });
     }
 
+    // Rows 6g-6i. ADR-173: a C#-implemented `IPet` through each of the three ERASED generic
+    // routes. The write mints a bridge transfer handle (`Wrap<T>` falls back to `HandleOf`, disposed
+    // on `owned`), and the returned handle resolves to the original `Dog` through the token probe in
+    // `Materialize<T>`, which is what must release it: there is no wrapper for a `using` to dispose.
+    // A probe that returns `rex` and forgets the handle leaks once per crossing with `Assert.Same`
+    // still green, so these rows are the only place that leak shows.
+    //
+    // Rex goes through the lambda relay fifty times and Oreo keeps count.
+    [Fact]
+    public void ErasedLambdaRoute_CSharpImplementedPet_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using IPet rex = new Dog("Rex");
+            using KotlinFunc<IPet, IPet> relay = PetRelayKt.PetRelay();
+            Assert.Same(rex, relay.Invoke(rex));
+        });
+    }
+
+    [Fact]
+    public void ErasedLegacyGenericFunction_CSharpImplementedPet_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using IPet rex = new Dog("Rex");
+            Assert.Same(rex, Helpers.AdoptPet<IPet>(rex));
+        });
+    }
+
+    [Fact]
+    public void ErasedGenericClass_CSharpImplementedPet_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using IPet rex = new Dog("Rex");
+            using var box = new PetBox<IPet>(rex);
+            Assert.Same(rex, box.Value);
+        });
+    }
+
     // Row 6f. The Flow twin of Row 6e: one handle per emission, resolved per element rather than
     // per completion. Separate row because the freeing site is the `KotlinFlow<T>` `read:`
     // delegate, not the completion callback, and the enumerator's own box/job handles ride along

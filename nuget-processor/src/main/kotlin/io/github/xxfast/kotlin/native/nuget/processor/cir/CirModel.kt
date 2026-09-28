@@ -177,6 +177,9 @@ data class CirClass(
   // public constructor, and the `sealed` modifier communicates that consumers should implement
   // `IPet` rather than subclass this handle wrapper.
   val isSealed: Boolean = false,
+  // ADR-173: the C# interface (`IPet`) this class is the ADR-040 backing wrapper of, or null for
+  // every ordinary class. Drives the interface-keyed `NugetMarshal.Factories` entry.
+  val backsInterface: String? = null,
   val companionMembers: List<CirMember> = emptyList(),
   // ADR-159: `hasScope` -- this class, or a kept ancestor, owns the one coroutine scope. Drives the
   // scope block in `Dispose()`, which every level below the owner must repeat (a derived `Dispose`
@@ -532,6 +535,9 @@ data class CirFactoryEntry(
   // ADR-171: a value class. A record struct has no handle constructor; its generated
   // `NugetUnbox(IntPtr)` reads the boxed Kotlin value's underlying and disposes the handle.
   val viaNugetUnbox: Boolean = false,
+  // ADR-173: the type the entry constructs, when it differs from the `typeof` key. An exported
+  // interface registers under `typeof(IPet)` and constructs its ADR-040 backing class `Pet`.
+  val constructTypeName: String = qualifiedTypeName,
 )
 
 // ADR-084: the C#-implemented-interface bridge layer -- `NugetBridge`, `NugetBridgeState`, and one

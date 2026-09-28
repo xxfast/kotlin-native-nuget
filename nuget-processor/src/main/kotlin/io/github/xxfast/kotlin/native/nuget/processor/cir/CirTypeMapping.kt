@@ -10,6 +10,8 @@ import com.google.devtools.ksp.symbol.KSTypeArgument
 import com.google.devtools.ksp.symbol.KSTypeParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.CollectionKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticOwner
@@ -477,6 +479,7 @@ internal fun csTypeArgument(
   type: KSType?,
   exportedTypes: Set<String>,
   context: NugetContext,
+  classifier: ForwardBridgeTypeClassifier,
 ): CsTypeArgument {
   val resolved: KSType = type?.expandAliases()
     ?: return CsTypeArgument.Unnameable("an unresolved type argument")
@@ -502,6 +505,14 @@ internal fun csTypeArgument(
   if (resolved.arguments.isNotEmpty()) return CsTypeArgument.Unnameable(qualifiedName)
   if (qualifiedName !in exportedTypes) return CsTypeArgument.Unnameable(qualifiedName)
 
+  // ADR-173: an exported interface is spelled as the projected interface (`IPet`), never its
+  // ADR-040 backing wrapper (`Pet`), which a consumer's own implementation can never be. The same
+  // classifier the Flow element route spells with, so there is one interface spelling; it returns
+  // only `BridgeType.Interface`, so sealed and `fun` interfaces keep their own projections.
+  classifier.legacyFlowElementInterface(resolved)?.let { iface ->
+    return CsTypeArgument.Named("${iface.csharpType}$suffix")
+  }
+
   return CsTypeArgument.Named("${qualifiedElementCsType(resolved, context)}$suffix")
 }
 
@@ -514,9 +525,10 @@ internal fun csTypeArguments(
   arguments: List<KSTypeArgument>,
   exportedTypes: Set<String>,
   context: NugetContext,
+  classifier: ForwardBridgeTypeClassifier,
 ): CsTypeArgument.Unnameable? = arguments
   .asSequence()
-  .map { argument -> csTypeArgument(argument.type?.resolve(), exportedTypes, context) }
+  .map { argument -> csTypeArgument(argument.type?.resolve(), exportedTypes, context, classifier) }
   .filterIsInstance<CsTypeArgument.Unnameable>()
   .firstOrNull()
 
@@ -530,8 +542,10 @@ internal fun csTypeArgumentNames(
   arguments: List<KSTypeArgument>,
   exportedTypes: Set<String>,
   context: NugetContext,
+  classifier: ForwardBridgeTypeClassifier,
 ): List<String> = arguments.map { argument ->
-  when (val spelling = csTypeArgument(argument.type?.resolve(), exportedTypes, context)) {
+  val resolved: KSType? = argument.type?.resolve()
+  when (val spelling = csTypeArgument(resolved, exportedTypes, context, classifier)) {
     is CsTypeArgument.Named -> spelling.csType
     is CsTypeArgument.Unnameable -> error(
       "Forward CIR spelled the type argument '${spelling.typeArgument}', which has no C# " +
