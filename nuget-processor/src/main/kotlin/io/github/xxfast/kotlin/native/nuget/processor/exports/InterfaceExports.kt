@@ -6,6 +6,10 @@ import com.google.devtools.ksp.symbol.Visibility
 import com.google.devtools.ksp.getVisibility
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceFlowMethods
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceFlowProperties
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceSuspendMethods
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
@@ -30,9 +34,24 @@ internal fun FileSpec.Builder.addInterfaceExports(
   callableCatalog: ForwardCallablePlanCatalog,
   /** ADR-163: the one symbol table. */
   symbols: ForwardSymbolTable,
+  classifier: ForwardBridgeTypeClassifier,
 ) {
   val qualifiedName: String = iface.qualifiedName?.asString() ?: return
   val prefix: String = iface.nativePrefix(symbols)
+
+  // ADR-174: the interface as an owner of the class route's own async emitters, under its own
+  // prefix. The receiver is spelled `asStableRef<Feed>()`, which reaches any implementer
+  // (`Crate<Int>` included) through Kotlin's virtual dispatch. The selectors are the ones the C#
+  // half reads (`forwardInterface*`), so the two halves carry the same members.
+  if (iface.forwardInterfaceSuspendMethods(classifier).isNotEmpty()) {
+    addSuspendClassMethodExports(iface, classifier, callableCatalog, symbols, prefix = prefix)
+  }
+  iface.forwardInterfaceFlowProperties(classifier).forEach { prop ->
+    addFlowPropertyExports(prop, qualifiedName, prefix, classifier)
+  }
+  iface.forwardInterfaceFlowMethods(classifier).forEach { method ->
+    addFlowMethodExports(method, qualifiedName, prefix, classifier, callableCatalog)
+  }
 
   iface.getAllProperties()
     .filter { it.getVisibility() == Visibility.PUBLIC }

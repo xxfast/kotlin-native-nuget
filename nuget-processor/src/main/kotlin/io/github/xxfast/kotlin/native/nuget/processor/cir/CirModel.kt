@@ -115,6 +115,9 @@ data class CirInterface(
   // Interface super-interfaces: the kept (exported) direct supers, spelled for C# with their type
   // arguments (`INamed`, `IHolder<int>`), rendered ahead of `IDisposable`.
   val superInterfaces: List<String> = emptyList(),
+  // ADR-174 ruling 5: `IAsyncDisposable` beside `IDisposable`, when the interface projects a
+  // scope-using member.
+  val isAsyncDisposable: Boolean = false,
 ) : CirDeclaration
 
 data class CirInterfaceProperty(
@@ -139,6 +142,9 @@ data class CirInterfaceMethod(
   val doc: CirDoc? = null,
   // Interface super-interfaces: see [CirInterfaceProperty.isNew].
   val isNew: Boolean = false,
+  // ADR-174: a `suspend` member, declared with the trailing `CancellationToken ... = default` the
+  // class route's `Async` method takes, so an implementing class satisfies it.
+  val isAsync: Boolean = false,
 )
 
 data class CirClass(
@@ -196,6 +202,11 @@ data class CirClass(
   // `Native_Dispose` import to drain into). `DisposeAsync` follows `Dispose`'s spelling, which is
   // the rule that makes `IAsyncDisposable` satisfiable on an abstract owner at all.
   val overridesDisposeAsync: Boolean = false,
+  // ADR-174: the non-generic carrier this class hoists its externs into (`FeedNative`), so a
+  // generic implementer's explicit interface implementations can reach the interface's imports.
+  // Null keeps the externs private in the class; a generic class always hoists into
+  // `{Name}Native` (ADR-147).
+  val nativeCarrier: String? = null,
   // ADR-064 amendment (2026-09-10): plain-text prose for the class's `<remarks>` doc comment, set
   // only when WARNING_NO_PUBLIC_CONSTRUCTOR fires, off the same detail string the diagnostic uses.
   // Text, not markup: `renderDoc` owns the XML escaping, because the detail names Kotlin
@@ -844,6 +855,9 @@ data class CirMethod(
   // when it is `@suppress`ed, or when the doc came from a non-KOTLIN origin. `renderDoc` owns the
   // escaping, the same way `renderRemarks` does.
   val doc: CirDoc? = null,
+  // ADR-174: set on a generic implementer's forwarder, the interface spelling (`IFeed`) the member
+  // is explicitly implemented for. The renderer drops the modifiers and the `= default` token.
+  val explicitInterface: String? = null,
 ) : CirMember
 
 /**
@@ -933,6 +947,8 @@ data class CirProperty(
   // partial skip, where the setter alone was refused and the property survives read-only, so the
   // paragraph belongs on the property a consumer can still call rather than on its type.
   val remarks: List<String> = emptyList(),
+  // ADR-174: see [CirMethod.explicitInterface].
+  val explicitInterface: String? = null,
 ) : CirMember
 
 data class CirExtraNative(
@@ -1013,3 +1029,22 @@ data class CirConst(
 enum class CirVisibility {
   PUBLIC, PRIVATE
 }
+
+/**
+ * ADR-174: the modifiers a member header opens with. An explicit interface implementation takes
+ * none (CS0106), so [modifiers] is dropped when [CirMethod.explicitInterface] is set.
+ */
+internal fun CirMethod.memberHead(modifiers: String): String =
+  if (explicitInterface != null) "" else modifiers
+
+/** ADR-174: `IFeed.FetchAsync` for an explicit implementation, the bare name otherwise. */
+internal val CirMethod.explicitName: String
+  get() = if (explicitInterface != null) "$explicitInterface.$name" else name
+
+/** ADR-174: the [CirProperty] twin of [memberHead]. */
+internal fun CirProperty.memberHead(modifiers: String): String =
+  if (explicitInterface != null) "" else modifiers
+
+/** ADR-174: the [CirProperty] twin of [explicitName]. */
+internal val CirProperty.explicitName: String
+  get() = if (explicitInterface != null) "$explicitInterface.$name" else name
