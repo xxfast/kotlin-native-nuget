@@ -7,7 +7,7 @@ a C# `abstract class` whose subclasses share one inherited `_handle`, and `seale
 
 | Kotlin | C# | Notes |
 |---|---|---|
-| `interface` | `interface` (`I`-prefixed) | default methods delegate to Kotlin; a super-interface's members are inherited, not redeclared |
+| `interface` | `interface` (`I`-prefixed) | default methods delegate to Kotlin; a super-interface's members are inherited, not redeclared; `suspend`/`Flow`/`StateFlow` members are declared too, and the interface becomes `IAsyncDisposable` when it has one |
 | `abstract class` | `abstract class` | `_handle` inherited by every subclass |
 | `sealed class` | `abstract class` | each subtype its own class, nested inside the base or declared beside it, reconstructed through a generated `FromHandle` |
 | eligible `sealed interface` (no type parameters; every subclass a `class`/`object` or `enum class`, no other superclass, no sub-interface, no second sealed-interface parent) | `abstract class` | same shape as `sealed class`; no C# interface is declared for it; an `enum class` arm binds as a boxed `{Enum}Arm` |
@@ -209,6 +209,71 @@ the way; see [A sealed arm's own interfaces](#sealed-arm-own-interfaces) below. 
 own code: a C# class or sealed arm implementing a `var`-bearing interface must declare every setter
 the interface now asks for; one that only declared a getter before this render shipped no longer
 compiles.
+
+### Async members on an interface {id="async-members-on-an-interface"}
+
+A `suspend`, `Flow<T>`, or `StateFlow<T>` member on an interface, abstract or defaulted, is declared
+on the generated `I<Name>` itself, with the same signature the class route uses, so a caller holding
+only the interface-typed reference can still reach it. The interface becomes `IAsyncDisposable`,
+draining whichever object is behind it:
+
+```kotlin
+interface Feed {
+  suspend fun fetch(id: Int): String
+  fun ticks(): Flow<Int>
+  val level: StateFlow<Int>
+  fun doubled(): Flow<Int> = ticks().map { it * 2 } // default body, declared on IFeed too
+  fun name(): String
+}
+
+class RssFeed : Feed { /* overrides fetch/ticks/level/name */ }
+fun makeFeed(): Feed = RssFeed()
+```
+
+```C#
+public interface IFeed : IDisposable, IAsyncDisposable
+{
+    KotlinStateFlow<int> Level { get; }
+    string Name();
+    Task<string> FetchAsync(int id, CancellationToken cancellationToken = default);
+    KotlinFlow<int> Ticks();
+    KotlinFlow<int> Doubled();
+}
+```
+
+```C#
+await using IFeed feed = Feeds.MakeFeed();
+await feed.FetchAsync(3);
+await foreach (int tick in feed.Ticks()) { /* ... */ }
+int level = feed.Level.Value;
+await foreach (int doubled in feed.Doubled()) { /* ... */ } // the default, reached through IFeed
+```
+
+A generic implementer, which [ADR-147](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/147-generic-class-methods.md)
+refuses these members on directly, gets them as **explicit** interface implementations instead: they
+dispatch correctly, but only through an `IFeed`-typed reference, not through the concrete generic
+type:
+
+```C#
+await using IFeed crate = Feeds.MakeCrate(); // wraps Crate<int>
+await crate.FetchAsync(3);                   // compiles: reached through IFeed
+
+var direct = new Crate<int>(1);
+// direct.FetchAsync(3) does not compile: FetchAsync is IFeed's explicit member, not Crate<T>'s own
+```
+
+`interface Feed<T>` (a generic interface) keeps its async members off `IFeed<T>` entirely, named
+`SKIPPED_GENERIC_INTERFACE_ASYNC_MEMBER`. An [eligible sealed interface](#sealed-interfaces) is
+excluded from this too, silently, since it never gets an `I<Name>` declaration in the first place;
+its arms still bind their own async members, see
+[Suspend methods on a sealed arm](#sealed-method-suspend-generated-c) and
+[Flow and StateFlow members on a sealed arm](#sealed-flow-generated-c).
+
+**Breaking:** a hand-written C# class implementing an interface that gains async members this way
+stops compiling (`CS0535` on the new members and on `DisposeAsync`), the same way adding a lambda
+parameter to `I<Name>` already could (see [below](#implementing-a-kotlin-interface-in-c)). Combined
+with that section's existing limits — `KotlinFlow<T>`'s constructor is `internal` — such an
+interface was never practically implementable in C# anyway.
 
 ### Implementing a Kotlin interface in C# {id="implementing-a-kotlin-interface-in-c"}
 
@@ -1107,8 +1172,9 @@ A sealed base, a sealed arm, and any `interface` owner can nest their own plain
 - A C#-implemented object's bridge is released on Kotlin's next garbage-collection round, not
   deterministically; there is no `IDisposable`-style prompt release for it.
 - An interface member whose own return type is another interface or a class handle (chained
-  resolution) is not supported. Suspend interface members, `Flow`/`StateFlow`-valued interface
-  members, and generic interface type parameters at a return position are not supported either.
+  resolution) is not supported, and neither is a generic interface type parameter at a return
+  position. A generic interface's own `suspend`/`Flow`/`StateFlow` members are a named skip too;
+  see [Async members on an interface](#async-members-on-an-interface).
 - Object identity is not preserved across two reads of a **Kotlin-backed** interface property: each
   read is a distinct C# wrapper over the same Kotlin object. A stored **C#-implemented** object is
   the exception: it always resolves back to the original instance.

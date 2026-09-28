@@ -279,6 +279,11 @@ public class NapPod : INapper, IDisposable, IAsyncDisposable, INugetHandle
 
 Hold it as `IAsyncDisposable` through a field, a cast, or `await using`, and it resolves correctly.
 
+An interface that itself declares a `suspend`/`Flow`/`StateFlow` member is `IAsyncDisposable` too,
+and every implementer's version of that member is callable through the interface-typed reference
+itself, not just through a concrete class; see
+[Interfaces, abstract classes and sealed classes: Async members on an interface](interfaces-abstract-sealed.md#async-members-on-an-interface).
+
 ### A class with a Kotlin superclass {id="a-class-with-a-kotlin-superclass"}
 
 One coroutine scope exists per instance, owned by whichever class is **first**, top to bottom, to
