@@ -229,3 +229,12 @@ public void InterfaceAdvertisesAsyncDisposal()
   still renders `IAsyncDisposable`, now with members that use the scope).
 - Leak rows: one `LeakTests` row per new handle path (the wrapper's scope created and drained through `DisposeAsync`; a `KotlinStateFlow` read through the interface), mirroring ADR-159's rows.
 - Nothing here verifies the runtime path on a real `.so`/`.dll`. The spike was Tier 1 (KSP plus JVM compile of the generated Kotlin, C# text only). The implementing run must prove it with `scripts/verify.sh`.
+
+## Amendment (2026-09-28): Item 3 (ROADMAP backlog `interface-default-flow-lambda-invisible-through-interface-type`) closed
+
+Both halves this ADR's Consequences predicted were absorbed are now pinned. `Manifest.flowReturnOnInterface`
+(a default `Flow<Int>` return) is declared on `IManifest` through this ADR's own admission rule; the
+lambda half was already on `IManifest` via ADR-160. `UnroutedPositionsSample.makeManifest()` makes
+`Manifest` reachable, and `InterfaceDefaultFlowAndLambdaAreCallableThroughTheInterfaceType` calls both
+through an `IManifest`-typed reference. No new `LeakTests` row: both routes reuse handle paths this ADR
+and ADR-160 already measure. The backlog item and its ROADMAP line are closed.
