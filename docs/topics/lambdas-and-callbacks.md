@@ -354,6 +354,13 @@ The same warning names a non-`Unit` return, as `SKIPPED_UNSUPPORTED_RETURN`, and
 from a super-interface. A listener interface that declares a property, rather than only methods,
 still fails the build with no diagnostic pointing at the cause; keep the listener method-only.
 
+The pair also refuses, named the same way on both halves, when `Watcher` itself has no C#
+declaration at all: nested under an owner that never gets its own nested declaration (an `enum
+class`, a generic class, an `inner class`, or a `value class`; see [Classes and objects: Nested
+types](classes-and-objects.md#nested-classes-and-objects)), or declared in a dependency module
+outside the plugin's export scope. Move the listener interface to the top level of its file, or
+into the exported scope, to bind the pair.
+
 This is one narrow case of a wider capability: a C# class can implement any Kotlin interface,
 including at an ordinary parameter, property setter, or extension receiver; see
 [Implementing a Kotlin interface in C#](interfaces-abstract-sealed.md#implementing-a-kotlin-interface-in-c).
