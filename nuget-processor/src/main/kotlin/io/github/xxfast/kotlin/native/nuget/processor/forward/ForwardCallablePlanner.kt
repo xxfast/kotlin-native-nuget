@@ -201,8 +201,9 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  library can never be brought into scope. */
   ACTUAL_TYPEALIAS_TARGET(droppedFromCSharp = true),
 
-  /** An `enum class` that no route declares as a C# enum: a nested enum (only top-level ones are
-   *  declared), or a module-local top-level enum outside the export scope. Distinct from
+  /** An `enum class` that no route declares as a C# enum: a nested enum ADR-133 does not declare
+   *  (under a deferred owner shape such as an enum or generic owner, or dropped by its CS0102
+   *  collision gate), or a module-local top-level enum outside the export scope. Distinct from
    *  [UNEXPORTED_DEPENDENCY_TYPE] because `include(...)` cannot make a nested enum declarable.
    *  Before this reason existed the member was emitted with a dangling C# enum reference and no
    *  diagnostic at all, taking the consumer's compile down with CS0426/CS0234. */

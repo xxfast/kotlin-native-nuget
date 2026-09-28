@@ -580,3 +580,15 @@ three; an `object`-typed value with no static interface to read still falls back
 `is` order. This also fixes a latent hazard the flattened interface hierarchy had hidden: a class
 implementing two unrelated bridged interfaces could previously match either one depending on
 declaration order.
+
+## Amendment (2026-09-28): a member typed by its own nested enum is planned like any other enum member
+
+`Tier1InterfaceBridgeFactoryTest`'s nested-enum cell was green for the wrong reason: naming the
+member `whistle(): Whistle` beside `enum class Whistle` collided in C# (CS0102), so ADR-133's
+collision gate dropped the enum before the factory was ever planned. With the member renamed
+(`whistleState(): Whistle`), a member typed by an enum nested in the interface itself gets its
+factory on both halves like any other enum member, spelling the slot
+`global::Interop.IOwner.Nested`. Only an enum an ADR-133 owner shape still defers (nested under an
+enum, generic, inner or value-class owner, or a companion object, or dropped by a colliding name)
+plans no factory; that posture is now pinned with the enum nested under a generic owner instead of
+the collision fixture.

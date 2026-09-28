@@ -37,6 +37,15 @@ internal data class Tier1Result(
             "kspErrors=$kspErrors generatedFiles=${generatedFiles.keys}"
       )
 
+  /**
+   * The generated Kotlin compiled without errors. Says nothing about KSP itself: a fixture that
+   * makes the processor report an error can still be `compiledClean`; pair it with
+   * [kspSucceeded] when the cell must not be an error fixture.
+   */
   val compiledClean: Boolean
     get() = compileErrors.isEmpty()
+
+  /** KSP exited `OK` and logged no error. */
+  val kspSucceeded: Boolean
+    get() = kspExitCode == "OK" && kspErrors.isEmpty()
 }

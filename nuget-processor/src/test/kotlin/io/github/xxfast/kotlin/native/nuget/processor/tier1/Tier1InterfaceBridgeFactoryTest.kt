@@ -260,9 +260,11 @@ class Tier1InterfaceBridgeFactoryTest {
   }
 
   /**
-   * ADR-084: an enum slot is spelled by the shared classifier. A nested enum is never declared in
-   * C#, so an interface with such a member plans no factory at all rather than emitting a bridge
-   * state that names a type neither half can resolve.
+   * ADR-084: an enum slot is spelled by the shared classifier. Since ADR-134 admitted interface
+   * owners, an enum nested in the interface itself is declared in C# (`IKettle.Whistle`), so the
+   * interface plans its factory like any other enum member. The member is `whistleState()`, not
+   * `whistle()`: the latter PascalCases onto the nested enum's own name (CS0102), which ADR-133's
+   * collision gate turns into an error fixture (pinned in `Tier1NestedTypesTest`).
    */
   private val enumSource: String = """
     package tier1.bridgefactory
@@ -272,7 +274,7 @@ class Tier1InterfaceBridgeFactoryTest {
     interface Kettle {
       enum class Whistle { OFF, ON }
       val heat: Heat
-      fun whistle(): Whistle
+      fun whistleState(): Whistle
     }
 
     interface Stove {
@@ -288,13 +290,66 @@ class Tier1InterfaceBridgeFactoryTest {
   """.trimIndent()
 
   @Test
-  fun `an interface with an undeclared enum member gets no factory on either half`() {
+  fun `an interface with a member typed by its own nested enum gets a factory on both halves`() {
     val result = Tier1Harness.run(enumSource)
+    assertTrue(
+      result.kspSucceeded,
+      "expected no KSP error; got ${result.kspExitCode} ${result.kspErrors}",
+    )
     assertTrue(result.compiledClean, "expected the fixture to bind; got: ${result.compileErrors}")
+
+    val kotlin: String = result.generated
+    assertContains(kotlin, "@CName(\"library_tier1_bridgefactory__kettle_bridge_create\")")
+    assertContains(kotlin, "override fun whistleState(): tier1.bridgefactory.Kettle.Whistle")
+
+    val cs: String = result.generatedCSharp
+    assertContains(
+      cs,
+      "internal sealed class Tier1BridgefactoryKettleBridgeState : NugetBridgeState",
+    )
+    assertContains(cs, "EntryPoint = \"library_tier1_bridgefactory__kettle_bridge_create\"")
+    assertContains(cs, "global::Interop.IKettle.Whistle WhistleState();")
+  }
+
+  @Test
+  fun `an interface with an undeclared enum member gets no factory on either half`() {
+    // ADR-133 still defers a type nested under a generic owner (it would be `Box<T>.Mood` in C#),
+    // so `Box.Mood` has no C# declaration and the whole interface plans to null.
+    val result = Tier1Harness.run(
+      """
+      package tier1.bridgefactorymood
+
+      class Box<T> {
+        enum class Mood { CALM, CROSS }
+      }
+
+      interface Kettle {
+        fun mood(): Box.Mood
+      }
+
+      class Kitchen(private val boiler: Kettle) {
+        fun kettle(): Kettle = boiler
+      }
+      """.trimIndent(),
+    )
+    assertTrue(
+      result.kspSucceeded,
+      "expected no KSP error; got ${result.kspExitCode} ${result.kspErrors}",
+    )
+    assertTrue(result.compiledClean, "expected the fixture to bind; got: ${result.compileErrors}")
+    val boxMoodUndeclared: Boolean =
+      result.kspWarnings.any {
+        it.contains("tier1.bridgefactorymood.Box.Mood") && it.contains("SKIPPED_NESTED_DECLARATION")
+      }
+    assertTrue(
+      boxMoodUndeclared,
+      "the enum must be undeclared because its generic owner is deferred; " +
+        "got ${result.kspWarnings}",
+    )
 
     assertFalse(
       result.generated.contains("kettle_bridge_create"),
-      "a nested enum member has no C# declaration, so the whole interface plans to null",
+      "an undeclared enum member has no C# declaration, so the whole interface plans to null",
     )
     assertFalse(
       result.generatedCSharp.contains("KettleBridgeState"),
@@ -305,6 +360,10 @@ class Tier1InterfaceBridgeFactoryTest {
   @Test
   fun `a declared enum slot is qualified on both halves`() {
     val result = Tier1Harness.run(enumSource)
+    assertTrue(
+      result.kspSucceeded,
+      "expected no KSP error; got ${result.kspExitCode} ${result.kspErrors}",
+    )
     assertTrue(
       result.compiledClean,
       "expected the enum slot to compile; got: ${result.compileErrors}",
