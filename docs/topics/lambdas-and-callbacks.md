@@ -58,6 +58,39 @@ using KotlinFunc<int?, string> describe = Recorder.Describer();
 string result = describe.Invoke(null); // "none"
 ```
 
+### A top-level function that returns a lambda {id="a-top-level-function-that-returns-a-lambda"}
+
+A top-level function may return a lambda and take ordinary parameters alongside it: an interface,
+an exported class, an enum, a nullable, or a collection. The returned lambda captures them, and you
+call it later.
+
+```kotlin
+fun petSupplier(pet: Pet): () -> Pet = { pet }
+fun adder(n: Int): (Int) -> Int = { it + n }
+```
+
+```C#
+public static KotlinFunc<IPet> PetSupplier(IPet pet)
+```
+
+```C#
+using IPet rex = new Dog("Rex"); // your own C# implementation of IPet
+using KotlinFunc<IPet> supplier = PetRelayKt.PetSupplier(rex);
+IPet same = supplier.Invoke(); // the same instance as rex
+
+using KotlinFunc<int, int> twoMore = PetRelayKt.Adder(2);
+int five = twoMore.Invoke(3);
+```
+
+Dispose the returned `KotlinFunc`, as for a lambda property above. A C#-implemented interface you
+pass stays alive for as long as the lambda does, so `rex` above remains valid after the call
+returns; a `null` for a nullable parameter reaches Kotlin as `null`.
+
+The lambda's type arguments follow the rules above. One Kotlin cannot have C# spell, such as
+`() -> List<Int>`, skips the function with a named `SKIPPED_UNSUPPORTED_RETURN`. A `suspend` lambda
+return (`suspend () -> Int`) and a lambda returned from a class, object or companion member are named
+skips too; expose a lambda property on the class instead.
+
 ### A lambda's type arguments across a namespace boundary {id="type-arguments-across-a-namespace-boundary"}
 
 A lambda property's type arguments are qualified with their full namespace automatically, so a
@@ -136,9 +169,9 @@ code): `Char` as either the lambda's payload or its own return; a payload that i
 non-scalar (`List`, `Set`, `Map`, `Any`, `Pair`, an array, `Duration`, or anything else under
 `kotlin`/`kotlinx` outside a primitive, `String` or `Char`); a lambda's *own* return outside `Unit`,
 a primitive or `String` (an object, an enum, `Char`, or one of those same builtins); a suspend
-lambda (`suspend (T) -> R`); a lambda type nested inside a `List`/`Set`/`Map`; a callback at a
-*result* position (a member returning a lambda rather than taking one; return a
-[Kotlin lambda property](#kotlin-c-lambda-properties-and-returns) instead); and a lambda parameter
+lambda (`suspend (T) -> R`); a lambda type nested inside a `List`/`Set`/`Map`; a class or object member
+that returns a lambda rather than taking one (a [top-level function](#a-top-level-function-that-returns-a-lambda) can; expose a
+[lambda property](#kotlin-c-lambda-properties-and-returns) on the class instead); and a lambda parameter
 on a constructor, a data class's `copy()`, an enum-arm box constructor, or a value-class member,
 since none of those can keep the callback registered past the single call that creates them.
 

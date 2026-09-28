@@ -11,7 +11,9 @@ import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_TO_CSHARP_PARAM
+import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 
@@ -32,6 +34,13 @@ internal fun KSFunctionDeclaration.hasLegacyGenericReturnRoute(): Boolean {
   val returnDecl: KSClassDeclaration = returnType.declaration as? KSClassDeclaration ?: return false
   val qualified: String? = returnDecl.qualifiedName?.asString()
   if (qualified in FLOW_TYPES || qualified in STATE_FLOW_TYPES) return false
+  // ADR-160 amendment: a lambda return belongs to the ADR-062 plan (`BridgeType.ReturnedLambda`),
+  // whatever the function's parameters, so this route no longer carries one; the parameter gate
+  // below used to refuse an interface, class or collection parameter here, which is what named
+  // `fun petSupplier(pet: Pet): () -> Pet` a false skip beside a binding `petRelay()`. A `suspend`
+  // lambda return is refused too: this route's C# half never had an arm for one, so the Kotlin
+  // half exported an orphan with no C# method and no diagnostic. Refused, the planner names it.
+  if (qualified in LAMBDA_TYPES || qualified in SUSPEND_LAMBDA_TYPES) return false
   // ROADMAP Phase 4 (2026-09-20), the general form of the ADR-064 amendment above: a *collection*
   // return belongs to the ADR-062 plan route and to nothing else. It is a generic declaration with
   // arguments, so it passed the test below whenever the plan SKIPPED it -- and `translateFunction`

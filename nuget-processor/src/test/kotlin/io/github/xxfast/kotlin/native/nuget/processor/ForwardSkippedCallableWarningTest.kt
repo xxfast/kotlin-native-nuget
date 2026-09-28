@@ -312,6 +312,9 @@ class ForwardSkippedCallableWarningTest {
         // parameter, a lambda at a class-method return). The member is absent from both halves,
         // so it warns; the reason it was reclassified from rides in `detail`.
         ForwardPlanSkipReason.UNROUTED_POSITION,
+        // ADR-160 amendment: a planned top-level lambda return whose type argument C# cannot
+        // spell (issue #111), named rather than returned as an uncompilable `KotlinFunc<...>`.
+        ForwardPlanSkipReason.LAMBDA_TYPE_ARGUMENT,
         ForwardPlanSkipReason.INHERITED_MEMBER,
         // ADR-066: a reachable dependency-module type the closure did not admit.
         ForwardPlanSkipReason.UNEXPORTED_DEPENDENCY_TYPE,

@@ -130,7 +130,7 @@ class Tier1CallbackParameterPlanTest {
         // An enum LAMBDA return, refused for the same reason.
         fun pickMood(make: (Int) -> Mood): Int = make(beats).ordinal
 
-        // A `suspend` lambda, which is not bridged at any position.
+        // A `suspend` lambda, which binds only as a class property, never as a parameter.
         fun awaitAll(step: suspend (Int) -> Unit): Int = if (step === step) beats else 0
 
         // A non-lambda parameter beside a lambda the plan declines: the legacy route drops `min`

@@ -1946,8 +1946,9 @@ class NugetProcessor(
         plan.calls().receiverInterfaceQualifiedNames().forEach(::add)
       }
       // ADR-173: an ERASED type-argument position reaches an interface too. A lambda return
-      // (`(Squeaker) -> Squeaker`) or a generic-class carrier (`Box<Squeaker>`) is a legacy route
-      // that never becomes a plan, yet `csTypeArgument` spells the interface there and the
+      // (`(Squeaker) -> Squeaker`, plan-owned since the ADR-160 amendment but erased: its arguments
+      // are not a planned position) or a generic-class carrier (`Box<Squeaker>`, a legacy route)
+      // never names the interface as a plan position, yet C# spells the interface there and the
       // consumer hands its own implementation through `Wrap<T>` and reads it back through
       // `Materialize<T>`. So the interface needs its backing wrapper, its `Factories` entry and
       // its `NugetBridge` arm exactly as a planned position would give it.

@@ -203,12 +203,35 @@ internal sealed interface BridgeType {
    * lambda-returning-lambda, a collection in the payload) stays a
    * [SpecializedProtocol] at classification and takes the named `CALLBACK_PROTOCOL` skip. A
    * callback at a RESULT position is refused the same way: a Kotlin function handed OUT is a
-   * different mechanism, and it keeps its legacy route.
+   * different mechanism, [ReturnedLambda], which the planner constructs itself at a top-level
+   * function return.
    */
   data class Callback(
     val parameters: List<BridgeType>,
     val result: BridgeType,
   ) : BridgeType
+
+  /**
+   * ADR-160 amendment: a Kotlin function type (`() -> Pet`, `(Int) -> Int`) handed OUT of Kotlin
+   * as a top-level function's RESULT, the other mechanism [Callback] names. Never produced by
+   * [ForwardBridgeTypeClassifier.classify], which is position-agnostic; the planner builds it for
+   * the `TOP_LEVEL` origin's return only.
+   *
+   * Erased on the wire: one OWNED handle minted by `NugetHandles.retain(lambda)`, wrapped C#-side
+   * as `new KotlinFunc<...>(handle)` (ADR-012), whose `Invoke` boxes through the shared
+   * arity-generic `NugetFunctionNative.Invoke{n}` exports. So the admission set is not ADR-160's
+   * per-slot table but "every type argument C# can name" (issue #111, ADR-173).
+   *
+   * @param typeArguments the classified function-type arguments, the lambda's own result last.
+   * @param kotlinTypeArguments each argument's Kotlin qualified name, positionally, so the issue
+   *   #111 skip can name the one C# cannot spell even when its [BridgeType] carries no name.
+   */
+  data class ReturnedLambda(
+    val typeArguments: List<BridgeType>,
+    val kotlinTypeArguments: List<kotlin.String>,
+  ) : BridgeType {
+    val arity: Int get() = typeArguments.size - 1
+  }
 
   /**
    * Protocols remain on named legacy routes until their dedicated planning adapters exist.
@@ -936,6 +959,11 @@ internal object ForwardCallablePlanValidator {
         validateType(type.result, "$position callback result")
       }
 
+      // ADR-160 amendment: valid at a top-level result only, the one place the planner mints it.
+      is BridgeType.ReturnedLambda -> type.typeArguments.forEach { argument ->
+        validateType(argument, "$position returned lambda type argument")
+      }
+
       is BridgeType.Collection -> validateCollection(type, position)
       is BridgeType.RawCollection -> error("Forward plan $position contains raw ${type.kind} collection")
       is BridgeType.RawKSType -> error("Forward plan $position contains raw KSType ${type.rendered}")
@@ -980,7 +1008,9 @@ internal object ForwardCallablePlanValidator {
     }
 
     // ADR-147: a `T` position crosses as the same StableRef handle an object does.
-    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.TypeParameter ->
+    is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.TypeParameter,
+    is BridgeType.ReturnedLambda,
+      ->
       if (flow == ForwardFlow.INTO_KOTLIN) {
         ForwardConversion.HANDLE_TO_STABLE_REF
       } else {

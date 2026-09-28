@@ -649,6 +649,107 @@ public class LiveHandleTests
         });
     }
 
+    // Rows 6j-6n. ROADMAP line 51 (ADR-160 amendment): a top-level lambda RETURN with a value
+    // parameter. Unlike Row 6g, the parameter bridge is not released when the call returns: the
+    // returned lambda captures it, so it lives until the `KotlinFunc` is disposed AND Kotlin's GC
+    // runs the ADR-084 cleaner on the lambda. `Settle` drives that cleaner round, so a lambda that
+    // still pins the bridge after `Dispose` reads as +1 per crossing here.
+    //
+    // Oreo hands Rex to the supplier fifty times and asks for him back each time.
+    [Fact]
+    public void LambdaReturn_CapturedCSharpImplementedPet_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using IPet rex = new Dog("Rex");
+            using KotlinFunc<IPet> supplier = PetRelayKt.PetSupplier(rex);
+            Assert.Same(rex, supplier.Invoke());
+            Assert.Same(rex, supplier.Invoke());
+        });
+    }
+
+    // The Kotlin-backed twin: the returned lambda handle itself, plus one owned `Cat` wrapper per
+    // `Invoke`, each of which the crossing disposes.
+    [Fact]
+    public void LambdaReturn_CapturedKotlinCat_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using Cat oreo = new Cat("Oreo", 9);
+            using KotlinFunc<Cat> supplier = PetRelayKt.CatSupplier(oreo);
+            using Cat back = supplier.Invoke();
+            Assert.Equal("Oreo", back.Name);
+        });
+    }
+
+    // A value-only capture: the returned lambda handle is the only handle in play, so any leak here
+    // is the new result shape's own OWNED handle. The nullable and collection parameters ride along
+    // so their marshalling cannot leak a transfer handle either.
+    [Fact]
+    public void LambdaReturn_ValueParameters_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using KotlinFunc<int> naps = PetRelayKt.NullableSupplier(null);
+            using KotlinFunc<int> treats = PetRelayKt.ListSupplier(new List<int> { 1, 2, 3 });
+            using KotlinFunc<int> mood = PetRelayKt.MoodSupplier(TestLibrary.Cat.Mood.Sleepy);
+            using KotlinFunc<int, int> twoMore = PetRelayKt.Adder(2);
+            Assert.Equal(-1, naps.Invoke());
+            Assert.Equal(6, treats.Invoke());
+            Assert.Equal((int)TestLibrary.Cat.Mood.Sleepy, mood.Invoke());
+            Assert.Equal(5, twoMore.Invoke(3));
+        });
+    }
+
+    // Kotlin throws after receiving the bridge and before making the lambda: the transfer handle
+    // the C# half minted for Grumpy must still be released on the error path.
+    [Fact]
+    public void LambdaReturn_KotlinThrowsBeforeTheLambda_ReleasesTheParameterBridge()
+    {
+        AssertNoLeak(() =>
+        {
+            using IPet grumpy = new Dog("Grumpy");
+            Assert.Throws<KotlinArgumentException>(() => PetRelayKt.PickyPetSupplier(grumpy));
+        });
+    }
+
+    // Fault injection on the `ListReturn_ThrowingElementFactory_ReleasesTheListHandle` pattern: the
+    // returned lambda hands back a Kotlin-backed stray, which only the `IPet` factory can build.
+    // Swap it to dispose-and-throw; neither the lambda handle nor the element handle may leak.
+    [Fact]
+    public void LambdaReturn_ThrowingInterfaceFactory_ReleasesTheLambdaHandle()
+    {
+        Func<IntPtr, object> original = NugetMarshal.Factories[typeof(IPet)];
+        NugetMarshal.Factories[typeof(IPet)] = handle =>
+        {
+            NugetMarshal.Dispose(handle);
+            throw new InvalidOperationException("Mylo sat on the stray's paperwork");
+        };
+
+        try
+        {
+            using IPet stray = PetKt.StrayPet();
+            Settle();
+            long before = NugetMarshal.LiveHandles;
+
+            // The supplier is minted after `before` and disposed before `after`.
+            using (KotlinFunc<IPet> supplier = PetRelayKt.PetSupplier(stray))
+            {
+                Assert.Throws<InvalidOperationException>(() => supplier.Invoke());
+            }
+
+            Settle();
+            long after = NugetMarshal.LiveHandles;
+            Assert.True(
+                after == before,
+                $"expected {before} live handles after 1 throwing Invoke() crossing, got {after} (delta {after - before}); the returned lambda or its element handle is the one that leaks");
+        }
+        finally
+        {
+            NugetMarshal.Factories[typeof(IPet)] = original;
+        }
+    }
+
     // Row 6f. The Flow twin of Row 6e: one handle per emission, resolved per element rather than
     // per completion. Separate row because the freeing site is the `KotlinFlow<T>` `read:`
     // delegate, not the completion callback, and the enumerator's own box/job handles ride along

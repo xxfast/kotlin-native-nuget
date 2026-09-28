@@ -249,3 +249,39 @@ deliberately still admitted on both axes: this is a denylist, not ADR-160's `isC
 plus `Char`, since unifying on that allowlist would also newly refuse a sealed-base or value-class
 payload whose runtime behavior on either legacy route nobody has verified. See
 [Lambdas and callbacks](../topics/lambdas-and-callbacks.md).
+
+## Amendment (2026-09-29): a top-level lambda return binds on the plan
+
+This corrects the "a callback at a **result** position ... refused by name" bullet under
+Consequences, which stopped being true for a top-level function, and the ROADMAP report that
+`fun petSupplier(pet: Pet): () -> Pet` was named `SKIPPED_UNSUPPORTED_RETURN` under a wrong reason.
+The reason was wrong because the sentence blamed the position, but the legacy lambda-return branch
+that fired never accepted a handle-typed or collection parameter beside the lambda return; the
+added `pet: Pet` was the real difference, not the position.
+
+The legacy branch is deleted. A top-level function's lambda return is now a
+`BridgeType.ReturnedLambda` on the ADR-062 plan: one owned handle (`NugetHandles.retain`), wrapped
+C#-side as `new KotlinFunc<...>(handle)`, beside parameters that get the plan's whole vocabulary
+(an interface per ADR-173, an exported class, an enum, a nullable, a collection). The returned lambda
+captures a parameter for as long as it lives, so a C#-implemented interface argument is kept alive by
+the ADR-084 bridge until the `KotlinFunc` is disposed and Kotlin's cleaner runs.
+
+Refused by name, unchanged in kind:
+
+- An object or companion member returning a lambda keeps its named skip.
+- A lambda type argument C# cannot spell (`() -> List<Int>`) is `SKIPPED_UNSUPPORTED_RETURN` with the
+  new reason `LAMBDA_TYPE_ARGUMENT` (GitHub issue #111 wording). A sealed interface or class type
+  argument keeps binding as before.
+- A `suspend` lambda return (`fun napper(): suspend () -> Int`) is a named skip. It used to leave
+  a Kotlin export with no C# declaration and no diagnostic. Its skip sentence also said "not bridged
+  at any position" when it binds as a class property, and now says so.
+
+Fixed on the way, each a defect of the deleted branch: `fun moodSupplier(m: Mood): () -> Int` failed
+the build with `ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE` and now binds; `fun nullableSupplier(n: Int?):
+() -> Int` generated `int n` and dropped `null`, and now generates `int? n`; the enum-route error
+hint now lists a lambda among the return shapes that carry an enum parameter.
+
+`LeakTests` rows 6j-6n measure the new ownership: a captured C#-implemented pet released by the
+ADR-084 cleaner, a captured Kotlin `Cat`, value-only parameters, Kotlin throwing before it makes the
+lambda, and a throwing `IPet` factory on the returned lambda. One branch stays cold: a value-class
+type argument on this route has no fixture.
