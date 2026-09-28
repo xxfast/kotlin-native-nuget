@@ -26,7 +26,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceDe
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceFlowMethods
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceFlowProperties
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceSuspendMethods
-import io.github.xxfast.kotlin.native.nuget.processor.forward.isDeclaredOn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKdoc
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toCirDoc
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedCallbackMember
@@ -49,6 +48,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStore
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceHierarchy
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncPlacement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceMemberPlacement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declared
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declaresLexically
@@ -3473,23 +3473,36 @@ internal fun translateInterface(
   // ADR-174: the async members this interface DECLARES, with the class route's own signatures, so
   // an implementer's `FetchAsync`/`Ticks()`/`Level` satisfy them as they stand. The real tracker:
   // `IFeed` spells `KotlinFlow<T>`/`Task<T>`, so it needs the same helpers the wrapper does.
-  val async: CirInterfaceAsyncMembers? = context?.let {
-    interfaceAsyncMembers(
-      iface, interfaceName, it.libraryName, classifier, tracker, callableCatalog,
-      it, expects, onlyDeclared = true,
-    )
+  // ADR-174 amendment: placed as the sync route places a member (`methodPlacements` above): a
+  // DECLARED one plainly, a DIAMOND_OVERRIDE one with `new`; inherited and identical-override
+  // members stay on the super that declares them.
+  fun asyncAt(placement: ForwardInterfaceMemberPlacement): CirInterfaceAsyncMembers? =
+    context?.let {
+      interfaceAsyncMembers(
+        iface, interfaceName, it.libraryName, classifier, tracker, callableCatalog,
+        it, expects, placements = setOf(placement),
+      )
+    }
+  val asyncByNew: List<Pair<Boolean, CirInterfaceAsyncMembers?>> = listOf(
+    false to asyncAt(ForwardInterfaceMemberPlacement.DECLARED),
+    true to asyncAt(ForwardInterfaceMemberPlacement.DIAMOND_OVERRIDE),
+  )
+  val asyncMethods: List<CirInterfaceMethod> = asyncByNew.flatMap { (isNew, async) ->
+    async?.methods.orEmpty().map { method ->
+      CirInterfaceMethod(
+        name = method.name,
+        returnType = method.returnType,
+        parameters = method.parameters,
+        doc = method.doc,
+        isNew = isNew,
+        isAsync = method.isAsync,
+      )
+    }
   }
-  val asyncMethods: List<CirInterfaceMethod> = async?.methods.orEmpty().map { method ->
-    CirInterfaceMethod(
-      name = method.name,
-      returnType = method.returnType,
-      parameters = method.parameters,
-      doc = method.doc,
-      isAsync = method.isAsync,
-    )
-  }
-  val asyncProperties: List<CirInterfaceProperty> = async?.properties.orEmpty().map { prop ->
-    CirInterfaceProperty(prop.name, prop.type, doc = prop.doc)
+  val asyncProperties: List<CirInterfaceProperty> = asyncByNew.flatMap { (isNew, async) ->
+    async?.properties.orEmpty().map { prop ->
+      CirInterfaceProperty(prop.name, prop.type, doc = prop.doc, isNew = isNew)
+    }
   }
 
   return CirInterface(
@@ -3798,7 +3811,7 @@ internal fun translateInterfaceBackingClass(
   val async: CirInterfaceAsyncMembers? = if (classifier != null && context != null) {
     interfaceAsyncMembers(
       iface, name, libraryName, classifier, tracker, callableCatalog, context, expects,
-      onlyDeclared = false,
+      placements = null,
     )
   } else {
     null
@@ -4584,9 +4597,10 @@ private fun byValueCsType(kotlinSimpleName: String): String =
 /**
  * ADR-174: an interface's `suspend`/`Flow`/`StateFlow` members, projected by the class route's own
  * builders ([suspendMembers], [flowMembers], [flowProperty]) with the interface as owner and its
- * own export prefix, the way ADR-118/124 reused them for a sealed arm. [onlyDeclared] narrows to
- * the members [iface] declares itself, the placement `I<Name>` and a generic implementer's forwards
- * use; the backing wrapper takes every member, own and inherited.
+ * own export prefix, the way ADR-118/124 reused them for a sealed arm. [placements] narrows to
+ * the members at those [ForwardInterfaceHierarchy] placements (the sync route's own), which
+ * `I<Name>` and a generic implementer's forwards use; `null`, the backing wrapper, takes every
+ * member, own and inherited.
  */
 internal class CirInterfaceAsyncMembers(
   /** The `[DllImport]`s and `async`/flow [CirMethod]s, in the class route's own order. */
@@ -4606,11 +4620,15 @@ internal fun interfaceAsyncMembers(
   callableCatalog: ForwardCallablePlanCatalog,
   context: NugetContext,
   expects: ExpectIndex,
-  onlyDeclared: Boolean,
+  placements: Set<ForwardInterfaceMemberPlacement>?,
   nativeCarrier: String = "",
 ): CirInterfaceAsyncMembers {
   val prefix: String = iface.nativePrefix(context.symbols)
-  fun KSDeclaration.kept(): Boolean = !onlyDeclared || isDeclaredOn(iface)
+  val hierarchy: ForwardInterfaceHierarchy by lazy {
+    ForwardInterfaceHierarchy(iface, classifier.exportedObjectHandles)
+  }
+  fun KSDeclaration.kept(): Boolean =
+    placements == null || iface.forwardAsyncPlacement(this, hierarchy, classifier) in placements
   val suspend: List<CirMember> = suspendMembers(
     suspendMethods = iface.forwardInterfaceSuspendMethods(classifier).filter { it.kept() },
     prefix = prefix,
@@ -4667,7 +4685,7 @@ internal fun interfaceAsyncForwards(
       val carrier: String = "$qualifier${iface.simpleName.asString()}Native"
       val projected: CirInterfaceAsyncMembers = interfaceAsyncMembers(
         iface, spelling, libraryName, classifier, tracker, callableCatalog, context, expects,
-        onlyDeclared = true, nativeCarrier = "$carrier.",
+        placements = DECLARING_PLACEMENTS, nativeCarrier = "$carrier.",
       )
       return@mapNotNull CirInterfaceAsyncMembers(
         members = projected.methods.map { method ->
@@ -4694,3 +4712,9 @@ internal fun interfaceAsyncForwards(
 /** ADR-174: the backing wrapper's carrier, `FeedNative`, when it projects an async member. */
 internal fun interfaceNativeCarrier(iface: KSClassDeclaration): String =
   "${iface.simpleName.asString()}Native"
+
+/** ADR-174 amendment: the placements at which an interface's own `I<Name>` declares a member. */
+private val DECLARING_PLACEMENTS: Set<ForwardInterfaceMemberPlacement> = setOf(
+  ForwardInterfaceMemberPlacement.DECLARED,
+  ForwardInterfaceMemberPlacement.DIAMOND_OVERRIDE,
+)

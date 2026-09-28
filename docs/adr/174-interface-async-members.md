@@ -258,3 +258,30 @@ Ruling 2 excludes an eligible sealed interface from `I<Name>`, and its own async
 instead by the abstract class ADR-112 renders, declared on the base itself. See
 [ADR-175](175-sealed-base-async-members.md). The ROADMAP line that predicted an `IShape` gap was
 premised on an `IShape` that ADR-112 removed.
+
+## Amendment (2026-09-29): inherited async members follow the interface hierarchy
+
+Rule 3 said placement "follows `ForwardInterfaceHierarchy` exactly as the sync route does". In code it
+did not: async members were placed by source location, so `IDerived : IBase` with only `IDerived`
+reachable declared an inherited async member on neither interface, though the backing wrapper
+implemented it publicly. Rule 3 is now true.
+
+1. **Promotion.** An async-carrying, non-generic, non-sealed super of a reachable interface becomes
+   reachable itself (to a fixed point), so `ITrough` is generated and declares the members that
+   `IManger` inherits. A hierarchy with no async member renders as before.
+2. **Placement.** Async members use the hierarchy's placement (`DECLARED` or `DIAMOND_OVERRIDE`),
+   not source location. A derived interface that restates `override suspend fun` does not redeclare
+   it (that hid the base member, `CS0108` under `-warnaserror`). A diamond (`IGrainbin : IScuttle,
+   IFunnel`) redeclares `new Task<string> FetchAsync(...)`.
+3. **Super that cannot be promoted.** A generic super (`Satchel<T>`) or one in an unexported package
+   (`SKIPPED_UNEXPORTED_SUPERTYPE`) declares nothing itself. Its async members are declared on the
+   derived interface, as the sync route does, matched by name and substituted parameter types.
+4. **Implementers.** A generic implementer of the derived interface (`Nosebag<T>`) now receives the
+   `DisposeAsync` and explicit forwards for the promoted super's members. Both `CS0535` breaks, and
+   the `CS0108` above, were real and found by `nugetCompileInterop`.
+
+No `LeakTests` row: the path reuses the backing wrapper's scope and handle that ADR-174's rows already
+measure, and Kotlin never hands out the newly reachable base wrapper (the ADR-173 precedent).
+
+Open, not chased: a public interface whose public super sits outside the export set through a
+dependency module under ADR-154.

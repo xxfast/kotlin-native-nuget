@@ -150,6 +150,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuspendRouteMethods
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSealedBaseAsyncMethods
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSealedBaseFlowProperties
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardClassFlowMethods
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardClassFlowProperties
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceHierarchy
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ownsSentence
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toDiagnosticKind
@@ -1954,8 +1957,38 @@ class NugetProcessor(
       // its `NugetBridge` arm exactly as a planned position would give it.
       erasedPositionTypes().forEach { type -> erasedInterfaceArguments(type).forEach(::add) }
     }
+    // ADR-174 amendment: an async member inherited through a reachable `IDerived` is declared on
+    // its super's `IBase`, as the sync route places it, so that super must carry it, i.e. be
+    // reachable. Only a super with an admitted async member is promoted (a sync-only hierarchy
+    // keeps its output), and only one `carries` would accept (non-generic, non-sealed): promoting
+    // anything else would mint a backing wrapper, factory entry and bridge arm for nothing. The
+    // class-route selectors are called directly because `carries` is empty until `reset` below.
+    // Walked to a fixed point, so a promoted super's own async-carrying supers are promoted too.
+    fun KSClassDeclaration.carriesInheritedAsync(): Boolean =
+      typeParameters.isEmpty() && !isSealedInterface() && (
+        forwardSuspendRouteMethods(forwardClassifier, superClass = null).isNotEmpty() ||
+          forwardClassFlowMethods(forwardClassifier, superClass = null).isNotEmpty() ||
+          forwardClassFlowProperties(forwardClassifier, superClass = null).isNotEmpty())
+    val interfacesByName: Map<String, KSClassDeclaration> =
+      interfaces.associateBy { iface -> iface.qualifiedName?.asString().orEmpty() }
+    val closedInterfaceNames: Set<String> = buildSet {
+      addAll(reachableInterfaceNames)
+      val pending: ArrayDeque<String> = ArrayDeque(reachableInterfaceNames)
+      while (pending.isNotEmpty()) {
+        val iface: KSClassDeclaration = interfacesByName[pending.removeFirst()] ?: continue
+        ForwardInterfaceHierarchy(iface, forwardClassifier.exportedObjectHandles).keptSupers
+          .mapNotNull { type -> type.declaration as? KSClassDeclaration }
+          .filter { base -> base.qualifiedName?.asString() !in this }
+          .filter { base -> base.carriesInheritedAsync() }
+          .forEach { base ->
+            val qualified: String = base.qualifiedName?.asString() ?: return@forEach
+            add(qualified)
+            pending.addLast(qualified)
+          }
+      }
+    }
     val reachableInterfaces: List<KSClassDeclaration> = interfaces
-      .filter { iface -> iface.qualifiedName?.asString() in reachableInterfaceNames }
+      .filter { iface -> iface.qualifiedName?.asString() in closedInterfaceNames }
     // ADR-174: the reachable set is the one that carries interface async members; every selector
     // (Kotlin exports, `I<Name>`, the backing wrapper, a generic implementer's forwards) reads it.
     ForwardAsyncInterfaces.reset(reachableInterfaces)

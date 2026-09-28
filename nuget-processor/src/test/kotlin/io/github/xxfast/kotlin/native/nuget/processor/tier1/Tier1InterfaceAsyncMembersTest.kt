@@ -411,4 +411,317 @@ class Tier1InterfaceAsyncMembersTest {
       "expected no bare FeedNative inside Shelf.Box; got:\n$box",
     )
   }
+
+  @Test
+  fun `an async member inherited by the only reachable interface is declared on its super`() {
+    // ADR-174 amendment, shape A: only `Manger` is reachable. The async members are declared on
+    // `ITrough` (made reachable because it carries them) and inherited through `IManger`, as the
+    // sync route does. The generic implementer `Nosebag<T>` needs explicit `ITrough` forwards and
+    // a `DisposeAsync`, or `IManger : IAsyncDisposable` is CS0535 in the consumer build.
+    val result = Tier1Harness.run(
+      """
+      package tier1.asyncinherited
+
+      import kotlinx.coroutines.flow.Flow
+      import kotlinx.coroutines.flow.MutableStateFlow
+      import kotlinx.coroutines.flow.StateFlow
+      import kotlinx.coroutines.flow.flowOf
+
+      interface Trough {
+        suspend fun fetch(id: Int): String
+        fun ticks(): Flow<Int>
+        val level: StateFlow<Int>
+        fun name(): String
+      }
+
+      interface Manger : Trough {
+        fun own(): Int
+      }
+
+      class Stall : Manger {
+        override suspend fun fetch(id: Int): String = "stall-${'$'}id"
+        override fun ticks(): Flow<Int> = flowOf(1, 2, 3)
+        override val level: StateFlow<Int> = MutableStateFlow(1)
+        override fun name(): String = "stall"
+        override fun own(): Int = 11
+      }
+
+      class Nosebag<T>(val item: T) : Manger {
+        override suspend fun fetch(id: Int): String = "nosebag-${'$'}id"
+        override fun ticks(): Flow<Int> = flowOf(7, 8)
+        override val level: StateFlow<Int> = MutableStateFlow(4)
+        override fun name(): String = "nosebag"
+        override fun own(): Int = 22
+      }
+
+      fun makeManger(): Manger = Stall()
+      fun makeNosebag(): Manger = Nosebag(1)
+      """.trimIndent(),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    // Precondition on the generated KOTLIN only; the C# is judged by its text below.
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val trough: String = result.generatedCSharp.interfaceBlock("ITrough")
+    val manger: String = result.generatedCSharp.interfaceBlock("IManger")
+    assertTrue(trough.isNotEmpty() && manger.isNotEmpty(),
+      "expected ITrough and IManger; generatedCSharp=${result.generatedCSharp}")
+
+    val asyncSignatures: List<String> = listOf(
+      "Task<string> FetchAsync(int id, CancellationToken cancellationToken = default);",
+      "KotlinFlow<int> Ticks();",
+      "KotlinStateFlow<int> Level",
+    )
+    assertTrue(trough.contains("IAsyncDisposable"),
+      "expected ITrough : IAsyncDisposable; got:\n$trough")
+    asyncSignatures.forEach { expected ->
+      assertTrue(trough.contains(expected), "expected `$expected` on ITrough; got:\n$trough")
+      assertFalse(manger.contains(expected), "expected no `$expected` on IManger; got:\n$manger")
+    }
+    assertTrue(manger.contains("IManger : ITrough"),
+      "expected IManger to inherit ITrough; got:\n$manger")
+
+    val nosebag: String = result.generatedCSharp.substringAfter("public class Nosebag<T>", "")
+      .substringBefore("\n    }\n")
+    assertTrue(nosebag.isNotEmpty(),
+      "expected Nosebag<T>; generatedCSharp=${result.generatedCSharp}")
+    listOf(
+      "IAsyncDisposable",
+      "public ValueTask DisposeAsync()",
+      "Task<string> ITrough.FetchAsync(int id, CancellationToken cancellationToken)",
+      "KotlinFlow<int> ITrough.Ticks()",
+      "KotlinStateFlow<int> ITrough.Level",
+    ).forEach { expected ->
+      assertTrue(nosebag.contains(expected), "expected `$expected` on Nosebag<T>; got:\n$nosebag")
+    }
+  }
+
+  @Test
+  fun `a restated async override on a reachable derived interface is declared only on its super`() {
+    // ADR-174 amendment, shape E: both interfaces reachable, `Hayrack` restates `fetch` as an
+    // identical override. The sync route classifies that IDENTICAL_OVERRIDE and omits it; the
+    // async route must too, or `IHayrack.FetchAsync` hides `IChute.FetchAsync` (CS0108, an error
+    // under TreatWarningsAsErrors).
+    val result = Tier1Harness.run(
+      """
+      package tier1.asyncrestated
+
+      interface Chute {
+        suspend fun fetch(id: Int): String
+      }
+
+      interface Hayrack : Chute {
+        override suspend fun fetch(id: Int): String
+        fun own(): Int
+      }
+
+      class Hayloft : Hayrack {
+        override suspend fun fetch(id: Int): String = "hayloft-${'$'}id"
+        override fun own(): Int = 33
+      }
+
+      fun makeHayrack(): Hayrack = Hayloft()
+      fun makeChute(): Chute = Hayloft()
+      """.trimIndent(),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val chute: String = result.generatedCSharp.interfaceBlock("IChute")
+    val hayrack: String = result.generatedCSharp.interfaceBlock("IHayrack")
+    assertTrue(chute.isNotEmpty() && hayrack.isNotEmpty(),
+      "expected IChute and IHayrack; generatedCSharp=${result.generatedCSharp}")
+    assertTrue(chute.contains("Task<string> FetchAsync("),
+      "expected FetchAsync on IChute; got:\n$chute")
+    assertFalse(hayrack.contains("FetchAsync("),
+      "expected no FetchAsync on IHayrack; got:\n$hayrack")
+    assertTrue(hayrack.contains("int Own();"), "expected IHayrack's own member; got:\n$hayrack")
+  }
+
+  @Test
+  fun `an async member inherited from a generic super is declared on the derived interface`() {
+    // ADR-174 amendment: `Base<T>` is generic, so it never carries (ruling 3) and is never
+    // promoted. Its async member is declared on `IDerived` instead, the nearest carrying interface,
+    // as an unexported super's is. Otherwise `IDerived : IAsyncDisposable` (it counts the inherited
+    // member) leaves the generic implementer `Crate<X>` without forwards or `DisposeAsync`: CS0535.
+    val result = Tier1Harness.run(
+      """
+      package tier1.asyncgenericsuper
+
+      interface Base<T> {
+        suspend fun fetch(): T
+      }
+
+      interface Derived : Base<Int> {
+        fun own(): Int
+      }
+
+      class Impl : Derived {
+        override suspend fun fetch(): Int = 7
+        override fun own(): Int = 1
+      }
+
+      class Crate<X>(val x: X) : Derived {
+        override suspend fun fetch(): Int = 8
+        override fun own(): Int = 2
+      }
+
+      fun makeDerived(): Derived = Impl()
+      fun makeCrate(): Derived = Crate("oats")
+      """.trimIndent(),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val derived: String = result.generatedCSharp.interfaceBlock("IDerived")
+    val base: String = result.generatedCSharp.interfaceBlock("IBase<T>")
+    assertTrue(derived.isNotEmpty(), "expected IDerived; generatedCSharp=${result.generatedCSharp}")
+    assertTrue(derived.contains("IAsyncDisposable"),
+      "expected IDerived : IAsyncDisposable; got:\n$derived")
+    assertTrue(
+      derived.contains("Task<int> FetchAsync(CancellationToken cancellationToken = default);"),
+      "expected FetchAsync on IDerived; got:\n$derived")
+    assertFalse(base.contains("FetchAsync("),
+      "expected no FetchAsync on the generic IBase<T>; got:\n$base")
+
+    val crate: String = result.generatedCSharp.substringAfter("public class Crate<", "")
+      .substringBefore("\n    }\n")
+    assertTrue(crate.isNotEmpty(), "expected Crate<X>; generatedCSharp=${result.generatedCSharp}")
+    listOf(
+      "IAsyncDisposable",
+      "public ValueTask DisposeAsync()",
+      "Task<int> IDerived.FetchAsync(CancellationToken cancellationToken)",
+    ).forEach { expected ->
+      assertTrue(crate.contains(expected), "expected `$expected` on Crate<X>; got:\n$crate")
+    }
+  }
+
+  @Test
+  fun `an unexported super's async members are re-homed onto the derived interface`() {
+    // ADR-174 amendment: a super outside the export set (here a package outside the root) is
+    // dropped with SKIPPED_UNEXPORTED_SUPERTYPE and its members re-homed onto `IShy` (DECLARED
+    // placement), async members included, exactly as the sync route does. The generic implementer
+    // forwards them under `IShy`.
+    val hidden: String = """
+      package tier1asynchidden
+
+      import kotlinx.coroutines.flow.Flow
+      import kotlinx.coroutines.flow.StateFlow
+
+      interface Tagged {
+        suspend fun fetch(id: Int): String
+        fun ticks(): Flow<Int>
+        val level: StateFlow<Int>
+        fun retag(t: String): String
+      }
+    """.trimIndent()
+    val fixture: String = """
+      package tier1.asyncrehomed
+
+      import tier1asynchidden.Tagged
+      import kotlinx.coroutines.flow.Flow
+      import kotlinx.coroutines.flow.MutableStateFlow
+      import kotlinx.coroutines.flow.StateFlow
+      import kotlinx.coroutines.flow.flowOf
+
+      interface Shy : Tagged { fun hello(): String }
+
+      class ShyImpl : Shy {
+        override suspend fun fetch(id: Int): String = "shy-${'$'}id"
+        override fun ticks(): Flow<Int> = flowOf(1)
+        override val level: StateFlow<Int> = MutableStateFlow(1)
+        override fun retag(t: String): String = t
+        override fun hello(): String = "hi"
+      }
+
+      class Bag<T>(val t: T) : Shy {
+        override suspend fun fetch(id: Int): String = "bag-${'$'}id"
+        override fun ticks(): Flow<Int> = flowOf(2)
+        override val level: StateFlow<Int> = MutableStateFlow(2)
+        override fun retag(t: String): String = t
+        override fun hello(): String = "hey"
+      }
+
+      fun adoptShy(): Shy = ShyImpl()
+      fun adoptBag(): Shy = Bag(1)
+    """.trimIndent()
+    val result = Tier1Harness.run(
+      mapOf("Hidden.kt" to hidden, "Rehomed.kt" to fixture),
+      processorOptions = mapOf("nuget.rootPackage" to "tier1.asyncrehomed"),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    assertTrue(
+      result.kspWarnings.any { "SKIPPED_UNEXPORTED_SUPERTYPE" in it && "Shy : Tagged" in it },
+      "expected the dropped super named; kspWarnings=${result.kspWarnings}",
+    )
+    assertFalse(result.generatedCSharp.contains("ITagged"), "no ITagged may be named")
+    val shy: String = result.generatedCSharp.interfaceBlock("IShy")
+    listOf(
+      "IAsyncDisposable",
+      "Task<string> FetchAsync(int id, CancellationToken cancellationToken = default);",
+      "KotlinFlow<int> Ticks();",
+      "KotlinStateFlow<int> Level",
+      "string Retag(string t);",
+    ).forEach { expected ->
+      assertTrue(shy.contains(expected), "expected `$expected` on IShy; got:\n$shy")
+    }
+    val bag: String = result.generatedCSharp.substringAfter("public class Bag<", "")
+      .substringBefore("\n    }\n")
+    listOf(
+      "public ValueTask DisposeAsync()",
+      "Task<string> IShy.FetchAsync(int id, CancellationToken cancellationToken)",
+      "KotlinFlow<int> IShy.Ticks()",
+      "KotlinStateFlow<int> IShy.Level",
+    ).forEach { expected ->
+      assertTrue(bag.contains(expected), "expected `$expected` on Bag<T>; got:\n$bag")
+    }
+  }
+
+  @Test
+  fun `an async member two carrying supers both declare is redeclared with new`() {
+    // ADR-174 amendment: `Feeder : Scoop, Ladle` with both supers declaring `fetch`. Both supers
+    // are promoted (they carry async members); inheriting `FetchAsync` from both would be CS0121 on
+    // `feeder.FetchAsync(...)`, so `IFeeder` redeclares it with `new`, the sync DIAMOND_OVERRIDE.
+    val result = Tier1Harness.run(
+      """
+      package tier1.asyncdiamond
+
+      interface Scoop {
+        suspend fun fetch(id: Int): String
+      }
+
+      interface Ladle {
+        suspend fun fetch(id: Int): String
+      }
+
+      interface Feeder : Scoop, Ladle {
+        fun own(): Int
+      }
+
+      class Trug : Feeder {
+        override suspend fun fetch(id: Int): String = "trug-${'$'}id"
+        override fun own(): Int = 3
+      }
+
+      fun makeFeeder(): Feeder = Trug()
+      """.trimIndent(),
+      libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val signature =
+      "Task<string> FetchAsync(int id, CancellationToken cancellationToken = default);"
+    val scoop: String = result.generatedCSharp.interfaceBlock("IScoop")
+    val ladle: String = result.generatedCSharp.interfaceBlock("ILadle")
+    val feeder: String = result.generatedCSharp.interfaceBlock("IFeeder")
+    assertTrue(scoop.contains(signature), "expected FetchAsync on IScoop; got:\n$scoop")
+    assertTrue(ladle.contains(signature), "expected FetchAsync on ILadle; got:\n$ladle")
+    assertTrue(feeder.contains("IFeeder : IScoop, ILadle"),
+      "expected both supers kept; got:\n$feeder")
+    assertTrue(feeder.contains("new $signature"),
+      "expected `new` FetchAsync on IFeeder; got:\n$feeder")
+    assertTrue(feeder.contains("int Own();"), "expected IFeeder's own member; got:\n$feeder")
+  }
 }

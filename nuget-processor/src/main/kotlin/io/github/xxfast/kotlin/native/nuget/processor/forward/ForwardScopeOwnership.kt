@@ -7,6 +7,7 @@ import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
+import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
@@ -316,11 +317,80 @@ internal fun KSClassDeclaration.forwardAsyncInterfaceForwards(
 /** Whether [this] interface DECLARES (not inherits) a scope-using member it carries. */
 internal fun KSClassDeclaration.forwardInterfaceDeclaresOwnScopeMember(
   classifier: ForwardBridgeTypeClassifier,
-): Boolean = (forwardInterfaceSuspendMethods(classifier) + forwardInterfaceFlowMethods(classifier))
-  .any { it.isDeclaredOn(this) } ||
-    forwardInterfaceFlowProperties(classifier).any { it.isDeclaredOn(this) }
+): Boolean {
+  val hierarchy = ForwardInterfaceHierarchy(this, classifier.exportedObjectHandles)
+  fun KSDeclaration.declared(): Boolean = forwardAsyncPlacement(this, hierarchy, classifier).let {
+    it == ForwardInterfaceMemberPlacement.DECLARED ||
+        it == ForwardInterfaceMemberPlacement.DIAMOND_OVERRIDE
+  }
+  return (forwardInterfaceSuspendMethods(classifier) + forwardInterfaceFlowMethods(classifier))
+    .any { it.declared() } ||
+      forwardInterfaceFlowProperties(classifier).any { it.declared() }
+}
 
-/** ADR-174: declared (not inherited) on [owner], the placement `I<Name>` declares a member at. */
-internal fun KSDeclaration.isDeclaredOn(owner: KSClassDeclaration): Boolean =
-  (parentDeclaration as? KSClassDeclaration)?.qualifiedName?.asString() ==
-      owner.qualifiedName?.asString()
+/**
+ * ADR-174 amendment: where `I<Name>` declares an async member is the sync route's placement, not a
+ * lexical owner test: DECLARED (own, or re-homed from an unexported super) or DIAMOND_OVERRIDE
+ * (redeclared with `new`). An identical override of a kept super's member stays on the super
+ * (CS0108 otherwise); an inherited one is declared on the super that carries it.
+ *
+ * One departure from the sync placement: a member reached only through kept supers that do NOT
+ * carry async members (a generic super, ruling 3, which the reachability closure never promotes)
+ * would be declared on no interface, while [this] still counts it for `IAsyncDisposable`, leaving a
+ * generic implementer without its forwards (CS0535). So that member is re-homed onto [this], the
+ * nearest carrying interface, as an unexported super's member is: DECLARED.
+ */
+internal fun KSClassDeclaration.forwardAsyncPlacement(
+  member: KSDeclaration,
+  hierarchy: ForwardInterfaceHierarchy,
+  classifier: ForwardBridgeTypeClassifier,
+): ForwardInterfaceMemberPlacement? {
+  val placed: ForwardInterfaceMemberPlacement? = hierarchy.asyncPlacement(member)
+  val reachedThroughSuper: Boolean = placed == ForwardInterfaceMemberPlacement.INHERITED ||
+      placed == ForwardInterfaceMemberPlacement.IDENTICAL_OVERRIDE
+  if (!reachedThroughSuper || carriedBySuper(member, classifier)) return placed
+  return ForwardInterfaceMemberPlacement.DECLARED
+}
+
+/** Whether a carrying super-interface of [this] projects an async member of [member]'s shape. */
+private fun KSClassDeclaration.carriedBySuper(
+  member: KSDeclaration,
+  classifier: ForwardBridgeTypeClassifier,
+): Boolean {
+  val owner: KSClassDeclaration = this
+  // Parameter types substituted as members of [owner], so `Satchel<T>.fetch(t: T)` seen through
+  // `Haversack : Satchel<Int>` compares as `fetch(Int)`; `null` for a property.
+  fun KSDeclaration.parameterTypes(): List<String?>? {
+    val function: KSFunctionDeclaration = this as? KSFunctionDeclaration ?: return null
+    val types: List<KSType?> = try {
+      function.asMemberOf(owner.asStarProjectedType()).parameterTypes
+    } catch (_: IllegalArgumentException) {
+      function.parameters.map { it.type.resolve() }
+    }
+    return types.map { type -> type?.declaration?.qualifiedName?.asString() }
+  }
+  val name: String = member.simpleName.asString()
+  val parameters: List<String?>? = member.parameterTypes()
+  fun KSDeclaration.sameShape(): Boolean =
+    simpleName.asString() == name && parameterTypes() == parameters
+  return getAllSuperTypes()
+    .mapNotNull { it.declaration as? KSClassDeclaration }
+    .filter { ForwardAsyncInterfaces.carries(it) }
+    .any { base ->
+      (
+        base.forwardInterfaceSuspendMethods(classifier) +
+          base.forwardInterfaceFlowMethods(classifier)
+      )
+        .any { it.sameShape() } ||
+          base.forwardInterfaceFlowProperties(classifier).any { it.sameShape() }
+    }
+}
+
+/** [ForwardInterfaceHierarchy.placement] for an async member, a function or a Flow property. */
+internal fun ForwardInterfaceHierarchy.asyncPlacement(
+  member: KSDeclaration,
+): ForwardInterfaceMemberPlacement? = when (member) {
+  is KSFunctionDeclaration -> placement(member)
+  is KSPropertyDeclaration -> placement(member)
+  else -> null
+}
