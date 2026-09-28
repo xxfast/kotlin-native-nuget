@@ -146,6 +146,16 @@ named diagnostics:
   two routes in the message (`Tier1EnumMemberExtensionNameClashTest`, `an enum member property and
   an extension property of one name resolve to their own plans`).
 
+  > **Amendment (2026-09-28):** [ADR-132](132-extension-receiver-shapes.md)'s same-dated amendment
+  > gives the extension-property route a `SHADOWED_BY_MEMBER` skip ahead of this check: a
+  > member-shadowed extension like `val Coat.grooming` above is now dropped before it ever reaches
+  > the plan, so the two plans no longer collide over `…__coat_get_grooming`, and this case no
+  > longer raises `ERROR_C_ENTRY_POINT_COLLISION`. The member keeps its export; only the shadowed
+  > extension is skipped, with a warning naming it. `Tier1EnumMemberExtensionNameClashTest` was
+  > updated accordingly. The sibling case just above (a member property beside an extension
+  > *function* of the same name) is unaffected and still fails as
+  > `ERROR_CSHARP_SIGNATURE_COLLISION`.
+
 ### Side fix: skip remarks on the C# enum itself
 
 `CirSkipRemarks`'s `else -> this` branch swallowed a skip remark targeting `CirEnum` (the

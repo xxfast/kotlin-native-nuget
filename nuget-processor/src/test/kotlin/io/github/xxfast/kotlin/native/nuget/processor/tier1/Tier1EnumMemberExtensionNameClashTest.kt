@@ -44,14 +44,15 @@ class Tier1EnumMemberExtensionNameClashTest {
 
   /**
    * A member `val grooming` and a (shadowed) extension `val Coat.grooming` share the plan symbol
-   * `tier1.enumclash2.Coat.grooming`. The extension route's `propertyFor` lookup must return the
-   * EXTENSION plan, never the member's. Both still claim the one C entry point
-   * `…__coat_get_grooming` (the same scheme on both routes, and on the old enum route before it),
-   * so generation stops at ADR-117's entry-point collision naming both owners, not at a processor
-   * crash or a silently wrong binding.
+   * `tier1.enumclash2.Coat.grooming`. Kotlin resolves `receiver.grooming` to the MEMBER, so the
+   * extension is unreachable by call syntax and its export body would read the member. The
+   * extension-property route skips it as `SHADOWED_BY_MEMBER` (reported under
+   * `SKIPPED_UNSUPPORTED_PROPERTY`, naming the enum member), which also removes the second claim on
+   * the C entry point `…__coat_get_grooming` that used to stop generation at ADR-117's collision.
+   * The member, found on the enum class's own declarations, keeps its export on both halves.
    */
   @Test
-  fun `an enum member property and an extension property of one name resolve to their own plans`() {
+  fun `an enum member property shadows an extension property of one name, which is skipped`() {
     val result = Tier1Harness.run(
       """
       package tier1.enumclash2
@@ -67,36 +68,24 @@ class Tier1EnumMemberExtensionNameClashTest {
       """.trimIndent(),
     )
 
-    assertTrue(
-      result.kspErrors.none { it.contains("duplicate plans") },
-      "the catalog lookup must not see two plans for one symbol; kspErrors=${result.kspErrors}",
-    )
-    val collisions: List<String> = result.kspErrors.filter {
-      it.contains(ForwardDiagnosticKind.ERROR_C_ENTRY_POINT_COLLISION.name)
+    assertTrue(result.kspErrors.isEmpty(), "expected no KSP errors; kspErrors=${result.kspErrors}")
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val shadowed: List<String> = result.kspWarnings.filter {
+      it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
+          it.contains("SHADOWED_BY_MEMBER")
     }
+    assertTrue(shadowed.size == 1, "expected one shadow warning; kspWarnings=${result.kspWarnings}")
+    assertTrue(shadowed.single().contains("`Coat.grooming` shadows it"), shadowed.single())
+
+    // The member's export survives on both halves, exactly once.
+    val entryPoint = "library_tier1_enumclash2__coat_get_grooming"
     assertTrue(
-      collisions.size == 1,
-      "expected one entry-point collision; kspErrors=${result.kspErrors}",
-    )
-    assertTrue(collisions.single().contains("coat_get_grooming"), collisions.single())
-    // Each route exported off its OWN plan: the member's export is tagged with its role, the
-    // extension's is not. Had `propertyFor` handed the extension route the member's plan, the
-    // extension projection would have refused it (it requires an EXTENSION plan) and the build
-    // would have stopped at an internal generator failure instead.
-    assertTrue(
-      collisions.single().contains("  - tier1.enumclash2.Coat.grooming (enum member property)"),
-      collisions.single(),
+      Regex(Regex.escape("@CName(\"$entryPoint\")")).findAll(result.generated).count() == 1,
+      "expected the member's single Kotlin export; generated=${result.generated}",
     )
     assertTrue(
-      Regex("""  - tier1\.enumclash2\.Coat\.grooming(\.|\r?\n)""")
-        .containsMatchIn(collisions.single()),
-      collisions.single(),
-    )
-    assertTrue(
-      result.kspErrors.none {
-        it.contains(ForwardDiagnosticKind.ERROR_INTERNAL_GENERATOR_FAILURE.name)
-      },
-      "kspErrors=${result.kspErrors}",
+      Regex(Regex.escape("EntryPoint = \"$entryPoint\"")).findAll(result.generatedCSharp).count() == 1,
+      "expected the member's single C# import; csharp=${result.generatedCSharp}",
     )
   }
 }

@@ -322,3 +322,36 @@ cleaner), neither object is a `StableRef`, so a pure `GCHandle` leak on the C# s
 this row green. That is shipped ADR-088 parameter-position behaviour, not new here. The seven
 scalar-ish receivers (`Enum`, `Uuid`, `Instant`, `Duration`, `String?`, `Uuid?`, and a `String`- or
 `ObjectHandle`-underlying value class, nullable) mint no handle on either side and get no row.
+
+## Amendment (2026-09-28): a member property that shadows an extension property is a named skip
+
+Discovered while implementing ADR-172: an extension property whose receiver already has a visible
+member property of the same name (`class Foo { val x: Int = 1 }` alongside `val Foo.x: Int get() =
+2` in another package) still bound and exported. The extension's generated Kotlin export body reads
+`receiver.x`, and Kotlin's own name resolution always prefers a member over an extension of the same
+name, so the export silently returned the *member's* value (`1`), never the extension's (`2`). Kotlin
+call syntax has the identical problem: `foo.x` from anywhere that can see both declarations also
+resolves to the member, so the extension was unreachable by ordinary Kotlin syntax either. This is
+not a new receiver shape and does not change the table above; it is a gate on top of it.
+
+`ForwardPropertyPlanner.shadowingMember` now looks up the receiver's member properties (declared and
+inherited via `getAllProperties()`) for a same-named, non-private, non-protected, non-extension
+candidate. Finding one drops the extension with a new `SHADOWED_BY_MEMBER` reason, reported under
+`SKIPPED_UNSUPPORTED_PROPERTY`: "the member property `Foo.x` shadows it: Kotlin resolves
+`receiver.x` to the member, so the extension is unreachable by call syntax", with a suggested fix to
+rename the extension or expose a top-level function instead. A private or protected member is not
+visible from the generated file and is not a candidate; a member *extension* property is not a
+candidate either, since plain `receiver.x` never resolves to one. A nullable receiver (`val
+Foo?.x`) is never shadowed: `(receiver).x` on a nullable static type has no member candidate, so the
+extension resolves as declared.
+
+**Fixture-verified**, `Tier1ShadowedExtensionPropertyTest.kt`: a declared shadowing member, an
+inherited shadowing member, a private member (does not shadow), and a nullable receiver (does not
+shadow) all render as expected; the member keeps its own export and the shadowed extension exports
+on neither half.
+
+**Known gap, not fixed here:** the extension **function** twin has the same defect
+(`fun Foo.y()` beside member `Foo.y()` renders `receiver.y()`, which also resolves to the member) and
+still exports today. Closing it needs overload applicability matching (arity, parameter types after
+alias expansion, defaults, varargs, generics), not a name-only check, so it is a separate ROADMAP
+item, pinned as a known-wrong control in the same Tier 1 test.
