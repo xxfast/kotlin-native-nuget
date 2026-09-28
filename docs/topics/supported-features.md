@@ -86,6 +86,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | a method declared on a `class<T>` | → | instance method on the generic carrier | Every `T` position, including a value class (its own box/unbox pair), crosses as a handle; `T` in a collection/lambda/`Flow`, and a generic subclass, are refused. | [Generics](generics.md) |
 | a property declared on a `class<T>` | → | its own C# type | `T`/`T?` properties cross as a handle; every other declared type (`String`, `Cat`, ...) keeps its own C# type, never `T`. | [Generics](generics.md) |
 | `fun <T> f()` | → | typed variants | Dispatched on the runtime type; a bare `T` carries `null` unless bound non-null. | [Generics](generics.md) |
+| a C#-implemented interface at an erased generic position (lambda, legacy `fun <T>`, `class<T>`) | ⇄ | the interface itself, not its backing wrapper | → returns the same instance · ← a Kotlin-backed value at `T = IFoo` materialises as `IFoo` | [Generics](generics.md) · [Interfaces, abstract and sealed](interfaces-abstract-sealed.md) |
 | `<T : Bound>` constraint | → | `where T : ...` | `T : Any` renders `where T : notnull`; a nullable bound (`T : Pet?`) keeps its `?`. | [Generics](generics.md) |
 | `out T` / `in T` variance | → | `out T` / `in T` |  | [Generics](generics.md) |
 | `typealias` | → | the underlying type | Use-site `?` and a substituted generic alias (`Box<Int>`) bind as the written-out type on every route; a parameter nested in the RHS stays a named skip. | [Generics](generics.md) |

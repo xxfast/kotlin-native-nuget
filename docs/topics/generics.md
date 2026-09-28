@@ -181,6 +181,35 @@ underlying, a generic value class, or an ineligible sealed interface) still comp
 throws `NotSupportedException` at the call, since an open C# generic has no build-time way to
 refuse it.
 
+### An interface at an erased position {id="an-interface-at-an-erased-position"}
+
+`T` bound to an exported interface (`PetBox<T : Pet>`, or the unconstrained `T` above) accepts your
+own C# implementation and hands back the SAME instance, not a fresh Kotlin-backed wrapper. A
+Kotlin-backed value read at `T = IPet` still materializes as `IPet`, through a factory the
+interface itself now carries:
+
+```C#
+sealed class Dog(string name) : IPet { /* ... */ }
+
+using IPet rex = new Dog("Rex");
+using var box = new PetBox<IPet>(rex);
+Assert.Same(rex, box.Value);
+
+using var oreo = new Cat("Oreo", 9);
+using var oreoBox = new PetBox<IPet>(oreo);
+IPet boxed = oreoBox.Value; // a fresh IPet wrapper over the Kotlin cat, not the same kind of "same instance"
+```
+
+Each crossing mints a bridge handle for your C# object (freed after the call) or reads one back by
+token (freed by the read); see [Implementing a Kotlin interface in
+C#](interfaces-abstract-sealed.md#implementing-a-kotlin-interface-in-c). `T` bound to something
+that isn't your own C# type and also isn't a Kotlin-backed instance Kotlin can reconstruct (a
+different implementation entirely) throws `InvalidCastException`; a `T = Dog` read of a
+Kotlin-backed value that isn't a `Dog` throws `NotSupportedException` naming the missing factory,
+inherent to erasure. The same identity rule applies to a lambda argument
+(see [Lambdas and callbacks](lambdas-and-callbacks.md)) and to the legacy [generic
+functions](#generic-functions) below.
+
 `T` is admitted only at a top-level position: a parameter, a return, a constructor parameter, or a
 property getter, optionally nullable. It is refused, named, everywhere else: nested in a
 collection or lambda (`List<T>`, `(T) -> Unit`, `Flow<T>`), a `var` property's setter
@@ -280,6 +309,17 @@ A constrained generic function carries the same `where` clause as a constrained 
 and non-reified `inline fun` (like a plain `square(x: Int)`) both generate as an ordinary method or
 generic method; inlining and reification only matter inside Kotlin and don't change the C# side.
 
+An unconstrained `T` bound to an exported interface gets the same identity treatment as the
+[generic-class case above](#an-interface-at-an-erased-position): the object arm now writes through
+the same shared marshalling helper every other erased route uses, so it also picks up boxed value
+classes for free.
+
+```C#
+using IPet rex = new Dog("Rex");
+Assert.Same(rex, Helpers.AdoptPet<IPet>(rex));       // fun <T : Pet> adoptPet(pet: T): T
+Assert.Same(rex, PetRelayKt.RelayPet<IPet>(rex));    // fun <T> relayPet(value: T): T, unconstrained
+```
+
 This row only binds for a **top-level** function with a `T`-typed direct parameter
 (`fun <T> f(value: T): T`). A generic function declared on a class, `object`, or interface, or a
 top-level one with no `T`-typed parameter (e.g. `fun <T> f(): List<T>`), is not generated.
@@ -332,5 +372,6 @@ declare the generic class in the publishing module itself instead.
     <category ref="external">
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/147-generic-class-methods.md">ADR-147: Generic class methods</a>
         <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/171-value-classes-at-erased-generic-positions.md">ADR-171: Value classes at erased generic positions</a>
+        <a href="https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/173-erased-generic-routes-carry-csharp-interface-identity.md">ADR-173: Erased generic routes carry C# interface identity</a>
     </category>
 </seealso>

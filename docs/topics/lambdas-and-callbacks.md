@@ -38,6 +38,13 @@ its underlying, so its own `init` still validates; a value class with no crossin
 (a nullable underlying, a generic value class, or an ineligible sealed interface) is refused by
 name instead.
 
+An exported **interface** type argument (`KotlinFunc<IPet, IPet>`) is spelled with the interface
+itself, never the ADR-040 backing wrapper, and passing your own C# implementation to `Invoke`
+returns that same instance; a Kotlin-backed value still materializes through the interface, see
+[An interface at an erased position](generics.md#an-interface-at-an-erased-position). If you
+explicitly named the old wrapper type (`KotlinFunc<Pet, Pet>`) before, that no longer compiles;
+`var` and passing the result straight on are unaffected.
+
 ```kotlin
 fun signIn(): (String?) -> Unit = { seen = it }
 fun describer(): (Int?) -> String = { if (it == null) "none" else "n=$it" }
