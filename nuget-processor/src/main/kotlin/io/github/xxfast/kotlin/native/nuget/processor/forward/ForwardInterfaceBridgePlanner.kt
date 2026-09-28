@@ -212,9 +212,10 @@ internal object ForwardInterfaceBridgePlanner {
       // A nullable enum has no sentinel on an `int` wire; only the non-null shape is in scope.
       if (nullable) return null
       // The enum's C# spelling is the classifier's to make, never this planner's: a bare simple
-      // name names nothing for a nested enum (which is never declared as a C# enum at all) and
-      // resolves only by luck for one outside the file's `using` list. An undeclared enum plans no
-      // factory, exactly the ADR-084 posture for every other out-of-scope member.
+      // name names nothing for a nested enum (declared under its owner, `IKettle.Whistle`) and
+      // resolves only by luck for one outside the file's `using` list. An undeclared enum (nested
+      // under an owner ADR-133 still defers, dropped by its CS0102 collision gate, or out of scope)
+      // plans no factory, exactly the ADR-084 posture for every other out-of-scope member.
       val classified: BridgeType = classifier.classify(type)
       if (classified !is BridgeType.Enum) return null
       // Kotlin reads the qualified name: valid at every `override` position, and the generated
