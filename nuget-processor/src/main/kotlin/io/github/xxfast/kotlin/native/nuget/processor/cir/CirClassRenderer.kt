@@ -38,9 +38,9 @@ internal fun StringBuilder.renderInterface(iface: CirInterface) {
     renderDoc(method.doc, "        ")
     // ADR-174: a `suspend` member ends in the class route's own `CancellationToken ... = default`,
     // minted the same way (`CirAsyncLocals`) so an implementing class's `Async` method matches.
+    val cancellationToken: String = CirAsyncLocals.of(method.parameters).cancellationToken
     val token: String? =
-      if (method.isAsync) "CancellationToken ${CirAsyncLocals.of(method.parameters).cancellationToken} = default"
-      else null
+      if (method.isAsync) "CancellationToken $cancellationToken = default" else null
     val paramStr: String =
       (method.parameters.map { it.declaration } + listOfNotNull(token)).joinToString(", ")
     val modifier: String = if (method.isNew) "new " else ""
@@ -75,9 +75,9 @@ internal fun StringBuilder.renderStaticClass(cls: CirStaticClass) {
  * ordinary one cannot drift: there is exactly one renderer, and the hoist is a mechanical move.
  */
 internal fun StringBuilder.renderClass(cls: CirClass) {
-  // ADR-174: an interface's backing wrapper hoists into a named carrier too (`FeedNative`), the same
-  // mechanical move, so a generic implementer's explicit interface implementations can reach the
-  // interface's imports. One copy of each extern, so the ABI contract still sees it once.
+  // ADR-174: an interface's backing wrapper hoists into a named carrier too (`FeedNative`), the
+  // same mechanical move, so a generic implementer's explicit interface implementations can reach
+  // the interface's imports. One copy of each extern, so the ABI contract still sees it once.
   val carrier: String = cls.nativeCarrier ?: "${cls.name}Native"
   if (cls.typeParameters.isEmpty() && cls.nativeCarrier == null) {
     renderClassDeclaration(cls)
@@ -487,8 +487,9 @@ internal fun StringBuilder.renderProperty(prop: CirProperty) {
   val modifier: String = if (prop.isOverride) "override " else if (prop.isVirtual) "virtual " else ""
   val isMultiLineGetter: Boolean = prop.getter.contains('\n')
   val isMultiLineSetter: Boolean = prop.setter?.contains('\n') == true
+  val head: String = prop.memberHead("public $static$modifier")
   if (isMultiLineGetter && prop.setter != null) {
-    appendLine("        ${prop.memberHead("public $static$modifier")}${prop.type} ${prop.explicitName}")
+    appendLine("        $head${prop.type} ${prop.explicitName}")
     appendLine("        {")
     appendLine("            get")
     appendLine("            {${prop.getter}")
@@ -498,16 +499,16 @@ internal fun StringBuilder.renderProperty(prop: CirProperty) {
     appendLine("            }")
     appendLine("        }")
   } else if (isMultiLineGetter) {
-    appendLine("        ${prop.memberHead("public $static$modifier")}${prop.type} ${prop.explicitName}")
+    appendLine("        $head${prop.type} ${prop.explicitName}")
     appendLine("        {")
     appendLine("            get")
     appendLine("            {${prop.getter}")
     appendLine("            }")
     appendLine("        }")
   } else if (prop.setter == null) {
-    appendLine("        ${prop.memberHead("public $static$modifier")}${prop.type} ${prop.explicitName} => ${prop.getter};")
+    appendLine("        $head${prop.type} ${prop.explicitName} => ${prop.getter};")
   } else if (isMultiLineSetter) {
-    appendLine("        ${prop.memberHead("public $static$modifier")}${prop.type} ${prop.explicitName}")
+    appendLine("        $head${prop.type} ${prop.explicitName}")
     appendLine("        {")
     appendLine("            get => ${prop.getter};")
     appendLine("            set")
@@ -515,7 +516,7 @@ internal fun StringBuilder.renderProperty(prop: CirProperty) {
     appendLine("            }")
     appendLine("        }")
   } else {
-    appendLine("        ${prop.memberHead("public $static$modifier")}${prop.type} ${prop.explicitName}")
+    appendLine("        $head${prop.type} ${prop.explicitName}")
     appendLine("        {")
     appendLine("            get => ${prop.getter};")
     appendLine("            set => ${prop.setter};")

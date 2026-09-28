@@ -202,9 +202,10 @@ data class CirClass(
   // `Native_Dispose` import to drain into). `DisposeAsync` follows `Dispose`'s spelling, which is
   // the rule that makes `IAsyncDisposable` satisfiable on an abstract owner at all.
   val overridesDisposeAsync: Boolean = false,
-  // ADR-174: the non-generic carrier this class hoists its externs into (`FeedNative`), so a generic
-  // implementer's explicit interface implementations can reach the interface's imports. Null keeps
-  // the externs private in the class; a generic class always hoists into `{Name}Native` (ADR-147).
+  // ADR-174: the non-generic carrier this class hoists its externs into (`FeedNative`), so a
+  // generic implementer's explicit interface implementations can reach the interface's imports.
+  // Null keeps the externs private in the class; a generic class always hoists into
+  // `{Name}Native` (ADR-147).
   val nativeCarrier: String? = null,
   // ADR-064 amendment (2026-09-10): plain-text prose for the class's `<remarks>` doc comment, set
   // only when WARNING_NO_PUBLIC_CONSTRUCTOR fires, off the same detail string the diagnostic uses.

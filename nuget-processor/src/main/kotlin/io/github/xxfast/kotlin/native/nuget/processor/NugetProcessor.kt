@@ -1718,21 +1718,23 @@ class NugetProcessor(
               when (member) {
                 is KSFunctionDeclaration -> member.modifiers.contains(Modifier.SUSPEND) ||
                     member.returnsForwardFlow()
-                is KSPropertyDeclaration -> member.type.resolve().expandAliases().isForwardFlowType()
+                is KSPropertyDeclaration ->
+                  member.type.resolve().expandAliases().isForwardFlowType()
                 else -> false
               }
             }
             .filter { it.getVisibility() == Visibility.PUBLIC }
             .toList()
-          members.map { member ->
+          return@flatMap members.map { member ->
             val memberName: String = member.simpleName.asString()
             ForwardDiagnostic(
               kind = ForwardDiagnosticKind.SKIPPED_GENERIC_INTERFACE_ASYNC_MEMBER,
               symbol = member.takeIf { iface.containingFile != null },
               declaration = "$name.$memberName",
               reason = "`$memberName` is a suspend/Flow member of the generic interface `$name`: " +
-                  "its interface-owned export would need `asStableRef<${iface.simpleName.asString()}" +
-                  "<...>>()`, which has no type argument to spell (ADR-147, ADR-174)",
+                  "its interface-owned export would need " +
+                  "`asStableRef<${iface.simpleName.asString()}<...>>()`, which has no type " +
+                  "argument to spell (ADR-147, ADR-174)",
               hint = "declare it on a non-generic interface, or on the implementing class, " +
                   "which binds it through its own class route",
               owner = null,

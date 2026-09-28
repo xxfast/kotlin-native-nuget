@@ -13,13 +13,14 @@ import kotlin.time.Duration.Companion.milliseconds
  * and reached through an `IFeed`-typed reference, whatever object is behind it.
  *
  * Every async shape the class route carries is here once: a string-returning suspend with a real
- * suspension point ([fetch]), an int-returning suspend with none ([count], the tight-loop leak row),
- * a Flow-returning method ([ticks]), a StateFlow property ([level]) and a DEFAULT Flow member
- * ([doubled]) whose body lives on the interface. [name] is the sync member `IFeed` already declares.
+ * suspension point ([fetch]), an int-returning suspend with none ([count], the tight-loop leak
+ * row), a Flow-returning method ([ticks]), a StateFlow property ([level]) and a DEFAULT Flow
+ * member ([doubled]) whose body lives on the interface. [name] is the sync member `IFeed` already
+ * declares.
  *
- * The package is `catfeed`, not `feed`: package `feed` would be namespace `TestLibrary.Feed`, which
- * collides with the `Feed` backing wrapper inside it. The file is `Feeds.kt` for the same reason, so
- * the top-level factories land on a static class `Feeds` rather than a second `Feed`.
+ * The package is `catfeed`, not `feed`: package `feed` would be namespace `TestLibrary.Feed`,
+ * which collides with the `Feed` backing wrapper inside it. The file is `Feeds.kt` for the same
+ * reason, so the top-level factories land on a static class `Feeds` rather than a second `Feed`.
  *
  * Oreo gets fed from the RSS feed, Mylo from the crate. Both of them want the doubled portion.
  */
@@ -49,9 +50,9 @@ class RssFeed : Feed {
 }
 
 /**
- * The generic implementer: ADR-147 refuses the legacy async routes on a generic owner, so `Crate<T>`
- * projects none of the async members itself. ADR-174 Rule 7 gives it explicit interface
- * implementations over the interface's own dispatch exports.
+ * The generic implementer: ADR-147 refuses the legacy async routes on a generic owner, so
+ * `Crate<T>` projects none of the async members itself. ADR-174 Rule 7 gives it explicit
+ * interface implementations over the interface's own dispatch exports.
  */
 class Crate<T>(val item: T) : Feed {
   override suspend fun fetch(id: Int): String {

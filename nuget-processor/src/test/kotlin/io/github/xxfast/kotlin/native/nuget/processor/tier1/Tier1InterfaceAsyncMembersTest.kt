@@ -23,9 +23,10 @@ class Tier1InterfaceAsyncMembersTest {
   }
 
   @Test
-  fun `a generic implementer forwards the interface's async members through the wrapper's carrier`() {
+  fun `a generic implementer forwards interface async members through the wrapper carrier`() {
     // Ruling 4, at generation time: the export compiles as `asStableRef<Feed>()` (the harness
-    // compiles the generated Kotlin), and `Crate<T>` implements `IFeed` explicitly over `FeedNative`.
+    // compiles the generated Kotlin), and `Crate<T>` implements `IFeed` explicitly over
+    // `FeedNative`.
     val result = Tier1Harness.run(
       """
       package tier1.asyncforward
@@ -164,7 +165,8 @@ class Tier1InterfaceAsyncMembersTest {
   @Test
   fun `a generic interface's async members are a named skip and stay off the interface`() {
     // Ruling 3: `asStableRef<Feed<...>>()` has no type argument to spell (the ADR-147 reason).
-    // `get(): T` is the case the type-parameter carve-out would otherwise have declared as `T Get()`.
+    // `get(): T` is the case the type-parameter carve-out would otherwise have declared as
+    // `T Get()`.
     val result = Tier1Harness.run(
       """
       package tier1.asyncgeneric

@@ -1396,8 +1396,8 @@ internal fun translateClass(
   // projects a scope-using member. `null` means nothing in the chain does.
   val scopeOwner: KSClassDeclaration? = cls.forwardScopeOwner(classifier, exportedTypes)
 
-  // ADR-174 ruling 4: a generic implementer's explicit implementations of the interface async members
-  // ADR-147 keeps off its own surface. Empty for every non-generic class.
+  // ADR-174 ruling 4: a generic implementer's explicit implementations of the interface async
+  // members ADR-147 keeps off its own surface. Empty for every non-generic class.
   val interfaceForwards: CirInterfaceAsyncMembers = interfaceAsyncForwards(
     cls, libraryName, classifier, tracker, callableCatalog, context, expects,
   )
@@ -1421,7 +1421,8 @@ internal fun translateClass(
     isDataClass = isDataClass,
     isAbstract = isAbstract,
     isOpen = isOpen,
-    companionMembers = companionMembers + asyncMembers + flowRouteMembers + interfaceForwards.members,
+    companionMembers =
+      companionMembers + asyncMembers + flowRouteMembers + interfaceForwards.members,
     // ADR-159: derived from what PROJECTED, in one place, for the whole kept chain. The raw
     // `getAllFunctions()` scan this replaces read inherited members (so a subclass of an async
     // base rendered a second `DisposeAsync`, CS0108) and refused ones (so a class whose only
@@ -3686,7 +3687,8 @@ internal fun translateInterfaceBackingClass(
   callableCatalog: ForwardCallablePlanCatalog,
   tracker: CollectionHelperTracker,
   logger: KSPLogger,
-  // ADR-174: the async members' builders. Null (a unit caller) projects none, the pre-ADR-174 shape.
+  // ADR-174: the async members' builders. Null (a unit caller) projects none, the pre-ADR-174
+  // shape.
   classifier: ForwardBridgeTypeClassifier? = null,
   context: NugetContext? = null,
   expects: ExpectIndex = ExpectIndex(),
@@ -3726,11 +3728,15 @@ internal fun translateInterfaceBackingClass(
       iface, name, libraryName, classifier, tracker, callableCatalog, context, expects,
       onlyDeclared = false,
     )
-  } else null
+  } else {
+    null
+  }
   val ownsScope: Boolean = async != null && !async.isEmpty()
 
+  val allMembers: List<CirMember> =
+    properties + methods + async?.properties.orEmpty() + async?.members.orEmpty()
   emitMemberNameCollisions(
-    name, "interface $name", iface, (properties + methods + async?.properties.orEmpty() + async?.members.orEmpty()).csMemberNames(),
+    name, "interface $name", iface, allMembers.csMemberNames(),
     KotlinSpellings.ofClass(iface), logger,
   )
 
@@ -4591,7 +4597,7 @@ internal fun interfaceAsyncForwards(
         iface, spelling, libraryName, classifier, tracker, callableCatalog, context, expects,
         onlyDeclared = true, nativeCarrier = "$carrier.",
       )
-      CirInterfaceAsyncMembers(
+      return@mapNotNull CirInterfaceAsyncMembers(
         members = projected.methods.map { method ->
           fun String.carried(): String = if (isEmpty()) this else "$carrier.$this"
           method.copy(
