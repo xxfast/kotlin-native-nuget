@@ -36,6 +36,14 @@ public class ErasedInterfaceIdentityTests
         public void Dispose() { }
     }
 
+    // Mylo's chew toy. `IChewer` appears in Kotlin ONLY as the type argument of `Box<Chewer>` at a
+    // top-level return, the generic-class twin of `ISqueaker`.
+    private sealed class RopeToy : IChewer
+    {
+        public string Chew => "rope";
+        public void Dispose() { }
+    }
+
     // --- Lambda route: KotlinFunc<IPet, IPet> ---
 
     [Fact]
@@ -149,5 +157,33 @@ public class ErasedInterfaceIdentityTests
         ISqueaker back = relay.Invoke(mouse);
         Assert.Same(mouse, back);
         Assert.Equal("eek", back.Squeak);
+    }
+
+    // --- Interface reached only as a generic-class type argument ---
+
+    [Fact]
+    public void ErasedOnlyGenericClassArgument_ChewerBox_IsSpelledWithTheInterface()
+    {
+        Assert.Equal(
+            typeof(Box<IChewer>),
+            typeof(PetRelayKt).GetMethod("ChewerBox")!.ReturnType);
+    }
+
+    [Fact]
+    public void ErasedOnlyGenericClassArgument_KotlinBackedChewer_MaterialisesAsIChewer()
+    {
+        using Box<IChewer> box = PetRelayKt.ChewerBox();
+        using IChewer toy = box.Value;
+        Assert.Equal("nom", toy.Chew);
+    }
+
+    [Fact]
+    public void ErasedOnlyGenericClassArgument_CSharpChewer_ReturnsTheSameInstance()
+    {
+        using IChewer rope = new RopeToy();
+        using var box = new Box<IChewer>(rope);
+        IChewer back = box.Value;
+        Assert.Same(rope, back);
+        Assert.Equal("rope", back.Chew);
     }
 }

@@ -104,7 +104,9 @@ interface Squeaker {
 fun squeakerRelay(): (Squeaker) -> Squeaker = { it }
 ```
 
-`Squeaker` appears nowhere but as a lambda type argument; it pins the reachability rule below.
+`Squeaker` appears nowhere but as a lambda type argument; it pins the reachability rule below. Its
+generic-class twin, `interface Chewer` reached only through `fun chewerBox(): Box<Chewer>`, pins
+the generic-class arm of the same rule.
 
 A lambda return is admitted only on a top-level function (**verified**, spike: a member
 `fun supplier(): () -> Pet` is skipped `SKIPPED_UNSUPPORTED_RETURN`), so the lambda fixture is

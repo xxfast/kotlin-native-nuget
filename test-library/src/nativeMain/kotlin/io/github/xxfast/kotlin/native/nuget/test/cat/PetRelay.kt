@@ -20,3 +20,16 @@ interface Squeaker {
 }
 
 fun squeakerRelay(): (Squeaker) -> Squeaker = { it }
+
+// ADR-173: the generic-class twin of `Squeaker`. `Chewer` appears ONLY as the type argument of an
+// exported generic class at a top-level return, so the generic-class arm of the erased-position
+// walk alone must give it its backing wrapper, `Factories` entry and bridge.
+//
+// Mylo's chew toy, which comes in a box.
+interface Chewer {
+  val chew: String
+}
+
+fun chewerBox(): Box<Chewer> = Box(object : Chewer {
+  override val chew: String = "nom"
+})
