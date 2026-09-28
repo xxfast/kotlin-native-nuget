@@ -690,3 +690,9 @@ becomes `TB`) while the property keeps its ordinary PascalCase name. Diagnostics
 New `LeakTests/LiveHandleTests.cs` row, `GenericCtorNullableArg_NullArgument_ReturnsToBaseline`:
 `new Crate<string?>(null)`, `.Describe(null)`, `.Pick(null)`, net zero, since a null argument mints
 no box (`Wrap<T>` returns `owned = false` for null) and a null return retains nothing.
+
+**2026-09-28:** a concrete-typed property on a generic class is typed from its own declaration
+(sub-option (b)'s side effect above, previously unverified); pinned by `Slot<T>`'s `label`/`count`/
+`note`/`keeper`, `IntegrationTests/GenericClassConcretePropertyTests.cs`, the `LeakTests` row
+`GenericClassConcreteProperty_KeeperRead_ReturnsToBaseline`, and a `Tier1NullableGenericPropertyTest`
+cell.

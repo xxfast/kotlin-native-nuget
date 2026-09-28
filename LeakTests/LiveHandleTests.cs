@@ -1479,6 +1479,31 @@ public class LiveHandleTests
         });
     }
 
+    // A concretely typed property on a generic class (ADR-147): `Slot<int>.Keeper` is a `Cat`,
+    // not `T`, so each read takes the plain exported-class getter, retaining once, and the
+    // wrapper's own `using` releases it. `Label`, `Count` and the `Note` round trip are converted
+    // or pass-through scalars and mint nothing. Mylo is read five times per iteration so a
+    // per-read leak scales past any settle noise.
+    // Ledger per iteration: wrap +1/-1 (ctor), slot_create +1, getter retain +1/-1 (x5),
+    // slot_dispose -1. Net zero. A positive delta is a Keeper read nobody owns.
+    [Fact]
+    public void GenericClassConcreteProperty_KeeperRead_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var slot = new Slot<int>(42);
+            for (var i = 0; i < 5; i++)
+            {
+                using Cat keeper = slot.Keeper;
+                Assert.Equal("Mylo", keeper.Name);
+            }
+            Assert.Equal("window sill", slot.Label);
+            Assert.Equal(2, slot.Count);
+            slot.Note = "Oreo took the sill";
+            Assert.Equal("Oreo took the sill", slot.Note);
+        });
+    }
+
     // ADR-171: a value class at the generic-class `T`. Unlike an exported class (borrowed, mints
     // nothing), a record struct has no handle of its own, so `Wrap<ChartId>` mints one boxed
     // `ChartId` through the per-value-class box export with `owned = true`, and the ctor's

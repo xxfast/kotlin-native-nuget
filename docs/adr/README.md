@@ -215,6 +215,7 @@ the current decision.
 - `class<T>` ⇄ `class<T>`: [010](010-generics-mapping.md), [072](072-closed-constructed-generics-in-kotlin.md), [083](083-nullable-collection-components.md), [101](101-unexported-supertype-skip.md)
 - `class<T>(...)` constructor ⇄ typed constructors: [147](147-generic-class-methods.md)
 - a method declared on a `class<T>` → instance method on the generic carrier: [147](147-generic-class-methods.md), [171](171-value-classes-at-erased-generic-positions.md)
+- a property declared on a `class<T>` → its own C# type: [147](147-generic-class-methods.md)
 - `<T : Bound>` constraint → `where T : ...`: [015](015-generic-type-constraint-mapping.md)
 - `out T` / `in T` variance → `out T` / `in T`: [016](016-generic-variance-mapping.md)
 - `typealias` → C# alias / underlying: [018](018-type-alias-mapping.md)

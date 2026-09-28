@@ -84,6 +84,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | `class<T>` | ⇄ | `class<T>` | → type-erased wrapper; a bare `T` carries `null` unless bound non-null; an unspellable return type argument or outer type skips, named · ← bound per closed instantiation; BCL ones are diagnosed | [Generics](generics.md) · [Generic types](generic-types.md) |
 | `class<T>(...)` constructor | ⇄ | typed constructors | → typed, `null`-capable arguments, one entry point per `T` · ← one Kotlin constructor per unambiguous instantiation; two that erase alike are both dropped | [Generics](generics.md) · [Generic types](generic-types.md) |
 | a method declared on a `class<T>` | → | instance method on the generic carrier | Every `T` position, including a value class (its own box/unbox pair), crosses as a handle; `T` in a collection/lambda/`Flow`, and a generic subclass, are refused. | [Generics](generics.md) |
+| a property declared on a `class<T>` | → | its own C# type | `T`/`T?` properties cross as a handle; every other declared type (`String`, `Cat`, ...) keeps its own C# type, never `T`. | [Generics](generics.md) |
 | `fun <T> f()` | → | typed variants | Dispatched on the runtime type; a bare `T` carries `null` unless bound non-null. | [Generics](generics.md) |
 | `<T : Bound>` constraint | → | `where T : ...` | `T : Any` renders `where T : notnull`; a nullable bound (`T : Pet?`) keeps its `?`. | [Generics](generics.md) |
 | `out T` / `in T` variance | → | `out T` / `in T` |  | [Generics](generics.md) |

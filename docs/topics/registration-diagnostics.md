@@ -182,6 +182,12 @@ A `null` argument at a [generic class's bare `T` position](generics.md#nullable-
 adds no new handle kind either: `new Crate<string?>(null)` mints nothing on the way in (`Wrap<T>`
 reports the box as unowned for null), so the count never moves for the argument itself.
 
+A [concrete-typed property on a generic class](generics.md#nullable-properties) adds no new handle
+kind either: reading a handle-returning property such as `Slot<T>.Keeper` mints exactly one
+wrapper handle, released by disposing it, the same as any other exported-class property getter.
+`LeakTests/LiveHandleTests.cs`'s `GenericClassConcreteProperty_KeeperRead_ReturnsToBaseline` covers
+the read-and-dispose cycle.
+
 ## Forward direction has no registration step
 
 Kotlin exports called from C# resolve by symbol name through an ordinary P/Invoke: no contract
