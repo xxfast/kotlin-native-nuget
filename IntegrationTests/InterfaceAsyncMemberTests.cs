@@ -314,4 +314,90 @@ public class InterfaceAsyncMemberTests
     {
         Assert.True(typeof(IAsyncDisposable).IsAssignableFrom(typeof(Pantry.IBowl)));
     }
+
+    // --- ADR-174 amendment: async members inherited from a super-interface. ----------------------
+    // Only IManger is reachable from Kotlin; the async members are declared on ITrough and
+    // inherited through IManger. Oreo eats at the stall, Mylo out of the nosebag.
+
+    [Fact]
+    public async Task Manger_InheritedSuspendMember_AwaitsThroughTheDerivedInterface()
+    {
+        await using IManger manger = Mangers.MakeManger();
+        Assert.Equal("stall-7", await manger.FetchAsync(7));
+        Assert.Equal(11, manger.Own());
+    }
+
+    [Fact]
+    public async Task Manger_InheritedFlowAndStateFlow_ReadThroughTheDerivedInterface()
+    {
+        await using IManger manger = Mangers.MakeManger();
+        Assert.Equal(new[] { 1, 2, 3 }, await Collect(manger.Ticks()));
+        Assert.Equal(1, manger.Level.Value);
+        Assert.Equal("stall", manger.Name());
+    }
+
+    [Fact]
+    public async Task Nosebag_GenericImplementer_AnswersInheritedMembersThroughTheDerivedInterface()
+    {
+        await using IManger nosebag = Mangers.MakeNosebag();
+        Assert.Equal("nosebag-7", await nosebag.FetchAsync(7));
+        Assert.Equal(new[] { 7, 8 }, await Collect(nosebag.Ticks()));
+        Assert.Equal(4, nosebag.Level.Value);
+        Assert.Equal(22, nosebag.Own());
+    }
+
+    [Fact]
+    public void Trough_AdvertisesAsyncDisposal()
+    {
+        // The inherited members live on ITrough, so ITrough itself is IAsyncDisposable.
+        Assert.True(typeof(IAsyncDisposable).IsAssignableFrom(typeof(ITrough)));
+        Assert.True(typeof(ITrough).IsAssignableFrom(typeof(IManger)));
+    }
+
+    [Fact]
+    public async Task Hayrack_RestatedSuspendMember_AwaitsThroughBothInterfaces()
+    {
+        // Shape E: IHayrack restates `fetch`; it is declared once, on IChute. The same object
+        // answers through the derived reference and through an upcast to the base.
+        await using IHayrack hayrack = Mangers.MakeHayrack();
+        Assert.Equal("hayloft-5", await hayrack.FetchAsync(5));
+        IChute chute = hayrack;
+        Assert.Equal("hayloft-6", await chute.FetchAsync(6));
+        Assert.Equal(33, hayrack.Own());
+    }
+
+    [Fact]
+    public void Hayrack_DeclaresNoFetchOfItsOwn()
+    {
+        // A restated identical override must not be redeclared on IHayrack (CS0108 under
+        // TreatWarningsAsErrors). Only IChute declares FetchAsync.
+        Assert.Null(typeof(IHayrack).GetMethod(
+            "FetchAsync", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly));
+        Assert.NotNull(typeof(IChute).GetMethod("FetchAsync"));
+    }
+
+    [Fact]
+    public async Task Haversack_MemberOfAGenericSuper_AwaitsThroughTheDerivedInterface()
+    {
+        // ISatchel<T> is generic and never carries async members, so FetchAsync is declared on
+        // IHaversack. Both the backing wrapper and the generic implementer Pannier<T> answer it.
+        await using IHaversack haversack = Satchels.MakeHaversack();
+        Assert.Equal(70, await haversack.FetchAsync(7));
+        await using IHaversack pannier = Satchels.MakePannier();
+        Assert.Equal(700, await pannier.FetchAsync(7));
+        Assert.Equal(6, pannier.Own());
+    }
+
+    [Fact]
+    public async Task Grainbin_DiamondMember_AwaitsThroughTheDerivedAndBothSupers()
+    {
+        // IScuttle and IFunnel both declare FetchAsync; IGrainbin redeclares it with `new`, so the
+        // call through IGrainbin is unambiguous. Sack<T> forwards it under all three interfaces.
+        await using IGrainbin grainbin = Satchels.MakeGrainbin();
+        Assert.Equal("silo-4", await grainbin.FetchAsync(4));
+        await using IGrainbin sack = Satchels.MakeSack();
+        Assert.Equal("sack-4", await sack.FetchAsync(4));
+        Assert.Equal("sack-5", await ((IScuttle)sack).FetchAsync(5));
+        Assert.Equal("sack-6", await ((IFunnel)sack).FetchAsync(6));
+    }
 }

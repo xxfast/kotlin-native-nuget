@@ -295,6 +295,35 @@ await using Pantry.IBowl bowl = pantry.Open();
 string filled = await bowl.FillAsync(3);
 ```
 
+An async member inherited from a super-interface is callable through the derived interface, even when
+nothing in your Kotlin API returns the super-interface:
+
+```kotlin
+interface Trough {
+  suspend fun fetch(id: Int): String
+  fun ticks(): Flow<Int>
+  val level: StateFlow<Int>
+}
+interface Manger : Trough { fun own(): Int }
+
+fun makeManger(): Manger = Stall()
+```
+
+```C#
+public interface ITrough : IDisposable, IAsyncDisposable { /* FetchAsync, Ticks, Level */ }
+public interface IManger : ITrough, IDisposable, IAsyncDisposable { int Own(); }
+```
+
+```C#
+await using IManger manger = Mangers.MakeManger();
+string item = await manger.FetchAsync(7); // declared on ITrough, inherited by IManger
+```
+
+`ITrough` is generated even though only `Manger` is reachable. A super-interface that cannot be
+generated this way, a generic one (`Satchel<T>`) or one in a package you did not export, has its async
+members declared on the derived interface instead, so `IHaversack : Satchel<Int>` still declares
+`FetchAsync`.
+
 `interface Feed<T>` (a generic interface) keeps its async members off `IFeed<T>` entirely, named
 `SKIPPED_GENERIC_INTERFACE_ASYNC_MEMBER`. An [eligible sealed interface](#sealed-interfaces) is
 excluded from this, since it never gets an `I<Name>` declaration; its async members are declared on
