@@ -150,14 +150,8 @@ suspend fun boardNibbles(): String = Kennel().use { kennel ->
 // So each row below names which of the two it stands on, and the Kotlin-cancels rows read state
 // back off the C# object rather than trusting that the wait ended.
 
-/** How long to wait for the queued C#-side `Cancel()` to land before reading its effect. */
-private val SETTLE = 200.milliseconds
-
 /** The shortest wait that reliably reaches the suspension inside the C# method. */
 private val IMPATIENT = 50.milliseconds
-
-/** Longer than `DawdleAsync`'s own 300ms, so the row can see it finish after being cancelled. */
-private val PATIENT = 500.milliseconds
 
 /**
  * `managedType|message` for a cancellation mapped out of C#: the ADR-104 envelope rides as the
@@ -178,7 +172,7 @@ private fun describeCancellation(e: CancellationException): String {
  */
 suspend fun stayTimesOut(): String = Kennel().use { kennel ->
   val result: Int? = withTimeoutOrNull(IMPATIENT) { kennel.stay("Oreo") }
-  delay(SETTLE)
+  pollFor { kennel.stayCancellations > 0 }
   "${result == null}|${kennel.stayCancelled}|${kennel.stayCancellations}"
 }
 
@@ -193,7 +187,7 @@ suspend fun stayJobCancelled(): String = Kennel().use { kennel ->
     delay(IMPATIENT)
     job.cancelAndJoin()
   }
-  delay(SETTLE)
+  pollFor { kennel.stayCancellations > 0 }
   "${kennel.stayCancelled}|${kennel.stayCancellations}"
 }
 
@@ -205,7 +199,7 @@ suspend fun stayJobCancelled(): String = Kennel().use { kennel ->
  */
 suspend fun dawdleIgnoresTheToken(): String = Kennel().use { kennel ->
   val result: Int? = withTimeoutOrNull(IMPATIENT) { kennel.dawdle() }
-  delay(PATIENT)
+  pollFor { kennel.dawdleCompleted }
   "${result == null}|${kennel.dawdleCompleted}"
 }
 
@@ -274,7 +268,7 @@ suspend fun dozeWithADefaultToken(): Int = Kennel().use { it.doze(3) }
  */
 suspend fun stayCancelledRepeatedly(times: Int): Int = Kennel().use { kennel ->
   repeat(times) { withTimeoutOrNull(IMPATIENT) { kennel.stay("Oreo") } }
-  delay(SETTLE)
+  pollFor { kennel.stayCancellations >= times }
   kennel.stayCancellations
 }
 
@@ -308,9 +302,10 @@ suspend fun pounceRepeatedly(times: Int): Int = Kennel().use { kennel ->
  * fire-and-forget (ADR-156 open question 2), so cleanup is polled rather than assumed.
  *
  * The ceiling is deliberately long. Each cancelled round's `finally` lands only after the C#
- * `Dawdle` finishes plus thread-pool hops for the completion and the dispose, and on a slow CI
- * runner a one-second ceiling returned a partial count (`BarksCancelledRepeatedlyAsync(5)` read 4).
- * The poll returns as soon as [predicate] holds, so a green run pays nothing for the headroom.
+ * `Dawdle` finishes plus thread-pool hops for the completion and the dispose, so a slow CI runner
+ * needs the headroom. The poll returns as soon as [predicate] holds, so a green run pays nothing
+ * for it. The ADR-153 cancel rows above poll through here too, instead of a fixed sleep that a
+ * slow runner outlasted (`StayTimesOutAsync` read `stayCancelled` as false).
  */
 private suspend fun pollFor(predicate: () -> Boolean): Boolean {
   repeat(500) {
