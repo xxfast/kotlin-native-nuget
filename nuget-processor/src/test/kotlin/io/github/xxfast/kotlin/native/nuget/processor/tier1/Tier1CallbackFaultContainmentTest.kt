@@ -10,8 +10,8 @@ import kotlin.test.assertTrue
  *
  * Both closures run inside an `[UnmanagedCallersOnly]` thunk whose catch-all is
  * `Environment.FailFast` (ADR-102), and both perform a materialisation the wire cannot guarantee:
- * `NugetMarshal.FromHandle<T>` has no branch for an enum element
- * (`docs/backlog/fromhandle-no-enum-branch.md`), so a `Flow<Mood>` is a reachable trigger today.
+ * an element factory can throw (a `Flow<Mood>` was the reachable trigger until ADR-094's
+ * 2026-09-29 amendment gave enums a factory; `IntegrationTests` now injects a throwing one).
  * The consumer symptom was the whole `dotnet test` host aborting with
  * `nuget: unhandled exception in NugetFlowOnNext`.
  *

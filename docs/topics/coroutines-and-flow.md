@@ -430,6 +430,37 @@ await foreach (var level in tracker.EnergyLevel.WithCancellation(cts.Token))
 the correct generated subclass, see
 [Interfaces, abstract classes and sealed classes](interfaces-abstract-sealed.md).
 
+## Enum and value class elements {id="enum-elements"}
+
+`StateFlow<E>`, `StateFlow<E?>`, `Flow<E>` and `Flow<E?>` over an [enum](enums.md) read back as the
+mapped C# enum, with `null` staying `null`. A value class element reads back as its record struct
+the same way.
+
+```kotlin
+class CatMoodTracker(private val catName: String) {
+  val temper: StateFlow<Mood>          // starts SLEEPY
+  val maybeTemper: StateFlow<Mood?>    // null until sulk()
+  fun sulk()
+  fun moodSwings(): Flow<Mood?> = flow { emit(Mood.SLEEPY); emit(null); emit(Mood.GRUMPY) }
+}
+```
+
+```C#
+using var tracker = new CatMoodTracker("Mylo");
+Mood now = tracker.Temper.Value;                  // Mood.Sleepy
+tracker.Sulk();
+Mood? maybe = tracker.MaybeTemper.Value;          // Mood.Grumpy
+
+await foreach (Mood? mood in tracker.MoodSwings())
+{
+  // Mood.Sleepy, null, Mood.Grumpy
+}
+```
+
+The same holds for an enum dependency admitted with `admit(...)` and for a nested enum.
+[Generic classes](generics.md) instantiated at an enum read it back too (`Box<Mood>.Value`).
+Writing an enum into a generic slot (`new Box<Mood>(Mood.Calm)`) is not supported yet.
+
 ## Settable `.Value` on `MutableStateFlow<T>`
 
 A member whose **declared** type is `MutableStateFlow<T>`, not narrowed to `StateFlow<T>` (the
@@ -565,9 +596,8 @@ the parameter across separate members.
 ## Limitations
 
 - `SharedFlow<T>` (hot, multi-subscriber) is not supported.
-- `StateFlow<SomeEnum>` / `MutableStateFlow<SomeEnum>`: `.Value` has no enum reader. `Flow<SomeEnum>`
-  binds (it is not refused), but every element materialisation on the C# side currently faults the
-  stream instead of producing a value, for the same reason.
+- `MutableStateFlow<SomeEnum>` surfaces as read-only `KotlinStateFlow<SomeEnum>`: `.Value` reads the
+  current entry but is not settable.
 - `MutableStateFlow<ByteArray>` surfaces as read-only `KotlinStateFlow<byte[]>`, not
   `KotlinMutableStateFlow<byte[]>`: `.Value` is not settable for a `ByteArray` element.
 - `CompareAndSet`, `Update`, `Emit`, `TryEmit`, `ReplayCache`, and `SubscriptionCount` on

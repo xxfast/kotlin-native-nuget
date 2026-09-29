@@ -101,7 +101,7 @@ class Tier1ReflectionFreeDispatchTest {
   }
 
   @Test
-  fun `enums and objects register no factory, a value class registers through its box pair`() {
+  fun `an enum registers by ordinal, a value class by box pair, an object not at all`() {
     val result = Tier1Harness.run(
       """
       package tier1.reflectionfreeplain
@@ -115,7 +115,9 @@ class Tier1ReflectionFreeDispatchTest {
         fun size(): Int = 1
       }
 
-      class Cat(val name: String)
+      class Cat(val name: String) {
+        enum class Gait { WALK, TROT }
+      }
 
       fun adopt(): Cat = Cat("Tom")
       """.trimIndent(),
@@ -126,7 +128,17 @@ class Tier1ReflectionFreeDispatchTest {
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "[typeof(global::Tier1.Cat)] = static handle => new global::Tier1.Cat(handle, out _),")
-    assertFalse(cs.contains("[typeof(global::Tier1.Mood)]"), "an enum has no handle constructor")
+    // ADR-094 amendment: an enum has no handle constructor, but an erased read of one is a handle
+    // the Kotlin enum object, so it registers through its ordinal.
+    assertContains(
+      cs,
+      "[typeof(global::Tier1.Mood)] = static handle => (global::Tier1.Mood)UnwrapEnumOrdinal(handle),",
+    )
+    // ADR-176 spelling: a nested enum registers under its enclosing path.
+    assertContains(
+      cs,
+      "[typeof(global::Tier1.Cat.Gait)] = static handle => (global::Tier1.Cat.Gait)UnwrapEnumOrdinal(handle),",
+    )
     assertFalse(cs.contains("[typeof(global::Tier1.Registry)]"), "an object is rendered without a handle")
 
     // ADR-171: a generic slot holds a BOXED value class, so the read registers through the

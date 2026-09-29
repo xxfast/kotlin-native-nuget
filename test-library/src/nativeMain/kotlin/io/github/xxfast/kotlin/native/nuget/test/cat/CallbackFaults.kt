@@ -44,12 +44,12 @@ import kotlinx.coroutines.flow.flow
  * the ctx a never-reused key, so both are now lookup misses: the `Unit` one is dropped, the
  * value-returning one reports `System.ObjectDisposedException` through the part B channel.
  *
- * [moodStream] is the materialisation-failure trigger (memo item 2, what-question 5): `Flow<Mood>`
- * is admitted by the flow route but `NugetMarshal.FromHandle<T>` has no enum branch
- * (`docs/backlog/fromhandle-no-enum-branch.md`), so reading an item inside the generated `onNext`
- * throws inside the thunk. Part A contains that throw: the `IAsyncEnumerable<Mood>` faults and the
- * Kotlin collector is cancelled, where the host process used to die. The materialisation gap itself
- * is still open, which is why this member is a fault trigger and not a round trip.
+ * [tantrumStream] is the materialisation-failure trigger (memo item 2, what-question 5): the C#
+ * test swaps the `NugetMarshal.Factories` entry for [Tantrum] with one that throws, so reading an
+ * item inside the generated `onNext` throws inside the thunk. Part A contains that throw: the
+ * `IAsyncEnumerable<Tantrum>` faults and the Kotlin collector is cancelled, where the host process
+ * used to die. It replaced [moodStream], whose `Flow<Mood>` failure was a bridge gap
+ * (`FromHandle<T>` had no enum entry) rather than a fault anyone meant to keep.
  *
  * The stored-listener list is copy-on-write behind a `@Volatile` reference so the C# stress test
  * can subscribe and dispose on one thread while another thread emits: a plain `mutableListOf` would
@@ -210,15 +210,31 @@ class CallbackFaults {
   // --- bridge-internal materialisation failure (memo item 2) ----------------------------------
 
   /**
-   * `Flow<Mood>`: an enum element, which the generated `onNext` reads through
-   * `NugetMarshal.FromHandle<T>`, which has no enum branch. The read therefore throws inside the
-   * thunk. The stream must fault (and the Kotlin collector cancel) instead of the host dying.
+   * `Flow<Mood>`: an enum element, read in the generated `onNext` through
+   * `NugetMarshal.FromHandle<Mood>`. Once the ADR-094 table carries an enum entry this is a plain
+   * round trip (`FlowEnumElementTests`); it is no longer the part A fault trigger.
    */
   fun moodStream(): Flow<Mood> = flow {
     emit(Mood.HAPPY)
     emit(Mood.GRUMPY)
   }
+
+  /**
+   * `Flow<Tantrum>`: the ADR-161 part A materialisation-failure trigger. [Tantrum] is a test-only
+   * class whose `Factories` entry the C# test swaps for a throwing one, so the read inside the
+   * generated `onNext` throws deterministically without depending on a bridge gap staying open.
+   */
+  fun tantrumStream(): Flow<Tantrum> = flow {
+    emit(Tantrum("Oreo knocked the water bowl over"))
+    emit(Tantrum("Mylo sat on the keyboard"))
+  }
 }
+
+/**
+ * ADR-161 part A: a class that exists only so `CallbackFaultTests` can inject a throwing
+ * `NugetMarshal.Factories` entry for it. Nothing else reads it, so the swap races nobody.
+ */
+class Tantrum(val what: String)
 
 /**
  * ADR-161: the interface a C# class implements so its members are called from Kotlin through the

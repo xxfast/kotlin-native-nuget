@@ -340,3 +340,18 @@ Spelled on the ADR-040 wrapper, that is
 
 None to the public API. The generated internals change shape, so a consumer shipping a hand-patched
 generated file would need to regenerate, which is already unsupported.
+
+## Amendment (2026-09-29): enums register too
+
+An exported enum class registers under its own `typeof` key, root or nested, and constructs as
+`(E)UnwrapEnumOrdinal(handle)`, where `UnwrapEnumOrdinal` calls the fixed-ABI
+`nuget_unwrap_enum_ordinal` (`(asStableRef<Any>().get() as Enum<*>).ordinal`) and disposes the
+handle. This closes the erased read of an enum element on `Flow<E>`, `StateFlow<E>`, `StateFlow<E?>`
+and an ADR-147 generic class instantiated at `E`, all of which retain the Kotlin enum object and read
+through `FromHandle<T>`/`Materialize<T>`. `E?` resolves through `Materialize<T>`'s existing
+`Nullable.GetUnderlyingType` key. The collection-component route is unchanged: ADR-097 projects
+ordinals on the Kotlin side and never reaches this entry. The sentence "Enums, objects ... register
+nothing" in `factoryEntries`' KDoc loses "Enums".
+
+Not covered: the erased write of an enum (`new Box<Mood>(Mood.Calm)`) and the `MutableStateFlow<E>`
+setter (ADR-071's deferral) stay open.

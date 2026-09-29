@@ -48,6 +48,17 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("        [return: MarshalAs(UnmanagedType.U2)]")
   appendLine("        private static extern char nuget_unwrap_char(IntPtr handle);")
   appendLine()
+  // ADR-094 amendment: the enum `Factories` entries read the Kotlin enum object's ordinal and
+  // release the handle, success or failure, since the entry owns what `Materialize<T>` hands it.
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_unwrap_enum_ordinal\")]")
+  appendLine("        private static extern int nuget_unwrap_enum_ordinal(IntPtr handle);")
+  appendLine()
+  appendLine("        internal static int UnwrapEnumOrdinal(IntPtr handle)")
+  appendLine("        {")
+  appendLine("            try { return nuget_unwrap_enum_ordinal(handle); }")
+  appendLine("            finally { Native_dispose(handle); }")
+  appendLine("        }")
+  appendLine()
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_dispose\")]")
   appendLine("        private static extern void Native_dispose(IntPtr handle);")
   appendLine()
@@ -119,6 +130,7 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
     val construct: String = when {
       entry.viaFromHandle -> "global::${entry.constructTypeName}.FromHandle(handle)"
       entry.viaNugetUnbox -> "global::${entry.constructTypeName}.NugetUnbox(handle)"
+      entry.viaEnumOrdinal -> "(global::${entry.constructTypeName})UnwrapEnumOrdinal(handle)"
       else -> "new global::${entry.constructTypeName}(handle, out _)"
     }
     appendLine("            [typeof(global::${entry.qualifiedTypeName})] = static handle => $construct,")

@@ -231,3 +231,12 @@ moment ago. That is ordinary late delivery, not a wrong-listener bug and not a u
 - A Kotlin-side in-flight gate `remove` waits on: rejected, deadlocks on a callback that disposes
   its own subscription.
 - Never freeing the subscription's key: rejected, leaks one entry per subscription.
+
+## Amendment (2026-09-29): the part A fault trigger is an injected factory
+
+The Context's example of a materialisation failure, `NugetMarshal.FromHandle<T>` hitting an
+unhandled element type, and the `Flow<Mood>` fixture that exercised it, no longer fail:
+[ADR-094](094-reflection-free-generic-dispatch.md)'s 2026-09-29 amendment registers enums. Part A's
+containment is unchanged. Its test now injects a throwing `NugetMarshal.Factories` entry for a
+test-only `Tantrum` type (`CallbackFaults.tantrumStream()`) instead of relying on a bridge gap.
+Residual 2 (a failed read leaks one `StableRef`) is unaffected.
