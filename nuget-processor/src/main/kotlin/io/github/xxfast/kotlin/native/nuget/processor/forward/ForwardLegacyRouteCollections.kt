@@ -155,8 +155,9 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
     )
   }
 
-  // Deliberately the un-rewritten classification: a `List<Shape>` of a sealed base stays refused,
-  // as ADR-114/ADR-119 decided, rather than being widened by the rewrite above.
+  // Deliberately the un-rewritten classification on the parameter side: a `List<Shape>` of a
+  // sealed base stays refused here, as ADR-114/ADR-119 decided (the return side now rewrites),
+  // rather than being widened by the rewrite above.
   val collection: BridgeType.Collection? = classify(type) as? BridgeType.Collection
   return if (collection != null && collection.isLegacyMarshallableInput()) {
     ForwardLegacyParameterShape.Marshalled(collection)
@@ -380,8 +381,15 @@ internal sealed interface ForwardLegacyReturnShape {
   /** A non-generic return, or a `StateFlow` (ADR-068 owns that one): the shipped spelling. */
   data object Plain : ForwardLegacyReturnShape
 
-  /** A collection the ordinary route's `List`/`Set`/`Map` return already reads back. */
-  data class Marshalled(val type: BridgeType.Collection) : ForwardLegacyReturnShape
+  /**
+   * A collection the ordinary route's `List`/`Set`/`Map` return already reads back. [nullable] is
+   * a `List<T>?` return: the Kotlin half already sends `null` as a null result pointer (issue
+   * #108), so only the C# declared type and a guarded read differ (ADR-119 amendment).
+   */
+  data class Marshalled(
+    val type: BridgeType.Collection,
+    val nullable: Boolean = false,
+  ) : ForwardLegacyReturnShape
 
   /**
    * ADR-131: an ADR-009 sealed **base** (a sealed class, or an ADR-112 eligible sealed interface)
@@ -534,7 +542,8 @@ internal fun legacyBytesElementReadArgument(nullable: Boolean): String =
  *
  * The admission is the ordinary route's own return-position rule (`isBridgeableComponent`), so
  * the two routes agree on which element types cross. A nullable collection (`List<T>?`) is
- * [ForwardLegacyReturnShape.Refused], mirroring [legacyParameterShape]'s ADR-114 deferral.
+ * [ForwardLegacyReturnShape.Marshalled] with `nullable = true`; the parameter side's ADR-114
+ * deferral in [legacyParameterShape] is independent (the two positions share no wire).
  */
 internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
   type: KSType?,
@@ -634,9 +643,14 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
     }
   }
 
-  val collection: BridgeType.Collection? = classify(type) as? BridgeType.Collection
+  // ADR-119 amendment: ADR-105's rewrite first, so a `List<Shape>` of an eligible sealed base
+  // carries `ObjectHandle(viaDiscriminator)` elements the admission below accepts, exactly as the
+  // plan routes classify it; then the nullable wrapper comes off, carried as `nullable`.
+  val rewritten: BridgeType = classify(type).sealedAsHandle()
+  val collection: BridgeType.Collection? =
+    (if (rewritten is BridgeType.Nullable) rewritten.type else rewritten) as? BridgeType.Collection
   return if (collection != null && collection.isBridgeableComponent()) {
-    ForwardLegacyReturnShape.Marshalled(collection)
+    ForwardLegacyReturnShape.Marshalled(collection, nullable = expanded.isMarkedNullable)
   } else {
     ForwardLegacyReturnShape.Refused(expanded.legacyDescription())
   }
@@ -741,7 +755,11 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
 
   if (expanded.arguments.isEmpty()) return ForwardLegacyFlowElementShape.Plain
 
-  val collection: BridgeType.Collection? = classify(type) as? BridgeType.Collection
+  // ADR-119 amendment: the suspend return's ADR-105 rewrite, so `Flow<List<Shape>>` of an eligible
+  // sealed base admits its `ObjectHandle(viaDiscriminator)` elements. A nullable collection element
+  // is still `Nullable`, not `Collection`, so it stays refused (the `StateFlow<T?>` problem).
+  val collection: BridgeType.Collection? =
+    classify(type).sealedAsHandle() as? BridgeType.Collection
   return if (collection != null && collection.isBridgeableComponent()) {
     ForwardLegacyFlowElementShape.Marshalled(collection)
   } else {
@@ -830,6 +848,18 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnCollectionKinds(
  */
 internal fun legacyCollectionRead(handle: String, type: BridgeType.Collection): String =
   componentCollectionRead(handle, type, csharpType = { it.forwardPublicCsharpType() })
+
+/** ADR-119 amendment: the `Task<...>` argument a collection return is DECLARED with. */
+internal fun ForwardLegacyReturnShape.Marshalled.declaredCsharpType(): String =
+  if (nullable) "${type.forwardPublicCsharpType()}?" else type.forwardPublicCsharpType()
+
+/**
+ * ...and its completion read, guarded on the wire pointer: `ReadList(IntPtr.Zero)` would call
+ * `nuget_list_count(null)`, so a null result must short-circuit to `null` first.
+ */
+internal fun ForwardLegacyReturnShape.Marshalled.legacyMarshalledRead(handle: String): String =
+  if (nullable) "$handle == IntPtr.Zero ? null : ${legacyCollectionRead(handle, type)}"
+  else legacyCollectionRead(handle, type)
 
 /**
  * ADR-131: the C# expression reading a suspend member's awaited **sealed base** handle back into

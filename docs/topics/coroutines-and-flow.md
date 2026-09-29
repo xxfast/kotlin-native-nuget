@@ -91,9 +91,30 @@ public Task<IReadOnlyDictionary<string, int>> AgesAsync(CancellationToken cancel
 ```
 
 `List<T>`, `Set<T>`, and `Map<K, V>` returns are spelled the same way a [property](collections.md)
-of that type is. Any other generic return (`Pair<A, B>`, `Result<T>`, `Flow<T>`, a nullable
-collection `List<T>?`) has no C# binding and is skipped with a diagnostic naming the member; expose
-the values through separate `suspend` functions instead.
+of that type is. Any other generic return (`Pair<A, B>`, `Result<T>`, `Flow<T>`) has no C# binding
+and is skipped with a diagnostic naming the member; expose the values through separate `suspend`
+functions instead.
+
+A nullable collection completes with `null`, never an empty collection, and an element that is a
+sealed base binds as the base type, each element arriving as its concrete arm. Both work on a
+class, a sealed base or arm, and at top level:
+
+```kotlin
+class Headcount(private val names: List<String>) {
+  suspend fun maybeTags(present: Boolean): List<String>? { /* ... */ }
+}
+
+class Issue54Studio {
+  suspend fun sketch(): List<Issue54Shape> { /* ... */ }
+}
+```
+
+```C#
+public Task<IReadOnlyList<string>?> MaybeTagsAsync(bool present, CancellationToken cancellationToken = default)
+public Task<IReadOnlyList<global::TestLibrary.Issue54.Issue54Shape>> SketchAsync(CancellationToken cancellationToken = default)
+```
+
+`Flow<List<Shape>>` binds as `KotlinFlow<IReadOnlyList<Shape>>` the same way.
 
 ## `suspend fun` returning a type from a dependency module {id="suspend-fun-returning-a-dependency-type"}
 
@@ -608,8 +629,8 @@ the parameter across separate members.
 - `StateFlow<T>` or `Flow<T>` as a function parameter, or as a generic type argument, is not
   supported.
 - A nullable `Flow<T>?` (the whole stream absent, as opposed to a nullable *element* `Flow<T?>`,
-  which is supported), and a `Pair`, a nullable collection (`List<T>?`), or a collection of a sealed
-  base as a `Flow`/`StateFlow` element, are not supported.
+  which is supported), and a `Pair` or a nullable collection (`List<T>?`) as a `Flow`/`StateFlow`
+  element, are not supported.
 - `Boolean?` / `Char?` value elements on a nullable `StateFlow` are not supported.
 - A `suspend inline fun <reified T> Receiver.f(...): Result<T>` extension has no bridge at all:
   `inline` plus `reified` erase at the native boundary, and `suspend` needs a concrete

@@ -25,7 +25,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyRetur
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesRead
-import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionRead
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyMarshalledRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyDiscriminatedRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredCsharpType
@@ -743,7 +743,7 @@ internal fun translateSuspendFunction(
   val asyncReturnType: String = when {
     isUnit -> ""
     stateFlowElement != null -> stateFlowElement.asyncReturnType
-    collectionReturn != null -> collectionReturn.forwardPublicCsharpType()
+    returnShape is ForwardLegacyReturnShape.Marshalled -> returnShape.declaredCsharpType()
     // ROADMAP Phase 4: `Task<byte[]>`, the class route's own line.
     returnShape is ForwardLegacyReturnShape.Bytes -> legacyBytesCsharpType(returnShape.nullable)
     // ADR-040: the class route's own line -- the projected interface, not the backing wrapper
@@ -801,7 +801,7 @@ internal fun translateSuspendFunction(
     // ADR-119 / ADR-131: the top-level route's own copy of the class route's decision, exhaustive
     // for the same reason -- the two routes have to answer a new return shape identically.
     asyncResultRead = when (returnShape) {
-      is ForwardLegacyReturnShape.Marshalled -> legacyCollectionRead("resultPtr", returnShape.type)
+      is ForwardLegacyReturnShape.Marshalled -> returnShape.legacyMarshalledRead("resultPtr")
 
       is ForwardLegacyReturnShape.Discriminated -> legacyDiscriminatedRead(
         handle = "resultPtr",

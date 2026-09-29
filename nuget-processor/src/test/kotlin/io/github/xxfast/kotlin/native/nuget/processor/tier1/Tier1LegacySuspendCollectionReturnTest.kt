@@ -38,6 +38,9 @@ class Tier1LegacySuspendCollectionReturnTest {
   private val fixture: String = """
     package tier1.roster
 
+    import kotlinx.coroutines.flow.Flow
+    import kotlinx.coroutines.flow.flowOf
+
     sealed class Assignment
 
     data class Member(val id: Int)
@@ -56,8 +59,13 @@ class Tier1LegacySuspendCollectionReturnTest {
       // The refusal arm: a generic return that is not a supported collection.
       suspend fun paired(): Pair<String, Int> = names.first() to 1
 
-      // Nullable collection returns are refused too, mirroring ADR-114's parameter rule.
+      // ADR-119 amendment: nullable collection returns bind as `Task<...?>`.
       suspend fun maybe(): List<String>? = null
+      suspend fun maybeAges(): Map<String, Int>? = null
+
+      // ADR-119 amendment: a collection of the sealed base, at a suspend return and a Flow element.
+      suspend fun assignments(): List<Assignment> = listOf(Existing(emptyList()))
+      fun rotation(): Flow<List<Assignment>> = flowOf(listOf(Existing(emptyList())))
 
       // Control: a scalar suspend return must be unaffected by any of this.
       suspend fun count(): Int = names.size
@@ -65,6 +73,8 @@ class Tier1LegacySuspendCollectionReturnTest {
 
     // The top-level suspend route is a third copy of the same composition.
     suspend fun everyone(roster: Roster): List<String> = roster.names
+    suspend fun assignmentsLater(present: Boolean): List<Assignment>? =
+      if (present) listOf(Existing(emptyList())) else null
   """.trimIndent()
 
   private fun run(): Tier1Result = Tier1Harness.run(
@@ -181,23 +191,72 @@ class Tier1LegacySuspendCollectionReturnTest {
     )
   }
 
-  /** ADR-114 refuses a nullable collection parameter; the return side keeps the same rule. */
+  /**
+   * ADR-119 amendment: a nullable collection return binds as `Task<IReadOnlyList<T>?>`, read
+   * behind an `IntPtr.Zero` guard (the Kotlin half already sends `null` as a null result pointer).
+   * ADR-114's nullable *parameter* deferral is untouched: the two positions share no wire.
+   */
   @Test
-  fun `a nullable collection suspend return skips the member named`() {
+  fun `a nullable collection suspend return binds nullable behind a null guard`() {
     val result = run()
 
-    assertFalse(
-      result.generatedCSharp.contains("MaybeAsync"),
-      "expected no MaybeAsync member for a List<String>? return; got: " +
-          "${csharpLinesFor(result, "Maybe")}",
+    val missing: List<String> = listOf(
+      "public Task<IReadOnlyList<string>?> MaybeAsync(",
+      "public Task<IReadOnlyDictionary<string, int>?> MaybeAgesAsync(",
+      "t.SetResult(resultPtr == IntPtr.Zero ? null : NugetMarshal.ReadList<string>(resultPtr, ",
+      "t.SetResult(resultPtr == IntPtr.Zero ? null : NugetMarshal.ReadMap<string, int>(resultPtr, ",
+    ).filterNot(result.generatedCSharp::contains)
+    assertTrue(
+      missing.isEmpty(),
+      "expected nullable collection returns declared `?` and guarded; missing: $missing; got: " +
+          "${csharpLinesFor(result, "Maybe")} " +
+          "${csharpLinesFor(result, "resultPtr == IntPtr.Zero")}",
     )
     assertTrue(
+      result.generated.contains("if (result == null) null else NugetHandles.retain("),
+      "expected the Kotlin half to pin a nullable result behind its null test",
+    )
+    assertFalse(
       result.kspWarnings.any {
         it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN.name}]") &&
-            it.contains("maybe") && it.contains("List<String>?")
+            it.contains("maybe")
       },
-      "expected a SKIPPED_UNSUPPORTED_RETURN naming Roster.maybe and quoting `List<String>?`; " +
-          "kspWarnings=${result.kspWarnings}",
+      "expected no SKIPPED_UNSUPPORTED_RETURN for maybe(); kspWarnings=${result.kspWarnings}",
+    )
+  }
+
+  /**
+   * ADR-119 amendment: a collection of an ADR-009 sealed base is classified through ADR-105's
+   * `sealedAsHandle()`, so each element is read through `FromHandle<Base>` exactly as the ordinary
+   * route's sync `List<Base>` return reads it, on every suspend owner and on a `Flow` element.
+   */
+  @Test
+  fun `a collection of a sealed base binds on every suspend owner and a Flow element`() {
+    val result = run()
+
+    val base = "global::Interop.Roster.Assignment"
+    val missing: List<String> = listOf(
+      "public Task<IReadOnlyList<$base>> AssignmentsAsync(",
+      "public static Task<IReadOnlyList<$base>?> AssignmentsLaterAsync(",
+      "static h1 => NugetMarshal.FromHandle<$base>(h1)",
+      "IReadOnlyList<$base>",
+    ).filterNot(result.generatedCSharp::contains)
+    assertTrue(
+      missing.isEmpty(),
+      "expected sealed-base collection returns to bind; missing: $missing; got: " +
+          "${csharpLinesFor(result, "Assignment")}",
+    )
+    assertTrue(
+      csharpLinesFor(result, "Rotation").any { it.contains("IReadOnlyList<$base>") },
+      "expected Flow<List<Assignment>> to bind its element; got: " +
+          "${csharpLinesFor(result, "Rotation")}",
+    )
+    assertFalse(
+      result.kspWarnings.any {
+        it.contains("SKIPPED_UNSUPPORTED") &&
+            (it.contains("assignments") || it.contains("rotation"))
+      },
+      "expected no skip for the sealed-base collections; kspWarnings=${result.kspWarnings}",
     )
   }
 

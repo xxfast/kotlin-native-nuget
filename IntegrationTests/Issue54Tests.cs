@@ -19,7 +19,10 @@ namespace IntegrationTests;
 /// plan rather than the property plan: a scalar sealed return and a sealed <em>collection</em>
 /// return on a class member (<c>Issue54Shapes.Pick(int)</c> / <c>Issue54Shapes.EveryShape()</c>), with the
 /// same collection return at a top-level function (<c>Issue54Sample.Shapes()</c>) as the control
-/// that already binds. The cats: Oreo curls into a circle, Mylo sprawls into nothing.
+/// that already binds. The same collection also rides the <em>suspend</em> route (ADR-119
+/// amendment): <c>Issue54Studio.SketchAsync()</c>, its nullable twin <c>SketchOrNullAsync(bool)</c>,
+/// and the top-level <c>Issue54Sample.ShapesLaterAsync()</c>.
+/// The cats: Oreo curls into a circle, Mylo sprawls into nothing.
 /// </para>
 /// <para>
 /// The remaining half of ADR-105 scope (d) is the <em>parameter</em> position, and the tests below
@@ -127,6 +130,76 @@ public class Issue54Tests
             shapes,
             mylo => Assert.IsType<Issue54Shape.Empty>(mylo),
             oreo => Assert.Equal(1.0, Assert.IsType<Issue54Shape.Circle>(oreo).Radius));
+    }
+
+    /// <summary>
+    /// ADR-119 amendment: the same sealed collection at a <em>suspend</em> class-member return
+    /// (<see cref="Issue54Studio"/>). Each element is read through the sealed base's
+    /// <c>FromHandle</c>, so the concrete arm wrappers come back, Mylo then Oreo.
+    /// </summary>
+    [Fact]
+    public async Task SketchAsync_SealedCollectionAtASuspendReturn_YieldsBothArmsInOrder()
+    {
+        using var studio = new Issue54Studio();
+
+        IReadOnlyList<Issue54Shape> shapes = await studio.SketchAsync();
+
+        Assert.Collection(
+            shapes,
+            mylo => Assert.IsType<Issue54Shape.Empty>(mylo),
+            oreo => Assert.Equal(1.0, Assert.IsType<Issue54Shape.Circle>(oreo).Radius));
+    }
+
+    /// <summary>
+    /// The top-level suspend owner of the same return, compared arm for arm against the synchronous
+    /// control <see cref="Shapes_SealedCollectionAtATopLevelReturn_YieldsBothArmsInOrder"/> reads.
+    /// </summary>
+    [Fact]
+    public async Task ShapesLaterAsync_TopLevelSuspend_AgreesWithTheSynchronousRoute()
+    {
+        IReadOnlyList<Issue54Shape> later = await Issue54Sample.ShapesLaterAsync();
+        IReadOnlyList<Issue54Shape> now = Issue54Sample.Shapes();
+
+        Assert.Equal(now.Select(s => s.GetType()), later.Select(s => s.GetType()));
+        Assert.Equal(1.0, Assert.IsType<Issue54Shape.Circle>(later[1]).Radius);
+    }
+
+    /// <summary>
+    /// Both halves of the amendment on one member: a <em>nullable</em> collection of the sealed
+    /// base. Absent, the cats skipped the sitting; present, they posed in the usual order.
+    /// </summary>
+    [Fact]
+    public async Task SketchOrNullAsync_NullableSealedCollection_PresentYieldsArms_AbsentIsNull()
+    {
+        using var studio = new Issue54Studio();
+
+        IReadOnlyList<Issue54Shape>? absent = await studio.SketchOrNullAsync(present: false);
+        IReadOnlyList<Issue54Shape>? present = await studio.SketchOrNullAsync(present: true);
+
+        Assert.Null(absent);
+        Assert.NotNull(present);
+        Assert.Collection(
+            present,
+            mylo => Assert.IsType<Issue54Shape.Empty>(mylo),
+            oreo => Assert.Equal(1.0, Assert.IsType<Issue54Shape.Circle>(oreo).Radius));
+    }
+
+    /// <summary>
+    /// The same sealed collection as a <c>Flow</c> element: each emission's elements come back as
+    /// arm wrappers. Two sittings, Mylo alone and then both cats.
+    /// </summary>
+    [Fact]
+    public async Task Sittings_SealedCollectionAsAFlowElement_YieldsArmsPerEmission()
+    {
+        using var studio = new Issue54Studio();
+
+        var seen = new List<string>();
+        await foreach (IReadOnlyList<Issue54Shape> sitting in studio.Sittings())
+        {
+            seen.Add(string.Join("+", sitting.Select(s => s.GetType().Name)));
+        }
+
+        Assert.Equal(new[] { "Empty", "Empty+Circle" }, seen);
     }
 
     /// <summary>

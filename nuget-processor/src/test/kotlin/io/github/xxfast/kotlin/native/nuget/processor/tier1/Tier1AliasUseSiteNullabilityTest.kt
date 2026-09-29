@@ -97,12 +97,14 @@ class Tier1AliasUseSiteNullabilityTest {
   }
 
   @Test
-  fun `a nullable collection alias return is refused like its written-out type`() {
-    assertFalse(result.generatedCSharp.contains("SRetNamesAsync"), "Names? must stay absent")
-    assertFalse(result.generated.contains("sRetNames_async"), "no half-emitted export")
-    assertTrue(
-      result.kspWarnings.any { "sRetNames" in it && "List<String>?" in it },
-      "the refusal names the expanded, nullable type; got: ${result.kspWarnings}",
+  fun `a nullable collection alias return binds like its written-out type`() {
+    // ADR-119 amendment: `List<String>?` now binds as `Task<IReadOnlyList<string>?>`, so the alias
+    // spelling must too, on BOTH halves (the use-site `?` reaching both is what this cell guards).
+    assertContains(result.generatedCSharp, "Task<IReadOnlyList<string>?> SRetNamesAsync(")
+    assertContains(result.generated, "sRetNames_async")
+    assertFalse(
+      result.kspWarnings.any { "sRetNames" in it },
+      "Names? must not be refused; got: ${result.kspWarnings}",
     )
   }
 
