@@ -819,10 +819,13 @@ internal fun ForwardPlanSkipReason.ownsSentence(detail: String?): Boolean =
  *   where it carries the member kind ("suspend", "Flow", ...).
  * @param parameter the same slot [diagnosticHint] documents; read here only by
  *   [ForwardPlanSkipReason.NULLABLE], and only when the offending input is a named parameter.
+ * @param returnType the same slot [diagnosticHint] documents; read only by
+ *   [ForwardPlanSkipReason.NULLABLE] when [parameter] is null.
  */
 internal fun ForwardPlanSkipReason.diagnosticReason(
   detail: String? = null,
   parameter: String? = null,
+  returnType: String? = null,
 ): String {
   val generic: String = genericSentence()
   return when (this) {
@@ -1006,6 +1009,7 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
     // shipped generic sentence.
     ForwardPlanSkipReason.NULLABLE ->
       if (parameter != null) "its parameter `$parameter` has a nullable type with no supported wire"
+      else if (returnType != null) "its nullable return type `$returnType` has no supported wire ($name)"
       else generic
 
     else -> generic
@@ -1088,6 +1092,9 @@ private fun String.dependencyAdmitName(): String {
  * @param parameter issue #131: the offending parameter's name, when the skip is at an input
  *   position and the input is a named parameter rather than an extension receiver. Read only by
  *   [ForwardPlanSkipReason.NULLABLE], whose shipped sentence could not say which position failed.
+ * @param returnType ADR-064 amendment (2026-09-29): the declared result's Kotlin spelling
+ *   (`Crate<Int>?`) at a return-position NULLABLE skip. Read only by
+ *   [ForwardPlanSkipReason.NULLABLE], and only when [parameter] is null.
  */
 internal fun ForwardPlanSkipReason.diagnosticHint(
   detail: String? = null,
@@ -1096,6 +1103,7 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
    *  [ForwardPlanSkipReason.EXCLUDED_DEPENDENCY_TYPE] can quote the entry that matched instead of
    *  a package derived from the type name. Empty keeps the derived-package wording. */
   excludeEntries: List<String> = emptyList(),
+  returnType: String? = null,
 ): String = when (this) {
   // ADR-162: the author did nothing wrong, so the hint says so and names the one line that unblocks
   // their build while the bug is fixed upstream. The declaration name is not in hand here (the hint
@@ -1233,6 +1241,10 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // Issue #131: it can name the offending *parameter* though, which is what the reader needs to
   // find the type in their own source. Without a name (a return, or an extension receiver) the
   // shipped sentence is unchanged.
+  //
+  // ADR-064 amendment (2026-09-29): at a return, the planner now carries the declared result's
+  // Kotlin spelling in `returnType`, so the hint names the type the author wrote. Without it (no
+  // declaration in hand) the shipped sentence is unchanged.
   // ADR-098 amendment (boundary nullability part C): the old wording recommended "a separate
   // has-value/value pair", which described the generator's OWN wire shape rather than anything the
   // author could write, and for `Char?` it recommended exactly the shape the generator now builds
@@ -1243,6 +1255,10 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
       "the nullable parameter `$parameter` has no wire at an input position; expose a " +
           "non-nullable wrapper, or split the member in two (one overload that takes the value " +
           "and one that takes none), instead"
+    } else if (returnType != null) {
+      "the nullable return type `$returnType` has no wire at a return position; expose a " +
+          "non-nullable wrapper, or split the member in two (one that reports whether there is a " +
+          "value and one that returns it), instead"
     } else {
       "expose a non-nullable wrapper, or split the member in two (one that reports whether there " +
           "is a value and one that returns it), instead of a nullable value at this position"
