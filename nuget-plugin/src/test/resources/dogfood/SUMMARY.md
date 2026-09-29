@@ -23,15 +23,15 @@ mean the generated Kotlin or C# compiles; nothing here compiles anything.
 | NuGet.Versioning 6.12.1 | `lib/netstandard2.0/NuGet.Versioning.dll` | ok | ok | 108 | 153 | 70.6 percent | 0 | 45 |
 | Humanizer.Core 2.14.1 | `lib/net6.0/Humanizer.dll` | ok | ok | 111 | 1488 | 7.5 percent | 0 | 65 |
 | NodaTime 3.2.2 | `lib/net8.0/NodaTime.dll` | ok | ok | 221 | 1153 | 19.2 percent | 0 | 100 |
-| Polly.Core 8.5.2 | `lib/net8.0/Polly.Core.dll` | ok | ok | 46 | 342 | 13.5 percent | 0 | 10 |
-| Serilog 4.2.0 | `lib/net8.0/Serilog.dll` | ok | ok | 129 | 430 | 30.0 percent | 0 | 78 |
-| Markdig 0.40.0 | `lib/net8.0/Markdig.dll` | ok | ok | 753 | 1177 | 64.0 percent | 0 | 278 |
-| CsvHelper 33.0.1 | `lib/net8.0/CsvHelper.dll` | failed | not_reached | 0 | 0 | n/a | 0 | 0 |
-| Newtonsoft.Json 13.0.3 | `lib/net6.0/Newtonsoft.Json.dll` | ok | ok | 580 | 1278 | 45.4 percent | 0 | 278 |
+| Polly.Core 8.5.2 | `lib/net8.0/Polly.Core.dll` | ok | ok | 45 | 342 | 13.2 percent | 0 | 9 |
+| Serilog 4.2.0 | `lib/net8.0/Serilog.dll` | ok | ok | 119 | 430 | 27.7 percent | 0 | 68 |
+| Markdig 0.40.0 | `lib/net8.0/Markdig.dll` | ok | ok | 748 | 1177 | 63.6 percent | 0 | 273 |
+| CsvHelper 33.0.1 | `lib/net8.0/CsvHelper.dll` | ok | ok | 493 | 1106 | 44.6 percent | 0 | 153 |
+| Newtonsoft.Json 13.0.3 | `lib/net6.0/Newtonsoft.Json.dll` | ok | ok | 579 | 1278 | 45.3 percent | 0 | 277 |
 
 ## Collapsed overload sets (ADR-155)
 
-Measured across the whole run: **0** collapsed set(s), **0** member(s) dropped, out of **855** bridgeable methods.
+Measured across the whole run: **0** collapsed set(s), **0** member(s) dropped, out of **991** bridgeable methods.
 
 This is the frequency measurement the ROADMAP line asks for: how often a C#
 overload pair really does collapse onto one Kotlin collection signature in
@@ -40,51 +40,51 @@ bridgeable, so array and `Nullable<T>` siblings never get there.
 
 ## Diagnostics by kind, whole run
 
-- `info_async_not_yet_mapped`: 5
+- `info_async_not_yet_mapped`: 10
 - `info_cancellation_token_not_yet_mapped`: 4
 - `info_oblivious_nullability`: 126
-- `info_uninstantiated_generic_type`: 31
+- `info_uninstantiated_generic_type`: 36
 - `skipped_ambiguous_generic_constructor`: 4
-- `skipped_array`: 72
-- `skipped_collection_element`: 51
+- `skipped_array`: 114
+- `skipped_collection_element`: 22
 - `skipped_collection_position`: 1
 - `skipped_default_interface_method`: 79
-- `skipped_delegate_position`: 4
-- `skipped_delegate_signature`: 77
-- `skipped_empty_interface`: 28
+- `skipped_delegate_position`: 3
+- `skipped_delegate_signature`: 90
+- `skipped_empty_interface`: 30
 - `skipped_event`: 18
-- `skipped_generic_interface`: 6
-- `skipped_generic_type_argument`: 26
-- `skipped_indexer`: 43
-- `skipped_member_name_collision`: 15
-- `skipped_open_generic`: 78
-- `skipped_unbound_generic_instantiation`: 166
-- `skipped_unbound_type_reference`: 649
-- `skipped_unsupported_enum`: 48
-- `skipped_unsupported_struct`: 270
+- `skipped_generic_interface`: 24
+- `skipped_generic_type_argument`: 17
+- `skipped_indexer`: 64
+- `skipped_member_name_collision`: 16
+- `skipped_open_generic`: 327
+- `skipped_unbound_generic_instantiation`: 170
+- `skipped_unbound_type_reference`: 792
+- `skipped_unsupported_enum`: 62
+- `skipped_unsupported_struct`: 294
 
 ## Most demanded unmapped type references
 
 Parsed out of each diagnostic's prose, so approximate. This ranks which BCL type
 to map next by real demand rather than by guess.
 
-- `System.Type`: 93
-- `System.Exception`: 91
+- `System.Type`: 172
 - `System.TimeSpan`: 78
-- `System.Globalization.CultureInfo`: 65
-- `System.DateTime`: 48
+- `System.Globalization.CultureInfo`: 75
+- `System.Exception`: 56
+- `System.DateTime`: 49
+- `System.IO.TextWriter`: 37
 - `System.DateOnly`: 34
-- `System.IO.TextWriter`: 31
 - `System.DateTimeOffset`: 20
 - `System.IFormatProvider`: 15
+- `System.IO.TextReader`: 15
+- `CsvHelper.TypeConversion.ITypeConverter`: 14
+- `System.Reflection.MemberInfo`: 13
+- `System.Linq.Expressions.Expression`: 10
 - `System.Uri`: 10
+- `System.Decimal`: 9
+- `System.Guid`: 9
 - `NuGet.Versioning.IVersionComparer`: 8
-- `System.Decimal`: 8
-- `System.Guid`: 8
 - `NodaTime.IClock`: 7
+- `System.Reflection.ParameterInfo`: 7
 - `System.TimeOnly`: 7
-- `System.Diagnostics.TraceLevel`: 6
-- `System.TimeProvider`: 6
-- `System.Runtime.Serialization.SerializationInfo`: 5
-- `System.StringComparison`: 5
-- `Humanizer.ICulturedStringTransformer`: 4

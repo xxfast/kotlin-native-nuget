@@ -274,6 +274,29 @@ public class BoxesDiagnosticsTests
     }
 
     [Fact]
+    public void PhantomGenericMethods_AreSkippedWithDiagnostic_AndTheSiblingBinds()
+    {
+        // Reset<T>() and Describe<T>(): the type parameter is phantom (in no parameter, not the
+        // return type), so decoding never meets `!!n`. Reset<T>() used to collide with Reset()'s
+        // canonical signature and fail the whole TestDependency reader run, like Oreo and Mylo
+        // both answering to "kitty"; Describe<T>() used to bind as a CS0411 call.
+        JsonElement assembly = TestDependencyAssembly();
+        JsonElement diagnostics = Diagnostics(assembly);
+        Assert.True(
+            HasDiagnostic(diagnostics, "Boxes", "Reset", "skipped_open_generic"),
+            "expected skipped_open_generic naming Boxes.Reset (the Reset<T>() half)");
+        Assert.True(
+            HasDiagnostic(diagnostics, "Boxes", "Describe", "skipped_open_generic"),
+            "expected skipped_open_generic naming Boxes.Describe");
+
+        List<string> methods = FindType(assembly, "Boxes").GetProperty("methods").EnumerateArray()
+            .Select(m => m.GetProperty("name").GetString() ?? "")
+            .ToList();
+        Assert.Single(methods, name => name == "Reset");
+        Assert.DoesNotContain("Describe", methods);
+    }
+
+    [Fact]
     public void Peek_BareTypeParameterNullableReturn_IsSkippedWithDiagnostic()
     {
         // T? Peek(): a bare type parameter annotated nullable is not representable per

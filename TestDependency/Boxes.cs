@@ -71,4 +71,13 @@ public static class Boxes
     public static Queue<int> Waiting() => new();                         // skipped_unbound_generic_instantiation
     public static Box<Box<int>> Nested() => new(new Box<int>(1));        // skipped_generic_type_argument
     public static T Identity<T>(T value) => value;                       // skipped_open_generic (ADR-043 survives)
+
+    // Phantom generic methods: the type parameter appears in no parameter and no return type, so
+    // decoding never meets `!!n`. Both must be skipped_open_generic. `Reset<T>()` shares its
+    // canonical managed signature with the non-generic `Reset()` (the CsvHelper
+    // `UnregisterClassMap` crash), and `Describe<T>()` has no sibling (the Serilog
+    // `ForContext<TSource>()` CS0411 binding). The non-generic `Reset()` must still bind.
+    public static void Reset() { }
+    public static void Reset<T>() { }
+    public static string Describe<T>() => typeof(T).Name;
 }

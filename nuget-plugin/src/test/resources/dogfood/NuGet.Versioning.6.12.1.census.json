@@ -38,8 +38,8 @@
     "staticMethod": { "seen": 10, "bound": 10 }
   },
   "diagnostics": {
-    "skipped_collection_element": 1,
     "skipped_empty_interface": 2,
+    "skipped_open_generic": 1,
     "skipped_unbound_type_reference": 26
   },
   "unboundTypeReferences": {

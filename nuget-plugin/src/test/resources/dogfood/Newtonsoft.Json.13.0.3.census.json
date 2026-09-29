@@ -32,24 +32,24 @@
   },
   "members": {
     "constructor": { "seen": 94, "bound": 94 },
-    "instanceMethod": { "seen": 221, "bound": 221 },
+    "instanceMethod": { "seen": 220, "bound": 220 },
     "property": { "seen": 208, "bound": 207 },
-    "readerSkippedMember": { "seen": 473, "bound": 0 },
+    "readerSkippedMember": { "seen": 474, "bound": 0 },
     "staticMethod": { "seen": 58, "bound": 58 }
   },
   "diagnostics": {
     "info_oblivious_nullability": 42,
     "info_uninstantiated_generic_type": 2,
-    "skipped_array": 38,
-    "skipped_collection_element": 20,
+    "skipped_array": 37,
+    "skipped_collection_element": 7,
     "skipped_delegate_signature": 4,
     "skipped_empty_interface": 6,
     "skipped_event": 7,
     "skipped_generic_interface": 2,
     "skipped_indexer": 25,
     "skipped_member_name_collision": 8,
-    "skipped_open_generic": 10,
-    "skipped_unbound_generic_instantiation": 131,
+    "skipped_open_generic": 26,
+    "skipped_unbound_generic_instantiation": 130,
     "skipped_unbound_type_reference": 221,
     "skipped_unsupported_enum": 16,
     "skipped_unsupported_struct": 1
@@ -96,7 +96,7 @@
   "collapsedOverloads": {
     "sets": 0,
     "membersDropped": 0,
-    "bridgeableMethods": 278,
+    "bridgeableMethods": 277,
     "examples": []
   },
   "errors": []

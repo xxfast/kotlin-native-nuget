@@ -32,23 +32,23 @@
   },
   "members": {
     "constructor": { "seen": 220, "bound": 219 },
-    "instanceMethod": { "seen": 199, "bound": 195 },
+    "instanceMethod": { "seen": 191, "bound": 191 },
     "property": { "seen": 246, "bound": 246 },
-    "readerSkippedMember": { "seen": 172, "bound": 0 },
-    "staticMethod": { "seen": 93, "bound": 93 }
+    "readerSkippedMember": { "seen": 197, "bound": 0 },
+    "staticMethod": { "seen": 92, "bound": 92 }
   },
   "diagnostics": {
     "info_uninstantiated_generic_type": 11,
     "skipped_ambiguous_generic_constructor": 4,
     "skipped_array": 7,
-    "skipped_collection_element": 12,
+    "skipped_collection_element": 7,
     "skipped_delegate_signature": 12,
     "skipped_empty_interface": 2,
     "skipped_event": 10,
     "skipped_generic_interface": 3,
     "skipped_indexer": 5,
     "skipped_member_name_collision": 7,
-    "skipped_open_generic": 10,
+    "skipped_open_generic": 40,
     "skipped_unbound_generic_instantiation": 10,
     "skipped_unbound_type_reference": 22,
     "skipped_unsupported_enum": 24,
@@ -65,7 +65,7 @@
   "collapsedOverloads": {
     "sets": 0,
     "membersDropped": 0,
-    "bridgeableMethods": 278,
+    "bridgeableMethods": 273,
     "examples": []
   },
   "errors": []
