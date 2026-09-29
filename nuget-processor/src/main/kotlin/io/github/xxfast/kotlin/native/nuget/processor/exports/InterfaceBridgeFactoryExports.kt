@@ -65,7 +65,7 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
     appendLine("} catch (e: Throwable) {")
     appendLine("  if (errorOut != null) {")
     appendLine("    errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(")
-    appendLine("      buildError(e)")
+    appendLine("      buildError(e, ::nugetMappedType)")
     appendLine("    )")
     appendLine("  }")
     appendLine("  null")

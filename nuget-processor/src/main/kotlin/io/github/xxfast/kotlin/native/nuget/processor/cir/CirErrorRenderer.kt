@@ -1,20 +1,55 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+/** ADR-177: how the Kotlin side decides a throwable belongs to a [KotlinExceptionRow]. */
+internal enum class KotlinExceptionMatch {
+  /** `t is T`: the row's class and every subclass. */
+  IS,
+
+  /** `t::class.qualifiedName == T`: the class is `internal` in the stdlib, so `is` cannot name it. */
+  NAME,
+}
+
 /**
- * ADR-150: the Kotlin-exception to C#-exception table, shared by the `BuildMapped` switch this file
- * renders and by the `<exception cref>` an author's `@throws` becomes. One table, so the documented
- * exception is always the one the consumer actually catches. Iteration order is the switch's
- * rendered order. Anything absent is a `KotlinException`.
+ * ADR-177: one row of the Kotlin-exception to C#-exception table. [optional] rows name a class
+ * outside the stdlib: the processor adds them to the generated `nugetMappedType` only when KSP
+ * resolves that class on the compile classpath; the rest are `nuget-runtime`'s
+ * `nugetStdlibMappedType`, in the same order.
  */
-internal val KOTLIN_EXCEPTION_TYPES: Map<String, String> = linkedMapOf(
-  "kotlin.IllegalArgumentException" to "KotlinArgumentException",
-  "kotlin.IllegalStateException" to "KotlinInvalidOperationException",
-  "kotlin.NoSuchElementException" to "KotlinInvalidOperationException",
-  "kotlin.ConcurrentModificationException" to "KotlinInvalidOperationException",
-  "kotlin.UnsupportedOperationException" to "KotlinNotSupportedException",
-  "kotlin.ClassCastException" to "KotlinInvalidCastException",
-  "kotlin.ArithmeticException" to "KotlinArithmeticException",
-  "kotlin.NumberFormatException" to "KotlinFormatException",
+internal data class KotlinExceptionRow(
+  val kotlinType: String,
+  val csharpType: String,
+  val match: KotlinExceptionMatch = KotlinExceptionMatch.IS,
+  val optional: Boolean = false,
+)
+
+/**
+ * ADR-150 / ADR-177: the Kotlin-exception to C#-exception table, shared by the `BuildMapped` switch
+ * this file renders, the generated `nugetMappedType` classifier and the `<exception cref>` an
+ * author's `@throws` becomes. One table, so the documented exception is always the one the consumer
+ * actually catches. Order is the Kotlin side's match order, most specific first (NFE before IAE,
+ * CancellationException before ISE, its Kotlin/Native superclass). Anything absent is a
+ * `KotlinException`.
+ */
+internal val KOTLIN_EXCEPTION_TYPES: List<KotlinExceptionRow> = listOf(
+  KotlinExceptionRow("kotlinx.io.IOException", "KotlinIOException", optional = true),
+  KotlinExceptionRow("kotlin.NumberFormatException", "KotlinFormatException"),
+  KotlinExceptionRow("kotlin.IllegalArgumentException", "KotlinArgumentException"),
+  KotlinExceptionRow(
+    "kotlin.coroutines.cancellation.CancellationException",
+    "KotlinOperationCanceledException",
+  ),
+  KotlinExceptionRow("kotlin.IllegalStateException", "KotlinInvalidOperationException"),
+  KotlinExceptionRow("kotlin.NoSuchElementException", "KotlinInvalidOperationException"),
+  KotlinExceptionRow("kotlin.ConcurrentModificationException", "KotlinInvalidOperationException"),
+  KotlinExceptionRow("kotlin.UnsupportedOperationException", "KotlinNotSupportedException"),
+  KotlinExceptionRow("kotlin.ClassCastException", "KotlinInvalidCastException"),
+  KotlinExceptionRow("kotlin.ArithmeticException", "KotlinArithmeticException"),
+  KotlinExceptionRow("kotlin.NullPointerException", "KotlinNullReferenceException"),
+  KotlinExceptionRow(
+    "kotlin.NoWhenBranchMatchedException",
+    "KotlinInvalidOperationException",
+    match = KotlinExceptionMatch.NAME,
+  ),
 )
 
 /**
@@ -50,6 +85,9 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_error_cause_stacktrace\")]")
   appendLine("        private static extern IntPtr Native_causeStackTrace(IntPtr handle, int index);")
   appendLine()
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_error_cause_mapped_type\")]")
+  appendLine("        private static extern IntPtr Native_causeMappedType(IntPtr handle, int index);")
+  appendLine()
   appendLine("        internal static string Type(IntPtr handle) => Marshal.PtrToStringUTF8(Native_type(handle))!;")
   appendLine("        internal static string Message(IntPtr handle) => Marshal.PtrToStringUTF8(Native_message(handle))!;")
   appendLine("        internal static string StackTrace(IntPtr handle) => Marshal.PtrToStringUTF8(Native_stacktrace(handle))!;")
@@ -57,6 +95,7 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("        internal static string CauseType(IntPtr handle, int index) => Marshal.PtrToStringUTF8(Native_causeType(handle, index))!;")
   appendLine("        internal static string CauseMessage(IntPtr handle, int index) => Marshal.PtrToStringUTF8(Native_causeMessage(handle, index))!;")
   appendLine("        internal static string CauseStackTrace(IntPtr handle, int index) => Marshal.PtrToStringUTF8(Native_causeStackTrace(handle, index))!;")
+  appendLine("        internal static string CauseMappedType(IntPtr handle, int index) => Marshal.PtrToStringUTF8(Native_causeMappedType(handle, index))!;")
   appendLine()
   // ADR-161: the C# half of the forward callback error channel. It lives here rather than in the
   // `NugetThunks` partial because `NugetErrorNative` is emitted unconditionally, while the thunk
@@ -123,11 +162,13 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("                string causeType = CauseType(errorPtr, i);")
   appendLine("                string causeMsg = CauseMessage(errorPtr, i);")
   appendLine("                string causeStack = CauseStackTrace(errorPtr, i);")
-  appendLine("                inner = BuildMapped(causeType, causeMsg, causeStack, inner);")
+  appendLine("                string causeMapped = CauseMappedType(errorPtr, i);")
+  appendLine("                inner = BuildMapped(causeType, causeMapped, causeMsg, causeStack, inner);")
   appendLine("            }")
   appendLine("            string kotlinType = Type(errorPtr);")
   appendLine("            string msg = Message(errorPtr);")
   appendLine("            string stackTrace = StackTrace(errorPtr);")
+  appendLine("            string mappedType = CauseMappedType(errorPtr, 0);")
   appendLine("            NugetMarshal.Dispose(errorPtr);")
   // ADR-161: when the escaping Kotlin error IS the managed exception this process threw a moment
   // ago inside a callback thunk, the C# caller gets the ORIGINAL exception back, so
@@ -135,7 +176,7 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   // Anything else, including a Kotlin author's own wrapper around it, keeps the ordinary mapping.
   appendLine("            Exception? original = TakeOriginalManagedFault(kotlinType, msg);")
   appendLine("            if (original != null) return original;")
-  appendLine("            return BuildMapped(kotlinType, msg, stackTrace, inner);")
+  appendLine("            return BuildMapped(kotlinType, mappedType, msg, stackTrace, inner);")
   appendLine("        }")
   appendLine()
   appendLine("        internal static T Check<T>(T result, IntPtr error)")
@@ -144,12 +185,15 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("            return result;")
   appendLine("        }")
   appendLine()
-  appendLine("        private static Exception BuildMapped(string kotlinType, string message, string stackTrace, Exception? inner) =>")
-  appendLine("            kotlinType switch")
+  appendLine("        private static Exception BuildMapped(string kotlinType, string mappedType, string message, string stackTrace, Exception? inner) =>")
+  // ADR-177: keyed on the row the Kotlin side matched with `is`, not the concrete class, so a
+  // subclass of a row maps to that row. Every row is rendered, optional ones included: the string
+  // only ever arrives when the module's `nugetMappedType` carries the row.
+  appendLine("            mappedType switch")
   appendLine("            {")
-  for ((kotlinType, csharpType) in KOTLIN_EXCEPTION_TYPES) {
-    appendLine("                \"$kotlinType\" =>")
-    appendLine("                    new $csharpType(kotlinType, message, stackTrace, inner),")
+  for (row in KOTLIN_EXCEPTION_TYPES) {
+    appendLine("                \"${row.kotlinType}\" =>")
+    appendLine("                    new ${row.csharpType}(kotlinType, message, stackTrace, inner),")
   }
   appendLine("                _ => new KotlinException(kotlinType, message, stackTrace, inner)")
   appendLine("            };")
@@ -176,6 +220,7 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("        public override string ToString()")
   appendLine("        {")
   appendLine("            return base.ToString()")
+  appendLine("                + Environment.NewLine + \"Kotlin type: \" + KotlinType")
   appendLine("                + Environment.NewLine + \" ---> Kotlin stack trace:\"")
   appendLine("                + Environment.NewLine + KotlinStackTrace")
   appendLine("                + Environment.NewLine + \" --- End of Kotlin stack trace ---\";")
@@ -189,6 +234,9 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
     "KotlinInvalidCastException" to "InvalidCastException",
     "KotlinArithmeticException" to "ArithmeticException",
     "KotlinFormatException" to "FormatException",
+    "KotlinIOException" to "System.IO.IOException",
+    "KotlinNullReferenceException" to "NullReferenceException",
+    "KotlinOperationCanceledException" to "OperationCanceledException",
   ).forEach { (name, base) -> renderMappedException(name, base) }
 }
 
@@ -208,6 +256,7 @@ internal fun StringBuilder.renderMappedException(name: String, base: String) {
   appendLine("        public override string ToString()")
   appendLine("        {")
   appendLine("            return base.ToString()")
+  appendLine("                + Environment.NewLine + \"Kotlin type: \" + KotlinType")
   appendLine("                + Environment.NewLine + \" ---> Kotlin stack trace:\"")
   appendLine("                + Environment.NewLine + KotlinStackTrace")
   appendLine("                + Environment.NewLine + \" --- End of Kotlin stack trace ---\";")

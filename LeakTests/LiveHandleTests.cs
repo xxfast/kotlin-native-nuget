@@ -705,6 +705,17 @@ public class LiveHandleTests
         });
     }
 
+    // ADR-177 fault path: every throw mints a `NugetError` handle, and hierarchy mapping adds a
+    // per-node mapped-type read on it. Oreo splitting the litter bag fifty times must still hand
+    // every error handle back. The base `System.IO.IOException` is caught on purpose, so this row
+    // compiles before `KotlinIOException` exists and fails on the exception type, not the build.
+    [Fact]
+    public void KotlinxIoIOException_Throws_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+            Assert.ThrowsAny<System.IO.IOException>(() => LitterBoxErrors.Scoop("Oreo")));
+    }
+
     // Kotlin throws after receiving the bridge and before making the lambda: the transfer handle
     // the C# half minted for Grumpy must still be released on the error path.
     [Fact]

@@ -40,8 +40,8 @@ class PassersBy {
    * The nullable-element defect surfaced in C# as a bare `KotlinException : Kotlin error`, which
    * reads like the Flow error path throwing away detail the ordinary call path keeps. It does not:
    * both go through `NugetErrorNative.BuildException`, and that text was the honest rendering of a
-   * Kotlin `NullPointerException` whose own `message` is null (`buildError` falls back to the
-   * literal "Kotlin error") and whose type is absent from the mapping table. This member is the
+   * Kotlin `NullPointerException` whose own `message` was null (before ADR-177 `buildError` fell back to the
+   * literal "Kotlin error" and the type had no mapping row; both changed in ADR-177). This member is the
    * control that says so: a named exception with a message keeps both across the same callback.
    *
    * Oreo watches a squirrel, and then the window bangs shut.

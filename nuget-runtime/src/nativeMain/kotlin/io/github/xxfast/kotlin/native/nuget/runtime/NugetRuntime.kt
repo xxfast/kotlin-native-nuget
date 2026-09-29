@@ -379,7 +379,7 @@ public fun export_nuget_suspend_func0_invoke(
   val fn = handle.asStableRef<SuspendFunction0<*>>().get()
   // ADR-128: the launch shape lives in `launchForCSharp`; this site owns only the call and
   // how its value becomes a handle. The `== Unit` test and the mint order are unchanged.
-  return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData) {
+  return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData, ::nugetStdlibMappedType) {
     val result = fn.invoke()
     // Boundary nullability part A1: a null result rides the same null pointer `Unit` already does,
     // instead of `retain(null as Any)`, which was an uncaught NPE that killed the host.
@@ -402,7 +402,7 @@ public fun export_nuget_suspend_func1_invoke(
   val param0 = arg0?.asStableRef<Any>()?.get()
   // ADR-128: the launch shape lives in `launchForCSharp`; this site owns only the call and
   // how its value becomes a handle. The `== Unit` test and the mint order are unchanged.
-  return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData) {
+  return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData, ::nugetStdlibMappedType) {
     val result = fn.invoke(param0)
     // Boundary nullability part A1: a null result rides the same null pointer `Unit` already does,
     // instead of `retain(null as Any)`, which was an uncaught NPE that killed the host.
@@ -425,7 +425,7 @@ public fun export_nuget_suspend_func2_invoke(
   val param1 = arg1?.asStableRef<Any>()?.get()
   // ADR-128: the launch shape lives in `launchForCSharp`; this site owns only the call and
   // how its value becomes a handle. The `== Unit` test and the mint order are unchanged.
-  return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData) {
+  return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData, ::nugetStdlibMappedType) {
     val result = fn.invoke(param0, param1)
     // Boundary nullability part A1: a null result rides the same null pointer `Unit` already does,
     // instead of `retain(null as Any)`, which was an uncaught NPE that killed the host.
@@ -450,7 +450,7 @@ public fun export_nuget_suspend_func3_invoke(
   val param2 = arg2?.asStableRef<Any>()?.get()
   // ADR-128: the launch shape lives in `launchForCSharp`; this site owns only the call and
   // how its value becomes a handle. The `== Unit` test and the mint order are unchanged.
-  return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData) {
+  return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData, ::nugetStdlibMappedType) {
     val result = fn.invoke(param0, param1, param2)
     // Boundary nullability part A1: a null result rides the same null pointer `Unit` already does,
     // instead of `retain(null as Any)`, which was an uncaught NPE that killed the host.
@@ -523,24 +523,59 @@ public fun export_nuget_job_dispose(handle: COpaquePointer?) {
 @NugetRuntimeApi
 public data class NugetError(
   public val type: String,
+  /**
+   * ADR-177: the Kotlin FQN of the first mapping row this node IS-A (most specific first), or
+   * `null` when no row matches. [type] stays the concrete class.
+   */
+  public val mappedType: String?,
   public val message: String,
   public val stackTrace: String,
   public val cause: NugetError? = null,
 )
 
+/**
+ * ADR-177: [mappedType] is required, with no default, so a call site that has not been converted
+ * to the per-module classifier fails to compile instead of silently losing its optional rows.
+ * A null Kotlin message becomes the concrete type name rather than a generic placeholder.
+ */
 @NugetRuntimeApi
-public fun buildError(e: Throwable): NugetError {
+public fun buildError(e: Throwable, mappedType: (Throwable) -> String?): NugetError {
   val seen = mutableSetOf<Throwable>()
   fun build(t: Throwable): NugetError? {
     if (!seen.add(t)) return null
+    val type: String = t::class.qualifiedName ?: t::class.simpleName ?: "UnknownException"
     return NugetError(
-      type = t::class.qualifiedName ?: t::class.simpleName ?: "UnknownException",
-      message = t.message ?: "Kotlin error",
+      type = type,
+      mappedType = mappedType(t),
+      message = t.message ?: type,
       stackTrace = t.stackTraceToString(),
       cause = t.cause?.let(::build),
     )
   }
   return build(e)!!
+}
+
+/**
+ * ADR-177: the stdlib mapping rows, most specific first. Order is load-bearing:
+ * `NumberFormatException : IllegalArgumentException` and, on Kotlin/Native,
+ * `CancellationException : IllegalStateException`, so first `is` match wins only in this order.
+ * `NoWhenBranchMatchedException` is `internal` in the stdlib and is matched by exact name.
+ * The keys are the processor's non-optional `KOTLIN_EXCEPTION_TYPES` rows (a Tier 1 test pins it).
+ */
+@NugetRuntimeApi
+public fun nugetStdlibMappedType(t: Throwable): String? = when {
+  t is NumberFormatException -> "kotlin.NumberFormatException"
+  t is IllegalArgumentException -> "kotlin.IllegalArgumentException"
+  t is CancellationException -> "kotlin.coroutines.cancellation.CancellationException"
+  t is IllegalStateException -> "kotlin.IllegalStateException"
+  t is NoSuchElementException -> "kotlin.NoSuchElementException"
+  t is ConcurrentModificationException -> "kotlin.ConcurrentModificationException"
+  t is UnsupportedOperationException -> "kotlin.UnsupportedOperationException"
+  t is ClassCastException -> "kotlin.ClassCastException"
+  t is ArithmeticException -> "kotlin.ArithmeticException"
+  t is NullPointerException -> "kotlin.NullPointerException"
+  t::class.qualifiedName == "kotlin.NoWhenBranchMatchedException" -> "kotlin.NoWhenBranchMatchedException"
+  else -> null
 }
 
 private tailrec fun NugetError.at(index: Int): NugetError =
@@ -667,6 +702,16 @@ public fun export_nuget_error_cause_message(handle: COpaquePointer, index: Int):
 public fun export_nuget_error_cause_stacktrace(handle: COpaquePointer, index: Int): String =
   handle.asStableRef<NugetError>().get().at(index).stackTrace
 
+/**
+ * ADR-177: the matched mapping row of node [index] (0 is the top), `""` when no row matched.
+ * Additive: no `NugetRuntimeAbi` bump, a new generator against an old runtime already fails to
+ * compile on the `buildError` call.
+ */
+@NugetRuntimeApi
+@CName("nuget_error_cause_mapped_type")
+public fun export_nuget_error_cause_mapped_type(handle: COpaquePointer, index: Int): String =
+  handle.asStableRef<NugetError>().get().at(index).mappedType.orEmpty()
+
 private const val TICKS_UNIX_EPOCH: Long = 621_355_968_000_000_000L
 
 private const val EPOCH_SECONDS_MIN: Long = -62_135_596_800L
@@ -766,7 +811,7 @@ public fun export_nuget_stateflow_collect(
     ?: CoroutineScope(Dispatchers.Default)
   // ADR-128: `collectForCSharp` owns the trio of callbacks and the launch; the flow handle is
   // still dereferenced before the launch, as today, and only `.collect` moves into the body.
-  return collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData) { emit ->
+  return collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData, ::nugetStdlibMappedType) { emit ->
     flow.collect { value -> emit(NugetHandles.retain(value as Any)) }
   }
 }

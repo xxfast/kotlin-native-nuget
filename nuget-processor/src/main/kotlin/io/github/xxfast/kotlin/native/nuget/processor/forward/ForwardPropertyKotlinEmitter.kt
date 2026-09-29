@@ -131,7 +131,7 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       BridgeType.Throwable -> {
         builder.returns(cOpaquePointer.copy(nullable = true))
         builder.addCode(
-          nullableHandleBody("$access?.let(::buildError)", "errorOut"),
+          nullableHandleBody("$access?.let { buildError(it, ::nugetMappedType) }", "errorOut"),
           nugetHandles,
           cOpaquePointerVar,
           nugetHandles,
@@ -176,7 +176,7 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
     BridgeType.Throwable -> {
       builder.returns(cOpaquePointer.copy(nullable = true))
       builder.addCode(
-        handleBody("buildError($access)", "errorOut"),
+        handleBody("buildError($access, ::nugetMappedType)", "errorOut"),
         nugetHandles,
         cOpaquePointerVar,
         nugetHandles,
@@ -541,7 +541,7 @@ private fun unitBody(invocation: String, error: String): String = buildString {
   appendLine("} catch (e: Throwable) {")
   appendLine("  if ($error != null) {")
   appendLine("    $error.reinterpret<%T>().pointed.value = %T.retain(")
-  appendLine("      buildError(e)")
+  appendLine("      buildError(e, ::nugetMappedType)")
   appendLine("    )")
   appendLine("  }")
   append("}")
@@ -553,7 +553,7 @@ internal fun valueBody(invocation: String, error: String, fallback: String): Str
   appendLine("} catch (e: Throwable) {")
   appendLine("  if ($error != null) {")
   appendLine("    $error.reinterpret<%T>().pointed.value = %T.retain(")
-  appendLine("      buildError(e)")
+  appendLine("      buildError(e, ::nugetMappedType)")
   appendLine("    )")
   appendLine("  }")
   appendLine("  $fallback")
@@ -566,7 +566,7 @@ internal fun handleBody(invocation: String, error: String): String = buildString
   appendLine("} catch (e: Throwable) {")
   appendLine("  if ($error != null) {")
   appendLine("    $error.reinterpret<%T>().pointed.value = %T.retain(")
-  appendLine("      buildError(e)")
+  appendLine("      buildError(e, ::nugetMappedType)")
   appendLine("    )")
   appendLine("  }")
   appendLine("  null")
@@ -580,7 +580,7 @@ internal fun nullableHandleBody(invocation: String, error: String): String = bui
   appendLine("} catch (e: Throwable) {")
   appendLine("  if ($error != null) {")
   appendLine("    $error.reinterpret<%T>().pointed.value = %T.retain(")
-  appendLine("      buildError(e)")
+  appendLine("      buildError(e, ::nugetMappedType)")
   appendLine("    )")
   appendLine("  }")
   appendLine("  null")

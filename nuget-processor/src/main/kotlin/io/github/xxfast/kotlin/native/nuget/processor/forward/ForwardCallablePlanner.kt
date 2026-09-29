@@ -29,6 +29,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.PLAN_OWNED_NAMES
 import io.github.xxfast.kotlin.native.nuget.processor.bridgeParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
+import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_EXCEPTION_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.KotlinExceptionMatch
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
@@ -4361,8 +4363,52 @@ internal fun BridgeType.isWrappableComponent(): Boolean = when (this) {
  */
 internal fun KSDeclaration.forwardKdoc(expects: ExpectIndex): ForwardKdoc? {
   if (origin != Origin.KOTLIN) return null
-  return parseKdoc(docString ?: expects.docOrNull(this))
+  val doc: ForwardKdoc = parseKdoc(docString ?: expects.docOrNull(this))
     ?: (this as? KSPropertyDeclaration)?.propertyTagKdoc(expects)
+    ?: return null
+  if (doc.throws.isEmpty()) return doc
+  return doc.copy(
+    throws = doc.throws.map { entry ->
+      entry.copy(resolvedCsharpType = resolveThrownType(entry.type, expects)?.mappedCsharpType())
+    },
+  )
+}
+
+/**
+ * ADR-177: the class an ADR-150 `@throws T` names. KSP exposes no file imports, so the written
+ * name is tried as a qualified name, then in this declaration's package, then in the packages an
+ * exception is conventionally imported from. `null` when none resolves.
+ */
+private fun KSDeclaration.resolveThrownType(written: String, expects: ExpectIndex): KSClassDeclaration? {
+  val candidates: List<String> = if ('.' in written) listOf(written)
+  else listOf(
+    "${packageName.asString()}.$written",
+    "kotlin.$written",
+    "kotlin.coroutines.cancellation.$written",
+    "kotlinx.io.$written",
+  )
+  return candidates.firstNotNullOfOrNull { name -> expects.classByName(name) }
+}
+
+private val JVM_STDLIB_PACKAGE: Regex = Regex("""^java\.(lang|util)\.""")
+
+/**
+ * ADR-177: the first mapping row this class IS-A, in the table's most-specific-first order, the
+ * same rule the Kotlin side applies at runtime. A NAME row matches only the exact class.
+ */
+private fun KSClassDeclaration.mappedCsharpType(): String {
+  val self: String? = qualifiedName?.asString()
+  // On a JVM compilation (Tier 1) the stdlib rows are typealiases of `java.lang`/`java.util`
+  // classes, so those spell their Kotlin name; on Kotlin/Native they already are `kotlin.*`.
+  val lineage: Set<String?> = getAllSuperTypes()
+    .map { it.declaration.qualifiedName?.asString()?.replace(JVM_STDLIB_PACKAGE, "kotlin.") }
+    .toSet() + self
+  return KOTLIN_EXCEPTION_TYPES.firstOrNull { row ->
+    when (row.match) {
+      KotlinExceptionMatch.IS -> row.kotlinType in lineage
+      KotlinExceptionMatch.NAME -> row.kotlinType == self
+    }
+  }?.csharpType ?: "KotlinException"
 }
 
 /**

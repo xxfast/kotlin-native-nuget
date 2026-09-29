@@ -124,6 +124,9 @@ kotlin {
       // ADR-066: a real second Gradle module, one klib boundary away. Consumed here so the
       // forward export reachability closure has a genuine cross-module type graph to walk.
       implementation(project(":test-models"))
+      // ADR-177: kotlinx-io on the classpath is what switches on the optional
+      // `kotlinx.io.IOException -> KotlinIOException` row (`cat/LitterBoxErrors.kt`).
+      implementation(libs.kotlinx.io.core)
     }
     nativeTest.dependencies {
       implementation(libs.kotlin.test)

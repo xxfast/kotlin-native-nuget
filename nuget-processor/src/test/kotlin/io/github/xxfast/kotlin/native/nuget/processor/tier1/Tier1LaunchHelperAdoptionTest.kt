@@ -76,7 +76,7 @@ class Tier1LaunchHelperAdoptionTest {
 
     assertContains(
       body,
-      "launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData)",
+      "launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData, ::nugetMappedType)",
       message = "expected the ad-hoc scope to be passed to the helper; got: $body",
     )
     assertContains(
@@ -92,7 +92,7 @@ class Tier1LaunchHelperAdoptionTest {
     val unitBody: String = exportBody(result, "library_tier1_launchhelper__cleanLitter_async")
     assertContains(
       unitBody,
-      "launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData)",
+      "launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData, ::nugetMappedType)",
       message = "expected the Unit route to use the helper too; got: $unitBody",
     )
     assertContains(
@@ -122,7 +122,7 @@ class Tier1LaunchHelperAdoptionTest {
     )
     assertContains(
       unitBody,
-      "launchForCSharp(scope, callbackPtr, userData)",
+      "launchForCSharp(scope, callbackPtr, userData, ::nugetMappedType)",
       message = "expected the scope handle's scope to be passed to the helper; got: $unitBody",
     )
     assertNoInlineLaunchShape(unitBody)
@@ -131,7 +131,7 @@ class Tier1LaunchHelperAdoptionTest {
     val nullableBody: String = exportBody(result, "library_tier1_launchhelper__shelter_findCat_async")
     assertContains(
       nullableBody,
-      "launchForCSharp(scope, callbackPtr, userData)",
+      "launchForCSharp(scope, callbackPtr, userData, ::nugetMappedType)",
       message = "expected the method route to use the helper; got: $nullableBody",
     )
     assertContains(
@@ -155,7 +155,7 @@ class Tier1LaunchHelperAdoptionTest {
     val propertyBody: String = exportBody(result, "library_tier1_launchhelper__radio_get_purrs_collect")
     assertContains(
       propertyBody,
-      "collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData)",
+      "collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData, ::nugetMappedType)",
       message = "expected the property collect to use the helper; got: $propertyBody",
     )
     assertContains(
@@ -168,7 +168,7 @@ class Tier1LaunchHelperAdoptionTest {
     val methodBody: String = exportBody(result, "library_tier1_launchhelper__radio_station_collect")
     assertContains(
       methodBody,
-      "collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData)",
+      "collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData, ::nugetMappedType)",
       message = "expected the method collect to use the helper; got: $methodBody",
     )
     assertNoInlineLaunchShape(methodBody)

@@ -5136,6 +5136,7 @@ private fun nugetKotlinErrorsActual(): String = """
   |import io.github.xxfast.kotlin.native.nuget.runtime.awaitForKotlin
   |import io.github.xxfast.kotlin.native.nuget.runtime.NugetHandles
   |import io.github.xxfast.kotlin.native.nuget.runtime.buildError
+  |import io.github.xxfast.kotlin.native.nuget.runtime.nugetStdlibMappedType
   |import io.github.xxfast.kotlin.native.nuget.runtime.flowForKotlin
   |import kotlinx.coroutines.flow.Flow
   |import kotlin.experimental.ExperimentalNativeApi
@@ -5145,7 +5146,7 @@ private fun nugetKotlinErrorsActual(): String = """
   |import kotlinx.cinterop.invoke
   |
   |internal actual fun nugetKotlinError(t: Throwable): COpaquePointer =
-  |  StableRef.create(buildError(t)).asCPointer()
+  |  StableRef.create(buildError(t, ::nugetStdlibMappedType)).asCPointer()
   |
   |// ADR-158: the counted half of a bridge/delegate ctx (see the `expect` for why it is counted and
   |// why it must stay paired with the release inside nuget_kotlin_release below).

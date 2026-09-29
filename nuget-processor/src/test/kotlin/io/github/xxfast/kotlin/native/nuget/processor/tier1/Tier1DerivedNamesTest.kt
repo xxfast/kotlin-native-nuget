@@ -212,11 +212,11 @@ class Tier1DerivedNamesTest {
     assertTrue(count.contains("scopeHandle_: COpaquePointer,"), count)
     assertTrue(count.contains("userData_: COpaquePointer,"), count)
     assertTrue(count.contains("val scope = scopeHandle_.asStableRef<CoroutineScope>().get()"), count)
-    assertTrue(count.contains("launchForCSharp(scope, callbackPtr, userData_)"), count)
+    assertTrue(count.contains("launchForCSharp(scope, callbackPtr, userData_, ::nugetMappedType)"), count)
     assertTrue(count.contains("obj.count(scopeHandle, userData)"), count)
 
     val tally: String = exportEndingWith("__tally_async")
-    assertTrue(tally.contains("callbackPtr, userData_)"), tally)
+    assertTrue(tally.contains("callbackPtr, userData_, ::nugetMappedType)"), tally)
     assertTrue(tally.contains("tier1.derived.tally(scopeHandle, userData)"), tally)
 
     assertCsharp("Native_CountAsync(IntPtr handle, IntPtr scopeHandle_, int scopeHandle, int userData, IntPtr callback, IntPtr userData_);")
@@ -259,7 +259,7 @@ class Tier1DerivedNamesTest {
     val stir: String = exportEndingWith("__kettle_stir_async")
     assertTrue(stir.contains("callbackPtr_: COpaquePointer,"), stir)
     assertTrue(stir.contains("val obj_ = handle.asStableRef"), stir)
-    assertTrue(stir.contains("launchForCSharp(scope_, callbackPtr_, userData)"), stir)
+    assertTrue(stir.contains("launchForCSharp(scope_, callbackPtr_, userData, ::nugetMappedType)"), stir)
     assertTrue(stir.contains("obj_.stir(obj, scope, callbackPtr, result, resultRef)"), stir)
   }
 

@@ -32,6 +32,7 @@ public fun launchForCSharp(
   scope: CoroutineScope,
   callbackPtr: COpaquePointer,
   userData: COpaquePointer,
+  mappedType: (Throwable) -> String?,
   body: suspend () -> COpaquePointer?,
 ): COpaquePointer {
   val callback = callbackPtr.reinterpret<CFunction<
@@ -44,7 +45,7 @@ public fun launchForCSharp(
       callback.invoke(null, null, 1.toByte(), userData)
       throw e
     } catch (e: Throwable) {
-      val errRef: COpaquePointer = NugetHandles.retain(buildError(e))
+      val errRef: COpaquePointer = NugetHandles.retain(buildError(e, mappedType))
       callback.invoke(null, errRef, 0.toByte(), userData)
     }
   }
@@ -67,6 +68,7 @@ public fun collectForCSharp(
   onCompletePtr: COpaquePointer,
   onErrorPtr: COpaquePointer,
   userData: COpaquePointer,
+  mappedType: (Throwable) -> String?,
   body: suspend (emit: (COpaquePointer?) -> Unit) -> Unit,
 ): COpaquePointer {
   val onNext = onNextPtr.reinterpret<CFunction<(COpaquePointer?, Byte, COpaquePointer) -> Unit>>()
@@ -80,7 +82,7 @@ public fun collectForCSharp(
       onNext.invoke(null, 1.toByte(), userData)
       throw e
     } catch (e: Throwable) {
-      val errRef: COpaquePointer = NugetHandles.retain(buildError(e))
+      val errRef: COpaquePointer = NugetHandles.retain(buildError(e, mappedType))
       onError.invoke(errRef, userData)
     }
   }

@@ -53,6 +53,7 @@ class LaunchForCSharpTest {
       scope = CoroutineScope(Dispatchers.Default),
       callbackPtr = resultCallback,
       userData = holderRef.asCPointer(),
+      mappedType = ::nugetStdlibMappedType,
     ) {
       NugetHandles.retain("forty-two")
     }
@@ -83,6 +84,7 @@ class LaunchForCSharpTest {
       scope = CoroutineScope(Dispatchers.Default),
       callbackPtr = resultCallback,
       userData = holderRef.asCPointer(),
+      mappedType = ::nugetStdlibMappedType,
     ) {
       awaitCancellation()
     }
@@ -116,6 +118,7 @@ class LaunchForCSharpTest {
       scope = CoroutineScope(Dispatchers.Default),
       callbackPtr = resultCallback,
       userData = holderRef.asCPointer(),
+      mappedType = ::nugetStdlibMappedType,
     ) {
       throw IllegalStateException("boom")
     }
@@ -148,6 +151,7 @@ class LaunchForCSharpTest {
       scope = CoroutineScope(Dispatchers.Default),
       callbackPtr = resultCallback,
       userData = holderRef.asCPointer(),
+      mappedType = ::nugetStdlibMappedType,
     ) {
       null
     }
