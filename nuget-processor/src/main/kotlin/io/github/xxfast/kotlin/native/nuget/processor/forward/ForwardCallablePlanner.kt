@@ -4379,14 +4379,20 @@ internal fun KSDeclaration.forwardKdoc(expects: ExpectIndex): ForwardKdoc? {
  * name is tried as a qualified name, then in this declaration's package, then in the packages an
  * exception is conventionally imported from. `null` when none resolves.
  */
-private fun KSDeclaration.resolveThrownType(written: String, expects: ExpectIndex): KSClassDeclaration? {
-  val candidates: List<String> = if ('.' in written) listOf(written)
-  else listOf(
-    "${packageName.asString()}.$written",
-    "kotlin.$written",
-    "kotlin.coroutines.cancellation.$written",
-    "kotlinx.io.$written",
-  )
+private fun KSDeclaration.resolveThrownType(
+  written: String,
+  expects: ExpectIndex,
+): KSClassDeclaration? {
+  val candidates: List<String> = if ('.' in written) {
+    listOf(written)
+  } else {
+    listOf(
+      "${packageName.asString()}.$written",
+      "kotlin.$written",
+      "kotlin.coroutines.cancellation.$written",
+      "kotlinx.io.$written",
+    )
+  }
   return candidates.firstNotNullOfOrNull { name -> expects.classByName(name) }
 }
 

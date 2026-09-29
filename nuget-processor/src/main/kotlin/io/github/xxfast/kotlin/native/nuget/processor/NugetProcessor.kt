@@ -2283,7 +2283,9 @@ class NugetProcessor(
       classes, enums, sealedClasses, objects, properties,
       valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
       exportedObjectHandles, forwardClassifier,
-      KOTLIN_EXCEPTION_TYPES.filter { row -> row.optional && expects.classByName(row.kotlinType) != null },
+      KOTLIN_EXCEPTION_TYPES.filter { row ->
+        row.optional && expects.classByName(row.kotlinType) != null
+      },
     )
     val bindings: CsharpBindings = generateCSharpBindings(
       functions, genericFunctions, extensionFunctions, extensionProperties,

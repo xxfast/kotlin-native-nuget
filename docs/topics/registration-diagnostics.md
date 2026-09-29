@@ -241,6 +241,12 @@ Rows 6j to 6n of `LeakTests/LiveHandleTests.cs` cover a captured C#-implemented 
 Kotlin `Cat`, value-only parameters, Kotlin throwing before it makes the lambda, and a throwing
 `IPet` factory on the returned lambda, and all return to baseline.
 
+An exception thrown from Kotlin allocates one error handle per call, and the
+[exception mapping](exceptions.md#catching-a-specific-exception-type) reads a mapped type from it
+for the exception and each cause. `LeakTests/LiveHandleTests.cs`'s
+`KotlinxIoIOException_Throws_ReturnsToBaseline` throws a `kotlinx.io.IOException` repeatedly and
+returns to baseline, so a mapped throw releases its error handle.
+
 ## Forward direction has no registration step
 
 Kotlin exports called from C# resolve by symbol name through an ordinary P/Invoke: no contract

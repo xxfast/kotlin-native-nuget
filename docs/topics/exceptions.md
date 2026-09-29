@@ -24,22 +24,68 @@ catch (KotlinArgumentException ex)
 
 ## Catching a specific exception type
 
-A fixed set of Kotlin stdlib exceptions map to the closest .NET type, as a subtype of that type
-implementing `IKotlinException`:
+A Kotlin exception maps to the closest .NET type when it is one of the classes below **or a subclass
+of one**, so `class KennelFullException : IllegalStateException()` is caught as
+`InvalidOperationException`. The generated type derives from the .NET type and implements
+`IKotlinException`; `KotlinType` still names your concrete Kotlin class.
 
 | Kotlin | C# |
 |---|---|
+| `kotlinx.io.IOException` and subclasses, such as `EOFException` | `KotlinIOException : IOException` |
 | `IllegalArgumentException` | `KotlinArgumentException : ArgumentException` |
-| `IllegalStateException`, `NoSuchElementException`, `ConcurrentModificationException` | `KotlinInvalidOperationException : InvalidOperationException` |
+| `NumberFormatException` | `KotlinFormatException : FormatException` |
+| `IllegalStateException`, `NoSuchElementException`, `ConcurrentModificationException`, `NoWhenBranchMatchedException` | `KotlinInvalidOperationException : InvalidOperationException` |
+| `CancellationException` | `KotlinOperationCanceledException : OperationCanceledException` |
 | `UnsupportedOperationException` | `KotlinNotSupportedException : NotSupportedException` |
 | `ClassCastException` | `KotlinInvalidCastException : InvalidCastException` |
 | `ArithmeticException` | `KotlinArithmeticException : ArithmeticException` |
-| `NumberFormatException` | `KotlinFormatException : FormatException` |
+| `NullPointerException` | `KotlinNullReferenceException : NullReferenceException` |
 
-Anything not in this table, including `NullPointerException` and `IndexOutOfBoundsException`
-(.NET reserves `NullReferenceException` for the CLR itself) and any user-defined exception, arrives
-as the base `KotlinException`. `catch (ArgumentException)` still catches `KotlinArgumentException`
-since it inherits from the .NET type.
+The first matching row wins, so `NumberFormatException` is a `FormatException` and not an
+`ArgumentException`, and a `CancellationException` is an `OperationCanceledException` and not an
+`InvalidOperationException`. Anything else, including `IndexOutOfBoundsException` and a user-defined
+exception that extends none of these, arrives as the base `KotlinException`.
+
+```kotlin
+internal class LitterBoxJammedException(message: String) : kotlinx.io.IOException(message)
+
+fun rake(catName: String): String {
+  if (catName == "Oreo") throw LitterBoxJammedException("Oreo buried the rake")
+  return "$catName's litter is raked into neat rows"
+}
+```
+
+```C#
+try
+{
+    LitterBoxErrors.Rake("Oreo");
+}
+catch (System.IO.IOException ex) when (ex is IKotlinException ke)
+{
+    Console.WriteLine(ke.KotlinType);   // the subclass's own name, not "kotlinx.io.IOException"
+}
+```
+
+<warning>
+<p><b>Breaking change.</b> Code that catches <code>KotlinException</code> for a subclass of a mapped
+type, for a <code>NullPointerException</code>, a <code>CancellationException</code> or a
+<code>kotlinx.io.IOException</code> now receives the mapped type above instead, and that is not a
+<code>KotlinException</code>. To handle any Kotlin exception, catch
+<code>Exception</code> and filter on the interface:
+<code>catch (Exception e) when (e is IKotlinException)</code>.</p>
+</warning>
+
+The `IOException` row exists only in a library that has `kotlinx-io` on its compile classpath, for
+example through Ktor. A `suspend` function's `IOException` maps like any other, but two routes see
+the standard-library rows only, so an `IOException` there stays a `KotlinException`: a Kotlin
+`suspend` lambda invoked from C#, and a `StateFlow` collect.
+
+## Exception messages
+
+`Message` is the Kotlin message verbatim. When the Kotlin exception has no message, `Message` is the
+Kotlin class's full name instead, so `throw NullPointerException()` reads as
+`kotlin.NullPointerException` rather than a blank or generic text. `ToString()` adds a
+`Kotlin type: <name>` line above the Kotlin stack trace.
 
 ## Catching any Kotlin exception
 

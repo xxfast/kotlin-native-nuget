@@ -3148,8 +3148,8 @@ private fun nugetRuntimeRegistrationContent(
   |            return Map(kotlinType, message, stackTrace, inner);
   |        }
   |
-  |        // Mirrors the forward BuildMapped switch (ADR-029). Duplicated, not shared: the forward
-  |        // one is `private`. If the forward table gains a row, add it here too.
+  |        // Mirrors the pre-ADR-177 forward BuildMapped, exact type names only. Duplicated, not shared: the forward
+  |        // one is `private` and now matches by class hierarchy, which this one does not (ROADMAP).
   |        private static Exception Map(string kotlinType, string message, string stackTrace, Exception? inner) =>
   |            kotlinType switch
   |            {

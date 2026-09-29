@@ -32,7 +32,10 @@ class Tier1ExceptionHierarchyMappingTest {
   fun `the IO row is emitted when kotlinx io IOException is on the classpath`() {
     val result = Tier1Harness.run(mapOf("Fixture.kt" to scoop, "KotlinxIo.kt" to kotlinxIo))
 
-    assertTrue(result.compiledClean, "expected the classifier to compile; got: ${result.compileErrors}")
+    assertTrue(
+      result.compiledClean,
+      "expected the classifier to compile; got: ${result.compileErrors}",
+    )
     assertTrue(
       "t is kotlinx.io.IOException -> \"kotlinx.io.IOException\"" in result.generated,
       "expected the IO row in nugetMappedType; generated=${result.generated}",
@@ -45,7 +48,10 @@ class Tier1ExceptionHierarchyMappingTest {
   fun `the IO row is omitted when kotlinx io is absent`() {
     val result = Tier1Harness.run(scoop)
 
-    assertTrue(result.compiledClean, "expected the classifier to compile; got: ${result.compileErrors}")
+    assertTrue(
+      result.compiledClean,
+      "expected the classifier to compile; got: ${result.compileErrors}",
+    )
     assertFalse("kotlinx.io.IOException" in result.generated, result.generated)
     assertTrue(
       "internal fun nugetMappedType(t: Throwable): String? = nugetStdlibMappedType(t)" in
@@ -62,8 +68,14 @@ class Tier1ExceptionHierarchyMappingTest {
     assertTrue("mappedType switch" in cs, cs)
     assertTrue("EntryPoint = \"nuget_error_cause_mapped_type\"" in cs, cs)
     assertTrue("string mappedType = CauseMappedType(errorPtr, 0);" in cs, cs)
-    assertTrue("public sealed class KotlinIOException : System.IO.IOException, IKotlinException" in cs, cs)
-    assertTrue("public sealed class KotlinNullReferenceException : NullReferenceException, IKotlinException" in cs, cs)
+    assertTrue(
+      "public sealed class KotlinIOException : System.IO.IOException, IKotlinException" in cs,
+      cs,
+    )
+    assertTrue(
+      "public sealed class KotlinNullReferenceException : NullReferenceException, IKotlinException" in cs,
+      cs,
+    )
     assertTrue(
       "public sealed class KotlinOperationCanceledException : OperationCanceledException, IKotlinException" in cs,
       cs,
@@ -124,8 +136,15 @@ class Tier1ExceptionHierarchyMappingTest {
     val body: String = source
       .substringAfter("public fun nugetStdlibMappedType(t: Throwable): String? = when {")
       .substringBefore("  else -> null")
-    val runtimeRows: List<String> = Regex("""-> "([^"]+)"""").findAll(body).map { it.groupValues[1] }.toList()
+    val runtimeRows: List<String> = Regex("""->\s*"([^"]+)"""")
+      .findAll(body)
+      .map { match -> match.groupValues[1] }
+      .toList()
 
-    assertEquals(KOTLIN_EXCEPTION_TYPES.filterNot { it.optional }.map { it.kotlinType }, runtimeRows)
+    val tableRows: List<String> = KOTLIN_EXCEPTION_TYPES
+      .filterNot { row -> row.optional }
+      .map { row -> row.kotlinType }
+
+    assertEquals(tableRows, runtimeRows)
   }
 }

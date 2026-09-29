@@ -39,7 +39,10 @@ class StdlibMappedTypeTest {
 
   @Test
   fun `every remaining stdlib row matches its own type`() {
-    assertEquals("kotlin.IllegalArgumentException", nugetStdlibMappedType(IllegalArgumentException()))
+    assertEquals(
+      "kotlin.IllegalArgumentException",
+      nugetStdlibMappedType(IllegalArgumentException()),
+    )
     assertEquals("kotlin.NoSuchElementException", nugetStdlibMappedType(NoSuchElementException()))
     assertEquals(
       "kotlin.ConcurrentModificationException",

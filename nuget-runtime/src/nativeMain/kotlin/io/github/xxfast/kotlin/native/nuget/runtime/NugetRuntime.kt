@@ -379,7 +379,12 @@ public fun export_nuget_suspend_func0_invoke(
   val fn = handle.asStableRef<SuspendFunction0<*>>().get()
   // ADR-128: the launch shape lives in `launchForCSharp`; this site owns only the call and
   // how its value becomes a handle. The `== Unit` test and the mint order are unchanged.
-  return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData, ::nugetStdlibMappedType) {
+  return launchForCSharp(
+    CoroutineScope(Dispatchers.Default),
+    callbackPtr,
+    userData,
+    ::nugetStdlibMappedType,
+  ) {
     val result = fn.invoke()
     // Boundary nullability part A1: a null result rides the same null pointer `Unit` already does,
     // instead of `retain(null as Any)`, which was an uncaught NPE that killed the host.
@@ -402,7 +407,12 @@ public fun export_nuget_suspend_func1_invoke(
   val param0 = arg0?.asStableRef<Any>()?.get()
   // ADR-128: the launch shape lives in `launchForCSharp`; this site owns only the call and
   // how its value becomes a handle. The `== Unit` test and the mint order are unchanged.
-  return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData, ::nugetStdlibMappedType) {
+  return launchForCSharp(
+    CoroutineScope(Dispatchers.Default),
+    callbackPtr,
+    userData,
+    ::nugetStdlibMappedType,
+  ) {
     val result = fn.invoke(param0)
     // Boundary nullability part A1: a null result rides the same null pointer `Unit` already does,
     // instead of `retain(null as Any)`, which was an uncaught NPE that killed the host.
@@ -425,7 +435,12 @@ public fun export_nuget_suspend_func2_invoke(
   val param1 = arg1?.asStableRef<Any>()?.get()
   // ADR-128: the launch shape lives in `launchForCSharp`; this site owns only the call and
   // how its value becomes a handle. The `== Unit` test and the mint order are unchanged.
-  return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData, ::nugetStdlibMappedType) {
+  return launchForCSharp(
+    CoroutineScope(Dispatchers.Default),
+    callbackPtr,
+    userData,
+    ::nugetStdlibMappedType,
+  ) {
     val result = fn.invoke(param0, param1)
     // Boundary nullability part A1: a null result rides the same null pointer `Unit` already does,
     // instead of `retain(null as Any)`, which was an uncaught NPE that killed the host.
@@ -450,7 +465,12 @@ public fun export_nuget_suspend_func3_invoke(
   val param2 = arg2?.asStableRef<Any>()?.get()
   // ADR-128: the launch shape lives in `launchForCSharp`; this site owns only the call and
   // how its value becomes a handle. The `== Unit` test and the mint order are unchanged.
-  return launchForCSharp(CoroutineScope(Dispatchers.Default), callbackPtr, userData, ::nugetStdlibMappedType) {
+  return launchForCSharp(
+    CoroutineScope(Dispatchers.Default),
+    callbackPtr,
+    userData,
+    ::nugetStdlibMappedType,
+  ) {
     val result = fn.invoke(param0, param1, param2)
     // Boundary nullability part A1: a null result rides the same null pointer `Unit` already does,
     // instead of `retain(null as Any)`, which was an uncaught NPE that killed the host.
@@ -574,7 +594,8 @@ public fun nugetStdlibMappedType(t: Throwable): String? = when {
   t is ClassCastException -> "kotlin.ClassCastException"
   t is ArithmeticException -> "kotlin.ArithmeticException"
   t is NullPointerException -> "kotlin.NullPointerException"
-  t::class.qualifiedName == "kotlin.NoWhenBranchMatchedException" -> "kotlin.NoWhenBranchMatchedException"
+  t::class.qualifiedName == "kotlin.NoWhenBranchMatchedException" ->
+    "kotlin.NoWhenBranchMatchedException"
   else -> null
 }
 
@@ -811,7 +832,14 @@ public fun export_nuget_stateflow_collect(
     ?: CoroutineScope(Dispatchers.Default)
   // ADR-128: `collectForCSharp` owns the trio of callbacks and the launch; the flow handle is
   // still dereferenced before the launch, as today, and only `.collect` moves into the body.
-  return collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData, ::nugetStdlibMappedType) { emit ->
+  return collectForCSharp(
+    scope,
+    onNextPtr,
+    onCompletePtr,
+    onErrorPtr,
+    userData,
+    ::nugetStdlibMappedType,
+  ) { emit ->
     flow.collect { value -> emit(NugetHandles.retain(value as Any)) }
   }
 }

@@ -2098,7 +2098,10 @@ class NugetGenerateBindingsTaskTest {
         file.content,
         "internal actual fun nugetKotlinError(t: Throwable): COpaquePointer",
       )
-      assertContains(file.content, "StableRef.create(buildError(t, ::nugetStdlibMappedType)).asCPointer()")
+      assertContains(
+        file.content,
+        "StableRef.create(buildError(t, ::nugetStdlibMappedType)).asCPointer()",
+      )
       // ADR-130 "Allocation, pinned": not NugetHandles.retain, so nuget_live_handles and the
       // LeakTests baselines do not move.
       assertFalse(

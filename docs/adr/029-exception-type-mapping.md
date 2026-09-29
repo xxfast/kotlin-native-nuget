@@ -436,3 +436,21 @@ The error bridge (NugetError, buildError, nuget_error_* exports) is unchanged. T
 - `kotlin.StackOverflowError` → no mapping (CLR reserved).
 - `kotlin.OutOfMemoryError` → no mapping (CLR reserved).
 - Custom type mapper extension point (let library authors register extra mappings) — future improvement.
+
+## Amendment (2026-09-29): matching is by class hierarchy, [ADR-177](177-exception-mapping-by-class-hierarchy.md)
+
+The exact-name `BuildMapped` switch described above is superseded on the forward direction. The
+Kotlin side now classifies each throwable with `is`, most specific first, and sends the matched row
+(`NugetError.mappedType`); `BuildMapped` switches on that row, not on the concrete class name. A
+Kotlin subclass of a mapped type maps like its base, and `KotlinType` still names the concrete
+class. Rows added: `kotlinx.io.IOException` (only in a module where KSP resolves the class) to
+`KotlinIOException : IOException`, `NullPointerException` to `KotlinNullReferenceException :
+NullReferenceException`, `CancellationException` to `KotlinOperationCanceledException :
+OperationCanceledException`, and `NoWhenBranchMatchedException` (matched by name, since it is
+`internal`) to `KotlinInvalidOperationException`. The "explicitly NOT mapped" entry for
+`NullPointerException` and the deferred `IOException` entry above no longer hold; the historical
+text is left as written.
+
+This widens the breaking change this ADR already recorded: `catch (KotlinException)` no longer
+catches a subclass of a mapped type, a `NullPointerException`, a `CancellationException` or an
+`IOException`. Runtime-owned routes and the reverse envelope keep exact stdlib names only.

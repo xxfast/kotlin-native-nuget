@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -56,7 +56,7 @@ Pros: subclasses map; no new runtime dependency; the classpath question is answe
 classpath is known (the consumer's KSP run); more optional bases (Okio, ktor 2) are one row each;
 a required parameter turns every missed call site into a compile error instead of a silent
 stdlib-only fallback. Cons: touches every `buildError` emitter; the stdlib rows live in the runtime
-and the C# rows in the processor, so a parity test is needed; reverse envelope gets stdlib rows only.
+and the C# rows in the processor, so a parity test is needed; the runtime-owned routes and the reverse envelope get stdlib rows only.
 
 ### 2. `nuget-runtime` depends on kotlinx-io-core and owns every row
 
@@ -198,10 +198,32 @@ as `NUGET_RUNTIME_EXPORTS`. The ADR-150 `@throws T` cref walks `T`'s KSP superty
 
 ### Reverse envelope
 
-The plugin-generated `nugetKotlinError(t)` passes `::nugetStdlibMappedType`; a new
-`nuget_kotlin_error_cause_mapped_type` export feeds the shim's `NugetKotlinErrors.Map`, which switches
-on the mapped type with the same rows. Stdlib subclasses therefore map identically in both
-directions; IO rows on the reverse envelope are deferred.
+As shipped, the plugin-generated `nugetKotlinError(t)` passes `::nugetStdlibMappedType`, so the
+envelope's `NugetError.mappedType` is populated, but the shim's `NugetKotlinErrors.Map` is
+**unchanged**: no `nuget_kotlin_error_cause_mapped_type` export was added, and `Map` still switches
+on the concrete `kotlinType` with its original exact-name table. A reverse-side subclass of a
+mapped type, `NullPointerException`, and the IO family therefore still arrive as `KotlinException`
+there. What the reverse envelope does inherit is the null-message rule: a Kotlin exception with no
+message now reads its Kotlin type name, not `Kotlin error`. The original design (a mapped-type
+export feeding `Map`) is deferred with the shared `BuildMapped` (ROADMAP.md).
+
+### Scope of the IO row
+
+The `kotlinx.io.IOException` row exists only where the module's own classifier does, that is on the
+generated forward call sites, including the forward suspend and Flow routes. Routes the runtime owns
+pass `::nugetStdlibMappedType` and get stdlib rows only, because the runtime cannot see the
+module's KSP lookup: `nuget_suspend_func{0..3}_invoke` (a Kotlin suspend lambda invoked from C#),
+`nuget_stateflow_collect`, and the reverse envelope. An `IOException` thrown on those routes
+arrives as `KotlinException`. Fixing it needs the module lookup to reach the runtime, by per-object
+capture or a per-library registration (ROADMAP.md).
+
+### `@throws` name resolution
+
+KSP exposes no file imports, so the ADR-150 `@throws T` name resolves as written when it is
+qualified; otherwise in the declaration's own package, then `kotlin.`,
+`kotlin.coroutines.cancellation.` and `kotlinx.io.`. The resolved class is walked to the first row it
+IS-A. Only when nothing resolves does the simple name match a non-optional row, so an unimported
+`kotlinx.io.IOException` never crefs `KotlinIOException` by name alone.
 
 ### Spikes
 
@@ -287,7 +309,7 @@ System.Runtime.CompilerServices.SwitchExpressionException base=System.InvalidOpe
 - **ADR-029 amended:** matching is by hierarchy, most specific first; three rows added
   (`kotlinx.io.IOException`, `NullPointerException`, `NoWhenBranchMatchedException`) plus the
   `CancellationException` row.
-- **Deferred:** IO rows on the reverse envelope; `okio.IOException` and ktor 2's IOException rows;
+- **Deferred:** hierarchy and IO rows on the reverse envelope and on the runtime-owned routes; `okio.IOException` and ktor 2's IOException rows;
   finer rows (`EOFException -> EndOfStreamException`, `FileNotFoundException`,
   `IndexOutOfBoundsException`, `UninitializedPropertyAccessException`); a forward error trace; sharing
   `BuildMapped` with the reverse shim (ROADMAP.md:221).

@@ -13,7 +13,7 @@ import kotlin.time.Duration.Companion.milliseconds
 // The custom exception classes are `internal` on purpose, like `OverfedCatException` and
 // `CatNapException`: they are only ever thrown, never part of the exported surface.
 
-// A subclass of kotlinx.io.IOException: must arrive as KotlinIOException with the concrete KotlinType.
+// A subclass of kotlinx.io.IOException: must arrive as KotlinIOException with its own KotlinType.
 internal class LitterBoxJammedException(message: String) : IOException(message)
 
 // A null-message subclass of a mapped stdlib type: must arrive as KotlinInvalidOperationException,
@@ -42,7 +42,7 @@ suspend fun deliverLitter(catName: String): String {
   return "fresh litter delivered for $catName"
 }
 
-// --- IOException as a cause: the outer node maps by its own row, the inner node to KotlinIOException ---
+// --- IOException as a cause: outer node maps by its own row, the inner to KotlinIOException ---
 fun scoopAll(catName: String): String {
   if (catName == "Oreo") throw IllegalStateException("scoop failed", IOException("the bag split"))
   return "$catName's whole house is scooped"
@@ -63,11 +63,13 @@ fun ownerName(catName: String): String {
 // --- CancellationException on a synchronous call → KotlinOperationCanceledException ---
 // Ordered ahead of IllegalStateException (its Kotlin/Native superclass).
 fun cancelBathTime(catName: String): String {
-  if (catName == "Oreo") throw CancellationException("Oreo cancelled bath time by hiding under the bed")
+  if (catName == "Oreo") {
+    throw CancellationException("Oreo cancelled bath time by hiding under the bed")
+  }
   return "$catName had a lovely bath"
 }
 
-// --- kotlin.NoWhenBranchMatchedException (internal class, matched by name) → KotlinInvalidOperationException ---
+// --- kotlin.NoWhenBranchMatchedException (matched by name) → KotlinInvalidOperationException ---
 @Suppress("INVISIBLE_REFERENCE", "INVISIBLE_MEMBER")
 fun pickLitterBrand(catName: String): String {
   if (catName == "Oreo") throw NoWhenBranchMatchedException()

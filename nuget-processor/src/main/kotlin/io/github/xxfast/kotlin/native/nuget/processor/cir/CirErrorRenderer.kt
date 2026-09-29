@@ -5,7 +5,7 @@ internal enum class KotlinExceptionMatch {
   /** `t is T`: the row's class and every subclass. */
   IS,
 
-  /** `t::class.qualifiedName == T`: the class is `internal` in the stdlib, so `is` cannot name it. */
+  /** `t::class.qualifiedName == T`: the class is `internal` in the stdlib, `is` cannot name it. */
   NAME,
 }
 
@@ -191,7 +191,7 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   // only ever arrives when the module's `nugetMappedType` carries the row.
   appendLine("            mappedType switch")
   appendLine("            {")
-  for (row in KOTLIN_EXCEPTION_TYPES) {
+  KOTLIN_EXCEPTION_TYPES.forEach { row ->
     appendLine("                \"${row.kotlinType}\" =>")
     appendLine("                    new ${row.csharpType}(kotlinType, message, stackTrace, inner),")
   }
