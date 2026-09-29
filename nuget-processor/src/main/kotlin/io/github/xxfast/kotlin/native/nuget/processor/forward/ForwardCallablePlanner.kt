@@ -640,6 +640,21 @@ internal data class ForwardCallablePlanCatalog(
         plan.invocation.symbol.substringBeforeLast('.') == owner
   }
 
+  /**
+   * ADR-006 amendment: the planned member functions of enum [owner], in planning order. Off the
+   * catalog for the reason [objectMethods] is: an overload's `_$n` symbol is underivable.
+   */
+  fun enumMethods(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
+    plan.invocation.origin == ForwardCallableOrigin.ENUM_MEMBER &&
+        plan.invocation.symbol.substringBeforeLast('.') == owner
+  }
+
+  /** ADR-006 amendment: the planned companion `val`/`var`s of enum [owner], in planning order. */
+  fun enumCompanionProperties(owner: String): List<ForwardPropertyPlan> = propertyPlans.filter { plan ->
+    plan.position == ForwardPropertyPosition.COMPANION &&
+        plan.symbol.substringBeforeLast('.') == "$owner.Companion"
+  }
+
   /** ADR-095: the planned companion members of class [owner], in planning order. See above. */
   fun companionMethods(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
     plan.invocation.origin == ForwardCallableOrigin.COMPANION &&
@@ -857,6 +872,18 @@ internal class ForwardCallablePlanner(
       // ADR-013 renders a companion's members as the owning class's statics, so the hole is on the
       // class -- which is what `forwardDiagnosticOwner()` returns for a companion.
       classes.forEach { cls -> addAll(companionEntries(cls).ownedBy(cls.forwardDiagnosticOwner())) }
+      // ADR-006 amendment: an enum's own functions and its companion's functions, both rendered in
+      // `{Enum}Extensions`, so a skip is named on the enum. No suspend route is keyed to an enum
+      // companion (the class suspend route reads `classes`), so a suspend one is named here rather
+      // than left a silent SUSPEND deferral.
+      enums.forEach { enum ->
+        addAll(enumEntries(enum).ownedBy(enum.forwardDiagnosticOwner()))
+        addAll(
+          companionEntries(enum)
+            .map { entry -> entry.namedSuspend() }
+            .ownedBy(enum.forwardDiagnosticOwner())
+        )
+      }
       valueClasses.forEach { cls ->
         addAll(valueClassEntries(cls).ownedBy(cls.forwardDiagnosticOwner()))
       }
@@ -2013,6 +2040,76 @@ internal class ForwardCallablePlanner(
     // measured, cells 3a/13a/18a/22a, so every deferral here is a drop, with no exemption.
     return members.map { member -> entryFor(member) }.nameUnroutedPositions()
   }
+
+  /**
+   * ADR-006 amendment: the functions declared in an `enum class` body, planned on the enum value as
+   * receiver (the ordinal ADR-132 already lowers: `Mood.entries[mood]` / `(int)mood`).
+   *
+   * `declarations`, not `getAllFunctions()`: an inherited `compareTo` is not something the author
+   * wrote on the enum. [isCompilerOwnedMember] removes `Any`'s three, and the compiler's synthesized
+   * `values()` / `valueOf()` are removed by name. No ABSTRACT skip: an `abstract fun` whose bodies
+   * live on the entries is exactly what `Mood.entries[mood].f()` dispatches. No legacy route is
+   * keyed to an enum, so every deferral is a named drop, SUSPEND included.
+   */
+  private fun enumEntries(enum: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
+    val owner: String = enum.qualifiedName?.asString() ?: return emptyList()
+    val type: BridgeType = classifier.classify(enum.asStarProjectedType())
+    if (type !is BridgeType.Enum) return emptyList()
+    val prefix: String = enum.nativePrefix(symbols)
+    val occurrences: MutableMap<String, Int> = mutableMapOf()
+    val members: List<KSFunctionDeclaration> = enum.declarations
+      .filterIsInstance<KSFunctionDeclaration>()
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { member -> !member.isCompilerOwnedMember(enum) }
+      .filter { member -> member.simpleName.asString() !in ENUM_SYNTHESIZED_FUNCTIONS }
+      .toList()
+
+    fun entryFor(function: KSFunctionDeclaration): ForwardCallableCatalogEntry {
+      val name: String = function.simpleName.asString()
+      val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
+      val suffix: String = if (occurrence == 1) "" else "_$occurrence"
+      val symbol = "$owner.$name$suffix"
+      val structural: ForwardPlanSkipReason? = when {
+        function.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
+        function.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
+        else -> null
+      }
+      if (structural != null) {
+        return ForwardCallableCatalogEntry.Skipped(symbol, structural, node = function).namedSuspend()
+      }
+      return planOrSkip(
+        symbol = symbol,
+        publicName = name.replaceFirstChar { it.uppercase() },
+        exportName = "${prefix}_${toCName(name)}$suffix",
+        receiver = ForwardReceiver.Value(type),
+        parameters = function.parameters.map { parameter ->
+          parameter.bridgeName() to classifier.classify(parameter.type.resolve())
+        },
+        result = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+        origin = ForwardCallableOrigin.ENUM_MEMBER,
+        target = owner,
+        member = name,
+        node = function,
+        defaults = declaredDefaults(function.parameters, memberDefaultFlags(function)),
+        doc = function.forwardKdoc(expects).forParameters(function.parameters),
+      )
+    }
+    return members.map { member -> entryFor(member) }.nameUnroutedPositions()
+  }
+
+  /**
+   * ADR-006 amendment: a SUSPEND deferral on an enum owner has no suspend route to defer to, so it
+   * becomes the named structural drop `extensionEntry` already uses for a suspend extension.
+   */
+  private fun ForwardCallableCatalogEntry.namedSuspend(): ForwardCallableCatalogEntry =
+    if (this is ForwardCallableCatalogEntry.Skipped && reason == ForwardPlanSkipReason.SUSPEND) {
+      ForwardCallableCatalogEntry.Skipped(
+        symbol, ForwardPlanSkipReason.UNROUTED_POSITION, node = node,
+        detail = ForwardPlanSkipReason.SUSPEND.name, structural = true,
+      )
+    } else {
+      this
+    }
 
   private fun companionEntries(cls: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val owner: String = cls.qualifiedName?.asString() ?: return emptyList()
@@ -4853,3 +4950,6 @@ private fun KSNode?.declaredResultType(): KSType? = when (this) {
   is KSPropertyDeclaration -> type.resolve()
   else -> null
 }
+
+/** ADR-006 amendment: the functions the compiler writes on every `enum class`, which no author declared. */
+private val ENUM_SYNTHESIZED_FUNCTIONS: Set<String> = setOf("values", "valueOf")

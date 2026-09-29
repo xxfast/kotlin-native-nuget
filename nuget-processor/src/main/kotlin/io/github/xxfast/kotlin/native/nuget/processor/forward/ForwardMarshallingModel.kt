@@ -673,6 +673,14 @@ internal enum class ForwardCallableOrigin {
   COPY,
 
   /**
+   * ADR-006 amendment: a function declared in an `enum class` body. The receiver is the enum value
+   * (`Value(BridgeType.Enum)`), so the Kotlin call is `Mood.entries[mood].isLoudNow()`, a member
+   * call that dispatches an `abstract fun` to each entry's own body. C# renders it as an extension
+   * method in the enum's `{Enum}Extensions` partial class.
+   */
+  ENUM_MEMBER,
+
+  /**
    * Value-class constructors, computed properties, and methods. Reconstruction of the value class
    * from its underlying wire value is owned by the VALUE_CLASS emitters (ADR-014 / ADR-035).
    */

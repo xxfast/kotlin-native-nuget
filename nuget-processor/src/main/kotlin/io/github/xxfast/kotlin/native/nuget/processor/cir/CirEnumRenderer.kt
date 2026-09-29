@@ -38,9 +38,10 @@ internal fun StringBuilder.renderEnumExtensions(enum: CirEnum) {
   appendLine("    public static partial class $className")
   appendLine("    {")
 
-  // ADR-006 amendment: projected off the enum's ENUM_MEMBER property plans, so each extern carries
-  // the error slot, each getter throws the mapped Kotlin exception, a `var` binds `SetX`, and the
-  // author's KDoc renders. The member renderer is the one every other projected member uses.
+  // ADR-006 amendment: projected off the enum's plans (ENUM_MEMBER properties and functions as
+  // `this {Enum}` extensions, companion functions and `val`/`var`s as plain statics), so each extern
+  // carries the error slot, each member throws the mapped Kotlin exception, a `var` binds `SetX`,
+  // and the author's KDoc renders. The member renderer is the one every other projected member uses.
   enum.extensionMembers.forEach { member -> renderMember(member, className) }
 
   appendLine("    }")

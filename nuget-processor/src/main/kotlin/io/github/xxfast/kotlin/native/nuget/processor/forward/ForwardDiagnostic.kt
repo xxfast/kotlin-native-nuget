@@ -196,14 +196,6 @@ internal enum class ForwardDiagnosticKind(
    *  ratified permanent by ADR-082, not a silently-bridged member. */
   SKIPPED_INHERITED_MEMBER(ForwardDiagnosticSeverity.WARNING),
 
-  /** A function declared in an `enum class` body or in an enum's `companion object`. ADR-006 binds
-   *  an enum's own instance properties only today (as `{Enum}Extensions` methods), and no route
-   *  declares an enum's functions, so they used to vanish from both halves with no diagnostic.
-   *  Named per ADR-064 so nothing on an enum disappears silently; binding them as extension
-   *  methods is separate ROADMAP work. The companion's *properties* report under
-   *  [SKIPPED_UNSUPPORTED_PROPERTY], the position kind. */
-  SKIPPED_ENUM_MEMBER_FUNCTION(ForwardDiagnosticSeverity.WARNING),
-
   /** `out`/`in` variance on a class type parameter is dropped; the member still binds, so this is
    *  a note, not a skip. */
   INFO_DROPPED_VARIANCE(ForwardDiagnosticSeverity.INFO),
@@ -884,7 +876,8 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       // ROADMAP Phase 4 line 23 fold-in: the suspend route covers top-level functions and class,
       // sealed-arm members, never an extension.
       ForwardPlanSkipReason.SUSPEND.name ->
-        "a `suspend` function binds at the top level and on a class, but not as an extension"
+        "a `suspend` function binds at the top level and on a class, but not as an extension " +
+          "or on an enum or its companion"
 
       ForwardPlanSkipReason.GENERIC.name ->
         "a generic type binds at a top-level function return, and a generic function at a " +
@@ -1294,8 +1287,8 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
           "a property of an ordinary class"
 
     ForwardPlanSkipReason.SUSPEND.name ->
-      "declare it as a top-level `suspend fun` taking the receiver as its first parameter, or as " +
-          "a `suspend` member of the receiver's class"
+      "declare it as a top-level `suspend fun` taking the receiver (or the enum value) as its " +
+          "first parameter, or as a `suspend` member of a class"
 
     ForwardPlanSkipReason.GENERIC.name ->
       "expose a non-generic wrapper (`fun f(value: Int)` beside `fun <T> f(value: T)`), or move " +

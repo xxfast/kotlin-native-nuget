@@ -163,7 +163,12 @@ internal class ForwardPropertyPlanner(
     enums: List<KSClassDeclaration> = emptyList(),
   ): List<ForwardPropertyPlan> = buildList {
     enums.forEach { enum ->
-      inOwner(enum.forwardDiagnosticOwner()) { addAll(enumMemberProperties(enum)) }
+      inOwner(enum.forwardDiagnosticOwner()) {
+        addAll(enumMemberProperties(enum))
+        // ADR-006 amendment: a companion `val`/`var` is a static property of `{Enum}Extensions`,
+        // planned as a class companion's is (`const val` stays excluded, and named elsewhere).
+        addAll(companionProperties(enum))
+      }
     }
     classes.forEach { cls ->
       // ADR-013: a companion's properties render as the class's statics, so both walks share the

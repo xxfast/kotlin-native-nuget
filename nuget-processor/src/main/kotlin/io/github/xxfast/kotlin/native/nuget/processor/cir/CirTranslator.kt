@@ -28,6 +28,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPlanProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPropertyProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.enumMembersOf
+import io.github.xxfast.kotlin.native.nuget.processor.forward.enumReceiverName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
@@ -755,9 +756,8 @@ internal fun translate(
     val qualifiedName: String = enum.qualifiedName?.asString() ?: return@forEach
     val key: Pair<String, String> =
       namespaceOf(enum.packageName.asString()) to enum.extensionReceiverKey()
-    val receiverName: String =
-      enum.nestedCsName().lowercase().replace(".", "").csharpParameterName()
-    val memberMethods: List<SpelledMethod> = callableCatalog.propertyPlans
+    val receiverName: String = enum.enumReceiverName()
+    val propertyMethods: List<SpelledMethod> = callableCatalog.propertyPlans
       .enumMembersOf(qualifiedName)
       .flatMap { plan ->
         val keyword: String = if (plan.setter != null) "var" else "val"
@@ -765,13 +765,37 @@ internal fun translate(
           .filterIsInstance<CirMethod>()
           .map { method -> SpelledMethod(method, "`$keyword ${plan.kotlinName}`", enum) }
       }
-    if (memberMethods.isEmpty()) return@forEach
+    // ADR-006 amendment: the member functions and the companion functions render into the same
+    // class, so a member `fun description()` beside `val description`, or a companion
+    // `fun describe(mood: Mood)` beside a member `fun describe()`, is the same collision.
+    fun ForwardCallablePlan.spelled(where: String, members: List<CirMember>): List<SpelledMethod> =
+      members.filterIsInstance<CirMethod>().map { method ->
+        SpelledMethod(method, "$where`fun ${invocation.member ?: publicSignature.name}`", enum)
+      }
+    val functionMethods: List<SpelledMethod> = callableCatalog.enumMethods(qualifiedName)
+      .flatMap { plan -> plan.spelled("", ForwardCirPlanProjection.extension(plan, context.libraryName, receiverName)) }
+    val companionMethods: List<SpelledMethod> = callableCatalog.companionMethods(qualifiedName)
+      .flatMap { plan ->
+        plan.spelled("companion ", ForwardCirPlanProjection.static(plan, context.libraryName))
+      }
+    val memberMethods: List<SpelledMethod> = propertyMethods + functionMethods + companionMethods
+    // A companion `val`/`var` is a static PROPERTY there, and C# forbids a property sharing its name
+    // with any other member of the class, method or property (CS0102), whatever the parameters.
+    val staticProperties: List<SpelledProperty> = callableCatalog.enumCompanionProperties(qualifiedName)
+      .flatMap { plan ->
+        val keyword: String = if (plan.setter != null) "var" else "val"
+        ForwardCirPropertyProjection.staticProperty(plan, context.libraryName)
+          .filterIsInstance<CirProperty>()
+          .map { property -> SpelledProperty(property.name, "companion `$keyword ${plan.kotlinName}`", enum) }
+      }
+    if (memberMethods.isEmpty() && staticProperties.isEmpty()) return@forEach
     emitEnumExtensionSignatureCollisions(
       enumName = enum.simpleName.asString(),
       container = "${key.first}.${key.second.replace(".", "")}Extensions",
       members = memberMethods,
       extensions = extensionClassMethods[key].orEmpty(),
       logger = logger,
+      properties = staticProperties,
     )
   }
 
