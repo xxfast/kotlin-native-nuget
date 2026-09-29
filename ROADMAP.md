@@ -9,35 +9,35 @@ Maintenance rules:
 
 ## First stable release (1.0.0)
 
-Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is hardening and acts as the release candidate, and 1.0.0 adds policy and docs with no breaks. An item that would force a semver-major after 1.0.0 lands in 0.9.0; additive work stays in its phase below and ships in 1.x. At 1.0.0 the forward direction (Kotlin to C#) is stable, and semver covers the Gradle DSL, the task names, the fixed generated C# types, the `nuget_*` runtime ABI, the diagnostic codes and `NugetDiagnostics.json`. The reverse direction (C# to Kotlin) is experimental behind an opt-in and may break in 1.x: it binds 34.0% of public members over nine real packages (`nuget-plugin/src/test/resources/dogfood/SUMMARY.md`) and its output has never been compiled against one. The Maven artifact ids stay `nuget-plugin`, `nuget-processor` and `nuget-runtime`.
+Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is hardening and acts as the release candidate, and 1.0.0 adds policy and docs with no breaks. Scope agreed 2026-09-29, after the 0.8.0 release; a claim below is verified (read in code or spiked) or inferred (not run), as labelled. An item that would force a semver-major after 1.0.0 lands in 0.9.0; additive work stays in its phase below and ships in 1.x. At 1.0.0 the forward direction (Kotlin to C#) is stable, and semver covers the Gradle DSL, the task names, the fixed generated C# types, the `nuget_*` runtime ABI, the diagnostic codes and `NugetDiagnostics.json`. The reverse direction (C# to Kotlin) is experimental behind an opt-in and may break in 1.x: it binds 34.0% of public members over nine real packages (`nuget-plugin/src/test/resources/dogfood/SUMMARY.md`) and its output has never been compiled against one. The Maven artifact ids stay `nuget-plugin`, `nuget-processor` and `nuget-runtime`.
 
 ### 0.9.0: breaking changes
 
-- [ ] **Two packages built by this plugin cannot be referenced from one .NET project** (`CS0101` on the global-namespace `INugetHandle`, `NugetHandleTag` and `NugetTrace`, verified by a scratch spike). [ADR-178](docs/adr/178-multi-package-coexistence.md) (Proposed) moves every internal generated type under its package's root namespace, forward and reverse, puts the exception family and `Optional<T>` in a compiled contract assembly, and guards the native file name at pack time. ([details](docs/research/roadmap/multi-package-coexistence.md))
+- [ ] **Two packages built by this plugin cannot be referenced from one .NET project** (`CS0101` on the global-namespace `INugetHandle`, `NugetHandleTag` and `NugetTrace`, verified by a scratch C# spike that mirrors the generated shape; the real `Interop.cs` was not compiled twice and no two-package fixture exists). The emission is verified at `cir/CirRenderer.kt:20-33`, and the public fixed types (`KotlinException`, `KotlinFlow<T>`, `Optional<T>`) are duplicated in each package's root namespace. With the internal types moved per package it compiles, but `catch (KotlinException)` is ambiguous (`CS0104`) and a qualified catch silently misses the other package's exception; the reverse shims collide too (ten internal types in the hardcoded namespace `IoGithubXxfast.KotlinNativeNuget`, `NugetGenerateShimsTask.kt:2634,3184`); two packages shipping the same native file name build with no warning and one file wins. [ADR-178](docs/adr/178-multi-package-coexistence.md) (Proposed) moves every internal generated type under its package's root namespace, forward and reverse, puts the exception family and `Optional<T>` in a compiled contract assembly, and guards the native file name at pack time; the namespace move of the exception family and `Optional<T>` is the break. Unverified: that two Kotlin/Native libraries in one process keep separate `nuget_*` state, and NativeAOT for the contract assembly; a two-publisher fixture on CI is the check for both. ([details](docs/research/roadmap/multi-package-coexistence.md))
 - [ ] **[ADR-109](docs/adr/109-duplicate-type-hazard.md)'s claim that KGP/KSP resolve the `nuget.publishedScopes` option `Provider` only after every project is evaluated is Inferred, not spiked.** A two-publisher fixture build (a second real publishing Gradle module, or a TestKit functional test) would verify it; if wrong, a publisher evaluated after the reader silently drops out of the value (a missing warning, never wrong output). Priced as its own item since no such fixture exists in the root build today.
-- [ ] Gradle DSL on `Property<T>`: drop the three `afterEvaluate` blocks in `NugetPlugin.kt`, add a `@DslMarker`, make `versionPropsFile` and `prebuiltRuntimes` a `RegularFileProperty` and a `DirectoryProperty`, and make a second `publish {}` call merge instead of replace.
-- [ ] The target framework is hardcoded to `net8.0` (`NugetPlugin.kt`); make it configurable.
-- [ ] Internalise leaked plugin API (the `rir` package, `generateKotlinStubs`, `generateCSharpShims`, `generateCsproj`, `GeneratedFile`, `NugetPusher` and its request and result types) and turn on `explicitApi()` in every published module.
-- [ ] `include` / `exclude` mean Kotlin packages in `publish {}` and C# namespaces in `bind {}`; rename one pair.
-- [ ] One naming scheme for task names: `packNuget` and `publishNuget` are verb-first, `nugetGen`, `nugetRestore` and the rest are `nuget`-first, and `nugetGen` is vague.
-- [ ] One casing and one prefix set for diagnostic codes across forward (`SKIPPED_*`) and reverse (`skipped_*`), and a schema version on `NugetDiagnostics.json` and `reverse-ir.json`.
-- [ ] Rename the generated C# `Optional<T>` and close `KotlinException`'s public constructor; the names are decided together with ADR-178's contract assembly.
+- [ ] Gradle DSL on `Property<T>`: drop the three `afterEvaluate` blocks in `NugetPlugin.kt`, add a `@DslMarker`, make `versionPropsFile` and `prebuiltRuntimes` a `RegularFileProperty` and a `DirectoryProperty`, and make a second `publish {}` call merge instead of replace. Verified (`NugetExtension.kt`, `NugetPublishConfig.kt`, `NugetPlugin.kt:43,273,402`).
+- [ ] The target framework is hardcoded to `net8.0` (`NugetPlugin.kt:75`, verified); make it configurable.
+- [ ] Internalise leaked plugin API (the `rir` package, `generateKotlinStubs`, `generateCSharpShims`, `generateCsproj`, `GeneratedFile`, `NugetPusher` and its request and result types) and turn on `explicitApi()` in every published module. Verified: no build script calls `explicitApi()`.
+- [ ] `include` / `exclude` mean Kotlin packages in `publish {}` and C# namespaces in `bind {}`; rename one pair. Verified.
+- [ ] One naming scheme for task names: `packNuget` and `publishNuget` are verb-first, `nugetGen`, `nugetRestore` and the rest are `nuget`-first, and `nugetGen` is vague. Verified.
+- [ ] One casing and one prefix set for diagnostic codes across forward (`SKIPPED_*`) and reverse (`skipped_*`), and a schema version on `NugetDiagnostics.json` and `reverse-ir.json`. Verified.
+- [ ] Rename the generated C# `Optional<T>` and close `KotlinException`'s public constructor (verified); the names are decided together with ADR-178's contract assembly.
 - [ ] Add `@ExperimentalNugetCoroutineApi` opt-in annotation and KSP warning for classes with suspend methods (see [ADR-021](docs/adr/021-structured-concurrency.md))
-- [ ] Decide whether `nuget_gc_collect` and `nuget_live_handles` belong in the frozen `nuget_*` ABI or behind a diagnostics switch.
+- [ ] Decide whether `nuget_gc_collect` and `nuget_live_handles` belong in the frozen `nuget_*` ABI or behind a diagnostics switch. Verified that both are exported today.
 - [ ] Decide the forward finalizer contract: [ADR-003](docs/adr/003-memory-management-across-bridge.md) lists a finalizer as a mitigation and [ADR-121](docs/adr/121-kotlin-object-collectability-after-last-dispose.md) says none. The callback-payload wrapper item under Performance & Resource Hygiene depends on the answer.
 - [ ] Decide the minimum C# version: [ADR-013](docs/adr/013-extension-property-mapping.md) defers C# 14 extension properties to a major bump.
 - [ ] The reverse opt-in itself: the marker or DSL switch that makes the reverse direction experimental.
-- [ ] Reverse only, not a 1.0.0 blocker: the generated `NugetManagedException` is `internal` (`NugetGenerateBindingsTask.kt`), so Kotlin cannot catch it by type; fold it onto the runtime's public class.
-- [ ] Reverse only, not a 1.0.0 blocker, inferred: `toEnumScreamingSnake` turns `HTTPStatus` into `H_T_T_P_STATUS`.
+- [ ] Reverse only, not a 1.0.0 blocker: the generated `NugetManagedException` is `internal` (`NugetGenerateBindingsTask.kt:5368`, verified), so Kotlin cannot catch it by type; fold it onto the runtime's public class.
+- [ ] Reverse only, not a 1.0.0 blocker, inferred: `toEnumScreamingSnake` turns `HTTPStatus` into `H_T_T_P_STATUS`. Take both reverse items in 0.9.0 when cheap.
 
 ### 0.10.0: hardening
 
-- [ ] `linuxArm64` is in `KONAN_TO_RID` (`NugetPlugin.kt`) but `nuget-runtime` does not build that target (`nuget-runtime/build.gradle.kts`); add the target or withdraw the claim. The resolution failure is inferred.
-- [ ] CI links and tests a Linux leg; today two of five RIDs run end to end.
-- [ ] `release.yml` runs `packNuget` and `IntegrationTests` before it publishes.
+- [ ] `linuxArm64` is in `KONAN_TO_RID` (`NugetPlugin.kt`, verified) but `nuget-runtime` does not build that target (`nuget-runtime/build.gradle.kts:11-14`, verified); add the target or withdraw the claim. The resolution failure is inferred.
+- [ ] CI links and tests a Linux leg; today two of five RIDs run end to end. Verified.
+- [ ] `release.yml` runs `packNuget` and `IntegrationTests` before it publishes; today it runs neither. Verified.
 - [ ] [ADR-165](docs/adr/165-publish-nuget-task.md)'s three Unverified claims need one real push to nuget.org and one to GitHub Packages before the next release ([details](docs/backlog/adr-165-unverified-claims-need-a-real-push.md))
-- [ ] **Nothing checks that two packaged targets generate the same C# API, and after [ADR-074](docs/adr/074-expect-actual-declarations.md) they can legitimately differ.** ([details](docs/backlog/nothing-checks-two-packaged-targets-generate-same.md))
-- [ ] Triage the backlog, then fix every live leak, wrong-behaviour and silent-omission item in the sections below; the 2026-09-29 audit counted seven and ten, and found at least one entry already fixed.
+- [ ] **Nothing checks that two packaged targets generate the same C# API, and after [ADR-074](docs/adr/074-expect-actual-declarations.md) they can legitimately differ.** `packNuget` ships the first target's `Interop.cs` with every target's binary, verified. ([details](docs/backlog/nothing-checks-two-packaged-targets-generate-same.md))
+- [ ] Triage the backlog, then fix every live leak, wrong-behaviour and silent-omission item in the sections below; the 2026-09-29 audit counted seven leak or wrong-behaviour items and ten silent omissions, and found at least one entry, the triple-dispose one, already fixed. Verified.
 - [ ] The AOT publish runs the full `IntegrationTests` suite, not only the smoke test; it is a different runtime and the leak harness has never run under it. Rung 8 of the [ladder](docs/backlog/zero-leak-evidence-ladder.md). Also unverified under NativeAOT: the statically-instantiated generic `NugetAsyncEnumeration<T>` [ADR-156](docs/adr/156-iasyncenumerable-to-flow.md) generates per method — `IntegrationTests` runs JIT net10.0 and `scripts/verify.sh` only compiles the AOT consumer check, it never runs it.
 - [ ] [ADR-154](docs/adr/154-forward-dependency-type-admission.md)'s `admit(...)` was never exercised against a real published klib (ktor's `Url`/`LogLevel`, kermit's `Severity`, the shapes it was designed around); only the `:test-models` fixture proves it
 - [ ] **`IntegrationTests.csproj` never copies `xunit.runner.json` to its output directory, so `parallelizeTestCollections: false` was never actually honoured; its test collections have run in parallel all along (trx per-test durations summed to 44.9s against a 15.6s wall clock).** Verified. This, not process sharing alone, is the real mechanism behind ADR-120's cross-test deltas. `LeakTests.csproj` copies the file explicitly; whether `IntegrationTests` should too is open, since it would roughly triple that suite's wall time by serializing it.
@@ -48,6 +48,16 @@ Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is
 - [ ] A binary-compatibility-validator baseline for the published modules, checked in CI.
 - [ ] A memory, threading and disposal topic that states the forward finalizer contract decided in 0.9.0.
 - [ ] A troubleshooting topic, a 0.x to 1.0 migration guide and a changelog.
+
+### Deferred to 1.x
+
+Additive, so none of it forces a major; each stays in its phase below: `SharedFlow`, `Flow` as a parameter or type argument, the wider `MutableStateFlow` surface, `Result`'s `TryRun`, reverse exception fidelity, events, `ValueTask`, operators, indexers, arrays, generic interfaces, the crossing benchmark, the size gate, the leak-ladder rungs beyond what the disposal contract needs, `LibraryImport`, record classes.
+
+### Open decisions
+
+- [ ] ADR-178: accept the recommendation, and choose its delivery (a nuget.org contract package or a DLL embedded in each package).
+- [ ] The names for the `include` / `exclude` rename, the task names, the diagnostic codes and the C# fixed types.
+- [ ] Each contract in 0.9.0 marked "Decide", and whether `@ExperimentalNugetCoroutineApi` ships or is dropped.
 
 ## Phase 1: Basic bridging
 
