@@ -979,6 +979,20 @@ internal object ForwardCirPlanProjection {
         ),
       )
 
+      // ADR-160 amendment: the OWNED lambda handle becomes ADR-012's `KotlinFunc<...>` (or
+      // `KotlinAction<...>`), which owns it from here and releases it on `Dispose`. `Invoke` goes
+      // through the shared arity-generic `NugetFunctionNative` exports the tracker declares.
+      is BridgeType.ReturnedLambda -> {
+        val lambdaType: String = result.forwardPublicCsharpType()
+        CirResultProjection(
+          returnType = lambdaType,
+          nativeReturnType = "IntPtr",
+          body = checkedPointerBody(
+            nativeName, callArguments, "return new $lambdaType(nativeResult);", prelude, cleanup,
+          ),
+        )
+      }
+
       // ADR-040: the public return type is the projected interface (`IPet`); construction uses
       // the generated backing wrapper class (`Pet`) instead.
       is BridgeType.Interface -> CirResultProjection(

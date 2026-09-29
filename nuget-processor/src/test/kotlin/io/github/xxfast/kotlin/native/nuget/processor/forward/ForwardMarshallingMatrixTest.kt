@@ -658,6 +658,7 @@ class ForwardMarshallingMatrixTest {
     // ADR-160: a callback is a parameter-position-only type; the matrix rows here are return
     // positions, so it has no row of its own and only needs a label.
     is BridgeType.Callback -> "Callback"
+    is BridgeType.ReturnedLambda -> "ReturnedLambda"
     BridgeType.Unit -> "Unit"
     is BridgeType.Primitive -> "Primitive(${type.kind})"
     BridgeType.Char -> "Char"

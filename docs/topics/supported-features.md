@@ -108,7 +108,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 
 | Kotlin | ⇄ | C# | Notes | Docs |
 |---|:-:|---|---|---|
-| `(T) -> R` (Kotlin → C#) | → | `Func<>` / `Action<>` | Invoked from C#; a `Unit` return binds `KotlinAction`. A value class payload/result crosses boxed; nullable args carry `?`; an unnameable one skips, named. | [Lambdas and callbacks](lambdas-and-callbacks.md) |
+| `(T) -> R` (Kotlin → C#) | → | `Func<>` / `Action<>` | Invoked from C#; `Unit` binds `KotlinAction`. A top-level function may return one beside parameters. Value class payloads cross boxed; an unspellable type argument skips, named. | [Lambdas and callbacks](lambdas-and-callbacks.md) |
 | `(T) -> R` parameter (C# → Kotlin) | → | `Func<>` / `Action<>` | Per-call, arity 0-3; return may be a scalar, `String`, object or enum. Throwing lambda is catchable. Nullable, `List`/`Map`/`Any`-typed payload, or non-scalar result refuses by name. | [Lambdas and callbacks](lambdas-and-callbacks.md) |
 | stored callback parameter | → | `IDisposable` subscription | Subscribe and dispose from C#; `AddX(null!)` throws `ArgumentNullException`, whatever the Kotlin nullability. A non-`Unit` result or Kotlin-builtin payload refuses the whole pair, named. | [Lambdas and callbacks](lambdas-and-callbacks.md) |
 | Kotlin lambda at a bound delegate parameter | ← | `Func<>` / `Action<>` / `Predicate<T>` / `Comparison<T>` / `Converter<,>` / package-declared `delegate` parameter | A bound method or constructor's delegate parameter takes a plain Kotlin lambda, `Invoke` arity up to 4. The C# delegate owns its lifetime. Async delegates are not bound yet. | [Reverse delegates](reverse-delegates.md) |

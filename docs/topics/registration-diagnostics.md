@@ -210,6 +210,14 @@ to baseline once the base-typed reference is disposed. `LeakTests/LiveHandleTest
 base-typed `suspend`, `Flow` and `StateFlow` calls, and row 9l-race repeats a call with no
 suspension point (`Loaf.area`) 5000 times in a tight loop.
 
+A [top-level function returning a lambda](lambdas-and-callbacks.md#a-top-level-function-that-returns-a-lambda)
+adds one owned handle, the returned `KotlinFunc`, which `Dispose` releases. A parameter the lambda
+captures is not released when the call returns: a C#-implemented interface stays pinned until the
+`KotlinFunc` is disposed and Kotlin's cleaner runs, so a lambda you never dispose keeps it alive.
+Rows 6j to 6n of `LeakTests/LiveHandleTests.cs` cover a captured C#-implemented pet, a captured
+Kotlin `Cat`, value-only parameters, Kotlin throwing before it makes the lambda, and a throwing
+`IPet` factory on the returned lambda, and all return to baseline.
+
 ## Forward direction has no registration step
 
 Kotlin exports called from C# resolve by symbol name through an ordinary P/Invoke: no contract

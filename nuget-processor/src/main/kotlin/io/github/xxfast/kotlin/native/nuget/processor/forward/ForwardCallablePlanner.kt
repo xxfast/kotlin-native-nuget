@@ -167,6 +167,11 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  [ForwardCallableCatalogEntry.Skipped.detail]. */
   UNROUTED_POSITION(droppedFromCSharp = true),
 
+  /** ADR-160 amendment (issue #111 on the plan): a top-level function returning a lambda one of
+   *  whose type arguments C# cannot spell (`() -> Flow<Snapshot>`, `() -> List<Int>`). The
+   *  offending argument's Kotlin name rides in [ForwardCallableCatalogEntry.Skipped.detail]. */
+  LAMBDA_TYPE_ARGUMENT(droppedFromCSharp = true),
+
   /** ADR-064/ADR-082: a value-class member whose signature a supertype declares — inherited,
    *  forwarded by interface delegation (e.g. `CharSequence by value`) or explicitly overridden. */
   INHERITED_MEMBER(droppedFromCSharp = true),
@@ -1947,9 +1952,11 @@ internal class ForwardCallablePlanner(
   ).nameUnroutedPosition { skipped ->
     // ADR-064 amendment (2026-09-13): the top-level owner has exactly one legacy route for these
     // reasons — `addFunctionExports` / `translateSpecializedFunction`, keyed on a
-    // generic-declaration RETURN. It carries both the lambda return (`(String) -> String` is
-    // `Function1`, measured RE) and the generic-type return (`Box<Int>`, measured emitting), and
-    // since the amendment it refuses a Flow/StateFlow return, which is what makes cell 4 a named
+    // generic-declaration RETURN. It carries the generic-type return (`Box<Int>`, measured
+    // emitting); the lambda return it also used to carry is plan-owned since the ADR-160
+    // amendment (`BridgeType.ReturnedLambda`, built in `staticEntry`), so the gate refuses it and a
+    // lambda return that does not plan is named here. Since the ADR-064 amendment it refuses a
+    // Flow/StateFlow return, which is what makes cell 4 a named
     // skip instead of a consumer-side CS0246. A PARAMETER of any of those types has no route here
     // at all, and an element-carried one (`List<Box<Int>>`) is unmeasured and therefore named.
     //
@@ -2053,7 +2060,19 @@ internal class ForwardCallablePlanner(
     if (structuralReason != null) {
       return ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = function)
     }
-    val result: BridgeType = function.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit
+    val returnType: KSType? = function.returnType?.resolve()
+    // ADR-160 amendment: a lambda handed OUT is planned at a top-level function's result only (an
+    // object or companion member returning one keeps its named CALLBACK_PROTOCOL skip), whatever
+    // the function's parameters are. Asked before `classify`, which is position-agnostic and
+    // would answer a parameter-position `Callback` or a `lambda` protocol.
+    val result: BridgeType = returnType
+      ?.let { type ->
+        val returnedLambda: BridgeType.ReturnedLambda? =
+          if (origin != ForwardCallableOrigin.TOP_LEVEL) null
+          else classifier.returnedLambdaOrNull(type)
+        returnedLambda ?: classifier.classify(type)
+      }
+      ?: BridgeType.Unit
     val parameters: List<Pair<String, BridgeType>> = function.parameters
       .map { parameter ->
         parameter.bridgeName() to classifier.classify(parameter.type.resolve())
@@ -2632,7 +2651,8 @@ internal class ForwardCallablePlanner(
     if (resultShape == null) {
       return ForwardCallableCatalogEntry.Skipped(
         symbol, requireNotNull(plannedResult.skipReason()), node = node,
-        detail = plannedResult.optInMarkerDetail()
+        detail = (plannedResult as? BridgeType.ReturnedLambda)?.unnameableTypeArgument()
+          ?: plannedResult.optInMarkerDetail()
           ?: plannedResult.actualTypeAliasTargetDetail()
           ?: plannedResult.unexportedDependencyDetail()
           ?: plannedResult.undeclaredTypeDetail()
@@ -3271,6 +3291,10 @@ internal class ForwardCallablePlanner(
     // ADR-147: a `T` result is minted by `NugetHandles.retain` like any other handle.
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.TypeParameter ->
       handleResultShape(this)
+    // ADR-160 amendment: the lambda is minted by `NugetHandles.retain` like any other handle, and
+    // has a shape only when C# can spell every one of its type arguments (issue #111).
+    is BridgeType.ReturnedLambda ->
+      if (unnameableTypeArgument() == null) handleResultShape(this) else null
     // ADR-088: gated on the manifest's Kotlin-implementability flag. Without a
     // `mint{Iface}Bridge`, a plain Kotlin implementation returned here has nothing to become on
     // the C# side, and v1 refuses to emit a route that works for one origin and traps for the
@@ -3935,6 +3959,8 @@ internal class ForwardCallablePlanner(
     // `nativeInputParameters`; this is the wire of each of them, and never of a result (a callback
     // has no result shape).
     is BridgeType.Callback -> ForwardAbiWireType.POINTER
+    // ADR-160 amendment: the one OWNED handle a returned lambda crosses as.
+    is BridgeType.ReturnedLambda -> ForwardAbiWireType.POINTER
     // ADR-107: the error-envelope pointer. Unreachable from a callable plan today (no shape and
     // no input arm admits a Throwable), but it is the wire the property route uses, so naming it
     // here keeps the two planners' answers identical rather than erroring on a live type.
@@ -4061,6 +4087,9 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   // ADR-160: a callback is a parameter-position type only; a `List<(Int) -> Unit>` has no wire at
   // all, so the member skips named rather than half-binding.
   is BridgeType.Callback -> false
+
+  // ADR-160 amendment: a returned lambda binds at a top-level result only, never nested.
+  is BridgeType.ReturnedLambda -> false
 
   // ADR-106: collection components are deferred (the component would need a `nuget_wrap_*` arm
   // over the text form), so `List<Uuid>` skips named rather than half-binding.
@@ -4510,9 +4539,13 @@ internal fun BridgeType.sealedTypeDetail(): String? {
 internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
   BridgeType.Unit, is BridgeType.Primitive -> null
   // ADR-160: only reached from a position a callback cannot bind at -- a RESULT (a Kotlin function
-  // handed OUT is a different mechanism and keeps its own legacy route) or a collection component.
+  // handed OUT is a different mechanism, `ReturnedLambda`, planned at a top-level function only) or
+  // a collection component.
   // A parameter-position callback plans a shape and never asks.
   is BridgeType.Callback -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
+  // ADR-160 amendment: a returned lambda has a shape exactly when every type argument has a C#
+  // spelling, so reaching here means one does not (or it was nested somewhere it cannot bind).
+  is BridgeType.ReturnedLambda -> ForwardPlanSkipReason.LAMBDA_TYPE_ARGUMENT
   BridgeType.Char -> ForwardPlanSkipReason.CHAR
   BridgeType.String -> ForwardPlanSkipReason.STRING
   // ADR-076: defensive only -- shapeOrNull's Instant branch always succeeds, same as CHAR/

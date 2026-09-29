@@ -699,7 +699,7 @@ internal class ForwardPropertyPlanner(
   private fun BridgeType.isSupportedReceiver(): Boolean = when (this) {
     // ADR-160: a callback binds at a parameter position; an extension ON a function type is not a
     // shape either half spells.
-    is BridgeType.Callback -> false
+    is BridgeType.Callback, is BridgeType.ReturnedLambda -> false
 
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Primitive,
     BridgeType.String -> true
@@ -1228,7 +1228,7 @@ internal class ForwardPropertyPlanner(
    *  must decide here rather than fall into an `else`. */
   private fun BridgeType.isReadableComponent(): Boolean = when (this) {
     // ADR-160: not readable at a property position; a function-typed property keeps its own skip.
-    is BridgeType.Callback -> false
+    is BridgeType.Callback, is BridgeType.ReturnedLambda -> false
 
     BridgeType.Char, BridgeType.String, BridgeType.Instant, BridgeType.Duration,
     is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,

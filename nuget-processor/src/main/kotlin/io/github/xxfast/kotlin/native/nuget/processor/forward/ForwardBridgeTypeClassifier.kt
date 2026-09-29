@@ -727,6 +727,44 @@ internal class ForwardBridgeTypeClassifier(
     return BridgeType.Callback(parameters, result)
   }
 
+  /**
+   * ADR-160 amendment: the [BridgeType.ReturnedLambda] for a non-nullable `kotlin.FunctionN`
+   * return, or null for any other type. Position-specific, so [classify] never calls it: the
+   * planner asks only at a top-level function's RESULT.
+   *
+   * Every argument is classified, never refused here: whether C# can spell it is the plan's
+   * question ([BridgeType.ReturnedLambda.unnameableTypeArgument]), so an unspellable one is a
+   * named skip rather than a fall-through to a protocol with no route. An ADR-009 sealed class
+   * argument is carried as its [BridgeType.ObjectHandle], the same unwrap a sealed result takes.
+   */
+  fun returnedLambdaOrNull(type: KSType): BridgeType.ReturnedLambda? {
+    val expanded: KSType = type.expandAliases()
+    if (type.isMarkedNullable || expanded.isMarkedNullable) return null
+    val qualifiedName: String = expanded.declaration.qualifiedName?.asString() ?: return null
+    if (qualifiedName !in LAMBDA_TYPES) return null
+    val resolved: List<KSType?> = expanded.arguments.map { argument -> argument.type?.resolve() }
+    if (resolved.isEmpty()) return null
+    val typeArguments: List<BridgeType> = resolved.map { argument ->
+      if (argument == null) {
+        BridgeType.Unsupported("an unresolved type argument", "unresolved")
+      } else {
+        when (val classified: BridgeType = classify(argument)) {
+          is BridgeType.SpecializedProtocol -> classified.sealedHandle ?: classified
+          is BridgeType.Nullable -> (classified.type as? BridgeType.SpecializedProtocol)
+            ?.sealedHandle?.let(BridgeType::Nullable) ?: classified
+
+          else -> classified
+        }
+      }
+    }
+    val kotlinTypeArguments: List<String> = resolved.map { argument ->
+      val declaration = argument?.expandAliases()?.declaration
+      declaration?.qualifiedName?.asString() ?: declaration?.simpleName?.asString()
+      ?: "an unresolved type argument"
+    }
+    return BridgeType.ReturnedLambda(typeArguments, kotlinTypeArguments)
+  }
+
   /** The payload shapes both callback halves lower, in. See [callbackType]. */
   internal fun BridgeType.isCallbackPayload(): Boolean = when (this) {
     is BridgeType.Primitive, BridgeType.String, is BridgeType.Enum -> true

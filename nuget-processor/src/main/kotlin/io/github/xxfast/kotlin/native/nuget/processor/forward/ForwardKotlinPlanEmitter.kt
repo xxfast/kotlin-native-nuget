@@ -144,8 +144,9 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
     // ADR-147: a `T` result is minted by the same `NugetHandles.retain`; C# reads it back with
     // `NugetMarshal.FromHandle<T>`.
     // ADR-151: a ByteArray result is the same mint; C# reads it back with `NugetMarshal.ReadBytes`.
+    // ADR-160 amendment: a returned lambda is the same mint, wrapped C#-side by `new KotlinFunc`.
     is BridgeType.ObjectHandle, is BridgeType.Interface, is BridgeType.Collection,
-    BridgeType.ByteArray, is BridgeType.TypeParameter -> {
+    BridgeType.ByteArray, is BridgeType.TypeParameter, is BridgeType.ReturnedLambda -> {
       // ADR-081: a collection with a value-class component boxes a projected copy of itself, so the
       // per-element boxes carry the underlying rather than the value class.
       val boxed: String =

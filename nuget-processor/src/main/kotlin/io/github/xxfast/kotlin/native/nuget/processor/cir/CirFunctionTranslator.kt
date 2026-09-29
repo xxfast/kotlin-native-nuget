@@ -144,8 +144,11 @@ internal fun translateFunction(
           declaration = func.qualifiedName?.asString() ?: func.simpleName.asString(),
           reason = "it takes an enum parameter and returns a $returnShape, a return shape whose " +
               "bridge hand-builds its native call and so never casts the enum down to its ordinal",
-          hint = "take the enum's ordinal as an Int, or return an enum, a String, a primitive or " +
-              "Unit, which are the return shapes that carry an enum parameter",
+          // ADR-160 amendment: only the generic-return arm still raises this, and every non-generic
+          // return is plan-owned and carries an enum parameter, a lambda return included.
+          hint = "take the enum's ordinal as an Int, or return a non-generic type (an enum, a " +
+              "String, a primitive, Unit, an exported class or a lambda), which are the return " +
+              "shapes that carry an enum parameter",
           // ERROR_*: the round returns before anything generated is read.
           owner = null,
         ),
@@ -180,62 +183,12 @@ internal fun translateFunction(
         "collection return the plan skipped must be ABSENT, not re-emitted with a simple-name " +
         "component spelling"
   }
-  val isLambdaReturnType: Boolean = qualifiedReturnName in LAMBDA_TYPES
-
-  if (isLambdaReturnType) {
-    if (hasEnumParams) return enumParamsUnsupported("lambda")
-
-    val lambdaArity: Int = returnType!!.arguments.size - 1
-    tracker.lambdaArities.add(lambdaArity)
-
-    // Issue #111: the return-position copy of the class-property rule. A type argument C# cannot
-    // name makes the whole function unspellable, so it is skipped named rather than returned as
-    // `KotlinFunc<CamId, Flow>` for the consumer's compiler to reject.
-    val unnameableTypeArgument: CsTypeArgument.Unnameable? =
-      csTypeArguments(returnType.arguments, exportedTypes, context, classifier)
-    if (unnameableTypeArgument != null) {
-      ForwardDiagnosticSink.emit(
-        listOf(
-          lambdaTypeArgumentDiagnostic(
-            kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
-            symbol = func,
-            declaration = func.simpleName.asString(),
-            typeArgument = unnameableTypeArgument.typeArgument,
-            // A top-level function, so the hole is on its ADR-007 file holder.
-            owner = func.forwardFileClassOwner(),
-            member = func.simpleName.asString(),
-          ),
-        ),
-        logger,
-      )
-      return emptyList()
-    }
-
-    val lambdaTypeArgs: List<String> =
-      csTypeArgumentNames(returnType.arguments, exportedTypes, context, classifier)
-    val lambdaCsType: String = csLambdaType(lambdaTypeArgs)
-
-    val nativeImport = CirDllImport(
-      libraryName = libraryName,
-      entryPoint = cname,
-      returnType = "IntPtr",
-      name = "${csName}_native",
-      parameters = params,
-      visibility = CirVisibility.PRIVATE,
-      hasSyncErrorOut = true,
-    )
-
-    val paramNames: String = params.joinToString(", ") { it.name }
-    val wrapper = CirMethod(
-      name = csName,
-      returnType = lambdaCsType,
-      parameters = params,
-      body = "new $lambdaCsType(NugetErrorNative.Check(${csName}_native(" +
-          "${syncErrorArguments(paramNames)}), error))",
-      isStatic = true,
-    )
-
-    return listOf(nativeImport, wrapper)
+  // ADR-160 amendment: the lambda-return arm that used to live here is gone. A top-level lambda
+  // return is plan-owned (`BridgeType.ReturnedLambda`) and `hasLegacyGenericReturnRoute()` refuses
+  // it, so reaching here would mean the gate regressed into a second route.
+  check(qualifiedReturnName !in LAMBDA_TYPES && qualifiedReturnName !in SUSPEND_LAMBDA_TYPES) {
+    "Forward CIR reached the legacy lambda-return route for '${func.simpleName.asString()}': " +
+        "a lambda return is plan-owned (ADR-160 amendment)"
   }
 
   if (isListReturnType) {

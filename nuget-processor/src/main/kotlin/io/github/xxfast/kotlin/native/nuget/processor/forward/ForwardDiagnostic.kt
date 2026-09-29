@@ -619,6 +619,10 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
 
   ForwardPlanSkipReason.COLLECTION -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
 
+  // ADR-160 amendment: always a top-level function's RESULT, by construction; the same kind the
+  // hand-written route raised for it (issue #111).
+  ForwardPlanSkipReason.LAMBDA_TYPE_ARGUMENT -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN
+
   // ADR-083 amendment (boundary nullability part B): unlike COLLECTION, this reason genuinely fires
   // at BOTH an input and a read position (ADR-083 only ever declined the input one), so it reads
   // [position] rather than fixing the input kind. The shipped input-position wording and kind are
@@ -840,6 +844,13 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
     ForwardPlanSkipReason.OPT_IN_MARKER ->
       "it is marked with the opt-in marker `${detail ?: "an opt-in marker"}`"
 
+    // ADR-160 amendment: issue #111's sentence, moved onto the plan with the route it came from.
+    ForwardPlanSkipReason.LAMBDA_TYPE_ARGUMENT ->
+      "its lambda type argument `${detail ?: "a type argument"}` has no C# spelling: a lambda " +
+          "argument must be a primitive, String, or an exported class, object or enum that is " +
+          "declared in C#, and a type carrying its own type arguments (Flow<T>, a collection, " +
+          "another lambda, a generic class) has no spelling on this route at all"
+
     ForwardPlanSkipReason.OPT_IN_MARKER_TYPE ->
       "its type `${detail?.substringBefore("->") ?: "its type"}` is marked with an opt-in marker"
 
@@ -856,13 +867,16 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       // shipped sentence ("not at this position") became false for it. What is left unrouted here
       // is a lambda *return* anywhere but a top-level function, and a lambda whose payload or own
       // return neither the plan nor the hand-written route carries.
+      // ADR-160 amendment: a top-level lambda return is planned too, whatever its parameters, so
+      // the sentence no longer implies a parameter list can be the reason.
       ForwardPlanSkipReason.CALLBACK_PROTOCOL.name ->
-        "a lambda parameter binds at an ordinary position and a lambda return only at a " +
-            "top-level function, so either this position or this lambda's own payload/return " +
-            "has no route"
+        "a lambda parameter binds at an ordinary position and a lambda return at a top-level " +
+            "function (with any parameters), so either this position or this lambda's own " +
+            "payload/return has no route"
 
       ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL.name ->
-        "a `suspend` lambda is not bridged at any position"
+        "a `suspend` lambda binds as a class property (`KotlinSuspendFunc<...>`), but not as a " +
+            "parameter or as a function return"
 
       // ROADMAP Phase 4 line 23 fold-in: the suspend route covers top-level functions and class,
       // sealed-arm members, never an extension.
@@ -1092,6 +1106,14 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "entry for this declaration to nuget { publish { } } to unblock this build, and report " +
         "the failure with this whole message"
 
+  // ADR-160 amendment: issue #111's hint, with the route it came from.
+  ForwardPlanSkipReason.LAMBDA_TYPE_ARGUMENT -> {
+    val argument: String = detail ?: "the type argument"
+    "expose a lambda over bridgeable types instead: replace `$argument` with a primitive, a " +
+        "String, or a top-level exported class in the export scope (a Flow or a generic type " +
+        "argument needs its own bridgeable wrapper type)"
+  }
+
   // ADR-151: an unmapped stdlib type no longer reaches here at all (the classifier refuses it as
   // plainly unsupported), so this arm is about a real dependency module. The stdlib sentence moved
   // to [ForwardPlanSkipReason.UNSUPPORTED] below; the guard stays because `refusedDependencyTypes`
@@ -1249,7 +1271,8 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
           "add/remove pair), or return it from a top-level function"
 
     ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL.name ->
-      "take a plain (non-suspend) lambda parameter on an ordinary class method instead"
+      "take or return a plain (non-suspend) lambda instead, or expose the `suspend` lambda as " +
+          "a property of an ordinary class"
 
     ForwardPlanSkipReason.SUSPEND.name ->
       "declare it as a top-level `suspend fun` taking the receiver as its first parameter, or as " +
@@ -1460,6 +1483,12 @@ internal fun BridgeType.diagnosticTypeName(): String = when (this) {
     prefix = "(",
     postfix = ") -> ${result.diagnosticTypeName()}",
   ) { parameter -> parameter.diagnosticTypeName() }
+
+  // ADR-160 amendment: the same arrow spelling for a function type handed OUT.
+  is BridgeType.ReturnedLambda -> typeArguments.dropLast(1).joinToString(
+    prefix = "(",
+    postfix = ") -> ${typeArguments.last().diagnosticTypeName()}",
+  ) { argument -> argument.diagnosticTypeName() }
 
   BridgeType.Unit -> "Unit"
   BridgeType.Char -> "Char"

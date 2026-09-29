@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.cir.csLambdaType
+
 /**
  * The public C# spelling of a [BridgeType], i.e. what a caller writes at a call site, as opposed
  * to the native (`DllImport`) type it is projected to.
@@ -60,6 +62,11 @@ internal fun BridgeType.forwardPublicCsharpType(): String = when (this) {
       (payload + result.forwardPublicCsharpType()).joinToString(", ", "Func<", ">")
     }
   }
+  // ADR-160 amendment: ADR-012's consumer type, `KotlinFunc<...>`, or `KotlinAction<...>` for a
+  // `Unit` result (issue #114). Only reached once [unnameableTypeArgument] found nothing.
+  is BridgeType.ReturnedLambda ->
+    csLambdaType(typeArguments.map { argument -> argument.forwardPublicCsharpType() })
+
   // ADR-147 amendment: a nullable-bounded bare `T` is `T`, not `T?`; the instantiation says
   // whether it holds null.
   is BridgeType.Nullable ->
@@ -112,6 +119,7 @@ internal fun BridgeType.isPubliclySpellable(
     .all { component -> component.isPubliclySpellable(typeParametersInScope) }
 
   is BridgeType.Nullable -> type.isPubliclySpellable(typeParametersInScope)
+  is BridgeType.ReturnedLambda -> unnameableTypeArgument() == null
   is BridgeType.TypeParameter -> name in typeParametersInScope
 
   BridgeType.Throwable,
@@ -160,4 +168,35 @@ internal fun PrimitiveKind.forwardPublicCsharpType(): String = when (this) {
   PrimitiveKind.ULONG -> "ulong"
   PrimitiveKind.FLOAT -> "float"
   PrimitiveKind.DOUBLE -> "double"
+}
+
+/**
+ * Issue #111 on the ADR-062 plan (ADR-160 amendment): the Kotlin name of the first type argument
+ * of a returned lambda that C# cannot spell, or `null` when every one has a spelling.
+ *
+ * The plan-side twin of `csTypeArgument`'s admission set: a primitive, `Char`, `String`, an
+ * exported class, object, interface (spelled `IPet`, ADR-173) or enum, any of those nullable, and
+ * `Unit` as the lambda's own result only (it narrows to `KotlinAction`). Everything else (a
+ * collection, a Flow, another lambda, a value class, `Instant`/`Duration`/`Uuid`, anything
+ * unexported) is refused, so the function is skipped naming the argument rather than returned as
+ * a `KotlinFunc` whose `FromHandle<T>` has no arm for it.
+ */
+internal fun BridgeType.ReturnedLambda.unnameableTypeArgument(): String? =
+  typeArguments.indices
+    .firstOrNull { index ->
+      !typeArguments[index].isLambdaTypeArgument(isResult = index == typeArguments.lastIndex)
+    }
+    ?.let { index -> kotlinTypeArguments[index] }
+
+private fun BridgeType.isLambdaTypeArgument(isResult: Boolean): Boolean = when (this) {
+  BridgeType.Unit -> isResult
+  is BridgeType.Primitive, BridgeType.Char, BridgeType.String, is BridgeType.Enum,
+  is BridgeType.ObjectHandle, is BridgeType.Interface,
+    -> true
+
+  // ADR-171: a value class with a box/unbox pair crosses an erased position; the same test the
+  // planner mints that pair on, which it never does for a generic value class.
+  is BridgeType.ValueClass -> typeArguments.isEmpty() && hasErasedCrossing()
+  is BridgeType.Nullable -> type != BridgeType.Unit && type.isLambdaTypeArgument(isResult = false)
+  else -> false
 }
