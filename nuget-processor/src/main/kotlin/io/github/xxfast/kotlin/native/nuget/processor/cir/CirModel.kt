@@ -361,6 +361,23 @@ data class CirSealedClass(
    */
   val methods: List<CirMethod> = emptyList(),
   /**
+   * ADR-175: the base's own `suspend` members on the legacy suspend route, under the base's own
+   * prefix (`shape_area_async`), projected by the same `suspendMembers` an ordinary class uses.
+   * The export dispatches through `asStableRef<Base>()`, so every arm (the enum-arm box included)
+   * inherits the one C# member. The base's Flow/StateFlow *properties* ride [properties] with
+   * `isFlow` set.
+   */
+  val asyncMembers: List<CirMember> = emptyList(),
+  /** ADR-175: the base's own Flow/StateFlow-returning methods, the [asyncMembers] twin. */
+  val flowMembers: List<CirMember> = emptyList(),
+  /**
+   * ADR-175 (ADR-159's owner rule): the base declares the one coroutine scope of every instance
+   * in the hierarchy (`_scopeHandle`, `GetOrCreateScope()`, `IAsyncDisposable`, an abstract
+   * `DisposeAsync`), because it projects a scope-using member. Each arm then overrides
+   * `DisposeAsync` instead of owning a scope of its own.
+   */
+  val ownsScope: Boolean = false,
+  /**
    * ADR-134: a type declared inside the sealed base in Kotlin, rendered inside the same
    * `public abstract class` block ADR-009 owns -- after the arm blocks, before `Native_GetType`.
    */
@@ -438,6 +455,15 @@ data class CirSealedSubclass(
    * *and* flow members emits exactly one scope field.
    */
   val hasSuspendMethods: Boolean = false,
+  /**
+   * ADR-175: whether the scope [hasSuspendMethods] reports is the arm's OWN. False when the sealed
+   * base (or its kept base) owns it (ADR-159's root-most rule): the arm then declares no scope
+   * field, no `GetOrCreateScope` and no `IAsyncDisposable`, but its `Dispose()` still cleans the
+   * inherited scope up and [overridesDisposeAsync] supplies the drain body.
+   */
+  val ownsScope: Boolean = hasSuspendMethods,
+  /** ADR-175: the arm overrides the abstract owner's `DisposeAsync`, not its own `Native_Dispose`. */
+  val overridesDisposeAsync: Boolean = false,
   val isDataClass: Boolean = false,
   /**
    * ADR-157: the C# spelling of the enum this arm boxes (`Patch`), or null for every ordinary arm.

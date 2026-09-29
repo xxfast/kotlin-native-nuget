@@ -98,10 +98,12 @@ class ForwardSkippedCallableWarningTest {
         detail = "suspend",
       ) to "it is a suspend member of a sealed subclass, which has no route yet (ADR-116)",
       ForwardCallableCatalogEntry.Skipped(
+        // ADR-175: a suspend member of a non-generic base is routed now, so the example is a
+        // generic member, which still has no route on the base.
         symbol = "com.example.Shape.observe",
         reason = ForwardPlanSkipReason.SEALED_BASE_UNROUTED,
-        detail = "suspend",
-      ) to "it is a suspend member of a sealed base class, which has no route yet (ADR-116)",
+        detail = "generic",
+      ) to "it is a generic member of a sealed base class, which has no route yet (ADR-116)",
       ForwardCallableCatalogEntry.Skipped(
         symbol = "com.example.Api.rename",
         reason = ForwardPlanSkipReason.NULLABLE,
@@ -352,6 +354,9 @@ class ForwardSkippedCallableWarningTest {
         // ADR-116 amendment (2026-09-11): the same, one level up, for a member the sealed *base*
         // declares. The base carries its ordinary members now, but no legacy route is keyed to it
         // at all, so `Job.rest` (an `open suspend fun`) is a real drop and finally names itself.
+        // ADR-175: the suspend and Flow routes are keyed to a non-generic base now (`Job.rest` is
+        // bound), so what still lands here is a generic or callback member, or any async member of
+        // a generic base (ADR-147).
         ForwardPlanSkipReason.SEALED_BASE_UNROUTED,
         // ADR-162: the generator's own invariant failing on a callable. `droppedFromCSharp`, so the
         // catalog's drop-reporting path carries it, which is the only thing that reports it at all;

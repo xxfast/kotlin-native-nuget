@@ -251,3 +251,10 @@ fixture (`Pantry.kt`) has a suspend, a Flow, a `StateFlow` and a default Flow me
 `new Crate<int>(1)` and `new RssFeed()`. No generator change. Not covered: error and cancellation
 branches through the carrier, and a runtime fixture for an `object` owner (Tier 1 only). No new
 `LeakTests` row: the exports and scope lifecycle are the ones rows 9k onward already measure.
+
+## Amendment (2026-09-29, ADR-175): the carrier for an eligible sealed interface
+
+Ruling 2 excludes an eligible sealed interface from `I<Name>`, and its own async members are carried
+instead by the abstract class ADR-112 renders, declared on the base itself. See
+[ADR-175](175-sealed-base-async-members.md). The ROADMAP line that predicted an `IShape` gap was
+premised on an `IShape` that ADR-112 removed.

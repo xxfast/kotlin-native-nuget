@@ -1270,8 +1270,10 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // ADR-116 amendment (2026-09-11): a sealed base has one remedy an arm does not -- the arms
   // themselves, which do carry the suspend and flow routes (ADR-118/ADR-124).
   ForwardPlanSkipReason.SEALED_BASE_UNROUTED ->
-    "declare the member on each arm of the sealed class instead (the arms carry the suspend and " +
-        "Flow routes the base does not), or move it onto an ordinary class"
+    // ADR-175: the base carries the suspend and Flow routes itself now (a generic base aside), so
+    // what is left unrouted on it is the callback and generic-member shapes.
+    "declare the member on each arm of the sealed class instead (the arms carry the callback " +
+        "routes the base does not), or move it onto an ordinary class"
 
   // Issue #57: the old hint ("declare the member directly on the value class") was already true
   // of an explicit `override`, which skips by the same rule (ADR-082: an override *is* the

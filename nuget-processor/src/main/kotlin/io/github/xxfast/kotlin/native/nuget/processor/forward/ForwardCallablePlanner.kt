@@ -1405,7 +1405,9 @@ internal class ForwardCallablePlanner(
    *   `override` without CS0506. `isOverride` stays false: the base overrides nothing.
    * - An unrouted skip is named [ForwardPlanSkipReason.SEALED_BASE_UNROUTED], not the arm's
    *   reason: `Job.rest`, an `open suspend fun` on the base, has produced no diagnostic at all
-   *   until now (ADR-118 found the same absence a third time).
+   *   until now (ADR-118 found the same absence a third time). ADR-175: `Job.rest` itself is
+   *   routed now, on the base's own suspend route; a suspend or Flow member keeps its legacy
+   *   reason unless the base is generic.
    */
   private fun sealedBaseEntries(sealed: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val owner: String = sealed.qualifiedName?.asString() ?: return emptyList()
@@ -1483,9 +1485,21 @@ internal class ForwardCallablePlanner(
     // legacy route re-emits it", and no legacy route is keyed to a sealed *base* at all -- not
     // even the suspend and flow ones ADR-118/ADR-124 keyed to the arms. So every skip left here
     // is a real drop and says so.
+    // ADR-175: except the suspend and Flow routes, which ARE keyed to the base now (the base's own
+    // prefix, receiver `asStableRef<Base>()`). A member those routes admit is emitted by them; one
+    // they refuse (ADR-114/119/123) is named with the refusal's own reason by
+    // `warnRefusedLegacyRouteMembers`, so neither is relabelled. A generic base still has no route
+    // (ADR-147, deferred) and keeps the unrouted name.
+    val asyncRouted: Set<ForwardPlanSkipReason> =
+      if (sealed.typeParameters.isEmpty()) {
+        setOf(ForwardPlanSkipReason.SUSPEND, ForwardPlanSkipReason.FLOW_PROTOCOL)
+      } else {
+        emptySet()
+      }
     return entries.map { entry ->
       if (entry !is ForwardCallableCatalogEntry.Skipped) return@map entry
       if (entry.reason.droppedFromCSharp) return@map entry
+      if (entry.reason in asyncRouted) return@map entry
       ForwardCallableCatalogEntry.Skipped(
         entry.symbol,
         ForwardPlanSkipReason.SEALED_BASE_UNROUTED,

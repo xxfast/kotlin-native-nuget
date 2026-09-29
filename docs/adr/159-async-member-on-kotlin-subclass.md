@@ -286,3 +286,10 @@ declarations would have handed this class a scope nothing ever creates.
   `Tier1SubclassScopeOwnerTest.kt`, `Tier1RefusedSuspendOrdinaryClassTest.kt`,
   `Tier1CoroutineFreeModuleTest.kt`, a collision cell in `Tier1SuspendMethodOverloadTest.kt`.
   `LeakTests/LiveHandleTests.cs` rows 13, 13a, 13b.
+
+## Amendment (2026-09-29, ADR-175): a sealed base is an abstract scope owner
+
+A sealed class, or an eligible sealed interface rendered as an abstract class, that declares an async
+member is a root-most abstract owner under rules 1 to 4: it declares `_scopeHandle`, is
+`IAsyncDisposable`, and declares `abstract DisposeAsync`. Each arm overrides `DisposeAsync` and keeps
+`IDisposable`. See [ADR-175](175-sealed-base-async-members.md).

@@ -62,6 +62,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ENUM_ARM_VALUE_MEMBER
 import io.github.xxfast.kotlin.native.nuget.processor.forward.enumArmName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPlanProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPropertyProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.enumMembersOf
@@ -89,6 +90,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.skipReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardCsharpTypeParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardScopeOwner
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardArmMemberProjectedByBase
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSealedBaseAsyncMethods
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSealedBaseFlowProperties
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuspendRouteMethods
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
@@ -1432,7 +1436,7 @@ internal fun translateClass(
         scopeOwner != null,
     overridesDisposeAsync = scopeOwner != null && !isAbstract &&
         scopeOwner.qualifiedName?.asString() != cls.qualifiedName?.asString() &&
-        scopeOwner.modifiers.contains(Modifier.ABSTRACT),
+        (scopeOwner.modifiers.contains(Modifier.ABSTRACT) || scopeOwner.isEligibleSealedType()),
     remarks = listOfNotNull(remarks),
     doc = cls.forwardKdoc(expects)?.toCirDoc(),
   )
@@ -2312,11 +2316,58 @@ internal fun translateSealedClass(
         isVirtual = plan.publicSignature.isVirtual,
       )
     }
+  // ADR-175: the base's own suspend / Flow / StateFlow members, on the legacy routes under the
+  // base's own prefix, projected by the same `suspendMembers` / `flowMembers` / `flowProperty` an
+  // ordinary class calls. The Kotlin exports dispatch through `asStableRef<Base>()`, so one C#
+  // member on the base serves every arm, the enum-arm box and a default body alike. The selectors
+  // are the ones the Kotlin export loop and the arm filter read, so the halves cannot disagree.
+  val baseAsyncMethods: List<KSFunctionDeclaration> = cls.forwardSealedBaseAsyncMethods(classifier)
+  val baseAsyncMembers: List<CirMember> = suspendMembers(
+    suspendMethods = baseAsyncMethods.filter { it.modifiers.contains(Modifier.SUSPEND) },
+    prefix = prefix,
+    libraryName = libraryName,
+    classifier = classifier,
+    tracker = tracker,
+    callableCatalog = callableCatalog,
+    context = context,
+    expects = expects,
+  )
+  val baseFlowMembers: List<CirMember> = flowMembers(
+    flowMethods = baseAsyncMethods.filterNot { it.modifiers.contains(Modifier.SUSPEND) },
+    prefix = prefix,
+    libraryName = libraryName,
+    classifier = classifier,
+    tracker = tracker,
+    callableCatalog = callableCatalog,
+    context = context,
+  )
+  val baseFlowProperties: List<CirProperty> = cls.forwardSealedBaseFlowProperties(classifier)
+    .mapNotNull { prop -> flowProperty(prop, name, context, classifier, tracker) }
+  // ADR-175 (ADR-159's root-most rule): who owns the one scope of every instance in the hierarchy.
+  // The sealed base itself when it projects a scope-using member, else a kept base above it, else
+  // nobody, in which case each arm keeps owning its own (ADR-118/124, unchanged).
+  val baseScopeOwner: KSClassDeclaration? = cls.forwardScopeOwner(classifier, exportedTypes)
+  val baseOwnsScope: Boolean = baseScopeOwner != null &&
+      baseScopeOwner.qualifiedName?.asString() == qualifiedName
+  // The owner's `DisposeAsync` is abstract (so an arm overrides it with a body) when the owner
+  // renders abstract: the sealed base always does, a kept ordinary base when Kotlin says so.
+  val armsOverrideDisposeAsync: Boolean = baseScopeOwner != null &&
+      (baseOwnsScope || baseScopeOwner.modifiers.contains(Modifier.ABSTRACT) ||
+          baseScopeOwner.isEligibleSealedType())
+
   // ADR-162: the sealed base renders `: IDisposable, INugetHandle` with its own `Dispose()`
   // (CirSealedRenderer), so the reserved signature applies here too.
-  emitCsharpSignatureCollisions(baseMethods, name, cls, logger, HANDLE_RESERVED_SIGNATURES)
+  emitCsharpSignatureCollisions(
+    baseMethods + (baseAsyncMembers + baseFlowMembers).filterIsInstance<CirMethod>(),
+    name,
+    cls,
+    logger,
+    HANDLE_RESERVED_SIGNATURES,
+  )
   // ADR-110 amendment (ROADMAP line 32): `abstract val area` beside `fun area(scale)` on the base.
-  val baseNames: List<CsMemberName> = (baseProperties + baseMethods).csMemberNames()
+  val baseNames: List<CsMemberName> =
+    (baseProperties + baseFlowProperties + baseMethods + baseAsyncMembers + baseFlowMembers)
+      .csMemberNames()
   val baseSpellings: KotlinSpellings = KotlinSpellings.ofClass(cls)
   emitMemberNameCollisions(name, "sealed class $name", cls, baseNames, baseSpellings, logger)
   qualifiedName?.let { qualified ->
@@ -2339,7 +2390,16 @@ internal fun translateSealedClass(
       if (subclass.isEnumArm()) {
         return@map enumArmSubclass(
           cls, subclass, subPrefix, callableCatalog, tracker, context, expects,
-        )
+        ).let { box ->
+          // ADR-175: the box owns no member, but it inherits the base's async ones, so it takes the
+          // base-owned scope's cleanup and the `DisposeAsync` body like every other arm.
+          if (baseScopeOwner == null) box
+          else box.copy(
+            hasSuspendMethods = true,
+            ownsScope = false,
+            overridesDisposeAsync = armsOverrideDisposeAsync,
+          )
+        }
       }
       val isDataClass: Boolean = subclass.modifiers.contains(Modifier.DATA)
       val isNested: Boolean =
@@ -2406,6 +2466,9 @@ internal fun translateSealedClass(
           // class's. The arm's own C# name goes in, because the getter bakes
           // `ObjectDisposedException(nameof(...))` and the receiver is the arm.
           if (prop.type.resolve().expandAliases().isForwardFlowType()) {
+            // ADR-175: a flow property the sealed base projects is the base's; the arm inherits
+            // it (the `forwardArmFlowProperties` rule the Kotlin half applies).
+            if (subclass.forwardArmMemberProjectedByBase(prop, classifier)) return@mapNotNull null
             return@mapNotNull flowProperty(prop, subName, context, classifier, tracker)
           }
 
@@ -2621,8 +2684,14 @@ internal fun translateSealedClass(
         // ADR-114 refused suspend member would otherwise hand the arm a scope, `IAsyncDisposable`
         // and `DisposeAsync` with no async method on it to use them. ADR-124: a flow member needs
         // the same scope, so one boolean covers both routes and the arm cannot emit two.
-        hasSuspendMethods = asyncMembers.isNotEmpty() || flowMembers.isNotEmpty() ||
-            properties.any { property -> property.isFlow },
+        // ADR-175: or the sealed base (or a kept base above it) owns the one scope, in which case
+        // the arm declares none of its own: it cleans the inherited one up in `Dispose()` and
+        // supplies the abstract owner's `DisposeAsync` body.
+        hasSuspendMethods = baseScopeOwner != null || asyncMembers.isNotEmpty() ||
+            flowMembers.isNotEmpty() || properties.any { property -> property.isFlow },
+        ownsScope = baseScopeOwner == null && (asyncMembers.isNotEmpty() ||
+            flowMembers.isNotEmpty() || properties.any { property -> property.isFlow }),
+        overridesDisposeAsync = armsOverrideDisposeAsync,
         isDataClass = isDataClass,
         isNested = isNested,
         isOpen = isOpenArm,
@@ -2641,8 +2710,11 @@ internal fun translateSealedClass(
     subclasses = subclasses,
     superClass = superClass,
     interfaces = interfaces,
-    properties = baseProperties,
+    properties = baseProperties + baseFlowProperties,
     methods = baseMethods,
+    asyncMembers = baseAsyncMembers,
+    flowMembers = baseFlowMembers,
+    ownsScope = baseOwnsScope,
     // ADR-134: a type declared beside the arms, in the block ADR-009 owns. An ADR-112 eligible
     // sealed interface arrives here too, which is why its children must never be routed to the
     // interface slot instead: nothing would read them.

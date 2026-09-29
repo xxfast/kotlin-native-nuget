@@ -103,6 +103,10 @@ internal object ForwardAbiLegacyRoutes {
         // does, and ADR-124: so does an arm's `Flow`/`StateFlow` member, at a method return and at
         // a property alike. Recognition stays structural (`CirMethod.isAsync` / `isFlow`,
         // `CirProperty.isFlow`), never by entry-point name.
+        // ADR-175: and the base's own, on the same route one level up.
+        (declaration.asyncMembers + declaration.flowMembers)
+          .forEach { member -> add(member, ForwardAbiLegacyRoute.SUSPEND_METHOD) }
+        declaration.properties.forEach { property -> add(property) }
         declaration.subclasses
           .flatMap { subclass -> subclass.asyncMembers + subclass.flowMembers }
           .forEach { member -> add(member, ForwardAbiLegacyRoute.SUSPEND_METHOD) }

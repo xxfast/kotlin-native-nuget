@@ -297,10 +297,9 @@ string filled = await bowl.FillAsync(3);
 
 `interface Feed<T>` (a generic interface) keeps its async members off `IFeed<T>` entirely, named
 `SKIPPED_GENERIC_INTERFACE_ASYNC_MEMBER`. An [eligible sealed interface](#sealed-interfaces) is
-excluded from this too, silently, since it never gets an `I<Name>` declaration in the first place;
-its arms still bind their own async members, see
-[Suspend methods on a sealed arm](#sealed-method-suspend-generated-c) and
-[Flow and StateFlow members on a sealed arm](#sealed-flow-generated-c).
+excluded from this, since it never gets an `I<Name>` declaration; its async members are declared on
+the abstract class instead, see
+[Async members on a sealed base](#sealed-method-suspend-generated-c).
 
 **Breaking:** a hand-written C# class implementing an interface that gains async members this way
 stops compiling (`CS0535` on the new members and on `DisposeAsync`), the same way adding a lambda
@@ -1095,22 +1094,60 @@ pose.Squish();    // factor defaults to 1.0
 pose.Squish(2.0);
 ```
 
-#### Suspend methods on a sealed arm {id="sealed-method-suspend-generated-c"}
+#### Async members on a sealed base and its arms {id="sealed-method-suspend-generated-c"}
 
-A `suspend fun` an arm declares binds like an ordinary class's suspend method, as `Task<T>
-XxxAsync(...)` under the arm's own name. An arm that declares a `suspend` member also implements
-`IAsyncDisposable`, draining its own coroutine scope before disposing the handle; an arm with **no**
-suspend member stays `IDisposable` only. Because this is per-arm, a consumer holding the sealed base
-has to pattern-match to the concrete arm before `await using`/`DisposeAsync()`:
+A `suspend fun`, `Flow<T>` or `StateFlow<T>` member the sealed base declares, abstract or with a
+default body, binds on the C# base itself, so a caller holding the base can use it without
+pattern-matching to an arm. Calls dispatch to the arm's override, or to the base's default when no
+arm overrides it, including for an `enum class` arm:
 
-```C#
-Job job = JobSample.AnyJob(40);
-if (job is Job.Running running) await running.DisposeAsync();
-else job.Dispose();
+```kotlin
+sealed interface Shape {
+  suspend fun area(): Int
+  fun ticks(): Flow<Int>
+  val level: StateFlow<Int>
+  suspend fun fallback(): Int = 9 // default body, no arm overrides it
+
+  data class Loaf(val width: Int) : Shape { /* overrides area, ticks, level */ }
+  data object Donut : Shape { /* overrides area, ticks, level */ }
+}
 ```
 
-The sealed **base**'s own `open suspend fun` has no carrier on the base at all, unlike an ordinary
-`open`/`abstract` member: it is absent everywhere unless an arm overrides it and declares its own.
+```C#
+public abstract class Shape : IDisposable, IAsyncDisposable
+{
+    public Task<int> AreaAsync(CancellationToken cancellationToken = default);
+    public KotlinFlow<int> Ticks();
+    public KotlinStateFlow<int> Level { get; }
+    public Task<int> FallbackAsync(CancellationToken cancellationToken = default);
+    public abstract void Dispose();
+    public abstract ValueTask DisposeAsync();
+}
+```
+
+```C#
+Shape shape = ShapeSamples.MakeShape();
+await using (shape)
+{
+    int area = await shape.AreaAsync();
+    await foreach (int tick in shape.Ticks()) { /* ... */ }
+    int level = shape.Level.Value;
+}
+```
+
+The base owns the one coroutine scope. Every arm overrides `DisposeAsync()` to drain it, and keeps
+`IDisposable` too, so `using` still compiles. A `sealed class` base works the same way
+(`Job.RestAsync` for `open suspend fun rest()`). A base member that cannot bind is a named skip with
+the reason the ordinary class route gives.
+
+A member only an arm declares (`Shape.Loaf.knead(times)`) binds as `Task<T> KneadAsync(...)` on that
+arm and uses the base's scope, so `await using` on the base reference drains it too.
+
+**Breaking:** the arm no longer declares its own copy of a base-declared member, and its own scope
+moves to the base. C# source keeps compiling, since `loaf.AreaAsync()` now resolves to the inherited
+`Shape.AreaAsync`. A consumer compiled against an earlier package must be rebuilt.
+
+A generic sealed base does not bind its own async members.
 
 #### A `suspend fun` returning the sealed base {id="sealed-method-suspend-base-generated-c"}
 
@@ -1137,10 +1174,9 @@ Assert.Equal(7, Assert.IsType<Job.Running>(result).Progress);
 
 A `Flow<T>`/`StateFlow<T>` an arm declares, at a property or a method return, binds the same shape
 an ordinary class's flow member does, see [Coroutines and Flow](coroutines-and-flow.md), under the
-arm's own name. As with `suspend`, only an arm that declares a flow member gets
-`IAsyncDisposable`; the sealed base's own `open` flow member has no base carrier. An arm that
-already has a `suspend` member and gains a flow member too shares the **same** scope and
-`DisposeAsync`, not two.
+arm's own name. A flow member the sealed base itself declares binds on the base instead, see
+[above](#sealed-method-suspend-generated-c). Suspend and flow members share the base's one scope
+and `DisposeAsync`, not two.
 
 #### Lambda parameters on a sealed arm {id="sealed-lambda-generated-c"}
 
@@ -1222,10 +1258,8 @@ A sealed base, a sealed arm, and any `interface` owner can nest their own plain
   obtain the arm from a factory or from the base's `FromHandle` discriminator instead. A
   `class`-kind arm with bridgeable constructor parameters exports a real public constructor
   instead; see [Sealed classes and interfaces](#sealed-classes-and-interfaces).
-- The sealed base's own `open suspend fun` and any `Flow`/`StateFlow` member it declares have no
-  carrier on the C# base at all: only an arm that itself declares one binds, and only that arm
-  gains `IAsyncDisposable`. A consumer holding the sealed base must pattern-match to the concrete
-  arm before an async call or `await using`.
+- A generic sealed base does not bind its own `suspend`, `Flow` or `StateFlow` members; they are
+  named skips.
 - A generic method or a `suspend` lambda parameter on a sealed arm has no binding, the same as on
   an ordinary class.
 

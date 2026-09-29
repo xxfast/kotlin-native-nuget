@@ -19,10 +19,12 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   // `IDisposable`, so the sealed base inherits all three and chains its handle constructor;
   // without one it declares them itself, beside whatever exported interfaces it lists.
   val superClass: String? = sealed.superClass
+  // ADR-175: a base that owns the hierarchy's one scope advertises the drain its arms implement.
+  val asyncDisposable: List<String> = listOfNotNull("IAsyncDisposable".takeIf { sealed.ownsScope })
   val baseList: List<String> = if (superClass != null) {
-    listOf(superClass) + sealed.interfaces
+    listOf(superClass) + sealed.interfaces + asyncDisposable
   } else {
-    sealed.interfaces + listOf("IDisposable", "INugetHandle")
+    sealed.interfaces + listOf("IDisposable") + asyncDisposable + listOf("INugetHandle")
   }
   appendLine("    public abstract class ${sealed.name} : ${baseList.joinToString(", ")}")
   appendLine("    {")
@@ -45,6 +47,14 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
     appendLine("        }")
   }
   appendLine()
+  // ADR-175 (ADR-159's owner rule, one level up): the scope field and its lazy creator, `internal`
+  // so every arm's own async bodies reach them unqualified.
+  if (sealed.ownsScope) {
+    renderScopeHandleField()
+    appendLine()
+    renderGetOrCreateScope()
+    appendLine()
+  }
 
   // ADR-111/ADR-116 amendment (2026-09-11): the base's own declared members, ahead of the arms so
   // a reader meets the polymorphic surface before the discrimination. Externs and bodies come off
@@ -52,6 +62,13 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   // rules an ordinary class uses, and all four bake the depth a class member sits at, which is
   // exactly the depth the base's members sit at here -- no re-indent, unlike the arm blocks.
   for (property in sealed.properties) {
+    // ADR-175: a base Flow/StateFlow property takes the flow extern block, as on an arm.
+    if (property.isFlow) {
+      renderFlowPropertyNativeImports(sealed.libraryName, sealed.nativePrefix, property)
+      renderProperty(property)
+      appendLine()
+      continue
+    }
     propertyNativeImports(sealed.libraryName, sealed.nativePrefix, property)
       .forEach { nativeImport -> renderDllImport(nativeImport) }
     renderProperty(property)
@@ -62,6 +79,10 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
     renderDllImport(methodNativeImport(sealed.libraryName, sealed.nativePrefix, method))
     renderMethod(method, sealed.name)
   }
+
+  // ADR-175: the base's own suspend and Flow members, dispatched by the same `renderMember` an
+  // ordinary class's `companionMembers` go through, at the depth a class member sits at.
+  (sealed.asyncMembers + sealed.flowMembers).forEach { member -> renderMember(member, sealed.name) }
 
   for (subclass in sealed.subclasses.filter { it.isNested }) {
     append(sealedSubclassBlock(sealed, subclass))
@@ -96,6 +117,9 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   // `override` is CS0114.
   val disposeModifier: String = if (superClass != null) "abstract override" else "abstract"
   appendLine("        public $disposeModifier void Dispose();")
+  // ADR-175: an abstract owner only declares the drain; each arm overrides it with a body over its
+  // own `Native_Dispose` (ADR-159's `Brusher` shape).
+  if (sealed.ownsScope) appendLine("        public abstract ValueTask DisposeAsync();")
   appendLine("    }")
 
   for (subclass in sealed.subclasses.filterNot { it.isNested }) {
@@ -110,11 +134,10 @@ private fun sealedSubclassBlock(
   subclass: CirSealedSubclass,
 ): String = buildString {
   // ADR-118: an arm that declares a `suspend fun` owns its own coroutine scope and therefore its
-  // own async disposal. The base's own base list is unaffected -- whether it declares
-  // `IDisposable` itself or inherits it through a kept exported base (ADR-101) -- because the
-  // base's `Native_Dispose` is per arm, so it has no scope to drain, and putting
-  // `IAsyncDisposable` there would advertise `DisposeAsync` on arms that never suspend.
-  val asyncDisposable: String = if (subclass.hasSuspendMethods) ", IAsyncDisposable" else ""
+  // own async disposal, as long as its sealed base projects no scope-using member. ADR-175: when
+  // the base does, the base owns the one scope and is the `IAsyncDisposable` (every arm inherits
+  // its async members, so none has nothing to drain), and the arm only overrides `DisposeAsync`.
+  val asyncDisposable: String = if (subclass.ownsScope) ", IAsyncDisposable" else ""
   // ADR-009 amendment (2026-09-11): an `open` arm drops `sealed`, so a Kotlin subclass of it (an
   // ordinary class, with the arm as its base) compiles and the arm's `open` members can be
   // `virtual`. A final arm keeps its shipped `public sealed class` spelling byte for byte.
@@ -136,7 +159,7 @@ private fun sealedSubclassBlock(
         "${sealed.name}$interfaces$asyncDisposable"
   )
   appendLine("        {")
-  if (subclass.hasSuspendMethods) {
+  if (subclass.ownsScope) {
     append(buildString { renderScopeHandleField() }.indentNestedBody())
     appendLine()
   }
@@ -164,7 +187,7 @@ private fun sealedSubclassBlock(
       }.indentNestedBody(),
     )
   }
-  if (subclass.hasSuspendMethods) {
+  if (subclass.ownsScope) {
     append(buildString { renderGetOrCreateScope() }.indentNestedBody())
     appendLine()
   }
@@ -297,6 +320,8 @@ private fun sealedSubclassBlock(
           isAbstract = false,
           hasSuperClass = true,
           hasSuspendMethods = true,
+          ownsScope = subclass.ownsScope,
+          overridesDisposeAsync = subclass.overridesDisposeAsync,
         )
       }.indentNestedBody(),
     )

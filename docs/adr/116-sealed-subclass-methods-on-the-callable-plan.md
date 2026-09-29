@@ -793,3 +793,9 @@ every arm, was already true; `sealedBaseEntries` needed no change. See
 [ADR-096](096-function-default-parameters.md)'s 2026-09-19 amendment for the mechanism correction:
 the raw `hasDefault` bit is not reliably `false` on an `override`, contrary to what motivated the
 2026-09-13 fix above.
+
+## Amendment (2026-09-29, ADR-175): `SEALED_BASE_UNROUTED` no longer covers async members
+
+A non-generic sealed base now projects its own `suspend`, `Flow` and `StateFlow` members, so
+`SEALED_BASE_UNROUTED` no longer fires for them. A member the class route's own selectors refuse keeps a
+named skip carrying that route's reason. See [ADR-175](175-sealed-base-async-members.md).

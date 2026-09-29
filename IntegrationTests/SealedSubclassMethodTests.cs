@@ -40,10 +40,10 @@ namespace IntegrationTests;
 /// </para>
 /// <para>
 /// The absences are asserted by reflection because a missing member is invisible to the compiler in
-/// the other direction: <c>Describe</c> on <c>Running</c>, and <c>RestAsync</c> on every arm
+/// the other direction: <c>Describe</c> on <c>Running</c>, and a <em>declared</em> <c>RestAsync</c> on every arm
 /// (declared-only, on the sync loop and on the suspend loop alike: an arm exports what it declares,
 /// and an inherited base body, <c>open fun describe()</c> or <c>open suspend fun rest()</c>, is not
-/// it). <c>PickNested</c> (a nested interface) used to be a third reflection-only absence; ADR-133
+/// it; since ADR-175 <c>RestAsync</c> is declared once on <c>Job</c> and inherited). <c>PickNested</c> (a nested interface) used to be a third reflection-only absence; ADR-133
 /// inverted that, so it is asserted present instead, see
 /// <see cref="PickNested_NestedInterfaceReturnOnASealedArm_Binds"/>.
 /// </para>
@@ -397,14 +397,21 @@ public class SealedSubclassMethodTests
     /// ADR-118's declared-only gate on the <em>suspend</em> loop. <c>Job.rest()</c> is an
     /// <c>open suspend fun</c> with a body on the base that no arm overrides, and the Kotlin suspend
     /// builder reads <c>getAllFunctions()</c>: without the filter every arm would export
-    /// <c>job_&lt;arm&gt;_rest_async</c>. No arm may carry <c>RestAsync</c>, under any spelling.
+    /// <c>job_&lt;arm&gt;_rest_async</c>. No arm may <em>declare</em> <c>RestAsync</c>.
+    /// <para>
+    /// ADR-175 flipped the other half: the base now projects it (<c>job_rest_async</c>) and every arm
+    /// inherits that one declaration, so <c>GetMethod</c> finds it on each arm with
+    /// <c>DeclaringType == typeof(Job)</c>. The declared-only gate still holds: no arm re-declares it.
+    /// </para>
     /// </summary>
     [Fact]
-    public void RestAsync_InheritedBaseSuspendBody_IsOnNoArmAndNotOnTheBase()
+    public void RestAsync_InheritedBaseSuspendBody_IsDeclaredOnTheBaseAndOnNoArm()
     {
         foreach (Type type in new[] { typeof(Job), typeof(Job.Running), typeof(Job.Idle), typeof(Job.Done) })
         {
-            Assert.Null(type.GetMethod("RestAsync"));
+            MethodInfo? rest = type.GetMethod("RestAsync");
+            Assert.NotNull(rest);
+            Assert.Same(typeof(Job), rest!.DeclaringType);
             Assert.Null(type.GetMethod("Rest"));
         }
     }
@@ -420,6 +427,10 @@ public class SealedSubclassMethodTests
     /// pseudo-custom attribute reconstructed by the runtime, so if that reconstruction ever came
     /// back empty the whole walk would pass vacuously.
     /// </para>
+    /// <para>
+    /// ADR-175: the base now exports it once, under its own prefix (<c>test_issue115__job_rest_async</c>),
+    /// so exactly one <c>_rest_async</c> entry point exists and it is the base's, never an arm's.
+    /// </para>
     /// </summary>
     [Fact]
     public void NoArm_ExportsAnEntryPointForTheInheritedBaseSuspendBody()
@@ -427,9 +438,9 @@ public class SealedSubclassMethodTests
         string[] entryPoints = EntryPointsOfTheSealedFamily();
 
         Assert.Contains("test_issue115__job_running_get_progress", entryPoints);
-        Assert.DoesNotContain(
-            entryPoints,
-            entryPoint => entryPoint.EndsWith("_rest_async", StringComparison.Ordinal));
+        Assert.Equal(
+            new[] { "test_issue115__job_rest_async" },
+            entryPoints.Where(entryPoint => entryPoint.EndsWith("_rest_async", StringComparison.Ordinal)).ToArray());
     }
 
     /// <summary>
@@ -578,14 +589,18 @@ public class SealedSubclassMethodTests
     }
 
     /// <summary>
-    /// The control, on the async half: <c>Done</c> declares no <c>suspend</c> member, so it gains no
-    /// scope, no <c>DisposeAsync</c> and no <c>IAsyncDisposable</c>. Putting the interface on the
-    /// sealed base instead would advertise a drain that <c>Done</c> has nothing to drain.
+    /// The control, on the async half: <c>Done</c> declares no <c>suspend</c> member of its own.
+    /// ADR-175 flipped it: the base <c>Job</c> projects <c>RestAsync</c> and owns the scope, so it is
+    /// <c>IAsyncDisposable</c> and <c>Done</c>, which inherits <c>RestAsync</c>, is too, correctly.
+    /// ADR-118's objection (a drain with nothing to drain) no longer holds once the base itself
+    /// declares a scope-using member. Every arm keeps <c>IDisposable</c> beside it.
     /// </summary>
     [Fact]
-    public void Done_ArmWithNoSuspendMembers_IsNotAsyncDisposable()
+    public void Done_ArmWithNoSuspendMembers_InheritsTheBaseScopeAndIsAsyncDisposable()
     {
-        Assert.False(typeof(IAsyncDisposable).IsAssignableFrom(typeof(Job.Done)));
+        Assert.True(typeof(IAsyncDisposable).IsAssignableFrom(typeof(Job)));
+        Assert.True(typeof(IAsyncDisposable).IsAssignableFrom(typeof(Job.Done)));
+        Assert.True(typeof(IDisposable).IsAssignableFrom(typeof(Job.Done)));
         Assert.True(typeof(IAsyncDisposable).IsAssignableFrom(typeof(Job.Running)));
         Assert.True(typeof(IAsyncDisposable).IsAssignableFrom(typeof(Job.Idle)));
     }
@@ -724,11 +739,11 @@ public class SealedSubclassMethodTests
     /// job is the finished one at 5.
     /// </para>
     /// <para>
-    /// <c>using</c>, not <c>await using</c>: the base is only <c>IDisposable</c>
-    /// (<c>CirSealedRenderer</c> puts <c>IAsyncDisposable</c> on the suspending arms alone), so
-    /// <c>await using</c> on a <c>Job</c>-typed local is CS8410. The arm's synchronous
-    /// <c>Dispose()</c> cancels and disposes its scope before releasing the handle, so a
-    /// suspending arm held as the base still cleans up both.
+    /// <c>using</c> still compiles and still cleans up: since ADR-175 the base <c>Job</c> owns the
+    /// one scope and is <c>IAsyncDisposable</c> itself (it projects <c>RestAsync</c>), so
+    /// <c>await using</c> would compile too, and every arm's synchronous <c>Dispose()</c> cancels and
+    /// disposes that inherited scope before releasing the handle. Kept as <c>using</c> to pin the
+    /// synchronous path on a base-typed local.
     /// </para>
     /// </summary>
     [Fact]
@@ -902,15 +917,15 @@ public class SealedSubclassMethodTests
     /// A <em>flow-only</em> arm takes the same async lifetime shape a suspending arm does: the
     /// collect protocol needs a scope of the arm's own, so <c>Watching</c> gains
     /// <c>IAsyncDisposable</c> and a <c>DisposeAsync</c> that drains it, exactly as an ordinary
-    /// class whose only async member is a flow already does. <c>Done</c>, with neither a suspend nor
-    /// a flow member, stays the arm without a scope, which is what keeps the interface off the
-    /// sealed base.
+    /// class whose only async member is a flow already does. Since ADR-175 the scope is the base's
+    /// (<c>Job</c> projects <c>RestAsync</c>), so <c>Done</c>, with neither a suspend nor a flow
+    /// member of its own, is <c>IAsyncDisposable</c> through the base too.
     /// </summary>
     [Fact]
-    public void Watching_IsAsyncDisposable_AndDoneIsNot()
+    public void Watching_IsAsyncDisposable_AndSoIsDoneThroughTheBase()
     {
         Assert.True(typeof(IAsyncDisposable).IsAssignableFrom(typeof(Job.Watching)));
-        Assert.False(typeof(IAsyncDisposable).IsAssignableFrom(typeof(Job.Done)));
+        Assert.True(typeof(IAsyncDisposable).IsAssignableFrom(typeof(Job.Done)));
     }
 
     /// <summary>

@@ -19,6 +19,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.isMutableStateFlowElem
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardArmMemberProjectedByBase
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParameterShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.collectionResultProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardArmMember
@@ -78,6 +79,8 @@ internal fun KSClassDeclaration.forwardArmFlowProperties(
   // ADR-123: an element this route cannot marshal drops the property on both halves;
   // `warnRefusedLegacyRouteMembers` names it once.
   .filter { prop -> classifier.legacyRefusedFlowElement(prop.type.resolve()) == null }
+  // ADR-175: a flow property the sealed base projects is the base's (ADR-159 rule 4).
+  .filter { prop -> !forwardArmMemberProjectedByBase(prop, classifier) }
   .toList()
 
 /**
@@ -100,6 +103,8 @@ internal fun KSClassDeclaration.forwardArmFlowMethods(
   // projection. Both halves must agree, or a C# import arrives with no Kotlin export behind it.
   .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
   .filter { method -> classifier.legacyRefusedReturn(method) == null }
+  // ADR-175: an override of a Flow member the sealed base projects stays on the base.
+  .filter { method -> !forwardArmMemberProjectedByBase(method, classifier) }
   .toList()
 
 /**

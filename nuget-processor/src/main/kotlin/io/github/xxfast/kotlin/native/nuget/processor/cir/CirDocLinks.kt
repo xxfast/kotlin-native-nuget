@@ -153,6 +153,8 @@ private fun CirDeclaration.resolveDocLinks(index: Map<String, String>): CirDecla
       subclasses = subclasses.map { arm -> arm.resolveDocLinks(index) },
       properties = properties.map { it.copy(doc = it.doc.resolve(index)) },
       methods = methods.map { it.copy(doc = it.doc.resolve(index)) },
+      asyncMembers = asyncMembers.map { it.resolveDocLinks(index) },
+      flowMembers = flowMembers.map { it.resolveDocLinks(index) },
       nestedDeclarations = nestedDeclarations.map { it.resolveDocLinks(index) },
       doc = doc.resolve(index),
     )
