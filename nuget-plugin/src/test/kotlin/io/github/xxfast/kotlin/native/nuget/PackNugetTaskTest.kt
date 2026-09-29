@@ -189,4 +189,20 @@ class PackNugetTaskTest {
 
     assertContains(error.message.orEmpty(), "osx-arm64")
   }
+
+  // A blank packageId passes `Property.get()`, and would name the .nupkg `  .1.0.0.nupkg` with a
+  // `<id>` of spaces. packNuget is the one task that truly needs an id, so it fails clearly.
+  @Test
+  fun `pack fails clearly for a blank packageId`() {
+    val task: PackNugetTask = newTask()
+    val outputDir: File = Files.createTempDirectory("pack-out").toFile()
+    configureCommon(task, outputDir)
+    task.packageId.set("  ")
+    task.dependencyVersions.set(emptyMap())
+    task.nativeLibDirs.set(emptyMap())
+
+    val error = assertFailsWith<IllegalArgumentException> { task.pack() }
+
+    assertContains(error.message.orEmpty(), "packageId")
+  }
 }

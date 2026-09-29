@@ -80,3 +80,11 @@ class NugetPublishConfig {
     _exportMarkers.addAll(markers)
   }
 }
+
+/**
+ * The forward C# root namespace: `packageId`, or the processor's `Interop` default when there is
+ * no `publish {}` or its `packageId` is null or blank. One rule for both the KSP `nuget.namespace`
+ * option and the reverse shims' ADR-087 error namespace, so the two halves always agree.
+ */
+internal fun NugetPublishConfig?.forwardNamespace(): String =
+  this?.packageId?.takeIf { id -> id.isNotBlank() } ?: "Interop"

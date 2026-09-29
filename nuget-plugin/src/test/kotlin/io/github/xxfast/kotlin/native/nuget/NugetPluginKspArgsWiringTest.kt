@@ -288,4 +288,62 @@ class NugetPluginKspArgsWiringTest {
     val ksp: KspExtension = project.extensions.getByType(KspExtension::class.java)
     assertEquals("", ksp.arguments["nuget.boundTypesManifest"])
   }
+
+  /**
+   * A `publish {}` without a usable `packageId` (null or blank) wires the processor's `Interop`
+   * default to KSP and to the reverse shims' ADR-087 error namespace through one shared rule, so
+   * the two halves can never disagree. Passing `""` used to render `namespace ` and `global::.X`.
+   */
+  @Test
+  fun `publish without a usable packageId wires the Interop namespace to KSP and the shims`() {
+    for (packageId in listOf(null, "", "  ")) {
+      val project: Project = buildProjectWithSharedLib()
+      val extension: NugetExtension = project.extensions.getByType(NugetExtension::class.java)
+      extension.publish {
+        this.packageId = packageId
+        version = "1.0.0"
+      }
+      extension.dependencies {
+        dependency("Acme") {
+          version = "1.0.0"
+          bind { packageName = "acme" }
+        }
+      }
+
+      project.evaluate()
+
+      val args: Map<String, String> =
+        project.extensions.getByType(KspExtension::class.java).arguments
+      assertEquals("Interop", args["nuget.namespace"], "packageId '$packageId'")
+      assertEquals("LibraryNative", args["nuget.className"], "packageId '$packageId'")
+
+      val shims = project.tasks.getByName("nugetGenerateShims") as NugetGenerateShimsTask
+      assertEquals("Interop", shims.forwardNamespace.get(), "packageId '$packageId'")
+    }
+  }
+
+  /** Control: a real `packageId` still flows through verbatim to both halves. */
+  @Test
+  fun `publish with a packageId wires it as the namespace to KSP and the shims`() {
+    val project: Project = buildProjectWithSharedLib()
+    val extension: NugetExtension = project.extensions.getByType(NugetExtension::class.java)
+    extension.publish {
+      packageId = "TestLibrary"
+      version = "1.0.0"
+    }
+    extension.dependencies {
+      dependency("Acme") {
+        version = "1.0.0"
+        bind { packageName = "acme" }
+      }
+    }
+
+    project.evaluate()
+
+    val args: Map<String, String> = project.extensions.getByType(KspExtension::class.java).arguments
+    assertEquals("TestLibrary", args["nuget.namespace"])
+    assertEquals("TestLibraryNative", args["nuget.className"])
+    val shims = project.tasks.getByName("nugetGenerateShims") as NugetGenerateShimsTask
+    assertEquals("TestLibrary", shims.forwardNamespace.get())
+  }
 }
