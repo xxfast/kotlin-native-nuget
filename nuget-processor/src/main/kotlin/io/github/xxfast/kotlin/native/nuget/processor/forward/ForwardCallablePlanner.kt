@@ -650,10 +650,11 @@ internal data class ForwardCallablePlanCatalog(
   }
 
   /** ADR-006 amendment: the planned companion `val`/`var`s of enum [owner], in planning order. */
-  fun enumCompanionProperties(owner: String): List<ForwardPropertyPlan> = propertyPlans.filter { plan ->
-    plan.position == ForwardPropertyPosition.COMPANION &&
-        plan.symbol.substringBeforeLast('.') == "$owner.Companion"
-  }
+  fun enumCompanionProperties(owner: String): List<ForwardPropertyPlan> =
+    propertyPlans.filter { plan ->
+      plan.position == ForwardPropertyPosition.COMPANION &&
+          plan.symbol.substringBeforeLast('.') == "$owner.Companion"
+    }
 
   /** ADR-095: the planned companion members of class [owner], in planning order. See above. */
   fun companionMethods(owner: String): List<ForwardCallablePlan> = plans.filter { plan ->
@@ -2046,10 +2047,10 @@ internal class ForwardCallablePlanner(
    * receiver (the ordinal ADR-132 already lowers: `Mood.entries[mood]` / `(int)mood`).
    *
    * `declarations`, not `getAllFunctions()`: an inherited `compareTo` is not something the author
-   * wrote on the enum. [isCompilerOwnedMember] removes `Any`'s three, and the compiler's synthesized
-   * `values()` / `valueOf()` are removed by name. No ABSTRACT skip: an `abstract fun` whose bodies
-   * live on the entries is exactly what `Mood.entries[mood].f()` dispatches. No legacy route is
-   * keyed to an enum, so every deferral is a named drop, SUSPEND included.
+   * wrote on the enum. [isCompilerOwnedMember] removes `Any`'s three, and the compiler's
+   * synthesized `values()` / `valueOf()` are removed by name. No ABSTRACT skip: an `abstract fun`
+   * whose bodies live on the entries is exactly what `Mood.entries[mood].f()` dispatches. No legacy
+   * route is keyed to an enum, so every deferral is a named drop, SUSPEND included.
    */
   private fun enumEntries(enum: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
     val owner: String = enum.qualifiedName?.asString() ?: return emptyList()
@@ -2075,7 +2076,9 @@ internal class ForwardCallablePlanner(
         else -> null
       }
       if (structural != null) {
-        return ForwardCallableCatalogEntry.Skipped(symbol, structural, node = function).namedSuspend()
+        return ForwardCallableCatalogEntry
+          .Skipped(symbol, structural, node = function)
+          .namedSuspend()
       }
       return planOrSkip(
         symbol = symbol,
@@ -4951,5 +4954,5 @@ private fun KSNode?.declaredResultType(): KSType? = when (this) {
   else -> null
 }
 
-/** ADR-006 amendment: the functions the compiler writes on every `enum class`, which no author declared. */
+/** ADR-006 amendment: the functions the compiler writes on every `enum class`, none authored. */
 private val ENUM_SYNTHESIZED_FUNCTIONS: Set<String> = setOf("values", "valueOf")

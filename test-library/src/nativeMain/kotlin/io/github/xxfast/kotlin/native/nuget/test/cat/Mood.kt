@@ -90,7 +90,8 @@ enum class Mood(val displayName: String, val isCuddly: Boolean) {
   fun toyFor(): Toy = Toy("$displayName's mouse", if (isCuddly) "cream" else "black")
 
   /** A nullable class-typed return: only a cuddly mood fetches a toy in [colour]. */
-  fun fetchToy(colour: String): Toy? = if (isCuddly) Toy("$displayName's $colour yarn", colour) else null
+  fun fetchToy(colour: String): Toy? =
+    if (isCuddly) Toy("$displayName's $colour yarn", colour) else null
 
   /** A nullable `String` return: Mylo only dreams when he is asleep. */
   fun dream(): String? = if (this == SLEEPY) "Mylo dreams of cream" else null

@@ -773,20 +773,29 @@ internal fun translate(
         SpelledMethod(method, "$where`fun ${invocation.member ?: publicSignature.name}`", enum)
       }
     val functionMethods: List<SpelledMethod> = callableCatalog.enumMethods(qualifiedName)
-      .flatMap { plan -> plan.spelled("", ForwardCirPlanProjection.extension(plan, context.libraryName, receiverName)) }
+      .flatMap { plan ->
+        plan.spelled(
+          "",
+          ForwardCirPlanProjection.extension(plan, context.libraryName, receiverName),
+        )
+      }
     val companionMethods: List<SpelledMethod> = callableCatalog.companionMethods(qualifiedName)
       .flatMap { plan ->
         plan.spelled("companion ", ForwardCirPlanProjection.static(plan, context.libraryName))
       }
     val memberMethods: List<SpelledMethod> = propertyMethods + functionMethods + companionMethods
-    // A companion `val`/`var` is a static PROPERTY there, and C# forbids a property sharing its name
-    // with any other member of the class, method or property (CS0102), whatever the parameters.
-    val staticProperties: List<SpelledProperty> = callableCatalog.enumCompanionProperties(qualifiedName)
+    // A companion `val`/`var` is a static PROPERTY there, and C# forbids a property sharing its
+    // name with any other member of the class, method or property (CS0102), whatever the
+    // parameters.
+    val staticProperties: List<SpelledProperty> = callableCatalog
+      .enumCompanionProperties(qualifiedName)
       .flatMap { plan ->
         val keyword: String = if (plan.setter != null) "var" else "val"
         ForwardCirPropertyProjection.staticProperty(plan, context.libraryName)
           .filterIsInstance<CirProperty>()
-          .map { property -> SpelledProperty(property.name, "companion `$keyword ${plan.kotlinName}`", enum) }
+          .map { property ->
+            SpelledProperty(property.name, "companion `$keyword ${plan.kotlinName}`", enum)
+          }
       }
     if (memberMethods.isEmpty() && staticProperties.isEmpty()) return@forEach
     emitEnumExtensionSignatureCollisions(

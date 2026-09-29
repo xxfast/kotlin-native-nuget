@@ -16,8 +16,8 @@ import kotlin.test.assertTrue
  *
  * Folded in on the same route: the enum getter's `bool` extern had no
  * `[return: MarshalAs(UnmanagedType.I1)]`, which every other route emits; and a property declared
- * in an enum's `companion object` was a named skip; since the ADR-006 amendment it binds, instead of
- * vanishing silently.
+ * in an enum's `companion object` was a named skip; since the ADR-006 amendment it binds, instead
+ * of vanishing silently.
  */
 class Tier1EnumCamelCasePropertyTest {
 
@@ -130,7 +130,10 @@ class Tier1EnumCamelCasePropertyTest {
   @Test
   fun `an enum member or companion function binds on the extensions class`() {
     assertContains(result.generated, "Mood.entries[receiver].isLoudNow()")
-    assertContains(result.generatedCSharp, "public static bool IsLoudNow(this global::Interop.Mood mood)")
+    assertContains(
+      result.generatedCSharp,
+      "public static bool IsLoudNow(this global::Interop.Mood mood)",
+    )
     assertContains(result.generatedCSharp, "public static global::Interop.Mood Fallback()")
     val named: List<String> = result.kspWarnings
       .filter { it.contains("Mood.isLoudNow") || it.contains("Mood.Companion.fallback") }

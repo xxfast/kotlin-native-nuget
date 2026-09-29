@@ -140,7 +140,9 @@ A class-typed [enum member property](enums.md) getter counts here too: every rea
 owned wrapper the caller must dispose, the same as any other class-typed property getter.
 `LeakTests/LiveHandleTests.cs` row 1h,
 `EnumMemberClassTypedGetter_UsingDispose_ReturnsToBaseline`, measures repeated reads and disposes
-of one such member returning to baseline.
+of one such member returning to baseline. Row 1i,
+`EnumMemberFunctionClassTypedReturn_UsingDispose_ReturnsToBaseline`, pins the same for a class-typed
+enum member function return.
 
 An [interface method overload](interfaces-abstract-sealed.md#method-overloads-on-an-interface) adds
 no new handle kind either: every numbered dispatch export or bridge slot a call reaches still

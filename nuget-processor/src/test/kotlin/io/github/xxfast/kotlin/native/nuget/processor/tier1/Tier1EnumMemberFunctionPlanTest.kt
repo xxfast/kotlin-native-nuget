@@ -9,8 +9,8 @@ import kotlin.test.assertTrue
 
 /**
  * ADR-006 amendment: an enum member function binds on the ADR-062 forward plan under
- * `ForwardCallableOrigin.ENUM_MEMBER` (Kotlin `Mood.entries[receiver].f()`, C# `F(this Mood mood)` in
- * `MoodExtensions`), a companion function under the COMPANION origin as a plain static of
+ * `ForwardCallableOrigin.ENUM_MEMBER` (Kotlin `Mood.entries[receiver].f()`, C# `F(this Mood mood)`
+ * in `MoodExtensions`), a companion function under the COMPANION origin as a plain static of
  * `MoodExtensions`, and a companion `val`/`var` as a static property there. What has no route on an
  * enum (suspend, generic, Flow return, lambda return, `const val`) is named once, never silent.
  */
@@ -84,7 +84,8 @@ class Tier1EnumMemberFunctionPlanTest {
     )
     val lines: List<String> = cs.lines().map { it.trim() }
     val extern: Int = lines.indexOfFirst { line ->
-      line.startsWith("private static extern bool Native_IsLoudNow(") && line.contains("out IntPtr error")
+      line.startsWith("private static extern bool Native_IsLoudNow(") &&
+        line.contains("out IntPtr error")
     }
     assertTrue(extern > 0, "no IsLoudNow extern with an error slot in:\n$cs")
     assertEquals("[return: MarshalAs(UnmanagedType.I1)]", lines[extern - 1])
@@ -134,23 +135,21 @@ class Tier1EnumMemberFunctionPlanTest {
 
   @Test
   fun `every enum member with no route is named exactly once`() {
-    for (symbol in listOf(
-      "Mood.napAsync", "Mood.tagged", "Mood.ticks", "Mood.sound", "Mood.Companion.wake",
-    )) {
-      val skips: List<String> = warningsFor(symbol)
-      assertEquals(1, skips.size, "$symbol kspWarnings=${result.kspWarnings}")
-    }
+    listOf("Mood.napAsync", "Mood.tagged", "Mood.ticks", "Mood.sound", "Mood.Companion.wake")
+      .forEach { symbol ->
+        val skips: List<String> = warningsFor(symbol)
+        assertEquals(1, skips.size, "$symbol kspWarnings=${result.kspWarnings}")
+      }
     assertContains(warningsFor("Mood.napAsync").single(), "or on an enum or its companion")
     val cs: String = result.generatedCSharp
-    for (name in listOf("NapAsync", "Tagged", "Ticks", "Wake")) {
-      assertFalse(cs.contains(" $name("), "$name must not render")
-    }
+    listOf("NapAsync", "Tagged", "Ticks", "Wake")
+      .forEach { name -> assertFalse(cs.contains(" $name("), "$name must not render") }
   }
 
   @Test
   fun `no member function is left unnamed or double-reported`() {
     // The retired `SKIPPED_ENUM_MEMBER_FUNCTION` producer is gone; nothing bindable warns.
-    for (symbol in listOf("Mood.isLoudNow", "Mood.greet", "Mood.Companion.fallback")) {
+    listOf("Mood.isLoudNow", "Mood.greet", "Mood.Companion.fallback").forEach { symbol ->
       assertTrue(warningsFor(symbol).isEmpty(), "$symbol kspWarnings=${result.kspWarnings}")
     }
     assertTrue(warningsFor("Chatter").isEmpty(), "${result.kspWarnings}")
@@ -283,7 +282,10 @@ class Tier1EnumMemberFunctionPlanTest {
     )
     assertTrue(errors.isEmpty(), "kspErrors=${run.kspErrors}")
     assertEquals("OK", run.kspExitCode, "kspErrors=${run.kspErrors}")
-    assertContains(run.generatedCSharp, "public static string Greet(this global::Interop.Mood mood)")
+    assertContains(
+      run.generatedCSharp,
+      "public static string Greet(this global::Interop.Mood mood)",
+    )
     assertContains(run.generatedCSharp, "public static string Greet()")
   }
 }

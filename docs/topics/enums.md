@@ -1,9 +1,9 @@
 # Enums
 
-A Kotlin `enum class` becomes a C# `enum` with matching ordinal values. A property declared on the
-enum class becomes a C# extension method, since a C# `enum` can't carry behavior itself. A function
-declared on the enum class, or a property or function in its companion object, isn't bound yet; see
-[Members that aren't bound](#enum-member-functions-skip-named) below.
+A Kotlin `enum class` becomes a C# `enum` with matching ordinal values. A property or function
+declared on the enum class becomes a C# extension method, since a C# `enum` can't carry behavior
+itself. A companion object's functions and properties become statics beside them; see
+[Functions and companion members](#enum-functions).
 
 ```kotlin
 enum class Mood {
@@ -183,29 +183,64 @@ declared: the declaration itself is skipped with `SKIPPED_NESTED_DECLARATION`, a
 return, or property typed with it is skipped with `SKIPPED_UNSUPPORTED_TYPE`/`SKIPPED_UNSUPPORTED_PROPERTY`
 naming `UNDECLARED_ENUM`; the owning class still generates with its other members.
 
-## Members that aren't bound {id="enum-member-functions-skip-named"}
+## Functions and companion members {id="enum-functions"}
 
-A property declared in an enum's `companion object`, and a function declared in the enum class
-body or in its companion object, have no route at all today: neither becomes a C# member, on
-either side. Each is a named skip rather than a silent drop:
+A function declared in the enum class body binds as an extension method, the same way a property
+does. An `abstract fun` with a body on each entry dispatches to the entry's own body:
 
 ```kotlin
-enum class Mood(val isCuddly: Boolean) {
-  FIRST(false), SECOND(true);
+enum class Chatter {
+  CHIRP { override fun sound(times: Int): String = List(times) { "chirp" }.joinToString(" ") },
+  TRILL { override fun sound(times: Int): String = List(times) { "trrrl" }.joinToString(" ") };
 
-  var isLoud: Boolean = false
-  fun isLoudNow(): Boolean = isLoud  // SKIPPED_ENUM_MEMBER_FUNCTION
+  abstract fun sound(times: Int): String
+}
+```
+
+```C#
+public static string Sound(this Chatter chatter, int times)   // in ChatterExtensions
+```
+
+The receiver parameter is named after the enum (`mood`, `chatter`), or `receiver` if the function
+already has a parameter of that name. Overloads, default arguments and a throwing function
+(a catchable mapped exception) behave as they do on a class. A class-typed return is a fresh
+wrapper you must `Dispose`.
+
+A function in the enum's `companion object` binds as a plain static method, and a companion `val`
+or `var` as a static property, both on the same `{Enum}Extensions` class. A C# `enum` cannot
+declare statics, and the generated code's language version has no static extension members, so
+there is no `Mood.Fallback()`:
+
+```kotlin
+enum class Mood {
+  HAPPY, SLEEPY, GRUMPY;
+
+  fun isLoudNow(): Boolean = this == GRUMPY
 
   companion object {
-    val isDefault: Boolean = true   // SKIPPED_UNSUPPORTED_PROPERTY
-    fun fallback(): Mood = FIRST    // SKIPPED_ENUM_MEMBER_FUNCTION
+    fun fallback(): Mood = SLEEPY
+    val houseFavourite: Mood = HAPPY
+    var lastSeen: Mood = SLEEPY
   }
 }
 ```
 
-`isLoud` itself binds both ways, `IsLoud(this Mood mood)` and `SetIsLoud(this Mood mood, value)`.
-Move a companion property to a top-level `val` or into an ordinary `object` instead. There is no
-current workaround for a member or companion function beyond exposing the same logic as a
-top-level function taking the enum as a parameter or receiver; binding it as an extension method,
-the way an enum's own properties already are, is open work (see
-[ROADMAP.md](https://github.com/xxfast/kotlin-native-nuget/blob/main/ROADMAP.md) Phase 4).
+```C#
+bool loud = Mood.Grumpy.IsLoudNow();
+Mood fallback = MoodExtensions.Fallback();
+Mood favourite = MoodExtensions.HouseFavourite;
+MoodExtensions.LastSeen = Mood.Grumpy;
+```
+
+An enum with only functions still gets its `{Enum}Extensions` class.
+
+### What is not bound
+
+- A `suspend`, generic, or `Flow`-returning enum member function, and a lambda-returning one, is
+  skipped with a named diagnostic. Expose it as a top-level function taking the enum as a receiver
+  or parameter instead.
+- A companion `const val` is skipped (`SKIPPED_UNSUPPORTED_PROPERTY`). Use a top-level `const val`.
+- Two declarations that spell the same C# signature in `{Enum}Extensions` fail generation with
+  `ERROR_CSHARP_SIGNATURE_COLLISION`: a member function beside a same-named member property
+  (`fun description()` beside `val description`), or a companion `val` beside any same-named
+  member. Rename one.

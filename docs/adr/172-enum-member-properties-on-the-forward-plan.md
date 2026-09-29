@@ -198,9 +198,8 @@ does, so per house practice it is the alternative, not the recommendation.
 - `LeakTests/LiveHandleTests.cs` row 1h, `EnumMemberClassTypedGetter_UsingDispose_ReturnsToBaseline`,
   pins the class-typed getter's owned wrapper returning to baseline on `Dispose`.
 - Left open, deliberately not touched by this ADR: enum member *functions* and companion
-  functions/properties still have no route (`SKIPPED_ENUM_MEMBER_FUNCTION`,
-  `SKIPPED_UNSUPPORTED_PROPERTY`); see ROADMAP.md Phase 4, "An enum member function ... not
-  bound."
+  functions/properties still had no route. *(Amended 2026-09-29: delivered by the ADR-006
+  amendment of that date; `SKIPPED_ENUM_MEMBER_FUNCTION` is gone.)*
 
 ## Prior art
 

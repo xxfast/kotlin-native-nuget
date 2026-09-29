@@ -28,7 +28,8 @@ internal fun FileSpec.Builder.addEnumExports(
   // ADR-006 amendment: member functions, companion functions and companion `val`/`var`, all off the
   // catalog, so the C# half (`translateEnum`) reads the very same plans.
   callableCatalog.enumMethods(qualifiedName).forEach { plan -> addForwardKotlinPlanExport(plan) }
-  callableCatalog.companionMethods(qualifiedName).forEach { plan -> addForwardKotlinPlanExport(plan) }
+  callableCatalog.companionMethods(qualifiedName)
+    .forEach { plan -> addForwardKotlinPlanExport(plan) }
   callableCatalog.enumCompanionProperties(qualifiedName)
     .forEach { plan -> addForwardPropertyPlanExports(plan) }
 }

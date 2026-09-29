@@ -252,10 +252,10 @@ the property's own type, the same sentence a callable route prints for the same 
     at Cat.kt:46
 ```
 
-A property declared in an `enum class`'s `companion object` skips this same way, naming the
-companion. A function declared in an enum class body or its companion object has no property-shaped
-kind to report under, so it gets its own, `SKIPPED_ENUM_MEMBER_FUNCTION`; see
-[Enums: Members that aren't bound](enums.md#enum-member-functions-skip-named).
+A `const val` in an `enum class`'s `companion object` skips this same way, naming the companion. A
+`suspend`, generic or `Flow`-returning function in an `enum class` body or its companion object
+skips under the standard kinds (`SKIPPED_UNSUPPORTED_COMBINATION` for a `suspend` one), naming the
+enum; see [Enums: Functions and companion members](enums.md#enum-functions).
 
 A collection property is skipped the same way when one of its components (the element, or a map
 key or value) has no C# spelling. A sealed **class** component no longer falls into this bucket:
