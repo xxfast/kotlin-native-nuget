@@ -213,6 +213,14 @@ way an ordinary value-class unbox does. `LeakTests/LiveHandleTests.cs`'s
 round trip, the value-class unbox-exactly-once path, and the same pair under the completion race a
 suspend call with no suspension point can hit.
 
+An [enum element read through `StateFlow`, `Flow` or a generic class](coroutines-and-flow.md#enum-elements)
+mints one handle per `.Value` read and per emission, released as the ordinal is read, so the count
+returns to baseline with nothing for you to dispose. `LeakTests/LiveHandleTests.cs`'s
+`EnumStateFlowElement_RepeatedValueReads_ReturnToBaseline`,
+`EnumFlowElement_Emissions_ReturnToBaseline` and
+`ValueClassFlowElement_ValueReadsAndEmissions_ReturnToBaseline` cover the enum `.Value` loop, the enum
+emission loop and the value-class element on the same two routes.
+
 A [sealed base's own async members](interfaces-abstract-sealed.md#sealed-method-suspend-generated-c)
 add no new handle kind either: the scope handle moves from the arm to the base, and the count returns
 to baseline once the base-typed reference is disposed. `LeakTests/LiveHandleTests.cs` row 9l covers

@@ -476,9 +476,8 @@ internal sealed interface CsTypeArgument {
  * through one is never admitted, and qualifying it would emit a `global::` reference to a type
  * nothing declares.
  *
- * A *declared* enum is deliberately still admitted here even though `NugetMarshal.FromHandle` has
- * no enum branch (`docs/backlog/fromhandle-no-enum-branch.md`): it compiles, and narrowing that
- * gap is a separate change.
+ * A *declared* enum is admitted here: since ADR-094's 2026-09-29 amendment every exported enum
+ * registers a `NugetMarshal.Factories` entry, so `FromHandle` reads it by ordinal.
  */
 internal fun csTypeArgument(
   type: KSType?,

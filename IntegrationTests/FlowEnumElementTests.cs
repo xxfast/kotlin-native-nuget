@@ -4,7 +4,7 @@ using Xunit;
 namespace IntegrationTests;
 
 /// <summary>
-/// ROADMAP line 74 (<c>docs/research/roadmap/fromhandle-enum.md</c>): an ENUM element at an erased
+/// ADR-094 2026-09-29 amendment: an ENUM element at an erased
 /// generic position. The Kotlin shim retains the enum object itself and the C# side reads it
 /// through <c>NugetMarshal.FromHandle&lt;Mood&gt;</c> with no per-member read delegate, so every
 /// cell here needs a <c>NugetMarshal.Factories</c> entry for the enum. Four positions:

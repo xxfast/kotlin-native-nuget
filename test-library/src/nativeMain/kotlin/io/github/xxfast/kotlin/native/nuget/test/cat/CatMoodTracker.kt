@@ -1,9 +1,9 @@
 package io.github.xxfast.kotlin.native.nuget.test.cat
 
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
 /**
@@ -220,7 +220,7 @@ class CatMoodTracker(private val catName: String) {
 
   private val _maybeTemper: MutableStateFlow<Mood?> = MutableStateFlow(null)
 
-  /** StateFlow<Mood?> -- nullable enum element. Null until [sulk]; `T` is `Nullable<Mood>` in C#. */
+  /** StateFlow<Mood?> -- nullable enum element. Null until [sulk]; `T` is `Mood?` in C#. */
   val maybeTemper: StateFlow<Mood?> = _maybeTemper.asStateFlow()
 
   /** Deterministic mutation -- Oreo sulks: [temper] and [maybeTemper] both become GRUMPY. */

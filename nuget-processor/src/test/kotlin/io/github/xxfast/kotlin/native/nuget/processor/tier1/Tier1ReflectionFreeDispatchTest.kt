@@ -101,7 +101,7 @@ class Tier1ReflectionFreeDispatchTest {
   }
 
   @Test
-  fun `objects register no factory, an enum registers through its ordinal, a value class through its box pair`() {
+  fun `an enum registers by ordinal, a value class by box pair, an object not at all`() {
     val result = Tier1Harness.run(
       """
       package tier1.reflectionfreeplain
@@ -128,7 +128,7 @@ class Tier1ReflectionFreeDispatchTest {
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "[typeof(global::Tier1.Cat)] = static handle => new global::Tier1.Cat(handle, out _),")
-    // ADR-094 amendment: an enum has no handle constructor, but an erased read of one is a handle to
+    // ADR-094 amendment: an enum has no handle constructor, but an erased read of one is a handle
     // the Kotlin enum object, so it registers through its ordinal.
     assertContains(
       cs,

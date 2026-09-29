@@ -353,3 +353,10 @@ Everything else is verified by source reading, with the file and line inline.
 > instead of a named skip. A bare `suspend fun (): ByteArray` had the mirror gap on the suspend
 > return and rendered an undeclared `Task<ByteArray>` (CS0246). Both now route through ADR-151's
 > `ByteArray` component and bare shapes, so the `check` never fires for `ByteArray` again.
+
+## Amendment (2026-09-29): a bare enum element is now bound
+
+The "Not touched" note above, that a bare enum element (`StateFlow<Mood>`) stays admitted but broken
+at runtime, no longer holds. [ADR-094](094-reflection-free-generic-dispatch.md)'s 2026-09-29
+amendment registers every exported enum in `NugetMarshal.Factories`, so `FromHandle<Mood>` resolves
+without a per-member delegate. This design's collection routing is unchanged.
