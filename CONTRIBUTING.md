@@ -84,12 +84,59 @@ and any generated-by footer. Deferred work and bugs found but not fixed belong i
 [ROADMAP.md](ROADMAP.md), where the next contributor will actually find them, not in a PR body that
 gets buried on merge.
 
-A release PR (`Prepare for release <version>`) skips all of the above. Its body is the list of commits
-on `main` since the previous tag, one `- <subject> (#NNN)` line each, and nothing else: no prose, no
-verify line, no release steps (those live in `.github/workflows/release.yml`). The list is the draft of
-the GitHub release notes.
+A release PR (`Prepare for release <version>`) skips all of the above. Its body is the draft of the
+GitHub release notes, in the format under [Release notes](#release-notes), and nothing else: no verify
+line, no release steps (those live in `.github/workflows/release.yml`).
+
+## Release notes
+
+The GitHub release for a tag has three sections, in this order, then the full commit list. Draft them
+in the release PR body and paste them into the release once the tag is published. Read every commit
+since the previous tag (`git log <previous-tag>..main`); the PR titles alone undersell some changes and
+hide others.
+
+**Headline features.** What a consumer can now do that they could not before. One bullet per area, led
+by the area in bold (`**Interfaces:**`, `**Reverse (C# to Kotlin):**`, `**Publishing:**`), naming the
+capability and its ADR. Group PRs that add up to one capability (the three ADR-150 KDoc PRs are one
+feature). Prefer what a consumer notices without reading `Interop.cs`: a new Gradle task, IntelliSense
+docs, a type that now binds.
+
+**Bug fixes.** Generated code that was wrong, did not compile, crashed the host, or aborted the build,
+and now is right. One line each, with the PR number. Diagnostic wording changes are one grouped line, not
+one per PR.
+
+**Breaking changes.** Every change after which code that worked against the previous release fails to
+compile, behaves differently, or needs a rebuild. Write `None.` rather than dropping the heading. Sources:
+the Breaking section of every ADR touched since the tag, and the "Breaking" and "Sharp edges" lines of
+every PR body. Each entry says:
+
+- what changed, with the old and new C# spelling where one moved
+- who is affected (a consumer catching `KotlinException`, a hand-written C# class implementing the
+  interface)
+- whether it is **source** (fails to compile) or **binary** (source compiles, code built against the old
+  package needs a rebuild)
+- what to do about it
+
+**All changes.** The commit list, one `- <subject>` line each, newest first. Commits with no consumer
+effect (docs, ROADMAP, test flakes) appear here and nowhere else.
 
 ```
+## Headline features
+
+- **Documentation:** KDoc on a Kotlin declaration becomes C# XML doc comments, so consumers see it in
+  IntelliSense, including an `expect` declaration's KDoc (ADR-150)
+
+## Bug fixes
+
+- A `bool` on a generated `DllImport` is marshalled as one byte on every route (#322)
+
+## Breaking changes
+
+- **Enum entries and `const val` keep their internal capitals** (source, ADR-006, #290).
+  `SecondValue` was `Secondvalue` in C#; rename references to the old spelling.
+
+## All changes
+
 - Bind suspend collection returns as `Task<IReadOnlyList<T>>` (ADR-119) (#124)
 - Stop exporting a marked lambda or Flow property (ADR-115) (#123)
 ```
