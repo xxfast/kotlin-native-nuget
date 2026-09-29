@@ -2283,6 +2283,23 @@ internal static class AssemblyExtractor
                 hint: "Expose an equivalent static member on a concrete adapter class."), null);
         }
 
+        // ADR-043 / ADR-072: a generic METHOD never binds, whether or not its type parameter
+        // appears in its signature. Checked here, before decoding, because a phantom type
+        // parameter (`UnregisterClassMap<TMap>()`, `ForContext<TSource>()`) never reaches the
+        // decoder's `!!n` guard: it would decode as an ordinary method and either collide with a
+        // non-generic sibling's canonical managed signature (failing the whole reader run in
+        // ValidateManagedSignatures) or bind as a CS0411 call.
+        if (methodDef.GetGenericParameters().Count > 0)
+        {
+            return (null, new RirDiagnostic(
+                kind: "skipped_open_generic",
+                typeName: typeName,
+                memberName: methodName,
+                memberSignature: BuildSignatureString(mr, methodDef, methodName),
+                reason: "generic method: its type parameter has no concrete type at code-generation time",
+                hint: "Expose a concrete overload in a C# adapter shim."), null);
+        }
+
         var decoder = new SignatureDecoder(
             mr, boundHandleTypeNames, enumTypes, structTypes, boundInterfaceTypeNames,
             declaringTypeParameters);

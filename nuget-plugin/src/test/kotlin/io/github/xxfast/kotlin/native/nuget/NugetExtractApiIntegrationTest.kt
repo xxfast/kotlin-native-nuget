@@ -1096,4 +1096,47 @@ class NugetExtractApiIntegrationTest {
     assertTrue(badge.properties.single().isReadOnly)
     assertTrue(badge.properties.single().isInitOnly)
   }
+
+  @Test
+  fun `a generic method with a phantom type parameter is skipped and never collides`() {
+    val dotnet: String = findDotnet() ?: return
+
+    // A phantom type parameter appears in no parameter and not in the return type, so signature
+    // decoding never meets `!!n`. `Unregister<TMap>()` used to render the same canonical managed
+    // signature as `Unregister()` and fail the whole reader run (CsvHelper's
+    // `CsvContext.UnregisterClassMap<TMap>()`); `Describe<TSource>()` has no sibling and used to
+    // bind as an ordinary `Describe()`, a CS0411 call (Serilog's `Log.ForContext<TSource>()`).
+    val source: String = """
+      namespace Probe.Phantom;
+
+      public sealed class Registry
+      {
+          public Registry() { }
+          public void Unregister() { }
+          public void Unregister<TMap>() { }
+          public string Describe<TSource>() => "";
+          public int Count() => 0;
+      }
+    """.trimIndent()
+
+    val dll: File = compileFixture(dotnet, source, "PhantomGenericReaderFixture")
+    val toolDir: File = Files.createTempDirectory("NugetMetadataReader-phantom-fixture").toFile()
+    unpackMetadataReader(toolDir, javaClass.classLoader)
+    val file: RirFile = parseReverseIr(
+      runMetadataReader(dotnet, toolDir, mapOf("PhantomFixture" to listOf(dll.absolutePath))),
+    )
+    val registry: RirClass = file.assemblies.single()
+      .namespaces.single { it.name == "Probe.Phantom" }
+      .types.filterIsInstance<RirClass>()
+      .single { it.name == "Registry" }
+
+    // The non-generic sibling and the control both still bind, once each.
+    assertEquals(listOf("Count", "Unregister"), registry.methods.map { it.name }.sorted())
+
+    val skipped: List<String> = file.assemblies.single().diagnostics
+      .filter { it.kind == RirDiagnosticKind.SKIPPED_OPEN_GENERIC && it.typeName == "Registry" }
+      .map { it.memberName }
+      .sorted()
+    assertEquals(listOf("Describe", "Unregister"), skipped)
+  }
 }

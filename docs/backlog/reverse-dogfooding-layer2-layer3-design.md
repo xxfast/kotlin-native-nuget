@@ -17,8 +17,7 @@ Kotlin to C# package and back.
 Asserts, none of which the layer 1 census can: the generated Kotlin compiles (`compileKotlin<Target>`),
 `nugetCompileInterop` compiles the shims, the smoke call returns the right value. This closes the gap
 the census's `SUMMARY.md` header states explicitly: `"generation": "ok"` means both generators returned
-without throwing, not that anything compiles. Serilog is a known case where it does not (see
-[`csvhelper-open-generic-method-signature-collision.md`](csvhelper-open-generic-method-signature-collision.md)).
+without throwing, not that anything compiles. Serilog was a known case where it did not (generic methods such as `ForContext<TSource>()` bound uncompilably; they are now skipped).
 
 Cost inferred at 8 to 12 minutes on one macOS leg (one Kotlin/Native link); run nightly plus
 `workflow_dispatch` only, same reasoning as the layer 1 job: a feed or build outage must not turn a
@@ -71,8 +70,7 @@ kermit first, then ktor's `LogLevel` and `Url`; datetime, serialization-json and
 ## Unspiked, spike before building
 
 1. Does the generated output compile for a real package, end to end (Kotlin and C# both)? Only
-   "does not throw" was measured by the layer 1 census. Serilog is known bad (see
-   [`csvhelper-open-generic-method-signature-collision.md`](csvhelper-open-generic-method-signature-collision.md));
+   "does not throw" was measured by the layer 1 census. Serilog was known bad (uncompilable generic-method bindings, now skipped);
    if the compile step is red for most packages, layer 2's first run will be red across the board.
 2. The forward direction entirely: `admit(...)` against a published klib (resolved by coordinate, not
    `project(...)`) was never run. Nobody has verified the ADR-154 origin resolution even finds a klib

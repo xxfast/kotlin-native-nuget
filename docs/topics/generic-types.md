@@ -89,8 +89,9 @@ fun tallyPairing(label: String, count: Int): String {
 - A bare type parameter annotated nullable (`T? Peek()`) is not representable per instantiation and
   is skipped (`skipped_nullable_type_parameter`); the rest of the class still binds.
 - Only generic **classes** bind. Generic interfaces stay excluded (`skipped_generic_interface`; see
-  [The bridgeable subset](bridgeable-subset.md)), and generic **methods** (`T Identity<T>(T)`) stay
-  `skipped_open_generic` permanently, unless a caller can pin the type argument.
+  [The bridgeable subset](bridgeable-subset.md)), and generic **methods** stay `skipped_open_generic`
+  permanently, unless a caller can pin the type argument. That includes `void Reset<T>()`, whose type
+  parameter appears in no signature; a non-generic `Reset()` beside it still binds.
 - A generic definition with zero discovered instantiations emits nothing at all: no Kotlin type, no
   registration, just an `info_uninstantiated_generic_type` note.
 
