@@ -1230,6 +1230,10 @@ internal class ForwardPropertyPlanner(
     // ADR-160: not readable at a property position; a function-typed property keeps its own skip.
     is BridgeType.Callback, is BridgeType.ReturnedLambda -> false
 
+    // ADR-176: `Interface` was admitted here before the method gates lifted it, so a collection
+    // property getter bound with no reachable backing wrapper and threw at the first element; the
+    // reachability walk in `NugetProcessor` now visits every collection component. The setter side
+    // is `isWrappableComponent`, which admits `Interface` too.
     BridgeType.Char, BridgeType.String, BridgeType.Instant, BridgeType.Duration,
     is BridgeType.Primitive, is BridgeType.Enum, is BridgeType.ObjectHandle,
     is BridgeType.Interface -> true

@@ -171,6 +171,15 @@ release on the C# side, unchanged from the member route. `LeakTests/LiveHandleTe
 `TwoCallCollectionParam_ThrowingListArgument_ReturnsToBaseline` cover the null-return, non-null-return
 and throwing cases for a `List` parameter.
 
+An [interface as a `List`/`Set`/`Map` component](collections.md#interfaces-as-collection-components)
+adds no new handle kind either: the returned collection's own handle is released on every path, each
+Kotlin-backed element is an owned wrapper you dispose, and a C#-implemented element you pass in is
+never disposed for you, even when a later element's factory throws. `LeakTests/LiveHandleTests.cs`'s
+`InterfaceListReturn_ElementsDisposed_ReturnsToBaseline`,
+`InterfaceListParameter_MixedElements_ReturnsToBaseline`,
+`InterfaceListEcho_CSharpElementResolved_ReturnsToBaseline` and
+`InterfaceListReturn_ThrowingElementFactory_DoesNotDisposeCSharpElement` cover them.
+
 A top-level [`suspend fun` returning `StateFlow<T>`](coroutines-and-flow.md#suspend-fun-returning-stateflow-t)
 adds no new handle kind either: the awaited holder owns the flow's own handle and releases it on
 `Dispose`, each `.Value` and each collected emission mints one element handle the caller releases,

@@ -1054,52 +1054,65 @@ private fun List<CirNamespace>.withoutEmptyStaticClasses(): List<CirNamespace> =
  * Enums, objects, interfaces without a backing wrapper and open generic wrappers register nothing:
  * none of them is a closed type reachable from a handle.
  */
-private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry> = namespaces
-  .flatMap { namespace ->
-    namespace.declarations.flatMap { declaration ->
-      when (declaration) {
-        // ADR-147: an open generic wrapper registers nothing -- `typeof(Crate<>)` is not the
-        // closed type an erased path asks for, and the entry would never match.
-        is CirClass ->
-          if (declaration.hasInternalHandleConstructor && !declaration.isAbstract &&
-            declaration.typeParameters.isEmpty()
-          ) {
-            listOf(CirFactoryEntry("${namespace.name}.${declaration.name}")) +
-                // ADR-173: an ADR-040 backing wrapper also registers under its interface, so an
-                // erased read at `T = IPet` (a Kotlin-backed pet the token probe missed)
-                // constructs the backing class. Namespace-level only: a nested interface's key
-                // is deferred until a fixture pins the ADR-134 spelling.
-                listOfNotNull(
-                  declaration.backsInterface?.let { iface ->
-                    CirFactoryEntry(
-                      "${namespace.name}.$iface",
-                      constructTypeName = "${namespace.name}.${declaration.name}",
-                    )
-                  },
-                )
-          } else {
-            emptyList()
+private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry> {
+  // ADR-176: nested declarations register too, spelled through their enclosing declarations (the
+  // name a consumer's `typeof(...)` produces, as [valueClassNames] does). Without it a nested
+  // class read per element (`List<Aviary.Perch>`, `FromHandle<Aviary.Perch>`) or a nested
+  // interface's backing wrapper (`List<Aviary.Keeper>`, `Materialize<Aviary.IKeeper>`) found no
+  // `Factories` key and threw `NotSupportedException` at the first element. A sealed arm's scope
+  // follows its `isNested` placement.
+  fun CirDeclaration.own(path: String): List<CirFactoryEntry> = when (this) {
+    // ADR-147: an open generic wrapper registers nothing -- `typeof(Crate<>)` is not the
+    // closed type an erased path asks for, and the entry would never match.
+    is CirClass ->
+      if (hasInternalHandleConstructor && !isAbstract && typeParameters.isEmpty()) {
+        listOf(CirFactoryEntry("$path.$name")) +
+            // ADR-173: an ADR-040 backing wrapper also registers under its interface, so an
+            // erased read at `T = IPet` (a Kotlin-backed pet the token probe missed) constructs
+            // the backing class. ADR-176: the backing wrapper of a nested interface is declared
+            // beside it, so both names share the enclosing path.
+            listOfNotNull(
+              backsInterface?.let { iface ->
+                CirFactoryEntry("$path.$iface", constructTypeName = "$path.$name")
+              },
+            )
+      } else {
+        emptyList()
+      }
+
+    is CirSealedClass ->
+      listOf(CirFactoryEntry("$path.$name", viaFromHandle = true)) +
+          subclasses.map { subclass ->
+            // Issue #54: a sibling subclass is declared beside its base, so its wrapper name is
+            // `Namespace.Label`, not `Namespace.Shape.Label` -- the key has to be the name a
+            // consumer's `typeof(...)` produces or the erased generic path misses it.
+            val name: String = if (subclass.isNested) "$name.${subclass.name}" else subclass.name
+            CirFactoryEntry("$path.$name")
           }
 
-        is CirSealedClass ->
-          listOf(CirFactoryEntry("${namespace.name}.${declaration.name}", viaFromHandle = true)) +
-              declaration.subclasses.map { subclass ->
-                // Issue #54: a sibling subclass is declared at namespace level, so its wrapper name
-                // is `Namespace.Label`, not `Namespace.Shape.Label` -- the key has to be the name a
-                // consumer's `typeof(...)` produces or the erased generic path misses it.
-                val name: String =
-                  if (subclass.isNested) "${declaration.name}.${subclass.name}" else subclass.name
-                CirFactoryEntry("${namespace.name}.$name")
-              }
-
-        else -> emptyList()
-      }
-    }
+    else -> emptyList()
   }
-  .plus(valueClassNames(namespaces).map { name -> CirFactoryEntry(name, viaNugetUnbox = true) })
-  // A duplicate key is an ArgumentException at type-initialization time, i.e. the first marshal
-  // call of the consumer's process, so collapse rather than trust the walk to be unique.
-  .distinctBy { it.qualifiedTypeName }
+
+  fun CirDeclaration.walk(path: String): List<CirFactoryEntry> = own(path) + when (this) {
+    is CirClass -> nestedDeclarations.flatMap { it.walk("$path.$name") }
+    is CirInterface -> nestedDeclarations.flatMap { it.walk("$path.$name") }
+    is CirObject -> nestedDeclarations.flatMap { it.walk("$path.$name") }
+    is CirSealedClass -> nestedDeclarations.flatMap { it.walk("$path.$name") } +
+        subclasses.flatMap { arm ->
+          val armPath: String = if (arm.isNested) "$path.$name.${arm.name}" else "$path.${arm.name}"
+          arm.nestedDeclarations.flatMap { it.walk(armPath) }
+        }
+
+    else -> emptyList()
+  }
+
+  return namespaces
+    .flatMap { namespace -> namespace.declarations.flatMap { it.walk(namespace.name) } }
+    .plus(valueClassNames(namespaces).map { name -> CirFactoryEntry(name, viaNugetUnbox = true) })
+    // A duplicate key is an ArgumentException at type-initialization time, i.e. the first marshal
+    // call of the consumer's process, so collapse rather than trust the walk to be unique.
+    .distinctBy { it.qualifiedTypeName }
+}
 
 /**
  * ADR-171: the `global::`-free qualified C# name of every value class with a box/unbox pair, root

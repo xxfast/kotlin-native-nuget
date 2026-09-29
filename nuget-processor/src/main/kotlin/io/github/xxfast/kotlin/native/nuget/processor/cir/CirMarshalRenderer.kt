@@ -545,10 +545,16 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
     appendLine("        }")
     appendLine()
   }
+  // ADR-176: the throw-path cleanup disposes only what the marshaller built (every generated
+  // wrapper is an `INugetHandle`, ADR-094). With interface components an element built before the
+  // throw can be a token-resolved C#-implemented original the consumer owns, which must survive.
   if (helper.includesList || helper.includesSet || helper.includesMap) {
     appendLine("        private static void DisposeMaterialized<T>(System.Collections.Generic.IEnumerable<T> materialized)")
     appendLine("        {")
-    appendLine("            foreach (T item in materialized) (item as IDisposable)?.Dispose();")
+    appendLine(
+      "            foreach (T item in materialized) " +
+        "if (item is INugetHandle && item is IDisposable disposable) disposable.Dispose();",
+    )
     appendLine("        }")
     appendLine()
   }

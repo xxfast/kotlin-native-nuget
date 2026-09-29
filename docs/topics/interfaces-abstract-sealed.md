@@ -59,6 +59,9 @@ Each read returns a **fresh wrapper**. Reading `cat.Friend` twice returns two di
 over the same Kotlin instance, and each disposes independently, so dispose every interface-typed
 value you receive.
 
+A `List`, `Set` or `Map` of an interface (`List<Pet>`) binds too, as `IReadOnlyList<IPet>` and its
+kin; see [Collections: Interfaces as collection components](collections.md#interfaces-as-collection-components).
+
 ### Defaulted interface members on implementing classes {id="defaulted-interface-members-on-implementing-classes"}
 
 A class that implements an interface without overriding one of its defaulted members still carries

@@ -183,7 +183,9 @@ loudly; it does not pass silently.
 `CirFactoryEntry` gains `constructTypeName` (defaulting to the key, `qualifiedTypeName`), and
 `CirClass` gains `backsInterface`, which `translateInterfaceBackingClass` sets to `I<Name>`.
 `factoryEntries` emits the interface entry beside the backing class's own `Pet` entry, from the
-namespace-level walk only, so a nested interface registers nothing yet (deferred). A statically
+namespace-level walk only, so a nested interface registers nothing yet (deferred; **closed
+2026-09-29** by [ADR-176](176-interface-collection-components.md), where `factoryEntries` recurses
+into nested declarations). A statically
 written line, so trim/AOT safe on the ADR-094 argument (inferred).
 
 ### Reachability: an erased type-argument position makes an interface reachable
@@ -254,7 +256,7 @@ the old spelling (verified by grep). Treated as a defect fix, not a deprecation 
   same PR. The respell alone turns every existing interface-typed erased read into
   `Materialize<IPet>` with no factory, breaking a consumer that works today.
 - Deferred: sealed interfaces and `fun interface`s at type arguments; nested-interface factory keys
-  (ADR-134 naming) until a nested fixture pins them; the unexplained skip of a top-level
+  (ADR-134 naming) until a nested fixture pins them (closed 2026-09-29 by ADR-176); the unexplained skip of a top-level
   `fun petSupplier(pet: Pet): () -> Pet`; Kotlin-side `===` across crossings (ADR-084).
 - ADR-136's deferral of the generic-function route becomes historical.
 

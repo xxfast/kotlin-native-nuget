@@ -100,7 +100,7 @@ those stay unsupported. See [Coroutines and Flow](coroutines-and-flow.md).
 A `var`-declared collection property always gets a getter. It gets a setter only when every
 component (the element for `List`/`Set`, the key **and** value for `Map`) is one of the supported
 [collection component types](#collection-component-types) below. If a component isn't supported
-(today: a nullable nested collection, or an interface), the property still generates, but read-only,
+(today: a nullable nested collection), the property still generates, but read-only,
 and the compiler emits a `SKIPPED_UNSUPPORTED_INPUT` diagnostic naming the property.
 
 ```kotlin
@@ -139,7 +139,7 @@ bare enum via its `int` ordinal (see [Enums](enums.md#as-a-collection-component)
 any of the above underlyings (see [Value classes](value-classes.md#as-a-collection-component)); a
 sealed base, which boxes as an object handle the same way a concrete class does (see
 [Interfaces, abstract classes, and sealed classes](interfaces-abstract-sealed.md#a-sealed-type-at-a-parameter-position));
-a `ByteArray`, as `byte[]` (see below); and a `List`/`Map`/`Set` itself, nested at arbitrary depth.
+a `ByteArray`, as `byte[]` (see below); an interface (see [Interfaces as collection components](#interfaces-as-collection-components)); and a `List`/`Map`/`Set` itself, nested at arbitrary depth.
 This applies uniformly to parameters, method and property returns, and
 [collection property setters](#mutable-collection-properties).
 
@@ -147,8 +147,8 @@ A nullable spelling of any of those (`Map<String, Int?>`, `Set<String?>`, `List<
 `List<Short?>`, `List<List<String?>>`) is also supported: a `null` element, set member, or map value
 rides a null pointer in that component's slot, both reading and writing.
 
-Two shapes are not supported and fail with a named diagnostic rather than binding incorrectly: a
-**nullable nested collection** (`List<List<String>?>`), and a plain interface component. A nullable
+One shape is not supported and fails with a named diagnostic rather than binding incorrectly: a
+**nullable nested collection** (`List<List<String>?>`). A nullable
 map **key** (`Map<String?, Int>`) is also unsupported, at every position a map appears (parameter,
 return, property, and nested), since a C# `Dictionary` can't hold a null key and the generated read
 path would otherwise fail to compile. A nullable map **value** (`Map<String, Int?>`) is unaffected.
@@ -266,6 +266,52 @@ Assert.Equal(new[] { "oreo", "mylo" }, grid[0]);
 string logged = board.LogGrid(new[] { new[] { "oreo", "mylo" }, new[] { "biscuit" } }); // "oreo,mylo;biscuit"
 ```
 
+### Interfaces as collection components {id="interfaces-as-collection-components"}
+
+A Kotlin interface binds as its `I`-prefixed C# interface inside a `List`, `Set` or `Map` (as a value
+or a key), at every position: property (get and set), method or top-level return, parameter,
+`suspend` return and `Flow` element, nullable elements included.
+
+```kotlin
+class FosterHome {
+  fun residentsNow(): List<Pet> = listOf(oreo, mylo)
+  fun roll(pets: List<Pet>): String = pets.joinToString(" | ") { "${it.name}: ${it.speak()}" }
+  fun echo(pets: List<Pet>): List<Pet> = pets
+  fun byName(): Map<String, Pet> = mapOf("oreo" to oreo, "mylo" to mylo)
+  suspend fun residentsLater(): List<Pet> = listOf(oreo, mylo)
+}
+```
+
+```C#
+public IReadOnlyList<global::TestLibrary.Cat.IPet> ResidentsNow()
+public string Roll(IReadOnlyList<global::TestLibrary.Cat.IPet> pets)
+public IReadOnlyList<global::TestLibrary.Cat.IPet> Echo(IReadOnlyList<global::TestLibrary.Cat.IPet> pets)
+public IReadOnlyDictionary<string, global::TestLibrary.Cat.IPet> ByName()
+public Task<IReadOnlyList<global::TestLibrary.Cat.IPet>> ResidentsLaterAsync(CancellationToken cancellationToken = default)
+```
+
+You can pass Kotlin-backed and C#-implemented elements in the same list. Kotlin calls each one, so a
+C# `Dog` answers from C#, and a C# element that comes back is your own object:
+
+```C#
+using var home = new FosterHome();
+using var oreo = new Cat("Oreo");
+var rex = new Dog("Rex");
+
+string rollCall = home.Roll(new IPet[] { oreo, rex });      // "Oreo: ... | Rex: Woof!"
+
+IReadOnlyList<IPet> back = home.Echo(new IPet[] { rex, oreo });
+Assert.Same(rex, back[0]);                                   // your own object
+back[1].Dispose();                                           // a Kotlin-backed element
+```
+
+A Kotlin-backed element is a fresh wrapper of the interface (`Pet`, never `Cat`, the concrete class),
+so do not cast it down. You own every wrapper a returned collection hands you: dispose each element
+you keep, as you would for a single interface return
+([Interface-typed return values](interfaces-abstract-sealed.md#interface-typed-return-values)). A map
+keyed by an interface compares keys by reference, so look a key up with the instance the collection
+gave you or that you passed in, not with another wrapper over the same Kotlin object.
+
 ## Exception safety on collection parameters and returns {id="exception-safety-on-collection-parameters-and-returns"}
 
 A temporary handle built for a collection parameter is released on every exit path, including when
@@ -277,7 +323,8 @@ error.
 The read side is symmetric: if materializing a returned collection's elements throws partway through
 (an element factory failure), the collection's own handle is still disposed and every element wrapper
 already built before the throw is disposed too. You don't need to add cleanup code for either
-direction; both are handled by the generated bridge code.
+direction; both are handled by the generated bridge code. Only wrappers the bridge built are disposed: a
+C#-implemented interface element you passed in is never disposed on your behalf.
 
 ## Limitations
 

@@ -952,7 +952,9 @@ C#" item (N function pointers for a non-subscription parameter).
 - Interfaces with generic type parameters (`Readable<out T>` / `Writable<in T>` already exist in
   `test-library/.../cat/Variance.kt`) – compose with ADR-010/015/016.
 - Suspend interface members (ADR-019), `Flow`/`StateFlow`-valued interface members (ADR-026/065),
-  collections of interfaces (`List<Pet>`).
+  collections of interfaces (`List<Pet>`). **Amended 2026-09-29:**
+  [ADR-176](176-interface-collection-components.md) lifts the collection deferral: an interface is
+  a `List`/`Set`/`Map` component at every position.
 - Passing a **C#-implemented** `IPet` to a Kotlin interface parameter – ROADMAP line 145+ (N function
   pointers), not this ADR.
 - Object identity: two reads of `cat.friend` produce two distinct C# wrappers over the same Kotlin

@@ -25,6 +25,7 @@ using TestLibrary.Models;
 using TestLibrary.Nested;
 using TestLibrary.Objectprops;
 using TestLibrary.Parcel;
+using TestLibrary.Petlist;
 using TestLibrary.Routes;
 using TestLibrary.Workshop;
 
@@ -1766,6 +1767,114 @@ public class LiveHandleTests
         finally
         {
             NugetMarshal.Factories[typeof(TopStory)] = original;
+        }
+    }
+
+    // ---- ADR-176: interface collection components ----
+
+    // A C#-side IPet that counts its Dispose calls, for the throwing-factory row below: the
+    // marshaller's throw-path cleanup must never dispose an object the consumer owns.
+    private sealed class CountingDog(string name) : IPet
+    {
+        public int Disposals { get; private set; }
+        public string Name { get; } = name;
+        public int Legs => 4;
+        public string? Nickname => null;
+        public string Vibe => "counting";
+        public string Speak() => "Woof!";
+        public string Greet() => $"Hi, I'm {Name} the dog";
+        public string Fetch(string item) => $"{Name} fetches the {item}";
+        public void Nap() { }
+        public void Dispose() => Disposals++;
+    }
+
+    // ADR-176 row 1. `IReadOnlyList<IPet>` return of two Kotlin-backed Cats: the list handle plus
+    // one element box per element; each element becomes a `Pet` wrapper the test disposes.
+    [Fact]
+    public void InterfaceListReturn_ElementsDisposed_ReturnsToBaseline()
+    {
+        using var home = new FosterHome();
+        AssertNoLeak(() =>
+        {
+            IReadOnlyList<IPet> pets = home.ResidentsNow();
+            Assert.Equal(2, pets.Count);
+            foreach (IPet pet in pets) pet.Dispose();
+        });
+    }
+
+    // ADR-176 row 2. Mixed parameter: the list handle (owned, released in the ADR-073 finally),
+    // the Cat's own handle (not owned: `Wrap` hands back the wrapper's handle), and for Rex one
+    // owned bridge transfer handle the fill loop disposes after `nuget_list_add`, plus the Kotlin
+    // bridge object the ADR-084 cleaner releases (hence `Settle`).
+    [Fact]
+    public void InterfaceListParameter_MixedElements_ReturnsToBaseline()
+    {
+        using var home = new FosterHome();
+        using var oreo = new Cat("Oreo");
+        AssertNoLeak(() =>
+        {
+            string rollCall = home.Roll(new IPet[] { new Dog("Rex"), oreo });
+            Assert.Contains("Rex: Woof!", rollCall);
+        });
+    }
+
+    // ADR-176 row 3. Echo of a C#-implemented element: the returned element's box hits the
+    // ADR-084 token probe, resolves to the caller's own Dog and must be disposed on that path.
+    [Fact]
+    public void InterfaceListEcho_CSharpElementResolved_ReturnsToBaseline()
+    {
+        using var home = new FosterHome();
+        var rex = new Dog("Rex");
+        AssertNoLeak(() =>
+        {
+            IReadOnlyList<IPet> back = home.Echo(new IPet[] { rex });
+            Assert.Same(rex, Assert.Single(back));
+        });
+    }
+
+    // ADR-176 row 4. `[countingDog, oreo, oreo]` echoed back with the `IPet` factory swapped for
+    // one that disposes its box and throws on its SECOND call. Element 0 resolves through the
+    // token probe (no factory call), element 1 is factory call 1, element 2 throws. The
+    // `DisposeMaterialized` cleanup then runs over the elements already built: the Pet wrapper
+    // must be disposed, the caller's own CountingDog must NOT be. The list handle is released.
+    [Fact]
+    public void InterfaceListReturn_ThrowingElementFactory_DoesNotDisposeCSharpElement()
+    {
+        Func<IntPtr, object> original = NugetMarshal.Factories[typeof(IPet)];
+        int calls = 0;
+        NugetMarshal.Factories[typeof(IPet)] = handle =>
+        {
+            if (++calls == 2)
+            {
+                NugetMarshal.Dispose(handle);
+                throw new InvalidOperationException("Mylo knocked the foster roster off the fridge");
+            }
+            return new Pet(handle, out _);
+        };
+
+        try
+        {
+            var countingDog = new CountingDog("Rex");
+            Settle();
+            long before = NugetMarshal.LiveHandles;
+
+            using (var home = new FosterHome())
+            using (var oreo = new Cat("Oreo"))
+            {
+                Assert.Throws<InvalidOperationException>(() =>
+                    home.Echo(new IPet[] { countingDog, oreo, oreo }));
+            }
+
+            Settle();
+            long after = NugetMarshal.LiveHandles;
+            Assert.Equal(0, countingDog.Disposals);
+            Assert.True(
+                after == before,
+                $"expected {before} live handles after 1 throwing Echo() crossing, got {after} (delta {after - before})");
+        }
+        finally
+        {
+            NugetMarshal.Factories[typeof(IPet)] = original;
         }
     }
 
