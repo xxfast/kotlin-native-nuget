@@ -723,7 +723,8 @@ boundary is fatal, unchanged from every other bound member.
   with ADR-070's `IFooHandle` (both are handle-backed slot dispatchers) but variance and the
   instantiation-by-interface matrix need their own call.
 - **Generic methods** (`T Identity<T>(T)`), still `skipped_open_generic`, permanently unless a caller
-  can pin the type argument.
+  can pin the type argument. Amended 2026-09-29: this covers every generic method, including one whose
+  type parameter appears in no parameter or return type (`void Reset<T>()`).
 - **Kotlin declaring or implementing a generic type for C#.** Not in scope here or anywhere.
 - **Constraints in the Kotlin surface** (`where T : class` to `<T : Any>`).
 - A generated generic type whose Kotlin name shadows a default-imported stdlib type (`Pair`, `Map`)
