@@ -156,7 +156,8 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
   }
 
   // Deliberately the un-rewritten classification on the parameter side: a `List<Shape>` of a
-  // sealed base stays refused here, as ADR-114/ADR-119 decided (the return side now rewrites), rather than being widened by the rewrite above.
+  // sealed base stays refused here, as ADR-114/ADR-119 decided (the return side now rewrites),
+  // rather than being widened by the rewrite above.
   val collection: BridgeType.Collection? = classify(type) as? BridgeType.Collection
   return if (collection != null && collection.isLegacyMarshallableInput()) {
     ForwardLegacyParameterShape.Marshalled(collection)
@@ -852,8 +853,10 @@ internal fun legacyCollectionRead(handle: String, type: BridgeType.Collection): 
 internal fun ForwardLegacyReturnShape.Marshalled.declaredCsharpType(): String =
   if (nullable) "${type.forwardPublicCsharpType()}?" else type.forwardPublicCsharpType()
 
-/** ...and its completion read, guarded on the wire pointer: `ReadList(IntPtr.Zero)` would call
- *  `nuget_list_count(null)`, so a null result must short-circuit to `null` first. */
+/**
+ * ...and its completion read, guarded on the wire pointer: `ReadList(IntPtr.Zero)` would call
+ * `nuget_list_count(null)`, so a null result must short-circuit to `null` first.
+ */
 internal fun ForwardLegacyReturnShape.Marshalled.legacyMarshalledRead(handle: String): String =
   if (nullable) "$handle == IntPtr.Zero ? null : ${legacyCollectionRead(handle, type)}"
   else legacyCollectionRead(handle, type)

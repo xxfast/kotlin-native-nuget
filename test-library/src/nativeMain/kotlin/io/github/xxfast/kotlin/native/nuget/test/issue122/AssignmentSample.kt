@@ -87,11 +87,11 @@ class Headcount(private val names: List<String>) {
   /**
    * A nullable collection return that is always `null`: binds as `Task<IReadOnlyList<string>?>`
    * and completes with `null`, the null result pointer never reaching `NugetMarshal.ReadList`.
-   * Refused with `SKIPPED_UNSUPPORTED_RETURN` until the ADR-119 amendment.
+   * Refused with `SKIPPED_UNSUPPORTED_RETURN` before ADR-119's 2026-09-29 amendment.
    */
   suspend fun maybe(): List<String>? = null
 
-  /** Nullable `List<String>`, present or absent on demand: Oreo's roll call, or nobody answering. */
+  /** Nullable `List<String>`, present or absent on demand: Oreo's roll call, or nobody home. */
   suspend fun maybeTags(present: Boolean): List<String>? {
     delay(1.milliseconds)
     return if (present) names else null

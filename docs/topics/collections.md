@@ -92,8 +92,8 @@ never an empty collection:
 public IReadOnlyList<global::TestLibrary.Clinic.ChartId>? Ids()
 ```
 
-This does not extend to a `suspend fun` or a `Flow`/`StateFlow` returning a nullable collection;
-those stay unsupported. See [Coroutines and Flow](coroutines-and-flow.md).
+This extends to a `suspend fun` returning a nullable collection, but not to a `Flow`/`StateFlow`
+element (`Flow<List<T>?>`), which stays unsupported. See [Coroutines and Flow](coroutines-and-flow.md).
 
 ## Mutable collection properties {id="mutable-collection-properties"}
 

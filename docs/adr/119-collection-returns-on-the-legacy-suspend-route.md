@@ -314,3 +314,30 @@ named `admit(...)` skip.
   `JobFactory` precedent), and the top-level `everyone` takes a `String`, because an object-typed
   parameter on the legacy suspend route still renders `IntPtr` (ROADMAP Phase 6), which the first
   verify run confirmed with `CS1503: cannot convert from Headcount to nint`.
+
+## Amendment (2026-09-29): nullable collection returns and sealed-base components
+
+The two shapes the Scope section refused "until nullable threading on the legacy routes is done
+once" and "rather than half-bound" now bind, because neither needs a new wire:
+
+- **A nullable collection return** (`suspend fun maybe(): List<String>?`, and `Set`/`Map`/mutable
+  variants) is `Marshalled` with `nullable = true`, declared `Task<IReadOnlyList<string>?>` and
+  completed with `resultPtr == IntPtr.Zero ? null : NugetMarshal.ReadList<string>(...)`. The Kotlin
+  half was already right: `resultRefExpression` pins `if (result == null) null else
+  NugetHandles.retain(<projection>)` for any nullable return (issue #108). This decouples the return
+  side from ADR-114's nullable-*parameter* deferral, which stands unchanged: the two positions share
+  no wire. A `typealias` to a nullable collection binds the same way.
+- **A collection of a sealed base** (`suspend fun sketch(): List<Shape>`) is classified through
+  ADR-105's `sealedAsHandle()` before the `isBridgeableComponent()` admission, as the plan routes
+  classify it. The element becomes `ObjectHandle(viaDiscriminator = true)` and C# reads each element
+  with `NugetMarshal.FromHandle<global::Ns.Shape>(h1)`, which resolves through the sealed base's
+  `Factories` entry to `Shape.FromHandle`. An ineligible sealed type stays refused, named.
+
+Both bind on a class, a sealed arm or base, and at top level. The Flow element position (ADR-123)
+gains the sealed half through the same one-token change (`Flow<List<Shape>>` is
+`KotlinFlow<IReadOnlyList<Shape>>`); `Flow<List<T>?>` stays refused. Still refused, named
+`SKIPPED_UNSUPPORTED_RETURN`: `Pair`, `Result<T>`, a user generic, `Flow<T>`.
+
+Leak evidence: `LeakTests/LiveHandleTests.cs` rows 9p
+(`Suspend_ReturningAListOfTheSealedBase_ReturnsToBaseline`) and 9q
+(`Suspend_ReturningANullableCollection_ReturnsToBaseline`).

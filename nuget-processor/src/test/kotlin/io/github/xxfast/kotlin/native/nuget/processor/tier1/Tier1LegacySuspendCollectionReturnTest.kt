@@ -209,7 +209,8 @@ class Tier1LegacySuspendCollectionReturnTest {
     assertTrue(
       missing.isEmpty(),
       "expected nullable collection returns declared `?` and guarded; missing: $missing; got: " +
-          "${csharpLinesFor(result, "Maybe")} ${csharpLinesFor(result, "resultPtr == IntPtr.Zero")}",
+          "${csharpLinesFor(result, "Maybe")} " +
+          "${csharpLinesFor(result, "resultPtr == IntPtr.Zero")}",
     )
     assertTrue(
       result.generated.contains("if (result == null) null else NugetHandles.retain("),

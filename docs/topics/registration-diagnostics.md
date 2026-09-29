@@ -227,6 +227,12 @@ to baseline once the base-typed reference is disposed. `LeakTests/LiveHandleTest
 base-typed `suspend`, `Flow` and `StateFlow` calls, and row 9l-race repeats a call with no
 suspension point (`Loaf.area`) 5000 times in a tight loop.
 
+A `suspend fun` returning a [nullable collection or a collection of a sealed base](coroutines-and-flow.md#suspend-fun-returning-a-collection)
+adds no new handle kind: the returned list handle is released as any collection return is, and the
+null case never reads. `LeakTests/LiveHandleTests.cs` row 9p
+(`Suspend_ReturningAListOfTheSealedBase_ReturnsToBaseline`) and row 9q
+(`Suspend_ReturningANullableCollection_ReturnsToBaseline`) cover them.
+
 A [top-level function returning a lambda](lambdas-and-callbacks.md#a-top-level-function-that-returns-a-lambda)
 adds one owned handle, the returned `KotlinFunc`, which `Dispose` releases. A parameter the lambda
 captures is not released when the call returns: a C#-implemented interface stays pinned until the
