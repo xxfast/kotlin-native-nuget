@@ -176,3 +176,50 @@ interface KeywordHandler {
 class KeywordHandlerImpl : KeywordHandler {
   override fun handle(params: String): String = params.uppercase()
 }
+
+/*
+ * Generated-local collisions on the **generic top-level function** route (ROADMAP: "The legacy
+ * `fun <T>` route's generated body now declares a local named `owned`"). Unlike [put], none of
+ * these names is a C# keyword: each is the name of a local the generated `F<T>` wrapper body
+ * declares for itself (`Type width`, `bool present`, `IntPtr handle`, `out bool owned`,
+ * `IntPtr result`), so a same-named Kotlin parameter rebinds inside that body (CS0136). The
+ * generator must move its own locals, never the user's parameter: the public named-argument label
+ * stays exactly the Kotlin name.
+ *
+ * One function per local, because each local is declared on a different arm of the body: `width`
+ * and `present` on the width dispatch every call crosses first, `handle`, `owned` and `result` only
+ * on the object arm. The C# facts instantiate each with an `int`, a `string` and a [KeywordTick]
+ * so every arm is reached. Oreo keeps what he is given; Mylo checks it is still there.
+ */
+
+/** Collides with the object arm's `out bool owned`. */
+fun <T> keep(owned: T): T = owned
+
+/** Collides with the object arm's `IntPtr handle`. */
+fun <T> hold(handle: T): T = handle
+
+/** Collides with the object arm's `IntPtr result`. */
+fun <T> pick(result: T): T = result
+
+/** Collides with the width dispatch's `Type width`. */
+fun <T> span(width: T): T = width
+
+/** Collides with the width dispatch's `bool present`. */
+fun <T> seen(present: T): T = present
+
+/**
+ * Not a C# local but the Kotlin export's own ADR-024 exception slot name: the ADR-055 contract
+ * check reads the slot direction off the name, so both halves shift it to `errorOut_` (C# sees
+ * `Mark<T>(T errorOut_)`), as the plan routes do.
+ */
+fun <T> mark(errorOut: T): T = errorOut
+
+/**
+ * **Constructor** route: the throwing-constructor body declares `IntPtr handle` for the
+ * native result. Already safe: a constructor parameter is shifted by `bridgeParameterName()`, so
+ * C# sees `handle_` and the local never collides. Folds the argument into
+ * [tag] so a C# caller can see it arrived.
+ */
+class KeywordCollar(handle: Int) {
+  val tag: Int = handle
+}

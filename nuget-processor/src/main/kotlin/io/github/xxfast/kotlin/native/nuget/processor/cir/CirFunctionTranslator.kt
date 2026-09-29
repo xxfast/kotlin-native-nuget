@@ -6,7 +6,9 @@ import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
+import io.github.xxfast.kotlin.native.nuget.processor.abiSlotParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
+import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericReturnRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.legacyGenericRouteParameterIndex
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
@@ -926,7 +928,21 @@ internal fun translateGenericFunction(
   val param = func.parameters[paramIndex]
   // Printed into the CirParameter of every instantiation import *and* into the hand-built body
   // below, which declares its own `IntPtr error` local; escaping once here keeps the two in step.
-  val paramName: String = (param.name?.asString() ?: "value").csharpParameterName()
+  // The ABI slot shift (`errorOut` -> `errorOut_`) runs first, as on the Kotlin half
+  // (`GenericFunctionExports`), so the ADR-055 contract check sees one name on both.
+  val paramName: String =
+    (param.name?.asString() ?: "value").abiSlotParameterName().csharpParameterName()
+
+  // Every local the hand-built body declares is minted off the user's parameter (collision-only,
+  // `freshName`), so the public label never moves and non-colliding output is unchanged.
+  val taken: MutableSet<String> = mutableSetOf(paramName.removePrefix("@"))
+  fun local(base: String): String = freshName(base, taken).also { name -> taken += name }
+  val errorLocal: String = local("error")
+  val widthLocal: String = local("width")
+  val presentLocal: String = local("present")
+  val handleLocal: String = local("handle")
+  val ownedLocal: String = local("owned")
+  val resultLocal: String = local("result")
 
   val returnsGenericClass: Boolean = returnDecl?.typeParameters?.isNotEmpty() == true
 
@@ -987,55 +1003,55 @@ internal fun translateGenericFunction(
 
   val body: String = buildString {
     appendLine()
-    appendLine("      IntPtr error;")
+    appendLine("      IntPtr $errorLocal;")
 
     if (!isConstrained) {
       // ADR-147 amendment, applied to this route: `T = int?` is `Nullable<int>`, which never
       // equals `typeof(int)`, so dispatch on the underlying type. A null argument has no width to
       // cross on (the string width's Kotlin parameter is a non-null `String`) and takes the object
       // variant's null pointer instead.
-      appendLine("      Type width = Nullable.GetUnderlyingType(typeof($typeParamName)) ?? typeof($typeParamName);")
-      appendLine("      bool present = $paramName is not null;")
-      appendLine("      if (present && width == typeof(string))")
+      appendLine("      Type $widthLocal = Nullable.GetUnderlyingType(typeof($typeParamName)) ?? typeof($typeParamName);")
+      appendLine("      bool $presentLocal = $paramName is not null;")
+      appendLine("      if ($presentLocal && $widthLocal == typeof(string))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<$typeParamName>(NugetErrorNative.Check(${csName}_string_native((string)(object)$paramName!, out error), error), out _);")
+        appendLine("        return new ${returnTypeName}<$typeParamName>(NugetErrorNative.Check(${csName}_string_native((string)(object)$paramName!, out $errorLocal), $errorLocal), out _);")
       } else {
-        appendLine("        return ($typeParamName)(object)Marshal.PtrToStringUTF8(NugetErrorNative.Check(${csName}_string_native((string)(object)$paramName!, out error), error))!;")
+        appendLine("        return ($typeParamName)(object)Marshal.PtrToStringUTF8(NugetErrorNative.Check(${csName}_string_native((string)(object)$paramName!, out $errorLocal), $errorLocal))!;")
       }
 
-      appendLine("      if (present && width == typeof(int))")
+      appendLine("      if ($presentLocal && $widthLocal == typeof(int))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<$typeParamName>(NugetErrorNative.Check(${csName}_int_native((int)(object)$paramName!, out error), error), out _);")
+        appendLine("        return new ${returnTypeName}<$typeParamName>(NugetErrorNative.Check(${csName}_int_native((int)(object)$paramName!, out $errorLocal), $errorLocal), out _);")
       } else {
-        appendLine("        return ($typeParamName)(object)NugetErrorNative.Check(${csName}_int_native((int)(object)$paramName!, out error), error);")
+        appendLine("        return ($typeParamName)(object)NugetErrorNative.Check(${csName}_int_native((int)(object)$paramName!, out $errorLocal), $errorLocal);")
       }
 
-      appendLine("      if (present && width == typeof(long))")
+      appendLine("      if ($presentLocal && $widthLocal == typeof(long))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<$typeParamName>(NugetErrorNative.Check(${csName}_long_native((long)(object)$paramName!, out error), error), out _);")
+        appendLine("        return new ${returnTypeName}<$typeParamName>(NugetErrorNative.Check(${csName}_long_native((long)(object)$paramName!, out $errorLocal), $errorLocal), out _);")
       } else {
-        appendLine("        return ($typeParamName)(object)NugetErrorNative.Check(${csName}_long_native((long)(object)$paramName!, out error), error);")
+        appendLine("        return ($typeParamName)(object)NugetErrorNative.Check(${csName}_long_native((long)(object)$paramName!, out $errorLocal), $errorLocal);")
       }
 
-      appendLine("      if (present && width == typeof(float))")
+      appendLine("      if ($presentLocal && $widthLocal == typeof(float))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<$typeParamName>(NugetErrorNative.Check(${csName}_float_native((float)(object)$paramName!, out error), error), out _);")
+        appendLine("        return new ${returnTypeName}<$typeParamName>(NugetErrorNative.Check(${csName}_float_native((float)(object)$paramName!, out $errorLocal), $errorLocal), out _);")
       } else {
-        appendLine("        return ($typeParamName)(object)NugetErrorNative.Check(${csName}_float_native((float)(object)$paramName!, out error), error);")
+        appendLine("        return ($typeParamName)(object)NugetErrorNative.Check(${csName}_float_native((float)(object)$paramName!, out $errorLocal), $errorLocal);")
       }
 
-      appendLine("      if (present && width == typeof(double))")
+      appendLine("      if ($presentLocal && $widthLocal == typeof(double))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<$typeParamName>(NugetErrorNative.Check(${csName}_double_native((double)(object)$paramName!, out error), error), out _);")
+        appendLine("        return new ${returnTypeName}<$typeParamName>(NugetErrorNative.Check(${csName}_double_native((double)(object)$paramName!, out $errorLocal), $errorLocal), out _);")
       } else {
-        appendLine("        return ($typeParamName)(object)NugetErrorNative.Check(${csName}_double_native((double)(object)$paramName!, out error), error);")
+        appendLine("        return ($typeParamName)(object)NugetErrorNative.Check(${csName}_double_native((double)(object)$paramName!, out $errorLocal), $errorLocal);")
       }
 
-      appendLine("      if (present && width == typeof(bool))")
+      appendLine("      if ($presentLocal && $widthLocal == typeof(bool))")
       if (returnsGenericClass) {
-        appendLine("        return new ${returnTypeName}<$typeParamName>(NugetErrorNative.Check(${csName}_bool_native((bool)(object)$paramName!, out error), error), out _);")
+        appendLine("        return new ${returnTypeName}<$typeParamName>(NugetErrorNative.Check(${csName}_bool_native((bool)(object)$paramName!, out $errorLocal), $errorLocal), out _);")
       } else {
-        appendLine("        return ($typeParamName)(object)NugetErrorNative.Check(${csName}_bool_native((bool)(object)$paramName!, out error), error);")
+        appendLine("        return ($typeParamName)(object)NugetErrorNative.Check(${csName}_bool_native((bool)(object)$paramName!, out $errorLocal), $errorLocal);")
       }
     }
 
@@ -1051,23 +1067,23 @@ internal fun translateGenericFunction(
     // `!`: `Wrap<T>` takes a non-null `T` under a `T?` parameter's flow analysis (CS8604), and
     // answers a null with the null pointer itself (ADR-083).
     appendLine(
-      "      IntPtr handle = NugetMarshal.Wrap<$typeParamName>($paramName!, out bool owned);",
+      "      IntPtr $handleLocal = NugetMarshal.Wrap<$typeParamName>($paramName!, out bool $ownedLocal);",
     )
-    appendLine("      IntPtr result;")
+    appendLine("      IntPtr $resultLocal;")
     appendLine("      try")
     appendLine("      {")
     appendLine(
-      "        result = NugetErrorNative.Check(${csName}_object_native(handle, out error), error);",
+      "        $resultLocal = NugetErrorNative.Check(${csName}_object_native($handleLocal, out $errorLocal), $errorLocal);",
     )
     appendLine("      }")
     appendLine("      finally")
     appendLine("      {")
-    appendLine("        if (owned) NugetMarshal.Dispose(handle);")
+    appendLine("        if ($ownedLocal) NugetMarshal.Dispose($handleLocal);")
     appendLine("      }")
     if (returnsGenericClass) {
-      appendLine("      return new ${returnTypeName}<$typeParamName>(result, out _);")
+      appendLine("      return new ${returnTypeName}<$typeParamName>($resultLocal, out _);")
     } else {
-      appendLine("      return result == IntPtr.Zero ? default! : NugetMarshal.Materialize<$typeParamName>(result);")
+      appendLine("      return $resultLocal == IntPtr.Zero ? default! : NugetMarshal.Materialize<$typeParamName>($resultLocal);")
     }
   }
 

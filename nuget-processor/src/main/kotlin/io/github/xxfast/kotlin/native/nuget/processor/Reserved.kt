@@ -200,6 +200,21 @@ internal fun String.bridgeParameterName(): String =
   if (shadows(PLAN_OWNED_NAMES)) "${this}_" else this
 
 /**
+ * The ABI slot names the ADR-055 contract check reads a direction off: a user parameter spelled
+ * like one would read back as an `out` slot. A subset of [PLAN_OWNED_NAMES].
+ */
+private val ABI_SLOT_NAMES: Set<String> = setOf("errorOut", "valueOut")
+
+/**
+ * The legacy generic-function route's narrower [bridgeParameterName]: only the ABI slot names
+ * ([ABI_SLOT_NAMES]) shift, same injective chain rule, so a shipped label like `value` stays put.
+ * Applied on both halves of that route (Kotlin export and C# translator) so the contract check
+ * agrees.
+ */
+internal fun String.abiSlotParameterName(): String =
+  if (shadows(ABI_SLOT_NAMES)) "${this}_" else this
+
+/**
  * A generator identifier that is *derived* from a user parameter's name (`${name}HasValue`,
  * `${name}IsSet`, `default_${name}`, `${name}Arg`, ...) or is a fixed slot or local of one route
  * (`mask`, `scopeHandle`, `userData`): [base] itself when it is free, otherwise [base] with one

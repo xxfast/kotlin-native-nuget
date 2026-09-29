@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
+import io.github.xxfast.kotlin.native.nuget.processor.abiSlotParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.hasNullableBound
 import io.github.xxfast.kotlin.native.nuget.processor.forward.importIfDefaultPackage
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinPackageReference
@@ -57,7 +58,10 @@ internal fun FileSpec.Builder.addGenericFunctionExports(
   // ADR-163: the default package has no qualifier to spell, so the bare call needs this import.
   importIfDefaultPackage(func)
 
-  val paramName: String = func.parameters[paramIndex].name?.asString() ?: "value"
+  // A parameter spelled like an ABI slot (`errorOut`) shifts on both halves, see
+  // abiSlotParameterName.
+  val paramName: String =
+    (func.parameters[paramIndex].name?.asString() ?: "value").abiSlotParameterName()
 
   val hasNonTrivialBound: Boolean = func.typeParameters.firstOrNull()
     ?.bounds?.toList()?.any { bound ->
