@@ -1922,3 +1922,29 @@ a producer calling `ForwardDiagnosticSink.emit` directly at a throw site the way
 this file is. See ADR-162 for the containment mechanism (per-declaration, not per-round) and for why
 the ROADMAP's own "continues, as the `SKIPPED_*` diagnostics do" wording for this family was replaced
 with "fatal everywhere" by human decision.
+
+## Amendment (2026-09-29): a return-position `NULLABLE` names the type
+
+Judgement: an **amendment**, not a new ADR. It closes the return half the issue #131 amendment left
+open. That amendment's premise ("no `BridgeType` to Kotlin-spelling renderer") no longer holds for
+this case: the spelling comes from the declaration, through the `KSType.kotlinSpelling()` the legacy
+routes already print. No new kind, no new reason. Status stays Accepted.
+
+`ForwardCallableCatalogEntry.Skipped` gains `returnType`, the simple Kotlin spelling of the declared
+result (`KSFunctionDeclaration.returnType` or `KSPropertyDeclaration.type`, aliases expanded, every
+`?` kept). Only the planner's return skip sets it, and only for `NULLABLE`. `diagnosticReason` and
+`diagnosticHint` read it for `NULLABLE` only, and only when no parameter is named. It is a dedicated
+slot and not `detail`, because the property and CIR abstract-member routes adopt any reason sentence
+that `ownsSentence(detail)` admits, and `detail` already carries the `?`-less inner name for a
+nullable unsupported type. With no declaration in hand, the shipped generic wording stands. The
+input position (#131) is unchanged.
+
+For a `Crate<Int>?` return the reason reads "its nullable return type `Crate<Int>?` has no supported
+wire (NULLABLE)" and the hint reads "the nullable return type `Crate<Int>?` has no wire at a return
+position; expose a non-nullable wrapper, or split the member in two (one that reports whether there
+is a value and one that returns it), instead". The `(NULLABLE)` tag stays as the search key, as in the
+`RECEIVER_FAN_OUT` and `UNDECLARED_*` sentences. The reason sentence also reaches the generated C#
+`<remarks>` paragraph.
+
+Not changed: a nullable return of an unmapped stdlib type such as `Regex?` still reaches `NULLABLE`
+rather than `UNSUPPORTED`, so it gets this wording and not the stdlib hint the non-null type gets.

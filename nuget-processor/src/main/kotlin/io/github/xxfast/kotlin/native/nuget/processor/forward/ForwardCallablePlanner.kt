@@ -327,6 +327,13 @@ internal sealed interface ForwardCallableCatalogEntry {
     val position: ForwardSkipPosition = ForwardSkipPosition.RETURN,
     val parameter: String? = null,
     /**
+     * ADR-064 amendment (2026-09-29): the Kotlin spelling of the declared result (`Crate<Int>?`),
+     * set only by the planner's return skip when [reason] is NULLABLE, and read only by that
+     * reason's sentence and hint. A dedicated slot rather than [detail], which the property and
+     * CIR abstract-member routes key their own wording on.
+     */
+    val returnType: String? = null,
+    /**
      * ADR-064 amendment (2026-09-13): the skip is about the *declaration's own* type parameters
      * (`fun <T> f(value: T): T`), not about a type standing at [position]. Set only by the
      * unrouted-position reclassification, and read by `toDiagnosticKind` to pick
@@ -2649,8 +2656,9 @@ internal class ForwardCallablePlanner(
 
     val resultShape: ForwardResultShape? = effectiveResult.shapeOrNull()
     if (resultShape == null) {
+      val returnSkipReason: ForwardPlanSkipReason = requireNotNull(plannedResult.skipReason())
       return ForwardCallableCatalogEntry.Skipped(
-        symbol, requireNotNull(plannedResult.skipReason()), node = node,
+        symbol, returnSkipReason, node = node,
         detail = (plannedResult as? BridgeType.ReturnedLambda)?.unnameableTypeArgument()
           ?: plannedResult.optInMarkerDetail()
           ?: plannedResult.actualTypeAliasTargetDetail()
@@ -2664,6 +2672,13 @@ internal class ForwardCallablePlanner(
         // `fun f(): Flow<Int>` both have to report RETURN, and an implicit default is not
         // something the next reader of that reclassification can check.
         position = ForwardSkipPosition.RETURN,
+        // Nullable-return diagnostic (ADR-064 amendment 2026-09-29): the declared result spelling,
+        // for NULLABLE only; `detail` stays as is because other routes key their wording on it.
+        returnType = if (returnSkipReason == ForwardPlanSkipReason.NULLABLE) {
+          node.declaredResultType()?.kotlinSpelling()
+        } else {
+          null
+        },
       )
     }
 
@@ -4779,3 +4794,10 @@ private val STORED_CALLBACK_ORIGINS: Set<ForwardCallableOrigin> = setOf(
   ForwardCallableOrigin.VALUE_CLASS,
   ForwardCallableOrigin.VALUE_CLASS_BOX,
 )
+
+/** The declared result type of a planned function or property, for a return-skip diagnostic. */
+private fun KSNode?.declaredResultType(): KSType? = when (this) {
+  is KSFunctionDeclaration -> returnType?.resolve()
+  is KSPropertyDeclaration -> type.resolve()
+  else -> null
+}

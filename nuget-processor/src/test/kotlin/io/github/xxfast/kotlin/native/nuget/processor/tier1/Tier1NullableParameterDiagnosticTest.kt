@@ -101,14 +101,19 @@ class Tier1NullableParameterDiagnosticTest {
   }
 
   @Test
-  fun `a nullable return keeps the return-position skip and its unnamed hint`() {
+  fun `a nullable return names the return type at the return-position skip, not a parameter`() {
     val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
 
     val diagnostic: String =
       diagnostic(result, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN, "latest")
+    // ADR-064 amendment (2026-09-29): the return half names the declared type the author wrote.
     assertTrue(
-      diagnostic.contains("at this position"),
-      "expected the shipped return-position hint to be unchanged; got: $diagnostic",
+      diagnostic.contains("the nullable return type `Flow<Int>?` has no wire at a return position"),
+      "expected the return-position hint to name `Flow<Int>?`; got: $diagnostic",
+    )
+    assertFalse(
+      diagnostic.contains("nullable parameter"),
+      "expected no parameter named at a return position; got: $diagnostic",
     )
   }
 

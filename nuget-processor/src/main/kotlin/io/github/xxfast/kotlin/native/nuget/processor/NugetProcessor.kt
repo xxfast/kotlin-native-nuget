@@ -342,8 +342,12 @@ internal fun warnDroppedForwardCallables(
       // ADR-064's 2026-09-10 amendment: the sentence lives on the reason, beside the hint it
       // reads with, so a drop that is not a type combination adds a `when` arm there rather than
       // a sixth special case here.
-      reason = dropped.reason.diagnosticReason(dropped.detail, dropped.parameter),
-      hint = dropped.reason.diagnosticHint(dropped.detail, dropped.parameter, excludeEntries),
+      reason = dropped.reason.diagnosticReason(
+        dropped.detail, dropped.parameter, returnType = dropped.returnType,
+      ),
+      hint = dropped.reason.diagnosticHint(
+        dropped.detail, dropped.parameter, excludeEntries, returnType = dropped.returnType,
+      ),
       // Issue #249: stamped on the catalog entry by the walk that planned it, so an inherited
       // member's owner is the class being planned rather than the supertype its node reports.
       owner = dropped.owner,

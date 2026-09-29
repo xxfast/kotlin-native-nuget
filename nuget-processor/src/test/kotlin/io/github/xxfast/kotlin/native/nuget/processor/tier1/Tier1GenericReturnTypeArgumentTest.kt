@@ -131,6 +131,30 @@ class Tier1GenericReturnTypeArgumentTest {
   }
 
   @Test
+  fun `a nullable return skip names the refused type, in the sentence and the hint`() {
+    val result = run()
+
+    mapOf(
+      "maybeCrateOfInt" to "`Crate<Int>?`",
+      "maybeCrateOfList" to "`Crate<List<Int>>?`",
+    ).forEach { (function, spelled) ->
+      val diagnostic: String = skipDiagnostic(result, function)
+      assertTrue(
+        diagnostic.contains("its nullable return type $spelled has no supported wire (NULLABLE)"),
+        "expected the reason sentence to name $spelled; got: $diagnostic",
+      )
+      assertTrue(
+        diagnostic.contains("the nullable return type $spelled has no wire at a return position"),
+        "expected the hint to name $spelled; got: $diagnostic",
+      )
+      assertFalse(
+        diagnostic.contains("a nullable value at this position"),
+        "expected the unnamed wording gone; got: $diagnostic",
+      )
+    }
+  }
+
+  @Test
   fun `an unnameable generic-return type argument skips the function, named`() {
     val result = run()
 
