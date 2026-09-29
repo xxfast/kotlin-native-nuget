@@ -1,5 +1,9 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import com.google.devtools.ksp.symbol.KSClassDeclaration
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
+import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
+
 /**
  * The declaration position determines the receiver and export naming, not marshalling semantics.
  *
@@ -39,6 +43,14 @@ internal fun List<ForwardPropertyPlan>.enumMembersOf(
     plan.position == ForwardPropertyPosition.ENUM_MEMBER &&
         plan.symbol.substringBeforeLast('.') == qualifiedName
   }
+
+/**
+ * ADR-006 amendment: the `this` parameter name every `{Enum}Extensions` member of [this] enum takes
+ * (`mood` for `Mood`, `aviarykind` for `Aviary.Kind`). One derivation for the member-property
+ * projection, the member-function plan and the collision gate, so they cannot disagree.
+ */
+internal fun KSClassDeclaration.enumReceiverName(): String =
+  nestedCsName().lowercase().replace(".", "").csharpParameterName()
 
 /** ADR-157: the catalog-key and Kotlin-side member name of a boxed enum arm's `Value`. */
 internal const val ENUM_ARM_VALUE_MEMBER: String = "value"

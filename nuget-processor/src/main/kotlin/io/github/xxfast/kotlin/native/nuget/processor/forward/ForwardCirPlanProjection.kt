@@ -385,6 +385,11 @@ internal object ForwardCirPlanProjection {
   fun extension(
     plan: ForwardCallablePlan,
     libraryName: String,
+    // ADR-006 amendment: the C#-only spelling of the `this` parameter (`mood` on an enum member
+    // function, matching the enum's member properties). The ABI keeps the plan-owned `receiver`,
+    // so only the C# half renames it, and a declared parameter already spelled that way keeps the
+    // plan's name instead of a duplicate.
+    receiverName: String? = null,
   ): List<CirMember> {
     val nativeCall: ForwardNativeCall = plan.singleNativeImport()
     val receiver: ForwardAbiParameter = nativeCall.parameters.firstOrNull()
@@ -392,13 +397,17 @@ internal object ForwardCirPlanProjection {
     require(receiver.role == ForwardAbiRole.RECEIVER) {
       "Forward CIR extension plan ${plan.invocation.symbol} must begin with a receiver"
     }
+    val declared: List<CirParameter> = plan.publicParameters()
+    val publicReceiverName: String = receiverName
+      ?.takeIf { name -> declared.none { parameter -> parameter.name == name } }
+      ?: receiver.name
     val receiverType: String = receiver.transfer.type.csharpType()
     val receiverParam = CirParameter(
-      receiver.csharpName,
+      publicReceiverName.csharpParameterName(),
       receiverType,
       receiver.wireType.csharpType(),
     )
-    val publicParams: List<CirParameter> = listOf(receiverParam) + plan.publicParameters()
+    val publicParams: List<CirParameter> = listOf(receiverParam) + declared
     val nativeName: String = "Native_${plan.publicSignature.name}${plan.overloadSuffix()}"
     // ADR-132: the receiver is parameter zero. Instead of a hand-rolled `receiverArgument` string
     // (which had an `else -> "receiver"` arm that handed the extern an `IPet`/`CatId?` where it
@@ -411,7 +420,7 @@ internal object ForwardCirPlanProjection {
     // inside [resultProjection] covers the receiver too, so no `forceCustomBody` is needed here.
     // The three shapes the old `when` handled render byte-identically: `callArgument` emits the
     // same `receiver._handle`, value-class unwrap, and `receiver?._handle ?? IntPtr.Zero`.
-    val receiverInput = ForwardPublicParameter(receiver.name, receiver.transfer.type)
+    val receiverInput = ForwardPublicParameter(publicReceiverName, receiver.transfer.type)
     val result: CirResultProjection = plan.resultProjection(
       nativeName = nativeName,
       parameters = listOf(receiverInput) + plan.publicSignature.parameters,

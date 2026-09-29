@@ -1,6 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
+
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -16,8 +16,8 @@ import kotlin.test.assertTrue
  *
  * Folded in on the same route: the enum getter's `bool` extern had no
  * `[return: MarshalAs(UnmanagedType.I1)]`, which every other route emits; and a property declared
- * in an enum's `companion object`, which no route declares, is now a named skip instead of
- * vanishing silently.
+ * in an enum's `companion object` was a named skip; since the ADR-006 amendment it binds, instead
+ * of vanishing silently.
  */
 class Tier1EnumCamelCasePropertyTest {
 
@@ -113,40 +113,30 @@ class Tier1EnumCamelCasePropertyTest {
     assertFalse(lines[displayName - 1].contains("UnmanagedType.I1"))
   }
 
+  /** ADR-006 amendment: a companion `val` binds as a static property of `MoodExtensions` now. */
   @Test
-  fun `an enum companion property is a named skip, not a silent drop`() {
-    val skips: List<String> = result.kspWarnings.filter {
-      it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name) &&
-          it.contains("Mood.Companion.isDefault")
-    }
-    assertEquals(1, skips.size, "kspWarnings=${result.kspWarnings}")
-    assertContains(skips.single(), "companion object of enum class `Mood`")
-    assertFalse(result.generated.contains("isDefault"))
-    assertFalse(result.generatedCSharp.contains("IsDefault"))
+  fun `an enum companion property binds as a static of the extensions class`() {
+    val skips: List<String> = result.kspWarnings.filter { it.contains("Mood.Companion.isDefault") }
+    assertTrue(skips.isEmpty(), "kspWarnings=${result.kspWarnings}")
+    assertContains(result.generated, "@CName(\"${prefix}mood_companion_get_isDefault\")")
+    assertContains(result.generatedCSharp, "public static bool IsDefault")
   }
 
   /**
-   * An enum member function and an enum companion function are bound by no route (binding them as
-   * extension methods is a separate ROADMAP line), but each is now named once rather than
-   * vanishing. The compiler's own `values()` / `valueOf()` and `Any`'s members are never named.
+   * ADR-006 amendment: an enum member function and an enum companion function bind (as
+   * `MoodExtensions.IsLoudNow(this Mood mood)` and the static `MoodExtensions.Fallback()`), so
+   * neither is named any more. `Tier1EnumMemberFunctionPlanTest` pins the shapes that stay skips.
    */
   @Test
-  fun `an enum member or companion function is a named skip, not a silent drop`() {
-    assertFalse(result.generated.contains("isLoudNow"))
-    assertFalse(result.generatedCSharp.contains("IsLoudNow"))
-    assertFalse(result.generated.contains("fallback"))
-
-    val skips: List<String> = result.kspWarnings
-      .filter { it.contains(ForwardDiagnosticKind.SKIPPED_ENUM_MEMBER_FUNCTION.name) }
-    val member: List<String> = skips.filter { it.contains("tier1.enumcamelcase.Mood.isLoudNow") }
-    assertEquals(1, member.size, "kspWarnings=${result.kspWarnings}")
-    assertContains(member.single(), "member function of enum class `Mood`")
-    assertContains(member.single(), "instance properties only today")
-    val companion: List<String> =
-      skips.filter { it.contains("tier1.enumcamelcase.Mood.Companion.fallback") }
-    assertEquals(1, companion.size, "kspWarnings=${result.kspWarnings}")
-    assertContains(companion.single(), "companion object of enum class `Mood`")
-    // Exactly those two: nothing the compiler wrote on the enum (values, valueOf, toString, ...).
-    assertEquals(2, skips.size, "kspWarnings=${result.kspWarnings}")
+  fun `an enum member or companion function binds on the extensions class`() {
+    assertContains(result.generated, "Mood.entries[receiver].isLoudNow()")
+    assertContains(
+      result.generatedCSharp,
+      "public static bool IsLoudNow(this global::Interop.Mood mood)",
+    )
+    assertContains(result.generatedCSharp, "public static global::Interop.Mood Fallback()")
+    val named: List<String> = result.kspWarnings
+      .filter { it.contains("Mood.isLoudNow") || it.contains("Mood.Companion.fallback") }
+    assertTrue(named.isEmpty(), "kspWarnings=${result.kspWarnings}")
   }
 }

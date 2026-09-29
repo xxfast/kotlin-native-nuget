@@ -21,7 +21,7 @@ the run):
 2. **Verified:** each arm (`Circle`, `Dot`) is `: Shape, IAsyncDisposable`, owns its own scope and renders `AreaAsync`, `Ticks`, `Level` over arm-prefixed imports.
 3. **Verified:** `Shape.area`, `Shape.ticks`, `Shape.fallback` are named `SKIPPED_UNSUPPORTED_COMBINATION` (`SEALED_BASE_UNROUTED`, "sealed base class, which has no route yet (ADR-116)"). `Shape.level` is dropped **silently**.
 4. **Verified:** `fallback` (a default body no arm overrides) is on no C# type.
-5. **Verified:** with an enum arm (`enum class Note : Tone`, ADR-157), the boxed `NoteArm` renders no `PitchAsync` (`Note.pitch` is `SKIPPED_ENUM_MEMBER_FUNCTION`).
+5. **Verified:** with an enum arm (`enum class Note : Tone`, ADR-157), the boxed `NoteArm` renders no `PitchAsync` (`Note.pitch` is `SKIPPED_ENUM_MEMBER_FUNCTION`). *(Amended 2026-09-29: superseded for a synchronous enum member. Since the ADR-006 amendment of that date a sync `pitch` binds as `NoteExtensions.Pitch(this Note)`; a `suspend` one is `SKIPPED_UNSUPPORTED_COMBINATION` under `UNROUTED_POSITION`. `SKIPPED_ENUM_MEMBER_FUNCTION` no longer exists.)*
 6. **Verified:** a `sealed class Job { abstract suspend fun run(): Int }` has the identical gap; the same `sealedBaseEntries` path (`ForwardCallablePlanner.kt:1410-1494`, verified by reading) serves both.
 7. **Verified by reading:** synchronous base members already plan on the base prefix with a `virtual` C# member and arm `override`s (`ForwardCallablePlanner.kt:1439-1476`). Only the async half lacks a base route. `forwardSuspendRouteMethods`' docstring (`ForwardScopeOwnership.kt`) rests on "the generated sealed base declares no suspend member".
 

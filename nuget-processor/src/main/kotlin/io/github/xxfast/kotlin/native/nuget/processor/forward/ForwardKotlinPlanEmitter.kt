@@ -1008,7 +1008,10 @@ private fun invocationExpression(
       "handle.asStableRef<${plan.ownerTypeName()}>().get().$functionName($arguments)"
     }
 
-    ForwardCallableOrigin.EXTENSION -> "${receiverExpression(requireNotNull(receiver))}.$functionName($arguments)"
+    // ADR-006 amendment: an enum member is called exactly like an extension on the enum value,
+    // which is also how Kotlin spells a member call, so per-entry `abstract fun` bodies dispatch.
+    ForwardCallableOrigin.EXTENSION, ForwardCallableOrigin.ENUM_MEMBER ->
+      "${receiverExpression(requireNotNull(receiver))}.$functionName($arguments)"
     // ADR-163: fully qualified, never imported by simple name. Two `rollCall()` in two packages
     // both become exported symbols now that the C name is package-qualified, and a bare call with
     // two simple-name imports beside it is an overload-resolution ambiguity in the generated file

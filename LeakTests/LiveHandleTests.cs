@@ -301,6 +301,23 @@ public class LiveHandleTests
         });
     }
 
+    // Row 1i. The function twin of Row 1h: an enum member FUNCTION returning an exported class
+    // (ADR-006 amendment). Each call retains a fresh `Toy` handle and hands C# the owned wrapper;
+    // the nullable overload of the same shape hands back either a wrapper or null. Oreo fetches a
+    // mouse and Mylo a cream yarn fifty times, and both go back in the basket each time.
+    [Fact]
+    public void EnumMemberFunctionClassTypedReturn_UsingDispose_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using Toy mouse = TestLibrary.Cat.Mood.Happy.ToyFor();
+            Assert.Equal("Purring Oreo's mouse", mouse.Name);
+            using Toy? yarn = TestLibrary.Cat.Mood.Sleepy.FetchToy("cream");
+            Assert.Equal("Snoozing Mylo's cream yarn", yarn!.Name);
+            Assert.Null(TestLibrary.Cat.Mood.Grumpy.FetchToy("black"));
+        });
+    }
+
     // Row 2. String parameter and string return on the ordinary route: no StableRef at all
     // (UTF-8 wire), so the count must not move even once.
     [Fact]

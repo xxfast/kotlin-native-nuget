@@ -88,7 +88,7 @@ class ForwardDeclarationRoutingMatrixTest {
         publicParams = emptyList(),
       )
 
-      ForwardCallableOrigin.EXTENSION -> RoutingParts(
+      ForwardCallableOrigin.EXTENSION, ForwardCallableOrigin.ENUM_MEMBER -> RoutingParts(
         receiverParams = listOf(
           ForwardAbiParameter(
             "receiver",
@@ -248,7 +248,7 @@ class ForwardDeclarationRoutingMatrixTest {
         assertTrue(method.name.isNotBlank())
       }
 
-      ForwardCallableOrigin.EXTENSION -> {
+      ForwardCallableOrigin.EXTENSION, ForwardCallableOrigin.ENUM_MEMBER -> {
         val members = ForwardCirPlanProjection.extension(plan, "sample")
         assertTrue(members.isNotEmpty())
       }

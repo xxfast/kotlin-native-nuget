@@ -66,6 +66,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedTy
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPlanProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCirPropertyProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.enumMembersOf
+import io.github.xxfast.kotlin.native.nuget.processor.forward.enumReceiverName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardDiagnosticOwner
@@ -2880,6 +2881,13 @@ internal data class SpelledMethod(
   val node: KSNode,
 )
 
+/** ADR-006 amendment: a rendered C# property name and the Kotlin declaration behind it. */
+internal data class SpelledProperty(
+  val name: String,
+  val kotlin: String,
+  val node: KSNode,
+)
+
 /**
  * ADR-006 amendment / ADR-034: the `{Enum}Extensions` partial class is declared from two routes,
  * the enum's own member properties ([members]) and the extensions over the enum ([extensions]).
@@ -2894,7 +2902,35 @@ internal fun emitEnumExtensionSignatureCollisions(
   members: List<SpelledMethod>,
   extensions: List<SpelledMethod>,
   logger: KSPLogger,
+  // ADR-006 amendment: the companion `val`/`var`s, static properties of the same class. A property
+  // collides with any member of its name (CS0102), so it is checked by name, not by signature.
+  properties: List<SpelledProperty> = emptyList(),
 ) {
+  (properties.map { it.name to (it.kotlin to it.node) } +
+      (members + extensions).map { it.method.name to (it.kotlin to it.node) })
+    .groupBy({ it.first }, { it.second })
+    .filterKeys { name -> properties.any { it.name == name } }
+    .filterValues { group -> group.size > 1 }
+    .forEach { (name, group) ->
+      val declarations: String = group.map { it.first }.distinct().joinToString(" and ")
+      ForwardDiagnosticSink.emit(
+        listOf(
+          ForwardDiagnostic(
+            kind = ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION,
+            symbol = group.first().second,
+            declaration = "$container.$name",
+            reason = "$declarations on enum class $enumName both render the member `$name` in " +
+                "$container, and C# cannot declare a property beside another member of the same " +
+                "name (CS0102); an enum companion `val`/`var` renders a static property there " +
+                "(ADR-006)",
+            hint = "rename one of them",
+            owner = null,
+          ),
+        ),
+        logger,
+      )
+    }
+
   fun SpelledMethod.signature(): List<String> =
     listOf(method.name) + method.parameters.map { param ->
       val stripReferenceNullability: Boolean = param.isReferenceType && param.type.endsWith("?")
@@ -2915,7 +2951,8 @@ internal fun emitEnumExtensionSignatureCollisions(
             reason = "$declarations on enum class $enumName both render " +
                 "`${signature.first()}(${signature.drop(1).joinToString(", ")})` in $container, " +
                 "and C# cannot declare two methods with the same signature (ADR-034); an enum " +
-                "member property renders its bare name there (ADR-006)",
+                "member property renders its bare name there, and an enum member or companion " +
+                "function its PascalCase name (ADR-006)",
             hint = "rename one of them",
             owner = null,
           ),
@@ -3945,14 +3982,42 @@ internal fun translateEnum(
 
   // ADR-006 amendment: the enum's own member properties come off their ENUM_MEMBER plans, the
   // same plans `EnumExports` emits the Kotlin half from, so the two cannot disagree.
-  val receiverName: String = enum.nestedCsName().lowercase().replace(".", "").csharpParameterName()
-  val extensionMembers: List<CirMember> = enum.qualifiedName?.asString()
-    ?.let { qualifiedName -> callableCatalog.propertyPlans.enumMembersOf(qualifiedName) }
+  val receiverName: String = enum.enumReceiverName()
+  val qualifiedName: String? = enum.qualifiedName?.asString()
+  val propertyMembers: List<CirMember> = qualifiedName
+    ?.let { callableCatalog.propertyPlans.enumMembersOf(it) }
     .orEmpty()
     .flatMap { plan ->
       tracker.trackProperty(plan)
       ForwardCirPropertyProjection.enumMember(plan, libraryName, receiverName)
     }
+  // ADR-006 amendment: member functions as `this {Enum}` extensions (the plan's receiver is already
+  // named [receiverName]), and the companion's functions and `val`/`var`s as plain statics, all in
+  // the same `{Enum}Extensions` class: a C# enum cannot declare members, and C# 12 has no static
+  // extension members.
+  val functionMembers: List<CirMember> = qualifiedName
+    ?.let { callableCatalog.enumMethods(it) }
+    .orEmpty()
+    .flatMap { plan ->
+      tracker.trackPlan(plan)
+      ForwardCirPlanProjection.extension(plan, libraryName, receiverName)
+    }
+  val companionProperties: List<CirMember> = qualifiedName
+    ?.let { callableCatalog.enumCompanionProperties(it) }
+    .orEmpty()
+    .flatMap { plan ->
+      tracker.trackProperty(plan)
+      ForwardCirPropertyProjection.staticProperty(plan, libraryName)
+    }
+  val companionFunctions: List<CirMember> = qualifiedName
+    ?.let { callableCatalog.companionMethods(it) }
+    .orEmpty()
+    .flatMap { plan ->
+      tracker.trackPlan(plan)
+      ForwardCirPlanProjection.static(plan, libraryName)
+    }
+  val extensionMembers: List<CirMember> =
+    propertyMembers + functionMembers + companionProperties + companionFunctions
 
   return CirEnum(
     name = name,

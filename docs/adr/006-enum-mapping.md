@@ -186,6 +186,8 @@ of this amendment (see ROADMAP Phase 10).
 
 ## 2026-09-26 amendment: camelCase property entry points and enum member skips
 
+*(Superseded in part by the 2026-09-29 amendment below: the enum member and companion function skips, and the companion property skip, no longer exist except for a companion `const val`.)*
+
 The Decision's Bridge mechanism section always meant the property's own name to reach both halves of
 the bridge, but the implementation didn't: the C# renderer (`CirEnumRenderer.kt`) lowercased the
 property name into the C entry point (`mood_get_issleepy`), while the Kotlin `@CName` export kept it
@@ -248,3 +250,41 @@ Five points from that move affect what this ADR promises a reader:
   ADR-117's `ERROR_C_ENTRY_POINT_COLLISION`) a same-named member/extension pair now reaches.
 
 **Scope.** Generator-only (`nuget-processor`), like the two amendments above.
+
+## 2026-09-29 amendment: enum member functions and companion members bind on the forward callable plan
+
+The Decision's "Methods → same pattern (extension methods)" line is now delivered, on the
+[ADR-062](062-forward-callable-plan.md) forward callable plan, the route
+[ADR-172](172-enum-member-properties-on-the-forward-plan.md) moved enum member properties onto. No
+second hand-written route was built.
+
+- **A function declared in the enum class body** plans under a new `ForwardCallableOrigin.ENUM_MEMBER`
+  with an enum-valued receiver. Kotlin calls `Mood.entries[receiver].isLoudNow()`, so an `abstract fun`
+  with per-entry bodies (`Chatter.sound`) dispatches to each entry's body. C# gets
+  `public static bool IsLoudNow(this Mood mood)` in `MoodExtensions`. The receiver is named after the
+  enum, and falls back to `receiver` when a parameter already has that name. It carries the ordinary
+  error slot, overloads, default arguments and KDoc.
+- **A function declared in the enum's `companion object`** plans under the existing COMPANION origin,
+  extended to enums, and renders as a plain static method in `{Enum}Extensions`
+  (`MoodExtensions.Fallback()`). A C# enum cannot declare members, and the static extension members that
+  would allow `Mood.Fallback()` are C# 14, above the generated code's C# 12 floor (verified by spike: an
+  `extension(Mood) { ... }` block fails with `CS1001` at `LangVersion 12.0`).
+- **A companion `val`/`var`** folds in on the same path as a static property in `{Enum}Extensions`
+  (`MoodExtensions.HouseFavourite`). A companion `const val` stays a named
+  `SKIPPED_UNSUPPORTED_PROPERTY`.
+- **An enum with only functions** now gets its `{Enum}Extensions` class.
+- **Named skips:** a `suspend`, generic, `Flow`-returning or lambda-returning enum member function is
+  named under `UNROUTED_POSITION` (the suspend wording now covers enum owners). The dedicated kind
+  `SKIPPED_ENUM_MEMBER_FUNCTION` is removed. It was added 2026-09-27, after the 0.7.0 release, so
+  no published `NugetDiagnostics.json` carried it.
+- **Collisions** in `{Enum}Extensions` fail generation with `ERROR_CSHARP_SIGNATURE_COLLISION`: a
+  member function beside a same-named member property, or a companion `val` beside any same-named
+  member.
+- **Side effect:** a dependency klib's enum companion function or property now binds too
+  (`dev.other.bytype.PurrLevel.Companion.contented`).
+
+Fixtures: `cat/Mood.kt`, `cat/Chatter.kt`; consumer tests `IntegrationTests/EnumMemberFunctionTests.cs`;
+`LeakTests` row 1i.
+
+**Scope.** Generator-only (`nuget-processor`). Additive public surface: every enum member or companion
+function that used to be skipped with a warning is now a C# member.
