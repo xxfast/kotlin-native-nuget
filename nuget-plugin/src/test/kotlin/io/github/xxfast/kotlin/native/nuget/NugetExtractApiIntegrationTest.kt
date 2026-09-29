@@ -1098,7 +1098,7 @@ class NugetExtractApiIntegrationTest {
   }
 
   @Test
-  fun `a generic method with a phantom type parameter is skipped and never collides with its sibling`() {
+  fun `a generic method with a phantom type parameter is skipped and never collides`() {
     val dotnet: String = findDotnet() ?: return
 
     // A phantom type parameter appears in no parameter and not in the return type, so signature
@@ -1125,8 +1125,10 @@ class NugetExtractApiIntegrationTest {
     val file: RirFile = parseReverseIr(
       runMetadataReader(dotnet, toolDir, mapOf("PhantomFixture" to listOf(dll.absolutePath))),
     )
-    val registry: RirClass = file.assemblies.single().namespaces.single { it.name == "Probe.Phantom" }
-      .types.filterIsInstance<RirClass>().single { it.name == "Registry" }
+    val registry: RirClass = file.assemblies.single()
+      .namespaces.single { it.name == "Probe.Phantom" }
+      .types.filterIsInstance<RirClass>()
+      .single { it.name == "Registry" }
 
     // The non-generic sibling and the control both still bind, once each.
     assertEquals(listOf("Count", "Unregister"), registry.methods.map { it.name }.sorted())
