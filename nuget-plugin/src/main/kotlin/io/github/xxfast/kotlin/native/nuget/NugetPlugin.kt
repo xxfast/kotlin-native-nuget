@@ -309,9 +309,12 @@ class NugetPlugin : Plugin<Project> {
             .distinct()
 
           argMethod.invoke(ksp, "nuget.libraryName", baseName ?: "library")
+          val classNameStem: String =
+            pub?.packageId?.takeIf { id -> id.isNotBlank() } ?: "Library"
+
           argMethod.invoke(ksp, "nuget.namespace", pub.forwardNamespace())
           argMethod.invoke(ksp, "nuget.rootPackage", pub?.rootPackage ?: "")
-          argMethod.invoke(ksp, "nuget.className", "${pub?.packageId?.takeIf { id -> id.isNotBlank() } ?: "Library"}Native")
+          argMethod.invoke(ksp, "nuget.className", "${classNameStem}Native")
           argMethod.invoke(ksp, "nuget.includePackages", pub?.include.orEmpty().joinToString(","))
           argMethod.invoke(ksp, "nuget.excludePackages", pub?.exclude.orEmpty().joinToString(","))
           argMethod.invoke(ksp, "nuget.boundPackages", boundPackages.joinToString(","))

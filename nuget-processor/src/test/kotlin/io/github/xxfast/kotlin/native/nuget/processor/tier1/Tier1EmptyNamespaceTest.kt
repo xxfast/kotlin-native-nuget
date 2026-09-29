@@ -22,7 +22,7 @@ class Tier1EmptyNamespaceTest {
 
   @Test
   fun `an empty or blank namespace falls back to Interop`() {
-    for (blank in listOf("", "  ")) {
+    listOf("", "  ").forEach { blank ->
       val result = Tier1Harness.run(
         source,
         processorOptions = mapOf("nuget.rootPackage" to "tier1.cage", "nuget.namespace" to blank),
@@ -35,7 +35,11 @@ class Tier1EmptyNamespaceTest {
         "namespace '$blank': expected a `namespace Interop` header; generatedCSharp:\n$csharp",
       )
       assertContains(csharp, "new global::Interop.WireCage(", message = "namespace '$blank'")
-      assertContains(csharp, "public static global::Interop.WireCage MakeCage(", message = "namespace '$blank'")
+      assertContains(
+        csharp,
+        "public static global::Interop.WireCage MakeCage(",
+        message = "namespace '$blank'",
+      )
       assertFalse(
         Regex("""global::\s*\.""").containsMatchIn(csharp),
         "namespace '$blank': bare global:: qualifier; generatedCSharp:\n$csharp",

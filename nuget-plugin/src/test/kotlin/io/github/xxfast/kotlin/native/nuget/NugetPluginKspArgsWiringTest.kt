@@ -296,7 +296,7 @@ class NugetPluginKspArgsWiringTest {
    */
   @Test
   fun `publish without a usable packageId wires the Interop namespace to KSP and the shims`() {
-    for (packageId in listOf(null, "", "  ")) {
+    listOf(null, "", "  ").forEach { packageId ->
       val project: Project = buildProjectWithSharedLib()
       val extension: NugetExtension = project.extensions.getByType(NugetExtension::class.java)
       extension.publish {

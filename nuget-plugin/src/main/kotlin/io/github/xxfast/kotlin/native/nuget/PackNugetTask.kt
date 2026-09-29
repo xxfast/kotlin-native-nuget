@@ -71,7 +71,8 @@ abstract class PackNugetTask : DefaultTask() {
   fun pack() {
     val id: String = packageId.get()
     require(id.isNotBlank()) {
-      "[nuget] packNuget needs a non-blank package id: set nuget { publish { packageId = \"...\" } }"
+      "[nuget] packNuget needs a non-blank package id: " +
+        "set nuget { publish { packageId = \"...\" } }"
     }
     val version: String = packageVersion.get()
     val outDir: File = outputDir.get().asFile
