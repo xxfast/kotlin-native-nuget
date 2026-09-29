@@ -103,7 +103,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverride
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverrideOn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesBaseClassMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesKeptBaseOf
-import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionRead
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyMarshalledRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyDiscriminatedRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyFlowElementShape
@@ -1979,7 +1979,7 @@ internal fun suspendMembers(
     // Issue #108: carry the nullability through, same as the top-level suspend route.
     val asyncReturnType: String = when {
       isUnit -> ""
-      collectionReturn != null -> collectionReturn.forwardPublicCsharpType()
+      returnShape is ForwardLegacyReturnShape.Marshalled -> returnShape.declaredCsharpType()
       returnShape is ForwardLegacyReturnShape.Bytes ->
         legacyBytesCsharpType(returnShape.nullable)
       // ADR-040: the projected interface, already `global::`-qualified and owner-chained by the
@@ -2048,7 +2048,7 @@ internal fun suspendMembers(
       // rather than fall through an `else` into the renderer's `new T(resultPtr)`.
       asyncResultRead = when (returnShape) {
         is ForwardLegacyReturnShape.Marshalled ->
-          legacyCollectionRead("resultPtr", returnShape.type)
+          returnShape.legacyMarshalledRead("resultPtr")
 
         // ADR-131: spelled off `asyncReturnType`, which is the same `nestedCsName()` string
         // `Task<...>` above is built from, so the declared type and the read cannot drift.

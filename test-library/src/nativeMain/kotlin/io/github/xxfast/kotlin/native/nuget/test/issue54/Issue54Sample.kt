@@ -1,5 +1,8 @@
 package io.github.xxfast.kotlin.native.nuget.test.issue54
 
+import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.coroutines.delay
+
 /**
  * Fixture for [#54](https://github.com/xxfast/kotlin-native-nuget/issues/54), the cell designed in
  * ADR-105 (`docs/adr/105-sealed-property-position.md`) at scope **(c)**:
@@ -115,6 +118,16 @@ fun curledCats(): Issue54Drawing = Issue54Drawing(
  * curled into a [Issue54Shape.Circle] of radius `1.0`.
  */
 fun shapes(): List<Issue54Shape> = sleepingCats().shapes
+
+/**
+ * The same collection return as [shapes], on the **top-level suspend** route (ADR-119 amendment):
+ * `Issue54Sample.ShapesLaterAsync()` is `Task<IReadOnlyList<Issue54Shape>>`, each element read
+ * through the sealed base's `FromHandle`. Same cats, same order, just after a nap.
+ */
+suspend fun shapesLater(): List<Issue54Shape> {
+  delay(1.milliseconds)
+  return shapes()
+}
 
 /**
  * The sealed base at a return position on a **class member**, which ADR-007 renders as a C# static

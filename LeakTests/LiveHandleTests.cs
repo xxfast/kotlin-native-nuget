@@ -16,6 +16,8 @@ using TestLibrary.Issue127;
 using TestLibrary.Issue131;
 using TestLibrary.Issue236;
 using Issue297 = TestLibrary.Issue297;
+using Issue54 = TestLibrary.Issue54;
+using Issue122 = TestLibrary.Issue122;
 using Perchvar = TestLibrary.Perchvar;
 using TestLibrary.Kennel;
 using Lineage = TestLibrary.Lineage;
@@ -1548,6 +1550,59 @@ public class LiveHandleTests
             await using Job.Running oreo = factory.Running(9);
             using Job next = await oreo.NextLaterAsync();
             Assert.Equal(10, Assert.IsType<Job.Done>(next).Code);
+        });
+    }
+
+    // Row 9p. A suspend call returning a List of the sealed BASE (ADR-119 amendment), and its
+    // nullable twin. Kotlin pins one StableRef on the list; `ReadList`'s finally disposes it; each
+    // `nuget_list_get` mints one element ref that `Issue54Shape.FromHandle` hands to the arm
+    // wrapper, which the test disposes. The null arm mints nothing: a completion that reached
+    // `ReadList(IntPtr.Zero)` would throw, and a guard that minted a list anyway would show here.
+    // Ledger per iteration: list +1/-1 (ReadList finally), element +1/-1 per arm (Dispose).
+    [Fact]
+    public async Task Suspend_ReturningAListOfTheSealedBase_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var studio = new Issue54.Issue54Studio();
+
+            IReadOnlyList<Issue54.Issue54Shape> shapes = await studio.SketchAsync();
+            Assert.Equal(2, shapes.Count);
+            foreach (Issue54.Issue54Shape shape in shapes) shape.Dispose();
+
+            Assert.Null(await studio.SketchOrNullAsync(present: false));
+
+            IReadOnlyList<Issue54.Issue54Shape>? present = await studio.SketchOrNullAsync(present: true);
+            Assert.NotNull(present);
+            foreach (Issue54.Issue54Shape shape in present) shape.Dispose();
+
+            IReadOnlyList<Issue54.Issue54Shape> later = await Issue54.Issue54Sample.ShapesLaterAsync();
+            foreach (Issue54.Issue54Shape shape in later) shape.Dispose();
+        });
+    }
+
+    // Row 9q. A suspend call returning a *nullable* collection of values (ADR-119 amendment), null
+    // and non-null, across all three kinds and an enum element that is projected per element.
+    // Nothing escapes the read as a handle, so the only ref in play is the collection itself:
+    // present, `ReadList`/`ReadSet`/`ReadMap`'s finally releases it; absent, Kotlin pins nothing
+    // (`if (result == null) null else retain(...)`) and the guarded read must not mint or read one.
+    [Fact]
+    public async Task Suspend_ReturningANullableCollection_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            using var headcount = new Issue122.Headcount(["Oreo", "Mylo"]);
+
+            Assert.Null(await headcount.MaybeAsync());
+            Assert.Equal(["Oreo", "Mylo"], await headcount.MaybeTagsAsync(present: true));
+            Assert.Null(await headcount.MaybeTagsAsync(present: false));
+            Assert.Equal(2, (await headcount.MaybeIdsAsync(present: true))!.Count);
+            Assert.Null(await headcount.MaybeIdsAsync(present: false));
+            Assert.Equal(4, (await headcount.MaybeAgesAsync(present: true))!["Mylo"]);
+            Assert.Null(await headcount.MaybeAgesAsync(present: false));
+            Assert.Equal(2, (await headcount.MaybeTempersAsync(present: true))!.Count);
+            Assert.Null(await headcount.MaybeTempersAsync(present: false));
+            Assert.Null(await Issue122.AssignmentSample.NobodyAsync(present: false));
         });
     }
 

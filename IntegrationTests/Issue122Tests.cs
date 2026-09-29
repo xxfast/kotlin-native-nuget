@@ -15,9 +15,10 @@ namespace IntegrationTests;
 /// in the signature and at runtime. The two are compared element for element below.
 /// </para>
 /// <para>
-/// Every other generic return on the route (<c>Pair</c>, a nullable collection) is absent and
-/// named <c>SKIPPED_UNSUPPORTED_RETURN</c>, asserted by reflection because an absent member is
-/// invisible to the compiler in the other direction.
+/// A <c>Pair</c> return is absent and named <c>SKIPPED_UNSUPPORTED_RETURN</c>, asserted by
+/// reflection because an absent member is invisible to the compiler in the other direction. A
+/// nullable collection return (the ADR-119 amendment) binds as <c>Task&lt;IReadOnlyList&lt;T&gt;?&gt;</c>
+/// and its Set/Map twins, completing with <c>null</c> for a Kotlin <c>null</c>.
 /// </para>
 /// <para>
 /// Oreo runs the headcount; Mylo is on it, and would like that reflected in the total.
@@ -141,10 +142,99 @@ public class Issue122Tests
 
     [Theory]
     [InlineData("PairedAsync")]
-    [InlineData("MaybeAsync")]
     public void ARefusedGenericReturn_IsAbsentFromTheClass(string name)
     {
         Assert.Null(typeof(Headcount).GetMethod(name));
+    }
+
+    // ---- ADR-119 amendment: a nullable collection return binds, completing with null. ----
+
+    [Fact]
+    public async Task MaybeAsync_NullableListReturn_CompletesWithNull()
+    {
+        using var headcount = new Headcount(Names);
+
+        IReadOnlyList<string>? maybe = await headcount.MaybeAsync();
+
+        Assert.Null(maybe);
+    }
+
+    [Theory]
+    [InlineData("MaybeAsync")]
+    [InlineData("MaybeTagsAsync")]
+    [InlineData("MaybeIdsAsync")]
+    [InlineData("MaybeAgesAsync")]
+    [InlineData("MaybeTempersAsync")]
+    public void ANullableCollectionReturn_IsDeclaredNullableInsideTheTask(string name)
+    {
+        // Task<IReadOnlyList<string>?>: the inner `?` is an annotation, so read it off NullabilityInfo.
+        MethodInfo method = typeof(Headcount).GetMethod(name)!;
+        NullabilityInfo info = new NullabilityInfoContext().Create(method.ReturnParameter);
+
+        Assert.Equal(NullabilityState.Nullable, info.GenericTypeArguments[0].ReadState);
+    }
+
+    [Fact]
+    public async Task MaybeTagsAsync_NullableList_PresentRoundTrips_AbsentIsNull()
+    {
+        using var headcount = new Headcount(Names);
+
+        IReadOnlyList<string>? present = await headcount.MaybeTagsAsync(present: true);
+        IReadOnlyList<string>? absent = await headcount.MaybeTagsAsync(present: false);
+
+        Assert.Equal(Names, present);
+        Assert.Null(absent);
+    }
+
+    [Fact]
+    public async Task MaybeIdsAsync_NullableSet_PresentRoundTrips_AbsentIsNull()
+    {
+        using var headcount = new Headcount(Names);
+
+        IReadOnlySet<int>? present = await headcount.MaybeIdsAsync(present: true);
+        IReadOnlySet<int>? absent = await headcount.MaybeIdsAsync(present: false);
+
+        Assert.NotNull(present);
+        Assert.True(present.SetEquals([0, 1, 2]));
+        Assert.Null(absent);
+    }
+
+    [Fact]
+    public async Task MaybeAgesAsync_NullableMap_PresentRoundTrips_AbsentIsNull()
+    {
+        using var headcount = new Headcount(Names);
+
+        IReadOnlyDictionary<string, int>? present = await headcount.MaybeAgesAsync(present: true);
+        IReadOnlyDictionary<string, int>? absent = await headcount.MaybeAgesAsync(present: false);
+
+        Assert.NotNull(present);
+        Assert.Equal(4, present["Oreo"]);
+        Assert.Equal(4, present["Mylo"]);
+        Assert.Equal(7, present["Biscuit"]);
+        Assert.Null(absent);
+    }
+
+    [Fact]
+    public async Task MaybeTempersAsync_NullableListOfEnum_ProjectsEachElement_AbsentIsNull()
+    {
+        using var headcount = new Headcount(Names);
+
+        IReadOnlyList<Temper>? present = await headcount.MaybeTempersAsync(present: true);
+        IReadOnlyList<Temper>? absent = await headcount.MaybeTempersAsync(present: false);
+
+        // Same projection as TempersAsync: every name length modulo three lands on Hungry.
+        Assert.Equal([Temper.Hungry, Temper.Hungry, Temper.Hungry], present);
+        Assert.Null(absent);
+    }
+
+    [Fact]
+    public async Task NobodyAsync_TopLevelNullableListReturn_PresentRoundTrips_AbsentIsNull()
+    {
+        IReadOnlyList<string>? home = await AssignmentSample.NobodyAsync(present: true);
+        IReadOnlyList<string>? away = await AssignmentSample.NobodyAsync(present: false);
+
+        Assert.Equal(["Oreo", "Mylo"], home);
+        Assert.Null(away);
     }
 
     /// <summary>

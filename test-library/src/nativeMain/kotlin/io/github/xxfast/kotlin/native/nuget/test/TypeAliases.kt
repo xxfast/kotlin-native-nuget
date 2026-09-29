@@ -50,9 +50,9 @@ suspend fun greetMaybeLater(name: MaybePetName): MaybePetName {
 }
 
 /**
- * `PetNames?` expands to `List<String>?`, which the suspend route refuses (ADR-119, a nullable
- * collection return), exactly as it refuses the written-out `AssignmentSample.maybe()`. Today this
- * one member takes down the whole KSP round with ERROR_INTERNAL_GENERATOR_FAILURE.
+ * `PetNames?` expands to `List<String>?`, which the suspend route binds as
+ * `Task<IReadOnlyList<string>?>` (ADR-119 amendment), exactly as it binds the written-out
+ * `AssignmentSample.maybe()`. The alias has to carry the use-site `?` to both halves.
  */
 suspend fun namesLater(): PetNames? = null
 

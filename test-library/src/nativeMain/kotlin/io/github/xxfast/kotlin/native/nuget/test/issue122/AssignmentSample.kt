@@ -23,8 +23,11 @@ import kotlinx.coroutines.delay
  *   box.
  * - [Headcount.paired]: the refusal arm. A `Pair` return has no wire shape here, so the member
  *   must be absent and named `SKIPPED_UNSUPPORTED_RETURN`, never rendered as `Task<Pair>`.
- * - [Headcount.maybe]: a nullable collection return is refused by the same rule ADR-114 applies
- *   to a nullable collection parameter.
+ * - [Headcount.maybe], [Headcount.maybeTags], [Headcount.maybeIds], [Headcount.maybeAges],
+ *   [Headcount.maybeTempers] and top-level [nobody]: a **nullable** collection return (ADR-119
+ *   amendment), all three kinds, an enum element that needs a projection, and the top-level owner.
+ *   Binds as `Task<IReadOnlyList<T>?>` (`IReadOnlySet`/`IReadOnlyDictionary`) and completes with
+ *   `null` for a Kotlin `null`.
  * - [everyone]: the top-level suspend route, the third copy of the same composition.
  * - [AssignmentFactory.existing]: how the test reaches the arm, since a sealed arm has no public
  *   C# constructor.
@@ -81,8 +84,49 @@ class Headcount(private val names: List<String>) {
   /** Refused: absent from C#, named `SKIPPED_UNSUPPORTED_RETURN`. */
   suspend fun paired(): Pair<String, Int> = names.first() to names.size
 
-  /** Refused: a nullable collection return, mirroring ADR-114's nullable-parameter rule. */
+  /**
+   * A nullable collection return that is always `null`: binds as `Task<IReadOnlyList<string>?>`
+   * and completes with `null`, the null result pointer never reaching `NugetMarshal.ReadList`.
+   * Refused with `SKIPPED_UNSUPPORTED_RETURN` until the ADR-119 amendment.
+   */
   suspend fun maybe(): List<String>? = null
+
+  /** Nullable `List<String>`, present or absent on demand: Oreo's roll call, or nobody answering. */
+  suspend fun maybeTags(present: Boolean): List<String>? {
+    delay(1.milliseconds)
+    return if (present) names else null
+  }
+
+  /** Nullable `Set<Int>`: the `ReadSet` twin of [maybeTags]. */
+  suspend fun maybeIds(present: Boolean): Set<Int>? {
+    delay(1.milliseconds)
+    return if (present) names.indices.toSet() else null
+  }
+
+  /** Nullable `Map<String, Int>`: the `ReadMap` twin of [maybeTags]. */
+  suspend fun maybeAges(present: Boolean): Map<String, Int>? {
+    delay(1.milliseconds)
+    return if (present) names.associateWith { it.length } else null
+  }
+
+  /**
+   * Nullable `List<Temper>`: the element needs a conversion at the seam (enum leaves as its
+   * ordinal, ADR-097), so the per-element projection runs on the smart-cast non-null `result`
+   * inside the Kotlin export's null test. Mylo is Hungry; so, it turns out, is everyone.
+   */
+  suspend fun maybeTempers(present: Boolean): List<Temper>? {
+    delay(1.milliseconds)
+    return if (present) names.map { Temper.entries[it.length % Temper.entries.size] } else null
+  }
+}
+
+/**
+ * The top-level owner of a nullable collection return: `AssignmentSample.NobodyAsync(bool)` is
+ * `Task<IReadOnlyList<string>?>`. Absent, nobody is home; present, Oreo and Mylo both are.
+ */
+suspend fun nobody(present: Boolean): List<String>? {
+  delay(1.milliseconds)
+  return if (present) listOf("Oreo", "Mylo") else null
 }
 
 /**

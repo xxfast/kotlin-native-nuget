@@ -134,15 +134,18 @@ public class TypeAliasUseSiteNullabilityTests
         Assert.Equal(NullabilityState.Nullable, info.GenericTypeArguments[0].ReadState);
     }
 
-    // ---- PetNames? on the suspend route: refused like List<String>? (ADR-119) ----
+    // ---- PetNames? on the suspend route: binds like List<String>? (ADR-119 amendment) ----
 
     [Fact]
-    public void NamesLater_NullableCollectionAlias_IsAbsentLikeItsWrittenOutType()
+    public async Task NamesLater_NullableCollectionAlias_BindsLikeItsWrittenOutType()
     {
-        // `suspend fun namesLater(): PetNames?` is `List<String>?`, which the suspend route refuses
-        // (see Issue122Tests' MaybeAsync). The alias must not change that: absent, and the rest of
-        // the module still generates (today it crashes the generator).
-        Assert.Null(typeof(TypeAliases).GetMethod("NamesLaterAsync"));
+        // `suspend fun namesLater(): PetNames?` is `List<String>?`, which the suspend route binds as
+        // `Task<IReadOnlyList<string>?>` (see Issue122Tests' MaybeAsync). The alias must agree.
+        Assert.Null(await TypeAliases.NamesLaterAsync());
+
+        MethodInfo method = typeof(TypeAliases).GetMethod("NamesLaterAsync")!;
+        NullabilityInfo info = Nullability.Create(method.ReturnParameter);
+        Assert.Equal(NullabilityState.Nullable, info.GenericTypeArguments[0].ReadState);
     }
 
     // ---- generic alias Box<T> = List<T> ----
