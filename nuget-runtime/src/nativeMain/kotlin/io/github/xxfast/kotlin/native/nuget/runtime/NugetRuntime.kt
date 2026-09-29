@@ -139,6 +139,14 @@ public fun export_nuget_unwrap_bool(handle: COpaquePointer): Boolean =
 public fun export_nuget_unwrap_char(handle: COpaquePointer): Char =
   handle.asStableRef<Any>().get() as Char
 
+// ADR-094 amendment: an enum at an erased generic position (`Flow<E>`, `StateFlow<E>`, `Box<E>`)
+// crosses as a StableRef of the Kotlin enum object; the C# `Factories` entry reads its ordinal here
+// and casts it to the mapped C# enum, whose members carry explicit ordinals. The caller disposes.
+@NugetRuntimeApi
+@CName("nuget_unwrap_enum_ordinal")
+public fun export_nuget_unwrap_enum_ordinal(handle: COpaquePointer): Int =
+  (handle.asStableRef<Any>().get() as Enum<*>).ordinal
+
 @NugetRuntimeApi
 @CName("nuget_dispose")
 public fun export_nuget_dispose(handle: COpaquePointer) {

@@ -572,6 +572,9 @@ data class CirFactoryEntry(
   // ADR-171: a value class. A record struct has no handle constructor; its generated
   // `NugetUnbox(IntPtr)` reads the boxed Kotlin value's underlying and disposes the handle.
   val viaNugetUnbox: Boolean = false,
+  // ADR-094 amendment: an enum. It has no handle constructor; `NugetMarshal.UnwrapEnumOrdinal`
+  // reads the Kotlin enum object's ordinal and disposes the handle, and the entry casts it.
+  val viaEnumOrdinal: Boolean = false,
   // ADR-173: the type the entry constructs, when it differs from the `typeof` key. An exported
   // interface registers under `typeof(IPet)` and constructs its ADR-040 backing class `Pet`.
   val constructTypeName: String = qualifiedTypeName,

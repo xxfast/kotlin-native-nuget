@@ -240,34 +240,54 @@ public class CallbackFaultTests
     // ---------------------------------------------------------------------------------------
 
     /// <summary>
-    /// <c>Flow&lt;Mood&gt;</c>: the flow route admits an enum element, but the generated
-    /// <c>onNext</c> reads it through <c>NugetMarshal.FromHandle&lt;T&gt;</c>, which has no enum
-    /// branch (<c>docs/backlog/fromhandle-no-enum-branch.md</c>). The read throws inside the thunk,
-    /// so the failure has to fault the <c>IAsyncEnumerable&lt;Mood&gt;</c> and cancel the Kotlin
-    /// collector; today it fails fast. The materialisation bug itself stays open: this cell asserts
-    /// only that the failure is a fault the consumer can catch, not that the element materialises.
+    /// <c>Flow&lt;Tantrum&gt;</c>: a bridge-internal materialisation failure inside the generated
+    /// <c>onNext</c>, injected deterministically. The <c>NugetMarshal.Factories</c> entry for the
+    /// test-only <c>Tantrum</c> class is swapped for one that releases the handle it was handed and
+    /// throws, on the <c>ListReturn_ThrowingElementFactory</c> pattern, so the read throws inside the
+    /// thunk. The failure has to fault the <c>IAsyncEnumerable&lt;Tantrum&gt;</c> and cancel the
+    /// Kotlin collector; the host must survive. This used to lean on <c>Flow&lt;Mood&gt;</c> failing
+    /// for want of an enum factory, a gap that is now a round trip (<c>FlowEnumElementTests</c>).
+    /// Runners are serial (<c>xunit.runner.json</c>), so the swap races no other test.
     /// </summary>
     [Fact]
     public async Task FlowItemMaterialisationFailure_FaultsTheStream_AndTheHostSurvives()
     {
-        using var faults = new CallbackFaults();
-
-        var seen = new List<Mood>();
-        var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
+        Func<IntPtr, object> original = NugetMarshal.Factories[typeof(Tantrum)];
+        int calls = 0;
+        NugetMarshal.Factories[typeof(Tantrum)] = handle =>
         {
-            await foreach (Mood mood in faults.MoodStream())
+            calls++;
+            NugetMarshal.Dispose(handle);
+            throw new InvalidOperationException("Oreo hid under the sofa mid-tantrum");
+        };
+
+        try
+        {
+            using var faults = new CallbackFaults();
+
+            var seen = new List<Tantrum>();
+            var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
             {
-                seen.Add(mood);
-            }
-        });
+                await foreach (Tantrum tantrum in faults.TantrumStream())
+                {
+                    seen.Add(tantrum);
+                }
+            });
 
-        // The failure must be the stream's, not an assertion of this test leaking out of the loop:
-        // an enum element that materialised fine would collect two moods and prove nothing.
-        Assert.IsNotAssignableFrom<Xunit.Sdk.XunitException>(ex);
-        Assert.Empty(seen);
+            // The failure must be the stream's (the injected factory ran), not an assertion of this
+            // test leaking out of the loop.
+            Assert.IsNotAssignableFrom<Xunit.Sdk.XunitException>(ex);
+            Assert.True(calls >= 1, "the injected factory never ran, so nothing was materialised");
+            Assert.Contains("Oreo hid under the sofa", ex.ToString());
+            Assert.Empty(seen);
 
-        // Liveness on the same object after the stream faulted.
-        Assert.Equal("Oreo?", faults.DescribeWith(name => name + "?"));
+            // Liveness on the same object after the stream faulted.
+            Assert.Equal("Oreo?", faults.DescribeWith(name => name + "?"));
+        }
+        finally
+        {
+            NugetMarshal.Factories[typeof(Tantrum)] = original;
+        }
     }
 
     // ---------------------------------------------------------------------------------------

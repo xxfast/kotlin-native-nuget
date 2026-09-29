@@ -666,6 +666,7 @@ internal val NUGET_RUNTIME_EXPORTS: Set<String> = setOf(
   "nuget_unwrap_byte",
   "nuget_unwrap_char",
   "nuget_unwrap_double",
+  "nuget_unwrap_enum_ordinal",
   "nuget_unwrap_float",
   "nuget_unwrap_int",
   "nuget_unwrap_long",

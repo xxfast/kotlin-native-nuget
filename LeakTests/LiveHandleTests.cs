@@ -1,3 +1,4 @@
+using Mood = TestLibrary.Cat.Mood;
 using Test.Menagerie;
 using TestLibrary;
 using TestLibrary.Admission;
@@ -1252,6 +1253,70 @@ public class LiveHandleTests
                     foreach (Kind kind in page) kind.Dispose();
                 }
                 Assert.Equal(3, hub.Items.Value.Count);
+            },
+            iterations: 200);
+    }
+
+    // Row 8d-enum. ROADMAP line 74 (fromhandle-enum): an ENUM element on the StateFlow route. Each
+    // `.Value` read mints one StableRef of the Kotlin enum object, which the `Factories` enum
+    // entry must release after it reads the ordinal. A factory that forgets the release leaks one
+    // handle per read, so the crossing reads many times: repeated non-nullable and nullable
+    // `.Value` reads after Oreo sulks, and a generic `Box<Mood>.Value` read (ADR-147).
+    [Fact]
+    public void EnumStateFlowElement_RepeatedValueReads_ReturnToBaseline()
+    {
+        AssertNoLeak(
+            () =>
+            {
+                using var tracker = new CatMoodTracker("Oreo");
+                Assert.Equal(Mood.Sleepy, tracker.Temper.Value);
+                tracker.Sulk();
+                for (int i = 0; i < 5; i++)
+                {
+                    Assert.Equal(Mood.Grumpy, tracker.Temper.Value);
+                    Assert.Equal(Mood.Grumpy, tracker.MaybeTemper.Value);
+                }
+                using Box<Mood> box = CatMoodTrackerKt.SulkBox();
+                Assert.Equal(Mood.Grumpy, box.Value);
+                Assert.Equal(Mood.Grumpy, box.Value);
+            },
+            iterations: 200);
+    }
+
+    // Row 8d-enum-flow. The same enum entry on the cold Flow route: one StableRef per emission,
+    // non-nullable (`MoodStream`) and nullable with a null in the middle (`MoodSwings`).
+    [Fact]
+    public async Task EnumFlowElement_Emissions_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                using var faults = new CallbackFaults();
+                var moods = new List<Mood>();
+                await foreach (Mood mood in faults.MoodStream()) moods.Add(mood);
+                Assert.Equal(new[] { Mood.Happy, Mood.Grumpy }, moods);
+
+                using var tracker = new CatMoodTracker("Mylo");
+                var swings = new List<Mood?>();
+                await foreach (Mood? mood in tracker.MoodSwings()) swings.Add(mood);
+                Assert.Equal(new Mood?[] { Mood.Sleepy, null, Mood.Grumpy }, swings);
+            },
+            iterations: 200);
+    }
+
+    // Row 8d-valueclass. Regression pin beside the enum rows: a VALUE CLASS element (ADR-171) on
+    // the same two routes, released by `CatId.NugetUnbox`. Expected green already.
+    [Fact]
+    public async Task ValueClassFlowElement_ValueReadsAndEmissions_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                using var tracker = new CatMoodTracker("Oreo");
+                for (int i = 0; i < 5; i++) Assert.Equal(new CatId("oreo-1"), tracker.Tag.Value);
+                var ids = new List<CatId?>();
+                await foreach (CatId? id in tracker.Tags()) ids.Add(id);
+                Assert.Equal(3, ids.Count);
             },
             iterations: 200);
     }

@@ -3,6 +3,8 @@ package io.github.xxfast.kotlin.native.nuget.test.cat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 
 /**
  * ADR-065: StateFlow<T> mapping fixture.
@@ -204,7 +206,64 @@ class CatMoodTracker(private val catName: String) {
   fun treatsGivenSoFar(): Int = treatCount.value
 
   val grudge: MutableStateFlow<Grudge> = MutableStateFlow(Grudge("the vet"))
+
+  // --- ROADMAP line 74 (fromhandle-enum): an ENUM element on the StateFlow and Flow routes. The
+  // Kotlin shim retains the enum object itself, and the C# side reads it through
+  // `NugetMarshal.FromHandle<Mood>`, which needs a `Factories` entry for the enum. Every value a
+  // test asserts has a NON-ZERO ordinal (SLEEPY = 1, GRUMPY = 2), so a read that always answers
+  // ordinal 0 cannot pass. Mylo starts sleepy; Oreo's sulk turns everything grumpy. ---
+
+  private val _temper: MutableStateFlow<Mood> = MutableStateFlow(Mood.SLEEPY)
+
+  /** StateFlow<Mood> -- non-nullable enum element. Starts SLEEPY (Mylo napping), ordinal 1. */
+  val temper: StateFlow<Mood> = _temper.asStateFlow()
+
+  private val _maybeTemper: MutableStateFlow<Mood?> = MutableStateFlow(null)
+
+  /** StateFlow<Mood?> -- nullable enum element. Null until [sulk]; `T` is `Nullable<Mood>` in C#. */
+  val maybeTemper: StateFlow<Mood?> = _maybeTemper.asStateFlow()
+
+  /** Deterministic mutation -- Oreo sulks: [temper] and [maybeTemper] both become GRUMPY. */
+  fun sulk() {
+    _temper.value = Mood.GRUMPY
+    _maybeTemper.value = Mood.GRUMPY
+  }
+
+  /** Flow<Mood?> -- nullable enum element on the cold Flow route, a null between two moods. */
+  fun moodSwings(): Flow<Mood?> = flow {
+    emit(Mood.SLEEPY)
+    emit(null)
+    emit(Mood.GRUMPY)
+  }
+
+  // --- Regression pins (memo what-question 1): a VALUE CLASS element on the same two routes.
+  // ADR-171 registers `CatId` in `Factories` via `NugetUnbox`, so these are expected to pass
+  // already; no fixture reached them at runtime before. ---
+
+  private val _tag: MutableStateFlow<CatId> = MutableStateFlow(CatId("oreo-1"))
+
+  /** StateFlow<CatId> -- value-class element. */
+  val tag: StateFlow<CatId> = _tag.asStateFlow()
+
+  /** Deterministic mutation -- re-tags the cat. */
+  fun retag(id: String) {
+    _tag.value = CatId(id)
+  }
+
+  /** Flow<CatId?> -- nullable value-class element on the Flow route, a null in the middle. */
+  fun tags(): Flow<CatId?> = flow {
+    emit(CatId("oreo-1"))
+    emit(null)
+    emit(CatId("mylo-2"))
+  }
 }
+
+/**
+ * ROADMAP line 74 (fromhandle-enum): an ADR-147 exported generic class instantiated at an ENUM.
+ * `Box<T>.Value` is generic in C#, so it reads through `NugetMarshal.FromHandle<T>` with
+ * `T = Mood`; no per-member read delegate can reach it, only a `Factories` entry for the enum.
+ */
+fun sulkBox(): Box<Mood> = Box(Mood.GRUMPY)
 
 /**
  * ADR-071: an element type whose `equals` throws, so the Kotlin `value` setter itself throws

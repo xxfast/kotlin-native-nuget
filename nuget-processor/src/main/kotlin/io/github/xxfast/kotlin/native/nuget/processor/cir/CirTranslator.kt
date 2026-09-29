@@ -1051,7 +1051,11 @@ private fun List<CirNamespace>.withoutEmptyStaticClasses(): List<CirNamespace> =
  * constructing the backing class ([CirFactoryEntry.constructTypeName]). `Materialize<T>` probes the
  * C# token BEFORE this lookup for an interface key, so a C#-implemented `IFoo` is never re-wrapped.
  *
- * Enums, objects, interfaces without a backing wrapper and open generic wrappers register nothing:
+ * ADR-094 amendment: an enum registers too, via [CirFactoryEntry.viaEnumOrdinal]. An enum element
+ * at an erased position (`Flow<E>`, `StateFlow<E?>`, `Box<E>.Value`) is a handle to the Kotlin
+ * enum object, so the entry reads its ordinal back; nested enums ride the same walk.
+ *
+ * Objects, interfaces without a backing wrapper and open generic wrappers register nothing:
  * none of them is a closed type reachable from a handle.
  */
 private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry> {
@@ -1089,6 +1093,8 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
             val name: String = if (subclass.isNested) "$name.${subclass.name}" else subclass.name
             CirFactoryEntry("$path.$name")
           }
+
+    is CirEnum -> listOf(CirFactoryEntry("$path.$name", viaEnumOrdinal = true))
 
     else -> emptyList()
   }
