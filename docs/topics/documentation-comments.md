@@ -83,7 +83,7 @@ its members), enum (and a documented entry), sealed base and arm, value class, c
 | `[label][Type]` | as above, with the C# `<see>`/`<c>` carrying `label` instead of `Type` |
 | `@param name text` | `<param name="name">text</param>` |
 | `@return text` | `<returns>text</returns>`, omitted on a `void` member; the same text on a `suspend` function's `Async` projection |
-| `@throws Type text` / `@exception Type text` | `<exception cref="...">text</exception>`, spelled from [the exception table](exceptions.md#catching-a-specific-exception-type); an unmapped type crefs `KotlinException` and keeps the Kotlin type name as a plain-text prefix (`Type: text`) |
+| `@throws Type text` / `@exception Type text` | `<exception cref="...">text</exception>`, spelled from [the exception table](exceptions.md#catching-a-specific-exception-type); the name is resolved as written, then in the declaration's package, then `kotlin.`, `kotlin.coroutines.cancellation.` and `kotlinx.io.` (imports are not visible), and crefs the exception the caller actually catches, so a subclass of a mapped type crefs its base's row. A name that resolves to no class still matches a standard-library row by its simple name; otherwise it crefs `KotlinException` and keeps the Kotlin type name as a plain-text prefix (`Type: text`) |
 | `@property name text` | the `<summary>` of the C# property `Name`, only when that property has no KDoc of its own; also the `<param>` text of a same-named primary-constructor parameter, when the class has no `@param` for it |
 | `@constructor text` | the `<summary>` of the primary constructor |
 | `@see Target` | `<seealso cref="global::...">` when `Target` resolves the same way `[Type]` does; otherwise a closing `<para>See also: <c>Target</c></para>` in `<remarks>` |

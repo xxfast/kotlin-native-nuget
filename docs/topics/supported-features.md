@@ -128,7 +128,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | thrown exception | ⇄ | `KotlinException` | → propagates synchronously · ← a throw from package code surfaces as a catchable `NugetManagedException`; its .NET type map, stack trace and cause chain are not built yet | [Exceptions](exceptions.md) · [The bridgeable subset](bridgeable-subset.md) |
 | stack trace | → | `KotlinStackTrace` property |  | [Exceptions](exceptions.md) |
 | `e.cause` | → | `InnerException` | The cause chain is preserved. | [Exceptions](exceptions.md) |
-| `IllegalArgumentException` etc. | → | `ArgumentException` etc. | Core exceptions are mapped through `IKotlinException`. | [Exceptions](exceptions.md) |
+| `IllegalArgumentException` etc., `kotlinx.io.IOException`, `NullPointerException` | → | `ArgumentException`, `IOException`, `NullReferenceException` etc. | Subclasses map too; `catch (KotlinException)` no longer catches them, filter `e is IKotlinException`. A null message reads the Kotlin type name. | [Exceptions](exceptions.md) |
 | `Throwable` / `Throwable?` property | → | `System.Exception?` | Reads as a constructed, unthrown exception rebuilt from the error envelope, so the type map and cause chain apply. Get-only, and a snapshot: each read allocates. | [Exceptions](exceptions.md) |
 | `Result<T>` return | → | `T`, failure thrown | An ordinary return unwraps with `getOrThrow()`, so a modelled failure is indistinguishable in C# from a thrown one. `Result<Unit>` is `void`; other positions skip, named. | [Exceptions](exceptions.md) |
 | property getter / setter throws | → | propagated |  | [Exceptions](exceptions.md) |

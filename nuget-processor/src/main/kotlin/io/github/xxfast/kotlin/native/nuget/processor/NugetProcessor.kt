@@ -27,6 +27,9 @@ import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.ksp.writeTo
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
+import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_EXCEPTION_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.KotlinExceptionRow
+import io.github.xxfast.kotlin.native.nuget.processor.exports.nugetMappedTypeFunction
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirRenderer
 import io.github.xxfast.kotlin.native.nuget.processor.cir.resolveDocLinks
@@ -1331,7 +1334,9 @@ class NugetProcessor(
     // qualified name is the only available link. Consumed by Decision 2 (actual typealias target
     // redirect) and Decision 3 (per-file C# static class naming). ADR-096: overloaded `expect fun`s
     // share one qualified name, so the index resolves functions by signature rather than by name.
-    val expects = ExpectIndex(allFilesDeclarations)
+    val expects = ExpectIndex(allFilesDeclarations) { name ->
+      resolver.getClassDeclarationByName(resolver.getKSNameFromString(name))
+    }
 
     // ADR-074 Decision 2: collected from the same funnel input, before the `isExpect` filter drops
     // the paired expect class. `findActualType()` resolves the alias to its target
@@ -2278,6 +2283,9 @@ class NugetProcessor(
       classes, enums, sealedClasses, objects, properties,
       valueClasses, suspendFunctions, callableCatalog, deps, reachableInterfaces,
       exportedObjectHandles, forwardClassifier,
+      KOTLIN_EXCEPTION_TYPES.filter { row ->
+        row.optional && expects.classByName(row.kotlinType) != null
+      },
     )
     val bindings: CsharpBindings = generateCSharpBindings(
       functions, genericFunctions, extensionFunctions, extensionProperties,
@@ -2503,6 +2511,8 @@ class NugetProcessor(
     exportedTypes: Set<String>,
     // ADR-114: the legacy Flow/suspend export builders classify their own generic parameters.
     forwardClassifier: ForwardBridgeTypeClassifier,
+    // ADR-177: the optional mapping rows (kotlinx-io) whose class KSP resolved on the classpath.
+    presentOptionalExceptionRows: List<KotlinExceptionRow>,
   ): FileSpec {
     val builder: FileSpec.Builder = FileSpec
       .builder("io.github.xxfast.kotlin.native.nuget.generated", "CNameExports")
@@ -2537,6 +2547,8 @@ class NugetProcessor(
         .initializer("%T", ClassName(NUGET_RUNTIME_PACKAGE, "NugetRuntimeAbi1"))
         .build()
     )
+
+    builder.addFunction(nugetMappedTypeFunction(presentOptionalExceptionRows))
 
     // ADR-162: the Kotlin half's containment seam. One guard per declaration per adder call, which
     // is exactly the granularity the `exports/*` builders iterate at: an emitter invariant that a

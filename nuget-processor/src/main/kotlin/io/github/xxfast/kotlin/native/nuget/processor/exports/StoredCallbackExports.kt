@@ -215,7 +215,7 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
     appendLine("} catch (e: Throwable) {")
     appendLine(
       "  if (errorOut != null) errorOut.reinterpret<COpaquePointerVar>().pointed.value = " +
-        "NugetHandles.retain(buildError(e))"
+        "NugetHandles.retain(buildError(e, ::nugetMappedType))"
     )
     appendLine("  null")
     append("}")

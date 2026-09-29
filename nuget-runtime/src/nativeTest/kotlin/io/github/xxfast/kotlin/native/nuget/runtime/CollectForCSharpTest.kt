@@ -61,6 +61,7 @@ class CollectForCSharpTest {
       onCompletePtr = onCompleteCallback,
       onErrorPtr = onErrorCallback,
       userData = holderRef.asCPointer(),
+      mappedType = ::nugetStdlibMappedType,
     ) { emit ->
       flowOf(1, 2, 3).collect { value -> emit(NugetHandles.retain(value as Any)) }
     }
@@ -93,6 +94,7 @@ class CollectForCSharpTest {
       onCompletePtr = onCompleteCallback,
       onErrorPtr = onErrorCallback,
       userData = holderRef.asCPointer(),
+      mappedType = ::nugetStdlibMappedType,
     ) {
       awaitCancellation()
     }
@@ -128,6 +130,7 @@ class CollectForCSharpTest {
       onCompletePtr = onCompleteCallback,
       onErrorPtr = onErrorCallback,
       userData = holderRef.asCPointer(),
+      mappedType = ::nugetStdlibMappedType,
     ) {
       throw IllegalArgumentException("flow boom")
     }

@@ -11,7 +11,16 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_EXCEPTION_TYPES
  * ADR-150: one `@throws T text` / `@exception T text` entry, [type] exactly as the author spelled
  * it.
  */
-internal data class ForwardKdocThrows(val type: String, val text: String)
+internal data class ForwardKdocThrows(
+  val type: String,
+  val text: String,
+  /**
+   * ADR-177: the C# class the thrown type actually arrives as, when [type] resolved to a class
+   * whose supertypes were walked to the first row it IS-A (`KotlinException` when none). `null`
+   * when the name did not resolve, and the simple-name match below is the fallback.
+   */
+  val resolvedCsharpType: String? = null,
+)
 
 /**
  * ADR-150 amendment: one block of the comment body. A [Para] is a paragraph of prose (its inline
@@ -266,9 +275,11 @@ internal fun ForwardKdoc.toCirDoc(
  */
 private fun ForwardKdocThrows.toCirDocThrows(): CirDocThrows {
   val simple: String = type.substringAfterLast('.')
-  val mapped: String? = KOTLIN_EXCEPTION_TYPES.entries
-    .firstOrNull { (kotlinType, _) -> kotlinType.substringAfterLast('.') == simple }
-    ?.value
+  val mapped: String? = resolvedCsharpType?.takeIf { it != "KotlinException" }
+    ?: KOTLIN_EXCEPTION_TYPES
+      .takeIf { resolvedCsharpType == null }
+      ?.firstOrNull { row -> !row.optional && row.kotlinType.substringAfterLast('.') == simple }
+      ?.csharpType
   // The `T: ` prefix is this generator's own prose, so it is glued on BEFORE tokenizing: the
   // Kotlin type name stays plain text rather than becoming a `<c>` span of its own.
   return if (mapped != null) CirDocThrows(mapped, text.docInlines())

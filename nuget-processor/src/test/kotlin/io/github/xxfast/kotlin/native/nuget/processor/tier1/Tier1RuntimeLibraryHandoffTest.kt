@@ -161,7 +161,7 @@ class Tier1RuntimeLibraryHandoffTest {
   @Test
   fun `the members it still calls are imported from the runtime package`() {
     val generated: String = generated()
-    listOf("NugetHandles", "buildError", "NugetRuntimeAbi1").forEach { member ->
+    listOf("NugetHandles", "buildError", "nugetStdlibMappedType", "NugetRuntimeAbi1").forEach { member ->
       assertTrue(
         generated.importsFromRuntime(member),
         "expected `$member` imported from the runtime package; generated=\n$generated",

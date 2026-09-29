@@ -21,7 +21,15 @@ import com.google.devtools.ksp.symbol.KSTypeArgument
  * ([functionOrNull]), so one overload's defaults can never be attributed to another. Zero or
  * multiple matches resolve to `null`, which is the "no defaults, own file name" fallback.
  */
-internal class ExpectIndex(declarations: List<KSDeclaration> = emptyList()) {
+internal class ExpectIndex(
+  declarations: List<KSDeclaration> = emptyList(),
+  /**
+   * ADR-177: resolves a class by qualified name on the compile classpath (KSP's
+   * `getClassDeclarationByName`), so an ADR-150 `@throws T` can walk `T`'s supertypes to the
+   * mapping row it IS-A. Rides on this index because it is already threaded to every KDoc reader.
+   */
+  val classByName: (String) -> KSClassDeclaration? = { null },
+) {
 
   private val byName: Map<String, List<KSDeclaration>> = declarations
     .filter { it.isExpect }

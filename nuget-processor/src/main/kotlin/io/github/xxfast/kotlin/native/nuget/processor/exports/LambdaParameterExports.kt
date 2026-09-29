@@ -170,7 +170,7 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
         appendLine(
           "    errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(",
         )
-        appendLine("      buildError(e)")
+        appendLine("      buildError(e, ::nugetMappedType)")
         appendLine("    )")
         appendLine("  }")
         append("}")
@@ -187,7 +187,7 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
         appendLine(
           "    errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(",
         )
-        appendLine("      buildError(e)")
+        appendLine("      buildError(e, ::nugetMappedType)")
         appendLine("    )")
         appendLine("  }")
         appendLine("  null")
@@ -205,7 +205,7 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
         appendLine(
           "    errorOut.reinterpret<COpaquePointerVar>().pointed.value = NugetHandles.retain(",
         )
-        appendLine("      buildError(e)")
+        appendLine("      buildError(e, ::nugetMappedType)")
         appendLine("    )")
         appendLine("  }")
         appendLine("  ${defaultValueFor(outerRetQualified)}")

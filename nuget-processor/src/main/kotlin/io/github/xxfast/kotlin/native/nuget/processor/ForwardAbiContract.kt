@@ -621,6 +621,8 @@ internal val NUGET_RUNTIME_EXPORTS: Set<String> = setOf(
   "nuget_csharp_token",
   "nuget_dispose",
   "nuget_error_cause_count",
+  // ADR-177: the matched mapping row per error node.
+  "nuget_error_cause_mapped_type",
   "nuget_error_cause_message",
   "nuget_error_cause_stacktrace",
   "nuget_error_cause_type",

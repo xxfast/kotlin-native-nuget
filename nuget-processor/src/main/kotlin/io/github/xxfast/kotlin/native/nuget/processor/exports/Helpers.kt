@@ -185,6 +185,8 @@ internal val NUGET_RUNTIME_MEMBERS: List<String> = listOf(
   "NugetHandles",
   "NugetError",
   "buildError",
+  // ADR-177: the stdlib rows every generated `nugetMappedType` falls back to.
+  "nugetStdlibMappedType",
   // ADR-161: the forward callback error channel's Kotlin half.
   "nugetCallbackCall",
   "NugetCSharpBridge",

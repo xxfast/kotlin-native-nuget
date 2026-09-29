@@ -38,12 +38,12 @@ class Tier1ThrowablePropertyTest {
     )
     // Nullable getter: the envelope is built only for a non-null value, then boxed.
     assertTrue(
-      "?.let(::buildError)" in result.generated,
+      "?.let { buildError(it, ::nugetMappedType) }" in result.generated,
       "expected the nullable getter to build the envelope; generated=${result.generated}",
     )
     // Non-null getter: unconditional envelope.
     assertTrue(
-      "buildError(handle.asStableRef<tier1.throwableproperty.Failure>().get().fatal)" in result.generated,
+      "buildError(handle.asStableRef<tier1.throwableproperty.Failure>().get().fatal, ::nugetMappedType)" in result.generated,
       "expected the non-null getter to build the envelope; generated=${result.generated}",
     )
     assertTrue(
@@ -114,7 +114,7 @@ class Tier1ThrowablePropertyTest {
       "expected the generated sealed getters to compile; got: ${result.compileErrors}",
     )
     assertTrue(
-      "?.let(::buildError)" in result.generated,
+      "?.let { buildError(it, ::nugetMappedType) }" in result.generated,
       "expected the sealed Kotlin getter to build the envelope, not box the Throwable itself; " +
           "generated=${result.generated}",
     )

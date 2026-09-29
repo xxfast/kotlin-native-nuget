@@ -46,13 +46,18 @@ internal object Tier1RuntimeStub {
     @NugetRuntimeApi
     data class NugetError(
       val type: String,
+      val mappedType: String?,
       val message: String,
       val stackTrace: String,
       val cause: NugetError? = null,
     )
 
     @NugetRuntimeApi
-    fun buildError(e: Throwable): NugetError = TODO()
+    fun buildError(e: Throwable, mappedType: (Throwable) -> String?): NugetError = TODO()
+
+    // ADR-177: the stdlib rows every generated `nugetMappedType` falls back to.
+    @NugetRuntimeApi
+    fun nugetStdlibMappedType(t: Throwable): String? = TODO()
 
     // ADR-161: the forward callback error channel. Generated code names both of these, so a
     // signature drift here would compile a generated call that the real runtime rejects.
@@ -102,6 +107,7 @@ internal object Tier1RuntimeStub {
       scope: CoroutineScope,
       callbackPtr: COpaquePointer,
       userData: COpaquePointer,
+      mappedType: (Throwable) -> String?,
       body: suspend () -> COpaquePointer?,
     ): COpaquePointer = TODO()
 
@@ -112,6 +118,7 @@ internal object Tier1RuntimeStub {
       onCompletePtr: COpaquePointer,
       onErrorPtr: COpaquePointer,
       userData: COpaquePointer,
+      mappedType: (Throwable) -> String?,
       body: suspend (emit: (COpaquePointer?) -> Unit) -> Unit,
     ): COpaquePointer = TODO()
   """.trimIndent()

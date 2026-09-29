@@ -207,7 +207,7 @@ private fun buildSuspendFunctionBody(
   val resultRefCode: String = resultRefExpression(isNullable, boxed)
   appendLine(
     "return launchForCSharp(CoroutineScope(Dispatchers.Default), ${names.callback}, " +
-        "${names.userData}) {"
+        "${names.userData}, ::nugetMappedType) {"
   )
   if (isUnit) {
     appendLine("  $call")
@@ -237,7 +237,7 @@ private fun buildSuspendMethodBody(
   appendLine("val ${names.scope} = ${names.scopeHandle}.asStableRef<CoroutineScope>().get()")
   append(paramPrelude)
   val resultRefCode: String = resultRefExpression(isNullable, boxed)
-  appendLine("return launchForCSharp(${names.scope}, ${names.callback}, ${names.userData}) {")
+  appendLine("return launchForCSharp(${names.scope}, ${names.callback}, ${names.userData}, ::nugetMappedType) {")
   // `result` / `resultRef` need no minting: they are declared inside the launch lambda and their
   // initializers read the user's argument before the local is in scope.
   if (isUnit) {

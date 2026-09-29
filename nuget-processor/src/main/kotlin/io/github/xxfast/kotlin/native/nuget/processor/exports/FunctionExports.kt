@@ -152,7 +152,7 @@ internal fun FileSpec.Builder.addFunctionExports(
         appendLine("} catch (e: Throwable) {")
         appendLine("  if (errorOut != null) {")
         appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.retain(")
-        appendLine("      buildError(e)")
+        appendLine("      buildError(e, ::nugetMappedType)")
         appendLine("    )")
         appendLine("  }")
         appendLine("  null")

@@ -485,7 +485,7 @@ private fun buildFlowCollectBody(
   // still reaches C# as `onError` instead of escaping the `@CName` export.
   appendLine("val scope = scopeHandle.asStableRef<CoroutineScope>().get()")
   appendLine(
-    "return collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData) { emit ->"
+    "return collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, userData, ::nugetMappedType) { emit ->"
   )
   appendLine("  obj.${memberAccessor(propName, memberNullable)}.collect { value ->")
   appendLine("    val itemRef = ${itemBoxExpr(elementNullable, elementCollection)}")
@@ -520,7 +520,7 @@ private fun buildFlowMethodCollectBody(
   append(paramPrelude)
   appendLine(
     "return collectForCSharp($scope, ${names.onNext}, ${names.onComplete}, ${names.onError}, " +
-        "${names.userData}) { $emit ->"
+        "${names.userData}, ::nugetMappedType) { $emit ->"
   )
   appendLine("  ${memberAccessor(call, memberNullable)}.collect { value ->")
   appendLine("    val itemRef = ${itemBoxExpr(elementNullable, elementCollection)}")
@@ -626,7 +626,7 @@ private fun buildStateFlowSetValuePropertyBody(
   appendLine("} catch (e: Throwable) {")
   appendLine("  if (errorOut != null) {")
   appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.retain(")
-  appendLine("      buildError(e)")
+  appendLine("      buildError(e, ::nugetMappedType)")
   appendLine("    )")
   appendLine("  }")
   append("}")
@@ -669,7 +669,7 @@ private fun buildStateFlowHandleSetValueBody(
   appendLine("} catch (e: Throwable) {")
   appendLine("  if (errorOut != null) {")
   appendLine("    errorOut.reinterpret<%T>().pointed.value = %T.retain(")
-  appendLine("      buildError(e)")
+  appendLine("      buildError(e, ::nugetMappedType)")
   appendLine("    )")
   appendLine("  }")
   append("}")
