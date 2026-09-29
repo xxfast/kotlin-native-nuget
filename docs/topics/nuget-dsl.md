@@ -21,7 +21,7 @@ the DSL itself enforces they're set, but `packNuget` fails once it reads an unse
 
 | Property | Type | Required | Maps to |
 |---|---|---|---|
-| `packageId` | `String?` | yes | `.nuspec` `<id>`, and the `.nupkg` file name |
+| `packageId` | `String?` | yes | `.nuspec` `<id>`, and the `.nupkg` file name. When null or blank (or with no `publish` block) the generated C# is rooted at `namespace Interop`, and `packNuget` fails with "needs a non-blank package id" |
 | `version` | `String?` | yes | `.nuspec` `<version>` |
 | `authors` | `String?` | yes | `.nuspec` `<authors>` |
 | `description` | `String?` | yes | `.nuspec` `<description>` |

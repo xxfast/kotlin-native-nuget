@@ -28,7 +28,11 @@ class NugetProcessorProvider : SymbolProcessorProvider {
     // lazy `Provider<String>` KSP option (its body walks `rootProject.allprojects` after every
     // project is evaluated). Absent when this project does not publish, or when an older plugin
     // runs against this processor: then no duplicate-type warning can fire, as before.
-    val rootNamespace: String = environment.options["nuget.namespace"] ?: "Interop"
+    // Blank means absent, as for `nuget.boundTypesManifest`: an empty or blank namespace would
+    // render a bare `namespace ` header and `global::.X` references.
+    val rootNamespace: String = environment.options["nuget.namespace"]
+      ?.takeIf { namespace -> namespace.isNotBlank() }
+      ?: "Interop"
     val publishedScopes: List<PublishedScope> =
       parsePublishedScopes(environment.options["nuget.publishedScopes"], rootNamespace)
 
