@@ -1005,12 +1005,15 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
           "resolves `receiver.${detail?.substringAfterLast('.') ?: "name"}` to the member, so " +
           "the extension is unreachable by call syntax ($name)"
 
-    // Issue #131: guarded on the name being there, so a return-position nullable keeps the
-    // shipped generic sentence.
+    // Issue #131 names the parameter at an input position; the ADR-064 2026-09-29 amendment names
+    // the declared type at a return. With neither, the shipped generic sentence stands.
     ForwardPlanSkipReason.NULLABLE ->
-      if (parameter != null) "its parameter `$parameter` has a nullable type with no supported wire"
-      else if (returnType != null) "its nullable return type `$returnType` has no supported wire ($name)"
-      else generic
+      when {
+        parameter != null ->
+          "its parameter `$parameter` has a nullable type with no supported wire"
+        returnType != null -> "its nullable return type `$returnType` has no supported wire ($name)"
+        else -> generic
+      }
 
     else -> generic
   }

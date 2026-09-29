@@ -119,7 +119,7 @@ class ForwardSkippedCallableWarningTest {
         symbol = "com.example.Api.find",
         reason = ForwardPlanSkipReason.NULLABLE,
       ) to "its NULLABLE type combination is not supported",
-      // With the declared result spelled, a return-position nullable names it (ADR-064, 2026-09-29).
+      // With the declared result spelled, a return-position nullable names it (ADR-064).
       ForwardCallableCatalogEntry.Skipped(
         symbol = "com.example.Api.lookup",
         reason = ForwardPlanSkipReason.NULLABLE,

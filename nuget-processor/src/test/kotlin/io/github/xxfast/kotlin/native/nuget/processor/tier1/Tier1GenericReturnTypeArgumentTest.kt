@@ -130,7 +130,6 @@ class Tier1GenericReturnTypeArgumentTest {
     }
   }
 
-
   @Test
   fun `a nullable return skip names the refused type, in the sentence and the hint`() {
     val result = run()
@@ -154,6 +153,7 @@ class Tier1GenericReturnTypeArgumentTest {
       )
     }
   }
+
   @Test
   fun `an unnameable generic-return type argument skips the function, named`() {
     val result = run()

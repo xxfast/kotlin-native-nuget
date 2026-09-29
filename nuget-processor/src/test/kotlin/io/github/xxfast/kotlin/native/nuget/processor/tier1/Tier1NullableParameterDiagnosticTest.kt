@@ -101,7 +101,7 @@ class Tier1NullableParameterDiagnosticTest {
   }
 
   @Test
-  fun `a nullable return keeps the return-position skip and names the return type, not a parameter`() {
+  fun `a nullable return names the return type at the return-position skip, not a parameter`() {
     val result = Tier1Harness.run(source, libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore))
 
     val diagnostic: String =
