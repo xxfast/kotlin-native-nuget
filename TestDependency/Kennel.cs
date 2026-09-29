@@ -228,8 +228,13 @@ public class Kennel
     /// <summary>True once <see cref="StayAsync"/> has SEEN a cancellation on its token.</summary>
     public bool StayCancelled { get; private set; }
 
-    /// <summary>How many <see cref="StayAsync"/> calls saw their token cancelled.</summary>
-    public int StayCancellations { get; private set; }
+    /// <summary>
+    /// How many <see cref="StayAsync"/> calls saw their token cancelled. Counted with
+    /// <see cref="Interlocked"/> because each call's catch runs on its own thread-pool continuation,
+    /// and back-to-back cancelled calls can land together: a plain <c>++</c> lost one of them.
+    /// </summary>
+    public int StayCancellations => Volatile.Read(ref _stayCancellations);
+    private int _stayCancellations;
 
     /// <summary>True once a <see cref="DawdleAsync"/> call ran to completion, cancelled or not.</summary>
     public bool DawdleCompleted { get; private set; }
@@ -250,7 +255,7 @@ public class Kennel
         catch (OperationCanceledException)
         {
             StayCancelled = true;
-            StayCancellations++;
+            Interlocked.Increment(ref _stayCancellations);
             throw;
         }
     }
@@ -394,23 +399,33 @@ public class Kennel
     /// </summary>
     public int BarkCalls { get; private set; }
 
+    // The iterator-side counters below are bumped from thread-pool continuations, and a cancelled
+    // collect's disposal is fire-and-forget, so one enumeration's `finally` can run alongside the
+    // next one's. A plain `++` there lost an update on a slow runner and left
+    // `BarksCancelledRepeatedlyAsync(5)` reading 4 however long it polled, hence Interlocked.
+
     /// <summary>How many <see cref="BarksAsync"/> iterator bodies actually started.</summary>
-    public int BarkEnumerations { get; private set; }
+    public int BarkEnumerations => Volatile.Read(ref _barkEnumerations);
+    private int _barkEnumerations;
 
     /// <summary>How many elements <see cref="BarksAsync"/> has yielded, across all enumerations.</summary>
-    public int BarkYields { get; private set; }
+    public int BarkYields => Volatile.Read(ref _barkYields);
+    private int _barkYields;
 
     /// <summary>How many <see cref="BarksAsync"/> iterator `finally` blocks ran (cleanup).</summary>
-    public int BarkFinallyRuns { get; private set; }
+    public int BarkFinallyRuns => Volatile.Read(ref _barkFinallyRuns);
+    private int _barkFinallyRuns;
 
     /// <summary>True once a <see cref="LitterAsync"/> step SAW its token cancelled.</summary>
     public bool LitterCancelled { get; private set; }
 
     /// <summary>How many <see cref="LitterAsync"/> iterator `finally` blocks ran.</summary>
-    public int LitterFinallyRuns { get; private set; }
+    public int LitterFinallyRuns => Volatile.Read(ref _litterFinallyRuns);
+    private int _litterFinallyRuns;
 
     /// <summary>How many <see cref="HowlsAsync"/> iterator `finally` blocks ran, throw included.</summary>
-    public int HowlFinallyRuns { get; private set; }
+    public int HowlFinallyRuns => Volatile.Read(ref _howlFinallyRuns);
+    private int _howlFinallyRuns;
 
     /// <summary>
     /// The token-IGNORING source, in two parts on purpose. This half is an ordinary method, so it
@@ -432,19 +447,19 @@ public class Kennel
     /// </summary>
     private async IAsyncEnumerable<string> BarkStream(int count)
     {
-        BarkEnumerations++;
+        Interlocked.Increment(ref _barkEnumerations);
         try
         {
             for (int i = 0; i < count; i++)
             {
                 if (i > 0) await Task.Delay(Dawdle);
-                BarkYields++;
+                Interlocked.Increment(ref _barkYields);
                 yield return $"woof{i}";
             }
         }
         finally
         {
-            BarkFinallyRuns++;
+            Interlocked.Increment(ref _barkFinallyRuns);
         }
     }
 
@@ -467,7 +482,7 @@ public class Kennel
         finally
         {
             if (ct.IsCancellationRequested) LitterCancelled = true;
-            LitterFinallyRuns++;
+            Interlocked.Increment(ref _litterFinallyRuns);
         }
     }
 
@@ -604,7 +619,7 @@ public class Kennel
         }
         finally
         {
-            HowlFinallyRuns++;
+            Interlocked.Increment(ref _howlFinallyRuns);
         }
     }
 }
