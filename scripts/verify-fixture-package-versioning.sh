@@ -20,22 +20,27 @@ assert_build() {
 
   test -f "$feed/TestDependency.$expected_version.nupkg"
   test -f "$feed/TestLibrary.$expected_version.nupkg"
+  test -f "$ROOT/test-companion/build/nuget/TestCompanion.$expected_version.nupkg"
   test -f "$props"
   grep -F "<TestLibraryVersion>$expected_version</TestLibraryVersion>" "$props"
+  grep -F "<TestCompanionVersion>$expected_version</TestCompanionVersion>" "$props"
   grep -F "<dependency id=\"TestDependency\" version=\"[$expected_version]\" />" \
     "$feed/TestLibrary.$expected_version/TestLibrary.nuspec"
 
   dotnet build GeneratedBindingsCheck
   dotnet build IntegrationTests
+  dotnet build MultiPackageTests
+  dotnet build SharedExceptionTests
 }
 
-./gradlew :test-library:clean :test-library:packNuget
+dotnet pack Kotlin.Native.Interop -c Release -o build/nuget
+./gradlew :test-library:clean :test-companion:clean :test-library:packNuget :test-companion:packNuget
 first_version="$(consumer_version)"
 test -n "$first_version"
 assert_build "$first_version"
 
 # --rerun-tasks makes this a second fixture build while preserving every NuGet and MSBuild cache.
-./gradlew --rerun-tasks :test-library:packNuget
+./gradlew --rerun-tasks :test-library:packNuget :test-companion:packNuget
 second_version="$(consumer_version)"
 test -n "$second_version"
 test "$first_version" != "$second_version"

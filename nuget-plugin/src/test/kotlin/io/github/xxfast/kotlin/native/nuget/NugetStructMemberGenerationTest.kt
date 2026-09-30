@@ -399,25 +399,25 @@ class NugetStructMemberGenerationTest {
       files.single { it.relativePath == "PointRegistration.cs" }.content
 
     // Receiver components use readName (X/Y) so they stay distinct from ordinary params and from
-    // out-pointers (outX/outY). Reconstruction is `new Point(X, Y)`.
+    // out-pointers (outX/outY). Reconstruction is `new global::Test.Structs.Point(X, Y)`.
     assertContains(
       registration,
       "private static unsafe int Magnitude_Get_Thunk(int X, int Y, IntPtr* errOut)",
     )
-    assertContains(registration, "new Point(X, Y).Magnitude")
+    assertContains(registration, "new global::Test.Structs.Point(X, Y).Magnitude")
 
     // Instance method returning struct: components, ordinary args, out-pointers.
     assertContains(
       registration,
       "private static unsafe void Offset_Thunk(int X, int Y, int dx, int dy, int* outX, int* outY, IntPtr* errOut)",
     )
-    assertContains(registration, "new Point(X, Y).Offset(dx, dy)")
+    assertContains(registration, "new global::Test.Structs.Point(X, Y).Offset(dx, dy)")
     assertContains(registration, "*outX = result.X;")
     assertContains(registration, "*outY = result.Y;")
 
     // Instance method returning string.
     assertContains(registration, "private static unsafe IntPtr Format_Thunk(int X, int Y, IntPtr* errOut)")
-    assertContains(registration, "new Point(X, Y).Format()")
+    assertContains(registration, "new global::Test.Structs.Point(X, Y).Format()")
     assertContains(registration, "Marshal.StringToCoTaskMemUTF8")
 
     // Static factory: no receiver components.
@@ -425,7 +425,7 @@ class NugetStructMemberGenerationTest {
       registration,
       "private static unsafe void Origin_Thunk(int* outX, int* outY, IntPtr* errOut)",
     )
-    assertContains(registration, "Point.Origin()")
+    assertContains(registration, "global::Test.Structs.Point.Origin()")
   }
 
   @Test
@@ -465,7 +465,7 @@ class NugetStructMemberGenerationTest {
     val registration: String =
       files.single { it.relativePath == "VectorRegistration.cs" }.content
     assertContains(registration, "Negate_Thunk(int X, int Y, int* outX, int* outY, IntPtr* errOut)")
-    assertContains(registration, "new Vector(X, Y).Negate()")
+    assertContains(registration, "new global::Test.Structs.Vector(X, Y).Negate()")
   }
 
   @Test
@@ -480,15 +480,15 @@ class NugetStructMemberGenerationTest {
 
     // Receiver components use readName (Tag/Active/Grade/Mood). Case-sensitive C# then keeps the
     // WithMood parameter as lowercase `mood` without colliding with component `Mood`.
-    assertContains(registration, "using Test.Enums;")
+    assertContains(registration, "using global::Test.Enums;")
     assertContains(
       registration,
       "private static unsafe IntPtr Label_Get_Thunk(IntPtr TagPtr, byte Active, ushort Grade, int Mood, IntPtr* errOut)",
     )
     assertContains(
       registration,
-      "new Profile(Marshal.PtrToStringUTF8(TagPtr)!, Active != 0, " +
-          "(char)Grade, (CatMood)Mood).Label",
+      "new global::Test.Structs.Profile(Marshal.PtrToStringUTF8(TagPtr)!, Active != 0, " +
+          "(char)Grade, (global::Test.Enums.CatMood)Mood).Label",
     )
 
     assertContains(
@@ -501,12 +501,12 @@ class NugetStructMemberGenerationTest {
       registration,
       "WithMood_Thunk(IntPtr TagPtr, byte Active, ushort Grade, int Mood, int mood,",
     )
-    assertContains(registration, ".WithMood((CatMood)mood)")
+    assertContains(registration, ".WithMood((global::Test.Enums.CatMood)mood)")
     assertContains(registration, "*outTag = Marshal.StringToCoTaskMemUTF8(result.Tag);")
     assertContains(registration, "*outMood = (int)result.Mood;")
 
     assertContains(registration, "Resting_Thunk(IntPtr tagPtr")
-    assertContains(registration, "Profile.Resting(")
+    assertContains(registration, "global::Test.Structs.Profile.Resting(")
   }
 
   @Test

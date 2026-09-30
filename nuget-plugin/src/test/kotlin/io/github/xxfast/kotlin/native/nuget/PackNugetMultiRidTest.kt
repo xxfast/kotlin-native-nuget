@@ -49,18 +49,18 @@ class PackNugetMultiRidTest {
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
 
     configureCommon(task, outputDir)
-    task.nativeLibDirs.set(mapOf("osx-arm64" to nativeDir("local", "libtest.dylib").path))
-    task.prebuiltRuntimesDir.set(prebuiltTree("win-x64", "test.dll"))
+    task.nativeLibDirs.set(mapOf("osx-arm64" to nativeDir("local", "libkn_746573746c696272617279.dylib").path))
+    task.prebuiltRuntimesDir.set(prebuiltTree("win-x64", "kn_746573746c696272617279.dll"))
 
     task.pack()
 
     val staged = File(outputDir, "TestLibrary.1.0.0")
     assertTrue(
-      File(staged, "runtimes/osx-arm64/native/libtest.dylib").exists(),
+      File(staged, "runtimes/osx-arm64/native/libkn_746573746c696272617279.dylib").exists(),
       "the locally linked RID must be staged",
     )
     assertTrue(
-      File(staged, "runtimes/win-x64/native/test.dll").exists(),
+      File(staged, "runtimes/win-x64/native/kn_746573746c696272617279.dll").exists(),
       "the prebuilt RID must be staged alongside it",
     )
 
@@ -68,11 +68,11 @@ class PackNugetMultiRidTest {
       zip.entries().toList().map { it.name }
     }
     assertTrue(
-      entries.contains("runtimes/osx-arm64/native/libtest.dylib"),
+      entries.contains("runtimes/osx-arm64/native/libkn_746573746c696272617279.dylib"),
       "the nupkg must carry the local RID, was $entries",
     )
     assertTrue(
-      entries.contains("runtimes/win-x64/native/test.dll"),
+      entries.contains("runtimes/win-x64/native/kn_746573746c696272617279.dll"),
       "the nupkg must carry the prebuilt RID, was $entries",
     )
   }
@@ -168,11 +168,11 @@ class PackNugetMultiRidTest {
   fun `pack fails when the same rid is both locally linked and prebuilt`() {
     val task: PackNugetTask = newTask()
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
-    val local: File = nativeDir("local", "test.dll")
+    val local: File = nativeDir("local", "kn_746573746c696272617279.dll")
 
     configureCommon(task, outputDir)
     task.nativeLibDirs.set(mapOf("win-x64" to local.path))
-    task.prebuiltRuntimesDir.set(prebuiltTree("win-x64", "test.dll"))
+    task.prebuiltRuntimesDir.set(prebuiltTree("win-x64", "kn_746573746c696272617279.dll"))
 
     val error = assertFailsWith<IllegalArgumentException> { task.pack() }
 
@@ -187,7 +187,7 @@ class PackNugetMultiRidTest {
   fun `pack ignores non-directory entries at the top of the prebuilt tree`() {
     val task: PackNugetTask = newTask()
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
-    val root: File = prebuiltTree("win-x64", "test.dll")
+    val root: File = prebuiltTree("win-x64", "kn_746573746c696272617279.dll")
     File(root, ".DS_Store").writeText("junk")
 
     configureCommon(task, outputDir)
@@ -196,7 +196,7 @@ class PackNugetMultiRidTest {
     task.pack()
 
     assertTrue(
-      File(outputDir, "TestLibrary.1.0.0/runtimes/win-x64/native/test.dll").exists(),
+      File(outputDir, "TestLibrary.1.0.0/runtimes/win-x64/native/kn_746573746c696272617279.dll").exists(),
       "a stray file next to the RID directories must not stop the pack",
     )
   }
@@ -207,12 +207,12 @@ class PackNugetMultiRidTest {
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
 
     configureCommon(task, outputDir)
-    task.prebuiltRuntimesDir.set(prebuiltTree("win-arm64", "test.dll"))
+    task.prebuiltRuntimesDir.set(prebuiltTree("win-arm64", "kn_746573746c696272617279.dll"))
 
     task.pack()
 
     assertTrue(
-      File(outputDir, "TestLibrary.1.0.0/runtimes/win-arm64/native/test.dll").exists(),
+      File(outputDir, "TestLibrary.1.0.0/runtimes/win-arm64/native/kn_746573746c696272617279.dll").exists(),
       "a RID this plugin version cannot build is a warning, not an error",
     )
   }
@@ -221,7 +221,7 @@ class PackNugetMultiRidTest {
   fun `pack filters non-native files out of a prebuilt rid`() {
     val task: PackNugetTask = newTask()
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
-    val root: File = prebuiltTree("win-x64", "test.dll")
+    val root: File = prebuiltTree("win-x64", "kn_746573746c696272617279.dll")
     File(root, "win-x64/native/test.pdb").writeText("fake debug symbols")
 
     configureCommon(task, outputDir)
@@ -230,7 +230,7 @@ class PackNugetMultiRidTest {
     task.pack()
 
     val native = File(outputDir, "TestLibrary.1.0.0/runtimes/win-x64/native")
-    assertTrue(File(native, "test.dll").exists())
+    assertTrue(File(native, "kn_746573746c696272617279.dll").exists())
     assertTrue(!File(native, "test.pdb").exists(), "debug symbols must not be packed")
   }
 }

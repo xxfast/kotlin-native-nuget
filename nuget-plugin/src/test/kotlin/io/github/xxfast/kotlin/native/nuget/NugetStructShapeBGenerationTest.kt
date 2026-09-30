@@ -264,12 +264,12 @@ class NugetStructShapeBGenerationTest {
     )
     assertContains(
       registration,
-      "Collars.Describe(new Collar { Girth = c_Girth, Colour = " +
+      "global::Test.Structs.Collars.Describe(new global::Test.Structs.Collar { Girth = c_Girth, Colour = " +
           "Marshal.PtrToStringUTF8(c_ColourPtr)!, Belled = c_Belled != 0, " +
-          "Initial = (char)c_Initial, Mood = (CatMood)c_Mood })",
+          "Initial = (char)c_Initial, Mood = (global::Test.Enums.CatMood)c_Mood })",
     )
     assertFalse(
-      registration.contains("new Collar(c_Girth"),
+      registration.contains("new global::Test.Structs.Collar(c_Girth"),
       "a Shape B struct must never reconstruct via the Shape A constructor-call syntax",
     )
   }
@@ -288,8 +288,8 @@ class NugetStructShapeBGenerationTest {
     )
     assertContains(
       registration,
-      "Collar result = new Collar { Girth = Girth, Colour = Marshal.PtrToStringUTF8(ColourPtr)!, " +
-          "Belled = Belled != 0, Initial = (char)Initial, Mood = (CatMood)Mood }.Resize(by);",
+      "global::Test.Structs.Collar result = new global::Test.Structs.Collar { Girth = Girth, Colour = Marshal.PtrToStringUTF8(ColourPtr)!, " +
+          "Belled = Belled != 0, Initial = (char)Initial, Mood = (global::Test.Enums.CatMood)Mood }.Resize(by);",
     )
     assertContains(registration, "*outGirth = result.Girth;")
     assertContains(registration, "*outColour = Marshal.StringToCoTaskMemUTF8(result.Colour);")
@@ -297,7 +297,7 @@ class NugetStructShapeBGenerationTest {
     assertContains(registration, "*outInitial = (ushort)result.Initial;")
     assertContains(registration, "*outMood = (int)result.Mood;")
     assertFalse(
-      registration.contains("new Collar(Girth"),
+      registration.contains("new global::Test.Structs.Collar(Girth"),
       "the struct RECEIVER of a struct member must also use the object-initializer, not the " +
           "Shape A constructor-call syntax",
     )
@@ -310,8 +310,8 @@ class NugetStructShapeBGenerationTest {
       files.single { it.relativePath == "ExtentRegistration.cs" }.content
 
     assertContains(registration, "private static unsafe int Area_Get_Thunk(int Width, int Height, IntPtr* errOut)")
-    assertContains(registration, "new Extent { Width = Width, Height = Height }.Area")
-    assertFalse(registration.contains("new Extent(Width"))
+    assertContains(registration, "new global::Test.Structs.Extent { Width = Width, Height = Height }.Area")
+    assertFalse(registration.contains("new global::Test.Structs.Extent(Width"))
   }
 
   @Test
@@ -327,7 +327,7 @@ class NugetStructShapeBGenerationTest {
     )
     assertContains(
       registration,
-      "Extent result = new Extent { Width = Width, Height = Height }.Grow(by);",
+      "global::Test.Structs.Extent result = new global::Test.Structs.Extent { Width = Width, Height = Height }.Grow(by);",
     )
     assertContains(registration, "*outWidth = result.Width;")
     assertContains(registration, "*outHeight = result.Height;")
@@ -434,9 +434,9 @@ class NugetStructShapeBGenerationTest {
     )
     assertContains(
       registration,
-      "Collars.Pair(new Collar { Girth = a_Girth, Colour = Marshal.PtrToStringUTF8(a_ColourPtr)!, " +
-          "Belled = a_Belled != 0, Initial = (char)a_Initial, Mood = (CatMood)a_Mood }, " +
-          "new Extent { Width = b_Width, Height = b_Height })",
+      "global::Test.Structs.Collars.Pair(new global::Test.Structs.Collar { Girth = a_Girth, Colour = Marshal.PtrToStringUTF8(a_ColourPtr)!, " +
+          "Belled = a_Belled != 0, Initial = (char)a_Initial, Mood = (global::Test.Enums.CatMood)a_Mood }, " +
+          "new global::Test.Structs.Extent { Width = b_Width, Height = b_Height })",
     )
   }
 

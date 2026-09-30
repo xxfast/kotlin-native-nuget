@@ -201,7 +201,7 @@ class NugetCancellationTokenBindingTest {
           shim.indexOf("GCHandle.Alloc(cts)"),
       "the handle is minted LAST: nothing above it can leak it on a throw",
     )
-    assertContains(shim, "    using System.Threading;")
+    assertContains(shim, "    using global::System.Threading;")
   }
 
   @Test

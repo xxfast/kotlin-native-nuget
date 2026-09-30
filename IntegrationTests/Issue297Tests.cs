@@ -8,7 +8,7 @@ namespace IntegrationTests;
 /// Issue #297 / ADR-164: every Kotlin defaulted parameter binds as the nullable C# form of its
 /// type on ONE signature, so any subset is settable by name and Kotlin evaluates the rest. The
 /// trailing all-defaulted run is optional (<c>= null</c>); a default before a required parameter
-/// is required-but-nullable; an already-nullable default is an <c>Optional&lt;T&gt;</c> so an
+/// is required-but-nullable; an already-nullable default is an <c>KotlinOptional&lt;T&gt;</c> so an
 /// explicit <c>null</c> differs from unset. Beyond 8 defaults, only the last 8 widen.
 ///
 /// Oreo's feeder config has four knobs and he only ever touches one of them. Mylo touches none.
@@ -91,7 +91,7 @@ public class Issue297Tests
         Assert.All(parameters, p => Assert.True(p.IsOptional));
     }
 
-    // ---- Registry: already-nullable defaults, Optional<T> ----
+    // ---- Registry: already-nullable defaults, KotlinOptional<T> ----
 
     [Fact]
     public void Describe_DistinguishesUnsetFromExplicitNullFromAValue()
@@ -115,7 +115,7 @@ public class Issue297Tests
         MethodInfo describe = Assert.Single(typeof(Registry).GetMethods(), m => m.Name == "Describe");
         ParameterInfo owner = describe.GetParameters()[1];
 
-        Assert.Equal("Optional`1", owner.ParameterType.Name);
+        Assert.Equal("KotlinOptional`1", owner.ParameterType.Name);
         Assert.True(owner.ParameterType.IsValueType);
         Assert.Equal(typeof(string), owner.ParameterType.GetGenericArguments()[0]);
         Assert.True(owner.IsOptional);
@@ -127,7 +127,7 @@ public class Issue297Tests
         MethodInfo treats = Assert.Single(typeof(Registry).GetMethods(), m => m.Name == "Treats");
         ParameterInfo count = treats.GetParameters()[1];
 
-        Assert.Equal("Optional`1", count.ParameterType.Name);
+        Assert.Equal("KotlinOptional`1", count.ParameterType.Name);
         Assert.Equal(typeof(int?), count.ParameterType.GetGenericArguments()[0]);
         Assert.True(count.IsOptional);
     }

@@ -289,7 +289,7 @@ public class MenagerieRoundTripTests
 
     // Phase 13 Wave 2, item 3 (ADR-087 stage 2): catchable propagation from a Kotlin-implemented
     // slot. The slot half: IFeedableBridge.Describe() throws
-    // TestLibrary.KotlinInvalidOperationException("no vacancy"), the mapped ADR-029 type. The
+    // Kotlin.Native.Interop.KotlinInvalidOperationException("no vacancy"), the mapped ADR-029 type. The
     // second half is ADR-104: this path reaches the bridge through Kotlin calling C#
     // (Sanctuary.Introduce), so the thrown exception leaves Introduce_Thunk, an
     // [UnmanagedCallersOnly] method, through the channel's error slot instead of terminating the

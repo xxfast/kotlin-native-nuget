@@ -166,12 +166,12 @@ class NugetNestedStructShimGenerationTest {
       "private static unsafe void Translate_Thunk(int p_X, int p_Y, int dx, int* outX, int* outY, IntPtr* errOut)",
       message = "the depth-2 recursion must not change the depth-1 (already-shipped) thunk shape",
     )
-    assertContains(registration, "Point result = Geometry.Translate(new Point(p_X, p_Y), dx);")
+    assertContains(registration, "global::Test.Structs.Point result = global::Test.Structs.Geometry.Translate(new global::Test.Structs.Point(p_X, p_Y), dx);")
   }
 
   // ------------------------------------------------------------------
   // 1. A-in-A + B-in-A: Litter's receiver-less PARAMETER reconstruction is a nested `new Litter(
-  //    new Profile(...), new Extent { ... }, count, mood)` — the outer's Shape A ctor call wraps
+  //    new Profile(...), new global::Test.Structs.Extent { ... }, count, mood)` — the outer's Shape A ctor call wraps
   //    an inner Shape A ctor call (Profile) AND an inner Shape B object initializer (Extent).
   // ------------------------------------------------------------------
 
@@ -192,10 +192,10 @@ class NugetNestedStructShimGenerationTest {
     )
     assertContains(
       registration,
-      "Litters.Describe(new Litter(new Profile(Marshal.PtrToStringUTF8(l_Mother_TagPtr)!, " +
-          "l_Mother_Active != 0, (char)l_Mother_Grade, (CatMood)l_Mother_Mood), " +
-          "new Extent { Width = l_Basket_Width, Height = l_Basket_Height }, l_Count, " +
-          "(CatMood)l_Mood))",
+      "global::Test.Structs.Litters.Describe(new global::Test.Structs.Litter(new global::Test.Structs.Profile(Marshal.PtrToStringUTF8(l_Mother_TagPtr)!, " +
+          "l_Mother_Active != 0, (char)l_Mother_Grade, (global::Test.Enums.CatMood)l_Mother_Mood), " +
+          "new global::Test.Structs.Extent { Width = l_Basket_Width, Height = l_Basket_Height }, l_Count, " +
+          "(global::Test.Enums.CatMood)l_Mood))",
       message = "reconstruction must be RECURSIVE: the outer Litter ctor call's first two " +
           "arguments are themselves reconstruction expressions (an inner ctor call for the Shape " +
           "A Profile component, an inner object initializer for the Shape B Extent component)",
@@ -311,11 +311,11 @@ class NugetNestedStructShimGenerationTest {
 
     assertContains(
       registration,
-      "NestFns.Describe(new Nest { Collar = new Collar { Girth = n_Collar_Girth, Colour = " +
+      "NestFns.Describe(new global::Test.Structs.Nest { Collar = new global::Test.Structs.Collar { Girth = n_Collar_Girth, Colour = " +
           "Marshal.PtrToStringUTF8(n_Collar_ColourPtr)!, Belled = n_Collar_Belled != 0, " +
-          "Initial = (char)n_Collar_Initial, Mood = (CatMood)n_Collar_Mood }, " +
-          "Centre = new Point(n_Centre_X, n_Centre_Y), " +
-          "Bounds = new Extent { Width = n_Bounds_Width, Height = n_Bounds_Height }, " +
+          "Initial = (char)n_Collar_Initial, Mood = (global::Test.Enums.CatMood)n_Collar_Mood }, " +
+          "Centre = new global::Test.Structs.Point(n_Centre_X, n_Centre_Y), " +
+          "Bounds = new global::Test.Structs.Extent { Width = n_Bounds_Width, Height = n_Bounds_Height }, " +
           "Lined = n_Lined != 0 })",
       message = "B-in-B (Collar: nested object initializer) and A-in-B (Point: nested " +
           "constructor call) must BOTH appear as the VALUE of the outer Nest object " +
@@ -326,7 +326,7 @@ class NugetNestedStructShimGenerationTest {
 
   // ------------------------------------------------------------------
   // 3. Cross-namespace `using`: a class in Test.Nested referencing a struct declared in
-  //    Test.Structs needs `using Test.Structs;` for its unqualified `new Point(...)` to
+  //    Test.Structs needs `using global::Test.Structs;` for its unqualified `new global::Test.Structs.Point(...)` to
   //    resolve. Deliberately FLAT (Point has no struct-typed component of its own) so this test
   //    isolates the "using" bug from the (still unimplemented) recursive-flattening throw path —
   //    ADR-059 calls this out as a PRE-EXISTING gap that nesting merely makes routine.
@@ -365,14 +365,14 @@ class NugetNestedStructShimGenerationTest {
     val registration: String =
       files.single { it.relativePath == "NurseriesRegistration.cs" }.content
 
-    assertContains(registration, "namespace Test.Nested")
-    assertContains(registration, "new Point(p_X, p_Y)")
+    assertContains(registration, "namespace Interop.NugetReverse.Test.Nested")
+    assertContains(registration, "new global::Test.Structs.Point(p_X, p_Y)")
     assertContains(
       registration,
-      "using Test.Structs;",
+      "using global::Test.Structs;",
       message = "ADR-059: referencedEnumTypes only collects RirEnumType — there is no struct " +
           "equivalent, so a struct declared in a different C# namespace than the class " +
-          "referencing it gets no `using`, and the generated `new Point(...)` does not resolve. " +
+          "referencing it gets no `using`, and the generated `new global::Test.Structs.Point(...)` does not resolve. " +
           "This is a PRE-EXISTING gap (no nesting required to observe it) that nesting makes " +
           "routine, per ADR-059's own framing.",
     )

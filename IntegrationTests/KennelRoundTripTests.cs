@@ -218,7 +218,7 @@ public class KennelRoundTripTests
         Assert.Equal("called with a token", await KennelSample.CallKeepsTheTokenOverloadAsync());
 
     // A `= default` token. The bridge always supplies its own, so the default is never consulted;
-    // this pins that `Optional, HasDefault` on the Param row does not change the decision to bind.
+    // this pins that `KotlinOptional, HasDefault` on the Param row does not change the decision to bind.
     [Fact]
     public async Task Doze_DefaultedToken_StillBindsWithTheTokenElided() =>
         Assert.Equal(6, await KennelSample.DozeWithADefaultTokenAsync());

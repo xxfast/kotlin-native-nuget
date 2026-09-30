@@ -1,7 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor
 
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirAsyncHelper
-import io.github.xxfast.kotlin.native.nuget.processor.cir.CirOptionalHelper
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirBridgeHelper
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirBytesHelper
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirCallbackDelegateHelper
@@ -115,7 +114,6 @@ internal object ForwardAbiLegacyRoutes {
           .forEach { property -> add(property) }
       }
 
-      CirOptionalHelper,
       is CirAsyncHelper,
       is CirBytesHelper,
       is CirCallbackDelegateHelper,

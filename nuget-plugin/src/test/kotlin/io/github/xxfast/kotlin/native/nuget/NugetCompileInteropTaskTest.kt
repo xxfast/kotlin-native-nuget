@@ -23,6 +23,21 @@ import kotlin.test.assertTrue
  * duplicate type.
  */
 class NugetCompileInteropTaskTest {
+  private val contractFeed: File by lazy {
+    val root: File = generateSequence(File(System.getProperty("user.dir"))) { it.parentFile }
+      .first { File(it, "Kotlin.Native.Interop/Kotlin.Native.Interop.csproj").exists() }
+    val feed: File = tempDir("interop-contract-feed")
+    val process = ProcessBuilder("dotnet", "pack",
+      File(root, "Kotlin.Native.Interop/Kotlin.Native.Interop.csproj").absolutePath,
+      "--output", feed.absolutePath).redirectErrorStream(true).start()
+    val output: String = process.inputStream.bufferedReader().readText()
+    check(process.waitFor() == 0) { "Contract fixture pack failed: $output" }
+    feed
+  }
+
+  private fun localContractSources(): List<String> =
+    if (findExecutable("dotnet") == null) emptyList() else listOf(contractFeed.absolutePath)
+
   private fun buildProject(): Project {
     val project: Project = ProjectBuilder.builder().build()
     project.plugins.apply("org.jetbrains.kotlin.multiplatform")
@@ -107,11 +122,11 @@ class NugetCompileInteropTaskTest {
   }
 
   @Test
-  fun `renders no RestoreSources and no PackageReference for a forward-only project`() {
+  fun `forward-only project references the contract without extra restore sources`() {
     val csproj: String = generateCheckCsproj(emptyList(), emptyMap(), emptyList())
 
     assertFalse(csproj.contains("RestoreSources"), "no bound package means no extra feed")
-    assertFalse(csproj.contains("PackageReference"), "no bound package means no reference")
+    assertContains(csproj, "<PackageReference Include=\"Kotlin.Native.Interop\" Version=\"[1.0.0,2.0.0)\" />")
   }
 
   @Test
@@ -181,7 +196,7 @@ class NugetCompileInteropTaskTest {
     task.dotnetSearchPath.set(empty.absolutePath)
     task.projectDir.set(out)
     task.dependencyVersions.set(emptyMap())
-    task.dependencySources.set(emptyList())
+    task.dependencySources.set(localContractSources())
 
     task.compile()
 
@@ -209,7 +224,7 @@ class NugetCompileInteropTaskTest {
     task.generatedCsDirs.from(sources)
     task.projectDir.set(out)
     task.dependencyVersions.set(emptyMap())
-    task.dependencySources.set(emptyList())
+    task.dependencySources.set(localContractSources())
 
     task.compile()
 
@@ -263,7 +278,7 @@ class NugetCompileInteropTaskTest {
     task.generatedCsDirs.from(sources)
     task.projectDir.set(out)
     task.dependencyVersions.set(emptyMap())
-    task.dependencySources.set(emptyList())
+    task.dependencySources.set(localContractSources())
 
     val failure: GradleException = assertFailsWith<GradleException> { task.compile() }
     assertContains(
@@ -307,7 +322,7 @@ class NugetCompileInteropTaskTest {
     task.dotnetSearchPath.set(bin.absolutePath)
     task.projectDir.set(out)
     task.dependencyVersions.set(emptyMap())
-    task.dependencySources.set(emptyList())
+    task.dependencySources.set(localContractSources())
 
     task.compile()
 
@@ -334,7 +349,7 @@ class NugetCompileInteropTaskTest {
     task.generatedCsDirs.from(sources)
     task.projectDir.set(tempDir("compile-interop-bad-out"))
     task.dependencyVersions.set(emptyMap())
-    task.dependencySources.set(emptyList())
+    task.dependencySources.set(localContractSources())
 
     val failure: GradleException = assertFailsWith<GradleException> { task.compile() }
     assertContains(failure.message.orEmpty(), "CS0101")

@@ -30,7 +30,7 @@ reflection-free `genericDispatch` strategy "likely warrants its own ADR"; this i
 
 Constraints discovered from the source (all Verified by reading this branch):
 
-- The marshal helper is emitted **once per generated file, into the root namespace**
+- At the time of this ADR, the marshal helper was emitted **once per generated file, into the root namespace**
   (`CirTranslator.kt:424-474` prepends `CirMarshalHelper` to `context.rootNamespace`). It is not
   per-namespace. Every other generated namespace is `rootNamespace` or `rootNamespace.<Suffix>`
   (`mapPackageToNamespace`, `CirTypeMapping.kt:156-176`, returns `"$rootNamespace.$suffix"`), so
@@ -100,7 +100,7 @@ remains scoped to the `[LibraryImport]` dialect when that work is picked up.
 
 ### The `INugetHandle` interface (extract direction)
 
-One internal interface, emitted at the **global namespace** of the generated file (before the first
+At the time of this ADR, one internal interface was emitted at the **global namespace** of the generated file (before the first
 `namespace` block), so every generated namespace sees it unqualified without threading a namespace
 string through the renderers:
 
@@ -355,3 +355,7 @@ nothing" in `factoryEntries`' KDoc loses "Enums".
 
 Not covered: the erased write of an enum (`new Box<Mood>(Mood.Calm)`) and the `MutableStateFlow<E>`
 setter (ADR-071's deferral) stay open.
+
+## Later change
+
+ADR-178 supersedes the global helper placement described here: generated helpers, including INugetHandle, are now package-local so two generated packages can compile in one consumer. The generic-dispatch registry behavior remains as recorded above.

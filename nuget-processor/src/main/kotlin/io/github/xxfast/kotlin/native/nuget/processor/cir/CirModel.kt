@@ -80,6 +80,7 @@ data class CirDocThrows(val cref: String, val text: CirDocText)
 data class CirFile(
   val usings: List<String> = listOf("System", "System.Runtime.InteropServices"),
   val namespaces: List<CirNamespace>,
+  val rootNamespace: String = namespaces.firstOrNull()?.name ?: "Interop",
 )
 
 data class CirNamespace(
@@ -665,12 +666,7 @@ data class CirErrorHelper(
   val libraryName: String,
 ) : CirDeclaration
 
-/**
- * ADR-164: the public `Optional<T>` struct an already-nullable defaulted Kotlin parameter renders
- * as, so an explicit `null` and "not set" stay distinguishable. Emitted unconditionally beside
- * `NugetMarshal`, like the other core helpers: it has no native half to gate on.
- */
-data object CirOptionalHelper : CirDeclaration
+
 
 data class CirFlowHelper(
   val libraryName: String,

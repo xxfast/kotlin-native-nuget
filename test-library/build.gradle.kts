@@ -1,6 +1,8 @@
+import io.github.xxfast.kotlin.native.nuget.NugetCompileInteropTask
 import io.github.xxfast.kotlin.native.nuget.NugetGenTask
 import io.github.xxfast.kotlin.native.nuget.PackNugetTask
 import org.gradle.api.DefaultTask
+import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFile
 import org.gradle.api.file.RegularFileProperty
@@ -8,6 +10,7 @@ import org.gradle.api.provider.Property
 import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.TaskAction
@@ -15,6 +18,21 @@ import org.gradle.process.ExecOperations
 import org.gradle.work.DisableCachingByDefault
 import java.time.Instant
 import javax.inject.Inject
+
+@DisableCachingByDefault(because = "local feed directories must exist before every restore")
+abstract class PrepareFixtureFeeds : DefaultTask() {
+  @get:Internal
+  abstract val directories: ConfigurableFileCollection
+
+  @TaskAction
+  fun prepare() {
+    for (directory in directories.files) {
+      check(directory.isDirectory || directory.mkdirs()) {
+        "Cannot create local fixture NuGet feed: $directory"
+      }
+    }
+  }
+}
 
 @DisableCachingByDefault(because = "every fixture build requires a new version")
 abstract class WriteFixtureVersion : DefaultTask() {
@@ -56,6 +74,7 @@ abstract class WriteFixtureVersions : DefaultTask() {
       |<Project>
       |  <PropertyGroup>
       |    <TestLibraryVersion>${fixtureVersion.get()}</TestLibraryVersion>
+      |    <TestCompanionVersion>${fixtureVersion.get()}</TestCompanionVersion>
       |    <NugetRuntimeVersion>${runtimeVersion.get()}</NugetRuntimeVersion>
       |  </PropertyGroup>
       |</Project>
@@ -102,7 +121,7 @@ kotlin {
   mingwX64 {
     binaries {
       sharedLib {
-        baseName = "test"
+        baseName = "shared"
       }
     }
   }
@@ -110,7 +129,7 @@ kotlin {
   macosArm64 {
     binaries {
       sharedLib {
-        baseName = "test"
+        baseName = "shared"
       }
     }
   }
@@ -140,6 +159,20 @@ val fixturePackageVersion: Provider<String> = providers.fileContents(fixtureVers
   .map { it.trim() }
 val fixtureVersionsFile = rootProject.file("build/FixtureVersions.props")
 
+val prepareFixtureFeeds by tasks.registering(PrepareFixtureFeeds::class) {
+  group = "nuget"
+  description = "Creates all configured fixture feeds before either publisher restores"
+  mustRunAfter(":test-library:clean", ":test-companion:clean")
+  directories.from(
+    layout.buildDirectory.dir("nuget"),
+    project(":test-companion").layout.buildDirectory.dir("nuget"),
+  )
+}
+
+tasks.withType<NugetCompileInteropTask>().configureEach {
+  dependencySources.add(rootProject.layout.buildDirectory.dir("nuget").get().asFile.absolutePath)
+}
+
 val writeFixtureVersion by tasks.registering(WriteFixtureVersion::class) {
   group = "nuget"
   description = "Creates a unique version shared by the local NuGet fixtures"
@@ -166,6 +199,7 @@ val packTestDependency by tasks.registering(PackTestDependency::class) {
   fixtureVersion.set(fixturePackageVersion)
   outputDir.set(layout.buildDirectory.dir("nuget"))
   dependsOn(writeFixtureVersion)
+  dependsOn(prepareFixtureFeeds)
 }
 
 // Wire packTestDependency before nugetRestore so the local feed is populated first.

@@ -38,6 +38,7 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <Using Include="Kotlin.Native.Interop" />
   </ItemGroup>
 
   <!-- ADR-129: the nuget-runtime version the fixture package was built against, surfaced to the

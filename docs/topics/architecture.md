@@ -50,7 +50,7 @@ Feature logic lives only in the IR plus its reader and renderer. The task plumbi
 
 ## Forward slice: a `data class` into C#
 
-Two source lines of Kotlin. Follow the native prefix `test_cat__toy_` as it threads through every stage: it is minted in the CIR, becomes the `[DllImport]` entry point on the C# side, and the matching `@CName` export on the Kotlin side. Same name, both ends of the ABI. The prefix has three parts: the library name (`test`), the declaring package relative to `nuget.rootPackage` (`cat`), and the declaration's own chain of simple names (`toy`) — see [Export symbols](forward-overview.md#export-symbols) for why every part is there.
+Two source lines of Kotlin. Follow the native prefix `kn_746573746c696272617279_cat__toy_` as it threads through every stage: the package-ID-derived library stem and declaration prefix are minted in the CIR, become the `[DllImport]` entry point on the C# side, and match the `@CName` export on the Kotlin side. See [Export symbols](forward-overview.md#export-symbols) for how declaration names are formed.
 
 ### 1. Kotlin source
 
@@ -67,18 +67,18 @@ data class Toy(
 
 ### 2. KSP fills the CIR (the reader)
 
-KSP resolves the declaration and its types, then builds a `CirClass` in memory. This is where the `toy_` native prefix and the per-member entry points are decided, and where data-class machinery (`Copy`, `Equals`, `ToString`) is materialized. Because the CIR lives in the same JVM process, it is never serialized; this is a faithful rendering of the in-memory model:
+KSP resolves the declaration and its types, then builds a `CirClass` in memory. This is where the package-derived library stem, declaration prefix, per-member entry points, and data-class machinery (`Copy`, `Equals`, `ToString`) are materialized. Because the CIR lives in the same JVM process, it is never serialized; this is a faithful rendering of the in-memory model:
 
 ```
 CirClass(
-  name = "Toy", libraryName = "test", nativePrefix = "test_cat__toy",
+  name = "Toy", libraryName = "kn_746573746c696272617279", nativePrefix = "kn_746573746c696272617279_cat__toy",
   isDataClass = true,
-  constructor = CirConstructor(parameters = [name, color]),   // entry: test_cat__toy_create
+  constructor = CirConstructor(parameters = [name, color]),   // entry: kn_746573746c696272617279_cat__toy_create
   properties = [
-    CirProperty("Name",  "string", nativeName = "test_cat__toy_get_name"),
-    CirProperty("Color", "string", nativeName = "test_cat__toy_get_color"),
+    CirProperty("Name",  "string", nativeName = "kn_746573746c696272617279_cat__toy_get_name"),
+    CirProperty("Color", "string", nativeName = "kn_746573746c696272617279_cat__toy_get_color"),
   ],
-  copyMethod = CirMethod("Copy", returnType = "Toy"),          // entry: test_cat__toy_copy
+  copyMethod = CirMethod("Copy", returnType = "Toy"),          // entry: kn_746573746c696272617279_cat__toy_copy
   methods = [ Equals, GetHashCode, ToString ],
 )
 ```
@@ -92,7 +92,7 @@ public class Toy : IDisposable
 {
     internal IntPtr _handle;
 
-    [DllImport("test", EntryPoint = "test_cat__toy_create")]
+    [DllImport("kn_746573746c696272617279", EntryPoint = "kn_746573746c696272617279_cat__toy_create")]
     private static extern IntPtr Native_Create(string name, string color, out IntPtr error);
 
     public Toy(string name, string color)
@@ -102,11 +102,11 @@ public class Toy : IDisposable
         _handle = handle;
     }
 
-    [DllImport("test", EntryPoint = "test_cat__toy_get_name")]
+    [DllImport("kn_746573746c696272617279", EntryPoint = "kn_746573746c696272617279_cat__toy_get_name")]
     private static extern IntPtr Native_Get_name(IntPtr handle, out IntPtr error);
     public string Name => Marshal.PtrToStringUTF8(Native_Get_name(_handle, out _))!;
 
-    // ... Color via test_cat__toy_get_color, Copy via test_cat__toy_copy, ToString, Dispose ...
+    // ... Color via kn_746573746c696272617279_cat__toy_get_color, Copy via kn_746573746c696272617279_cat__toy_copy, ToString, Dispose ...
 }
 ```
 
@@ -120,8 +120,8 @@ The same renderer emits `@CName` top-level functions that Kotlin/Native compiles
 import io.github.xxfast.kotlin.native.nuget.runtime.NugetHandles
 import io.github.xxfast.kotlin.native.nuget.runtime.buildError
 
-@CName("test_cat__toy_create")
-public fun export_test_cat__toy_create(
+@CName("kn_746573746c696272617279_cat__toy_create")
+public fun export_kn_746573746c696272617279_cat__toy_create(
   name: String,
   color: String,
   errorOut: COpaquePointer?,
@@ -134,8 +134,8 @@ public fun export_test_cat__toy_create(
   null
 }
 
-@CName("test_cat__toy_get_name")
-public fun export_test_cat__toy_get_name(handle: COpaquePointer, errorOut: COpaquePointer?): String = try {
+@CName("kn_746573746c696272617279_cat__toy_get_name")
+public fun export_kn_746573746c696272617279_cat__toy_get_name(handle: COpaquePointer, errorOut: COpaquePointer?): String = try {
   handle.asStableRef<io.github.xxfast.kotlin.native.nuget.test.cat.Toy>().get().name
 } catch (e: Throwable) {
   if (errorOut != null) {
@@ -145,7 +145,7 @@ public fun export_test_cat__toy_get_name(handle: COpaquePointer, errorOut: COpaq
 }
 ```
 
-At runtime, C# `new Toy(...)` calls P/Invoke `test_cat__toy_create`, which reaches Kotlin `export_test_cat__toy_create` and returns a handle from `NugetHandles.retain`. See [Publishing Kotlin to C#](forward-overview.md) for the full forward pipeline, and [ADR-127](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md) for why the fixed ABI moved into its own library.
+At runtime, C# `new Toy(...)` calls P/Invoke `kn_746573746c696272617279_cat__toy_create`, which reaches Kotlin `export_kn_746573746c696272617279_cat__toy_create` and returns a handle from `NugetHandles.retain`. See [Publishing Kotlin to C#](forward-overview.md) for the full forward pipeline, and [ADR-127](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md) for why the fixed ABI moved into its own library.
 
 The reverse bridge (below) builds its own thrown-exception envelope through the same `buildError`, rather than a second, structurally identical error class: `internal expect fun nugetKotlinError(t: Throwable)` in the generated `nativeMain` file, with a per-target `actual` that calls `StableRef.create(buildError(t)).asCPointer()` where the runtime is visible. See [ADR-130](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/130-reverse-error-envelope-on-runtime.md).
 
@@ -255,7 +255,7 @@ namespace Test.Text
 {
     internal static class TemplateRegistration
     {
-        [DllImport("test", EntryPoint = "nuget_test_text_template_register")]
+        [DllImport("kn_746573746c696272617279", EntryPoint = "nuget_test_text_template_register")]
         private static extern void nuget_test_text_template_register(
             int slotCount, long contractHash, IntPtr ctorPtr, /* ... */ IntPtr renderCountGetterPtr);
 

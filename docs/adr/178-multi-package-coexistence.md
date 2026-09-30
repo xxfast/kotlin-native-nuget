@@ -1,156 +1,165 @@
-# ADR-178: Two generated packages in one .NET project: internal types per package, shared public types in a compiled contract assembly
+# ADR-178: Multi-package coexistence: package-local native bridges and a shared compiled contract
 
 ## Status
 
-Proposed
+Accepted
+
+Implemented and verified 2026-09-30. Windows `scripts/verify.sh --plugin` passed the full consumer pipeline and Windows NativeAOT executed all six supported shapes. The macOS CI lane is wired but was not run locally; Linux remains separate platform-support work.
 
 ## Context
 
-A generated package ships its C# as source (`contentFiles`, `buildAction="Compile"`,
-[ADR-050](050-end-to-end-packaging-integration.md), `PackNugetTask.kt:228-230`), so it compiles into
-the consumer's own assembly. Three families of generated text are the same in every package and
-land where a second package collides with them. Research memo:
-`docs/research/roadmap/multi-package-coexistence.md`.
+Target: A C# consumer can reference two Kotlin-built NuGet packages, catch failures from either with one exception type, and keep each library’s handles in its own runtime.
 
-Verified by reading:
+The common KotlinException catch covers unmapped/custom failures. Existing mapped exceptions inherit BCL types, not KotlinException, and retain that behavior. Each existing exception type instead gains one identity across publishers. IKotlinException permits uniform inspection but cannot be used as a C# catch type.
 
-- `INugetHandle` and `NugetHandleTag` are emitted in the global namespace (`cir/CirRenderer.kt:20,32`,
-  [ADR-094](094-reflection-free-generic-dispatch.md)).
-- The reverse runtime shims (`NugetRuntimeRegistration`, `NugetTrace` and eight more internal types)
-  are emitted in a hardcoded namespace, `IoGithubXxfast.KotlinNativeNuget`
-  (`NugetGenerateShimsTask.kt:2634,3184`), although `NugetRuntimeRegistration` carries a
-  `DllImport` that names one library.
-- A per-type `<Type>Registration` shim is emitted in the bound C# dependency's own namespace
-  (`NugetGenerateShimsTask.kt:1119,1408,1573`), so two packages binding the same dependency type
-  declare the same class.
-- The public fixed types (`IKotlinException`, `KotlinException`, nine mapped exceptions,
-  `Optional<T>`, the Flow and Func families) are emitted in each package's root namespace
-  (`cir/CirErrorRenderer.kt:202-260`, `cir/CirMarshalRenderer.kt:802`, `cir/CirFlowRenderer.kt:79`,
-  `cir/CirFunctionRenderer.kt:35`).
-- Every generated namespace nests under the root namespace (`cir/CirTypeMapping.kt:300-328`).
-- `nuget.libraryName` is the shared library's `baseName` (`NugetPlugin.kt:285-311`) and the native
-  file is packed under its own name (`PackNugetTask.kt:131-134`).
+**Verified by current source reading:**
 
-Verified by spike (scratch projects, .NET SDK 10.0.301, real compiler output, recorded in the memo):
+- Packages ship generated C# as contentFiles/Compile (PackNugetTask.kt:103-110,228-230).
+- INugetHandle/NugetHandleTag are global (cir/CirRenderer.kt:20,32); every forward namespace otherwise nests beneath its package root (cir/CirTypeMapping.kt:300-327).
+- Reverse runtime and trace helpers use IoGithubXxfast.KotlinNativeNuget (NugetGenerateShimsTask.kt:2634,3184); class/witness/interface/struct registrations use the dependency namespace (:1119,1408,1573,2371).
+- Public exception/presence types are emitted per root (cir/CirErrorRenderer.kt:202-260; cir/CirMarshalRenderer.kt:802). Nine mapped exceptions inherit BCL classes (:230-240).
+- Flow/Func implementations and native helper state are library-bound; INugetHandle gates erased-generic pointer extraction (cir/CirMarshalRenderer.kt:390).
+- Forward and reverse imports read shared binary baseName (NugetPlugin.kt:285-311,145-150). Pack copies every native DLL/SO/DYLIB from local/prebuilt inputs unchanged (PackNugetTask.kt:98,131-134,180).
+- Nuspec and hermetic pre-pack C# compilation currently exact-pin dependencies (PackNugetTask.kt:208; NugetCompileInteropTask.kt:74-79). Both paths must learn about the shared contract.
 
-- Today's shape in one project: `CS0101` on `INugetHandle`, `NugetHandleTag` and `NugetTrace`, plus
-  `CS0535` on every class implementing `INugetHandle`.
-- With the internal types moved into each package namespace the project compiles, and then
-  `catch (KotlinException)` is `CS0104` when both namespaces are imported; qualified as
-  `LibA.KotlinException` it does not catch `LibB.KotlinException`.
-- A public type shipped as source has one identity per compiling assembly. The same
-  `Kotlin.Interop.KotlinException` source compiled into two referenced libraries is `CS0433` in the
-  app; compiled into a library and the app it is `warning CS0436` and the catch misses at run time.
-- A compiled assembly holding `KotlinException`, referenced by two source packages, gives one catch
-  type: both packages' failures were caught by one `catch (KotlinException)`.
-- Two packages shipping the same `runtimes/win-x64/native/shared.dll`: no warning, one file in the
-  output, the first package's.
-- Two packages pinning the contract exactly, at `[1.0.0]` and `[1.0.1]`, fail the consumer's restore
-  with `NU1107`. As lower bounds they resolve to 1.0.1 and both failures are caught. Exact pins are
-  what `PackNugetTask.kt:208` writes for every dependency today.
-- `file`-scoped `NugetHandleTag` is `CS9051` in the internal constructor's signature.
+**Verified by historical scratch compiler/NuGet spikes**, detailed in the memo:
 
-Inferred, not verified by anyone: two Kotlin/Native shared libraries loaded into one process keep
-separate runtime state and never bind each other's `nuget_*` symbols
-([ADR-109](109-duplicate-type-hazard.md) inferred claim 1 is the same assumption). If it is wrong on
-some platform, one library's calls run against the other's runtime and corrupt handles silently.
-This ADR does not depend on the claim to compile, but its "isolated runtimes" consequence does.
-
-ROADMAP Phase 14 calls a shared C# runtime package blocked on a per-library `DllImportResolver`.
-That holds only for a compiled assembly that contains P/Invokes. `SetDllImportResolver` admits one
-resolver per assembly (inferred from the
-[API reference](https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.nativelibrary.setdllimportresolver)),
-and generated source compiles into the consumer's assembly, so a generated package must never set
-one.
+- Global and reverse helpers collide with CS0101.
+- Namespace-only fix compiles, but KotlinException is ambiguous or a qualified catch misses the other package.
+- Source-shipped common public types gain separate assembly identities, causing CS0433 or a catch miss with CS0436.
+- One compiled contract dependency gives shared catch identity across source packages.
+- Two packages shipping shared.dll yield one output file with no warning.
+- Differing exact contract pins fail NU1107; differing minimum versions coalesce.
+- File-local NugetHandleTag in a generated class constructor fails CS9051.
 
 ## Alternatives Considered
 
-### 1. Internal types per package, plus a compiled contract assembly for the public types that are not library-bound (chosen)
+### 1. Package-local bridges plus a small compiled public contract (recommended)
 
-Every internal generated type lives under its package's root namespace. `IKotlinException`,
-`KotlinException`, the nine mapped exceptions and `Optional<T>` move to one compiled assembly with
-no P/Invoke, which every generated package depends on.
+Only exception types and the presence value need common identity. Runtime state, handles and P/Invokes stay per package. Requires one independently versioned NuGet dependency and consumer import migration.
 
-Pros: one catch type across packages and across assemblies; no resolver; library-bound code stays
-per library, so the two native runtimes stay apart by construction. Cons: the project publishes and
-versions a NuGet package; the exception family's namespace moves once; the consumer's restore needs
-that package.
+### 2. Move all helpers per package, keep all public contracts duplicated
 
-### 2. Everything per package, internal types moved into the package namespace
+Fixes compilation but does not deliver a common exception identity. Consumers must qualify names and cannot catch another package's unmapped failure with their package's exception type.
 
-Compiles, breaks no consumer. No shared catch type, `CS0104` on every fixed public name when both
-namespaces are imported. This is what `uniffi-bindgen-cs` does, and its cross-crate
-[issue #184](https://github.com/NordSecurity/uniffi-bindgen-cs/issues/184) is the cost (inferred
-from the issue).
+### 3. Shared contract shipped as source
 
-### 3. A source-shipped shared contract package
+Rejected by actual CLR identity/compiler spikes: every assembly compiling the source defines its own type.
 
-Rejected on the spike: each assembly that compiles the source mints its own type, and a shared
-namespace turns that into `CS0433` or a silent catch miss.
+### 4. Full compiled C# runtime twin
 
-### 4. The full compiled C# twin
+Requires a per-library backend choice for library-bound implementation; much larger dispatch/API migration than this item. A resolver can route several distinct names, but one fixed import name in a shared implementation still needs library identity supplied per operation/instance. Not every helper inherently needs to become public; only actual cross-assembly entry points do. This broader design remains Phase 14/compiled-binding work.
 
-All fixed lines, P/Invokes included, in one assembly. Needs a per-library indirection for every
-native call and makes every internal helper public API. Deferred with Phase 14; nothing in
-coexistence needs it.
+### 5. Share INugetHandle too
 
-### 5. One shared `INugetHandle`
+Rejected: the existing type test would admit foreign pointers through erased generics. Per-package interfaces keep that path closed.
 
-Rejected: `NugetMarshal.HandleOf` extracts a handle from anything that implements the interface
-(`cir/CirMarshalRenderer.kt:390`), so a shared interface lets package A's handle reach package B's
-runtime through an erased generic. Per package, that value misses the type test.
+### 6. Warn on unqualified native stems
 
-## Decision
+Only reports risk and leaves the proved silent overwrite possible. An independently published package cannot know every other package a consumer will reference. Enforced unique identities are required for the promised primary-binary coexistence.
 
-Three parts.
+## Decision implemented
 
-**1. Internal types per package.** `INugetHandle` and `NugetHandleTag` are emitted inside the root
-namespace. Unqualified references keep resolving because every generated namespace nests under the
-root (verified by spike for a class three namespaces deep). The reverse runtime shims move to a
-namespace under the root; per-type registration shims move to a namespace under the root and
-import the dependency's namespace. The exact namespace names are open.
+### Package-local implementation
 
-**2. The contract assembly.** A net8.0 assembly with no P/Invoke and no reference to generated code,
-holding `IKotlinException`, `KotlinException`, the nine mapped exceptions and `Optional<T>` (renamed
-per B7 of the 1.0.0 plan). The generator stops emitting them; `PackNugetTask` adds the dependency to
-the nuspec as a **lower bound** (`version="x"`), never the exact pin (`version="[x]"`) it writes for
-other dependencies, and names the lowest contract version the generated text needs. The contract's
-public surface is additive only for the whole 1.x line: a contract major would split generated
-packages into two sets that cannot be referenced together.
+Move forward handle helpers into their existing package root. Move reverse runtime helpers to <PackageRoot>.NugetReverse and registrations to <PackageRoot>.NugetReverse.<DependencyNamespace>. Include struct and generic witness branches. Preserve dependency namespaces through imports/qualified global:: references.
 
-Generated code compiles in another assembly than the contract, and `InternalsVisibleTo` cannot name
-unknown consumer assemblies, so a construction path for `KotlinException` stays reachable: B7's
-"close the public constructor" can only hide it. The shape (a `protected` constructor with a
-per-package internal subclass, verified by spike, or a public factory hidden from IntelliSense, not
-spiked) is open.
+The consumer fixture verifies root-nested handle lookup and reverse namespace migration, including registration of the shared dependency from both publishers.
 
-**3. Native file name guard.** Packing reports a native file stem that is not derived from the
-package id. Severity is open.
+Keep Flow/Func wrappers, handles, native imports, managed callbacks and live state per package. The full compiled twin is not needed. Do not install a generated resolver into the consumer assembly. **Inferred from the official [resolver API](https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.nativelibrary.setdllimportresolver):** one resolver can be registered per assembly; no runtime resolver spike is needed by this design.
 
-The Flow and Func families are library-bound and have internal constructors; they stay per package
-unless the open question below is answered the other way.
+### Compiled contract and construction
+
+Shipped package/assembly/namespace: **Kotlin.Native.Interop**, targeting net8.0. Types: IKotlinException, KotlinException, nine mapped exception classes and **KotlinOptional<T>**, the renamed presence struct. No P/Invoke, library reference, handle interface or native state.
+
+**Verified by the refreshed scratch spike:** a separate consumer assembly can construct the exact common exception through a public factory while the constructor is internal:
+
+~~~csharp
+public class KotlinException : Exception, IKotlinException
+{
+    internal KotlinException(string type, string message, string stack, Exception? inner)
+        : base(message, inner) { /* existing properties */ }
+
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public static KotlinException Create(
+        string type, string message, string stack, Exception? inner = null)
+        => new(type, message, stack, inner);
+}
+~~~
+
+Keep the existing generated mapping table; fallback construction changes to KotlinException.Create. Mapped exception constructors remain public and their BCL inheritance/sealed status remain intact. Closing mapped constructors is not this proposal.
+
+Command: DOTNET_ROLL_FORWARD=Major, dotnet run --project <scratch>/App/App.csproj.
+net8.0 projects compiled and executed on installed .NET 9, not the absent .NET 8 runtime.
+
+~~~text
+caught shared Kotlin.Native.Interop.KotlinException: PkgA
+caught BCL Kotlin.Native.Interop.KotlinArgumentException: PkgA; IKotlinException=True
+caught shared Kotlin.Native.Interop.KotlinException: PkgB
+caught BCL Kotlin.Native.Interop.KotlinArgumentException: PkgB; IKotlinException=True
+public KotlinException constructors=0
+factory EditorBrowsable=Never; mapped sealed=True
+~~~
+
+**Inferred from [EditorBrowsable documentation](https://learn.microsoft.com/en-us/dotnet/api/system.componentmodel.editorbrowsableattribute?view=net-10.0):** an editor may hide the factory. IntelliSense was not tested. It is callable public API, not protection against fabricated exceptions.
+
+### Delivery and compatibility
+
+Shipped as the `Kotlin.Native.Interop` NuGet dependency, independently versioned at 1.0.0 with compatible-major range **[1.0.0,2.0.0)**. Each generator records its minimum contract version; keep the API compatible throughout a contract major.
+
+The full consumer verification resolves both publishers against the compatible range. Application-forced overrides can interact with NuGet's direct-dependency rules; do not promise an unconditional hard restore failure for all overrides.
+
+Local verification packs/restores the contract before dependent packages and supplies its feed to the hermetic pre-pack compiler. Publish it before dependent generated packages; production consumers use nuget.org or a private-feed mirror. Package-id availability/reservation is not verified.
+
+### Native identity and supported assets
+
+The plugin derives the published SharedLibrary.baseName from the case-folded package id. The stem is `kn_` plus hex(UTF-8(invariant-lowercase(packageId))). For example, TestLibrary becomes `kn_746573746c696272617279`. Distinct package IDs remain distinct modulo NuGet identity casing.
+
+Generated imports and packaged filenames agree in the verified Windows consumer fixture. The macOS CI lane is wired but was not run locally; Linux filenames remain outside current platform support.
+
+The v1 guarantee covers plugin-produced Kotlin primary binaries. Each local or prebuilt RID input must contain exactly the expected primary native library; unexpected native files fail packing. This excludes arbitrary auxiliary native dependency relocation.
+
+Existing baseName/prebuilt assets must migrate consistently. Namespace validity and distinct package root namespaces remain prerequisites; this ADR does not implicitly close the separate namespace-validation item.
+
+## Verification evidence
+
+**Verified on Windows scratch only:** Kotlin/Native 2.4.10 independently linked two mingw_x64 DLLs exporting the same nuget_live_handles/nuget_dispose names. net10.0 P/Invoke through distinct DLL paths kept counters independent and read/disposed each own StableRef.
+
+Commands:
+
+~~~text
+<konan-2.4.10>/bin/konanc.bat <scratch>/Native.kt -produce dynamic -target mingw_x64 -o <scratch>/pkg_a
+<konan-2.4.10>/bin/konanc.bat <scratch>/Native.kt -produce dynamic -target mingw_x64 -o <scratch>/pkg_b
+dotnet run --project <scratch>/NativeApp/NativeApp.csproj
+~~~
+
+Real output:
+
+~~~text
+live A=0, B=0
+live A=1, B=0
+live A=1, B=1
+own StableRef reads A=5, B=5
+live A=0, B=1
+live A=0, B=0
+~~~
+
+Scratch directory: %TEMP%/nuget-coexistence-refresh-29314e2639614259a4106707e3d68b12. All compiler processes completed; no repo build or source edits.
+
+The real consumer fixture verifies both publishers against the same managed dependency, shared exception identity across helper assemblies, mapped BCL catches, each runtime's own allocate/read/dispose counter transitions, erased-generic foreign-handle rejection, distinct package-derived native names, strict extra/mismatched asset rejection, and compatible contract resolution. LeakTests remains a separate process. `scripts/verify.sh --plugin` passed on Windows; processor tests passed 1504/1504, plugin tests 667 total with two existing skips and zero failures, contract tests 3, IntegrationTests 2907, LeakTests 138, MultiPackageTests 8, and SharedExceptionTests 2. Windows NativeAOT executed all six supported shapes. The macOS CI lane is wired but was not run locally; Linux platform support remains separate work.
+
+The two-publisher fixture does not close ADR-109's Provider timing assumption: it has no dedicated assertion that an earlier publisher sees the later publisher's scope/diagnostic.
 
 ## Consequences
 
-- Breaking, 0.9.0: the exception family and `Optional<T>` change namespace; consumers add one
-  `using`. 30 test files and 51 lines of topic docs in this repo name them.
-- The release publishes a NuGet package, and `scripts/verify.sh` packs it into the local feed.
-- A two-publisher fixture and a `MultiPackageTests` project are added; they also close ADR-109's
-  inferred claim 2.
-- ADR-094's "global namespace" paragraph is superseded by part 1.
-- ROADMAP Phase 14's C# twin line is reworded: the resolver blocks only the full twin.
-- Not addressed: one package referenced from two projects of a solution compiles its
-  per-declaration types twice (the `CS0436` case). That is the compiled-assembly packaging mode's
-  problem.
-- NativeAOT for the contract assembly is inferred (ILC stage clean in the spike, link step not run
-  on the research machine). `AotSmokeTest` is the check.
+- Breaking in 0.9.0: exception namespace move; shared presence type namespace/name; KotlinException constructor closure; published native filename identity and stricter prebuilt/extra-file rules.
+- Contract is additive within a compatible major and independently versioned/published.
+- ADR-094 global-helper choice is superseded. ADR-109's object-transfer remedy remains; its Provider timing assumption stays open because the fixture has no dedicated later-publisher assertion.
+- Deferred: cross-library wrapper transfer, shared Flow/Func bases, compiled binding mode/full twin, namespace validation and general native dependency relocation.
 
-## Open questions
+## Human decisions
 
-1. Contract delivery: a package dependency (recommended) or a DLL embedded in each package
-   (verified for identical copies only).
-2. Whether the Flow and Func families move into the contract as abstract classes. Recommended: no.
-3. Names: contract package id and namespace, reverse shim namespace, `Optional<T>`.
-4. Construction of a closed `KotlinException`. Recommended: hidden public factory.
-5. Native file name guard: warning (recommended) or error.
-6. Contract version: its own (recommended), or the plugin's as `nuget-runtime` does.
+1. End state and scope: accepted compiled dependency, package-local Flow/Func/handles, real two-publisher fixture, enforced primary identity and strict v1 auxiliary-native policy; preserve mapped BCL catches.
+2. Names/defaults: Kotlin.Native.Interop, KotlinOptional<T>, NugetReverse dependency suffix, independent compatible-major contract version; sibling presence rename/base constructor closure shipped with dedicated coverage.
+
+**Accepted and shipped 2026-09-30:** the compiled `Kotlin.Native.Interop` contract (compatible range `[1.0.0,2.0.0)`), package-local wrappers and handle state, package-derived native names, strict native-asset validation, and `KotlinOptional<T>` rename/base-constructor closure are covered by the two-publisher consumer fixture. Mapped exceptions retain their BCL inheritance and public constructors. Both native runtimes independently allocate, read and dispose their own handles. The separate ADR-109 Provider timing assertion remains open. Windows verification passed; the macOS CI lane is wired but not run locally, and Linux support remains separate work.

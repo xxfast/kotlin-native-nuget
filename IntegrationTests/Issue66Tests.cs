@@ -47,7 +47,7 @@ public class Issue66Tests
     public void Constructor_OmittedEdition_KeepsErrorAndDefaultsEdition()
     {
         // ADR-164: `edition` is a trailing optional `int?`; `error` is a middle, already-nullable
-        // default, so it is a required `Optional<string?>` and the string converts implicitly.
+        // default, so it is a required `KotlinOptional<string?>` and the string converts implicitly.
         // Edition defaults to 3, not 0: a mis-wired mask arm shows up as a wrong value.
         using var state = new Issue66StoryState("Oreo raided the treat jar", "Biscuit Heist");
 

@@ -98,7 +98,7 @@ public class XmlDocTests
         Assert.Equal("the booking reference", Tag(member, "returns"));
 
         XElement exception = Assert.Single(member.Elements("exception"));
-        Assert.Equal("T:TestLibrary.KotlinArgumentException", (string?)exception.Attribute("cref"));
+        Assert.Equal("T:Kotlin.Native.Interop.KotlinArgumentException", (string?)exception.Attribute("cref"));
         Assert.Equal("when nights is not positive", exception.Value.Trim());
     }
 
@@ -223,7 +223,7 @@ public class XmlDocTests
         Assert.Equal("where the cat goes once the sunbeam moves", Param(member, "home"));
 
         XElement exception = Assert.Single(member.Elements("exception"));
-        Assert.Equal("T:TestLibrary.KotlinException", (string?)exception.Attribute("cref"));
+        Assert.Equal("T:Kotlin.Native.Interop.KotlinException", (string?)exception.Attribute("cref"));
         // The unmapped Kotlin type survives as a plain-text prefix, not a <c> span, so the consumer
         // still sees which Kotlin exception the author named.
         Assert.Equal("RuntimeException: when the boarding desk is closed", exception.Value.Trim());

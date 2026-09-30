@@ -5,8 +5,8 @@ the resulting `MyCatLib` package to a .NET project.
 
 ## 1. Apply the plugin and build shared libraries
 
-Apply Kotlin Multiplatform and the NuGet plugin, then give every supported native target the same
-shared-library `baseName`:
+Apply Kotlin Multiplatform and the NuGet plugin, then configure a shared library for each target.
+The plugin derives the native library name from `packageId`:
 
 ```kotlin
 plugins {
@@ -18,7 +18,6 @@ kotlin {
   mingwX64 {
     binaries {
       sharedLib {
-        baseName = "mycatlib"
       }
     }
   }
@@ -26,7 +25,6 @@ kotlin {
   macosArm64 {
     binaries {
       sharedLib {
-        baseName = "mycatlib"
       }
     }
   }
@@ -37,6 +35,8 @@ Replace `<version>` with the version shown in [Getting started](getting-started.
 pinned. Only configured targets in the [supported target table](prerequisites.md) that this host
 can link are added to the package this way; a RID built on another host can still be added via
 `prebuiltRuntimes`, see [One package for every platform](#one-package-for-every-platform) below.
+
+The plugin derives a unique native library name from `packageId`, so separate Kotlin-built packages can be loaded in one .NET project. Existing `baseName` settings and prebuilt files must use the derived name. Each local or prebuilt RID input must contain exactly that package’s expected primary native library; extra or mismatched native files fail packing.
 
 <warning>
 <p>Applying a <b>second</b> Kotlin compiler plugin (for example, the Koin compiler plugin) to a
@@ -222,8 +222,8 @@ the prebuilt one:
 
 ```
 MyCatLib.1.0.0.nupkg
-├── runtimes/osx-arm64/native/libmycatlib.dylib   (locally linked)
-├── runtimes/win-x64/native/mycatlib.dll          (prebuilt)
+├── runtimes/osx-arm64/native/libkn_6d796361746c6962.dylib   (locally linked)
+├── runtimes/win-x64/native/kn_6d796361746c6962.dll          (prebuilt)
 ├── contentFiles/cs/any/*.cs
 ├── build/MyCatLib.targets
 └── MyCatLib.nuspec

@@ -8,7 +8,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * ADR-164: one widened signature per callable, nullable means unset, `Optional<T>` for an already
+ * ADR-164: one widened signature per callable, nullable means unset, `global::Kotlin.Native.Interop.KotlinOptional<T>` for an already
  * nullable default, and a Kotlin-side `when (mask)` with one named-argument call per subset.
  *
  * The end-to-end half is `issue297/Issue297Sample.kt` / `Issue297Tests.cs`. What is pinned here is
@@ -80,7 +80,7 @@ class Tier1OptionalDefaultParameterTest {
     val cs: String = result.generatedCSharp
     assertContains(
       cs, "public Config(int? retries = null, global::Interop.Mode? mode = null, " +
-          "Optional<string?> owner = default)",
+          "global::Kotlin.Native.Interop.KotlinOptional<string?> owner = default)",
     )
     // A default before a required parameter is required-but-nullable.
     assertContains(cs, "public Book(string title, int? pages, string city)")
@@ -89,11 +89,11 @@ class Tier1OptionalDefaultParameterTest {
   @Test
   fun `an already nullable default is an Optional behind its IsSet slot`() {
     val cs: String = result.generatedCSharp
-    assertContains(cs, "public static string Describe(string name, Optional<string?> owner = default)")
+    assertContains(cs, "public static string Describe(string name, global::Kotlin.Native.Interop.KotlinOptional<string?> owner = default)")
     assertContains(cs, "bool ownerIsSet, [MarshalAs(UnmanagedType.LPUTF8Str)] string? owner")
     assertContains(cs, "var ownerValue = owner.Value;")
     assertContains(cs, "owner.HasValue, ownerValue")
-    assertContains(cs, "public readonly struct Optional<T>")
+    assertFalse(cs.contains("public readonly struct KotlinOptional<T>"))
 
     val kotlin: String = result.generated
     assertContains(kotlin, "if (ownerIsSet) mask = mask or 1")
@@ -121,7 +121,7 @@ class Tier1OptionalDefaultParameterTest {
     assertContains(
       result.generatedCSharp,
       "public Config Copy(int? retries = null, global::Interop.Mode? mode = null, " +
-          "Optional<string?> owner = default)",
+          "global::Kotlin.Native.Interop.KotlinOptional<string?> owner = default)",
     )
     assertContains(
       result.generated,
@@ -186,7 +186,7 @@ class Tier1OptionalDefaultParameterTest {
   @Test
   fun `the top-level nullable route unwraps an Optional on its single call`() {
     val cs: String = result.generatedCSharp
-    assertContains(cs, "public static int? Maybe(Optional<int?> n = default)")
+    assertContains(cs, "public static int? Maybe(global::Kotlin.Native.Interop.KotlinOptional<int?> n = default)")
     assertContains(cs, "var nValue = n.Value;")
     // ADR-170: one native call, the Optional's IsSet slot and the nullable pair ahead of valueOut.
     assertContains(

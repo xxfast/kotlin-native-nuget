@@ -8,14 +8,25 @@ class CirRenderer {
     appendLine("#nullable enable")
     appendLine()
 
-    for (using in file.usings) {
+    for (using in (file.usings + "Kotlin.Native.Interop").distinct()) {
       appendLine("using $using;")
     }
 
     appendLine()
 
-    // ADR-094: one internal interface at the global namespace, so every generated namespace sees it
-    // unqualified. Every class that declares `internal IntPtr _handle` implements it explicitly,
+    // CirTranslator may reuse a root namespace after another package's namespace.
+    val root: Int = file.namespaces.indexOfFirst { it.name == file.rootNamespace }
+    check(root >= 0 || file.namespaces.isEmpty()) {
+      "CIR file has no publisher root namespace '${file.rootNamespace}'."
+    }
+    file.namespaces.forEachIndexed { index, namespace ->
+      renderNamespace(namespace, index == root)
+    }
+  }
+
+  private fun StringBuilder.renderHandleHelpers() {
+    // ADR-178: one internal interface per publisher root, so only its own wrappers satisfy it.
+    // Every class that declares `internal IntPtr _handle` implements it explicitly,
     // which is how erased-generic code extracts a handle without `GetField("_handle")`.
     appendLine("internal interface INugetHandle")
     appendLine("{")
@@ -34,14 +45,13 @@ class CirRenderer {
     appendLine("}")
     appendLine()
 
-    for (namespace in file.namespaces) {
-      renderNamespace(namespace)
-    }
   }
 
-  private fun StringBuilder.renderNamespace(namespace: CirNamespace) {
+  private fun StringBuilder.renderNamespace(namespace: CirNamespace, root: Boolean) {
     appendLine("namespace ${namespace.name}")
     appendLine("{")
+
+    if (root) renderHandleHelpers()
 
     for (declaration in namespace.declarations) {
       renderDeclaration(declaration)
@@ -97,7 +107,6 @@ private fun nestedEnumsOf(declaration: CirDeclaration): List<CirEnum> =
 internal fun StringBuilder.renderDeclaration(declaration: CirDeclaration, nested: Boolean = false) {
   when (declaration) {
     is CirMarshalHelper -> renderMarshalHelper(declaration)
-    CirOptionalHelper -> renderOptionalHelper()
     is CirListHelper -> renderListHelper(declaration)
     is CirBytesHelper -> renderBytesHelper(declaration)
     is CirMapHelper -> renderMapHelper(declaration)

@@ -108,7 +108,7 @@ class NugetGenerateShimsTaskTest {
   @Test
   fun `generated shim declares namespace Newtonsoft dot Json verbatim`() {
     val shim: GeneratedFile = jsonConvertShim()
-    assertContains(shim.content, "namespace Newtonsoft.Json")
+    assertContains(shim.content, "namespace Interop.NugetReverse.Newtonsoft.Json")
   }
 
   @Test
@@ -552,7 +552,7 @@ class NugetGenerateShimsTaskTest {
     assertContains(shim.content, "private static unsafe void DoIt_Thunk(IntPtr selfHandle, IntPtr* errOut)")
     assertContains(
       shim.content,
-      "(InstanceOnly)GCHandle.FromIntPtr(selfHandle).Target!",
+      "(global::Acme.Lib.InstanceOnly)GCHandle.FromIntPtr(selfHandle).Target!",
     )
   }
 
@@ -669,7 +669,7 @@ class NugetGenerateShimsTaskTest {
     val shim: GeneratedFile = templateShim()
     assertContains(
       shim.content,
-      "(Template)GCHandle.FromIntPtr(templateHandle).Target!",
+      "(global::Test.Text.Template)GCHandle.FromIntPtr(templateHandle).Target!",
       message = "Render_Thunk must cast the handle back to Template via GCHandle.FromIntPtr (ADR-051)",
     )
   }
@@ -852,8 +852,8 @@ class NugetGenerateShimsTaskTest {
     val shim: GeneratedFile = templateWithCtorShim()
     assertContains(
       shim.content,
-      "new Template(Marshal.PtrToStringUTF8(sourcePtr)!)",
-      message = "ADR-052: Ctor_Thunk must construct the C# object via `new Template(...)`",
+      "new global::Test.Text.Template(Marshal.PtrToStringUTF8(sourcePtr)!)",
+      message = "ADR-052: Ctor_Thunk must construct the C# object via `new global::Test.Text.Template(...)`",
     )
   }
 
@@ -1036,7 +1036,7 @@ class NugetGenerateShimsTaskTest {
     val shim: GeneratedFile = templateInstanceShim()
     assertContains(
       shim.content,
-      "(Template)GCHandle.FromIntPtr(selfHandle).Target!",
+      "(global::Test.Text.Template)GCHandle.FromIntPtr(selfHandle).Target!",
       message = "the receiver must be resolved via the exact same GCHandle.FromIntPtr(...).Target! " +
           "pattern ADR-051 already uses for handle-typed parameters (see Render_Thunk)",
     )
@@ -1066,7 +1066,7 @@ class NugetGenerateShimsTaskTest {
   @Test
   fun `Name_Get_Thunk body resolves the receiver and returns Marshal StringToCoTaskMemUTF8 of the property value`() {
     val shim: GeneratedFile = templateInstanceShim()
-    assertContains(shim.content, "(Template)GCHandle.FromIntPtr(selfHandle).Target!")
+    assertContains(shim.content, "(global::Test.Text.Template)GCHandle.FromIntPtr(selfHandle).Target!")
     assertContains(shim.content, "Marshal.StringToCoTaskMemUTF8(")
   }
 
@@ -1242,7 +1242,7 @@ class NugetGenerateShimsTaskTest {
       .single { it.relativePath.endsWith("MoodServiceRegistration.cs") }
 
     assertContains(shim.content, "private static unsafe int Next_Thunk(int mood, IntPtr* errOut)")
-    assertContains(shim.content, "Mood result = MoodService.Next((Mood)mood);")
+    assertContains(shim.content, "global::Test.Enums.Mood result = global::Test.Enums.MoodService.Next((global::Test.Enums.Mood)mood);")
     assertContains(shim.content, "return (int)result;")
   }
 
@@ -1252,27 +1252,27 @@ class NugetGenerateShimsTaskTest {
       .single { it.relativePath.endsWith("MoodServiceRegistration.cs") }
 
     assertContains(shim.content, "private static unsafe int DefaultMood_Get_Thunk(IntPtr* errOut)")
-    assertContains(shim.content, "Mood result = MoodService.DefaultMood;")
+    assertContains(shim.content, "global::Test.Enums.Mood result = global::Test.Enums.MoodService.DefaultMood;")
     assertContains(shim.content, "return (int)result;")
     assertContains(shim.content, "private static unsafe void DefaultMood_Set_Thunk(int value, IntPtr* errOut)")
-    assertContains(shim.content, "MoodService.DefaultMood = (Mood)value;")
+    assertContains(shim.content, "global::Test.Enums.MoodService.DefaultMood = (global::Test.Enums.Mood)value;")
   }
 
   @Test
-  fun `enum in the shims own namespace needs no extra using`() {
+  fun `enum in the dependency namespace is imported from relocated shim`() {
     val shim: GeneratedFile = generateCSharpShims(moodRir, "sample")
       .single { it.relativePath.endsWith("MoodServiceRegistration.cs") }
 
-    assertContains(shim.content, "namespace Test.Enums")
-    assertFalse(
-      shim.content.contains("using Test.Enums;"),
-      "the shim already renders inside namespace Test.Enums; importing it would be redundant",
+    assertContains(shim.content, "namespace Interop.NugetReverse.Test.Enums")
+    assertTrue(
+      shim.content.contains("using global::Test.Enums;"),
+      "the relocated shim must import its original dependency namespace",
     )
   }
 
   // ------------------------------------------------------------------
   // Cross-namespace enum: Mood is declared in Test.Enums but consumed by Test.Text.MoodService,
-  // so the shim (which renders inside `namespace Test.Text`) must import Test.Enums or the
+  // so the shim (which renders inside `namespace Interop.NugetReverse.Test.Text`) must import Test.Enums or the
   // `(Mood)mood` casts in its thunk bodies do not compile.
   // ------------------------------------------------------------------
 
@@ -1333,9 +1333,9 @@ class NugetGenerateShimsTaskTest {
     val shim: GeneratedFile = generateCSharpShims(crossNamespaceMoodRir, "sample")
       .single { it.relativePath.endsWith("MoodServiceRegistration.cs") }
 
-    assertContains(shim.content, "namespace Test.Text")
-    assertContains(shim.content, "    using Test.Enums;")
-    assertContains(shim.content, "Mood result = MoodService.Next((Mood)mood);")
+    assertContains(shim.content, "namespace Interop.NugetReverse.Test.Text")
+    assertContains(shim.content, "    using global::Test.Enums;")
+    assertContains(shim.content, "global::Test.Enums.Mood result = global::Test.Text.MoodService.Next((global::Test.Enums.Mood)mood);")
   }
 
   @Test
@@ -1343,9 +1343,9 @@ class NugetGenerateShimsTaskTest {
     val shim: GeneratedFile = generateCSharpShims(crossNamespaceMoodRir, "sample")
       .single { it.relativePath.endsWith("MoodServiceRegistration.cs") }
 
-    assertContains(shim.content, "    using System;")
-    assertContains(shim.content, "    using System.Runtime.CompilerServices;")
-    assertContains(shim.content, "    using System.Runtime.InteropServices;")
+    assertContains(shim.content, "    using global::System;")
+    assertContains(shim.content, "    using global::System.Runtime.CompilerServices;")
+    assertContains(shim.content, "    using global::System.Runtime.InteropServices;")
   }
 
   // ------------------------------------------------------------------
@@ -1475,7 +1475,7 @@ class NugetGenerateShimsTaskTest {
           "GCHandle.FromIntPtr(IntPtr.Zero) throws (ADR-051 reserved the sentinel for exactly this)",
     )
     assertContains(shim.content, "? null")
-    assertContains(shim.content, "(Nickname)GCHandle.FromIntPtr(nicknameHandle).Target!")
+    assertContains(shim.content, "(global::Test.Nullability.Nickname)GCHandle.FromIntPtr(nicknameHandle).Target!")
   }
 
   // Guard: a non-null-annotated handle return keeps the exact same null check as a nullable one —
@@ -1614,7 +1614,7 @@ class NugetGenerateShimsTaskTest {
     assertNotNull(trace, "NugetTrace.cs must be generated whenever anything else is")
     assertContains(trace.content, "NUGET_INTEROP_TRACE")
     assertContains(trace.content, "NUGET_INTEROP_TRACEFILE")
-    assertContains(trace.content, "namespace IoGithubXxfast.KotlinNativeNuget")
+    assertContains(trace.content, "namespace Interop.NugetReverse")
     assertContains(trace.content, "internal static class NugetTrace")
   }
 
@@ -1645,7 +1645,7 @@ class NugetGenerateShimsTaskTest {
     assertContains(shim.content, "NugetTrace.Write(\"register ok    Test.Text.Template\");")
     assertContains(
       shim.content,
-      "using IoGithubXxfast.KotlinNativeNuget;",
+      "using global::Interop.NugetReverse;",
       message = "TemplateRegistration.cs must import the namespace NugetTrace lives in",
     )
   }

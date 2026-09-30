@@ -170,6 +170,8 @@
 - [176](176-interface-collection-components.md): Forward, an interface is a `List`/`Set`/`Map` component (value and key) at every position, return, parameter, property get and set, top level, `suspend` and `Flow` (Accepted): a Kotlin-backed element arrives as the ADR-040 wrapper, a C#-implemented one comes back as the caller's own object; reachability walks every collection component to a fixed point, `factoryEntries` registers nested declarations, and `DisposeMaterialized` disposes only `INugetHandle` items.
 - [177](177-exception-mapping-by-class-hierarchy.md): Forward, exception mapping by class hierarchy (Accepted): GitHub #349 plus the ROADMAP NPE/null-message item. The Kotlin side classifies each throwable with `is` against ordered rows (`NumberFormatException` before `IllegalArgumentException`, `CancellationException` before `IllegalStateException`, `internal` `NoWhenBranchMatchedException` by name) and sends the matched row beside the concrete type, so a subclass of a mapped type maps and `KotlinType` still names the subclass. A per-module `kotlinx.io.IOException` row is emitted only when KSP resolves the class; new `KotlinIOException`, `KotlinNullReferenceException` and `KotlinOperationCanceledException`. Breaking: `catch (KotlinException)` no longer catches them, and a null message reads the Kotlin type name. Runtime-owned routes and the reverse envelope keep stdlib rows only; `@throws` crefs resolve without imports.
 
+- [178](178-multi-package-coexistence.md): Forward and reverse, two Kotlin-built NuGet packages coexist in one .NET consumer with a shared exception/optional contract and package-local native/runtime state (Accepted). Windows full verification and six NativeAOT shapes passed; macOS lane is wired but not locally run, Linux remains separate. ADR-109 Provider timing stays open.
+
 ## By mapping
 
 The ADRs that decided each mapping on
@@ -296,3 +298,5 @@ the current decision.
 
 - the fixed `nuget_*` ABI (`NugetHandles`, `NugetError`, the scalar wrap/unwrap, collection, callback and coroutine exports, the .NET ticks conversions, `NugetCSharpBridge`, `nuget_runtime_version`) → the same `DllImport`s in `Interop.cs`, plus one more: [127](127-nuget-runtime-library.md), [129](129-nuget-runtime-version-export.md)
 - every forward `@CName` export symbol → the matching `DllImport` `EntryPoint`: [163](163-export-symbol-package-qualification.md)
+
+- package coexistence across publishers → shared `Kotlin.Native.Interop` exception and optional identity, package-local runtime and native identities: [178](178-multi-package-coexistence.md)

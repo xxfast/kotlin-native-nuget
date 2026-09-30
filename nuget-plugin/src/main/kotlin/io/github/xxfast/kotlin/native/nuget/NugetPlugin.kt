@@ -27,6 +27,19 @@ class NugetPlugin : Plugin<Project> {
     val extension: NugetExtension =
       project.extensions.create("nuget", NugetExtension::class.java)
 
+    // ADR-178: run before either the reverse name provider or forward KSP args read baseName.
+    project.afterEvaluate {
+      val pub: NugetPublishConfig = extension.publish ?: return@afterEvaluate
+      val id: String = pub.packageId?.takeIf { it.isNotBlank() } ?: return@afterEvaluate
+      val stem: String = nativeLibraryStem(id)
+      project.extensions.findByType(KotlinMultiplatformExtension::class.java)
+        ?.targets?.filterIsInstance<KotlinNativeTarget>()?.forEach { target ->
+          target.binaries.withType(SharedLibrary::class.java).configureEach { lib ->
+            lib.baseName = stem
+          }
+        }
+    }
+
     // ADR-050 Alternative 6: the consume-side (`dependencies { bind {} }`) afterEvaluate block is
     // registered FIRST — before the KMP-gated publish/packNuget block below — so that, by
     // registration order, nugetRestore/nugetGenerateShims already exist as TaskProviders by the
@@ -532,7 +545,7 @@ class NugetPlugin : Plugin<Project> {
             task.generatedCsDirs.from(kspOutputDir)
             task.projectDir.set(project.layout.buildDirectory.dir("nuget-compile"))
             task.dotnetSearchPath.set(project.providers.environmentVariable("PATH"))
-            task.dependencySources.set(extension.dependencies.mapNotNull { it.source }.distinct())
+            task.dependencySources.addAll(extension.dependencies.mapNotNull { it.source }.distinct())
             task.dependencyVersions.set(resolvedVersions)
             task.dependsOn(kspTask)
 

@@ -415,7 +415,7 @@ class NugetGenericClassGenerationTest {
     assertContains(boxOfInt.content, "internal static class BoxOfIntRegistration")
     assertContains(boxOfInt.content, "nuget_test_boxes_box_of_int_register")
     assertContains(
-      boxOfInt.content, "(Box<int>)",
+      boxOfInt.content, "(global::Test.Boxes.Box<int>)",
       message = "Decision 4/CS8895: the thunk must cast the receiver to the CONCRETE closed instantiation",
     )
 
@@ -423,7 +423,7 @@ class NugetGenericClassGenerationTest {
       files.single { it.relativePath == "BoxOfStringRegistration.cs" }
     assertContains(boxOfString.content, "internal static class BoxOfStringRegistration")
     assertContains(boxOfString.content, "nuget_test_boxes_box_of_string_register")
-    assertContains(boxOfString.content, "(Box<string>)")
+    assertContains(boxOfString.content, "(global::Test.Boxes.Box<string>)")
 
     assertNotEquals(
       boxOfInt.relativePath, boxOfString.relativePath,
@@ -578,13 +578,13 @@ class NugetGenericClassGenerationTest {
     val boxesRegistration: GeneratedFile = files.single { it.relativePath == "BoxesRegistration.cs" }
 
     assertContains(
-      boxesRegistration.content, "(Box<int>)",
-      message = "a Box<int> PARAMETER unwraps via a cast to the CONCRETE closed instantiation, " +
+      boxesRegistration.content, "(global::Test.Boxes.Box<int>)",
+      message = "a global::Test.Boxes.Box<int> PARAMETER unwraps via a cast to the CONCRETE closed instantiation, " +
           "never the open definition",
     )
     assertContains(
-      boxesRegistration.content, "Box<string>? result",
-      message = "a Box<string> RETURN names the concrete closed instantiation",
+      boxesRegistration.content, "global::Test.Boxes.Box<string>? result",
+      message = "a global::Test.Boxes.Box<string> RETURN names the concrete closed instantiation",
     )
   }
 

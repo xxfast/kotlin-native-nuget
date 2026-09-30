@@ -139,3 +139,11 @@ The reverse bridge is observable as of [ADR-054](docs/adr/054-reverse-bridge-reg
     - Document why you are catching a broad exception if you must do so.
   - Log the error with sufficient context 
   - Rethrow if it cannot be handled gracefully.
+
+## Case-Sensitive PowerShell Replacements
+
+- PowerShell `-replace` is case-insensitive by default. When renaming identifiers that differ only by capitalization, use `-creplace` and inspect the full diff for accidental edits to lowercase locals and comments.
+
+## Benchmark Finalization Requires jq
+
+- The benchmark finalize wrapper needs `jq` and a real Bash shell. On Windows use Git Bash; the WindowsApps `bash` may be a WSL stub. If capture/finalize cannot run, report it as blocked and never invent metrics or figures.

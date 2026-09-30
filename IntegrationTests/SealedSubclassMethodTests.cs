@@ -17,13 +17,13 @@ namespace IntegrationTests;
 /// This file cannot compile until the methods bind: every call below is CS1061 today. That is the
 /// red. After ADR-116 lands, <c>Job.Running</c> carries <c>Cancel</c>, <c>Label</c>, both
 /// <c>Step</c> overloads, <c>Next</c>, <c>Finish</c> and <c>Pick</c> as
-/// <c>job_running_*</c> exports beside the <c>test_issue115__job_running_get_progress</c> getter it
+/// <c>job_running_*</c> exports beside the <c>kn_746573746c696272617279_issue115__job_running_get_progress</c> getter it
 /// already has.
 /// </para>
 /// <para>
 /// ADR-118 adds the suspend half. A <c>suspend fun</c> an arm <em>declares</em> now binds as
 /// <c>Task&lt;T&gt; ...Async(..., CancellationToken)</c> off the arm's own export prefix
-/// (<c>test_issue115__job_running_pause_async</c>), the arm gains <c>_scopeHandle</c>,
+/// (<c>kn_746573746c696272617279_issue115__job_running_pause_async</c>), the arm gains <c>_scopeHandle</c>,
 /// <c>IAsyncDisposable</c> and
 /// <c>DisposeAsync</c>, and a second same-named overload takes <c>_2</c> on <em>both</em> the
 /// <c>[DllImport]</c> EntryPoint and the private extern's C# name.
@@ -32,8 +32,8 @@ namespace IntegrationTests;
 /// ADR-124 adds the flow half. A <c>Flow&lt;T&gt;</c> or <c>StateFlow&lt;T&gt;</c> an arm declares,
 /// at a property getter or at a method return, binds as <c>KotlinFlow&lt;T&gt;</c> /
 /// <c>KotlinStateFlow&lt;T&gt;</c> off the arm's own export prefix
-/// (<c>test_issue115__job_watching_get_ticks_collect</c>,
-/// <c>test_issue115__job_watching_labels_collect</c>), through the same
+/// (<c>kn_746573746c696272617279_issue115__job_watching_get_ticks_collect</c>,
+/// <c>kn_746573746c696272617279_issue115__job_watching_labels_collect</c>), through the same
 /// collect and value thunks the ordinary-class route uses. The method form is
 /// <c>SKIPPED_UNSUPPORTED_COMBINATION</c> today and the property form is dropped in silence, so
 /// <c>Ticks</c>, <c>Labels</c> and <c>Beats</c> are all CS1061 until it lands.
@@ -428,7 +428,7 @@ public class SealedSubclassMethodTests
     /// back empty the whole walk would pass vacuously.
     /// </para>
     /// <para>
-    /// ADR-175: the base now exports it once, under its own prefix (<c>test_issue115__job_rest_async</c>),
+    /// ADR-175: the base now exports it once, under its own prefix (<c>kn_746573746c696272617279_issue115__job_rest_async</c>),
     /// so exactly one <c>_rest_async</c> entry point exists and it is the base's, never an arm's.
     /// </para>
     /// </summary>
@@ -437,16 +437,16 @@ public class SealedSubclassMethodTests
     {
         string[] entryPoints = EntryPointsOfTheSealedFamily();
 
-        Assert.Contains("test_issue115__job_running_get_progress", entryPoints);
+        Assert.Contains("kn_746573746c696272617279_issue115__job_running_get_progress", entryPoints);
         Assert.Equal(
-            new[] { "test_issue115__job_rest_async" },
+            new[] { "kn_746573746c696272617279_issue115__job_rest_async" },
             entryPoints.Where(entryPoint => entryPoint.EndsWith("_rest_async", StringComparison.Ordinal)).ToArray());
     }
 
     /// <summary>
     /// The numbering read off the entry points themselves: two <c>suspend</c> overloads on one arm
-    /// take <c>test_issue115__job_running_pause_async</c> and
-    /// <c>test_issue115__job_running_pause_2_async</c>, composed off the
+    /// take <c>kn_746573746c696272617279_issue115__job_running_pause_async</c> and
+    /// <c>kn_746573746c696272617279_issue115__job_running_pause_2_async</c>, composed off the
     /// arm's prefix rather than the base's. This fails loudly if the planner's occurrence counter
     /// never reaches the suspend route's composition site — the awaited call above would still
     /// return <em>a</em> number.
@@ -456,10 +456,10 @@ public class SealedSubclassMethodTests
     {
         string[] entryPoints = EntryPointsOfTheSealedFamily();
 
-        Assert.Contains("test_issue115__job_running_pause_async", entryPoints);
-        Assert.Contains("test_issue115__job_running_pause_2_async", entryPoints);
-        Assert.Contains("test_issue115__job_running_resume_async", entryPoints);
-        Assert.Contains("test_issue115__job_idle_nap_async", entryPoints);
+        Assert.Contains("kn_746573746c696272617279_issue115__job_running_pause_async", entryPoints);
+        Assert.Contains("kn_746573746c696272617279_issue115__job_running_pause_2_async", entryPoints);
+        Assert.Contains("kn_746573746c696272617279_issue115__job_running_resume_async", entryPoints);
+        Assert.Contains("kn_746573746c696272617279_issue115__job_idle_nap_async", entryPoints);
     }
 
     /// <summary>

@@ -54,7 +54,7 @@ public class Issue131Tests
     }
 
     /// <summary>
-    /// ADR-164 widens over the nullable handle parameter too (<c>Optional&lt;Logger?&gt;</c>), so
+    /// ADR-164 widens over the nullable handle parameter too (<c>KotlinOptional&lt;Logger?&gt;</c>), so
     /// the defaults-only call the issue asked for exists.
     /// </summary>
     [Fact]
@@ -170,14 +170,14 @@ public class Issue131Tests
     [Fact]
     public void HubWithLoggerAndEvents_IsOneSignature_WithoutTheUnsupportedParameter()
     {
-        // `logger` is already nullable, so it widens to Optional<Logger?>.
+        // `logger` is already nullable, so it widens to KotlinOptional<Logger?>.
         MethodInfo method = Assert.Single(
             typeof(HubSample).GetMethods(), m => m.Name == "HubWithLoggerAndEvents");
         ParameterInfo[] parameters = method.GetParameters();
 
         Assert.Equal(["settings", "logger"], parameters.Select(parameter => parameter.Name));
         Assert.Equal(typeof(Settings), parameters[0].ParameterType);
-        Assert.Equal("Optional`1", parameters[1].ParameterType.Name);
+        Assert.Equal("KotlinOptional`1", parameters[1].ParameterType.Name);
         Assert.Equal(typeof(Logger), parameters[1].ParameterType.GetGenericArguments()[0]);
         Assert.All(parameters, parameter => Assert.True(parameter.IsOptional));
     }

@@ -248,7 +248,7 @@ class NugetInterfaceGenerationTest {
 
     assertContains(
       registration.content,
-      "IFeedable receiver = (IFeedable)GCHandle.FromIntPtr(selfHandle).Target!;",
+      "global::Test.Menagerie.IFeedable receiver = (global::Test.Menagerie.IFeedable)GCHandle.FromIntPtr(selfHandle).Target!;",
     )
     assertContains(registration.content, "internal static class IFeedableRegistration")
   }
@@ -281,9 +281,9 @@ class NugetInterfaceGenerationTest {
 
     assertContains(
       registration.content,
-      "receiver.Introduce((IFeedable)GCHandle.FromIntPtr(feedableHandle).Target!);",
+      "receiver.Introduce((global::Test.Menagerie.IFeedable)GCHandle.FromIntPtr(feedableHandle).Target!);",
     )
-    assertContains(registration.content, "IFeedable? result = receiver.Star();")
+    assertContains(registration.content, "global::Test.Menagerie.IFeedable? result = receiver.Star();")
   }
 
   @Test
