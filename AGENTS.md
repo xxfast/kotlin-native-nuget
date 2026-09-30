@@ -4,6 +4,10 @@ This file describes common issues and pain points that agents might encounter wh
 
 If you ever encounter an issue specific to agents in the project, please update this file to help prevent future agents from having the same issue.
 
+## Commit Attribution
+
+Always include a `Co-authored-by` trailer identifying the assisting agent in commits it creates or amends. For Codex, use `Co-authored-by: Codex <codex@openai.com>`.
+
 ## Understand the Project Goals
 
 Read [GOALS.md](GOALS.md) before making design decisions.
