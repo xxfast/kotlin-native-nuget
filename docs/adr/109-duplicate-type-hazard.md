@@ -92,10 +92,10 @@ mechanism, with one message that is exact for D and hedged for S.
   isolation. Gradle is 9.1.0 (wrapper). The plugin compiles against `kotlin("gradle-plugin")`.
 - **Inferred**: cross-project extension reads at configuration time are legal under configuration
   cache (project isolation is the stricter, unset, opt-in).
-- **Inferred, the residual claim this design rests on**: KGP/KSP resolve the option Provider only
-  **after every project in the build is evaluated** (at task configuration or execution). If it is
-  resolved earlier, a publisher evaluated later than the reader is missing from the value and its
-  duplicates go unwarned (silent no-op, not wrong output). See Decision §6 for what proves it.
+- **Verified for the repository's current native fixture and toolchain**: KGP/KSP deliver a
+  publisher scope configured after the reader's `afterEvaluate` callback to `nuget.publishedScopes`;
+  see Decision §6. This verifies the observable late-publisher warning, not a universal guarantee
+  about when every Provider invocation runs for every project or build.
 - **Verified by reasoning, and the reason the eager design is rejected**: an eager cross-project
   read inside `afterEvaluate` needs `project.evaluationDependsOn(other)` to see a not-yet-evaluated
   publisher (Gradle evaluates siblings alphabetically by default, Inferred, so `:test-library`
@@ -115,12 +115,13 @@ those with this plugin applied and `publish != null`, and encodes each one's ADR
 own `nuget.namespace` and warns for every admitted type whose package another publisher's scope
 covers. Nothing is skipped; generated output is unchanged.
 
-Pros: one mechanism for D and S; no new DSL; no `afterEvaluate` ordering or circularity, because the
-walk runs after configuration; the only thing crossing to the processor is a package predicate it
+Pros: one mechanism for D and S; no new DSL; no eager cross-project read in `afterEvaluate` and no
+reciprocal evaluation dependency; the only thing crossing to the processor is a package predicate it
 already understands; ADR-100 delivery is free; including self means the existing single-publisher
-real build (`scripts/verify.sh --plugin`, `test-library`) exercises the plumbing end to end.
-Cons: S is a heuristic ("may duplicate") with no off-switch beyond `exclude(...)`; the Provider
-resolution timing is Inferred (Decision §6); reflection on a second `arg` overload.
+real build (`scripts/verify.sh --plugin`, `test-library`) exercises the plumbing end to end. The
+permanent two-publisher fixture verifies delivery after the reader's `afterEvaluate` callback.
+Cons: S is a heuristic ("may duplicate") with no off-switch beyond `exclude(...)`; reflection on a
+second `arg` overload.
 
 ### 2. Eager cross-project read in `afterEvaluate` with `evaluationDependsOn`
 
@@ -156,10 +157,12 @@ Rejected: the human closed the option of deferring.
 ```kotlin
 // ADR-109: the ADR-063 predicate of EVERY forward publisher in the build, this project included,
 // lowered to packages because the processor can only match an admitted klib type by package.
-// A Provider, not a String: its body runs when KSP resolves its options, after every project is
-// evaluated, so no cross-project read happens inside afterEvaluate and no evaluationDependsOn
-// (which would be circular between two publishers) is needed. The processor drops the entry whose
-// packageId is its own nuget.namespace; self is listed so the single-publisher real build still
+// A Provider, not a String: it defers the cross-project walk until KSP resolves its options. The
+// native two-publisher fixture verifies that a later publisher is included after the reader's
+// afterEvaluate callback; it does not assert a universal resolution point for all builds. No
+// eager evaluationDependsOn (which would be circular between two publishers) is needed. The
+// processor drops the entry whose packageId is its own nuget.namespace; self is listed so the
+// single-publisher real build still
 // exercises the plumbing.
 fun NugetPublishConfig.encodeScope(): String {
   val include: List<String> = include.ifEmpty { listOfNotNull(rootPackage) }
@@ -256,9 +259,9 @@ w: [nuget:WARNING_DUPLICATED_DEPENDENCY_TYPE] Duplicating io.github.xxfast.kotli
 
 ### 6. Tests (the verification story, stated plainly)
 
-At the time this ADR was written there was **no two-publisher fixture** in the root build (Verified then: `settings.gradle.kts` included
+At the time this ADR was written there was **no two-publisher fixture** in the root build (historical evidence, Verified then: `settings.gradle.kts` included
 `:nuget-processor`, `:test-models`, `:test-library` only; `:test-models` does not apply the plugin).
-Proof is the sum of three things:
+The original proof was the sum of three things; current permanent evidence is listed below.
 
 - **Plugin, `NugetPluginPublishedScopesWiringTest.kt`** (ProjectBuilder; mirrors
   `NugetPluginKspArgsWiringTest.kt:24-66`): a root, child `models` (KMP, `mingwX64`, plugin NOT
@@ -267,9 +270,9 @@ Proof is the sum of three things:
   include("com.acme", "com.acme.models") }`, `implementation(project(":models"))`). Evaluate all
   four; read `lib-a`'s `KspExtension.getArguments()`; assert `nuget.publishedScopes` lists **both**
   `LibA:com.acme|com.acme.models:` and `LibB:com.acme|com.acme.models:` and nothing for `models`.
-  Second cell: a lone publisher yields exactly its own entry. **Inferred until this runs**: that
-  `getArguments()` exposes a Provider-registered option resolved (via `apOptions.get()` or
-  equivalent). If it does not, assert through `apOptions` reflectively instead.
+  Second cell: a lone publisher yields exactly its own entry. This cell later verified that
+  `getArguments()` exposes the Provider-registered option resolved; see the historical correction
+  under Consequences.
 - **Processor, `Tier1DuplicatedDependencyTypeTest.kt`** (`Tier1Harness.run` with a
   `Tier1DependencyLibrary` jar declaring `dep.models.TopStory`, and
   `processorOptions = mapOf("nuget.namespace" to "Lib", "nuget.includePackages" to
@@ -284,30 +287,35 @@ Proof is the sum of three things:
   implementation)**: the malformed-entry cell (`"OtherLib:dep.models"`, 2 fields, not 4) lives here,
   not in `Tier1DuplicatedDependencyTypeTest.kt`, since a parse failure is unit-testable directly
   against `parsePublishedScopes` and does not need a full KSP round to observe.
-- **Real build, `scripts/verify.sh --plugin`**: `test-library` is the only publisher, so the value is
-  its own entry and the processor drops it; the build stays warning-free. That proves **delivery**
-  of a Provider-backed option through KGP/KSP into `environment.options` (the residual Inferred
-  claim), not the warning. The ProjectBuilder cell proves the multi-publisher **value**; the Tier 1
-  cell proves the **warning**. No single test proves all three at once, and this ADR says so.
+- **Real build, verified 2026-10-01**: `scripts/verify-forward-diagnostics.sh` packs both
+  publishers twice and asserts each console warning names the other publisher and `TopStory`. The
+  companion config uses the one-way `evaluationDependsOn(":test-library")`; a sentinel registered
+  after the library plugin callback confirms `companion.publish` is still absent, without resolving
+  `nuget.publishedScopes`. The script checks both fresh diagnostic manifests, both generated
+  `TopStory` copies, and confirms both KSP tasks are cached on the second run. It passed locally on
+  `macosArm64` with Gradle 9.1.0, KGP 2.4.10, and KSP 2.3.10. CI wires the script into the Windows
+  job, which was not executed locally. Its output includes:
 
-## Inferred claims (nobody has verified these; what breaks if wrong)
+  ```text
+  ==> confirmed: both publishers delivered warnings while KSP was cached
+  ==> confirmed: both manifests warn and both publishers retain generated TopStory copies
+  ```
+
+  This verifies observable late-publisher warning delivery for the current native fixture and
+  toolchain. It does **not** establish a universal Provider invocation point after all project
+  evaluation in arbitrary Gradle builds. The ProjectBuilder cell proves the multi-publisher
+  encoded value; the Tier 1 cell proves processor warning behavior independently.
+
+## Remaining inferred claims (what breaks if wrong)
 
 1. Handles do not cross two Kotlin/Native libraries in one process. If wrong, shape (1) becomes
    viable and the hint text is needlessly restrictive; the warning itself stays correct.
-2. **KGP/KSP resolve the option Provider only after all projects are evaluated.** If wrong, a
-   publisher evaluated after the reader is missing from the value and its duplicates go unwarned:
-   a silent no-op, not wrong output. The ProjectBuilder cell evaluates root + two publishers *before*
-   reading, so it proves the value but not the timing; the real build proves delivery for the
-   single-publisher case only. The current two-publisher fixture has no dedicated later-publisher
-   assertion, so this timing assumption remains open.
-3. `KspExtension.getArguments()` exposes Provider-registered options resolved. If wrong, the
-   ProjectBuilder cell reads `apOptions` reflectively; test-only impact.
-4. Gradle's default sibling evaluation order is alphabetical, and mutual `evaluationDependsOn` from
+2. Gradle's default sibling evaluation order is alphabetical, and mutual `evaluationDependsOn` from
    `afterEvaluate` throws `CircularReferenceException`. Only the rejection of Alternative 2 rests on
    this; the chosen design does not call it.
-5. NuGet ID grammar excludes `; : |`. If wrong, an entry splits incorrectly; the parser fails with a
+3. NuGet ID grammar excludes `; : |`. If wrong, an entry splits incorrectly; the parser fails with a
    named error rather than guessing.
-6. Kotlin docs framework precedent (no diagnostic, umbrella remedy): documentation only.
+4. Kotlin docs framework precedent (no diagnostic, umbrella remedy): documentation only.
 
 ## Consequences
 
@@ -336,16 +344,9 @@ Proof is the sum of three things:
 - The Provider body reads other projects' extensions; legal today, and the first thing to break if
   project isolation is ever enabled. Note it in the code comment.
 
-> **Correction (post-implementation), Inferred claims #2 and #3.** #3
-> (`KspExtension.getArguments()` exposes a Provider-registered option resolved) is now **Verified**:
-> javap/decompilation of the cached `symbol-processing-gradle-plugin-2.3.10.jar` (KSP 2.3.10, not
-> 2.3.9 as elsewhere in this ADR) shows `arguments get() = apOptions.get()`, so the `ProjectBuilder`
-> cell in `NugetPluginPublishedScopesWiringTest.kt` reads it directly rather than falling back to
-> reflection on `apOptions`. #2's **delivery** half (a Provider-backed option reaches
-> `environment.options`) is Verified by a temporary probe added to the real build (option value
-> observed as `TestLibrary:io.github.xxfast.kotlin.native.nuget.test:`, then removed). Its **timing**
-> half (the Provider body runs only after every project in the build is evaluated) stays **Inferred**:
-> the single-publisher real build cannot distinguish "resolved after all projects evaluated" from
-> "resolved after this project alone". The current two-publisher fixture does not assert the
-> later-publisher timing case, so it does not force the distinction. The stated failure mode is unchanged if wrong: a publisher evaluated after the reader
-> silently drops out of the value, a missing warning rather than wrong output. See ROADMAP.md.
+> **Verification amendment (2026-10-01).** Before the permanent fixture, a temporary single-
+> publisher probe confirmed a Provider-backed value reached `environment.options`, but did not
+> establish when KGP/KSP resolve it. The permanent two-publisher check above verifies the later-
+> publisher warning under Gradle 9.1.0, KGP 2.4.10, and KSP 2.3.10; universal timing remains
+> unverified. `KspExtension.getArguments()` exposes the resolved option, as confirmed by inspecting
+> the KSP 2.3.10 implementation (`arguments` delegates to `apOptions.get()`).

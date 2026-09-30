@@ -1,4 +1,5 @@
 import io.github.xxfast.kotlin.native.nuget.NugetCompileInteropTask
+import io.github.xxfast.kotlin.native.nuget.NugetExtension
 import io.github.xxfast.kotlin.native.nuget.NugetGenTask
 import io.github.xxfast.kotlin.native.nuget.PackNugetTask
 import org.gradle.api.DefaultTask
@@ -206,6 +207,14 @@ val packTestDependency by tasks.registering(PackTestDependency::class) {
 // nugetRestore is registered in afterEvaluate by the nuget plugin, so the wiring must also be
 // in afterEvaluate (registered second, runs after the plugin's afterEvaluate).
 afterEvaluate {
+  // ADR-109: registered after the plugin callback, before companion configures publish.
+  // Check ordering without forcing resolution of nuget.publishedScopes ourselves.
+  val companion = project(":test-companion").extensions.findByType(NugetExtension::class.java)
+  check(companion?.publish == null) {
+    "ADR-109 fixture requires companion publish to be configured after reader evaluation"
+  }
+  logger.lifecycle("ADR-109: reader evaluated before companion publish configuration")
+
   tasks.matching { it.name == "nugetRestore" }.configureEach { dependsOn(packTestDependency) }
 
   val nugetGen = tasks.named("nugetGen", NugetGenTask::class.java).get()

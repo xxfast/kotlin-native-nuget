@@ -8,7 +8,8 @@ set -euo pipefail
 # either defect this ADR fixes (KSP's stdout never reaching the console, and packNuget not running
 # KSP at all on an incremental build).
 #
-# So this runs a real build and asserts on the real console, twice. The second run is the one that
+# This runs a real build and asserts on the real console, twice. When invoked by verify.sh, both
+# runs follow its clean packs; standalone execution may build fresh outputs. The second run
 # pins the contract: no clean, no --rerun-tasks, so `kspKotlin{Target}` is UP-TO-DATE and any
 # transport that only speaks during the KSP task action goes silent. That is exactly where the old
 # behaviour died.
@@ -21,12 +22,13 @@ cd "$ROOT"
 # (ADR-098 for List<Short>, ADR-099 for nested collections), and naming one would produce a test
 # that silently stops testing anything the day that ADR lands.
 DECLARATION="io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.length"
+SHARED_TYPE="io.github.xxfast.kotlin.native.nuget.test.models.TopStory"
 
 run() {
   local label="$1"
   local log="$2"
-  echo "==> $label: ./gradlew :test-library:packNuget --console=plain"
-  ./gradlew :test-library:packNuget :test-companion:packNuget --console=plain >"$log" 2>&1 || {
+  echo "==> $label: pack both publishers with --console=plain --no-configuration-cache"
+  ./gradlew :test-library:packNuget :test-companion:packNuget --console=plain --no-configuration-cache >"$log" 2>&1 || {
     echo "FAIL: the build itself failed; see $log" >&2
     tail -40 "$log" >&2
     exit 1
@@ -41,6 +43,22 @@ run() {
     echo "FAIL ($label): console has a [nuget:SKIPPED_ marker but does not name $DECLARATION." >&2
     echo "If that declaration stopped being skipped, pick another product-scope skip from" >&2
     echo "test-library/build/generated/ksp/*/*/resources/NugetDiagnostics.json and update this script." >&2
+    exit 1
+  fi
+
+  # ADR-109: match code, declaration and sibling publisher on one console line.
+  for publisher in TestCompanion TestLibrary; do
+    if ! grep -E "\\[nuget:WARNING_DUPLICATED_DEPENDENCY_TYPE\\].*$SHARED_TYPE:.*$publisher NuGet package" "$log" >/dev/null; then
+      echo "FAIL ($label): no duplicate TopStory warning naming $publisher." >&2
+      exit 1
+    fi
+  done
+
+  # Disable configuration caching above to rerun the ordering sentinel, while preserving
+  # task caching for the incremental KSP assertion.
+  # The sentinel runs after the reader plugin callback and before companion publish exists.
+  if ! grep -Fq "ADR-109: reader evaluated before companion publish configuration" "$log"; then
+    echo "FAIL ($label): late-publisher ordering sentinel did not run." >&2
     exit 1
   fi
 
@@ -86,12 +104,37 @@ run "run 1" "$LOG_DIR/run1.log"
 # running packNuget sees it".
 run "run 2 (incremental, KSP up-to-date)" "$LOG_DIR/run2.log"
 
-if grep -q 'kspKotlin.* UP-TO-DATE\|kspKotlin.* FROM-CACHE' "$LOG_DIR/run2.log"; then
-  echo "==> confirmed: run 2 did not execute the KSP task, and the warning was still reported"
-else
-  echo "note: run 2 re-executed the KSP task, so the cached-build path was not exercised here" >&2
-fi
+for module in test-library test-companion; do
+  if ! grep -E "^> Task :$module:kspKotlin[^ ]+ (UP-TO-DATE|FROM-CACHE)$" "$LOG_DIR/run2.log" >/dev/null ||
+      grep -E "^> Task :$module:kspKotlin[^ ]+$" "$LOG_DIR/run2.log" >/dev/null; then
+    echo "FAIL: run 2 executed KSP for $module; cached diagnostic delivery was not proved." >&2
+    exit 1
+  fi
+done
+echo "==> confirmed: both publishers delivered warnings while KSP was cached"
+
+# Inspect outputs from the real builds above, never pre-existing package-cache copies.
+python3 - "$ROOT" "$SHARED_TYPE" <<'PYTHON'
+import json
+import pathlib
+import sys
+root = pathlib.Path(sys.argv[1])
+for module, sibling in (("test-library", "TestCompanion"), ("test-companion", "TestLibrary")):
+    generated = root / module / "build/generated/ksp"
+    manifests = list(generated.rglob("NugetDiagnostics.json"))
+    interops = list(generated.rglob("Interop.cs"))
+    assert manifests and interops, f"No real generated outputs for {module}"
+    for manifest in manifests:
+        entries = json.loads(manifest.read_text())
+        assert any(entry["kind"] == "WARNING_DUPLICATED_DEPENDENCY_TYPE"
+                   and entry["declaration"] == sys.argv[2]
+                   and f"{sibling} NuGet package" in entry["message"]
+                   for entry in entries), f"Missing shared TopStory warning in {manifest}"
+    for interop in interops:
+        assert "class TopStory" in interop.read_text(), f"Missing publisher's TopStory copy: {interop}"
+print("==> confirmed: both manifests warn and both publishers retain generated TopStory copies")
+PYTHON
 
 assert_no_synthesized_serializer_in_interop
 
-echo "OK: forward diagnostics reach the console on both a fresh and an incremental packNuget"
+echo "OK: forward diagnostics reach both packNuget consoles, including cached KSP"

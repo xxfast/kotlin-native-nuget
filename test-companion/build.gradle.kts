@@ -7,6 +7,10 @@ plugins {
   id("io.github.xxfast.kotlin.native.nuget")
 }
 
+// ADR-109 fixture: configure this publisher only after the reader has evaluated.
+// One-way ordering; the reader sentinel never resolves KSP arguments.
+evaluationDependsOn(":test-library")
+
 kotlin {
   mingwX64 {
     binaries.sharedLib { baseName = "shared" }
@@ -16,7 +20,7 @@ kotlin {
   }
   sourceSets {
     nativeMain.dependencies {
-      // Materialize the shared source set before reverse binding tasks attach generated sources.
+      implementation(project(":test-models"))
     }
   }
 }
@@ -50,6 +54,10 @@ nuget {
     authors = "xxfast"
     description = "Independent second Kotlin publisher for coexistence verification"
     rootPackage = "io.github.xxfast.kotlin.native.nuget.companion"
+    include(
+      "io.github.xxfast.kotlin.native.nuget.companion",
+      "io.github.xxfast.kotlin.native.nuget.test.models",
+    )
   }
   dependencies {
     dependency("TestDependency", version = "1.0.0") {
