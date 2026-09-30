@@ -6,7 +6,7 @@ If you ever encounter an issue specific to agents in the project, please update 
 
 ## Commit Attribution
 
-Always include a `Co-authored-by` trailer identifying the assisting agent in commits it creates or amends. For Codex, use `Co-authored-by: Codex <codex@openai.com>`. For Claude Code, use `Co-Authored-By: Claude <noreply@anthropic.com>`, naming the model if known (for example `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`). For Antigravity, use `Co-authored-by: Antigravity <antigravity@google.com>`.
+Always include a `Co-authored-by` trailer identifying the assisting agent in commits it creates or amends. For Codex, use `Co-authored-by: Codex <codex@openai.com>`. For Claude Code, use `Co-Authored-By: Claude <noreply@anthropic.com>`, naming the model if known (for example `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`).
 
 ## Understand the Project Goals
 
