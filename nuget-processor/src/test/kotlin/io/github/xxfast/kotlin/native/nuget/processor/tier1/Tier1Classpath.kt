@@ -45,3 +45,11 @@ internal object Tier1Classpath {
    */
   val kotlinxCoroutinesCore: File by lazy { jar("kotlinx-coroutines-core-jvm-") }
 }
+
+/** ADR-179: the classpath entry holding the real `@CSharpName`, for a fixture's KSP `libraries`. */
+internal val csharpNameLibrary: java.io.File by lazy {
+  java.io.File(
+    io.github.xxfast.kotlin.native.nuget.annotations.CSharpName::class.java
+      .protectionDomain.codeSource.location.toURI(),
+  )
+}

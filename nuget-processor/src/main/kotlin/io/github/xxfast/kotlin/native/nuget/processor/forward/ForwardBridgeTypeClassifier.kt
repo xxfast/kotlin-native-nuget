@@ -871,10 +871,10 @@ private fun KSClassDeclaration.forwardCsharpTypeParameterNames(): Map<String, St
   val names: List<String> = typeParameters.map { it.simpleName.asString() }
   val members: Set<String> = buildSet {
     getAllProperties().forEach { property ->
-      add(property.simpleName.asString().replaceFirstChar { it.uppercase() })
+      add(property.csharpMemberName())
     }
     getAllFunctions().forEach { function ->
-      add(function.simpleName.asString().replaceFirstChar { it.uppercase() })
+      add(function.csharpMemberName())
     }
     declarations.filterIsInstance<KSClassDeclaration>().forEach { nested ->
       add(nested.simpleName.asString())

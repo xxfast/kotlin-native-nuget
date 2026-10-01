@@ -29,6 +29,8 @@ dependencies {
   // cinterop stub file: it supplies the real `ExperimentalCoroutinesApi` marker that every
   // generated file's unconditional `@OptIn` references.
   testImplementation(libs.kotlinx.coroutines.core)
+  // ADR-179: Tier 1 puts the real `@CSharpName` on the fixture KSP classpath.
+  testImplementation(project(":nuget-annotations"))
 
   // ADR-060's strict `@XFail`: a JUnit 5 `InvocationInterceptor` extension (Tier1XFail.kt).
   // `junit-jupiter-engine` is `testRuntimeOnly` because nothing in this module's test sources

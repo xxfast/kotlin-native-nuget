@@ -142,7 +142,9 @@ public annotation class CSharpName(val name: String)
 
 `BINARY`, not `SOURCE`, because a dependency owner admitted through the ADR-066 closure is read from
 a klib, and KSP sees only what the klib metadata kept (inferred from the `CatteryInternalApi`
-cross-module read, which is `BINARY`-retained; not spiked with a `SOURCE` one). Targets: the standard
+cross-module read, which is `BINARY`-retained; not spiked with a `SOURCE` one). The `jvm` target compiles to JVM 1.8 bytecode (verified: left at the build JDK's default, the
+class file was version 65 and the processor's JVM 17 test run failed with
+`UnsupportedClassVersionError`, which any JVM 17 consumer would hit too). Targets: the standard
 KMP set the Kotlin team publishes libraries for (jvm, js, wasmJs, every `ios*`/`macos*`/`tvos*`/`watchos*`,
 `linuxX64`, `linuxArm64`, `mingwX64`, `androidNativeArm64` etc.). Inferred: an `androidTarget()`
 consumer resolves the `jvm` variant through KGP's `KotlinPlatformType` compatibility rule, so no AGP
@@ -159,8 +161,14 @@ New `forward/ForwardCSharpName.kt`:
 
 ```kotlin
 internal fun KSDeclaration.declaredCSharpName(): String?   // the validated annotation argument, or null
-internal fun KSDeclaration.csharpMemberName(): String      // declared, else toCSharpName(PascalCase(simpleName))
+internal fun KSDeclaration.csharpMemberName(): String      // declared, else PascalCase(simpleName), unescaped
 ```
+
+Amended during implementation (verified): `csharpMemberName()` returns the name **unescaped**. A
+forward plan refuses a C#-escaped public name at plan time (`Forward plan ... public signature name
+@event must not be C#-escaped at plan time`), and the renderer escapes; CIR sites that build an
+identifier themselves wrap the result in `toCSharpName`. Validation (rules 2 and 3 below) is one
+pass over `getSymbolsWithAnnotation` at the start of the round, not inside the helper.
 
 Semantics, each a cell in the Tier 1 test:
 

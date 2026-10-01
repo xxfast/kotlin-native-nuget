@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.getVisibility
@@ -976,7 +978,7 @@ internal fun translateClass(
       // Named specialized-protocol property adapters only (lambda / suspend-lambda / Flow).
       // Ordinary property types without a plan are skipped — no mapReturnType IntPtr fallthrough.
       val propTypeResolved: KSType = prop.type.resolve().expandAliases()
-      val csPropName: String = propName.replaceFirstChar { it.uppercase() }
+      val csPropName: String = prop.csharpMemberName()
       val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
 
       // ADR-124: the Flow/StateFlow arm is one function now, so `translateSealedClass` projects
@@ -1268,7 +1270,7 @@ internal fun translateClass(
         CirParameter((param.name?.asString() ?: "_").csharpParameterName(), paramType)
       }
       CirMethod(
-        name = methodName.replaceFirstChar { it.uppercase() },
+        name = method.csharpMemberName(),
         returnType = returnType,
         parameters = methodParams,
         body = "",
@@ -1625,7 +1627,7 @@ internal fun flowProperty(
   }
 
   return CirProperty(
-    name = csPropName,
+    name = prop.csharpMemberName(),
     type = type,
     nativeReturnType = nativeReturnType,
     nativeSetterType = mutableStateFlowNativeSetterType,
@@ -1782,7 +1784,7 @@ internal fun flowMembers(
       )
 
       val heldMethod = CirMethod(
-        name = csMethodName,
+        name = method.csharpMemberName(),
         returnType = "KotlinMutableStateFlow<$flowCsElementType>",
         nativeName = nativeStem,
         parameters = methodParams,
@@ -2038,7 +2040,7 @@ internal fun suspendMembers(
         methodParams.map { it.name } + asyncCancellationParameter(methodParams),
         hasResult = !isUnit,
       ),
-      name = "${csMethodName}Async",
+      name = method.csharpAsyncMemberName(),
       nativeName = nativeStem,
       returnType = taskReturnType,
       parameters = methodParams,
@@ -2147,7 +2149,7 @@ internal fun suspendMembers(
         methodParams.map { it.name } + asyncCancellationParameter(methodParams),
         hasResult = true,
       ),
-      name = "${csMethodName}Async",
+      name = method.csharpAsyncMemberName(),
       nativeName = nativeStem,
       returnType = "Task<$asyncReturnType>",
       parameters = methodParams,
@@ -2507,7 +2509,7 @@ internal fun translateSealedClass(
             csTypeArgumentNames(propTypeResolved.arguments, nameableTypes, context, classifier)
           val lambdaCsType: String = csLambdaType(lambdaTypeArgs)
           CirProperty(
-            name = propName.replaceFirstChar { it.uppercase() },
+            name = prop.csharpMemberName(),
             type = lambdaCsType,
             nativeReturnType = "IntPtr",
             nativeName = propName,
@@ -3162,7 +3164,7 @@ internal fun translateCompanionProperty(
   val propTypeResolved: KSType = prop.type.resolve().expandAliases()
   val propType: String = propTypeResolved.declaration.simpleName.asString()
   val isMutable: Boolean = prop.isMutable
-  val csPropName: String = propName.replaceFirstChar { it.uppercase() }
+  val csPropName: String = prop.csharpMemberName()
 
   if (propType !in KOTLIN_TO_CSHARP_RETURN) return emptyList()
 
@@ -3312,7 +3314,7 @@ internal fun translateCompanionFunction(
       append(if (isMutableListReturn) "                return result;" else "                return result.AsReadOnly();")
     }
     val wrapper = CirMethod(
-      name = csMethodName,
+      name = func.csharpMemberName(),
       returnType = returnType,
       nativeReturnType = "IntPtr",
       nativeName = nativeName,
@@ -3621,7 +3623,7 @@ private fun typeParameterProperties(
     .mapNotNull { prop ->
       val typeName: String = prop.type.resolve().expandAliases().declaration.simpleName.asString()
       if (typeName !in typeParamNames) return@mapNotNull null
-      val csName: String = prop.simpleName.asString().replaceFirstChar { it.uppercase() }
+      val csName: String = prop.csharpMemberName()
       if (csName in plannedNames) return@mapNotNull null
       CirInterfaceProperty(csName, typeName)
     }
@@ -3654,7 +3656,7 @@ private fun typeParameterMethods(
         returnName in typeParamNames || paramNames.any { it in typeParamNames }
       if (!mentionsTypeParameter) return@mapNotNull null
 
-      val csMethodName: String = method.simpleName.asString().replaceFirstChar { it.uppercase() }
+      val csMethodName: String = method.csharpMemberName()
       val csReturnType: String = when {
         returnName in typeParamNames -> requireNotNull(returnName)
         returnName == "String" -> "string"
@@ -4186,7 +4188,7 @@ private fun translateCallbackMethod(
   tracker: CollectionHelperTracker,
 ): CirCallbackMethod? {
   val methodName: String = method.simpleName.asString()
-  val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
+  val csMethodName: String = method.csharpMemberName()
   val nativeEntryPoint: String = "${classPrefix}_$methodName"
 
   val lambdaParam = method.parameters.firstOrNull { param ->
@@ -4546,7 +4548,7 @@ private fun translateInterfaceBridgeMethod(
 
   val entries: List<CirInterfaceBridgeMethodEntry> = ifaceMethods.map { method ->
     val mName: String = method.simpleName.asString()
-    val mCsName: String = mName.replaceFirstChar { it.uppercase() }
+    val mCsName: String = method.csharpMemberName()
     val params = method.parameters.toList()
     val arity: Int = params.size
 

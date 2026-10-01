@@ -45,6 +45,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addCompanionExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addEnumExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
 import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedLegacyLambdaShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.validateCSharpNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStoredCallbackPair
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowMethodExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowPropertyExports
@@ -1075,6 +1076,9 @@ class NugetProcessor(
     // ADR-100: the sink is a singleton inside a long-lived Gradle daemon; start this round empty so
     // NugetDiagnostics.json describes this compilation and no earlier one.
     ForwardDiagnosticSink.reset()
+
+    // ADR-179: an invalid or override-disagreeing `@CSharpName` is fatal before anything renders.
+    validateCSharpNames(resolver, logger)
 
     // ADR-163: every forward symbol this round mints starts with the sanitised library name, so a
     // library literally called `nuget` would mint into ADR-127's reserved runtime ABI space.

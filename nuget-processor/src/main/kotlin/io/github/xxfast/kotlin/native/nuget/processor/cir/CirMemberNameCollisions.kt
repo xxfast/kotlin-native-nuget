@@ -1,5 +1,8 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredCSharpName
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -59,12 +62,15 @@ internal data class KotlinSpelling(
   val keyword: String,
   val name: String,
   val onCompanion: Boolean = false,
+  /** ADR-179: the author's `@CSharpName`, so a declared name that still collides names it. */
+  val declared: String? = null,
 ) {
   val isFunction: Boolean get() = keyword == "fun"
 
   fun describe(): String {
     val code: String = if (isFunction) "`fun $name()`" else "`$keyword $name`"
-    return if (onCompanion) "$code on the companion" else code
+    val annotated: String = if (declared == null) code else "$code (`@CSharpName(\"$declared\")`)"
+    return if (onCompanion) "$annotated on the companion" else annotated
   }
 }
 
@@ -89,16 +95,18 @@ internal class KotlinSpellings {
       return
     }
     val keyword: String = if (prop.isMutable) "var" else "val"
-    record(name.replaceFirstChar { it.uppercase() }, KotlinSpelling(keyword, name, onCompanion))
+    record(
+      prop.csharpMemberName(),
+      KotlinSpelling(keyword, name, onCompanion, prop.declaredCSharpName()),
+    )
   }
 
   fun recordFunction(function: KSFunctionDeclaration, onCompanion: Boolean = false) {
     val name: String = function.simpleName.asString()
-    val csName: String = name.replaceFirstChar { it.uppercase() }
-    val spelling = KotlinSpelling("fun", name, onCompanion)
-    record(csName, spelling)
-    // The suspend route renders `{Name}Async`.
-    if (function.modifiers.contains(Modifier.SUSPEND)) record("${csName}Async", spelling)
+    val spelling = KotlinSpelling("fun", name, onCompanion, function.declaredCSharpName())
+    record(function.csharpMemberName(), spelling)
+    // The suspend route renders `{Name}Async`, or the declared name verbatim (ADR-179).
+    if (function.modifiers.contains(Modifier.SUSPEND)) record(function.csharpAsyncMemberName(), spelling)
   }
 
   companion object {
@@ -196,7 +204,7 @@ private fun defaultReason(ownerPhrase: String, collision: CsNameCollision): Stri
 }
 
 private fun defaultHint(ownerPhrase: String): String =
-  "rename one of them on $ownerPhrase; a property, a `const val` and a function all render " +
+  "rename one of them on $ownerPhrase, or give one a different `@CSharpName`; a property, a `const val` and a function all render " +
       "PascalCase in C#, and a companion's members land on the same C# type (ADR-110)"
 
 /**
