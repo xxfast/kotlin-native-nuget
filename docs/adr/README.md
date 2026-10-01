@@ -286,6 +286,7 @@ the current decision.
 - `List`/`Set`/`Map` return on a `suspend` member → `Task<IReadOnlyList<T>>` / `Task<IReadOnlySet<T>>` / `Task<IReadOnlyDictionary<K, V>>`: [119](119-collection-returns-on-the-legacy-suspend-route.md)
 - A class, `object`, sealed base, or sealed subclass parameter on a `Flow`/`StateFlow`-returning or `suspend` member → the mapped C# type, spelled exactly as the return position on the same member, passed as `x._handle`: [122](122-handle-parameters-on-the-legacy-routes.md)
 - A nullable primitive/`Char`/`String` parameter on a `Flow`/`StateFlow`-returning or `suspend` member → `int?`/`char?`/`bool?`/`string?`: [122](122-handle-parameters-on-the-legacy-routes.md)
+- A nullable class or sealed handle parameter on a `Flow`/`StateFlow`-returning or `suspend` member → `T?`, `null` as `IntPtr.Zero`: [122](122-handle-parameters-on-the-legacy-routes.md)
 - `List`/`Set`/`Map` element on a `Flow`/`StateFlow` property or method return → `KotlinFlow<IReadOnlyList<T>>` / `KotlinStateFlow<IReadOnlyList<T>>` / `IReadOnlySet<T>` / `IReadOnlyDictionary<K, V>`: [123](123-collection-elements-on-the-flow-routes.md)
 - `suspend fun` returning `Unit`/`T` ← `Task`/`Task<T>`, instance or static: [152](152-task-to-suspend-fun.md), [153](153-reverse-cancellation-token.md)
 - `IAsyncEnumerable<T>` method return, instance or static ← `Flow<T>`: [130](130-reverse-error-envelope-on-runtime.md), [156](156-iasyncenumerable-to-flow.md)
