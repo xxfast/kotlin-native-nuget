@@ -152,10 +152,7 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
     classified.isLegacyScalar() -> ForwardLegacyParameterShape.Plain
     classified is BridgeType.ObjectHandle -> ForwardLegacyParameterShape.Handle(classified)
     classified is BridgeType.Nullable && classified.type is BridgeType.ObjectHandle ->
-      ForwardLegacyParameterShape.Handle(
-        classified.type as BridgeType.ObjectHandle,
-        nullable = true,
-      )
+      ForwardLegacyParameterShape.Handle(classified.type, nullable = true)
     classified is BridgeType.Enum -> ForwardLegacyParameterShape.Enum(classified)
     classified is BridgeType.Nullable &&
         (classified.type.isLegacyScalar() || classified.type is BridgeType.Enum) ->
