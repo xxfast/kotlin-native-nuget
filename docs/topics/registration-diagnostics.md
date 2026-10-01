@@ -215,6 +215,11 @@ way an ordinary value-class unbox does. `LeakTests/LiveHandleTests.cs`'s
 round trip, the value-class unbox-exactly-once path, and the same pair under the completion race a
 suspend call with no suspension point can hit.
 
+A nullable class or sealed handle parameter on a legacy route borrows the caller's handle, or crosses
+as no handle for `null`, so nothing new is minted. `LeakTests/LiveHandleTests.cs`'s
+`NullableHandleParameter_SuspendNullAndValue_ReturnsToBaseline` covers a `suspend` call with `null`
+and with a value.
+
 An [enum element read through `StateFlow`, `Flow` or a generic class](coroutines-and-flow.md#enum-elements)
 mints one handle per `.Value` read and per emission, released as the ordinal is read, so the count
 returns to baseline with nothing for you to dispose. `LeakTests/LiveHandleTests.cs`'s

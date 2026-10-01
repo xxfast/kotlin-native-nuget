@@ -362,7 +362,8 @@ class Tier1LegacyRouteHandleParameterTest {
 
   /**
    * Issue #365: a nullable handle used to be refused here for its nullability alone. It now binds
-   * on the same one pointer slot, `null` crossing as `IntPtr.Zero` and arriving in Kotlin as `null`.
+   * on the same one pointer slot, `null` crossing as `IntPtr.Zero` and arriving in Kotlin as
+   * `null`.
    */
   @Test
   fun `a nullable handle parameter binds with null crossing as IntPtr Zero`() {

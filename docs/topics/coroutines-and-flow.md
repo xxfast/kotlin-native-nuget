@@ -608,11 +608,33 @@ public Task<int> CountAsync(CancellationToken cancellationToken = default);
 public Task<int> CountAsync(int? limit, CancellationToken cancellationToken = default); // no `= null`
 ```
 
+A class, `object` or sealed handle parameter may be nullable. It binds as `T?` and `null` reaches
+Kotlin as `null`:
+
+```kotlin
+class Checkup(private val vet: String) {
+  suspend fun examine(room: String, cat: Cat?): String
+}
+```
+
+```C#
+public Task<string> ExamineAsync(string room, Cat? cat, CancellationToken cancellationToken = default);
+```
+
+```C#
+using var checkup = new Checkup("Dr Purr");
+await checkup.ExamineAsync("room 2", null); // Kotlin sees cat == null
+```
+
+This holds for `suspend` members, sealed-subclass members, top-level `suspend` functions,
+`Flow`/`StateFlow` members and `suspend` functions returning `StateFlow`. A nullable handle with a
+default value (`cat: Cat? = null`) is still required in C#, so pass `null` explicitly.
+
 Any other generic parameter (`Pair<A, B>`, `Array<T>`, a lambda), `Instant`/`Duration`/`Uuid`, a
-value class, an interface, or a nullable class/object parameter (`Observation?`) is not supported at
-these positions and is skipped with a diagnostic naming the member. Pass a class/object/sealed
-handle, a `List`/`Set`/`Map`, an enum, or a primitive/`String` (nullable or not) instead, or split
-the parameter across separate members.
+value class or an interface is not supported at these positions and is skipped with a diagnostic
+naming the member. Pass a class/object/sealed handle (nullable or not), a `List`/`Set`/`Map`, an
+enum, or a primitive/`String` (nullable or not) instead, or split the parameter across separate
+members.
 
 ## Limitations
 

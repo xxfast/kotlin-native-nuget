@@ -191,7 +191,8 @@ private fun legacyRouteParameter(
         shape.type.forwardPublicCsharpType()
       },
       nativeType = "IntPtr",
-      nativeArgumentExpression = if (shape.nullable) "$name?._handle ?? IntPtr.Zero" else "$name._handle",
+      nativeArgumentExpression =
+        if (shape.nullable) "$name?._handle ?? IntPtr.Zero" else "$name._handle",
     )
 
     // Issue #299: the plan route's wire. A nullable primitive or `Char` is public `int?` / `char?`

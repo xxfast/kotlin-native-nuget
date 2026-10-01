@@ -134,8 +134,8 @@ internal fun BridgeType.ValueClass.hasErasedCrossing(): Boolean =
  * them is a public `IntPtr`.
  *
  * A nullable class or sealed handle is a nullable [ForwardLegacyParameterShape.Handle] (issue
- * #365). Nullable collections (`List<T>?`) land in [ForwardLegacyParameterShape.Refused] on purpose: threading nullability through these routes is
- * ADR-067 territory and ADR-114 defers it. A nullable *scalar* is
+ * #365). Nullable collections (`List<T>?`) land in [ForwardLegacyParameterShape.Refused] on
+ * purpose: threading nullability through these routes is ADR-067 territory and ADR-114 defers it. A nullable *scalar* is
  * [ForwardLegacyParameterShape.NullableScalar] (issue #299): it used to stay `Plain`, which bound
  * `Int?` as a non-null `int` on both halves, so a C# caller could not pass `null`.
  */
@@ -152,7 +152,10 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
     classified.isLegacyScalar() -> ForwardLegacyParameterShape.Plain
     classified is BridgeType.ObjectHandle -> ForwardLegacyParameterShape.Handle(classified)
     classified is BridgeType.Nullable && classified.type is BridgeType.ObjectHandle ->
-      ForwardLegacyParameterShape.Handle(classified.type as BridgeType.ObjectHandle, nullable = true)
+      ForwardLegacyParameterShape.Handle(
+        classified.type as BridgeType.ObjectHandle,
+        nullable = true,
+      )
     classified is BridgeType.Enum -> ForwardLegacyParameterShape.Enum(classified)
     classified is BridgeType.Nullable &&
         (classified.type.isLegacyScalar() || classified.type is BridgeType.Enum) ->

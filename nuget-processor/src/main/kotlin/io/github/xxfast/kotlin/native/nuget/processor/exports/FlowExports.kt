@@ -311,7 +311,8 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       // ADR-122: so is a class/object/sealed parameter, which used to declare its real Kotlin
       // type here and cross as a pinned `kref` struct against C#'s `IntPtr` (issue #126).
       if (paramShapes[index].isLegacyLowered()) {
-        addParameter(paramName, cOpaquePointer.copy(nullable = paramShapes[index].isLegacyNullableSlot))
+        val nullable: Boolean = paramShapes[index].isLegacyNullableSlot
+        addParameter(paramName, cOpaquePointer.copy(nullable = nullable))
         return@forEachIndexed
       }
       val resolved: KSType = param.type.resolve().expandAliases()

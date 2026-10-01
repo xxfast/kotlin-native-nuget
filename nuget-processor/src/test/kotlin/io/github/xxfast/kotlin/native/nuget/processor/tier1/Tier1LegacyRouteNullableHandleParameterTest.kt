@@ -69,7 +69,7 @@ class Tier1LegacyRouteNullableHandleParameterTest {
     assertTrue(export.contains("cat: COpaquePointer?,"), export)
     assertTrue(export.contains("cat?.asStableRef<tier1.clinic.Cat>()?.get()"), export)
 
-    assertCsharp("public Task<string> ExamineAsync(global::Interop.Clinic.Cat? cat, CancellationToken")
+    assertCsharp("Task<string> ExamineAsync(global::Interop.Clinic.Cat? cat, CancellationToken")
     assertCsharp("cat?._handle ?? IntPtr.Zero")
   }
 

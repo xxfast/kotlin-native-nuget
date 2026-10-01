@@ -169,7 +169,8 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
       // ADR-114: a collection crosses as a handle to its boxed wire container.
       // ADR-122: so does a class/object/sealed parameter, as the borrowed handle C# already holds.
       if (paramShapes[index].isLegacyLowered()) {
-        builder.addParameter(paramName, cOpaquePointer.copy(nullable = paramShapes[index].isLegacyNullableSlot))
+        val nullable: Boolean = paramShapes[index].isLegacyNullableSlot
+        builder.addParameter(paramName, cOpaquePointer.copy(nullable = nullable))
         return@forEachIndexed
       }
       val resolved: KSType = param.type.resolve().expandAliases()

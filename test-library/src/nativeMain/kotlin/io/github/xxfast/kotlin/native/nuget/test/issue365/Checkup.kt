@@ -13,7 +13,8 @@ import kotlin.time.Duration.Companion.milliseconds
  * Fixture for [#365](https://github.com/xxfast/kotlin-native-nuget/issues/365): a **nullable**
  * class or sealed handle parameter on a legacy route is skipped whole as
  * `SKIPPED_UNSUPPORTED_INPUT`. `legacyParameterShape` lands `ObjectHandle` on `Handle` (ADR-122)
- * and a nullable scalar on `NullableScalar` (#299), but `Nullable(ObjectHandle)` falls to `Refused`.
+ * and a nullable scalar on `NullableScalar` (#299), but `Nullable(ObjectHandle)` falls to
+ * `Refused`.
  *
  * Expected after the fix: C# spells the parameter `Cat?` / `Observation?`, `null` crosses as
  * `IntPtr.Zero` (one pointer slot, no `HasValue` slot), and Kotlin rebuilds it as `null`.
