@@ -212,11 +212,14 @@ member, and a compiler plugin's synthesized surface such as kotlinx.serializatio
   `constructor(n: Int)` next to `constructor(n: Int?)` render genuinely distinct signatures and are
   not treated as a collision. A second case is a property and a method that render the same C# name
   on one generated type -- a top-level file class, `object`, class and companion, sealed base or
-  arm, value class, or interface alike (`ERROR_CSHARP_NAME_COLLISION`, CS0102); the same diagnostic
+  arm, value class, or interface alike (`ERROR_CSHARP_NAME_COLLISION`, CS0102, resolved by renaming one or by giving one a different `@CSharpName`); the same diagnostic
   also fires when a declared member takes the C# name of an **inherited** member of the other kind
   (CS0108 hiding). See [Classes and objects](classes-and-objects.md#property-and-method-name-collisions)
   for the general rule and [Top-level declarations](top-level-declarations.md) for the file-class
-  shape. This page covers the third:
+  shape. `@CSharpName` adds two more fatal codes: `ERROR_CSHARP_NAME_INVALID` (the declared name is
+  not a C# identifier) and `ERROR_CSHARP_NAME_OVERRIDE_MISMATCH` (an override declares a different
+  name than the member it overrides); see [Choosing the C# name](instance-members.md#choosing-the-csharp-name).
+  This page covers the third:
   `ERROR_C_ENTRY_POINT_COLLISION`, two *different* Kotlin declarations deriving the same underlying C
   entry point; see [Two declarations can't share one C entry point](#entry-point-collision) below.
   A fourth, opt-in only: with `publish { strictDependencyTypes = true }`, an un-admitted dependency

@@ -63,6 +63,44 @@ lab.apply(3)    // resolves to the int overload
 An overload set the mapping can't tell apart is skipped with its own build diagnostic; the type's
 other bridgeable members still generate.
 
+## Choosing the C# name {id="choosing-the-csharp-name"}
+
+`@CSharpName` sets the exact C# name of one `fun` or property. Use it when a property and a function
+share a Kotlin name, which C# cannot declare on one type (`ERROR_CSHARP_NAME_COLLISION`), and you
+don't want to rename the Kotlin API on every platform:
+
+```kotlin
+import io.github.xxfast.kotlin.native.nuget.annotations.CSharpName
+
+class CollarReader(val owner: String) {
+  val payload: CollarTag? get() = /* ... */
+
+  @CSharpName("PayloadBytes")
+  fun payload(code: Int): ByteArray? = /* ... */
+
+  @CSharpName("ReadCollar")
+  suspend fun readCollar(prefix: String): String = "$prefix$owner"
+}
+```
+
+```C#
+public byte[]? PayloadBytes(int code)
+public Task<string> ReadCollar(string prefix, CancellationToken cancellationToken = default)
+```
+
+- The name is used verbatim. A `suspend fun` gets no `Async` suffix unless you write it.
+- The name must be a C# identifier, or generation fails with `ERROR_CSHARP_NAME_INVALID`. A C#
+  keyword is allowed and is escaped with `@`.
+- An override inherits the name declared on the member it overrides. Repeating the same name is
+  fine; a different one fails with `ERROR_CSHARP_NAME_OVERRIDE_MISMATCH`, so put the annotation on
+  the root declaration.
+- If the declared name still collides with another member, you get `ERROR_CSHARP_NAME_COLLISION`
+  again, with the annotation shown in the message.
+
+Only the C# member changes. The Kotlin name and the native entry points stay as they were.
+The plugin adds the annotation's `nuget-annotations` dependency to `commonMainApi` for you (see
+[the plugin DSL](nuget-dsl.md#annotations-dependency)).
+
 ## Name collisions with the wrapper itself
 
 The generated wrapper already owns three Kotlin member names: `handle`, `close`, and `cleaner`
