@@ -17,6 +17,7 @@ dependencyResolutionManagement {
 
 include(":nuget-processor")
 include(":nuget-runtime")
+include(":nuget-annotations")
 include(":test-models")
 include(":test-library")
 include(":test-companion")

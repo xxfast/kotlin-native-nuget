@@ -56,6 +56,7 @@ jobs:
           ./gradlew \
             :nuget-processor:publishAllPublicationsToLocalTestRepository \
             :nuget-runtime:publishAllPublicationsToLocalTestRepository \
+            :nuget-annotations:publishAllPublicationsToLocalTestRepository \
             :nuget-plugin:publishAllPublicationsToLocalTestRepository
           ./gradlew -p smoke-test verifyProcessorResolvesByCoordinate verifyRuntimeResolvesByCoordinate
 
@@ -81,6 +82,7 @@ jobs:
           ./gradlew --no-configuration-cache
           :nuget-processor:publishToMavenCentral
           :nuget-runtime:publishToMavenCentral
+          :nuget-annotations:publishToMavenCentral
           :nuget-plugin:publishToMavenCentral
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}

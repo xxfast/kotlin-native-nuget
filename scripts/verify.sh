@@ -29,6 +29,7 @@ if [ "$RUN_PLUGIN" = true ]; then
   echo "==> Publish plugin + processor + runtime to build/local-repo"
   ./gradlew :nuget-processor:publishAllPublicationsToLocalTestRepository \
     :nuget-runtime:publishAllPublicationsToLocalTestRepository \
+    :nuget-annotations:publishAllPublicationsToLocalTestRepository \
     :nuget-plugin:publishAllPublicationsToLocalTestRepository
 
   # Exercises the maven-coordinate fallback in NugetPlugin that this repo's own builds skip,
