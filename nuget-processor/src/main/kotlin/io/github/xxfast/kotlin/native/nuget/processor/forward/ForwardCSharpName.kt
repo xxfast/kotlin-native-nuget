@@ -53,7 +53,7 @@ internal fun KSDeclaration.declaredCSharpName(): String? =
 internal fun KSDeclaration.csharpMemberName(): String =
   declaredCSharpName() ?: simpleName.asString().replaceFirstChar { it.uppercase() }
 
-/** ADR-179: the member's C# name for a `suspend` member: declared verbatim, else `<Pascal>Async`. */
+/** ADR-179: a `suspend` member's C# name: declared verbatim, else `<Pascal>Async`. */
 internal fun KSDeclaration.csharpAsyncMemberName(): String = toCSharpName(
   declaredCSharpName() ?: (simpleName.asString().replaceFirstChar { it.uppercase() } + "Async"),
 )

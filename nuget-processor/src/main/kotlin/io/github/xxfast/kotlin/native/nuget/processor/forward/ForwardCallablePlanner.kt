@@ -2317,7 +2317,8 @@ internal class ForwardCallablePlanner(
 
     return planOrSkip(
       symbol = symbol,
-      publicName = function.declaredCSharpName() ?: toCName(functionName).replaceFirstChar { it.uppercase() },
+      publicName = function.declaredCSharpName()
+        ?: toCName(functionName).replaceFirstChar { it.uppercase() },
       exportName = symbols.extension(function, receiverPrefix, "${toCName(functionName)}$suffix"),
       // ADR-105 amendment: the receiver gets the same sealed rewrite scope (d) applies to every
       // declared parameter, here rather than in `planOrSkip`, because the extension route is the

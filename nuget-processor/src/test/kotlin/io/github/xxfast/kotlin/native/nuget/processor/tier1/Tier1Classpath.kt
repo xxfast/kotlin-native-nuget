@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.annotations.CSharpName
 import java.io.File
 
 /**
@@ -47,9 +48,6 @@ internal object Tier1Classpath {
 }
 
 /** ADR-179: the classpath entry holding the real `@CSharpName`, for a fixture's KSP `libraries`. */
-internal val csharpNameLibrary: java.io.File by lazy {
-  java.io.File(
-    io.github.xxfast.kotlin.native.nuget.annotations.CSharpName::class.java
-      .protectionDomain.codeSource.location.toURI(),
-  )
+internal val csharpNameLibrary: File by lazy {
+  File(CSharpName::class.java.protectionDomain.codeSource.location.toURI())
 }

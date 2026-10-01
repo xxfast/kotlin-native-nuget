@@ -45,7 +45,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addCompanionExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addEnumExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
 import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedLegacyLambdaShape
-import io.github.xxfast.kotlin.native.nuget.processor.forward.validateCSharpNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStoredCallbackPair
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowMethodExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFlowPropertyExports
@@ -79,6 +78,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addValueClassExpor
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedDeclaration
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardValueClassUnderlying
+import io.github.xxfast.kotlin.native.nuget.processor.forward.validateCSharpNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.valueClassUnderlying
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeContext
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier

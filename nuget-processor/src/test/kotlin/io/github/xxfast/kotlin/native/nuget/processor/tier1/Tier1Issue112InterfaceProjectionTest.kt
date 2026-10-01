@@ -116,7 +116,8 @@ class Tier1Issue112InterfaceProjectionTest {
 
     // ADR-179: `collarTag(code)` is bridged under `@CSharpName("CollarTagBytes")` now, so no
     // owner reports a hole for it.
-    val methodSkips: List<String> = result.kspWarnings.filter { "collarTag(" in it || ".collarTag" in it }
+    val methodSkips: List<String> = result.kspWarnings
+      .filter { "collarTag(" in it || ".collarTag" in it }
     assertTrue(
       methodSkips.none { "collarTag" in it && "codes" !in it && "SKIPPED" in it },
       "expected no skip naming collarTag; kspWarnings=$methodSkips",

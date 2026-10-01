@@ -13,7 +13,8 @@ import kotlin.test.assertTrue
 class Tier1CSharpNameTest {
 
   private fun run(body: String): Tier1Result = Tier1Harness.run(
-    "package tier1.csname\n\nimport io.github.xxfast.kotlin.native.nuget.annotations.CSharpName\n\n" + body,
+    "package tier1.csname\n\n" +
+        "import io.github.xxfast.kotlin.native.nuget.annotations.CSharpName\n\n" + body,
     libraries = listOf(csharpNameLibrary),
   )
 

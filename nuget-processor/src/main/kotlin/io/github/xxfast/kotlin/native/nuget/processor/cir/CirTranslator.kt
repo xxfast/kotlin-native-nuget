@@ -1,10 +1,10 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
-import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
-import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredCSharpName
 import com.google.devtools.ksp.processing.KSPLogger
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredCSharpName
 import io.github.xxfast.kotlin.native.nuget.processor.sanitizeLibrarySegment
 import io.github.xxfast.kotlin.native.nuget.processor.csharpIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
@@ -314,10 +314,12 @@ internal fun translate(
       }
     }
   }
+  fun KSDeclaration.spelling(keyword: String): KotlinSpelling =
+    KotlinSpelling(keyword, simpleName.asString(), declared = declaredCSharpName())
   fun KSPropertyDeclaration.topLevelSpelling(): KotlinSpelling = when {
-    modifiers.contains(Modifier.CONST) -> KotlinSpelling("const val", simpleName.asString(), declared = declaredCSharpName())
-    isMutable -> KotlinSpelling("var", simpleName.asString(), declared = declaredCSharpName())
-    else -> KotlinSpelling("val", simpleName.asString(), declared = declaredCSharpName())
+    modifiers.contains(Modifier.CONST) -> spelling("const val")
+    isMutable -> spelling("var")
+    else -> spelling("val")
   }
 
   groupByNamespaceAndFile(functions).forEach { (key, funcs) ->
@@ -346,7 +348,7 @@ internal fun translate(
       }
       recordStatic(
         namespace, finalClassName, emitted, function,
-        KotlinSpelling("fun", function.simpleName.asString(), declared = function.declaredCSharpName()),
+        function.spelling("fun"),
       )
       emitted
     }
@@ -368,7 +370,7 @@ internal fun translate(
         translateGenericFunction(function, context.libraryName, context).also { emitted ->
           recordStatic(
             namespace, finalClassName, emitted, function,
-            KotlinSpelling("fun", function.simpleName.asString(), declared = function.declaredCSharpName()),
+            function.spelling("fun"),
           )
         }
       }
@@ -385,7 +387,7 @@ internal fun translate(
       ).also { emitted ->
         recordStatic(
           namespace, finalClassName, emitted, function,
-          KotlinSpelling("fun", function.simpleName.asString(), declared = function.declaredCSharpName()),
+          function.spelling("fun"),
         )
       }
     }
@@ -682,7 +684,7 @@ internal fun translate(
               SpelledMethod(method, "`fun $receiverText.${func.simpleName.asString()}()`", func)
             }
           recordStatic(
-            namespace, className, emitted, func, KotlinSpelling("fun", func.simpleName.asString(), declared = func.declaredCSharpName()),
+            namespace, className, emitted, func, func.spelling("fun"),
           )
         }
     }

@@ -1,7 +1,5 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
-import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
-import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getConstructors
 import com.google.devtools.ksp.getVisibility
@@ -21,6 +19,8 @@ import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
 import io.github.xxfast.kotlin.native.nuget.processor.forward.cirDoc
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncInterfaceForwards

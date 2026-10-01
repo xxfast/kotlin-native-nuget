@@ -1,7 +1,5 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
-import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
-import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -10,6 +8,8 @@ import com.google.devtools.ksp.symbol.KSType
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.abiSlotParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericReturnRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.legacyGenericRouteParameterIndex

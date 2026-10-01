@@ -1,8 +1,5 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
-import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
-import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
-import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredCSharpName
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -14,6 +11,9 @@ import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredCSharpName
 import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
 
 /**
@@ -106,7 +106,9 @@ internal class KotlinSpellings {
     val spelling = KotlinSpelling("fun", name, onCompanion, function.declaredCSharpName())
     record(function.csharpMemberName(), spelling)
     // The suspend route renders `{Name}Async`, or the declared name verbatim (ADR-179).
-    if (function.modifiers.contains(Modifier.SUSPEND)) record(function.csharpAsyncMemberName(), spelling)
+    if (function.modifiers.contains(Modifier.SUSPEND)) {
+      record(function.csharpAsyncMemberName(), spelling)
+    }
   }
 
   companion object {
@@ -204,8 +206,9 @@ private fun defaultReason(ownerPhrase: String, collision: CsNameCollision): Stri
 }
 
 private fun defaultHint(ownerPhrase: String): String =
-  "rename one of them on $ownerPhrase, or give one a different `@CSharpName`; a property, a `const val` and a function all render " +
-      "PascalCase in C#, and a companion's members land on the same C# type (ADR-110)"
+  "rename one of them on $ownerPhrase, or give one a different `@CSharpName`; a property, a " +
+      "`const val` and a function all render PascalCase in C#, and a companion's members land " +
+      "on the same C# type (ADR-110)"
 
 /**
  * Rule 2 (CS0108) runs after every class has translated, because a base can translate after its
