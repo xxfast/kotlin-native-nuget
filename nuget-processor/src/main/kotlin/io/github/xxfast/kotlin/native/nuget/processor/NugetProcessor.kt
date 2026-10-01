@@ -700,10 +700,10 @@ internal fun warnRefusedLegacyRouteMembers(
     symbol = member,
     declaration = declaration,
     // ADR-122 widened this from generic-only: an enum, Instant/Duration/Uuid, value class,
-    // interface, nullable object or unexported class parameter used to render a public `IntPtr`
-    // here, so the wording names what the route CAN take rather than only what it cannot.
+    // interface or unexported class parameter used to render a public `IntPtr` here (a
+    // nullable handle binds since issue #365), so the wording names what the route CAN take rather than only what it cannot.
     reason = "a Flow-returning or suspend member can take a primitive/String, a List/Set/Map, or " +
-        "a class/object/sealed-type handle, but not $refused",
+        "a class/object/sealed-type handle (nullable or not), but not $refused",
     hint = "pass a class, object or sealed type, a List/Set/Map, or a primitive/String, or " +
         "expose the values as separate parameters",
     owner = owner,

@@ -338,7 +338,8 @@ Refused, named `SKIPPED_UNSUPPORTED_INPUT`:
   with no diagnostic at all.
 - A nullable object parameter (`Observation?`), keeping ADR-114's nullable deferral rule: nullable
   threading on the legacy routes is done once, or not at all (satisfied for scalars and `String` by
-  the 2026-09-26 amendment below; a nullable class handle stays refused).
+  the 2026-09-26 amendment below; a nullable class or sealed handle binds since the 2026-10-01
+  amendment below).
 - Every generic parameter that is not a supported collection, unchanged from ADR-114.
 
 Not touched:
@@ -413,7 +414,8 @@ A nullable primitive/`Char` parameter and a nullable `String` parameter on these
 routes were still bound as their non-null spelling on both halves (Kotlin `limit: Int`, C#
 `int limit`), so a C# caller had no way to pass `null`. This satisfies the "done once, or not at
 all" nullable-threading rule this ADR set for the legacy routes: it is now done for every scalar and
-`String`, and remains not-done (refused) only for a nullable class handle.
+`String`, and remained not-done (refused) only for a nullable class handle, until the 2026-10-01
+amendment below.
 
 The fix reuses the plan route's own wire (ADR-098's `${name}HasValue` amendment, ADR-164's Context)
 rather than inventing a second encoding: a nullable primitive or `Char` fans out to a
@@ -435,3 +437,26 @@ a nullable `String` is a runtime-marshalled UTF-8 buffer freed after the call, s
 `NugetMarshal` handle (inferred from the generator source, the same reasoning as ADR-155's reverse
 collections). Verified by `nuget-processor`'s `Tier1LegacyRouteNullableParameterTest` (generated
 Kotlin and C# text) and `IntegrationTests/SuspendNullableParameterTests.cs` (consumer behaviour).
+
+### 2026-10-01: nullable class and sealed handle parameters (issue #365)
+
+A nullable class or sealed handle parameter (`cat: Cat?`, `observation: Observation?`) on the
+legacy routes (suspend member, sealed arm member, top-level suspend, Flow/StateFlow member, suspend
+returning StateFlow) was the last nullable shape still refused. It now binds, which completes the
+"done once, or not at all" nullable-threading rule for every parameter shape this ADR binds.
+
+The wire is the one the ordinary plan route already uses for a nullable handle
+(`ForwardCirPlanProjection`), so nothing new crosses the ABI: one pointer slot, no `HasValue` slot,
+no CIR model or `DllImport` change. `ForwardLegacyParameterShape.Handle` carries a `nullable` flag;
+C# declares the public parameter `T?` and passes `x?._handle ?? IntPtr.Zero`, and the Kotlin export
+declares the slot `COpaquePointer?` and lowers it eagerly as `x?.asStableRef<T>()?.get()`, so the
+member receives `null`. A sealed base keeps ADR-105's rewrite (`sealedAsHandle()` already turned
+`Observation?` into a nullable handle). A defaulted nullable handle (`cat: Cat? = null`) is still
+not widened: the parameter stays required, as a non-null handle default already does.
+
+The `SKIPPED_UNSUPPORTED_INPUT` wording now says the route takes a handle "nullable or not".
+Verified by `nuget-processor`'s `Tier1LegacyRouteNullableHandleParameterTest` and the flipped
+`Tier1LegacyRouteHandleParameterTest` ghost case (generated text),
+`IntegrationTests/LegacyRouteNullableHandleParameterTests.cs` (consumer behaviour), and the
+`LeakTests` row `NullableHandleParameter_SuspendNullAndValue_ReturnsToBaseline` (a borrowed handle
+mints nothing, `null` included).

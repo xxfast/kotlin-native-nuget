@@ -24,6 +24,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParam
 import io.github.xxfast.kotlin.native.nuget.processor.forward.collectionResultProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardArmMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isLegacyLowered
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isLegacyNullableSlot
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
@@ -310,7 +311,7 @@ internal fun FileSpec.Builder.addFlowMethodExports(
       // ADR-122: so is a class/object/sealed parameter, which used to declare its real Kotlin
       // type here and cross as a pinned `kref` struct against C#'s `IntPtr` (issue #126).
       if (paramShapes[index].isLegacyLowered()) {
-        addParameter(paramName, cOpaquePointer)
+        addParameter(paramName, cOpaquePointer.copy(nullable = paramShapes[index].isLegacyNullableSlot))
         return@forEachIndexed
       }
       val resolved: KSType = param.type.resolve().expandAliases()

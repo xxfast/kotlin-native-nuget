@@ -361,28 +361,30 @@ class Tier1LegacyRouteHandleParameterTest {
   }
 
   /**
-   * The other half of the refusal arm: a type that *would* bind, refused for its nullability
-   * alone. The diagnostic has to keep the `?`, or the author reads it as "no objects here" and
-   * goes looking for the wrong defect.
+   * Issue #365: a nullable handle used to be refused here for its nullability alone. It now binds
+   * on the same one pointer slot, `null` crossing as `IntPtr.Zero` and arriving in Kotlin as `null`.
    */
   @Test
-  fun `a nullable handle parameter is refused and the diagnostic keeps the question mark`() {
+  fun `a nullable handle parameter binds with null crossing as IntPtr Zero`() {
     val result = run()
 
-    assertFalse(
-      result.generatedCSharp.contains("Ghost("),
-      "expected no Ghost member: nullability is not threaded on these routes; got: " +
-          "${csharpLinesFor(result, "Ghost")}",
-    )
-
-    val diagnostic: String? = result.kspWarnings.firstOrNull {
-      it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name}]") &&
-          it.contains("ghost")
-    }
     assertTrue(
-      diagnostic != null && diagnostic.contains("observation: Observation?"),
-      "expected the refusal to name the parameter WITH its `?`, since the type itself binds; " +
-          "got: $diagnostic",
+      result.generated.contains(
+        "val observationArg = observation?.asStableRef<tier1.watchtower.Observation>()?.get()",
+      ),
+      "expected the nullable lowering to short-circuit on null; generated=${result.generated}",
+    )
+    assertTrue(
+      result.generatedCSharp.contains("observation?._handle ?? IntPtr.Zero"),
+      "expected the C# call to pass IntPtr.Zero for null; got: ${csharpLinesFor(result, "Ghost")}",
+    )
+    assertTrue(
+      result.generatedCSharp.contains("Ghost(global::Interop.Watchtower.Observation? observation)"),
+      "expected Ghost to take a nullable Observation; got: ${csharpLinesFor(result, "Ghost")}",
+    )
+    assertTrue(
+      result.kspWarnings.none { it.contains("ghost") },
+      "expected no skip diagnostic for ghost; got: ${result.kspWarnings}",
     )
   }
 

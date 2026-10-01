@@ -57,7 +57,14 @@ internal sealed interface ForwardLegacyParameterShape {
    * ADR-122: a class, `object`, sealed base or sealed arm, crossing as the borrowed handle the
    * ordinary plan route already passes (`x._handle` in C#, `asStableRef<T>().get()` in Kotlin).
    */
-  data class Handle(val type: BridgeType.ObjectHandle) : ForwardLegacyParameterShape
+  data class Handle(
+    val type: BridgeType.ObjectHandle,
+    /**
+     * Issue #365: a nullable class or sealed handle, still one pointer slot. `null` crosses as
+     * `IntPtr.Zero` (`x?._handle ?? IntPtr.Zero` in C#) and Kotlin receives `null`.
+     */
+    val nullable: Boolean = false,
+  ) : ForwardLegacyParameterShape
 
   /**
    * Issue #299 (ADR-122 amendment): a nullable primitive, `Char` or `String`, crossing on the plan
@@ -126,8 +133,8 @@ internal fun BridgeType.ValueClass.hasErasedCrossing(): Boolean =
  * marshal it, borrow its handle, cross an enum by ordinal (ADR-164), or refuse it by name. None of
  * them is a public `IntPtr`.
  *
- * Nullable collections (`List<T>?`) and nullable objects land in
- * [ForwardLegacyParameterShape.Refused] on purpose: threading nullability through these routes is
+ * A nullable class or sealed handle is a nullable [ForwardLegacyParameterShape.Handle] (issue
+ * #365). Nullable collections (`List<T>?`) land in [ForwardLegacyParameterShape.Refused] on purpose: threading nullability through these routes is
  * ADR-067 territory and ADR-114 defers it. A nullable *scalar* is
  * [ForwardLegacyParameterShape.NullableScalar] (issue #299): it used to stay `Plain`, which bound
  * `Int?` as a non-null `int` on both halves, so a C# caller could not pass `null`.
@@ -144,6 +151,8 @@ internal fun ForwardBridgeTypeClassifier.legacyParameterShape(
   if (expanded.arguments.isEmpty()) return when {
     classified.isLegacyScalar() -> ForwardLegacyParameterShape.Plain
     classified is BridgeType.ObjectHandle -> ForwardLegacyParameterShape.Handle(classified)
+    classified is BridgeType.Nullable && classified.type is BridgeType.ObjectHandle ->
+      ForwardLegacyParameterShape.Handle(classified.type as BridgeType.ObjectHandle, nullable = true)
     classified is BridgeType.Enum -> ForwardLegacyParameterShape.Enum(classified)
     classified is BridgeType.Nullable &&
         (classified.type.isLegacyScalar() || classified.type is BridgeType.Enum) ->
@@ -1122,7 +1131,16 @@ internal fun legacyHandleStatement(
   parameter: String,
   local: String,
   type: BridgeType.ObjectHandle,
-): String = "val $local = $parameter.asStableRef<${type.qualifiedName}>().get()"
+  nullable: Boolean = false,
+): String = if (nullable) {
+  "val $local = $parameter?.asStableRef<${type.qualifiedName}>()?.get()"
+} else {
+  "val $local = $parameter.asStableRef<${type.qualifiedName}>().get()"
+}
+
+/** Whether this lowered parameter's `COpaquePointer` slot is nullable (issue #365). */
+internal val ForwardLegacyParameterShape.isLegacyNullableSlot: Boolean
+  get() = this is ForwardLegacyParameterShape.Handle && nullable
 
 /**
  * Whether the Kotlin export binds this parameter to an eagerly-evaluated local rather than calling
@@ -1243,7 +1261,7 @@ internal fun ForwardLegacyParameterShape.legacyPrelude(
   is ForwardLegacyParameterShape.Marshalled ->
     legacyLoweringStatement(parameter, requireNotNull(local), type)
   is ForwardLegacyParameterShape.Handle ->
-    legacyHandleStatement(parameter, requireNotNull(local), type)
+    legacyHandleStatement(parameter, requireNotNull(local), type, nullable)
   ForwardLegacyParameterShape.Plain,
   is ForwardLegacyParameterShape.Enum,
   is ForwardLegacyParameterShape.NullableScalar,
