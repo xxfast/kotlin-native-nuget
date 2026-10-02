@@ -516,7 +516,9 @@ internal fun ForwardDiagnostic.format(): String {
   val at: String = (symbol?.location as? FileLocation)
     ?.let { location -> "\n    at ${location.filePath}:${location.lineNumber}" }
     ?: ""
-  return "[nuget:${kind.name}] ${kind.verb} $location: $reason. $hint$at"
+  // A reason that already closes its own sentence keeps its period rather than gaining a second.
+  val sentence: String = if (reason.endsWith('.')) reason else "$reason."
+  return "[nuget:${kind.name}] ${kind.verb} $location: $sentence $hint$at"
 }
 
 /**

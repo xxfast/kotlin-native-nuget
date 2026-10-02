@@ -7420,8 +7420,11 @@ internal fun formatDiagnostic(packageId: String, diagnostic: RirDiagnostic): Str
     diagnostic.memberName.isEmpty() -> "$packageId/${diagnostic.typeName}"
     else -> "$packageId/${diagnostic.typeName}.${diagnostic.memberName}(${diagnostic.memberSignature})"
   }
-  return "[nuget:${diagnostic.kind.name}] ${diagnostic.kind.verb} $location: " +
-      "${diagnostic.reason}. ${diagnostic.hint}"
+  // A reason that already closes its own sentence (the reader's SKIPPED_ARRAY one does) keeps its
+  // period rather than gaining a second: forward's `ForwardDiagnostic.format()` does the same.
+  val reason: String = diagnostic.reason.let { if (it.endsWith('.')) it else "$it." }
+  return "[nuget:${diagnostic.kind.name}] ${diagnostic.kind.verb} $location: $reason " +
+      diagnostic.hint
 }
 
 abstract class NugetGenerateBindingsTask : DefaultTask() {

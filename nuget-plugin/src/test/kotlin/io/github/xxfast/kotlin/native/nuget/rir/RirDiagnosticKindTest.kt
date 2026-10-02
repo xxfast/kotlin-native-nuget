@@ -71,6 +71,30 @@ class RirDiagnosticKindTest {
     )
   }
 
+  /** The reader's real `SKIPPED_ARRAY` reason already ends its sentence; no `buffer.. Expose`. */
+  @Test
+  fun `the console line does not double a reason's own closing period`() {
+    val reason =
+      "`string[]`: arrays are deferred (ADR-155). The Kotlin type for an array is its own " +
+          "decision, and `byte[]` wants the ADR-151 blit rather than a slot buffer."
+    val hint = "Expose IReadOnlyList<T> (or another mapped BCL collection) instead of an array."
+    val array = RirDiagnostic(
+      RirDiagnosticKind.SKIPPED_ARRAY, "MimeUtility", "GetExtensions", "GetExtensions(string)",
+      reason = reason, hint = hint,
+    )
+
+    assertEquals(
+      "[nuget:SKIPPED_ARRAY] Skipping MimeMapping/MimeUtility.GetExtensions(GetExtensions(string)): " +
+          "$reason $hint",
+      formatDiagnostic("MimeMapping", array),
+    )
+    assertEquals(
+      "[nuget:SKIPPED_ARRAY] Skipping MimeMapping/MimeUtility.GetExtensions(GetExtensions(string)): " +
+          "no wire. $hint",
+      formatDiagnostic("MimeMapping", array.copy(reason = "no wire")),
+    )
+  }
+
   @Test
   fun `the reader's uppercase code deserializes`() {
     val parsed: RirFile = parseReverseIr(

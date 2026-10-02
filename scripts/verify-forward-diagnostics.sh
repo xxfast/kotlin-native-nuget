@@ -23,6 +23,7 @@ cd "$ROOT"
 # that silently stops testing anything the day that ADR lands.
 DECLARATION="io.github.xxfast.kotlin.native.nuget.test.models.StoryUri.length"
 SHARED_TYPE="io.github.xxfast.kotlin.native.nuget.test.models.TopStory"
+FORWARD_SKIP='\[nuget:SKIPPED_[A-Z0-9_]+\] Skipping [a-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+[:(]'
 
 run() {
   local label="$1"
@@ -34,12 +35,15 @@ run() {
     exit 1
   }
 
-  if ! grep -q '\[nuget:SKIPPED_' "$log"; then
-    echo "FAIL ($label): no [nuget:SKIPPED_ marker on the console. Forward diagnostics are invisible." >&2
+  # ADR-182: reverse lines carry the same `[nuget:SKIPPED_` bracket, so the bracket alone no longer
+  # proves forward delivery. A forward location is a dotted Kotlin name (lowercase package first);
+  # a reverse one is `<packageId>/<Type>...`, so the `/` rules it out.
+  if ! grep -Eq "$FORWARD_SKIP" "$log"; then
+    echo "FAIL ($label): no forward [nuget:SKIPPED_ line on the console. Forward diagnostics are invisible." >&2
     exit 1
   fi
 
-  if ! grep -q "$DECLARATION" "$log"; then
+  if ! grep -Eq "\\[nuget:SKIPPED_[A-Z0-9_]+\\] Skipping ${DECLARATION//./\\.}:" "$log"; then
     echo "FAIL ($label): console has a [nuget:SKIPPED_ marker but does not name $DECLARATION." >&2
     echo "If that declaration stopped being skipped, pick another product-scope skip from" >&2
     echo "test-library/build/generated/ksp/*/*/resources/NugetDiagnostics.json and update this script." >&2
