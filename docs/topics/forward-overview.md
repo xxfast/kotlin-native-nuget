@@ -12,7 +12,7 @@ At build time:
 4. **`CirRenderer` emits `Interop.cs`.** The C# source is generated once, at Kotlin build time, and shipped inside the package. There is no consumer-side codegen step, unlike the `ClangSharpPInvokeGenerator`-based approach from earlier phases (see [ADR-001](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/001-csharp-codegen-in-consumer.md)).
 5. **KotlinPoet emits `Bridges.kt`.** Kotlin-side `@CName` export wrappers are generated so every bridged declaration has a stable C ABI entry point.
 6. **Kotlin/Native compiles and links** shared libraries for each target platform.
-7. **`packNuget` packages** the generated C#, the native binaries, and metadata into a `.nupkg`.
+7. **`nugetPack` packages** the generated C#, the native binaries, and metadata into a `.nupkg`.
 
 ```
 Gradle Plugin (Kotlin side)                NuGet Package       C# Consumer
@@ -37,7 +37,7 @@ Every time an object-typed property or return value crosses the bridge, the gene
 
 ## What ships in the `.nupkg`
 
-Running `packNuget` for `test-library` produces this layout:
+Running `nugetPack` for `test-library` produces this layout:
 
 ```
 TestLibrary.1.0.0/
@@ -201,7 +201,7 @@ member, and a compiler plugin's synthesized surface such as kotlinx.serializatio
 - **`INFO_*`**: the member still binds, under a documented assumption (for example, `out`/`in`
   variance on a class type parameter is dropped, but the member still generates).
 - **`ERROR_*`**: generation fails and `CNameExports.kt` (the Kotlin `@CName` export file) is never
-  written, so `packNuget` never runs. Cases include two constructors, or two methods on one class,
+  written, so `nugetPack` never runs. Cases include two constructors, or two methods on one class,
   that render an identical C# signature
   ([ADR-034](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/034-secondary-constructor-exceptions.md)),
   named `ERROR_CSHARP_SIGNATURE_COLLISION`. This also catches two constructors that differ only in
@@ -946,7 +946,7 @@ same-simple-name collision across packages is no longer possible. What is left i
 *inside one package and owner*: a member whose name happens to match a generated role, or two
 different declarations whose mangled names meet because a Kotlin identifier already contains `_`,
 this scheme's own separator. Two declarations that resolve to the same symbol used to abort
-`packNuget` with a raw `IllegalArgumentException` naming only the mangled symbol
+`nugetPack` with a raw `IllegalArgumentException` naming only the mangled symbol
 (`radio_play_collect`), not which Kotlin declarations were fighting over it.
 [ADR-117](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/117-forward-abi-collision-names-owning-declarations.md)
 (issue [#106](https://github.com/xxfast/kotlin-native-nuget/issues/106)) replaced that with a named
@@ -1048,10 +1048,10 @@ writes every accumulated diagnostic to `NugetDiagnostics.json` (an object with `
 ([ADR-100](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/100-forward-diagnostic-delivery.md)).
 Being a declared output, not just something printed during the task action, is what makes it survive
 an incremental build: it is *restored* on a cache hit and present after an `UP-TO-DATE` run, the two
-outcomes a normal, unchanged `packNuget` produces on every run after the first. A
-`NugetReportDiagnosticsTask` ahead of `packNuget` reads that file and re-emits every message through
-Gradle's own warning logger, so a skip is visible on every `packNuget`, cached or not, not only the
-build where KSP happened to run. This is a real `packNuget --console=plain` run against this
+outcomes a normal, unchanged `nugetPack` produces on every run after the first. A
+`NugetReportDiagnosticsTask` ahead of `nugetPack` reads that file and re-emits every message through
+Gradle's own warning logger, so a skip is visible on every `nugetPack`, cached or not, not only the
+build where KSP happened to run. This is a real `nugetPack --console=plain` run against this
 repository's own fixture, KSP task `UP-TO-DATE`:
 
 ```
@@ -1071,7 +1071,7 @@ repository's own fixture, KSP task `UP-TO-DATE`:
 <note>
 <p>Before ADR-100, this exact set of six diagnostics was computed correctly but reached nobody: the
 KSP stdout channel never surfaced in the Gradle console (a Worker API stdout-attribution gap), and
-even when it did, a normal, unchanged <code>packNuget</code> reports the KSP task
+even when it did, a normal, unchanged <code>nugetPack</code> reports the KSP task
 <code>FROM-CACHE</code> then <code>UP-TO-DATE</code> on consecutive runs, so a transport that only
 speaks during a task action was silent on every build after the first. Nothing about which
 declarations are skipped, or their severity, changed; only delivery did.</p>

@@ -21,7 +21,7 @@ import java.time.Instant
  * Always out of date: the whole point is a fresh timestamp per build.
  */
 @DisableCachingByDefault(because = "every snapshot build requires a new version")
-abstract class NugetSnapshotVersionTask : DefaultTask() {
+abstract class NugetGenerateSnapshotVersionTask : DefaultTask() {
   // ADR-180: optional, so a missing value fails in the action below with the DSL-level message
   // instead of Gradle's generic "doesn't have a configured value".
   @get:Input
@@ -62,7 +62,7 @@ abstract class NugetSnapshotVersionTask : DefaultTask() {
  * reference `Version="$(<SanitizedId>Version)"` without knowing the timestamp.
  */
 @DisableCachingByDefault(because = "the props file is generated for the current snapshot version")
-abstract class NugetSnapshotVersionPropsTask : DefaultTask() {
+abstract class NugetGenerateSnapshotVersionPropsTask : DefaultTask() {
   @get:Input
   abstract val packageId: Property<String>
 
@@ -109,8 +109,8 @@ fun msbuildVersionPropertyName(packageId: String): String {
 /** The pair of tasks plus the execution-time version provider they share (ADR-092). */
 internal class SnapshotVersioning(
   val version: Provider<String>,
-  val versionTask: TaskProvider<NugetSnapshotVersionTask>,
-  val propsTask: TaskProvider<NugetSnapshotVersionPropsTask>,
+  val versionTask: TaskProvider<NugetGenerateSnapshotVersionTask>,
+  val propsTask: TaskProvider<NugetGenerateSnapshotVersionPropsTask>,
 )
 
 internal fun registerSnapshotVersioning(
@@ -126,10 +126,10 @@ internal fun registerSnapshotVersioning(
     .asText
     .map { it.trim() }
 
-  // ADR-180: registered with `publish {}` whatever `snapshot` is; packNuget only depends on these
+  // ADR-180: registered with `publish {}` whatever `snapshot` is; nugetPack only depends on these
   // when it is true. A missing version or packageId fails in the mint task's action.
-  val versionTask: TaskProvider<NugetSnapshotVersionTask> =
-    project.tasks.register("nugetSnapshotVersion", NugetSnapshotVersionTask::class.java) { task ->
+  val versionTask: TaskProvider<NugetGenerateSnapshotVersionTask> =
+    project.tasks.register(NugetTaskNames.GENERATE_SNAPSHOT_VERSION, NugetGenerateSnapshotVersionTask::class.java) { task ->
       task.group = "nuget"
       task.description = "Mints a unique snapshot version for this build"
       task.baseVersion.set(pub.version)
@@ -141,10 +141,10 @@ internal fun registerSnapshotVersioning(
     project.rootProject.layout.buildDirectory.file(pub.packageId.map { id -> "${id}Versions.props" })
   )
 
-  val propsTask: TaskProvider<NugetSnapshotVersionPropsTask> =
+  val propsTask: TaskProvider<NugetGenerateSnapshotVersionPropsTask> =
     project.tasks.register(
-      "nugetSnapshotVersionProps",
-      NugetSnapshotVersionPropsTask::class.java,
+      NugetTaskNames.GENERATE_SNAPSHOT_VERSION_PROPS,
+      NugetGenerateSnapshotVersionPropsTask::class.java,
     ) { task ->
       task.group = "nuget"
       task.description = "Writes the MSBuild props file pinning the current snapshot version"

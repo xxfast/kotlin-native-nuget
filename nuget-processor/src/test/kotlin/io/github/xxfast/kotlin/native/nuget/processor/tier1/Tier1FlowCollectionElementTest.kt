@@ -17,7 +17,7 @@ import kotlin.test.assertTrue
  * Interop.cs(1176,62): error CS0234: The type or namespace name 'Kotlin' does not exist
  * ```
  *
- * `packNuget` is green with this in it: the failure only shows when a consumer compiles the
+ * `nugetPack` is green with this in it: the failure only shows when a consumer compiles the
  * generated `Interop.cs`. Tier 1 asserts the C# text structurally (ADR-060), so the cells below
  * read the rendered signature rather than compiling it.
  *

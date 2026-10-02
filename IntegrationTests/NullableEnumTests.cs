@@ -7,12 +7,12 @@ namespace IntegrationTests;
 /// ordinary forward position. ADR-079 shipped the strictly harder wrapped case
 /// (<c>Temperament?</c>: <see cref="ValueClassNullableUnderlyingTests"/>), so today's support matrix
 /// is incoherent -- <c>Mood?</c> binds nowhere. Worse, it does not merely skip: a bare <c>Mood?</c>
-/// <i>property</i> crashes <c>packNuget</c> (<c>hasValueFanOutInner()</c> has no bare-<c>Enum</c>
+/// <i>property</i> crashes <c>nugetPack</c> (<c>hasValueFanOutInner()</c> has no bare-<c>Enum</c>
 /// case, so the getter takes the <c>Direct</c> route and
 /// <c>ForwardPropertyKotlinEmitter.addGetter</c> has no route for it), while bare <c>Mood?</c>
 /// parameters and returns skip the whole callable with the mislabelled <c>NULLABLE</c> reason.
 ///
-/// So these are expected to fail as a KSP/<c>packNuget</c> abort for <see cref="MoodJournal"/>'s
+/// So these are expected to fail as a KSP/<c>nugetPack</c> abort for <see cref="MoodJournal"/>'s
 /// property, and -- once that is fixed but the callable path is not -- as C# compile errors naming
 /// the missing members (CS1061 / CS1729 / CS0117), not as assertion failures.
 ///

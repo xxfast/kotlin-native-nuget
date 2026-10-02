@@ -320,7 +320,7 @@ public class PayloadTests
     //    declares (CS0246), with the `ByteArray` parameter degraded to `IntPtr`. That hole was
     //    general (any refused component, e.g. `List<Instant>`) and is now closed in
     //    `hasLegacyGenericReturnRoute()`: skip means absent;
-    //  - `CollarStream.pulses` (`Flow<ByteArray>`) crashed `packNuget` before any of this.
+    //  - `CollarStream.pulses` (`Flow<ByteArray>`) crashed `nugetPack` before any of this.
     //
     // Oreo's collar transmits one burst per zoomie; Mylo's transmits a lot of nothing, at length.
     // =============================================================================================

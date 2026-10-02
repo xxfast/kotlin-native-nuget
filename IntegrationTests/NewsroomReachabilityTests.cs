@@ -157,7 +157,7 @@ public class NewsroomReachabilityTests
     {
         // Whisker.purr: Purr? and Purr.whisker: Whisker? -- the closure's visited set (keyed on
         // qualified name) must terminate on the second visit instead of walking forever. Just
-        // reaching this test at all (packNuget completing) is half the assertion; the other half
+        // reaching this test at all (nugetPack completing) is half the assertion; the other half
         // is that both hops resolve to the original pair.
         using var newsroom = new Newsroom();
         using Whisker whisker = newsroom.Echo();

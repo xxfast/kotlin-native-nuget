@@ -7,7 +7,7 @@ namespace IntegrationTests;
 /// Issue <a href="https://github.com/xxfast/kotlin-native-nuget/issues/112">#112</a> / ADR-113: the
 /// generated <c>IFoo</c> is projected from Kotlin simple names while every implementation of it is
 /// projected from the forward plan, so the two disagree and nothing can implement the interface.
-/// <c>packNuget</c> is green; the failure lands when the consumer compiles <c>Interop.cs</c>.
+/// <c>nugetPack</c> is green; the failure lands when the consumer compiles <c>Interop.cs</c>.
 /// <para>
 /// The red for this issue is therefore "everything red": <c>Interop.cs</c> does not compile
 /// (CS0102 for a property and a method both named <c>CollarTag</c>, CS0738 because the class's

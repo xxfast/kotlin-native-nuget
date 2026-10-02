@@ -8,7 +8,7 @@ namespace IntegrationTests;
 /// <summary>
 /// Issue #111. The legacy lambda routes spelled every one of a lambda's type arguments with
 /// <c>arg.type?.resolve()?.declaration?.simpleName</c>, which drops the argument's namespace and
-/// its own type arguments. <c>packNuget</c> stayed green and the consumer got
+/// its own type arguments. <c>nugetPack</c> stayed green and the consumer got
 /// <c>CS0246: The type or namespace name 'Flow' could not be found</c>.
 ///
 /// Two outcomes, never one:

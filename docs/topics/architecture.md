@@ -295,13 +295,13 @@ Two task chains, one per direction. See [Gradle tasks](gradle-tasks.md) for the 
 |---|---|---|
 | compile + link | Kotlin/Native shared libs, one per target RID | `.dylib` / `.dll` |
 | KSP → CIR | reader + renderer emit the C# and Kotlin bridge source | `Interop.cs`, `CNameExports.kt` |
-| `packNuget` | assembles `runtimes/` + `contentFiles` into the package | `.nupkg` |
+| `nugetPack` | assembles `runtimes/` + `contentFiles` into the package | `.nupkg` |
 
 **Reverse: consume C# → Kotlin**, aggregated behind the `nugetImport` IDE-sync task:
 
 | Task | Does | Produces |
 |---|---|---|
-| `nugetGen` | writes a synthetic `.csproj` for the bound dependencies | `interop.csproj` |
+| `nugetGenerateRestoreProject` | writes a synthetic `.csproj` for the bound dependencies | `interop.csproj` |
 | `nugetRestore` | `dotnet restore`; pins `targetFramework`, fails fast below the floor | `project.assets.json` |
 | `nugetExtractApi` | runs `NugetMetadataReader` over the resolved `.dll` | `reverse-ir.json` |
 | `nugetGenerateBindings` | Kotlin stubs + native binding tables from the RIR | `Template.kt`, `TemplateBindings.kt` |

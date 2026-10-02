@@ -43,7 +43,7 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      # Before packNuget, which pays for a Kotlin/Native link. These previously ran only in
+      # Before nugetPack, which pays for a Kotlin/Native link. These previously ran only in
       # release.yml, on a tag, so a PR could break them and CI stayed green until release day.
       # koverXmlReport runs the tests and writes the JaCoCo-compatible XML in one pass.
       # nuget-plugin is a composite includeBuild, so its task is addressed with -p nuget-plugin.
@@ -67,7 +67,7 @@ jobs:
         shell: bash
 
       - name: Build both independent NuGet publishers
-        run: ./gradlew :test-library:packNuget :test-companion:packNuget
+        run: ./gradlew :test-library:nugetPack :test-companion:nugetPack
 
       - name: Forward diagnostics include the late publisher on cached builds
         run: scripts/verify-forward-diagnostics.sh

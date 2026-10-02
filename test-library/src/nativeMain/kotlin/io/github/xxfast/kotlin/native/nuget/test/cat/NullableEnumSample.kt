@@ -7,7 +7,7 @@ package io.github.xxfast.kotlin.native.nuget.test.cat
  * "an accepted plan whose emitter has no route" crash.
  *
  * There is deliberately no fixture for this today, which is exactly why the hole went unseen. Until
- * ADR-080 lands, [MoodJournal.currentMood] stops `packNuget` outright
+ * ADR-080 lands, [MoodJournal.currentMood] stops `nugetPack` outright
  * (`IllegalStateException: Forward property direct nullable getter is invalid for ...`, because
  * `hasValueFanOutInner()` has no bare-`Enum` case so the getter takes the `Direct` route), and every
  * other member below is silently skipped with the mislabelled `NULLABLE` /

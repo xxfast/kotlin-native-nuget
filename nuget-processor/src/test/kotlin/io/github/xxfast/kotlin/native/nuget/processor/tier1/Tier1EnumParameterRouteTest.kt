@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
  * still fails before the Kotlin export file is written.
  *
  * Deliberately in-process only, never in `test-library/`: the correct outcome is a failed build,
- * which would break `packNuget`.
+ * which would break `nugetPack`.
  */
 class Tier1EnumParameterRouteTest {
 

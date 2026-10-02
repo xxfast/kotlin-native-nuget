@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
  * before `CNameExports.kt` exists.
  *
  * Deliberately in-process only (never in `test-library/`): each cell's correct outcome is a failed
- * build, which would break `packNuget`.
+ * build, which would break `nugetPack`.
  *
  * The assertions mostly do not name *which* of the three duplicate guards fires (`duplicate C#
  * import`, `duplicate Kotlin export`, `conflicting C# legacy imports`): which one a shape hits

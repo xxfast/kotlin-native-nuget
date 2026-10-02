@@ -16,7 +16,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * ADR-093: `publish { prebuiltRuntimes = dir }` must reach `packNuget.prebuiltRuntimesDir`, and a
+ * ADR-093: `publish { prebuiltRuntimes = dir }` must reach `nugetPack.prebuiltRuntimesDir`, and a
  * target whose link task is disabled on this host must be excluded from `nativeLibDirs` at
  * configuration time rather than silently skipped at execution time.
  */
@@ -68,7 +68,7 @@ class NugetPluginPrebuiltRuntimesWiringTest {
   }
 
   @Test
-  fun `prebuiltRuntimes reaches packNuget prebuiltRuntimesDir`() {
+  fun `prebuiltRuntimes reaches nugetPack prebuiltRuntimesDir`() {
     val project: Project = buildProject()
     val root: File = prebuiltTree()
 
@@ -82,8 +82,8 @@ class NugetPluginPrebuiltRuntimesWiringTest {
 
     project.evaluate()
 
-    val packNuget = project.tasks.getByName("packNuget") as PackNugetTask
-    assertEquals(root.absolutePath, packNuget.prebuiltRuntimesDir.get().asFile.absolutePath)
+    val nugetPack = project.tasks.getByName("nugetPack") as NugetPackTask
+    assertEquals(root.absolutePath, nugetPack.prebuiltRuntimesDir.get().asFile.absolutePath)
   }
 
   @Test
@@ -99,9 +99,9 @@ class NugetPluginPrebuiltRuntimesWiringTest {
 
     project.evaluate()
 
-    val packNuget = project.tasks.getByName("packNuget") as PackNugetTask
+    val nugetPack = project.tasks.getByName("nugetPack") as NugetPackTask
     assertFalse(
-      packNuget.prebuiltRuntimesDir.isPresent,
+      nugetPack.prebuiltRuntimesDir.isPresent,
       "an unset prebuiltRuntimes must leave the optional input absent",
     )
   }
@@ -121,8 +121,8 @@ class NugetPluginPrebuiltRuntimesWiringTest {
 
     project.evaluate()
 
-    val packNuget = project.tasks.getByName("packNuget") as PackNugetTask
-    val rids: Set<String> = packNuget.nativeLibDirs.get().keys
+    val nugetPack = project.tasks.getByName("nugetPack") as NugetPackTask
+    val rids: Set<String> = nugetPack.nativeLibDirs.get().keys
 
     assertFalse(
       rids.contains("win-x64"),
@@ -131,7 +131,7 @@ class NugetPluginPrebuiltRuntimesWiringTest {
   }
 
   @Test
-  fun `packNuget is still registered when every local link is disabled but prebuilt is set`() {
+  fun `nugetPack is still registered when every local link is disabled but prebuilt is set`() {
     val project: Project = buildProject()
     project.disableLinkTasks("mingwX64")
     project.disableLinkTasks("macosArm64")
@@ -146,13 +146,13 @@ class NugetPluginPrebuiltRuntimesWiringTest {
 
     project.evaluate()
 
-    val packNuget = project.tasks.findByName("packNuget")
-    assertNotNull(packNuget, "a pack-only host must still get a packNuget task")
-    assertTrue((packNuget as PackNugetTask).nativeLibDirs.get().isEmpty())
+    val nugetPack = project.tasks.findByName("nugetPack")
+    assertNotNull(nugetPack, "a pack-only host must still get a nugetPack task")
+    assertTrue((nugetPack as NugetPackTask).nativeLibDirs.get().isEmpty())
   }
 
   @Test
-  fun `packNuget fails at execution when every local link is disabled and nothing is prebuilt`() {
+  fun `nugetPack fails at execution when every local link is disabled and nothing is prebuilt`() {
     val project: Project = buildProject()
     project.disableLinkTasks("mingwX64")
     project.disableLinkTasks("macosArm64")
@@ -168,9 +168,9 @@ class NugetPluginPrebuiltRuntimesWiringTest {
 
     // ADR-180 gate decision 2: registered on every `publish {}` project, failing when it runs
     // instead of being silently absent.
-    val packNuget = project.tasks.getByName("packNuget") as PackNugetTask
-    assertEquals(setOf("win-x64", "osx-arm64"), packNuget.skippedRids.get().keys)
-    val error = assertFailsWith<IllegalStateException> { packNuget.pack() }
+    val nugetPack = project.tasks.getByName("nugetPack") as NugetPackTask
+    assertEquals(setOf("win-x64", "osx-arm64"), nugetPack.skippedRids.get().keys)
+    val error = assertFailsWith<IllegalStateException> { nugetPack.pack() }
     assertTrue(
       error.message.orEmpty().contains("No native library to pack"),
       "with no local RID and no prebuilt input there is nothing to pack: ${error.message}",

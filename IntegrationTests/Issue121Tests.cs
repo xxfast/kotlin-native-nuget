@@ -16,7 +16,7 @@ namespace IntegrationTests;
 /// <para>
 /// <b>The criterion that matters is not here.</b> Issue #121's criterion 3 is that the consuming
 /// module compiles with no <c>optIn</c> / <c>-opt-in=</c> flag in any build script. That is proven
-/// by <c>packNuget</c> compiling the fixture at all, not by anything xunit can assert: before the
+/// by <c>nugetPack</c> compiling the fixture at all, not by anything xunit can assert: before the
 /// fix the generated <c>CNameExports.kt</c> read the marked properties without opting in and the
 /// module did not build. What is left for here is the C# half, criterion 2 and criterion 4.
 /// </para>

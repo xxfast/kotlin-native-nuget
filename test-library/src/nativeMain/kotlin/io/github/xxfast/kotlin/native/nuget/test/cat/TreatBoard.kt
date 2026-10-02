@@ -18,7 +18,7 @@ import kotlinx.coroutines.flow.flow
  * e: CNameExports.kt:342:8 One type argument expected for 'interface Set<out E> : Collection<E>'.
  * ```
  *
- * `packNuget` dies at that compile, so the whole package fails to build, not just the member.
+ * `nugetPack` dies at that compile, so the whole package fails to build, not just the member.
  *
  * Three routes, because they are three separate copies of the same mistake and have drifted
  * before:

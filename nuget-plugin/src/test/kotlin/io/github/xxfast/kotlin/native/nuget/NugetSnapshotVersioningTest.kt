@@ -58,12 +58,12 @@ class NugetSnapshotVersioningTest {
 
     project.evaluate()
 
-    assertNotNull(project.tasks.findByName("nugetSnapshotVersion"))
-    assertNotNull(project.tasks.findByName("nugetSnapshotVersionProps"))
+    assertNotNull(project.tasks.findByName("nugetGenerateSnapshotVersion"))
+    assertNotNull(project.tasks.findByName("nugetGenerateSnapshotVersionProps"))
   }
 
   @Test
-  fun `packNuget resolves the minted version once the version task has run`() {
+  fun `nugetPack resolves the minted version once the version task has run`() {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
@@ -76,20 +76,20 @@ class NugetSnapshotVersioningTest {
 
     project.evaluate()
 
-    val mint = project.tasks.getByName("nugetSnapshotVersion") as NugetSnapshotVersionTask
+    val mint = project.tasks.getByName("nugetGenerateSnapshotVersion") as NugetGenerateSnapshotVersionTask
     mint.write()
 
-    val packNuget = project.tasks.getByName("packNuget") as PackNugetTask
-    val version: String = packNuget.packageVersion.get()
+    val nugetPack = project.tasks.getByName("nugetPack") as NugetPackTask
+    val version: String = nugetPack.packageVersion.get()
 
     assertTrue(
       snapshotVersion.matches(version),
-      "packNuget.packageVersion must resolve to <base>-snapshot.<millis>, was '$version'",
+      "nugetPack.packageVersion must resolve to <base>-snapshot.<millis>, was '$version'",
     )
   }
 
   @Test
-  fun `packNuget depends on both snapshot tasks`() {
+  fun `nugetPack depends on both snapshot tasks`() {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
@@ -102,24 +102,24 @@ class NugetSnapshotVersioningTest {
 
     project.evaluate()
 
-    val packNuget: Task = project.tasks.getByName("packNuget")
-    val names: Set<String> = packNuget.taskDependencies
-      .getDependencies(packNuget)
+    val nugetPack: Task = project.tasks.getByName("nugetPack")
+    val names: Set<String> = nugetPack.taskDependencies
+      .getDependencies(nugetPack)
       .map { it.name }
       .toSet()
 
     assertTrue(
-      names.contains("nugetSnapshotVersion"),
-      "packNuget must depend on nugetSnapshotVersion",
+      names.contains("nugetGenerateSnapshotVersion"),
+      "nugetPack must depend on nugetGenerateSnapshotVersion",
     )
     assertTrue(
-      names.contains("nugetSnapshotVersionProps"),
-      "packNuget must depend on nugetSnapshotVersionProps",
+      names.contains("nugetGenerateSnapshotVersionProps"),
+      "nugetPack must depend on nugetGenerateSnapshotVersionProps",
     )
   }
 
   @Test
-  fun `non-snapshot mode keeps packNuget off the snapshot tasks and keeps the literal version`() {
+  fun `non-snapshot mode keeps nugetPack off the snapshot tasks and keeps the literal version`() {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
@@ -131,14 +131,14 @@ class NugetSnapshotVersioningTest {
 
     project.evaluate()
 
-    // ADR-180: the snapshot tasks are registered with `publish {}`; packNuget pulls them in only
+    // ADR-180: the snapshot tasks are registered with `publish {}`; nugetPack pulls them in only
     // when `snapshot` is true.
-    val packNuget = project.tasks.getByName("packNuget") as PackNugetTask
+    val nugetPack = project.tasks.getByName("nugetPack") as NugetPackTask
     val names: Set<String> =
-      packNuget.taskDependencies.getDependencies(packNuget).map { it.name }.toSet()
-    assertFalse("nugetSnapshotVersion" in names, "was $names")
-    assertFalse("nugetSnapshotVersionProps" in names, "was $names")
-    assertEquals("1.0.0", packNuget.packageVersion.get())
+      nugetPack.taskDependencies.getDependencies(nugetPack).map { it.name }.toSet()
+    assertFalse("nugetGenerateSnapshotVersion" in names, "was $names")
+    assertFalse("nugetGenerateSnapshotVersionProps" in names, "was $names")
+    assertEquals("1.0.0", nugetPack.packageVersion.get())
   }
 
   @Test
@@ -153,7 +153,7 @@ class NugetSnapshotVersioningTest {
     }
 
     project.evaluate()
-    val mint = project.tasks.getByName("nugetSnapshotVersion") as NugetSnapshotVersionTask
+    val mint = project.tasks.getByName("nugetGenerateSnapshotVersion") as NugetGenerateSnapshotVersionTask
     val error: Throwable = assertFailsWith<Exception> { mint.write() }
     val message: String = generateSequence(error) { it.cause }
       .mapNotNull { it.message }
@@ -177,7 +177,7 @@ class NugetSnapshotVersioningTest {
     }
 
     project.evaluate()
-    val mint = project.tasks.getByName("nugetSnapshotVersion") as NugetSnapshotVersionTask
+    val mint = project.tasks.getByName("nugetGenerateSnapshotVersion") as NugetGenerateSnapshotVersionTask
     val error: Throwable = assertFailsWith<Exception> { mint.write() }
     val message: String = generateSequence(error) { it.cause }
       .mapNotNull { it.message }
@@ -213,11 +213,11 @@ class NugetSnapshotVersioningTest {
 
     project.evaluate()
 
-    val mint = project.tasks.getByName("nugetSnapshotVersion") as NugetSnapshotVersionTask
+    val mint = project.tasks.getByName("nugetGenerateSnapshotVersion") as NugetGenerateSnapshotVersionTask
     mint.write()
 
     val props =
-      project.tasks.getByName("nugetSnapshotVersionProps") as NugetSnapshotVersionPropsTask
+      project.tasks.getByName("nugetGenerateSnapshotVersionProps") as NugetGenerateSnapshotVersionPropsTask
     props.write()
 
     val file: File = props.outputFile.get().asFile
@@ -251,11 +251,11 @@ class NugetSnapshotVersioningTest {
 
     project.evaluate()
 
-    val mint = project.tasks.getByName("nugetSnapshotVersion") as NugetSnapshotVersionTask
+    val mint = project.tasks.getByName("nugetGenerateSnapshotVersion") as NugetGenerateSnapshotVersionTask
     mint.write()
 
     val props =
-      project.tasks.getByName("nugetSnapshotVersionProps") as NugetSnapshotVersionPropsTask
+      project.tasks.getByName("nugetGenerateSnapshotVersionProps") as NugetGenerateSnapshotVersionPropsTask
     props.write()
 
     assertEquals(override.absolutePath, props.outputFile.get().asFile.absolutePath)

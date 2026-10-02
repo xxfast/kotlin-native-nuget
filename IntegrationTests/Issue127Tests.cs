@@ -8,7 +8,7 @@ namespace IntegrationTests;
 /// Issue #127 / ADR-123: a <c>Flow</c> or <c>StateFlow</c> whose element is a Kotlin collection
 /// spelled its element as <c>global::TestLibrary.Kotlin.Collections.Set</c>, a namespace that does
 /// not exist, with the type argument dropped, so the generated <c>Interop.cs</c> failed this
-/// project's compile with <c>CS0234</c> while <c>packNuget</c> stayed green. The fact that this
+/// project's compile with <c>CS0234</c> while <c>nugetPack</c> stayed green. The fact that this
 /// file compiles at all is therefore most of the test.
 /// <para>
 /// The gap is visible on one declaration: in <see cref="NodeHub.Visible"/> the <c>List&lt;Kind&gt;</c>

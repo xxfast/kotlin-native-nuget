@@ -7,7 +7,7 @@ import org.gradle.api.provider.Property
 import javax.inject.Inject
 
 /**
- * A named NuGet feed `publishNuget` pushes to. Unset credentials resolve from the Gradle
+ * A named NuGet feed `nugetPublish` pushes to. Unset credentials resolve from the Gradle
  * properties `<name>ApiKey` / `<name>Username` / `<name>Password` when the task runs.
  */
 @NugetDsl

@@ -104,7 +104,7 @@ internal fun generateCheckCsproj(
 }
 
 /**
- * ADR-138: compiles the generated C# bindings with `dotnet build` before `packNuget` stages them,
+ * ADR-138: compiles the generated C# bindings with `dotnet build` before `nugetPack` stages them,
  * so a binding that does not compile fails the author's pack instead of every consumer's build.
  * Skips with a warning when `dotnet` is absent, or when the SDK on PATH cannot run, because
  * publishing is documented as needing no .NET SDK. The check owns its own SDK and feed selection
@@ -116,13 +116,13 @@ internal fun generateCheckCsproj(
     "global NuGet cache, which is outside project scope and not tracked by Gradle's build cache"
 )
 abstract class NugetCompileInteropTask : DefaultTask() {
-  // The same producers packNuget stages: the KSP resources dir, plus nugetGenerateShims's
+  // The same producers nugetPack stages: the KSP resources dir, plus nugetGenerateShims's
   // csharpOutputDir when the project also binds a package.
   @get:InputFiles
   @get:PathSensitive(PathSensitivity.RELATIVE)
   abstract val generatedCsDirs: ConfigurableFileCollection
 
-  // The exact resolved version per bound package, the same map packNuget writes into the .nuspec
+  // The exact resolved version per bound package, the same map nugetPack writes into the .nuspec
   // <dependencies> block. Empty for a forward-only project.
   @get:Input
   abstract val dependencyVersions: MapProperty<String, String>

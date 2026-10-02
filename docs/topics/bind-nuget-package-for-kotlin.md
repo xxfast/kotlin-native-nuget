@@ -17,7 +17,7 @@ nuget {
     dependency("MimeMapping", version = "4.0.0") {
       bind {
         packageName = "mimemapping"
-        include("MimeMapping")
+        includeNamespaces("MimeMapping")
       }
     }
   }
@@ -25,7 +25,7 @@ nuget {
 ```
 
 <note>
-<p>Use <code>include</code>, <code>exclude</code>, and <code>alias</code> to keep the generated
+<p>Use <code>includeNamespaces</code>, <code>excludeNamespaces</code>, and <code>alias</code> to keep the generated
 surface focused. See <a href="declaring-dependencies.md">Declaring dependencies</a> for their
 matching rules and <a href="bridgeable-subset.md">The bridgeable subset</a> before choosing an API
 to bind.</p>
@@ -58,7 +58,7 @@ Generated bindings are experimental, so the file opts in. See [Consuming C# in K
 
 ## 3. Package the bridge and call it
 
-Run `packNuget` again. When both `publish {}` and `dependencies {}` are present, the package
+Run `nugetPack` again. When both `publish {}` and `dependencies {}` are present, the package
 includes the C# registration shims and an exact dependency on the bound NuGet package. The .NET
 consumer still references only the Kotlin library package.
 

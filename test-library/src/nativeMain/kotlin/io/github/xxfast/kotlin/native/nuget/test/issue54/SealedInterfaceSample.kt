@@ -173,7 +173,7 @@ sealed interface Mixed {
  * `public abstract class Tone`, and `ITone` disappears. It sits in this same namespace as a
  * **declared top-level enum** on purpose, because the CS0101 trap survives the inversion:
  * [Pitch] must still be declared exactly once, as `public enum Pitch`, and the box must take the
- * `PitchArm` name rather than the enum's. The trap fails loudly at `packNuget` rather than
+ * `PitchArm` name rather than the enum's. The trap fails loudly at `nugetPack` rather than
  * silently. The ineligible control this file still carries is [Mixed], whose arm has a second
  * superclass.
  *

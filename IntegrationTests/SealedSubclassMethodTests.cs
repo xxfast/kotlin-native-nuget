@@ -996,7 +996,7 @@ public class SealedSubclassMethodDiagnosticsTests
 
     /// <summary>
     /// Every <c>NugetDiagnostics.json</c> the KSP round wrote, one per Kotlin target. They are
-    /// regenerated together by <c>:test-library:clean :test-library:packNuget</c> and must agree,
+    /// regenerated together by <c>:test-library:clean :test-library:nugetPack</c> and must agree,
     /// so a per-target regression cannot hide behind a sibling target's file.
     /// </summary>
     private static (string Path, IReadOnlyList<Diagnostic> Entries)[] DiagnosticFiles()
@@ -1005,7 +1005,7 @@ public class SealedSubclassMethodDiagnosticsTests
         Assert.True(
             Directory.Exists(kspRoot),
             $"{kspRoot} does not exist. Run `scripts/verify.sh` (or at least " +
-            "`./gradlew :test-library:packNuget`) first: this test reads the KSP artifact, it " +
+            "`./gradlew :test-library:nugetPack`) first: this test reads the KSP artifact, it " +
             "does not produce it.");
 
         string[] files = Directory

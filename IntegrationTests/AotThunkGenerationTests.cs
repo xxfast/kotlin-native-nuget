@@ -76,7 +76,7 @@ public class AotThunkGenerationTests
         if (File.Exists(generated)) return generated;
 
         throw new InvalidOperationException(
-            "no generated Interop.cs found. Run `./gradlew :test-library:packNuget` (or " +
+            "no generated Interop.cs found. Run `./gradlew :test-library:nugetPack` (or " +
             "scripts/verify.sh) first: this test reads the generated artifact, it does not " +
             $"produce it. Looked under {Path.Combine(root, "test-library", "build")}.");
     }

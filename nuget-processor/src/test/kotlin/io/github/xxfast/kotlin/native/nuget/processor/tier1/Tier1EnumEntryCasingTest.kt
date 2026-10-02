@@ -16,7 +16,7 @@ import kotlin.test.assertTrue
  * - the casing cell duplicates the fixture's ground so a red signal does not need a NuGet pack,
  * - `_1ST` / `_` / `__` generate illegal C# today (`1st = 0`, an empty member name, both CS1001 in
  *   `Interop.cs` itself), so in `test-library` they would break every consumer test file,
- * - the collision cell's correct outcome is a FAILED generation, which would break `packNuget`.
+ * - the collision cell's correct outcome is a FAILED generation, which would break `nugetPack`.
  *
  * No ABI assertion anywhere in this file: an entry crosses as its ordinal `int` in every position,
  * so the fix cannot move a single export.

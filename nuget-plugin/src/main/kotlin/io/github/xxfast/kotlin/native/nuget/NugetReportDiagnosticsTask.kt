@@ -24,7 +24,7 @@ import java.io.File
  *
  * Two defects make this necessary, both measured: the processor's own `KSPLogger` output never
  * reaches the console (KSP runs it on a Worker API thread whose stdout Gradle drops, even KSP's own
- * startup line is absent at `--info`), and a normal `packNuget` does not run the KSP task at all
+ * startup line is absent at `--info`), and a normal `nugetPack` does not run the KSP task at all
  * (`FROM-CACHE`, then `UP-TO-DATE`). The second is why the input is a *declared KSP output file*
  * rather than anything computed during the KSP task action: the file is restored on a cache hit and
  * present on an up-to-date run, so this task can speak on every build.
@@ -37,7 +37,7 @@ import java.io.File
 )
 abstract class NugetReportDiagnosticsTask : DefaultTask() {
   /**
-   * The KSP resources dir(s) `NugetDiagnostics.json` lands in, i.e. the same directory `packNuget`
+   * The KSP resources dir(s) `NugetDiagnostics.json` lands in, i.e. the same directory `nugetPack`
    * already reads `Interop.cs` from. A missing file is a silent no-op: a project with `bind {}` and
    * no `publish {}` never runs the forward processor.
    */

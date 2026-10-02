@@ -75,7 +75,7 @@ fun sightingEpoch(): Instant =
  * Parses a free-form sighting note. Mylo never causes trouble, so a note that doesn't mention
  * "Oreo" is assumed to be about him and produces no sighting -- exercises the top-level
  * nullable return (ADR-002 two-call shape), the shape ADR-069 recorded as crashing
- * `packNuget` if the plan doesn't account for it.
+ * `nugetPack` if the plan doesn't account for it.
  */
 fun parseSighting(text: String): Instant? =
   if (text.contains("Oreo")) sightingEpoch() else null

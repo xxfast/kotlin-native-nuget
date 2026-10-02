@@ -14,7 +14,7 @@ import io.github.xxfast.kotlin.native.nuget.test.models.CatteryInternalApi
  *    to honour the marker.
  *
  * **This fixture is deliberately red before the implementation lands.** Every `ERROR`-level cell
- * below is failure (1), so `nugetGen`'s output fails to compile, `packNuget` fails, and
+ * below is failure (1), so `nugetGenerateRestoreProject`'s output fails to compile, `nugetPack` fails, and
  * `IntegrationTests` cannot build. That is the strongest available failing test: weakening the
  * markers to `WARNING` for a green build would delete the reproducer for the reported bug.
  *

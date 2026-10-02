@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
  * Issue #55: an explicit `include(...)` replaces the `rootPackage` default (ADR-063, deliberate),
  * and two things around that rule made it a trap. The `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` hint
  * named only the missing package, so following it emptied the export set; and an empty export set
- * returned silently, leaving a green `packNuget` with no `Interop.cs` in the package.
+ * returned silently, leaving a green `nugetPack` with no `Interop.cs` in the package.
  */
 class Tier1ExportScopeDiagnosticsTest {
 

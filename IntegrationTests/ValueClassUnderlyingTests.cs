@@ -20,7 +20,7 @@ namespace IntegrationTests;
 ///    <see cref="Patient.Dosage"/> (property).
 ///  - Enum (<c>Temperament(val mood: Mood)</c>): <see cref="Patient.Temperament"/> (property) and
 ///    <see cref="Patient.Soothe"/> (param + return in one call). Declaring this fixture originally
-///    crashed <c>packNuget</c> outright on both KSP targets (<c>java.lang.IllegalArgumentException:
+///    crashed <c>nugetPack</c> outright on both KSP targets (<c>java.lang.IllegalArgumentException:
 ///    Forward ABI missing C# projection for temperament_create; expected temperament_create(in
 ///    int, out pointer) -&gt; int</c>, verified with a real build) -- a broken
 ///    <c>CirClassTranslator</c> struct, not a missing ordinary-position case, per the ADR's own

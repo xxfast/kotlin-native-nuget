@@ -30,11 +30,11 @@ class NugetTargetFrameworkTest {
   }
 
   private fun Project.frameworks(): List<String> = listOf(
-    (tasks.getByName("nugetGen") as NugetGenTask).targetFramework.get(),
+    (tasks.getByName("nugetGenerateRestoreProject") as NugetGenerateRestoreProjectTask).targetFramework.get(),
     (tasks.getByName("nugetRestore") as NugetRestoreTask).targetFramework.get(),
     (tasks.getByName("nugetExtractApi") as NugetExtractApiTask).targetFramework.get(),
     (tasks.getByName("nugetCompileInterop") as NugetCompileInteropTask).targetFramework.get(),
-    (tasks.getByName("packNuget") as PackNugetTask).targetFramework.get(),
+    (tasks.getByName("nugetPack") as NugetPackTask).targetFramework.get(),
   )
 
   @Test
@@ -65,7 +65,7 @@ class NugetTargetFrameworkTest {
         nuget.targetFramework.set(value)
 
         val error: Throwable = assertFailsWith<Throwable>(value) {
-          (project.tasks.getByName("packNuget") as PackNugetTask).targetFramework.get()
+          (project.tasks.getByName("nugetPack") as NugetPackTask).targetFramework.get()
         }
         val messages: String = generateSequence(error) { it.cause }
           .mapNotNull { it.message }

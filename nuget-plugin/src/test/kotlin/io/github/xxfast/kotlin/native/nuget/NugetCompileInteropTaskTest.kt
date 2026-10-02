@@ -17,7 +17,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * ADR-138: `packNuget` compiles the generated C# bindings before it packs them. Covers the csproj
+ * ADR-138: `nugetPack` compiles the generated C# bindings before it packs them. Covers the csproj
  * rendering (pinned against `GeneratedBindingsCheck.csproj`, whose property set it must mirror),
  * the task wiring, the `dotnet`-absent skip, and one real `dotnet build` that must reject a
  * duplicate type.
@@ -144,17 +144,17 @@ class NugetCompileInteropTaskTest {
   }
 
   @Test
-  fun `packNuget depends on nugetCompileInterop and both stage the same cs dirs`() {
+  fun `nugetPack depends on nugetCompileInterop and both stage the same cs dirs`() {
     val project: Project = buildProject()
     publish(project)
     project.evaluate()
 
-    val packNuget = project.tasks.getByName("packNuget") as PackNugetTask
+    val nugetPack = project.tasks.getByName("nugetPack") as NugetPackTask
     val compile = project.tasks.getByName("nugetCompileInterop") as NugetCompileInteropTask
-    val deps: Set<Task> = packNuget.taskDependencies.getDependencies(packNuget)
+    val deps: Set<Task> = nugetPack.taskDependencies.getDependencies(nugetPack)
 
-    assertTrue(deps.contains(compile), "packNuget must depend on nugetCompileInterop")
-    assertEquals(packNuget.generatedCsDirs.files, compile.generatedCsDirs.files)
+    assertTrue(deps.contains(compile), "nugetPack must depend on nugetCompileInterop")
+    assertEquals(nugetPack.generatedCsDirs.files, compile.generatedCsDirs.files)
     assertEquals(emptyMap(), compile.dependencyVersions.get())
   }
 
@@ -178,7 +178,7 @@ class NugetCompileInteropTaskTest {
 
     assertTrue(
       compile.generatedCsDirs.files.contains(shimsDir),
-      "the reverse shims are staged by packNuget, so they must be compiled too, " +
+      "the reverse shims are staged by nugetPack, so they must be compiled too, " +
         "was ${compile.generatedCsDirs.files}",
     )
     assertTrue(deps.contains(shims), "nugetCompileInterop must run after nugetGenerateShims")

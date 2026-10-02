@@ -18,7 +18,7 @@ namespace IntegrationTests;
 /// widening lands. <c>Dosage</c>'s primitive underlying is already admitted by the planner but has
 /// no fixture (ROADMAP.md: "A primitive-underlying value-class extension-property receiver is also
 /// untested, only the String-underlying case (ChartId) is covered") — that member is expected to
-/// bind on its own, but the C# side never generated because <c>packNuget</c> never completes (see
+/// bind on its own, but the C# side never generated because <c>nugetPack</c> never completes (see
 /// half 2 below), so today it fails exactly the same CS1061 way as the other two.
 ///
 /// Half 2, extension-FUNCTION value-class receivers: <c>ForwardCallablePlanner.extensionEntry</c>
@@ -29,7 +29,7 @@ namespace IntegrationTests;
 /// <c>receiver.escalate()</c> directly on that wire value — <c>konanc</c> rejects both with
 /// "Unresolved reference. None of the following candidates is applicable because of a receiver
 /// type mismatch", so <c>test-library:compileKotlinMacosArm64</c> (and mingwX64) fail outright and
-/// <c>packNuget</c> never reaches the C# generation step at all. Zero fixtures declared one before
+/// <c>nugetPack</c> never reaches the C# generation step at all. Zero fixtures declared one before
 /// this file, so this shape has never actually run.
 ///
 /// Oreo keeps losing his chart notes; Mylo's temperament keeps escalating past reasonable limits.

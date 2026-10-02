@@ -83,7 +83,7 @@ class Tier1ByteArrayComponentTest {
       "expected the per-element CreateBytes projection; " +
           "generatedCSharp=${result.generatedCSharp}",
     )
-    // The Kotlin half casts the dereferenced box; a missing arm here CRASHES packNuget outright.
+    // The Kotlin half casts the dereferenced box; a missing arm here CRASHES nugetPack outright.
     assertTrue(
       "it as kotlin.ByteArray" in result.generated,
       "expected the Kotlin component lowering; generated=${result.generated}",

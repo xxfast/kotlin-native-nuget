@@ -21,7 +21,7 @@ import kotlin.test.assertTrue
  * Interop.cs(7572,37): error CS0246: The type or namespace name 'Flow' could not be found
  * ```
  *
- * `packNuget` is green either way; the defect only surfaces when the generated `Interop.cs` is
+ * `nugetPack` is green either way; the defect only surfaces when the generated `Interop.cs` is
  * compiled, which is why it needs a structural Tier 1 cell per route rather than one end-to-end
  * assertion.
  *

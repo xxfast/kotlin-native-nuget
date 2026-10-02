@@ -11,7 +11,7 @@ import io.github.xxfast.kotlin.native.nuget.annotations.CSharpName
  * walks `getAllProperties()` / `getAllFunctions()` and maps each member's C# type through
  * `mapParamType` / `mapReturnType`, which are `KOTLIN_TO_CSHARP_PARAM[kotlinType] ?: "IntPtr"`
  * (`cir/CirTypeMapping.kt`). Every reference type outside the primitive table therefore lands on
- * the literal string `IntPtr`, and no member is ever filtered for bridgeability. `packNuget` is
+ * the literal string `IntPtr`, and no member is ever filtered for bridgeability. `nugetPack` is
  * green with this in it; the failure only appears when the consumer compiles `Interop.cs`.
  *
  * Pre-fix, [Advertisement] renders as

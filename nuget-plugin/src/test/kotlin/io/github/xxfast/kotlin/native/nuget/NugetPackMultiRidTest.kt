@@ -13,13 +13,13 @@ import kotlin.test.assertTrue
  * `publish { prebuiltRuntimes = ... }` pointing at a `rid/native` tree of dll, dylib or so files
  * staged by another CI host, plus fail-fast validation replacing the silent skip.
  */
-class PackNugetMultiRidTest {
-  private fun newTask(): PackNugetTask {
+class NugetPackMultiRidTest {
+  private fun newTask(): NugetPackTask {
     val project = ProjectBuilder.builder().build()
-    return project.tasks.create("packNuget", PackNugetTask::class.java)
+    return project.tasks.create("nugetPack", NugetPackTask::class.java)
   }
 
-  private fun configureCommon(task: PackNugetTask, outputDir: File) {
+  private fun configureCommon(task: NugetPackTask, outputDir: File) {
     task.packageId.set("TestLibrary")
     task.packageVersion.set("1.0.0")
     task.authors.set("Test Author")
@@ -45,7 +45,7 @@ class PackNugetMultiRidTest {
 
   @Test
   fun `pack merges locally linked and prebuilt rids into one package`() {
-    val task: PackNugetTask = newTask()
+    val task: NugetPackTask = newTask()
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
 
     configureCommon(task, outputDir)
@@ -79,7 +79,7 @@ class PackNugetMultiRidTest {
 
   @Test
   fun `pack fails when a locally linked rid contributes no native library`() {
-    val task: PackNugetTask = newTask()
+    val task: NugetPackTask = newTask()
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
     val empty: File = Files.createTempDirectory("empty-local").toFile()
 
@@ -97,7 +97,7 @@ class PackNugetMultiRidTest {
 
   @Test
   fun `pack fails when a locally linked rid path does not exist`() {
-    val task: PackNugetTask = newTask()
+    val task: NugetPackTask = newTask()
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
 
     configureCommon(task, outputDir)
@@ -110,7 +110,7 @@ class PackNugetMultiRidTest {
 
   @Test
   fun `pack fails when the prebuilt tree has no rid subdirectory`() {
-    val task: PackNugetTask = newTask()
+    val task: NugetPackTask = newTask()
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
     val root: File = Files.createTempDirectory("prebuilt").toFile()
     File(root, ".DS_Store").writeText("junk")
@@ -132,7 +132,7 @@ class PackNugetMultiRidTest {
 
   @Test
   fun `pack fails when a prebuilt rid has no native directory`() {
-    val task: PackNugetTask = newTask()
+    val task: NugetPackTask = newTask()
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
     val root: File = Files.createTempDirectory("prebuilt").toFile()
     File(root, "win-x64").mkdirs()
@@ -151,7 +151,7 @@ class PackNugetMultiRidTest {
 
   @Test
   fun `pack fails when a prebuilt rid native directory is empty`() {
-    val task: PackNugetTask = newTask()
+    val task: NugetPackTask = newTask()
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
     val root: File = Files.createTempDirectory("prebuilt").toFile()
     File(root, "win-x64/native").mkdirs()
@@ -166,7 +166,7 @@ class PackNugetMultiRidTest {
 
   @Test
   fun `pack fails when the same rid is both locally linked and prebuilt`() {
-    val task: PackNugetTask = newTask()
+    val task: NugetPackTask = newTask()
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
     val local: File = nativeDir("local", "kn_746573746c696272617279.dll")
 
@@ -185,7 +185,7 @@ class PackNugetMultiRidTest {
 
   @Test
   fun `pack ignores non-directory entries at the top of the prebuilt tree`() {
-    val task: PackNugetTask = newTask()
+    val task: NugetPackTask = newTask()
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
     val root: File = prebuiltTree("win-x64", "kn_746573746c696272617279.dll")
     File(root, ".DS_Store").writeText("junk")
@@ -203,7 +203,7 @@ class PackNugetMultiRidTest {
 
   @Test
   fun `pack stages an unknown prebuilt rid instead of failing`() {
-    val task: PackNugetTask = newTask()
+    val task: NugetPackTask = newTask()
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
 
     configureCommon(task, outputDir)
@@ -219,7 +219,7 @@ class PackNugetMultiRidTest {
 
   @Test
   fun `pack filters non-native files out of a prebuilt rid`() {
-    val task: PackNugetTask = newTask()
+    val task: NugetPackTask = newTask()
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
     val root: File = prebuiltTree("win-x64", "kn_746573746c696272617279.dll")
     File(root, "win-x64/native/test.pdb").writeText("fake debug symbols")

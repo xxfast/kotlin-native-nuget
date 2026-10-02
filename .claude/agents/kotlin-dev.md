@@ -72,7 +72,7 @@ The [refactorer agent](refactorer.md) formats your files afterward. Report the d
 
 - Compile processor: `./gradlew :nuget-processor:compileKotlin`
 - Plugin tests: `./gradlew :nuget-plugin:test`
-- Build sample + package: `./gradlew :test-library:clean :test-library:packNuget`
+- Build sample + package: `./gradlew :test-library:clean :test-library:nugetPack`
 - Full verify: run `scripts/verify.sh` (add `--plugin` when Gradle plugin code changed). It packages the sample library, wipes consumer `obj`/`bin`, and runs the .NET tests. Fixture packages now mint a fresh `1.0.0-fixture.<epoch-ms>` version on every pack, so a re-pack can no longer resolve the previous package's contents. Never hand-edit generated output or the NuGet cache to iterate faster.
 
 ## Code coverage

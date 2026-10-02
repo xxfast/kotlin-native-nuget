@@ -21,7 +21,7 @@ class NugetPluginTest {
   }
 
   @Test
-  fun `nugetGen task is registered when dependencies block is non-empty`() {
+  fun `nugetGenerateRestoreProject task is registered when dependencies block is non-empty`() {
     val project: Project = buildProject()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
@@ -30,20 +30,20 @@ class NugetPluginTest {
 
     project.evaluate()
 
-    assertNotNull(project.tasks.findByName("nugetGen"))
+    assertNotNull(project.tasks.findByName("nugetGenerateRestoreProject"))
   }
 
   @Test
-  fun `nugetGen task is not registered when dependencies block is empty`() {
+  fun `nugetGenerateRestoreProject task is not registered when dependencies block is empty`() {
     val project: Project = buildProject()
 
     project.evaluate()
 
-    assertNull(project.tasks.findByName("nugetGen"))
+    assertNull(project.tasks.findByName("nugetGenerateRestoreProject"))
   }
 
   @Test
-  fun `nugetRestore depends on nugetGen`() {
+  fun `nugetRestore depends on nugetGenerateRestoreProject`() {
     val project: Project = buildProject()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
@@ -52,11 +52,11 @@ class NugetPluginTest {
 
     project.evaluate()
 
-    val nugetGen: Task = project.tasks.getByName("nugetGen")
+    val nugetGenerateRestoreProject: Task = project.tasks.getByName("nugetGenerateRestoreProject")
     val nugetRestore: Task = project.tasks.getByName("nugetRestore")
     val deps: Set<Task> = nugetRestore.taskDependencies.getDependencies(nugetRestore)
 
-    assertTrue(deps.contains(nugetGen), "nugetRestore must depend on nugetGen")
+    assertTrue(deps.contains(nugetGenerateRestoreProject), "nugetRestore must depend on nugetGenerateRestoreProject")
   }
 
   @Test
@@ -77,7 +77,7 @@ class NugetPluginTest {
   }
 
   @Test
-  fun `nugetGen csprojFile points into build nuget-interop directory`() {
+  fun `nugetGenerateRestoreProject csprojFile points into build nuget-interop directory`() {
     val project: Project = buildProject()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
@@ -86,8 +86,8 @@ class NugetPluginTest {
 
     project.evaluate()
 
-    val nugetGen: NugetGenTask = project.tasks.getByName("nugetGen") as NugetGenTask
-    val path: String = nugetGen.csprojFile.get().asFile.absolutePath
+    val nugetGenerateRestoreProject: NugetGenerateRestoreProjectTask = project.tasks.getByName("nugetGenerateRestoreProject") as NugetGenerateRestoreProjectTask
+    val path: String = nugetGenerateRestoreProject.csprojFile.get().asFile.absolutePath
 
     assertTrue(path.contains("nuget-interop"), "csprojFile must be under nuget-interop/")
     assertTrue(path.endsWith("interop.csproj"), "csprojFile must be named interop.csproj")

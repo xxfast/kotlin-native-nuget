@@ -151,7 +151,7 @@ generated C# shapes. The complete package metadata options are in the
 Build the package from the project root:
 
 ```bash
-./gradlew packNuget
+./gradlew nugetPack
 ```
 
 The package is written to `build/nuget/MyCatLib.1.0.0.nupkg`. See
@@ -200,9 +200,9 @@ Windows-only targets. `prebuiltRuntimes` merges another host's already-linked `r
 into this host's own pack, so one host still produces one publishable package instead of each CI
 leg shipping a package that only covers its own platform.
 
-A typical two-host flow: the Windows leg runs `packNuget` and uploads its staged `runtimes/`
+A typical two-host flow: the Windows leg runs `nugetPack` and uploads its staged `runtimes/`
 folder as a CI artifact, then the macOS leg downloads that artifact into a local directory and
-points at it before running its own `packNuget`:
+points at it before running its own `nugetPack`:
 
 ```kotlin
 nuget {
@@ -237,7 +237,7 @@ for the design rationale.
 ## 4. Iterate locally without bumping the version
 
 Without snapshot versioning, every local Kotlin change needs a version bump, or the consumer's
-`packNuget` + delete-from-cache + `dotnet restore --force --no-cache` dance, because NuGet treats
+`nugetPack` + delete-from-cache + `dotnet restore --force --no-cache` dance, because NuGet treats
 a version as immutable and serves the cached copy of the previous build otherwise. Add
 `snapshot = true` to `publish {}` to skip that entirely:
 
@@ -254,7 +254,7 @@ nuget {
 }
 ```
 
-Every `packNuget` now mints a fresh `1.0.0-snapshot.<epochMillis>` identity and writes
+Every `nugetPack` now mints a fresh `1.0.0-snapshot.<epochMillis>` identity and writes
 `build/MyCatLibVersions.props`, pinning it under a sanitized property name (see
 [The nuget {} DSL](nuget-dsl.md) for the naming rule):
 
@@ -295,7 +295,7 @@ not the version that actually gets published.</p>
 
 The local package source above is useful while developing and testing the library. To distribute
 `MyCatLib`, push the generated package to NuGet.org, GitHub Packages, or a private feed with the
-`publishNuget` task. It pushes over plain HTTP, so no .NET SDK is required for this step either.
+`nugetPublish` task. It pushes over plain HTTP, so no .NET SDK is required for this step either.
 
 Declare a named repository inside `publish { }`:
 
@@ -320,14 +320,14 @@ nuget {
 }
 ```
 
-Each repository gets its own `publishNugetTo<Name>Repository` task (`publishNugetToNugetOrgRepository`,
-`publishNugetToGithubRepository`, both depending on `packNuget`), plus an aggregate `publishNuget`
+Each repository gets its own `nugetPublishTo<Name>Repository` task (`nugetPublishToNugetOrgRepository`,
+`nugetPublishToGithubRepository`, both depending on `nugetPack`), plus an aggregate `nugetPublish`
 that runs all of them:
 
 ```bash
-./gradlew publishNuget
+./gradlew nugetPublish
 # or push to just one feed
-./gradlew publishNugetToNugetOrgRepository
+./gradlew nugetPublishToNugetOrgRepository
 ```
 
 An unset `apiKey`, `username`, or `password` on a repository named `"nugetOrg"` resolves from the
@@ -335,9 +335,9 @@ Gradle properties `nugetOrgApiKey`, `nugetOrgUsername`, `nugetOrgPassword` when 
 credential never has to sit in the build file:
 
 ```bash
-./gradlew publishNuget -PnugetOrgApiKey=<NUGET_API_KEY>
+./gradlew nugetPublish -PnugetOrgApiKey=<NUGET_API_KEY>
 # or, for CI:
-ORG_GRADLE_PROJECT_nugetOrgApiKey=<NUGET_API_KEY> ./gradlew publishNuget
+ORG_GRADLE_PROJECT_nugetOrgApiKey=<NUGET_API_KEY> ./gradlew nugetPublish
 ```
 
 `username`/`password` send HTTP basic auth alongside the key header, which is what GitHub Packages
@@ -350,8 +350,8 @@ Two task options:
   build failure; it is also settable per repository with `skipDuplicate = true`.
 
 ```bash
-./gradlew publishNuget --dryRun
-./gradlew publishNuget --skipDuplicate
+./gradlew nugetPublish --dryRun
+./gradlew nugetPublish --skipDuplicate
 ```
 
 Consumers then reference `MyCatLib` with the same normal `PackageReference` shown above and restore
@@ -359,7 +359,7 @@ it from the published feed. They do not need the `mycatlib-local` entry in their
 
 <note>
 <p>A repository needs a <code>NuGet.Config</code>-based credential provider or interactive sign-in
-(for example Azure Artifacts without a PAT)? <code>publishNuget</code> does not support that; fall
+(for example Azure Artifacts without a PAT)? <code>nugetPublish</code> does not support that; fall
 back to <a href="https://learn.microsoft.com/dotnet/core/tools/dotnet-nuget-push"><code>dotnet nuget
 push</code></a> with the .NET SDK installed.</p>
 </note>

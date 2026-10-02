@@ -103,7 +103,7 @@ Rejected: every consumer would have to skip a non-diagnostic element forever; on
 
 ### Section 4: what happens to the old names
 
-#### 4a. Fail-fast tombstones for 0.9.x, deleted in 0.10.0 (chosen)
+#### 4a. Fail-fast tombstones for 0.9.x, deleted in 0.10.0
 
 ROADMAP.md:12 puts every break in 0.9.0 and none in 0.10.0 or 1.0.0. A working deprecated alias is
 therefore either removed in 0.10.0 (a break) or frozen into 1.0.0's semver surface. A tombstone
@@ -112,16 +112,20 @@ build script the new name. The DSL half is airtight (an ERROR-level deprecation 
 compilation). The task half has one residual: a script that only *configures* the old name
 (`tasks.named("packNuget") { dependsOn(...) }`, a `finalizedBy`) succeeds against the tombstone in
 0.9.x and fails with `UnknownTaskException` in 0.10.0. Choosing between 4a and 4c is choosing
-whether that edge case is acceptable.
+whether that edge case is acceptable. Rejected for the tasks: deleting the tombstones in 0.10.0 is
+itself a removal, and 0.10.0 must have no breaks. The DSL half keeps its ERROR-level deprecation,
+because deleting a symbol nothing can compile against breaks no build.
 
 #### 4b. Working deprecated aliases
 
 Rejected for the reason above. Not researched: how KGP or AGP handled their own task renames; the release-policy constraint in ROADMAP.md:12 decides this regardless of their precedent.
 
-#### 4c. Clean break, no tombstones
+#### 4c. Clean break for the tasks, no tombstones (chosen)
 
-Viable; the migration guide (ROADMAP.md:47) carries the mapping. Rejected only because a tombstone
-costs a few lines and saves every CI script a search.
+The migration guide (ROADMAP.md:47) carries the mapping, and Gradle's own "Task 'packNuget' not
+found" fails the build at the first invocation in 0.9.0, the one release allowed to break. A
+tombstone would save a CI script a search but would have to be deleted in 0.10.0, which allows no
+breaks; it would also make `tasks.named("packNuget")` configure cleanly in 0.9.x and fail in 0.10.0.
 
 ## Decision
 
@@ -150,6 +154,11 @@ nuget {
 }
 ```
 
+The `ListProperty` behind each function takes the same name (`includeNamespaces`,
+`excludeNamespaces`), keeping the file's property-plus-same-named-function idiom; the old `include` /
+`exclude` properties are removed outright, since ADR-180 already broke them (`List<String>` to
+`ListProperty<String>`) in this same 0.9.0.
+
 The KSP option keys (`nuget.includePackages`, `nuget.excludePackages`, `NugetPlugin.kt:339-340`)
 and the task inputs (`namespaceIncludes`, `namespaceExcludes`, `NugetPlugin.kt:122-123`) are
 plumbing and do not change.
@@ -173,6 +182,17 @@ This supersedes [ADR-165](165-publish-nuget-task.md)'s task-name prefix only: th
 `To<Name>Repository` tail and the `publishing` group, the parts that make the publish tasks read like
 `maven-publish`'s, are kept. Every name moves into one internal `NugetTaskNames` object; the
 string lookups at `NugetPlugin.kt:530,536` and the hints at `NugetExtractApiTask.kt:43,73` read it.
+
+The task classes rename with their tasks, because a build script can name them in
+`tasks.withType<...>()` and ADR-183 freezes them as public API:
+
+| Old class | New class |
+|---|---|
+| `NugetGenTask` | `NugetGenerateRestoreProjectTask` |
+| `PackNugetTask` | `NugetPackTask` |
+| `PublishNugetTask` | `NugetPublishTask` |
+| `NugetSnapshotVersionTask` | `NugetGenerateSnapshotVersionTask` |
+| `NugetSnapshotVersionPropsTask` | `NugetGenerateSnapshotVersionPropsTask` |
 
 ### 3. Diagnostic codes and schema versions
 
@@ -220,7 +240,7 @@ separately):
   `severity` (`RirDiagnosticSeverity`) and `verb` from the prefix, and any other prefix, or a
   `WARNING_` kind with no declared verb, fails at class init. `NugetGenerateBindingsTask` and
   `RirCensus` read the derived severity instead of `kind.name.startsWith(...)`.
-- Reverse warnings and errors share one `formatDiagnostic`. A real `packNuget` prints, for example,
+- Reverse warnings and errors share one `formatDiagnostic`. A real `nugetPack` prints, for example,
   `[nuget:SKIPPED_INDEXER] Skipping MimeMapping/MimeUtility.TypeMap(TypeMap): indexer ...`; the old
   `w: ` text prefix is gone, as on the forward re-emitter, where Gradle's WARN level comes from the
   logger call.
@@ -240,18 +260,29 @@ separately):
 
 ### 4. Old names
 
-- `NugetBindConfig.include` / `exclude` stay in 0.9.x as
+- The functions `NugetBindConfig.include` / `exclude` stay in 0.9.x as
   `@Deprecated(level = DeprecationLevel.ERROR, ReplaceWith("includeNamespaces(*namespace)"))`
   (and the `exclude` twin), and are deleted in 0.10.0.
-- `packNuget` and `publishNuget` stay in 0.9.x as tasks whose action throws
-  "`packNuget` was renamed to `nugetPack` in 0.9.0", and are deleted in 0.10.0. The other renamed
-  tasks get no tombstone.
+- The tasks are a clean break (4c): no task is registered under any old name, and the old task
+  classes are gone. A stub would have to be removed in 0.10.0, which must have no breaks.
 - Diagnostic codes and the JSON files get no compatibility shim; `schemaVersion` is the signal.
+
+Implemented (2026-10-02, sections 1, 2 and 4, the DSL filter and task-name half):
+
+- `NugetBindConfig` has `includeNamespaces` / `excludeNamespaces` (property and vararg function);
+  the old functions are ERROR-level deprecations forwarding to them, asserted reflectively in
+  `NugetTaskNamesTest`. Fixture build scripts, README and the docs pages use the new names.
+- `NugetTaskNames` holds every task name; every `register(...)` / `named(...)` in the plugin and the
+  messages that name a task (`NugetExtractApiTask`, `NugetPackTask`, `NugetPusher`, the task
+  descriptions) read it. `NugetTaskNamesTest` asserts all thirteen names are registered, that every
+  plugin task matches the `nuget<Verb><Object>` pattern, and that none of the six old names exists.
+- The five task classes and their files and tests renamed as in the table above.
 
 ## Consequences
 
 - Breaking in 0.9.0: every `bind { include(...) }` (stale scripts fail to compile with a quick-fix),
-  every `packNuget` / `publishNuget` invocation in CI (fails naming the new task), every reverse
+  every `packNuget` / `publishNuget` invocation in CI (Gradle's "Task not found"; the migration guide
+names the new task), every `tasks.withType<PackNugetTask>()` and the other renamed classes, every reverse
   diagnostic consumer matching lowercase codes, and every `NugetDiagnostics.json` reader expecting an
   array. The 1.0.0 migration guide lists all four.
 - Docs: `docs/topics` (`nuget-dsl.md`, `declaring-dependencies.md`, `bind-nuget-package-for-kotlin.md`,

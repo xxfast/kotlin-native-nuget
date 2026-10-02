@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.flowOf
  * Fixture for issue [#127](https://github.com/xxfast/kotlin-native-nuget/issues/127) / ADR-123: a
  * `Flow` or `StateFlow` whose **element** is a Kotlin collection renders that element as
  * `global::TestLibrary.Kotlin.Collections.Set`, a namespace that does not exist, with the type
- * argument dropped. `packNuget` stays green and the consumer's compile fails with `CS0234`.
+ * argument dropped. `nugetPack` stays green and the consumer's compile fails with `CS0234`.
  *
  * The gap is visible on one declaration: in [NodeHub.visible] the `List<Kind>` **parameter** is
  * already right (`IReadOnlyList<global::TestLibrary.Issue127.Kind>`, ADR-114) while the

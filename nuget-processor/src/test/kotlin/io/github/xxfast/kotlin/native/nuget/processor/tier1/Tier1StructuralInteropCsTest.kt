@@ -575,7 +575,7 @@ class Tier1StructuralInteropCsTest {
    * never be mapped as a user type, so **no generated type name may join the root namespace to a
    * `kotlin`/`kotlinx` package segment**. `global::Interop.Kotlin.Collections.List` is what
    * `mapPackageToNamespace` produced for a `StateFlow<List<T>>` element: a namespace nothing
-   * declares, CS0234 in every consumer's build while `packNuget` stayed green.
+   * declares, CS0234 in every consumer's build while `nugetPack` stayed green.
    *
    * The fixture is [everyRouteFixture] plus the two element positions, so the scan pays for every
    * route rather than for the one the issue happened to report. The generator also carries a

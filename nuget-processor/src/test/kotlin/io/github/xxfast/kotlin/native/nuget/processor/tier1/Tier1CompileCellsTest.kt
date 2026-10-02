@@ -495,7 +495,7 @@ class Tier1CompileCellsTest {
 
   /**
    * ADR-075: the `Visit(patient, symptoms, notes)` data-class primary constructor from the
-   * shipped fixture only ever runs through the real `packNuget`/konanc pipeline, never through
+   * shipped fixture only ever runs through the real `nugetPack`/konanc pipeline, never through
    * this JVM-only harness — so this is the fast regression guard for the *general callable*
    * half of the change: `ForwardCallablePlanner.inputSkipReason()`'s Nullable branch now admits
    * `Nullable(Collection)` (previously an unconditional `NULLABLE` skip, dropping the whole

@@ -6,11 +6,11 @@
 - Gradle, via the included wrapper (`./gradlew`)
 - [.NET SDK](https://dotnet.microsoft.com/download) 10.0+, only if you bind a NuGet package into
   Kotlin (`nuget { dependencies { dependency(...) { bind { ... } } } }`). Publishing needs no
-  .NET SDK: `packNuget` writes the `.nupkg` itself.
+  .NET SDK: `nugetPack` writes the `.nupkg` itself.
 
   <note>
     <p>
-      If a .NET SDK is on <code>PATH</code>, <code>packNuget</code> also compiles the generated C#
+      If a .NET SDK is on <code>PATH</code>, <code>nugetPack</code> also compiles the generated C#
       bindings before packing and fails the build on a compiler error. Without the SDK (or one
       that can't run), this check is skipped with a warning and publishing proceeds as before. See
       <a href="gradle-tasks.md#nugetcompileinterop">Gradle tasks</a>.

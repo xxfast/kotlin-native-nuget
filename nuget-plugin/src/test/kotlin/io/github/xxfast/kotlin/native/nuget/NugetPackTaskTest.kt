@@ -10,23 +10,23 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Task-action tests for `PackNugetTask` (ADR-050 pieces 1 and 2).
+ * Task-action tests for `NugetPackTask` (ADR-050 pieces 1 and 2).
  *
  * Piece 1: `generatedCsDir: DirectoryProperty` becomes `generatedCsDirs: ConfigurableFileCollection`
- * so `packNuget` can merge `.cs` files from multiple producers (KSP's forward `Interop.cs` and
+ * so `nugetPack` can merge `.cs` files from multiple producers (KSP's forward `Interop.cs` and
  * `nugetGenerateShims`'s reverse registration shims) into one `contentFiles/cs/net10.0/` folder.
  *
  * Piece 2: `dependencyVersions: MapProperty<String, String>` drives a `.nuspec` `<dependencies>`
  * block pinning each bound package at its exact resolved version (nuspec exact-version range
  * syntax, e.g. `version="[4.0.0]"`).
  */
-class PackNugetTaskTest {
-  private fun newTask(): PackNugetTask {
+class NugetPackTaskTest {
+  private fun newTask(): NugetPackTask {
     val project = ProjectBuilder.builder().build()
-    return project.tasks.create("packNuget", PackNugetTask::class.java)
+    return project.tasks.create("nugetPack", NugetPackTask::class.java)
   }
 
-  private fun configureCommon(task: PackNugetTask, outputDir: File) {
+  private fun configureCommon(task: NugetPackTask, outputDir: File) {
     task.packageId.set("TestLibrary")
     task.packageVersion.set("1.0.0")
     task.authors.set("Test Author")
@@ -37,7 +37,7 @@ class PackNugetTaskTest {
 
   @Test
   fun `pack merges cs files from multiple generatedCsDirs into contentFiles cs net10 0`() {
-    val task: PackNugetTask = newTask()
+    val task: NugetPackTask = newTask()
 
     val kspDir: File = Files.createTempDirectory("ksp-cs").toFile()
     File(kspDir, "Interop.cs").writeText("// forward bindings\nnamespace Sample { }\n")
@@ -84,7 +84,7 @@ class PackNugetTaskTest {
   // consumer with NU1202; either alone is silent (the memo's spike, variants Q and R).
   @Test
   fun `pack scopes contentFiles and an empty lib placeholder to the configured framework`() {
-    val task: PackNugetTask = newTask()
+    val task: NugetPackTask = newTask()
 
     val csDir: File = Files.createTempDirectory("ksp-cs").toFile()
     File(csDir, "Interop.cs").writeText("// forward bindings\n")
@@ -115,7 +115,7 @@ class PackNugetTaskTest {
 
   @Test
   fun `pack nuspec includes dependencies block with exact resolved version when non-empty`() {
-    val task: PackNugetTask = newTask()
+    val task: NugetPackTask = newTask()
 
     val csDir: File = Files.createTempDirectory("ksp-cs").toFile()
     File(csDir, "Interop.cs").writeText("// forward bindings\n")
@@ -135,7 +135,7 @@ class PackNugetTaskTest {
 
   @Test
   fun `pack nuspec includes contract when bound dependencyVersions is empty`() {
-    val task: PackNugetTask = newTask()
+    val task: NugetPackTask = newTask()
 
     val csDir: File = Files.createTempDirectory("ksp-cs").toFile()
     File(csDir, "Interop.cs").writeText("// forward bindings\n")
@@ -153,7 +153,7 @@ class PackNugetTaskTest {
 
   @Test
   fun `pack copies native libraries into runtimes rid native`() {
-    val task: PackNugetTask = newTask()
+    val task: NugetPackTask = newTask()
 
     val csDir: File = Files.createTempDirectory("ksp-cs").toFile()
     File(csDir, "Interop.cs").writeText("// forward bindings\n")
@@ -175,7 +175,7 @@ class PackNugetTaskTest {
 
   @Test
   fun `pack filters out non-native files from a nativeLibDirs source`() {
-    val task: PackNugetTask = newTask()
+    val task: NugetPackTask = newTask()
 
     val csDir: File = Files.createTempDirectory("ksp-cs").toFile()
     File(csDir, "Interop.cs").writeText("// forward bindings\n")
@@ -204,7 +204,7 @@ class PackNugetTaskTest {
   // so an empty entry now means the local link is broken.
   @Test
   fun `pack fails for a nativeLibDirs entry whose path does not exist`() {
-    val task: PackNugetTask = newTask()
+    val task: NugetPackTask = newTask()
 
     val csDir: File = Files.createTempDirectory("ksp-cs").toFile()
     File(csDir, "Interop.cs").writeText("// forward bindings\n")
@@ -221,10 +221,10 @@ class PackNugetTaskTest {
   }
 
   // A blank packageId passes `Property.get()`, and would name the .nupkg `  .1.0.0.nupkg` with a
-  // `<id>` of spaces. packNuget is the one task that truly needs an id, so it fails clearly.
+  // `<id>` of spaces. nugetPack is the one task that truly needs an id, so it fails clearly.
   @Test
   fun `pack fails clearly for a blank packageId`() {
-    val task: PackNugetTask = newTask()
+    val task: NugetPackTask = newTask()
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
     configureCommon(task, outputDir)
     task.packageId.set("  ")

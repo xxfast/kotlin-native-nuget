@@ -14,7 +14,7 @@ import kotlin.test.assertTrue
  * Kotlin that used to generate uncompilable C# (CS0102) or a CS0108 hiding warning, which
  * `nugetCompileInterop` and a warnings-as-errors consumer both treat as a build failure. The
  * correct outcome is a FAILED generation naming the owner and both Kotlin declarations, which is
- * why these are Tier 1 cells and not `test-library` fixtures: a fixture would fail `packNuget`.
+ * why these are Tier 1 cells and not `test-library` fixtures: a fixture would fail `nugetPack`.
  */
 class Tier1MemberNameCollisionTest {
 

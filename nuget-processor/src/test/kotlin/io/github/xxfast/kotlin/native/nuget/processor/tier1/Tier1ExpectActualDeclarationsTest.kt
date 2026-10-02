@@ -314,7 +314,7 @@ class Tier1ExpectActualDeclarationsTest {
 
   /**
    * Decision 3: a top-level `actual fun`/`val` takes its C# static class name from the *expect's*
-   * file, not the per-target file it happens to be declared in — otherwise `packNuget` packages
+   * file, not the per-target file it happens to be declared in — otherwise `nugetPack` packages
    * one target's `PlatformMacos` while shipping every target's binary, and the consumer gets a
    * class named after somebody else's platform.
    */

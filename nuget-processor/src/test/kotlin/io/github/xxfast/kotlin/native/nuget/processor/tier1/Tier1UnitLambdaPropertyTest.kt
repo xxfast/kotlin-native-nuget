@@ -39,7 +39,7 @@ import kotlin.test.assertTrue
  * [onName] and [onCleanup] are the controls: the non-Unit lambda must keep its `KotlinFunc`
  * spelling, and the suspend Unit lambda (which was always correct) must not regress.
  *
- * `packNuget` is green with the defect in it. Only compiling the generated `Interop.cs` fails,
+ * `nugetPack` is green with the defect in it. Only compiling the generated `Interop.cs` fails,
  * which is why this is a structural Tier 1 cell (ADR-060 rejected compiling C# in Tier 1) backed
  * by the real fixture in `test-library` that `scripts/verify.sh` does compile.
  *

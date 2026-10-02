@@ -3,7 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.test.cat
 /**
  * ADR-090 · ordinary-class method overloads.
  *
- * Two same-name methods on an exported ordinary class crash the whole KSP/`packNuget` run today
+ * Two same-name methods on an exported ordinary class crash the whole KSP/`nugetPack` run today
  * (`Forward callable catalog has duplicate plans for ...CatNarrator.describe`), because
  * `classEntries` names every export `"${prefix}_$name"` and keys every plan by `"$owner.$name"`.
  * This fixture is the consumer-side red step for the numbering scheme ADR-090 borrows from

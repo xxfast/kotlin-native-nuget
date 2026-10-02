@@ -34,7 +34,7 @@ package io.github.xxfast.kotlin.native.nuget.test.issue285
  *   illegal C# (CS1001) in `Interop.cs` itself, so they would break every consumer test file
  *   rather than this one. The memo assigns them to Tier 1 cells.
  * - Any pair that collides after casing (`FOO` + `Foo`, or `FOO_BAR` + `FooBar` under the new
- *   rule): that is a fatal generation error Tier 1 pins, and it would break `packNuget` here.
+ *   rule): that is a fatal generation error Tier 1 pins, and it would break `nugetPack` here.
  * - Any property on the enum: an entry-name fixture has no use for one. The one this bullet used to
  *   exclude, an `is`-prefixed `Boolean` (it aborted generation with `Forward ABI missing Kotlin
  *   export for ..._get_is...`), was never `is`-specific: every camelCase enum property aborted the

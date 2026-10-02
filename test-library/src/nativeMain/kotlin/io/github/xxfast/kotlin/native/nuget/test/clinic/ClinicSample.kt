@@ -385,7 +385,7 @@ value class Dosage(val milligrams: Double)
 
 /**
  * ADR-077 sub-item 4 · enum-underlying value class. The bare declaration used to crash
- * `packNuget` outright on both KSP targets (`java.lang.IllegalArgumentException: Forward ABI
+ * `nugetPack` outright on both KSP targets (`java.lang.IllegalArgumentException: Forward ABI
  * missing C# projection for temperament_create; expected temperament_create(in int, out pointer)
  * -> int`); it now packs as a `readonly record struct Temperament` wrapping [Mood]. Its use at
  * ordinary positions ([Patient.temperament] property, [Patient.soothe] param + return) is the

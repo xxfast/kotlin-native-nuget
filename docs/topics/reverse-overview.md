@@ -50,7 +50,7 @@ full in [ADR-041](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/a
 ## The pipeline
 
 ```
-nugetGen              generates a synthetic interop.csproj
+nugetGenerateRestoreProject              generates a synthetic interop.csproj
     ↓
 nugetRestore          dotnet restore → obj/project.assets.json
     ↓
@@ -59,14 +59,14 @@ nugetExtractApi       NugetMetadataReader subprocess → reverse-ir.json
 nugetGenerateBindings  reverse-ir.json → Kotlin stubs
 nugetGenerateShims     reverse-ir.json → C# registration shims
     ↓
-packNuget              merges the shims into contentFiles, pins the bound
+nugetPack              merges the shims into contentFiles, pins the bound
                         package at its exact resolved version
 ```
 
 `nugetImport` is the umbrella IDE-sync task that runs the whole chain (mirroring `podImport` in the
 Kotlin CocoaPods plugin).
 
-### `nugetGen`: a synthetic `.csproj`
+### `nugetGenerateRestoreProject`: a synthetic `.csproj`
 
 For every declared dependency (see [Declaring dependencies](declaring-dependencies.md)) the plugin
 writes a throwaway `interop.csproj` with one `<PackageReference>` per package, pinned to
@@ -231,9 +231,9 @@ typical consumer's code path references it directly.
 enables them. See [Registration diagnostics](registration-diagnostics.md) for what a mismatch
 means and how to read it, and for the opt-in trace that logs each registration as it lands.
 
-### `packNuget`: one `PackageReference` for the consumer
+### `nugetPack`: one `PackageReference` for the consumer
 
-`packNuget` copies the generated `.cs` shim files into the same `contentFiles/cs/<tfm>/` folder that
+`nugetPack` copies the generated `.cs` shim files into the same `contentFiles/cs/<tfm>/` folder that
 already carries the forward-direction `Interop.cs`, so a consuming `.csproj` compiles them straight
 into its own assembly. It also adds a `<dependencies>` entry to the `.nuspec` for each bound package,
 pinned to the **exact version NuGet resolved** (not the floating floor declared in the DSL), because

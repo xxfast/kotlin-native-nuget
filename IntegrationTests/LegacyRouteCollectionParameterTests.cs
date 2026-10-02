@@ -11,7 +11,7 @@ namespace IntegrationTests;
 /// e: CNameExports.kt:97:10 One type argument expected for 'interface List&lt;out E&gt; : Collection&lt;E&gt;'.
 /// e: CNameExports.kt:342:8 One type argument expected for 'interface Set&lt;out E&gt; : Collection&lt;E&gt;'.
 /// </code>
-/// <c>packNuget</c> died at that compile, so the whole package failed to build, not just the
+/// <c>nugetPack</c> died at that compile, so the whole package failed to build, not just the
 /// member. The fact that this file compiles at all is therefore most of the test: pre-fix there
 /// is no package to reference.
 ///
