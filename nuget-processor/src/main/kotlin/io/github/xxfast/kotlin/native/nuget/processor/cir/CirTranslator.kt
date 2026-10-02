@@ -169,7 +169,7 @@ internal fun translate(
   // ADR-074 Decision 3: without this, `expect fun platformName()` in `nativeMain/Platform.kt` with
   // actuals in `macosArm64Main/PlatformMacos.kt` and `mingwX64Main/PlatformMingw.kt` produces
   // `public static class PlatformMacos` in one target's `Interop.cs` and `PlatformMingw` in the
-  // other's, while `nugetPack` packages exactly one target's output and ships every target's
+  // other's, while `packNuget` packages exactly one target's output and ships every target's
   // binary. Kotlin requires an `expect` and its `actual` to live in the same module, so within one
   // compilation this lookup always hits for a genuine `actual`; the fallback is defensive only.
   fun expectFileNameOrNull(declaration: KSDeclaration): String? =

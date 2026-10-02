@@ -13,7 +13,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-class NugetPublishTaskWiringTest {
+class PublishNugetTaskWiringTest {
   private fun buildProject(): Project {
     val project: Project = ProjectBuilder.builder().build()
     project.plugins.apply("org.jetbrains.kotlin.multiplatform")
@@ -73,7 +73,7 @@ class NugetPublishTaskWiringTest {
   }
 
   @Test
-  fun `each repository gets its own publish task depending on nugetPack`() {
+  fun `each repository gets its own publish task depending on packNuget`() {
     val project: Project = buildProject()
     project.publish {
       it.nuget("nugetOrg") { repository -> repository.url.set("https://api.nuget.org/v3/index.json") }
@@ -82,26 +82,26 @@ class NugetPublishTaskWiringTest {
 
     project.evaluate()
 
-    val nugetPack: Task = project.tasks.getByName("nugetPack")
-    val nugetOrg: Task = assertNotNull(project.tasks.findByName("nugetPublishToNugetOrgRepository"))
-    val github: Task = assertNotNull(project.tasks.findByName("nugetPublishToGithubRepository"))
+    val packNuget: Task = project.tasks.getByName("packNuget")
+    val nugetOrg: Task = assertNotNull(project.tasks.findByName("publishNugetToNugetOrgRepository"))
+    val github: Task = assertNotNull(project.tasks.findByName("publishNugetToGithubRepository"))
 
     assertTrue(
-      nugetOrg is NugetPublishTask,
-      "nugetPublishToNugetOrgRepository must be a NugetPublishTask",
+      nugetOrg is PublishNugetTask,
+      "publishNugetToNugetOrgRepository must be a PublishNugetTask",
     )
     assertTrue(
-      nugetPack in nugetOrg.dependencies(),
-      "nugetPublishToNugetOrgRepository must depend on nugetPack",
+      packNuget in nugetOrg.dependencies(),
+      "publishNugetToNugetOrgRepository must depend on packNuget",
     )
     assertTrue(
-      nugetPack in github.dependencies(),
-      "nugetPublishToGithubRepository must depend on nugetPack",
+      packNuget in github.dependencies(),
+      "publishNugetToGithubRepository must depend on packNuget",
     )
   }
 
   @Test
-  fun `aggregate nugetPublish depends on every repository task`() {
+  fun `aggregate publishNuget depends on every repository task`() {
     val project: Project = buildProject()
     project.publish {
       it.nuget("nugetOrg") { repository -> repository.url.set("https://api.nuget.org/v3/index.json") }
@@ -110,25 +110,25 @@ class NugetPublishTaskWiringTest {
 
     project.evaluate()
 
-    val nugetPublish: Task = assertNotNull(project.tasks.findByName("nugetPublish"))
-    val deps: Set<Task> = nugetPublish.dependencies()
-    assertTrue(project.tasks.getByName("nugetPublishToNugetOrgRepository") in deps)
-    assertTrue(project.tasks.getByName("nugetPublishToGithubRepository") in deps)
+    val publishNuget: Task = assertNotNull(project.tasks.findByName("publishNuget"))
+    val deps: Set<Task> = publishNuget.dependencies()
+    assertTrue(project.tasks.getByName("publishNugetToNugetOrgRepository") in deps)
+    assertTrue(project.tasks.getByName("publishNugetToGithubRepository") in deps)
   }
 
   @Test
-  fun `no repositories registers no repository tasks but nugetPublish still exists`() {
+  fun `no repositories registers no repository tasks but publishNuget still exists`() {
     val project: Project = buildProject()
     project.publish { }
 
     project.evaluate()
 
-    assertNotNull(project.tasks.findByName("nugetPublish"))
-    assertTrue(project.tasks.withType(NugetPublishTask::class.java).isEmpty())
+    assertNotNull(project.tasks.findByName("publishNuget"))
+    assertTrue(project.tasks.withType(PublishNugetTask::class.java).isEmpty())
   }
 
   @Test
-  fun `repository task carries the url and the nugetPack output file`() {
+  fun `repository task carries the url and the packNuget output file`() {
     val project: Project = buildProject()
     project.publish {
       it.nuget("nugetOrg") { repository -> repository.url.set("https://api.nuget.org/v3/index.json") }
@@ -136,7 +136,7 @@ class NugetPublishTaskWiringTest {
 
     project.evaluate()
 
-    val task = project.tasks.getByName("nugetPublishToNugetOrgRepository") as NugetPublishTask
+    val task = project.tasks.getByName("publishNugetToNugetOrgRepository") as PublishNugetTask
     val expected: File =
       project.layout.buildDirectory.file("nuget/TestLibrary.1.0.0.nupkg").get().asFile
     assertEquals("nugetOrg", task.repositoryName.get())
@@ -171,7 +171,7 @@ class NugetPublishTaskWiringTest {
 
     project.evaluate()
 
-    val task = project.tasks.getByName("nugetPublishToGithubRepository") as NugetPublishTask
+    val task = project.tasks.getByName("publishNugetToGithubRepository") as PublishNugetTask
     assertEquals("explicit-key", task.apiKey.get())
   }
 
@@ -184,7 +184,7 @@ class NugetPublishTaskWiringTest {
 
     project.evaluate()
 
-    val task = project.tasks.getByName("nugetPublishToNugetOrgRepository") as NugetPublishTask
+    val task = project.tasks.getByName("publishNugetToNugetOrgRepository") as PublishNugetTask
     assertFalse(task.apiKey.isPresent)
 
     val file: File = task.packageFile.get().asFile

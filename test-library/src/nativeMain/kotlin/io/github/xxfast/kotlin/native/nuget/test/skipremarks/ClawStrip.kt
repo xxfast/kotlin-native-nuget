@@ -92,7 +92,7 @@ class ClawStrip(val name: String) {
    * `IReadOnlyDictionary<string?, int>` whose body calls `NugetMarshal.ReadMap<string?, int>`. That
    * helper is declared `where TKey : notnull`, so the generated file does not compile: CS8714,
    * which the generated-bindings build turns into an error. A `Map<String?, Int>` return is
-   * therefore a `nugetPack` abort, not a consumer-side warning, and the fix is the same named skip
+   * therefore a `packNuget` abort, not a consumer-side warning, and the fix is the same named skip
    * the input side already ships, attributed to the KEY and not to the slot.
    */
   fun perchScores(): Map<String?, Int> = mapOf(null to 1, "windowsill" to 2)

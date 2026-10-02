@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.flowOf
 /**
  * Issue #111: the legacy lambda routes spell every one of a lambda's type arguments as
  * `arg.type?.resolve()?.declaration?.simpleName`, which drops both the argument's namespace and
- * its own type arguments. `nugetPack` stays green; the consumer's `Interop.cs` then fails
+ * its own type arguments. `packNuget` stays green; the consumer's `Interop.cs` then fails
  * `CS0246: The type or namespace name 'Flow' could not be found`.
  *
  * The class arms of the fixture. Two properties per arm, so the two failure modes cannot be

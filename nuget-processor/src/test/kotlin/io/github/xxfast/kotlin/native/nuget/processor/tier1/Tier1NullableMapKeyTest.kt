@@ -14,7 +14,7 @@ import kotlin.test.assertTrue
  * `where TKey : notnull`, so the generated file raised CS8714 -- an ERROR under the
  * generated-bindings csproj
  * (`<Nullable>enable</Nullable>` plus `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>`). A
- * `Map<String?, Int>` return was therefore a `nugetPack` abort at seven positions, which is why the
+ * `Map<String?, Int>` return was therefore a `packNuget` abort at seven positions, which is why the
  * skip removes nothing that ever worked.
  *
  * The assertion that discriminates is the absence of `ReadMap<string?` / `ReadMap<int?` anywhere in

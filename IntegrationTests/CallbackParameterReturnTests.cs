@@ -13,7 +13,7 @@ namespace IntegrationTests;
 ///     <c>metronome.SumWeights(t =&gt; t * 2)</c>, a <c>Func&lt;int,int&gt;</c> whose result crosses
 ///     by value (ADR-036's table said so and this route never implemented it).</item>
 /// </list>
-/// Today every cell here is unreachable: <c>nugetPack</c> throws on the first scalar-outer member in
+/// Today every cell here is unreachable: <c>packNuget</c> throws on the first scalar-outer member in
 /// processing order (<c>Forward ABI mismatch for metronome_countAbove; expected ... -&gt; pointer,
 /// actual ... -&gt; int</c> on 2026-09-22), so the red is a build failure of the whole package rather
 /// than a CS1061 per member. Once the route generates, the red becomes these assertions.

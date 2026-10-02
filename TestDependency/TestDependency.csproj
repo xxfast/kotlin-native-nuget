@@ -79,8 +79,8 @@
     as "test-library/build/nuget".
 
     NOTE: test-library/build/nuget is a Gradle-generated output directory and is wiped
-    by `./gradlew :test-library:clean :test-library:nugetPack`. The build packs this
-    fixture into that feed before nugetPack (see the packTestDependency task in
+    by `./gradlew :test-library:clean :test-library:packNuget`. The build packs this
+    fixture into that feed before packNuget (see the packTestDependency task in
     test-library/build.gradle.kts), so `dotnet restore` can resolve TestDependency.
   -->
 

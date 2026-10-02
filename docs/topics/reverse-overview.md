@@ -59,7 +59,7 @@ nugetExtractApi       NugetMetadataReader subprocess → reverse-ir.json
 nugetGenerateBindings  reverse-ir.json → Kotlin stubs
 nugetGenerateShims     reverse-ir.json → C# registration shims
     ↓
-nugetPack              merges the shims into contentFiles, pins the bound
+packNuget              merges the shims into contentFiles, pins the bound
                         package at its exact resolved version
 ```
 
@@ -231,9 +231,9 @@ typical consumer's code path references it directly.
 enables them. See [Registration diagnostics](registration-diagnostics.md) for what a mismatch
 means and how to read it, and for the opt-in trace that logs each registration as it lands.
 
-### `nugetPack`: one `PackageReference` for the consumer
+### `packNuget`: one `PackageReference` for the consumer
 
-`nugetPack` copies the generated `.cs` shim files into the same `contentFiles/cs/<tfm>/` folder that
+`packNuget` copies the generated `.cs` shim files into the same `contentFiles/cs/<tfm>/` folder that
 already carries the forward-direction `Interop.cs`, so a consuming `.csproj` compiles them straight
 into its own assembly. It also adds a `<dependencies>` entry to the `.nuspec` for each bound package,
 pinned to the **exact version NuGet resolved** (not the floating floor declared in the DSL), because

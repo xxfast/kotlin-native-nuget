@@ -784,7 +784,7 @@ internal fun warnRefusedLegacyRouteMembers(
   // nullable- or builtin-payload lambda member (or one whose lambda result neither route can
   // marshal) out before they partition, so this walk is the only thing that tells the author the
   // member is gone -- and before the refusal existed, nothing did: the member either aborted their
-  // `nugetPack` (inside generated Kotlin, or inside the generator itself) or crossed and killed
+  // `packNuget` (inside generated Kotlin, or inside the generator itself) or crossed and killed
   // the process.
   fun refusedCallbackPayload(
     member: KSFunctionDeclaration,
@@ -1239,7 +1239,7 @@ class NugetProcessor(
     )
 
     // Issue #55: scoping that admits nothing used to be indistinguishable from a module with no
-    // public API at all: `nugetPack` stayed green with no `Interop.cs` in the package. Say so
+    // public API at all: `packNuget` stayed green with no `Interop.cs` in the package. Say so
     // once, naming the scope that did it, before the `hasNothingToProcess` early return below.
     if (allDeclarations.isEmpty() && candidateDeclarations.isNotEmpty()) {
       val scope: String = buildList {
@@ -2321,7 +2321,7 @@ class NugetProcessor(
   /**
    * ADR-100: the delivery channel for forward diagnostics. `KSPLogger.warn` output never reaches
    * the console (KSP runs the processor on a Worker API thread and its stdout is dropped), and a
-   * normal `nugetPack` does not even run the KSP task (`FROM-CACHE`, then `UP-TO-DATE`), so a
+   * normal `packNuget` does not even run the KSP task (`FROM-CACHE`, then `UP-TO-DATE`), so a
    * transport that only speaks during the task action is silent on most builds. A *declared KSP
    * output file* survives both: it is restored on a cache hit and present on an up-to-date run, and
    * `NugetReportDiagnosticsTask` re-emits it through Gradle's own `Task.logger`.

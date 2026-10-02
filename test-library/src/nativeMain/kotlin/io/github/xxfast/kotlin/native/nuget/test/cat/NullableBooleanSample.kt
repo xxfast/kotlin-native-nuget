@@ -45,7 +45,7 @@ class CatRecord {
 
 /**
  * ADR-069 cell 7: top-level function return. `ForwardKotlinPlanEmitter.kt:173` hard-crashes
- * `nugetPack` for this cell today (`require(value.result != BOOLEAN && value.result != VOID)`).
+ * `packNuget` for this cell today (`require(value.result != BOOLEAN && value.result != VOID)`).
  * This fixture is what turns that from a theoretical hole into a reachable, reproducible one.
  */
 fun chipImplanted(state: Int): Boolean? = tribool(state)

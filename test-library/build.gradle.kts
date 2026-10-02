@@ -1,7 +1,7 @@
 import io.github.xxfast.kotlin.native.nuget.NugetCompileInteropTask
 import io.github.xxfast.kotlin.native.nuget.NugetExtension
 import io.github.xxfast.kotlin.native.nuget.NugetGenerateRestoreProjectTask
-import io.github.xxfast.kotlin.native.nuget.NugetPackTask
+import io.github.xxfast.kotlin.native.nuget.PackNugetTask
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
@@ -233,9 +233,9 @@ afterEvaluate {
     }
   )
 
-  val nugetPack = tasks.named("nugetPack", NugetPackTask::class.java).get()
-  nugetPack.packageVersion.set(fixturePackageVersion)
-  nugetPack.dependsOn(writeFixtureVersions)
+  val packNuget = tasks.named("packNuget", PackNugetTask::class.java).get()
+  packNuget.packageVersion.set(fixturePackageVersion)
+  packNuget.dependsOn(writeFixtureVersions)
 }
 
 nuget {

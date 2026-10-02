@@ -19,7 +19,7 @@ import java.util.zip.ZipOutputStream
 
 private val NATIVE_EXTENSIONS = setOf("dll", "dylib", "so")
 
-// The .cs files nugetPack stages into contentFiles/cs/<tfm>/, in staging order. Deduped by file
+// The .cs files packNuget stages into contentFiles/cs/<tfm>/, in staging order. Deduped by file
 // name - if the same name appears in more than one source dir, the last one wins (matches
 // copyTo's overwrite = true applied in iteration order). ADR-138: nugetCompileInterop compiles
 // exactly this set, so the check and the pack can never disagree about what ships.
@@ -27,7 +27,7 @@ internal fun generatedCsFiles(dirs: Iterable<File>): List<File> = dirs
   .flatMap { dir -> dir.listFiles()?.filter { it.extension == "cs" } ?: emptyList() }
   .distinctBy { it.name }
 
-abstract class NugetPackTask : DefaultTask() {
+abstract class PackNugetTask : DefaultTask() {
   @get:Input
   abstract val packageId: Property<String>
 
@@ -47,7 +47,7 @@ abstract class NugetPackTask : DefaultTask() {
   abstract val nativeLibFiles: ConfigurableFileCollection
 
   // ADR-050 Alternative 3: a ConfigurableFileCollection (not a single DirectoryProperty) so
-  // nugetPack can merge .cs files from multiple producers — KSP's forward Interop.cs and
+  // packNuget can merge .cs files from multiple producers — KSP's forward Interop.cs and
   // nugetGenerateShims's reverse registration shims — into one contentFiles/cs/<tfm>/ folder.
   @get:InputFiles
   abstract val generatedCsDirs: ConfigurableFileCollection
@@ -78,7 +78,7 @@ abstract class NugetPackTask : DefaultTask() {
   abstract val outputDir: DirectoryProperty
 
   // ADR-180: whether any native target maps to a supported RID, linkable here or not. False means no
-  // supported target at all, which used to leave nugetPack unregistered and now fails the task.
+  // supported target at all, which used to leave packNuget unregistered and now fails the task.
   @get:Internal
   abstract val hasSupportedTargets: Property<Boolean>
 

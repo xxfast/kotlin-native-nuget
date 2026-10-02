@@ -86,8 +86,8 @@ class NugetCoexistenceTest {
     assertContains(csproj, "local-feed")
   }
 
-  private fun pack(nativeFiles: List<String> = emptyList(), prebuilt: Boolean = false): Pair<NugetPackTask, File> {
-    val task = ProjectBuilder.builder().build().tasks.create("nugetPack", NugetPackTask::class.java)
+  private fun pack(nativeFiles: List<String> = emptyList(), prebuilt: Boolean = false): Pair<PackNugetTask, File> {
+    val task = ProjectBuilder.builder().build().tasks.create("packNuget", PackNugetTask::class.java)
     val output = Files.createTempDirectory("coexist-pack").toFile()
     task.packageId.set("TestLibrary")
     task.packageVersion.set("1.0.0")

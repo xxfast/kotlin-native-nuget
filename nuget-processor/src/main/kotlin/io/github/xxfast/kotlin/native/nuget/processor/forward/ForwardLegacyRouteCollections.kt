@@ -22,7 +22,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
  *
  * Those routes spell a parameter by pasting the declaration's own Kotlin type name through
  * `ClassName.bestGuess`, which drops the type arguments, so `fun served(kinds: List<String>):
- * StateFlow<String>` generated `kinds: List` and `nugetPack` died at the Kotlin compile of the
+ * StateFlow<String>` generated `kinds: List` and `packNuget` died at the Kotlin compile of the
  * whole file (issue #109). ADR-122 then found the same fall-through at the non-generic position,
  * where it renders a public `IntPtr` nobody can call (issue #126). Four outcomes, and only these
  * four are safe:
@@ -712,7 +712,7 @@ internal sealed interface ForwardLegacyFlowElementShape {
    *
    * This one did not merely lie, it HARD-CRASHED the processor: `qualifiedElementCsType` runs a
    * Kotlin builtin through the *user-type* namespace mapping, and ADR-123's guard there turns that
-   * into an `IllegalStateException` that takes `nugetPack` down with it. The wire needed nothing:
+   * into an `IllegalStateException` that takes `packNuget` down with it. The wire needed nothing:
    * `FlowExports` already boxes each emission with `NugetHandles.retain(value as Any)`, which for
    * a `ByteArray` is exactly the handle `ReadBytes` consumes. It rides ADR-123's per-member `read:`
    * seam, the same one a collection element uses.
@@ -743,7 +743,7 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
 
   // ROADMAP Phase 4 / ADR-151: a bare `ByteArray` element has no type arguments, so it reached the
   // `Plain` early return and both halves spelled it with `qualifiedElementCsType` -- the user-type
-  // speller, which for a Kotlin builtin HARD-CRASHES the processor and therefore `nugetPack`
+  // speller, which for a Kotlin builtin HARD-CRASHES the processor and therefore `packNuget`
   // ("Kotlin builtin kotlin.ByteArray reached the user-type C# speller", ADR-123). Decided here,
   // ahead of that fall-through.
   val classified: BridgeType = classify(expanded).let {

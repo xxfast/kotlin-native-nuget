@@ -39,7 +39,7 @@ class NugetDslLazinessTest {
     taskDependencies.getDependencies(this).map { it.name }.toSet()
 
   @Test
-  fun `a second publish block merges and nugetPack exists without evaluate`() {
+  fun `a second publish block merges and packNuget exists without evaluate`() {
     val project: Project = project()
     val nuget: NugetExtension = project.nuget()
 
@@ -47,13 +47,13 @@ class NugetDslLazinessTest {
     nuget.publish { pub -> pub.version.set("1.0.0"); pub.include("a.c") }
 
     // No evaluate(): registration no longer waits for afterEvaluate.
-    assertNotNull(project.tasks.findByName("nugetPack"))
+    assertNotNull(project.tasks.findByName("packNuget"))
     assertEquals(listOf("a.b", "a.c"), nuget.publish.include.get())
     assertEquals("MyLib", nuget.publish.packageId.get())
 
     // Values set AFTER wiring still reach the task: the provider chain, not a snapshot.
     nuget.publish { pub -> pub.packageId.set("Renamed") }
-    val pack = project.tasks.getByName("nugetPack") as NugetPackTask
+    val pack = project.tasks.getByName("packNuget") as PackNugetTask
     assertEquals("Renamed", pack.packageId.get())
     assertEquals("1.0.0", pack.packageVersion.get())
 
@@ -70,18 +70,18 @@ class NugetDslLazinessTest {
     project.nuget().publish { pub -> pub.packageId.set(id) }
     id.set("FromProvider")
 
-    val pack = project.tasks.getByName("nugetPack") as NugetPackTask
+    val pack = project.tasks.getByName("packNuget") as PackNugetTask
     assertEquals("FromProvider", pack.packageId.get())
   }
 
   @Test
-  fun `a consume-only project still gets no nugetPack`() {
+  fun `a consume-only project still gets no packNuget`() {
     val project: Project = project()
     project.nuget().dependencies { deps -> deps.dependency("Some.Package", "1.0.0") }
 
     assertNotNull(project.tasks.findByName("nugetRestore"))
     (project as ProjectInternal).evaluate()
-    assertNull(project.tasks.findByName("nugetPack"))
+    assertNull(project.tasks.findByName("packNuget"))
   }
 
   @Test
@@ -144,14 +144,14 @@ class NugetDslLazinessTest {
   }
 
   @Test
-  fun `bind and publish in either order merge shims into nugetPack`() {
+  fun `bind and publish in either order merge shims into packNuget`() {
     val project: Project = project()
     project.nuget().dependencies { deps ->
       deps.dependency("Acme", "1.0.0") { dep -> dep.bind { } }
     }
     project.nuget().publish { pub -> pub.packageId.set("MyLib"); pub.version.set("1.0.0") }
 
-    val pack: Task = project.tasks.getByName("nugetPack")
+    val pack: Task = project.tasks.getByName("packNuget")
     assertTrue("nugetGenerateShims" in pack.dependencyNames())
   }
 
@@ -163,10 +163,10 @@ class NugetDslLazinessTest {
       pub.repositories { repos -> repos.nuget("feed") { repo -> repo.url.set("https://f") } }
     }
 
-    val task = project.tasks.getByName("nugetPublishToFeedRepository") as NugetPublishTask
+    val task = project.tasks.getByName("publishNugetToFeedRepository") as PublishNugetTask
     assertEquals("https://f", task.repositoryUrl.get())
-    assertTrue("nugetPublishToFeedRepository" in
-      project.tasks.getByName("nugetPublish").dependencyNames())
+    assertTrue("publishNugetToFeedRepository" in
+      project.tasks.getByName("publishNuget").dependencyNames())
   }
 
   @Test
@@ -178,7 +178,7 @@ class NugetDslLazinessTest {
     }
     (project as ProjectInternal).evaluate()
 
-    val task = project.tasks.getByName("nugetPublishToFeedRepository") as NugetPublishTask
+    val task = project.tasks.getByName("publishNugetToFeedRepository") as PublishNugetTask
     val error = assertFailsWith<IllegalArgumentException> { task.publish() }
     assertTrue(error.message.orEmpty().contains("v3 service index url"), "${error.message}")
   }
@@ -194,12 +194,12 @@ class NugetDslLazinessTest {
     val override: File = File(Files.createTempDirectory("props").toFile(), "Custom.props")
     nuget.publish { pub -> pub.versionPropsFile.set(override) }
     val props =
-      project.tasks.getByName("nugetGenerateSnapshotVersionProps") as NugetGenerateSnapshotVersionPropsTask
+      project.tasks.getByName("nugetSnapshotVersionProps") as NugetSnapshotVersionPropsTask
     assertEquals(override.absolutePath, props.outputFile.get().asFile.absolutePath)
   }
 
   @Test
-  fun `a publish project with no supported target gets a nugetPack that fails at execution`() {
+  fun `a publish project with no supported target gets a packNuget that fails at execution`() {
     val project: Project = ProjectBuilder.builder().build()
     project.plugins.apply("org.jetbrains.kotlin.multiplatform")
     project.plugins.apply("io.github.xxfast.kotlin.native.nuget")
@@ -210,7 +210,7 @@ class NugetDslLazinessTest {
     }
     (project as ProjectInternal).evaluate()
 
-    val pack = project.tasks.getByName("nugetPack") as NugetPackTask
+    val pack = project.tasks.getByName("packNuget") as PackNugetTask
     assertFalse(pack.hasSupportedTargets.get())
     val error = assertFailsWith<IllegalStateException> { pack.pack() }
     assertTrue(error.message.orEmpty().contains("No supported native targets"), "${error.message}")

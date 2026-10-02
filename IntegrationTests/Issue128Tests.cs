@@ -17,7 +17,7 @@ namespace IntegrationTests;
 /// <para>
 /// <b>The real test is structural, and it already ran.</b> Before the fix, <c>nugetGenerateRestoreProject</c> emitted
 /// <c>GroomingPlan(name)</c> and <c>GroomingPlan()</c>, <c>compileKotlin</c> rejected both
-/// (<c>CNameExports.kt:11437:74 Cattery bookkeeping, not a public API</c>), <c>nugetPack</c> failed
+/// (<c>CNameExports.kt:11437:74 Cattery bookkeeping, not a public API</c>), <c>packNuget</c> failed
 /// and this assembly could not build. It builds with no <c>optIn</c> / <c>-opt-in=</c> anywhere in
 /// any build script, which is issue #128 requirement 3. What is left for xunit is the shape of the
 /// surface that fix produces.

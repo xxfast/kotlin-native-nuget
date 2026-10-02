@@ -72,7 +72,7 @@ echo "==> Runtime helper tests (:nuget-runtime:allTests)"
 
 echo "==> Pack both independent Kotlin NuGet publishers"
 ./gradlew :test-library:clean :test-companion:clean \
-  :test-library:nugetPack :test-companion:nugetPack
+  :test-library:packNuget :test-companion:packNuget
 
 # ADR-127: the fixed `nuget_*` ABI now reaches the binary from the `nuget-runtime` klib through
 # the plugin's `export()`, not from a regenerated block. This is the check that the export really
@@ -80,7 +80,7 @@ echo "==> Pack both independent Kotlin NuGet publishers"
 echo "==> Runtime exports present in the linked library (scripts/verify-runtime-exports.sh)"
 "$ROOT/scripts/verify-runtime-exports.sh"
 
-# ADR-100: forward diagnostics must reach the console on a fresh *and* an incremental nugetPack.
+# ADR-100: forward diagnostics must reach the console on a fresh *and* an incremental packNuget.
 # Runs after the pack above, so both of its runs exercise the cached path this feature exists for.
 echo "==> Forward diagnostic delivery (scripts/verify-forward-diagnostics.sh)"
 "$ROOT/scripts/verify-forward-diagnostics.sh"

@@ -53,12 +53,12 @@ matter if you read the DSL back or depend on task shape:
 - The checks that used to fail while the build was configured now fail when the task runs, with the
   same message: a repository with no `url`, `snapshot = true` without a `version` or `packageId`,
   and a project with no supported targets.
-- `nugetPack` exists on every project with a `publish {}` block and fails at execution when there is
-  nothing to pack. A project without `publish {}` still has no `nugetPack`.
-- `nugetGenerateSnapshotVersion` and `nugetGenerateSnapshotVersionProps` exist on every `publish {}` project.
-  `nugetPack` depends on them only when `snapshot` is `true`.
+- `packNuget` exists on every project with a `publish {}` block and fails at execution when there is
+  nothing to pack. A project without `publish {}` still has no `packNuget`.
+- `nugetSnapshotVersion` and `nugetSnapshotVersionProps` exist on every `publish {}` project.
+  `packNuget` depends on them only when `snapshot` is `true`.
 - Repositories and dependencies are processed in name order, not declaration order.
-- `nugetPublish` depends on every push task in the project.
+- `publishNuget` depends on every push task in the project.
 - A second `publish {}`, `bind {}`, `dependency("X")` or `nuget("x")` used to replace the first or
   register a duplicate (a duplicate `nuget("x")` failed the build). It now merges.
 
@@ -85,11 +85,11 @@ targets all resolve it; you add nothing yourself. See
 ## `publish { }`
 
 Configures `NugetPublishConfig`. The five string settings have no default. Nothing in the DSL
-itself enforces they're set, but `nugetPack` fails once it reads an unset one.
+itself enforces they're set, but `packNuget` fails once it reads an unset one.
 
 | Property | Type | Required | Maps to |
 |---|---|---|---|
-| `packageId` | `Property<String>` | yes | `.nuspec` `<id>`, and the `.nupkg` file name. When null or blank (or with no `publish` block) the generated C# is rooted at `namespace Interop`, and `nugetPack` fails with "needs a non-blank package id" |
+| `packageId` | `Property<String>` | yes | `.nuspec` `<id>`, and the `.nupkg` file name. When null or blank (or with no `publish` block) the generated C# is rooted at `namespace Interop`, and `packNuget` fails with "needs a non-blank package id" |
 | `version` | `Property<String>` | yes | `.nuspec` `<version>` |
 | `authors` | `Property<String>` | yes | `.nuspec` `<authors>` |
 | `description` | `Property<String>` | yes | `.nuspec` `<description>` |
@@ -98,10 +98,10 @@ itself enforces they're set, but `nugetPack` fails once it reads an unset one.
 | `exclude(vararg packages: String)` | function, adds to a `ListProperty` | no | empty; a package prefix or a qualified declaration name (a class, object, sealed base, or top-level function, plus everything nested under it); applied after `include`, and always wins over it |
 | `admit(vararg types: String)` | function, adds to a `ListProperty` | no | empty; additively admits a dependency-module type into [the cross-module export closure](#cross-module-export-closure) by qualified name or package prefix, without touching `include`/`rootPackage`; see below |
 | `strictDependencyTypes` | `Property<Boolean>` | no | `false`; when `true`, an un-admitted dependency type in a public signature fails the build (`ERROR_UNEXPORTED_DEPENDENCY_TYPE`) instead of warning; see below |
-| `snapshot` | `Property<Boolean>` | no | `false`; when `true`, `nugetPack` mints `<version>-snapshot.<epochMillis>` at execution time instead of using `version` literally, and always writes an MSBuild props file. Requires `packageId` and a non-blank `version` |
+| `snapshot` | `Property<Boolean>` | no | `false`; when `true`, `packNuget` mints `<version>-snapshot.<epochMillis>` at execution time instead of using `version` literally, and always writes an MSBuild props file. Requires `packageId` and a non-blank `version` |
 | `versionPropsFile` | `RegularFileProperty` | no | only consulted when `snapshot` is `true`. Default `<rootProject>/build/<packageId>Versions.props` |
-| `prebuiltRuntimes` | `DirectoryProperty` | no | unset; a directory laid out `<rid>/native/*.{dll,dylib,so}`, exactly the `runtimes/` tree `nugetPack` stages, merged with the RIDs this host links itself into one package |
-| `repositories { }` | function | no | empty; declares named feeds `nugetPublish` pushes the packed `.nupkg` to, see below |
+| `prebuiltRuntimes` | `DirectoryProperty` | no | unset; a directory laid out `<rid>/native/*.{dll,dylib,so}`, exactly the `runtimes/` tree `packNuget` stages, merged with the RIDs this host links itself into one package |
+| `repositories { }` | function | no | empty; declares named feeds `publishNuget` pushes the packed `.nupkg` to, see below |
 
 ```kotlin
 nuget {
@@ -117,7 +117,7 @@ nuget {
 
 ### Snapshot versioning
 
-With `snapshot = true`, every `nugetPack` run mints a fresh, immutable version instead of reusing
+With `snapshot = true`, every `packNuget` run mints a fresh, immutable version instead of reusing
 `version` as-is, so a .NET consumer's next restore always sees a new version and never serves
 NuGet's cached copy of the previous build:
 
@@ -139,7 +139,7 @@ local-iteration flow and the consumer-side props import.
 ### Publishing repositories
 
 `repositories { }` declares named feeds inside `publish { }`; each `nuget(name) { }` block gets its
-own `nugetPublishTo<Name>Repository` task:
+own `publishNugetTo<Name>Repository` task:
 
 ```kotlin
 nuget {
@@ -160,9 +160,9 @@ for credential resolution, `--dryRun`, and `--skipDuplicate`.
 
 ### Multi-RID packages
 
-`nugetPack` only links the native targets this host's Kotlin/Native toolchain can build, but a
+`packNuget` only links the native targets this host's Kotlin/Native toolchain can build, but a
 package worth publishing needs every RID your CI matrix produces. `prebuiltRuntimes` points at a
-directory built by another host and merges it into this host's own pack, so one `nugetPack` run
+directory built by another host and merges it into this host's own pack, so one `packNuget` run
 still produces one package covering both:
 
 ```kotlin
@@ -175,19 +175,19 @@ nuget {
 }
 ```
 
-A typical two-host CI flow: a Windows leg runs `nugetPack` and uploads its staged `runtimes/`
+A typical two-host CI flow: a Windows leg runs `packNuget` and uploads its staged `runtimes/`
 folder as an artifact, then a macOS leg downloads it, points `prebuiltRuntimes` at it, and runs
-`nugetPack` itself, producing one package with both RIDs.
+`packNuget` itself, producing one package with both RIDs.
 
 <note>
 <p>A target whose link task is disabled on the packing host (say <code>mingwX64</code> declared but
 not linkable here) is excluded from the locally linked set, with a lifecycle log naming the RID and
 pointing at <code>prebuiltRuntimes</code> as the way to still ship it. A host with every local link
-disabled and <code>prebuiltRuntimes</code> set still gets a <code>nugetPack</code> task: a
+disabled and <code>prebuiltRuntimes</code> set still gets a <code>packNuget</code> task: a
 pack-only host is a supported shape.</p>
 </note>
 
-`nugetPack` validates the merge rather than silently dropping anything:
+`packNuget` validates the merge rather than silently dropping anything:
 
 - A locally linked RID with no `.dll`/`.dylib`/`.so` to copy fails the build naming the RID and the
   directory scanned.

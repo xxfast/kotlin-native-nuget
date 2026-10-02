@@ -5,7 +5,7 @@ set -euo pipefail
 #
 # The Tier 1 unit assertions prove the *producer* only: the harness injects its own
 # RecordingKSPLogger, which is precisely the component production replaces, so they cannot fail for
-# either defect this ADR fixes (KSP's stdout never reaching the console, and nugetPack not running
+# either defect this ADR fixes (KSP's stdout never reaching the console, and packNuget not running
 # KSP at all on an incremental build).
 #
 # This runs a real build and asserts on the real console, twice. When invoked by verify.sh, both
@@ -29,7 +29,7 @@ run() {
   local label="$1"
   local log="$2"
   echo "==> $label: pack both publishers with --console=plain --no-configuration-cache"
-  ./gradlew :test-library:nugetPack :test-companion:nugetPack --console=plain --no-configuration-cache >"$log" 2>&1 || {
+  ./gradlew :test-library:packNuget :test-companion:packNuget --console=plain --no-configuration-cache >"$log" 2>&1 || {
     echo "FAIL: the build itself failed; see $log" >&2
     tail -40 "$log" >&2
     exit 1
@@ -68,7 +68,7 @@ run() {
 
   # Issue #235: a diagnostic may only ever describe something the consumer can act on. Nobody
   # wrote `Carton.Companion.serializer` or `Carton.$serializer`; the kotlinx.serialization compiler
-  # plugin did, on a `@Serializable` type in `:test-models`. Grepped on the real nugetPack console
+  # plugin did, on a `@Serializable` type in `:test-models`. Grepped on the real packNuget console
   # rather than in a unit test because the plugin only runs in a real build: KSP shows nothing at
   # all for an in-module `@Serializable` type, so this surface exists solely across a klib boundary.
   if grep -q '\[nuget:.*serializer' "$log"; then
@@ -105,7 +105,7 @@ run "run 1" "$LOG_DIR/run1.log"
 
 # No clean, no --rerun-tasks: KSP is UP-TO-DATE / FROM-CACHE here, and the warning must still
 # appear. This assertion is what separates "appears once when KSP happens to run" from "a consumer
-# running nugetPack sees it".
+# running packNuget sees it".
 run "run 2 (incremental, KSP up-to-date)" "$LOG_DIR/run2.log"
 
 for module in test-library test-companion; do
@@ -145,4 +145,4 @@ PYTHON
 
 assert_no_synthesized_serializer_in_interop
 
-echo "OK: forward diagnostics reach both nugetPack consoles, including cached KSP"
+echo "OK: forward diagnostics reach both packNuget consoles, including cached KSP"

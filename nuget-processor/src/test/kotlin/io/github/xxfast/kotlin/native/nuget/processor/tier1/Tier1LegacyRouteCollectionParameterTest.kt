@@ -21,7 +21,7 @@ import kotlin.test.assertTrue
  * e: CNameExports.kt:342:8 One type argument expected for 'interface Set<out E> : Collection<E>'.
  * ```
  *
- * `nugetPack` dies at that compile, so the whole package fails to build, not just the offending
+ * `packNuget` dies at that compile, so the whole package fails to build, not just the offending
  * member. Tier 1 is where that is cheapest to see: [Tier1Result.compiledClean] is the same
  * compiler's verdict on the same file, without a native link.
  *
@@ -103,7 +103,7 @@ class Tier1LegacyRouteCollectionParameterTest {
   /**
    * The headline cell, and the whole of issue #109: the generated Kotlin has to compile. Pre-fix
    * this is `One type argument expected for 'interface List<out E>'` (and the `Set` twin), which
-   * is `nugetPack` dying on any module that declares these shapes.
+   * is `packNuget` dying on any module that declares these shapes.
    */
   @Test
   fun `a collection parameter on a legacy route still generates compiling Kotlin`() {

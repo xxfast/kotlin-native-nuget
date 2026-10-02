@@ -96,7 +96,7 @@ internal fun KSFunctionDeclaration.hasPlannedCallbackParameter(
  * binding there: it is a broken build or an uncatchable crash, measured per shape.
  *  - `(Int?) -> Unit`: Kotlin `cbFn.invoke(it0, cbUserData)` against
  *    `CFunction<(Int, COpaquePointer) -> Unit>` -- "actual type is 'Int?', but 'Int' was expected",
- *    so the author's `nugetPack` fails in GENERATED code with no diagnostic first.
+ *    so the author's `packNuget` fails in GENERATED code with no diagnostic first.
  *  - `(Cat?) -> Unit`: `NugetHandles.retain(it0)` against `retain(value: Any)` -- same abort.
  *  - `(String?) -> Unit`: compiles, then `retain(it0 as Any)` throws an uncaught
  *    `NullPointerException` inside a `@CName` export with no error slot, which terminates the host

@@ -6,7 +6,7 @@ namespace IntegrationTests;
 /// <summary>
 /// Issue #122 / ADR-119: a <c>suspend</c> member returning <c>List&lt;T&gt;</c> rendered the type
 /// argument away, as bare <c>List</c>, so the generated <c>Interop.cs</c> failed this project's
-/// compile with <c>CS0305</c> while <c>nugetPack</c> stayed green. The fact that this file compiles
+/// compile with <c>CS0305</c> while <c>packNuget</c> stayed green. The fact that this file compiles
 /// is therefore most of the test.
 /// <para>
 /// The precedent is on the same class: <see cref="Existing.Members"/> (the property route) already

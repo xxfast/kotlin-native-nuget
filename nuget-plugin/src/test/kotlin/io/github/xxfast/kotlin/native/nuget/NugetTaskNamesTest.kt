@@ -10,7 +10,11 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/** ADR-182 sections 2 and 4: one `nuget<Verb><Object>` scheme, and the old names are gone. */
+/**
+ * ADR-182 sections 2 and 4: packaging and publishing tasks are verb-first (`packNuget`,
+ * `publishNuget`), as Kotlin's Gradle plugin names producing tasks; tool steps are `nuget`-prefixed.
+ * Only `nugetGen` was renamed, as a clean break.
+ */
 class NugetTaskNamesTest {
   private fun everyTaskProject(): Project {
     val project: Project = ProjectBuilder.builder().build()
@@ -39,7 +43,7 @@ class NugetTaskNamesTest {
   }
 
   @Test
-  fun `every task the plugin registers follows the nuget verb object scheme`() {
+  fun `packaging and publishing tasks are verb-first and tool steps are nuget-prefixed`() {
     val project: Project = everyTaskProject()
     val expected: List<String> = listOf(
       NugetTaskNames.GENERATE_RESTORE_PROJECT,
@@ -53,49 +57,59 @@ class NugetTaskNamesTest {
       NugetTaskNames.PACK,
       NugetTaskNames.PUBLISH,
       NugetTaskNames.publishTo("local"),
-      NugetTaskNames.GENERATE_SNAPSHOT_VERSION,
-      NugetTaskNames.GENERATE_SNAPSHOT_VERSION_PROPS,
+      NugetTaskNames.SNAPSHOT_VERSION,
+      NugetTaskNames.SNAPSHOT_VERSION_PROPS,
     )
     expected.forEach { name -> assertNotNull(project.tasks.findByName(name), "$name is not registered") }
-    assertEquals("nugetPublishToLocalRepository", NugetTaskNames.publishTo("local"))
+    assertEquals("packNuget", NugetTaskNames.PACK)
+    assertEquals("publishNuget", NugetTaskNames.PUBLISH)
+    assertEquals("publishNugetToLocalRepository", NugetTaskNames.publishTo("local"))
+    assertEquals("nugetSnapshotVersion", NugetTaskNames.SNAPSHOT_VERSION)
+    assertEquals("nugetSnapshotVersionProps", NugetTaskNames.SNAPSHOT_VERSION_PROPS)
+    assertEquals("nugetGenerateRestoreProject", NugetTaskNames.GENERATE_RESTORE_PROJECT)
 
-    val scheme = Regex("^nuget(Generate|Restore|Import|Extract|Report|Compile|Pack|Publish)[A-Za-z]*$")
+    val packaging = Regex("^(pack|publish)Nuget([A-Z][A-Za-z]*)?$")
+    val toolStep = Regex("^nuget(?!Pack|Publish)[A-Z][A-Za-z]*$")
     val ours: List<String> = project.tasks
       .filter { it.group == "nuget" || it.name.contains("nuget", ignoreCase = true) }
       .map { it.name }
     assertEquals(expected.toSet(), ours.toSet())
-    ours.forEach { name -> assertTrue(scheme.matches(name), "$name breaks the task naming scheme") }
+    ours.forEach { name ->
+      val packages: Boolean = name.startsWith("pack") || name.startsWith("publish")
+      val rule: Regex = if (packages) packaging else toolStep
+      assertTrue(rule.matches(name), "$name breaks the task naming rule")
+    }
   }
 
-  // Clean break, no tombstones: a stub under the old name would have to be deleted in 0.10.0,
-  // which allows no breaks.
+  // Clean break for nugetGen, no tombstone: a stub would have to be deleted in 0.10.0, which allows
+  // no breaks. The nuget-prefixed packaging names were never released and must not come back.
   @Test
-  fun `the pre-0_9 task names are not registered`() {
+  fun `nugetGen and the unreleased nuget-prefixed packaging names are not registered`() {
     val project: Project = everyTaskProject()
     listOf(
       "nugetGen",
-      "packNuget",
-      "publishNuget",
-      "publishNugetToLocalRepository",
-      "nugetSnapshotVersion",
-      "nugetSnapshotVersionProps",
+      "nugetPack",
+      "nugetPublish",
+      "nugetPublishToLocalRepository",
+      "nugetGenerateSnapshotVersion",
+      "nugetGenerateSnapshotVersionProps",
     ).forEach { old -> assertNull(project.tasks.findByName(old), "$old is still registered") }
   }
 
   @Test
-  fun `renamed task classes back the renamed tasks`() {
+  fun `task classes back their tasks`() {
     val project: Project = everyTaskProject()
-    assertTrue(project.tasks.getByName(NugetTaskNames.PACK) is NugetPackTask)
-    assertTrue(project.tasks.getByName(NugetTaskNames.publishTo("local")) is NugetPublishTask)
+    assertTrue(project.tasks.getByName(NugetTaskNames.PACK) is PackNugetTask)
+    assertTrue(project.tasks.getByName(NugetTaskNames.publishTo("local")) is PublishNugetTask)
     assertTrue(
       project.tasks.getByName(NugetTaskNames.GENERATE_RESTORE_PROJECT) is NugetGenerateRestoreProjectTask
     )
     assertTrue(
-      project.tasks.getByName(NugetTaskNames.GENERATE_SNAPSHOT_VERSION) is NugetGenerateSnapshotVersionTask
+      project.tasks.getByName(NugetTaskNames.SNAPSHOT_VERSION) is NugetSnapshotVersionTask
     )
     assertTrue(
-      project.tasks.getByName(NugetTaskNames.GENERATE_SNAPSHOT_VERSION_PROPS)
-        is NugetGenerateSnapshotVersionPropsTask
+      project.tasks.getByName(NugetTaskNames.SNAPSHOT_VERSION_PROPS)
+        is NugetSnapshotVersionPropsTask
     )
   }
 

@@ -113,7 +113,7 @@ class Tier1SkipMeansAbsentTest {
   @Test
   fun `a bare ByteArray at a Flow element no longer crashes the processor`() {
     // Measured before the fix: `IllegalStateException: Kotlin builtin kotlin.ByteArray reached the
-    // user-type C# speller` out of KSP, which took `nugetPack` down with it -- every other
+    // user-type C# speller` out of KSP, which took `packNuget` down with it -- every other
     // declaration in the module went with it. Now it BINDS (ADR-151 amendment), through the
     // ADR-123 per-member `read:` seam.
     val result: Tier1Result = Tier1Harness.run(

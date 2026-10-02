@@ -295,7 +295,7 @@ Two task chains, one per direction. See [Gradle tasks](gradle-tasks.md) for the 
 |---|---|---|
 | compile + link | Kotlin/Native shared libs, one per target RID | `.dylib` / `.dll` |
 | KSP → CIR | reader + renderer emit the C# and Kotlin bridge source | `Interop.cs`, `CNameExports.kt` |
-| `nugetPack` | assembles `runtimes/` + `contentFiles` into the package | `.nupkg` |
+| `packNuget` | assembles `runtimes/` + `contentFiles` into the package | `.nupkg` |
 
 **Reverse: consume C# → Kotlin**, aggregated behind the `nugetImport` IDE-sync task:
 

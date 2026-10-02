@@ -34,13 +34,13 @@ assert_build() {
 }
 
 dotnet pack Kotlin.Native.Interop -c Release -o build/nuget
-./gradlew :test-library:clean :test-companion:clean :test-library:nugetPack :test-companion:nugetPack
+./gradlew :test-library:clean :test-companion:clean :test-library:packNuget :test-companion:packNuget
 first_version="$(consumer_version)"
 test -n "$first_version"
 assert_build "$first_version"
 
 # --rerun-tasks makes this a second fixture build while preserving every NuGet and MSBuild cache.
-./gradlew --rerun-tasks :test-library:nugetPack :test-companion:nugetPack
+./gradlew --rerun-tasks :test-library:packNuget :test-companion:packNuget
 second_version="$(consumer_version)"
 test -n "$second_version"
 test "$first_version" != "$second_version"

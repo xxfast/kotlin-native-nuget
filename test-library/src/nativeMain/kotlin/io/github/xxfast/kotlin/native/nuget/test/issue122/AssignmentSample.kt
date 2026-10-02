@@ -6,7 +6,7 @@ import kotlinx.coroutines.delay
 /**
  * Fixture for issue [#122](https://github.com/xxfast/kotlin-native-nuget/issues/122) / ADR-119: a
  * `suspend` member returning `List<T>` rendered the type argument away, as bare `List`, so the
- * generated `Interop.cs` failed the consumer's compile (`CS0305`) while `nugetPack` stayed green.
+ * generated `Interop.cs` failed the consumer's compile (`CS0305`) while `packNuget` stayed green.
  *
  * The precedent is on the same class: the **property** route already spells `List<Member>` as
  * `IReadOnlyList<global::TestLibrary.Issue122.Member>` and reads it through `nuget_list_*`. ADR-119

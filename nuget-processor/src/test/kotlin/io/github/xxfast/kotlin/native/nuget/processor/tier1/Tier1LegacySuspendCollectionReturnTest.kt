@@ -18,7 +18,7 @@ import kotlin.test.assertTrue
  * Interop.cs(12626,21): error CS0305: Using the generic type 'List<T>' requires 1 type arguments
  * ```
  *
- * `nugetPack` is green with this in it: the failure only shows when the generated `Interop.cs` is
+ * `packNuget` is green with this in it: the failure only shows when the generated `Interop.cs` is
  * compiled by a consumer. Tier 1 asserts the C# text structurally (ADR-060), so the cells below
  * read the rendered signature rather than compiling it.
  *

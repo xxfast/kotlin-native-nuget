@@ -41,7 +41,7 @@ fi
 
 if [ -z "$LIBRARY" ]; then
   {
-    echo "no linked shared library found (pack the sample first: ./gradlew :test-library:nugetPack)"
+    echo "no linked shared library found (pack the sample first: ./gradlew :test-library:packNuget)"
     echo "looked for:"
     for candidate in "${CANDIDATES[@]}"; do
       echo "  $candidate"
@@ -51,7 +51,7 @@ if [ -z "$LIBRARY" ]; then
 fi
 
 if [ ! -f "$LIBRARY" ]; then
-  echo "shared library not found: $LIBRARY (pack the sample first: ./gradlew :test-library:nugetPack)" >&2
+  echo "shared library not found: $LIBRARY (pack the sample first: ./gradlew :test-library:packNuget)" >&2
   exit 1
 fi
 

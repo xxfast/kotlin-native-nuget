@@ -4,7 +4,7 @@ namespace IntegrationTests;
 
 // ADR-075 ("Forward — plan collection property getters and setters independently"). Two
 // ROADMAP items land together here: a `var` collection property used to lose its getter
-// entirely, and a nullable collection property (`val` or `var`) used to crash `nugetPack`
+// entirely, and a nullable collection property (`val` or `var`) used to crash `packNuget`
 // outright. Oreo and Mylo are, as ever, the patients on file.
 public class CollectionPropertyIndependenceTests
 {

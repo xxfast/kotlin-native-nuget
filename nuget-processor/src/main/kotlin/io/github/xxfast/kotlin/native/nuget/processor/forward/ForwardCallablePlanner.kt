@@ -88,7 +88,7 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    * ANY position. ADR-083 declined it at an input position already; the result, property-read and
    * nested positions admitted it and rendered `NugetMarshal.ReadMap<string?, int>` against a helper
    * declared `where TKey : notnull`, which is CS8714 and a hard error under the ADR-138 gate's
-   * csproj -- a `nugetPack` abort, not a consumer-side warning.
+   * csproj -- a `packNuget` abort, not a consumer-side warning.
    *
    * Its own reason rather than the COLLECTION bucket because the hint slot carries no per-detail
    * text, and COLLECTION's hint ("use components that are primitives, Char, String, ...") would
@@ -4194,7 +4194,7 @@ internal fun BridgeType.sealedAsHandle(): BridgeType = when (this) {
  * the whole callable through the normal named-diagnostic path, not reach the plan validator —
  * `handleResultShape`/`inputSkipReason` used to build a Collection shape unconditionally, so an
  * unsupported element only surfaced as a hard `IllegalStateException` out of
- * `ForwardCallablePlanValidator.validateType`, crashing the entire `nugetPack` rather than
+ * `ForwardCallablePlanValidator.validateType`, crashing the entire `packNuget` rather than
  * skipping the one member. Mirrors [ForwardCallablePlanValidator.validateType]'s error branches
  * exactly, so anything that would `error(...)` there returns `false` here instead.
  *
@@ -4361,7 +4361,7 @@ internal fun BridgeType.Collection.declinesNullableMapKey(): Boolean = when (kin
  * six narrow primitive kinds and `Char`, each with a `nuget_wrap_*` export of its own. Still
  * narrower than [isBridgeableComponent], which also admits nested `Collection` and `Unit` (neither
  * of which the write side can box), because those overshoots would otherwise either crash
- * `nugetPack` (nested `Collection`, no `elementKotlinTypeName` branch) or throw at runtime
+ * `packNuget` (nested `Collection`, no `elementKotlinTypeName` branch) or throw at runtime
  * (`NotSupportedException`, no matching `nuget_wrap_*`).
  *
  * ADR-097: this is now the gate for *every* input position, `List` included. ADR-075 already

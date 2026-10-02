@@ -12,7 +12,7 @@ import kotlin.test.assertTrue
  * `inputSkipReason` built a `Collection` shape unconditionally, regardless of whether the element
  * was itself bridgeable. A plain (non-collection) unsupported return classifies straight to
  * `BridgeType.Unsupported` and skips cleanly; only the collection-element path crashed the whole
- * `nugetPack` with an `IllegalStateException` instead of skipping the one member.
+ * `packNuget` with an `IllegalStateException` instead of skipping the one member.
  *
  * Reproduced here with an ordinary `exclude(...)`-scoped element (no dependency module needed):
  * `Secret` is module-local but outside the export scope, so `Widget.archive(): List<Secret>`

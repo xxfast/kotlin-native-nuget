@@ -11,7 +11,7 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-class NugetPublishTaskTest {
+class PublishNugetTaskTest {
   private lateinit var server: HttpServer
   private val keys = mutableListOf<String?>()
   private val methods = mutableListOf<String>()
@@ -53,14 +53,14 @@ class NugetPublishTaskTest {
     close()
   }
 
-  private fun task(skipDuplicate: Boolean = false): NugetPublishTask {
+  private fun task(skipDuplicate: Boolean = false): PublishNugetTask {
     val project: Project = ProjectBuilder.builder().build()
     val file = File(project.layout.buildDirectory.get().asFile, "nuget/TestLibrary.1.0.0.nupkg")
     file.parentFile.mkdirs()
     file.writeBytes(byteArrayOf(0x50, 0x4B, 0x03, 0x04))
 
-    val task: NugetPublishTask = project.tasks
-      .register("nugetPublishToFakeRepository", NugetPublishTask::class.java)
+    val task: PublishNugetTask = project.tasks
+      .register("publishNugetToFakeRepository", PublishNugetTask::class.java)
       .get()
     task.packageFile.set(file)
     task.repositoryName.set("fake")

@@ -34,7 +34,7 @@ class NugetGenerateShimsTaskWiringTest {
   // fail-fast `nativeLibraryName` derivation (ADR-049 Alternative 12) has something to resolve.
   //
   // Applying the real "org.jetbrains.kotlin.multiplatform" plugin also activates NugetPlugin's
-  // pre-existing forward-direction (`nugetPack`) wiring, which independently requires a
+  // pre-existing forward-direction (`packNuget`) wiring, which independently requires a
   // `nuget { publish { ... } }` block to be present at evaluation time — unrelated to this ADR,
   // but a precondition of applying the KMP plugin at all in this codebase, so it must be
   // satisfied here too (all fields are nullable; an empty block is sufficient).

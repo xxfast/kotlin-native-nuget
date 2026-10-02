@@ -220,7 +220,7 @@ class CollarStream {
   /**
    * BARE `ByteArray` as a `Flow` element: `KotlinFlow<byte[]>`.
    *
-   * Measured 2026-09-20, BEFORE the fix: this one member **crashed** `nugetPack` outright, it was
+   * Measured 2026-09-20, BEFORE the fix: this one member **crashed** `packNuget` outright, it was
    * not a skip: `e: [ksp] java.lang.IllegalStateException: Kotlin builtin kotlin.ByteArray reached
    * the user-type C# speller; it would render global::TestLibrary.Kotlin..., a namespace nothing
    * declares. Gate the call site on the type's own route first (ADR-123).` It binds now, through

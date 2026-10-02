@@ -1,6 +1,6 @@
 import io.github.xxfast.kotlin.native.nuget.NugetGenerateRestoreProjectTask
 import io.github.xxfast.kotlin.native.nuget.NugetCompileInteropTask
-import io.github.xxfast.kotlin.native.nuget.NugetPackTask
+import io.github.xxfast.kotlin.native.nuget.PackNugetTask
 
 plugins {
   alias(libs.plugins.kotlinMultiplatform)
@@ -45,7 +45,7 @@ afterEvaluate {
     dependsOn(":test-library:writeFixtureVersion")
     dependencyVersions.set(fixtureVersion.map { mapOf("TestDependency" to it) })
   }
-  tasks.named("nugetPack", NugetPackTask::class.java) {
+  tasks.named("packNuget", PackNugetTask::class.java) {
     packageVersion.set(fixtureVersion)
     dependsOn(":test-library:writeFixtureVersions")
   }

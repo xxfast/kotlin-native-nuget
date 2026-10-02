@@ -281,7 +281,7 @@ Implemented (2026-10-02, sections 1, 2 and 4, the DSL filter and task-name half)
   the old functions are ERROR-level deprecations forwarding to them, asserted reflectively in
   `NugetTaskNamesTest`. Fixture build scripts, README and the docs pages use the new names.
 - `NugetTaskNames` holds every task name; every `register(...)` / `named(...)` in the plugin and the
-  messages that name a task (`NugetExtractApiTask`, `NugetPackTask`, `NugetPusher`, the task
+  messages that name a task (`NugetExtractApiTask`, `PackNugetTask`, `NugetPusher`, the task
   descriptions) read it. `NugetTaskNamesTest` asserts all thirteen names are registered, that the
   packaging tasks are verb-first and the tool-driving ones `nuget`-prefixed, and that `nugetGen` is gone.
 - `NugetGenTask`, its file and its tests renamed as in the table above.

@@ -453,7 +453,7 @@ private fun elementKotlinTypeName(type: BridgeType): String = when (type) {
   // ROADMAP Phase 4 (ADR-151 amendment): the incoming box holds the real `ByteArray` --
   // `nuget_list_add` dereferenced the `nuget_bytes_create` handle before storing it -- so the
   // lowering is the plain cast every other handle-shaped component uses. Without this arm the
-  // `else` below crashes `nugetPack` outright.
+  // `else` below crashes `packNuget` outright.
   BridgeType.ByteArray -> "kotlin.ByteArray"
   else -> error("Forward Kotlin plan emitter has no element type name for $type")
 }

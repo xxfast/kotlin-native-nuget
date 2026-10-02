@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
  * Two opposite edits, and they have to be read together, because before this change the tool got
  * each one exactly backwards:
  *  - a lambda whose PAYLOAD or RETURN is nullable bound with no diagnostic at all and then either
- *    aborted the author's `nugetPack` inside generated Kotlin (`Int?` and handle payloads on the
+ *    aborted the author's `packNuget` inside generated Kotlin (`Int?` and handle payloads on the
  *    per-call route, every payload on the stored route) or crossed and killed the host process on a
  *    real null (`String?`, and a callback returning null at a generated `!!`). It is now a named
  *    skip, which replaces a broken build rather than removing a working member;

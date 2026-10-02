@@ -54,10 +54,10 @@ relative to it. See the [nuget {} DSL reference](nuget-dsl.md) for every field.
 ## 4. Pack it
 
 ```bash
-./gradlew nugetPack
+./gradlew packNuget
 ```
 
-`nugetPack` runs KSP to generate the C# bindings, links the shared libraries for every configured
+`packNuget` runs KSP to generate the C# bindings, links the shared libraries for every configured
 target, and writes a real `.nupkg` at:
 
 ```
@@ -71,7 +71,7 @@ present.
 ## 5. Consume it from C#
 
 Point a C# project at the folder containing the `.nupkg` as a local NuGet feed and add a
-`PackageReference`. To publish to a real feed instead, run `./gradlew nugetPublish`; see
+`PackageReference`. To publish to a real feed instead, run `./gradlew publishNuget`; see
 [Publish a Kotlin/Native library as NuGet](publish-kotlin-library-as-nuget.md#5-publish-the-package-to-a-feed).
 The package ships the native libs under
 `runtimes/{rid}/native/` and the pre-generated `Interop.cs` under `contentFiles/cs/<tfm>/`, both

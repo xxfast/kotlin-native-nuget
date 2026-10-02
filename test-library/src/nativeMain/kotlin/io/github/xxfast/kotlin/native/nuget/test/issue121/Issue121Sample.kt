@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.flowOf
  * declaration", which nothing may emit. So a marked lambda property was reported
  * `SKIPPED_OPT_IN_MARKER` and exported anyway, on both sides.
  *
- * **This fixture is the criterion-3 test.** It is compiled by `nugetPack` with no `optIn` or
+ * **This fixture is the criterion-3 test.** It is compiled by `packNuget` with no `optIn` or
  * `-opt-in=` flag anywhere in any build script. Before the fix the generated `CNameExports.kt` read
  * these marked properties without opting in and the module did not compile, so the fixture existing
  * and the build being green is itself the assertion. `IntegrationTests/Issue121Tests.cs` then owns

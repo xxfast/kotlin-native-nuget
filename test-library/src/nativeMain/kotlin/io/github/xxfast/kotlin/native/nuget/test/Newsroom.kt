@@ -70,7 +70,7 @@ class Newsroom {
 
   /**
    * Closure-termination guard: a cyclic pair across the module boundary (`Whisker.purr: Purr?`,
-   * `Purr.whisker: Whisker?`). Must not hang or crash `nugetPack`.
+   * `Purr.whisker: Whisker?`). Must not hang or crash `packNuget`.
    */
   fun echo(): Whisker = catnip()
 

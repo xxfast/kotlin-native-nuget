@@ -4,7 +4,7 @@ package io.github.xxfast.kotlin.native.nuget.test.grooming
  * ADR-095 · overloads on the four *static* export routes.
  *
  * ADR-090 gave ordinary-class methods a numbering scheme (`CatNarrator`); it recorded, verified by
- * the same spike, that the other four same-name routes still crash the whole `nugetPack` run with
+ * the same spike, that the other four same-name routes still crash the whole `packNuget` run with
  * the identical `planFor` duplicate-plans message. This file is the consumer-side red step for all
  * four, one route per carrier, deliberately in its own package: top-level and extension numbering
  * are *package*-scoped, so putting these cells anywhere else would entangle their counters with

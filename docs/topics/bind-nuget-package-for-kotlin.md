@@ -58,7 +58,7 @@ Generated bindings are experimental, so the file opts in. See [Consuming C# in K
 
 ## 3. Package the bridge and call it
 
-Run `nugetPack` again. When both `publish {}` and `dependencies {}` are present, the package
+Run `packNuget` again. When both `publish {}` and `dependencies {}` are present, the package
 includes the C# registration shims and an exact dependency on the bound NuGet package. The .NET
 consumer still references only the Kotlin library package.
 
