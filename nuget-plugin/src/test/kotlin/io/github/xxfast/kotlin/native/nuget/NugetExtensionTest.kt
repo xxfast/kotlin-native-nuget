@@ -176,6 +176,20 @@ class NugetExtensionTest {
     assertEquals(listOf("Acme.Core", "Acme.Math"), bind.includeNamespaces.get())
   }
 
+  // ADR-192: a second bind block does not open a second namespace group; packageName is last-wins.
+  @Test
+  fun `a second bind block with its own packageName overrides the first`() {
+    extension.dependencies {
+      it.dependency("Acme") { dep ->
+        dep.bind { bind -> bind.packageName.set("acme.core") }
+        dep.bind { bind -> bind.packageName.set("acme.math") }
+      }
+    }
+
+    val bind: NugetBindConfig = extension.dependencies.single().bind
+    assertEquals("acme.math", bind.packageName.get())
+  }
+
   @Test
   fun `aliasing the same csharp namespace twice keeps only the last kotlin package`() {
     extension.dependencies {

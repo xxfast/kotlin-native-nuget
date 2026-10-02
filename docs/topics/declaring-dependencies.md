@@ -47,14 +47,27 @@ nuget {
 - `alias(csharpNamespace, kotlinPackage)` overrides `packageName` for that one namespace. A
   namespace without a matching `alias()` falls back to `packageName`, or, if that's unset too, to
   the package id lowercased with `-` replaced by `_`.
+- `alias()` matches one namespace exactly, unlike the filters: an included sub-namespace needs its own
+  `alias()` line or it uses `packageName`. Several namespaces may alias to one package.
+- A second `bind { }` block merges into the first (lists and aliases accumulate, `packageName` is
+  last-wins), so groups of namespaces get their own packages through aliases:
+
+```kotlin
+dependency("TestDependency", version = "1.0.0") {
+  bind {
+    includeNamespaces("Test.Text")
+    alias("Test.Text", "test.text")
+    includeNamespaces("Test.Enums")
+    alias("Test.Enums", "test.enums")
+  }
+}
+```
 
 See [The nuget {} DSL](nuget-dsl.md) for every `bind { }` property, its default, and whether it's
 required.
 
 ## Limitations
 
-- Only one `bind { }` block per `dependency()` is supported: a second `bind { }` call on the same
-  dependency replaces the first rather than merging with it.
 - A private feed is set per package with `source = "https://.../index.json"` inside `dependency()`;
   there's no extension-level shared feed list yet.
 - There's no local `.nupkg` or path-based dependency source yet, only registry resolution.

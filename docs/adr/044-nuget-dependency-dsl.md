@@ -523,5 +523,6 @@ The task names follow the `nuget*` prefix convention established in the synthesi
   at the `nuget {}` root); v1 supports per-dependency `source` only.
 - Multiple `bind {}` calls per dependency (multiple namespace groups with distinct `packageName`
   values in one package); v1 allows only one `bind {}` per `dependency()`.
+  See [ADR-192](192-reverse-namespace-groups-via-alias.md): namespace groups use `alias()`, and a repeated `bind {}` merges.
 - Transitive-package binding shorthand — binding a transitive package without promoting it to a
   direct `dependency()` declaration.

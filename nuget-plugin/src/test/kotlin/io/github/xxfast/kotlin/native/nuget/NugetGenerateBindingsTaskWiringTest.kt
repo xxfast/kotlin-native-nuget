@@ -163,4 +163,32 @@ class NugetGenerateBindingsTaskWiringTest {
       "nugetGenerateBindings.reverseIrFile must point at the same file as nugetExtractApi.reverseIrFile",
     )
   }
+
+  // ADR-192: namespace groups are aliases, and a repeated bind block merges its aliases.
+  @Test
+  fun `two bind blocks contribute both namespace aliases to nugetGenerateBindings`() {
+    val project: Project = buildProject()
+
+    project.extensions.getByType(NugetExtension::class.java).dependencies {
+      it.dependency("Acme.Utilities", version = "2.0.0") { dep ->
+        dep.bind { bind -> bind.alias("Acme.Utilities.Core", kotlinPackage = "acme.core") }
+        dep.bind { bind -> bind.alias("Acme.Utilities.Math", kotlinPackage = "acme.math") }
+      }
+    }
+
+    project.evaluate()
+
+    val task: NugetGenerateBindingsTask =
+      project.tasks.getByName("nugetGenerateBindings") as NugetGenerateBindingsTask
+
+    assertEquals(
+      mapOf(
+        "Acme.Utilities" to mapOf(
+          "Acme.Utilities.Core" to "acme.core",
+          "Acme.Utilities.Math" to "acme.math",
+        ),
+      ),
+      task.namespaceAliases.get(),
+    )
+  }
 }

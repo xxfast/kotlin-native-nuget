@@ -1434,6 +1434,52 @@ class NugetGenerateBindingsTaskTest {
     assertContains(stub.content, "import test.enums.Mood")
   }
 
+  // ------------------------------------------------------------------
+  // ADR-192: a namespace group is a set of aliases to one Kotlin package. alias is an exact match,
+  // so a sub-namespace that is not aliased itself falls back to packageName.
+  // ------------------------------------------------------------------
+
+  private fun enumNamespace(name: String, enum: String): RirNamespace = RirNamespace(
+    name = name,
+    types = listOf(RirEnum(name = enum, entries = listOf(RirEnumEntry(name = "One", ordinal = 0)))),
+  )
+
+  private val groupedRir: RirFile = RirFile(
+    assemblies = listOf(
+      RirAssembly(
+        packageId = "Acme.Utilities",
+        assemblyName = "Acme.Utilities",
+        namespaces = listOf(
+          enumNamespace("Acme.Utilities.Core", "CoreKind"),
+          enumNamespace("Acme.Utilities.Core.Inner", "InnerKind"),
+          enumNamespace("Acme.Utilities.Math.Inner", "MathInnerKind"),
+        ),
+      ),
+    ),
+  )
+
+  @Test
+  fun `aliased namespaces share one kotlin package and unaliased ones use packageName`() {
+    val files: List<GeneratedFile> = generateKotlinStubs(
+      file = groupedRir,
+      packageNameOverrides = mapOf("Acme.Utilities" to "acme"),
+      namespaceAliases = mapOf(
+        "Acme.Utilities" to mapOf(
+          "Acme.Utilities.Core" to "acme.core",
+          "Acme.Utilities.Core.Inner" to "acme.core",
+          "Acme.Utilities.Math" to "acme.math",
+        ),
+      ),
+    )
+
+    fun content(name: String): String =
+      files.single { it.relativePath.endsWith("/$name.kt") }.content
+
+    assertContains(content("CoreKind"), "package acme.core\n")
+    assertContains(content("InnerKind"), "package acme.core\n")
+    assertContains(content("MathInnerKind"), "package acme\n")
+  }
+
   @Test
   fun `stub does not import an enum generated into its own kotlin package`() {
     val files: List<GeneratedFile> = generateKotlinStubs(crossNamespaceMoodRir)
