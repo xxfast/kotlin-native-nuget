@@ -126,6 +126,7 @@ class NugetInteropOutputCleanupTest {
     task.namespaceAliases.set(emptyMap())
     task.kotlinOutputDir.set(out)
     task.boundTypesManifestFile.set(File(work, "bound-types.json"))
+    task.diagnosticsFile.set(File(work, "NugetDiagnostics.json"))
 
     ir.writeText(reverseIr(mimeUtility, template))
     task.generate()
