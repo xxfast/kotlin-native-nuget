@@ -68,15 +68,10 @@ old task name fails with "task not found".
 | Before | Now |
 |---|---|
 | `bind { include(...) }`, `bind { exclude(...) }` | `includeNamespaces(...)`, `excludeNamespaces(...)`. The old functions are deprecated at `ERROR` level with a `ReplaceWith`. `publish { include/exclude }` is unchanged: it selects Kotlin packages. |
-| `packNuget` | `nugetPack` |
-| `publishNuget` | `nugetPublish` |
-| `publishNugetTo<Name>Repository` | `nugetPublishTo<Name>Repository` |
 | `nugetGen` | `nugetGenerateRestoreProject` |
-| `nugetSnapshotVersion`, `nugetSnapshotVersionProps` | `nugetGenerateSnapshotVersion`, `nugetGenerateSnapshotVersionProps` |
-| `PackNugetTask`, `PublishNugetTask` | `NugetPackTask`, `NugetPublishTask` |
-| `NugetGenTask`, `NugetSnapshotVersionTask`, `NugetSnapshotVersionPropsTask` | `NugetGenerateRestoreProjectTask`, `NugetGenerateSnapshotVersionTask`, `NugetGenerateSnapshotVersionPropsTask` |
+| `NugetGenTask` | `NugetGenerateRestoreProjectTask` |
 
-Every task now follows `nuget<Verb><Object>`; see [Gradle tasks](gradle-tasks.md).
+Tasks that pack or publish are verb-first (`packNuget`, `publishNuget`) and steps that drive the .NET tool start with `nuget`, as in Kotlin's Gradle plugin; see [Gradle tasks](gradle-tasks.md).
 
 Groovy build scripts can use the same blocks, but are not tested.
 
