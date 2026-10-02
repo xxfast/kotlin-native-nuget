@@ -405,7 +405,7 @@ class Tier1NestedTypesTest {
     )
     assertContains(
       result.generatedCSharp,
-      "private static extern IntPtr Native_Create(IntPtr outer, int visits, out IntPtr error);",
+      "private static extern IntPtr Native_Create(NugetKotlinHandle outer, int visits, out IntPtr error);",
     )
   }
 

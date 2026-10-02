@@ -190,9 +190,10 @@ private fun legacyRouteParameter(
       } else {
         shape.type.forwardPublicCsharpType()
       },
-      nativeType = "IntPtr",
+      // ADR-187: typed as the owned handle, so the call keeps it alive; a null is the zero sentinel.
+      nativeType = KOTLIN_HANDLE,
       nativeArgumentExpression =
-        if (shape.nullable) "$name?._handle ?? IntPtr.Zero" else "$name._handle",
+        if (shape.nullable) "$name?._handle ?? NugetKotlinHandle.Null" else "$name._handle",
     )
 
     // Issue #299: the plan route's wire. A nullable primitive or `Char` is public `int?` / `char?`

@@ -248,7 +248,7 @@ null case never reads. `LeakTests/LiveHandleTests.cs` row 9p
 A [top-level function returning a lambda](lambdas-and-callbacks.md#a-top-level-function-that-returns-a-lambda)
 adds one owned handle, the returned `KotlinFunc`, which `Dispose` releases. A parameter the lambda
 captures is not released when the call returns: a C#-implemented interface stays pinned until the
-`KotlinFunc` is disposed and Kotlin's cleaner runs, so a lambda you never dispose keeps it alive.
+`KotlinFunc` is disposed and Kotlin's cleaner runs, so a lambda you never dispose keeps it alive until the GC finalizes the `KotlinFunc`.
 Rows 6j to 6n of `LeakTests/LiveHandleTests.cs` cover a captured C#-implemented pet, a captured
 Kotlin `Cat`, value-only parameters, Kotlin throwing before it makes the lambda, and a throwing
 `IPet` factory on the returned lambda, and all return to baseline.
@@ -258,6 +258,33 @@ An exception thrown from Kotlin allocates one error handle per call, and the
 for the exception and each cause. `LeakTests/LiveHandleTests.cs`'s
 `KotlinxIoIOException_Throws_ReturnsToBaseline` throws a `kotlinx.io.IOException` repeatedly and
 returns to baseline, so a mapped throw releases its error handle.
+
+### Dropped wrappers are released by the GC
+
+A wrapper dropped without `Dispose()` returns `LiveHandles` to baseline once the .NET GC finalizes it
+([ADR-187](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/187-forward-finalizer-contract.md)).
+In a check, drop the wrapper in a method the JIT cannot inline, then loop `GC.Collect()` and
+`GC.WaitForPendingFinalizers()` until the count settles; it can take several rounds. These
+`LeakTests/LiveHandleTests.cs` rows pin it:
+
+| Row | Test | Pins |
+|---|---|---|
+| 16 | `UndisposedClassWrapper_IsReleasedByTheGc` | a class wrapper |
+| 16a | `UndisposedCallbackObjectPayload_LambdaParameterRoute_IsReleasedByTheGc` | a callback object payload, lambda-parameter route |
+| 16b | `UndisposedCallbackObjectPayload_CallbackMemberRoute_IsReleasedByTheGc` | a callback object payload, callback-member route |
+| 16c | `AbandonedWrapperTypedFlowItem_AfterDisposeAsync_IsReleasedByTheGc` | a wrapper-typed `Flow` item abandoned after `DisposeAsync` |
+| 16d | `UndisposedSealedArm_IsReleasedByTheGc` | a sealed arm |
+| 16e | `UndisposedInterfaceTypedReturn_IsReleasedByTheGc` | an interface-typed return |
+| 16f | `UndisposedKotlinFuncAndAction_IsReleasedByTheGc` | `KotlinFunc` and `KotlinAction` |
+| 16g | `UndisposedKotlinSuspendFunc_IsReleasedByTheGc` | `KotlinSuspendFunc` |
+| 16h | `UndisposedKotlinStateFlow_IsReleasedByTheGc` | `KotlinStateFlow` |
+| 16i | `DiscardedSubscription_KeepsDeliveringAfterTheGc_AndKeepsItsToken` | a discarded `AddX` subscription keeps delivering and keeps its token |
+| 16j | `UndisposedWrapperWithASuspendScope_IsReleasedByTheGc` | a wrapper that owns a suspend scope |
+| 16k | `DisposedWrappers_ThenFinalized_AreNotReleasedTwice` | no double release after `Dispose()` |
+
+The subscription token is the exception: row 16i pins that nothing releases it until you dispose the
+subscription, so a discarded subscription holds one handle for the life of the process. The
+finalizer rows have been run on macOS with the JIT only.
 
 ## Forward direction has no registration step
 

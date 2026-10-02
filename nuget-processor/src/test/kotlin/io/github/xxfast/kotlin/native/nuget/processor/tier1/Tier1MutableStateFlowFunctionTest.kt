@@ -86,11 +86,14 @@ class Tier1MutableStateFlowFunctionTest {
 
     // The flow is acquired once per call, and all three seams key off that one handle: the
     // shared collect/value exports for reads, the flow-keyed setter for writes, and the
-    // wrapper's own `ownedHandle` slot for disposal.
+    // wrapper's own `ownedHandle` slot for disposal. ADR-187: that one handle is owned from the
+    // moment it is acquired, and every seam passes the owned object.
     assertContains(csharp, "IntPtr flow = Native_Level(_handle);")
-    assertContains(csharp, "NugetStateFlowNative.Collect(flow,")
-    assertContains(csharp, "() => NugetStateFlowNative.Value(flow),")
-    assertContains(csharp, "Native_LevelSetValue(flow, v, out IntPtr error);")
-    assertContains(csharp, "                flow);")
+    assertContains(csharp, "var owned = new NugetKotlinHandle(flow);")
+    assertContains(csharp, "NugetScopeHandle collectScope = GetOrCreateScope();")
+    assertContains(csharp, "NugetStateFlowNative.Collect(owned, collectScope,")
+    assertContains(csharp, "() => NugetStateFlowNative.Value(owned),")
+    assertContains(csharp, "Native_LevelSetValue(owned, v, out IntPtr error);")
+    assertContains(csharp, "                owned);")
   }
 }

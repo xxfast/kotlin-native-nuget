@@ -62,7 +62,7 @@ class Tier1SealedListPropertyTest {
 
     assertContains(
       result.generatedCSharp,
-      "private static extern IntPtr Native_Get_items(IntPtr handle, out IntPtr error);",
+      "private static extern IntPtr Native_Get_items(NugetKotlinHandle handle, out IntPtr error);",
     )
     assertContains(
       result.generated,
@@ -98,7 +98,7 @@ class Tier1SealedListPropertyTest {
       result.generatedCSharp,
       """
       |            [return: MarshalAs(UnmanagedType.I1)]
-      |            private static extern bool Native_Get_refreshing(IntPtr handle, out IntPtr error);
+      |            private static extern bool Native_Get_refreshing(NugetKotlinHandle handle, out IntPtr error);
       """.trimMargin(),
     )
   }

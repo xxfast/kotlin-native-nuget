@@ -1033,7 +1033,9 @@ internal fun translateGenericFunction(
     appendLine("      }")
     appendLine("      finally")
     appendLine("      {")
+    // ADR-187: a borrowed handle is a live wrapper's raw `Handle`; keep the wrapper alive past the call.
     appendLine("        if ($ownedLocal) NugetMarshal.Dispose($handleLocal);")
+    appendLine("        else GC.KeepAlive($paramName);")
     appendLine("      }")
     if (returnsGenericClass) {
       appendLine("      return new ${returnTypeName}<$typeParamName>($resultLocal, out _);")

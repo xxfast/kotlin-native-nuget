@@ -497,7 +497,9 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
         // ADR-099: both boxes were minted by this loop iteration, and nuget_map_put has already
         // stored the dereferenced objects into a map the outer StableRef roots.
         "        if (keyOwned) NugetMapNative.Dispose(key);",
+        "        else GC.KeepAlive(pair.Key);",
         "        if (valueOwned) NugetMapNative.Dispose(value);",
+        "        else GC.KeepAlive(pair.Value);",
         "    }",
         "}",
       ),
@@ -711,7 +713,8 @@ private fun elementLoop(native: String, add: String): List<String> = listOf(
   "        element = Wrap(value, out owned);",
   "        $native.$add;",
   "    }",
-  "    finally { if (owned) $native.Dispose(element); }",
+  // ADR-187: a borrowed element is a live wrapper's raw `Handle`, kept alive past the `Add`.
+  "    finally { if (owned) $native.Dispose(element); else GC.KeepAlive(value); }",
   "}",
 )
 

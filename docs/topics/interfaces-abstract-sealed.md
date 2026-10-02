@@ -1016,8 +1016,8 @@ using var socks = new PatchArm(Patch.Socks); // boxes an existing entry
 
 `swirl.Value.Patch()` reaches `Swirl`'s own member through the ordinary [enum extension
 method](enums.md), never a second spelling on the box. A boxed arm is `IDisposable` like any other
-arm; `new PatchArm(Patch.Socks)` without `using` leaks a handle to a permanent Kotlin singleton the
-same way an unboxed arm constructor does. There is no implicit conversion from the C# enum to the
+arm; `new PatchArm(Patch.Socks)` without `using` holds a handle to a permanent Kotlin singleton
+until you dispose it or the GC finalizes it, the same as an unboxed arm constructor. There is no implicit conversion from the C# enum to the
 sealed base (`Marking m = Patch.Bib` does not compile): it would mint a handle the caller never sees
 and cannot dispose. A declared type already named `{Enum}Arm` in the same namespace refuses the
 interface, naming the collision, rather than colliding silently. An arm that extends another class

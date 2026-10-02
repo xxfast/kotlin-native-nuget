@@ -22,7 +22,7 @@ declares the fixture, C# consumes it.
 - `Dispose()` on a generated class wrapper is synchronous: `{Type}Native.Dispose(_handle)` then
   `_handle = IntPtr.Zero` (`nuget-processor/.../cir/CirClassRenderer.kt:126-133`). The export is
   `NugetHandles.release(handle)` (`exports/ClassExports.kt:75-78`). No finalizer, no .NET GC in the
-  path, so the C# side has nothing to release before the Kotlin object can go.
+  path, so the C# side has nothing to release before the Kotlin object can go. *Amended 2026-10-02: [ADR-187](187-forward-finalizer-contract.md) added a finalizable `SafeHandle` to every wrapper, so a wrapper dropped without `Dispose()` is now released when the .NET GC finalizes it; the explicit-dispose path described here is unchanged.*
 - `nuget_gc_collect` already exists: it calls `kotlin.native.runtime.GC.collect()` under
   `@OptIn(NativeRuntimeApi::class)` (`exports/InterfaceBridgeFactoryExports.kt:124-131`), reached from
   C# as `NugetBridge.GcCollect()` (`cir/CirBridgeRenderer.kt:39`). It is gated on `hasBridgeFactories`

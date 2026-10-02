@@ -73,7 +73,7 @@ class Tier1ValueClassHandleAndPrimitiveTest {
       "return nativeResult == IntPtr.Zero ? null : " +
           "new global::Interop.ChartRef(new global::Interop.Patient(nativeResult, out _));",
     )
-    assertContains(cs, "Native_Set_backupReferral(_handle, value?.Patient._handle ?? IntPtr.Zero, out IntPtr error)")
+    assertContains(cs, "Native_Set_backupReferral(_handle, value?.Patient._handle ?? NugetKotlinHandle.Null, out IntPtr error)")
     // The reference-underlying struct header: `renderReferenceValueClass`' positional record, whose
     // member type comes off the same translator spelling as the enum branch's `{ get; }` member.
     assertContains(
@@ -82,7 +82,7 @@ class Tier1ValueClassHandleAndPrimitiveTest {
     )
     assertContains(cs, "public global::Interop.ChartRef? Backup()")
     // Nullable handle *parameter*: null propagates to IntPtr.Zero, Kotlin `?.let`-re-wraps.
-    assertContains(cs, "Native_Transfer(_handle, to?.Patient._handle ?? IntPtr.Zero, out IntPtr error)")
+    assertContains(cs, "Native_Transfer(_handle, to?.Patient._handle ?? NugetKotlinHandle.Null, out IntPtr error)")
     assertContains(
       kotlin,
       ".transfer(to?.let { tier1.valueclasskinds.ChartRef(it.asStableRef<tier1.valueclasskinds.Patient>().get()) })",

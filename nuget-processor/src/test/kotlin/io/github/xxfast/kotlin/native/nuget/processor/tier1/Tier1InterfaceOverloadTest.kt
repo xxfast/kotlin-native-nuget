@@ -50,7 +50,7 @@ class Tier1InterfaceOverloadTest {
     assertContains(cs, "string Speak();")
     assertContains(cs, "string Speak(int times);")
     assertContains(cs, "EntryPoint = \"library_tier1_ifaceov__pet_speak_2\"")
-    assertContains(cs, "private static extern IntPtr Native_Speak_2(IntPtr handle, int times")
+    assertContains(cs, "private static extern IntPtr Native_Speak_2(NugetKotlinHandle handle, int times")
     assertContains(cs, "public string Speak(int times)")
   }
 

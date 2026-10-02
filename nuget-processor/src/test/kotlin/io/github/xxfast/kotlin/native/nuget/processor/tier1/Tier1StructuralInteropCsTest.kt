@@ -502,6 +502,9 @@ class Tier1StructuralInteropCsTest {
     "public static List<T> ReadList<T>(IntPtr handle",
     "public static HashSet<T> ReadSet<T>(IntPtr handle",
     "public static Dictionary<TKey, TValue> ReadMap<TKey, TValue>(IntPtr handle",
+    // ADR-187: the `SafeHandle` override on the internal `NugetKotlinHandle`. It reads the pointer
+    // and exposes a `bool`; `SafeHandle` makes it public.
+    "public override bool IsInvalid => handle == IntPtr.Zero;",
   )
 
   @Test

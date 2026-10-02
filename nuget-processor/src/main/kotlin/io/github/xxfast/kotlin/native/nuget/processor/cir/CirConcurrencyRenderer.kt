@@ -46,9 +46,42 @@ internal fun StringBuilder.renderScopeHelper(helper: CirScopeHelper) {
   appendLine()
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_scope_drain\")]")
   appendLine(
-    "        internal static extern IntPtr Drain(IntPtr handle, IntPtr callback, " +
+    "        internal static extern IntPtr Drain(NugetKotlinHandle handle, IntPtr callback, " +
         "IntPtr userData);"
   )
+  appendLine("    }")
+  appendLine()
+  renderScopeHandle()
+}
+
+/**
+ * ADR-187: the suspend scope's owned handle. Its release is not the shared `nuget_dispose`: an
+ * undisposed wrapper's scope is cancelled and then disposed, exactly as `Dispose()` does it. The
+ * drain path (which has already completed the scope) and the losing side of the creation race
+ * release without the cancel, as they always have.
+ */
+private fun StringBuilder.renderScopeHandle() {
+  appendLine("    internal sealed class NugetScopeHandle : NugetKotlinHandle")
+  appendLine("    {")
+  appendLine("        private volatile bool _uncancelled;")
+  appendLine()
+  appendLine("        internal NugetScopeHandle(IntPtr handle) : base(handle)")
+  appendLine("        {")
+  appendLine("        }")
+  appendLine()
+  appendLine("        /// <summary>Releases a scope that was drained, or never published, without cancelling it.</summary>")
+  appendLine("        internal void DisposeWithoutCancel()")
+  appendLine("        {")
+  appendLine("            _uncancelled = true;")
+  appendLine("            Dispose();")
+  appendLine("        }")
+  appendLine()
+  appendLine("        protected override bool ReleaseHandle()")
+  appendLine("        {")
+  appendLine("            if (!_uncancelled) NugetScopeNative.Cancel(handle);")
+  appendLine("            NugetScopeNative.Dispose(handle);")
+  appendLine("            return true;")
+  appendLine("        }")
   appendLine("    }")
   appendLine()
 }
@@ -283,12 +316,15 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   val resultExtraction: String = when {
     isUnit -> "t.SetResult(true);"
     isStateFlowReturn -> buildString {
-      appendLine("IntPtr flowHandle = resultPtr;")
+      // ADR-187: the flow handle is owned from here, and the lambdas capture that object and the
+      // scope handle object, never raw pointers (see `renderHeldStateFlowMethod`).
+      appendLine("var flowHandle = new NugetKotlinHandle(resultPtr);")
       // ADR-068 (2026-09-27 amendment): a static (top-level) member has no parent scope. It passes
       // null and `nuget_stateflow_collect` launches on the runtime's ad-hoc scope, as the
       // top-level suspend call itself does; the enumerator's job is still the cancellation handle.
-      val collectScope: String = if (method.isStatic) "IntPtr.Zero" else "GetOrCreateScope()"
-      appendLine("                    IntPtr collectScope = $collectScope;")
+      val collectScope: String =
+        if (method.isStatic) "NugetKotlinHandle.Null" else "GetOrCreateScope()"
+      appendLine("                    NugetKotlinHandle collectScope = $collectScope;")
       appendLine("                    t.SetResult(new ${method.asyncReturnType}(")
       appendLine("                        (flowOnNext, flowOnComplete, flowOnError, flowUserData) =>")
       appendLine("                            NugetStateFlowNative.Collect(flowHandle, collectScope, flowOnNext, flowOnComplete, flowOnError, flowUserData),")
@@ -331,7 +367,7 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   )
   appendLine("        {")
   if (!method.isStatic && className.isNotEmpty()) {
-    appendLine("            if (_handle == IntPtr.Zero)")
+    appendLine("            if (_handle.IsInvalid)")
     appendLine("                throw new ObjectDisposedException(nameof($className));")
   }
   val (tcs, callback, callbackHandle, job, jobHandle, reg) = locals
@@ -339,8 +375,11 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   appendLine("            NugetAsyncCallback $callback = null!;")
   appendLine("            GCHandle $callbackHandle = default;")
   appendLine("            var $job = new NugetJobCell();")
+  // ADR-187: an instance member's closure roots its wrapper until the call completes, so a wrapper
+  // dropped mid-flight is never finalized, and its scope never cancelled, under the coroutine.
+  val keepAlive: List<String> = if (method.isStatic) emptyList() else listOf("GC.KeepAlive(this);")
   appendAsyncCompletionClosure(
-    tcsType, resultExtraction, cancellationArgument = token, locals = locals,
+    tcsType, resultExtraction, cancellationArgument = token, prelude = keepAlive, locals = locals,
   )
   appendLine("            $callbackHandle = GCHandle.Alloc($callback);")
   // ADR-114: the native call is synchronous even though the await is not, so the wire container is

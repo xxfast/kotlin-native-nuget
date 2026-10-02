@@ -96,9 +96,9 @@ class Tier1SealedParameterPositionTest {
     )
     assertTrue(
       result.generatedCSharp.contains(
-        "Native_DescribeMaybe(shape?._handle ?? IntPtr.Zero, out IntPtr error)",
+        "Native_DescribeMaybe(shape?._handle ?? NugetKotlinHandle.Null, out IntPtr error)",
       ),
-      "expected the C# call to pass IntPtr.Zero for null; generatedCSharp=" +
+      "expected the C# call to pass the zero handle for null; generatedCSharp=" +
           "${result.generatedCSharp.lines().filter { it.contains("describeMaybe") }}",
     )
   }

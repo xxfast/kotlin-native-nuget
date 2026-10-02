@@ -49,6 +49,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | Kotlin | ⇄ | C# | Notes | Docs |
 |---|:-:|---|---|---|
 | `class` | ⇄ | `class` | → `IDisposable` over an opaque handle; nested types become real C# nested types; a supertype outside the export set is dropped, its members re-homed · ← `AutoCloseable` over a handle | [Classes and objects](classes-and-objects.md) · [Objects and handles](objects-and-handles.md) |
+| wrapper dropped without `Dispose()` | → | released when the .NET GC finalizes it | Eventually, on the finalizer thread, never at process exit; `Dispose()` stays prompt. A discarded `AddX` subscription keeps delivering. | [Classes and objects](classes-and-objects.md) |
 | dependency-module type (cross-module export) | → | same class, generated into this module's package | A type your API exposes but a dependency declares is admitted by `include`/`rootPackage` or by an additive `admit(...)`; whatever is left out skips, named. | [NuGet DSL](nuget-dsl.md) |
 | constructor | ⇄ | `new Foo(...)` | → defaults widen to one nullable signature, `null` meaning unset; a class with no bridgeable constructor is factory-only and says so · ← each public `.ctor` becomes a secondary constructor | [Classes and objects](classes-and-objects.md) · [Instance members](instance-members.md) |
 | `data class` | → | `class` | `ToString`, `Equals` and `Copy` are generated. | [Data classes](data-classes.md) |

@@ -106,7 +106,7 @@ class Tier1CallbackNullGuardTest {
     val nativeAt: Int = body.indexOf("Native_")
     assertTrue(nativeAt < 0 || guardAt < nativeAt, "guard must precede the native call in `$member`; body=$body")
     if (owner != null) {
-      val disposed = "if (_handle == IntPtr.Zero) throw new ObjectDisposedException(nameof($owner));"
+      val disposed = "if (_handle.IsInvalid) throw new ObjectDisposedException(nameof($owner));"
       val disposedAt: Int = body.indexOf(disposed)
       assertTrue(disposedAt > guardAt, "expected `$disposed` right after the guard in `$member`; body=$body")
       assertTrue(registerAt < 0 || disposedAt < registerAt, "disposed check must precede RegisterCtx; body=$body")

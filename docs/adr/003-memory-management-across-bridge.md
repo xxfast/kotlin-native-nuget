@@ -85,4 +85,5 @@ Opaque handle + accessor functions:
 
 **Mitigations:**
 - Generated C# classes implement `IDisposable` with a destructor/finalizer as safety net
+  - *Amended 2026-10-02:* never emitted as a destructor; [ADR-187](187-forward-finalizer-contract.md) ships the safety net as a `SafeHandle` instead, so an undisposed wrapper is released when the .NET GC finalizes its handle.
 - Consider `SafeHandle` for automatic cleanup if the process exits without dispose

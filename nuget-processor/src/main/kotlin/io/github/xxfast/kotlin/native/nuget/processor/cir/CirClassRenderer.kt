@@ -200,10 +200,10 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
   appendLine("    {")
 
   if (cls.superClass == null) {
-    appendLine("        internal IntPtr _handle;")
+    appendLine("        internal NugetKotlinHandle _handle = NugetKotlinHandle.Null;")
     if (cls.ownsScope) renderScopeHandleField()
     appendLine()
-    appendLine("        IntPtr INugetHandle.Handle => _handle;")
+    appendLine("        IntPtr INugetHandle.Handle => _handle.DangerousGetHandle();")
     appendLine()
 
     if (cls.ownsScope) {
@@ -241,7 +241,7 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
       appendLine("        internal ${cls.name}(IntPtr handle, out NugetHandleTag tag)")
       appendLine("        {")
       appendLine("            tag = default;")
-      appendLine("            _handle = handle;")
+      appendLine("            _handle = new NugetKotlinHandle(handle);")
       appendLine("        }")
     }
     appendLine()
@@ -329,20 +329,20 @@ internal fun StringBuilder.renderFlowPropertyNativeImports(
   require(prop.isFlow) { "Only a Flow/StateFlow property has collect and value native imports" }
   val collectEntryPoint = "${nativePrefix}_get_${prop.nativeName}_collect"
   appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$collectEntryPoint\")]")
-  appendLine("        private static extern IntPtr Native_Get${prop.name}Collect(IntPtr handle, IntPtr scopeHandle, IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);")
+  appendLine("        private static extern IntPtr Native_Get${prop.name}Collect(NugetKotlinHandle handle, NugetKotlinHandle scopeHandle, IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);")
   appendLine()
   if (prop.isStateFlow) {
     // ADR-065: synchronous `_value` sibling export -- handle only, no scope/callbacks/errorOut.
     val valueEntryPoint = "${nativePrefix}_get_${prop.nativeName}_value"
     appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$valueEntryPoint\")]")
-    appendLine("        private static extern IntPtr Native_Get${prop.name}Value(IntPtr handle);")
+    appendLine("        private static extern IntPtr Native_Get${prop.name}Value(NugetKotlinHandle handle);")
     appendLine()
     if (prop.isNullableMember) {
       // ADR-067: nullable member -- sibling `_has_value` presence-probe export.
       val hasValueEntryPoint = "${nativePrefix}_get_${prop.nativeName}_has_value"
       appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$hasValueEntryPoint\")]")
       appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
-      appendLine("        private static extern bool Native_Get${prop.name}HasValue(IntPtr handle);")
+      appendLine("        private static extern bool Native_Get${prop.name}HasValue(NugetKotlinHandle handle);")
       appendLine()
     }
     if (prop.isMutableStateFlow) {
@@ -353,7 +353,7 @@ internal fun StringBuilder.renderFlowPropertyNativeImports(
       appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$setValueEntryPoint\")]")
       // ADR-098: a MutableStateFlow<Char> setter slot is a `char` slot like any other.
       val setValueParam: String = narrowParameterMarshal(prop.nativeSetterType, "value")
-      appendLine("        private static extern void Native_Set${prop.name}Value(IntPtr handle, $setValueParam, out IntPtr error);")
+      appendLine("        private static extern void Native_Set${prop.name}Value(NugetKotlinHandle handle, $setValueParam, out IntPtr error);")
       appendLine()
     }
   }
@@ -363,7 +363,7 @@ private fun StringBuilder.renderLegacyPropertyNativeImports(cls: CirClass, prop:
   val getterErrorParam: String = if (prop.hasSyncErrorOut) ", out IntPtr error" else ""
   appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_get_${prop.nativeName}\")]")
   narrowReturnMarshal(prop.nativeReturnType)?.let { appendLine(it) }
-  appendLine("        private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle$getterErrorParam);")
+  appendLine("        private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(NugetKotlinHandle handle$getterErrorParam);")
   appendLine()
 }
 
@@ -398,7 +398,7 @@ internal fun StringBuilder.renderConstructorMember(
 }
 
 private fun StringBuilder.renderLegacyMethodNativeImport(cls: CirClass, method: CirMethod) {
-  val nativeParamList: MutableList<String> = (listOf("IntPtr handle") +
+  val nativeParamList: MutableList<String> = (listOf("NugetKotlinHandle handle") +
       method.parameters.map { narrowParameterMarshal(it.nativeType, it.name) }).toMutableList()
   nativeParamList.addAll(method.extraNativeParams)
   if (method.isSyncErrorCheckEnabled) nativeParamList.add("out IntPtr error")
@@ -432,7 +432,7 @@ internal fun StringBuilder.renderConstructor(
     appendLine("            {")
     appendLine("                throw NugetErrorNative.BuildException(error);")
     appendLine("            }")
-    appendLine("            _handle = handle;")
+    appendLine("            _handle = new NugetKotlinHandle(handle);")
     appendLine("        }")
   } else {
     // ROADMAP:29: the body already carries its own leading newline and its own indent, exactly like
@@ -737,7 +737,7 @@ internal fun StringBuilder.renderDataClassMethods(cls: CirClass) {
  * sealed base cannot own one), which is why this is lifted rather than inlined twice.
  */
 internal fun StringBuilder.renderScopeHandleField() {
-  appendLine("        internal IntPtr _scopeHandle;")
+  appendLine("        internal NugetScopeHandle? _scopeHandle;")
 }
 
 /**
@@ -745,17 +745,20 @@ internal fun StringBuilder.renderScopeHandleField() {
  *
  * ADR-159: `internal`, matching `_scopeHandle`. `private` was invisible to a subclass whose own
  * async bodies call it unqualified (CS0122), which is every class below the scope owner.
+ *
+ * ADR-187: the scope is an owned [NugetScopeHandle], so the import slot it is passed to keeps it
+ * alive for the call, and an undisposed wrapper's scope is cancelled and released by the GC.
  */
 internal fun StringBuilder.renderGetOrCreateScope() {
-  appendLine("        internal IntPtr GetOrCreateScope()")
+  appendLine("        internal NugetScopeHandle GetOrCreateScope()")
   appendLine("        {")
-  appendLine("            IntPtr existing = _scopeHandle;")
-  appendLine("            if (existing != IntPtr.Zero) return existing;")
-  appendLine("            IntPtr created = NugetScopeNative.Create();")
-  appendLine("            IntPtr prior = Interlocked.CompareExchange(ref _scopeHandle, created, IntPtr.Zero);")
-  appendLine("            if (prior != IntPtr.Zero)")
+  appendLine("            NugetScopeHandle? existing = _scopeHandle;")
+  appendLine("            if (existing != null) return existing;")
+  appendLine("            var created = new NugetScopeHandle(NugetScopeNative.Create());")
+  appendLine("            NugetScopeHandle? prior = Interlocked.CompareExchange(ref _scopeHandle, created, null);")
+  appendLine("            if (prior != null)")
   appendLine("            {")
-  appendLine("                NugetScopeNative.Dispose(created);")
+  appendLine("                created.DisposeWithoutCancel();")
   appendLine("                return prior;")
   appendLine("            }")
   appendLine("            return created;")
@@ -791,19 +794,17 @@ internal fun StringBuilder.renderDispose(
     if (ownsScope) appendLine("        public ${abstract}ValueTask DisposeAsync();")
   } else {
     renderDllImport(requireNotNull(nativeImport) { "Concrete disposable classes require a native import" })
+    // ADR-187: the owned handle is swapped for the zero sentinel, so a second `Dispose()` and every
+    // disposed check read zero exactly as the raw field did, and the handle object is released once.
+    // `Native_Dispose` stays imported for the ABI contract; the shared release is `nuget_dispose`.
     appendLine("        public ${override}void Dispose()")
     appendLine("        {")
-    appendLine("            IntPtr handle = Interlocked.Exchange(ref _handle, IntPtr.Zero);")
-    appendLine("            if (handle == IntPtr.Zero) return;")
+    appendLine("            $TAKE_HANDLE")
+    appendLine("            if (handle.IsInvalid) return;")
     if (hasSuspendMethods) {
-      appendLine("            IntPtr scopeHandle = Interlocked.Exchange(ref _scopeHandle, IntPtr.Zero);")
-      appendLine("            if (scopeHandle != IntPtr.Zero)")
-      appendLine("            {")
-      appendLine("                NugetScopeNative.Cancel(scopeHandle);")
-      appendLine("                NugetScopeNative.Dispose(scopeHandle);")
-      appendLine("            }")
+      appendLine("            Interlocked.Exchange(ref _scopeHandle, null)?.Dispose();")
     }
-    appendLine("            Native_Dispose(handle);")
+    appendLine("            handle.Dispose();")
     appendLine("        }")
     // ADR-159: the drain is declared once per chain, by the owner, and inherited below (every
     // class's `_dispose` export is `NugetHandles.release`, so the owner's `Native_Dispose` is
@@ -814,18 +815,21 @@ internal fun StringBuilder.renderDispose(
       appendLine()
       appendLine("        public ${disposeAsyncModifier}ValueTask DisposeAsync()")
       appendLine("        {")
-      appendLine("            IntPtr handle = Interlocked.Exchange(ref _handle, IntPtr.Zero);")
-      appendLine("            if (handle == IntPtr.Zero) return ValueTask.CompletedTask;")
-      appendLine("            IntPtr scopeHandle = Interlocked.Exchange(ref _scopeHandle, IntPtr.Zero);")
-      appendLine("            if (scopeHandle == IntPtr.Zero)")
+      appendLine("            $TAKE_HANDLE")
+      appendLine("            if (handle.IsInvalid) return ValueTask.CompletedTask;")
+      appendLine("            NugetScopeHandle? scopeHandle = Interlocked.Exchange(ref _scopeHandle, null);")
+      appendLine("            if (scopeHandle == null)")
       appendLine("            {")
-      appendLine("                Native_Dispose(handle);")
+      appendLine("                handle.Dispose();")
       appendLine("                return ValueTask.CompletedTask;")
       appendLine("            }")
       appendLine("            return new ValueTask(DrainAndDisposeAsync(handle, scopeHandle));")
       appendLine("        }")
       appendLine()
-      appendLine("        private Task DrainAndDisposeAsync(IntPtr handle, IntPtr scopeHandle)")
+      // ADR-187: the wrapper is already reading as disposed; the closure holds the two handle
+      // objects it took, so neither can be finalized before the drain completes, and it releases
+      // them through the same objects, so nothing is released twice.
+      appendLine("        private Task DrainAndDisposeAsync(NugetKotlinHandle handle, NugetScopeHandle scopeHandle)")
       appendLine("        {")
       appendLine("            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);")
       appendLine("            NugetAsyncCallback callback = null!;")
@@ -841,7 +845,7 @@ internal fun StringBuilder.renderDispose(
         "TaskCompletionSource<bool>",
         "t.SetResult(true);",
         cancellationArgument = "",
-        prelude = listOf("NugetScopeNative.Dispose(scopeHandle);", "Native_Dispose(handle);"),
+        prelude = listOf("scopeHandle.DisposeWithoutCancel();", "handle.Dispose();"),
         includesErrorBranch = false,
       )
       appendLine("            callbackHandle = GCHandle.Alloc(callback);")
@@ -858,7 +862,7 @@ internal fun StringBuilder.renderDispose(
 
 private fun StringBuilder.renderStoredCallbackMethod(method: CirStoredCallbackMethod) {
   appendLine("        [DllImport(\"${method.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${method.subscribeEntryPoint}\")]")
-  appendLine("        private static extern IntPtr Native_${method.csMethodName}(IntPtr handle, IntPtr listenerPtr, IntPtr userData, out IntPtr error);")
+  appendLine("        private static extern IntPtr Native_${method.csMethodName}(NugetKotlinHandle handle, IntPtr listenerPtr, IntPtr userData, out IntPtr error);")
   appendLine()
   appendLine("        [DllImport(\"${method.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${method.removeEntryPoint}\")]")
   appendLine("        private static extern void ${method.csRemoveNativeName}(IntPtr handle, IntPtr subscriptionHandle);")
@@ -871,7 +875,7 @@ private fun StringBuilder.renderStoredCallbackMethod(method: CirStoredCallbackMe
   // `RegisterCtx`, so a rejected call mints no ctx key and no Kotlin handle.
   appendLine("            ArgumentNullException.ThrowIfNull(listener);")
   appendLine(
-    "            if (_handle == IntPtr.Zero) " +
+    "            if (_handle.IsInvalid) " +
         "throw new ObjectDisposedException(nameof(${method.className}));"
   )
   appendLine("            ${method.delegateName} nativeCallback = ${method.delegateParamList} => { ${method.nativeCallbackBody} };")
@@ -890,9 +894,12 @@ private fun StringBuilder.renderStoredCallbackMethod(method: CirStoredCallbackMe
     "            if (error != IntPtr.Zero) { NugetThunks.UnregisterCtx(cbKey); " +
         "throw NugetErrorNative.BuildException(error); }"
   )
+  // ADR-187 (gate, 2026-10-02): the token is NOT finalizer-released. A discarded subscription keeps
+  // delivering; only an explicit `Dispose()` unregisters. The remove export ignores the receiver,
+  // which is passed raw so a subscription disposed after its owner still unregisters.
   appendLine(
     "            return new NugetSubscription(() => { " +
-        "${method.csRemoveNativeName}(_handle, sub); NugetThunks.UnregisterCtx(cbKey); });"
+        "${method.csRemoveNativeName}(_handle.DangerousGetHandle(), sub); NugetThunks.UnregisterCtx(cbKey); });"
   )
   appendLine("        }")
   appendLine()
@@ -901,7 +908,7 @@ private fun StringBuilder.renderStoredCallbackMethod(method: CirStoredCallbackMe
 private fun StringBuilder.renderInterfaceBridgeMethod(method: CirInterfaceBridgeMethod) {
   // DllImport for subscribe: handle + per-method (fnPtr, ctx) pairs + error
   val nativeAddParams: String = buildString {
-    append("IntPtr handle")
+    append("NugetKotlinHandle handle")
     method.entries.forEach { entry ->
       append(", IntPtr ${entry.methodKtName}Ptr, IntPtr ${entry.methodKtName}Ctx")
     }
@@ -930,7 +937,7 @@ private fun StringBuilder.renderInterfaceBridgeMethod(method: CirInterfaceBridge
   // Same guard as the lambda pair, ahead of the disposed check: the argument is named first.
   appendLine("            ArgumentNullException.ThrowIfNull(listener);")
   appendLine(
-    "            if (_handle == IntPtr.Zero) throw new ObjectDisposedException(nameof(${method.className}));"
+    "            if (_handle.IsInvalid) throw new ObjectDisposedException(nameof(${method.className}));"
   )
 
   // Delegate assignments
@@ -962,7 +969,7 @@ private fun StringBuilder.renderInterfaceBridgeMethod(method: CirInterfaceBridge
 
   // Return NugetSubscription
   appendLine(
-    "            return new NugetSubscription(() => { ${method.csRemoveNativeName}(_handle, sub); $freeHandles });"
+    "            return new NugetSubscription(() => { ${method.csRemoveNativeName}(_handle.DangerousGetHandle(), sub); $freeHandles });"
   )
   appendLine("        }")
   appendLine()
@@ -971,7 +978,7 @@ private fun StringBuilder.renderInterfaceBridgeMethod(method: CirInterfaceBridge
 private fun StringBuilder.renderCallbackMethod(method: CirCallbackMethod) {
   appendLine("        [DllImport(\"${method.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${method.nativeEntryPoint}\")]")
   narrowReturnMarshal(method.nativeImportReturnType)?.let { appendLine(it) }
-  appendLine("        private static extern ${method.nativeImportReturnType} Native_${method.csMethodName}(IntPtr handle, IntPtr ${method.lambdaParamName}Ptr, IntPtr userData, out IntPtr error);")
+  appendLine("        private static extern ${method.nativeImportReturnType} Native_${method.csMethodName}(NugetKotlinHandle handle, IntPtr ${method.lambdaParamName}Ptr, IntPtr userData, out IntPtr error);")
   appendLine()
   appendLine("        public ${method.csReturnType} ${method.csMethodName}(${method.csParamType} ${method.lambdaParamName})")
   appendLine("        {")
@@ -999,3 +1006,10 @@ private fun StringBuilder.renderCallbackMethod(method: CirCallbackMethod) {
   appendLine()
 }
 
+
+/**
+ * ADR-187: takes a wrapper's owned handle out of its field, leaving the zero sentinel behind. Every
+ * release path starts here, so a handle object is released exactly once.
+ */
+internal const val TAKE_HANDLE: String =
+  "NugetKotlinHandle handle = Interlocked.Exchange(ref _handle, NugetKotlinHandle.Null);"

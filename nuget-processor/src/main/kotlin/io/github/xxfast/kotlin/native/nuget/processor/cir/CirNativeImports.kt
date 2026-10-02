@@ -104,7 +104,7 @@ internal fun propertyNativeImports(
       entryPoint = "${nativePrefix}_get_${property.nativeName}",
       returnType = property.nativeReturnType,
       name = "Native_Get_${property.nativeName}",
-      parameters = listOf(CirParameter("handle", "IntPtr")),
+      parameters = listOf(CirParameter("handle", KOTLIN_HANDLE)),
       visibility = CirVisibility.PRIVATE,
       hasSyncErrorOut = property.hasSyncErrorOut,
     )
@@ -118,7 +118,7 @@ internal fun propertyNativeImports(
         returnType = "void",
         name = "Native_Set_${property.nativeName}",
         parameters = listOf(
-          CirParameter("handle", "IntPtr"),
+          CirParameter("handle", KOTLIN_HANDLE),
           CirParameter("value", property.nativeSetterType),
         ),
         visibility = CirVisibility.PRIVATE,
@@ -129,7 +129,7 @@ internal fun propertyNativeImports(
 
   property.extraNatives.forEach { extra ->
     val parameters: List<CirParameter> = buildList {
-      add(CirParameter("handle", "IntPtr"))
+      add(CirParameter("handle", KOTLIN_HANDLE))
       if (extra.hasValueParam) add(CirParameter("value", extra.returnType))
     }
     add(
@@ -173,7 +173,7 @@ internal fun methodNativeImport(
     "Only ordinary synchronous concrete methods have normalized native imports"
   }
   val parameters: List<CirParameter> = buildList {
-    add(CirParameter("handle", "IntPtr"))
+    add(CirParameter("handle", KOTLIN_HANDLE))
     addAll(method.nativeParameters ?: method.parameters)
     addAll(method.extraNativeParams.map { declaration -> declaration.toRawNativeParameter() })
   }
@@ -196,7 +196,7 @@ internal fun CirClass.dataClassNativeImports(): List<CirDllImport> = buildList {
       "${nativePrefix}_equals",
       "bool",
       "Native_Equals",
-      listOf(CirParameter("handle", "IntPtr"), CirParameter("other", "IntPtr")),
+      listOf(CirParameter("handle", KOTLIN_HANDLE), CirParameter("other", KOTLIN_HANDLE)),
       CirVisibility.PRIVATE,
     )
   )
@@ -206,7 +206,7 @@ internal fun CirClass.dataClassNativeImports(): List<CirDllImport> = buildList {
       "${nativePrefix}_hashcode",
       "int",
       "Native_HashCode",
-      listOf(CirParameter("handle", "IntPtr")),
+      listOf(CirParameter("handle", KOTLIN_HANDLE)),
       CirVisibility.PRIVATE,
     )
   )
@@ -216,7 +216,7 @@ internal fun CirClass.dataClassNativeImports(): List<CirDllImport> = buildList {
       "${nativePrefix}_tostring",
       "IntPtr",
       "Native_ToString",
-      listOf(CirParameter("handle", "IntPtr")),
+      listOf(CirParameter("handle", KOTLIN_HANDLE)),
       CirVisibility.PRIVATE,
     )
   )
@@ -273,7 +273,7 @@ internal fun CirValueClass.propertyNativeImport(property: CirProperty): CirDllIm
   entryPoint = "${nativePrefix}_get_${property.nativeName}",
   returnType = property.nativeReturnType,
   name = "Native_Get${property.name}",
-  parameters = listOf(CirParameter("value", underlyingNativeType)),
+  parameters = listOf(CirParameter("value", receiverNativeType())),
   visibility = CirVisibility.PRIVATE,
 )
 
@@ -287,7 +287,7 @@ internal fun CirValueClass.methodNativeImport(method: CirMethod): CirDllImport {
     // ADR-082: the numbered native name, not the (shared) public overload name — see
     // `ForwardCirPlanProjection.valueClassMethod`. Identical for unsuffixed members.
     name = "Native_${method.nativeName.replaceFirstChar { it.uppercase() }}",
-    parameters = listOf(CirParameter("value", underlyingNativeType)) + methodParams,
+    parameters = listOf(CirParameter("value", receiverNativeType())) + methodParams,
     visibility = CirVisibility.PRIVATE,
     hasSyncErrorOut = method.isSyncErrorCheckEnabled,
   )
@@ -302,3 +302,10 @@ private fun String.toRawNativeParameter(): CirParameter {
   val name: String = substring(separator + 1)
   return CirParameter(name = name, type = nativeType, nativeType = nativeType)
 }
+
+/**
+ * ADR-187: a reference underlying is passed as its wrapper's own `_handle`, so the member imports
+ * take the owned handle; every other underlying keeps its wire type.
+ */
+private fun CirValueClass.receiverNativeType(): String =
+  if (underlyingIsReference) KOTLIN_HANDLE else underlyingNativeType

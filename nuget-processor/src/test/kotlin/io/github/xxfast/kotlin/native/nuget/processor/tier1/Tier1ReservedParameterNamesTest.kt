@@ -96,14 +96,14 @@ class Tier1ReservedParameterNamesTest {
 
   /**
    * The synthesized data-class `copy` is the declaration-site half of the same collision: it is an
-   * instance callable, so its extern already leads with the `IntPtr handle` receiver slot and a
+   * instance callable, so its extern already leads with the `NugetKotlinHandle handle` receiver slot and a
    * second `handle` beside it is CS0100. On the Kotlin side the export declares `handle` twice.
    */
   @Test
   fun `the data class copy route renames a parameter that shadows the receiver slot`() {
     assertContains(
       result.generatedCSharp,
-      "private static extern IntPtr Native_Copy(IntPtr handle, [MarshalAs(UnmanagedType.I1)] bool handle_HasValue, int handle_, out IntPtr error);",
+      "private static extern IntPtr Native_Copy(NugetKotlinHandle handle, [MarshalAs(UnmanagedType.I1)] bool handle_HasValue, int handle_, out IntPtr error);",
     )
     assertContains(result.generatedCSharp, "public Widget Copy(int? handle_ = null)")
     assertContains(
@@ -130,7 +130,7 @@ class Tier1ReservedParameterNamesTest {
   fun `an instance method renames the handle receiver, the value slot and the C# result local`() {
     assertContains(
       result.generatedCSharp,
-      "private static extern IntPtr Native_Describe(IntPtr handle, int handle_, " +
+      "private static extern IntPtr Native_Describe(NugetKotlinHandle handle, int handle_, " +
           "[MarshalAs(UnmanagedType.LPUTF8Str)] string value_, int nativeResult_, " +
           "out IntPtr error);",
     )
@@ -183,7 +183,7 @@ class Tier1ReservedParameterNamesTest {
   fun `a nullable class member renames the value out slot and the has value local`() {
     assertContains(
       result.generatedCSharp,
-      "private static extern bool Native_Read(IntPtr handle, int valueOut_, int hasValue_, " +
+      "private static extern bool Native_Read(NugetKotlinHandle handle, int valueOut_, int hasValue_, " +
           "out int valueOut, out IntPtr error);",
     )
     assertContains(result.generatedCSharp, "public int? Read(int valueOut_, int hasValue_)")
@@ -225,7 +225,7 @@ class Tier1ReservedParameterNamesTest {
 
   /**
    * ADR-141's outer-instance slot, the one `PLAN_OWNED_NAMES` entry no cell pinned until now: an
-   * `inner class` constructor leads with `IntPtr outer`, so a constructor parameter of the same
+   * `inner class` constructor leads with `NugetKotlinHandle outer`, so a constructor parameter of the same
    * word is CS0100 at that position and a duplicate parameter in the `@CName` export. Only the
    * inner-class route mints the slot, so only it can collide.
    */
@@ -233,7 +233,7 @@ class Tier1ReservedParameterNamesTest {
   fun `an inner class constructor renames a parameter that shadows the outer slot`() {
     assertContains(
       result.generatedCSharp,
-      "private static extern IntPtr Native_Create(IntPtr outer, int outer_, out IntPtr error);",
+      "private static extern IntPtr Native_Create(NugetKotlinHandle outer, int outer_, out IntPtr error);",
     )
     assertContains(result.generatedCSharp, "public Sunbather(Hearth outer, int outer_)")
     assertContains(
@@ -309,7 +309,7 @@ class Tier1ReservedParameterNamesTest {
 
   private companion object {
     val BARE: List<String> = listOf(
-      "IntPtr handle, int handle,", "int handle_, int handle,",
+      "IntPtr handle, int handle,", "NugetKotlinHandle handle, int handle,", "int handle_, int handle,",
       "string receiver, [MarshalAs(UnmanagedType.LPUTF8Str)] string receiver,",
       "int value, int value)", "int nativeResult,", "int valueOut, int hasValue,",
       "int errorOut, int valueOut,",

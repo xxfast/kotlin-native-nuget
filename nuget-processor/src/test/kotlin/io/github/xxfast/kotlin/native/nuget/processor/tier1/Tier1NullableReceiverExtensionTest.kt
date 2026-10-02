@@ -56,9 +56,9 @@ class Tier1NullableReceiverExtensionTest {
     )
     assertTrue(
       result.generatedCSharp.contains(
-        "Native_NameOrStray(receiver?._handle ?? IntPtr.Zero, out IntPtr error)",
+        "Native_NameOrStray(receiver?._handle ?? NugetKotlinHandle.Null, out IntPtr error)",
       ),
-      "expected a null receiver to cross as IntPtr.Zero; generatedCSharp=" +
+      "expected a null receiver to cross as the zero handle; generatedCSharp=" +
           "${result.generatedCSharp.lines().filter { it.contains("Native_NameOrStray") }}",
     )
   }

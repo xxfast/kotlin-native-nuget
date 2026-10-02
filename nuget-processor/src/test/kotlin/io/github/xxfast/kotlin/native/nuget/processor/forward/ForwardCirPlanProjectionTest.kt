@@ -44,7 +44,7 @@ class ForwardCirPlanProjectionTest {
     assertEquals(listOf("amount"), method.parameters.map { it.name })
     assertEquals("counter_increment", import.entryPoint)
     assertEquals("int", import.returnType)
-    assertEquals(listOf("IntPtr", "int"), import.parameters.map { it.nativeType })
+    assertEquals(listOf("NugetKotlinHandle", "int"), import.parameters.map { it.nativeType })
     assertEquals(true, import.hasSyncErrorOut)
     val rendered: String = CirRenderer().render(
       CirFile(
@@ -65,7 +65,7 @@ class ForwardCirPlanProjectionTest {
         ),
       ),
     )
-    assertEquals(true, rendered.contains("Native_Increment(IntPtr handle, int amount, out IntPtr error)"))
+    assertEquals(true, rendered.contains("Native_Increment(NugetKotlinHandle handle, int amount, out IntPtr error)"))
     assertEquals(true, rendered.contains("Native_Increment(_handle, amount, out IntPtr error)"))
   }
 
@@ -124,7 +124,7 @@ class ForwardCirPlanProjectionTest {
 
     // Public surface takes the struct; the native import takes its underlying string.
     assertEquals(listOf("ChartId"), method.parameters.map { it.type })
-    assertEquals(listOf("IntPtr", "string"), import.parameters.map { it.nativeType })
+    assertEquals(listOf("NugetKotlinHandle", "string"), import.parameters.map { it.nativeType })
     assertEquals(true, method.body?.contains("Native_Retag(_handle, id.Value, out IntPtr error)"))
   }
 
@@ -151,7 +151,7 @@ class ForwardCirPlanProjectionTest {
     assertEquals(listOf("@default"), method.parameters.map { it.name })
     assertEquals(
       true,
-      rendered.contains("Native_Describe(IntPtr handle, int @default, out IntPtr error)"),
+      rendered.contains("Native_Describe(NugetKotlinHandle handle, int @default, out IntPtr error)"),
       rendered,
     )
     assertEquals(true, rendered.contains("Describe(int @default)"), rendered)
@@ -188,7 +188,7 @@ class ForwardCirPlanProjectionTest {
     assertEquals(listOf("@params"), method.parameters.map { it.name })
     assertEquals(
       true,
-      rendered.contains("Native_Tag(IntPtr handle, IntPtr @params, out IntPtr error)"),
+      rendered.contains("Native_Tag(NugetKotlinHandle handle, IntPtr @params, out IntPtr error)"),
       rendered,
     )
     assertEquals(true, rendered.contains("Tag(IReadOnlyList<string> @params)"), rendered)
@@ -251,7 +251,7 @@ class ForwardCirPlanProjectionTest {
     assertEquals(true, rendered.contains("Article(string @abstract, Article @ref)"), rendered)
     assertEquals(
       true,
-      rendered.contains("string @abstract, IntPtr @ref, out IntPtr error)"),
+      rendered.contains("string @abstract, NugetKotlinHandle @ref, out IntPtr error)"),
       rendered,
     )
     assertEquals(

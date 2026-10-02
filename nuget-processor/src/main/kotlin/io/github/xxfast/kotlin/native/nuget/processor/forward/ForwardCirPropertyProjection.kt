@@ -8,6 +8,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMethod
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirParameter
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirProperty
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirVisibility
+import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_HANDLE
 import io.github.xxfast.kotlin.native.nuget.processor.cir.indentNestedBody
 
 /** C# projection for the planned property path. */
@@ -75,6 +76,7 @@ internal object ForwardCirPropertyProjection {
       .first { parameter -> parameter.role == ForwardAbiRole.RECEIVER }
       .let { parameter ->
         if (parameter.transfer.type.isNullableStringWire()) "string?"
+        else if (parameter.transfer.type.isKotlinHandleWire()) KOTLIN_HANDLE
         else parameter.wireType.csharpWireType()
       }
     // ADR-075: an extension receiver that is a value class passes its underlying value to the
@@ -571,13 +573,15 @@ internal object ForwardCirPropertyProjection {
     // getter's IntPtr wire, and `string?` when nullable for the same CS8604 reason as String.
     BridgeType.String, BridgeType.Uuid -> if (type is BridgeType.Nullable) "string?" else "string"
     is BridgeType.Enum -> "int"
-    is BridgeType.ObjectHandle, is BridgeType.Interface -> "IntPtr"
+    // ADR-187: a wrapper value is passed as its owned handle, which the call keeps alive.
+    is BridgeType.ObjectHandle -> KOTLIN_HANDLE
+    is BridgeType.Interface -> "IntPtr"
     // ADR-077: the underlying's wire crosses the setter (sub-item 4 keys it per kind); the outer
     // nullability decides the String spelling, exactly like the plain-String arm above.
     is BridgeType.ValueClass -> when (value.underlying) {
       BridgeType.String -> if (type is BridgeType.Nullable) "string?" else "string"
       is BridgeType.Enum -> "int"
-      is BridgeType.ObjectHandle -> "IntPtr"
+      is BridgeType.ObjectHandle -> KOTLIN_HANDLE
       else -> value.underlying.wireType().csharpWireType()
     }
 
@@ -663,8 +667,10 @@ internal object ForwardCirPropertyProjection {
       // ADR-135: the same zero guard the collection arm below carries. A throw from the mint in
       // `handleStep` reaches this `finally` with the handle still Zero, and `nuget_dispose` is
       // not null-safe.
+      // ADR-187: and a borrowed one is the wrapper's raw `Handle`, kept alive past the call.
       is BridgeType.Interface ->
-        "if (${name}Owned && ${name}Handle != IntPtr.Zero) { NugetMarshal.Dispose(${name}Handle); }"
+        "if (${name}Owned && ${name}Handle != IntPtr.Zero) { NugetMarshal.Dispose(${name}Handle); } " +
+          "GC.KeepAlive($name);"
       // ADR-151: the same unconditional zero guard the collection arm carries.
       BridgeType.ByteArray ->
         "if (${name}Handle != IntPtr.Zero) { NugetBytesNative.Dispose(${name}Handle); }"
@@ -707,7 +713,8 @@ internal object ForwardCirPropertyProjection {
       }
 
       is BridgeType.ObjectHandle ->
-        if (this is BridgeType.Nullable) "$name?._handle ?? IntPtr.Zero" else "$name._handle"
+        if (this is BridgeType.Nullable) "$name?._handle ?? NugetKotlinHandle.Null"
+        else "$name._handle"
       // ADR-040 sub-decision B: the setter's static parameter type is `IFoo`, so extraction goes
       // through the shared reflective helper rather than a direct `._handle` field read.
       // ADR-084 stage 3: extraction moved into [handleStep], because a C#-implemented value
@@ -736,7 +743,7 @@ internal object ForwardCirPropertyProjection {
         when (value.underlying) {
           is BridgeType.Enum -> "(int)$unwrapped"
           is BridgeType.ObjectHandle ->
-            if (nullable) "$unwrapped._handle ?? IntPtr.Zero" else "$unwrapped._handle"
+            if (nullable) "$unwrapped._handle ?? NugetKotlinHandle.Null" else "$unwrapped._handle"
 
           else -> unwrapped
         }

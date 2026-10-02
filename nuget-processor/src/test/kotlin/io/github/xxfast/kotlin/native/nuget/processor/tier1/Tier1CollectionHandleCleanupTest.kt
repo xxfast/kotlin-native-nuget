@@ -91,7 +91,7 @@ class Tier1CollectionHandleCleanupTest {
       |                {
       |                    throw NugetErrorNative.BuildException(error);
       |                }
-      |                _handle = handle;
+      |                _handle = new NugetKotlinHandle(handle);
       |            }
       |            finally
       |            {
@@ -178,7 +178,7 @@ class Tier1CollectionHandleCleanupTest {
       |                        element = Wrap(value, out owned);
       |                        NugetListNative.Add(listHandle, element);
       |                    }
-      |                    finally { if (owned) NugetListNative.Dispose(element); }
+      |                    finally { if (owned) NugetListNative.Dispose(element); else GC.KeepAlive(value); }
       |                }
       |            }
       |            catch
@@ -213,7 +213,9 @@ class Tier1CollectionHandleCleanupTest {
       |                    finally
       |                    {
       |                        if (keyOwned) NugetMapNative.Dispose(key);
+      |                        else GC.KeepAlive(pair.Key);
       |                        if (valueOwned) NugetMapNative.Dispose(value);
+      |                        else GC.KeepAlive(pair.Value);
       |                    }
       |                }
       |            }

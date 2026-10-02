@@ -103,12 +103,18 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   // can fault before `_jobHandle` has been assigned, in which case the closure has no handle to
   // cancel and the constructor does it instead.
   appendLine("        private volatile bool _faulted;")
+  // ADR-187: the collect delegate captures the wrapper that started the collection (it reads its
+  // `_handle` and its scope), and `KotlinFlow` is dropped as soon as the enumerator exists. Holding
+  // the delegate here roots that wrapper, and so its scope, for as long as the enumerator is rooted
+  // by its callbacks, so an undisposed wrapper is never finalized mid-collection.
+  appendLine("        private readonly NugetFlowCollectDelegate _startCollect;")
   appendLine("        private readonly Func<IntPtr, T> _read;")
   appendLine()
   appendLine("        public T Current { get; private set; } = default!;")
   appendLine()
   appendLine("        internal KotlinFlowEnumerator(NugetFlowCollectDelegate startCollect, CancellationToken cancellationToken, Func<IntPtr, T>? read = null)")
   appendLine("        {")
+  appendLine("            _startCollect = startCollect;")
   appendLine("            _read = read ?? NugetMarshal.FromHandle<T>;")
   appendLine("            _channel = Channel.CreateUnbounded<T>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });")
   appendLine()
@@ -244,6 +250,7 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
   )
   appendLine("            callbacks?.Release();")
   appendLine("            _channel.Writer.TryComplete();")
+  appendLine("            GC.KeepAlive(_startCollect);")
   appendLine("            return ValueTask.CompletedTask;")
   appendLine("        }")
   appendLine("    }")
@@ -259,24 +266,23 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
     appendLine("    public class KotlinStateFlow<T> : KotlinFlow<T>, IDisposable")
     appendLine("    {")
     appendLine("        private readonly Func<IntPtr> _readValue;")
-    appendLine("        private IntPtr _ownedHandle;")
+    // ADR-187: the owned flow handle is the same `NugetKotlinHandle` the read and write lambdas
+    // pass, so a dropped flow is released by the GC and a live one is kept alive by every call.
+    appendLine("        private NugetKotlinHandle _ownedHandle;")
     appendLine()
-    appendLine("        internal KotlinStateFlow(NugetFlowCollectDelegate startCollect, Func<IntPtr> readValue, IntPtr ownedHandle = default, Func<IntPtr, T>? read = null)")
+    appendLine("        internal KotlinStateFlow(NugetFlowCollectDelegate startCollect, Func<IntPtr> readValue, NugetKotlinHandle? ownedHandle = null, Func<IntPtr, T>? read = null)")
     appendLine("            : base(startCollect, read)")
     appendLine("        {")
     appendLine("            _readValue = readValue;")
-    appendLine("            _ownedHandle = ownedHandle;")
+    appendLine("            _ownedHandle = ownedHandle ?? NugetKotlinHandle.Null;")
     appendLine("        }")
     appendLine()
     appendLine("        public T Value => _read(_readValue());")
     appendLine()
     appendLine("        public void Dispose()")
     appendLine("        {")
-    appendLine("            IntPtr handle = Interlocked.Exchange(ref _ownedHandle, IntPtr.Zero);")
-    appendLine("            if (handle != IntPtr.Zero)")
-    appendLine("            {")
-    appendLine("                NugetMarshal.Dispose(handle);")
-    appendLine("            }")
+    appendLine("            NugetKotlinHandle handle = Interlocked.Exchange(ref _ownedHandle, NugetKotlinHandle.Null);")
+    appendLine("            if (!handle.IsInvalid) handle.Dispose();")
     appendLine("        }")
     appendLine("    }")
     appendLine()
@@ -295,7 +301,7 @@ internal fun StringBuilder.renderFlowHelper(helper: CirFlowHelper) {
       appendLine("            NugetFlowCollectDelegate startCollect,")
       appendLine("            Func<IntPtr> readValue,")
       appendLine("            Action<T> writeValue,")
-      appendLine("            IntPtr ownedHandle = default)")
+      appendLine("            NugetKotlinHandle? ownedHandle = null)")
       appendLine("            : base(startCollect, readValue, ownedHandle)")
       appendLine("        {")
       appendLine("            _writeValue = writeValue;")
@@ -319,10 +325,10 @@ internal fun StringBuilder.renderStateFlowHandleHelper(helper: CirStateFlowHandl
   appendLine("    internal static class NugetStateFlowNative")
   appendLine("    {")
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_stateflow_collect\")]")
-  appendLine("        internal static extern IntPtr Collect(IntPtr flowHandle, IntPtr scopeHandle, IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);")
+  appendLine("        internal static extern IntPtr Collect(NugetKotlinHandle flowHandle, NugetKotlinHandle scopeHandle, IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);")
   appendLine()
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_stateflow_value\")]")
-  appendLine("        internal static extern IntPtr Value(IntPtr flowHandle);")
+  appendLine("        internal static extern IntPtr Value(NugetKotlinHandle flowHandle);")
   appendLine("    }")
   appendLine()
 }
@@ -341,7 +347,7 @@ internal fun StringBuilder.renderFlowMethod(method: CirMethod, className: String
         "${method.explicitName}($paramStr)",
   )
   appendLine("        {")
-  appendLine("            if (_handle == IntPtr.Zero)")
+  appendLine("            if (_handle.IsInvalid)")
   appendLine("                throw new ObjectDisposedException(nameof($className));")
   appendLine("            return new KotlinFlow<${method.flowElementType}>((${method.flowCallbackNames.joinToString(", ")}) =>")
   // ADR-114: the collect delegate runs per subscription, so the wire container is built inside it
@@ -406,7 +412,7 @@ internal fun StringBuilder.renderStateFlowMethod(method: CirMethod, className: S
         "${method.explicitName}($paramStr)",
   )
   appendLine("        {")
-  appendLine("            if (_handle == IntPtr.Zero)")
+  appendLine("            if (_handle.IsInvalid)")
   appendLine("                throw new ObjectDisposedException(nameof($className));")
   if (method.isStateFlowNullableMember) {
     val hasValueNativeName: String = method.stateFlowHasValueNativeName
@@ -454,7 +460,7 @@ private fun StringBuilder.renderHeldStateFlowMethod(method: CirMethod, className
         "${method.explicitName}($paramStr)",
   )
   appendLine("        {")
-  appendLine("            if (_handle == IntPtr.Zero)")
+  appendLine("            if (_handle.IsInvalid)")
   appendLine("                throw new ObjectDisposedException(nameof($className));")
   // ADR-114: a collection argument's wire handle lives only for the acquire call, which is the
   // one call that reads it; the flow the call returns owns nothing of it.
@@ -463,6 +469,7 @@ private fun StringBuilder.renderHeldStateFlowMethod(method: CirMethod, className
   // parameter spelled like either; only this renderer declares or reads them.
   val taken: MutableSet<String> = method.parameters.localScopeNames()
   val flow: String = freshName("flow", taken).also { taken += it }
+  val owned: String = freshName("owned", taken).also { taken += it }
   val collectScope: String = freshName("collectScope", taken)
   val scoped: List<String>? =
     method.parameters.collectionScopedCall("            ", "$flow = $acquire", returns = false)
@@ -472,21 +479,26 @@ private fun StringBuilder.renderHeldStateFlowMethod(method: CirMethod, className
     appendLine("            IntPtr $flow = IntPtr.Zero;")
     scoped.forEach { appendLine(it) }
   }
-  appendLine("            IntPtr $collectScope = GetOrCreateScope();")
+  // ADR-187: the lambdas capture the owned flow handle and the parent's scope handle OBJECTS, not
+  // raw pointers, so neither can be finalized while the flow is reachable, and each call keeps the
+  // one it passes alive. A parent disposed first leaves a closed scope, which the collect call
+  // rejects (`ObjectDisposedException`) instead of handing Kotlin a released pointer.
+  appendLine("            var $owned = new NugetKotlinHandle($flow);")
+  appendLine("            NugetScopeHandle $collectScope = GetOrCreateScope();")
   appendLine("            return new KotlinMutableStateFlow<$element>(")
   appendLine("                (onNext, onComplete, onError, userData) =>")
-  appendLine("                    NugetStateFlowNative.Collect($flow, $collectScope, onNext, onComplete, onError, userData),")
-  appendLine("                () => NugetStateFlowNative.Value($flow),")
+  appendLine("                    NugetStateFlowNative.Collect($owned, $collectScope, onNext, onComplete, onError, userData),")
+  appendLine("                () => NugetStateFlowNative.Value($owned),")
   appendLine("                v =>")
   appendLine("                {")
   if (method.isMutableStateFlowElementObject) {
     appendLine("                    if (v is null) throw new ArgumentNullException(nameof(v));")
   }
   val writeReceiver: String = if (method.isMutableStateFlowElementObject) "v._handle" else "v"
-  appendLine("                    ${method.stateFlowSetValueNativeName}($flow, $writeReceiver, out IntPtr error);")
+  appendLine("                    ${method.stateFlowSetValueNativeName}($owned, $writeReceiver, out IntPtr error);")
   appendLine("                    if (error != IntPtr.Zero) throw NugetErrorNative.BuildException(error);")
   appendLine("                },")
-  appendLine("                $flow);")
+  appendLine("                $owned);")
   appendLine("        }")
   appendLine()
 }
