@@ -11,7 +11,7 @@
   If Gradle can't see `dotnet` on its `PATH` (an IDE-launched daemon, say), set `nuget.dotnet` to the
   executable's absolute path in the root project's `local.properties`:
 
-  ```properties
+  ```
   nuget.dotnet=/usr/local/share/dotnet/dotnet
   ```
 
