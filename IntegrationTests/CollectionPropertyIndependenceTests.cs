@@ -209,9 +209,9 @@ public class CollectionPropertyIndependenceTests
     {
         var chartId = new ChartId("oreo-chart-1");
 
-        chartId.SetSymptomTags(new List<string> { "sneezing", "purring" });
+        chartId.SymptomTags = new List<string> { "sneezing", "purring" };
 
-        Assert.Equal(new[] { "sneezing", "purring" }, chartId.GetSymptomTags());
+        Assert.Equal(new[] { "sneezing", "purring" }, chartId.SymptomTags);
     }
 
     [Fact]
@@ -219,6 +219,6 @@ public class CollectionPropertyIndependenceTests
     {
         var chartId = new ChartId("mylo-chart-1");
 
-        Assert.Empty(chartId.GetSymptomTags());
+        Assert.Empty(chartId.SymptomTags);
     }
 }

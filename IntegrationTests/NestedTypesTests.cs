@@ -150,7 +150,7 @@ public class NestedTypesTests
         using var perch = aviary.PerchAt(9);
 
         Assert.Equal("perch@9 (ext)", perch.Summarize());
-        Assert.True(perch.GetIsHigh());
+        Assert.True(perch.IsHigh);
 
         Assembly assembly = typeof(Aviary).Assembly;
         Assert.NotNull(assembly.GetType("TestLibrary.Nested.AviaryPerchExtensions"));

@@ -43,9 +43,9 @@ public class ExtensionNamespaceTests
         // The property group picks its namespace independently of the function group, so today the
         // root package's String extensions already split across two `StringExtensions` classes in
         // two namespaces. One declaring package must mean exactly one class.
-        Assert.Equal(3, TestLibrary.StringExtensions.GetWordCount("Oreo and Mylo"));
+        Assert.Equal(3, TestLibrary.StringExtensions.get_WordCount("Oreo and Mylo"));
         Assert.NotNull(typeof(TestLibrary.StringExtensions).GetMethod("Meowify"));
-        Assert.NotNull(typeof(TestLibrary.StringExtensions).GetMethod("GetWordCount"));
+        Assert.NotNull(typeof(TestLibrary.StringExtensions).GetMethod("get_WordCount"));
     }
 
     [Fact]
@@ -74,6 +74,6 @@ public class ExtensionNamespaceTests
         // rule change must not touch it. Both an extension function and an extension property.
         using var oreo = new TestLibrary.Cat.Cat("Oreo", 9);
         Assert.Equal("My name is Oreo", TestLibrary.Cat.CatExtensions.SayName(oreo));
-        Assert.True(TestLibrary.Cat.CatExtensions.GetIsKitten(oreo));
+        Assert.True(TestLibrary.Cat.CatExtensions.get_IsKitten(oreo));
     }
 }

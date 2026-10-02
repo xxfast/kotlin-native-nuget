@@ -47,7 +47,7 @@ class Tier1OrdinarySurfaceTest {
   }
 
   @Test
-  fun `extension property on Int surfaces as static Get Set methods`() {
+  fun `extension property on Int surfaces as C# 14 extension properties`() {
     val result = Tier1Harness.run(
       """
       package tier1.extprop
@@ -60,8 +60,8 @@ class Tier1OrdinarySurfaceTest {
 
     assertTrue(result.compiledClean, "got: ${result.compileErrors}")
     val cs = result.generatedCSharp
-    assertContains(cs, "GetDoubled(this int")
-    assertContains(cs, "SetDoubled(this int")
+    assertContains(cs, "extension(int receiver)\n        {\n            public int Doubled\n")
+    assertContains(cs, "                set\n")
   }
 
   /**
@@ -74,7 +74,7 @@ class Tier1OrdinarySurfaceTest {
    * konanc/dotnet round trip.
    */
   @Test
-  fun `extension property on value class receiver with collection setter surfaces as static Get Set methods`() {
+  fun `extension property on value class receiver with collection setter surfaces as C# 14 extension properties`() {
     val result = Tier1Harness.run(
       """
       package tier1.valueclassextprop
@@ -92,8 +92,8 @@ class Tier1OrdinarySurfaceTest {
 
     assertTrue(result.compiledClean, "got: ${result.compileErrors}")
     val cs = result.generatedCSharp
-    assertContains(cs, "GetLabels(this global::Interop.Tag")
-    assertContains(cs, "SetLabels(this global::Interop.Tag")
+    assertContains(cs, "extension(global::Interop.Tag receiver)")
+    assertContains(cs, "public IReadOnlyList<string> Labels")
     assertContains(cs, "receiver.Value")
   }
 

@@ -43,9 +43,9 @@ public class ValueClassReceiverTests
     {
         var dosage = new Dosage(2.5);
 
-        dosage.SetLabel("Oreo's evening dose");
+        dosage.Label = "Oreo's evening dose";
 
-        Assert.Equal("Oreo's evening dose", dosage.GetLabel());
+        Assert.Equal("Oreo's evening dose", dosage.Label);
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public class ValueClassReceiverTests
     {
         var dosage = new Dosage(1.0);
 
-        Assert.Empty(dosage.GetLabel());
+        Assert.Empty(dosage.Label);
     }
 
     [Fact]
@@ -63,9 +63,9 @@ public class ValueClassReceiverTests
         // re-wrapped Temperament from a stray zeroed wire.
         var temperament = new Temperament(Mood.Anxious);
 
-        temperament.SetNote("hisses at the vacuum");
+        temperament.Note = "hisses at the vacuum";
 
-        Assert.Equal("hisses at the vacuum", temperament.GetNote());
+        Assert.Equal("hisses at the vacuum", temperament.Note);
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public class ValueClassReceiverTests
     {
         var temperament = new Temperament(Mood.Playful);
 
-        Assert.Empty(temperament.GetNote());
+        Assert.Empty(temperament.Note);
     }
 
     [Fact]
@@ -82,9 +82,9 @@ public class ValueClassReceiverTests
         using var oreo = new Patient("Oreo");
         var chartRef = new ChartRef(oreo);
 
-        chartRef.SetAnnotation("microchipped");
+        chartRef.Annotation = "microchipped";
 
-        Assert.Equal("microchipped", chartRef.GetAnnotation());
+        Assert.Equal("microchipped", chartRef.Annotation);
     }
 
     [Fact]
@@ -97,9 +97,9 @@ public class ValueClassReceiverTests
         var first = new ChartRef(mylo);
         var second = new ChartRef(mylo);
 
-        first.SetAnnotation("due for a checkup");
+        first.Annotation = "due for a checkup";
 
-        Assert.Equal("due for a checkup", second.GetAnnotation());
+        Assert.Equal("due for a checkup", second.Annotation);
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public class ValueClassReceiverTests
         using var oreo = new Patient("Oreo");
         var chartRef = new ChartRef(oreo);
 
-        Assert.Empty(chartRef.GetAnnotation());
+        Assert.Empty(chartRef.Annotation);
     }
 
     // --- Half 2: extension-FUNCTION value-class receivers ---

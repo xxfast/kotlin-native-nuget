@@ -9,6 +9,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirConst
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDeclaration
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirExtensionProperty
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirEnum
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirErrorHelper
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
@@ -149,7 +150,7 @@ internal object ForwardAbiLegacyRoutes {
       is CirCallbackMethod -> add(ForwardAbiLegacyRoute.LAMBDA_PARAMETER_METHOD)
       is CirStoredCallbackMethod -> add(ForwardAbiLegacyRoute.STORED_CALLBACK_METHOD)
       is CirInterfaceBridgeMethod -> add(ForwardAbiLegacyRoute.INTERFACE_BRIDGE_METHOD)
-      is CirConst, is CirDllImport -> Unit
+      is CirConst, is CirDllImport, is CirExtensionProperty -> Unit
     }
   }
 

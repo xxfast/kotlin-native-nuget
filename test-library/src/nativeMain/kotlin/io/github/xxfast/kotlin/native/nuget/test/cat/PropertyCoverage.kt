@@ -43,6 +43,8 @@ private data class ExtensionPropertyState(
   var nickname: String? = null,
   var buddy: Cat? = null,
   var mood: Mood = Mood.SLEEPY,
+  var lives: Int = 9,
+  var isIndoor: Boolean = true,
 )
 
 private val extensionPropertyStates: MutableMap<PropertyProbe, ExtensionPropertyState> = mutableMapOf()
@@ -72,6 +74,20 @@ var PropertyProbe.extensionMood: Mood
   get() = extensionPropertyState().mood
   set(value) {
     extensionPropertyState().mood = value
+  }
+
+// Non-null `Int` and `Boolean` `var`s: the no-conversion setter shape (ADR-188), next to the
+// nullable, string, object and enum `var`s above that all convert on the way across.
+var PropertyProbe.extensionLives: Int
+  get() = extensionPropertyState().lives
+  set(value) {
+    extensionPropertyState().lives = value
+  }
+
+var PropertyProbe.extensionIsIndoor: Boolean
+  get() = extensionPropertyState().isIndoor
+  set(value) {
+    extensionPropertyState().isIndoor = value
   }
 
 val PropertyProbe.extensionTags: List<String>

@@ -112,7 +112,7 @@ class Tier1SealedReceiverExtensionTest {
     )
     assertTrue(
       result.generatedCSharp.contains(
-        "public static string GetOutline(this global::Interop.Shape receiver)",
+        "extension(global::Interop.Shape receiver)\n        {\n            public string Outline\n",
       ),
       "expected a C# extension accessor on the sealed base; generatedCSharp=" +
           "${result.generatedCSharp.lines().filter { it.contains("GetOutline") }}",

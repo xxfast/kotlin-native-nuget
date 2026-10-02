@@ -51,27 +51,49 @@ public class PropertyPositionMarshallingTests
         using var probe = new PropertyProbe();
         using var mylo = new Cat("Mylo", 9);
 
-        probe.SetExtensionAge(4);
-        probe.SetExtensionNickname("Mighty Mylo");
-        probe.SetExtensionBuddy(mylo);
-        probe.SetExtensionMood(Mood.Happy);
+        probe.ExtensionAge = 4;
+        probe.ExtensionNickname = "Mighty Mylo";
+        probe.ExtensionBuddy = mylo;
+        probe.ExtensionMood = Mood.Happy;
 
-        using Cat? buddy = probe.GetExtensionBuddy();
-        IReadOnlyList<string> tags = probe.GetExtensionTags();
+        using Cat? buddy = probe.ExtensionBuddy;
+        IReadOnlyList<string> tags = probe.ExtensionTags;
 
-        Assert.Equal(4, probe.GetExtensionAge());
-        Assert.Equal("Mighty Mylo", probe.GetExtensionNickname());
+        Assert.Equal(4, probe.ExtensionAge);
+        Assert.Equal("Mighty Mylo", probe.ExtensionNickname);
         Assert.NotNull(buddy);
         Assert.Equal("Mylo", buddy!.Name);
-        Assert.Equal(Mood.Happy, probe.GetExtensionMood());
+        Assert.Equal(Mood.Happy, probe.ExtensionMood);
         Assert.Equal(new[] { "extension", "property" }, tags);
 
-        probe.SetExtensionAge(null);
-        probe.SetExtensionNickname(null);
-        probe.SetExtensionBuddy(null);
-        Assert.Null(probe.GetExtensionAge());
-        Assert.Null(probe.GetExtensionNickname());
-        Assert.Null(probe.GetExtensionBuddy());
+        probe.ExtensionAge = null;
+        probe.ExtensionNickname = null;
+        probe.ExtensionBuddy = null;
+        Assert.Null(probe.ExtensionAge);
+        Assert.Null(probe.ExtensionNickname);
+        Assert.Null(probe.ExtensionBuddy);
+    }
+
+    // The no-conversion half of the extension `var` shape: non-null `Int` and `Boolean` cross
+    // with no allocation, string or handle, so the C# 14 setter body is the plain scalar path.
+    // Oreo starts with nine lives indoors; after a night on the fence he is down to eight and
+    // Mylo has let him stay outside.
+    [Fact]
+    public void Extension_NonNullIntAndBoolVars_RoundTripWithoutConversion()
+    {
+        using var probe = new PropertyProbe();
+
+        Assert.Equal(9, probe.ExtensionLives);
+        Assert.True(probe.ExtensionIsIndoor);
+
+        probe.ExtensionLives = 8;
+        probe.ExtensionIsIndoor = false;
+
+        Assert.Equal(8, probe.ExtensionLives);
+        Assert.False(probe.ExtensionIsIndoor);
+
+        probe.ExtensionLives -= 1;
+        Assert.Equal(7, probe.ExtensionLives);
     }
 
     [Fact]

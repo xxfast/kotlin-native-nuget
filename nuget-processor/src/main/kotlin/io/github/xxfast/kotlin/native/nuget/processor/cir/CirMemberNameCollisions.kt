@@ -54,6 +54,10 @@ internal fun List<CirMember>.csMemberNames(): List<CsMemberName> = mapNotNull { 
     is CirStoredCallbackMethod -> CsMemberName(member.csMethodName, CsMemberKind.METHOD)
     is CirInterfaceBridgeMethod -> CsMemberName(member.csMethodName, CsMemberKind.METHOD)
     is CirDllImport -> null
+    // ADR-188: an extension-block member is not a member of the static class itself (it lowers to
+    // `get_X`/`set_X`). Its clash with a same-named extension function is refused by the planner
+    // (`SHADOWED_BY_EXTENSION_FUNCTION`) before any CIR exists.
+    is CirExtensionProperty -> null
   }
 }
 

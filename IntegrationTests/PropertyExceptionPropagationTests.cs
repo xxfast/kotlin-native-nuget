@@ -262,14 +262,14 @@ public class PropertyExceptionPropagationTests
         Assert.Equal("Mylo is purring contentedly", cat.Mood);
     }
 
-    // --- Extension property: throwing GETTER (CatExtensions.GetFavouriteTreatName) ---
+    // --- Extension property: throwing GETTER (CatExtensions, `cat.FavouriteTreatName`) ---
 
     [Fact]
     public void Cat_FavouriteTreatName_WithToys_GetterSucceeds()
     {
         // Cat always has toys from its constructor (Mouse and Ball)
         using var cat = new Cat("Oreo", 9);
-        string name = cat.GetFavouriteTreatName();
+        string name = cat.FavouriteTreatName;
         Assert.Equal("Mouse flavour", name);
     }
 

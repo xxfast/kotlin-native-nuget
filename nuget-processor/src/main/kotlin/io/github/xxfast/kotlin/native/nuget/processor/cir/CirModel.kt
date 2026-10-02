@@ -976,6 +976,31 @@ data class CirProperty(
   val explicitInterface: String? = null,
 ) : CirMember
 
+/**
+ * ADR-188: a Kotlin extension property, rendered as a C# 14 extension member inside its
+ * `{Receiver}Extensions` static class:
+ *
+ * ```csharp
+ * extension(Cat receiver)
+ * {
+ *     public bool IsKitten { get { ... } }
+ * }
+ * ```
+ *
+ * The block's parameter is always named `receiver`, which is what [getter] and [setter] reference.
+ * The bodies are baked at the extension-method depth (brace at column 8), and the renderer moves
+ * them in to the accessor depth. The private `[DllImport]` externs stay ordinary class-level
+ * [CirDllImport] members beside this one: an extension block cannot declare an extern.
+ */
+data class CirExtensionProperty(
+  val receiverType: String,
+  val name: String,
+  val type: String,
+  val getter: String,
+  val setter: String? = null,
+  val doc: CirDoc? = null,
+) : CirMember
+
 data class CirExtraNative(
   val entryPointSuffix: String,
   val returnType: String,

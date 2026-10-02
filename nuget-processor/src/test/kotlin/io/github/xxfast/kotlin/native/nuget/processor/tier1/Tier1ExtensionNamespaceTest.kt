@@ -77,7 +77,7 @@ class Tier1ExtensionNamespaceTest {
       val cs: String = run(sources)
       val rootBlock: String = namespaceBlock(cs, "Ext")
 
-      assertContains(rootBlock, "public static int GetWordCount(")
+      assertContains(rootBlock, "public int WordCount\n")
       assertEquals(
         1,
         Regex("class StringExtensions").findAll(rootBlock).count(),

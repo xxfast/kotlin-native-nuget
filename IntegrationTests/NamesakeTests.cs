@@ -2,7 +2,7 @@
 // spelled through, because `Kitten`, `LoadState` and `Mood` exist in both halves and an unqualified
 // simple name would be CS0104. The plain using-namespace directives are still required: C# resolves
 // extension methods only through using-NAMESPACE directives, never through a using-alias, so
-// `Mood.Curious.Chirp()` and `.GetPounce()` would be CS1061 without them. CS0104 fires on
+// `Mood.Curious.Chirp()` and `.Pounce` would be CS1061 without them. CS0104 fires on
 // unqualified simple names only, so the two forms coexist.
 using TestLibrary.Namesake.A;
 using TestLibrary.Namesake.B;
@@ -180,10 +180,10 @@ public class NamesakeTests
     [Fact]
     public void TwoEnums_ExtensionProperty_ReadsFromItsOwnPackage()
     {
-        Assert.Equal("a: Oreo pounces on the blind cord", A.Mood.Curious.GetPounce());
-        Assert.Equal("a: Oreo cannot be bothered", A.Mood.Smug.GetPounce());
-        Assert.Equal("b: Mylo pounces on the milk jug", B.Mood.Curious.GetPounce());
-        Assert.Equal("b: Mylo naps through it", B.Mood.Smug.GetPounce());
+        Assert.Equal("a: Oreo pounces on the blind cord", A.Mood.Curious.Pounce);
+        Assert.Equal("a: Oreo cannot be bothered", A.Mood.Smug.Pounce);
+        Assert.Equal("b: Mylo pounces on the milk jug", B.Mood.Curious.Pounce);
+        Assert.Equal("b: Mylo naps through it", B.Mood.Smug.Pounce);
     }
 
     // -----------------------------------------------------------------------------------------

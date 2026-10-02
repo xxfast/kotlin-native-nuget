@@ -267,7 +267,7 @@ class ForwardPropertyEmitterTest {
     assertContains(kotlin, "receiver.doubled")
 
     val csharp = renderExtension(plan)
-    assertContains(csharp, "public static int GetDoubled(this int receiver)")
+    assertContains(csharp, "extension(int receiver)\n        {\n            public int Doubled\n")
     assertContains(csharp, "Native_IntGetDoubled(receiver, out IntPtr error)")
   }
 
@@ -286,9 +286,9 @@ class ForwardPropertyEmitterTest {
     assertContains(kotlin, "alias = value")
 
     val csharp = renderExtension(plan)
-    assertContains(csharp, "public static string GetAlias(this Patient receiver)")
+    assertContains(csharp, "extension(Patient receiver)\n        {\n            public string Alias\n")
     assertContains(csharp, "Native_PatientGetAlias(receiver._handle, out IntPtr error)")
-    assertContains(csharp, "public static void SetAlias(this Patient receiver, string value)")
+    assertContains(csharp, "                set\n")
   }
 
   // -- builders ---------------------------------------------------------------

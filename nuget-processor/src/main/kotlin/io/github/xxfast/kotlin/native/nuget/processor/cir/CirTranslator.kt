@@ -728,17 +728,11 @@ internal fun translate(
       if (plan != null) {
         tracker.trackProperty(plan)
         ForwardCirPropertyProjection.extension(plan, context.libraryName)
+          // ADR-188: the projection emits a C# 14 extension-block property, not a `GetX`/`SetX`
+          // method pair, so nothing here feeds the ADR-095 extension-method signature check. Its
+          // one clash, a same-named extension function on the same receiver, is refused by the
+          // planner (`SHADOWED_BY_EXTENSION_FUNCTION`).
           .also { emitted ->
-            val keyword: String = if (prop.isMutable) "var" else "val"
-            val receiverText: String = prop.extensionReceiver?.resolve()?.declaration?.simpleName
-              ?.asString().orEmpty()
-            extensionClassMethods.getOrPut(key) { mutableListOf() } += emitted
-              .filterIsInstance<CirMethod>()
-              .map { method ->
-                SpelledMethod(
-                  method, "`$keyword $receiverText.${prop.simpleName.asString()}`", prop,
-                )
-              }
             recordStatic(namespace, className, emitted, prop, prop.topLevelSpelling())
           }
       } else {

@@ -871,6 +871,66 @@ class CirOrdinaryRendererTest {
     assertContains(rendered, "Native_MoodGetLabel((int)mood, out IntPtr error)")
   }
 
+  // -- CirExtensionProperty (ADR-188) -----------------------------------------
+
+  @Test
+  fun `extension property renders a C# 14 extension block with both accessors`() {
+    val getter = "\n            return Native_CatGetLabel(receiver._handle);"
+    val setter = "\n            Native_CatSetLabel(receiver._handle, value);"
+    val rendered: String = buildString {
+      renderMember(
+        CirExtensionProperty(
+          receiverType = "Cat",
+          name = "Label",
+          type = "string",
+          getter = getter,
+          setter = setter,
+        ),
+      )
+    }
+
+    assertEquals(
+      """
+      |        extension(Cat receiver)
+      |        {
+      |            public string Label
+      |            {
+      |                get
+      |                {
+      |                    return Native_CatGetLabel(receiver._handle);
+      |                }
+      |                set
+      |                {
+      |                    Native_CatSetLabel(receiver._handle, value);
+      |                }
+      |            }
+      |        }
+      |
+      |
+      """.trimMargin(),
+      rendered.replace("\r\n", "\n"),
+    )
+    assertFalse(rendered.contains("GetLabel(this"), "ADR-013's method shape must be gone")
+  }
+
+  @Test
+  fun `a read-only extension property renders no setter`() {
+    val rendered: String = buildString {
+      renderMember(
+        CirExtensionProperty(
+          receiverType = "Cat?",
+          name = "IsKitten",
+          type = "bool",
+          getter = "\n            return true;",
+        ),
+      )
+    }
+
+    assertContains(rendered, "extension(Cat? receiver)")
+    assertContains(rendered, "public bool IsKitten")
+    assertFalse(rendered.contains("set"), "a val has no setter: $rendered")
+  }
+
   // -- CirValueClass ----------------------------------------------------------
 
   @Test
