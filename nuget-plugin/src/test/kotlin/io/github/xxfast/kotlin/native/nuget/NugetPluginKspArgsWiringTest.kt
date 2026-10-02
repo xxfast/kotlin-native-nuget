@@ -47,14 +47,14 @@ class NugetPluginKspArgsWiringTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
-      rootPackage = "com.contoso.api"
-      include("com.contoso.api")
-      include("com.contoso.extra")
-      exclude("com.contoso.api.internal")
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
+      it.rootPackage.set("com.contoso.api")
+      it.include("com.contoso.api")
+      it.include("com.contoso.extra")
+      it.exclude("com.contoso.api.internal")
     }
 
     project.evaluate()
@@ -72,10 +72,10 @@ class NugetPluginKspArgsWiringTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
     }
 
     project.evaluate()
@@ -103,13 +103,13 @@ class NugetPluginKspArgsWiringTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
-      rootPackage = "com.contoso.api"
-      admit("io.ktor.http.Url")
-      admit("co.touchlab.kermit.Severity", "io.ktor.client.plugins.logging")
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
+      it.rootPackage.set("com.contoso.api")
+      it.admit("io.ktor.http.Url")
+      it.admit("co.touchlab.kermit.Severity", "io.ktor.client.plugins.logging")
     }
 
     project.evaluate()
@@ -131,11 +131,11 @@ class NugetPluginKspArgsWiringTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
-      strictDependencyTypes = true
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
+      it.strictDependencyTypes.set(true)
     }
 
     project.evaluate()
@@ -158,12 +158,12 @@ class NugetPluginKspArgsWiringTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
-      rootPackage = "com.contoso.api"
-      admit("io.ktor.http.Url")
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
+      it.rootPackage.set("com.contoso.api")
+      it.admit("io.ktor.http.Url")
     }
 
     project.evaluate()
@@ -184,12 +184,12 @@ class NugetPluginKspArgsWiringTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
-      exportMarkers("com.contoso.api.ExperimentalFooApi")
-      exportMarkers("com.contoso.api.ExperimentalBarApi")
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
+      it.exportMarkers("com.contoso.api.ExperimentalFooApi")
+      it.exportMarkers("com.contoso.api.ExperimentalBarApi")
     }
 
     project.evaluate()
@@ -212,18 +212,18 @@ class NugetPluginKspArgsWiringTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
     }
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Acme") {
-        version = "1.0.0"
-        bind {
-          packageName = "acme"
-          alias("Acme.Core", kotlinPackage = "acme.core")
+      it.dependency("Acme") {
+        it.version.set("1.0.0")
+        it.bind {
+          it.packageName.set("acme")
+          it.alias("Acme.Core", kotlinPackage = "acme.core")
         }
       }
     }
@@ -247,16 +247,16 @@ class NugetPluginKspArgsWiringTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
     }
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Acme") {
-        version = "1.0.0"
-        bind { packageName = "acme" }
+      it.dependency("Acme") {
+        it.version.set("1.0.0")
+        it.bind { bind -> bind.packageName.set("acme") }
       }
     }
 
@@ -277,10 +277,10 @@ class NugetPluginKspArgsWiringTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
     }
 
     project.evaluate()
@@ -300,13 +300,13 @@ class NugetPluginKspArgsWiringTest {
       val project: Project = buildProjectWithSharedLib()
       val extension: NugetExtension = project.extensions.getByType(NugetExtension::class.java)
       extension.publish {
-        this.packageId = packageId
-        version = "1.0.0"
+        it.packageId.set(packageId)
+        it.version.set("1.0.0")
       }
       extension.dependencies {
-        dependency("Acme") {
-          version = "1.0.0"
-          bind { packageName = "acme" }
+        it.dependency("Acme") {
+          it.version.set("1.0.0")
+          it.bind { bind -> bind.packageName.set("acme") }
         }
       }
 
@@ -328,13 +328,13 @@ class NugetPluginKspArgsWiringTest {
     val project: Project = buildProjectWithSharedLib()
     val extension: NugetExtension = project.extensions.getByType(NugetExtension::class.java)
     extension.publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
     }
     extension.dependencies {
-      dependency("Acme") {
-        version = "1.0.0"
-        bind { packageName = "acme" }
+      it.dependency("Acme") {
+        it.version.set("1.0.0")
+        it.bind { bind -> bind.packageName.set("acme") }
       }
     }
 

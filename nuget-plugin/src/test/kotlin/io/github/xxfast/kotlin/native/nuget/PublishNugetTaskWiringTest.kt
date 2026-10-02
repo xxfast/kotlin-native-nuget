@@ -36,41 +36,48 @@ class PublishNugetTaskWiringTest {
     (this as ProjectInternal).evaluate()
   }
 
-  private fun Project.publish(configure: NugetRepositoriesScope.() -> Unit) {
+  private fun Project.publish(configure: (NugetRepositoriesScope) -> Unit) {
     extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
-      repositories(configure)
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
+      it.repositories { scope -> configure(scope) }
     }
   }
 
   private fun Task.dependencies(): Set<Task> = taskDependencies.getDependencies(this)
 
   @Test
-  fun `repositories block registers named repositories in order`() {
-    val extension = NugetExtension()
+  fun `repositories block registers named repositories keyed by name`() {
+    val extension: NugetExtension = ProjectBuilder.builder().build()
+      .objects.newInstance(NugetExtension::class.java)
 
     extension.publish {
-      repositories {
-        nuget("nugetOrg") { url = "https://api.nuget.org/v3/index.json" }
-        nuget("github") { url = "https://nuget.pkg.github.com/xxfast/index.json" }
+      it.repositories {
+        it.nuget("nugetOrg") { repository -> repository.url.set("https://api.nuget.org/v3/index.json") }
+        it.nuget("github") { repository -> repository.url.set("https://nuget.pkg.github.com/xxfast/index.json") }
       }
     }
 
-    val repositories: List<NugetRepository> = extension.publish!!.repositories
-    assertEquals(listOf("nugetOrg", "github"), repositories.map { it.name })
-    assertEquals("https://api.nuget.org/v3/index.json", repositories[0].url)
-    assertEquals("https://nuget.pkg.github.com/xxfast/index.json", repositories[1].url)
+    val repositories = extension.publish.repositories
+    assertEquals(setOf("nugetOrg", "github"), repositories.names)
+    assertEquals(
+      "https://api.nuget.org/v3/index.json",
+      repositories.getByName("nugetOrg").url.get(),
+    )
+    assertEquals(
+      "https://nuget.pkg.github.com/xxfast/index.json",
+      repositories.getByName("github").url.get(),
+    )
   }
 
   @Test
   fun `each repository gets its own publish task depending on packNuget`() {
     val project: Project = buildProject()
     project.publish {
-      nuget("nugetOrg") { url = "https://api.nuget.org/v3/index.json" }
-      nuget("github") { url = "https://nuget.pkg.github.com/xxfast/index.json" }
+      it.nuget("nugetOrg") { repository -> repository.url.set("https://api.nuget.org/v3/index.json") }
+      it.nuget("github") { repository -> repository.url.set("https://nuget.pkg.github.com/xxfast/index.json") }
     }
 
     project.evaluate()
@@ -97,8 +104,8 @@ class PublishNugetTaskWiringTest {
   fun `aggregate publishNuget depends on every repository task`() {
     val project: Project = buildProject()
     project.publish {
-      nuget("nugetOrg") { url = "https://api.nuget.org/v3/index.json" }
-      nuget("github") { url = "https://nuget.pkg.github.com/xxfast/index.json" }
+      it.nuget("nugetOrg") { repository -> repository.url.set("https://api.nuget.org/v3/index.json") }
+      it.nuget("github") { repository -> repository.url.set("https://nuget.pkg.github.com/xxfast/index.json") }
     }
 
     project.evaluate()
@@ -124,7 +131,7 @@ class PublishNugetTaskWiringTest {
   fun `repository task carries the url and the packNuget output file`() {
     val project: Project = buildProject()
     project.publish {
-      nuget("nugetOrg") { url = "https://api.nuget.org/v3/index.json" }
+      it.nuget("nugetOrg") { repository -> repository.url.set("https://api.nuget.org/v3/index.json") }
     }
 
     project.evaluate()
@@ -144,7 +151,8 @@ class PublishNugetTaskWiringTest {
   // missing-key message below.
   @Test
   fun `unset credentials resolve from repository-named Gradle properties`() {
-    val repository = NugetRepository("nugetOrg")
+    val repository: NugetRepository = ProjectBuilder.builder().build()
+      .objects.newInstance(NugetRepository::class.java, "nugetOrg")
 
     assertEquals("nugetOrgApiKey", repository.apiKeyProperty)
     assertEquals("nugetOrgUsername", repository.usernameProperty)
@@ -155,9 +163,9 @@ class PublishNugetTaskWiringTest {
   fun `explicit apiKey wins over the Gradle property`() {
     val project: Project = buildProject()
     project.publish {
-      nuget("github") {
-        url = "https://nuget.pkg.github.com/xxfast/index.json"
-        apiKey = project.providers.provider { "explicit-key" }
+      it.nuget("github") {
+        it.url.set("https://nuget.pkg.github.com/xxfast/index.json")
+        it.apiKey.set(project.providers.provider { "explicit-key" })
       }
     }
 
@@ -171,7 +179,7 @@ class PublishNugetTaskWiringTest {
   fun `missing apiKey does not fail configuration but fails when the task runs`() {
     val project: Project = buildProject()
     project.publish {
-      nuget("nugetOrg") { url = "https://api.nuget.org/v3/index.json" }
+      it.nuget("nugetOrg") { repository -> repository.url.set("https://api.nuget.org/v3/index.json") }
     }
 
     project.evaluate()

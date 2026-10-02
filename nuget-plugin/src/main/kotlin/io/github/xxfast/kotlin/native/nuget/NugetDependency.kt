@@ -1,14 +1,42 @@
 package io.github.xxfast.kotlin.native.nuget
 
-class NugetDependency(val id: String) {
-  var version: String? = null
-  var source: String? = null
-  var bind: NugetBindConfig? = null
+import org.gradle.api.Action
+import org.gradle.api.Named
+import org.gradle.api.model.ObjectFactory
+import org.gradle.api.provider.Property
+import javax.inject.Inject
+
+@NugetDsl
+abstract class NugetDependency @Inject constructor(
+  private val name: String,
+  objects: ObjectFactory,
+) : Named {
+  override fun getName(): String = name
+
+  /** The NuGet package id; the container key. */
+  val id: String get() = name
+
+  abstract val version: Property<String>
+  abstract val source: Property<String>
+
+  val bind: NugetBindConfig = objects.newInstance(NugetBindConfig::class.java)
+
+  // ADR-180: `bind {}` is a declaration, not only configuration: a dependency with an empty
+  // `bind { }` is bound, one without the block is resolve-only.
+  internal var bound: Boolean = false
     private set
 
-  fun bind(configure: NugetBindConfig.() -> Unit) {
-    val config = NugetBindConfig()
-    config.configure()
-    bind = config
+  private val bindHooks: MutableList<() -> Unit> = mutableListOf()
+
+  fun bind(action: Action<in NugetBindConfig>) {
+    action.execute(bind)
+    if (bound) return
+    bound = true
+    bindHooks.forEach { hook -> hook() }
+  }
+
+  /** Runs [hook] once, on the first `bind {}` call, or now if that already happened. */
+  internal fun whenBound(hook: () -> Unit) {
+    if (bound) hook() else bindHooks.add(hook)
   }
 }

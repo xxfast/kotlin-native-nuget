@@ -1,20 +1,25 @@
 package io.github.xxfast.kotlin.native.nuget
 
-class NugetBindConfig {
-  var packageName: String? = null
+import org.gradle.api.provider.ListProperty
+import org.gradle.api.provider.MapProperty
+import org.gradle.api.provider.Property
 
-  private val _include = mutableListOf<String>()
-  private val _exclude = mutableListOf<String>()
-  private val _aliases = mutableMapOf<String, String>()
+@NugetDsl
+abstract class NugetBindConfig {
+  abstract val packageName: Property<String>
+  abstract val include: ListProperty<String>
+  abstract val exclude: ListProperty<String>
+  abstract val aliases: MapProperty<String, String>
 
-  val include: List<String> get() = _include.toList()
-  val exclude: List<String> get() = _exclude.toList()
-  val aliases: Map<String, String> get() = _aliases.toMap()
+  fun include(vararg namespace: String) {
+    include.addAll(*namespace)
+  }
 
-  fun include(vararg namespace: String) { _include.addAll(namespace) }
-  fun exclude(vararg namespace: String) { _exclude.addAll(namespace) }
+  fun exclude(vararg namespace: String) {
+    exclude.addAll(*namespace)
+  }
 
   fun alias(csharpNamespace: String, kotlinPackage: String) {
-    _aliases[csharpNamespace] = kotlinPackage
+    aliases.put(csharpNamespace, kotlinPackage)
   }
 }

@@ -62,10 +62,10 @@ class NugetCompileInteropTaskTest {
 
   private fun publish(project: Project) {
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
     }
   }
 
@@ -164,8 +164,8 @@ class NugetCompileInteropTaskTest {
     publish(project)
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("TestDependency", version = "1.0.0") {
-        bind { }
+      it.dependency("TestDependency", version = "1.0.0") {
+        it.bind { }
       }
     }
 

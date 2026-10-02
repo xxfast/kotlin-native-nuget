@@ -67,8 +67,8 @@ class NugetGenerateShimsTaskWiringTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3") {
-        bind { }
+      it.dependency("Newtonsoft.Json", version = "13.0.3") {
+        it.bind { }
       }
     }
 
@@ -82,7 +82,7 @@ class NugetGenerateShimsTaskWiringTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3")
+      it.dependency("Newtonsoft.Json", version = "13.0.3")
     }
 
     project.evaluate()
@@ -95,8 +95,8 @@ class NugetGenerateShimsTaskWiringTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3") {
-        bind { }
+      it.dependency("Newtonsoft.Json", version = "13.0.3") {
+        it.bind { }
       }
     }
 
@@ -114,8 +114,8 @@ class NugetGenerateShimsTaskWiringTest {
     val project: Project = buildProjectWithSharedLib(baseName = "test")
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3") {
-        bind { }
+      it.dependency("Newtonsoft.Json", version = "13.0.3") {
+        it.bind { }
       }
     }
 
@@ -132,8 +132,8 @@ class NugetGenerateShimsTaskWiringTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3") {
-        bind { }
+      it.dependency("Newtonsoft.Json", version = "13.0.3") {
+        it.bind { }
       }
     }
 
@@ -151,7 +151,7 @@ class NugetGenerateShimsTaskWiringTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3")
+      it.dependency("Newtonsoft.Json", version = "13.0.3")
     }
 
     project.evaluate()
@@ -172,8 +172,8 @@ class NugetGenerateShimsTaskWiringTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3") {
-        bind { }
+      it.dependency("Newtonsoft.Json", version = "13.0.3") {
+        it.bind { }
       }
     }
 
@@ -192,8 +192,8 @@ class NugetGenerateShimsTaskWiringTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3") {
-        bind { }
+      it.dependency("Newtonsoft.Json", version = "13.0.3") {
+        it.bind { }
       }
     }
 

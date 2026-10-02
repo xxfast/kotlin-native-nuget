@@ -50,10 +50,10 @@ class NugetPluginComposabilityTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
     }
 
     project.evaluate()
@@ -69,8 +69,8 @@ class NugetPluginComposabilityTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("MimeMapping", version = "4.0.0") {
-        bind { }
+      it.dependency("MimeMapping", version = "4.0.0") {
+        it.bind { }
       }
     }
 
@@ -90,15 +90,15 @@ class NugetPluginComposabilityTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
     }
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("MimeMapping", version = "4.0.0") {
-        bind { }
+      it.dependency("MimeMapping", version = "4.0.0") {
+        it.bind { }
       }
     }
 

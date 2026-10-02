@@ -214,7 +214,8 @@ afterEvaluate {
   // ADR-109: registered after the plugin callback, before companion configures publish.
   // Check ordering without forcing resolution of nuget.publishedScopes ourselves.
   val companion = project(":test-companion").extensions.findByType(NugetExtension::class.java)
-  check(companion?.publish == null) {
+  // ADR-180: `publish` is never null now; an unset packageId is what "not configured yet" means.
+  check(companion?.publish?.packageId?.isPresent != true) {
     "ADR-109 fixture requires companion publish to be configured after reader evaluation"
   }
   logger.lifecycle("ADR-109: reader evaluated before companion publish configuration")

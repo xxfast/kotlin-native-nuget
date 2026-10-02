@@ -145,7 +145,7 @@ class NugetCoexistenceTest {
       task.dependencySources.add("local-contract-feed")
     }
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "Test.Library-2"; version = "1.0.0"; authors = "Test"; description = "Test"
+      it.packageId.set("Test.Library-2"); it.version.set("1.0.0"); it.authors.set("Test"); it.description.set("Test")
     }
     (project as ProjectInternal).evaluate()
     assertEquals("kn_746573742e6c6962726172792d32", target.binaries.filterIsInstance<SharedLibrary>().first().baseName)

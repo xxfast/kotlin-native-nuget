@@ -11,7 +11,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
-import kotlin.test.assertNull
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -49,11 +49,11 @@ class NugetSnapshotVersioningTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "PeopleInSpace.Kotlin"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
-      snapshot = true
+      it.packageId.set("PeopleInSpace.Kotlin")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
+      it.snapshot.set(true)
     }
 
     project.evaluate()
@@ -67,11 +67,11 @@ class NugetSnapshotVersioningTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "PeopleInSpace.Kotlin"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
-      snapshot = true
+      it.packageId.set("PeopleInSpace.Kotlin")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
+      it.snapshot.set(true)
     }
 
     project.evaluate()
@@ -93,11 +93,11 @@ class NugetSnapshotVersioningTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
-      snapshot = true
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
+      it.snapshot.set(true)
     }
 
     project.evaluate()
@@ -119,37 +119,42 @@ class NugetSnapshotVersioningTest {
   }
 
   @Test
-  fun `non-snapshot mode registers no snapshot tasks and keeps the literal version`() {
+  fun `non-snapshot mode keeps packNuget off the snapshot tasks and keeps the literal version`() {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
     }
 
     project.evaluate()
 
-    assertNull(project.tasks.findByName("nugetSnapshotVersion"))
-    assertNull(project.tasks.findByName("nugetSnapshotVersionProps"))
-
+    // ADR-180: the snapshot tasks are registered with `publish {}`; packNuget pulls them in only
+    // when `snapshot` is true.
     val packNuget = project.tasks.getByName("packNuget") as PackNugetTask
+    val names: Set<String> =
+      packNuget.taskDependencies.getDependencies(packNuget).map { it.name }.toSet()
+    assertFalse("nugetSnapshotVersion" in names, "was $names")
+    assertFalse("nugetSnapshotVersionProps" in names, "was $names")
     assertEquals("1.0.0", packNuget.packageVersion.get())
   }
 
   @Test
-  fun `snapshot without a base version fails fast`() {
+  fun `snapshot without a base version fails when the version is minted`() {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      authors = "Test Author"
-      description = "Test description"
-      snapshot = true
+      it.packageId.set("TestLibrary")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
+      it.snapshot.set(true)
     }
 
-    val error: Throwable = assertFailsWith<Exception> { project.evaluate() }
+    project.evaluate()
+    val mint = project.tasks.getByName("nugetSnapshotVersion") as NugetSnapshotVersionTask
+    val error: Throwable = assertFailsWith<Exception> { mint.write() }
     val message: String = generateSequence(error) { it.cause }
       .mapNotNull { it.message }
       .joinToString("\n")
@@ -161,17 +166,19 @@ class NugetSnapshotVersioningTest {
   }
 
   @Test
-  fun `snapshot without a package id fails fast`() {
+  fun `snapshot without a package id fails when the version is minted`() {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
-      snapshot = true
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
+      it.snapshot.set(true)
     }
 
-    val error: Throwable = assertFailsWith<Exception> { project.evaluate() }
+    project.evaluate()
+    val mint = project.tasks.getByName("nugetSnapshotVersion") as NugetSnapshotVersionTask
+    val error: Throwable = assertFailsWith<Exception> { mint.write() }
     val message: String = generateSequence(error) { it.cause }
       .mapNotNull { it.message }
       .joinToString("\n")
@@ -197,11 +204,11 @@ class NugetSnapshotVersioningTest {
     val project: Project = buildProjectWithSharedLib()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "PeopleInSpace.Kotlin"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
-      snapshot = true
+      it.packageId.set("PeopleInSpace.Kotlin")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
+      it.snapshot.set(true)
     }
 
     project.evaluate()
@@ -234,12 +241,12 @@ class NugetSnapshotVersioningTest {
     val override: File = File(Files.createTempDirectory("props-override").toFile(), "Custom.props")
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
-      snapshot = true
-      versionPropsFile = override
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
+      it.snapshot.set(true)
+      it.versionPropsFile.set(override)
     }
 
     project.evaluate()
