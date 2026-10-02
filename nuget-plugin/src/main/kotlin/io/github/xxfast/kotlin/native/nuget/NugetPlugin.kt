@@ -367,11 +367,11 @@ class NugetPlugin : Plugin<Project> {
           // match an admitted klib type by package (a cross-module declaration carries no
           // module identity: `containingFile == null`, `origin == KOTLIN_LIB`).
           //
-          // A Provider, not a String: its body runs when KSP resolves its options, after every
-          // project in the build is evaluated, so no cross-project read happens inside
-          // `afterEvaluate` — where seeing a not-yet-evaluated sibling publisher would need
-          // `project.evaluationDependsOn(other)`, which is circular the moment two publishers
-          // each do it to the other (ADR-109 Alternative 2).
+          // The Provider defers the cross-project walk to option resolution. The real
+          // two-publisher fixture verifies delivery of a scope configured after this reader's
+          // afterEvaluate callback (scripts/verify-forward-diagnostics.sh). It does not prove
+          // that every Provider invocation waits for all projects to finish evaluation.
+          // Eager reciprocal evaluationDependsOn calls would be circular (ADR-109 Alternative 2).
           //
           // Self is listed deliberately, and dropped by the processor (its entry's packageId
           // equals its own `nuget.namespace`), so the single-publisher real build still

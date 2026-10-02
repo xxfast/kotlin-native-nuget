@@ -69,6 +69,10 @@ jobs:
       - name: Build both independent NuGet publishers
         run: ./gradlew :test-library:packNuget :test-companion:packNuget
 
+      - name: Forward diagnostics include the late publisher on cached builds
+        run: scripts/verify-forward-diagnostics.sh
+        shell: bash
+
       # ADR-127 seam 3 runs on both matrix legs: the runtime's `nuget_*` exports were only ever
       # spiked on macosArm64, so checking the linked library here turns a missing Windows export
       # into a build failure instead of an `EntryPointNotFoundException` in the dotnet tests below.

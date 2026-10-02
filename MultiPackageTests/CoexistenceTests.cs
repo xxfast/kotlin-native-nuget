@@ -9,6 +9,20 @@ namespace MultiPackageTests;
 public class CoexistenceTests
 {
     [Fact]
+    public void BothPublishersExposeTheirOwnSharedDependencyStory()
+    {
+        using var newsroom = new TestLibrary.Newsroom();
+        using var oreo = newsroom.Latest();
+        using var shared = Second.SharedStorySample.SharedStory();
+
+        Assert.Equal("Oreo escapes the cardboard box (again)", oreo.Title);
+        Assert.Equal("Shared story", shared.Title);
+        Assert.IsType<TestLibrary.Models.TopStory>(oreo);
+        Assert.NotEqual(oreo.GetType(), shared.GetType());
+        Assert.StartsWith("TestCompanion.", shared.GetType().FullName!);
+    }
+
+    [Fact]
     public void BothNativeRuntimesAllocateReadAndDisposeTheirOwnHandles()
     {
         long first = TestLibrary.NugetMarshal.LiveHandles;

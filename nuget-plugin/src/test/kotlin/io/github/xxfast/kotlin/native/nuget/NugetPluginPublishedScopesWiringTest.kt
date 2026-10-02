@@ -14,9 +14,10 @@ import kotlin.test.assertTrue
  * ADR-109: the duplicate-type hazard is only visible to a KSP run that knows the export scope of
  * every OTHER forward publisher in the same Gradle build. That knowledge crosses as one KSP
  * option, `nuget.publishedScopes`, registered as a lazy `Provider<String>` (KSP's
- * `arg(String, Provider<String>)` overload) so its cross-project walk runs when KSP resolves its
- * options — after every project is evaluated — instead of inside `afterEvaluate`, where seeing
- * a not-yet-evaluated sibling would need the mutually-circular `evaluationDependsOn`.
+ * `arg(String, Provider<String>)` overload). This test explicitly evaluates every project before
+ * resolving the options, so it proves encoding and wiring, not real KGP/KSP lifecycle timing.
+ * The native fixture in `scripts/verify-forward-diagnostics.sh` verifies delivery of a sibling
+ * scope configured after the reader's afterEvaluate callback.
  *
  * Encoding (ADR-109 Decision 2): entries `;`-separated, fields `:`-separated, lists `|`-separated,
  * `<packageId>:<include1|include2>:<exclude1|exclude2>`, sorted for a stable configuration-cache
