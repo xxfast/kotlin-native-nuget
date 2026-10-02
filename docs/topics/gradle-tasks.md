@@ -13,7 +13,7 @@ Registered when the build script declares `nuget { publish { } }` **and** the Ko
 |---|---|---|
 | `packNuget` | Packages the Kotlin/Native shared library as a NuGet package | the shared-lib link tasks, `kspKotlin{Target}`, `nugetReportDiagnostics`, `nugetCompileInterop`, `nugetGenerateShims` (only if the project also binds a dependency), and `nugetSnapshotVersion`/`nugetSnapshotVersionProps` (only when `snapshot = true`) |
 | `nugetReportDiagnostics` | Reports declarations the forward bridge could not generate | `kspKotlin{Target}` |
-| `nugetCompileInterop` | Compiles the generated C# bindings with dotnet before packNuget stages them | `kspKotlin{Target}`, `nugetGenerateShims` (only if the project also binds a dependency) |
+| `nugetCompileInterop` | Compiles the generated C# bindings with dotnet. Runs as part of `check` and before `packNuget` stages them | `kspKotlin{Target}`, `nugetGenerateShims` (only if the project also binds a dependency) |
 | `publishNugetTo<Name>Repository` | Pushes the packed `.nupkg` to the named `repositories { nuget("<name>") { } }` feed | `packNuget` |
 | `publishNuget` | Runs every push task in the project | every `PublishNugetTask` in the project |
 
@@ -35,12 +35,12 @@ it merges the reverse-direction C# shims from `nugetGenerateShims` into the same
 
 ### `nugetCompileInterop` {id="nugetcompileinterop"}
 
-Before `packNuget` stages the package, `nugetCompileInterop` builds every file it would stage (the
+`nugetCompileInterop` runs as part of `check` and before `packNuget` stages the package. It builds every file it would stage (the
 KSP-generated `Interop.cs`, plus any reverse-direction shims) against an exact-version
 `PackageReference` for each bound dependency, in an isolated build environment that ignores any
 `global.json`, `Directory.Build.props/targets`, `Directory.Packages.props`, or `NuGet.config`
 elsewhere in the repo. If a generated file does not compile, `packNuget` fails with the compiler's
-own output, for example:
+own output (so does `check`), for example:
 
 ```
 [nuget] The generated C# bindings do not compile (dotnet build exit code 1). This is a generator
@@ -51,7 +51,7 @@ Build FAILED.
 
 When `dotnet` is not found (on `PATH`, or at `nuget.dotnet` if you set it; see [Prerequisites](prerequisites.md)) or can't run, the task logs a warning and
 skips the check, so publishing a Kotlin/Native library still needs no .NET SDK. A `nuget.dotnet` that
-doesn't point at an executable fails instead of skipping.
+doesn't point at an executable fails instead of skipping, in `check` as well as `packNuget`.
 
 Registered on every project with a `publish {}` block. `packNuget` depends on them only when `snapshot = true`:
 
