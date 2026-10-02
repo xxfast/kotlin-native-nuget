@@ -144,6 +144,13 @@ class NugetPlugin : Plugin<Project> {
         // `EntryPointNotFoundException`. `export()` appends, so an author's own entries stand.
         target.binaries.withType(SharedLibrary::class.java).configureEach { lib ->
           lib.export(runtimeDep)
+
+          if (!target.konanTarget.name.startsWith("mingw")) return@configureEach
+          // -lole32: the reverse-bound `freeManagedString` actual (ADR-048, mingwMain) calls
+          // `platform.windows.CoTaskMemFree`, which is exported from ole32.dll/ole32.lib —
+          // needed whenever a bound dependency has a string-returning bridgeable method, which a
+          // consume-only project has too. Harmless to link unconditionally for every mingw target.
+          lib.linkerOpts("-lmsvcrt", "-static-libgcc", "-static-libstdc++", "-lole32")
         }
       }
 
@@ -504,17 +511,6 @@ class NugetPlugin : Plugin<Project> {
     kotlin: KotlinMultiplatformExtension,
   ) {
     val pub: NugetPublishConfig = extension.publish
-
-    kotlin.targets.withType(KotlinNativeTarget::class.java).configureEach { target ->
-      if (!target.konanTarget.name.startsWith("mingw")) return@configureEach
-      target.binaries.withType(SharedLibrary::class.java).configureEach { lib ->
-        // -lole32: the reverse-bound `freeManagedString` actual (ADR-048, mingwMain) calls
-        // `platform.windows.CoTaskMemFree`, which is exported from ole32.dll/ole32.lib —
-        // needed whenever a bound dependency has a string-returning bridgeable method.
-        // Harmless to link unconditionally for every mingw target.
-        lib.linkerOpts("-lmsvcrt", "-static-libgcc", "-static-libstdc++", "-lole32")
-      }
-    }
 
     fun supportedTargets(): List<KotlinNativeTarget> = kotlin.targets
       .filterIsInstance<KotlinNativeTarget>()

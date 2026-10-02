@@ -216,6 +216,34 @@ class NugetDslLazinessTest {
     assertTrue(error.message.orEmpty().contains("No supported native targets"), "${error.message}")
   }
 
+  // Pre-existing bug split out of ADR-180: the reverse `freeManagedString` (mingwMain) calls
+  // `CoTaskMemFree` from ole32, but `-lole32` used to be added only on `publish {}` projects.
+  @Test
+  fun `a consume-only mingw shared library links ole32`() {
+    val project: Project = project()
+    project.nuget().dependencies { deps ->
+      deps.dependency("Acme", "1.0.0") { dep -> dep.bind { } }
+    }
+    (project as ProjectInternal).evaluate()
+
+    val kotlin = project.extensions.getByType(KotlinMultiplatformExtension::class.java)
+    val library: SharedLibrary = (kotlin.targets.getByName("mingwX64") as KotlinNativeTarget)
+      .binaries.filterIsInstance<SharedLibrary>().first()
+    assertTrue("-lole32" in library.linkerOpts, "was ${library.linkerOpts}")
+  }
+
+  @Test
+  fun `a publishing mingw shared library links ole32 exactly once`() {
+    val project: Project = project()
+    project.nuget().publish { pub -> pub.packageId.set("MyLib") }
+    (project as ProjectInternal).evaluate()
+
+    val kotlin = project.extensions.getByType(KotlinMultiplatformExtension::class.java)
+    val library: SharedLibrary = (kotlin.targets.getByName("mingwX64") as KotlinNativeTarget)
+      .binaries.filterIsInstance<SharedLibrary>().first()
+    assertEquals(1, library.linkerOpts.count { it == "-lole32" }, "was ${library.linkerOpts}")
+  }
+
   @Test
   fun `the ADR-178 baseName stamp still reaches the KSP libraryName`() {
     val project: Project = project()
