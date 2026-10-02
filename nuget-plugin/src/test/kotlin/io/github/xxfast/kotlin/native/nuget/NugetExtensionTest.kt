@@ -204,4 +204,17 @@ class NugetExtensionTest {
     val bind: NugetBindConfig = extension.dependencies.single().bind
     assertEquals(mapOf("Foo" to "a.c"), bind.aliases.get())
   }
+
+  @Test
+  fun `shared sources default to empty and a second call appends`() {
+    assertEquals(emptyList(), extension.sources.get())
+
+    extension.sources("https://feed.example/v3/index.json", "../local-feed")
+    extension.sources("../other-feed")
+
+    assertEquals(
+      listOf("https://feed.example/v3/index.json", "../local-feed", "../other-feed"),
+      extension.sources.get(),
+    )
+  }
 }

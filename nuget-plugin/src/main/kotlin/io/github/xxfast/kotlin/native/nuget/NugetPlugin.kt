@@ -176,9 +176,13 @@ public class NugetPlugin : Plugin<Project> {
     val sources: Provider<Map<String, String>> =
       project.provider { dependencies.resolvedSources(projectDir) }
     val localSources: Provider<Map<String, String>> = sources.map(::localOnly)
-    // ADR-190: restore moves under build/ only when a local source is declared.
+    val shared: Provider<List<String>> =
+      project.provider { resolvedShared(extension.sources.get(), projectDir) }
+    val sharedDirs: Provider<List<File>> = shared.map(::sharedDirectories)
+    // ADR-190 / ADR-191: restore moves under build/ only when a local feed is declared.
     val packagesDir: Provider<Directory> = project.provider {
-      if (localSources.get().isEmpty()) null
+      val noLocalFeed: Boolean = localSources.get().isEmpty() && sharedDirs.get().isEmpty()
+      if (noLocalFeed) null
       else interopDir.get().dir("packages")
     }
 
@@ -198,6 +202,8 @@ public class NugetPlugin : Plugin<Project> {
           }
         )
         task.dependencySources.set(sources)
+        task.sharedSources.set(shared)
+        task.localSources.from(sharedDirs)
         task.localSources.from(localSources.map { local -> local.values.map(::File) })
         task.packagesDir.set(packagesDir)
         task.feedDir.set(interopDir.map { it.dir("feed") })
@@ -227,6 +233,7 @@ public class NugetPlugin : Plugin<Project> {
             local.values.filterNot { it.endsWith(".nupkg", ignoreCase = true) }.map(::File)
           }
         )
+        task.localFeeds.from(sharedDirs)
         task.localSources.set(localSources)
         task.packagesDir.set(packagesDir)
       }
@@ -604,20 +611,26 @@ public class NugetPlugin : Plugin<Project> {
         task.projectDir.set(project.layout.buildDirectory.dir("nuget-compile"))
         task.targetFramework.set(extension.validatedTargetFramework)
         task.dotnetSearchPath.set(project.providers.environmentVariable("PATH"))
-        // ADR-190: the resolved feeds and packages folder nugetRestore uses, read from the DSL.
+        // ADR-190 / ADR-191: the resolved feeds (shared first) and packages folder nugetRestore
+        // uses, read from the DSL.
         val projectDir: File = project.layout.projectDirectory.asFile
         val interopDir: Provider<Directory> = project.layout.buildDirectory.dir("nuget-interop")
+        val shared: Provider<List<String>> =
+          project.provider { resolvedShared(extension.sources.get(), projectDir) }
         task.dependencySources.addAll(
           project.provider {
             val feedDir: File = interopDir.get().dir("feed").asFile
-            restoreFeeds(extension.dependencies.resolvedSources(projectDir).values, feedDir)
+            val perDependency: Collection<String> =
+              extension.dependencies.resolvedSources(projectDir).values
+            restoreFeeds(shared.get() + perDependency, feedDir)
           }
         )
         task.packagesDir.set(
           project.provider {
             val local: Map<String, String> =
               localOnly(extension.dependencies.resolvedSources(projectDir))
-            if (local.isEmpty()) null else interopDir.get().dir("packages")
+            val noLocalFeed: Boolean = local.isEmpty() && sharedDirectories(shared.get()).isEmpty()
+            if (noLocalFeed) null else interopDir.get().dir("packages")
           }
         )
         task.dependencyVersions.convention(emptyMap())

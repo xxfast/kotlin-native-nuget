@@ -4,6 +4,7 @@ import org.gradle.api.Action
 import org.gradle.api.GradleException
 import org.gradle.api.NamedDomainObjectContainer
 import org.gradle.api.model.ObjectFactory
+import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.Provider
 import javax.inject.Inject
@@ -30,6 +31,19 @@ public abstract class NugetExtension @Inject constructor(objects: ObjectFactory)
 
   init {
     targetFramework.convention(DEFAULT_TARGET_FRAMEWORK)
+    sources.convention(emptyList())
+  }
+
+  /**
+   * ADR-191: feeds every dependency resolves against, on top of nuget.org and any dependency's own
+   * `source`: feed URLs or directories of `.nupkg` files, relative to the project directory. One
+   * union: no feed is preferred for an id that more than one of them serves.
+   */
+  public abstract val sources: ListProperty<String>
+
+  /** Appends [source] entries to [sources]. */
+  public fun sources(vararg source: String) {
+    sources.addAll(*source)
   }
 
   public val publish: NugetPublishConfig = objects.newInstance(NugetPublishConfig::class.java)

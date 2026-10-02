@@ -316,4 +316,41 @@ class NugetDslLazinessTest {
     assertTrue(gen.localSources.isEmpty)
     assertEquals(emptyMap(), restore.localSources.get())
   }
+
+  // ADR-191: shared feeds resolve against the project like a dependency's `source`, and a shared
+  // directory joins ADR-190's local-feed set.
+  @Test
+  fun `a shared directory feed is resolved, tracked and moves packages under build`() {
+    val project: Project = project()
+    val shared: File = project.file("shared-feed")
+    shared.mkdirs()
+    project.nuget().sources("https://feed.example/v3/index.json", "shared-feed")
+    project.nuget().dependencies { deps -> deps.dependency("Acme", "1.0.0") }
+
+    val gen = project.tasks.getByName("nugetGenerateRestoreProject")
+      as NugetGenerateRestoreProjectTask
+    val restore = project.tasks.getByName("nugetRestore") as NugetRestoreTask
+    val packages: File = project.layout.buildDirectory.dir("nuget-interop/packages").get().asFile
+    val feed: File = project.layout.buildDirectory.dir("nuget-interop/feed").get().asFile
+
+    assertEquals(
+      listOf("https://feed.example/v3/index.json", shared.absolutePath),
+      gen.sharedSources.get(),
+    )
+    assertEquals(setOf(shared), gen.localSources.files)
+    assertEquals(packages, gen.packagesDir.get().asFile)
+    assertEquals(packages, restore.packagesDir.get().asFile)
+    assertEquals(setOf(feed, shared), restore.localFeeds.files)
+  }
+
+  @Test
+  fun `a remote shared feed keeps the global packages folder`() {
+    val project: Project = project()
+    project.nuget().sources("https://feed.example/v3/index.json")
+    project.nuget().dependencies { deps -> deps.dependency("Acme", "1.0.0") }
+
+    val restore = project.tasks.getByName("nugetRestore") as NugetRestoreTask
+
+    assertFalse(restore.packagesDir.isPresent)
+  }
 }

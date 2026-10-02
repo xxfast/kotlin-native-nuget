@@ -9,6 +9,7 @@ Reference for the `nuget {}` extension.
 | `publish { }` | `NugetPublishConfig` | optional, omit for a consume-only project |
 | `dependencies { }` | `NugetDependencyScope` | optional, omit for a publish-only project |
 | `targetFramework` | `Property<String>` | no, default `net10.0` |
+| `sources(...)` | `ListProperty<String>` | no, empty; feeds every dependency restores from, see [Declaring dependencies](declaring-dependencies.md#shared-feeds) |
 
 The `targetFramework` is the .NET target framework the generated package targets. It must be exactly `netX.0` with X of 10 or higher (the generated C# needs C# 14), and anything else fails the build. The package ships its C# under `contentFiles/cs/<tfm>/`, so a consumer project on a lower framework fails restore with `NU1202` instead of building without the generated code. The same value is used for the restore of bound dependencies and the pre-pack compile check. Platform frameworks such as `net10.0-android`, `netstandard` and .NET Framework are not supported.
 
@@ -365,7 +366,7 @@ Inside the trailing block, `NugetDependency` exposes:
 | Property / function | Type | Required | Notes |
 |---|---|---|---|
 | `version` | `Property<String>` | no | same as the `version` parameter; settable inside the block instead of passing it positionally |
-| `source` | `Property<String>` | no | where to restore from: a feed URL (added to `<RestoreSources>` alongside `api.nuget.org`), a directory of `.nupkg` files (needs `version`), or one `.nupkg` file (id and version read from the package; a differing `version` fails). A same-version rebuild of a local source is picked up, and the build fails if the restored package is not the local one. See [Declaring dependencies](declaring-dependencies.md#binding-a-locally-built-package) |
+| `source` | `Property<String>` | no | where to restore from: a feed URL (added to `<RestoreSources>` alongside `api.nuget.org`) (an extra feed, not a replacement for the shared list), a directory of `.nupkg` files (needs `version`), or one `.nupkg` file (id and version read from the package; a differing `version` fails). A same-version rebuild of a local source is picked up, and the build fails if the restored package is not the local one. See [Declaring dependencies](declaring-dependencies.md#binding-a-locally-built-package) |
 | `bind { }` | function, configures `NugetBindConfig` | no | omit to resolve the dependency without generating any Kotlin bindings for it |
 
 ```kotlin
