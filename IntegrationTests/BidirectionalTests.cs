@@ -395,7 +395,7 @@ public class BidirectionalTests
         using IPet dog = new Dog("Rex");
         oreo.Befriend(dog);
 
-        NugetBridge.GcCollect();
+        NugetMarshal.GcCollect();
         GC.Collect();
         GC.WaitForPendingFinalizers();
 
@@ -433,7 +433,7 @@ public class BidirectionalTests
         {
             GC.Collect();
             GC.WaitForPendingFinalizers();
-            NugetBridge.GcCollect();
+            NugetMarshal.GcCollect();
             Thread.Sleep(25);
         }
     }
@@ -445,7 +445,7 @@ public class BidirectionalTests
         {
             GC.Collect();
             GC.WaitForPendingFinalizers();
-            NugetBridge.GcCollect();
+            NugetMarshal.GcCollect();
             if (NugetBridgeState.ReleasedCount > before) return true;
             Thread.Sleep(25);
         }

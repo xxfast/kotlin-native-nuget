@@ -56,13 +56,8 @@ internal fun StringBuilder.renderBridgeHelper(helper: CirBridgeHelper) {
   appendLine("            throw new NotSupportedException(")
   appendLine("                \$\"{impl.GetType().Name} implements no bridgeable Kotlin interface.\");")
   appendLine("        }")
-  appendLine()
-  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_gc_collect\")]")
-  appendLine("        private static extern void Native_GcCollect();")
-  appendLine()
-  // ADR-084 stage 2: the release is cleaner-driven, so it fires on a *later* Kotlin GC cycle, never
-  // promptly. Hosts that need to observe it (and the release test) force a round here.
-  appendLine("        internal static void GcCollect() => Native_GcCollect();")
+  // ADR-186: the `nuget_gc_collect` import lives on `NugetMarshal` (CirMarshalRenderer), which
+  // every library renders, not here behind the bridge-plan gate.
   appendLine()
   appendLine("    }")
   appendLine()

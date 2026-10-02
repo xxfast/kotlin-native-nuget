@@ -72,6 +72,16 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("        /// <summary>The number of Kotlin StableRef handles the forward bridge currently holds.</summary>")
   appendLine("        internal static long LiveHandles => Native_live_handles();")
   appendLine()
+  // ADR-186: frozen `nuget_*` ABI, rendered for every library beside `LiveHandles` (it used to sit
+  // on `NugetBridge`, which only renders when a C#-implementable interface exists, so a consumer
+  // following the leak-check docs got CS0103). ADR-084's release is cleaner-driven and lands on a
+  // *later* Kotlin GC round, so callers loop.
+  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_gc_collect\")]")
+  appendLine("        private static extern void Native_GcCollect();")
+  appendLine()
+  appendLine("        /// <summary>Runs one Kotlin GC round. Cleaner-driven releases may land on a later round.</summary>")
+  appendLine("        internal static void GcCollect() => Native_GcCollect();")
+  appendLine()
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_string\")]")
   appendLine("        private static extern IntPtr nuget_wrap_string(string value);")
   appendLine()

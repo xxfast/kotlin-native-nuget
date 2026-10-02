@@ -195,4 +195,40 @@ class Tier1CoreHelpersAlwaysEmittedTest {
       )
     }
   }
+
+  /**
+   * ADR-186: `NugetMarshal.GcCollect()` is the frozen C# face of `nuget_gc_collect` and renders
+   * for every library. It used to live on `NugetBridge`, which only renders when the module has a
+   * C#-implementable interface, so a consumer of a library like this one who followed the leak-check
+   * docs got CS0103. The `NugetBridge` absence check is what makes the cell discriminate: without
+   * it, any fixture that happens to carry an interface would pass on the old placement too.
+   */
+  @Test
+  fun `a module with no C#-implementable interface still gets NugetMarshal GcCollect`() {
+    val cs: String = Tier1Harness.run(
+      """
+      package tier1.corehelpers.gccollect
+
+      class Kennel(val name: String) {
+        fun open(): Boolean = true
+      }
+      """.trimIndent(),
+    ).generatedCSharp
+
+    assertTrue(
+      "static class NugetBridge" !in cs,
+      "the fixture must render no NugetBridge, or it cannot tell the two placements apart; " +
+          "generatedCSharp:\n$cs",
+    )
+    val marshal: String = cs.substringAfter("static class NugetMarshal", missingDelimiterValue = "")
+    assertTrue(marshal.isNotEmpty(), "expected NugetMarshal declared; generatedCSharp:\n$cs")
+    assertTrue(
+      "EntryPoint = \"nuget_gc_collect\")]\n        private static extern void Native_GcCollect();" in marshal,
+      "expected the nuget_gc_collect import inside NugetMarshal; generatedCSharp:\n$cs",
+    )
+    assertTrue(
+      "internal static void GcCollect() => Native_GcCollect();" in marshal,
+      "expected NugetMarshal.GcCollect(); generatedCSharp:\n$cs",
+    )
+  }
 }

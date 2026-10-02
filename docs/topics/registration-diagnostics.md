@@ -127,10 +127,15 @@ handles are currently retained: originally the forward bridge only (a Kotlin obj
 and, since a reverse `suspend fun` call retains a pending-continuation handle for the duration of
 the await (see [Async methods](instance-members.md#async-methods)), the reverse bridge too. It's
 `internal`, so code you write in the same consuming assembly can read it: snapshot the count, run
-the operation you suspect leaks, then compare. `NugetBridge.GcCollect()` (also internal, in the
-same shim) forces a pending release round before you re-read the count, since a release lands on a
-later GC cycle, not promptly. The count is process-global, so isolate the check from anything else
-running in the process that crosses a handle at the same time.
+the operation you suspect leaks, then compare. `NugetMarshal.GcCollect()` (also internal, in the
+same shim, generated for every library) runs one Kotlin garbage collection round before it returns,
+so call it before you re-read the count; a release can still land on a later cycle, not promptly.
+The count is process-global, so isolate the check from anything else running in the process that
+crosses a handle at the same time.
+
+Both exports are part of the stable runtime interface. Only the delta is guaranteed: a balanced
+sequence of crossings returns `LiveHandles` to its earlier reading. Compare readings, never assert
+an absolute number, and do not rely on which handle kinds are counted.
 
 A boxed [`enum class` sealed arm](interfaces-abstract-sealed.md#an-enum-class-arm) counts here too:
 its constructor mints a `StableRef` to a Kotlin enum entry, and reading one back through a holder's

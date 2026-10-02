@@ -56,7 +56,7 @@ public class LambdaReturnParameterTests
         using KotlinFunc<IPet> supplier = PetRelayKt.PetSupplier(rex);
         GC.Collect();
         GC.WaitForPendingFinalizers();
-        NugetBridge.GcCollect();
+        NugetMarshal.GcCollect();
         IPet back = supplier.Invoke();
         Assert.Same(rex, back);
         Assert.Equal("Woof!", back.Speak());
