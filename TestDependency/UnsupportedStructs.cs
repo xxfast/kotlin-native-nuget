@@ -5,7 +5,7 @@ namespace Test.Structs;
 /// (one constructor parameter, two stored instance fields). Under ADR-058 it ALSO falls through
 /// to Shape B and fails there too: its only public member is a get-only property (not settable),
 /// so it has zero components and an uncovered private field (<see cref="_hidden"/>). Its
-/// <c>skipped_unsupported_struct</c> diagnostic reason text changes under ADR-058 — it used to
+/// <c>SKIPPED_UNSUPPORTED_STRUCT</c> diagnostic reason text changes under ADR-058 — it used to
 /// name only the Shape A rule; a test asserting the exact reason string must be updated.
 /// </summary>
 public readonly struct Overstuffed
@@ -25,7 +25,7 @@ public readonly struct Overstuffed
 /// Adversarial (ADR-058 Shape B rule 3): a settable auto-property (<see cref="Visible"/>) covers
 /// its own backing field, but the hand-written private field <see cref="_hidden"/> is separate,
 /// uncovered stored state — no component writes it. Must be skipped with a
-/// <c>skipped_unsupported_struct</c> diagnostic naming the uncovered field.
+/// <c>SKIPPED_UNSUPPORTED_STRUCT</c> diagnostic naming the uncovered field.
 /// </summary>
 public struct PartlyHidden
 {
@@ -36,7 +36,7 @@ public struct PartlyHidden
 /// <summary>
 /// Adversarial (ADR-058 Shape B rule 3 / the <c>InitOnly</c> row): a public <c>readonly</c> field
 /// cannot be assigned by an object initializer (verified: CS0191), so it can never be a Shape B
-/// component. Must be skipped with a <c>skipped_unsupported_struct</c> diagnostic.
+/// component. Must be skipped with a <c>SKIPPED_UNSUPPORTED_STRUCT</c> diagnostic.
 /// </summary>
 public struct Frozen
 {
@@ -51,7 +51,7 @@ public struct Frozen
 /// actually writes <see cref="_a"/>. This is the negative a count-based coverage implementation
 /// (number of components == number of fields) would wrongly accept: 1 settable property, 1 field,
 /// "coverage passes" — yet nothing proves it. Must be skipped with a
-/// <c>skipped_unsupported_struct</c> diagnostic naming the non-auto-property rule.
+/// <c>SKIPPED_UNSUPPORTED_STRUCT</c> diagnostic naming the non-auto-property rule.
 /// </summary>
 public struct Manual
 {
@@ -66,7 +66,7 @@ public struct Manual
 
 /// <summary>
 /// Adversarial (ADR-058 Shape B rule 5): zero stored state, zero components. Must be skipped with
-/// a <c>skipped_unsupported_struct</c> diagnostic.
+/// a <c>SKIPPED_UNSUPPORTED_STRUCT</c> diagnostic.
 /// </summary>
 public struct Nothing
 {

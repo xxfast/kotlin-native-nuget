@@ -59,7 +59,7 @@ nothing to `close()`. At a non-null position, a `null` slipping through anyway t
 
 An assembly with no nullable-reference annotations at all (pre-C#-8, or built with
 `#nullable disable`) binds every one of its reference types as non-null, string or object alike, and
-the build emits one `info_oblivious_nullability` warning per assembly (or per member, for an
+the build emits one `INFO_OBLIVIOUS_NULLABILITY` warning per assembly (or per member, for an
 otherwise-annotated assembly with an oblivious island). A legitimately-null return from such an
 assembly still throws `IllegalStateException` at the Kotlin call site.
 

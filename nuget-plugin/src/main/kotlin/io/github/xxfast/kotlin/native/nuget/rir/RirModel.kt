@@ -8,6 +8,10 @@ import kotlinx.serialization.json.JsonClassDiscriminator
 @Serializable
 data class RirFile(
   val assemblies: List<RirAssembly>,
+  // ADR-182: the reader always writes it. Nullable and defaulted only so the inline fixtures in the
+  // plugin tests keep parsing through [parseReverseIr]; the version CHECK lives in the
+  // nugetGenerateBindings/nugetGenerateShims task actions ([requireCurrentSchema]), not here.
+  val schemaVersion: Int? = null,
 )
 
 @Serializable
@@ -395,24 +399,31 @@ data class RirDiagnostic(
   val hint: String,
 )
 
+/** ADR-182: how a reverse diagnostic is surfaced, derived from its code's prefix (never declared). */
+enum class RirDiagnosticSeverity { WARNING, INFO, ERROR }
+
+/**
+ * The reverse diagnostic codes. ADR-182: the enum NAME is the wire code (`reverse-ir.json`'s
+ * `kind`, the console's `[nuget:<CODE>]`), `SCREAMING_SNAKE` in both directions, and unique across
+ * them (`RirDiagnosticKindTest` keeps it disjoint from the forward `ForwardDiagnosticKind`).
+ *
+ * The prefix decides [severity] and [verb], the same rule forward's enum enforces: `SKIPPED_` is a
+ * WARNING that reads "Skipping" (the member is absent), `INFO_` reads "Note" (it binds), `ERROR_`
+ * reads "Error" (generation fails). A `WARNING_` kind binds with a caveat, so it has to say what it
+ * warns about and must pass [declaredVerb]; any other prefix fails at class init.
+ */
 @Serializable
-enum class RirDiagnosticKind {
-  @SerialName("skipped_overload_set")
+enum class RirDiagnosticKind(private val declaredVerb: String? = null) {
   SKIPPED_OVERLOAD_SET,
 
-  @SerialName("skipped_ref_struct")
   SKIPPED_REF_STRUCT,
 
-  @SerialName("skipped_open_generic")
   SKIPPED_OPEN_GENERIC,
 
-  @SerialName("skipped_dynamic")
   SKIPPED_DYNAMIC,
 
-  @SerialName("skipped_default_interface_method")
   SKIPPED_DEFAULT_INTERFACE_METHOD,
 
-  @SerialName("skipped_unbound_type_reference")
   SKIPPED_UNBOUND_TYPE_REFERENCE,
 
   // Phase 9 (ROADMAP line 151, instance methods/properties — confirmed mirror of ADR-051/052, no
@@ -420,16 +431,13 @@ enum class RirDiagnosticKind {
   // — it depends on the ADR-051 wrapper's own Kotlin member names (`handle`, `close`, `cleaner`),
   // which only the Gradle-plugin-side generators know about. Reuses the existing RirDiagnostic
   // model (ADR-043's mechanism) rather than inventing a separate reporting path.
-  @SerialName("skipped_member_name_collision")
   SKIPPED_MEMBER_NAME_COLLISION,
 
-  @SerialName("skipped_unsupported_enum")
   SKIPPED_UNSUPPORTED_ENUM,
 
   // ADR-056: a value-type candidate that failed the Decision 3a "Shape A" bridgeability rules
   // (no/multiple public instance constructors, an unmatched or non-v1 component type, or stored
   // fields not fully covered by the constructor). Never emitted as a class fallback.
-  @SerialName("skipped_unsupported_struct")
   SKIPPED_UNSUPPORTED_STRUCT,
 
   // ADR-059 Decision 5a: a bridged member whose flattened ABI argument count (receiver +
@@ -439,33 +447,27 @@ enum class RirDiagnosticKind {
   // bridgeableRegistrables/bridgeableStructRegistrables filter, never by either generator alone —
   // only the shared filter knows the flattened ABI projection, and if only one generator dropped
   // the member the two sides' registration slots would silently misalign.
-  @SerialName("skipped_abi_arity_limit")
   SKIPPED_ABI_ARITY_LIMIT,
 
-  @SerialName("error_kotlin_signature_collision")
   ERROR_KOTLIN_SIGNATURE_COLLISION,
 
-  @SerialName("info_async_not_yet_mapped")
   INFO_ASYNC_NOT_YET_MAPPED,
 
   // ADR-153: a `CancellationToken` the bridge cannot own on the member's behalf: a SYNC method
   // taking one, two or more tokens, a `CancellationToken?`, or a token on a constructor or
   // property. Named, because the alternative these used to get
-  // (skipped_unbound_type_reference) tells the user to bind the BCL, which never helps.
-  @SerialName("info_cancellation_token_not_yet_mapped")
+  // (SKIPPED_UNBOUND_TYPE_REFERENCE) tells the user to bind the BCL, which never helps.
   INFO_CANCELLATION_TOKEN_NOT_YET_MAPPED,
 
   // ADR-153: `FooAsync()` beside `FooAsync(CancellationToken)`. With the token elided both project
   // to the same Kotlin signature, so the token-less sibling is dropped and the token overload
   // kept. Informational: the surface is unchanged from the consumer's side.
-  @SerialName("info_cancellation_overload_folded")
   INFO_CANCELLATION_OVERLOAD_FOLDED,
 
   // ADR-006 2026-10-02 amendment: two or more members of one C# enum convert to the same
   // SCREAMING_SNAKE entry (`HTTPStatus` and `HttpStatus` both give `HTTP_STATUS`), so each of them
   // keeps its C# name verbatim instead. Emitted plugin-side, one per member kept. Not a skip: every
   // member binds, at the same ordinal.
-  @SerialName("info_enum_entry_kept_verbatim")
   INFO_ENUM_ENTRY_KEPT_VERBATIM,
 
   // ADR-053: an oblivious (un-annotated) reference type binds non-null in Kotlin — this is an
@@ -473,107 +475,89 @@ enum class RirDiagnosticKind {
   // instance (memberName empty) when the whole assembly carries no NullableAttribute/
   // NullableContextAttribute anywhere; one per-member instance (memberName populated) for a
   // `#nullable disable` island inside an otherwise-annotated assembly.
-  @SerialName("info_oblivious_nullability")
   INFO_OBLIVIOUS_NULLABILITY,
 
   // ADR-070 Decision 6: an open generic interface (`IFoo`1`) — the arity-mangled CLR name is not
-  // valid Kotlin. Interface-level (unlike skipped_open_generic, which is per-member).
-  @SerialName("skipped_generic_interface")
+  // valid Kotlin. Interface-level (unlike SKIPPED_OPEN_GENERIC, which is per-member).
   SKIPPED_GENERIC_INTERFACE,
 
   // ADR-070 Decision 6: a `static`/`static abstract`/`static virtual` interface member — calling
   // it through the interface itself is CS8926 for the abstract/virtual case.
-  @SerialName("skipped_interface_static_member")
   SKIPPED_INTERFACE_STATIC_MEMBER,
 
   // ADR-070 Decision 6: an indexer (`this[int]`) — reaches the reader as a parameterless property
   // literally named `Item`, which would emit an uncompilable `receiver.Item`. Pre-existing gap,
   // also affects classes.
-  @SerialName("skipped_indexer")
   SKIPPED_INDEXER,
 
   // ADR-070 Decision 6: a `event` member — currently dropped with no diagnostic at all.
   // Pre-existing gap, also affects classes.
-  @SerialName("skipped_event")
   SKIPPED_EVENT,
 
   // ADR-070 Decision 6: an interface with zero admissible members — nothing to generate, must not
   // emit an empty registration export.
-  @SerialName("skipped_empty_interface")
   SKIPPED_EMPTY_INTERFACE,
 
   // ADR-070 Decision 5: a bound class's supertype for a given interface is omitted because at
   // least one interface member has no identically-signed public member on the class (e.g. an
   // explicit interface implementation, which is non-public in metadata).
-  @SerialName("skipped_interface_supertype")
   SKIPPED_INTERFACE_SUPERTYPE,
 
   // ADR-085: a bound interface a Kotlin class CAN implement but that cannot be handed back to C#
   // as a minted bridge — a member outside the v1 slot vocabulary, or interface inheritance.
   // Plugin-derived (kotlinBridgeDiagnostics), never emitted by the metadata reader.
-  @SerialName("skipped_kotlin_bridge")
   SKIPPED_KOTLIN_BRIDGE,
 
   // ADR-070 Decision 5: a derived interface (`IDerived : IBase`) is bound with only its own
   // declared members because IBase is not itself admissible/bound — IDerived's Kotlin interface
   // omits the `: IBase` supertype and IDerivedHandle cannot dispatch IBase's members.
-  @SerialName("info_inherited_interface_members_absent")
   INFO_INHERITED_INTERFACE_MEMBERS_ABSENT,
 
   // ADR-072 Decision 9: an instantiation whose definition lives outside the bound assemblies
   // (`List<int>`, `Dictionary<string,int>`): no members are ever extracted for it, so it is
   // diagnosed and skipped rather than bound as a handle with nothing on it.
-  @SerialName("skipped_unbound_generic_instantiation")
   SKIPPED_UNBOUND_GENERIC_INSTANTIATION,
 
   // ADR-072 Decision 6: a type argument outside the v1 vocabulary (another generic instantiation,
   // a struct, an array, a ref struct, an unresolved type parameter, an unbound external type).
-  @SerialName("skipped_generic_type_argument")
   SKIPPED_GENERIC_TYPE_ARGUMENT,
 
   // ADR-072 Decision 7: a member whose type is a bare type parameter annotated nullable
   // (`T? Peek()`), not representable per instantiation in v1.
-  @SerialName("skipped_nullable_type_parameter")
   SKIPPED_NULLABLE_TYPE_PARAMETER,
 
   // ADR-072 Decision 5: two or more instantiations of one generic definition erase (to non-null
   // Kotlin types) to the same fake-constructor parameter list. ALL of them lose their fake
   // constructor (never "all but one": the outcome must not depend on declaration order).
-  @SerialName("skipped_ambiguous_generic_constructor")
   SKIPPED_AMBIGUOUS_GENERIC_CONSTRUCTOR,
 
   // ADR-072 Decision 10: a bound generic definition with zero discovered instantiations. Nothing
   // is emitted for it at all (no Kotlin type, no export, no C# class). This is what closes the
   // latent `Box`1` interpolation leak (Context item 2).
-  @SerialName("info_uninstantiated_generic_type")
   INFO_UNINSTANTIATED_GENERIC_TYPE,
 
   // ADR-072 Decision 10: `Box` and `Box`1` declared in the same namespace (or two instantiations
   // of one definition sharing an internal tag) cannot both produce a Kotlin type/tag named
   // `Box`. This is a hard generation failure, mirroring ERROR_KOTLIN_SIGNATURE_COLLISION.
-  @SerialName("error_generic_arity_name_collision")
   ERROR_GENERIC_ARITY_NAME_COLLISION,
 
   // ADR-155: a mapped BCL collection whose element (or map key/value) is outside the v1 element
   // vocabulary: a struct element, a nested collection, a `Nullable<T>` element (`List<int?>`), a
   // bound generic instance element, a type-parameter element inside a generic class, or `object`.
-  // Named, because the alternative (skipped_unbound_generic_instantiation) blames the BCL
+  // Named, because the alternative (SKIPPED_UNBOUND_GENERIC_INSTANTIATION) blames the BCL
   // definition when the element is the thing the bridge cannot carry.
-  @SerialName("skipped_collection_element")
   SKIPPED_COLLECTION_ELEMENT,
 
   // ADR-158: a member that takes or returns a C# delegate (`Func<>`, `Action<>`, `Predicate<T>`, a
   // package-declared `delegate`). Named, because the two diagnostics these used to get both blamed
-  // the wrong thing: `skipped_unbound_type_reference` says to include System.Private.CoreLib in the
-  // extraction run, and `skipped_unbound_generic_instantiation` says to expose a BCL collection.
-  @SerialName("skipped_delegate_signature")
+  // the wrong thing: `SKIPPED_UNBOUND_TYPE_REFERENCE` says to include System.Private.CoreLib in the
+  // extraction run, and `SKIPPED_UNBOUND_GENERIC_INSTANTIATION` says to expose a BCL collection.
   SKIPPED_DELEGATE_SIGNATURE,
 
   // ADR-158: a delegate the READER admitted (it carries a derivable Invoke shape inside the v1
   // vocabulary) that the GENERATORS still decline: a return or property position, a struct or
   // bound-interface or generic-class member, or a delegate nested in a collection. Plugin-derived,
   // the mirror of SKIPPED_COLLECTION_POSITION, so no admitted-then-dropped member is silent.
-  @SerialName("skipped_delegate_position")
   SKIPPED_DELEGATE_POSITION,
 
   // ADR-158 Decision 9: a bound overload set whose members differ ONLY by delegate shape
@@ -582,12 +566,10 @@ enum class RirDiagnosticKind {
   // Kotlin 2.4.10: `Overload resolution ambiguity`, in both directions, including the `{ }` form),
   // while a typed function value or an anonymous function does. Not a skip: dropping the set would
   // delete members that stay perfectly callable.
-  @SerialName("info_delegate_overload_ambiguity")
   INFO_DELEGATE_OVERLOAD_AMBIGUITY,
 
   // ADR-155: an array (`T[]`). Deferred with the rest of the array work (`byte[]` → `ByteArray`
   // wants the ADR-151 blit, not slots). Today such a member vanishes with no diagnostic at all.
-  @SerialName("skipped_array")
   SKIPPED_ARRAY,
 
   // ADR-155: a collection at a POSITION the shared conversion path does not reach: a struct
@@ -595,6 +577,39 @@ enum class RirDiagnosticKind {
   // (its own hand-written dispatch bodies, ADR-070). Plugin-derived, never emitted by the
   // metadata reader, which cannot know which positions the generators share. Named rather than
   // dropped silently, and named rather than hand-patched at the site: the ADR-155 rule.
-  @SerialName("skipped_collection_position")
   SKIPPED_COLLECTION_POSITION,
+;
+
+  val severity: RirDiagnosticSeverity = when {
+    name.startsWith(SKIPPED_PREFIX) -> RirDiagnosticSeverity.WARNING
+    name.startsWith(WARNING_PREFIX) -> RirDiagnosticSeverity.WARNING
+    name.startsWith(INFO_PREFIX) -> RirDiagnosticSeverity.INFO
+    name.startsWith(ERROR_PREFIX) -> RirDiagnosticSeverity.ERROR
+    else -> error(
+      "$name has none of the $SKIPPED_PREFIX/$WARNING_PREFIX/$INFO_PREFIX/$ERROR_PREFIX prefixes " +
+          "a diagnostic code derives its severity from (ADR-182)"
+    )
+  }
+
+  /** The word the console line opens with, after the `[nuget:<CODE>]` bracket. */
+  val verb: String = when {
+    name.startsWith(SKIPPED_PREFIX) -> "Skipping"
+    name.startsWith(INFO_PREFIX) -> "Note"
+    name.startsWith(ERROR_PREFIX) -> "Error"
+    else -> requireNotNull(declaredVerb) {
+      "$name is a $WARNING_PREFIX kind and must pass declaredVerb: a WARNING that is not a skip " +
+          "may not render as \"Skipping\""
+    }
+  }
+
+  init {
+    require(name.startsWith(WARNING_PREFIX) || declaredVerb == null) {
+      "$name derives its verb from its name prefix and may not also declare one"
+    }
+  }
 }
+
+private const val SKIPPED_PREFIX: String = "SKIPPED_"
+private const val WARNING_PREFIX: String = "WARNING_"
+private const val INFO_PREFIX: String = "INFO_"
+private const val ERROR_PREFIX: String = "ERROR_"

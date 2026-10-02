@@ -816,7 +816,7 @@ class NugetKotlinBridgeGenerationTest {
   // ------------------------------------------------------------------
 
   @Test
-  fun `an out-of-vocabulary member yields skipped_kotlin_bridge and no bridge at all`() {
+  fun `an out-of-vocabulary member yields SKIPPED_KOTLIN_BRIDGE and no bridge at all`() {
     val file: RirFile = rirOf(iAdopter)
     val diagnostics: List<RirDiagnostic> = kotlinBridgeDiagnostics(
       iAdopter, boundHandleTypes(file), boundInterfaceTypes(file),

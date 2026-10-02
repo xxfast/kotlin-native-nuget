@@ -91,7 +91,7 @@ public class Household
 /// <summary>
 /// Oblivious island inside the household namespace: every reference type here is byte 0 (no
 /// <see cref="System.Runtime.CompilerServices.NullableAttribute"/> anywhere), so it binds
-/// non-null under ADR-053 decision 1a, with one <c>info_oblivious_nullability</c> diagnostic per
+/// non-null under ADR-053 decision 1a, with one <c>INFO_OBLIVIOUS_NULLABILITY</c> diagnostic per
 /// member. <see cref="Announce"/> deliberately returns a genuine C# <c>null</c> for an
 /// unrecognised name — even though its oblivious signature reads <c>string</c>, not
 /// <c>string?</c> — so the round trip exercises decision 1a's fail-fast guard, not just its

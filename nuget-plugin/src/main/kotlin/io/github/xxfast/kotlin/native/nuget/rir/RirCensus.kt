@@ -115,11 +115,11 @@ fun census(
   // total this side of the bridge can observe. The reader's diagnostics do not say which member
   // SHAPE they refused, so they all land on one bucket rather than being guessed into four.
   val readerDiagnostics: List<RirDiagnostic> = rir.assemblies.flatMap { it.diagnostics }
-  // Only the `skipped_*` kinds: an `info_*` entry (an oblivious member, a deferred async
+  // Only the `SKIPPED_*` kinds: an `INFO_*` entry (an oblivious member, a deferred async
   // shape's note) names a member that may well be BOUND, so counting those here would inflate
   // the skip bucket by 84 members on Humanizer.Core alone.
   val namedSkips: Int = readerDiagnostics.count {
-    it.memberName.isNotEmpty() && it.kind.wireName().startsWith("skipped_")
+    it.memberName.isNotEmpty() && it.kind.name.startsWith("SKIPPED_")
   }
 
   val rirConstructors: Int =
@@ -191,7 +191,7 @@ fun census(
       "property" to MemberCensus(seen = rirProperties, bound = boundProperties),
       "readerSkippedMember" to MemberCensus(seen = namedSkips, bound = 0),
     ),
-    diagnostics = all.groupingBy { it.kind.wireName() }.eachCount().toSortedMap(),
+    diagnostics = all.groupingBy { it.kind.name }.eachCount().toSortedMap(),
     unboundTypeReferences = all
       .filter { it.kind == RirDiagnosticKind.SKIPPED_UNBOUND_TYPE_REFERENCE }
       .mapNotNull { backtickedSubject(it.reason) }
@@ -209,8 +209,8 @@ fun census(
         .sorted(),
     ),
     errors = all
-      .filter { it.kind.wireName().startsWith("error_") }
-      .map { "${it.kind.wireName()}: ${it.typeName}.${it.memberName}" }
+      .filter { it.kind.severity == RirDiagnosticSeverity.ERROR }
+      .map { "${it.kind.name}: ${it.typeName}.${it.memberName}" }
       .sorted(),
   )
 }
@@ -235,10 +235,6 @@ fun readerFailureCensus(
   readerError = readerError,
   generation = "not_reached",
 )
-
-// Every RirDiagnosticKind's @SerialName is its own name, lowercased; derived rather than looked
-// up so the census never carries a second copy of the vocabulary that could drift from RirModel.
-internal fun RirDiagnosticKind.wireName(): String = name.lowercase()
 
 // The unbound type's name lives only inside the diagnostic's prose today (there is no `subject`
 // field on RirDiagnostic), and the reader always backticks it first. Nothing depends on this

@@ -1,5 +1,12 @@
 package io.github.xxfast.kotlin.native.nuget
 
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.intOrNull
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.tasks.InputFiles
@@ -70,6 +77,7 @@ abstract class NugetReportDiagnosticsTask : DefaultTask() {
 }
 
 /** ADR-100: one entry of `NugetDiagnostics.json`, as written by the KSP processor. */
+@Serializable
 internal data class ForwardDiagnosticEntry(
   val severity: String,
   val kind: String,
@@ -96,103 +104,55 @@ internal data class ForwardDiagnosticEntry(
 internal fun ForwardDiagnosticEntry.consoleLine(): String =
   if (file != null && line != null) "$file:$line: $message" else message
 
+
+/** ADR-182: the `NugetDiagnostics.json` schema this plugin reads; the processor writes the same. */
+internal const val FORWARD_DIAGNOSTICS_SCHEMA_VERSION: Int = 1
+
+@Serializable
+private data class ForwardDiagnosticsFile(
+  val schemaVersion: Int,
+  val diagnostics: List<ForwardDiagnosticEntry>,
+)
+
+private val diagnosticsJson: Json = Json { ignoreUnknownKeys = true }
+
 /**
  * ADR-100: reads the processor-written diagnostics file.
  *
- * Hand-rolled, following the `bound-types.json` precedent, but not with that file's `\{([^{}]*)}`
- * regex: a rendered message legitimately contains braces (`add include("...") to nuget { publish
- * { } }`) and newlines, so object boundaries have to be found with strings skipped properly. Every
- * value this writer emits is a JSON string, so within an object the quoted tokens alternate
- * key, value.
+ * ADR-182: the root is `{ "schemaVersion": 1, "diagnostics": [ ... ] }` and the reader is
+ * kotlinx.serialization (already on the plugin's classpath for `reverse-ir.json`), replacing the
+ * hand-rolled token walk that required every value to be a string. Unknown keys are ignored, so an
+ * additive field never needs a version bump; the version is checked BEFORE the entries are decoded,
+ * so a file from another release fails with what it is rather than with whichever field moved.
  *
  * Fails fast with the offending file named rather than silently reporting nothing, since "no
  * warnings" is indistinguishable from "the file was unreadable" at the console, and silence is the
- * bug this ADR exists to fix.
+ * bug ADR-100 exists to fix.
  */
 internal fun parseForwardDiagnostics(
   json: String,
   source: String = "NugetDiagnostics.json",
 ): List<ForwardDiagnosticEntry> {
   if (json.isBlank()) return emptyList()
-  require(json.trimStart().startsWith("[")) {
-    "[nuget] $source is not a JSON array: ${json.take(80)}"
+  val root: JsonElement = try {
+    diagnosticsJson.parseToJsonElement(json)
+  } catch (e: SerializationException) {
+    throw IllegalArgumentException("[nuget] $source is not valid JSON: ${e.message}", e)
   }
-
-  val entries: MutableList<ForwardDiagnosticEntry> = mutableListOf()
-  var fields: MutableMap<String, String> = mutableMapOf()
-  val tokens: MutableList<String> = mutableListOf()
-  var index = 0
-
-  while (index < json.length) {
-    when (json[index]) {
-      '{' -> {
-        tokens.clear()
-        fields = mutableMapOf()
-        index++
-      }
-
-      '}' -> {
-        tokens.chunked(2).forEach { pair -> if (pair.size == 2) fields[pair[0]] = pair[1] }
-        entries += ForwardDiagnosticEntry(
-          severity = fields.field("severity", source),
-          kind = fields.field("kind", source),
-          declaration = fields.field("declaration", source),
-          message = fields.field("message", source),
-          // ADR-162: optional, so an older processor's file stays readable.
-          file = fields["file"],
-          line = fields["line"],
-        )
-        tokens.clear()
-        index++
-      }
-
-      '"' -> {
-        val (value: String, next: Int) = json.readJsonString(index, source)
-        tokens += value
-        index = next
-      }
-
-      else -> index++
+  val version: JsonPrimitive? = (root as? JsonObject)?.get("schemaVersion") as? JsonPrimitive
+  require(version?.intOrNull == FORWARD_DIAGNOSTICS_SCHEMA_VERSION) {
+    val found: String = when {
+      root !is JsonObject -> "no schemaVersion (a pre-0.9.0 bare array)"
+      version == null -> "no schemaVersion"
+      else -> "schemaVersion ${version.content}"
     }
+    "[nuget] $source has $found, but this plugin reads schemaVersion " +
+        "$FORWARD_DIAGNOSTICS_SCHEMA_VERSION. It is a stale KSP output from a different plugin " +
+        "release; rebuild the project (`./gradlew clean packNuget`) to regenerate it."
   }
-  return entries
-}
-
-private fun Map<String, String>.field(name: String, source: String): String =
-  requireNotNull(this[name]) { "[nuget] $source has an entry with no `$name` field: $this" }
-
-/**
- * Reads the JSON string starting at [start] (a `"`), returning its value and the index after it.
- */
-private fun String.readJsonString(start: Int, source: String): Pair<String, Int> {
-  val text = StringBuilder()
-  var index: Int = start + 1
-  while (index < length) {
-    when (val c: Char = this[index]) {
-      '"' -> return text.toString() to index + 1
-      '\\' -> {
-        index++
-        require(index < length) { "[nuget] $source ends inside a string escape" }
-        when (val escape: Char = this[index]) {
-          'n' -> text.append('\n')
-          'r' -> text.append('\r')
-          't' -> text.append('\t')
-          'u' -> {
-            require(index + 4 < length) { "[nuget] $source ends inside a unicode escape" }
-            text.append(substring(index + 1, index + 5).toInt(16).toChar())
-            index += 4
-          }
-
-          else -> text.append(escape)
-        }
-        index++
-      }
-
-      else -> {
-        text.append(c)
-        index++
-      }
-    }
+  return try {
+    diagnosticsJson.decodeFromJsonElement(ForwardDiagnosticsFile.serializer(), root).diagnostics
+  } catch (e: SerializationException) {
+    throw IllegalArgumentException("[nuget] $source has a malformed diagnostic: ${e.message}", e)
   }
-  error("[nuget] $source has an unterminated string starting at offset $start")
 }

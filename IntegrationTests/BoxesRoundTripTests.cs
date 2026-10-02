@@ -38,7 +38,7 @@ public class BoxesRoundTripTests
     public void BoxOfText_Value_IsARealKotlinString()
     {
         // Oreo: black with white in the middle, like the biscuit. Box<string> has no fake
-        // constructor (skipped_ambiguous_generic_constructor vs Box<string?>), so it is only
+        // constructor (SKIPPED_AMBIGUOUS_GENERIC_CONSTRUCTOR vs Box<string?>), so it is only
         // reachable via Boxes.ofText. .uppercase() proves a real Kotlin String, not a raw pointer.
         string result = BoxesSample.BoxOfTextUppercased("oreo");
         Assert.Equal("OREO", result);
@@ -131,6 +131,8 @@ public class BoxesDiagnosticsTests
             "extraction artifact, it does not produce it.");
 
         using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(reverseIrPath));
+        // ADR-182: the reader writes the schema version the plugin checks.
+        Assert.Equal(1, doc.RootElement.GetProperty("schemaVersion").GetInt32());
         foreach (JsonElement assembly in doc.RootElement.GetProperty("assemblies").EnumerateArray())
         {
             if (assembly.GetProperty("packageId").GetString() == "TestDependency")
@@ -208,7 +210,7 @@ public class BoxesDiagnosticsTests
         //
         // The ambiguity rule itself is deliberately NOT asserted here. It is stated in terms of
         // erased *Kotlin* parameter lists, which only the Gradle generator can compute, so
-        // `skipped_ambiguous_generic_constructor` is emitted as a plugin build warning and can
+        // `SKIPPED_AMBIGUOUS_GENERIC_CONSTRUCTOR` is emitted as a plugin build warning and can
         // never appear in reverse-ir.json (the reader's own output). It is covered, including
         // order-independence, by NugetGenericClassGenerationTest in nuget-plugin.
         JsonElement boxClass = FindType(TestDependencyAssembly(), "Box`1");
@@ -239,8 +241,8 @@ public class BoxesDiagnosticsTests
         // RosterRoundTripTests.Map_CrossesAsAMap_WithABitCastValue.
         JsonElement diagnostics = Diagnostics(TestDependencyAssembly());
         Assert.True(
-            HasDiagnostic(diagnostics, "Boxes", "Waiting", "skipped_unbound_generic_instantiation"),
-            "expected skipped_unbound_generic_instantiation naming Boxes.Waiting (Queue<int>)");
+            HasDiagnostic(diagnostics, "Boxes", "Waiting", "SKIPPED_UNBOUND_GENERIC_INSTANTIATION"),
+            "expected SKIPPED_UNBOUND_GENERIC_INSTANTIATION naming Boxes.Waiting (Queue<int>)");
     }
 
     // The other half of that change of verdict: `Dictionary<string,int>` on a STATIC route of a
@@ -258,8 +260,8 @@ public class BoxesDiagnosticsTests
         // vocabulary.
         JsonElement diagnostics = Diagnostics(TestDependencyAssembly());
         Assert.True(
-            HasDiagnostic(diagnostics, "Boxes", "Nested", "skipped_generic_type_argument"),
-            "expected skipped_generic_type_argument naming Boxes.Nested (Box<Box<int>>)");
+            HasDiagnostic(diagnostics, "Boxes", "Nested", "SKIPPED_GENERIC_TYPE_ARGUMENT"),
+            "expected SKIPPED_GENERIC_TYPE_ARGUMENT naming Boxes.Nested (Box<Box<int>>)");
     }
 
     [Fact]
@@ -269,8 +271,8 @@ public class BoxesDiagnosticsTests
         // ADR-043's exclusion survives unchanged.
         JsonElement diagnostics = Diagnostics(TestDependencyAssembly());
         Assert.True(
-            HasDiagnostic(diagnostics, "Boxes", "Identity", "skipped_open_generic"),
-            "expected skipped_open_generic naming Boxes.Identity");
+            HasDiagnostic(diagnostics, "Boxes", "Identity", "SKIPPED_OPEN_GENERIC"),
+            "expected SKIPPED_OPEN_GENERIC naming Boxes.Identity");
     }
 
     [Fact]
@@ -283,11 +285,11 @@ public class BoxesDiagnosticsTests
         JsonElement assembly = TestDependencyAssembly();
         JsonElement diagnostics = Diagnostics(assembly);
         Assert.True(
-            HasDiagnostic(diagnostics, "Boxes", "Reset", "skipped_open_generic"),
-            "expected skipped_open_generic naming Boxes.Reset (the Reset<T>() half)");
+            HasDiagnostic(diagnostics, "Boxes", "Reset", "SKIPPED_OPEN_GENERIC"),
+            "expected SKIPPED_OPEN_GENERIC naming Boxes.Reset (the Reset<T>() half)");
         Assert.True(
-            HasDiagnostic(diagnostics, "Boxes", "Describe", "skipped_open_generic"),
-            "expected skipped_open_generic naming Boxes.Describe");
+            HasDiagnostic(diagnostics, "Boxes", "Describe", "SKIPPED_OPEN_GENERIC"),
+            "expected SKIPPED_OPEN_GENERIC naming Boxes.Describe");
 
         List<string> methods = FindType(assembly, "Boxes").GetProperty("methods").EnumerateArray()
             .Select(m => m.GetProperty("name").GetString() ?? "")
@@ -303,15 +305,15 @@ public class BoxesDiagnosticsTests
         // instantiation.
         JsonElement diagnostics = Diagnostics(TestDependencyAssembly());
         Assert.True(
-            HasDiagnostic(diagnostics, "Box`1", "Peek", "skipped_nullable_type_parameter"),
-            "expected skipped_nullable_type_parameter naming Box`1.Peek");
+            HasDiagnostic(diagnostics, "Box`1", "Peek", "SKIPPED_NULLABLE_TYPE_PARAMETER"),
+            "expected SKIPPED_NULLABLE_TYPE_PARAMETER naming Box`1.Peek");
     }
 
     [Fact]
     public void Unused_NeverInstantiated_EmitsExactlyOneInfoDiagnostic()
     {
         // Unused<T>: no Kotlin type, no export, no C# class, exactly one
-        // info_uninstantiated_generic_type. Regression test for the Box`1 interpolation leak
+        // INFO_UNINSTANTIATED_GENERIC_TYPE. Regression test for the Box`1 interpolation leak
         // (ADR-072 Context item 2 / Decision 10): a package-declared generic class must never
         // reach the RIR (or Kotlin/C# source) under its arity-mangled CLR name.
         JsonElement assembly = TestDependencyAssembly();
@@ -322,7 +324,7 @@ public class BoxesDiagnosticsTests
         {
             if (d.GetProperty("typeName").GetString() != "Unused`1") continue;
             string kind = d.GetProperty("kind").GetString() ?? "";
-            if (kind.Contains("info_uninstantiated_generic_type", StringComparison.OrdinalIgnoreCase))
+            if (kind.Contains("INFO_UNINSTANTIATED_GENERIC_TYPE", StringComparison.OrdinalIgnoreCase))
             {
                 matches++;
             }

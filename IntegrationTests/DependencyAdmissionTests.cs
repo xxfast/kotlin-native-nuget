@@ -339,7 +339,9 @@ public class DependencyAdmissionDiagnosticsTests
         return files.Select(path =>
         {
             using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(path));
-            List<Diagnostic> entries = doc.RootElement.EnumerateArray().Select(entry =>
+            // ADR-182: the versioned object root, checked so a schema change cannot pass unnoticed.
+            Assert.Equal(1, doc.RootElement.GetProperty("schemaVersion").GetInt32());
+            List<Diagnostic> entries = doc.RootElement.GetProperty("diagnostics").EnumerateArray().Select(entry =>
                 new Diagnostic(
                     entry.GetProperty("severity").GetString() ?? "",
                     entry.GetProperty("kind").GetString() ?? "",

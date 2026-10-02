@@ -336,15 +336,15 @@ class NugetExtractApiIntegrationTest {
         .map { it.jsonObject }
       assertTrue(
         diagnostics.any { diagnostic ->
-          diagnostic.getValue("kind").jsonPrimitive.content == "skipped_ref_struct" &&
+          diagnostic.getValue("kind").jsonPrimitive.content == "SKIPPED_REF_STRUCT" &&
               diagnostic.getValue("typeName").jsonPrimitive.content == "OverloadLab" &&
               diagnostic.getValue("memberName").jsonPrimitive.content == "Describe"
         },
         "the unsupported ref-struct sibling must retain its own precise diagnostic",
       )
       assertTrue(
-        diagnostics.none { it.getValue("kind").jsonPrimitive.content == "skipped_overload_set" },
-        "supported overload sets must not emit skipped_overload_set",
+        diagnostics.none { it.getValue("kind").jsonPrimitive.content == "SKIPPED_OVERLOAD_SET" },
+        "supported overload sets must not emit SKIPPED_OVERLOAD_SET",
       )
     }
 
@@ -470,11 +470,11 @@ class NugetExtractApiIntegrationTest {
 
     // `List<int?>` is List<Nullable<int>>: it must be refused BY NAME before the inner
     // instantiation reaches ADR-072 Decision 9's diagnostic and blames the BCL.
-    assertEquals("skipped_collection_element", diagnosed("Maybes"))
+    assertEquals("SKIPPED_COLLECTION_ELEMENT", diagnosed("Maybes"))
     // Arrays are deferred, and today vanish with no diagnostic at all.
-    assertEquals("skipped_array", diagnosed("Codes"))
+    assertEquals("SKIPPED_ARRAY", diagnosed("Codes"))
     // An unmapped BCL definition keeps the existing named skip.
-    assertEquals("skipped_unbound_generic_instantiation", diagnosed("Waiting"))
+    assertEquals("SKIPPED_UNBOUND_GENERIC_INSTANTIATION", diagnosed("Waiting"))
     listOf("Maybes", "Codes", "Waiting").forEach { member ->
       assertTrue(
         methods.none { it.getValue("name").jsonPrimitive.content == member },
@@ -488,8 +488,8 @@ class NugetExtractApiIntegrationTest {
   // Verified against the shipped reader before the fix (spike a, 2026-09-21): `Transform` came out
   // as `{"kind":"class","name":"Transform"}` with an `Invoke` method and an empty constructor list,
   // `ApplyNamed` bound with an unconstructible handle parameter, `Apply`/`Shout` were
-  // `skipped_unbound_generic_instantiation` (hint: expose a BCL collection) and `Act` was
-  // `skipped_unbound_type_reference` (hint: include System.Private.CoreLib).
+  // `SKIPPED_UNBOUND_GENERIC_INSTANTIATION` (hint: expose a BCL collection) and `Act` was
+  // `SKIPPED_UNBOUND_TYPE_REFERENCE` (hint: include System.Private.CoreLib).
   @Test
   fun `metadata reader carries a delegate as a delegate and never as a class`() {
     val dotnet: String = findDotnet() ?: return
@@ -655,7 +655,7 @@ class NugetExtractApiIntegrationTest {
     // slot vocabulary.
     listOf("ApplyGeneric", "LaterAsync", "Sum5", "Parse", "Later").forEach { member ->
       assertEquals(
-        listOf("skipped_delegate_signature"),
+        listOf("SKIPPED_DELEGATE_SIGNATURE"),
         diagnosedKinds(member),
         "`$member` must carry exactly one delegate-shaped diagnostic",
       )
@@ -807,10 +807,10 @@ class NugetExtractApiIntegrationTest {
     listOf("PurrsAsync", "SettleAsync", "MaybeAsync", "Queue", "Herd").forEach { member ->
       assertTrue(
         diagnostics.any {
-          it.getValue("kind").jsonPrimitive.content == "info_async_not_yet_mapped" &&
+          it.getValue("kind").jsonPrimitive.content == "INFO_ASYNC_NOT_YET_MAPPED" &&
               it.getValue("memberName").jsonPrimitive.content == member
         },
-        "`$member` must be skipped with info_async_not_yet_mapped, found: " +
+        "`$member` must be skipped with INFO_ASYNC_NOT_YET_MAPPED, found: " +
             diagnostics.map {
               it.getValue("memberName").jsonPrimitive.content to
                   it.getValue("kind").jsonPrimitive.content
@@ -836,10 +836,10 @@ class NugetExtractApiIntegrationTest {
     }
 
     // The bug ADR-152 fixes on the way: non-generic `Task` used to reach
-    // `skipped_unbound_type_reference`, which told the user to bind System.Private.CoreLib.
+    // `SKIPPED_UNBOUND_TYPE_REFERENCE`, which told the user to bind System.Private.CoreLib.
     assertTrue(
       diagnostics.none {
-        it.getValue("kind").jsonPrimitive.content == "skipped_unbound_type_reference" &&
+        it.getValue("kind").jsonPrimitive.content == "SKIPPED_UNBOUND_TYPE_REFERENCE" &&
             it.getValue("memberName").jsonPrimitive.content == "NapAsync"
       },
       "non-generic Task must not be reported as an unbound type reference",
@@ -925,7 +925,7 @@ class NugetExtractApiIntegrationTest {
       .getValue("diagnostics").jsonArray.map { it.jsonObject }
     assertTrue(
       diagnostics.any {
-        it.getValue("kind").jsonPrimitive.content == "info_cancellation_overload_folded" &&
+        it.getValue("kind").jsonPrimitive.content == "INFO_CANCELLATION_OVERLOAD_FOLDED" &&
             it.getValue("memberName").jsonPrimitive.content == "CallAsync"
       },
       "the dropped sibling must say so by name, found: " + diagnostics.map {
@@ -941,10 +941,10 @@ class NugetExtractApiIntegrationTest {
       )
       assertTrue(
         diagnostics.any {
-          it.getValue("kind").jsonPrimitive.content == "info_cancellation_token_not_yet_mapped" &&
+          it.getValue("kind").jsonPrimitive.content == "INFO_CANCELLATION_TOKEN_NOT_YET_MAPPED" &&
               it.getValue("memberName").jsonPrimitive.content == member
         },
-        "`$member` must be skipped with info_cancellation_token_not_yet_mapped, found: " +
+        "`$member` must be skipped with INFO_CANCELLATION_TOKEN_NOT_YET_MAPPED, found: " +
             diagnostics.map {
               it.getValue("memberName").jsonPrimitive.content to
                   it.getValue("kind").jsonPrimitive.content
@@ -953,7 +953,7 @@ class NugetExtractApiIntegrationTest {
     }
     assertTrue(
       diagnostics.none {
-        it.getValue("kind").jsonPrimitive.content == "skipped_unbound_type_reference" &&
+        it.getValue("kind").jsonPrimitive.content == "SKIPPED_UNBOUND_TYPE_REFERENCE" &&
             it.getValue("memberName").jsonPrimitive.content == "Wait"
       },
       "a CancellationToken is not an unbound type reference; that hint tells the user to bind " +

@@ -38,19 +38,19 @@
     "staticMethod": { "seen": 43, "bound": 42 }
   },
   "diagnostics": {
-    "info_uninstantiated_generic_type": 1,
-    "skipped_collection_element": 2,
-    "skipped_collection_position": 1,
-    "skipped_delegate_signature": 25,
-    "skipped_empty_interface": 1,
-    "skipped_generic_interface": 1,
-    "skipped_generic_type_argument": 12,
-    "skipped_indexer": 6,
-    "skipped_open_generic": 2,
-    "skipped_unbound_generic_instantiation": 7,
-    "skipped_unbound_type_reference": 66,
-    "skipped_unsupported_enum": 7,
-    "skipped_unsupported_struct": 120
+    "INFO_UNINSTANTIATED_GENERIC_TYPE": 1,
+    "SKIPPED_COLLECTION_ELEMENT": 2,
+    "SKIPPED_COLLECTION_POSITION": 1,
+    "SKIPPED_DELEGATE_SIGNATURE": 25,
+    "SKIPPED_EMPTY_INTERFACE": 1,
+    "SKIPPED_GENERIC_INTERFACE": 1,
+    "SKIPPED_GENERIC_TYPE_ARGUMENT": 12,
+    "SKIPPED_INDEXER": 6,
+    "SKIPPED_OPEN_GENERIC": 2,
+    "SKIPPED_UNBOUND_GENERIC_INSTANTIATION": 7,
+    "SKIPPED_UNBOUND_TYPE_REFERENCE": 66,
+    "SKIPPED_UNSUPPORTED_ENUM": 7,
+    "SKIPPED_UNSUPPORTED_STRUCT": 120
   },
   "unboundTypeReferences": {
     "NodaTime.IClock": 7,

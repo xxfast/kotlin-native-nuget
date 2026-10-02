@@ -261,7 +261,7 @@ fun ringLeaderRecharge(): String {
 
 // Phase 13 Wave 2, item 1 (ADR-086 addendum / ADR-085 "Deferred" list): derived-interface
 // flattening. `ITagged : IFeedable` today plans no Kotlin bridge factory at all -- a Kotlin class
-// implementing `ITagged` is a named `skipped_kotlin_bridge`, so `nugetMintBridge` has no branch
+// implementing `ITagged` is a named `SKIPPED_KOTLIN_BRIDGE`, so `nugetMintBridge` has no branch
 // for it and `Any.nugetHandle("Test.Menagerie.ITagged")` falls through to its `error(...)`
 // branch. Tabby (tabby cat, tagged) is the fixture.
 private class Tabby : ITagged {
@@ -303,7 +303,7 @@ fun kotlinTabbyIntroduceViaFeedable(): String {
 // bound interface. `IKeeper` plans no Kotlin bridge factory today either -- `Ferret`/`IFeedable`
 // parameters, returns, and the nullable `Ferret?` property are all outside the v1 slot vocabulary
 // (`isKotlinBridgeSlotType` only admits `Unit`/primitive/`Boolean`/enum/`String`/`String?`), so
-// every `IKeeper` member is a named `skipped_kotlin_bridge` and minting hits the same
+// every `IKeeper` member is a named `SKIPPED_KOTLIN_BRIDGE` and minting hits the same
 // `error(...)` fallback item 1 hits.
 private class Zookeeper : IKeeper {
   /** Set by [groom]; proves the received [Ferret] parameter transferred ownership into Kotlin

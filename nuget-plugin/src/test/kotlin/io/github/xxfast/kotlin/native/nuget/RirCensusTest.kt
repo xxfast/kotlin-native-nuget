@@ -158,8 +158,8 @@ class RirCensusTest {
   @Test
   fun `diagnostics bucket by kind and the unbound histogram reads the backticked subject`() {
     val census: Census = censusOf()
-    assertEquals(2, census.diagnostics.getValue("skipped_unbound_type_reference"))
-    assertEquals(1, census.diagnostics.getValue("skipped_indexer"))
+    assertEquals(2, census.diagnostics.getValue("SKIPPED_UNBOUND_TYPE_REFERENCE"))
+    assertEquals(1, census.diagnostics.getValue("SKIPPED_INDEXER"))
     assertEquals(mapOf("System.TimeSpan" to 2), census.unboundTypeReferences)
   }
 

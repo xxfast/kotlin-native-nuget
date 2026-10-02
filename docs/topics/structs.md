@@ -173,7 +173,7 @@ exceeds 22 is skipped entirely rather than generated, with a build warning namin
 count:
 
 ```
-w: [nuget:TestDependency] Skipping Test.Structs.Litters.Merge(...): flattened ABI arity (24)
+[nuget:SKIPPED_ABI_ARITY_LIMIT] Skipping TestDependency/Test.Structs.Litters.Merge(...): flattened ABI arity (24)
 exceeds the 22-argument CFunction.invoke ceiling verified for Kotlin/Native (ADR-059 Constraint 3).
 Shrink one of the nested structs in this member's signature (fewer components, or less nesting), or
 split it into multiple members with fewer struct parameters.

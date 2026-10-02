@@ -91,10 +91,10 @@ public class Tag : ILabelled
 ///   <item><see cref="AddRange(IEnumerable{string})"/> beside
 ///         <see cref="AddRange(List{string})"/>: a C# overload pair that collapses to ONE Kotlin
 ///         signature, because both parameter types render the same read-only Kotlin type. The
-///         whole set is skipped with <c>skipped_overload_set</c>, never all but one, and the rest
+///         whole set is skipped with <c>SKIPPED_OVERLOAD_SET</c>, never all but one, and the rest
 ///         of this type keeps binding around it.</item>
 ///   <item><see cref="Kennels"/> and <see cref="Beds"/>: deliberately OUT of v1. They must be
-///         SKIPPED with a named diagnostic (<c>skipped_array</c>, <c>skipped_collection_element</c>)
+///         SKIPPED with a named diagnostic (<c>SKIPPED_ARRAY</c>, <c>SKIPPED_COLLECTION_ELEMENT</c>)
 ///         rather than bound or, as today for the array, vanishing with no diagnostic at all.</item>
 /// </list>
 ///
@@ -222,7 +222,7 @@ public class Roster
     /// OUT of v1, as a PAIR: both overloads project to <c>fun addRange(names: List&lt;String&gt;)</c>
     /// in Kotlin, because every list-like C# definition renders the same read-only Kotlin type
     /// (Q1/Q2). That is a hard generation failure today (<c>validateKotlinSignatures</c>,
-    /// finding 18), so the whole set must be dropped with <c>skipped_overload_set</c>: never all
+    /// finding 18), so the whole set must be dropped with <c>SKIPPED_OVERLOAD_SET</c>: never all
     /// but one, per ADR-072 Decision 5. This is ordinary C# (<c>List&lt;T&gt;.AddRange</c> is
     /// exactly this shape), so it is reachable the moment collections bind at all, and the rest of
     /// <see cref="Roster"/> must keep binding around it.
@@ -233,15 +233,15 @@ public class Roster
     public void AddRange(List<string> names) => Rankings = Rankings.Concat(names).ToList();
 
     /// <summary>
-    /// OUT of v1: an ARRAY. Must be skipped with the new <c>skipped_array</c> diagnostic. Today
+    /// OUT of v1: an ARRAY. Must be skipped with the new <c>SKIPPED_ARRAY</c> diagnostic. Today
     /// it is skipped with NO diagnostic at all, which is the part of this row that is a fix.
     /// </summary>
     public string[] Kennels() => new[] { "front", "back" };
 
     /// <summary>
     /// OUT of v1: a STRUCT element (ADR-056 Scope, multi-slot elements). Must be skipped with the
-    /// new <c>skipped_collection_element</c> diagnostic naming the element, not with
-    /// <c>skipped_unbound_generic_instantiation</c> blaming the BCL definition.
+    /// new <c>SKIPPED_COLLECTION_ELEMENT</c> diagnostic naming the element, not with
+    /// <c>SKIPPED_UNBOUND_GENERIC_INSTANTIATION</c> blaming the BCL definition.
     /// </summary>
     public IReadOnlyList<Point> Beds() => new List<Point> { new(1, 2) };
 }

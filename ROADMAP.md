@@ -16,7 +16,6 @@ Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is
 - [ ] Internalise leaked plugin API (the `rir` package, `generateKotlinStubs`, `generateCSharpShims`, `generateCsproj`, `GeneratedFile`, `NugetPusher` and its request and result types) and turn on `explicitApi()` in every published module. Verified: no build script calls `explicitApi()`.
 - [ ] `include` / `exclude` mean Kotlin packages in `publish {}` and C# namespaces in `bind {}`; rename one pair. Verified.
 - [ ] One naming scheme for task names: `packNuget` and `publishNuget` are verb-first, `nugetGen`, `nugetRestore` and the rest are `nuget`-first, and `nugetGen` is vague. Verified.
-- [ ] One casing and one prefix set for diagnostic codes across forward (`SKIPPED_*`) and reverse (`skipped_*`), and a schema version on `NugetDiagnostics.json` and `reverse-ir.json`. Verified.
 - [ ] Implement [ADR-187](docs/adr/187-forward-finalizer-contract.md): SafeHandle-owned forward handles; the callback-payload wrapper item under Performance & Resource Hygiene closes with it. ([details](docs/backlog/implement-adr-187-safehandle-forward-handles.md))
 
 ### 0.10.0: hardening

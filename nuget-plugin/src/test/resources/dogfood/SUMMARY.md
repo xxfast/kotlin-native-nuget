@@ -40,28 +40,28 @@ bridgeable, so array and `Nullable<T>` siblings never get there.
 
 ## Diagnostics by kind, whole run
 
-- `info_async_not_yet_mapped`: 10
-- `info_cancellation_token_not_yet_mapped`: 4
-- `info_oblivious_nullability`: 126
-- `info_uninstantiated_generic_type`: 36
-- `skipped_ambiguous_generic_constructor`: 4
-- `skipped_array`: 114
-- `skipped_collection_element`: 22
-- `skipped_collection_position`: 1
-- `skipped_default_interface_method`: 79
-- `skipped_delegate_position`: 3
-- `skipped_delegate_signature`: 90
-- `skipped_empty_interface`: 30
-- `skipped_event`: 18
-- `skipped_generic_interface`: 24
-- `skipped_generic_type_argument`: 17
-- `skipped_indexer`: 64
-- `skipped_member_name_collision`: 16
-- `skipped_open_generic`: 327
-- `skipped_unbound_generic_instantiation`: 170
-- `skipped_unbound_type_reference`: 792
-- `skipped_unsupported_enum`: 62
-- `skipped_unsupported_struct`: 294
+- `INFO_ASYNC_NOT_YET_MAPPED`: 10
+- `INFO_CANCELLATION_TOKEN_NOT_YET_MAPPED`: 4
+- `INFO_OBLIVIOUS_NULLABILITY`: 126
+- `INFO_UNINSTANTIATED_GENERIC_TYPE`: 36
+- `SKIPPED_AMBIGUOUS_GENERIC_CONSTRUCTOR`: 4
+- `SKIPPED_ARRAY`: 114
+- `SKIPPED_COLLECTION_ELEMENT`: 22
+- `SKIPPED_COLLECTION_POSITION`: 1
+- `SKIPPED_DEFAULT_INTERFACE_METHOD`: 79
+- `SKIPPED_DELEGATE_POSITION`: 3
+- `SKIPPED_DELEGATE_SIGNATURE`: 90
+- `SKIPPED_EMPTY_INTERFACE`: 30
+- `SKIPPED_EVENT`: 18
+- `SKIPPED_GENERIC_INTERFACE`: 24
+- `SKIPPED_GENERIC_TYPE_ARGUMENT`: 17
+- `SKIPPED_INDEXER`: 64
+- `SKIPPED_MEMBER_NAME_COLLISION`: 16
+- `SKIPPED_OPEN_GENERIC`: 327
+- `SKIPPED_UNBOUND_GENERIC_INSTANTIATION`: 170
+- `SKIPPED_UNBOUND_TYPE_REFERENCE`: 792
+- `SKIPPED_UNSUPPORTED_ENUM`: 62
+- `SKIPPED_UNSUPPORTED_STRUCT`: 294
 
 ## Most demanded unmapped type references
 

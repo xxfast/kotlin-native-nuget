@@ -192,7 +192,7 @@ class RirParsingTest {
   }
 
   @Test
-  fun `diagnostic with kind skipped_overload_set deserializes correctly`() {
+  fun `diagnostic with kind SKIPPED_OVERLOAD_SET deserializes correctly`() {
     val json = """
       {
         "assemblies": [
@@ -202,7 +202,7 @@ class RirParsingTest {
             "namespaces": [],
             "diagnostics": [
               {
-                "kind": "skipped_overload_set",
+                "kind": "SKIPPED_OVERLOAD_SET",
                 "typeName": "JsonConvert",
                 "memberName": "SerializeObject",
                 "memberSignature": "SerializeObject(object) [+3 overloads]",
@@ -758,7 +758,7 @@ class RirParsingTest {
   // ------------------------------------------------------------------
 
   @Test
-  fun `assembly-level diagnostic with kind info_oblivious_nullability deserializes correctly`() {
+  fun `assembly-level diagnostic with kind INFO_OBLIVIOUS_NULLABILITY deserializes correctly`() {
     val json = """
       {
         "assemblies": [
@@ -768,7 +768,7 @@ class RirParsingTest {
             "namespaces": [],
             "diagnostics": [
               {
-                "kind": "info_oblivious_nullability",
+                "kind": "INFO_OBLIVIOUS_NULLABILITY",
                 "typeName": "",
                 "memberName": "",
                 "memberSignature": "",
@@ -789,7 +789,7 @@ class RirParsingTest {
   }
 
   @Test
-  fun `member-level diagnostic with kind info_oblivious_nullability names the oblivious member`() {
+  fun `member-level diagnostic with kind INFO_OBLIVIOUS_NULLABILITY names the oblivious member`() {
     val json = """
       {
         "assemblies": [
@@ -799,7 +799,7 @@ class RirParsingTest {
             "namespaces": [],
             "diagnostics": [
               {
-                "kind": "info_oblivious_nullability",
+                "kind": "INFO_OBLIVIOUS_NULLABILITY",
                 "typeName": "LegacyNicknameBook",
                 "memberName": "Find",
                 "memberSignature": "Find(string): string",

@@ -81,4 +81,33 @@ class ForwardDiagnosticKindTest {
       warned.format(),
     )
   }
+
+  /**
+   * A reason that already ends its sentence (NugetMetadataReader's real `SKIPPED_ARRAY` text, here
+   * as a forward reason) must not print `buffer.. Expose`; a bare reason still gets its period.
+   */
+  @Test
+  fun `format does not double a reason's own closing period`() {
+    val reason =
+      "`string[]`: arrays are deferred (ADR-155). The Kotlin type for an array is its own " +
+          "decision, and `byte[]` wants the ADR-151 blit rather than a slot buffer."
+    val hint = "Expose IReadOnlyList<T> (or another mapped BCL collection) instead of an array."
+    val diagnostic = ForwardDiagnostic(
+      kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
+      symbol = null,
+      declaration = "Sample.thing",
+      reason = reason,
+      hint = hint,
+      owner = null,
+    )
+
+    assertEquals(
+      "[nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping Sample.thing: $reason $hint",
+      diagnostic.format(),
+    )
+    assertEquals(
+      "[nuget:SKIPPED_UNSUPPORTED_TYPE] Skipping Sample.thing: no wire. $hint",
+      diagnostic.copy(reason = "no wire").format(),
+    )
+  }
 }

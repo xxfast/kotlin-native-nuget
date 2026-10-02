@@ -253,7 +253,7 @@ fun bridgeableStaticMethods(
 // replaced the old "one constructor per type, the rest skipped as an overload set upstream"
 // rule: the reader now emits every public `.ctor` with its own identity and assesses each
 // independently, so this filter really does see overload siblings. The reverse census confirms
-// it, there is no skipped_overload_set anywhere in nine real published packages.
+// it, there is no SKIPPED_OVERLOAD_SET anywhere in nine real published packages.
 fun bridgeableConstructors(
   cls: RirClass,
   boundHandleTypes: Set<RirTypeKey>,
@@ -605,7 +605,7 @@ private fun String.toMethodCamelCase(): String = replaceFirstChar { it.lowercase
 
 // Phase 9 (ROADMAP line 151, rule 5): ADR-043-style skip diagnostics for instance members whose
 // Kotlin name collides with an ADR-051 wrapper member (WRAPPER_MEMBER_NAMES above). Reuses the
-// existing RirDiagnostic model — the same one the metadata reader emits for skipped_overload_set
+// existing RirDiagnostic model — the same one the metadata reader emits for SKIPPED_OVERLOAD_SET
 // etc. — rather than inventing a new reporting mechanism (per ADR-043's existing "Diagnostic
 // format" contract), even though this particular diagnostic is produced Gradle-plugin-side, not by
 // the metadata reader (see RirDiagnosticKind.SKIPPED_MEMBER_NAME_COLLISION).
@@ -745,7 +745,7 @@ private fun RirRegistrable.abiArity(
       abiArgs(listOf(RirParameter("value", property.type)), structs).size
 }
 
-// ADR-059 Decision 5a: one skipped_abi_arity_limit diagnostic for [r], naming the member and the
+// ADR-059 Decision 5a: one SKIPPED_ABI_ARITY_LIMIT diagnostic for [r], naming the member and the
 // arity that overshot the ceiling. [memberSignature] is set to [r]'s own identity() so both
 // bridgeableRegistrables and bridgeableStructRegistrables can match a diagnostic back to the
 // candidate it was computed for without re-deriving arity a second time.
@@ -873,7 +873,7 @@ fun arityLimitDiagnostics(
 private fun isDeferredAsync(cls: RirClass, method: RirMethod): Boolean =
   method.asyncKind != null && cls.typeParameters.isNotEmpty()
 
-// ADR-152: one named `info_async_not_yet_mapped` per async member the GENERATOR (not the reader)
+// ADR-152: one named `INFO_ASYNC_NOT_YET_MAPPED` per async member the GENERATOR (not the reader)
 // declines: a struct method, a bound-interface member, or a member of a generic class definition.
 // The reader already names the shapes it declines itself (ValueTask, `Task<T>?`, async parameters);
 // this is the plugin-side half, so nothing async is ever dropped silently.
@@ -910,7 +910,7 @@ private fun mentionsCollection(type: RirTypeRef): Boolean =
   type is RirCollectionType ||
       (type is RirGenericInstanceType && type.typeArguments.any(::mentionsCollection))
 
-// ADR-155: one named `skipped_collection_position` per member the GENERATORS decline because of
+// ADR-155: one named `SKIPPED_COLLECTION_POSITION` per member the GENERATORS decline because of
 // WHERE the collection sits, not what is in it. A struct member decomposes into flattened
 // out-pointers (ADR-056) and a bound-interface member has its own hand-written dispatch body
 // (ADR-070); neither rides the shared conversion tables this wire was built into, so isV1Type
@@ -1317,7 +1317,7 @@ private fun isV1Type(
     "bool", "byte", "short", "int", "long", "float", "double", "char",
   )
   // ADR-051: a handle ref is bridgeable iff the referenced type resolves to a non-static bound
-  // class. Types outside the bound set stay unmapped and produce a skipped_unbound_type_reference
+  // class. Types outside the bound set stay unmapped and produce a SKIPPED_UNBOUND_TYPE_REFERENCE
   // diagnostic from the reader — never reach here as bridgeable candidates.
   is RirObjectHandleType -> RirTypeKey(type.namespace, type.name) in boundHandleTypes
   // ADR-070: an interface ref is bridgeable iff it resolves to an admissible, bound RirInterface.
@@ -1340,7 +1340,7 @@ private fun isV1Type(
   // fixed-point pass (`definition.instantiations`); an instantiation nobody enumerated has no
   // witness/bindings object to dispatch through, so admitting it here would silently emit a call to
   // a table that was never generated. Both failures fall through to `false`, the same fail-closed
-  // shape skipped_unbound_generic_instantiation/skipped_generic_type_argument rely on upstream.
+  // shape SKIPPED_UNBOUND_GENERIC_INSTANTIATION/SKIPPED_GENERIC_TYPE_ARGUMENT rely on upstream.
   is RirGenericInstanceType -> {
     val definition: RirClass? =
       boundGenericClassDefinitions[RirTypeKey(type.namespace, type.name)]
@@ -1375,7 +1375,7 @@ private fun isV1Type(
 // ADR-155 v1 element vocabulary: exactly ADR-072 Decision 6's type-argument vocabulary minus the
 // type parameter. A struct element (multi-slot), a nested collection (a slot holding a buffer
 // pointer), a `Nullable<T>` element (needs a presence slot) and a bound generic instance are all
-// deferred, and the reader refuses them by name (skipped_collection_element) before they reach
+// deferred, and the reader refuses them by name (SKIPPED_COLLECTION_ELEMENT) before they reach
 // here; this is the generator-side fail-closed mirror of that refusal.
 private fun isCollectionElement(
   type: RirTypeRef,
@@ -1773,7 +1773,7 @@ fun kotlinBridgePlan(
   return KotlinBridgePlan(iface, slots, needsDupHandle = true)
 }
 
-// ADR-085: `skipped_kotlin_bridge`, one per reason this interface cannot be implemented in Kotlin
+// ADR-085: `SKIPPED_KOTLIN_BRIDGE`, one per reason this interface cannot be implemented in Kotlin
 // and handed back to C#. Never silence: an interface without a plan keeps ADR-070's error(...).
 fun kotlinBridgeDiagnostics(
   iface: RirInterface,

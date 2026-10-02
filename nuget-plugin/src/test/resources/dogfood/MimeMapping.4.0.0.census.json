@@ -38,8 +38,8 @@
     "staticMethod": { "seen": 1, "bound": 1 }
   },
   "diagnostics": {
-    "skipped_array": 1,
-    "skipped_indexer": 2
+    "SKIPPED_ARRAY": 1,
+    "SKIPPED_INDEXER": 2
   },
   "unboundTypeReferences": {},
   "collapsedOverloads": {

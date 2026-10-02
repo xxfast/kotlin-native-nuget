@@ -263,4 +263,4 @@ VetTriage.WIN32_NT      // Win32NT
 
 If two members of one enum would get the same entry name (`HTTPStatus` and `HttpStatus` both give
 `HTTP_STATUS`), each of them keeps its C# spelling as the Kotlin entry and the build logs one
-`info_enum_entry_kept_verbatim` note per member. The enum still binds in full.
+`INFO_ENUM_ENTRY_KEPT_VERBATIM` note per member. The enum still binds in full.

@@ -42,7 +42,7 @@ A public C# constructor becomes a fake top-level Kotlin constructor named like t
 (`Box(value)`), one overload per unambiguous instantiation. When two instantiations of the same
 definition would erase to the same non-null Kotlin parameter list, such as `Box<String>` and
 `Box<String?>` both erasing to `(String)`, **both** lose their fake constructor. This is a Gradle
-build warning (`skipped_ambiguous_generic_constructor`), not a `reverse-ir.json` diagnostic. An
+build warning (`SKIPPED_AMBIGUOUS_GENERIC_CONSTRUCTOR`), not a `reverse-ir.json` diagnostic. An
 instantiation with no fake constructor is still reachable through any bound factory or member that
 returns it:
 
@@ -80,20 +80,20 @@ fun tallyPairing(label: String, count: Int): String {
 - A type argument must be a primitive, `string` (nullable or not), a bound enum, or a bound class
   or interface handle. Anything else, including another generic instantiation, a struct, or a BCL
   generic such as `List<int>` or `Dictionary<string, int>`, excludes the whole instantiation
-  (`skipped_generic_type_argument`, or `skipped_unbound_generic_instantiation` for a BCL type whose
+  (`SKIPPED_GENERIC_TYPE_ARGUMENT`, or `SKIPPED_UNBOUND_GENERIC_INSTANTIATION` for a BCL type whose
   definition lives outside the bound assemblies).
 - No Kotlin type-parameter constraints are emitted: `where T : class` does not become `<T : Any>`.
   You can *write* `Box<Double>` in Kotlin even though no such instantiation is bound; there is no
   witness or factory for it, so the failure surfaces the first time you try to obtain one, at
   compile time.
 - A bare type parameter annotated nullable (`T? Peek()`) is not representable per instantiation and
-  is skipped (`skipped_nullable_type_parameter`); the rest of the class still binds.
-- Only generic **classes** bind. Generic interfaces stay excluded (`skipped_generic_interface`; see
-  [The bridgeable subset](bridgeable-subset.md)), and generic **methods** stay `skipped_open_generic`
+  is skipped (`SKIPPED_NULLABLE_TYPE_PARAMETER`); the rest of the class still binds.
+- Only generic **classes** bind. Generic interfaces stay excluded (`SKIPPED_GENERIC_INTERFACE`; see
+  [The bridgeable subset](bridgeable-subset.md)), and generic **methods** stay `SKIPPED_OPEN_GENERIC`
   permanently, unless a caller can pin the type argument. That includes `void Reset<T>()`, whose type
   parameter appears in no signature; a non-generic `Reset()` beside it still binds.
 - A generic definition with zero discovered instantiations emits nothing at all: no Kotlin type, no
-  registration, just an `info_uninstantiated_generic_type` note.
+  registration, just an `INFO_UNINSTANTIATED_GENERIC_TYPE` note.
 
 ## See also
 

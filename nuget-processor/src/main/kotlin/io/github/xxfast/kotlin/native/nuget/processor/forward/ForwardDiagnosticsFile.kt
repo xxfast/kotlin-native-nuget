@@ -37,17 +37,22 @@ internal data class ForwardDiagnosticRecord(
   val line: Int? = null,
 )
 
+/** ADR-182: the `NugetDiagnostics.json` schema; the plugin's reader refuses any other value. */
+internal const val FORWARD_DIAGNOSTICS_SCHEMA_VERSION: Int = 1
+
 /**
- * ADR-100: the JSON array the KSP round writes and `NugetReportDiagnosticsTask` reads back.
+ * ADR-100: the JSON file the KSP round writes and `NugetReportDiagnosticsTask` reads back.
+ *
+ * ADR-182: the root is `{ "schemaVersion": 1, "diagnostics": [ ... ] }`. [FORWARD_DIAGNOSTICS_SCHEMA_VERSION]
+ * is a bare JSON integer, bumped only on a change a reader that ignores unknown keys would misread
+ * (a field removed, renamed or retyped, a code renamed); an additive field never bumps it.
  *
  * Hand-rolled rather than kotlinx.serialization, following the `bound-types.json` precedent
  * ([parseBoundTypesManifest]): the processor has no JSON dependency and adding one to every
  * consumer's KSP classpath to write a flat array of at most six string fields is a poor trade.
  *
- * Every value is a JSON **string**, including ADR-162's `line`. That is a contract with the reader
- * (`NugetReportDiagnosticsTask.parseForwardDiagnostics`), which finds fields by walking quoted
- * tokens and pairing them key, value: one bare number would shift every following key onto the
- * wrong value. A new field must be a string, or the reader has to learn about types first.
+ * Every DIAGNOSTIC field is a JSON **string**, including ADR-162's `line`: the plugin's reader (now
+ * kotlinx.serialization, ADR-182) declares them `String`, so retyping one is a schema bump.
  */
 internal fun renderForwardDiagnosticsJson(records: List<ForwardDiagnosticRecord>): String {
   val entries: String = records.joinToString(",\n") { record ->
@@ -56,10 +61,6 @@ internal fun renderForwardDiagnosticsJson(records: List<ForwardDiagnosticRecord>
     // location-less diagnostic (a scope-level one) readable by both the old and the new parser.
     val location: String =
       if (record.file != null && record.line != null) {
-        // `line` is written as a JSON *string*, deliberately. The reader on the other side
-        // (`parseForwardDiagnostics`) finds fields by walking quoted tokens and pairing them
-        // key, value, which is sound only while every value this writer emits is a string; a bare
-        // number would shift every following key onto the wrong value.
         "\n    \"file\": ${record.file.jsonString()}," +
             "\n    \"line\": ${record.line.toString().jsonString()},"
       } else {
@@ -74,7 +75,8 @@ internal fun renderForwardDiagnosticsJson(records: List<ForwardDiagnosticRecord>
     |  }
     """.trimMargin()
   }
-  return if (records.isEmpty()) "[]\n" else "[\n$entries\n]\n"
+  val diagnostics: String = if (records.isEmpty()) "[]" else "[\n${entries.prependIndent("  ")}\n  ]"
+  return "{\n  \"schemaVersion\": $FORWARD_DIAGNOSTICS_SCHEMA_VERSION,\n  \"diagnostics\": $diagnostics\n}\n"
 }
 
 private fun String.jsonString(): String {
