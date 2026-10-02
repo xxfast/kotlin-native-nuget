@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -201,4 +201,4 @@ A `repositories {}` block with no explicit function on the marked type resolved 
   - The `include`/`exclude` rename.
   - Task-name unification.
   - The reverse opt-in switch, which is the `dependencies` / `bind` registration trigger.
-- Research memo: [docs/research/roadmap/gradle-dsl-property.md](../research/roadmap/gradle-dsl-property.md).
+- Fixed on the way (pre-existing): a consume-only mingw project now gets `-lole32` (it was applied only in the publish-gated block), and a second `nuget("x")` or `dependency("X")` no longer registers a duplicate task or `PackageReference`; the second call merges.

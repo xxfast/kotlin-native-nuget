@@ -14,6 +14,45 @@ package with no reverse bindings; `dependencies {}` alone binds C# packages into
 publishing anything. See [Gradle tasks](gradle-tasks.md) for exactly which tasks each combination
 registers.
 
+Every setting is a Gradle `Property`, `ListProperty`, `RegularFileProperty` or `DirectoryProperty`,
+so you can feed one from a `Provider` and the build stays configuration-cache friendly. In a Kotlin
+build script you still write plain `=` assignment (Gradle 8.2 or later, verified on 9.1.0). A nested
+block cannot call a function from an enclosing block: `include("x")` inside
+`repositories { nuget("feed") { } }` is a compile error instead of silently widening `publish`.
+
+Repeating a block merges instead of replacing. These two `publish {}` blocks produce one
+configuration with both `include` entries, and the same holds for `bind {}`, `dependency("X")` and
+`nuget("x")`:
+
+```kotlin
+nuget {
+  publish { include("com.example.a") }
+  publish { include("com.example.b") }
+}
+```
+
+### Breaking in 0.9.0 {id="breaking-in-0-9-0"}
+
+Scripts that only assign values and call the block functions need no change. These differences
+matter if you read the DSL back or depend on task shape:
+
+- Reading a value returns a `Provider`, so `nuget.publish?.packageId` becomes
+  `nuget.publish.packageId` (a `Property<String>`). `nuget.publish` is never null; test whether a
+  value was set with `packageId.isPresent`.
+- The checks that used to fail while the build was configured now fail when the task runs, with the
+  same message: a repository with no `url`, `snapshot = true` without a `version` or `packageId`,
+  and a project with no supported targets.
+- `packNuget` exists on every project with a `publish {}` block and fails at execution when there is
+  nothing to pack. A project without `publish {}` still has no `packNuget`.
+- `nugetSnapshotVersion` and `nugetSnapshotVersionProps` exist on every `publish {}` project.
+  `packNuget` depends on them only when `snapshot` is `true`.
+- Repositories and dependencies are processed in name order, not declaration order.
+- `publishNuget` depends on every push task in the project.
+- A second `publish {}`, `bind {}`, `dependency("X")` or `nuget("x")` used to replace the first or
+  register a duplicate (a duplicate `nuget("x")` failed the build). It now merges.
+
+Groovy build scripts can use the same blocks, but are not tested.
+
 ## Annotations dependency {id="annotations-dependency"}
 
 Applying the plugin adds `nuget-annotations`, which carries `@CSharpName`, to your `commonMainApi`
@@ -23,23 +62,23 @@ targets all resolve it; you add nothing yourself. See
 
 ## `publish { }`
 
-Configures `NugetPublishConfig`. Every field is a nullable `String` with no default. Nothing in
-the DSL itself enforces they're set, but `packNuget` fails once it reads an unset one.
+Configures `NugetPublishConfig`. The five string settings have no default. Nothing in the DSL
+itself enforces they're set, but `packNuget` fails once it reads an unset one.
 
 | Property | Type | Required | Maps to |
 |---|---|---|---|
-| `packageId` | `String?` | yes | `.nuspec` `<id>`, and the `.nupkg` file name. When null or blank (or with no `publish` block) the generated C# is rooted at `namespace Interop`, and `packNuget` fails with "needs a non-blank package id" |
-| `version` | `String?` | yes | `.nuspec` `<version>` |
-| `authors` | `String?` | yes | `.nuspec` `<authors>` |
-| `description` | `String?` | yes | `.nuspec` `<description>` |
-| `rootPackage` | `String?` | yes | the Kotlin package the generated C# namespaces are rooted at; sub-packages map relative to it. Also the default export scope: see below |
-| `include(vararg packages: String)` | function | no | empty; when set, only these package prefixes (and their sub-packages) are bridged |
-| `exclude(vararg packages: String)` | function | no | empty; a package prefix or a qualified declaration name (a class, object, sealed base, or top-level function, plus everything nested under it); applied after `include`, and always wins over it |
-| `admit(vararg types: String)` | function | no | empty; additively admits a dependency-module type into [the cross-module export closure](#cross-module-export-closure) by qualified name or package prefix, without touching `include`/`rootPackage`; see below |
-| `strictDependencyTypes` | `Boolean` | no | `false`; when `true`, an un-admitted dependency type in a public signature fails the build (`ERROR_UNEXPORTED_DEPENDENCY_TYPE`) instead of warning; see below |
-| `snapshot` | `Boolean` | no | `false`; when `true`, `packNuget` mints `<version>-snapshot.<epochMillis>` at execution time instead of using `version` literally, and always writes an MSBuild props file. Requires `packageId` and a non-blank `version` |
-| `versionPropsFile` | `File?` | no | `null`; only consulted when `snapshot` is `true`. Default `<rootProject>/build/<packageId>Versions.props` |
-| `prebuiltRuntimes` | `File?` | no | `null`; a directory laid out `<rid>/native/*.{dll,dylib,so}`, exactly the `runtimes/` tree `packNuget` stages, merged with the RIDs this host links itself into one package |
+| `packageId` | `Property<String>` | yes | `.nuspec` `<id>`, and the `.nupkg` file name. When null or blank (or with no `publish` block) the generated C# is rooted at `namespace Interop`, and `packNuget` fails with "needs a non-blank package id" |
+| `version` | `Property<String>` | yes | `.nuspec` `<version>` |
+| `authors` | `Property<String>` | yes | `.nuspec` `<authors>` |
+| `description` | `Property<String>` | yes | `.nuspec` `<description>` |
+| `rootPackage` | `Property<String>` | yes | the Kotlin package the generated C# namespaces are rooted at; sub-packages map relative to it. Also the default export scope: see below |
+| `include(vararg packages: String)` | function, adds to a `ListProperty` | no | empty; when set, only these package prefixes (and their sub-packages) are bridged |
+| `exclude(vararg packages: String)` | function, adds to a `ListProperty` | no | empty; a package prefix or a qualified declaration name (a class, object, sealed base, or top-level function, plus everything nested under it); applied after `include`, and always wins over it |
+| `admit(vararg types: String)` | function, adds to a `ListProperty` | no | empty; additively admits a dependency-module type into [the cross-module export closure](#cross-module-export-closure) by qualified name or package prefix, without touching `include`/`rootPackage`; see below |
+| `strictDependencyTypes` | `Property<Boolean>` | no | `false`; when `true`, an un-admitted dependency type in a public signature fails the build (`ERROR_UNEXPORTED_DEPENDENCY_TYPE`) instead of warning; see below |
+| `snapshot` | `Property<Boolean>` | no | `false`; when `true`, `packNuget` mints `<version>-snapshot.<epochMillis>` at execution time instead of using `version` literally, and always writes an MSBuild props file. Requires `packageId` and a non-blank `version` |
+| `versionPropsFile` | `RegularFileProperty` | no | only consulted when `snapshot` is `true`. Default `<rootProject>/build/<packageId>Versions.props` |
+| `prebuiltRuntimes` | `DirectoryProperty` | no | unset; a directory laid out `<rid>/native/*.{dll,dylib,so}`, exactly the `runtimes/` tree `packNuget` stages, merged with the RIDs this host links itself into one package |
 | `repositories { }` | function | no | empty; declares named feeds `publishNuget` pushes the packed `.nupkg` to, see below |
 
 ```kotlin
@@ -301,8 +340,8 @@ Inside the trailing block, `NugetDependency` exposes:
 
 | Property / function | Type | Required | Notes |
 |---|---|---|---|
-| `version` | `String?` | no | same as the `version` parameter; settable inside the block instead of passing it positionally |
-| `source` | `String?` | no | an extra NuGet feed URL, added to `<RestoreSources>` alongside `api.nuget.org`, for a private/internal feed |
+| `version` | `Property<String>` | no | same as the `version` parameter; settable inside the block instead of passing it positionally |
+| `source` | `Property<String>` | no | an extra NuGet feed URL, added to `<RestoreSources>` alongside `api.nuget.org`, for a private/internal feed |
 | `bind { }` | function, configures `NugetBindConfig` | no | omit to resolve the dependency without generating any Kotlin bindings for it |
 
 ```kotlin
@@ -324,7 +363,7 @@ Configures `NugetBindConfig`. Declaring `bind {}` at all is what triggers `nuget
 
 | Property / function | Type | Required | Default |
 |---|---|---|---|
-| `packageName` | `String?` | no | the dependency id, lowercased with `-` replaced by `_` (e.g. `TestDependency` becomes `sampledependency`) |
+| `packageName` | `Property<String>` | no | the dependency id, lowercased with `-` replaced by `_` (e.g. `TestDependency` becomes `sampledependency`) |
 | `include(vararg namespace: String)` | function | no | empty, with no `include` at all, every namespace in the package is considered, subject to `exclude` |
 | `exclude(vararg namespace: String)` | function | no | empty |
 | `alias(csharpNamespace, kotlinPackage)` | function | no | none |
@@ -344,6 +383,6 @@ dependency("TestDependency", version = "1.0.0") {
 }
 ```
 
-Only one `bind { }` block is supported per dependency (a second call overwrites the first). For
+A second `bind { }` block for the same dependency merges into the first. For
 what actually gets bound once a namespace is included, see
 [Consuming C# in Kotlin](reverse-overview.md).
