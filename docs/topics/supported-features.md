@@ -119,13 +119,13 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | value class at an ordinary position | → | the same record struct | Returns, parameters at all five positions and class properties, over a `String`, primitive, enum or object-handle underlying, nullable included. Inherited members never bind. | [Value classes](value-classes.md) |
 | value class as a `List`/`Map`/`Set` component | → | the same record struct, in `IReadOnlyList<T>`/`IReadOnlyDictionary<K,V>`/`IReadOnlySet<T>` etc. | Element, map key or map value, for the same four underlyings. The wire carries the underlying per element, never the value class itself. | [Value classes](value-classes.md) |
 | same-name function overloads | ⇄ | method overload set | → one natural C# overload set per container, the numbering hidden on the export symbol; a pair differing only in reference nullability fails generation · ← each member keeps its Kotlin name | [Classes and objects](classes-and-objects.md) · [The bridgeable subset](bridgeable-subset.md) |
-| function/method default parameters | → | one widened signature | Any subset settable by name; already-nullable params use `Optional<T>`. Cap of 8; a stored lambda default stays Kotlin-only; a real shorter overload wins over widening. | [Classes and objects](classes-and-objects.md) |
+| function/method default parameters | → | one widened signature | Any subset settable by name; already-nullable params use shared `KotlinOptional<T>`. Cap of 8; a stored lambda default stays Kotlin-only; a real shorter overload wins over widening. | [Classes and objects](classes-and-objects.md) |
 
 ## Exception handling
 
 | Kotlin | ⇄ | C# | Notes | Docs |
 |---|:-:|---|---|---|
-| thrown exception | ⇄ | `KotlinException` | → propagates synchronously · ← a throw from package code surfaces as a catchable `NugetManagedException`; its .NET type map, stack trace and cause chain are not built yet | [Exceptions](exceptions.md) · [The bridgeable subset](bridgeable-subset.md) |
+| thrown exception | ⇄ | `KotlinException` | → shared identity; mapped types keep BCL bases · ← throws surface as `NugetManagedException`; .NET type mapping, stack and causes are not built | [Exceptions](exceptions.md) · [The bridgeable subset](bridgeable-subset.md) |
 | stack trace | → | `KotlinStackTrace` property |  | [Exceptions](exceptions.md) |
 | `e.cause` | → | `InnerException` | The cause chain is preserved. | [Exceptions](exceptions.md) |
 | `IllegalArgumentException` etc., `kotlinx.io.IOException`, `NullPointerException` | → | `ArgumentException`, `IOException`, `NullReferenceException` etc. | Subclasses map too; `catch (KotlinException)` no longer catches them, filter `e is IKotlinException`. A null message reads the Kotlin type name. | [Exceptions](exceptions.md) |
@@ -179,4 +179,5 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | Kotlin | ⇄ | C# | Notes | Docs |
 |---|:-:|---|---|---|
 | the fixed `nuget_*` ABI (`NugetHandles`, `NugetError`, the scalar wrap/unwrap, collection, callback and coroutine exports, the .NET ticks conversions, `NugetCSharpBridge`, `nuget_runtime_version`) | → | the same `DllImport`s in `Interop.cs`, plus one more | Ships once as a versioned `nuget-runtime` library the plugin adds and exports, so the generator emits only per-declaration code. The C# side is still source-shipped. | [Architecture](architecture.md) |
+| Two Kotlin-built NuGet packages in one .NET project | → | package-local generated APIs and native runtimes | Share exception and `KotlinOptional<T>` identity; native names and handle state stay package-specific. | [Exceptions](exceptions.md) · [Publishing Kotlin to C#](publish-kotlin-library-as-nuget.md) |
 | every forward `@CName` export symbol | → | the matching `DllImport` `EntryPoint` | Always the library, then the package relative to `rootPackage`, then the declaration's own name, so same-named declarations in different packages never collide. | [Architecture](architecture.md) |

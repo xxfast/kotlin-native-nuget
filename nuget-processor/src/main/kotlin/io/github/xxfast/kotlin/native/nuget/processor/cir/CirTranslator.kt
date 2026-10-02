@@ -872,7 +872,6 @@ internal fun translate(
       boxers = valueClassNames(namespaces),
     ),
   )
-  helpers.add(CirOptionalHelper)
   if (bridgePlans.isNotEmpty()) helpers.add(CirBridgeHelper(context.libraryName, bridgePlans))
   if (tracker.needsList) helpers.add(CirListHelper(context.libraryName))
   if (tracker.needsBytes) helpers.add(CirBytesHelper(context.libraryName))
@@ -1026,7 +1025,7 @@ internal fun translate(
   // ADR-064 amendment (issue #249): the husk sweep moved OUT of here, to the processor, so it runs
   // after `withSkipRemarks` and can spare a holder that carries a remark. Translation returns what
   // the declarations produced, husks included.
-  return CirFile(usings = usings, namespaces = namespaces)
+  return CirFile(usings = usings, namespaces = namespaces, rootNamespace = context.rootNamespace)
 }
 
 /**

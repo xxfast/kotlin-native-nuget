@@ -122,6 +122,7 @@ int? wait = GroomingSample.WaitTime("   "); // null, resolved by the string over
 
 A defaulted top-level parameter widens to its nullable C# form (`null` means "use the Kotlin
 default"); a required parameter after it stays required-but-nullable instead of optional.
+When the original Kotlin parameter is already nullable, the generated signature uses `KotlinOptional<T>` to distinguish an omitted argument from an explicit `null`.
 
 ```kotlin
 fun hail(name: String, loud: Boolean = false): String =
@@ -142,7 +143,7 @@ A defaulted parameter the bridge cannot route to any non-null C# form is dropped
 signature when it is part of the trailing all-defaulted run, and Kotlin always evaluates its
 default. See
 [Constructor and method default parameters](classes-and-objects.md#constructor-and-method-default-parameters)
-for the full rule, the cap, and `Optional<T>`.
+for the full rule, the cap, and `KotlinOptional<T>`.
 
 ```kotlin
 fun hubWithEvents(settings: Settings = Settings(), events: Flow<Int>? = null): Hub =

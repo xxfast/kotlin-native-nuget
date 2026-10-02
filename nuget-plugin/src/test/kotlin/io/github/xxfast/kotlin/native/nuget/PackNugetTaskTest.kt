@@ -101,7 +101,7 @@ class PackNugetTaskTest {
   }
 
   @Test
-  fun `pack nuspec omits dependencies block when dependencyVersions is empty`() {
+  fun `pack nuspec includes contract when bound dependencyVersions is empty`() {
     val task: PackNugetTask = newTask()
 
     val csDir: File = Files.createTempDirectory("ksp-cs").toFile()
@@ -115,10 +115,7 @@ class PackNugetTaskTest {
     task.pack()
 
     val nuspec: String = File(outputDir, "TestLibrary.1.0.0/TestLibrary.nuspec").readText()
-    assertFalse(
-      nuspec.contains("<dependencies>"),
-      "no <dependencies> block should be emitted when dependencyVersions is empty",
-    )
+    assertContains(nuspec, "<dependency id=\"Kotlin.Native.Interop\" version=\"[1.0.0,2.0.0)\" />")
   }
 
   @Test
@@ -129,7 +126,7 @@ class PackNugetTaskTest {
     File(csDir, "Interop.cs").writeText("// forward bindings\n")
 
     val nativeDir: File = Files.createTempDirectory("native-libs").toFile()
-    File(nativeDir, "Sample.dll").writeText("fake native binary")
+    File(nativeDir, "kn_746573746c696272617279.dll").writeText("fake native binary")
 
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
     configureCommon(task, outputDir)
@@ -139,8 +136,8 @@ class PackNugetTaskTest {
 
     task.pack()
 
-    val copied = File(outputDir, "TestLibrary.1.0.0/runtimes/win-x64/native/Sample.dll")
-    assertTrue(copied.exists(), "Sample.dll must be copied into runtimes/win-x64/native/")
+    val copied = File(outputDir, "TestLibrary.1.0.0/runtimes/win-x64/native/kn_746573746c696272617279.dll")
+    assertTrue(copied.exists(), "kn_746573746c696272617279.dll must be copied into runtimes/win-x64/native/")
   }
 
   @Test
@@ -151,7 +148,7 @@ class PackNugetTaskTest {
     File(csDir, "Interop.cs").writeText("// forward bindings\n")
 
     val nativeDir: File = Files.createTempDirectory("native-libs").toFile()
-    File(nativeDir, "Sample.dll").writeText("fake native binary")
+    File(nativeDir, "kn_746573746c696272617279.dll").writeText("fake native binary")
     File(nativeDir, "Sample.pdb").writeText("fake debug symbols")
     File(nativeDir, "Sample.xml").writeText("<doc></doc>")
 
@@ -164,7 +161,7 @@ class PackNugetTaskTest {
     task.pack()
 
     val nativeOutDir = File(outputDir, "TestLibrary.1.0.0/runtimes/win-x64/native")
-    assertTrue(File(nativeOutDir, "Sample.dll").exists())
+    assertTrue(File(nativeOutDir, "kn_746573746c696272617279.dll").exists())
     assertFalse(File(nativeOutDir, "Sample.pdb").exists())
     assertFalse(File(nativeOutDir, "Sample.xml").exists())
   }

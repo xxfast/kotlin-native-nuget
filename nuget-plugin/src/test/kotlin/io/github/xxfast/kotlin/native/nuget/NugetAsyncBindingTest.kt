@@ -306,7 +306,7 @@ class NugetAsyncBindingTest {
       "private static unsafe void RollCallAsyncBegin_Thunk(IntPtr callback, IntPtr ctx, " +
           "IntPtr* errOut)",
     )
-    assertContains(shim, "Task task = Kennel.RollCallAsync();")
+    assertContains(shim, "Task task = global::Test.Kennel.Kennel.RollCallAsync();")
   }
 
   @Test
@@ -325,7 +325,7 @@ class NugetAsyncBindingTest {
       shim,
       "(IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr*, int>)(&CountAsyncEnd_Thunk)",
     )
-    assertContains(shim, "    using System.Threading.Tasks;")
+    assertContains(shim, "    using global::System.Threading.Tasks;")
   }
 
   @Test

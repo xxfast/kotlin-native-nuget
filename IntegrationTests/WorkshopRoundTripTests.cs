@@ -137,14 +137,14 @@ public class WorkshopRoundTripTests
     public void KotlinThrowInsideTheLambda_IsCatchableOnTheKotlinSide() =>
         AssertManaged(
             WorkshopSample.WorkshopThrowing(),
-            "TestLibrary.KotlinInvalidOperationException",
+            "Kotlin.Native.Interop.KotlinInvalidOperationException",
             "boom from Kotlin");
 
     // The same receiver, used again after the throw. A channel that left the crossing or the
     // holder in a bad state passes the row above and fails this one.
     [Fact]
     public void AfterAThrowingLambda_TheSameReceiverStillWorks() =>
-        Assert.Equal("TestLibrary.KotlinInvalidOperationException/12", WorkshopSample.WorkshopThrowingThenFine());
+        Assert.Equal("Kotlin.Native.Interop.KotlinInvalidOperationException/12", WorkshopSample.WorkshopThrowingThenFine());
 
     // The STORED lifetime, and the feature's main composed row: each half of it is verified
     // separately (the .NET GC roots a delegate's target through its holder, spike c1; a

@@ -1171,7 +1171,7 @@ class NugetKotlinBridgeGenerationTest {
       "                GCHandle resultHandle = GCHandle.FromIntPtr(resultPtr);\n" +
           "                try\n" +
           "                {\n" +
-          "                    return (Ferret)resultHandle.Target!;\n" +
+          "                    return (global::Test.Menagerie.Ferret)resultHandle.Target!;\n" +
           "                }\n" +
           "                finally\n" +
           "                {\n" +
@@ -1308,11 +1308,11 @@ class NugetKotlinBridgeGenerationTest {
     assertContains(
       file.content,
       "\"kotlin.IllegalStateException\" => new " +
-          "TestLibrary.KotlinInvalidOperationException(kotlinType, message, stackTrace, inner),",
+          "global::Kotlin.Native.Interop.KotlinInvalidOperationException(kotlinType, message, stackTrace, inner),",
     )
     assertContains(
       file.content,
-      "_ => new TestLibrary.KotlinException(kotlinType, message, stackTrace, inner)",
+      "_ => global::Kotlin.Native.Interop.KotlinException.Create(kotlinType, message, stackTrace, inner)",
     )
   }
 

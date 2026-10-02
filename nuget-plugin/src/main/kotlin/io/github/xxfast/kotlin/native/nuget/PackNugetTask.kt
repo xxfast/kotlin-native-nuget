@@ -95,6 +95,8 @@ abstract class PackNugetTask : DefaultTask() {
             "${sourceDir.absolutePath}. The link task for this target produced nothing to pack."
       }
 
+      validateNativeLibs(id, rid, sourceDir, libs)
+
       copyNativeLibs(libs, File(nupkgDir, "runtimes/$rid/native"))
     }
 
@@ -126,11 +128,20 @@ abstract class PackNugetTask : DefaultTask() {
   }
 
   private fun nativeLibsIn(dir: File): List<File> =
-    dir.listFiles()?.filter { it.isFile && it.extension in NATIVE_EXTENSIONS }.orEmpty()
+    dir.listFiles()?.filter { it.isFile && it.extension.lowercase() in NATIVE_EXTENSIONS }.orEmpty()
 
   private fun copyNativeLibs(libs: List<File>, targetDir: File) {
     targetDir.mkdirs()
     libs.forEach { lib -> lib.copyTo(File(targetDir, lib.name), overwrite = true) }
+  }
+
+  private fun validateNativeLibs(id: String, rid: String, dir: File, libs: List<File>) {
+    val expected: String = nativeLibraryFile(id, rid)
+    require(libs.size == 1 && libs.single().name == expected) {
+      "[nuget] RID '$rid' in ${dir.absolutePath} must contain exactly '$expected'; found " +
+        libs.joinToString { it.name } + ". Rebuild the primary binary with this package identity " +
+        "and migrate prebuilt assets. Auxiliary native libraries are not supported."
+    }
   }
 
   // ADR-093: merges another host's runtimes/ tree into this pack. Every failure here is a CI
@@ -168,6 +179,8 @@ abstract class PackNugetTask : DefaultTask() {
             "(layout: <prebuiltRuntimes>/<rid>/native/)."
       }
 
+      validateNativeLibs(packageId.get(), rid, nativeDir, libs)
+
       // ADR-093: the RID set NuGet accepts is open, so an unknown name may be a legitimate
       // artifact from a newer plugin on the other host. Warn, do not block the pack.
       if (rid !in KONAN_TO_RID.values) {
@@ -201,11 +214,12 @@ abstract class PackNugetTask : DefaultTask() {
           "target=\"contentFiles/cs/any/${file.name}\" />"
     }
 
-    val dependenciesBlock: String = if (dependencyVersions.isEmpty()) {
+    val ranges: Map<String, String> = dependencyRanges(dependencyVersions)
+    val dependenciesBlock: String = if (ranges.isEmpty()) {
       ""
     } else {
-      val entries: String = dependencyVersions.entries.joinToString("\n") { (depId, depVersion) ->
-        "        <dependency id=\"$depId\" version=\"[$depVersion]\" />"
+      val entries: String = ranges.entries.joinToString("\n") { (depId, depVersion) ->
+        "        <dependency id=\"$depId\" version=\"$depVersion\" />"
       }
       """
         |    <dependencies>

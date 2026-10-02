@@ -76,6 +76,11 @@ import java.io.File
 private const val COLLECTION_NOT_MAPPED: String =
   "[nuget] ADR-155: a collection type reached a conversion table before it is mapped"
 
+private fun reverseNamespace(root: String, dependency: String = ""): String {
+  val namespace: String = "${root.ifEmpty { "Interop" }}.NugetReverse"
+  return if (dependency.isEmpty()) namespace else "$namespace.$dependency"
+}
+
 // ADR-049: C#-side registration shim generator — the managed mirror of generateKotlinStubs
 // (ADR-048). Emits, per bound RirClass with at least one v1-bridgeable static method, one
 // `{TypeName}Registration.cs` file containing:
@@ -129,6 +134,7 @@ fun generateCSharpShims(
               content = structRegistrationFileContent(
                 namespace.name, struct, registrables,
                 registrationExportName(namespace.name, struct.name), nativeLibraryName, structs,
+                errorNamespace,
               ),
             )
           )
@@ -148,7 +154,7 @@ fun generateCSharpShims(
               GeneratedFile(
                 relativePath = "${tag}Registration.cs",
                 content = genericRegistrationFileContent(
-                  namespace.name, cls, inst, tag, exportName, nativeLibraryName,
+                  namespace.name, cls, inst, tag, exportName, nativeLibraryName, errorNamespace,
                 ),
               )
             )
@@ -257,7 +263,7 @@ fun generateCSharpShims(
     result.add(
       GeneratedFile(
         relativePath = "NugetTrace.cs",
-        content = nugetTraceCsContent(),
+        content = nugetTraceCsContent(errorNamespace),
       )
     )
   }
@@ -317,6 +323,9 @@ private fun csAbiType(type: RirTypeRef): String = when (type) {
 
 // The real, natural C# type for the actual method call/return (as opposed to the ABI-level type
 // that crosses [UnmanagedCallersOnly] — see csAbiType above).
+private fun csOriginalType(namespace: String, name: String): String =
+  "global::${if (namespace.isEmpty()) "" else "$namespace."}$name"
+
 private fun csNativeType(type: RirTypeRef): String = when (type) {
   // ADR-158: the DECLARED closed delegate type, spelled globally qualified so a package type named
   // `Func` cannot shadow it, and with each argument's own nullability, because the factory
@@ -332,17 +341,17 @@ private fun csNativeType(type: RirTypeRef): String = when (type) {
   }
   is RirVoidType -> "void"
   is RirStringType -> "string"
-  // ADR-051: the natural C# type for a handle is the simple type name (e.g. Template).
-  is RirObjectHandleType -> type.name
+  // ADR-178: original dependency types are qualified after registration namespace relocation.
+  is RirObjectHandleType -> csOriginalType(type.namespace, type.name)
   // ADR-070: on the C# side an interface reference IS the C# interface itself — no distinction
   // from a handle beyond the type name (the generated shim never sees "Handle"; that suffix is
   // Kotlin-only, ADR-070 Decision 3).
-  is RirInterfaceType -> type.name
-  is RirEnumType -> type.name
-  // ADR-056: the natural C# type for a struct is its own simple type name (e.g. Point) — used for
+  is RirInterfaceType -> csOriginalType(type.namespace, type.name)
+  is RirEnumType -> csOriginalType(type.namespace, type.name)
+  // ADR-056: the natural C# type for a struct is its qualified original type — used for
   // the `Point result = ...;` local the struct-return thunk branch declares before writing each
   // component through its out-pointer.
-  is RirStructType -> type.name
+  is RirStructType -> csOriginalType(type.namespace, type.name)
   is RirPrimitiveType -> when (type.name) {
     "bool" -> "bool"
     "byte" -> "byte"
@@ -364,7 +373,7 @@ private fun csNativeType(type: RirTypeRef): String = when (type) {
   // Decision 7: each type ARGUMENT'S own nullability is rendered inline (csGenericArgumentType),
   // never through csNativeType directly, see that function's KDoc for why.
   is RirGenericInstanceType ->
-    "${type.name.substringBefore('`')}<${
+    "${csOriginalType(type.namespace, type.name.substringBefore('`'))}<${
       type.typeArguments.joinToString(", ") { csGenericArgumentType(it) }
     }>"
 
@@ -582,13 +591,13 @@ private fun paramConversion(p: RirParameter): String = when (p.type) {
     if (p.type.nullable) "Marshal.PtrToStringUTF8(${thunkParamName(p)})"
     else "Marshal.PtrToStringUTF8(${thunkParamName(p)})!"
   // ADR-051: unpack the handle back to the managed type via GCHandle.FromIntPtr.
-  is RirObjectHandleType -> "(${p.type.name})GCHandle.FromIntPtr(${thunkParamName(p)}).Target!"
+  is RirObjectHandleType -> "(${csNativeType(p.type)})GCHandle.FromIntPtr(${thunkParamName(p)}).Target!"
   // ADR-070: an interface parameter unpacks identically — GCHandle.FromIntPtr's Target is the
   // real runtime object, cast to the interface type; the CLR dispatches virtually from there
   // (verified: interface dispatch through a thunk needs no bound, public, or even named runtime
   // type on the Kotlin side).
-  is RirInterfaceType -> "(${p.type.name})GCHandle.FromIntPtr(${thunkParamName(p)}).Target!"
-  is RirEnumType -> "(${p.type.name})${thunkParamName(p)}"
+  is RirInterfaceType -> "(${csNativeType(p.type)})GCHandle.FromIntPtr(${thunkParamName(p)}).Target!"
+  is RirEnumType -> "(${csNativeType(p.type)})${thunkParamName(p)}"
   is RirVoidType -> thunkParamName(p)
   // ADR-056: a struct-typed parameter is reconstructed via `new T(...)` in paramBinding, which
   // intercepts it before paramConversion is ever called — see paramBinding below.
@@ -656,12 +665,12 @@ private data class ParamBinding(val declarationLines: List<String>, val expressi
 // readName. [componentExprs] must already be in struct.components order — both call sites derive
 // it that way (abiArgs()/structReceiverAbiArgs() both walk struct.components in declaration
 // order), so zipping them back onto struct.components here is safe.
-private fun structConstruction(struct: RirStruct, componentExprs: List<String>): String =
+private fun structConstruction(struct: RirStruct, componentExprs: List<String>, namespace: String): String =
   if (struct.shape == RirStructShape.CONSTRUCTOR) {
-    "new ${struct.name}(${componentExprs.joinToString(", ")})"
+    "new ${csOriginalType(namespace, struct.name)}(${componentExprs.joinToString(", ")})"
   } else {
     struct.components.zip(componentExprs)
-      .joinToString(", ", prefix = "new ${struct.name} { ", postfix = " }") { (c, e) ->
+      .joinToString(", ", prefix = "new ${csOriginalType(namespace, struct.name)} { ", postfix = " }") { (c, e) ->
         "${c.readName} = $e"
       }
   }
@@ -683,15 +692,16 @@ private fun structConstructionExpr(
   struct: RirStruct,
   structs: Map<RirTypeKey, RirStruct>,
   pathPrefix: List<String>,
+  namespace: String,
 ): String {
   val componentExprs: List<String> = struct.components.map { c ->
     val path: List<String> = pathPrefix + c.readName
     val nested: RirStruct? =
       (c.type as? RirStructType)?.let { structs[RirTypeKey(it.namespace, it.name)] }
     if (nested == null) paramConversion(RirParameter(path.joinToString("_"), c.type))
-    else structConstructionExpr(nested, structs, path)
+    else structConstructionExpr(nested, structs, path, c.type.namespace)
   }
-  return structConstruction(struct, componentExprs)
+  return structConstruction(struct, componentExprs, namespace)
 }
 
 // ADR-059 Decision 1a: recursive DFS pre-order out-pointer write-back — the C# mirror of the
@@ -735,16 +745,16 @@ private fun paramBinding(p: RirParameter, structs: Map<RirTypeKey, RirStruct>): 
     // matches inParamDecls' thunkParamName(RirParameter(arg.name, arg.type)).
     return ParamBinding(
       declarationLines = emptyList(),
-      expression = structConstructionExpr(struct, structs, listOf(p.name)),
+      expression = structConstructionExpr(struct, structs, listOf(p.name), type.namespace),
     )
   }
   if (type is RirObjectHandleType && type.nullable) {
     val handleName: String = thunkParamName(p)
     return ParamBinding(
       declarationLines = listOf(
-        "${type.name}? ${p.name} = $handleName == IntPtr.Zero",
+        "${csNativeType(type)}? ${p.name} = $handleName == IntPtr.Zero",
         "    ? null",
-        "    : (${type.name})GCHandle.FromIntPtr($handleName).Target!;",
+        "    : (${csNativeType(type)})GCHandle.FromIntPtr($handleName).Target!;",
       ),
       expression = p.name,
     )
@@ -755,9 +765,9 @@ private fun paramBinding(p: RirParameter, structs: Map<RirTypeKey, RirStruct>): 
     val handleName: String = thunkParamName(p)
     return ParamBinding(
       declarationLines = listOf(
-        "${type.name}? ${p.name} = $handleName == IntPtr.Zero",
+        "${csNativeType(type)}? ${p.name} = $handleName == IntPtr.Zero",
         "    ? null",
-        "    : (${type.name})GCHandle.FromIntPtr($handleName).Target!;",
+        "    : (${csNativeType(type)})GCHandle.FromIntPtr($handleName).Target!;",
       ),
       expression = p.name,
     )
@@ -948,6 +958,7 @@ private fun genericRegistrationFileContent(
   tag: String,
   exportName: String,
   nativeLibraryName: String,
+  errorNamespace: String,
 ): String {
   val args: List<RirTypeRef> = instantiation.typeArguments
   // ADR-072 Decision 7: each type argument's own nullability must be rendered inline
@@ -955,7 +966,7 @@ private fun genericRegistrationFileContent(
   // type name, and `new Box<string>(...)` mismatches the REAL `Box<string?>` at the actual call
   // site (CS8619).
   val closedTypeName: String =
-    "${cls.name.substringBefore('`')}<${args.joinToString(", ") { csGenericArgumentType(it) }}>"
+    "${csOriginalType(namespaceName, cls.name.substringBefore('`'))}<${args.joinToString(", ") { csGenericArgumentType(it) }}>"
   val registrables: List<RirRegistrable> = genericDefinitionRegistrables(cls)
   val qualifiedName =
     "$namespaceName.${cls.name}[${canonicalInstantiationSignature(instantiation)}]"
@@ -1105,9 +1116,9 @@ private fun genericRegistrationFileContent(
   val usings: String = (
       listOf(
         "System", "System.Runtime.CompilerServices", "System.Runtime.InteropServices",
-        "IoGithubXxfast.KotlinNativeNuget",
+        reverseNamespace(errorNamespace), namespaceName,
       ) + allNamespaces
-      ).joinToString("\n") { "    using $it;" }
+      ).distinct().joinToString("\n") { "    using global::$it;" }
 
   return """
     |// <auto-generated>
@@ -1116,7 +1127,7 @@ private fun genericRegistrationFileContent(
     |// </auto-generated>
     |#nullable enable
     |
-    |namespace $namespaceName
+    |namespace ${reverseNamespace(errorNamespace, namespaceName)}
     |{
     |$usings
     |
@@ -1243,11 +1254,11 @@ private fun registrationFileContent(
   val usings: String = (
       listOf(
         "System", "System.Runtime.CompilerServices", "System.Runtime.InteropServices",
-        "IoGithubXxfast.KotlinNativeNuget",
+        reverseNamespace(errorNamespace), namespaceName,
       ) + asyncUsings + allNamespaces
       // ADR-156: distinct, because System.Threading is now asked for by two independent reasons
       // (a token-taking member, and any async-enumerable member) and C# rejects a repeated using.
-      ).distinct().joinToString("\n") { "    using $it;" }
+      ).distinct().joinToString("\n") { "    using global::$it;" }
 
   // ADR-054: the register export's contract — both baked identically from the same shared
   // contractHash() function NugetGenerateBindingsTask calls, so within one build the two
@@ -1260,6 +1271,7 @@ private fun registrationFileContent(
   val slotCount: Int = registrables.slotCount() + plans.size
   val hash: Long = delegateContractHash(contractHash(cls, registrables, structs), plans)
   val qualifiedType: String = "$namespaceName.${cls.name}"
+  val declaringType: String = csOriginalType(namespaceName, cls.name)
   val slotWord: String = if (slotCount == 1) "slot" else "slots"
   val delegateImportParams: String = plans.joinToString("") { plan ->
     ", IntPtr create${plan.shapeKey}DelegatePtr"
@@ -1384,17 +1396,17 @@ private fun registrationFileContent(
 
   val thunks: String = registrables.mapSlots { r, role ->
     when (r) {
-      is RirRegistrable.Ctor -> buildCtorThunkMethod(cls, r.ctor, structs)
+      is RirRegistrable.Ctor -> buildCtorThunkMethod(declaringType, r.ctor, structs)
       is RirRegistrable.Method -> when (role) {
-        RirSlotRole.SYNC -> buildThunkMethod(cls, r.method, structs)
-        RirSlotRole.ASYNC_BEGIN -> buildAsyncBeginThunkMethod(cls, r.method, structs)
+        RirSlotRole.SYNC -> buildThunkMethod(declaringType, r.method, structs)
+        RirSlotRole.ASYNC_BEGIN -> buildAsyncBeginThunkMethod(declaringType, r.method, structs)
         RirSlotRole.ASYNC_END -> buildAsyncEndThunkMethod(r.method, structs)
-        RirSlotRole.ASYNC_ENUMERATE -> buildEnumerateThunkMethod(cls, r.method, structs)
+        RirSlotRole.ASYNC_ENUMERATE -> buildEnumerateThunkMethod(declaringType, r.method, structs)
         RirSlotRole.ASYNC_CURRENT -> buildCurrentThunkMethod(r.method, structs)
       }
 
-      is RirRegistrable.PropertyGetter -> buildPropertyGetterThunkMethod(cls, r.property, structs)
-      is RirRegistrable.PropertySetter -> buildPropertySetterThunkMethod(cls, r.property, structs)
+      is RirRegistrable.PropertyGetter -> buildPropertyGetterThunkMethod(declaringType, r.property, structs)
+      is RirRegistrable.PropertySetter -> buildPropertySetterThunkMethod(declaringType, r.property, structs)
     }
   }.joinToString("\n\n")
 
@@ -1405,7 +1417,7 @@ private fun registrationFileContent(
     |// </auto-generated>
     |#nullable enable
     |
-    |namespace $namespaceName
+    |namespace ${reverseNamespace(errorNamespace, namespaceName)}
     |{
     |$usings
     |
@@ -1476,9 +1488,9 @@ private fun interfaceRegistrationFileContent(
   val usings: String = (
       listOf(
         "System", "System.Runtime.CompilerServices", "System.Runtime.InteropServices",
-        "IoGithubXxfast.KotlinNativeNuget",
+        reverseNamespace(errorNamespace), namespaceName,
       ) + enumNamespaces
-      ).joinToString("\n") { "    using $it;" }
+      ).distinct().joinToString("\n") { "    using global::$it;" }
 
   // ADR-085: a plannable interface registers two extra trailing slots (bridge factory + identity
   // token probe). Both numbers come off the shared planner/hash, never re-derived here.
@@ -1492,6 +1504,7 @@ private fun interfaceRegistrationFileContent(
   val hash: Long =
     if (bridgePlan == null) memberHash else kotlinBridgeContractHash(memberHash, bridgePlan)
   val qualifiedType = "$namespaceName.${iface.name}"
+  val declaringType: String = csOriginalType(namespaceName, iface.name)
   val slotWord: String = if (slotCount == 1) "slot" else "slots"
 
   val registrableParams: String = registrables.joinToString(", ") { r ->
@@ -1556,9 +1569,9 @@ private fun interfaceRegistrationFileContent(
 
   val thunks: String = (registrables.joinToString("\n\n") { r ->
     when (r) {
-      is RirRegistrable.Method -> buildInterfaceThunkMethod(iface, r.method)
-      is RirRegistrable.PropertyGetter -> buildInterfacePropertyGetterThunk(iface, r.property)
-      is RirRegistrable.PropertySetter -> buildInterfacePropertySetterThunk(iface, r.property)
+      is RirRegistrable.Method -> buildInterfaceThunkMethod(declaringType, r.method)
+      is RirRegistrable.PropertyGetter -> buildInterfacePropertyGetterThunk(declaringType, r.property)
+      is RirRegistrable.PropertySetter -> buildInterfacePropertySetterThunk(declaringType, r.property)
       is RirRegistrable.Ctor -> error("[nuget] an interface never has a constructor (ADR-070)")
     }
   }) + if (bridgePlan == null) "" else "\n\n" + kotlinBridgeCsharp(bridgePlan, errorNamespace)
@@ -1570,7 +1583,7 @@ private fun interfaceRegistrationFileContent(
     |// </auto-generated>
     |#nullable enable
     |
-    |namespace $namespaceName
+    |namespace ${reverseNamespace(errorNamespace, namespaceName)}
     |{
     |$usings
     |
@@ -1613,13 +1626,13 @@ private fun interfaceRegistrationFileContent(
 // ADR-070: an interface thunk is a class thunk (buildThunkMethod) restricted to Decision 6's v1
 // vocabulary (no statics, no structs) — the receiver casts to the INTERFACE, not any concrete
 // class (verified: dispatch through a thunk needs no bound, public, or even named runtime type).
-private fun buildInterfaceThunkMethod(iface: RirInterface, method: RirMethod): String {
+private fun buildInterfaceThunkMethod(interfaceName: String, method: RirMethod): String {
   val thunkName = "${method.name}${method.bridgeSuffix()}_Thunk"
   val paramBindings: List<ParamBinding> = method.parameters.map { paramBinding(it, emptyMap()) }
   val paramDeclarationLines: List<String> = paramBindings.flatMap { it.declarationLines }
   val callArgs: String = paramBindings.joinToString(", ") { it.expression }
   val receiverLine: String =
-    "${iface.name} receiver = (${iface.name})GCHandle.FromIntPtr(selfHandle).Target!;"
+    "$interfaceName receiver = ($interfaceName)GCHandle.FromIntPtr(selfHandle).Target!;"
   val callExpr = "receiver.${method.name}($callArgs)"
   val inParamDecls: List<String> = method.parameters.map { p ->
     "${csAbiType(p.type)} ${thunkParamName(p)}"
@@ -1686,10 +1699,10 @@ private fun buildInterfaceThunkMethod(iface: RirInterface, method: RirMethod): S
   return errorChannelThunk(retAbiType, thunkName, paramList, bodyLines)
 }
 
-private fun buildInterfacePropertyGetterThunk(iface: RirInterface, property: RirProperty): String {
+private fun buildInterfacePropertyGetterThunk(interfaceName: String, property: RirProperty): String {
   val thunkName = "${property.name}_Get_Thunk"
   val receiverLine: String =
-    "${iface.name} receiver = (${iface.name})GCHandle.FromIntPtr(selfHandle).Target!;"
+    "$interfaceName receiver = ($interfaceName)GCHandle.FromIntPtr(selfHandle).Target!;"
   val getExpr = "receiver.${property.name}"
   val retAbiType: String = csAbiType(property.type)
 
@@ -1742,11 +1755,11 @@ private fun buildInterfacePropertyGetterThunk(iface: RirInterface, property: Rir
   )
 }
 
-private fun buildInterfacePropertySetterThunk(iface: RirInterface, property: RirProperty): String {
+private fun buildInterfacePropertySetterThunk(interfaceName: String, property: RirProperty): String {
   val thunkName = "${property.name}_Set_Thunk"
   val valueParam = RirParameter(name = "value", type = property.type)
   val receiverLine: String =
-    "${iface.name} receiver = (${iface.name})GCHandle.FromIntPtr(selfHandle).Target!;"
+    "$interfaceName receiver = ($interfaceName)GCHandle.FromIntPtr(selfHandle).Target!;"
   val assignTarget = "receiver.${property.name}"
   val valueBinding: ParamBinding = paramBinding(valueParam, emptyMap())
   val assignLine = "$assignTarget = ${valueBinding.expression};"
@@ -1759,7 +1772,7 @@ private fun buildInterfacePropertySetterThunk(iface: RirInterface, property: Rir
 }
 
 private fun buildThunkMethod(
-  cls: RirClass,
+  className: String,
   method: RirMethod,
   structs: Map<RirTypeKey, RirStruct>,
 ): String {
@@ -1802,12 +1815,12 @@ private fun buildThunkMethod(
   val paramDeclarationLines: List<String> = paramBindings.flatMap { it.declarationLines }
   val callArgs: String = paramBindings.joinToString(", ") { it.expression }
   val receiverLine: String? = if (!method.isStatic) {
-    "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
+    "$className receiver = ($className)GCHandle.FromIntPtr(selfHandle).Target!;"
   } else {
     null
   }
   val callExpr: String =
-    if (method.isStatic) "${cls.name}.${method.name}($callArgs)"
+    if (method.isStatic) "$className.${method.name}($callArgs)"
     else "receiver.${method.name}($callArgs)"
 
   val callBodyLines: List<String> = returnBodyLines(method.returnType, callExpr, outArgs, structs)
@@ -1925,7 +1938,7 @@ private fun returnBodyLines(
 // that validates its arguments) leaves through the ADR-104 error slot and the callback never
 // fires, which is exactly the path the Kotlin side releases its ctx on.
 private fun buildAsyncBeginThunkMethod(
-  cls: RirClass,
+  className: String,
   method: RirMethod,
   structs: Map<RirTypeKey, RirStruct>,
 ): String {
@@ -1948,9 +1961,9 @@ private fun buildAsyncBeginThunkMethod(
   val callArgs: String = callArgExpressions.joinToString(", ")
   val receiverLine: String? =
     if (method.isStatic) null
-    else "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
+    else "$className receiver = ($className)GCHandle.FromIntPtr(selfHandle).Target!;"
   val callExpr: String =
-    if (method.isStatic) "${cls.name}.${method.name}($callArgs)"
+    if (method.isStatic) "$className.${method.name}($callArgs)"
     else "receiver.${method.name}($callArgs)"
 
   // ADR-153: the source is minted BEFORE the call (the callee needs the token) but its GCHandle
@@ -2023,7 +2036,7 @@ private fun buildAsyncEndThunkMethod(
 // pending step). Its GCHandle is allocated LAST, after everything that can throw, so a throwing
 // method leaks neither the source nor an enumeration handle Kotlin will never dispose.
 private fun buildEnumerateThunkMethod(
-  cls: RirClass,
+  className: String,
   method: RirMethod,
   structs: Map<RirTypeKey, RirStruct>,
 ): String {
@@ -2042,9 +2055,9 @@ private fun buildEnumerateThunkMethod(
   val callArgs: String = callArgExpressions.joinToString(", ")
   val receiverLine: String? =
     if (method.isStatic) null
-    else "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
+    else "$className receiver = ($className)GCHandle.FromIntPtr(selfHandle).Target!;"
   val callExpr: String =
-    if (method.isStatic) "${cls.name}.${method.name}($callArgs)"
+    if (method.isStatic) "$className.${method.name}($callArgs)"
     else "receiver.${method.name}($callArgs)"
 
   val element: String = csNativeType(method.returnType)
@@ -2087,14 +2100,14 @@ private fun buildCurrentThunkMethod(
 // receiver), resolves it via GCHandle.FromIntPtr(...).Target!, and returns the marshalled value
 // (Marshal.StringToCoTaskMemUTF8 for a string-typed property, per ADR-048/049).
 private fun buildPropertyGetterThunkMethod(
-  cls: RirClass,
+  className: String,
   property: RirProperty,
   structs: Map<RirTypeKey, RirStruct>,
 ): String {
   val thunkName = "${property.name}_Get_Thunk"
   val receiverLine: String? = if (property.isStatic) null
-  else "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
-  val getExpr: String = if (property.isStatic) "${cls.name}.${property.name}"
+  else "$className receiver = ($className)GCHandle.FromIntPtr(selfHandle).Target!;"
+  val getExpr: String = if (property.isStatic) "$className.${property.name}"
   else "receiver.${property.name}"
 
   // ADR-056: expanded through the shared abiOutArgs/abiReturnType functions — a struct-typed
@@ -2197,15 +2210,15 @@ private fun buildPropertyGetterThunkMethod(
 // parameters (e.g. a string value thunk-parameter is named "valuePtr", a handle value
 // "valueHandle").
 private fun buildPropertySetterThunkMethod(
-  cls: RirClass,
+  className: String,
   property: RirProperty,
   structs: Map<RirTypeKey, RirStruct>,
 ): String {
   val thunkName = "${property.name}_Set_Thunk"
   val valueParam = RirParameter(name = "value", type = property.type)
   val receiverLine: String? = if (property.isStatic) null
-  else "${cls.name} receiver = (${cls.name})GCHandle.FromIntPtr(selfHandle).Target!;"
-  val assignTarget: String = if (property.isStatic) "${cls.name}.${property.name}"
+  else "$className receiver = ($className)GCHandle.FromIntPtr(selfHandle).Target!;"
+  val assignTarget: String = if (property.isStatic) "$className.${property.name}"
   else "receiver.${property.name}"
   val valueBinding: ParamBinding = paramBinding(valueParam, structs)
   val assignLine = "$assignTarget = ${valueBinding.expression};"
@@ -2232,7 +2245,7 @@ private fun buildPropertySetterThunkMethod(
 // `new` and is unconditionally non-null — a C# constructor either succeeds or throws, it never
 // yields IntPtr.Zero (contrast ADR-051's nullable-factory `result is null ? IntPtr.Zero : …`).
 private fun buildCtorThunkMethod(
-  cls: RirClass,
+  className: String,
   ctor: RirConstructor,
   structs: Map<RirTypeKey, RirStruct>,
 ): String {
@@ -2246,7 +2259,7 @@ private fun buildCtorThunkMethod(
   val callArgs: String = paramBindings.joinToString(", ") { it.expression }
 
   val bodyLines: List<String> = paramDeclarationLines + listOf(
-    "var obj = new ${cls.name}($callArgs);",
+    "var obj = new $className($callArgs);",
     "return GCHandle.ToIntPtr(GCHandle.Alloc(obj));",
   )
 
@@ -2265,6 +2278,7 @@ private fun structRegistrationFileContent(
   exportName: String,
   nativeLibraryName: String,
   structs: Map<RirTypeKey, RirStruct>,
+  errorNamespace: String,
 ): String {
   val enumNamespaces: List<String> = referencedEnumTypes(registrables, structs)
     .map { it.namespace }
@@ -2289,9 +2303,9 @@ private fun structRegistrationFileContent(
   val allEnumNamespaces: List<String> =
     (enumNamespaces + componentEnumNamespaces + structNamespaces).distinct().sorted()
   val usings: String = (
-      listOf("System", "System.Runtime.CompilerServices", "System.Runtime.InteropServices") +
+      listOf("System", "System.Runtime.CompilerServices", "System.Runtime.InteropServices", namespaceName) +
           allEnumNamespaces
-      ).joinToString("\n") { "    using $it;" }
+      ).distinct().joinToString("\n") { "    using global::$it;" }
 
   val registerParams: String = registrables.joinToString(", ") { r ->
     when (r) {
@@ -2355,9 +2369,9 @@ private fun structRegistrationFileContent(
   val thunks: String = registrables.joinToString("\n\n") { r ->
     when (r) {
       is RirRegistrable.Ctor -> buildStructCtorThunkMethod(struct, r.ctor, structs, namespaceName)
-      is RirRegistrable.Method -> buildStructMethodThunk(struct, r.method, structs)
+      is RirRegistrable.Method -> buildStructMethodThunk(struct, r.method, structs, namespaceName)
       is RirRegistrable.PropertyGetter ->
-        buildStructPropertyGetterThunk(struct, r.property, structs)
+        buildStructPropertyGetterThunk(struct, r.property, structs, namespaceName)
 
       is RirRegistrable.PropertySetter -> error(
         "[nuget] struct property setters are out of scope (ADR-056 deferred)",
@@ -2368,7 +2382,7 @@ private fun structRegistrationFileContent(
     |// <auto-generated>
     |#nullable enable
     |
-    |namespace $namespaceName
+    |namespace ${reverseNamespace(errorNamespace, namespaceName)}
     |{
     |$usings
     |
@@ -2403,12 +2417,14 @@ private fun structRegistrationFileContent(
 private fun structReceiverReconstruction(
   struct: RirStruct,
   structs: Map<RirTypeKey, RirStruct>,
-): String = structConstructionExpr(struct, structs, pathPrefix = emptyList())
+  namespaceName: String,
+): String = structConstructionExpr(struct, structs, pathPrefix = emptyList(), namespace = namespaceName)
 
 private fun buildStructMethodThunk(
   struct: RirStruct,
   method: RirMethod,
   structs: Map<RirTypeKey, RirStruct>,
+  namespaceName: String,
 ): String {
   val thunkName: String = "${method.name}${method.bridgeSuffix()}_Thunk"
   val receiverParams: List<String> = if (!method.isStatic) {
@@ -2433,9 +2449,9 @@ private fun buildStructMethodThunk(
   val paramDeclarationLines: List<String> = paramBindings.flatMap { it.declarationLines }
   val callArgs: String = paramBindings.joinToString(", ") { it.expression }
   val callExpr: String = if (method.isStatic) {
-    "${struct.name}.${method.name}($callArgs)"
+    "${csOriginalType(namespaceName, struct.name)}.${method.name}($callArgs)"
   } else {
-    "${structReceiverReconstruction(struct, structs)}.${method.name}($callArgs)"
+    "${structReceiverReconstruction(struct, structs, namespaceName)}.${method.name}($callArgs)"
   }
 
   val callBodyLines: List<String> = when (val retType: RirTypeRef = method.returnType) {
@@ -2506,6 +2522,7 @@ private fun buildStructPropertyGetterThunk(
   struct: RirStruct,
   property: RirProperty,
   structs: Map<RirTypeKey, RirStruct>,
+  namespaceName: String,
 ): String {
   val thunkName: String = "${property.name}_Get_Thunk"
   val receiverParams: List<String> = structReceiverAbiArgs(struct, structs).map { arg ->
@@ -2516,7 +2533,7 @@ private fun buildStructPropertyGetterThunk(
   val outParamDecls: List<String> = outArgs.map { arg -> "${csAbiType(arg.type)}* ${arg.name}" }
   val paramList: String = (receiverParams + outParamDecls).joinToString(", ")
   val retAbiType: String = csAbiType(abiRetType)
-  val getExpr: String = "${structReceiverReconstruction(struct, structs)}.${property.name}"
+  val getExpr: String = "${structReceiverReconstruction(struct, structs, namespaceName)}.${property.name}"
 
   val bodyLines: List<String> = when (val type: RirTypeRef = property.type) {
     // ADR-158: the RIR can carry a delegate, but the shared isV1Type filter refuses one, so no
@@ -2600,7 +2617,7 @@ private fun buildStructCtorThunkMethod(
   val args: String = bindings.joinToString(", ") { it.expression }
   val writes: List<String> = structOutWrites(struct, outArgs.iterator(), "result", structs)
   val bodyLines: List<String> =
-    declarations + "var result = new ${struct.name}($args);" + writes
+    declarations + "var result = new ${csOriginalType(namespaceName, struct.name)}($args);" + writes
 
   // ADR-104: a struct constructor is user code too.
   return errorChannelThunk(
@@ -2621,9 +2638,8 @@ private fun nugetRuntimeRegistrationContent(
   // ADR-087 stage 2 wiring: the exception TYPES are the forward-generated PUBLIC KotlinException
   // family (one hierarchy for consumers, whichever direction threw); only the envelope READ is
   // reverse-owned, because the reverse Kotlin cannot see the forward NugetError class across the
-  // source-set boundary. Unqualified only when the task is given an empty namespace (its own
-  // default); the plugin always wires the forward namespace, `Interop` when no publish {} sets one.
-  val ex: String = if (errorNamespace.isEmpty()) "" else "$errorNamespace."
+  // source-set boundary. ADR-178 shares the globally qualified managed exception contract.
+  val ex: String = "global::Kotlin.Native.Interop."
   return """
   |// <auto-generated>
   |// Generated by nugetGenerateShims (ADR-051). Do not edit by hand.
@@ -2631,7 +2647,7 @@ private fun nugetRuntimeRegistrationContent(
   |// </auto-generated>
   |#nullable enable
   |
-  |namespace IoGithubXxfast.KotlinNativeNuget
+  |namespace ${reverseNamespace(errorNamespace)}
   |{
   |    using System;
   |    // ADR-156: IAsyncEnumerator<T>, named by the NugetAsyncEnumeration<T> below.
@@ -3161,7 +3177,7 @@ private fun nugetRuntimeRegistrationContent(
   |                "kotlin.ClassCastException" => new ${ex}KotlinInvalidCastException(kotlinType, message, stackTrace, inner),
   |                "kotlin.ArithmeticException" => new ${ex}KotlinArithmeticException(kotlinType, message, stackTrace, inner),
   |                "kotlin.NumberFormatException" => new ${ex}KotlinFormatException(kotlinType, message, stackTrace, inner),
-  |                _ => new ${ex}KotlinException(kotlinType, message, stackTrace, inner)
+  |                _ => ${ex}KotlinException.Create(kotlinType, message, stackTrace, inner)
   |            };
   |    }
   |}
@@ -3173,7 +3189,7 @@ private fun nugetRuntimeRegistrationContent(
 // references it). xunit 2.9.3 (this repo's harness) removed Console capture entirely, so the
 // default sink is stderr, not Console.Out — a Console.WriteLine here would be invisible at
 // exactly the moment it matters (mid-test-run registration failure).
-private fun nugetTraceCsContent(): String = """
+private fun nugetTraceCsContent(errorNamespace: String): String = """
   |// <auto-generated>
   |// Generated by nugetGenerateShims (ADR-054). Do not edit by hand.
   |// Opt-in registration trace: NUGET_INTEROP_TRACE=1 (also "true"/"all") enables it;
@@ -3181,7 +3197,7 @@ private fun nugetTraceCsContent(): String = """
   |// </auto-generated>
   |#nullable enable
   |
-  |namespace IoGithubXxfast.KotlinNativeNuget
+  |namespace ${reverseNamespace(errorNamespace)}
   |{
   |    using System;
   |    using System.IO;

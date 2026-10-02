@@ -626,7 +626,7 @@ class CirOrdinaryRendererTest {
     val rendered: String = render(cls)
 
     // The file preamble documents `NugetHandleTag`; the class itself must carry none.
-    val classSection: String = rendered.substringAfter("namespace Sample")
+    val classSection: String = rendered.substringAfter("public class Sensor")
     assertFalse(classSection.contains("///"), "expected no doc comment; got: $rendered")
     assertEquals(rendered, render(cls.copy(remarks = emptyList())))
   }

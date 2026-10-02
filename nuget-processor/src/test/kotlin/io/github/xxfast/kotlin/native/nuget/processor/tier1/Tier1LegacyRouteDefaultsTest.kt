@@ -9,7 +9,7 @@ import kotlin.test.assertTrue
  * refuse (`SKIPPED_UNSUPPORTED_INPUT`, ADR-122 Alternative 6).
  *
  * A defaulted parameter widens on both halves: C# gets an optional (`int? portion = null`,
- * `Optional<int?> treats = default`), and the Kotlin export dispatches `when (mask)` over named
+ * `global::Kotlin.Native.Interop.KotlinOptional<int?> treats = default`), and the Kotlin export dispatches `when (mask)` over named
  * calls, so an omitted argument makes Kotlin evaluate its own default. The legacy bodies used to
  * call positionally with every argument, so a C#-only `= null` would have compiled and handed
  * Kotlin a zero filler instead. The runtime half is `IntegrationTests.LegacyRouteDefaultsTests`
@@ -74,7 +74,7 @@ class Tier1LegacyRouteDefaultsTest {
 
     assertCsharp(
       "public Task<string> FeedAsync(string cat, int? portion = null, string? note = null, " +
-          "Optional<int?> treats = default, CancellationToken cancellationToken = default)"
+          "global::Kotlin.Native.Interop.KotlinOptional<int?> treats = default, CancellationToken cancellationToken = default)"
     )
     assertCsharp(
       "cat, portion.HasValue, portion.GetValueOrDefault(), note, treats.HasValue, " +
@@ -122,7 +122,7 @@ class Tier1LegacyRouteDefaultsTest {
     )
 
     assertCsharp("Hunger asked, ")
-    assertCsharp("Hunger? hunger = null, Optional<")
+    assertCsharp("Hunger? hunger = null, global::Kotlin.Native.Interop.KotlinOptional<")
     assertCsharp(
       "(int)asked, hunger.HasValue, (int)hunger.GetValueOrDefault(), fallback.HasValue, " +
           "fallback.Value.HasValue, (int)fallback.Value.GetValueOrDefault(),"

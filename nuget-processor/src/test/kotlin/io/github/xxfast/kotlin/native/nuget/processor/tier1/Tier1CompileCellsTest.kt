@@ -523,7 +523,7 @@ class Tier1CompileCellsTest {
     )
     val cs: String = result.generatedCSharp
     assertTrue(
-      "public Visit(string patient, Optional<IReadOnlyList<string>?> notes = default)" in cs,
+      "public Visit(string patient, global::Kotlin.Native.Interop.KotlinOptional<IReadOnlyList<string>?> notes = default)" in cs,
       "expected the constructor to take the nullable collection parameter; generatedCSharp:\n$cs",
     )
     assertTrue(

@@ -152,7 +152,7 @@ public class DerivedNamesTests
     [Fact]
     public void Ladle_ValueLocalCollision_KeepsBothArguments()
     {
-        // The C# wrapper unwraps `Optional<int?> limit` into a `limitValue` local.
+        // The C# wrapper unwraps `KotlinOptional<int?> limit` into a `limitValue` local.
         using var pantry = new Pantry();
 
         Assert.Equal("7|9", pantry.Ladle(limit: 7, limitValue: 9));

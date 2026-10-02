@@ -198,7 +198,7 @@ private fun legacyRouteParameter(
       val enum: BridgeType.Enum? = shape.type as? BridgeType.Enum
       val inner: String = enum?.csharpType
         ?: mapParamType(param.type.resolve().expandAliases().declaration.simpleName.asString())
-      val public: String = if (shape.optional) "Optional<$inner?>" else "$inner?"
+      val public: String = if (shape.optional) "global::Kotlin.Native.Interop.KotlinOptional<$inner?>" else "$inner?"
       val defaultValue: String? = when {
         !optional -> null
         shape.optional -> "default"

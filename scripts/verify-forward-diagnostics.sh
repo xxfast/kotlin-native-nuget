@@ -26,7 +26,7 @@ run() {
   local label="$1"
   local log="$2"
   echo "==> $label: ./gradlew :test-library:packNuget --console=plain"
-  ./gradlew :test-library:packNuget --console=plain >"$log" 2>&1 || {
+  ./gradlew :test-library:packNuget :test-companion:packNuget --console=plain >"$log" 2>&1 || {
     echo "FAIL: the build itself failed; see $log" >&2
     tail -40 "$log" >&2
     exit 1

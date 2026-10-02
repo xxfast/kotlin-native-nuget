@@ -180,7 +180,7 @@ class Tier1DerivedNamesTest {
 
   @Test
   fun `the C# Optional value local moves off the user's parameter`() {
-    assertCsharp("public string Ladle(Optional<int?> limit, int limitValue)")
+    assertCsharp("public string Ladle(global::Kotlin.Native.Interop.KotlinOptional<int?> limit, int limitValue)")
     assertCsharp("var limitValue_ = limit.Value;")
     assertCsharp("limitValue_.HasValue, limitValue_.GetValueOrDefault(), limitValue, out IntPtr error);")
   }

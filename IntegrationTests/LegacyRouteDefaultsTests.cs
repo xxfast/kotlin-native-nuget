@@ -16,7 +16,7 @@ namespace IntegrationTests;
 /// </para>
 /// <para>
 /// Every widened parameter is optional and nullable in C# (or, if it was already nullable,
-/// <c>Optional&lt;T?&gt;</c>), and omitting it lets Kotlin evaluate its own default; a defaulted
+/// <c>KotlinOptional&lt;T?&gt;</c>), and omitting it lets Kotlin evaluate its own default; a defaulted
 /// handle or collection parameter stays required.
 /// </para>
 /// <para>
@@ -113,7 +113,7 @@ public class LegacyRouteDefaultsTests
         Assert.Equal(typeof(int?), parameters[1].ParameterType);
         Assert.True(parameters[1].IsOptional);
         Assert.True(parameters[2].IsOptional);
-        Assert.Equal(typeof(Optional<int?>), parameters[3].ParameterType);
+        Assert.Equal(typeof(KotlinOptional<int?>), parameters[3].ParameterType);
         Assert.True(parameters[3].IsOptional);
     }
 

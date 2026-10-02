@@ -144,7 +144,7 @@ class NugetStructGenerationTest {
     )
     assertContains(
       registration.content,
-      "Point result = Geometry.Translate(new Point(p_X, p_Y), dx, dy);",
+      "global::Test.Structs.Point result = global::Test.Structs.Geometry.Translate(new global::Test.Structs.Point(p_X, p_Y), dx, dy);",
     )
     assertContains(registration.content, "*outX = result.X;")
     assertContains(registration.content, "*outY = result.Y;")
@@ -328,7 +328,7 @@ class NugetStructGenerationTest {
     val registration: GeneratedFile = files.single { it.relativePath == "RosterRegistration.cs" }
 
     // A struct-component enum from a different C# namespace needs its own `using`.
-    assertContains(registration.content, "using Test.Enums;")
+    assertContains(registration.content, "using global::Test.Enums;")
     // A string RETURN crosses as IntPtr (ADR-049); the string PARAMETER component's declared
     // name gets the existing Ptr suffix (thunkParamName), matching p_TagPtr's use below.
     assertContains(
@@ -338,8 +338,8 @@ class NugetStructGenerationTest {
     )
     assertContains(
       registration.content,
-      "new Profile(Marshal.PtrToStringUTF8(p_TagPtr)!, p_Score, p_Active != 0, (char)p_Grade, " +
-          "(CatMood)p_Mood)",
+      "new global::Test.Structs.Profile(Marshal.PtrToStringUTF8(p_TagPtr)!, p_Score, p_Active != 0, (char)p_Grade, " +
+          "(global::Test.Enums.CatMood)p_Mood)",
     )
   }
 
@@ -378,8 +378,8 @@ class NugetStructGenerationTest {
     )
     assertContains(
       registration.content,
-      "Roster.Current = new Profile(Marshal.PtrToStringUTF8(value_TagPtr)!, value_Score, " +
-          "value_Active != 0, (char)value_Grade, (CatMood)value_Mood);",
+      "global::Test.Structs.Roster.Current = new global::Test.Structs.Profile(Marshal.PtrToStringUTF8(value_TagPtr)!, value_Score, " +
+          "value_Active != 0, (char)value_Grade, (global::Test.Enums.CatMood)value_Mood);",
     )
   }
 }

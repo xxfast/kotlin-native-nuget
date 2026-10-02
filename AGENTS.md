@@ -77,6 +77,11 @@ On top of that, we have some additional conventions that are specific to this re
 
 ## Don't Trust Build Artifacts as Evidence
 
+- The shared contract and `ContractTests` have project-local `NuGet.Config` files that clear the
+  repository's generated local feeds. Keep them: plugin tests pack the contract before those feed
+  directories exist, and inheriting the root config makes a clean CI checkout fail with `NU1301`.
+  A warm checkout can hide this setup failure.
+
 - A generated file, a packaged `.nupkg`, a compiled `.dll`, a `project.assets.json`: none of these are evidence of what the *source* does. They are evidence of what some earlier build did. In the ADR-053 feature, **two of the four "bugs" found were phantoms of stale build state**, and hours went into debugging code that was already correct.
 - Fixture packages avoid both cache layers by using a new immutable version for every build, which makes the consumer restore resolve a new identity. That does not make build artifacts reliable evidence: other packages, local experiments, or manually version-pinned inputs can still leave stale cache and `obj/project.assets.json` state behind. Rebuild cleanly before diagnosing generated output or compiler behaviour.
 - Before you conclude "the generator emits the wrong thing" or "the compiler is omitting my code", rebuild clean and re-check. If a finding cannot survive `scripts/verify.sh` from a purged state, it is not a finding.
@@ -139,3 +144,11 @@ The reverse bridge is observable as of [ADR-054](docs/adr/054-reverse-bridge-reg
     - Document why you are catching a broad exception if you must do so.
   - Log the error with sufficient context 
   - Rethrow if it cannot be handled gracefully.
+
+## Case-Sensitive PowerShell Replacements
+
+- PowerShell `-replace` is case-insensitive by default. When renaming identifiers that differ only by capitalization, use `-creplace` and inspect the full diff for accidental edits to lowercase locals and comments.
+
+## Benchmark Finalization Requires jq
+
+- The benchmark finalize wrapper needs `jq` and a real Bash shell. On Windows use Git Bash; the WindowsApps `bash` may be a WSL stub. If capture/finalize cannot run, report it as blocked and never invent metrics or figures.

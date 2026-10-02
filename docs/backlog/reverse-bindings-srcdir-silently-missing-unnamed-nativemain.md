@@ -9,27 +9,11 @@ package produces) exist on disk but are attached to nothing. The first symptom a
 C# process startup, when `[ModuleInitializer]` calls the expected `nuget_*_register` export and it is
 missing (`EntryPointNotFoundException`), with nothing in the Gradle log pointing back at the cause.
 
-**Root cause.** `NugetPlugin.kt:192` adds the reverse bindings srcDir with
-`kotlin.sourceSets.findByName("nativeMain")` inside the plugin's own `project.afterEvaluate` block
-(registered at `NugetPlugin.kt:42`). **Verified** by a `ProjectBuilder` probe: in a project whose
-script never references `nativeMain` by name, `evaluate()` does eventually create a `nativeMain`
-source set (Kotlin's default hierarchy template wires it), but its `kotlin.srcDirs` never gain
-`build/nuget-interop/kotlin/nativeMain`. The reverse bindings are generated but attached to no
-compilation.
-
-**Not isolated: the mechanism.** Two candidate explanations fit the same observation, and they have
-different fixes:
-
-- `findByName("nativeMain")` returns `null` at the point the plugin's `afterEvaluate` callback runs
-  (registered early, at `NugetPlugin.kt:42`), before the default hierarchy template has created the
-  source set yet, so the `?.kotlin?.srcDir(...)` call silently no-ops.
-- `findByName("nativeMain")` returns a real source set, but Kotlin's default hierarchy template later
-  re-creates or replaces its `srcDirs`, dropping the plugin's addition.
-
-The first points at a run-order fix (`sourceSets.configureEach`/`whenObjectAdded` keyed on the name,
-or `maybeCreate`); the second points at moving the srcDir wiring later, or onto a target-specific
-source set the template does not touch. The probe that established the symptom did not go far enough
-to distinguish them.
+**Verified cause.** `NugetPlugin.kt` calls `findByName("nativeMain")` before KGP hierarchy creation,
+so the nullable lookup silently omits the generated source directory. Explicitly naming
+`nativeMain` in the fixture creates the source set early and masks the issue. Companion compiler
+output also missed `expect`, registry and `Template` imports; cover both failures with a reverse
+pipeline fixture that leaves `nativeMain` unnamed and compiles generated output.
 
 **Why it went unnoticed.** `test-library/build.gradle.kts:110` names `nativeMain` explicitly
 (`nativeMain.dependencies { ... }`), which is enough to make the source set exist with the plugin's

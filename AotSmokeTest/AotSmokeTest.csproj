@@ -32,6 +32,7 @@
 
   <ItemGroup>
     <PackageReference Include="TestLibrary" Version="$(TestLibraryVersion)" />
+    <PackageReference Include="TestCompanion" Version="$(TestCompanionVersion)" />
   </ItemGroup>
 
 </Project>

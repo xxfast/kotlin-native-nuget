@@ -71,10 +71,10 @@ internal fun generateCheckCsproj(
 
   // Exact-version pins, the same [v] strings the .nuspec <dependencies> block uses, so the check
   // compiles against the versions the package declares rather than whatever restore floats to.
-  val packageReferences: String = dependencyVersions.entries
+  val packageReferences: String = dependencyRanges(dependencyVersions).entries
     .sortedBy { it.key }
     .joinToString("\n") { (id, version) ->
-      """    <PackageReference Include="$id" Version="[$version]" />"""
+      """    <PackageReference Include="$id" Version="$version" />"""
     }
 
   val referenceGroup: String = if (packageReferences.isEmpty()) {

@@ -180,11 +180,13 @@ IFoo` renders `public class X : Base, IFoo`, not `Base` alone with `IFoo` droppe
 [Interfaces, abstract classes, and sealed classes](interfaces-abstract-sealed.md) for when a base
 class or interface is dropped instead of kept.
 
+When one .NET project references several Kotlin-built packages, each package's generated C# wrappers use its own native runtime and handle state. Dispose each wrapper as usual; the packages do not share Kotlin object handles.
+
 ## Constructor and method default parameters
 
 A Kotlin defaulted parameter binds as one C# signature: a non-nullable type widens to its
 nullable C# form, and `null` means "use the Kotlin default". A parameter that is already
-nullable in Kotlin widens to the generated `Optional<T>` struct instead, since `null` there is
+nullable in Kotlin widens to the shared `KotlinOptional<T>` struct instead, since `null` there is
 already a real value; `default` means unset. Whichever way it widens, any subset of the
 defaulted parameters can be set by name in one call, and Kotlin evaluates the rest.
 
@@ -313,11 +315,11 @@ diagnostic names the parameters left required, so split the callable or pass the
 ### Generated C# {id="ctordefaults-generated-c"}
 
 A widened non-nullable parameter renders as `= null`; a widened already-nullable one renders as
-`Optional<T> = default`:
+`KotlinOptional<T> = default`:
 
 ```C#
 public Config(Guid? id = null, int? retries = null, Mode? mode = null)
-public string Describe(string name, Optional<string?> owner = default)
+public string Describe(string name, KotlinOptional<string?> owner = default)
 ```
 
 A signature that would otherwise collide with another constructor still fails generation with

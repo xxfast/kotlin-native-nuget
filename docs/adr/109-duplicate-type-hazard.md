@@ -256,7 +256,7 @@ w: [nuget:WARNING_DUPLICATED_DEPENDENCY_TYPE] Duplicating io.github.xxfast.kotli
 
 ### 6. Tests (the verification story, stated plainly)
 
-There is **no two-publisher fixture** in the root build (Verified: `settings.gradle.kts` includes
+At the time this ADR was written there was **no two-publisher fixture** in the root build (Verified then: `settings.gradle.kts` included
 `:nuget-processor`, `:test-models`, `:test-library` only; `:test-models` does not apply the plugin).
 Proof is the sum of three things:
 
@@ -298,7 +298,8 @@ Proof is the sum of three things:
    publisher evaluated after the reader is missing from the value and its duplicates go unwarned:
    a silent no-op, not wrong output. The ProjectBuilder cell evaluates root + two publishers *before*
    reading, so it proves the value but not the timing; the real build proves delivery for the
-   single-publisher case only. A two-publisher real fixture would close it; not required for this cut.
+   single-publisher case only. The current two-publisher fixture has no dedicated later-publisher
+   assertion, so this timing assumption remains open.
 3. `KspExtension.getArguments()` exposes Provider-registered options resolved. If wrong, the
    ProjectBuilder cell reads `apOptions` reflectively; test-only impact.
 4. Gradle's default sibling evaluation order is alphabetical, and mutual `evaluationDependsOn` from
@@ -345,6 +346,6 @@ Proof is the sum of three things:
 > observed as `TestLibrary:io.github.xxfast.kotlin.native.nuget.test:`, then removed). Its **timing**
 > half (the Provider body runs only after every project in the build is evaluated) stays **Inferred**:
 > the single-publisher real build cannot distinguish "resolved after all projects evaluated" from
-> "resolved after this project alone", and no two-publisher real fixture exists to force the
-> distinction. The stated failure mode is unchanged if wrong: a publisher evaluated after the reader
+> "resolved after this project alone". The current two-publisher fixture does not assert the
+> later-publisher timing case, so it does not force the distinction. The stated failure mode is unchanged if wrong: a publisher evaluated after the reader
 > silently drops out of the value, a missing warning rather than wrong output. See ROADMAP.md.

@@ -37,11 +37,16 @@ if [ "$RUN_PLUGIN" = true ]; then
   ./gradlew -p smoke-test verifyProcessorResolvesByCoordinate verifyRuntimeResolvesByCoordinate
 fi
 
-echo "==> Purge stale TestLibrary + TestDependency NuGet caches"
+echo "==> Purge the fixed-version local contract cache"
 # Fixture packages now receive a unique version on every pack, so NuGet resolves each build under
 # a new cache key. Keep this purge as a clean-room verification precaution; it is no longer the
 # mechanism that prevents fixture packages from going stale.
-rm -rf ~/.nuget/packages/samplelibrary ~/.nuget/packages/sampledependency
+cache="${NUGET_PACKAGES:-$HOME/.nuget/packages}"
+if [ -d "$cache" ]; then
+  cache="$(cd "$cache" && pwd)"
+  test -n "$cache" && test "$cache" != /
+  rm -rf "$cache/kotlin.native.interop"
+fi
 
 # Consumer projects resolve the new exact fixture version on the next restore, so their existing
 # assets files cannot silently retain an older package's contentFiles. Keep the clean output here
@@ -49,14 +54,24 @@ rm -rf ~/.nuget/packages/samplelibrary ~/.nuget/packages/sampledependency
 rm -rf GeneratedBindingsCheck/obj GeneratedBindingsCheck/bin
 rm -rf IntegrationTests/obj IntegrationTests/bin
 rm -rf LeakTests/obj LeakTests/bin
+rm -rf MultiPackageTests/obj MultiPackageTests/bin
+rm -rf SharedExceptionTests/obj SharedExceptionTests/bin
+rm -rf FirstPublisherConsumer/obj FirstPublisherConsumer/bin
+rm -rf SecondPublisherConsumer/obj SecondPublisherConsumer/bin
+
+echo "==> Shared contract API tests and package"
+dotnet test ContractTests
+dotnet pack Kotlin.Native.Interop -c Release -o build/nuget
+bash "$ROOT/scripts/verify-contract-version-ranges.sh"
 
 # ADR-128: the `launchForCSharp` / `collectForCSharp` runtime helpers are ordinary Kotlin/Native
 # code, so they are driven in-process here before the link that would only exercise them via C#.
 echo "==> Runtime helper tests (:nuget-runtime:allTests)"
 ./gradlew :nuget-runtime:allTests
 
-echo "==> Pack TestLibrary NuGet (:test-library:clean :test-library:packNuget)"
-./gradlew :test-library:clean :test-library:packNuget
+echo "==> Pack both independent Kotlin NuGet publishers"
+./gradlew :test-library:clean :test-companion:clean \
+  :test-library:packNuget :test-companion:packNuget
 
 # ADR-127: the fixed `nuget_*` ABI now reaches the binary from the `nuget-runtime` klib through
 # the plugin's `export()`, not from a regenerated block. This is the check that the export really
@@ -89,5 +104,21 @@ dotnet test
 echo "==> Leak harness (dotnet test in LeakTests)"
 cd "$ROOT/LeakTests"
 dotnet test
+
+echo "==> Independent native runtimes and shared contracts"
+cd "$ROOT"
+dotnet test MultiPackageTests
+dotnet test SharedExceptionTests
+
+echo "==> Execute NativeAOT with both publishers"
+case "$(uname -s)" in
+  MINGW* | MSYS*)
+    powershell.exe -NoProfile -File "$ROOT/scripts/verify-aot.ps1"
+    ;;
+  Darwin)
+    dotnet publish AotSmokeTest -r osx-arm64 -c Release -p:PublishAot=true
+    ./AotSmokeTest/bin/Release/net10.0/osx-arm64/publish/AotSmokeTest
+    ;;
+esac
 
 echo "==> Verify complete"

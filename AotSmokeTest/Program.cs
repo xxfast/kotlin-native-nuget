@@ -1,4 +1,5 @@
 using TestLibrary.Cat;
+using Kotlin.Native.Interop;
 
 namespace AotSmokeTest;
 
@@ -28,14 +29,16 @@ internal static class Program
         Console.WriteLine($"runtime: {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}");
         Console.Out.Flush();
 
-        await Step("1/5 flow          (Oreo narrates dinner)", FlowStep);
-        await Step("2/5 suspend       (greeting Oreo asynchronously)", SuspendStep);
-        await Step("3/5 percall-lambda(describing Oreo through a C# lambda)", PerCallLambdaStep);
-        await Step("4/5 stored-cb     (Mylo's mood listener)", StoredCallbackStep);
-        await Step("5/5 iface-bridge  (Rex the C# dog crosses into Kotlin)", InterfaceBridgeStep);
+        // Measure exact counters before callbacks can leave asynchronous cleaner work behind.
+        await Step("1/6 coexistence  (Oreo and Mylo have separate native runtimes)", CoexistenceStep);
+        await Step("2/6 flow          (Oreo narrates dinner)", FlowStep);
+        await Step("3/6 suspend       (greeting Oreo asynchronously)", SuspendStep);
+        await Step("4/6 percall-lambda(describing Oreo through a C# lambda)", PerCallLambdaStep);
+        await Step("5/6 stored-cb     (Mylo's mood listener)", StoredCallbackStep);
+        await Step("6/6 iface-bridge  (Rex the C# dog crosses into Kotlin)", InterfaceBridgeStep);
 
         Console.WriteLine(_failures == 0
-            ? "== ALL 5 SHAPES PASS =="
+            ? "== ALL 6 SHAPES PASS =="
             : $"== {_failures} SHAPE(S) FAILED ==");
         Console.Out.Flush();
         return _failures == 0 ? 0 : 1;
@@ -64,6 +67,37 @@ internal static class Program
     private static void Expect(bool condition, string what)
     {
         if (!condition) throw new InvalidOperationException($"expectation failed: {what}");
+    }
+
+    private static Task CoexistenceStep()
+    {
+        long first = TestLibrary.NugetMarshal.LiveHandles;
+        long second = TestCompanion.NugetMarshal.LiveHandles;
+        using (var oreo = new TestLibrary.Coexistence.Probe("Oreo"))
+        using (var mylo = new TestCompanion.Coexistence.Probe("Mylo"))
+        {
+            Expect(oreo.Name == "Oreo" && mylo.Name == "Mylo", "each publisher reads its own wrapper");
+            Expect(TestLibrary.NugetMarshal.LiveHandles == first + 1, "first publisher owns one handle");
+            Expect(TestCompanion.NugetMarshal.LiveHandles == second + 1, "second publisher owns one handle");
+        }
+        Expect(TestLibrary.NugetMarshal.LiveHandles == first, "first publisher releases its handle");
+        Expect(TestCompanion.NugetMarshal.LiveHandles == second, "second publisher releases its handle");
+        Expect(TestLibrary.Coexistence.CoexistenceSample.ReverseRoundTrip("Mylo") == "Oreo meets Mylo",
+            "first reverse registration");
+        Expect(TestCompanion.Coexistence.CoexistenceSample.ReverseRoundTrip("Oreo") == "Mylo meets Oreo",
+            "second reverse registration");
+        foreach (Action fail in new Action[] { TestLibrary.Coexistence.CoexistenceSample.FailCustom,
+                     TestCompanion.Coexistence.CoexistenceSample.FailCustom })
+        {
+            bool caught = false;
+            try { fail(); }
+            catch (KotlinException error)
+            {
+                caught = error.InnerException is KotlinArgumentException;
+            }
+            Expect(caught, "shared custom exception identity and mapped cause");
+        }
+        return Task.CompletedTask;
     }
 
     // Shape 4 in ADR-102's table, first here: the only failure verified live on a JIT-less

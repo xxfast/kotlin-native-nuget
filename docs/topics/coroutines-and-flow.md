@@ -572,7 +572,7 @@ public KotlinFlow<string> Meows(Hunger asked, Hunger? hunger = null)
 A default on a scalar, `String`, or enum parameter here widens the same way a
 [constructor or method default](classes-and-objects.md#constructor-and-method-default-parameters)
 does: a non-nullable type widens to its nullable C# form (`null` means unset), an already-nullable
-one widens to `Optional<T>`, and omitting the argument runs the Kotlin default:
+one widens to `KotlinOptional<T>`, and omitting the argument runs the Kotlin default:
 
 ```kotlin
 class Dinnerbell(val bowl: Int) {

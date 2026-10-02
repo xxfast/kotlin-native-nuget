@@ -193,74 +193,10 @@ internal fun StringBuilder.renderErrorHelper(helper: CirErrorHelper) {
   appendLine("            {")
   KOTLIN_EXCEPTION_TYPES.forEach { row ->
     appendLine("                \"${row.kotlinType}\" =>")
-    appendLine("                    new ${row.csharpType}(kotlinType, message, stackTrace, inner),")
+    appendLine("                    new global::Kotlin.Native.Interop.${row.csharpType}(kotlinType, message, stackTrace, inner),")
   }
-  appendLine("                _ => new KotlinException(kotlinType, message, stackTrace, inner)")
+  appendLine("                _ => global::Kotlin.Native.Interop.KotlinException.Create(kotlinType, message, stackTrace, inner)")
   appendLine("            };")
-  appendLine("    }")
-  appendLine()
-  appendLine("    public interface IKotlinException")
-  appendLine("    {")
-  appendLine("        string KotlinType { get; }")
-  appendLine("        string KotlinStackTrace { get; }")
-  appendLine("    }")
-  appendLine()
-  appendLine("    public class KotlinException : Exception, IKotlinException")
-  appendLine("    {")
-  appendLine("        public string KotlinType { get; }")
-  appendLine("        public string KotlinStackTrace { get; }")
-  appendLine()
-  appendLine("        public KotlinException(string kotlinType, string message, string kotlinStackTrace,")
-  appendLine("            Exception? innerException = null) : base(message, innerException)")
-  appendLine("        {")
-  appendLine("            KotlinType = kotlinType;")
-  appendLine("            KotlinStackTrace = kotlinStackTrace;")
-  appendLine("        }")
-  appendLine()
-  appendLine("        public override string ToString()")
-  appendLine("        {")
-  appendLine("            return base.ToString()")
-  appendLine("                + Environment.NewLine + \"Kotlin type: \" + KotlinType")
-  appendLine("                + Environment.NewLine + \" ---> Kotlin stack trace:\"")
-  appendLine("                + Environment.NewLine + KotlinStackTrace")
-  appendLine("                + Environment.NewLine + \" --- End of Kotlin stack trace ---\";")
-  appendLine("        }")
-  appendLine("    }")
-  appendLine()
-  listOf(
-    "KotlinArgumentException" to "ArgumentException",
-    "KotlinInvalidOperationException" to "InvalidOperationException",
-    "KotlinNotSupportedException" to "NotSupportedException",
-    "KotlinInvalidCastException" to "InvalidCastException",
-    "KotlinArithmeticException" to "ArithmeticException",
-    "KotlinFormatException" to "FormatException",
-    "KotlinIOException" to "System.IO.IOException",
-    "KotlinNullReferenceException" to "NullReferenceException",
-    "KotlinOperationCanceledException" to "OperationCanceledException",
-  ).forEach { (name, base) -> renderMappedException(name, base) }
-}
-
-internal fun StringBuilder.renderMappedException(name: String, base: String) {
-  appendLine("    public sealed class $name : $base, IKotlinException")
-  appendLine("    {")
-  appendLine("        public string KotlinType { get; }")
-  appendLine("        public string KotlinStackTrace { get; }")
-  appendLine()
-  appendLine("        public $name(string kotlinType, string message, string kotlinStackTrace,")
-  appendLine("            Exception? innerException = null) : base(message, innerException)")
-  appendLine("        {")
-  appendLine("            KotlinType = kotlinType;")
-  appendLine("            KotlinStackTrace = kotlinStackTrace;")
-  appendLine("        }")
-  appendLine()
-  appendLine("        public override string ToString()")
-  appendLine("        {")
-  appendLine("            return base.ToString()")
-  appendLine("                + Environment.NewLine + \"Kotlin type: \" + KotlinType")
-  appendLine("                + Environment.NewLine + \" ---> Kotlin stack trace:\"")
-  appendLine("                + Environment.NewLine + KotlinStackTrace")
-  appendLine("                + Environment.NewLine + \" --- End of Kotlin stack trace ---\";")
-  appendLine("        }")
   appendLine("    }")
   appendLine()
 }

@@ -29,6 +29,10 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
       # The tag is the only thing a human types. If it disagrees with the version the artifacts
       # will actually carry, stop here rather than publish a mislabelled release that can't be
       # taken back.
@@ -60,6 +64,18 @@ jobs:
       # `nuget-processor` and `nuget-runtime`, and needs its own approval. The runtime ships here
       # too (ADR-127): the plugin resolves `io.github.xxfast:nuget-runtime:<version>` by coordinate
       # in every consumer, so a release without it does not resolve outside this repository.
+      # The independently versioned contract must resolve before any generated package needs it.
+      # Reusing a contract major across plugin releases is intentional; NuGet versions are immutable.
+      - name: Verify and publish the shared NuGet contract
+        run: |
+          dotnet test ContractTests
+          dotnet pack Kotlin.Native.Interop -c Release -o build/nuget
+          dotnet nuget push build/nuget/Kotlin.Native.Interop.*.nupkg \
+            --source https://api.nuget.org/v3/index.json \
+            --api-key "$NUGET_API_KEY" --skip-duplicate
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+
       - name: Publish to Maven Central
         run: >
           ./gradlew --no-configuration-cache

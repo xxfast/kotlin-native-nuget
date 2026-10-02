@@ -4,6 +4,8 @@ A Kotlin function, property accessor, or constructor that throws crosses the bri
 exception instead of aborting the process. Nothing needs to be written differently in the exported
 Kotlin to get this: it applies uniformly to every generated call shape.
 
+The exception types come from the shared `Kotlin.Native.Interop` package. If your .NET project references multiple Kotlin-built packages, an unmapped failure from either can be caught as `KotlinException`; mapped failures keep their usual .NET base type and implement `IKotlinException`.
+
 ```kotlin
 fun checkOreoWeight(grams: Int): String {
   if (grams > 0) throw IllegalArgumentException("Oreo is on a diet, $grams g treat is too much")
@@ -12,6 +14,8 @@ fun checkOreoWeight(grams: Int): String {
 ```
 
 ```C#
+using Kotlin.Native.Interop;
+
 try
 {
     MappedExceptions.CheckOreoWeight(10);
@@ -44,7 +48,7 @@ of one**, so `class KennelFullException : IllegalStateException()` is caught as
 The first matching row wins, so `NumberFormatException` is a `FormatException` and not an
 `ArgumentException`, and a `CancellationException` is an `OperationCanceledException` and not an
 `InvalidOperationException`. Anything else, including `IndexOutOfBoundsException` and a user-defined
-exception that extends none of these, arrives as the base `KotlinException`.
+exception that extends none of these, arrives as the shared `KotlinException`.
 
 ```kotlin
 internal class LitterBoxJammedException(message: String) : kotlinx.io.IOException(message)

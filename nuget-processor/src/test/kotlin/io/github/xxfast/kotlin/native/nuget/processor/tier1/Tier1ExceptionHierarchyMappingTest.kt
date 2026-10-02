@@ -69,18 +69,18 @@ class Tier1ExceptionHierarchyMappingTest {
     assertTrue("EntryPoint = \"nuget_error_cause_mapped_type\"" in cs, cs)
     assertTrue("string mappedType = CauseMappedType(errorPtr, 0);" in cs, cs)
     assertTrue(
-      "public sealed class KotlinIOException : System.IO.IOException, IKotlinException" in cs,
+      "new global::Kotlin.Native.Interop.KotlinIOException(kotlinType, message, stackTrace, inner)" in cs,
       cs,
     )
     assertTrue(
-      "public sealed class KotlinNullReferenceException : NullReferenceException, IKotlinException" in cs,
+      "new global::Kotlin.Native.Interop.KotlinNullReferenceException(kotlinType, message, stackTrace, inner)" in cs,
       cs,
     )
     assertTrue(
-      "public sealed class KotlinOperationCanceledException : OperationCanceledException, IKotlinException" in cs,
+      "new global::Kotlin.Native.Interop.KotlinOperationCanceledException(kotlinType, message, stackTrace, inner)" in cs,
       cs,
     )
-    assertTrue("\"Kotlin type: \" + KotlinType" in cs, cs)
+    assertTrue("global::Kotlin.Native.Interop.KotlinException.Create(" in cs, cs)
     // Most specific first: the CancellationException arm precedes the IllegalStateException arm.
     assertTrue(
       cs.indexOf("\"kotlin.coroutines.cancellation.CancellationException\" =>") <

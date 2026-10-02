@@ -489,7 +489,7 @@ internal object ForwardCirPlanProjection {
       CirParameter(
         name = parameter.csharpName,
         type = when (parameter.default?.encoding) {
-          ForwardDefaultEncoding.OPTIONAL -> "Optional<$type>"
+          ForwardDefaultEncoding.OPTIONAL -> "global::Kotlin.Native.Interop.KotlinOptional<$type>"
           ForwardDefaultEncoding.PRESENCE -> "$type?"
           else -> type
         },
