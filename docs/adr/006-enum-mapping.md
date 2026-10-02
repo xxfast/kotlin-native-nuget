@@ -288,3 +288,47 @@ Fixtures: `cat/Mood.kt`, `cat/Chatter.kt`; consumer tests `IntegrationTests/Enum
 
 **Scope.** Generator-only (`nuget-processor`). Additive public surface: every enum member or companion
 function that used to be skipped with a warning is now a C# member.
+
+## 2026-10-02 amendment: reverse entry names keep acronym runs together
+
+The reverse direction (a bound C# enum generated as a Kotlin `enum class`) spelled each
+member as `SCREAMING_SNAKE` by putting `_` before every capital after the first. Every acronym came
+apart: `HTTPStatus` bound as `H_T_T_P_STATUS`, `OK` (as in `System.Net.HttpStatusCode.OK`) as `O_K`,
+and a C# member already in `SNAKE_CASE` as `S_N_A_K_E__C_A_S_E`.
+
+**Rule.** kotlinx-serialization's `JsonNamingStrategy.SnakeCase`, uppercased. A new word starts at
+an uppercase letter that follows a lowercase letter or a digit, and at the last capital of an
+uppercase run when a lowercase letter follows it. An existing `_` is a word boundary; repeated,
+leading and trailing underscores are dropped.
+
+| C# member        | Kotlin entry       |
+|------------------|--------------------|
+| `HTTPStatus`     | `HTTP_STATUS`      |
+| `IOError`        | `IO_ERROR`         |
+| `OK`             | `OK`               |
+| `SNAKE_CASE`     | `SNAKE_CASE`       |
+| `Foo_Bar`        | `FOO_BAR`          |
+| `Win32NT`        | `WIN32_NT`         |
+| `AB1C`           | `AB1_C`            |
+| `XMLHttpRequest` | `XML_HTTP_REQUEST` |
+| `Playful`        | `PLAYFUL`          |
+
+Members with no acronym run convert exactly as before, so no existing binding changes name.
+
+**Collisions.** When two or more members of one enum convert to the same entry (`HTTPStatus` and
+`HttpStatus` both give `HTTP_STATUS`), every one of them keeps its C# name verbatim as the Kotlin
+entry, and each gets one `info_enum_entry_kept_verbatim` build note. A verbatim name cannot clash
+with another entry: C# member names are unique, a converted name has no lowercase letter, and an
+all-uppercase verbatim name converts to itself, so it would already be in the colliding set. The
+enum still binds in full: unlike an overload set (ADR-072, ADR-155), there is no dispatch to make
+ambiguous, and dropping the enum would skip every member typed with it. The diagnostic code follows
+the reverse plugin's current lowercase spelling; the ADR-182 code rename uppercases it with the rest.
+
+**Scope.** Generated surface only (`nuget-plugin`, `NugetGenerateBindingsTask`). Entries cross the
+ABI as ordinals (`nugetEnumEntry(X.entries, ordinal, ...)`), and the collision pass keeps ordinal
+order, so the contract hash, the C# shims and the runtime are unchanged. Reverse is experimental
+(ADR-181), so the rename carries no deprecation alias; an alias entry would also shift `entries`.
+C# method and property names (`URLPath` binding as `uRLPath`) are a separate item.
+
+Fixtures: `TestDependency/VetTriage.cs`, `test-library/.../test/enums/VetTriageSample.kt`; consumer
+test `IntegrationTests/ReverseEnumNamingTests.cs`.

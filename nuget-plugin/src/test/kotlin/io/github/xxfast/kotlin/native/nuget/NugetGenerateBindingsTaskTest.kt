@@ -1207,6 +1207,72 @@ class NugetGenerateBindingsTaskTest {
     )
   }
 
+  // ROADMAP 0.9.0 (reverse enum acronyms): entries follow kotlinx-serialization's SnakeCase rule,
+  // uppercased, so an acronym run stays one word. Members that collapse to one name keep their C#
+  // names verbatim and are named by info_enum_entry_kept_verbatim.
+  private fun statusRir(vararg names: String): RirFile = RirFile(
+    assemblies = listOf(
+      RirAssembly(
+        packageId = "Test.Enums",
+        assemblyName = "Test.Enums",
+        namespaces = listOf(
+          RirNamespace(
+            name = "Test.Enums",
+            types = listOf(
+              RirEnum(
+                name = "Status",
+                entries = names.mapIndexed { i, n -> RirEnumEntry(name = n, ordinal = i) },
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  private fun statusEntries(rir: RirFile): List<String> {
+    val enum: GeneratedFile = generateKotlinStubs(rir).single { it.relativePath.endsWith("/Status.kt") }
+    return enum.content.substringAfter("enum class Status {").substringBefore("}")
+      .split(",").map { it.trim() }.filter { it.isNotEmpty() }
+  }
+
+  @Test
+  fun `C sharp enum entries keep acronym runs together`() {
+    val entries: List<String> = statusEntries(
+      statusRir(
+        "HTTPStatus", "IOError", "OK", "SNAKE_CASE", "Foo_Bar", "Win32NT", "AB1C", "Playful",
+        "XMLHttpRequest", "MacOSX", "UTF8", "IPv4", "X509Certificate", "_Lead__Trail_",
+      ),
+    )
+
+    assertEquals(
+      listOf(
+        "HTTP_STATUS", "IO_ERROR", "OK", "SNAKE_CASE", "FOO_BAR", "WIN32_NT", "AB1_C", "PLAYFUL",
+        "XML_HTTP_REQUEST", "MAC_OSX", "UTF8", "I_PV4", "X509_CERTIFICATE", "LEAD_TRAIL",
+      ),
+      entries,
+    )
+    assertTrue(
+      allDiagnostics(statusRir("HTTPStatus", "IOError", "OK"))
+        .none { it.second.kind == RirDiagnosticKind.INFO_ENUM_ENTRY_KEPT_VERBATIM },
+      "a clean enum emits no kept-verbatim note",
+    )
+  }
+
+  @Test
+  fun `C sharp enum members that collapse to one Kotlin name keep their C sharp names`() {
+    val rir: RirFile = statusRir("HTTPStatus", "Other", "HttpStatus")
+
+    assertEquals(listOf("HTTPStatus", "OTHER", "HttpStatus"), statusEntries(rir))
+
+    val notes: List<String> = allDiagnostics(rir)
+      .filter { it.second.kind == RirDiagnosticKind.INFO_ENUM_ENTRY_KEPT_VERBATIM }
+      .map { (packageId, d) -> "$packageId ${d.typeName}.${d.memberName} ${d.reason}" }
+    assertEquals(2, notes.size, "one note per member kept verbatim, found: $notes")
+    assertTrue(notes.all { it.contains("Status") && it.contains("HTTP_STATUS") }, "$notes")
+    assertTrue(notes.any { it.contains("HTTPStatus") } && notes.any { it.contains("HttpStatus") })
+  }
+
   @Test
   fun `enum method signatures use Mood and marshal values through ordinal`() {
     val files: List<GeneratedFile> = generateKotlinStubs(moodRir)

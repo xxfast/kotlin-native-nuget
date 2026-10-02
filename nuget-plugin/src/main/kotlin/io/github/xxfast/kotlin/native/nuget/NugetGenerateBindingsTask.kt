@@ -2001,12 +2001,78 @@ private fun structTypesInTree(
 // e.g. SerializeObject → serializeObject
 private fun String.toMethodCamelCase(): String = replaceFirstChar { it.lowercaseChar() }
 
-private fun String.toEnumScreamingSnake(): String = buildString {
-  this@toEnumScreamingSnake.forEachIndexed { index, char ->
-    if (index > 0 && char.isUpperCase()) append('_')
-    append(char.uppercaseChar())
+// ADR-006 2026-10-02 amendment: a C# enum member → a SCREAMING_SNAKE Kotlin entry by the
+// kotlinx-serialization `JsonNamingStrategy.SnakeCase` rule, uppercased. A word starts at an
+// uppercase letter after a lowercase letter or a digit, and at the last capital of an uppercase run
+// that a lowercase letter follows, so an acronym run stays one word: `HTTPStatus` → `HTTP_STATUS`,
+// `IOError` → `IO_ERROR`, `OK` → `OK`, `Win32NT` → `WIN32_NT`. An existing `_` is a boundary;
+// repeated, leading and trailing underscores are dropped (`SNAKE_CASE` and `Foo_Bar` survive).
+internal fun String.toEnumScreamingSnake(): String {
+  val words: MutableList<StringBuilder> = mutableListOf()
+  var current = StringBuilder()
+  fun flush() {
+    if (current.isNotEmpty()) words += current
+    current = StringBuilder()
+  }
+  forEachIndexed { index, char ->
+    if (char == '_') {
+      flush()
+      return@forEachIndexed
+    }
+    if (char.isUpperCase() && current.isNotEmpty()) {
+      val previous: Char = this[index - 1]
+      val next: Char? = getOrNull(index + 1)
+      val startsWord: Boolean = previous.isLowerCase() || previous.isDigit() ||
+          (previous.isUpperCase() && next != null && next.isLowerCase())
+      if (startsWord) flush()
+    }
+    current.append(char.uppercaseChar())
+  }
+  flush()
+  return words.joinToString("_")
+}
+
+// ADR-006 2026-10-02 amendment: the Kotlin entry name of every member of [enum], in ordinal order,
+// paired with whether it was kept verbatim. Members whose converted names collide keep their C#
+// names (unique by C# rules, and never equal to another entry's converted name: a converted name
+// has no lowercase letter, and an all-uppercase verbatim name converts to itself, so it would be in
+// the colliding set already). Shared by enumFileContent and enumEntryVerbatimDiagnostics so the
+// generated file and the build-log note can never disagree.
+internal fun enumEntryKotlinNames(enum: RirEnum): List<Pair<String, Boolean>> {
+  val converted: List<String> = enum.entries.map { it.name.toEnumScreamingSnake() }
+  val counts: Map<String, Int> = converted.groupingBy { it }.eachCount()
+  return enum.entries.zip(converted).map { (entry, name) ->
+    if (counts.getValue(name) > 1) entry.name to true else name to false
   }
 }
+
+// ADR-006 2026-10-02 amendment: one info_enum_entry_kept_verbatim per member that kept its C# name
+// because its SCREAMING_SNAKE form collided with another member of the same enum.
+internal fun enumEntryVerbatimDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> =
+  rir.assemblies.flatMap { assembly ->
+    assembly.namespaces.flatMap { namespace ->
+      namespace.types.filterIsInstance<RirEnum>().flatMap { enum ->
+        enum.entries.zip(enumEntryKotlinNames(enum))
+          .filter { (_, chosen) -> chosen.second }
+          .map { (entry, _) ->
+            val collapsed: String = entry.name.toEnumScreamingSnake()
+            val siblings: List<String> = enum.entries
+              .filter { it.name.toEnumScreamingSnake() == collapsed }
+              .map { it.name }
+            assembly.packageId to RirDiagnostic(
+              kind = RirDiagnosticKind.INFO_ENUM_ENTRY_KEPT_VERBATIM,
+              typeName = enum.name,
+              memberName = entry.name,
+              memberSignature = "",
+              reason = "${siblings.joinToString(", ")} all convert to the Kotlin entry " +
+                  "`$collapsed`, so each keeps its C# name as the Kotlin entry name",
+              hint = "Refer to this entry as `${enum.name}.${entry.name}` from Kotlin; its ordinal " +
+                  "is unchanged.",
+            )
+          }
+      }
+    }
+  }
 
 // ADR-158 step 4: the Kotlin package a delegate Invoke position's own type is generated into, or
 // null when the position needs no package at all (void, a primitive, a string). Used only to decide
@@ -2048,7 +2114,7 @@ private fun delegateAliasFileContent(
 }
 
 private fun enumFileContent(kotlinPkg: String, enum: RirEnum, packageId: String): String {
-  val entries: String = enum.entries.joinToString(",\n") { it.name.toEnumScreamingSnake() }
+  val entries: String = enumEntryKotlinNames(enum).joinToString(",\n") { it.first }
   return """
     |@file:OptIn($BINDING_MARKER_OPT_IN)
     |
@@ -7074,7 +7140,7 @@ internal fun allDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> {
     }
   return fromReader + fromCollisions + fromArityLimits + fromAmbiguousGenericConstructors +
       fromDeferredAsync + fromCollapsedOverloads + fromCollectionPositions +
-      fromDelegatePositions + fromDelegateOverloads
+      fromDelegatePositions + fromDelegateOverloads + enumEntryVerbatimDiagnostics(rir)
 }
 
 // ADR-158 Decision 9: one note per bound overload SET (not per member: the ambiguity is a property
