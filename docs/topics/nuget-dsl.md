@@ -45,6 +45,8 @@ nuget {
 Scripts that only assign values and call the block functions need no change. These differences
 matter if you read the DSL back or depend on task shape:
 
+- Plugin internals are no longer public: build scripts that imported the `rir` model, the generator functions (`generateKotlinStubs`, `generateCSharpShims`, `generateCsproj`) or `NugetPusher` no longer compile. The DSL and the task classes stay public.
+
 - The package targets `net10.0` by default, up from a hardcoded `net8.0`, and `targetFramework` now sets it. A consumer project below `net10.0` fails restore with `NU1202`.
 
 - Reading a value returns a `Provider`, so `nuget.publish?.packageId` becomes
