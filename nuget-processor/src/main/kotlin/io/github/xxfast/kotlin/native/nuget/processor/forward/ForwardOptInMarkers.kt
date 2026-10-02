@@ -23,6 +23,16 @@ import com.google.devtools.ksp.symbol.KSValueParameter
 private const val REQUIRES_OPT_IN: String = "kotlin.RequiresOptIn"
 
 /**
+ * ADR-181: the reverse direction's opt-in marker, stamped on every consumer-facing declaration the
+ * `bind {}` generator emits. Always waived here, with no `publish { exportMarkers(...) }` entry: it
+ * describes the stability of the Kotlin-side binding, not of the author's forward API, so an author
+ * who propagates it (`@ExperimentalNugetBindingApi fun adopt(f: IFeedable)`) keeps the ADR-088
+ * export. `CNameExports.kt` names it in its `@file:OptIn` unconditionally for the same reason.
+ */
+internal const val NUGET_BINDING_MARKER: String =
+  "io.github.xxfast.kotlin.native.nuget.annotations.ExperimentalNugetBindingApi"
+
+/**
  * The two hops ADR-115 Findings 4 and 7 verified: resolve the annotation's own declaration and ask
  * whether *it* carries `kotlin.RequiresOptIn`.
  *
@@ -46,6 +56,7 @@ private fun KSAnnotation.optInMarkerName(exportMarkers: Set<String>): String? {
   // diagnosed. A waived marker also waives a TYPE marked with it, because the classifier reads
   // the same function.
   if (name in exportMarkers) return null
+  if (name == NUGET_BINDING_MARKER) return null
   return name
 }
 

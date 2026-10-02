@@ -95,6 +95,16 @@ private const val COLLECTION_NOT_MAPPED: String =
   "[nuget] ADR-155: a collection type reached a conversion table before it is mapped"
 
 private const val INTERNAL_PKG = "io.github.xxfast.kotlin.native.nuget.internal"
+
+// ADR-181: the reverse direction is experimental. Every consumer-facing generated declaration
+// carries this ERROR-level marker (it gates the consumer, whose module these stubs compile into, so
+// `internal` declarations are consumer surface too), and every generated file names it in its
+// `@file:OptIn` (so the unmarked glue naming a marked declaration still compiles). Fully qualified
+// in both places, so no per-file import list has to learn about it.
+private const val BINDING_MARKER_FQN =
+  "io.github.xxfast.kotlin.native.nuget.annotations.ExperimentalNugetBindingApi"
+private const val BINDING_MARKER = "@$BINDING_MARKER_FQN"
+private const val BINDING_MARKER_OPT_IN = "$BINDING_MARKER_FQN::class"
 private const val INTERNAL_DIR = "io/github/xxfast/kotlin/native/nuget/internal"
 
 
@@ -1080,6 +1090,8 @@ private fun genericBridgeInterfaceFileContent(
     (listOf("import $INTERNAL_PKG.NugetObjectHandle") + enumImportLines + handleImportLines)
       .distinct().joinToString("\n")
   return """
+    |@file:OptIn($BINDING_MARKER_OPT_IN)
+    |
     |package $kotlinPkg
     |
     |$imports
@@ -1153,6 +1165,7 @@ private fun genericClassWrapperFileContent(
       // declaration (see the "internal (not public)" notes on
       // stubFileContent/classWrapperContent/structFileContent).
       """
+      |$BINDING_MARKER
       |internal fun $simpleName($params): $simpleName<$retTypeArgs> {
       |  val handle = ${tag}Bridge.construct($args)
       |  return $simpleName(handle, ${tag}Bridge)
@@ -1187,6 +1200,7 @@ private fun genericClassWrapperFileContent(
   return """
     |@file:OptIn(
     |  kotlinx.cinterop.ExperimentalForeignApi::class,
+    |  $BINDING_MARKER_OPT_IN,
     |  kotlin.experimental.ExperimentalNativeApi::class,
     |)
     |
@@ -1196,6 +1210,7 @@ private fun genericClassWrapperFileContent(
     |
     |// Generated (ADR-072 Decision 1): a real Kotlin generic class over an erased ADR-051 handle.
     |// Every member (T-free members included, CS8895's constraint) dispatches through [bridge].
+    |$BINDING_MARKER
     |internal class $simpleName<$typeParams> internal constructor(
     |  handle: NugetObjectHandle,
     |  private val bridge: ${simpleName}Bridge<$typeParams>,
@@ -1435,7 +1450,7 @@ private fun genericWitnessObjectFileContent(
       ).distinct().joinToString("\n")
 
   return """
-    |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+    |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, $BINDING_MARKER_OPT_IN)
     |
     |package $kotlinPkg
     |
@@ -2019,10 +2034,13 @@ private fun delegateAliasFileContent(
   val body: String = aliases.entries.sortedBy { it.key }.joinToString("\n\n") { (name, delegate) ->
     """
       |// Generated: C# `${delegate.definition}`
+      |$BINDING_MARKER
       |typealias $name = ${declKotlinType(delegate, qualifiedTypeNames)}
     """.trimMargin()
   }
   return """
+    |@file:OptIn($BINDING_MARKER_OPT_IN)
+    |
     |package $kotlinPkg
     |
     |$body
@@ -2032,9 +2050,12 @@ private fun delegateAliasFileContent(
 private fun enumFileContent(kotlinPkg: String, enum: RirEnum, packageId: String): String {
   val entries: String = enum.entries.joinToString(",\n") { it.name.toEnumScreamingSnake() }
   return """
+    |@file:OptIn($BINDING_MARKER_OPT_IN)
+    |
     |package $kotlinPkg
     |
     |// Generated: ordinal-backed Kotlin enum for $packageId.${enum.name}
+    |$BINDING_MARKER
     |enum class ${enum.name} {
     |${entries.indented("  ")}
     |}
@@ -2261,7 +2282,7 @@ private fun structFileContent(
     """.trimMargin()
   }
   return """
-    |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+    |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, $BINDING_MARKER_OPT_IN)
     |
     |package $kotlinPkg
     |
@@ -2275,6 +2296,7 @@ private fun structFileContent(
     |// type must not be re-exported forward into the packed nupkg's own Interop.cs (mirrors the
     |// same note on the Bindings.kt/wrapper-class files; unlike a reverse-generated enum class,
     |// no ADR authorises a forward mapping for a decomposed struct).
+    |$BINDING_MARKER
     |internal data class ${struct.name}(
     |  $params,
     |) {
@@ -2447,7 +2469,7 @@ private fun structBindingsFileContent(
     .filter { it != "COpaquePointerVar" }
     .joinToString("\n") { "import kotlinx.cinterop.$it" }
   return """
-    |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+    |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, $BINDING_MARKER_OPT_IN)
     |
     |package $kotlinPkg
     |
@@ -3542,7 +3564,7 @@ private fun bindingsFileContent(
   }.let { if (it.isEmpty()) "" else "\n\n$it" }
 
   return """
-    |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+    |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, $BINDING_MARKER_OPT_IN)
     |
     |package $kotlinPkg
     |
@@ -3851,7 +3873,7 @@ private fun stubFileContent(
   }
 
   return buildString {
-    appendLine("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)")
+    appendLine("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, $BINDING_MARKER_OPT_IN)")
     appendLine()
     appendLine("package $kotlinPkg")
     appendLine()
@@ -3865,6 +3887,7 @@ private fun stubFileContent(
     // hand-authored test-library sources that call it), but invisible to the forward-direction
     // (KSP) exporter's public-API scan — this reverse-bound API must not be re-exported forward
     // into the packed nupkg's own Interop.cs (see the matching note on the Bindings.kt file).
+    appendLine(BINDING_MARKER)
     appendLine("internal object ${cls.name} {")
     appendLine()
     appendLine(methods.indented("  "))
@@ -4083,7 +4106,7 @@ private fun classWrapperContent(
   }
 
   return buildString {
-    appendLine("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)")
+    appendLine("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, $BINDING_MARKER_OPT_IN)")
     appendLine()
     appendLine("package $kotlinPkg")
     appendLine()
@@ -4113,6 +4136,7 @@ private fun classWrapperContent(
     // generically) and AutoCloseable.
     val supertypes: String =
       (interfaceSupertypeNames + listOf("NugetHandleOwner", "AutoCloseable")).joinToString(", ")
+    appendLine(BINDING_MARKER)
     appendLine(
       "internal class ${cls.name} internal constructor(handle: COpaquePointer) : $supertypes {",
     )
@@ -5022,7 +5046,7 @@ private fun buildStubProperty(
 }
 
 private fun nugetInteropExpect(): String = """
-  |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+  |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, $BINDING_MARKER_OPT_IN)
   |
   |package $INTERNAL_PKG
   |
@@ -5061,6 +5085,7 @@ private fun nugetInteropExpect(): String = """
 private fun nugetInteropMingw(): String = """
   |@file:OptIn(
   |  kotlinx.cinterop.ExperimentalForeignApi::class,
+  |  $BINDING_MARKER_OPT_IN,
   |  io.github.xxfast.kotlin.native.nuget.runtime.NugetRuntimeApi::class,
   |)
   |
@@ -5089,6 +5114,7 @@ private fun nugetInteropMingw(): String = """
 private fun nugetInteropPosix(): String = """
   |@file:OptIn(
   |  kotlinx.cinterop.ExperimentalForeignApi::class,
+  |  $BINDING_MARKER_OPT_IN,
   |  io.github.xxfast.kotlin.native.nuget.runtime.NugetRuntimeApi::class,
   |)
   |
@@ -5127,6 +5153,7 @@ private fun nugetInteropPosix(): String = """
 private fun nugetKotlinErrorsActual(): String = """
   |@file:OptIn(
   |  kotlinx.cinterop.ExperimentalForeignApi::class,
+  |  $BINDING_MARKER_OPT_IN,
   |  io.github.xxfast.kotlin.native.nuget.runtime.NugetRuntimeApi::class,
   |)
   |
@@ -5278,7 +5305,7 @@ private fun nugetKotlinErrorsActual(): String = """
 //   - NugetObjectHandle: the Cleaner resource holder (separate from the wrapper to avoid
 //     the createCleaner self-reference leak hazard)
 private fun nugetRuntimeContent(): String = """
-  |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+  |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, $BINDING_MARKER_OPT_IN)
   |
   |package $INTERNAL_PKG
   |
@@ -5833,7 +5860,7 @@ private fun nugetKotlinBridgesContent(dispatch: List<BridgeDispatchArm>): String
   }
   val body: String = if (arms.isEmpty()) "  else -> null" else "$arms\n  else -> null"
   return """
-    |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+    |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, $BINDING_MARKER_OPT_IN)
     |
     |package $INTERNAL_PKG
     |
@@ -5864,6 +5891,8 @@ private fun nugetKotlinBridgesContent(dispatch: List<BridgeDispatchArm>): String
 private fun nugetRegistryContent(expected: List<String>): String {
   val expectedList: String = expected.joinToString(",\n    ") { "\"$it\"" }
   return """
+    |@file:OptIn($BINDING_MARKER_OPT_IN)
+    |
     |package $INTERNAL_PKG
     |
     |import kotlin.concurrent.AtomicReference
@@ -5957,7 +5986,7 @@ private fun nugetRegistryContent(expected: List<String>): String {
 // type at process start. Nothing on the hot bridge-call path calls this — there is no branch to
 // skip when the trace is off, per ADR-054's "cost when off: exactly zero" on the call path.
 private fun nugetTraceContent(): String = """
-  |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+  |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, $BINDING_MARKER_OPT_IN)
   |
   |package $INTERNAL_PKG
   |
@@ -6002,6 +6031,8 @@ private fun nugetTraceContent(): String = """
 // enum back from C#. Holds the single shared bounds-checked ordinal lookup every generated stub
 // calls, rather than each stub inlining its own copy of the same check.
 private fun nugetEnumsContent(): String = """
+  |@file:OptIn($BINDING_MARKER_OPT_IN)
+  |
   |package $INTERNAL_PKG
   |
   |// Generated: fail-fast ordinal lookup, shared by every enum-returning bridge call.
@@ -6117,6 +6148,8 @@ private fun interfaceFileContent(
   val body: String = if (members.isEmpty()) "" else "\n$members\n"
 
   return """
+    |@file:OptIn($BINDING_MARKER_OPT_IN)
+    |
     |package $kotlinPkg
     |
     |${importsBlock}// Generated: pure Kotlin interface for the C# interface `$packageId.${iface.name}`
@@ -6127,6 +6160,7 @@ private fun interfaceFileContent(
     |// (`fun adopt(feedable: IFeedable)`), and Kotlin rejects a public signature over an internal
     |// type. Only the pure interfaces go public: keeping the rest internal is what keeps them out
     |// of the forward export scan, whose root buckets admit PUBLIC declarations only.
+    |$BINDING_MARKER
     |${visibility}interface ${iface.name}$supertypesSuffix {$body}
   """.trimMargin().trim()
 }
@@ -6241,7 +6275,7 @@ private fun interfaceHandleFileContent(
   val membersText: String = memberBlocks.joinToString("\n\n") { it.prependIndent("  ") }
 
   return buildString {
-    appendLine("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)")
+    appendLine("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, $BINDING_MARKER_OPT_IN)")
     appendLine()
     appendLine("package $kotlinPkg")
     appendLine()
@@ -6686,7 +6720,7 @@ private fun interfaceBindingsFileContent(
     kotlinInterfaceValueHelper(iface, namespaceName, bridgePlan != null)
 
   return """
-    |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+    |@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, $BINDING_MARKER_OPT_IN)
     |
     |package $kotlinPkg
     |
