@@ -332,13 +332,55 @@ arrive as <code>KotlinException</code> here. With no Kotlin message, <code>Messa
 Kotlin class name.</p>
 </note>
 
-## Unsupported members show up as build warnings
+## Unsupported members show up as build warnings {id="unsupported-members-show-up-as-build-warnings"}
 
-Every member the reader excludes, and every enum, struct, or interface it can't bind, is recorded
-with its type, member, and reason, and logged as a Gradle build warning when
-`nugetGenerateBindings` runs. If a method you expected in Kotlin is missing, search the build log
-for it by name rather than guessing why. An unsupported member never hides its siblings: the rest
-of an overload set, or the rest of a class, still binds. For registration-time failures (a stale
+Every member the reader excludes, and every enum, struct, or interface it can't bind, is logged as
+a Gradle warning when `nugetGenerateBindings` runs, and written to
+`build/nuget-interop/NugetDiagnostics.json`. If a method you expected in Kotlin is missing, search
+the log or the file for it by name rather than guessing why. An unsupported member never hides its
+siblings: the rest of an overload set, or the rest of a class, still binds.
+
+The log is only printed when the task actually runs. An unchanged build reports
+`nugetGenerateBindings` as `UP-TO-DATE` and prints nothing, so the file is where to look on every
+later build. Deleting it makes the task run again.
+
+```json
+{
+  "schemaVersion": 1,
+  "diagnostics": [
+    {
+      "severity": "WARNING",
+      "kind": "SKIPPED_ARRAY",
+      "declaration": "MimeMapping/MimeUtility.GetExtensions(GetExtensions(string))",
+      "message": "[nuget:SKIPPED_ARRAY] Skipping MimeMapping/MimeUtility.GetExtensions(GetExtensions(string)): `string[]`: arrays are deferred (ADR-155). ... Expose IReadOnlyList<T> (or another mapped BCL collection) instead of an array.",
+      "packageId": "MimeMapping",
+      "typeName": "MimeUtility",
+      "memberName": "GetExtensions",
+      "memberSignature": "GetExtensions(string)"
+    }
+  ]
+}
+```
+
+`severity` is `WARNING`, `INFO` or `ERROR`. `kind` is the code in the log line, and `message` is
+that line verbatim. `packageId`, `typeName`, `memberName` and `memberSignature` locate the
+declaration and are left out when they do not apply (an assembly-wide note has no type). The file is
+written on every run of the task, with an empty `diagnostics` list when nothing was skipped.
+
+A diagnostic that fails the build (`ERROR_*`, such as a Kotlin signature collision or two generic
+types that strip to the same Kotlin name) is in the file too: the file is written first, then the
+build fails with the error lines. Every collision is reported together.
+
+The reverse file is experimental, like the reverse direction it describes
+([Consuming C# in Kotlin](reverse-overview.md#opt-in)), and its fields may change in 1.x. The
+publishing direction writes its own `NugetDiagnostics.json`, see
+[Publishing Kotlin to C#](forward-overview.md#where-these-messages-appear); the two files are
+separate and are not merged.
+
+A member with a `dynamic` parameter is dropped with no diagnostic at all, so it is missing from the
+file as well. Declare the parameter with a concrete type.
+
+For registration-time failures (a stale
 build, a contract mismatch at process startup) rather than an extraction-time skip, see
 [Registration diagnostics](registration-diagnostics.md).
 

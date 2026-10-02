@@ -5,6 +5,7 @@ import org.gradle.api.Task
 import org.gradle.api.internal.project.ProjectInternal
 import org.gradle.testfixtures.ProjectBuilder
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -114,6 +115,29 @@ class NugetGenerateBindingsTaskWiringTest {
 
     assertTrue(path.contains("nuget-interop"), "kotlinOutputDir must be under nuget-interop/")
     assertTrue(path.endsWith("kotlin"), "kotlinOutputDir must end with 'kotlin'")
+  }
+
+  // ADR-182 amendment: the reverse report sits beside kotlin/ and csharp/, never inside either,
+  // because those directories are cleared on each run.
+  @Test
+  fun `nugetGenerateBindings diagnosticsFile is build nuget-interop NugetDiagnostics json`() {
+    val project: Project = buildProject()
+
+    project.extensions.getByType(NugetExtension::class.java).dependencies {
+      it.dependency("Newtonsoft.Json", version = "13.0.3") {
+        it.bind { }
+      }
+    }
+
+    project.evaluate()
+
+    val task: NugetGenerateBindingsTask =
+      project.tasks.getByName("nugetGenerateBindings") as NugetGenerateBindingsTask
+
+    assertEquals(
+      project.layout.buildDirectory.file("nuget-interop/NugetDiagnostics.json").get().asFile,
+      task.diagnosticsFile.get().asFile,
+    )
   }
 
   @Test

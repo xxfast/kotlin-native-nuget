@@ -85,6 +85,10 @@ echo "==> Runtime exports present in the linked library (scripts/verify-runtime-
 echo "==> Forward diagnostic delivery (scripts/verify-forward-diagnostics.sh)"
 "$ROOT/scripts/verify-forward-diagnostics.sh"
 
+# ADR-182 amendment: the reverse report the pack above wrote for test-library's bound dependency.
+echo "==> Reverse diagnostics report (verifyReverseDiagnostics)"
+./gradlew verifyReverseDiagnostics --console=plain -q
+
 echo "==> Check generated bindings compile as a consumer (net10.0, C# 14, warnings as errors)"
 dotnet build GeneratedBindingsCheck
 

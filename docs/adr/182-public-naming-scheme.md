@@ -6,6 +6,8 @@ Accepted
 
 Revised 2026-10-02: section 2 (task names) changed from `nuget<Verb><Object>` for every task to the two-part rule matching Kotlin's Gradle plugin; only `nugetGen` is renamed. Sections 1 and 3 are unchanged.
 
+Amended 2026-10-03: reverse diagnostics get a report file. See "Amendment: reverse diagnostics in the report" at the end.
+
 ## Context
 
 At 1.0.0, semver covers the Gradle DSL, the task names, the diagnostic codes and
@@ -308,3 +310,140 @@ Implemented (2026-10-02, sections 1, 2 and 4, the DSL filter and task-name half)
 - Deferred: a published JSON Schema (`$schema`) for either file; the producing plugin version inside
   `NugetDiagnostics.json`; a `schemaVersion` on the dogfood `*.census.json`; renaming the JSON field
   `kind` to `code`.
+
+## Amendment: reverse diagnostics in the report
+
+Status: Accepted (2026-10-03).
+
+Gate note: decided 2026-10-03 by a stand-in reviewer agent while the owner was asleep, narrower
+than the research memo recommended. The decision most open to being overruled is keeping the log
+in `nugetGenerateBindings` (alternative D) instead of moving it to `nugetReportDiagnostics`
+(alternative A).
+
+### Context
+
+Section 3 unified the codes and the console shape, but only the forward direction wrote
+`NugetDiagnostics.json`. Before this amendment:
+
+- The reverse direction's only delivery was `logger.warn` inside the `nugetGenerateBindings` task
+  action. No file was written. Verified by reading.
+- Four of the 38 `RirDiagnosticKind` entries never reached that log through the one renderer,
+  `formatDiagnostic`. Verified by reading, then by the coverage test below going red on them:
+  - `SKIPPED_KOTLIN_BRIDGE`: `kotlinBridgeDiagnostics` was read only as a boolean inside
+    `kotlinBridgePlan`.
+  - `ERROR_GENERIC_ARITY_NAME_COLLISION`: a raw `require` string in the pre-ADR-182 shape
+    `[nuget] ERROR_...:`, with no package id, thrown on the first collision.
+  - `SKIPPED_INTERFACE_SUPERTYPE` and `INFO_INHERITED_INTERFACE_MEMBERS_ABSENT`: declared,
+    constructed nowhere. ADR-070 Decision 5 promises both.
+- A fatal reverse run did print its warnings first. The two plugin-derived fatals throw inside
+  `generateKotlinStubs`, after the warnings were logged; the reader emits no `ERROR_` kind. The
+  memo's "a fatal one suppresses every warning" was wrong. Verified by reading.
+
+### Alternatives considered
+
+#### A. Move the log to `nugetReportDiagnostics`, which re-emits both files
+
+One voice, and reverse would speak on an `UP-TO-DATE` build. Not chosen now: it needs
+`nugetReportDiagnostics` registered from `registerReverse`, a trigger for a `bind {}`-only build
+(`finalizedBy` or `nugetImport`), and `nugetReportDiagnostics` depends on `kspKotlin{Target}`
+(`NugetPlugin.kt`, `registerPublish`), so wiring it to `nugetImport` would run KSP on every IDE
+sync.
+None of that has been run. Kept as the candidate end state on the ROADMAP.
+
+#### B. Merge both directions into one file
+
+Rejected. The forward file is a per-target KSP output inside KSP's own resources directory; a merged
+file needs a third task and moves a path 0.9.0 already documents.
+
+#### C. Point consumers at `reverse-ir.json`
+
+Rejected. It is the API model, not a report, and it cannot carry the plugin-derived kinds
+(collisions, arity limit, collapsed overloads, collection and delegate positions, Kotlin bridges).
+
+#### D. Keep logging in `nugetGenerateBindings` and add the file (chosen)
+
+The narrow step. The log text and the task it prints under do not change; the file is new.
+
+### Decision
+
+- `nugetGenerateBindings` gains `@OutputFile diagnosticsFile`, wired to
+  `build/nuget-interop/NugetDiagnostics.json`, beside `kotlin/`, `bound-types.json` and
+  `reverse-ir.json` and never inside `kotlin/` or `csharp/`. Written on every run the action
+  executes, an empty `diagnostics` list included.
+- Root `{ "schemaVersion": 1, "diagnostics": [...] }`, the forward schema. Each entry carries the
+  four forward fields, `severity`, `kind`, `declaration` (the `<packageId>/<Type>.<member>(<sig>)`
+  location `formatDiagnostic` renders) and `message` (its exact output), plus `packageId`,
+  `typeName`, `memberName` and `memberSignature` under their `reverse-ir.json` names, each omitted
+  when empty. No `reason` / `hint` fields: both are inside `message`. No `schemaVersion` bump: the
+  extra fields are additive and the plugin's own reader ignores unknown keys.
+
+  ```json
+  {
+    "severity": "WARNING",
+    "kind": "SKIPPED_ARRAY",
+    "declaration": "MimeMapping/MimeUtility.GetExtensions(GetExtensions(string))",
+    "message": "[nuget:SKIPPED_ARRAY] Skipping MimeMapping/MimeUtility.GetExtensions(...): ...",
+    "packageId": "MimeMapping",
+    "typeName": "MimeUtility",
+    "memberName": "GetExtensions",
+    "memberSignature": "GetExtensions(string)"
+  }
+  ```
+
+- One list, in this order inside the task action: collect every diagnostic of every severity
+  (`reverseDiagnostics`: `allDiagnostics` plus the two plugin-derived fatal families), write the
+  file, log every non-`ERROR` line with `logger.warn` (same text as before), then fail with the
+  rendered `ERROR` lines. Errors land in the file, unlike forward (ADR-100), and no `ERROR` line
+  prints twice.
+- `kotlinBridgeDiagnostics` joins `allDiagnostics`, over the same bound interfaces the stub loop
+  plans a bridge for. `SKIPPED_KOTLIN_BRIDGE` starts printing.
+- `validateGenericArityCollisions` becomes a non-throwing `genericArityCollisions` list plus a
+  validator, the `kotlinSignatureCollisions` / `validateKotlinSignatures` pair's shape, so every
+  collision is a `RirDiagnostic` rendered by `formatDiagnostic` and all are reported together.
+- `nugetReportDiagnostics`, `packNuget` and `nugetImport` are unchanged.
+- Stability: the reverse file, and its reverse-only fields, are experimental with the reverse
+  direction (ADR-181) and may change in 1.x. The forward file's stability is unchanged.
+- Every `RirDiagnosticKind` must reach the file from a real assembly, minus two named exemption sets
+  in `RirDiagnosticCoverageTest`:
+  - `notYetEmitted`: `SKIPPED_INTERFACE_SUPERTYPE`, `INFO_INHERITED_INTERFACE_MEMBERS_ABSENT`
+    (constructed nowhere; tracked on the ROADMAP).
+  - `unreachableFromCSharp`: `SKIPPED_DYNAMIC`. The reader only recognises `DynamicAttribute` as a
+    custom modifier; C# encodes `dynamic` as `object` plus an attribute, so a `dynamic` parameter
+    drops with no diagnostic at all.
+
+### Verification
+
+- Verified, `RirDiagnosticCoverageTest` "every kind is written to the report from a real assembly":
+  compiles `diagnostics/EveryKind.cs` and `diagnostics/Fatal.cs`, runs the real
+  `NugetMetadataReader`, runs the real task action and reads the file it wrote. The written kinds
+  equal `RirDiagnosticKind.entries` minus the two sets, and the failure message is exactly the
+  file's `ERROR` messages. Red before the change, naming `SKIPPED_KOTLIN_BRIDGE`,
+  `ERROR_KOTLIN_SIGNATURE_COLLISION` and `ERROR_GENERIC_ARITY_NAME_COLLISION`; red again, naming
+  `SKIPPED_INDEXER`, when the indexer shape was removed from the fixture.
+- Verified, the same test's sibling: every kind round-trips through the writer and
+  `parseForwardDiagnostics` with its code and severity.
+- Verified, two consecutive real `:test-library:nugetGenerateBindings` builds: run 1 wrote 44
+  entries and logged 44 lines under `> Task :test-library:nugetGenerateBindings`; run 2 was
+  `UP-TO-DATE`, printed nothing and left the file intact.
+- Verified, deleting the file re-runs the task (configuration cache reused), rewriting 44 entries
+  and logging 44 lines.
+- Verified, a real fatal build (a scratch project binding a packed `Fatal.cs` plus one array member)
+  fails `nugetGenerateBindings` with the two `[nuget:ERROR_...] Error ...` lines once each, and the
+  file holds both `ERROR` entries and that run's `SKIPPED_ARRAY` warning.
+- Verified, `verifyReverseDiagnostics` (root `build.gradle.kts`, run by `scripts/verify.sh`) checks
+  the real `test-library` report: `schemaVersion` 1, non-empty, no `ERROR`, every message in the
+  `[nuget:<kind>]` shape.
+- Unverified: whether the forward processor runs in a `bind {}`-only KMP project; this amendment
+  does not depend on it.
+
+### Consequences
+
+- A consumer can query reverse skips from `build/nuget-interop/NugetDiagnostics.json` instead of
+  scraping the log.
+- Reverse diagnostics are still silent on an `UP-TO-DATE` `nugetGenerateBindings`; the file is what
+  survives. Alternative A is the candidate fix.
+- `SKIPPED_KOTLIN_BRIDGE` now prints and is counted by the dogfood census (13 entries over the nine
+  packages: Humanizer.Core 11, Markdig 1, NodaTime 1).
+- `ERROR_GENERIC_ARITY_NAME_COLLISION` renders in the ADR-182 shape with a package id.
+- Not decided here: a `direction` field or one merged file, `reason` / `hint` fields, a per-package
+  split, a fail-on-skip gate.
