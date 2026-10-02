@@ -10,6 +10,7 @@ import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -72,11 +73,11 @@ class NugetPluginPrebuiltRuntimesWiringTest {
     val root: File = prebuiltTree()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
-      prebuiltRuntimes = root
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
+      it.prebuiltRuntimes.set(root)
     }
 
     project.evaluate()
@@ -90,10 +91,10 @@ class NugetPluginPrebuiltRuntimesWiringTest {
     val project: Project = buildProject()
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
     }
 
     project.evaluate()
@@ -111,11 +112,11 @@ class NugetPluginPrebuiltRuntimesWiringTest {
     project.disableLinkTasks("mingwX64")
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
-      prebuiltRuntimes = prebuiltTree()
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
+      it.prebuiltRuntimes.set(prebuiltTree())
     }
 
     project.evaluate()
@@ -136,11 +137,11 @@ class NugetPluginPrebuiltRuntimesWiringTest {
     project.disableLinkTasks("macosArm64")
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
-      prebuiltRuntimes = prebuiltTree()
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
+      it.prebuiltRuntimes.set(prebuiltTree())
     }
 
     project.evaluate()
@@ -151,23 +152,28 @@ class NugetPluginPrebuiltRuntimesWiringTest {
   }
 
   @Test
-  fun `packNuget is not registered when every local link is disabled and nothing is prebuilt`() {
+  fun `packNuget fails at execution when every local link is disabled and nothing is prebuilt`() {
     val project: Project = buildProject()
     project.disableLinkTasks("mingwX64")
     project.disableLinkTasks("macosArm64")
 
     project.extensions.getByType(NugetExtension::class.java).publish {
-      packageId = "TestLibrary"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
+      it.packageId.set("TestLibrary")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
     }
 
     project.evaluate()
 
-    assertFalse(
-      project.tasks.names.contains("packNuget"),
-      "with no local RID and no prebuilt input there is nothing to pack",
+    // ADR-180 gate decision 2: registered on every `publish {}` project, failing when it runs
+    // instead of being silently absent.
+    val packNuget = project.tasks.getByName("packNuget") as PackNugetTask
+    assertEquals(setOf("win-x64", "osx-arm64"), packNuget.skippedRids.get().keys)
+    val error = assertFailsWith<IllegalStateException> { packNuget.pack() }
+    assertTrue(
+      error.message.orEmpty().contains("No native library to pack"),
+      "with no local RID and no prebuilt input there is nothing to pack: ${error.message}",
     )
   }
 }

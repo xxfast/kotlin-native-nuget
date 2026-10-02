@@ -25,7 +25,7 @@ class NugetPluginTest {
     val project: Project = buildProject()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3")
+      it.dependency("Newtonsoft.Json", version = "13.0.3")
     }
 
     project.evaluate()
@@ -47,7 +47,7 @@ class NugetPluginTest {
     val project: Project = buildProject()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3")
+      it.dependency("Newtonsoft.Json", version = "13.0.3")
     }
 
     project.evaluate()
@@ -64,7 +64,7 @@ class NugetPluginTest {
     val project: Project = buildProject()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3")
+      it.dependency("Newtonsoft.Json", version = "13.0.3")
     }
 
     project.evaluate()
@@ -81,7 +81,7 @@ class NugetPluginTest {
     val project: Project = buildProject()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3")
+      it.dependency("Newtonsoft.Json", version = "13.0.3")
     }
 
     project.evaluate()
@@ -98,7 +98,7 @@ class NugetPluginTest {
     val project: Project = buildProject()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3")
+      it.dependency("Newtonsoft.Json", version = "13.0.3")
     }
 
     project.evaluate()

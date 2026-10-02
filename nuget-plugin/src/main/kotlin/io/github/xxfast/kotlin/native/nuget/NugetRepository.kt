@@ -1,20 +1,31 @@
 package io.github.xxfast.kotlin.native.nuget
 
-import org.gradle.api.provider.Provider
+import org.gradle.api.Action
+import org.gradle.api.Named
+import org.gradle.api.NamedDomainObjectContainer
+import org.gradle.api.provider.Property
+import javax.inject.Inject
 
 /**
  * A named NuGet feed `publishNuget` pushes to. Unset credentials resolve from the Gradle
  * properties `<name>ApiKey` / `<name>Username` / `<name>Password` when the task runs.
  */
-class NugetRepository(val name: String) {
-  var url: String? = null
-  var apiKey: Provider<String>? = null
-  var username: Provider<String>? = null
-  var password: Provider<String>? = null
+@NugetDsl
+abstract class NugetRepository @Inject constructor(private val name: String) : Named {
+  override fun getName(): String = name
+
+  abstract val url: Property<String>
+  abstract val apiKey: Property<String>
+  abstract val username: Property<String>
+  abstract val password: Property<String>
 
   // ADR-165: a 409 (version already published) warns instead of failing; `--skipDuplicate` also
   // sets it.
-  var skipDuplicate: Boolean = false
+  abstract val skipDuplicate: Property<Boolean>
+
+  init {
+    skipDuplicate.convention(false)
+  }
 
   // The Gradle properties an unset credential resolves from (`-P`, gradle.properties,
   // `ORG_GRADLE_PROJECT_*`).
@@ -23,10 +34,12 @@ class NugetRepository(val name: String) {
   val passwordProperty: String get() = "${name}Password"
 }
 
-class NugetRepositoriesScope(private val repositories: MutableList<NugetRepository>) {
-  fun nuget(name: String, configure: NugetRepository.() -> Unit) {
-    val repository = NugetRepository(name)
-    repository.configure()
-    repositories.add(repository)
+@NugetDsl
+class NugetRepositoriesScope internal constructor(
+  private val repositories: NamedDomainObjectContainer<NugetRepository>,
+) {
+  /** Declares the feed [name], or configures it again: a second call for the same name merges. */
+  fun nuget(name: String, action: Action<in NugetRepository>) {
+    action.execute(repositories.maybeCreate(name))
   }
 }

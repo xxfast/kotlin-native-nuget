@@ -33,8 +33,8 @@ class NugetGenerateBindingsTaskWiringTest {
     val project: Project = buildProject()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3") {
-        bind { }
+      it.dependency("Newtonsoft.Json", version = "13.0.3") {
+        it.bind { }
       }
     }
 
@@ -48,7 +48,7 @@ class NugetGenerateBindingsTaskWiringTest {
     val project: Project = buildProject()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3")
+      it.dependency("Newtonsoft.Json", version = "13.0.3")
     }
 
     project.evaluate()
@@ -61,8 +61,8 @@ class NugetGenerateBindingsTaskWiringTest {
     val project: Project = buildProject()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3") {
-        bind { }
+      it.dependency("Newtonsoft.Json", version = "13.0.3") {
+        it.bind { }
       }
     }
 
@@ -80,7 +80,7 @@ class NugetGenerateBindingsTaskWiringTest {
     val project: Project = buildProject()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3")
+      it.dependency("Newtonsoft.Json", version = "13.0.3")
     }
 
     project.evaluate()
@@ -101,8 +101,8 @@ class NugetGenerateBindingsTaskWiringTest {
     val project: Project = buildProject()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3") {
-        bind { }
+      it.dependency("Newtonsoft.Json", version = "13.0.3") {
+        it.bind { }
       }
     }
 
@@ -121,8 +121,8 @@ class NugetGenerateBindingsTaskWiringTest {
     val project: Project = buildProject()
 
     project.extensions.getByType(NugetExtension::class.java).dependencies {
-      dependency("Newtonsoft.Json", version = "13.0.3") {
-        bind { }
+      it.dependency("Newtonsoft.Json", version = "13.0.3") {
+        it.bind { }
       }
     }
 

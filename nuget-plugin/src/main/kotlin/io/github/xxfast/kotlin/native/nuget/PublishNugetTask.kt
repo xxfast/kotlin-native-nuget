@@ -17,7 +17,10 @@ abstract class PublishNugetTask : DefaultTask() {
   @get:Input
   abstract val repositoryName: Property<String>
 
+  // ADR-180: optional, so a missing url fails in the action with the DSL-level message instead of
+  // failing configuration (it used to be a `requireNotNull` in the plugin's afterEvaluate).
   @get:Input
+  @get:Optional
   abstract val repositoryUrl: Property<String>
 
   @get:Internal
@@ -53,6 +56,11 @@ abstract class PublishNugetTask : DefaultTask() {
   @TaskAction
   fun publish() {
     val name: String = repositoryName.get()
+    val url: String = requireNotNull(repositoryUrl.orNull) {
+      "nuget { publish { repositories { nuget(\"$name\") { url = ... } } } } " +
+        "needs the feed's v3 service index url"
+    }
+
     val key: String = requireNotNull(apiKey.orNull) {
       "No API key for NuGet repository '$name'. Set `apiKey` in its nuget(\"$name\") { } block, " +
           "or the Gradle property `${name}ApiKey` " +
@@ -60,7 +68,7 @@ abstract class PublishNugetTask : DefaultTask() {
     }
 
     val request = NugetPushRequest(
-      serviceIndex = repositoryUrl.get(),
+      serviceIndex = url,
       packageFile = packageFile.get().asFile,
       apiKey = key,
       username = username.orNull,
@@ -71,7 +79,6 @@ abstract class PublishNugetTask : DefaultTask() {
 
     val result: NugetPushResult = NugetPusher().push(request)
     val file: String = request.packageFile.name
-    val url: String = request.serviceIndex
     if (result == NugetPushResult.DRY_RUN) {
       logger.lifecycle("[nuget] Dry run: would push $file to '$name' ($url)")
     }

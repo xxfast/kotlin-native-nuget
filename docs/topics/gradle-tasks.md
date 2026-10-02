@@ -7,7 +7,7 @@ Multiplatform) and consuming (`dependencies {}`). A project can use either, both
 
 ## Publishing (Kotlin → C#)
 
-Registered when `nuget { publish { } }` is set **and** the Kotlin Multiplatform plugin is applied.
+Registered when the build script declares `nuget { publish { } }` **and** the Kotlin Multiplatform plugin is applied. The tasks exist as soon as `publish {}` is declared, so a missing setting or nothing to pack fails when the task runs, not at configuration.
 
 | Task | Description | Depends on |
 |---|---|---|
@@ -15,7 +15,7 @@ Registered when `nuget { publish { } }` is set **and** the Kotlin Multiplatform 
 | `nugetReportDiagnostics` | Reports declarations the forward bridge could not generate | `kspKotlin{Target}` |
 | `nugetCompileInterop` | Compiles the generated C# bindings with dotnet before packNuget stages them | `kspKotlin{Target}`, `nugetGenerateShims` (only if the project also binds a dependency) |
 | `publishNugetTo<Name>Repository` | Pushes the packed `.nupkg` to the named `repositories { nuget("<name>") { } }` feed | `packNuget` |
-| `publishNuget` | Runs every `publishNugetTo<Name>Repository` task | each repository's push task |
+| `publishNuget` | Runs every push task in the project | every `PublishNugetTask` in the project |
 
 `publishNuget` and its per-repository tasks are registered even with no `repositories { }` block,
 so `publishNuget` is always a valid task name on a project that packs; with no repositories
@@ -53,7 +53,7 @@ When `dotnet` is not found on `PATH` (or is on `PATH` but can't run), the task l
 skips the check, so publishing a Kotlin/Native library still needs no .NET SDK. See
 [Prerequisites](prerequisites.md).
 
-Registered only when `nuget { publish { snapshot = true } }` is set:
+Registered on every project with a `publish {}` block. `packNuget` depends on them only when `snapshot = true`:
 
 | Task | Description | Writes |
 |---|---|---|

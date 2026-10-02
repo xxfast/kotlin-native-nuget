@@ -7,6 +7,7 @@ import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.TaskAction
 import org.gradle.api.tasks.TaskProvider
@@ -21,8 +22,15 @@ import java.time.Instant
  */
 @DisableCachingByDefault(because = "every snapshot build requires a new version")
 abstract class NugetSnapshotVersionTask : DefaultTask() {
+  // ADR-180: optional, so a missing value fails in the action below with the DSL-level message
+  // instead of Gradle's generic "doesn't have a configured value".
   @get:Input
+  @get:Optional
   abstract val baseVersion: Property<String>
+
+  @get:Input
+  @get:Optional
+  abstract val packageId: Property<String>
 
   @get:OutputFile
   abstract val outputFile: RegularFileProperty
@@ -33,9 +41,19 @@ abstract class NugetSnapshotVersionTask : DefaultTask() {
 
   @TaskAction
   fun write() {
+    val base: String? = baseVersion.orNull
+    require(!base.isNullOrBlank()) {
+      "nuget { publish { snapshot = true } } requires a base version; set `version = \"1.0.0\"`"
+    }
+
+    val id: String? = packageId.orNull
+    require(!id.isNullOrBlank()) {
+      "nuget { publish { snapshot = true } } requires a packageId to name the version props file"
+    }
+
     val file: File = outputFile.get().asFile
     file.parentFile.mkdirs()
-    file.writeText("${baseVersion.get()}-snapshot.${Instant.now().toEpochMilli()}\n")
+    file.writeText("$base-snapshot.${Instant.now().toEpochMilli()}\n")
   }
 }
 
@@ -99,16 +117,6 @@ internal fun registerSnapshotVersioning(
   project: Project,
   pub: NugetPublishConfig,
 ): SnapshotVersioning {
-  val base: String? = pub.version
-  require(!base.isNullOrBlank()) {
-    "nuget { publish { snapshot = true } } requires a base version; set `version = \"1.0.0\"`"
-  }
-
-  val id: String? = pub.packageId
-  require(!id.isNullOrBlank()) {
-    "nuget { publish { snapshot = true } } requires a packageId to name the version props file"
-  }
-
   val versionFile: Provider<RegularFile> =
     project.layout.buildDirectory.file("nuget-snapshot-version.txt")
 
@@ -118,16 +126,20 @@ internal fun registerSnapshotVersioning(
     .asText
     .map { it.trim() }
 
+  // ADR-180: registered with `publish {}` whatever `snapshot` is; packNuget only depends on these
+  // when it is true. A missing version or packageId fails in the mint task's action.
   val versionTask: TaskProvider<NugetSnapshotVersionTask> =
     project.tasks.register("nugetSnapshotVersion", NugetSnapshotVersionTask::class.java) { task ->
       task.group = "nuget"
       task.description = "Mints a unique snapshot version for this build"
-      task.baseVersion.set(base)
+      task.baseVersion.set(pub.version)
+      task.packageId.set(pub.packageId)
       task.outputFile.set(versionFile)
     }
 
-  val propsFile: File = pub.versionPropsFile
-    ?: project.rootProject.layout.buildDirectory.file("${id}Versions.props").get().asFile
+  pub.versionPropsFile.convention(
+    project.rootProject.layout.buildDirectory.file(pub.packageId.map { id -> "${id}Versions.props" })
+  )
 
   val propsTask: TaskProvider<NugetSnapshotVersionPropsTask> =
     project.tasks.register(
@@ -136,9 +148,9 @@ internal fun registerSnapshotVersioning(
     ) { task ->
       task.group = "nuget"
       task.description = "Writes the MSBuild props file pinning the current snapshot version"
-      task.packageId.set(id)
+      task.packageId.set(pub.packageId)
       task.packageVersion.set(version)
-      task.outputFile.set(propsFile)
+      task.outputFile.set(pub.versionPropsFile)
       task.dependsOn(versionTask)
     }
 

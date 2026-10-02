@@ -54,13 +54,13 @@ class NugetPluginPublishedScopesWiringTest {
     (this as ProjectInternal).evaluate()
   }
 
-  private fun Project.publish(id: String, configure: NugetPublishConfig.() -> Unit = {}) {
+  private fun Project.publish(id: String, configure: (NugetPublishConfig) -> Unit = {}) {
     extensions.getByType(NugetExtension::class.java).publish {
-      packageId = id
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
-      configure()
+      it.packageId.set(id)
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
+      configure(it)
     }
   }
 
@@ -75,13 +75,13 @@ class NugetPluginPublishedScopesWiringTest {
     val libB: Project = buildProjectWithSharedLib("lib-b", root)
 
     libA.publish("LibA") {
-      rootPackage = "com.acme"
-      include("com.acme", "com.acme.models")
+      it.rootPackage.set("com.acme")
+      it.include("com.acme", "com.acme.models")
     }
     libB.publish("LibB") {
-      rootPackage = "com.acme"
-      include("com.acme", "com.acme.models")
-      exclude("com.acme.internal")
+      it.rootPackage.set("com.acme")
+      it.include("com.acme", "com.acme.models")
+      it.exclude("com.acme.internal")
     }
 
     listOf(models, libA, libB).forEach { it.evaluate() }
@@ -112,7 +112,7 @@ class NugetPluginPublishedScopesWiringTest {
   @Test
   fun `a lone publisher encodes its own rootPackage-derived scope`() {
     val project: Project = buildProjectWithSharedLib("solo")
-    project.publish("Solo") { rootPackage = "com.contoso.api" }
+    project.publish("Solo") { it.rootPackage.set("com.contoso.api") }
 
     project.evaluate()
 

@@ -13,7 +13,6 @@ Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is
 
 ### 0.9.0: breaking changes
 
-- [ ] Gradle DSL on `Property<T>`: drop the three `afterEvaluate` blocks in `NugetPlugin.kt`, add a `@DslMarker`, make `versionPropsFile` and `prebuiltRuntimes` a `RegularFileProperty` and a `DirectoryProperty`, and make a second `publish {}` call merge instead of replace. Verified (`NugetExtension.kt`, `NugetPublishConfig.kt`, `NugetPlugin.kt:43,273,402`).
 - [ ] The target framework is hardcoded to `net8.0` (`NugetPlugin.kt:75`, verified); make it configurable.
 - [ ] Internalise leaked plugin API (the `rir` package, `generateKotlinStubs`, `generateCSharpShims`, `generateCsproj`, `GeneratedFile`, `NugetPusher` and its request and result types) and turn on `explicitApi()` in every published module. Verified: no build script calls `explicitApi()`.
 - [ ] `include` / `exclude` mean Kotlin packages in `publish {}` and C# namespaces in `bind {}`; rename one pair. Verified.

@@ -1,147 +1,193 @@
 package io.github.xxfast.kotlin.native.nuget
 
+import org.gradle.testfixtures.ProjectBuilder
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
-import kotlin.test.assertNull
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class NugetExtensionTest {
-  private val extension = NugetExtension()
+  private val extension: NugetExtension = ProjectBuilder.builder().build()
+    .objects.newInstance(NugetExtension::class.java)
 
   @Test
   fun `publish block populates the model`() {
     extension.publish {
-      packageId = "MyLib"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
-      rootPackage = "io.github.test"
+      it.packageId.set("MyLib")
+      it.version.set("1.0.0")
+      it.authors.set("Test Author")
+      it.description.set("Test description")
+      it.rootPackage.set("io.github.test")
     }
 
-    val pub = extension.publish!!
-    assertEquals("MyLib", pub.packageId)
-    assertEquals("1.0.0", pub.version)
-    assertEquals("Test Author", pub.authors)
-    assertEquals("Test description", pub.description)
-    assertEquals("io.github.test", pub.rootPackage)
+    val pub: NugetPublishConfig = extension.publish
+    assertEquals("MyLib", pub.packageId.get())
+    assertEquals("1.0.0", pub.version.get())
+    assertEquals("Test Author", pub.authors.get())
+    assertEquals("Test description", pub.description.get())
+    assertEquals("io.github.test", pub.rootPackage.get())
   }
 
   @Test
   fun `publish include and exclude populate package prefix lists`() {
     extension.publish {
-      packageId = "MyLib"
-      version = "1.0.0"
-      authors = "Test Author"
-      description = "Test description"
-      rootPackage = "io.github.test"
-      include("a.b")
-      include("a.c")
-      exclude("a.b.internal")
+      it.packageId.set("MyLib")
+      it.include("a.b")
+      it.include("a.c")
+      it.exclude("a.b.internal")
     }
 
-    val pub = extension.publish!!
-    assertEquals(listOf("a.b", "a.c"), pub.include)
-    assertEquals(listOf("a.b.internal"), pub.exclude)
+    val pub: NugetPublishConfig = extension.publish
+    assertEquals(listOf("a.b", "a.c"), pub.include.get())
+    assertEquals(listOf("a.b.internal"), pub.exclude.get())
   }
 
   @Test
-  fun `packNuget fails fast with clear message when publish is missing`() {
-    assertNull(extension.publish)
+  fun `publish is undeclared until the block is called`() {
+    assertFalse(extension.publishDeclared)
+    assertFalse(extension.publish.packageId.isPresent)
 
-    val error = assertFailsWith<IllegalArgumentException> {
-      requireNotNull(extension.publish) {
-        "nuget { publish { ... } } block is required to run packNuget"
-      }
+    extension.publish { }
+
+    assertTrue(extension.publishDeclared)
+  }
+
+  @Test
+  fun `a second publish block merges into the first`() {
+    extension.publish {
+      it.packageId.set("MyLib")
+      it.include("a.b")
+    }
+    extension.publish {
+      it.version.set("2.0.0")
+      it.include("a.c")
     }
 
-    assertEquals("nuget { publish { ... } } block is required to run packNuget", error.message)
+    val pub: NugetPublishConfig = extension.publish
+    assertEquals("MyLib", pub.packageId.get())
+    assertEquals("2.0.0", pub.version.get())
+    assertEquals(listOf("a.b", "a.c"), pub.include.get())
+  }
+
+  @Test
+  fun `snapshot and strictDependencyTypes default to false`() {
+    assertFalse(extension.publish.snapshot.get())
+    assertFalse(extension.publish.strictDependencyTypes.get())
   }
 
   @Test
   fun `dependency without bind is resolve-only`() {
     extension.dependencies {
-      dependency("Serilog") {
-        version = "3.1.1"
+      it.dependency("Serilog") { dep ->
+        dep.version.set("3.1.1")
       }
     }
 
     val dep: NugetDependency = extension.dependencies.single()
     assertEquals("Serilog", dep.id)
-    assertEquals("3.1.1", dep.version)
-    assertNull(dep.bind)
+    assertEquals("3.1.1", dep.version.get())
+    assertFalse(dep.bound)
   }
 
   @Test
   fun `dependency with bind captures packageName include exclude alias`() {
     extension.dependencies {
-      dependency("Acme.Utilities") {
-        version = "2.0.0"
-        source = "https://pkgs.dev.azure.com/myorg"
-        bind {
-          packageName = "acme"
-          include("Acme.Utilities.Core")
-          include("Acme.Utilities.Math")
-          exclude("Acme.Utilities.Internal")
-          alias("Acme.Utilities.Core", kotlinPackage = "acme.core")
-          alias("Acme.Utilities.Math", kotlinPackage = "acme.math")
+      it.dependency("Acme.Utilities") { dep ->
+        dep.version.set("2.0.0")
+        dep.source.set("https://pkgs.dev.azure.com/myorg")
+        dep.bind { bind ->
+          bind.packageName.set("acme")
+          bind.include("Acme.Utilities.Core")
+          bind.include("Acme.Utilities.Math")
+          bind.exclude("Acme.Utilities.Internal")
+          bind.alias("Acme.Utilities.Core", kotlinPackage = "acme.core")
+          bind.alias("Acme.Utilities.Math", kotlinPackage = "acme.math")
         }
       }
     }
 
     val dep: NugetDependency = extension.dependencies.single()
     assertEquals("Acme.Utilities", dep.id)
-    assertEquals("2.0.0", dep.version)
-    assertEquals("https://pkgs.dev.azure.com/myorg", dep.source)
+    assertEquals("2.0.0", dep.version.get())
+    assertEquals("https://pkgs.dev.azure.com/myorg", dep.source.get())
+    assertTrue(dep.bound)
 
-    val bind = dep.bind!!
-    assertEquals("acme", bind.packageName)
-    assertEquals(listOf("Acme.Utilities.Core", "Acme.Utilities.Math"), bind.include)
-    assertEquals(listOf("Acme.Utilities.Internal"), bind.exclude)
+    val bind: NugetBindConfig = dep.bind
+    assertEquals("acme", bind.packageName.get())
+    assertEquals(listOf("Acme.Utilities.Core", "Acme.Utilities.Math"), bind.include.get())
+    assertEquals(listOf("Acme.Utilities.Internal"), bind.exclude.get())
     assertEquals(
       mapOf(
         "Acme.Utilities.Core" to "acme.core",
         "Acme.Utilities.Math" to "acme.math",
       ),
-      bind.aliases,
+      bind.aliases.get(),
     )
   }
 
   @Test
   fun `dependency shorthand sets version without configure block`() {
     extension.dependencies {
-      dependency("Microsoft.Extensions.Logging", version = "8.0.0")
+      it.dependency("Microsoft.Extensions.Logging", version = "8.0.0")
     }
 
     val dep: NugetDependency = extension.dependencies.single()
     assertEquals("Microsoft.Extensions.Logging", dep.id)
-    assertEquals("8.0.0", dep.version)
-    assertNull(dep.bind)
+    assertEquals("8.0.0", dep.version.get())
+    assertFalse(dep.bound)
   }
 
   @Test
-  fun `multiple dependencies are preserved in declaration order`() {
+  fun `multiple dependencies are kept, keyed by id`() {
     extension.dependencies {
-      dependency("First") { version = "1.0.0" }
-      dependency("Second") { version = "2.0.0" }
-      dependency("Third") { version = "3.0.0" }
+      it.dependency("Second") { dep -> dep.version.set("2.0.0") }
+      it.dependency("First") { dep -> dep.version.set("1.0.0") }
+      it.dependency("Third") { dep -> dep.version.set("3.0.0") }
     }
 
-    val ids: List<String> = extension.dependencies.map { it.id }
-    assertEquals(listOf("First", "Second", "Third"), ids)
+    val ids: Set<String> = extension.dependencies.map { it.id }.toSet()
+    assertEquals(setOf("First", "Second", "Third"), ids)
+  }
+
+  // ADR-180 gate decision 1: a repeated id is one PackageReference, not two.
+  @Test
+  fun `a second dependency with the same id merges into one entry`() {
+    extension.dependencies { it.dependency("Acme", version = "1.0.0") }
+    extension.dependencies {
+      it.dependency("Acme") { dep -> dep.bind { bind -> bind.include("Acme.Core") } }
+    }
+
+    val dep: NugetDependency = extension.dependencies.single()
+    assertEquals("1.0.0", dep.version.get())
+    assertTrue(dep.bound)
+    assertEquals(listOf("Acme.Core"), dep.bind.include.get())
+  }
+
+  @Test
+  fun `a second bind block merges into the first`() {
+    extension.dependencies {
+      it.dependency("Acme") { dep ->
+        dep.bind { bind -> bind.include("Acme.Core") }
+        dep.bind { bind -> bind.include("Acme.Math") }
+      }
+    }
+
+    val bind: NugetBindConfig = extension.dependencies.single().bind
+    assertEquals(listOf("Acme.Core", "Acme.Math"), bind.include.get())
   }
 
   @Test
   fun `aliasing the same csharp namespace twice keeps only the last kotlin package`() {
     extension.dependencies {
-      dependency("Acme.Utilities") {
-        bind {
-          alias("Foo", kotlinPackage = "a.b")
-          alias("Foo", kotlinPackage = "a.c")
+      it.dependency("Acme.Utilities") { dep ->
+        dep.bind { bind ->
+          bind.alias("Foo", kotlinPackage = "a.b")
+          bind.alias("Foo", kotlinPackage = "a.c")
         }
       }
     }
 
-    val bind = extension.dependencies.single().bind!!
-    assertEquals(mapOf("Foo" to "a.c"), bind.aliases)
+    val bind: NugetBindConfig = extension.dependencies.single().bind
+    assertEquals(mapOf("Foo" to "a.c"), bind.aliases.get())
   }
 }

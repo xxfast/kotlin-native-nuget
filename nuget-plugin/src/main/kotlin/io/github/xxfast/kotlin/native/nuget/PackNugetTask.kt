@@ -8,6 +8,7 @@ import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.TaskAction
@@ -67,6 +68,16 @@ abstract class PackNugetTask : DefaultTask() {
   @get:OutputDirectory
   abstract val outputDir: DirectoryProperty
 
+  // ADR-180: whether any native target maps to a supported RID, linkable here or not. False means no
+  // supported target at all, which used to leave packNuget unregistered and now fails the task.
+  @get:Internal
+  abstract val hasSupportedTargets: Property<Boolean>
+
+  // ADR-093 / ADR-180: RID to target name for each supported target whose link task is disabled
+  // on this host. Logged when the task runs; the same RIDs are absent from nativeLibDirs.
+  @get:Internal
+  abstract val skippedRids: MapProperty<String, String>
+
   @TaskAction
   fun pack() {
     val id: String = packageId.get()
@@ -75,6 +86,28 @@ abstract class PackNugetTask : DefaultTask() {
         "set nuget { publish { packageId = \"...\" } }"
     }
     val version: String = packageVersion.get()
+
+    check(hasSupportedTargets.getOrElse(true)) {
+      "[nuget] No supported native targets found (expected mingw or macOS) in $path, so " +
+        "packNuget has nothing to pack. Add a supported Kotlin/Native target."
+    }
+
+    skippedRids.get().forEach { (rid, target) ->
+      logger.lifecycle(
+        "[nuget] Skipping RID '$rid': the link task for target '$target' is disabled " +
+          "on this host. Supply it from another host via " +
+          "nuget { publish { prebuiltRuntimes = ... } } to ship it in this package."
+      )
+    }
+
+    // Only when the plugin wired the target facts (it always sets `hasSupportedTargets`): a task
+    // configured by hand may legitimately stage C# only.
+    val wired: Boolean = hasSupportedTargets.isPresent
+    check(!wired || nativeLibDirs.get().isNotEmpty() || prebuiltRuntimesDir.isPresent) {
+      "[nuget] No native library to pack in $path: every supported target's link task is " +
+        "disabled on this host and no prebuiltRuntimes is set. Build on a host that can link " +
+        "one, or set nuget { publish { prebuiltRuntimes = ... } }."
+    }
     val outDir: File = outputDir.get().asFile
 
     val nupkgDir = File(outDir, "$id.$version")
