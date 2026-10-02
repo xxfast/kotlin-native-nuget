@@ -3,6 +3,8 @@ package io.github.xxfast.kotlin.native.nuget
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.TaskAction
@@ -18,6 +20,9 @@ import javax.inject.Inject
 )
 abstract class NugetRestoreTask : DefaultTask() {
   @get:InputFile abstract val csprojFile: RegularFileProperty
+
+  // ADR-184: the restore TFM, named in the failure hint.
+  @get:Input abstract val targetFramework: Property<String>
   @get:OutputFile abstract val assetsFile: RegularFileProperty
 
   @get:Inject abstract val execOps: ExecOperations
@@ -39,7 +44,8 @@ abstract class NugetRestoreTask : DefaultTask() {
         "[nuget] dotnet restore failed (exit code $exitCode).\n" +
           stderr.toString().trimEnd() + "\n\n" +
           "If this is a transient network error, re-run with --rerun-tasks. " +
-          "If a package requires a higher .NET version than net8.0, " +
+          "If a package requires a higher .NET version than ${targetFramework.get()}, " +
+          "raise nuget { targetFramework } or " +
           "use an older compatible version."
       )
     }

@@ -6000,7 +6000,7 @@ private fun nugetRegistryContent(expected: List<String>): String {
     |        "No [ModuleInitializer] in any *Registration.cs ran, so those files are not compiled into " +
     |        "any assembly the host has loaded. This is almost never a codegen bug. In order of likelihood:\n" +
     |        "  1. Stale build state: the consuming project's obj/project.assets.json was not re-resolved, " +
-    |        "so NuGet never handed contentFiles/cs/any/*Registration.cs to the compiler. Delete obj/ and " +
+    |        "so NuGet never handed contentFiles/cs/<tfm>/*Registration.cs to the compiler. Delete obj/ and " +
     |        "bin/, purge the NuGet cache at ~/.nuget/packages/${'$'}packageId, restore, rebuild.\n" +
     |        "  2. The consuming project does not reference the packed package at all.\n" +
     |        "  3. The shim files compiled, but the assembly containing them was never loaded.\n" +

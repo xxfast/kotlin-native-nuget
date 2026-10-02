@@ -74,7 +74,7 @@ Point a C# project at the folder containing the `.nupkg` as a local NuGet feed a
 `PackageReference`. To publish to a real feed instead, run `./gradlew publishNuget`; see
 [Publish a Kotlin/Native library as NuGet](publish-kotlin-library-as-nuget.md#5-publish-the-package-to-a-feed).
 The package ships the native libs under
-`runtimes/{rid}/native/` and the pre-generated `Interop.cs` under `contentFiles/cs/any/`, both
+`runtimes/{rid}/native/` and the pre-generated `Interop.cs` under `contentFiles/cs/<tfm>/`, both
 wire up automatically, no consumer-side codegen.
 
 ```xml

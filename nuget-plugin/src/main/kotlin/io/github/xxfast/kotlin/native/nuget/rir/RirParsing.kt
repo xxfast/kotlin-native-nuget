@@ -8,12 +8,18 @@ private val json = Json { ignoreUnknownKeys = true }
 
 fun parseReverseIr(jsonString: String): RirFile = json.decodeFromString(jsonString)
 
-fun deriveDllPaths(assetsJson: String, packageIds: Set<String>): Map<String, List<String>> {
+// ADR-184: [targetFramework] is the restore TFM, the assets file's `targets` key. No default: a key
+// that differs from the restore TFM finds no entry and binds nothing, silently.
+fun deriveDllPaths(
+  assetsJson: String,
+  packageIds: Set<String>,
+  targetFramework: String,
+): Map<String, List<String>> {
   if (packageIds.isEmpty()) return emptyMap()
 
   val assets: AssetsFile = json.decodeFromString(assetsJson)
   val packagesPath: String = assets.project.restore.packagesPath
-  val targets: Map<String, AssetsTarget> = assets.targets["net8.0"] ?: return emptyMap()
+  val targets: Map<String, AssetsTarget> = assets.targets[targetFramework] ?: return emptyMap()
 
   // Case-insensitive lookup from lowercased id → caller-specified id (NuGet IDs are case-insensitive)
   val idLookup: Map<String, String> = packageIds.associateBy { it.lowercase() }

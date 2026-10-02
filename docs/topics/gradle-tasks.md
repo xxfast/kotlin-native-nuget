@@ -26,7 +26,7 @@ for the DSL and credential setup.
 `packNuget` writes the staged package to `build/nuget/{packageId}.{version}/` and the zipped
 `.nupkg` to `build/nuget/{packageId}.{version}.nupkg`. When the project also binds a dependency,
 it merges the reverse-direction C# shims from `nugetGenerateShims` into the same
-`contentFiles/cs/any/` folder and pins each bound dependency at its exact resolved version in the
+`contentFiles/cs/<tfm>/` folder and pins each bound dependency at its exact resolved version in the
 `.nuspec` `<dependencies>` block.
 
 `nugetReportDiagnostics` re-emits every skipped-declaration message as a Gradle warning on each

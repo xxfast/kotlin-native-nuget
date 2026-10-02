@@ -470,3 +470,12 @@ of an SDK-class failure as "a loud failure, not a silent wrong verdict" for the 
 toolchain cannot run at all. That case is now an environment skip. A restore failure raised by the
 compiler run itself, such as an unreachable feed or a missing package, still fails the pack as
 before.
+
+## Amendment (2026-10-02): the check compiles at the configured target framework (ADR-184)
+
+The `TargetFramework` row above is no longer a constant: `generateCheckCsproj` writes
+`nuget { targetFramework }` (default `net10.0`), the same value `NugetGenTask`, the assets-file
+lookup and the `.nuspec` dependency group use. `LangVersion` moves from `12.0` to `14.0`, the C#
+level ADR-188 sets as the generated code's floor and the default language of `net10.0`.
+`GeneratedBindingsCheck/GeneratedBindingsCheck.csproj` moves to `net10.0` / `14.0` with it, so the
+two property sets still match. Compiling against TFMs above the floor stays on its own ROADMAP line.

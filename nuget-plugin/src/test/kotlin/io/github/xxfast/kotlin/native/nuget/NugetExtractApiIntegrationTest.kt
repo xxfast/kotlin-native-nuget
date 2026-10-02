@@ -138,6 +138,7 @@ class NugetExtractApiIntegrationTest {
     val dllPaths: Map<String, List<String>> = deriveDllPaths(
       assetsJson = assetsFile.readText(),
       packageIds = setOf("Newtonsoft.Json"),
+      targetFramework = "net8.0",
     )
 
     assertTrue(dllPaths.containsKey("Newtonsoft.Json"), "deriveDllPaths must find Newtonsoft.Json")
@@ -208,6 +209,7 @@ class NugetExtractApiIntegrationTest {
     val dllPaths: Map<String, List<String>> = deriveDllPaths(
       assetsJson = assetsFile.readText(),
       packageIds = setOf("Newtonsoft.Json"),
+      targetFramework = "net8.0",
     )
 
     val toolDir: File = Files.createTempDirectory("NugetMetadataReader-overloads").toFile()
@@ -997,6 +999,7 @@ class NugetExtractApiIntegrationTest {
     val dllPaths: Map<String, List<String>> = deriveDllPaths(
       assetsJson = assetsFile.readText(),
       packageIds = setOf("MimeMapping"),
+      targetFramework = "net8.0",
     )
 
     assertTrue(dllPaths.containsKey("MimeMapping"), "deriveDllPaths must find MimeMapping")

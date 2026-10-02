@@ -19,7 +19,7 @@ import java.util.zip.ZipOutputStream
 
 private val NATIVE_EXTENSIONS = setOf("dll", "dylib", "so")
 
-// The .cs files packNuget stages into contentFiles/cs/any/, in staging order. Deduped by file
+// The .cs files packNuget stages into contentFiles/cs/<tfm>/, in staging order. Deduped by file
 // name - if the same name appears in more than one source dir, the last one wins (matches
 // copyTo's overwrite = true applied in iteration order). ADR-138: nugetCompileInterop compiles
 // exactly this set, so the check and the pack can never disagree about what ships.
@@ -48,7 +48,7 @@ abstract class PackNugetTask : DefaultTask() {
 
   // ADR-050 Alternative 3: a ConfigurableFileCollection (not a single DirectoryProperty) so
   // packNuget can merge .cs files from multiple producers — KSP's forward Interop.cs and
-  // nugetGenerateShims's reverse registration shims — into one contentFiles/cs/any/ folder.
+  // nugetGenerateShims's reverse registration shims — into one contentFiles/cs/<tfm>/ folder.
   @get:InputFiles
   abstract val generatedCsDirs: ConfigurableFileCollection
 
@@ -64,6 +64,15 @@ abstract class PackNugetTask : DefaultTask() {
   @get:Optional
   @get:InputDirectory
   abstract val prebuiltRuntimesDir: DirectoryProperty
+
+  // ADR-184: the package's floor TFM. Names the contentFiles folder, the empty lib/<tfm>/_._
+  // placeholder and the nuspec dependency group, so NuGet rejects a lower consumer with NU1202.
+  @get:Input
+  abstract val targetFramework: Property<String>
+
+  init {
+    targetFramework.convention(DEFAULT_TARGET_FRAMEWORK)
+  }
 
   @get:OutputDirectory
   abstract val outputDir: DirectoryProperty
@@ -135,7 +144,8 @@ abstract class PackNugetTask : DefaultTask() {
 
     stagePrebuiltRuntimes(nupkgDir, localRids)
 
-    val contentDir = File(nupkgDir, "contentFiles/cs/any")
+    val tfm: String = targetFramework.get()
+    val contentDir = File(nupkgDir, "contentFiles/cs/$tfm")
     contentDir.mkdirs()
 
     val csFiles: List<File> = generatedCsFiles(generatedCsDirs.files)
@@ -144,12 +154,21 @@ abstract class PackNugetTask : DefaultTask() {
       csFile.copyTo(File(contentDir, csFile.name), overwrite = true)
     }
 
-    val buildDir = File(nupkgDir, "build")
+    // ADR-184: without a lib/<tfm>/ entry NuGet treats a contentFiles-only package as compatible
+    // with every TFM and silently drops its dependency group for a lower consumer (memo spike, Q/R).
+    val libDir = File(nupkgDir, "lib/$tfm")
+    libDir.mkdirs()
+    File(libDir, "_._").writeText("")
+
+    // ADR-184: build/<tfm>/, not root build/. A root build/<id>.targets is an asset for every TFM,
+    // so NuGet counts the package compatible with a lower consumer and restores it without NU1202,
+    // compiling none of the source (verified: a net8.0 consumer of the packed TestLibrary).
+    val buildDir = File(nupkgDir, "build/$tfm")
     buildDir.mkdirs()
 
     File(buildDir, "$id.targets").writeText(generateTargets(id))
     File(nupkgDir, "$id.nuspec").writeText(
-      generateNuspec(id, version, csFiles, dependencyVersions.get())
+      generateNuspec(id, version, tfm, csFiles, dependencyVersions.get())
     )
 
     logger.lifecycle("NuGet package staged at: ${nupkgDir.absolutePath}")
@@ -239,13 +258,16 @@ abstract class PackNugetTask : DefaultTask() {
   private fun generateNuspec(
     id: String,
     version: String,
+    tfm: String,
     csFiles: List<File>,
     dependencyVersions: Map<String, String>,
   ): String {
-    val fileEntries: String = csFiles.joinToString("\n") { file ->
-      "      <file src=\"contentFiles/cs/any/${file.name}\" " +
-          "target=\"contentFiles/cs/any/${file.name}\" />"
-    }
+    val fileEntries: String = (
+      csFiles.map { file ->
+        "      <file src=\"contentFiles/cs/$tfm/${file.name}\" " +
+            "target=\"contentFiles/cs/$tfm/${file.name}\" />"
+      } + "      <file src=\"lib/$tfm/_._\" target=\"lib/$tfm/_._\" />"
+    ).joinToString("\n")
 
     val ranges: Map<String, String> = dependencyRanges(dependencyVersions)
     val dependenciesBlock: String = if (ranges.isEmpty()) {
@@ -256,7 +278,7 @@ abstract class PackNugetTask : DefaultTask() {
       }
       """
         |    <dependencies>
-        |      <group targetFramework="net8.0">
+        |      <group targetFramework="$tfm">
         |$entries
         |      </group>
         |    </dependencies>
@@ -273,7 +295,7 @@ abstract class PackNugetTask : DefaultTask() {
       |    <description>${packageDescription.get()}</description>
       |$dependenciesBlock
       |    <contentFiles>
-      |      <files include="cs/any/**/*.cs" buildAction="Compile" />
+      |      <files include="cs/$tfm/**/*.cs" buildAction="Compile" />
       |    </contentFiles>
       |  </metadata>
       |  <files>

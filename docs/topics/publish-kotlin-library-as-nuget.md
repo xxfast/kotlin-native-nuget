@@ -224,7 +224,7 @@ the prebuilt one:
 MyCatLib.1.0.0.nupkg
 ├── runtimes/osx-arm64/native/libkn_6d796361746c6962.dylib   (locally linked)
 ├── runtimes/win-x64/native/kn_6d796361746c6962.dll          (prebuilt)
-├── contentFiles/cs/any/*.cs
+├── contentFiles/cs/<tfm>/*.cs
 ├── build/MyCatLib.targets
 └── MyCatLib.nuspec
 ```

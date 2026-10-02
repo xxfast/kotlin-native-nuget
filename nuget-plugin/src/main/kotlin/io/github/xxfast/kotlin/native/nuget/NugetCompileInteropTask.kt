@@ -35,7 +35,7 @@ internal const val HERMETIC_GLOBAL_JSON = "{}"
  * ADR-138 amendment: the `NuGet.config` the check restores with, passed as `RestoreConfigFile` so a
  * consumer's own config (extra feeds, package source mapping) is never consulted. `RestoreSources`
  * in the csproj replaces this source list outright when a dependency declares a feed; this config
- * is what a forward-only project restores the `net8.0` targeting pack from.
+ * is what a forward-only project restores the configured targeting pack from (ADR-184).
  */
 internal fun hermeticNugetConfig(): String = """
   |<configuration>
@@ -49,7 +49,7 @@ internal fun hermeticNugetConfig(): String = """
 /**
  * ADR-138: the throwaway csproj `nugetCompileInterop` builds. Its property set is
  * `GeneratedBindingsCheck/GeneratedBindingsCheck.csproj`'s, verbatim, plus `AllowUnsafeBlocks`
- * (which a real consumer gets from the package's own `build/<id>.targets`, and this project has no
+ * (which a real consumer gets from the package's own `build/<tfm>/<id>.targets`, and this project has no
  * package to import it from). If that csproj changes, this function changes with it;
  * `NugetCompileInteropTaskTest` pins every property so the drift is loud.
  */
@@ -57,6 +57,7 @@ internal fun generateCheckCsproj(
   csFiles: List<File>,
   dependencyVersions: Map<String, String>,
   dependencySources: List<String>,
+  targetFramework: String = DEFAULT_TARGET_FRAMEWORK,
 ): String {
   val restoreSourcesLine: String = if (dependencySources.isEmpty()) {
     ""
@@ -86,8 +87,8 @@ internal fun generateCheckCsproj(
   return """
     |<Project Sdk="Microsoft.NET.Sdk">
     |  <PropertyGroup>
-    |    <TargetFramework>net8.0</TargetFramework>
-    |    <LangVersion>12.0</LangVersion>
+    |    <TargetFramework>$targetFramework</TargetFramework>
+    |    <LangVersion>14.0</LangVersion>
     |    <Nullable>enable</Nullable>
     |    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     |    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
@@ -131,6 +132,15 @@ abstract class NugetCompileInteropTask : DefaultTask() {
   @get:Input
   abstract val dependencySources: ListProperty<String>
 
+  // ADR-184: the package's floor TFM, the one consumer TFM this check compiles at. The plugin wires
+  // it from `nuget { targetFramework }`; the convention serves a task built by hand.
+  @get:Input
+  abstract val targetFramework: Property<String>
+
+  init {
+    targetFramework.convention(DEFAULT_TARGET_FRAMEWORK)
+  }
+
   // Where interop-check.csproj and its obj/ and bin/ land: build/nuget-compile/.
   @get:OutputDirectory
   abstract val projectDir: DirectoryProperty
@@ -155,7 +165,7 @@ abstract class NugetCompileInteropTask : DefaultTask() {
       logger.warn(
         "w: [nuget] dotnet is not on PATH, so the generated C# bindings were not compiled " +
           "before packing. A binding that does not compile will only surface in a consumer's " +
-          "build. Install the .NET SDK 8.0 or later from https://dot.net/download to check at pack."
+          "build. Install the .NET SDK 10.0 or later from https://dot.net/download to check at pack."
       )
       return
     }
@@ -165,7 +175,9 @@ abstract class NugetCompileInteropTask : DefaultTask() {
 
     val csproj = File(dir, "interop-check.csproj")
     csproj.writeText(
-      generateCheckCsproj(csFiles, dependencyVersions.get(), dependencySources.get())
+      generateCheckCsproj(
+        csFiles, dependencyVersions.get(), dependencySources.get(), targetFramework.get(),
+      )
     )
 
     // The scratch dir sits inside the consumer's tree, so the check writes its own SDK and feed
@@ -194,7 +206,7 @@ abstract class NugetCompileInteropTask : DefaultTask() {
         "w: [nuget] The .NET SDK on PATH could not be used (dotnet --version exit code " +
           "${probe.exitValue}), so the generated C# bindings were not compiled before packing. " +
           "A binding that does not compile will only surface in a consumer's build. Install the " +
-          ".NET SDK 8.0 or later from https://dot.net/download to check at pack. dotnet said:\n" +
+          ".NET SDK 10.0 or later from https://dot.net/download to check at pack. dotnet said:\n" +
           probeOutput
       )
       return

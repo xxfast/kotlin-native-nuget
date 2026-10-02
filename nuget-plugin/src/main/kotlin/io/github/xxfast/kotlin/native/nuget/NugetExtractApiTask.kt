@@ -6,6 +6,7 @@ import org.gradle.api.GradleException
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.MapProperty
+import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.OutputFile
@@ -23,6 +24,8 @@ abstract class NugetExtractApiTask : DefaultTask() {
   @get:Input abstract val namespaceIncludes: MapProperty<String, List<String>>
   @get:Input abstract val namespaceExcludes: MapProperty<String, List<String>>
   @get:Input abstract val namespaceAliases: MapProperty<String, Map<String, String>>
+  // ADR-184: the restore TFM; selects the assets file target the bound DLLs are read from.
+  @get:Input abstract val targetFramework: Property<String>
   @get:InputFile abstract val assetsFile: RegularFileProperty
   @get:OutputFile abstract val reverseIrFile: RegularFileProperty
 
@@ -33,7 +36,7 @@ abstract class NugetExtractApiTask : DefaultTask() {
     val assetsJson: String = assetsFile.get().asFile.readText()
     val ids: Set<String> = boundPackageIds.get().toSet()
 
-    val dllPaths: Map<String, List<String>> = deriveDllPaths(assetsJson, ids)
+    val dllPaths: Map<String, List<String>> = deriveDllPaths(assetsJson, ids, targetFramework.get())
 
     dllPaths.forEach { (packageId, paths) ->
       paths.forEach { path ->

@@ -14,7 +14,7 @@ import kotlin.test.assertTrue
  *
  * Piece 1: `generatedCsDir: DirectoryProperty` becomes `generatedCsDirs: ConfigurableFileCollection`
  * so `packNuget` can merge `.cs` files from multiple producers (KSP's forward `Interop.cs` and
- * `nugetGenerateShims`'s reverse registration shims) into one `contentFiles/cs/any/` folder.
+ * `nugetGenerateShims`'s reverse registration shims) into one `contentFiles/cs/net10.0/` folder.
  *
  * Piece 2: `dependencyVersions: MapProperty<String, String>` drives a `.nuspec` `<dependencies>`
  * block pinning each bound package at its exact resolved version (nuspec exact-version range
@@ -36,7 +36,7 @@ class PackNugetTaskTest {
   }
 
   @Test
-  fun `pack merges cs files from multiple generatedCsDirs into contentFiles cs any`() {
+  fun `pack merges cs files from multiple generatedCsDirs into contentFiles cs net10 0`() {
     val task: PackNugetTask = newTask()
 
     val kspDir: File = Files.createTempDirectory("ksp-cs").toFile()
@@ -52,32 +52,65 @@ class PackNugetTaskTest {
 
     task.pack()
 
-    val contentDir = File(outputDir, "TestLibrary.1.0.0/contentFiles/cs/any")
+    val contentDir = File(outputDir, "TestLibrary.1.0.0/contentFiles/cs/net10.0")
     assertTrue(
       File(contentDir, "Interop.cs").exists(),
-      "Interop.cs from the first generatedCsDirs entry must be copied into contentFiles/cs/any/",
+      "Interop.cs from the first generatedCsDirs entry must be copied into contentFiles/cs/net10.0/",
     )
     assertTrue(
       File(contentDir, "FooRegistration.cs").exists(),
       "FooRegistration.cs from the second generatedCsDirs entry must be copied into " +
-          "contentFiles/cs/any/",
+          "contentFiles/cs/net10.0/",
     )
 
     val nuspec: String = File(outputDir, "TestLibrary.1.0.0/TestLibrary.nuspec").readText()
     assertContains(
       nuspec,
-      """<file src="contentFiles/cs/any/Interop.cs" target="contentFiles/cs/any/Interop.cs" />""",
+      """<file src="contentFiles/cs/net10.0/Interop.cs" target="contentFiles/cs/net10.0/Interop.cs" />""",
     )
     assertContains(
       nuspec,
-      """<file src="contentFiles/cs/any/FooRegistration.cs" """ +
-          """target="contentFiles/cs/any/FooRegistration.cs" />""",
+      """<file src="contentFiles/cs/net10.0/FooRegistration.cs" """ +
+          """target="contentFiles/cs/net10.0/FooRegistration.cs" />""",
     )
     assertContains(
       nuspec,
-      """<files include="cs/any/**/*.cs" buildAction="Compile" />""",
+      """<files include="cs/net10.0/**/*.cs" buildAction="Compile" />""",
       message = "the contentFiles include glob must cover both merged files",
     )
+  }
+
+  // ADR-184: cs/<tfm> plus an empty lib/<tfm>/_._ is the layout that makes NuGet answer a lower
+  // consumer with NU1202; either alone is silent (the memo's spike, variants Q and R).
+  @Test
+  fun `pack scopes contentFiles and an empty lib placeholder to the configured framework`() {
+    val task: PackNugetTask = newTask()
+
+    val csDir: File = Files.createTempDirectory("ksp-cs").toFile()
+    File(csDir, "Interop.cs").writeText("// forward bindings\n")
+
+    val outputDir: File = Files.createTempDirectory("pack-out").toFile()
+    configureCommon(task, outputDir)
+    task.targetFramework.set("net11.0")
+    task.generatedCsDirs.from(csDir)
+    task.dependencyVersions.set(emptyMap())
+
+    task.pack()
+
+    val root = File(outputDir, "TestLibrary.1.0.0")
+    assertTrue(File(root, "contentFiles/cs/net11.0/Interop.cs").exists())
+    assertFalse(File(root, "contentFiles/cs/any").exists())
+    val placeholder = File(root, "lib/net11.0/_._")
+    assertTrue(placeholder.exists(), "lib/net11.0/_._ must exist")
+    assertTrue(placeholder.length() == 0L, "the placeholder must be empty")
+    // A root build/ asset makes the package compatible with every TFM and suppresses NU1202.
+    assertTrue(File(root, "build/net11.0/TestLibrary.targets").exists())
+    assertFalse(File(root, "build/TestLibrary.targets").exists())
+
+    val nuspec: String = File(root, "TestLibrary.nuspec").readText()
+    assertContains(nuspec, """<files include="cs/net11.0/**/*.cs" buildAction="Compile" />""")
+    assertContains(nuspec, """<group targetFramework="net11.0">""")
+    assertContains(nuspec, """<file src="lib/net11.0/_._" target="lib/net11.0/_._" />""")
   }
 
   @Test
@@ -96,7 +129,7 @@ class PackNugetTaskTest {
 
     val nuspec: String = File(outputDir, "TestLibrary.1.0.0/TestLibrary.nuspec").readText()
     assertContains(nuspec, "<dependencies>")
-    assertContains(nuspec, """<group targetFramework="net8.0">""")
+    assertContains(nuspec, """<group targetFramework="net10.0">""")
     assertContains(nuspec, """<dependency id="MimeMapping" version="[4.0.0]" />""")
   }
 

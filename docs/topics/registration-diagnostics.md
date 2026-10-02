@@ -21,7 +21,7 @@ shim and the native library were generated from different builds. One of them is
 pointers were stored (a mismatched table would corrupt memory).
 ```
 
-The C# shim ships as source (`contentFiles/cs/any/`) compiled into *your* assembly, while the
+The C# shim ships as source (`contentFiles/cs/<tfm>/`) compiled into *your* assembly, while the
 register export lives in the separately built native library. NuGet caches by version, so it's
 routine for one half to lag the other. Fix: purge the cached package
 (`~/.nuget/packages/<packageId>`), delete the consuming project's `obj/`/`bin/`, and rebuild both
@@ -60,7 +60,7 @@ Test.Nullability.LegacyNicknameBook, Test.Text.Template.
 No [ModuleInitializer] in any *Registration.cs ran, so those files are not compiled into any
 assembly the host has loaded. This is almost never a codegen bug. In order of likelihood:
   1. Stale build state: the consuming project's obj/project.assets.json was not re-resolved, so
-     NuGet never handed contentFiles/cs/any/*Registration.cs to the compiler. Delete obj/ and
+     NuGet never handed contentFiles/cs/<tfm>/*Registration.cs to the compiler. Delete obj/ and
      bin/, purge the NuGet cache at ~/.nuget/packages/TestDependency, restore, rebuild.
   2. The consuming project does not reference the packed package at all.
   3. The shim files compiled, but the assembly containing them was never loaded.
