@@ -2010,7 +2010,7 @@ class NugetGenerateBindingsTaskTest {
     assertContains(zeroRegistrations, "3.")
     assertContains(zeroRegistrations, "assembly containing them")
     assertContains(zeroRegistrations, "loaded")
-    assertContains(zeroRegistrations, "contentFiles/cs/any/*Registration.cs")
+    assertContains(zeroRegistrations, "contentFiles/cs/<tfm>/*Registration.cs")
     assertContains(zeroRegistrations, "NUGET_INTEROP_TRACE=1")
 
     assertContains(partialRegistrations, "Missing:")

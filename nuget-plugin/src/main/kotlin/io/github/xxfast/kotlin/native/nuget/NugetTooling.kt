@@ -17,7 +17,7 @@ internal fun requireDotnet(purpose: String, searchPath: String? = System.getenv(
   if (dotnet == null) {
     throw GradleException(
       "[nuget] dotnet is required to $purpose but was not found on PATH. " +
-        "Install the .NET SDK 8.0 or later from https://dot.net/download, then re-run."
+        "Install the .NET SDK 10.0 or later from https://dot.net/download, then re-run."
     )
   }
 

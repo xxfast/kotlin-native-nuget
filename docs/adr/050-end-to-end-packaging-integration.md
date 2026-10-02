@@ -216,3 +216,14 @@ exposed three latent defects, now fixed and regression-tested:
    `sample.dll` exports both `mimeTypeFor` and `nuget_mimemapping_mime_utility_register`.
 3. **mingw link failed on `CoTaskMemFree`.** The ADR-048 `freeManagedString` Windows `actual` calls
    `CoTaskMemFree`; the mingw shared-lib link needs `-lole32`, added to the target's `linkerOpts`.
+
+## Amendment (2026-10-02): the content folder is TFM-scoped (ADR-184)
+
+`packNuget` no longer stages into `contentFiles/cs/any/`. The merged forward and shim sources go to
+`contentFiles/cs/<tfm>/`, the targets file to `build/<tfm>/<id>.targets`, and an empty
+`lib/<tfm>/_._` is added, where `<tfm>` is `nuget { targetFramework }` (default `net10.0`). The
+nuspec `<contentFiles>` glob and dependency group name the same TFM. Reason: with `cs/any` and a
+root `build/` file NuGet treats the package as compatible with every TFM, so a lower consumer
+restored it without error and silently lost its dependency group; the scoped layout turns that into
+`NU1202` (verified against the packed `TestLibrary` from a `net8.0` scratch consumer). Every
+reference to `contentFiles/cs/any/` above describes the layout before this date.

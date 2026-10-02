@@ -42,6 +42,7 @@ class DllPathDerivationTest {
     val paths: Map<String, List<String>> = deriveDllPaths(
       assetsJson = singlePackageAssetsJson,
       packageIds = setOf("Newtonsoft.Json"),
+      targetFramework = "net8.0",
     )
 
     assertEquals(1, paths.size)
@@ -58,6 +59,7 @@ class DllPathDerivationTest {
     val paths: Map<String, List<String>> = deriveDllPaths(
       assetsJson = singlePackageAssetsJson,
       packageIds = setOf("Acme.Lib"),
+      targetFramework = "net8.0",
     )
 
     assertTrue(paths.isEmpty())
@@ -97,6 +99,7 @@ class DllPathDerivationTest {
     val paths: Map<String, List<String>> = deriveDllPaths(
       assetsJson = json,
       packageIds = setOf("Acme.Lib"),
+      targetFramework = "net8.0",
     )
 
     val dlls: List<String> = requireNotNull(paths["Acme.Lib"])
@@ -110,6 +113,7 @@ class DllPathDerivationTest {
     val paths: Map<String, List<String>> = deriveDllPaths(
       assetsJson = singlePackageAssetsJson,
       packageIds = emptySet(),
+      targetFramework = "net8.0",
     )
 
     assertTrue(paths.isEmpty())
@@ -148,6 +152,7 @@ class DllPathDerivationTest {
     val paths: Map<String, List<String>> = deriveDllPaths(
       assetsJson = json,
       packageIds = setOf("Serilog"),
+      targetFramework = "net8.0",
     )
 
     val dlls: List<String> = requireNotNull(paths["Serilog"])
@@ -162,6 +167,7 @@ class DllPathDerivationTest {
     val paths: Map<String, List<String>> = deriveDllPaths(
       assetsJson = singlePackageAssetsJson,
       packageIds = setOf("newtonsoft.json"),
+      targetFramework = "net8.0",
     )
 
     assertEquals(1, paths.size)
@@ -197,14 +203,14 @@ class DllPathDerivationTest {
     """.trimIndent()
 
     val error = assertFailsWith<IllegalArgumentException> {
-      deriveDllPaths(assetsJson = json, packageIds = setOf("Foo"))
+      deriveDllPaths(assetsJson = json, packageIds = setOf("Foo"), targetFramework = "net8.0")
     }
 
     assertContains(error.message.orEmpty(), "no libraries entry for 'Foo/1.0.0'")
   }
 
   @Test
-  fun `deriveDllPaths returns empty map when targets has no net8_0 entry`() {
+  fun `deriveDllPaths returns empty map when targets has no entry for the requested framework`() {
     val json = """
       {
         "targets": {
@@ -236,8 +242,30 @@ class DllPathDerivationTest {
     val paths: Map<String, List<String>> = deriveDllPaths(
       assetsJson = json,
       packageIds = setOf("Foo"),
+      targetFramework = "net8.0",
     )
 
     assertTrue(paths.isEmpty())
+  }
+
+  // ADR-184: the key is the configured TFM. A restore at net10.0 read with any other key binds
+  // nothing, silently, which is why the parameter has no default.
+  @Test
+  fun `deriveDllPaths reads the targets entry for the configured framework`() {
+    val json: String = singlePackageAssetsJson.replace("net8.0", "net10.0")
+
+    val paths: Map<String, List<String>> = deriveDllPaths(
+      assetsJson = json,
+      packageIds = setOf("Newtonsoft.Json"),
+      targetFramework = "net10.0",
+    )
+
+    assertEquals(
+      listOf("/home/user/.nuget/packages/newtonsoft.json/13.0.3/lib/net10.0/Newtonsoft.Json.dll"),
+      paths["Newtonsoft.Json"],
+    )
+    assertTrue(
+      deriveDllPaths(json, setOf("Newtonsoft.Json"), targetFramework = "net8.0").isEmpty(),
+    )
   }
 }

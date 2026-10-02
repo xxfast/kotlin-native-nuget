@@ -82,7 +82,7 @@ jobs:
         run: scripts/verify-runtime-exports.sh
         shell: bash
 
-      - name: Check generated bindings compile as a consumer (net8.0, warnings as errors)
+      - name: Check generated bindings compile as a consumer (net10.0, warnings as errors)
         run: dotnet build GeneratedBindingsCheck
 
       - name: Build dotnet tests

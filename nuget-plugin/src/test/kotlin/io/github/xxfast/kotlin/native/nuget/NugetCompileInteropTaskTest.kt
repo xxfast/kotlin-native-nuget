@@ -80,10 +80,10 @@ class NugetCompileInteropTaskTest {
 
   @Test
   fun `renders the GeneratedBindingsCheck property set plus AllowUnsafeBlocks`() {
-    val csproj: String = generateCheckCsproj(emptyList(), emptyMap(), emptyList())
+    val csproj: String = generateCheckCsproj(emptyList(), emptyMap(), emptyList(), "net11.0")
 
-    assertContains(csproj, "<TargetFramework>net8.0</TargetFramework>")
-    assertContains(csproj, "<LangVersion>12.0</LangVersion>")
+    assertContains(csproj, "<TargetFramework>net11.0</TargetFramework>")
+    assertContains(csproj, "<LangVersion>14.0</LangVersion>")
     assertContains(csproj, "<Nullable>enable</Nullable>")
     assertContains(csproj, "<TreatWarningsAsErrors>true</TreatWarningsAsErrors>")
     assertContains(csproj, "<EnableDefaultCompileItems>false</EnableDefaultCompileItems>")
@@ -232,7 +232,7 @@ class NugetCompileInteropTaskTest {
     assertTrue(File(out, "NuGet.config").exists(), "the check must write its own feed selection")
     assertTrue(File(out, "interop-check.csproj").exists(), "the check must write its csproj")
     assertTrue(
-      File(out, "bin/Debug/net8.0/interop-check.dll").exists(),
+      File(out, "bin/Debug/net10.0/interop-check.dll").exists(),
       "the check must have compiled under an installed SDK, not the pin above it",
     )
   }

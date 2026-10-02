@@ -7,16 +7,16 @@ import kotlin.test.assertTrue
 
 class NugetGenTaskTest {
   @Test
-  fun `csproj always pins TargetFramework to net8 0`() {
+  fun `csproj pins the TargetFramework it is given`() {
     val csproj: String = generateCsproj(
       ids = listOf("Newtonsoft.Json"),
       versions = mapOf("Newtonsoft.Json" to "13.0.3"),
       sources = emptyMap(),
-      targetFramework = "net8.0",
+      targetFramework = "net10.0",
       rids = listOf("osx-arm64"),
     )
 
-    assertContains(csproj, "<TargetFramework>net8.0</TargetFramework>")
+    assertContains(csproj, "<TargetFramework>net10.0</TargetFramework>")
   }
 
   @Test

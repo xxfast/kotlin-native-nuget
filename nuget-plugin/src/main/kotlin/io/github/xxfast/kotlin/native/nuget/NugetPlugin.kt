@@ -191,7 +191,7 @@ class NugetPlugin : Plugin<Project> {
               .associate { it.id to it.source.get() }
           }
         )
-        task.targetFramework.set("net8.0")
+        task.targetFramework.set(extension.validatedTargetFramework)
         task.runtimeIdentifiers.set(
           project.provider {
             project.extensions.findByType(KotlinMultiplatformExtension::class.java)
@@ -209,6 +209,7 @@ class NugetPlugin : Plugin<Project> {
         task.group = "nuget"
         task.description = "Runs dotnet restore to download declared NuGet packages"
         task.csprojFile.set(nugetGen.flatMap { it.csprojFile })
+        task.targetFramework.set(extension.validatedTargetFramework)
         task.assetsFile.set(interopDir.map { it.file("obj/project.assets.json") })
       }
 
@@ -244,6 +245,7 @@ class NugetPlugin : Plugin<Project> {
         task.description =
           "Extracts the public API surface of bound NuGet packages into reverse-ir.json"
         task.assetsFile.set(nugetRestore.flatMap { it.assetsFile })
+        task.targetFramework.set(extension.validatedTargetFramework)
         task.boundPackageIds.set(bound.map { deps -> deps.map { it.id } })
         task.packageNameOverrides.set(packageNameOverrides)
         task.namespaceIncludes.set(
@@ -314,7 +316,7 @@ class NugetPlugin : Plugin<Project> {
     nugetImport.configure { task -> task.dependsOn(nugetGenerateShims) }
 
     // ADR-050 Alternative 6: a project that ALSO publishes merges the reverse shims into
-    // contentFiles/cs/any/ and pins each bound package at its exact resolved version in the
+    // contentFiles/cs/<tfm>/ and pins each bound package at its exact resolved version in the
     // .nuspec. `withType().configureEach` covers whichever of `publish {}` and `bind {}` came
     // first; the publish side sets `dependencyVersions` only as a convention.
     val boundIds: Provider<Set<String>> = bound.map { deps -> deps.map { it.id }.toSet() }
@@ -581,6 +583,7 @@ class NugetPlugin : Plugin<Project> {
           "Compiles the generated C# bindings with dotnet before packNuget stages them"
         task.generatedCsDirs.from(kspOutputDir)
         task.projectDir.set(project.layout.buildDirectory.dir("nuget-compile"))
+        task.targetFramework.set(extension.validatedTargetFramework)
         task.dotnetSearchPath.set(project.providers.environmentVariable("PATH"))
         task.dependencySources.addAll(
           project.provider {
@@ -623,6 +626,7 @@ class NugetPlugin : Plugin<Project> {
 
         task.generatedCsDirs.from(kspOutputDir)
         task.outputDir.set(project.layout.buildDirectory.dir("nuget"))
+        task.targetFramework.set(extension.validatedTargetFramework)
 
         task.dependsOn(kspTask)
         task.dependsOn(reportDiagnostics)

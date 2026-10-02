@@ -1,6 +1,6 @@
 <!--
   Compiles the generated C# bindings exactly as a consumer does, at the lowest
-  supported TFM (net8.0). Warnings are treated as errors because our generated
+  supported TFM (net10.0, ADR-184). Warnings are treated as errors because our generated
   code ships as contentFiles and compiles inside the consumer's build, so any
   warning we emit lands in their build (and fails it under TreatWarningsAsErrors).
   This project has no sources of its own; it consumes the packed TestLibrary
@@ -8,8 +8,8 @@
 -->
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <LangVersion>12.0</LangVersion>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14.0</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
