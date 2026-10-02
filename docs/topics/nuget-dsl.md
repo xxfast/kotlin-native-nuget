@@ -62,6 +62,22 @@ matter if you read the DSL back or depend on task shape:
 - A second `publish {}`, `bind {}`, `dependency("X")` or `nuget("x")` used to replace the first or
   register a duplicate (a duplicate `nuget("x")` failed the build). It now merges.
 
+Renamed so a name says what it selects or does. There are no aliases: a script or CI step using an
+old task name fails with "task not found".
+
+| Before | Now |
+|---|---|
+| `bind { include(...) }`, `bind { exclude(...) }` | `includeNamespaces(...)`, `excludeNamespaces(...)`. The old functions are deprecated at `ERROR` level with a `ReplaceWith`. `publish { include/exclude }` is unchanged: it selects Kotlin packages. |
+| `packNuget` | `nugetPack` |
+| `publishNuget` | `nugetPublish` |
+| `publishNugetTo<Name>Repository` | `nugetPublishTo<Name>Repository` |
+| `nugetGen` | `nugetGenerateRestoreProject` |
+| `nugetSnapshotVersion`, `nugetSnapshotVersionProps` | `nugetGenerateSnapshotVersion`, `nugetGenerateSnapshotVersionProps` |
+| `PackNugetTask`, `PublishNugetTask` | `NugetPackTask`, `NugetPublishTask` |
+| `NugetGenTask`, `NugetSnapshotVersionTask`, `NugetSnapshotVersionPropsTask` | `NugetGenerateRestoreProjectTask`, `NugetGenerateSnapshotVersionTask`, `NugetGenerateSnapshotVersionPropsTask` |
+
+Every task now follows `nuget<Verb><Object>`; see [Gradle tasks](gradle-tasks.md).
+
 Groovy build scripts can use the same blocks, but are not tested.
 
 ## Annotations dependency {id="annotations-dependency"}

@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -25,10 +25,8 @@ inconsistent:
   Neither `NugetDiagnostics.json` (a bare array, `ForwardDiagnosticsFile.kt:51-77`) nor
   `reverse-ir.json` (`RirFile(assemblies)`) carries a version. Verified by reading.
 
-The research memos carry the full inventories and counts:
-[include-exclude-rename](../research/roadmap/include-exclude-rename.md),
-[task-name-scheme](../research/roadmap/task-name-scheme.md),
-[diagnostic-code-scheme](../research/roadmap/diagnostic-code-scheme.md).
+The research memos that carried the full inventories and counts (`include-exclude-rename`,
+`task-name-scheme`, `diagnostic-code-scheme`) were deleted at close-out.
 
 The C# fixed types were checked for the same Open decisions line and need no change: every public
 fixed type is `Kotlin`-prefixed (`KotlinFlow<T>`, `KotlinStateFlow<T>`, `KotlinMutableStateFlow<T>`,
@@ -233,8 +231,7 @@ reader can only come from a stale file, because the plugin pins the processor to
 (`NugetPlugin.kt:236-237`, verified by reading); the inference is that KSP's cache key includes the
 processor artifact.
 
-Implemented (2026-10-02, this section only; sections 1 and 2, the DSL filter and task renames, land
-separately):
+Implemented (2026-10-02, diagnostics half; the DSL filter and task renames follow below):
 
 - `RirDiagnosticKind` has no `@SerialName` left; the enum name is the wire code. It derives
   `severity` (`RirDiagnosticSeverity`) and `verb` from the prefix, and any other prefix, or a
