@@ -461,6 +461,13 @@ enum class RirDiagnosticKind {
   @SerialName("info_cancellation_overload_folded")
   INFO_CANCELLATION_OVERLOAD_FOLDED,
 
+  // ADR-006 2026-10-02 amendment: two or more members of one C# enum convert to the same
+  // SCREAMING_SNAKE entry (`HTTPStatus` and `HttpStatus` both give `HTTP_STATUS`), so each of them
+  // keeps its C# name verbatim instead. Emitted plugin-side, one per member kept. Not a skip: every
+  // member binds, at the same ordinal.
+  @SerialName("info_enum_entry_kept_verbatim")
+  INFO_ENUM_ENTRY_KEPT_VERBATIM,
+
   // ADR-053: an oblivious (un-annotated) reference type binds non-null in Kotlin — this is an
   // informational signal, not a skip, since the member is still bridged. One assembly-level
   // instance (memberName empty) when the whole assembly carries no NullableAttribute/

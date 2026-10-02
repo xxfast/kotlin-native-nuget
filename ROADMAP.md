@@ -20,8 +20,6 @@ Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is
 - [ ] One casing and one prefix set for diagnostic codes across forward (`SKIPPED_*`) and reverse (`skipped_*`), and a schema version on `NugetDiagnostics.json` and `reverse-ir.json`. Verified.
 - [ ] Implement [ADR-187](docs/adr/187-forward-finalizer-contract.md): SafeHandle-owned forward handles; the callback-payload wrapper item under Performance & Resource Hygiene closes with it. ([details](docs/backlog/implement-adr-187-safehandle-forward-handles.md))
 - [ ] Decide the minimum C# version: [ADR-013](docs/adr/013-extension-property-mapping.md) defers C# 14 extension properties to a major bump.
-- [ ] Reverse only, not a 1.0.0 blocker: the generated `NugetManagedException` is `internal` (`NugetGenerateBindingsTask.kt:5368`, verified), so Kotlin cannot catch it by type; fold it onto the runtime's public class.
-- [ ] Reverse only, not a 1.0.0 blocker, inferred: `toEnumScreamingSnake` turns `HTTPStatus` into `H_T_T_P_STATUS`. Take both reverse items in 0.9.0 when cheap.
 
 ### 0.10.0: hardening
 
@@ -168,6 +166,7 @@ Mirror of Phase 3. Moves the reverse bridge beyond v1 static methods: C# objects
 - [ ] An interface member returning an interface from another bound namespace has no cross-package `nuget{Name}Value` resolver import on the bound-**interface** route (the class route was fixed alongside the init-only/cross-namespace compile-break fix); inferred, no fixture. ([details](docs/backlog/interface-route-cross-namespace-interface-return-import.md))
 - [ ] The same cross-package resolver import is missing on the generic-witness route (`genericWitnessObjectFileContent`); inferred, no fixture. ([details](docs/backlog/generic-route-cross-namespace-interface-return-import.md))
 - [ ] An `init`-only computed property on a Shape B struct is silently unbound instead of admitted as a getter (the reader's struct branch shares the writable-setter assumption the class/interface fix corrected); verified by reading only. ([details](docs/backlog/shape-b-struct-init-only-computed-property-unbound.md))
+- [ ] `toMethodCamelCase` turns `URLPath` into `uRLPath` for every reverse method and property name; same acronym-run rule as the enum fix (ADR-006 2026-10-02 amendment).
 
 ## Phase 10: Reverse rich type support
 
@@ -183,7 +182,6 @@ Mirror of Phase 4: generics, collections, delegates, and the C#-specific surface
 - [ ] **A delegate at a return, property, or field position, and a constructor overload pair differing only by delegate shape binding with no ambiguity note; a possible nullability-only false positive on that same note; and two same-simple-name custom delegates in different C# namespaces silently overwriting one Kotlin `typealias`.** Four small gaps found alongside [ADR-158](docs/adr/158-reverse-delegate-parameters.md). ([details](docs/backlog/delegate-overload-and-return-gaps.md))
 - [ ] AOT/trimmer safety of the delegate factory's `new TDelegate(holder.Invoke)` is inferred, never run through `AotSmokeTest`. ([details](docs/backlog/delegate-factory-aot-safety-unverified.md))
 - [ ] Oblivious nullability on a custom delegate's own `Invoke` parameters is not reported with `info_oblivious_nullability`, unlike every other annotatable position. ([details](docs/backlog/delegate-invoke-oblivious-nullability-unreported.md))
-- [ ] **A bound C# enum member with a run of consecutive uppercase letters (`AB1C`, `HTTPStatus`) is inferred to over-split into Kotlin, since `toEnumScreamingSnake` inserts an underscore before every uppercase character with no acronym-run exception.** ([details](docs/backlog/reverse-toenumscreamingsnake-mangles-acronym-runs.md))
 - [ ] Map default parameter values → Kotlin default arguments (constants are in metadata)
 - [ ] Map C# extension methods → Kotlin extension functions
 - [ ] Reverse mirror of [ADR-150](docs/adr/150-kdoc-to-csharp-xml-docs.md): a NuGet package's `lib/<tfm>/*.xml` documentation file becomes KDoc on the generated Kotlin bindings; `NugetMetadataReader` has no XML handling today.

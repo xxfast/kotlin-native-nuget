@@ -244,3 +244,23 @@ An enum with only functions still gets its `{Enum}Extensions` class.
   `ERROR_CSHARP_SIGNATURE_COLLISION`: a member function beside a same-named member property
   (`fun description()` beside `val description`), or a companion `val` beside any same-named
   member. Rename one.
+
+## C# enums in Kotlin {id="reverse-enum-naming"}
+
+A bound C# `enum` becomes a Kotlin `enum class` whose entries are `SCREAMING_SNAKE_CASE`. An
+acronym run stays one word, and a digit starts a new one:
+
+```C#
+public enum VetTriage { OK, HTTPTimeout, IOError, Win32NT }
+```
+
+```kotlin
+VetTriage.OK            // OK
+VetTriage.HTTP_TIMEOUT  // HTTPTimeout
+VetTriage.IO_ERROR      // IOError
+VetTriage.WIN32_NT      // Win32NT
+```
+
+If two members of one enum would get the same entry name (`HTTPStatus` and `HttpStatus` both give
+`HTTP_STATUS`), each of them keeps its C# spelling as the Kotlin entry and the build logs one
+`info_enum_entry_kept_verbatim` note per member. The enum still binds in full.

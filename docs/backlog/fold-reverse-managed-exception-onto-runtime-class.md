@@ -12,3 +12,5 @@ in each per-target file the plugin already emits. Not spiked in this pass (the r
 (c) was never run): whether the Beta expect/actual-classes warning trips a consumer's
 `allWarningsAsErrors`, and whether `compileNativeMainKotlinMetadata` accepts the seam at all, are
 open. Fallback if it fails: leave the two types separate.
+
+Research finding (2026-10-02): inside the consuming module the generated class is already catchable, and a fold cannot make the runtime class nameable from `nativeMain` (ADR-130's spike: a declaration reachable only through a per-target `api` is unresolved there), so a `nativeMain` author would still catch the `internal` expect name; the fold would also change `e.message` at every reverse catch site, because the runtime class prefixes the managed type. Not cheap, so it is not a 0.9.0 item.

@@ -142,6 +142,8 @@ distinct types with the same simple name, one reached only when the reverse pipe
 runtime registration file, the other always present once any forward callback exists. Deferred, new
 ROADMAP item below.
 
+*Correction (2026-10-02):* "nameable from `nativeMain`" above is wrong. ADR-130's spike shows a declaration reachable only through a per-target `${target}MainApi` classpath is unresolved in the `nativeMain` metadata compilation; only per-target code and downstream modules can name the runtime class.
+
 **`@NugetRuntimeApi` omission, flagged for the human.** Every other public runtime export function
 in this file carries `@NugetRuntimeApi` (an opt-in marker, ADR-115) so a consumer must
 `@OptIn(NugetRuntimeApi::class)` to call it directly. `NugetManagedException` deliberately does
