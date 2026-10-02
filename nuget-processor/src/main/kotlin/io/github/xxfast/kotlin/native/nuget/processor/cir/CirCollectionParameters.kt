@@ -184,9 +184,15 @@ private fun legacyRouteParameter(
     // here, so nothing is disposed here either.
     is ForwardLegacyParameterShape.Handle -> CirParameter(
       name,
-      type = shape.type.forwardPublicCsharpType(),
+      // Issue #365: a nullable handle is public `T?`, `null` crossing as `IntPtr.Zero`.
+      type = if (shape.nullable) {
+        BridgeType.Nullable(shape.type).forwardPublicCsharpType()
+      } else {
+        shape.type.forwardPublicCsharpType()
+      },
       nativeType = "IntPtr",
-      nativeArgumentExpression = "$name._handle",
+      nativeArgumentExpression =
+        if (shape.nullable) "$name?._handle ?? IntPtr.Zero" else "$name._handle",
     )
 
     // Issue #299: the plan route's wire. A nullable primitive or `Char` is public `int?` / `char?`

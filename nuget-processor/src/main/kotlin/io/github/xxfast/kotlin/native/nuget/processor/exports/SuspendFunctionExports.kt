@@ -24,6 +24,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParam
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.collectionResultProjection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isLegacyLowered
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isLegacyNullableSlot
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyPrelude
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyKotlinNames
@@ -168,7 +169,8 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
       // ADR-114: a collection crosses as a handle to its boxed wire container.
       // ADR-122: so does a class/object/sealed parameter, as the borrowed handle C# already holds.
       if (paramShapes[index].isLegacyLowered()) {
-        builder.addParameter(paramName, cOpaquePointer)
+        val nullable: Boolean = paramShapes[index].isLegacyNullableSlot
+        builder.addParameter(paramName, cOpaquePointer.copy(nullable = nullable))
         return@forEachIndexed
       }
       val resolved: KSType = param.type.resolve().expandAliases()
@@ -298,7 +300,7 @@ private fun FunSpec.Builder.addLegacySuspendParameters(
   func.parameters.forEachIndexed { index, param ->
     val name: String = param.name?.asString() ?: "_"
     if (shapes[index].isLegacyLowered()) {
-      addParameter(name, cOpaquePointer)
+      addParameter(name, cOpaquePointer.copy(nullable = shapes[index].isLegacyNullableSlot))
       return@forEachIndexed
     }
     addLegacyScalarParameter(

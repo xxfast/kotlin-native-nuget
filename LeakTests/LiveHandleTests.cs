@@ -15,6 +15,7 @@ using TestLibrary.Issue126;
 using TestLibrary.Issue127;
 using TestLibrary.Issue131;
 using TestLibrary.Issue236;
+using TestLibrary.Issue365;
 using Issue297 = TestLibrary.Issue297;
 using Issue54 = TestLibrary.Issue54;
 using Issue122 = TestLibrary.Issue122;
@@ -1262,6 +1263,28 @@ public class LiveHandleTests
             Observation.Alive alive = Assert.IsType<Observation.Alive>(observation);
             Assert.Equal("alive:Oreo", radio.Watch(alive).Value);
         });
+    }
+
+    // Row 8c-null. Issue #365: a NULLABLE handle parameter on the legacy suspend route. Null crosses
+    // as IntPtr.Zero and must not mint anything; a value is borrowed exactly like the non-null row
+    // above. Both halves in one crossing, plain class and sealed base, because a fix that wrapped
+    // the nullable dereference in a StableRef of its own would leak on the value arm only, and a
+    // fix that minted a placeholder for null would leak on the null arm only.
+    [Fact]
+    public async Task NullableHandleParameter_SuspendNullAndValue_ReturnsToBaseline()
+    {
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                using var checkup = new Checkup("Dr Purr");
+                using var oreo = new Cat("Oreo");
+                using Observation observation = ObservationKt.OpenBox("Mylo");
+                Assert.Equal("Dr Purr in room 2: none", await checkup.ExamineAsync("room 2", null));
+                Assert.Equal("Dr Purr in room 2: Oreo", await checkup.ExamineAsync("room 2", oreo));
+                Assert.Equal("Dr Purr triage: unobserved", await checkup.TriageAsync(null));
+                Assert.Equal("Dr Purr triage: dead:The cat was not Mylo", await checkup.TriageAsync(observation));
+            },
+            iterations: 50);
     }
 
     // Row 8d. Issue #127 / ADR-123: a *collection* element on the Flow and StateFlow routes. Each
