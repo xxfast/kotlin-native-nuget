@@ -59,7 +59,7 @@ class Tier1ValueClassReceiverTest {
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "private static extern IntPtr Native_TemperamentGetNote(int receiver, out IntPtr error);")
-    assertContains(cs, "private static extern IntPtr Native_ChartrefGetAnnotation(IntPtr receiver, out IntPtr error);")
+    assertContains(cs, "private static extern IntPtr Native_ChartrefGetAnnotation(NugetKotlinHandle receiver, out IntPtr error);")
     assertContains(cs, "Native_TemperamentGetNote((int)receiver.Mood, out IntPtr error)")
     assertContains(cs, "Native_TemperamentSetNote((int)receiver.Mood, value, out IntPtr error)")
     assertContains(cs, "Native_ChartrefGetAnnotation(receiver.Patient._handle, out IntPtr error)")

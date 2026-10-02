@@ -291,6 +291,10 @@ await service.DisposeAsync(); // waits for quickNap, then releases
 string result = await quickNap;
 ```
 
+A wrapper you drop without disposing is not cancelled mid-flight: a pending `suspend` call, a running
+`await foreach` and a held or awaited `StateFlow` keep the owner alive until they finish, and the
+GC releases it afterwards (see [Classes and objects](classes-and-objects.md#object-identity-and-disposal)).
+
 A class that both implements an exported interface and has `suspend`/`Flow` members still gets
 `Dispose()`/`DisposeAsync()` on its own base list, alongside the interface:
 

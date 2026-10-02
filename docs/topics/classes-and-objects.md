@@ -66,6 +66,19 @@ Disposal does not cascade: a wrapper's `Dispose()` releases only its own handle.
 read from the same property. Dispose every wrapper you hold, including ones you only read a
 property or method return into.
 
+Dispose a wrapper to release its Kotlin object promptly. A wrapper you drop without disposing is
+released when the .NET GC finalizes it: eventually, on the finalizer thread, and not at process
+exit. `Dispose()` is idempotent and safe to call from any thread. A `suspend`, `Flow` or `StateFlow`
+call in flight keeps what it needs alive until it completes, so `await new Desk().SettleAsync(5)`
+needs no local for the desk.
+
+One exception: the `IDisposable` an `AddX` [stored-callback](lambdas-and-callbacks.md#c-kotlin-stored-callbacks)
+subscription returns has no finalizer release. Dropping it leaves the listener registered and
+delivering; only its own `Dispose()` unsubscribes and frees it.
+
+A held or awaited `KotlinStateFlow` used after its own `Dispose()`, or collected after the object
+it came from was disposed, throws `ObjectDisposedException`.
+
 ## Method returns
 
 An instance method returning an object, a nullable type, a collection, an enum, or `Char` marshals

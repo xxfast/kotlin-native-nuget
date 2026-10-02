@@ -61,7 +61,7 @@ class Tier1TopLevelSuspendStateFlowTest {
       "expected no undefined-type Task<StateFlow>; generatedCSharp=$csharp",
     )
     // No parent scope on a static member: the collect launches on the runtime's ad-hoc scope.
-    assertContains(csharp, "IntPtr collectScope = IntPtr.Zero;")
+    assertContains(csharp, "NugetKotlinHandle collectScope = NugetKotlinHandle.Null;")
     assertFalse(
       csharp.contains("GetOrCreateScope()"),
       "a static member has no GetOrCreateScope(); generatedCSharp=$csharp",

@@ -171,17 +171,18 @@ class Tier1LegacyRouteParameterNamesTest {
   fun `the mutable state flow route renames a parameter that shadows the error slot`() {
     assertContains(
       generated,
-      "private static extern IntPtr Native_State(IntPtr handle, int error_);",
+      "private static extern IntPtr Native_State(NugetKotlinHandle handle, int error_);",
     )
     assertContains(
       generated,
-      "private static extern void Native_StateSetValue(IntPtr flowHandle, int value, " +
+      "private static extern void Native_StateSetValue(NugetKotlinHandle flowHandle, int value, " +
           "out IntPtr error);",
     )
     assertContains(generated, "public KotlinMutableStateFlow<int> State(int error_)")
     assertContains(generated, "IntPtr flow = Native_State(_handle, error_);")
-    assertContains(generated, "() => NugetStateFlowNative.Value(flow),")
-    assertContains(generated, "Native_StateSetValue(flow, v, out IntPtr error);")
+    assertContains(generated, "var owned = new NugetKotlinHandle(flow);")
+    assertContains(generated, "() => NugetStateFlowNative.Value(owned),")
+    assertContains(generated, "Native_StateSetValue(owned, v, out IntPtr error);")
   }
 
   /**
@@ -198,7 +199,7 @@ class Tier1LegacyRouteParameterNamesTest {
     assertEquals(
       true,
       generated.contains(
-        "private static extern void Native_OnEvent(IntPtr handle, IntPtr refPtr, IntPtr " +
+        "private static extern void Native_OnEvent(NugetKotlinHandle handle, IntPtr refPtr, IntPtr " +
             "refUserData, out IntPtr error);",
       ),
       "extern lines: " + generated.lines().filter { it.contains("OnEvent") }.joinToString("\n"),
@@ -222,7 +223,7 @@ class Tier1LegacyRouteParameterNamesTest {
   fun `the lambda parameter route renames a callback that shadows the error slot`() {
     assertContains(
       generated,
-      "private static extern void Native_OnFail(IntPtr handle, IntPtr errorPtr, IntPtr " +
+      "private static extern void Native_OnFail(NugetKotlinHandle handle, IntPtr errorPtr, IntPtr " +
           "errorUserData, out IntPtr error);",
     )
     assertContains(generated, "public void OnFail(Action<global::Interop.KeywordTick> error_)")

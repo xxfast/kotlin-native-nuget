@@ -51,7 +51,7 @@ class Tier1NullableGenericPropertyTest {
     // ADR-147: hoisted out of the generic carrier (CS7042), forwarded back into it.
     assertContains(
       cs,
-      "internal static extern IntPtr Native_Get_previous(IntPtr handle, out IntPtr error);",
+      "internal static extern IntPtr Native_Get_previous(NugetKotlinHandle handle, out IntPtr error);",
     )
     assertContains(cs, "=> SlotNative.Native_Get_previous(handle, out error);")
     // NugetMarshal.FromHandle already returns `default!` for IntPtr.Zero, so the C# read needs no

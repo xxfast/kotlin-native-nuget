@@ -171,7 +171,7 @@ class Tier1SealedArmFlowTest {
     )
     // One `_scopeHandle` per scope-owning arm: Watching and Running, and nothing for Done.
     assertTrue(
-      Regex("internal IntPtr _scopeHandle;").findAll(result.generatedCSharp).count() == 2,
+      Regex("internal NugetScopeHandle\\? _scopeHandle;").findAll(result.generatedCSharp).count() == 2,
       "expected exactly one scope field per scope-owning arm; got: " +
           "${csharpLinesFor(result, "_scopeHandle")}",
     )

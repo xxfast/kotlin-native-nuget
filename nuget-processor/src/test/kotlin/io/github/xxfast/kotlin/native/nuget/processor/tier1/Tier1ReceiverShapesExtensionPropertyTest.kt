@@ -392,8 +392,8 @@ class Tier1ReceiverShapesExtensionPropertyTest {
       "extension(global::Interop.ChartRef? receiver)\n        {\n" +
         "            public string PatientName\n",
     )
-    assertContains(result.generatedCSharp, "Native_ChartrefGetPatientName(IntPtr receiver")
-    assertContains(result.generatedCSharp, "receiver?.Chart._handle ?? IntPtr.Zero")
+    assertContains(result.generatedCSharp, "Native_ChartrefGetPatientName(NugetKotlinHandle receiver")
+    assertContains(result.generatedCSharp, "receiver?.Chart._handle ?? NugetKotlinHandle.Null")
   }
 
   /**

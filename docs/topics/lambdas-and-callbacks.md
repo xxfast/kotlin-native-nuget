@@ -26,8 +26,8 @@ onNap.Invoke();
 calls into Kotlin and marshals the result back. A lambda returning `Unit` binds as `KotlinAction`
 instead of `KotlinFunc<void>`, since `void` cannot be a C# type argument; `Invoke` returns `void`
 and disposal works the same way. Each property access mints a new native handle, so read the
-property once into a `using var` rather than calling `cat.OnPet.Invoke(...)` inline, which leaks
-the handle.
+property once into a `using var` rather than calling `cat.OnPet.Invoke(...)` inline, which
+leaves the handle undisposed until the GC finalizes it.
 
 `Invoke` accepts and returns `string`, any narrow or wide primitive (including `char`), any
 exported object, a [value class](value-classes.md#at-an-erased-generic-position), or a nullable
@@ -225,7 +225,7 @@ Kotlin, once it crosses:
 
 - a `string` (or other marshalled value) arrives already fully read; there is nothing to dispose.
 - an exported object arrives as a live wrapper you own, the same as any other object you construct
-  or receive. Dispose it yourself:
+  or receive. Dispose it yourself to release it promptly:
 
 ```C#
 cat.ForEachToy(toy =>
@@ -235,9 +235,10 @@ cat.ForEachToy(toy =>
 });
 ```
 
-A generated wrapper has `Dispose()` and no finalizer, so an object payload your callback never
-disposes leaks for the life of the process; `NugetMarshal.LiveHandles` can help diagnose that. A
-primitive payload never had a handle, so there is nothing to own.
+A payload your callback never disposes is not leaked: the .NET GC releases it when it finalizes the
+wrapper, eventually and not at process exit, the same as any other
+[dropped wrapper](classes-and-objects.md#object-identity-and-disposal). A primitive payload never
+had a handle, so there is nothing to own.
 
 The rule applies just as much when the lambda also returns a value picked from its payload: dispose
 the payload before returning from it, not after.
@@ -252,7 +253,7 @@ using Chime chime = metronome.FirstChime(c =>
 The object `FirstChime` itself returns is a separate, freshly retained handle and is yours to
 dispose too, the same as any other exported-object return.
 
-## C# → Kotlin: stored callbacks
+## C# → Kotlin: stored callbacks {id="c-kotlin-stored-callbacks"}
 
 ```kotlin
 fun addMoodListener(listener: (Mood) -> Unit) = moodListeners.add(listener)

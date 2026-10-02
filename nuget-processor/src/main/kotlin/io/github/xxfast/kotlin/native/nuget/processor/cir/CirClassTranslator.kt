@@ -1565,7 +1565,7 @@ internal fun flowProperty(
         if (isMutableStateFlowProperty) "KotlinMutableStateFlow" else "KotlinStateFlow"
       buildString {
         appendLine()
-        appendLine("                if (_handle == IntPtr.Zero)")
+        appendLine("                if (_handle.IsInvalid)")
         appendLine("                    throw new ObjectDisposedException(nameof($ownerCsName));")
         if (isNullableMember) {
           appendLine("                if (!$hasValueNativeName(_handle))")
@@ -1603,7 +1603,7 @@ internal fun flowProperty(
       val collectNativeName = "${nativeCarrier}Native_Get${csPropName}Collect"
       buildString {
         appendLine()
-        appendLine("                if (_handle == IntPtr.Zero)")
+        appendLine("                if (_handle.IsInvalid)")
         appendLine("                    throw new ObjectDisposedException(nameof($ownerCsName));")
         appendLine("                return new KotlinFlow<$flowElementType>((onNext, onComplete, onError, userData) =>")
         if (flowElementRead != null) {
@@ -1622,7 +1622,7 @@ internal fun flowProperty(
   // read-only StateFlow property has no setter).
   val mutableStateFlowNativeSetterType: String = when {
     !isMutableStateFlowProperty -> nativeReturnType
-    isMutableStateFlowObjectElement -> "IntPtr"
+    isMutableStateFlowObjectElement -> KOTLIN_HANDLE
     else -> flowElementType ?: nativeReturnType
   }
 
@@ -1759,7 +1759,7 @@ internal fun flowMembers(
         entryPoint = "${prefix}_$cname",
         returnType = "IntPtr",
         name = nativeStem,
-        parameters = listOf(CirParameter("handle", "IntPtr")) +
+        parameters = listOf(CirParameter("handle", KOTLIN_HANDLE)) +
             methodParams.nativeImportParameters(),
         visibility = CirVisibility.PRIVATE,
       )
@@ -1773,10 +1773,10 @@ internal fun flowMembers(
         returnType = "void",
         name = "${nativeStem}SetValue",
         parameters = listOf(
-          CirParameter("flowHandle", "IntPtr"),
+          CirParameter("flowHandle", KOTLIN_HANDLE),
           CirParameter(
             "value",
-            if (isMutableStateFlowObjectElement) "IntPtr" else flowCsElementType,
+            if (isMutableStateFlowObjectElement) KOTLIN_HANDLE else flowCsElementType,
           ),
         ),
         visibility = CirVisibility.PRIVATE,
@@ -1809,8 +1809,8 @@ internal fun flowMembers(
     val callbackNames: List<String> =
       listOf(flowNames.onNext, flowNames.onComplete, flowNames.onError, flowNames.userData)
     val nativeParams: List<CirParameter> = listOf(
-      CirParameter("handle", "IntPtr"),
-      CirParameter(flowNames.scopeHandle, "IntPtr"),
+      CirParameter("handle", KOTLIN_HANDLE),
+      CirParameter(flowNames.scopeHandle, KOTLIN_HANDLE),
     ) + methodParams.nativeImportParameters() +
         callbackNames.map { name -> CirParameter(name, "IntPtr") }
 
@@ -1839,7 +1839,7 @@ internal fun flowMembers(
         entryPoint = "${prefix}_${cname}_value",
         returnType = "IntPtr",
         name = "${nativeStem}Value",
-        parameters = listOf(CirParameter("handle", "IntPtr")) +
+        parameters = listOf(CirParameter("handle", KOTLIN_HANDLE)) +
             methodParams.nativeImportParameters(),
         visibility = CirVisibility.PRIVATE,
       )
@@ -1852,7 +1852,7 @@ internal fun flowMembers(
           entryPoint = "${prefix}_${cname}_has_value",
           returnType = "bool",
           name = "${nativeStem}HasValue",
-          parameters = listOf(CirParameter("handle", "IntPtr")) +
+          parameters = listOf(CirParameter("handle", KOTLIN_HANDLE)) +
               methodParams.nativeImportParameters(),
           visibility = CirVisibility.PRIVATE,
         )
@@ -2009,8 +2009,8 @@ internal fun suspendMembers(
     val slotNames: ForwardLegacyNames =
       legacyCsharpNames(method.parameters, classifier, callableCatalog.legacyDefaultFlags(method))
     val nativeParams: List<CirParameter> = listOf(
-      CirParameter("handle", "IntPtr"),
-      CirParameter(slotNames.scopeHandle, "IntPtr"),
+      CirParameter("handle", KOTLIN_HANDLE),
+      CirParameter(slotNames.scopeHandle, KOTLIN_HANDLE),
     ) + methodParams.nativeImportParameters() +
         listOf(
           // ADR-102: a raw thunk address, not a delegate the marshaller would have to build a
@@ -2121,8 +2121,8 @@ internal fun suspendMembers(
     val slotNames: ForwardLegacyNames =
       legacyCsharpNames(method.parameters, classifier, callableCatalog.legacyDefaultFlags(method))
     val nativeParams: List<CirParameter> = listOf(
-      CirParameter("handle", "IntPtr"),
-      CirParameter(slotNames.scopeHandle, "IntPtr"),
+      CirParameter("handle", KOTLIN_HANDLE),
+      CirParameter(slotNames.scopeHandle, KOTLIN_HANDLE),
     ) + methodParams.nativeImportParameters() +
         listOf(
           // ADR-102: a raw thunk address, not a delegate the marshaller would have to build a

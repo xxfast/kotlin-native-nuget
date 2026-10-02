@@ -155,6 +155,20 @@ internal fun BridgeType.isNullableStringWire(): Boolean {
       (inner as? BridgeType.ValueClass)?.underlying == BridgeType.String
 }
 
+/**
+ * ADR-187: a pointer slot whose argument is a generated wrapper's own `_handle` (an exported class,
+ * object or sealed type, or a value class over one, either nullable), so its import is typed
+ * `NugetKotlinHandle` and the marshaller keeps the handle alive for the call. A nullable one passes
+ * `NugetKotlinHandle.Null` for a C# null. Shared by the callable and property routes, so the import
+ * and the argument agree on both.
+ */
+internal fun BridgeType.isKotlinHandleWire(): Boolean =
+  when (val type: BridgeType = if (this is BridgeType.Nullable) this.type else this) {
+    is BridgeType.ObjectHandle -> true
+    is BridgeType.ValueClass -> type.underlying is BridgeType.ObjectHandle
+    else -> false
+  }
+
 /** The C# spelling of a primitive kind, shared for the same reason as the type above. */
 internal fun PrimitiveKind.forwardPublicCsharpType(): String = when (this) {
   PrimitiveKind.BOOLEAN -> "bool"

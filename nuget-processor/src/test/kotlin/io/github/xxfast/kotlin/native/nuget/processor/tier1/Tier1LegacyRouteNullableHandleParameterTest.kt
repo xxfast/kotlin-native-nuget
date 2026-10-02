@@ -8,7 +8,7 @@ import kotlin.test.assertTrue
  * Issue #365 / ADR-122 amendment. A nullable class or sealed handle parameter on a legacy route
  * (suspend member, sealed arm member, top-level suspend, Flow/StateFlow member, suspend returning
  * StateFlow) used to be refused. It now binds as public `T?` on the same one pointer slot the
- * non-null handle takes: `null` crosses as `IntPtr.Zero` (`x?._handle ?? IntPtr.Zero`), and Kotlin
+ * non-null handle takes: `null` crosses as `IntPtr.Zero` (`x?._handle ?? NugetKotlinHandle.Null`, ADR-187), and Kotlin
  * reads `x?.asStableRef<T>()?.get()`, so the member receives `null`.
  *
  * Each route is asserted separately because each has its own hand-written parameter builder.
@@ -70,7 +70,7 @@ class Tier1LegacyRouteNullableHandleParameterTest {
     assertTrue(export.contains("cat?.asStableRef<tier1.clinic.Cat>()?.get()"), export)
 
     assertCsharp("Task<string> ExamineAsync(global::Interop.Clinic.Cat? cat, CancellationToken")
-    assertCsharp("cat?._handle ?? IntPtr.Zero")
+    assertCsharp("cat?._handle ?? NugetKotlinHandle.Null")
   }
 
   @Test
@@ -82,7 +82,7 @@ class Tier1LegacyRouteNullableHandleParameterTest {
       export,
     )
     assertCsharp("ObserveAsync(global::Interop.Clinic.Observation? observation, CancellationToken")
-    assertCsharp("observation?._handle ?? IntPtr.Zero")
+    assertCsharp("observation?._handle ?? NugetKotlinHandle.Null")
   }
 
   @Test

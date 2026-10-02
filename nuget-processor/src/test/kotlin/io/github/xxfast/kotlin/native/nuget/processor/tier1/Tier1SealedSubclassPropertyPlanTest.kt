@@ -138,7 +138,7 @@ class Tier1SealedSubclassPropertyPlanTest {
         result.generatedCSharp,
         """
         |            [return: MarshalAs(UnmanagedType.I1)]
-        |            private static extern bool $native(IntPtr handle, out IntPtr error);
+        |            private static extern bool $native(NugetKotlinHandle handle, out IntPtr error);
         """.trimMargin(),
       )
     }
@@ -181,7 +181,7 @@ class Tier1SealedSubclassPropertyPlanTest {
     assertContains(result.generatedCSharp, "public global::System.TimeSpan Age")
     assertContains(
       result.generatedCSharp,
-      "private static extern long Native_Get_age(IntPtr handle, out IntPtr error);",
+      "private static extern long Native_Get_age(NugetKotlinHandle handle, out IntPtr error);",
     )
   }
 
@@ -196,7 +196,7 @@ class Tier1SealedSubclassPropertyPlanTest {
     )
     assertContains(
       result.generatedCSharp,
-      "private static extern void Native_Set_counter(IntPtr handle, int value, out IntPtr error);",
+      "private static extern void Native_Set_counter(NugetKotlinHandle handle, int value, out IntPtr error);",
     )
     assertContains(
       result.generatedCSharp,
@@ -270,7 +270,7 @@ class Tier1SealedSubclassPropertyPlanTest {
       result.generatedCSharp,
       """
       |            [DllImport("library", CallingConvention = CallingConvention.Cdecl, EntryPoint = "library_tier1_sealedlambda__handler_ontap_get_onTap")]
-      |            private static extern IntPtr Native_Get_onTap(IntPtr handle, out IntPtr error);
+      |            private static extern IntPtr Native_Get_onTap(NugetKotlinHandle handle, out IntPtr error);
       """.trimMargin(),
     )
     assertContains(

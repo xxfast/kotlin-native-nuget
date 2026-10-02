@@ -29,14 +29,14 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   appendLine("    public abstract class ${sealed.name} : ${baseList.joinToString(", ")}")
   appendLine("    {")
   if (superClass == null) {
-    appendLine("        internal IntPtr _handle;")
+    appendLine("        internal NugetKotlinHandle _handle = NugetKotlinHandle.Null;")
     appendLine()
-    appendLine("        IntPtr INugetHandle.Handle => _handle;")
+    appendLine("        IntPtr INugetHandle.Handle => _handle.DangerousGetHandle();")
     appendLine()
     appendLine("        internal ${sealed.name}(IntPtr handle, out NugetHandleTag tag)")
     appendLine("        {")
     appendLine("            tag = default;")
-    appendLine("            _handle = handle;")
+    appendLine("            _handle = new NugetKotlinHandle(handle);")
     appendLine("        }")
   } else {
     appendLine(
@@ -215,7 +215,7 @@ private fun sealedSubclassBlock(
       require(!prop.isFlow) { "A Flow property takes the flow native-import route above" }
       appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_get_${prop.nativeName}\")]")
       narrowReturnMarshal(prop.nativeReturnType)?.let { appendLine("    $it") }
-      appendLine("            private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(IntPtr handle, out IntPtr error);")
+      appendLine("            private static extern ${prop.nativeReturnType} Native_Get_${prop.nativeName}(NugetKotlinHandle handle, out IntPtr error);")
       appendLine()
     } else {
       append(
@@ -330,11 +330,9 @@ private fun sealedSubclassBlock(
   } else {
     appendLine("            public override void Dispose()")
     appendLine("            {")
-    appendLine("                if (_handle != IntPtr.Zero)")
-    appendLine("                {")
-    appendLine("                    Native_Dispose(_handle);")
-    appendLine("                    _handle = IntPtr.Zero;")
-    appendLine("                }")
+    // ADR-187: the same swap-then-release `renderDispose` uses, which also makes this one atomic.
+    appendLine("                $TAKE_HANDLE")
+    appendLine("                if (!handle.IsInvalid) handle.Dispose();")
     appendLine("            }")
     appendLine()
     appendLine("            [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${subclass.nativePrefix}_dispose\")]")
@@ -364,13 +362,13 @@ internal fun StringBuilder.renderSealedSubclassDataMethods(
 ) {
   appendLine("            [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_equals\")]")
   appendLine("            [return: MarshalAs(UnmanagedType.I1)]")
-  appendLine("            private static extern bool Native_Equals(IntPtr handle, IntPtr other);")
+  appendLine("            private static extern bool Native_Equals(NugetKotlinHandle handle, NugetKotlinHandle other);")
   appendLine()
   appendLine("            [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_hashcode\")]")
-  appendLine("            private static extern int Native_HashCode(IntPtr handle);")
+  appendLine("            private static extern int Native_HashCode(NugetKotlinHandle handle);")
   appendLine()
   appendLine("            [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${nativePrefix}_tostring\")]")
-  appendLine("            private static extern IntPtr Native_ToString(IntPtr handle);")
+  appendLine("            private static extern IntPtr Native_ToString(NugetKotlinHandle handle);")
   appendLine()
   appendLine("            public override bool Equals(object? obj)")
   appendLine("            {")

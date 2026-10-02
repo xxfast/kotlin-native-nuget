@@ -111,12 +111,12 @@ class Tier1SubclassScopeOwnerTest {
     assertContains(cs, "public class NapLounge : SunShelf, IAsyncDisposable")
     assertEquals(
       1,
-      Regex("class NapLounge[^\\n]*\\n(?:.*\\n)*?\\s+internal IntPtr _scopeHandle;")
+      Regex("class NapLounge[^\\n]*\\n(?:.*\\n)*?\\s+internal NugetScopeHandle\\? _scopeHandle;")
         .findAll(cs).count(),
       "expected NapLounge to declare the scope field; got: ${classBlock(cs, "NapLounge")}",
     )
     assertTrue(
-      classBlock(cs, "NapLounge").contains("internal IntPtr GetOrCreateScope()"),
+      classBlock(cs, "NapLounge").contains("internal NugetScopeHandle GetOrCreateScope()"),
       "expected the derived owner to declare the scope factory; got: " +
           classBlock(cs, "NapLounge"),
     )
@@ -158,8 +158,8 @@ class Tier1SubclassScopeOwnerTest {
       "expected no second scope factory on the subclass; got: $sub",
     )
     assertTrue(
-      sub.contains("NugetScopeNative.Cancel(scopeHandle);") &&
-          sub.contains("NugetScopeNative.Dispose(scopeHandle);"),
+      // ADR-187: the scope handle's own release is the cancel-then-dispose.
+      sub.contains("Interlocked.Exchange(ref _scopeHandle, null)?.Dispose();"),
       "expected the subclass's override Dispose() to cancel and dispose the inherited scope, " +
           "which is the leak the Flow twin of this shape ships today; got: $sub",
     )
@@ -175,7 +175,7 @@ class Tier1SubclassScopeOwnerTest {
     val result = run()
 
     assertFalse(
-      result.generatedCSharp.contains("private IntPtr GetOrCreateScope()"),
+      result.generatedCSharp.contains("private NugetScopeHandle GetOrCreateScope()"),
       "expected no private scope factory: a subclass's async body calls it unqualified (CS0122)",
     )
     assertTrue(
@@ -242,8 +242,8 @@ class Tier1SubclassScopeOwnerTest {
       "expected the abstract owner to declare the drain (CS0535 without it); got: $owner",
     )
     assertTrue(
-      owner.contains("internal IntPtr _scopeHandle;") &&
-          owner.contains("internal IntPtr GetOrCreateScope()"),
+      owner.contains("internal NugetScopeHandle? _scopeHandle;") &&
+          owner.contains("internal NugetScopeHandle GetOrCreateScope()"),
       "expected the abstract owner to still own the scope itself; got: $owner",
     )
 

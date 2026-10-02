@@ -69,7 +69,7 @@ class Tier1ValueClassOverSealedPropertyTest {
     )
     assertContains(
       cs,
-      "Native_Set_maybe(_handle, value?.Shape._handle ?? IntPtr.Zero, out IntPtr error)",
+      "Native_Set_maybe(_handle, value?.Shape._handle ?? NugetKotlinHandle.Null, out IntPtr error)",
     )
   }
 

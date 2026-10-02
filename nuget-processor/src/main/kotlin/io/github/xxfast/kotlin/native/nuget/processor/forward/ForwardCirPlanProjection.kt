@@ -12,6 +12,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirProperty
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClassBoxing
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClassConstructor
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirVisibility
+import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_HANDLE
 
 /** Projects the direct-value migration slice of a callable plan into CIR. */
 internal object ForwardCirPlanProjection {
@@ -261,7 +262,7 @@ internal object ForwardCirPlanProjection {
       core = buildString {
         appendLine("            IntPtr handle = Native_Create$nativeSuffix($callArgs);")
         appendErrorCheck()
-        append("            _handle = handle;")
+        append("            _handle = new NugetKotlinHandle(handle);")
       },
     )
     return CirConstructor(
@@ -553,8 +554,12 @@ internal object ForwardCirPlanProjection {
 
   // ADR-077 sub-items 3/4 / ADR-106: the nullable-string-wire rule lives in `isNullableStringWire`,
   // shared with the property route's receiver import (ADR-132 2026-09-20) rather than copied.
-  private fun ForwardAbiParameter.nativeCsharpType(): String =
-    if (transfer.type.isNullableStringWire()) "string?" else wireType.csharpType()
+  // ADR-187: a wrapper-handle slot is typed as the owned handle, so the call keeps it alive.
+  private fun ForwardAbiParameter.nativeCsharpType(): String = when {
+    transfer.type.isNullableStringWire() -> "string?"
+    transfer.type.isKotlinHandleWire() -> KOTLIN_HANDLE
+    else -> wireType.csharpType()
+  }
 
   /** A parameter shape whose native ABI representation is identical to its public C# type — no
    * cast, fan-out, or prelude/cleanup statement required at the call site, so it can still flow
@@ -623,7 +628,8 @@ internal object ForwardCirPlanProjection {
         BridgeType.String -> listOf(parameter.csharpName)
         // ADR-106: `Guid?` -- a null stays a null string, so the wire's null pointer is the null.
         BridgeType.Uuid -> listOf("${parameter.csharpName}?.ToString()")
-        is BridgeType.ObjectHandle -> listOf("${parameter.csharpName}?._handle ?? IntPtr.Zero")
+        is BridgeType.ObjectHandle ->
+          listOf("${parameter.csharpName}?._handle ?? NugetKotlinHandle.Null")
         is BridgeType.Interface -> listOf("${parameter.csharpLocal}Handle")
         // ADR-083/147: `Wrap<T>` already maps a null to `IntPtr.Zero`, so `T?` needs no guard.
         is BridgeType.TypeParameter -> listOf("${parameter.csharpLocal}Box")
@@ -676,7 +682,7 @@ internal object ForwardCirPlanProjection {
             val unwrapped = "${parameter.csharpName}?.$prop"
             listOf(
               if (inner.underlying is BridgeType.ObjectHandle) {
-                "$unwrapped._handle ?? IntPtr.Zero"
+                "$unwrapped._handle ?? NugetKotlinHandle.Null"
               } else {
                 unwrapped
               }
@@ -828,8 +834,10 @@ internal object ForwardCirPlanProjection {
     // ADR-135: the same zero guard `collectionCleanup` carries, for the same reason. This
     // `finally` is also reached by a throw from the mint itself, where the handle is still Zero,
     // and `nuget_dispose` is not null-safe.
+    // ADR-187: a borrowed handle is the wrapper's raw `Handle`, so the wrapper is kept alive past
+    // the call that read it.
     return "if (${parameter.csharpLocal}Owned && ${parameter.csharpLocal}Handle != IntPtr.Zero) " +
-        "{ NugetMarshal.Dispose(${parameter.csharpLocal}Handle); }"
+        "{ NugetMarshal.Dispose(${parameter.csharpLocal}Handle); } GC.KeepAlive(${parameter.csharpName});"
   }
 
   /**
@@ -855,8 +863,10 @@ internal object ForwardCirPlanProjection {
   /** ADR-099/147: dispose only a box this call site minted, and only once it exists. */
   private fun ForwardCallablePlan.typeParameterCleanup(parameter: ForwardPublicParameter): String? {
     if (parameter.type.unwrapNullable() !is BridgeType.TypeParameter) return null
+    // ADR-187: keep a borrowed wrapper alive past the call (only when borrowed: `T` may be a value).
     return "if (${parameter.csharpLocal}Owned && ${parameter.csharpLocal}Box != IntPtr.Zero) { " +
-        "NugetMarshal.Dispose(${parameter.csharpLocal}Box); }"
+        "NugetMarshal.Dispose(${parameter.csharpLocal}Box); } " +
+        "if (!${parameter.csharpLocal}Owned) GC.KeepAlive(${parameter.csharpName});"
   }
 
   /**

@@ -69,7 +69,8 @@ class CirOrdinaryRendererTest {
     val rendered: String = render(cls)
 
     assertContains(rendered, "public class Patient : IDisposable")
-    assertContains(rendered, "internal IntPtr _handle;")
+    assertContains(rendered, "internal NugetKotlinHandle _handle = NugetKotlinHandle.Null;")
+    assertContains(rendered, "IntPtr INugetHandle.Handle => _handle.DangerousGetHandle();")
     assertContains(
       rendered,
       "private static extern IntPtr Native_Create([MarshalAs(UnmanagedType.LPUTF8Str)] string name, out IntPtr error);",
@@ -81,24 +82,24 @@ class CirOrdinaryRendererTest {
     // reach the handle constructor; a root constructor assigns it, a derived one forwards it.
     assertContains(
       rendered,
-      "internal Patient(IntPtr handle, out NugetHandleTag tag)\n        {\n            tag = default;\n            _handle = handle;\n        }",
+      "internal Patient(IntPtr handle, out NugetHandleTag tag)\n        {\n            tag = default;\n            _handle = new NugetKotlinHandle(handle);\n        }",
     )
     assertFalse(Regex("""internal Patient\(IntPtr handle\)\r?\n""").containsMatchIn(rendered))
     assertContains(rendered, "internal readonly struct NugetHandleTag")
     assertContains(
       rendered,
-      "private static extern int Native_Get_age(IntPtr handle, out IntPtr error);",
+      "private static extern int Native_Get_age(NugetKotlinHandle handle, out IntPtr error);",
     )
     assertContains(
       rendered,
-      "private static extern void Native_Set_age(IntPtr handle, int value, out IntPtr error);",
+      "private static extern void Native_Set_age(NugetKotlinHandle handle, int value, out IntPtr error);",
     )
     assertContains(rendered, "public int Age")
     assertContains(rendered, "get => Native_Get_age(_handle, out IntPtr error);")
     assertContains(rendered, "set => Native_Set_age(_handle, value, out IntPtr error);")
     assertContains(
       rendered,
-      "private static extern IntPtr Native_Greet(IntPtr handle, out IntPtr error);",
+      "private static extern IntPtr Native_Greet(NugetKotlinHandle handle, out IntPtr error);",
     )
     assertContains(rendered, "public string Greet()")
     assertContains(rendered, "IntPtr nativeResult = Native_Greet(_handle, out IntPtr error);")
@@ -108,7 +109,13 @@ class CirOrdinaryRendererTest {
       "private static extern void Native_Dispose(IntPtr handle);",
     )
     assertContains(rendered, "public void Dispose()")
-    assertContains(rendered, "Native_Dispose(handle);")
+    // ADR-187: the owned handle is swapped for the zero sentinel and released through itself.
+    assertContains(
+      rendered,
+      "NugetKotlinHandle handle = Interlocked.Exchange(ref _handle, NugetKotlinHandle.Null);\n" +
+        "            if (handle.IsInvalid) return;\n" +
+        "            handle.Dispose();",
+    )
   }
 
   @Test
@@ -132,7 +139,7 @@ class CirOrdinaryRendererTest {
 
     assertContains(
       rendered,
-      "private static extern IntPtr Native_Lock(IntPtr handle, out IntPtr error);",
+      "private static extern IntPtr Native_Lock(NugetKotlinHandle handle, out IntPtr error);",
     )
     assertContains(rendered, "IntPtr nativeResult = Native_Lock(_handle, out IntPtr error);")
     assertFalse(rendered.contains("Native_@"))
@@ -277,7 +284,7 @@ class CirOrdinaryRendererTest {
     val rendered: String = render(cls)
 
     assertContains(rendered, "public class Inpatient : Patient")
-    assertFalse(rendered.contains("internal IntPtr _handle;"))
+    assertFalse(rendered.contains("internal NugetKotlinHandle _handle"))
     assertContains(rendered, "public Inpatient(string name) : base(IntPtr.Zero, out _)")
     assertContains(
       rendered,
@@ -348,7 +355,7 @@ class CirOrdinaryRendererTest {
 
     assertContains(
       rendered,
-      "private static extern IntPtr Native_Labels(IntPtr handle, out IntPtr error);",
+      "private static extern IntPtr Native_Labels(NugetKotlinHandle handle, out IntPtr error);",
     )
     assertContains(rendered, "public IReadOnlyList<string> Labels()")
     assertContains(rendered, "return NugetListNative.ToList<string>(listHandle);")
@@ -429,7 +436,7 @@ class CirOrdinaryRendererTest {
 
     assertContains(
       rendered,
-      "private static extern void Native_Diagnose(IntPtr handle, int mood, out IntPtr error);",
+      "private static extern void Native_Diagnose(NugetKotlinHandle handle, int mood, out IntPtr error);",
     )
     assertContains(rendered, "public void Diagnose(Mood mood)")
     assertContains(rendered, "Native_Diagnose(_handle, (int)mood, out IntPtr error);")
@@ -747,7 +754,7 @@ class CirOrdinaryRendererTest {
     assertContains(rendered, "[return: MarshalAs(UnmanagedType.I1)]")
     assertContains(
       rendered,
-      "private static extern bool Native_Get_enabled(IntPtr handle, out IntPtr error);",
+      "private static extern bool Native_Get_enabled(NugetKotlinHandle handle, out IntPtr error);",
     )
   }
 

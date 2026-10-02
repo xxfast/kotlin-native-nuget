@@ -376,8 +376,8 @@ class Tier1LegacyRouteHandleParameterTest {
       "expected the nullable lowering to short-circuit on null; generated=${result.generated}",
     )
     assertTrue(
-      result.generatedCSharp.contains("observation?._handle ?? IntPtr.Zero"),
-      "expected the C# call to pass IntPtr.Zero for null; got: ${csharpLinesFor(result, "Ghost")}",
+      result.generatedCSharp.contains("observation?._handle ?? NugetKotlinHandle.Null"),
+      "expected the C# call to pass the zero handle for null; got: ${csharpLinesFor(result, "Ghost")}",
     )
     assertTrue(
       result.generatedCSharp.contains("Ghost(global::Interop.Watchtower.Observation? observation)"),

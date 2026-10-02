@@ -199,7 +199,7 @@ class Tier1SealedBaseAsyncTest {
     // One scope owner per hierarchy: the base. Arms keep no `_scopeHandle` of their own.
     assertEquals(
       2,
-      cs.occurrences("internal IntPtr _scopeHandle;"),
+      cs.occurrences("internal NugetScopeHandle? _scopeHandle;"),
       "expected exactly two scope fields (Shape and Job); got: " +
           cs.lines().filter { it.contains("_scopeHandle;") || it.contains("_scopeHandle =") },
     )
@@ -256,7 +256,7 @@ class Tier1SealedBaseAsyncTest {
     )
     assertTrue(nested.compiledClean, "got: ${nested.compileErrors} ${nested.kspErrors}")
     val cs: String = nested.generatedCSharp
-    assertEquals(1, cs.occurrences("internal IntPtr _scopeHandle;"), cs)
+    assertEquals(1, cs.occurrences("internal NugetScopeHandle? _scopeHandle;"), cs)
     assertTrue(cs.baseListOf("Job").contains("IAsyncDisposable"), cs)
     assertTrue(
       cs.lines().none { it.contains("class Sub :") && it.contains("IAsyncDisposable") },

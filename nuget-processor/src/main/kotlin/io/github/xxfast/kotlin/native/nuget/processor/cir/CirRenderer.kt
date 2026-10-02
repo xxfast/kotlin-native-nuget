@@ -1,5 +1,8 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+/** ADR-187: the C# type of a wrapper's owned handle, and of every DllImport slot that takes it. */
+internal const val KOTLIN_HANDLE: String = "NugetKotlinHandle"
+
 internal class CirRenderer {
   fun render(file: CirFile): String =
     renderFile(file).withUtf8StringParameters().checkSpellableInCSharp()
@@ -26,13 +29,16 @@ internal class CirRenderer {
 
   private fun StringBuilder.renderHandleHelpers() {
     // ADR-178: one internal interface per publisher root, so only its own wrappers satisfy it.
-    // Every class that declares `internal IntPtr _handle` implements it explicitly,
+    // Every class that declares `internal NugetKotlinHandle _handle` implements it explicitly,
     // which is how erased-generic code extracts a handle without `GetField("_handle")`.
+    // ADR-187: the pointer stays `IntPtr`; whoever consumes it keeps the wrapper alive past the
+    // native call (`GC.KeepAlive`), because a raw pointer read does not.
     appendLine("internal interface INugetHandle")
     appendLine("{")
     appendLine("    IntPtr Handle { get; }")
     appendLine("}")
     appendLine()
+    renderKotlinHandle()
     // ROADMAP line 26: `Interop.cs` compiles into the consumer, so `internal` does not hide the
     // handle constructor from overload resolution. A trailing `out` parameter of this type is one
     // no ordinary call binds, so `new Tag('O')` and `new Circle(5)` always reach the public one.
@@ -44,7 +50,41 @@ internal class CirRenderer {
     appendLine("{")
     appendLine("}")
     appendLine()
+  }
 
+  /**
+   * ADR-187: the one owned-handle type per publisher root. Every wrapper holds its Kotlin
+   * `StableRef` in one of these, so a wrapper dropped without `Dispose()` is released when the GC
+   * finalizes the handle, and every DllImport slot that takes a wrapper's handle is typed as it, so
+   * the marshaller keeps it alive for the call. The release is `nuget_dispose` (every per-type
+   * `_dispose` export is the same `NugetHandles.release`).
+   *
+   * [Null] is the zero handle: the argument for a null wrapper (a null `SafeHandle` argument is an
+   * `ArgumentNullException` in the marshaller) and the value a disposed wrapper's field is swapped
+   * to, so a disposed wrapper still reads as zero exactly as the raw field did. It is never closed,
+   * because every release path swaps it in and returns early on an invalid handle.
+   */
+  private fun StringBuilder.renderKotlinHandle() {
+    appendLine("/// <summary>")
+    appendLine("/// The Kotlin handle a generated wrapper owns. Disposing the wrapper releases it promptly; a")
+    appendLine("/// wrapper dropped without disposing is released when the GC finalizes this handle.")
+    appendLine("/// </summary>")
+    appendLine("internal class NugetKotlinHandle : SafeHandle")
+    appendLine("{")
+    appendLine("    /// <summary>The zero handle: a null argument, and a disposed wrapper's field. Never released.</summary>")
+    appendLine("    internal static readonly NugetKotlinHandle Null = new NugetKotlinHandle(IntPtr.Zero);")
+    appendLine()
+    appendLine("    internal NugetKotlinHandle(IntPtr handle) : base(IntPtr.Zero, ownsHandle: true) => SetHandle(handle);")
+    appendLine()
+    appendLine("    public override bool IsInvalid => handle == IntPtr.Zero;")
+    appendLine()
+    appendLine("    protected override bool ReleaseHandle()")
+    appendLine("    {")
+    appendLine("        NugetMarshal.Dispose(handle);")
+    appendLine("        return true;")
+    appendLine("    }")
+    appendLine("}")
+    appendLine()
   }
 
   private fun StringBuilder.renderNamespace(namespace: CirNamespace, root: Boolean) {

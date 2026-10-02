@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Mood = TestLibrary.Cat.Mood;
 using Test.Menagerie;
 using TestLibrary;
@@ -2784,5 +2785,322 @@ public class LiveHandleTests
         await AssertNoLeakAsync(
             async () => Assert.Equal(6, await oreo.AreaAsync()),
             iterations: 5000);
+    }
+
+    // Rows 16 to 16k. ADR-187: a wrapper dropped WITHOUT `Dispose()` has its Kotlin handle released
+    // when the .NET GC finalizes the generated `NugetKotlinHandle : SafeHandle`. Every other row in
+    // this file disposes and measures the prompt path; these rows deliberately do not dispose, and
+    // measure the eventual one. Each row drops `Drops` undisposed instances from a non-inlined
+    // helper (so no local in the test method keeps them reachable), checks the drop really minted
+    // handles (a row that minted nothing would go green without crossing the seam it names), then
+    // runs bounded GC + finalizer rounds until the count is back at the baseline.
+    //
+    // Before ADR-187 lands there is no finalizer anywhere in the generated code, so every row here
+    // except 16i and 16k is red by design: the count never comes back. 16i pins the subscription
+    // exception (a discarded subscription keeps delivering and keeps its token) and 16k is the
+    // double-free guard; both are green before and after.
+    //
+    // Oreo and Mylo leave their toys all over the house, and the GC tidies up after them.
+    private const int Drops = 10;
+    private const int FinalizerRounds = 50;
+
+    private static long CollectUntilBaseline(long baseline)
+    {
+        for (int round = 0; round < FinalizerRounds && NugetMarshal.LiveHandles > baseline; round++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+        return NugetMarshal.LiveHandles;
+    }
+
+    private static void AssertReleasedByTheGc(string what, Action dropUndisposed)
+    {
+        Settle();
+        long baseline = NugetMarshal.LiveHandles;
+
+        for (int i = 0; i < Drops; i++) dropUndisposed();
+
+        AssertDroppedHandlesComeBack(what, baseline);
+    }
+
+    private static async Task AssertReleasedByTheGcAsync(string what, Func<Task> dropUndisposed)
+    {
+        Settle();
+        long baseline = NugetMarshal.LiveHandles;
+
+        for (int i = 0; i < Drops; i++) await dropUndisposed();
+
+        AssertDroppedHandlesComeBack(what, baseline);
+    }
+
+    private static void AssertDroppedHandlesComeBack(string what, long baseline)
+    {
+        long dropped = NugetMarshal.LiveHandles;
+        Assert.True(
+            dropped > baseline,
+            $"dropping {Drops} undisposed {what} minted no live handle ({baseline} before, {dropped} after), so this row does not cross the ADR-187 seam");
+
+        long after = CollectUntilBaseline(baseline);
+        if (after == baseline) return;
+
+        Assert.Fail(
+            $"expected {baseline} live handles once the GC finalized {Drops} undisposed {what}, got {after} " +
+            $"({after - baseline} of the {dropped - baseline} dropped handles still live after {FinalizerRounds} GC rounds)");
+    }
+
+    // Row 16. The headline: a class wrapper constructed from C# and never disposed. Oreo is named
+    // and forgotten.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void DropUndisposedCat() => Assert.Equal("Oreo", new Cat("Oreo", 9).Name);
+
+    [Fact]
+    public void UndisposedClassWrapper_IsReleasedByTheGc() =>
+        AssertReleasedByTheGc("Cat wrappers", DropUndisposedCat);
+
+    // Row 16a. The callback-payload leak ADR-187 closed:
+    // the per-call lambda-parameter route of Row 8i, with a callback body that reads each `Toy` and
+    // does NOT dispose it. The payload wrapper is the only owner of its handle (ADR-036's 2026-09-11
+    // amendment), so without a finalizer two handles per call stay live for the process. The
+    // receiver is disposed, so the payloads are the only thing that can still be counted.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void DropUndisposedToyPayloads()
+    {
+        using var mylo = new Cat("Mylo", 9);
+        var toyNames = new List<string>();
+        mylo.ForEachToy(toy => toyNames.Add(toy.Name));
+        Assert.Equal(new List<string> { "Mouse", "Ball" }, toyNames);
+    }
+
+    [Fact]
+    public void UndisposedCallbackObjectPayload_LambdaParameterRoute_IsReleasedByTheGc() =>
+        AssertReleasedByTheGc("Toy callback payloads", DropUndisposedToyPayloads);
+
+    // Row 16b. The same payload residual on ADR-160's route (Row 13 without its `using (c)`): every
+    // `Chime` candidate handed to the predicate is read and dropped. The member's returned chime is
+    // disposed, so only the predicate payloads are left for the GC.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void DropUndisposedChimePayloads()
+    {
+        using var metronome = new Metronome(4);
+        using Chime chime = metronome.FirstChime(c => c.Weight >= 2);
+        Assert.Equal("Mylo", chime.Name);
+    }
+
+    [Fact]
+    public void UndisposedCallbackObjectPayload_CallbackMemberRoute_IsReleasedByTheGc() =>
+        AssertReleasedByTheGc("Chime predicate payloads", DropUndisposedChimePayloads);
+
+    // Row 16c. ROADMAP's abandoned-Flow item, wrapper-typed half only: `Newsroom.Stream()` emits two
+    // `TopStory` wrappers with no suspension point between them. The consumer takes the first
+    // (and disposes it), waits long enough for the second to have been delivered, then
+    // `DisposeAsync`s the enumerator. The second item's box was minted by `FromHandle<TopStory>`
+    // into a wrapper that nobody will ever read: either it sits in the abandoned channel or, if it
+    // landed after `DisposeAsync`, `TryWrite` returned false and the wrapper was dropped on the
+    // spot. Both are the same leak (an undisposed wrapper over an owned box), and the GC is the only
+    // thing that can return it. The newsroom itself is disposed. The ADR-123 collection-element half
+    // of that ROADMAP item stays open under ADR-187 and is deliberately not measured here.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task DropAbandonedTopStory()
+    {
+        using var newsroom = new Newsroom();
+        IAsyncEnumerator<TopStory> stories = newsroom.Stream().GetAsyncEnumerator();
+        Assert.True(await stories.MoveNextAsync());
+        using (TopStory first = stories.Current)
+        {
+            Assert.Equal("Oreo escapes the cardboard box (again)", first.Title);
+        }
+        await Task.Delay(100);   // let Mylo's sunbeam story arrive before the reader walks away
+        await stories.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task AbandonedWrapperTypedFlowItem_AfterDisposeAsync_IsReleasedByTheGc() =>
+        await AssertReleasedByTheGcAsync("abandoned TopStory flow items", DropAbandonedTopStory);
+
+    // Row 16d. A sealed ARM, both ways one is obtained: constructed from C# (Row 1c's
+    // `new Nap.Deep(minutes: 12)`, whose handle lives on the BASE's field) and returned from Kotlin
+    // through the arm's own `FromHandle` path (`Newsroom.DeepNap()`). The newsroom is disposed.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void DropUndisposedSealedArms()
+    {
+        Assert.Equal(12, new Nap.Deep(minutes: 12).Minutes);
+        using var newsroom = new Newsroom();
+        Assert.Equal(720, newsroom.DeepNap().Minutes);
+    }
+
+    [Fact]
+    public void UndisposedSealedArm_IsReleasedByTheGc() =>
+        AssertReleasedByTheGc("Nap.Deep sealed arms", DropUndisposedSealedArms);
+
+    // Row 16e. An INTERFACE-typed return: `houseBrusher()` hands back an anonymous Kotlin `Brusher`
+    // behind the ADR-040 backing wrapper (Row 6l's fixture), the interface container kind.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void DropUndisposedInterfaceReturn() =>
+        Assert.Equal("Oreo is brushed", BrusherKt.HouseBrusher().Brush());
+
+    [Fact]
+    public void UndisposedInterfaceTypedReturn_IsReleasedByTheGc() =>
+        AssertReleasedByTheGc("IBrusher interface returns", DropUndisposedInterfaceReturn);
+
+    // Row 16f. `KotlinFunc` and `KotlinAction` returned from Kotlin, value-only captures so the
+    // lambda's own StableRef is the only handle in play (no ADR-084 bridge for the cleaner to owe).
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void DropUndisposedKotlinFuncAndAction()
+    {
+        Assert.Equal(5, PetRelayKt.Adder(2).Invoke(3));
+        Recorder.SignIn().Invoke("Mylo");
+        Assert.Equal("Mylo", Recorder.LastSeen());
+    }
+
+    [Fact]
+    public void UndisposedKotlinFuncAndAction_IsReleasedByTheGc() =>
+        AssertReleasedByTheGc("KotlinFunc/KotlinAction returns", DropUndisposedKotlinFuncAndAction);
+
+    // Row 16g. The suspend twin of 16f: a `KotlinSuspendFunc` read off a property (`onFeedPortion`)
+    // and awaited to completion, then dropped. The feeder is disposed.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task DropUndisposedKotlinSuspendFunc()
+    {
+        await using var feeder = new CatFeeder("Oreo");
+        Assert.Equal("Oreo devoured 30g of tuna!", await feeder.OnFeedPortion.InvokeAsync("tuna", 30));
+    }
+
+    [Fact]
+    public async Task UndisposedKotlinSuspendFunc_IsReleasedByTheGc() =>
+        await AssertReleasedByTheGcAsync("KotlinSuspendFunc returns", DropUndisposedKotlinSuspendFunc);
+
+    // Row 16h. A `KotlinStateFlow<T>` that owns a handle: Row 8f's `CatSnackDispenser.Level()`, whose
+    // `KotlinMutableStateFlow<int>` holds the StableRef to the flow itself in `_ownedHandle`. The
+    // dispenser is disposed; the flow wrapper is dropped.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void DropUndisposedStateFlow()
+    {
+        using var dispenser = new CatSnackDispenser();
+        KotlinMutableStateFlow<int> level = dispenser.Level();
+        level.Value = 7;
+        Assert.Equal(7, level.Value);
+    }
+
+    [Fact]
+    public void UndisposedKotlinStateFlow_IsReleasedByTheGc() =>
+        AssertReleasedByTheGc("KotlinStateFlow returns", DropUndisposedStateFlow);
+
+    // Row 16i. The one kind ADR-187 deliberately does NOT release on the GC (human gate,
+    // 2026-10-02): a discarded subscription keeps delivering, as a discarded .NET event
+    // subscription does. Only an explicit `Dispose()` unregisters. So this row pins the opposite of
+    // its neighbours: Oreo stays alive, the `IDisposable`s from `AddMoodListener` are dropped, the
+    // GC and finalizers run, and every dropped listener must still hear the mood change.
+    //
+    // The count half pins today's behaviour rather than inventing one. The token is the
+    // `NugetHandles.retain(unregister)` ref Kotlin mints on subscribe (StoredCallbackExports.kt),
+    // released only by the remove export that `Dispose()` calls, and disposing the owner does not
+    // release it (Row 5 is the disposed half). So after Oreo is disposed the count sits at exactly
+    // one live token per dropped subscription: a dropped subscription is a pinned leak by design,
+    // and a finalizer that frees the token (with or without unregistering) turns this row red.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void DropSubscriptions(Cat oreo, StrongBox<int> heard)
+    {
+        for (int i = 0; i < Drops; i++)
+        {
+            Assert.NotNull(oreo.AddMoodListener(_ => Interlocked.Increment(ref heard.Value)));
+        }
+    }
+
+    [Fact]
+    public void DiscardedSubscription_KeepsDeliveringAfterTheGc_AndKeepsItsToken()
+    {
+        Settle();
+        long baseline = NugetMarshal.LiveHandles;
+        var heard = new StrongBox<int>(0);
+
+        var oreo = new Cat("Oreo", 9);
+        DropSubscriptions(oreo, heard);
+        Assert.Equal(baseline + 1 + Drops, NugetMarshal.LiveHandles);
+
+        for (int round = 0; round < FinalizerRounds / 5; round++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+
+        oreo.TriggerMoodChange(Mood.Happy);
+        Assert.Equal(Drops, heard.Value);
+
+        oreo.Dispose();
+        Settle();
+        Assert.Equal(baseline + Drops, NugetMarshal.LiveHandles);
+    }
+
+    // Row 16j. The suspend SCOPE handle: a wrapper whose first `suspend` call lazily created
+    // `_scopeHandle`, awaited to completion and then dropped, so there is no call in flight and
+    // both the object handle and the scope handle are the GC's to release.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task DropUndisposedWrapperWithAScope() =>
+        Assert.Equal("Oreo settled in 5 minutes", await new TestLibrary.Kdoc.BoardingDesk("Oreo").SettleAsync(5));
+
+    [Fact]
+    public async Task UndisposedWrapperWithASuspendScope_IsReleasedByTheGc() =>
+        await AssertReleasedByTheGcAsync("BoardingDesks with a live suspend scope", DropUndisposedWrapperWithAScope);
+
+    // Row 16k. The double-free guard. Every kind the rows above drop, disposed explicitly this time
+    // and then dropped, so once ADR-187 lands each one's `SafeHandle` is both disposed AND
+    // finalizable. After the GC and finalizers have run, the count must be EXACTLY the baseline:
+    // below it means a finalizer released a handle `Dispose()` had already released (a `StableRef`
+    // freed twice, which can also take the process down rather than miscount). Green before and
+    // after the feature.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task DropDisposedOfEveryKind()
+    {
+        using (var oreo = new Cat("Oreo", 9))
+        {
+            Assert.Equal("Oreo", oreo.Name);
+            oreo.ForEachToy(toy => { using (toy) { Assert.NotEmpty(toy.Name); } });
+            oreo.AddMoodListener(_ => { }).Dispose();
+        }
+
+        using (var newsroom = new Newsroom())
+        {
+            await foreach (TopStory story in newsroom.Stream())
+            {
+                story.Dispose();
+            }
+            using Nap.Deep deep = newsroom.DeepNap();
+            Assert.Equal(720, deep.Minutes);
+        }
+
+        using (var deep = new Nap.Deep(minutes: 12)) Assert.Equal(12, deep.Minutes);
+        using (IBrusher brusher = BrusherKt.HouseBrusher()) Assert.Equal("Oreo is brushed", brusher.Brush());
+        using (KotlinFunc<int, int> adder = PetRelayKt.Adder(2)) Assert.Equal(5, adder.Invoke(3));
+
+        using (var dispenser = new CatSnackDispenser())
+        using (KotlinMutableStateFlow<int> level = dispenser.Level())
+        {
+            level.Value = 3;
+            Assert.Equal(3, level.Value);
+        }
+
+        await using (var desk = new TestLibrary.Kdoc.BoardingDesk("Mylo"))
+        {
+            Assert.Equal("Mylo settled in 5 minutes", await desk.SettleAsync(5));
+        }
+    }
+
+    [Fact]
+    public async Task DisposedWrappers_ThenFinalized_AreNotReleasedTwice()
+    {
+        Settle();
+        long baseline = NugetMarshal.LiveHandles;
+
+        for (int i = 0; i < Drops; i++) await DropDisposedOfEveryKind();
+
+        for (int round = 0; round < FinalizerRounds / 5; round++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+        Settle();
+
+        Assert.Equal(baseline, NugetMarshal.LiveHandles);
     }
 }

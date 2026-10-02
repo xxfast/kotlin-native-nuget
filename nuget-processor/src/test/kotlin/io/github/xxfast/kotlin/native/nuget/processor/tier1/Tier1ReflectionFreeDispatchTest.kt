@@ -32,7 +32,7 @@ class Tier1ReflectionFreeDispatchTest {
     assertContains(cs, "internal interface INugetHandle")
     assertContains(cs, "IntPtr Handle { get; }")
     assertContains(cs, "public class Cat : IDisposable, INugetHandle")
-    assertContains(cs, "IntPtr INugetHandle.Handle => _handle;")
+    assertContains(cs, "IntPtr INugetHandle.Handle => _handle.DangerousGetHandle();")
     assertContains(cs, "Dictionary<Type, Func<IntPtr, object>> Factories")
     assertContains(cs, "[typeof(global::Tier1.Cat)] = static handle => new global::Tier1.Cat(handle, out _),")
     assertContains(cs, "internal static T Materialize<T>(IntPtr handle)")

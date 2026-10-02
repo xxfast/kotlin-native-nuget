@@ -197,7 +197,7 @@ class Tier1DerivedNamesTest {
     }
     assertCsharp("public Task<string> FillAsync(int? limit, bool limitHasValue, CancellationToken")
     assertCsharp(
-      "IntPtr scopeHandle, [MarshalAs(UnmanagedType.I1)] bool limitHasValue_, int limit, " +
+      "NugetKotlinHandle scopeHandle, [MarshalAs(UnmanagedType.I1)] bool limitHasValue_, int limit, " +
         "[MarshalAs(UnmanagedType.I1)] bool limitHasValue, IntPtr callback"
     )
   }
@@ -222,7 +222,7 @@ class Tier1DerivedNamesTest {
     assertTrue(tally.contains("callbackPtr, userData_, ::nugetMappedType)"), tally)
     assertTrue(tally.contains("tier1.derived.tally(scopeHandle, userData)"), tally)
 
-    assertCsharp("Native_CountAsync(IntPtr handle, IntPtr scopeHandle_, int scopeHandle, int userData, IntPtr callback, IntPtr userData_);")
+    assertCsharp("Native_CountAsync(NugetKotlinHandle handle, NugetKotlinHandle scopeHandle_, int scopeHandle, int userData, IntPtr callback, IntPtr userData_);")
     assertCsharp("TallyAsync_native(int scopeHandle, int userData, IntPtr callback, IntPtr userData_);")
   }
 
@@ -241,7 +241,7 @@ class Tier1DerivedNamesTest {
           "onNext_, onComplete, onError, userData_)"
     )
     assertCsharp("IntPtr flow_ = Native_Level(_handle, flow, collectScope);")
-    assertCsharp("IntPtr collectScope_ = GetOrCreateScope();")
+    assertCsharp("NugetScopeHandle collectScope_ = GetOrCreateScope();")
   }
 
   @Test
