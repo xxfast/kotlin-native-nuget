@@ -68,6 +68,7 @@ On top of that, we have some additional conventions that are specific to this re
 - Fixture builds give `TestLibrary` and `TestDependency` a new immutable version on every pack and write `build/FixtureVersions.props`. The fixture consumers import that file, so they restore the exact fresh version without clearing NuGet caches or consumer `obj`/`bin`. Use `scripts/verify-fixture-package-versioning.sh` to guard this behaviour.
 - This only fixes the repository fixtures. A real package whose contents change without a version change can still be served from NuGet's cache. If that is possible in a manual test, clear its cached package before restoring; for this repository's full integration path, use `scripts/verify.sh`.
 - **Never hand-copy files into `~/.nuget/packages/`**, and never hand-patch a generated shim, to skip a rebuild. Agents have done both to iterate faster and it backfires: MSBuild resolves the `<Compile>` item set from the restored package at restore time, so a hand-edited cache produces symptoms that look exactly like real compiler or generator bugs, and you burn hours chasing a bug that does not exist. Always go through `scripts/verify.sh`.
+- Verification scripts (`scripts/verify*.sh`) use only bash, Gradle/Kotlin and `dotnet`; no Python, Node or other interpreters. A check that needs to parse a file is a Gradle task in the root `build.gradle.kts` (e.g. `verifyForwardDiagnostics`, `checkWritersideReport`).
 
 ## Don't Leave Gradle Builds Running
 
