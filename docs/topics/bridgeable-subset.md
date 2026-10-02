@@ -16,7 +16,7 @@ skipped.
 | Generic class reached through a closed instantiation (`Box<int>`) | real Kotlin generic class, one per instantiation | see [Generic types](generic-types.md) |
 | `record class` | same rules as an ordinary class; not a distinct construct in metadata | |
 | `ref struct` (`Span<T>`, `ReadOnlySpan<T>`, a custom one) | not bound | any member referencing one is skipped |
-| Nested type, public or not | not bound | only top-level public types are candidates |
+| Nested type | not bound | only top-level public types are candidates; a nested type that is publicly reachable is named on a `SKIPPED_NESTED_TYPE` build warning, so expose it as a top-level type |
 | Open generic type parameter | member skipped | |
 | Generic interface (`IBox<T>`) | not bound | |
 

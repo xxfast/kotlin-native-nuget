@@ -1142,4 +1142,69 @@ class NugetExtractApiIntegrationTest {
       .sorted()
     assertEquals(listOf("Describe", "Unregister"), skipped)
   }
+
+  /**
+   * Nested public types are out of the reader's v1 scope (top-level only), but every one it drops
+   * gets a named `SKIPPED_NESTED_TYPE` instead of vanishing (dogfood census: Humanizer.Core's 47).
+   * Same reachability rule as the census's `publicSurface.nestedTypes`: a nested type is public
+   * surface only when every enclosing type is public too.
+   */
+  @Test
+  fun `metadata reader names every dropped nested public type`() {
+    val dotnet: String = findDotnet() ?: return
+
+    val source: String = """
+      namespace Probe.Nested;
+
+      public sealed class Outer
+      {
+          public Outer() { }
+          public int Count() => 0;
+
+          public sealed class Inner { public int Value() => 1; }
+          public enum Mood { Calm, Loud }
+
+          private sealed class Hidden { }
+          internal sealed class Internal { }
+          protected internal sealed class Shielded { }
+      }
+
+      internal sealed class Secret
+      {
+          public sealed class Leaked { }
+      }
+    """.trimIndent()
+
+    val dll: File = compileFixture(dotnet, source, "NestedReaderFixture")
+    val toolDir: File = Files.createTempDirectory("NugetMetadataReader-nested-fixture").toFile()
+    unpackMetadataReader(toolDir, javaClass.classLoader)
+    val file: RirFile = parseReverseIr(
+      runMetadataReader(dotnet, toolDir, mapOf("NestedFixture" to listOf(dll.absolutePath))),
+    )
+
+    // The declaring type still binds as before.
+    val outer: RirClass = file.assemblies.single()
+      .namespaces.single { it.name == "Probe.Nested" }
+      .types.filterIsInstance<RirClass>()
+      .single { it.name == "Outer" }
+    assertEquals(listOf("Count"), outer.methods.map { it.name })
+
+    val nested: List<RirDiagnostic> = file.assemblies.single().diagnostics
+      .filter { it.kind == RirDiagnosticKind.SKIPPED_NESTED_TYPE }
+      .sortedBy { it.typeName }
+
+    // One per nested PUBLIC type, the class and the enum alike, named with its declaring type.
+    // Hidden, Internal, Shielded (not public) and Secret.Leaked (public, but its declaring type is
+    // not) are not public surface and must stay silent.
+    assertEquals(listOf("Outer.Inner", "Outer.Mood"), nested.map { it.typeName })
+    nested.forEach { diagnostic ->
+      assertEquals("", diagnostic.memberName, "type-level: no member")
+      assertEquals("Probe.Nested.${diagnostic.typeName}", diagnostic.memberSignature)
+      assertTrue(
+        diagnostic.reason.contains("Outer"),
+        "names the declaring type: ${diagnostic.reason}",
+      )
+      assertTrue(diagnostic.hint.isNotBlank())
+    }
+  }
 }
