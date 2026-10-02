@@ -978,7 +978,7 @@ public class LiveHandleTests
     // getter rather than an extension function. The getter body is the new surface: the setter
     // route already owns a handle scope, the getter body is flat, so without a `finally`-dispose
     // around it a read on a C#-implemented receiver leaks one StableRef per call, invisible to
-    // IntegrationTests. (The nullable handle receiver, `Cat?.NameOrStray`, mints nothing on
+    // IntegrationTests. (The nullable handle receiver, the `Cat?.nameOrStray()` function, mints nothing on
     // either side, so it gets no row.)
     [Fact]
     public void InterfaceReceiverExtensionProperty_CSharpImplementedPet_ReleasesTransferHandle()

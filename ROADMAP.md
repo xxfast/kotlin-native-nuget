@@ -18,7 +18,6 @@ Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is
 - [ ] One naming scheme for task names: `packNuget` and `publishNuget` are verb-first, `nugetGen`, `nugetRestore` and the rest are `nuget`-first, and `nugetGen` is vague. Verified.
 - [ ] One casing and one prefix set for diagnostic codes across forward (`SKIPPED_*`) and reverse (`skipped_*`), and a schema version on `NugetDiagnostics.json` and `reverse-ir.json`. Verified.
 - [ ] Implement [ADR-187](docs/adr/187-forward-finalizer-contract.md): SafeHandle-owned forward handles; the callback-payload wrapper item under Performance & Resource Hygiene closes with it. ([details](docs/backlog/implement-adr-187-safehandle-forward-handles.md))
-- [ ] Decide the minimum C# version: [ADR-013](docs/adr/013-extension-property-mapping.md) defers C# 14 extension properties to a major bump.
 
 ### 0.10.0: hardening
 
@@ -93,6 +92,9 @@ Complete.
 - [ ] No fixture exercises an unsigned-primitive or interface-typed payload on [ADR-160](docs/adr/160-callback-parameter-on-the-forward-plan.md)'s callback plan; ten of forty-four branches in `forward/ForwardCirCallbackProjection.kt` are cold. Discovered alongside ADR-160.
 - [ ] `cir/CirClassTranslator.kt`'s `cirTypeParameters` (ADR-147's bound-spelling helper) has a compiler "Condition is always 'true'" warning on its `isInterface && declaration != null` check, found while building the ADR-075 2026-09-19 amendment; not fixed, code hygiene only.
 - [ ] An extension FUNCTION shadowed by an applicable member function (`fun Foo.y()` beside member `Foo.y()`) still exports, and its Kotlin body `receiver.y()` calls the member, so C# silently gets the member's result; detecting it needs applicability matching (arity, parameter types after alias expansion, defaults, varargs, generics), not a name check. Discovered alongside [ADR-132](docs/adr/132-extension-receiver-shapes.md)'s 2026-09-28 amendment.
+- [ ] An extension property is skipped for a same-named extension function on the same receiver even when the two live in different Kotlin packages a consumer would never import together ([ADR-188](docs/adr/188-minimum-csharp-version.md)).
+- [ ] Unverified since [ADR-188](docs/adr/188-minimum-csharp-version.md): an enum member function and an extension property with the same C# name on that enum; and `val Cat.x` beside `val Cat?.x` in one package; neither has a fixture.
+- [ ] Tier 1: `pkg.a.Mood` and `pkg.b.Mood` both render as `global::Interop.Mood` (`Tier1ExportSymbolSchemeTest`), so that cell's C# likely declares two same-named enums; Tier 1 never compiles C#.
 - [ ] A keyword `@CSharpName` such as `"event"` renders without its `@` escape on the legacy routes that build a `CirProperty`/`CirMethod` name directly (flow, companion, callback and interface-bridge members; `CirClassTranslator.kt` near lines 1628, 1785, 3315, 4189, 4549). The planned, top-level and suspend routes escape correctly; found while shipping [ADR-179](docs/adr/179-author-declared-csharp-member-name.md), inferred from reading and not tested.
 
 ## Phase 5: Exception handling

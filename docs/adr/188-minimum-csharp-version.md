@@ -1,7 +1,7 @@
 # ADR-188: Forward, the generated C# states one minimum language version that matches the default target framework
 
 ## Status
-Proposed. Decided at the human gate on 2026-10-02 (see Decision); moves to Accepted when the implementing change lands.
+Accepted. Decided at the human gate on 2026-10-02; implemented in the same stack.
 
 ## Context
 

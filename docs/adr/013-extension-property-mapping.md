@@ -1,7 +1,7 @@
 # ADR-013: Extension Property Mapping — GetXxx/SetXxx extension methods
 
 ## Status
-Proposed
+Proposed. Superseded in part on 2026-10-02 by [ADR-188](188-minimum-csharp-version.md): extension properties now render as C# 14 `extension` blocks and the `GetXxx`/`SetXxx` statics described below are removed.
 
 ## Context
 Kotlin extension properties (`val Cat.isKitten: Boolean`) need a C# representation. Unlike Swift, C# (up to C# 13) supports extension methods but not extension properties. We need a convention that feels natural to C# developers and integrates with the existing extension function bridge (`{ReceiverName}Extensions` static class).
