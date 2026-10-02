@@ -52,29 +52,5 @@ if [ ! -f "$OUT/report.json" ]; then
   exit 1
 fi
 
-python3 - "$OUT/report.json" <<'EOF'
-import json
-import sys
-
-with open(sys.argv[1]) as f:
-    report = json.load(f)
-
-# report.json shape: testsErrors / testsWarnings map a problem id (e.g. MRK003)
-# to a list of {problemId, name, description}; counts live in testsErrorsCount,
-# testsWarningsCount, testsTotal.
-def emit(bucket, label):
-    count = 0
-    for problem_id, problems in sorted((report.get(bucket) or {}).items()):
-        for problem in problems:
-            print(f"{label}: {problem_id}: {problem.get('name', '')}: {problem.get('description', '')}")
-            count += 1
-    return count
-
-warnings = emit("testsWarnings", "WARNING")
-errors = emit("testsErrors", "ERROR")
-
-if errors:
-    print(f"\ndocs check FAILED: {errors} error(s)")
-    sys.exit(1)
-print(f"docs check passed: {report.get('testsTotal')} checks, {warnings} warning(s)")
-EOF
+# The report check is a task in the root build.gradle.kts; it only reads report.json.
+./gradlew checkWritersideReport -PwritersideReport="$OUT/report.json" --console=plain -q

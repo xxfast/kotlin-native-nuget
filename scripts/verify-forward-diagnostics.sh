@@ -117,31 +117,9 @@ for module in test-library test-companion; do
 done
 echo "==> confirmed: both publishers delivered warnings while KSP was cached"
 
-# Inspect outputs from the real builds above, never pre-existing package-cache copies.
-python3 - "$ROOT" "$SHARED_TYPE" <<'PYTHON'
-import json
-import pathlib
-import sys
-root = pathlib.Path(sys.argv[1])
-for module, sibling in (("test-library", "TestCompanion"), ("test-companion", "TestLibrary")):
-    generated = root / module / "build/generated/ksp"
-    manifests = list(generated.rglob("NugetDiagnostics.json"))
-    interops = list(generated.rglob("Interop.cs"))
-    assert manifests and interops, f"No real generated outputs for {module}"
-    for manifest in manifests:
-        data = json.loads(manifest.read_text())
-        # ADR-182: a versioned object root, not the pre-0.9.0 bare array.
-        assert isinstance(data, dict) and data.get("schemaVersion") == 1, \
-            f"{manifest} has no schemaVersion 1 object root"
-        entries = data["diagnostics"]
-        assert any(entry["kind"] == "WARNING_DUPLICATED_DEPENDENCY_TYPE"
-                   and entry["declaration"] == sys.argv[2]
-                   and f"{sibling} NuGet package" in entry["message"]
-                   for entry in entries), f"Missing shared TopStory warning in {manifest}"
-    for interop in interops:
-        assert "class TopStory" in interop.read_text(), f"Missing publisher's TopStory copy: {interop}"
-print("==> confirmed: both manifests warn and both publishers retain generated TopStory copies")
-PYTHON
+# Inspect outputs from the real builds above, never pre-existing package-cache copies. The task
+# lives in the root build.gradle.kts, depends on nothing and only reads files, so KSP stays put.
+./gradlew verifyForwardDiagnostics -PsharedType="$SHARED_TYPE" --console=plain -q
 
 assert_no_synthesized_serializer_in_interop
 
