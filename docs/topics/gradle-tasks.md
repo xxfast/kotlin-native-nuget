@@ -49,9 +49,9 @@ defect: the package would fail in every consumer's build. Compiler output:
 Build FAILED.
 ```
 
-When `dotnet` is not found on `PATH` (or is on `PATH` but can't run), the task logs a warning and
-skips the check, so publishing a Kotlin/Native library still needs no .NET SDK. See
-[Prerequisites](prerequisites.md).
+When `dotnet` is not found (on `PATH`, or at `nuget.dotnet` if you set it; see [Prerequisites](prerequisites.md)) or can't run, the task logs a warning and
+skips the check, so publishing a Kotlin/Native library still needs no .NET SDK. A `nuget.dotnet` that
+doesn't point at an executable fails instead of skipping.
 
 Registered on every project with a `publish {}` block. `packNuget` depends on them only when `snapshot = true`:
 
@@ -75,7 +75,7 @@ of `publish {}`, and even of Kotlin Multiplatform being applied.
 | Task | Description | Depends on | Writes |
 |---|---|---|---|
 | `nugetGenerateRestoreProject` | Generates the synthetic interop.csproj for NuGet dependency resolution | (none) | `build/nuget-interop/interop.csproj` |
-| `nugetRestore` | Runs dotnet restore to download declared NuGet packages | `nugetGenerateRestoreProject` | `build/nuget-interop/obj/project.assets.json` |
+| `nugetRestore` | Runs dotnet restore to download declared NuGet packages, retrying up to 3 attempts when a feed is unavailable (`NU1301`) | `nugetGenerateRestoreProject` | `build/nuget-interop/obj/project.assets.json` |
 | `nugetImport` | IDE-sync umbrella task: resolve NuGet dependencies | `nugetRestore`, plus `nugetExtractApi` / `nugetGenerateBindings` / `nugetGenerateShims` when any dependency binds | (none, umbrella task) |
 
 The following three are registered only when at least one dependency declares a `bind { }` block:

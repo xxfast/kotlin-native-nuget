@@ -253,7 +253,9 @@ This direction requires the .NET SDK (10 or later) on the machine running the Ko
 `nugetRestore` and `nugetExtractApi` shell out to `dotnet`. This is a prerequisite for the reverse
 direction only: a Kotlin library author who never declares a `bind {}` block needs nothing beyond
 the usual Kotlin/Native toolchain. If `dotnet` isn't found on `PATH`, the plugin fails fast with an
-install pointer rather than a cryptic subprocess error.
+install pointer rather than a cryptic subprocess error; set `nuget.dotnet` in `local.properties` to
+use an SDK that isn't on `PATH` (see [Prerequisites](prerequisites.md)). `nugetRestore` retries a
+feed that is unavailable (`NU1301`) up to three attempts; other restore errors fail immediately.
 
 <seealso>
     <category ref="related">
