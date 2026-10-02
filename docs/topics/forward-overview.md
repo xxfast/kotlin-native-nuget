@@ -41,13 +41,13 @@ Running `packNuget` for `test-library` produces this layout:
 
 ```
 TestLibrary.1.0.0/
-├── contentFiles/cs/any/Interop.cs
+├── contentFiles/cs/<tfm>/Interop.cs
 └── runtimes/
     ├── osx-arm64/native/
     └── win-x64/native/
 ```
 
-- **`contentFiles/cs/any/Interop.cs`**: the generated C# source, compiled directly into the consumer's own project (not a separate assembly). This is why the generated code has no external dependency beyond the .NET BCL: it becomes part of the consumer's compilation unit.
+- **`contentFiles/cs/<tfm>/Interop.cs`**: the generated C# source, compiled directly into the consumer's own project (not a separate assembly). This is why the generated code has no external dependency beyond the .NET BCL: it becomes part of the consumer's compilation unit.
 - **`runtimes/{rid}/native/`**: the compiled Kotlin/Native shared libraries, one per supported target (`osx-arm64`, `win-x64`, ...). The .NET runtime resolves the correct native asset for the host RID automatically via `[DllImport]`.
 
 No consumer-side build step, SDK, or tool is required beyond referencing the package.

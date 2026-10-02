@@ -8,6 +8,15 @@ Reference for the `nuget {}` extension.
 |---|---|---|
 | `publish { }` | `NugetPublishConfig` | optional, omit for a consume-only project |
 | `dependencies { }` | `NugetDependencyScope` | optional, omit for a publish-only project |
+| `targetFramework` | `Property<String>` | no, default `net10.0` |
+
+The `targetFramework` is the .NET target framework the generated package targets. It must be exactly `netX.0` with X of 10 or higher (the generated C# needs C# 14), and anything else fails the build. The package ships its C# under `contentFiles/cs/<tfm>/`, so a consumer project on a lower framework fails restore with `NU1202` instead of building without the generated code. The same value is used for the restore of bound dependencies and the pre-pack compile check. Platform frameworks such as `net10.0-android`, `netstandard` and .NET Framework are not supported.
+
+```kotlin
+nuget {
+  targetFramework = "net10.0"
+}
+```
 
 A project can declare either block, both, or neither meaningfully. `publish {}` alone publishes a
 package with no reverse bindings; `dependencies {}` alone binds C# packages into Kotlin without
@@ -35,6 +44,8 @@ nuget {
 
 Scripts that only assign values and call the block functions need no change. These differences
 matter if you read the DSL back or depend on task shape:
+
+- The package targets `net10.0` by default, up from a hardcoded `net8.0`, and `targetFramework` now sets it. A consumer project below `net10.0` fails restore with `NU1202`.
 
 - Reading a value returns a `Provider`, so `nuget.publish?.packageId` becomes
   `nuget.publish.packageId` (a `Property<String>`). `nuget.publish` is never null; test whether a

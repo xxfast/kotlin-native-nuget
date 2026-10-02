@@ -8,7 +8,7 @@ cat named Oreo.
 - [Bind a NuGet package for Kotlin](bind-nuget-package-for-kotlin.md)
 
 Check [Prerequisites](prerequisites.md) before starting. Publishing needs JDK 17 and Kotlin/Native.
-Binding a NuGet package also needs the .NET 8 SDK or later.
+Binding a NuGet package also needs the .NET 10 SDK or later.
 
 <seealso>
     <category ref="related">

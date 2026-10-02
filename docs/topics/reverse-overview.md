@@ -70,7 +70,7 @@ Kotlin CocoaPods plugin).
 
 For every declared dependency (see [Declaring dependencies](declaring-dependencies.md)) the plugin
 writes a throwaway `interop.csproj` with one `<PackageReference>` per package, pinned to
-`net8.0`, and `<RuntimeIdentifiers>` covering every configured Kotlin/Native target so
+your configured [`targetFramework`](nuget-dsl.md) (default `net10.0`), and `<RuntimeIdentifiers>` covering every configured Kotlin/Native target so
 `runtimes/{rid}/native/` payloads resolve for all of them.
 
 ### `nugetRestore`: `dotnet restore`
@@ -233,7 +233,7 @@ means and how to read it, and for the opt-in trace that logs each registration a
 
 ### `packNuget`: one `PackageReference` for the consumer
 
-`packNuget` copies the generated `.cs` shim files into the same `contentFiles/cs/any/` folder that
+`packNuget` copies the generated `.cs` shim files into the same `contentFiles/cs/<tfm>/` folder that
 already carries the forward-direction `Interop.cs`, so a consuming `.csproj` compiles them straight
 into its own assembly. It also adds a `<dependencies>` entry to the `.nuspec` for each bound package,
 pinned to the **exact version NuGet resolved** (not the floating floor declared in the DSL), because
@@ -249,7 +249,7 @@ library, and restores `MimeMapping`/`TestDependency` transitively, with zero han
 
 ## What you need installed
 
-This direction requires the .NET SDK (8 or later) on the machine running the Kotlin build, because
+This direction requires the .NET SDK (10 or later) on the machine running the Kotlin build, because
 `nugetRestore` and `nugetExtractApi` shell out to `dotnet`. This is a prerequisite for the reverse
 direction only: a Kotlin library author who never declares a `bind {}` block needs nothing beyond
 the usual Kotlin/Native toolchain. If `dotnet` isn't found on `PATH`, the plugin fails fast with an

@@ -4,7 +4,7 @@
 
 - JDK 17+
 - Gradle, via the included wrapper (`./gradlew`)
-- [.NET SDK](https://dotnet.microsoft.com/download) 8.0+, only if you bind a NuGet package into
+- [.NET SDK](https://dotnet.microsoft.com/download) 10.0+, only if you bind a NuGet package into
   Kotlin (`nuget { dependencies { dependency(...) { bind { ... } } } }`). Publishing needs no
   .NET SDK: `packNuget` writes the `.nupkg` itself.
 
@@ -19,7 +19,7 @@
 
 ## C# side (consumer)
 
-- [.NET SDK](https://dotnet.microsoft.com/download) 8.0+
+- [.NET SDK](https://dotnet.microsoft.com/download) 10.0+
 
 ```bash
 brew install dotnet

@@ -13,7 +13,6 @@ Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is
 
 ### 0.9.0: breaking changes
 
-- [ ] The target framework is hardcoded to `net8.0` (`NugetPlugin.kt:75`, verified); make it configurable.
 - [ ] Internalise leaked plugin API (the `rir` package, `generateKotlinStubs`, `generateCSharpShims`, `generateCsproj`, `GeneratedFile`, `NugetPusher` and its request and result types) and turn on `explicitApi()` in every published module. Verified: no build script calls `explicitApi()`.
 - [ ] `include` / `exclude` mean Kotlin packages in `publish {}` and C# namespaces in `bind {}`; rename one pair. Verified.
 - [ ] One naming scheme for task names: `packNuget` and `publishNuget` are verb-first, `nugetGen`, `nugetRestore` and the rest are `nuget`-first, and `nugetGen` is vague. Verified.
@@ -64,7 +63,7 @@ Complete.
 - [ ] A box handed to a `FromHandle<T>` wrapper factory that throws *before* constructing the wrapper is owned by nobody and leaks; `NugetMarshal.DisposeMaterialized` only covers already-constructed wrappers, and `LiveHandleTests.cs`'s red-case fixture sidesteps it by disposing the box itself inside the throwing factory. Inferred from reading `CirMarshalRenderer.kt`'s `Materialize<T>` and `GenericClassExports.kt`'s `nuget_list_get` (mints a fresh box per element read), not reproduced by a fixture that omits the explicit dispose. Discovered alongside [ADR-120](docs/adr/120-live-stableref-counter-and-leak-harness.md).
 - [ ] `nugetCompileInterop` is not wired into Gradle's `check` lifecycle, only into `packNuget`. Discovered alongside [ADR-138](docs/adr/138-pack-time-interop-compile-check.md).
 - [ ] `nugetCompileInterop` skips silently when `dotnet` is absent; an opt-in strict mode should fail `packNuget` instead of warning, for a CI that forgot to install the SDK. Discovered alongside [ADR-138](docs/adr/138-pack-time-interop-compile-check.md).
-- [ ] `nugetCompileInterop` compiles the generated C# against `net8.0` only, `GeneratedBindingsCheck`'s target, not every TFM a consumer might build against. Discovered alongside [ADR-138](docs/adr/138-pack-time-interop-compile-check.md).
+- [ ] `nugetCompileInterop` compiles the generated C# against the configured `targetFramework` only ([ADR-184](docs/adr/184-configurable-target-framework.md)), not every higher TFM a consumer might build against. Discovered alongside [ADR-138](docs/adr/138-pack-time-interop-compile-check.md).
 - [ ] Inferred: a generic dependency owner reached only through its nested type (`class Box<T> { class Lid }` in a klib) takes `addGenericClassExports` on a klib-read class, a route ADR-066 records as never exercised cross-module; no cell proves the output compiles. Discovered alongside [ADR-066](docs/adr/066-forward-export-reachability-closure.md)'s 2026-09-14 amendment.
 - [ ] Also uncovered by [ADR-134](docs/adr/134-nested-types-under-deferred-owners.md): the scope-refusal dependency arm inside the nested gate has no fixture.
 - [ ] Inferred, unverified: `unsupportedNestedOwnerReason()` (`NugetProcessor.kt`) has no arm for a nested SEALED owner, so a value class under `Owner.NestedSealed` may be declared under an owner that is never declared. Discovered alongside [ADR-134](docs/adr/134-nested-types-under-deferred-owners.md).
