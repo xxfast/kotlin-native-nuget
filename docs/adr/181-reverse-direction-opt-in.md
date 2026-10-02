@@ -2,13 +2,13 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
 At 1.0.0 the forward direction (Kotlin to C#) is stable and the reverse direction (C# to Kotlin: `bind {}`, RIR, generated Kotlin stubs) is experimental and may break in 1.x (ROADMAP.md, "First stable release (1.0.0)"). Semver can only exclude it if a consumer has explicitly acknowledged that, so the 0.9.0 item asks for "the marker or DSL switch that makes the reverse direction experimental".
 
-Constraints found in the repo (research memo: [reverse-opt-in](../research/roadmap/reverse-opt-in.md)):
+Constraints found in the repo:
 
 - Generated reverse stubs compile inside the consumer's own module, as extra `srcDir`s of `nativeMain` and the per-target source sets (`NugetPlugin.kt:206-215`, verified by reading). Whatever gates them must gate same-module use.
 - The forward KSP output calls author functions whose signatures name bound C# interfaces (ADR-088; fixture `Farm.kt:43`, `fun adopt(feedable: IFeedable)`, verified by reading).

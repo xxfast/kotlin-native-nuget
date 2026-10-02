@@ -5,6 +5,39 @@ Kotlin library. The Gradle plugin resolves the package, reads its public API str
 compiled assembly, and generates both sides of the bridge: Kotlin stubs your code calls, and a C#
 shim that registers function pointers with Kotlin at process startup.
 
+## Opt in
+
+Everything `bind {}` generates is marked `@ExperimentalNugetBindingApi`, an `ERROR`-level opt-in.
+The reverse direction may change in any 1.x release, so code that calls a bound package does not
+compile until its module acknowledges that:
+
+```
+This declaration needs opt-in. Bindings generated from a NuGet package by `bind {}` are
+experimental and may change in any 1.x release.
+```
+
+Opt in for one file or declaration:
+
+```kotlin
+@file:OptIn(ExperimentalNugetBindingApi::class)
+
+import io.github.xxfast.kotlin.native.nuget.annotations.ExperimentalNugetBindingApi
+```
+
+or for the whole module in `build.gradle.kts`:
+
+```kotlin
+kotlin {
+  compilerOptions {
+    optIn.add("io.github.xxfast.kotlin.native.nuget.annotations.ExperimentalNugetBindingApi")
+  }
+}
+```
+
+The plugin adds the `nuget-annotations` dependency for you. There is no Gradle switch to turn the
+marker off. A function you publish to C# can take or return a bound type without being marked
+itself, because the forward direction exempts this marker.
+
 ## Why this direction needs no CLR hosting
 
 The Kotlin/Native library you're building always runs *inside* a .NET host process: it's loaded via

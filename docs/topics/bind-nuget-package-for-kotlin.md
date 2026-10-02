@@ -44,12 +44,17 @@ C# registration shims. The Kotlin output is added to `nativeMain`, so regular so
 Add this helper under `src/nativeMain/kotlin/com/example/cats/mime/MimeSample.kt`:
 
 ```kotlin
+@file:OptIn(ExperimentalNugetBindingApi::class)
+
 package com.example.cats.mime
 
+import io.github.xxfast.kotlin.native.nuget.annotations.ExperimentalNugetBindingApi
 import mimemapping.MimeUtility
 
 fun catPhotoMimeType(fileName: String): String = MimeUtility.getMimeMapping(fileName)
 ```
+
+Generated bindings are experimental, so the file opts in. See [Consuming C# in Kotlin](reverse-overview.md#opt-in) for the module-wide form.
 
 ## 3. Package the bridge and call it
 
