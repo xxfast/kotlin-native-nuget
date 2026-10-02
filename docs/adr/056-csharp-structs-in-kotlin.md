@@ -934,3 +934,7 @@ force `Bindings` / `Registration` generation even when the struct has no alterna
 **Kotlin surface:** members on the generated `data class`; statics on `companion object`. Fixture:
 `sample-dependency/Geometry.cs` (`Point.Magnitude` / `Offset` / `Format` / `Origin`) and
 `Profile.cs` (`Label` / `IsPlayful` / `WithMood` / `Resting`).
+
+## Amendment (2026-10-03): the struct itself gets its own diagnostic kind
+
+A struct that fails the shape rules (or is a `ref struct` or generic) is now reported once as `SKIPPED_UNSUPPORTED_STRUCT_TYPE`, with an empty member name and the failed rules in the reason. `SKIPPED_UNSUPPORTED_STRUCT` is reserved for members that mention such a struct. Previously the struct itself was filed under `SKIPPED_UNSUPPORTED_STRUCT` with its own name as the member name.

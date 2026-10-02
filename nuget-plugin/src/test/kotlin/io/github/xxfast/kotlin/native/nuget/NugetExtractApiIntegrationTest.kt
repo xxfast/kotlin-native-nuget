@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget
 
+import io.github.xxfast.kotlin.native.nuget.rir.RirAssembly
 import io.github.xxfast.kotlin.native.nuget.rir.RirClass
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnostic
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnosticKind
@@ -7,6 +8,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirFile
 import io.github.xxfast.kotlin.native.nuget.rir.RirInterface
 import io.github.xxfast.kotlin.native.nuget.rir.RirNamespace
 import io.github.xxfast.kotlin.native.nuget.rir.RirProperty
+import io.github.xxfast.kotlin.native.nuget.rir.RirStruct
 import io.github.xxfast.kotlin.native.nuget.rir.deriveDllPaths
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import java.io.File
@@ -1206,5 +1208,94 @@ class NugetExtractApiIntegrationTest {
       )
       assertTrue(diagnostic.hint.isNotBlank())
     }
+  }
+
+  /**
+   * A struct that fails every ADR-056 shape rule used to surface only as the member-level
+   * `SKIPPED_UNSUPPORTED_STRUCT` cascade on OTHER types' members (NodaTime: 125 of those, no
+   * entry for any of its 13 structs). Each one now gets a single type-level
+   * `SKIPPED_UNSUPPORTED_STRUCT_TYPE` whose reason is the reader's own failed-rule text.
+   */
+  @Test
+  fun `metadata reader names every struct that fails the ADR-056 shape rules`() {
+    val dotnet: String = findDotnet() ?: return
+
+    val source: String = """
+      namespace Probe.Structs;
+
+      // Fails Shape A (no public constructor) and Shape B (private state, NodaTime's Instant).
+      public readonly struct Opaque
+      {
+          private readonly long _ticks;
+          public long Ticks => _ticks;
+      }
+
+      // Fails Shape A (constructor covers 1 of 2 fields) and Shape B (no public setters).
+      public readonly struct Partial
+      {
+          public Partial(int x) { X = x; Y = 0; }
+          public int X { get; }
+          public int Y { get; }
+      }
+
+      // Stack-only: fails before any shape is tried.
+      public ref struct Span2 { public int Length => 0; }
+
+      // Shape A and Shape B: both bind, so neither is named.
+      public readonly struct Size
+      {
+          public Size(int width, int height) { Width = width; Height = height; }
+          public int Width { get; }
+          public int Height { get; }
+      }
+
+      public struct Bag { public int Count { get; set; } }
+
+      public static class Use
+      {
+          public static long Read(Opaque value) => value.Ticks;
+          public static int Area(Size size) => size.Width * size.Height;
+      }
+    """.trimIndent()
+
+    val dll: File = compileFixture(dotnet, source, "StructShapeReaderFixture")
+    val toolDir: File = Files.createTempDirectory("NugetMetadataReader-struct-fixture").toFile()
+    unpackMetadataReader(toolDir, javaClass.classLoader)
+    val file: RirFile = parseReverseIr(
+      runMetadataReader(dotnet, toolDir, mapOf("StructFixture" to listOf(dll.absolutePath))),
+    )
+    val assembly: RirAssembly = file.assemblies.single()
+
+    val bound: List<String> = assembly.namespaces.single { it.name == "Probe.Structs" }
+      .types.filterIsInstance<RirStruct>()
+      .map { it.name }
+      .sorted()
+    assertEquals(listOf("Bag", "Size"), bound)
+
+    val named: Map<String, RirDiagnostic> = assembly.diagnostics
+      .filter { it.kind == RirDiagnosticKind.SKIPPED_UNSUPPORTED_STRUCT_TYPE }
+      .associateBy { it.typeName }
+    assertEquals(listOf("Opaque", "Partial", "Span2"), named.keys.sorted(), "one per struct")
+    named.values.forEach { diagnostic ->
+      assertEquals("", diagnostic.memberName, "type-level: no member")
+      assertEquals("Probe.Structs.${diagnostic.typeName}", diagnostic.memberSignature)
+      assertTrue(diagnostic.hint.isNotBlank())
+    }
+
+    // The reason is the rule ExtractStruct gave up on, in its own words.
+    val opaque: String = named.getValue("Opaque").reason
+    assertTrue(opaque.contains("field `_ticks` is private"), opaque)
+    val partial: String = named.getValue("Partial").reason
+    assertTrue(partial.contains("Shape A:"), partial)
+    assertTrue(partial.contains("constructor takes 1 parameter(s)"), partial)
+    assertTrue(partial.contains("Shape B:"), partial)
+    assertTrue(partial.contains("auto-property `X` has no public setter"), partial)
+    val span: String = named.getValue("Span2").reason
+    assertTrue(span.contains("ref struct"), span)
+
+    // The cascade on a member that mentions the struct stays as it was: still member-level.
+    val cascade: List<RirDiagnostic> = assembly.diagnostics
+      .filter { it.kind == RirDiagnosticKind.SKIPPED_UNSUPPORTED_STRUCT }
+    assertTrue(cascade.any { it.typeName == "Use" && it.memberName == "Read" }, "$cascade")
   }
 }

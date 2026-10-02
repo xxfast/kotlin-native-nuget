@@ -34,7 +34,7 @@
     "constructor": { "seen": 94, "bound": 94 },
     "instanceMethod": { "seen": 220, "bound": 220 },
     "property": { "seen": 208, "bound": 207 },
-    "readerSkippedMember": { "seen": 474, "bound": 0 },
+    "readerSkippedMember": { "seen": 473, "bound": 0 },
     "staticMethod": { "seen": 58, "bound": 58 }
   },
   "diagnostics": {
@@ -52,7 +52,7 @@
     "SKIPPED_UNBOUND_GENERIC_INSTANTIATION": 130,
     "SKIPPED_UNBOUND_TYPE_REFERENCE": 221,
     "SKIPPED_UNSUPPORTED_ENUM": 16,
-    "SKIPPED_UNSUPPORTED_STRUCT": 1
+    "SKIPPED_UNSUPPORTED_STRUCT_TYPE": 1
   },
   "unboundTypeReferences": {
     "Newtonsoft.Json.Serialization.IAttributeProvider": 1,

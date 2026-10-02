@@ -1254,11 +1254,11 @@ internal static class AssemblyExtractor
     {
         if (typeDef.GetGenericParameters().Count > 0)
             return StructExtraction.Unsupported(
-                "generic struct — open/closed generic structs are not bridgeable in v1");
+                "generic struct: open/closed generic structs are not bridgeable in v1");
 
         if (MetadataHelpers.IsRefStructType(mr, typeDef))
             return StructExtraction.Unsupported(
-                "ref struct — stack-only (IsByRefLike) and cannot cross the C ABI (ADR-043)");
+                "ref struct: stack-only (IsByRefLike) and cannot cross the C ABI (ADR-043)");
 
         var ctorCandidates = new List<MethodDefinitionHandle>();
         foreach (var handle in typeDef.GetMethods())
@@ -1302,7 +1302,7 @@ internal static class AssemblyExtractor
                 // the Shape A rules") does not hold here — some ctor DOES satisfy them, just not
                 // uniquely — so this does not fall through to Shape B.
                 return StructExtraction.Unsupported(
-                    $"{stateCandidates.Count} public constructors cover all stored state — the state " +
+                    $"{stateCandidates.Count} public constructors cover all stored state, so the state " +
                     "constructor is ambiguous");
             }
 
@@ -1575,7 +1575,7 @@ internal static class AssemblyExtractor
         }
 
         if (ctorSig.ParameterTypes.Length == 0)
-            return (null, "public constructor has no parameters — zero components");
+            return (null, "public constructor has no parameters: zero components");
 
         int instanceFieldCount = typeDef.GetFields().Count(fieldHandle =>
             (mr.GetFieldDefinition(fieldHandle).Attributes & System.Reflection.FieldAttributes.Static) == 0);
@@ -1583,7 +1583,7 @@ internal static class AssemblyExtractor
         if (instanceFieldCount != ctorSig.ParameterTypes.Length)
             return (null,
                 $"struct has {instanceFieldCount} stored instance field(s) but its constructor " +
-                $"takes {ctorSig.ParameterTypes.Length} parameter(s) — state would be silently dropped");
+                $"takes {ctorSig.ParameterTypes.Length} parameter(s), so state would be silently dropped");
 
         // Public, readable, non-static instance properties OR public instance fields, keyed
         // case-insensitively (Constraint 4: ctor parameter `x` vs. property `X`; ADR-058 Decision
@@ -1742,20 +1742,22 @@ internal static class AssemblyExtractor
         // ADR-056: a value type that is not an enum is a struct candidate and must not fall
         // through to class processing below (Constraint 3's verified bug). The RirStruct already
         // carries components, constructors, and (ADR-056 deferred) methods/properties from the
-        // struct post-process pass.
+        // struct post-process pass. An unsupported one (a failed shape rule, a ref or generic
+        // struct) gets one type-level diagnostic here: this runs after CollectStructTypes' fixed
+        // point has settled, once per filtered-in top-level struct.
         if (structTypes.TryGetValue(fullName, out var structType))
         {
             if (structType.Struct is not null) return (structType.Struct, structType.Diagnostics);
 
             return (null, new[] { new RirDiagnostic(
-                kind: "SKIPPED_UNSUPPORTED_STRUCT",
+                kind: "SKIPPED_UNSUPPORTED_STRUCT_TYPE",
                 typeName: typeName,
-                memberName: typeName,
+                memberName: "",
                 memberSignature: fullName,
                 reason: structType.Reason!,
-                hint: "See ADR-056 Decision 3a: a bridgeable struct has exactly one public " +
-                    "constructor covering all stored state, with primitive/string/bound-enum " +
-                    "components matching the constructor parameters case-insensitively.") });
+                hint: $"Members that mention `{typeName}` are skipped as SKIPPED_UNSUPPORTED_STRUCT. " +
+                    "See ADR-056/ADR-058 for the constructor (Shape A) and object-initializer " +
+                    "(Shape B) rules a bridgeable struct must meet.") });
         }
 
         // ADR-072 Decision 10: a package-declared generic class definition. Two possible outcomes:

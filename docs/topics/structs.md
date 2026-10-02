@@ -62,6 +62,10 @@ set it), a hand-written property setter (metadata can't prove it writes the fiel
 zero stored state. If a nested component itself fails, the whole outer struct is skipped too, and the
 build warning names the failing component's path, not the outer struct's own rules.
 
+The build warns once per skipped struct with `SKIPPED_UNSUPPORTED_STRUCT_TYPE`, naming the shape rule it
+failed. Every member of another type that mentions the struct is skipped with `SKIPPED_UNSUPPORTED_STRUCT`.
+The struct's own public members are not counted or listed.
+
 ## Component order for the no-constructor shape
 
 When a struct has a state constructor, its component order is already public C# API: reordering the

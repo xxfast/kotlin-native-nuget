@@ -34,7 +34,7 @@
     "constructor": { "seen": 21, "bound": 20 },
     "instanceMethod": { "seen": 7, "bound": 7 },
     "property": { "seen": 18, "bound": 16 },
-    "readerSkippedMember": { "seen": 116, "bound": 0 },
+    "readerSkippedMember": { "seen": 82, "bound": 0 },
     "staticMethod": { "seen": 2, "bound": 2 }
   },
   "diagnostics": {
@@ -48,7 +48,8 @@
     "SKIPPED_OPEN_GENERIC": 47,
     "SKIPPED_UNBOUND_GENERIC_INSTANTIATION": 2,
     "SKIPPED_UNBOUND_TYPE_REFERENCE": 14,
-    "SKIPPED_UNSUPPORTED_STRUCT": 35
+    "SKIPPED_UNSUPPORTED_STRUCT": 1,
+    "SKIPPED_UNSUPPORTED_STRUCT_TYPE": 34
   },
   "unboundTypeReferences": {
     "System.Exception": 3,
