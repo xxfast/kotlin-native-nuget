@@ -28,7 +28,7 @@ Two constraints shape what may become `internal`:
   input `secret$plug` (`INPUTS=[msg, secret$plug]`): the module-mangled JVM name becomes the input
   key. Silent, not a build failure.
 - **Task types are configured by class (verified by reading).** This repo's own fixtures do
-  `tasks.withType<NugetCompileInteropTask>()`, `tasks.named("nugetPack", NugetPackTask::class.java)`,
+  `tasks.withType<NugetCompileInteropTask>()`, `tasks.named("packNuget", PackNugetTask::class.java)`,
   `tasks.named("nugetGenerateRestoreProject", NugetGenerateRestoreProjectTask::class.java)` and
   `extensions.findByType(NugetExtension::class.java)` (`test-library/build.gradle.kts:1-4`, `:177`,
   `:216`, `:225`, `:236`; `test-companion/build.gradle.kts:1-3`, `:36`, `:44`, `:48`; task names as

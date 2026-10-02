@@ -38,10 +38,6 @@ Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is
 
 Additive, so none of it forces a major; each stays in its phase below: `SharedFlow`, `Flow` as a parameter or type argument, the wider `MutableStateFlow` surface, `Result`'s `TryRun`, reverse exception fidelity, events, `ValueTask`, operators, indexers, arrays, generic interfaces, the crossing benchmark, the size gate, the leak-ladder rungs beyond what the disposal contract needs, `LibraryImport`, record classes.
 
-### Open decisions
-
-- [ ] Each contract in 0.9.0 marked "Decide".
-
 ## Phase 1: Basic bridging
 
 Complete.
