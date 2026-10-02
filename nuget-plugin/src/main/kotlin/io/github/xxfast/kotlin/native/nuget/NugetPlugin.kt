@@ -10,6 +10,7 @@ import org.gradle.api.tasks.TaskProvider
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.SharedLibrary
+import java.io.File
 import java.lang.reflect.Method
 import java.util.concurrent.Callable
 
@@ -171,6 +172,15 @@ public class NugetPlugin : Plugin<Project> {
   private fun registerConsume(project: Project, extension: NugetExtension) {
     val interopDir: Provider<Directory> = project.layout.buildDirectory.dir("nuget-interop")
     val dependencies = extension.dependencies
+    val projectDir: File = project.layout.projectDirectory.asFile
+    val sources: Provider<Map<String, String>> =
+      project.provider { dependencies.resolvedSources(projectDir) }
+    val localSources: Provider<Map<String, String>> = sources.map(::localOnly)
+    // ADR-190: restore moves under build/ only when a local source is declared.
+    val packagesDir: Provider<Directory> = project.provider {
+      if (localSources.get().isEmpty()) null
+      else interopDir.get().dir("packages")
+    }
 
     val nugetGenerateRestoreProject: TaskProvider<NugetGenerateRestoreProjectTask> =
       project.tasks.register(
@@ -187,13 +197,10 @@ public class NugetPlugin : Plugin<Project> {
               .associate { it.id to it.version.get() }
           }
         )
-        task.dependencySources.set(
-          project.provider {
-            dependencies
-              .filter { it.source.isPresent }
-              .associate { it.id to it.source.get() }
-          }
-        )
+        task.dependencySources.set(sources)
+        task.localSources.from(localSources.map { local -> local.values.map(::File) })
+        task.packagesDir.set(packagesDir)
+        task.feedDir.set(interopDir.map { it.dir("feed") })
         task.targetFramework.set(extension.validatedTargetFramework)
         task.runtimeIdentifiers.set(
           project.provider {
@@ -214,6 +221,14 @@ public class NugetPlugin : Plugin<Project> {
         task.csprojFile.set(nugetGenerateRestoreProject.flatMap { it.csprojFile })
         task.targetFramework.set(extension.validatedTargetFramework)
         task.assetsFile.set(interopDir.map { it.file("obj/project.assets.json") })
+        task.localFeeds.from(nugetGenerateRestoreProject.flatMap { it.feedDir })
+        task.localFeeds.from(
+          localSources.map { local ->
+            local.values.filterNot { it.endsWith(".nupkg", ignoreCase = true) }.map(::File)
+          }
+        )
+        task.localSources.set(localSources)
+        task.packagesDir.set(packagesDir)
       }
 
     project.tasks.register(NugetTaskNames.IMPORT) { task ->
@@ -589,9 +604,20 @@ public class NugetPlugin : Plugin<Project> {
         task.projectDir.set(project.layout.buildDirectory.dir("nuget-compile"))
         task.targetFramework.set(extension.validatedTargetFramework)
         task.dotnetSearchPath.set(project.providers.environmentVariable("PATH"))
+        // ADR-190: the resolved feeds and packages folder nugetRestore uses, read from the DSL.
+        val projectDir: File = project.layout.projectDirectory.asFile
+        val interopDir: Provider<Directory> = project.layout.buildDirectory.dir("nuget-interop")
         task.dependencySources.addAll(
           project.provider {
-            extension.dependencies.mapNotNull { it.source.orNull }.distinct()
+            val feedDir: File = interopDir.get().dir("feed").asFile
+            restoreFeeds(extension.dependencies.resolvedSources(projectDir).values, feedDir)
+          }
+        )
+        task.packagesDir.set(
+          project.provider {
+            val local: Map<String, String> =
+              localOnly(extension.dependencies.resolvedSources(projectDir))
+            if (local.isEmpty()) null else interopDir.get().dir("packages")
           }
         )
         task.dependencyVersions.convention(emptyMap())

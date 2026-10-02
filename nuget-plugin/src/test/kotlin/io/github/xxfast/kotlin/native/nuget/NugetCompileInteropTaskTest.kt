@@ -144,6 +144,50 @@ class NugetCompileInteropTaskTest {
   }
 
   @Test
+  fun `renders RestorePackagesPath when a packages path is given`() {
+    val csproj: String = generateCheckCsproj(
+      emptyList(), emptyMap(), listOf("/a&b/feed"), packagesPath = "/a&b/packages",
+    )
+
+    assertContains(csproj, "<RestorePackagesPath>/a&amp;b/packages</RestorePackagesPath>")
+    assertContains(csproj, ";/a&amp;b/feed</RestoreSources>")
+  }
+
+  // ADR-190: the check restores a local source from the same resolved feeds into the same
+  // project-local folder as nugetRestore, or it compiles against a stale copy.
+  @Test
+  fun `a local source gives the check absolute feeds and the shared packages folder`() {
+    val project: Project = buildProject()
+    publish(project)
+    writeNupkg(project.file("libs/Acme.Local.1.0.0.nupkg"), "Acme.Local", "1.0.0")
+    project.extensions.getByType(NugetExtension::class.java).dependencies {
+      it.dependency("Acme.Local") { dep -> dep.source.set("libs/Acme.Local.1.0.0.nupkg") }
+      it.dependency("Acme.Text", "1.0.0") { dep -> dep.source.set("artifacts") }
+    }
+
+    val compile = project.tasks.getByName("nugetCompileInterop") as NugetCompileInteropTask
+    val interop: File = project.layout.buildDirectory.dir("nuget-interop").get().asFile
+
+    assertEquals(
+      listOf(File(interop, "feed").absolutePath, project.file("artifacts").absolutePath),
+      compile.dependencySources.get(),
+    )
+    assertEquals(File(interop, "packages"), compile.packagesDir.get().asFile)
+  }
+
+  // test-library and test-companion add an absolute directory to dependencySources by hand; that
+  // must not move them off the global packages folder.
+  @Test
+  fun `a directory added to dependencySources by hand keeps the global packages folder`() {
+    val project: Project = buildProject()
+    publish(project)
+    val compile = project.tasks.getByName("nugetCompileInterop") as NugetCompileInteropTask
+    compile.dependencySources.add(tempDir("hand-feed").absolutePath)
+
+    assertFalse(compile.packagesDir.isPresent)
+  }
+
+  @Test
   fun `packNuget depends on nugetCompileInterop and both stage the same cs dirs`() {
     val project: Project = buildProject()
     publish(project)

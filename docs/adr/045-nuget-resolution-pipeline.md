@@ -554,5 +554,6 @@ deletes it as part of the standard `build/` cleanup.
 - Per-package `nuget.config` source mapping for precise feed routing (v2; deferred per
   Alternative 4).
 - Local path / `.nupkg` file source for a dependency (synthesis D6, ADR-044 deferred scope).
+  Shipped: [ADR-190](190-local-nupkg-dependency-source.md).
 - The `--packages` flag to redirect the global NuGet cache into the Gradle build directory for
   fully-hermetic builds (useful in restricted-network CI; tracked under Future Improvements).

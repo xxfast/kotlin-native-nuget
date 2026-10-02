@@ -1,10 +1,15 @@
 package io.github.xxfast.kotlin.native.nuget
 
+import org.gradle.api.Project
+import org.gradle.testfixtures.ProjectBuilder
+import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -94,5 +99,108 @@ class NugetRestoreIntegrationTest {
       output.contains("NU1202"),
       "Error output must contain NU1202 for TFM incompatibility but was:\n$output",
     )
+  }
+
+  // ADR-190: packs `Probe.Local 1.0.0` holding one public class named [marker]. Every call packs
+  // the SAME id and version, which is the dev loop the local source exists for.
+  private fun packProbe(dotnet: String, marker: String, output: File): File {
+    val dir: File = Files.createTempDirectory("probe-local-src").toFile()
+    File(dir, "Probe.Local.csproj").writeText(
+      """
+      <Project Sdk="Microsoft.NET.Sdk">
+        <PropertyGroup>
+          <TargetFramework>netstandard2.0</TargetFramework>
+          <PackageId>Probe.Local</PackageId>
+          <Version>1.0.0</Version>
+        </PropertyGroup>
+      </Project>
+      """.trimIndent(),
+    )
+    File(dir, "Marker.cs").writeText(
+      "namespace Probe.Local { public class $marker { public int Value() { return 1; } } }",
+    )
+
+    val process: Process = ProcessBuilder(
+      dotnet, "pack", "--nologo", "-v", "quiet", "-o", output.absolutePath,
+    )
+      .directory(dir)
+      .redirectErrorStream(true)
+      .start()
+    val log: String = process.inputStream.bufferedReader().readText()
+    assertEquals(0, process.waitFor(), "probe pack must succeed\n$log")
+    return File(output, "Probe.Local.1.0.0.nupkg")
+  }
+
+  private fun consumer(id: String, version: String?, source: String): Project {
+    val dir: File = Files.createTempDirectory("local-source-consumer").toFile()
+    val project: Project = ProjectBuilder.builder().withProjectDir(dir).build()
+    project.plugins.apply("org.jetbrains.kotlin.multiplatform")
+    project.plugins.apply("io.github.xxfast.kotlin.native.nuget")
+    project.extensions.getByType(KotlinMultiplatformExtension::class.java)
+      .mingwX64 { target -> target.binaries { sharedLib { baseName = "test" } } }
+    project.extensions.getByType(NugetExtension::class.java).dependencies { deps ->
+      deps.dependency(id, version) { dep ->
+        dep.source.set(source)
+        dep.bind { }
+      }
+    }
+    return project
+  }
+
+  // Drives the real task actions in pipeline order, the way `nugetGenerateBindings` reaches them.
+  private fun Project.restoreAndExtract(): String {
+    (tasks.getByName(NugetTaskNames.GENERATE_RESTORE_PROJECT) as NugetGenerateRestoreProjectTask)
+      .generate()
+    (tasks.getByName(NugetTaskNames.RESTORE) as NugetRestoreTask).restore()
+    val extract = tasks.getByName(NugetTaskNames.EXTRACT_API) as NugetExtractApiTask
+    extract.extract()
+    return extract.reverseIrFile.get().asFile.readText()
+  }
+
+  private fun assertSameVersionRepackRebinds(sourceOf: (feed: File) -> String) {
+    val dotnet: String = findDotnet() ?: return
+    val feed: File = Files.createTempDirectory("probe-local-feed").toFile()
+    packProbe(dotnet, "MarkerOne", feed)
+
+    val project: Project = consumer("Probe.Local", "1.0.0", sourceOf(feed))
+    val first: String = project.restoreAndExtract()
+    assertContains(first, "MarkerOne")
+
+    packProbe(dotnet, "MarkerTwo", feed)
+    val second: String = project.restoreAndExtract()
+    assertContains(second, "MarkerTwo", message = "a same-version repack must reach the bindings")
+    assertFalse(second.contains("MarkerOne"), "the V1 assembly must not be bound after a repack")
+
+    val packages: File = project.layout.buildDirectory.dir("nuget-interop/packages").get().asFile
+    val extracted = File(packages, "probe.local/1.0.0/probe.local.1.0.0.nupkg")
+    assertTrue(extracted.exists(), "the extracted folder keeps its .nupkg at $extracted")
+  }
+
+  @Test
+  fun `a same-version repack of a nupkg file source is rebound`() {
+    assertSameVersionRepackRebinds { feed -> File(feed, "Probe.Local.1.0.0.nupkg").absolutePath }
+  }
+
+  @Test
+  fun `a same-version repack in a directory source is rebound`() {
+    assertSameVersionRepackRebinds { feed -> feed.absolutePath }
+  }
+
+  // nuget.org holds Newtonsoft.Json 13.0.3; the declared directory does not. Restore succeeds from
+  // nuget.org, which is exactly the silent wrong binding the post-restore check exists to stop.
+  @Test
+  fun `a directory source that does not hold the package fails even when nuget org does`() {
+    findDotnet() ?: return
+    val empty: File = Files.createTempDirectory("empty-local-feed").toFile()
+    val project: Project = consumer("Newtonsoft.Json", "13.0.3", empty.absolutePath)
+
+    (project.tasks.getByName(NugetTaskNames.GENERATE_RESTORE_PROJECT)
+      as NugetGenerateRestoreProjectTask).generate()
+    val error: IllegalStateException = assertFailsWith {
+      (project.tasks.getByName(NugetTaskNames.RESTORE) as NugetRestoreTask).restore()
+    }
+
+    assertContains(error.message.orEmpty(), "Newtonsoft.Json")
+    assertContains(error.message.orEmpty(), empty.absolutePath)
   }
 }

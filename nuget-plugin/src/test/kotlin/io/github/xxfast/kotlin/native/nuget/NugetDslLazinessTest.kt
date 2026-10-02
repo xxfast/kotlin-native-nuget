@@ -260,4 +260,60 @@ class NugetDslLazinessTest {
     assertEquals(baseName, ksp.arguments["nuget.libraryName"])
     assertEquals(nativeLibraryStem("MyLib"), baseName)
   }
+
+  // ADR-190: a local source resolves against the project directory at wiring time and becomes a
+  // tracked input, and only then does restore move under build/.
+  @Test
+  fun `a local nupkg source is a tracked input and moves packages under build`() {
+    val project: Project = project()
+    val nupkg: File =
+      writeNupkg(project.file("libs/Acme.Local.1.0.0.nupkg"), "Acme.Local", "1.0.0")
+    val artifacts: File = project.file("artifacts")
+    artifacts.mkdirs()
+    project.nuget().dependencies { deps ->
+      deps.dependency("Acme.Local") { dep -> dep.source.set("libs/Acme.Local.1.0.0.nupkg") }
+      deps.dependency("Acme.Text", "1.2.0") { dep -> dep.source.set("artifacts") }
+      deps.dependency("Remote", "1.0.0") { dep -> dep.source.set("https://feed") }
+    }
+
+    val gen = project.tasks.getByName("nugetGenerateRestoreProject")
+      as NugetGenerateRestoreProjectTask
+    val restore = project.tasks.getByName("nugetRestore") as NugetRestoreTask
+    val packages: File = project.layout.buildDirectory.dir("nuget-interop/packages").get().asFile
+    val feed: File = project.layout.buildDirectory.dir("nuget-interop/feed").get().asFile
+
+    assertEquals(
+      mapOf(
+        "Acme.Local" to nupkg.absolutePath,
+        "Acme.Text" to artifacts.absolutePath,
+        "Remote" to "https://feed",
+      ),
+      gen.dependencySources.get(),
+    )
+    assertEquals(setOf(nupkg, artifacts), gen.localSources.files)
+    assertEquals(packages, gen.packagesDir.get().asFile)
+    assertEquals(packages, restore.packagesDir.get().asFile)
+    assertEquals(setOf(feed, artifacts), restore.localFeeds.files)
+    assertEquals(
+      mapOf("Acme.Local" to nupkg.absolutePath, "Acme.Text" to artifacts.absolutePath),
+      restore.localSources.get(),
+    )
+  }
+
+  @Test
+  fun `a remote-only project keeps the global packages folder`() {
+    val project: Project = project()
+    project.nuget().dependencies { deps ->
+      deps.dependency("Remote", "1.0.0") { dep -> dep.source.set("https://feed") }
+    }
+
+    val gen = project.tasks.getByName("nugetGenerateRestoreProject")
+      as NugetGenerateRestoreProjectTask
+    val restore = project.tasks.getByName("nugetRestore") as NugetRestoreTask
+
+    assertFalse(gen.packagesDir.isPresent)
+    assertFalse(restore.packagesDir.isPresent)
+    assertTrue(gen.localSources.isEmpty)
+    assertEquals(emptyMap(), restore.localSources.get())
+  }
 }
