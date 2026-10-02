@@ -168,6 +168,8 @@ class PackNugetTaskTest {
     task.generatedCsDirs.from(csDir)
     task.dependencyVersions.set(emptyMap())
     task.nativeLibDirs.set(mapOf("win-x64" to nativeDir.path))
+    writeProducerContract(csDir, "// forward bindings\n")
+    task.localContractDirs.set(mapOf("win-x64" to csDir.path))
 
     task.pack()
 
@@ -192,6 +194,8 @@ class PackNugetTaskTest {
     task.generatedCsDirs.from(csDir)
     task.dependencyVersions.set(emptyMap())
     task.nativeLibDirs.set(mapOf("win-x64" to nativeDir.path))
+    writeProducerContract(csDir, "// forward bindings\n")
+    task.localContractDirs.set(mapOf("win-x64" to csDir.path))
 
     task.pack()
 

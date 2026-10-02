@@ -104,7 +104,7 @@ itself enforces they're set, but `packNuget` fails once it reads an unset one.
 | `strictCompileCheck` | `Property<Boolean>` | no | `false`; when `true`, a missing or unusable `dotnet` fails `check` and `packNuget` instead of skipping the pre-pack compile check with a warning; see [Gradle tasks](gradle-tasks.md#nugetcompileinterop) |
 | `snapshot` | `Property<Boolean>` | no | `false`; when `true`, `packNuget` mints `<version>-snapshot.<epochMillis>` at execution time instead of using `version` literally, and always writes an MSBuild props file. Requires `packageId` and a non-blank `version` |
 | `versionPropsFile` | `RegularFileProperty` | no | only consulted when `snapshot` is `true`. Default `<rootProject>/build/<packageId>Versions.props` |
-| `prebuiltRuntimes` | `DirectoryProperty` | no | unset; a directory laid out `<rid>/native/*.{dll,dylib,so}`, exactly the `runtimes/` tree `packNuget` stages, merged with the RIDs this host links itself into one package |
+| `prebuiltRuntimes` | `DirectoryProperty` | no | unset; the complete `runtimes/` tree staged by another host, including each RID's `native/` library, `ForwardAbi.json`, and `Interop.cs`; merged with this host's linked RIDs |
 | `repositories { }` | function | no | empty; declares named feeds `publishNuget` pushes the packed `.nupkg` to, see below |
 
 ```kotlin
@@ -179,9 +179,11 @@ nuget {
 }
 ```
 
-A typical two-host CI flow: a Windows leg runs `packNuget` and uploads its staged `runtimes/`
-folder as an artifact, then a macOS leg downloads it, points `prebuiltRuntimes` at it, and runs
-`packNuget` itself, producing one package with both RIDs.
+A typical two-host CI flow: a Windows leg runs `packNuget` and uploads its complete staged
+`runtimes/` folder as an artifact, then a macOS leg downloads it, points `prebuiltRuntimes` at it,
+and runs `packNuget` itself, producing one package with both RIDs. Keep the sidecars alongside each
+RID's `native/` folder when transferring the artifact; they let the packing host compare each
+producer's API and native contract with the package's single generated C# API and contract.
 
 <note>
 <p>A target whose link task is disabled on the packing host (say <code>mingwX64</code> declared but
@@ -198,6 +200,12 @@ pack-only host is a supported shape.</p>
 - A `prebuiltRuntimes` directory with no RID subdirectories, or a RID subdirectory whose `native/`
   folder is missing or empty, fails naming the expected layout
   (`<prebuiltRuntimes>/<rid>/native/*.dll|*.dylib|*.so`).
+- Every RID must also include the producer's `ForwardAbi.json` and `Interop.cs` beside `native/`.
+  Missing or invalid sidecars fail packing. Binary-only artifacts from older plugin versions must
+  be rebuilt by their original producer and transferred as a complete `runtimes/` tree.
+- `packNuget` compares each RID's native contract and generated C# source with one baseline before
+  writing the package. A mismatch fails with the differing ABI symbols or C# token context; align
+  the exported declarations or publish the incompatible targets in separate packages.
 - The same RID arriving both locally linked and prebuilt fails naming both sources: pick one
   producer per RID.
 - A prebuilt RID name this plugin version does not know how to build is a warning only, since the

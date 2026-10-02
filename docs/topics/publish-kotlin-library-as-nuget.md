@@ -217,20 +217,30 @@ nuget {
 }
 ```
 
-The resulting package carries a `runtimes/<rid>/native/` folder for both the locally linked RID and
-the prebuilt one:
+The resulting package carries both native libraries and producer contract sidecars for each RID.
+`packNuget` checks that all targets agree on the native contract and generated C# API before it
+writes the package. If a target differs, packing reports the affected RIDs and ABI or C# token
+differences; align the declarations or publish those targets separately. Comparison is
+conservative: comments and whitespace outside literals are ignored, but generated declaration
+order and implementation tokens must match, so equivalent APIs with reordered generated code can
+be rejected.
 
 ```
 MyCatLib.1.0.0.nupkg
 ├── runtimes/osx-arm64/native/libkn_6d796361746c6962.dylib   (locally linked)
+├── runtimes/osx-arm64/ForwardAbi.json
+├── runtimes/osx-arm64/Interop.cs
 ├── runtimes/win-x64/native/kn_6d796361746c6962.dll          (prebuilt)
+├── runtimes/win-x64/ForwardAbi.json
+├── runtimes/win-x64/Interop.cs
 ├── contentFiles/cs/<tfm>/*.cs
 ├── build/MyCatLib.targets
 └── MyCatLib.nuspec
 ```
 
-See [The nuget {} DSL](nuget-dsl.md) for the full validation rules (an empty prebuilt directory, a
-RID declared both locally and prebuilt, an unknown RID name) and
+Upload and download the complete staged `runtimes/` tree, including the two sidecars beside each
+RID's `native/` directory. Binary-only prebuilt runtimes from older plugin versions must be rebuilt
+by their original producer. See [The nuget {} DSL](nuget-dsl.md) for the full validation rules and
 [ADR-093](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/093-multi-rid-package-inputs.md)
 for the design rationale.
 

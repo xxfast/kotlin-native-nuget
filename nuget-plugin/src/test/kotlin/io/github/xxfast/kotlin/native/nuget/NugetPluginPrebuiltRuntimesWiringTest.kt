@@ -176,4 +176,54 @@ class NugetPluginPrebuiltRuntimesWiringTest {
       "with no local RID and no prebuilt input there is nothing to pack: ${error.message}",
     )
   }
+  @Test fun `compile and pack baseline excludes disabled first target`() {
+    val project = buildProject()
+    project.disableLinkTasks("mingwX64")
+    val kotlin = project.extensions.getByType(KotlinMultiplatformExtension::class.java)
+    (kotlin.targets.getByName("macosArm64") as KotlinNativeTarget).binaries.filterIsInstance<SharedLibrary>()
+      .forEach { it.linkTaskProvider.configure { link -> link.enabled = true } }
+    project.extensions.getByType(NugetExtension::class.java).publish { it.packageId.set("TestLibrary") }
+    project.evaluate()
+    val pack = project.tasks.getByName("packNuget") as PackNugetTask
+    val compile = project.tasks.getByName("nugetCompileInterop") as NugetCompileInteropTask
+    assertEquals(setOf("osx-arm64"), pack.localContractDirs.get().keys)
+    assertTrue(pack.generatedCsDirs.files.single().path.contains("macosArm64"))
+    assertEquals(pack.generatedCsDirs.files, compile.generatedCsDirs.files)
+    val names = pack.taskDependencies.getDependencies(pack).map { it.name }
+    assertTrue("kspKotlinMacosArm64" in names, names.toString())
+    assertFalse("kspKotlinMingwX64" in names, names.toString())
+  }
+  @Test fun `all packaged local targets depend on their KSP and track contracts`() {
+    val project = buildProject()
+    val kotlin = project.extensions.getByType(KotlinMultiplatformExtension::class.java)
+    kotlin.targets.filterIsInstance<KotlinNativeTarget>().forEach { target ->
+      target.binaries.filterIsInstance<SharedLibrary>().forEach { it.linkTaskProvider.configure { link -> link.enabled = true } }
+    }
+    project.extensions.getByType(NugetExtension::class.java).publish { it.packageId.set("TestLibrary") }
+    project.evaluate()
+    val pack = project.tasks.getByName("packNuget") as PackNugetTask
+    assertEquals(setOf("osx-arm64", "win-x64"), pack.localContractDirs.get().keys)
+    val names = pack.taskDependencies.getDependencies(pack).map { it.name }
+    assertTrue("kspKotlinMacosArm64" in names && "kspKotlinMingwX64" in names, names.toString())
+    pack.localContractDirs.get().values.forEach { path -> writeProducerContract(File(path)) }
+    assertTrue(pack.contractFiles.files.count { it.name == "ForwardAbi.json" } == 2)
+  }
+  @Test fun `prebuilt only baseline is stable and never requires disabled KSP`() {
+    val project = buildProject()
+    project.disableLinkTasks("mingwX64")
+    project.disableLinkTasks("macosArm64")
+    val root = prebuiltTree()
+    File(root, "aaa-new-rid").mkdirs()
+    project.extensions.getByType(NugetExtension::class.java).publish {
+      it.packageId.set("TestLibrary")
+      it.prebuiltRuntimes.set(root)
+    }
+    project.evaluate()
+    val pack = project.tasks.getByName("packNuget") as PackNugetTask
+    val compile = project.tasks.getByName("nugetCompileInterop") as NugetCompileInteropTask
+    assertEquals(setOf(File(root, "aaa-new-rid")), pack.generatedCsDirs.files)
+    assertEquals(pack.generatedCsDirs.files, compile.generatedCsDirs.files)
+    assertTrue(pack.taskDependencies.getDependencies(pack).none { it.name.startsWith("kspKotlin") })
+  }
+
 }

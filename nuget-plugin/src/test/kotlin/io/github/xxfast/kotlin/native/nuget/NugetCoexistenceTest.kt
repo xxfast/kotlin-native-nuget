@@ -101,6 +101,9 @@ class NugetCoexistenceTest {
       val native = if (prebuilt) File(root, "win-x64/native") else root
       native.mkdirs()
       nativeFiles.forEach { File(native, it).writeText("binary") }
+      val contract = if (prebuilt) native.parentFile else root
+      writeProducerContract(contract)
+      if (!prebuilt) task.localContractDirs.set(mapOf("win-x64" to contract.path))
       if (prebuilt) task.prebuiltRuntimesDir.set(root)
       else task.nativeLibDirs.set(mapOf("win-x64" to native.path))
     }
