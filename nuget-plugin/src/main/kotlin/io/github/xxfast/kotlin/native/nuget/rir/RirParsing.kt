@@ -6,10 +6,10 @@ import kotlinx.serialization.json.JsonObject
 
 private val json = Json { ignoreUnknownKeys = true }
 
-fun parseReverseIr(jsonString: String): RirFile = json.decodeFromString(jsonString)
+internal fun parseReverseIr(jsonString: String): RirFile = json.decodeFromString(jsonString)
 
 /** ADR-182: the `reverse-ir.json` schema this plugin reads; NugetMetadataReader's `RirFile.CurrentSchemaVersion`. */
-const val REVERSE_IR_SCHEMA_VERSION: Int = 1
+internal const val REVERSE_IR_SCHEMA_VERSION: Int = 1
 
 /**
  * ADR-182: the task-action half of the schema check, kept out of [parseReverseIr] so hand-built
@@ -17,7 +17,7 @@ const val REVERSE_IR_SCHEMA_VERSION: Int = 1
  * different one came from another plugin release. Either way it was written by a reader this
  * plugin does not ship, so the only fix is to extract it again.
  */
-fun RirFile.requireCurrentSchema(source: String): RirFile {
+internal fun RirFile.requireCurrentSchema(source: String): RirFile {
   require(schemaVersion == REVERSE_IR_SCHEMA_VERSION) {
     val found: String = schemaVersion?.let { "schemaVersion $it" } ?: "no schemaVersion"
     "[nuget] $source has $found, but this plugin reads schemaVersion $REVERSE_IR_SCHEMA_VERSION. " +
@@ -29,7 +29,7 @@ fun RirFile.requireCurrentSchema(source: String): RirFile {
 
 // ADR-184: [targetFramework] is the restore TFM, the assets file's `targets` key. No default: a key
 // that differs from the restore TFM finds no entry and binds nothing, silently.
-fun deriveDllPaths(
+internal fun deriveDllPaths(
   assetsJson: String,
   packageIds: Set<String>,
   targetFramework: String,
@@ -67,7 +67,7 @@ fun deriveDllPaths(
 // version NuGet actually resolved (read from project.assets.json), not the DSL-declared/floating
 // version — the shim's method signatures are frozen against one specific assembly's metadata.
 // Mirrors deriveDllPaths(): parses the same `libraries` map, whose keys are "{id}/{version}".
-fun deriveResolvedVersions(assetsJson: String, packageIds: Set<String>): Map<String, String> {
+internal fun deriveResolvedVersions(assetsJson: String, packageIds: Set<String>): Map<String, String> {
   if (packageIds.isEmpty()) return emptyMap()
 
   val assets: AssetsFile = json.decodeFromString(assetsJson)

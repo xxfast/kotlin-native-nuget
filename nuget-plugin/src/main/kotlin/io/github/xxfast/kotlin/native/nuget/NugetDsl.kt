@@ -8,4 +8,4 @@ package io.github.xxfast.kotlin.native.nuget
  */
 @DslMarker
 @Target(AnnotationTarget.CLASS, AnnotationTarget.TYPE)
-annotation class NugetDsl
+public annotation class NugetDsl

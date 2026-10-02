@@ -1,6 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
-class CirRenderer {
+internal class CirRenderer {
   fun render(file: CirFile): String =
     renderFile(file).withUtf8StringParameters().checkSpellableInCSharp()
 

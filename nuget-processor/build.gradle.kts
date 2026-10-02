@@ -7,6 +7,7 @@ plugins {
 // Matches `nuget-plugin`: the plugin resolves this processor onto a consumer's KSP classpath, so
 // publishing it with a JVM 21 requirement would lock out every consumer on Java 17.
 kotlin {
+  explicitApi()
   jvmToolchain(17)
 }
 

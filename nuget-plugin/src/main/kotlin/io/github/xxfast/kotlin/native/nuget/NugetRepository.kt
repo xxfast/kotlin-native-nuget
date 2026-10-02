@@ -11,17 +11,17 @@ import javax.inject.Inject
  * properties `<name>ApiKey` / `<name>Username` / `<name>Password` when the task runs.
  */
 @NugetDsl
-abstract class NugetRepository @Inject constructor(private val name: String) : Named {
+public abstract class NugetRepository @Inject constructor(private val name: String) : Named {
   override fun getName(): String = name
 
-  abstract val url: Property<String>
-  abstract val apiKey: Property<String>
-  abstract val username: Property<String>
-  abstract val password: Property<String>
+  public abstract val url: Property<String>
+  public abstract val apiKey: Property<String>
+  public abstract val username: Property<String>
+  public abstract val password: Property<String>
 
   // ADR-165: a 409 (version already published) warns instead of failing; `--skipDuplicate` also
   // sets it.
-  abstract val skipDuplicate: Property<Boolean>
+  public abstract val skipDuplicate: Property<Boolean>
 
   init {
     skipDuplicate.convention(false)
@@ -29,17 +29,17 @@ abstract class NugetRepository @Inject constructor(private val name: String) : N
 
   // The Gradle properties an unset credential resolves from (`-P`, gradle.properties,
   // `ORG_GRADLE_PROJECT_*`).
-  val apiKeyProperty: String get() = "${name}ApiKey"
-  val usernameProperty: String get() = "${name}Username"
-  val passwordProperty: String get() = "${name}Password"
+  public val apiKeyProperty: String get() = "${name}ApiKey"
+  public val usernameProperty: String get() = "${name}Username"
+  public val passwordProperty: String get() = "${name}Password"
 }
 
 @NugetDsl
-class NugetRepositoriesScope internal constructor(
+public class NugetRepositoriesScope internal constructor(
   private val repositories: NamedDomainObjectContainer<NugetRepository>,
 ) {
   /** Declares the feed [name], or configures it again: a second call for the same name merges. */
-  fun nuget(name: String, action: Action<in NugetRepository>) {
+  public fun nuget(name: String, action: Action<in NugetRepository>) {
     action.execute(repositories.maybeCreate(name))
   }
 }

@@ -9,7 +9,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
  *   `global::` (the classifier adds that).
  * @param implementable ADR-085 admissibility: a `mint{Iface}Bridge` exists.
  */
-data class ForwardBoundInterface(
+internal data class ForwardBoundInterface(
   val kotlinName: String,
   val csharpName: String,
   val implementable: Boolean,
@@ -27,7 +27,7 @@ data class ForwardBoundInterface(
  * silently empty manifest would degrade into `SKIPPED_UNSUPPORTED_TYPE` for every bound interface,
  * which is precisely the pre-ADR-088 bug this feature removes).
  */
-fun parseBoundTypesManifest(json: String): List<ForwardBoundInterface> {
+internal fun parseBoundTypesManifest(json: String): List<ForwardBoundInterface> {
   if (json.isBlank()) return emptyList()
   val open: Int = json.indexOf('[', startIndex = json.indexOf("\"interfaces\""))
   val close: Int = json.lastIndexOf(']')

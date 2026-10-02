@@ -5,18 +5,18 @@ import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 
 @NugetDsl
-abstract class NugetBindConfig {
-  abstract val packageName: Property<String>
-  abstract val includeNamespaces: ListProperty<String>
-  abstract val excludeNamespaces: ListProperty<String>
-  abstract val aliases: MapProperty<String, String>
+public abstract class NugetBindConfig {
+  public abstract val packageName: Property<String>
+  public abstract val includeNamespaces: ListProperty<String>
+  public abstract val excludeNamespaces: ListProperty<String>
+  public abstract val aliases: MapProperty<String, String>
 
   /** C# namespaces to bind. `publish { include(...) }` is the Kotlin-package filter (ADR-182). */
-  fun includeNamespaces(vararg namespace: String) {
+  public fun includeNamespaces(vararg namespace: String) {
     includeNamespaces.addAll(*namespace)
   }
 
-  fun excludeNamespaces(vararg namespace: String) {
+  public fun excludeNamespaces(vararg namespace: String) {
     excludeNamespaces.addAll(*namespace)
   }
 
@@ -27,7 +27,7 @@ abstract class NugetBindConfig {
     replaceWith = ReplaceWith("includeNamespaces(*namespace)"),
     level = DeprecationLevel.ERROR,
   )
-  fun include(vararg namespace: String) {
+  public fun include(vararg namespace: String) {
     includeNamespaces(*namespace)
   }
 
@@ -36,11 +36,11 @@ abstract class NugetBindConfig {
     replaceWith = ReplaceWith("excludeNamespaces(*namespace)"),
     level = DeprecationLevel.ERROR,
   )
-  fun exclude(vararg namespace: String) {
+  public fun exclude(vararg namespace: String) {
     excludeNamespaces(*namespace)
   }
 
-  fun alias(csharpNamespace: String, kotlinPackage: String) {
+  public fun alias(csharpNamespace: String, kotlinPackage: String) {
     aliases.put(csharpNamespace, kotlinPackage)
   }
 }

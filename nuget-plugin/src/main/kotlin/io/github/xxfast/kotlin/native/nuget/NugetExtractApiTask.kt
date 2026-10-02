@@ -18,21 +18,21 @@ import java.io.File
 import java.io.InputStream
 import javax.inject.Inject
 
-abstract class NugetExtractApiTask : DefaultTask() {
-  @get:Input abstract val boundPackageIds: ListProperty<String>
-  @get:Input abstract val packageNameOverrides: MapProperty<String, String>
-  @get:Input abstract val namespaceIncludes: MapProperty<String, List<String>>
-  @get:Input abstract val namespaceExcludes: MapProperty<String, List<String>>
-  @get:Input abstract val namespaceAliases: MapProperty<String, Map<String, String>>
+public abstract class NugetExtractApiTask : DefaultTask() {
+  @get:Input public abstract val boundPackageIds: ListProperty<String>
+  @get:Input public abstract val packageNameOverrides: MapProperty<String, String>
+  @get:Input public abstract val namespaceIncludes: MapProperty<String, List<String>>
+  @get:Input public abstract val namespaceExcludes: MapProperty<String, List<String>>
+  @get:Input public abstract val namespaceAliases: MapProperty<String, Map<String, String>>
   // ADR-184: the restore TFM; selects the assets file target the bound DLLs are read from.
-  @get:Input abstract val targetFramework: Property<String>
-  @get:InputFile abstract val assetsFile: RegularFileProperty
-  @get:OutputFile abstract val reverseIrFile: RegularFileProperty
+  @get:Input public abstract val targetFramework: Property<String>
+  @get:InputFile public abstract val assetsFile: RegularFileProperty
+  @get:OutputFile public abstract val reverseIrFile: RegularFileProperty
 
-  @get:Inject abstract val execOps: ExecOperations
+  @get:Inject public abstract val execOps: ExecOperations
 
   @TaskAction
-  fun extract() {
+  public fun extract() {
     val assetsJson: String = assetsFile.get().asFile.readText()
     val ids: Set<String> = boundPackageIds.get().toSet()
 

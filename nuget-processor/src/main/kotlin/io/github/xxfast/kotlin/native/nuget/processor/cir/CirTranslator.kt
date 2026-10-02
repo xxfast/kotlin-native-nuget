@@ -51,7 +51,7 @@ private fun syncErrorArguments(parameters: String): String = if (parameters.isEm
   "$parameters, out IntPtr error"
 }
 
-data class NugetContext(
+internal data class NugetContext(
   val libraryName: String,
   val rootNamespace: String,
   val rootPackage: String,

@@ -1,6 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor
 
-val C_RESERVED = setOf(
+internal val C_RESERVED = setOf(
   "auto", "break", "case", "char", "const", "continue", "default", "do",
   "double", "else", "enum", "extern", "float", "for", "goto", "if",
   "int", "long", "register", "return", "short", "signed", "sizeof",
@@ -8,7 +8,7 @@ val C_RESERVED = setOf(
   "volatile", "while",
 )
 
-val CSHARP_RESERVED = setOf(
+internal val CSHARP_RESERVED = setOf(
   "abstract", "as", "base", "bool", "break", "byte", "case", "catch",
   "char", "checked", "class", "const", "continue", "decimal", "default",
   "delegate", "do", "double", "else", "enum", "event", "explicit",
@@ -22,7 +22,7 @@ val CSHARP_RESERVED = setOf(
   "ushort", "using", "virtual", "void", "volatile", "while",
 )
 
-fun toCName(name: String): String {
+internal fun toCName(name: String): String {
   if (name in C_RESERVED) return "${name}_"
   return name
 }
@@ -52,7 +52,7 @@ internal fun sanitizeLibrarySegment(libraryName: String): String {
   return if (trimmed.first().isDigit()) "_$trimmed" else trimmed
 }
 
-fun toCSharpName(cname: String): String {
+internal fun toCSharpName(cname: String): String {
   if (cname.trimEnd('_') in CSHARP_RESERVED) return "@$cname"
   return cname
 }

@@ -10,27 +10,27 @@ import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.TaskAction
 import org.gradle.api.tasks.options.Option
 
-abstract class PublishNugetTask : DefaultTask() {
+public abstract class PublishNugetTask : DefaultTask() {
   @get:InputFile
-  abstract val packageFile: RegularFileProperty
+  public abstract val packageFile: RegularFileProperty
 
   @get:Input
-  abstract val repositoryName: Property<String>
+  public abstract val repositoryName: Property<String>
 
   // ADR-180: optional, so a missing url fails in the action with the DSL-level message instead of
   // failing configuration (it used to be a `requireNotNull` in the plugin's afterEvaluate).
   @get:Input
   @get:Optional
-  abstract val repositoryUrl: Property<String>
+  public abstract val repositoryUrl: Property<String>
 
   @get:Internal
-  abstract val apiKey: Property<String>
+  public abstract val apiKey: Property<String>
 
   @get:Internal
-  abstract val username: Property<String>
+  public abstract val username: Property<String>
 
   @get:Internal
-  abstract val password: Property<String>
+  public abstract val password: Property<String>
 
   @get:Input
   @get:Optional
@@ -38,7 +38,7 @@ abstract class PublishNugetTask : DefaultTask() {
     option = "dryRun",
     description = "Resolves the feed and validates the package without pushing it",
   )
-  abstract val dryRun: Property<Boolean>
+  public abstract val dryRun: Property<Boolean>
 
   @get:Input
   @get:Optional
@@ -46,7 +46,7 @@ abstract class PublishNugetTask : DefaultTask() {
     option = "skipDuplicate",
     description = "Treats an already-published version (HTTP 409) as a warning",
   )
-  abstract val skipDuplicate: Property<Boolean>
+  public abstract val skipDuplicate: Property<Boolean>
 
   init {
     // A push is a side effect on a remote feed, never up to date.
@@ -54,7 +54,7 @@ abstract class PublishNugetTask : DefaultTask() {
   }
 
   @TaskAction
-  fun publish() {
+  public fun publish() {
     val name: String = repositoryName.get()
     val url: String = requireNotNull(repositoryUrl.orNull) {
       "nuget { publish { repositories { nuget(\"$name\") { url = ... } } } } " +

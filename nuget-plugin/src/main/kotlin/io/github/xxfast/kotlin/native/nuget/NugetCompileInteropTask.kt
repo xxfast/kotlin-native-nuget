@@ -115,27 +115,27 @@ internal fun generateCheckCsproj(
   because = "dotnet build manages its own obj/ and bin/ state and resolves packages through the " +
     "global NuGet cache, which is outside project scope and not tracked by Gradle's build cache"
 )
-abstract class NugetCompileInteropTask : DefaultTask() {
+public abstract class NugetCompileInteropTask : DefaultTask() {
   // The same producers packNuget stages: the KSP resources dir, plus nugetGenerateShims's
   // csharpOutputDir when the project also binds a package.
   @get:InputFiles
   @get:PathSensitive(PathSensitivity.RELATIVE)
-  abstract val generatedCsDirs: ConfigurableFileCollection
+  public abstract val generatedCsDirs: ConfigurableFileCollection
 
   // The exact resolved version per bound package, the same map packNuget writes into the .nuspec
   // <dependencies> block. Empty for a forward-only project.
   @get:Input
-  abstract val dependencyVersions: MapProperty<String, String>
+  public abstract val dependencyVersions: MapProperty<String, String>
 
   // The extra feeds declared with dependency(id, source = ...), so a package that only exists on a
   // private feed restores here too.
   @get:Input
-  abstract val dependencySources: ListProperty<String>
+  public abstract val dependencySources: ListProperty<String>
 
   // ADR-184: the package's floor TFM, the one consumer TFM this check compiles at. The plugin wires
   // it from `nuget { targetFramework }`; the convention serves a task built by hand.
   @get:Input
-  abstract val targetFramework: Property<String>
+  public abstract val targetFramework: Property<String>
 
   init {
     targetFramework.convention(DEFAULT_TARGET_FRAMEWORK)
@@ -143,17 +143,17 @@ abstract class NugetCompileInteropTask : DefaultTask() {
 
   // Where interop-check.csproj and its obj/ and bin/ land: build/nuget-compile/.
   @get:OutputDirectory
-  abstract val projectDir: DirectoryProperty
+  public abstract val projectDir: DirectoryProperty
 
   // Overridable so a test can point it at an empty directory and exercise the skip.
   @get:Internal
-  abstract val dotnetSearchPath: Property<String>
+  public abstract val dotnetSearchPath: Property<String>
 
   @get:Inject
-  abstract val execOps: ExecOperations
+  public abstract val execOps: ExecOperations
 
   @TaskAction
-  fun compile() {
+  public fun compile() {
     val csFiles: List<File> = generatedCsFiles(generatedCsDirs.files)
     if (csFiles.isEmpty()) {
       logger.info("[nuget] No generated C# to compile; nothing to check before packing.")

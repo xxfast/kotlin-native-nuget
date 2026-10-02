@@ -22,6 +22,7 @@ version = requireNotNull(rootProperties.getProperty("version")) { "`version` mis
 // Gradle module metadata records `org.gradle.jvm.version: 21` and every consumer on 17 fails to
 // resolve the plugin at all.
 kotlin {
+  explicitApi()
   jvmToolchain(17)
 }
 

@@ -110,7 +110,7 @@ private const val BINDING_MARKER_OPT_IN = "$BINDING_MARKER_FQN::class"
 private const val INTERNAL_DIR = "io/github/xxfast/kotlin/native/nuget/internal"
 
 
-data class GeneratedFile(
+internal data class GeneratedFile(
   val relativePath: String,
   val content: String,
 )
@@ -387,7 +387,7 @@ internal fun boundTypesManifest(
   return "{\n  \"interfaces\": [$body]\n}\n"
 }
 
-fun generateKotlinStubs(
+internal fun generateKotlinStubs(
   file: RirFile,
   packageNameOverrides: Map<String, String> = emptyMap(),
   namespaceAliases: Map<String, Map<String, String>> = emptyMap(),
@@ -7427,28 +7427,28 @@ internal fun formatDiagnostic(packageId: String, diagnostic: RirDiagnostic): Str
       diagnostic.hint
 }
 
-abstract class NugetGenerateBindingsTask : DefaultTask() {
+public abstract class NugetGenerateBindingsTask : DefaultTask() {
   @get:InputFile
-  abstract val reverseIrFile: RegularFileProperty
+  public abstract val reverseIrFile: RegularFileProperty
 
   @get:Input
-  abstract val packageNameOverrides: MapProperty<String, String>
+  public abstract val packageNameOverrides: MapProperty<String, String>
 
   @get:Input
-  abstract val namespaceAliases: MapProperty<String, Map<String, String>>
+  public abstract val namespaceAliases: MapProperty<String, Map<String, String>>
 
   @get:OutputDirectory
-  abstract val kotlinOutputDir: DirectoryProperty
+  public abstract val kotlinOutputDir: DirectoryProperty
 
   // ADR-088: the cross-pipeline bound-type manifest the forward KSP run reads through the
   // `nuget.boundTypesManifest` option. A separate OutputFile, not a file inside kotlinOutputDir:
   // that directory is wired as a Kotlin `srcDir`, and a stray .json in a source root is at best
   // noise and at worst a compiler input.
   @get:OutputFile
-  abstract val boundTypesManifestFile: RegularFileProperty
+  public abstract val boundTypesManifestFile: RegularFileProperty
 
   @TaskAction
-  fun generate() {
+  public fun generate() {
     val reverseIr: File = reverseIrFile.get().asFile
     val rir: RirFile = parseReverseIr(reverseIr.readText()).requireCurrentSchema(reverseIr.path)
 
