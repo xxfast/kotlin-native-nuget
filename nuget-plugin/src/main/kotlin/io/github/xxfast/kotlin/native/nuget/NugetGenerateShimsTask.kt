@@ -3263,6 +3263,7 @@ public abstract class NugetGenerateShimsTask : DefaultTask() {
     )
 
     val outputDir: File = csharpOutputDir.get().asFile
+    clearOutputDir(outputDir)
     files.forEach { generated ->
       val out: File = outputDir.resolve(generated.relativePath)
       out.parentFile.mkdirs()

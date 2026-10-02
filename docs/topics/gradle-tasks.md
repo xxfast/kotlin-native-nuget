@@ -91,5 +91,7 @@ The following three are registered only when at least one dependency declares a 
 it, so KSP sees the reverse-generated stubs before it runs. `nugetGenerateShims`'s C# output is
 what `packNuget` merges in when a project both publishes and binds a dependency.
 
+Each run of `nugetGenerateBindings` and `nugetGenerateShims` replaces the contents of its output directory, so do not hand-place files in `build/nuget-interop/kotlin/` or `build/nuget-interop/csharp/`.
+
 See the [nuget {} DSL reference](nuget-dsl.md) for the `publish {}` and
 `dependencies { bind { } }` blocks that drive this wiring.
