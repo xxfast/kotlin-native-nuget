@@ -80,7 +80,10 @@ class NugetReportDiagnosticsTaskTest {
   @Test
   fun `malformed JSON fails fast naming the file`() {
     val failure = assertFailsWith<IllegalArgumentException> {
-      parseForwardDiagnostics("""{"schemaVersion": 1, "diagnostics": [{"severity": "WARNING""", "build/x/NugetDiagnostics.json")
+      parseForwardDiagnostics(
+        """{"schemaVersion": 1, "diagnostics": [{"severity": "WARNING""",
+        "build/x/NugetDiagnostics.json",
+      )
     }
     assertContains(failure.message!!, "build/x/NugetDiagnostics.json")
   }
@@ -99,7 +102,8 @@ class NugetReportDiagnosticsTaskTest {
   fun `a NugetDiagnostics json without the current schemaVersion fails naming the file`() {
     val error = assertFailsWith<IllegalArgumentException> {
       parseForwardDiagnostics(
-        """[ { "severity": "WARNING", "kind": "SKIPPED_X", "declaration": "a", "message": "m" } ]""",
+        """[ { "severity": "WARNING", "kind": "SKIPPED_X", "declaration": "a", """ +
+          """"message": "m" } ]""",
         "build/x/NugetDiagnostics.json",
       )
     }
@@ -118,7 +122,10 @@ class NugetReportDiagnosticsTaskTest {
   @Test
   fun `a newer schemaVersion fails with the version it found`() {
     val error = assertFailsWith<IllegalArgumentException> {
-      parseForwardDiagnostics("""{ "schemaVersion": 2, "diagnostics": [] }""", "NugetDiagnostics.json")
+      parseForwardDiagnostics(
+        """{ "schemaVersion": 2, "diagnostics": [] }""",
+        "NugetDiagnostics.json",
+      )
     }
     assertContains(error.message!!, "schemaVersion 2")
     assertContains(error.message!!, "NugetDiagnostics.json")

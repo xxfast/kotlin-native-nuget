@@ -76,10 +76,16 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   // on `NugetBridge`, which only renders when a C#-implementable interface exists, so a consumer
   // following the leak-check docs got CS0103). ADR-084's release is cleaner-driven and lands on a
   // *later* Kotlin GC round, so callers loop.
-  appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_gc_collect\")]")
+  appendLine(
+    "        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, " +
+      "EntryPoint = \"nuget_gc_collect\")]",
+  )
   appendLine("        private static extern void Native_GcCollect();")
   appendLine()
-  appendLine("        /// <summary>Runs one Kotlin GC round. Cleaner-driven releases may land on a later round.</summary>")
+  appendLine(
+    "        /// <summary>Runs one Kotlin GC round. Cleaner-driven releases may land on a later " +
+      "round.</summary>",
+  )
   appendLine("        internal static void GcCollect() => Native_GcCollect();")
   appendLine()
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_wrap_string\")]")

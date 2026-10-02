@@ -27,68 +27,68 @@ internal fun generatedCsFiles(dirs: Iterable<File>): List<File> = dirs
   .flatMap { dir -> dir.listFiles()?.filter { it.extension == "cs" } ?: emptyList() }
   .distinctBy { it.name }
 
-abstract class PackNugetTask : DefaultTask() {
+public abstract class PackNugetTask : DefaultTask() {
   @get:Input
-  abstract val packageId: Property<String>
+  public abstract val packageId: Property<String>
 
   @get:Input
-  abstract val packageVersion: Property<String>
+  public abstract val packageVersion: Property<String>
 
   @get:Input
-  abstract val authors: Property<String>
+  public abstract val authors: Property<String>
 
   @get:Input
-  abstract val packageDescription: Property<String>
+  public abstract val packageDescription: Property<String>
 
   @get:Input
-  abstract val nativeLibDirs: MapProperty<String, String>
+  public abstract val nativeLibDirs: MapProperty<String, String>
 
   @get:InputFiles
-  abstract val nativeLibFiles: ConfigurableFileCollection
+  public abstract val nativeLibFiles: ConfigurableFileCollection
 
   // ADR-050 Alternative 3: a ConfigurableFileCollection (not a single DirectoryProperty) so
   // packNuget can merge .cs files from multiple producers — KSP's forward Interop.cs and
   // nugetGenerateShims's reverse registration shims — into one contentFiles/cs/<tfm>/ folder.
   @get:InputFiles
-  abstract val generatedCsDirs: ConfigurableFileCollection
+  public abstract val generatedCsDirs: ConfigurableFileCollection
 
   // ADR-050 Alternative 5: per bound package, the exact version NuGet resolved (from
   // project.assets.json), driving the .nuspec <dependencies> block. Empty when there are no bound
   // dependencies (publish-only projects).
   @get:Input
-  abstract val dependencyVersions: MapProperty<String, String>
+  public abstract val dependencyVersions: MapProperty<String, String>
 
   // ADR-093: native libraries built on another host, laid out as <dir>/<rid>/native/*.dll|dylib|so.
   // Staged after the locally linked RIDs into the same runtimes/ tree, so one pack produces one
   // package covering more RIDs than this host can link.
   @get:Optional
   @get:InputDirectory
-  abstract val prebuiltRuntimesDir: DirectoryProperty
+  public abstract val prebuiltRuntimesDir: DirectoryProperty
 
   // ADR-184: the package's floor TFM. Names the contentFiles folder, the empty lib/<tfm>/_._
   // placeholder and the nuspec dependency group, so NuGet rejects a lower consumer with NU1202.
   @get:Input
-  abstract val targetFramework: Property<String>
+  public abstract val targetFramework: Property<String>
 
   init {
     targetFramework.convention(DEFAULT_TARGET_FRAMEWORK)
   }
 
   @get:OutputDirectory
-  abstract val outputDir: DirectoryProperty
+  public abstract val outputDir: DirectoryProperty
 
   // ADR-180: whether any native target maps to a supported RID, linkable here or not. False means no
   // supported target at all, which used to leave packNuget unregistered and now fails the task.
   @get:Internal
-  abstract val hasSupportedTargets: Property<Boolean>
+  public abstract val hasSupportedTargets: Property<Boolean>
 
   // ADR-093 / ADR-180: RID to target name for each supported target whose link task is disabled
   // on this host. Logged when the task runs; the same RIDs are absent from nativeLibDirs.
   @get:Internal
-  abstract val skippedRids: MapProperty<String, String>
+  public abstract val skippedRids: MapProperty<String, String>
 
   @TaskAction
-  fun pack() {
+  public fun pack() {
     val id: String = packageId.get()
     require(id.isNotBlank()) {
       "[nuget] ${NugetTaskNames.PACK} needs a non-blank package id: " +
@@ -155,7 +155,8 @@ abstract class PackNugetTask : DefaultTask() {
     }
 
     // ADR-184: without a lib/<tfm>/ entry NuGet treats a contentFiles-only package as compatible
-    // with every TFM and silently drops its dependency group for a lower consumer (memo spike, Q/R).
+    // with every TFM and silently drops its dependency group for a lower consumer (memo
+    // spike, Q/R).
     val libDir = File(nupkgDir, "lib/$tfm")
     libDir.mkdirs()
     File(libDir, "_._").writeText("")

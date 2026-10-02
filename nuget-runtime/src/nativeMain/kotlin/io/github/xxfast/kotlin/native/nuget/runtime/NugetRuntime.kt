@@ -74,8 +74,8 @@ public object NugetHandles {
  * `int64_t nuget_live_handles(void)`: frozen 1.0 `nuget_*` ABI (ADR-186).
  *
  * Frozen contract: in a process where nothing else crosses concurrently, a balanced sequence of
- * crossings (every minted handle disposed, pending cleaner rounds flushed) returns this value to its
- * prior reading. Process-global per native library.
+ * crossings (every minted handle disposed, pending cleaner rounds flushed) returns this value
+ * to its prior reading. Process-global per native library.
  *
  * Not frozen: the absolute value and which handle kinds are counted. A later ADR may count a new
  * kind in a minor release, so compare deltas within one process, never absolutes across versions.

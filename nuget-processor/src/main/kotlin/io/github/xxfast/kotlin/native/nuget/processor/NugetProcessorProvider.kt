@@ -10,7 +10,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.parseBoundTypesMan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.parsePublishedScopes
 import java.io.File
 
-class NugetProcessorProvider : SymbolProcessorProvider {
+public class NugetProcessorProvider : SymbolProcessorProvider {
   override fun create(environment: SymbolProcessorEnvironment): SymbolProcessor {
     // ADR-088: the cross-pipeline manifest, written by `nugetGenerateBindings` (which
     // `kspKotlin{Target}` already dependsOn). Absent option or absent file means "nothing bound":

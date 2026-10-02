@@ -103,7 +103,7 @@ private fun reverseNamespace(root: String, dependency: String = ""): String {
 // [errorNamespace] (ADR-087 stage 2) is the FORWARD bindings' C# namespace, i.e. the publish
 // packageId. Defaulted so every existing caller (and the generator tests) keeps compiling; the
 // Gradle task passes the configured value.
-fun generateCSharpShims(
+internal fun generateCSharpShims(
   file: RirFile,
   nativeLibraryName: String,
   errorNamespace: String = "",
@@ -3233,12 +3233,12 @@ private fun nugetTraceCsContent(errorNamespace: String): String = """
   |}
 """.trimMargin().trim()
 
-abstract class NugetGenerateShimsTask : DefaultTask() {
+public abstract class NugetGenerateShimsTask : DefaultTask() {
   @get:InputFile
-  abstract val reverseIrFile: RegularFileProperty
+  public abstract val reverseIrFile: RegularFileProperty
 
   @get:Input
-  abstract val nativeLibraryName: Property<String>
+  public abstract val nativeLibraryName: Property<String>
 
   // ADR-087 stage 2: the FORWARD bindings' C# namespace (the publish packageId), whose
   // NugetErrorNative.BuildException maps a slot's error envelope onto the same ADR-029 exception
@@ -3246,13 +3246,13 @@ abstract class NugetGenerateShimsTask : DefaultTask() {
   // case no forward Interop.cs exists to reuse and the generated members keep their pre-stage-2
   // shape.
   @get:Input
-  abstract val forwardNamespace: Property<String>
+  public abstract val forwardNamespace: Property<String>
 
   @get:OutputDirectory
-  abstract val csharpOutputDir: DirectoryProperty
+  public abstract val csharpOutputDir: DirectoryProperty
 
   @TaskAction
-  fun generate() {
+  public fun generate() {
     val reverseIr: File = reverseIrFile.get().asFile
     val rir: RirFile = parseReverseIr(reverseIr.readText()).requireCurrentSchema(reverseIr.path)
 

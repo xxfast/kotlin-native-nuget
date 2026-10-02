@@ -39,7 +39,7 @@ private class LocalLibrary(
 // registered by the first call to that block (ADR-050 Alternative 6: a consume-only project still
 // has no `packNuget`), and everything that depends on a value is a Provider, so a value set after
 // the block, or supplied as a Provider, still reaches the task.
-class NugetPlugin : Plugin<Project> {
+public class NugetPlugin : Plugin<Project> {
   override fun apply(project: Project) {
     val extension: NugetExtension =
       project.extensions.create("nuget", NugetExtension::class.java)
@@ -173,7 +173,10 @@ class NugetPlugin : Plugin<Project> {
     val dependencies = extension.dependencies
 
     val nugetGenerateRestoreProject: TaskProvider<NugetGenerateRestoreProjectTask> =
-      project.tasks.register(NugetTaskNames.GENERATE_RESTORE_PROJECT, NugetGenerateRestoreProjectTask::class.java) { task ->
+      project.tasks.register(
+        NugetTaskNames.GENERATE_RESTORE_PROJECT,
+        NugetGenerateRestoreProjectTask::class.java,
+      ) { task ->
         task.group = "nuget"
         task.description = "Generates the synthetic interop.csproj for NuGet dependency resolution"
         task.dependencyIds.set(project.provider { dependencies.map { it.id } })

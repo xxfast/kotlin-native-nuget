@@ -15,14 +15,14 @@ import javax.inject.Inject
  * through the internal hooks below, instead of in `afterEvaluate`.
  */
 @NugetDsl
-abstract class NugetExtension @Inject constructor(objects: ObjectFactory) {
+public abstract class NugetExtension @Inject constructor(objects: ObjectFactory) {
   /**
    * ADR-184: the lowest .NET a C# consumer can use. Names the reverse restore project, the
    * `project.assets.json` target read for bound DLLs, the pre-pack compile check, and the packed
    * `contentFiles/cs/<tfm>/` + `lib/<tfm>/_._` layout, so a lower consumer gets NU1202. Exactly
    * `netX.0` with X >= 10; the plugin reads it through [validatedTargetFramework].
    */
-  abstract val targetFramework: Property<String>
+  public abstract val targetFramework: Property<String>
 
   /** [targetFramework], validated lazily: a bad value fails the first task that reads it. */
   internal val validatedTargetFramework: Provider<String>
@@ -32,10 +32,10 @@ abstract class NugetExtension @Inject constructor(objects: ObjectFactory) {
     targetFramework.convention(DEFAULT_TARGET_FRAMEWORK)
   }
 
-  val publish: NugetPublishConfig = objects.newInstance(NugetPublishConfig::class.java)
+  public val publish: NugetPublishConfig = objects.newInstance(NugetPublishConfig::class.java)
 
   // Keyed by package id. Iterates in id order, not declaration order.
-  val dependencies: NamedDomainObjectContainer<NugetDependency> =
+  public val dependencies: NamedDomainObjectContainer<NugetDependency> =
     objects.domainObjectContainer(NugetDependency::class.java)
 
   internal var publishDeclared: Boolean = false
@@ -43,7 +43,7 @@ abstract class NugetExtension @Inject constructor(objects: ObjectFactory) {
 
   private val publishHooks: MutableList<() -> Unit> = mutableListOf()
 
-  fun publish(action: Action<in NugetPublishConfig>) {
+  public fun publish(action: Action<in NugetPublishConfig>) {
     action.execute(publish)
     if (publishDeclared) return
     publishDeclared = true
@@ -52,7 +52,7 @@ abstract class NugetExtension @Inject constructor(objects: ObjectFactory) {
 
   // An explicit function, not only the container: without it `dependencies { }` inside `nuget {}`
   // resolves to `Project.dependencies` (verified for `repositories` in ADR-180's spike).
-  fun dependencies(action: Action<in NugetDependencyScope>) {
+  public fun dependencies(action: Action<in NugetDependencyScope>) {
     action.execute(NugetDependencyScope(dependencies))
   }
 
@@ -63,12 +63,12 @@ abstract class NugetExtension @Inject constructor(objects: ObjectFactory) {
 }
 
 @NugetDsl
-class NugetDependencyScope internal constructor(
+public class NugetDependencyScope internal constructor(
   private val dependencies: NamedDomainObjectContainer<NugetDependency>,
 ) {
   /** Declares [id], or configures it again: a second call for the same id merges. */
   @JvmOverloads
-  fun dependency(
+  public fun dependency(
     id: String,
     version: String? = null,
     action: Action<in NugetDependency> = Action { },

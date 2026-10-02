@@ -7,7 +7,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInter
  * segment and then wraps it, which is the only way a code span holding `<T>` can come out as
  * `<c>&lt;T&gt;</c>` rather than as escaped markup or unescaped text.
  */
-sealed interface CirDocInline {
+internal sealed interface CirDocInline {
 
   /** Prose exactly as the author wrote it. */
   data class Text(val value: String) : CirDocInline
@@ -31,10 +31,10 @@ sealed interface CirDocInline {
 }
 
 /** One run of prose: the inline segments of a paragraph, a tag's text or a summary. */
-typealias CirDocText = List<CirDocInline>
+internal typealias CirDocText = List<CirDocInline>
 
 /** ADR-150 amendment: one block of a `<remarks>` (or of a multi-block `<summary>`). */
-sealed interface CirDocBlock {
+internal sealed interface CirDocBlock {
 
   data class Para(val text: CirDocText) : CirDocBlock
 
@@ -53,7 +53,7 @@ sealed interface CirDocBlock {
  * `remarks: List<String>`, and `renderDoc` takes it as its third argument so that one member always
  * renders exactly one `<remarks>` element -- author paragraphs first, generated ones last.
  */
-data class CirDoc(
+internal data class CirDoc(
   val summary: CirDocText? = null,
   /** Fenced blocks that sat inside the first body paragraph, rendered inside `<summary>`. */
   val summaryCode: List<String> = emptyList(),
@@ -72,25 +72,25 @@ data class CirDoc(
 /**
  * [text] is empty for a parameter the author did not document; the tag is still required (CS1573).
  */
-data class CirDocParam(val name: String, val text: CirDocText)
+internal data class CirDocParam(val name: String, val text: CirDocText)
 
 /** [cref] is a C# exception type this generator itself emits, so it always resolves (CS1574). */
-data class CirDocThrows(val cref: String, val text: CirDocText)
+internal data class CirDocThrows(val cref: String, val text: CirDocText)
 
-data class CirFile(
+internal data class CirFile(
   val usings: List<String> = listOf("System", "System.Runtime.InteropServices"),
   val namespaces: List<CirNamespace>,
   val rootNamespace: String = namespaces.firstOrNull()?.name ?: "Interop",
 )
 
-data class CirNamespace(
+internal data class CirNamespace(
   val name: String,
   val declarations: List<CirDeclaration>,
 )
 
-sealed interface CirDeclaration
+internal sealed interface CirDeclaration
 
-data class CirStaticClass(
+internal data class CirStaticClass(
   val name: String,
   val members: List<CirMember>,
   // ADR-064 amendment (issue #249): generated prose for this declaration's single `<remarks>`,
@@ -99,7 +99,7 @@ data class CirStaticClass(
   val remarks: List<String> = emptyList(),
 ) : CirDeclaration
 
-data class CirInterface(
+internal data class CirInterface(
   val name: String,
   val typeParameters: List<CirTypeParameter> = emptyList(),
   val properties: List<CirInterfaceProperty>,
@@ -121,7 +121,7 @@ data class CirInterface(
   val isAsyncDisposable: Boolean = false,
 ) : CirDeclaration
 
-data class CirInterfaceProperty(
+internal data class CirInterfaceProperty(
   val name: String,
   val type: String,
   val hasSetter: Boolean = false,
@@ -135,7 +135,7 @@ data class CirInterfaceProperty(
   val remarks: List<String> = emptyList(),
 )
 
-data class CirInterfaceMethod(
+internal data class CirInterfaceMethod(
   val name: String,
   val returnType: String,
   val parameters: List<CirParameter>,
@@ -148,7 +148,7 @@ data class CirInterfaceMethod(
   val isAsync: Boolean = false,
 )
 
-data class CirClass(
+internal data class CirClass(
   val name: String,
   /**
    * ADR-147: the class's own declared type parameters, empty for an ordinary class. A generic
@@ -227,7 +227,7 @@ data class CirClass(
   val nestedDeclarations: List<CirDeclaration> = emptyList(),
 ) : CirDeclaration
 
-data class CirValueClass(
+internal data class CirValueClass(
   val name: String,
   val libraryName: String,
   val nativePrefix: String,
@@ -270,7 +270,7 @@ data class CirValueClass(
  * @param boxArguments the box extern's input arguments, the value lowered to its underlying wire.
  * @param unboxResult the `NugetUnbox` return expression over the extern's `nativeResult`.
  */
-data class CirValueClassBoxing(
+internal data class CirValueClassBoxing(
   val boxImport: CirDllImport,
   val unboxImport: CirDllImport,
   val boxParameter: String,
@@ -278,7 +278,7 @@ data class CirValueClassBoxing(
   val unboxResult: String,
 )
 
-data class CirValueClassConstructor(
+internal data class CirValueClassConstructor(
   val parameters: List<CirParameter>,
   val nativeName: String,
   val body: String,
@@ -301,7 +301,7 @@ data class CirValueClassConstructor(
   val doc: CirDoc? = null,
 )
 
-data class CirEnum(
+internal data class CirEnum(
   val name: String,
   val libraryName: String,
   // ADR-133: the C entry-point prefix, the enclosing chain (`owner_kind`); the enum entry point
@@ -328,7 +328,7 @@ data class CirEnum(
   val doc: CirDoc? = null,
 ) : CirDeclaration
 
-data class CirSealedClass(
+internal data class CirSealedClass(
   val name: String,
   val libraryName: String,
   val nativePrefix: String,
@@ -390,7 +390,7 @@ data class CirSealedClass(
   val remarks: List<String> = emptyList(),
 ) : CirDeclaration
 
-data class CirSealedSubclass(
+internal data class CirSealedSubclass(
   val name: String,
   val nativePrefix: String,
   val properties: List<CirProperty>,
@@ -505,7 +505,7 @@ data class CirSealedSubclass(
   val doc: CirDoc? = null,
 )
 
-data class CirObject(
+internal data class CirObject(
   val name: String,
   val libraryName: String,
   val nativePrefix: String,
@@ -519,18 +519,18 @@ data class CirObject(
   val remarks: List<String> = emptyList(),
 ) : CirDeclaration
 
-enum class CirVariance { INVARIANT, COVARIANT, CONTRAVARIANT }
+internal enum class CirVariance { INVARIANT, COVARIANT, CONTRAVARIANT }
 
 /** ADR-147 amendment: C#'s spelling of a Kotlin `T : Any` bound. */
 internal const val NOTNULL_CONSTRAINT: String = "notnull"
 
-data class CirTypeParameter(
+internal data class CirTypeParameter(
   val name: String,
   val bounds: List<String> = emptyList(),
   val variance: CirVariance = CirVariance.INVARIANT,
 )
 
-data class CirMarshalHelper(
+internal data class CirMarshalHelper(
   val libraryName: String,
   // ADR-073: NugetMarshal.CreateMap/CreateSet call into NugetMapNative/NugetSetNative, which are
   // only emitted (as separate CirMapHelper/CirSetHelper declarations) when the tracker actually
@@ -562,7 +562,7 @@ data class CirMarshalHelper(
 // ADR-094: a registry line. [qualifiedTypeName] is the `global::`-free fully qualified C# name
 // (`Clinic.ApiResult.Success`); the renderer adds the `global::` prefix, since the registry sits in
 // the root namespace and cannot see child-namespace types unqualified.
-data class CirFactoryEntry(
+internal data class CirFactoryEntry(
   val qualifiedTypeName: String,
   // ADR-094 / issue #40: a sealed BASE is abstract, so `new Base(handle)` will not compile, but it
   // is still materialisable -- its generated `internal static Base FromHandle(IntPtr)` reads the
@@ -597,56 +597,56 @@ internal data class CirBridgeInterface(
   val csQualifiedName: String = "$csNamespace.${plan.csName}"
 }
 
-data class CirListHelper(
+internal data class CirListHelper(
   val libraryName: String,
 ) : CirDeclaration
 
 /** ADR-151: `NugetBytesNative`, the three `nuget_bytes_*` imports plus `nuget_dispose`. Emitted
  *  only when a `ByteArray` was actually planned somewhere in the file, the same gate
  *  [CirListHelper] rides. */
-data class CirBytesHelper(
+internal data class CirBytesHelper(
   val libraryName: String,
 ) : CirDeclaration
 
-data class CirMapHelper(
+internal data class CirMapHelper(
   val libraryName: String,
 ) : CirDeclaration
 
-data class CirSetHelper(
+internal data class CirSetHelper(
   val libraryName: String,
 ) : CirDeclaration
 
-data class CirFuncNativeHelper(
-  val libraryName: String,
-  val arities: Set<Int>,
-) : CirDeclaration
-
-data class CirFuncHelper(
-  val libraryName: String,
-  val arities: Set<Int>,
-  val helperNamespace: String,
-) : CirDeclaration
-
-data class CirSuspendFuncNativeHelper(
+internal data class CirFuncNativeHelper(
   val libraryName: String,
   val arities: Set<Int>,
 ) : CirDeclaration
 
-data class CirSuspendFuncHelper(
+internal data class CirFuncHelper(
   val libraryName: String,
   val arities: Set<Int>,
   val helperNamespace: String,
 ) : CirDeclaration
 
-data class CirAsyncHelper(
+internal data class CirSuspendFuncNativeHelper(
+  val libraryName: String,
+  val arities: Set<Int>,
+) : CirDeclaration
+
+internal data class CirSuspendFuncHelper(
+  val libraryName: String,
+  val arities: Set<Int>,
+  val helperNamespace: String,
+) : CirDeclaration
+
+internal data class CirAsyncHelper(
   val libraryName: String,
 ) : CirDeclaration
 
-data class CirScopeHelper(
+internal data class CirScopeHelper(
   val libraryName: String,
 ) : CirDeclaration
 
-data class CirJobHelper(
+internal data class CirJobHelper(
   val libraryName: String,
 ) : CirDeclaration
 
@@ -658,17 +658,17 @@ data class CirJobHelper(
  * and only the per-feature helpers (list, map, set, bytes, func, async, flow, bridge) stay
  * flag-gated.
  */
-data class CirRuntimeHelper(
+internal data class CirRuntimeHelper(
   val libraryName: String,
 ) : CirDeclaration
 
-data class CirErrorHelper(
+internal data class CirErrorHelper(
   val libraryName: String,
 ) : CirDeclaration
 
 
 
-data class CirFlowHelper(
+internal data class CirFlowHelper(
   val libraryName: String,
   // ADR-065: also emit the KotlinStateFlow<T> subclass (implies needsFlow -- set by the tracker
   // whenever any StateFlow member is planned).
@@ -682,34 +682,34 @@ data class CirFlowHelper(
 // `Collect`/`Value` on the awaited flow's own StableRef, rather than re-invoking a parent member.
 // Emitted once per module (like [CirScopeHelper]/[CirJobHelper]), regardless of how many
 // suspend-StateFlow members exist across every class.
-data class CirStateFlowHandleHelper(
+internal data class CirStateFlowHandleHelper(
   val libraryName: String,
 ) : CirDeclaration
 
-data class CirSubscriptionHelper(
+internal data class CirSubscriptionHelper(
   val libraryName: String,
 ) : CirDeclaration
 
-data class CirCallbackDelegate(
+internal data class CirCallbackDelegate(
   val name: String,
   val paramList: String,
   val returnType: String,
 )
 
-data class CirCallbackDelegateHelper(
+internal data class CirCallbackDelegateHelper(
   val delegates: List<CirCallbackDelegate>,
 ) : CirDeclaration
 
-data class CirEnumEntry(
+internal data class CirEnumEntry(
   val name: String,
   val ordinal: Int,
   // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
   val doc: CirDoc? = null,
 )
 
-sealed interface CirMember
+internal sealed interface CirMember
 
-data class CirDllImport(
+internal data class CirDllImport(
   val libraryName: String,
   val entryPoint: String?,
   val returnType: String,
@@ -729,7 +729,7 @@ data class CirDllImport(
 ) : CirMember
 
 // One interface method entry within a CirInterfaceBridgeMethod.
-data class CirInterfaceBridgeMethodEntry(
+internal data class CirInterfaceBridgeMethodEntry(
   val methodCsName: String,       // "OnMeow"
   val methodKtName: String,       // "onMeow" (used as variable prefix: onMeowCb, onMeowPtr)
   val delegateName: String,       // "NugetObjectVoidCallback"
@@ -740,7 +740,7 @@ data class CirInterfaceBridgeMethodEntry(
 // A class method that is the subscribe half of an interface-bridge pair (add*/subscribe*).
 // The paired parameter is a Kotlin interface type, not a lambda.
 // Generates an IDisposable factory method backed by two native exports with N function pointers.
-data class CirInterfaceBridgeMethod(
+internal data class CirInterfaceBridgeMethod(
   val csMethodName: String,        // "AddListener"
   val csRemoveNativeName: String,  // "Native_RemoveListener"
   val subscribeEntryPoint: String, // "cateventsource_addListener"
@@ -753,7 +753,7 @@ data class CirInterfaceBridgeMethod(
 
 // A class method that is the subscribe half of a stored-callback pair (add*/subscribe*).
 // Generates an IDisposable factory method backed by two native exports.
-data class CirStoredCallbackMethod(
+internal data class CirStoredCallbackMethod(
   val csMethodName: String,           // "AddMoodListener"
   val csRemoveNativeName: String,     // "Native_RemoveMoodListener"
   val subscribeEntryPoint: String,    // "cat_addMoodListener"
@@ -768,7 +768,7 @@ data class CirStoredCallbackMethod(
 ) : CirMember
 
 // A class method that accepts a lambda parameter from C# (phase 7 reverse interop).
-data class CirCallbackMethod(
+internal data class CirCallbackMethod(
   val csMethodName: String,
   val nativeEntryPoint: String,
   val libraryName: String,
@@ -782,7 +782,7 @@ data class CirCallbackMethod(
   val wrapperBody: String,
 ) : CirMember
 
-data class CirMethod(
+internal data class CirMethod(
   val name: String,
   val returnType: String,
   val nativeReturnType: String = returnType,
@@ -904,7 +904,7 @@ internal val CirMethod.resolvedExternName: String
     return "Native_$name"
   }
 
-data class CirProperty(
+internal data class CirProperty(
   val name: String,
   val type: String,
   val nativeReturnType: String,
@@ -992,7 +992,7 @@ data class CirProperty(
  * them in to the accessor depth. The private `[DllImport]` externs stay ordinary class-level
  * [CirDllImport] members beside this one: an extension block cannot declare an extern.
  */
-data class CirExtensionProperty(
+internal data class CirExtensionProperty(
   val receiverType: String,
   val name: String,
   val type: String,
@@ -1001,7 +1001,7 @@ data class CirExtensionProperty(
   val doc: CirDoc? = null,
 ) : CirMember
 
-data class CirExtraNative(
+internal data class CirExtraNative(
   val entryPointSuffix: String,
   val returnType: String,
   val name: String,
@@ -1009,7 +1009,7 @@ data class CirExtraNative(
   val hasSyncErrorOut: Boolean = false,
 )
 
-data class CirConstructor(
+internal data class CirConstructor(
   val parameters: List<CirParameter>,
   val body: String,
   val hasErrorCheck: Boolean = false,
@@ -1027,7 +1027,7 @@ data class CirConstructor(
   val doc: CirDoc? = null,
 )
 
-data class CirParameter(
+internal data class CirParameter(
   val name: String,
   val type: String,
   // Native (DllImport) type; differs from type when the public C# type needs a cast
@@ -1070,13 +1070,13 @@ data class CirParameter(
     get() = if (defaultValue == null) "$type $name" else "$type $name = $defaultValue"
 }
 
-data class CirConst(
+internal data class CirConst(
   val name: String,
   val type: String,
   val value: String,
 ) : CirMember
 
-enum class CirVisibility {
+internal enum class CirVisibility {
   PUBLIC, PRIVATE
 }
 

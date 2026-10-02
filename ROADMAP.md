@@ -13,7 +13,6 @@ Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is
 
 ### 0.9.0: breaking changes
 
-- [ ] Internalise leaked plugin API (the `rir` package, `generateKotlinStubs`, `generateCSharpShims`, `generateCsproj`, `GeneratedFile`, `NugetPusher` and its request and result types) and turn on `explicitApi()` in every published module. Verified: no build script calls `explicitApi()`.
 - [ ] Implement [ADR-187](docs/adr/187-forward-finalizer-contract.md): SafeHandle-owned forward handles; the callback-payload wrapper item under Performance & Resource Hygiene closes with it. ([details](docs/backlog/implement-adr-187-safehandle-forward-handles.md))
 
 ### 0.10.0: hardening
@@ -31,17 +30,13 @@ Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is
 ### 1.0.0: policy and docs
 
 - [ ] A stability policy: semver, the deprecation cycle, which surfaces are covered and the supported toolchain range. README says anything can change today.
-- [ ] A binary-compatibility-validator baseline for the published modules, checked in CI.
+- [ ] A binary-compatibility-validator baseline for the published modules, checked in CI (surface fixed by ADR-183).
 - [ ] A memory, threading and disposal topic that states the forward finalizer contract decided in 0.9.0 and the scope-ownership rule of [ADR-021](docs/adr/021-structured-concurrency.md).
 - [ ] A troubleshooting topic, a 0.x to 1.0 migration guide and a changelog.
 
 ### Deferred to 1.x
 
 Additive, so none of it forces a major; each stays in its phase below: `SharedFlow`, `Flow` as a parameter or type argument, the wider `MutableStateFlow` surface, `Result`'s `TryRun`, reverse exception fidelity, events, `ValueTask`, operators, indexers, arrays, generic interfaces, the crossing benchmark, the size gate, the leak-ladder rungs beyond what the disposal contract needs, `LibraryImport`, record classes.
-
-### Open decisions
-
-- [ ] Each contract in 0.9.0 marked "Decide".
 
 ## Phase 1: Basic bridging
 

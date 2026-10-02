@@ -16,6 +16,8 @@ fun escalateTriage(triage: VetTriage): VetTriage {
     VetTriage.WIN32_NT -> VetTriage.OK
   }
   val actual: VetTriage = VetTriageDesk().escalate(triage)
-  check(actual == expected) { "VetTriageDesk.escalate($triage) returned $actual, expected $expected" }
+  check(actual == expected) {
+    "VetTriageDesk.escalate($triage) returned $actual, expected $expected"
+  }
   return actual
 }

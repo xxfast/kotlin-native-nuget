@@ -6,13 +6,13 @@ import java.security.MessageDigest
 // determine whether a RirObjectHandleType reference is bridgeable (i.e. the type it refers to is
 // a non-static class present in the extraction set). Kept as a plain data class rather than
 // Pair<String,String> for readability at call sites.
-data class RirTypeKey(val namespace: String, val name: String)
+internal data class RirTypeKey(val namespace: String, val name: String)
 
 // Derives the set of all non-static RirClass types across the whole RirFile. A
 // RirObjectHandleType is v1-bridgeable iff its (namespace, name) pair is in this set. Both
 // generators call this function with the same RirFile before delegating to
 // bridgeableStaticMethods, so the set is always consistent across the two generator outputs.
-fun boundHandleTypes(file: RirFile): Set<RirTypeKey> =
+internal fun boundHandleTypes(file: RirFile): Set<RirTypeKey> =
   file.assemblies.flatMap { assembly ->
     assembly.namespaces.flatMap { namespace ->
       namespace.types
@@ -28,7 +28,7 @@ fun boundHandleTypes(file: RirFile): Set<RirTypeKey> =
 // RirEnumType is only ever emitted for a validated enum (see isV1Type below) — so both generators
 // need this map to resolve a struct reference's component list at codegen time (abiArgs/
 // abiOutArgs/contractHash), not to decide bridgeability.
-fun boundStructTypes(file: RirFile): Map<RirTypeKey, RirStruct> =
+internal fun boundStructTypes(file: RirFile): Map<RirTypeKey, RirStruct> =
   file.assemblies.flatMap { assembly ->
     assembly.namespaces.flatMap { namespace ->
       namespace.types
@@ -41,7 +41,7 @@ fun boundStructTypes(file: RirFile): Map<RirTypeKey, RirStruct> =
 // boundHandleTypes/boundStructTypes. A RirInterfaceType reference is v1-bridgeable iff its
 // (namespace, name) pair is in this map's keys — mirrors boundStructTypes' role of also resolving
 // the full declaration (methods/properties/interfaces), which both generators need at codegen time.
-fun boundInterfaceTypes(file: RirFile): Map<RirTypeKey, RirInterface> =
+internal fun boundInterfaceTypes(file: RirFile): Map<RirTypeKey, RirInterface> =
   file.assemblies.flatMap { assembly ->
     assembly.namespaces.flatMap { namespace ->
       namespace.types
@@ -55,7 +55,7 @@ fun boundInterfaceTypes(file: RirFile): Map<RirTypeKey, RirInterface> =
 // RirGenericInstanceType reference at an ORDINARY (non-generic) member's return/parameter/property
 // position is v1-bridgeable iff its (namespace, name) resolves here. [name] keeps the CLR name
 // verbatim ("Box`1"), matching RirGenericInstanceType.name.
-fun boundGenericClassDefinitions(file: RirFile): Map<RirTypeKey, RirClass> =
+internal fun boundGenericClassDefinitions(file: RirFile): Map<RirTypeKey, RirClass> =
   file.assemblies.flatMap { assembly ->
     assembly.namespaces.flatMap { namespace ->
       namespace.types
@@ -68,7 +68,7 @@ fun boundGenericClassDefinitions(file: RirFile): Map<RirTypeKey, RirClass> =
 // ADR-070: parses one "{Namespace}.{Name}" entry from RirClass.interfaces/RirInterface.interfaces
 // into a RirTypeKey. The namespace may itself contain dots, so the SIMPLE name (which never does)
 // is split off from the end.
-fun parseInterfaceRef(qualifiedName: String): RirTypeKey =
+internal fun parseInterfaceRef(qualifiedName: String): RirTypeKey =
   RirTypeKey(
     namespace = qualifiedName.substringBeforeLast('.'),
     name = qualifiedName.substringAfterLast('.'),
@@ -77,7 +77,7 @@ fun parseInterfaceRef(qualifiedName: String): RirTypeKey =
 // ADR-070 Decision 5: this interface's own directly-declared base interfaces (verified: unlike a
 // class, an interface's InterfaceImpl table lists only DIRECT bases), filtered to those that are
 // themselves admissible and bound in this extraction run.
-fun interfaceBaseKeys(
+internal fun interfaceBaseKeys(
   iface: RirInterface,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface>,
 ): List<RirTypeKey> =
@@ -90,7 +90,7 @@ fun interfaceBaseKeys(
 // cls.properties — there is nothing to "not match", the member never reached the RIR at all.
 // RirMethod/RirProperty/RirTypeRef are plain data classes, so structural equality on
 // (name, parameter types, return type) / (name, type) is exactly "identically signed".
-fun classImplementsInterface(cls: RirClass, iface: RirInterface): Boolean {
+internal fun classImplementsInterface(cls: RirClass, iface: RirInterface): Boolean {
   val methodsOk: Boolean = iface.methods.all { im ->
     cls.methods.any { cm ->
       !cm.isStatic && cm.name == im.name &&
@@ -112,7 +112,7 @@ fun classImplementsInterface(cls: RirClass, iface: RirInterface): Boolean {
 // (transitive) base of another qualifying interface dropped — Kotlin interface inheritance
 // already provides it, so declaring both would be redundant (e.g. a class implementing
 // `ITagged : IFeedable` declares only `: ITagged`, not `: ITagged, IFeedable`).
-fun classInterfaceSupertypes(
+internal fun classInterfaceSupertypes(
   cls: RirClass,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface>,
 ): List<RirTypeKey> {
@@ -135,7 +135,7 @@ fun classInterfaceSupertypes(
 // ADR-056: one ABI-level argument. `type` is always a scalar — never a RirStructType, because
 // abiArgs/abiOutArgs have already expanded any struct into its components. `isOutPointer` marks a
 // struct-return out-parameter (see abiOutArgs); an ordinary in-argument is isOutPointer = false.
-data class AbiArg(val name: String, val type: RirTypeRef, val isOutPointer: Boolean)
+internal data class AbiArg(val name: String, val type: RirTypeRef, val isOutPointer: Boolean)
 
 private fun resolveStruct(type: RirTypeRef, structs: Map<RirTypeKey, RirStruct>): RirStruct? =
   (type as? RirStructType)?.let { ref ->
@@ -196,7 +196,10 @@ private fun requireDistinctAbiNames(args: List<AbiArg>): List<AbiArg> {
 // Kotlin CFunction types and NugetGenerateShimsTask's C# thunk signatures) MUST call this shared
 // function — not re-derive the expansion — or the registration slots still line up while the
 // arguments inside a slot silently misalign, which is memory corruption with no error.
-fun abiArgs(parameters: List<RirParameter>, structs: Map<RirTypeKey, RirStruct>): List<AbiArg> =
+internal fun abiArgs(
+  parameters: List<RirParameter>,
+  structs: Map<RirTypeKey, RirStruct>,
+): List<AbiArg> =
   requireDistinctAbiNames(
     parameters.flatMap { p ->
       flattenLeaves(p.type, structs).map { (path, leafType) ->
@@ -210,7 +213,7 @@ fun abiArgs(parameters: List<RirParameter>, structs: Map<RirTypeKey, RirStruct>)
 // "outMother_Tag" at depth 2, "outX" at depth 1, unchanged), appended after the real parameters. A
 // non-struct return yields no out-arguments at all — see abiReturnType, which turns the thunk's
 // own return into void whenever this list is non-empty.
-fun abiOutArgs(returnType: RirTypeRef, structs: Map<RirTypeKey, RirStruct>): List<AbiArg> {
+internal fun abiOutArgs(returnType: RirTypeRef, structs: Map<RirTypeKey, RirStruct>): List<AbiArg> {
   if (resolveStruct(returnType, structs) == null) return emptyList()
   return requireDistinctAbiNames(
     flattenLeaves(returnType, structs).map { (path, leafType) ->
@@ -221,7 +224,10 @@ fun abiOutArgs(returnType: RirTypeRef, structs: Map<RirTypeKey, RirStruct>): Lis
 
 // ADR-056: the ABI-level return type — RirVoidType when the real return is a struct (its
 // components cross via abiOutArgs instead), the real return type unchanged otherwise.
-fun abiReturnType(returnType: RirTypeRef, structs: Map<RirTypeKey, RirStruct>): RirTypeRef =
+internal fun abiReturnType(
+  returnType: RirTypeRef,
+  structs: Map<RirTypeKey, RirStruct>,
+): RirTypeRef =
   if (resolveStruct(returnType, structs) != null) RirVoidType else returnType
 
 // ADR-049 Alternative 10: a single, shared source of truth for "which static methods on a bound
@@ -234,7 +240,7 @@ fun abiReturnType(returnType: RirTypeRef, structs: Map<RirTypeKey, RirStruct>): 
 // ADR-051: signature extended with boundHandleTypes (derived once per RirFile via the
 // boundHandleTypes() helper above) so that RirObjectHandleType references can be resolved. Both
 // generators derive the set via the shared helper, closing the same drift risk as this function.
-fun bridgeableStaticMethods(
+internal fun bridgeableStaticMethods(
   cls: RirClass,
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
@@ -254,7 +260,7 @@ fun bridgeableStaticMethods(
 // rule: the reader now emits every public `.ctor` with its own identity and assesses each
 // independently, so this filter really does see overload siblings. The reverse census confirms
 // it, there is no SKIPPED_OVERLOAD_SET anywhere in nine real published packages.
-fun bridgeableConstructors(
+internal fun bridgeableConstructors(
   cls: RirClass,
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
@@ -269,7 +275,7 @@ fun bridgeableConstructors(
     }
   }
 
-fun bridgeableStructConstructors(
+internal fun bridgeableStructConstructors(
   struct: RirStruct,
   boundHandleTypes: Set<RirTypeKey>,
 ): List<RirConstructor> {
@@ -344,7 +350,7 @@ private fun bridgeableStructRegistrablesCandidates(
 // exceeds the 22-argument ceiling. `structs` defaults to empty for pre-ADR-059 callers that never
 // pass a struct-typed component (a struct's own arity is then just its declared component count,
 // unchanged from ADR-056/058).
-fun structArityLimitDiagnostics(
+internal fun structArityLimitDiagnostics(
   struct: RirStruct,
   boundHandleTypes: Set<RirTypeKey>,
   structs: Map<RirTypeKey, RirStruct> = emptyMap(),
@@ -365,7 +371,7 @@ fun structArityLimitDiagnostics(
 // ADR-059 Decision 5a: a candidate whose flattened ABI arity exceeds the 22-argument ceiling is
 // skipped here — the SHARED filter, not either generator — and diagnosed via
 // structArityLimitDiagnostics (called with the same arguments so the two can never disagree).
-fun bridgeableStructRegistrables(
+internal fun bridgeableStructRegistrables(
   struct: RirStruct,
   boundHandleTypes: Set<RirTypeKey>,
   structs: Map<RirTypeKey, RirStruct> = emptyMap(),
@@ -386,7 +392,7 @@ fun bridgeableStructRegistrables(
 // params (e.g. Mood vs mood) and from out-pointers (outX). `structs` defaults to empty for
 // pre-ADR-059 callers whose struct never has a struct-typed component (see flattenLeaves: a
 // non-struct component is its own single leaf regardless of the structs map's contents).
-fun structReceiverAbiArgs(
+internal fun structReceiverAbiArgs(
   struct: RirStruct,
   structs: Map<RirTypeKey, RirStruct> = emptyMap(),
 ): List<AbiArg> = requireDistinctAbiNames(
@@ -404,7 +410,7 @@ fun structReceiverAbiArgs(
 // C# ModuleInitializer pointer arguments) from ONE shared, ordered list, rather than each
 // independently remembering "constructor before methods" — closing the same order-drift hole
 // ADR-049 Alternative 10 closed for methods-only registration, now extended to the constructor.
-sealed interface RirRegistrable {
+internal sealed interface RirRegistrable {
   data class Ctor(val ctor: RirConstructor) : RirRegistrable
 
   // ADR-152: an async method occupies TWO adjacent registration slots (Begin, then End) rather
@@ -427,31 +433,33 @@ sealed interface RirRegistrable {
   data class PropertySetter(val property: RirProperty) : RirRegistrable
 }
 
-fun RirMethod.identity(): String = if (managedSignature.isNotEmpty()) managedSignature else {
+internal fun RirMethod.identity(): String {
+  if (managedSignature.isNotEmpty()) return managedSignature
   val receiver: String = if (isStatic) "static" else "instance"
-  "method|$receiver||$name|(${parameters.joinToString(",") { it.type.describe() }})|" +
-      returnType.describe()
+  return "method|$receiver||$name|(${parameters.joinToString(",") { it.type.describe() }})|" +
+    returnType.describe()
 }
 
-fun RirConstructor.identity(): String = if (managedSignature.isNotEmpty()) managedSignature else
-  "ctor|instance||.ctor|(${parameters.joinToString(",") { it.type.describe() }})|void"
+internal fun RirConstructor.identity(): String =
+  if (managedSignature.isNotEmpty()) managedSignature
+  else "ctor|instance||.ctor|(${parameters.joinToString(",") { it.type.describe() }})|void"
 
-fun RirMethod.bridgeId(): String = bridgeId(identity())
+internal fun RirMethod.bridgeId(): String = bridgeId(identity())
 
-fun RirConstructor.bridgeId(): String = bridgeId(identity())
+internal fun RirConstructor.bridgeId(): String = bridgeId(identity())
 
-fun RirMethod.bridgeSuffix(): String =
+internal fun RirMethod.bridgeSuffix(): String =
   if (managedSignature.isEmpty()) "" else "__${bridgeId()}"
 
-fun RirConstructor.bridgeSuffix(): String =
+internal fun RirConstructor.bridgeSuffix(): String =
   if (managedSignature.isEmpty()) "" else "__${bridgeId()}"
 
-fun bridgeId(signature: String): String = MessageDigest.getInstance("SHA-256")
+internal fun bridgeId(signature: String): String = MessageDigest.getInstance("SHA-256")
   .digest(signature.toByteArray(Charsets.UTF_8))
   .take(16)
   .joinToString("") { byte -> "%02x".format(byte) }
 
-fun bridgeIds(
+internal fun bridgeIds(
   signatures: List<String>,
   digest: (String) -> String = ::bridgeId,
 ): Map<String, String> {
@@ -466,7 +474,7 @@ fun bridgeIds(
   return ids
 }
 
-fun RirRegistrable.identity(): String = when (this) {
+internal fun RirRegistrable.identity(): String = when (this) {
   is RirRegistrable.Ctor -> ctor.identity()
   is RirRegistrable.Method -> method.identity()
   is RirRegistrable.PropertyGetter ->
@@ -476,14 +484,14 @@ fun RirRegistrable.identity(): String = when (this) {
     "property|instance|set|${property.name}|${property.type.describe()}"
 }
 
-fun RirRegistrable.bridgeId(): String = bridgeId(identity())
+internal fun RirRegistrable.bridgeId(): String = bridgeId(identity())
 
 // ADR-152: one registration slot. A synchronous registrable has exactly one; an async method has
 // two, Begin then End, adjacent and in that order. Both generators expand the SHARED
 // bridgeableRegistrables list through this function rather than re-deriving "is this one slot or
 // two", which is the same anti-drift rule the ordered list itself exists for: a disagreement here
 // misaligns every pointer past the async member, which is memory corruption with no error.
-enum class RirSlotRole {
+internal enum class RirSlotRole {
   SYNC,
   ASYNC_BEGIN,
   ASYNC_END,
@@ -498,7 +506,7 @@ enum class RirSlotRole {
 
 // The name fragment a slot contributes to its Kotlin `...Fn` var and its C# `..._Thunk`, empty
 // for a synchronous slot, so no existing generated name moves.
-val RirSlotRole.nameSuffix: String
+internal val RirSlotRole.nameSuffix: String
   get() = when (this) {
     RirSlotRole.SYNC -> ""
     RirSlotRole.ASYNC_BEGIN -> "Begin"
@@ -507,7 +515,7 @@ val RirSlotRole.nameSuffix: String
     RirSlotRole.ASYNC_CURRENT -> "Current"
   }
 
-fun RirRegistrable.slotRoles(): List<RirSlotRole> = when {
+internal fun RirRegistrable.slotRoles(): List<RirSlotRole> = when {
   this !is RirRegistrable.Method -> listOf(RirSlotRole.SYNC)
   // ADR-156: still two adjacent slots, but a DIFFERENT pair. Every consumer of this list is
   // therefore forced to decide on the kind rather than on `asyncKind != null`.
@@ -520,16 +528,18 @@ fun RirRegistrable.slotRoles(): List<RirSlotRole> = when {
 
 // The registration's true slot count: what both `slotCount` arguments and both register-export
 // parameter lists are built from (ADR-054's contract check compares exactly this number).
-fun List<RirRegistrable>.slotCount(): Int = sumOf { it.slotRoles().size }
+internal fun List<RirRegistrable>.slotCount(): Int = sumOf { it.slotRoles().size }
 
 // Renders one text fragment per registration SLOT, in slot order, for a generator that used to
 // map one fragment per registrable.
-fun <T> List<RirRegistrable>.mapSlots(transform: (RirRegistrable, RirSlotRole) -> T): List<T> =
+internal fun <T> List<RirRegistrable>.mapSlots(
+  transform: (RirRegistrable, RirSlotRole) -> T,
+): List<T> =
   flatMap { r -> r.slotRoles().map { role -> transform(r, role) } }
 
 // Phase 9 (ROADMAP line 151): v1-bridgeable instance methods on a bound class — mirrors
 // bridgeableStaticMethods, but for `!isStatic` methods.
-fun bridgeableInstanceMethods(
+internal fun bridgeableInstanceMethods(
   cls: RirClass,
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
@@ -544,7 +554,7 @@ fun bridgeableInstanceMethods(
 
 // Phase 9: v1-bridgeable properties on a bound class. Static properties support strings and the
 // current primitive subset; handle-typed static properties remain deferred with handle setters.
-fun bridgeableProperties(
+internal fun bridgeableProperties(
   cls: RirClass,
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
@@ -559,7 +569,7 @@ fun bridgeableProperties(
 // methods (sorted by identity) → per-property [getter, setter?] (sorted by name). No constructors
 // (an interface has none) and no statics (Decision 6 skips every static interface member before
 // it reaches RirInterface). A strict subset of bridgeableRegistrablesCandidates' class ordering.
-fun bridgeableInterfaceRegistrables(
+internal fun bridgeableInterfaceRegistrables(
   iface: RirInterface,
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
@@ -613,7 +623,7 @@ private fun String.toMethodCamelCase(): String = replaceFirstChar { it.lowercase
 // Deliberately independent of boundHandleTypes/type-bridgeability: a name collision is a Kotlin
 // naming problem only, not a type problem — a member is skipped because its Kotlin name shadows
 // the wrapper's own member, regardless of whether its C# type would otherwise have been bridgeable.
-fun collisionDiagnostics(cls: RirClass): List<RirDiagnostic> {
+internal fun collisionDiagnostics(cls: RirClass): List<RirDiagnostic> {
   val methodDiagnostics: List<RirDiagnostic> = cls.methods
     .filter { !it.isStatic && it.name.toMethodCamelCase() in WRAPPER_MEMBER_NAMES }
     .map { method ->
@@ -656,7 +666,7 @@ fun collisionDiagnostics(cls: RirClass): List<RirDiagnostic> {
 // distinct closed generic struct (System.Nullable<T>), not an annotation on the value type
 // itself, and is out of scope for v1 (deferred to the Phase 9 structs item). Both generators read
 // this through a single shared accessor rather than re-deriving the same `when` at each call site.
-val RirTypeRef.isNullable: Boolean
+internal val RirTypeRef.isNullable: Boolean
   get() = when (this) {
     is RirStringType -> nullable
     is RirObjectHandleType -> nullable
@@ -852,7 +862,7 @@ private fun bridgeableRegistrablesCandidates(
 // ABI arity (a 1-slot GCHandle receiver for an instance member + flattened parameters + flattened
 // out-pointers) exceeds the 22-argument ceiling. `structs` defaults to empty for pre-ADR-059
 // callers that never pass a struct-typed parameter/return.
-fun arityLimitDiagnostics(
+internal fun arityLimitDiagnostics(
   cls: RirClass,
   boundHandleTypes: Set<RirTypeKey>,
   structs: Map<RirTypeKey, RirStruct> = emptyMap(),
@@ -877,7 +887,7 @@ private fun isDeferredAsync(cls: RirClass, method: RirMethod): Boolean =
 // declines: a struct method, a bound-interface member, or a member of a generic class definition.
 // The reader already names the shapes it declines itself (ValueTask, `Task<T>?`, async parameters);
 // this is the plugin-side half, so nothing async is ever dropped silently.
-fun asyncDeferredDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> =
+internal fun asyncDeferredDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> =
   rir.assemblies.flatMap { assembly ->
     assembly.namespaces.flatMap { namespace ->
       namespace.types.flatMap { type ->
@@ -916,7 +926,7 @@ private fun mentionsCollection(type: RirTypeRef): Boolean =
 // (ADR-070); neither rides the shared conversion tables this wire was built into, so isV1Type
 // refuses them (allowCollections = false) and this is what says so out loud. Without it the
 // member would vanish silently, which is the exact failure ADR-043 diagnostics exist to prevent.
-fun collectionPositionDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> =
+internal fun collectionPositionDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> =
   rir.assemblies.flatMap { assembly ->
     assembly.namespaces.flatMap { namespace ->
       namespace.types.flatMap { type ->
@@ -975,14 +985,14 @@ fun collectionPositionDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic
 // cosmetic. A package-declared delegate gets a Kotlin `typealias` carrying its C# name, and the C#
 // holder factory constructs that declared type rather than a `Func`. Everything about the wire,
 // the slot and the lifetime is identical, which is why this is a predicate and not a variant.
-fun RirDelegateType.isPackageDeclared(): Boolean = !definition.startsWith("System.")
+internal fun RirDelegateType.isPackageDeclared(): Boolean = !definition.startsWith("System.")
 
 // ADR-158: the generated-name key for one delegate SHAPE, a sanitized CLR name plus the wire
 // spelling of every Invoke position, so two shapes can never share a holder class, a factory or a
 // reuse table. `Func<int,int>` is `FuncInt32Int32`; `Action<string?>` is `ActionStringN`; the
 // non-generic `Action` is `Action`. Collision-checked by the caller (delegatePlans) the way ADR-072
 // checks instantiation names.
-fun RirDelegateType.shapeKey(): String {
+internal fun RirDelegateType.shapeKey(): String {
   val base: String = definition.substringAfterLast('.').substringBefore('`')
   val parts: List<String> = (parameters + returnType).map { part ->
     val name: String = when (part) {
@@ -1016,7 +1026,7 @@ fun RirDelegateType.shapeKey(): String {
 // [invoke] is the delegate's `Invoke` signature dressed as an ordinary registrable method, which is
 // what lets the ADR-085 slot renderers (Kotlin `kotlinSlotEnvelope`, C# `bridgeMethodMember`) be
 // reused verbatim instead of re-derived.
-data class KotlinDelegatePlan(
+internal data class KotlinDelegatePlan(
   val shapeKey: String,
   val delegate: RirDelegateType,
   val invoke: RirRegistrable.Method,
@@ -1028,7 +1038,7 @@ data class KotlinDelegatePlan(
 // per shape per DECLARING type: two bound classes using `Func<int,int>` mint two factories, which
 // costs a slot each and buys nothing across types, but keeps the ADR-054 accounting local to the
 // type whose contract hash moves.
-fun delegatePlans(
+internal fun delegatePlans(
   cls: RirClass,
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
@@ -1047,7 +1057,10 @@ fun delegatePlans(
 // ADR-158: the same plans off an ALREADY-computed registrable list, which is what both generators
 // have in hand when they render a type's registration (and is why neither needs to re-run the
 // admission filter and risk disagreeing with the other about the slot list).
-fun delegatePlans(registrables: List<RirRegistrable>, typeName: String): List<KotlinDelegatePlan> {
+internal fun delegatePlans(
+  registrables: List<RirRegistrable>,
+  typeName: String,
+): List<KotlinDelegatePlan> {
   val delegates: List<RirDelegateType> = registrables.flatMap { r ->
     when (r) {
       is RirRegistrable.Method -> r.method.parameters.map { it.type }
@@ -1101,7 +1114,7 @@ private fun mentionsDelegate(type: RirTypeRef): Boolean =
 // the generators still decline, so an admitted-then-dropped member is never silent. Mirrors
 // collectionPositionDiagnostics above, and shrinks as positions are lifted: the day a delegate
 // PARAMETER of an ordinary bound class binds, that case stops appearing here.
-fun delegatePositionDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> =
+internal fun delegatePositionDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> =
   rir.assemblies.flatMap { assembly ->
     assembly.namespaces.flatMap { namespace ->
       namespace.types.flatMap { type ->
@@ -1199,7 +1212,7 @@ fun delegatePositionDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>>
 // arityLimitDiagnostics (called with the same arguments so the two can never disagree). If only
 // one generator dropped an over-arity member, the two sides' registration slots would silently
 // misalign — memory corruption with no error.
-fun bridgeableRegistrables(
+internal fun bridgeableRegistrables(
   cls: RirClass,
   boundHandleTypes: Set<RirTypeKey>,
   structs: Map<RirTypeKey, RirStruct> = emptyMap(),
@@ -1413,7 +1426,7 @@ private fun isMapKey(type: RirTypeRef): Boolean =
 // differs, which is precisely the drift ADR-054 exists to detect at runtime.
 // ADR-056: `structs` lets signaturePart expand a RirStructType's components — load-bearing (see
 // below), not just plumbing.
-fun contractHash(
+internal fun contractHash(
   cls: RirClass,
   registrables: List<RirRegistrable>,
   structs: Map<RirTypeKey, RirStruct>,
@@ -1424,7 +1437,7 @@ fun contractHash(
 // RirBridging.kt), so an interface's own name works identically for
 // nuget_{ns}_{IFoo}_register's contract, with no change to the hash algorithm itself. The
 // RirClass overload above is kept as a thin convenience wrapper for existing call sites.
-fun contractHash(
+internal fun contractHash(
   name: String,
   registrables: List<RirRegistrable>,
   structs: Map<RirTypeKey, RirStruct>,
@@ -1442,9 +1455,9 @@ fun contractHash(
 // the channel under cdecl, and a new shim + old dylib writes a GCHandle through an undefined
 // pointer on the throw path. Mirrors ADR-087's `kotlin_bridge_v2:` precedent verbatim; bump this
 // tag on any future change to the reverse thunk ABI shape.
-const val REVERSE_ABI_TAG: String = "reverse_v2:"
+internal const val REVERSE_ABI_TAG: String = "reverse_v2:"
 
-fun structConstructorContractHash(
+internal fun structConstructorContractHash(
   namespace: String,
   struct: RirStruct,
   constructors: List<RirConstructor>,
@@ -1459,7 +1472,7 @@ fun structConstructorContractHash(
 // ADR-056 deferred: contract hash over the full shared struct registration list (alternate
 // ctors + methods + computed getters). Same component prefix as the ctor-only form so a
 // members-free struct keeps a stable hash with the previous shape.
-fun structContractHash(
+internal fun structContractHash(
   namespace: String,
   struct: RirStruct,
   registrables: List<RirRegistrable>,
@@ -1568,7 +1581,7 @@ internal fun fnv1a64(s: String): Long {
 // ADR-153: two more (releaseCancellation/managedErrorKind), taking the shared runtime from 5 slots
 // to 7. A consumer whose C# shim predates this and whose native library does not (or the other way
 // round) fails at startup with the ADR-054 message instead of mis-assigning pointers.
-val NUGET_RUNTIME_CONTRACT_HASH: Long = fnv1a64(
+internal val NUGET_RUNTIME_CONTRACT_HASH: Long = fnv1a64(
   "runtime:freeGcHandle(handle:COpaquePointer):Unit;" +
       "weakenGcHandle(handle:COpaquePointer):COpaquePointer;" +
       "resolveGcHandle(handle:COpaquePointer):COpaquePointer;" +
@@ -1589,7 +1602,7 @@ val NUGET_RUNTIME_CONTRACT_HASH: Long = fnv1a64(
 // Shared registration export-name derivation (ADR-048's naming contract, which ADR-049's C# side
 // must match exactly): "nuget_{ns_snake}_{type_snake}_register". Sharing this function (rather than
 // letting each generator re-derive it) closes the same drift risk as bridgeableStaticMethods above.
-fun registrationExportName(namespaceName: String, typeName: String): String {
+internal fun registrationExportName(namespaceName: String, typeName: String): String {
   val nsSnake: String = namespaceName.replace('.', '_').lowercase()
   val typeSnake: String = typeName.toTypeSnake()
   return if (nsSnake.isEmpty()) "nuget_${typeSnake}_register"
@@ -1598,7 +1611,7 @@ fun registrationExportName(namespaceName: String, typeName: String): String {
 
 // PascalCase type name → lower_snake_case: insert '_' before each uppercase letter after the
 // first, then lowercase. e.g. JsonConvert → json_convert, MathHelper → math_helper
-fun String.toTypeSnake(): String = buildString {
+internal fun String.toTypeSnake(): String = buildString {
   this@toTypeSnake.forEachIndexed { i, c ->
     if (i > 0 && c.isUpperCase()) append('_')
     append(c.lowercaseChar())
@@ -1609,7 +1622,7 @@ fun String.toTypeSnake(): String = buildString {
 // passed back to C#. Slot-order drift between the Kotlin `staticCFunction` block and the C#
 // bridge class is the classic silent-ABI bug (the contract hash covers the member list, not the
 // per-slot meaning), so neither task derives its own ordering: both call kotlinBridgePlan.
-data class KotlinBridgePlan(
+internal data class KotlinBridgePlan(
   val iface: RirInterface,
   // The FLATTENED slot list: every inherited base interface's registration slots (depth-first,
   // bases before own — see kotlinBridgeSlots) followed by this interface's own. The bridge's
@@ -1646,7 +1659,7 @@ internal fun RirTypeRef.isHandleBacked(): Boolean =
 // {Derived}Handle dispatches an inherited member through. This one is the bridge factory's
 // parameter order, and it is base-first so appending a member to a derived interface does not
 // renumber its bases' slots.
-fun flattenedBridgeInterfaces(
+internal fun flattenedBridgeInterfaces(
   iface: RirInterface,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface>,
 ): List<RirInterface> {
@@ -1670,7 +1683,7 @@ fun flattenedBridgeInterfaces(
 // The flattened slot list itself. Deduped by member identity as well as by interface: a derived
 // interface may RE-declare a base member (C# `new`), and one C# bridge class can only carry one
 // public member for the two — the base's slot (visited first) serves both.
-fun kotlinBridgeSlots(
+internal fun kotlinBridgeSlots(
   iface: RirInterface,
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface>,
@@ -1756,7 +1769,7 @@ private fun RirRegistrable.memberName(): String = when (this) {
 // ADR-085: the bridge plan for [iface], or null when at least one member is out of vocabulary (in
 // which case kotlinBridgeDiagnostics names what and why). All-or-nothing per interface: a bridge
 // that implements only some of a C# interface's members does not compile on the C# side.
-fun kotlinBridgePlan(
+internal fun kotlinBridgePlan(
   iface: RirInterface,
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
@@ -1775,7 +1788,7 @@ fun kotlinBridgePlan(
 
 // ADR-085: `SKIPPED_KOTLIN_BRIDGE`, one per reason this interface cannot be implemented in Kotlin
 // and handed back to C#. Never silence: an interface without a plan keeps ADR-070's error(...).
-fun kotlinBridgeDiagnostics(
+internal fun kotlinBridgeDiagnostics(
   iface: RirInterface,
   boundHandleTypes: Set<RirTypeKey>,
   boundInterfaceTypes: Map<RirTypeKey, RirInterface> = emptyMap(),
@@ -1841,7 +1854,7 @@ fun kotlinBridgeDiagnostics(
 // type's ADR-054 contract hash must move with the shape list: a shim built against `Func<int,int>`
 // must not silently register against a native library that now expects `Func<int,long>`. Folded in
 // shape-key order, the same order the slots are appended in.
-fun delegateContractHash(memberHash: Long, plans: List<KotlinDelegatePlan>): Long {
+internal fun delegateContractHash(memberHash: Long, plans: List<KotlinDelegatePlan>): Long {
   if (plans.isEmpty()) return memberHash
   val factories: String = "kotlin_delegate_v1:" + plans.joinToString("|") { plan ->
     "${plan.shapeKey}(${plan.invoke.contractSignature(emptyMap())})"
@@ -1849,10 +1862,10 @@ fun delegateContractHash(memberHash: Long, plans: List<KotlinDelegatePlan>): Lon
   return memberHash xor fnv1a64(factories)
 }
 
-fun kotlinBridgeContractHash(memberHash: Long, plan: KotlinBridgePlan): Long =
+internal fun kotlinBridgeContractHash(memberHash: Long, plan: KotlinBridgePlan): Long =
   kotlinBridgeContractHash(memberHash, plan.slots, plan.needsDupHandle)
 
-fun kotlinBridgeContractHash(
+internal fun kotlinBridgeContractHash(
   memberHash: Long,
   slots: List<RirRegistrable>,
   needsDupHandle: Boolean = false,

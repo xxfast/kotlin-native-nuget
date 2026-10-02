@@ -30,7 +30,8 @@ class NugetTargetFrameworkTest {
   }
 
   private fun Project.frameworks(): List<String> = listOf(
-    (tasks.getByName("nugetGenerateRestoreProject") as NugetGenerateRestoreProjectTask).targetFramework.get(),
+    (tasks.getByName("nugetGenerateRestoreProject") as NugetGenerateRestoreProjectTask)
+      .targetFramework.get(),
     (tasks.getByName("nugetRestore") as NugetRestoreTask).targetFramework.get(),
     (tasks.getByName("nugetExtractApi") as NugetExtractApiTask).targetFramework.get(),
     (tasks.getByName("nugetCompileInterop") as NugetCompileInteropTask).targetFramework.get(),

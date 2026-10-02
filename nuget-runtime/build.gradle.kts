@@ -8,6 +8,7 @@ plugins {
 // `CNameExports.kt`. The C names here ARE the versioned ABI; the Kotlin names are for the
 // generator of the same version and nobody else, which is what `@NugetRuntimeApi` says.
 kotlin {
+  explicitApi()
   macosArm64()
   macosX64()
   linuxX64()

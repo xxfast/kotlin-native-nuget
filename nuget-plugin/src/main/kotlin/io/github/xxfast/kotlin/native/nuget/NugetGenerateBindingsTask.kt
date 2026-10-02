@@ -110,7 +110,7 @@ private const val BINDING_MARKER_OPT_IN = "$BINDING_MARKER_FQN::class"
 private const val INTERNAL_DIR = "io/github/xxfast/kotlin/native/nuget/internal"
 
 
-data class GeneratedFile(
+internal data class GeneratedFile(
   val relativePath: String,
   val content: String,
 )
@@ -387,7 +387,7 @@ internal fun boundTypesManifest(
   return "{\n  \"interfaces\": [$body]\n}\n"
 }
 
-fun generateKotlinStubs(
+internal fun generateKotlinStubs(
   file: RirFile,
   packageNameOverrides: Map<String, String> = emptyMap(),
   namespaceAliases: Map<String, Map<String, String>> = emptyMap(),
@@ -2006,7 +2006,8 @@ private fun String.toMethodCamelCase(): String = replaceFirstChar { it.lowercase
 // ADR-006 2026-10-02 amendment: a C# enum member → a SCREAMING_SNAKE Kotlin entry by the
 // kotlinx-serialization `JsonNamingStrategy.SnakeCase` rule, uppercased. A word starts at an
 // uppercase letter after a lowercase letter or a digit, and at the last capital of an uppercase run
-// that a lowercase letter follows, so an acronym run stays one word: `HTTPStatus` → `HTTP_STATUS`,
+// that a lowercase letter follows, so an acronym run stays one word:
+// `HTTPStatus` → `HTTP_STATUS`,
 // `IOError` → `IO_ERROR`, `OK` → `OK`, `Win32NT` → `WIN32_NT`. An existing `_` is a boundary;
 // repeated, leading and trailing underscores are dropped (`SNAKE_CASE` and `Foo_Bar` survive).
 internal fun String.toEnumScreamingSnake(): String {
@@ -2068,8 +2069,8 @@ internal fun enumEntryVerbatimDiagnostics(rir: RirFile): List<Pair<String, RirDi
               memberSignature = "",
               reason = "${siblings.joinToString(", ")} all convert to the Kotlin entry " +
                   "`$collapsed`, so each keeps its C# name as the Kotlin entry name",
-              hint = "Refer to this entry as `${enum.name}.${entry.name}` from Kotlin; its ordinal " +
-                  "is unchanged.",
+              hint = "Refer to this entry as `${enum.name}.${entry.name}` from Kotlin; " +
+                  "its ordinal is unchanged.",
             )
           }
       }
@@ -3941,7 +3942,9 @@ private fun stubFileContent(
   }
 
   return buildString {
-    appendLine("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, $BINDING_MARKER_OPT_IN)")
+    appendLine(
+      "@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, $BINDING_MARKER_OPT_IN)",
+    )
     appendLine()
     appendLine("package $kotlinPkg")
     appendLine()
@@ -4174,7 +4177,9 @@ private fun classWrapperContent(
   }
 
   return buildString {
-    appendLine("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, $BINDING_MARKER_OPT_IN)")
+    appendLine(
+      "@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, $BINDING_MARKER_OPT_IN)",
+    )
     appendLine()
     appendLine("package $kotlinPkg")
     appendLine()
@@ -6002,7 +6007,8 @@ private fun nugetRegistryContent(expected: List<String>): String {
     |        "No [ModuleInitializer] in any *Registration.cs ran, so those files are not compiled into " +
     |        "any assembly the host has loaded. This is almost never a codegen bug. In order of likelihood:\n" +
     |        "  1. Stale build state: the consuming project's obj/project.assets.json was not re-resolved, " +
-    |        "so NuGet never handed contentFiles/cs/<tfm>/*Registration.cs to the compiler. Delete obj/ and " +
+    |        "so NuGet never handed contentFiles/cs/<tfm>/*Registration.cs to the compiler. " +
+    |        "Delete obj/ and " +
     |        "bin/, purge the NuGet cache at ~/.nuget/packages/${'$'}packageId, restore, rebuild.\n" +
     |        "  2. The consuming project does not reference the packed package at all.\n" +
     |        "  3. The shim files compiled, but the assembly containing them was never loaded.\n" +
@@ -6343,7 +6349,9 @@ private fun interfaceHandleFileContent(
   val membersText: String = memberBlocks.joinToString("\n\n") { it.prependIndent("  ") }
 
   return buildString {
-    appendLine("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, $BINDING_MARKER_OPT_IN)")
+    appendLine(
+      "@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, $BINDING_MARKER_OPT_IN)",
+    )
     appendLine()
     appendLine("package $kotlinPkg")
     appendLine()
@@ -7418,7 +7426,8 @@ internal fun formatDiagnostic(packageId: String, diagnostic: RirDiagnostic): Str
   val location: String = when {
     diagnostic.typeName.isEmpty() && diagnostic.memberName.isEmpty() -> packageId
     diagnostic.memberName.isEmpty() -> "$packageId/${diagnostic.typeName}"
-    else -> "$packageId/${diagnostic.typeName}.${diagnostic.memberName}(${diagnostic.memberSignature})"
+    else ->
+      "$packageId/${diagnostic.typeName}.${diagnostic.memberName}(${diagnostic.memberSignature})"
   }
   // A reason that already closes its own sentence (the reader's SKIPPED_ARRAY one does) keeps its
   // period rather than gaining a second: forward's `ForwardDiagnostic.format()` does the same.
@@ -7427,28 +7436,28 @@ internal fun formatDiagnostic(packageId: String, diagnostic: RirDiagnostic): Str
       diagnostic.hint
 }
 
-abstract class NugetGenerateBindingsTask : DefaultTask() {
+public abstract class NugetGenerateBindingsTask : DefaultTask() {
   @get:InputFile
-  abstract val reverseIrFile: RegularFileProperty
+  public abstract val reverseIrFile: RegularFileProperty
 
   @get:Input
-  abstract val packageNameOverrides: MapProperty<String, String>
+  public abstract val packageNameOverrides: MapProperty<String, String>
 
   @get:Input
-  abstract val namespaceAliases: MapProperty<String, Map<String, String>>
+  public abstract val namespaceAliases: MapProperty<String, Map<String, String>>
 
   @get:OutputDirectory
-  abstract val kotlinOutputDir: DirectoryProperty
+  public abstract val kotlinOutputDir: DirectoryProperty
 
   // ADR-088: the cross-pipeline bound-type manifest the forward KSP run reads through the
   // `nuget.boundTypesManifest` option. A separate OutputFile, not a file inside kotlinOutputDir:
   // that directory is wired as a Kotlin `srcDir`, and a stray .json in a source root is at best
   // noise and at worst a compiler input.
   @get:OutputFile
-  abstract val boundTypesManifestFile: RegularFileProperty
+  public abstract val boundTypesManifestFile: RegularFileProperty
 
   @TaskAction
-  fun generate() {
+  public fun generate() {
     val reverseIr: File = reverseIrFile.get().asFile
     val rir: RirFile = parseReverseIr(reverseIr.readText()).requireCurrentSchema(reverseIr.path)
 

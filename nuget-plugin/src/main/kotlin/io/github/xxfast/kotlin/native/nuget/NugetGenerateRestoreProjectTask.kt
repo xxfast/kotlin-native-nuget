@@ -12,7 +12,7 @@ import java.io.File
 
 private const val NUGET_ORG = "https://api.nuget.org/v3/index.json"
 
-fun generateCsproj(
+internal fun generateCsproj(
   ids: List<String>,
   versions: Map<String, String>,
   sources: Map<String, String>,
@@ -52,16 +52,16 @@ fun generateCsproj(
   """.trimMargin().trim()
 }
 
-abstract class NugetGenerateRestoreProjectTask : DefaultTask() {
-  @get:Input abstract val dependencyIds: ListProperty<String>
-  @get:Input abstract val dependencyVersions: MapProperty<String, String>
-  @get:Input abstract val dependencySources: MapProperty<String, String>
-  @get:Input abstract val targetFramework: Property<String>
-  @get:Input abstract val runtimeIdentifiers: ListProperty<String>
-  @get:OutputFile abstract val csprojFile: RegularFileProperty
+public abstract class NugetGenerateRestoreProjectTask : DefaultTask() {
+  @get:Input public abstract val dependencyIds: ListProperty<String>
+  @get:Input public abstract val dependencyVersions: MapProperty<String, String>
+  @get:Input public abstract val dependencySources: MapProperty<String, String>
+  @get:Input public abstract val targetFramework: Property<String>
+  @get:Input public abstract val runtimeIdentifiers: ListProperty<String>
+  @get:OutputFile public abstract val csprojFile: RegularFileProperty
 
   @TaskAction
-  fun generate() {
+  public fun generate() {
     val csproj: String = generateCsproj(
       ids = dependencyIds.get(),
       versions = dependencyVersions.get(),

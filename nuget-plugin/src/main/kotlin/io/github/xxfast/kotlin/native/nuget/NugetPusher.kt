@@ -24,7 +24,7 @@ private const val PROTOCOL_VERSION = "4.1.0"
 private val TIMEOUT: Duration = Duration.ofSeconds(300)
 
 /** One push of a `.nupkg` to a NuGet V3 feed, identified by its service index URL. */
-data class NugetPushRequest(
+internal data class NugetPushRequest(
   val serviceIndex: String,
   val packageFile: File,
   val apiKey: String,
@@ -39,14 +39,14 @@ data class NugetPushRequest(
         "skipDuplicate=$skipDuplicate)"
 }
 
-enum class NugetPushResult { PUSHED, DUPLICATE_SKIPPED, DRY_RUN }
+internal enum class NugetPushResult { PUSHED, DUPLICATE_SKIPPED, DRY_RUN }
 
 /**
  * Pushes a package over plain JVM HTTP (ADR-165): GET the service index, pick the
  * `PackagePublish/2.0.0` resource, PUT the package as multipart/form-data. Throws
  * `GradleException` on failure.
  */
-class NugetPusher(private val userAgent: String = "kotlin-native-nuget/$PLUGIN_VERSION") {
+internal class NugetPusher(private val userAgent: String = "kotlin-native-nuget/$PLUGIN_VERSION") {
   private val client: HttpClient = HttpClient.newBuilder()
     .connectTimeout(TIMEOUT)
     .followRedirects(HttpClient.Redirect.NORMAL)
@@ -55,7 +55,9 @@ class NugetPusher(private val userAgent: String = "kotlin-native-nuget/$PLUGIN_V
   fun push(request: NugetPushRequest): NugetPushResult {
     val file: File = request.packageFile
     if (!file.isFile) {
-      throw GradleException("NuGet package not found at ${file.absolutePath}; run ${NugetTaskNames.PACK} first")
+      throw GradleException(
+        "NuGet package not found at ${file.absolutePath}; run ${NugetTaskNames.PACK} first",
+      )
     }
 
     val endpoint: URI = publishEndpoint(request.serviceIndex)

@@ -21,7 +21,10 @@ internal object NugetTaskNames {
   const val SNAPSHOT_VERSION: String = "nugetSnapshotVersion"
   const val SNAPSHOT_VERSION_PROPS: String = "nugetSnapshotVersionProps"
 
-  /** The ADR-165 push task for one named repository, `maven-publish`'s `To<Name>Repository` tail. */
+  /**
+   * The ADR-165 push task for one named repository, `maven-publish`'s `To<Name>Repository`
+   * tail.
+   */
   fun publishTo(repository: String): String =
     "publishNugetTo${repository.replaceFirstChar { it.uppercase() }}Repository"
 }

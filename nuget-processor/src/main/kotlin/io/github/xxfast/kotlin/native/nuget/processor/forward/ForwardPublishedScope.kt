@@ -31,7 +31,7 @@ internal fun List<String>.matchesDeclaration(
       (qualifiedName != null && isUnderPackage(qualifiedName, entry))
 }
 
-data class PackageScope(
+internal data class PackageScope(
   val include: List<String>,
   val exclude: List<String>,
 ) {
@@ -60,7 +60,7 @@ data class PackageScope(
  * A cross-module declaration carries no module identity (`containingFile == null`,
  * `origin == KOTLIN_LIB`, ADR-066), so *by package* is the only match available.
  */
-data class PublishedScope(
+internal data class PublishedScope(
   val packageId: String,
   val scope: PackageScope,
 ) {

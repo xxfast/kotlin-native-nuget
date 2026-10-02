@@ -35,7 +35,7 @@ import java.io.File
 @DisableCachingByDefault(
   because = "Reporting only; must speak on every build, including cached ones",
 )
-abstract class NugetReportDiagnosticsTask : DefaultTask() {
+public abstract class NugetReportDiagnosticsTask : DefaultTask() {
   /**
    * The KSP resources dir(s) `NugetDiagnostics.json` lands in, i.e. the same directory `packNuget`
    * already reads `Interop.cs` from. A missing file is a silent no-op: a project with `bind {}` and
@@ -43,14 +43,14 @@ abstract class NugetReportDiagnosticsTask : DefaultTask() {
    */
   @get:InputFiles
   @get:PathSensitive(PathSensitivity.RELATIVE)
-  abstract val diagnosticsFiles: ConfigurableFileCollection
+  public abstract val diagnosticsFiles: ConfigurableFileCollection
 
   init {
     outputs.upToDateWhen { false }
   }
 
   @TaskAction
-  fun report() {
+  public fun report() {
     val files: List<File> = diagnosticsFiles.files
       .flatMap { file ->
         when {

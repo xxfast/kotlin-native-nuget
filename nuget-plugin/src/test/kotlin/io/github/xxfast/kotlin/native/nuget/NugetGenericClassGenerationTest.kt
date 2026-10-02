@@ -290,7 +290,7 @@ class NugetGenericClassGenerationTest {
   }
 
   @Test
-  fun `a namespace declaring both Box and Box backtick-1 fails generation with ERROR_GENERIC_ARITY_NAME_COLLISION`() {
+  fun `Box and Box backtick-1 in one namespace fail with ERROR_GENERIC_ARITY_NAME_COLLISION`() {
     val nonGenericBox = RirClass(name = "Box", constructors = emptyList())
     val collidingFile = RirFile(
       assemblies = listOf(

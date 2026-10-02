@@ -227,7 +227,9 @@ class OverloadGenerationTest {
   fun `error diagnostics fail generation while skipped and info diagnostics remain reportable`() {
     val nonErrors: RirFile = overloadRir(reversed = false, includeUnsupportedDiagnostic = true)
     assertTrue(
-      diagnosticWarnings(nonErrors).all { it.startsWith("[nuget:SKIPPED_") || it.startsWith("[nuget:INFO_") },
+      diagnosticWarnings(nonErrors).all {
+        it.startsWith("[nuget:SKIPPED_") || it.startsWith("[nuget:INFO_")
+      },
     )
 
     val error: IllegalArgumentException = assertFailsWith {
@@ -562,7 +564,10 @@ class OverloadGenerationTest {
 
     val error: IllegalArgumentException = assertFailsWith { generateKotlinStubs(rir) }
     assertContains(error.message.orEmpty(), "ERROR_KOTLIN_SIGNATURE_COLLISION")
-    assertContains(error.message.orEmpty(), "[nuget:ERROR_KOTLIN_SIGNATURE_COLLISION] Error Acme.Api/")
+    assertContains(
+      error.message.orEmpty(),
+      "[nuget:ERROR_KOTLIN_SIGNATURE_COLLISION] Error Acme.Api/",
+    )
     assertContains(error.message.orEmpty(), "var name: String")
   }
 

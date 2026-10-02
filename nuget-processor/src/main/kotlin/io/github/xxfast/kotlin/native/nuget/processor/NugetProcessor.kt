@@ -1026,7 +1026,7 @@ private fun KSAnnotated.hasCNameAnnotation(): Boolean =
  */
 private data class CsharpBindings(val cir: CirFile, val rendered: String)
 
-class NugetProcessor(
+internal class NugetProcessor(
   private val codeGenerator: CodeGenerator,
   logger: KSPLogger,
   private val context: NugetContext,

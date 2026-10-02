@@ -6,7 +6,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonClassDiscriminator
 
 @Serializable
-data class RirFile(
+internal data class RirFile(
   val assemblies: List<RirAssembly>,
   // ADR-182: the reader always writes it. Nullable and defaulted only so the inline fixtures in the
   // plugin tests keep parsing through [parseReverseIr]; the version CHECK lives in the
@@ -15,7 +15,7 @@ data class RirFile(
 )
 
 @Serializable
-data class RirAssembly(
+internal data class RirAssembly(
   val packageId: String,
   val assemblyName: String,
   val namespaces: List<RirNamespace>,
@@ -34,7 +34,7 @@ data class RirAssembly(
  * instead of disappearing from both halves of it.
  */
 @Serializable
-data class RirPublicSurface(
+internal data class RirPublicSurface(
   val types: Int = 0,
   val nestedTypes: Int = 0,
   val structs: Int = 0,
@@ -47,7 +47,7 @@ data class RirPublicSurface(
 )
 
 @Serializable
-data class RirNamespace(
+internal data class RirNamespace(
   val name: String,
   val types: List<RirType>,
 )
@@ -55,13 +55,13 @@ data class RirNamespace(
 @Serializable
 @OptIn(ExperimentalSerializationApi::class)
 @JsonClassDiscriminator("kind")
-sealed interface RirType {
+internal sealed interface RirType {
   val name: String
 }
 
 @Serializable
 @SerialName("class")
-data class RirClass(
+internal data class RirClass(
   override val name: String,
   val isAbstract: Boolean = false,
   // ECMA-335: a C# static class is `abstract sealed` in metadata (ADR-051)
@@ -92,7 +92,7 @@ data class RirClass(
 // ADR-072 Decision 3: one closed instantiation of a generic RirClass, positionally matching that
 // class's own [RirClass.typeParameters] (same arity, same order).
 @Serializable
-data class RirInstantiation(val typeArguments: List<RirTypeRef>)
+internal data class RirInstantiation(val typeArguments: List<RirTypeRef>)
 
 // ADR-070: a C#-declared, admissible (Decision 6), bound interface. [methods]/[properties] are
 // this interface's OWN declared members only (never members inherited from a base interface —
@@ -102,7 +102,7 @@ data class RirInstantiation(val typeArguments: List<RirTypeRef>)
 // slots (Decision 5) — nothing needs to be re-declared or re-registered here.
 @Serializable
 @SerialName("interface")
-data class RirInterface(
+internal data class RirInterface(
   override val name: String,
   val methods: List<RirMethod> = emptyList(),
   val properties: List<RirProperty> = emptyList(),
@@ -117,13 +117,13 @@ data class RirInterface(
 // Every entry has a validated contiguous Int ordinal, so enum values can cross the C ABI as Int.
 @Serializable
 @SerialName("enum")
-data class RirEnum(
+internal data class RirEnum(
   override val name: String,
   val entries: List<RirEnumEntry>,
 ) : RirType
 
 @Serializable
-data class RirEnumEntry(
+internal data class RirEnumEntry(
   val name: String,
   val ordinal: Int,
 )
@@ -135,7 +135,7 @@ data class RirEnumEntry(
 // existing reverse-ir.json without this field (every struct predating ADR-058) still parses as
 // Shape A. Mirrors `RirStructShape` in NugetMetadataReader/Program.cs.
 @Serializable
-enum class RirStructShape {
+internal enum class RirStructShape {
   @SerialName("constructor")
   CONSTRUCTOR,
 
@@ -156,7 +156,7 @@ enum class RirStructShape {
 // constructors on a Shape B struct are deferred, diagnosed rather than bridged).
 @Serializable
 @SerialName("struct")
-data class RirStruct(
+internal data class RirStruct(
   override val name: String,
   val components: List<RirStructComponent> = emptyList(),
   val shape: RirStructShape = RirStructShape.CONSTRUCTOR,
@@ -169,7 +169,7 @@ data class RirStruct(
 // (drives the Kotlin property name); [readName] is the public property used to read the value
 // back, which may differ in case from [name] (verified: ctor `x` vs. property `X`).
 @Serializable
-data class RirStructComponent(
+internal data class RirStructComponent(
   val name: String,
   val readName: String,
   val type: RirTypeRef,
@@ -180,7 +180,7 @@ data class RirStructComponent(
 // Absent (`null`) for every ordinary synchronous member, which is every member the reader emitted
 // before ADR-152.
 @Serializable
-enum class RirAsyncKind {
+internal enum class RirAsyncKind {
   @SerialName("task")
   TASK,
 
@@ -195,7 +195,7 @@ enum class RirAsyncKind {
 // `Task`), and the method binds as a Kotlin `suspend fun` over two adjacent registration slots
 // (Begin, then End) instead of one.
 @Serializable
-data class RirMethod(
+internal data class RirMethod(
   val name: String,
   val returnType: RirTypeRef,
   val parameters: List<RirParameter> = emptyList(),
@@ -210,7 +210,7 @@ data class RirMethod(
 )
 
 @Serializable
-data class RirProperty(
+internal data class RirProperty(
   val name: String,
   val type: RirTypeRef,
   val isReadOnly: Boolean = true,
@@ -225,7 +225,7 @@ data class RirProperty(
 )
 
 @Serializable
-data class RirParameter(
+internal data class RirParameter(
   val name: String,
   val type: RirTypeRef,
 )
@@ -234,7 +234,7 @@ data class RirParameter(
 // RirObjectHandleType) — a constructor never returns null, unlike a factory RirMethod, which is
 // why this is a distinct node rather than reusing RirMethod (whose returnType is mandatory).
 @Serializable
-data class RirConstructor(
+internal data class RirConstructor(
   val parameters: List<RirParameter> = emptyList(),
   val managedSignature: String = "",
   val isState: Boolean = false,
@@ -243,22 +243,22 @@ data class RirConstructor(
 @Serializable
 @OptIn(ExperimentalSerializationApi::class)
 @JsonClassDiscriminator("kind")
-sealed interface RirTypeRef
+internal sealed interface RirTypeRef
 
 @Serializable
 @SerialName("void")
-data object RirVoidType : RirTypeRef
+internal data object RirVoidType : RirTypeRef
 
 // ADR-053: `nullable` reflects the decoded NullableAttribute payload for this type reference
 // (`string?` -> true; oblivious/un-annotated `string` -> false, see RirTypeRef.isNullable).
 @Serializable
 @SerialName("string")
-data class RirStringType(val nullable: Boolean = false) : RirTypeRef
+internal data class RirStringType(val nullable: Boolean = false) : RirTypeRef
 
 // name is one of: "bool", "byte", "short", "int", "long", "float", "double", "char"
 @Serializable
 @SerialName("primitive")
-data class RirPrimitiveType(val name: String) : RirTypeRef
+internal data class RirPrimitiveType(val name: String) : RirTypeRef
 
 // A reference to a bound C# class that crosses the bridge as an opaque GCHandle pointer (ADR-051).
 // Split namespace/name rather than an assembly-qualified string: both generators resolve the
@@ -268,7 +268,7 @@ data class RirPrimitiveType(val name: String) : RirTypeRef
 // (`Foo?` -> true; oblivious/un-annotated `Foo` -> false, see RirTypeRef.isNullable).
 @Serializable
 @SerialName("handle")
-data class RirObjectHandleType(
+internal data class RirObjectHandleType(
   val namespace: String,
   val name: String,
   val nullable: Boolean = false,
@@ -278,7 +278,7 @@ data class RirObjectHandleType(
 // to consume; unlike handles, this always crosses the ABI as an ordinal Int.
 @Serializable
 @SerialName("enum")
-data class RirEnumType(
+internal data class RirEnumType(
   val namespace: String,
   val name: String,
 ) : RirTypeRef
@@ -290,7 +290,7 @@ data class RirEnumType(
 // closed generic struct, not an annotation on this type ref.
 @Serializable
 @SerialName("struct")
-data class RirStructType(
+internal data class RirStructType(
   val namespace: String,
   val name: String,
 ) : RirTypeRef
@@ -302,7 +302,7 @@ data class RirStructType(
 // class (ADR-070 Decision 3), because the wire carries no runtime type tag.
 @Serializable
 @SerialName("interface")
-data class RirInterfaceType(
+internal data class RirInterfaceType(
   val namespace: String,
   val name: String,
   val nullable: Boolean = false,
@@ -314,7 +314,7 @@ data class RirInterfaceType(
 // substituted type argument at each instantiation (Decision 7), not from this node.
 @Serializable
 @SerialName("typeparam")
-data class RirTypeParameterType(val index: Int, val name: String) : RirTypeRef
+internal data class RirTypeParameterType(val index: Int, val name: String) : RirTypeRef
 
 // ADR-072 Decision 3: a member type that is a closed instantiation of a bound generic definition
 // ([namespace]/[name] identify the OPEN definition by its CLR name, e.g. "Box`1"; Decision 10
@@ -323,7 +323,7 @@ data class RirTypeParameterType(val index: Int, val name: String) : RirTypeRef
 // own nullability (`Box<string?>`).
 @Serializable
 @SerialName("generic")
-data class RirGenericInstanceType(
+internal data class RirGenericInstanceType(
   val namespace: String,
   val name: String,
   val typeArguments: List<RirTypeRef>,
@@ -335,7 +335,7 @@ data class RirGenericInstanceType(
 // the value is an eager copy: a mutable Kotlin type would let `roster.tags.add(x)` compile and
 // change nothing in C#. So there is no `mutable` flag here: nothing would read it.
 @Serializable
-enum class RirCollectionKind {
+internal enum class RirCollectionKind {
   @SerialName("list")
   LIST,
 
@@ -356,7 +356,7 @@ enum class RirCollectionKind {
 // elements' own (`IReadOnlyList<string?>`).
 @Serializable
 @SerialName("collection")
-data class RirCollectionType(
+internal data class RirCollectionType(
   val collection: RirCollectionKind,
   val definition: String,
   val typeArguments: List<RirTypeRef>,
@@ -381,7 +381,7 @@ data class RirCollectionType(
 // function type), independent of its arguments' (`Action<string?>`).
 @Serializable
 @SerialName("delegate")
-data class RirDelegateType(
+internal data class RirDelegateType(
   val definition: String,
   val typeArguments: List<RirTypeRef> = emptyList(),
   val parameters: List<RirTypeRef> = emptyList(),
@@ -390,7 +390,7 @@ data class RirDelegateType(
 ) : RirTypeRef
 
 @Serializable
-data class RirDiagnostic(
+internal data class RirDiagnostic(
   val kind: RirDiagnosticKind,
   val typeName: String,
   val memberName: String,
@@ -399,8 +399,11 @@ data class RirDiagnostic(
   val hint: String,
 )
 
-/** ADR-182: how a reverse diagnostic is surfaced, derived from its code's prefix (never declared). */
-enum class RirDiagnosticSeverity { WARNING, INFO, ERROR }
+/**
+ * ADR-182: how a reverse diagnostic is surfaced, derived from its code's prefix (never
+ * declared).
+ */
+internal enum class RirDiagnosticSeverity { WARNING, INFO, ERROR }
 
 /**
  * The reverse diagnostic codes. ADR-182: the enum NAME is the wire code (`reverse-ir.json`'s
@@ -413,7 +416,7 @@ enum class RirDiagnosticSeverity { WARNING, INFO, ERROR }
  * warns about and must pass [declaredVerb]; any other prefix fails at class init.
  */
 @Serializable
-enum class RirDiagnosticKind(private val declaredVerb: String? = null) {
+internal enum class RirDiagnosticKind(private val declaredVerb: String? = null) {
   SKIPPED_OVERLOAD_SET,
 
   SKIPPED_REF_STRUCT,

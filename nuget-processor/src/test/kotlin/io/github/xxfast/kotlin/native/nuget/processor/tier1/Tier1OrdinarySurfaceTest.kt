@@ -74,7 +74,7 @@ class Tier1OrdinarySurfaceTest {
    * konanc/dotnet round trip.
    */
   @Test
-  fun `extension property on value class receiver with collection setter surfaces as C# 14 extension properties`() {
+  fun `extension property on value class receiver with collection setter is a C# 14 property`() {
     val result = Tier1Harness.run(
       """
       package tier1.valueclassextprop

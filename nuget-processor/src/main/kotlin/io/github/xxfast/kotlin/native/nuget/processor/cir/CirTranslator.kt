@@ -51,7 +51,7 @@ private fun syncErrorArguments(parameters: String): String = if (parameters.isEm
   "$parameters, out IntPtr error"
 }
 
-data class NugetContext(
+internal data class NugetContext(
   val libraryName: String,
   val rootNamespace: String,
   val rootPackage: String,
@@ -1475,90 +1475,6 @@ private fun checkedExtensionBody(
   appendLine("                throw NugetErrorNative.BuildException(error);")
   appendLine("            }")
   if (resultType != null) append("            return $returnValue;")
-}
-
-internal fun translateExtensionProperty(
-  prop: KSPropertyDeclaration,
-  receiverName: String,
-  receiverQualified: String,
-  libraryName: String,
-  exportedTypes: Set<String>,
-): List<CirMember> {
-  val propName: String = prop.simpleName.asString()
-  val csName: String = "Get${propName.replaceFirstChar { it.uppercase() }}"
-  val receiverPrefix: String = receiverName.lowercase()
-  val cname: String = "${receiverPrefix}_get_${toCName(propName)}"
-
-  val propTypeResolved: KSType = prop.type.resolve().expandAliases()
-  val kotlinReturnType: String = propTypeResolved.declaration.simpleName.asString()
-
-  val isExportedReceiver: Boolean = receiverQualified in exportedTypes
-
-  val nativeReceiverType: String = if (isExportedReceiver) "IntPtr" else mapParamType(receiverName)
-  val receiverParamName: String = if (isExportedReceiver) "handle" else "receiver"
-
-  val allNativeParams: List<CirParameter> = listOf(
-    CirParameter(receiverParamName, nativeReceiverType),
-  )
-
-  val nativeReturnType: String = mapReturnType(kotlinReturnType)
-
-  val dllImport = CirDllImport(
-    libraryName = libraryName,
-    entryPoint = cname,
-    returnType = nativeReturnType,
-    name = "Native_$csName",
-    parameters = allNativeParams,
-    visibility = CirVisibility.PRIVATE,
-    hasSyncErrorOut = true,
-  )
-
-  val csReceiverType: String = if (isExportedReceiver) receiverName else mapParamType(receiverName)
-  val csReceiverParamName: String = if (isExportedReceiver) receiverName.lowercase() else "receiver"
-
-  val wrapperParams: List<CirParameter> = listOf(
-    CirParameter(csReceiverParamName, csReceiverType),
-  )
-
-  val nativeCallReceiver: String = if (isExportedReceiver) "${csReceiverParamName}._handle" else "receiver"
-
-  val csReturnType: String
-  val body: String
-
-  if (kotlinReturnType == "String") {
-    csReturnType = "string"
-    body = buildString {
-      appendLine()
-      appendLine("            IntPtr nativeResult = Native_$csName($nativeCallReceiver, out IntPtr error);")
-      appendLine("            if (error != IntPtr.Zero)")
-      appendLine("            {")
-      appendLine("                throw NugetErrorNative.BuildException(error);")
-      appendLine("            }")
-      append("            return Marshal.PtrToStringUTF8(nativeResult)!;")
-    }
-  } else {
-    csReturnType = KOTLIN_TO_CSHARP_PARAM[kotlinReturnType] ?: kotlinReturnType
-    body = buildString {
-      appendLine()
-      appendLine("            $csReturnType result = Native_$csName($nativeCallReceiver, out IntPtr error);")
-      appendLine("            if (error != IntPtr.Zero)")
-      appendLine("            {")
-      appendLine("                throw NugetErrorNative.BuildException(error);")
-      appendLine("            }")
-      append("            return result;")
-    }
-  }
-
-  val wrapper = CirMethod(
-    name = csName,
-    returnType = csReturnType,
-    parameters = wrapperParams,
-    body = body,
-    isStatic = true,
-    isExtension = true,
-  )
-
-  return listOf(dllImport, wrapper)
 }
 
 internal fun translateProperty(

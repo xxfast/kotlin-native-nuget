@@ -18,17 +18,17 @@ import javax.inject.Inject
   because = "dotnet restore manages its own package cache; " +
     "the global NuGet cache is outside project scope and not tracked by Gradle's build cache"
 )
-abstract class NugetRestoreTask : DefaultTask() {
-  @get:InputFile abstract val csprojFile: RegularFileProperty
+public abstract class NugetRestoreTask : DefaultTask() {
+  @get:InputFile public abstract val csprojFile: RegularFileProperty
 
   // ADR-184: the restore TFM, named in the failure hint.
-  @get:Input abstract val targetFramework: Property<String>
-  @get:OutputFile abstract val assetsFile: RegularFileProperty
+  @get:Input public abstract val targetFramework: Property<String>
+  @get:OutputFile public abstract val assetsFile: RegularFileProperty
 
-  @get:Inject abstract val execOps: ExecOperations
+  @get:Inject public abstract val execOps: ExecOperations
 
   @TaskAction
-  fun restore() {
+  public fun restore() {
     val dotnet: String = requireDotnet("restore NuGet packages")
 
     val stderr = ByteArrayOutputStream()

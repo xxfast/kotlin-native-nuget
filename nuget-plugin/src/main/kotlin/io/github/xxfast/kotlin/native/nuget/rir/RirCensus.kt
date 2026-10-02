@@ -13,7 +13,7 @@ import io.github.xxfast.kotlin.native.nuget.allDiagnostics
  * diagnostics can see, and the gap between the two is the members this project drops with no
  * diagnostic at all.
  */
-data class Census(
+internal data class Census(
   val packageName: String,
   val version: String,
   val asset: String,
@@ -32,12 +32,12 @@ data class Census(
   val errors: List<String> = emptyList(),
 )
 
-data class NullabilityCensus(
+internal data class NullabilityCensus(
   val assemblyOblivious: Boolean = false,
   val obliviousMembers: Int = 0,
 )
 
-data class PublicSurfaceCensus(
+internal data class PublicSurfaceCensus(
   val types: Int,
   val nestedTypes: Int,
   val structs: Int,
@@ -54,7 +54,7 @@ data class PublicSurfaceCensus(
   val members: Int get() = methods + constructors + properties + operators + events
 }
 
-data class TypeCensus(
+internal data class TypeCensus(
   val cls: Int = 0,
   val staticClass: Int = 0,
   val interface_: Int = 0,
@@ -63,9 +63,9 @@ data class TypeCensus(
   val genericDefinition: Int = 0,
 )
 
-data class MemberCensus(val seen: Int, val bound: Int)
+internal data class MemberCensus(val seen: Int, val bound: Int)
 
-data class CollapsedOverloadCensus(
+internal data class CollapsedOverloadCensus(
   val sets: Int = 0,
   val membersDropped: Int = 0,
   val bridgeableMethods: Int = 0,
@@ -77,7 +77,7 @@ data class CollapsedOverloadCensus(
  * access, so the shape is unit-testable against a hand-built [RirFile] in the ordinary `test`
  * task, and the dogfood task only supplies the real input.
  */
-fun census(
+internal fun census(
   rir: RirFile,
   packageName: String,
   version: String,
@@ -220,7 +220,7 @@ fun census(
  * cell is absent rather than zero: a committed `reader: "failed"` golden on a real, popular
  * package is a status line, and it turns green in a diff the day the reader stops crashing.
  */
-fun readerFailureCensus(
+internal fun readerFailureCensus(
   packageName: String,
   version: String,
   asset: String,
@@ -256,7 +256,7 @@ internal fun RirFile.allTypes(): List<RirType> =
  * absolute paths, so a golden diff shows only what actually moved. Hand-written rather than
  * kotlinx.serialization because the key order and the two-space layout ARE the contract here.
  */
-fun Census.toStableJson(): String {
+internal fun Census.toStableJson(): String {
   val out = StringBuilder()
   out.append("{\n")
   out.append("  \"package\": ${quote(packageName)},\n")

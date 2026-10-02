@@ -21,26 +21,26 @@ import java.time.Instant
  * Always out of date: the whole point is a fresh timestamp per build.
  */
 @DisableCachingByDefault(because = "every snapshot build requires a new version")
-abstract class NugetSnapshotVersionTask : DefaultTask() {
+public abstract class NugetSnapshotVersionTask : DefaultTask() {
   // ADR-180: optional, so a missing value fails in the action below with the DSL-level message
   // instead of Gradle's generic "doesn't have a configured value".
   @get:Input
   @get:Optional
-  abstract val baseVersion: Property<String>
+  public abstract val baseVersion: Property<String>
 
   @get:Input
   @get:Optional
-  abstract val packageId: Property<String>
+  public abstract val packageId: Property<String>
 
   @get:OutputFile
-  abstract val outputFile: RegularFileProperty
+  public abstract val outputFile: RegularFileProperty
 
   init {
     outputs.upToDateWhen { false }
   }
 
   @TaskAction
-  fun write() {
+  public fun write() {
     val base: String? = baseVersion.orNull
     require(!base.isNullOrBlank()) {
       "nuget { publish { snapshot = true } } requires a base version; set `version = \"1.0.0\"`"
@@ -62,18 +62,18 @@ abstract class NugetSnapshotVersionTask : DefaultTask() {
  * reference `Version="$(<SanitizedId>Version)"` without knowing the timestamp.
  */
 @DisableCachingByDefault(because = "the props file is generated for the current snapshot version")
-abstract class NugetSnapshotVersionPropsTask : DefaultTask() {
+public abstract class NugetSnapshotVersionPropsTask : DefaultTask() {
   @get:Input
-  abstract val packageId: Property<String>
+  public abstract val packageId: Property<String>
 
   @get:Input
-  abstract val packageVersion: Property<String>
+  public abstract val packageVersion: Property<String>
 
   @get:OutputFile
-  abstract val outputFile: RegularFileProperty
+  public abstract val outputFile: RegularFileProperty
 
   @TaskAction
-  fun write() {
+  public fun write() {
     val property: String = msbuildVersionPropertyName(packageId.get())
     val file: File = outputFile.get().asFile
     file.parentFile.mkdirs()
@@ -94,7 +94,7 @@ abstract class NugetSnapshotVersionPropsTask : DefaultTask() {
  * id is not usable verbatim. Drop everything outside `[A-Za-z0-9_]`, prefix `_` if what remains
  * starts with a digit, append `Version`.
  */
-fun msbuildVersionPropertyName(packageId: String): String {
+internal fun msbuildVersionPropertyName(packageId: String): String {
   val sanitized: String = packageId.filter {
     it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '_'
   }
@@ -138,7 +138,8 @@ internal fun registerSnapshotVersioning(
     }
 
   pub.versionPropsFile.convention(
-    project.rootProject.layout.buildDirectory.file(pub.packageId.map { id -> "${id}Versions.props" })
+    project.rootProject.layout.buildDirectory
+      .file(pub.packageId.map { id -> "${id}Versions.props" })
   )
 
   val propsTask: TaskProvider<NugetSnapshotVersionPropsTask> =

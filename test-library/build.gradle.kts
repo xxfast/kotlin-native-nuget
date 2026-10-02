@@ -222,7 +222,8 @@ afterEvaluate {
 
   tasks.matching { it.name == "nugetRestore" }.configureEach { dependsOn(packTestDependency) }
 
-  val nugetGenerateRestoreProject = tasks.named("nugetGenerateRestoreProject", NugetGenerateRestoreProjectTask::class.java).get()
+  val nugetGenerateRestoreProject =
+    tasks.named("nugetGenerateRestoreProject", NugetGenerateRestoreProjectTask::class.java).get()
   nugetGenerateRestoreProject.dependsOn(writeFixtureVersion)
   nugetGenerateRestoreProject.dependencyVersions.set(
     fixturePackageVersion.map { version ->

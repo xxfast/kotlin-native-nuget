@@ -55,8 +55,12 @@ class PublishNugetTaskWiringTest {
 
     extension.publish {
       it.repositories {
-        it.nuget("nugetOrg") { repository -> repository.url.set("https://api.nuget.org/v3/index.json") }
-        it.nuget("github") { repository -> repository.url.set("https://nuget.pkg.github.com/xxfast/index.json") }
+        it.nuget("nugetOrg") { repository ->
+          repository.url.set("https://api.nuget.org/v3/index.json")
+        }
+        it.nuget("github") { repository ->
+          repository.url.set("https://nuget.pkg.github.com/xxfast/index.json")
+        }
       }
     }
 
@@ -76,8 +80,12 @@ class PublishNugetTaskWiringTest {
   fun `each repository gets its own publish task depending on packNuget`() {
     val project: Project = buildProject()
     project.publish {
-      it.nuget("nugetOrg") { repository -> repository.url.set("https://api.nuget.org/v3/index.json") }
-      it.nuget("github") { repository -> repository.url.set("https://nuget.pkg.github.com/xxfast/index.json") }
+      it.nuget("nugetOrg") { repository ->
+        repository.url.set("https://api.nuget.org/v3/index.json")
+      }
+      it.nuget("github") { repository ->
+        repository.url.set("https://nuget.pkg.github.com/xxfast/index.json")
+      }
     }
 
     project.evaluate()
@@ -104,8 +112,12 @@ class PublishNugetTaskWiringTest {
   fun `aggregate publishNuget depends on every repository task`() {
     val project: Project = buildProject()
     project.publish {
-      it.nuget("nugetOrg") { repository -> repository.url.set("https://api.nuget.org/v3/index.json") }
-      it.nuget("github") { repository -> repository.url.set("https://nuget.pkg.github.com/xxfast/index.json") }
+      it.nuget("nugetOrg") { repository ->
+        repository.url.set("https://api.nuget.org/v3/index.json")
+      }
+      it.nuget("github") { repository ->
+        repository.url.set("https://nuget.pkg.github.com/xxfast/index.json")
+      }
     }
 
     project.evaluate()
@@ -131,7 +143,9 @@ class PublishNugetTaskWiringTest {
   fun `repository task carries the url and the packNuget output file`() {
     val project: Project = buildProject()
     project.publish {
-      it.nuget("nugetOrg") { repository -> repository.url.set("https://api.nuget.org/v3/index.json") }
+      it.nuget("nugetOrg") { repository ->
+        repository.url.set("https://api.nuget.org/v3/index.json")
+      }
     }
 
     project.evaluate()
@@ -179,7 +193,9 @@ class PublishNugetTaskWiringTest {
   fun `missing apiKey does not fail configuration but fails when the task runs`() {
     val project: Project = buildProject()
     project.publish {
-      it.nuget("nugetOrg") { repository -> repository.url.set("https://api.nuget.org/v3/index.json") }
+      it.nuget("nugetOrg") { repository ->
+        repository.url.set("https://api.nuget.org/v3/index.json")
+      }
     }
 
     project.evaluate()
