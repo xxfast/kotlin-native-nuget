@@ -304,7 +304,10 @@ internal object Tier1Harness {
       val coroutines: List<File> =
         if (coroutinesOnCompileClasspath) listOf(Tier1Classpath.kotlinxCoroutinesCore)
         else emptyList()
-      classpath = (listOf(Tier1Classpath.kotlinStdlib) + coroutines + libraries)
+      // ADR-181: `CNameExports.kt` names `ExperimentalNugetBindingApi` in its `@file:OptIn`
+      // unconditionally, because the plugin wires `nuget-annotations` to every consumer; the real
+      // annotations jar stands in for that wiring here.
+      classpath = (listOf(Tier1Classpath.kotlinStdlib, csharpNameLibrary) + coroutines + libraries)
         .joinToString(File.pathSeparator) { it.absolutePath }
       noStdlib = true
       noReflect = true

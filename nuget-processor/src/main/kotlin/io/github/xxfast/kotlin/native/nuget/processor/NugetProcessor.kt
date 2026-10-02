@@ -77,6 +77,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendFunction
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addValueClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedDeclaration
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.NUGET_BINDING_MARKER
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardValueClassUnderlying
 import io.github.xxfast.kotlin.native.nuget.processor.forward.validateCSharpNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.valueClassUnderlying
@@ -2688,6 +2689,10 @@ class NugetProcessor(
       add(ClassName("kotlinx.cinterop", "ExperimentalForeignApi"))
       // ADR-127: every runtime declaration the generated file calls is behind this marker.
       add(ClassName(NUGET_RUNTIME_PACKAGE, "NugetRuntimeApi"))
+      // ADR-181: an author function whose signature names a bound reverse type still needs its
+      // caller to opt in, even when the function itself opted in. Unconditional, like
+      // `NugetRuntimeApi`: `nuget-annotations` is always on the classpath (`commonMainApi`).
+      add(ClassName.bestGuess(NUGET_BINDING_MARKER))
       if (hasSuspendFunctions || needsFlowImports) {
         add(ClassName("kotlinx.coroutines", "ExperimentalCoroutinesApi"))
       }

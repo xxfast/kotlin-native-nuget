@@ -119,6 +119,10 @@ plugins {
 }
 
 kotlin {
+  // ADR-181: this fixture calls `bind {}`-generated bindings, which are experimental.
+  compilerOptions {
+    optIn.add("io.github.xxfast.kotlin.native.nuget.annotations.ExperimentalNugetBindingApi")
+  }
   mingwX64 {
     binaries {
       sharedLib {
