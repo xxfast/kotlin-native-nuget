@@ -123,7 +123,7 @@ Workshop.run(fun() { })            // picks the Action overload
 ## What doesn't bind yet
 
 Each of these is named on its own build diagnostic rather than silently dropped (most as
-`skipped_delegate_signature` or `skipped_delegate_position`; a custom delegate declared outside the
+`SKIPPED_DELEGATE_SIGNATURE` or `SKIPPED_DELEGATE_POSITION`; a custom delegate declared outside the
 bound assemblies keeps the ordinary unbound-type diagnostic instead). See
 [Unsupported members show up as build warnings](bridgeable-subset.md#unsupported-members-show-up-as-build-warnings).
 

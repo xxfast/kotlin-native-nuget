@@ -249,8 +249,8 @@ token-taking overload and drops the other, so a consumer only ever sees one `foo
 
 A **sync** method taking a token, a method taking two or more tokens, a nullable
 `CancellationToken?`, or a token on a constructor or property, is not bound; it's a named
-diagnostic (`info_cancellation_token_not_yet_mapped`) rather than the generic
-`skipped_unbound_type_reference` hint.
+diagnostic (`INFO_CANCELLATION_TOKEN_NOT_YET_MAPPED`) rather than the generic
+`SKIPPED_UNBOUND_TYPE_REFERENCE` hint.
 
 ## Async streams {id="async-streams"}
 

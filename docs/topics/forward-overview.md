@@ -231,6 +231,20 @@ member, and a compiler plugin's synthesized surface such as kotlinx.serializatio
   same build is reported the same way, in the same run, rather than one at a time
   ([ADR-162](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/162-per-declaration-error-containment.md)).
 
+### Breaking in 0.9.0 {id="diagnostics-breaking-0-9-0"}
+
+Diagnostic codes now look the same in both directions. If you grep build logs, filter on a code,
+or parse diagnostics output, update it:
+
+- Reverse codes (the ones from binding a NuGet package) are `SCREAMING_SNAKE`, like the forward
+  ones: `skipped_indexer` is now `SKIPPED_INDEXER`. The prefix sets severity in both directions:
+  `SKIPPED_`, `WARNING_`, `INFO_` or `ERROR_`.
+- Reverse console lines use the forward format, and the old `w: ` prefix is gone:
+  `[nuget:SKIPPED_INDEXER] Skipping MimeMapping/MimeUtility.TypeMap(TypeMap): reason. hint`.
+- `NugetDiagnostics.json` is now an object, `{"schemaVersion": 1, "diagnostics": [...]}`, instead
+  of a bare array, and `reverse-ir.json` carries a root `schemaVersion: 1`. A reader fails with a
+  clear message on a missing or higher version, so check `schemaVersion` before reading the rest.
+
 A `List`/`Map`/`Set` parameter with an unsupported element/key/value type (see
 [Collections](collections.md)) is skipped like this, naming the component that failed rather than the
 collection kind:
@@ -1030,7 +1044,7 @@ for the shape that does bind.
 ### Where these messages appear
 
 A diagnostic computed at generation time is only useful if it reaches the console. The processor
-writes every accumulated diagnostic to `NugetDiagnostics.json`, a declared KSP task output
+writes every accumulated diagnostic to `NugetDiagnostics.json` (an object with `schemaVersion` and a `diagnostics` array), a declared KSP task output
 ([ADR-100](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/100-forward-diagnostic-delivery.md)).
 Being a declared output, not just something printed during the task action, is what makes it survive
 an incremental build: it is *restored* on a cache hit and present after an `UP-TO-DATE` run, the two

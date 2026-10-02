@@ -278,7 +278,7 @@ fun pairOf(): Pair<Int, Int> = 1 to 2                  // skipped: Pair isn't de
 ```
 
 ```
-w: [nuget] [SKIPPED_UNSUPPORTED_RETURN] Skipping crateOfList(): its type argument
+[nuget:SKIPPED_UNSUPPORTED_RETURN] Skipping crateOfList(): its type argument
    `kotlin.collections.List` has no C# spelling on a generic return: an argument must be a
    primitive, String, or an exported class, object, enum or interface, and a type carrying its own
    type arguments (a collection, a generic class, Flow, a lambda) has none
