@@ -1018,7 +1018,7 @@ public class SealedSubclassMethodDiagnosticsTests
         return files.Select(path =>
         {
             using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(path));
-            List<Diagnostic> entries = doc.RootElement.EnumerateArray().Select(entry =>
+            List<Diagnostic> entries = doc.RootElement.GetProperty("diagnostics").EnumerateArray().Select(entry =>
                 new Diagnostic(
                     entry.GetProperty("severity").GetString() ?? "",
                     entry.GetProperty("kind").GetString() ?? "",

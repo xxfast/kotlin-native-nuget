@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget
 
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
@@ -8,24 +9,26 @@ import kotlin.test.assertTrue
 /**
  * ADR-100: the reader half of the forward diagnostic channel. The load-bearing test for the feature
  * is `scripts/verify-forward-diagnostics.sh` (a real build, run twice); this one only pins the file
- * format against the processor's writer, in particular the two things the `bound-types.json`
- * regex could not handle: braces inside a rendered hint, and the escaped newline of the source
- * location suffix.
+ * format against the processor's writer: ADR-182's `{ "schemaVersion": 1, "diagnostics": [...] }`
+ * root, braces inside a rendered hint, and the escaped newline of the source location suffix.
  */
 class NugetReportDiagnosticsTaskTest {
+  private fun file(vararg entries: String): String =
+    """{ "schemaVersion": 1, "diagnostics": [ ${entries.joinToString(",\n")} ] }"""
+
   @Test
   fun `parses a rendered diagnostic verbatim`() {
     val entries: List<ForwardDiagnosticEntry> = parseForwardDiagnostics(
-      """
-      [
+      file(
+        """
         {
           "severity": "WARNING",
           "kind": "SKIPPED_INHERITED_MEMBER",
           "declaration": "com.example.Tag.length",
           "message": "[nuget:SKIPPED_INHERITED_MEMBER] Skipping com.example.Tag.length: reason. hint\n    at /src/Tag.kt:12"
         }
-      ]
-      """.trimIndent()
+        """.trimIndent()
+      )
     )
 
     assertEquals(1, entries.size)
@@ -41,22 +44,24 @@ class NugetReportDiagnosticsTaskTest {
   @Test
   fun `keeps braces and quotes inside a message`() {
     val entries: List<ForwardDiagnosticEntry> = parseForwardDiagnostics(
-      """
-      [
+      file(
+        """
         {
           "severity": "WARNING",
           "kind": "SKIPPED_UNEXPORTED_DEPENDENCY_TYPE",
           "declaration": "com.example.Api.use",
           "message": "add include(\"com.dep\") to nuget { publish { } }"
-        },
+        }
+        """.trimIndent(),
+        """
         {
           "severity": "INFO",
           "kind": "INFO_DROPPED_VARIANCE",
           "declaration": "com.example.Box",
           "message": "Note com.example.Box: variance dropped"
         }
-      ]
-      """.trimIndent()
+        """.trimIndent(),
+      )
     )
 
     assertEquals(2, entries.size)
@@ -67,39 +72,80 @@ class NugetReportDiagnosticsTaskTest {
   @Test
   fun `decodes every escape the writer can emit`() {
     val entries: List<ForwardDiagnosticEntry> = parseForwardDiagnostics(
-      """[{"severity":"WARNING","kind":"K","declaration":"d","message":"a\tb\r\nA\\"}]"""
+      file("""{"severity":"WARNING","kind":"K","declaration":"d","message":"a\tb\r\nA\\\u0001"}""")
     )
-    assertEquals("a\tb\r\nA\\", entries[0].message)
+    assertEquals("a\tb\r\nA\\\u0001", entries[0].message)
   }
 
   @Test
-  fun `an unterminated string fails fast`() {
-    val failure = assertFailsWith<IllegalStateException> {
-      parseForwardDiagnostics("""[{"severity": "WARNING""")
+  fun `malformed JSON fails fast naming the file`() {
+    val failure = assertFailsWith<IllegalArgumentException> {
+      parseForwardDiagnostics("""{"schemaVersion": 1, "diagnostics": [{"severity": "WARNING""", "build/x/NugetDiagnostics.json")
     }
-    assertTrue(failure.message!!.contains("unterminated string"))
+    assertContains(failure.message!!, "build/x/NugetDiagnostics.json")
   }
 
   @Test
-  fun `an empty array reports nothing`() {
-    assertTrue(parseForwardDiagnostics("[]\n").isEmpty())
+  fun `an empty diagnostics list reports nothing`() {
+    assertTrue(parseForwardDiagnostics("""{ "schemaVersion": 1, "diagnostics": [] }""").isEmpty())
     assertTrue(parseForwardDiagnostics("").isEmpty())
   }
 
+  /**
+   * ADR-182: the pre-0.9.0 bare-array root. Only a stale file can reach this (the plugin pins the
+   * processor to its own version), and it must say so rather than report nothing.
+   */
   @Test
-  fun `a non-array file fails fast`() {
-    val failure = assertFailsWith<IllegalArgumentException> {
-      parseForwardDiagnostics("{\"severity\":\"WARNING\"}", source = "NugetDiagnostics.json")
+  fun `a NugetDiagnostics json without the current schemaVersion fails naming the file`() {
+    val error = assertFailsWith<IllegalArgumentException> {
+      parseForwardDiagnostics(
+        """[ { "severity": "WARNING", "kind": "SKIPPED_X", "declaration": "a", "message": "m" } ]""",
+        "build/x/NugetDiagnostics.json",
+      )
     }
-    assertTrue(failure.message!!.contains("not a JSON array"))
+    assertContains(error.message!!, "build/x/NugetDiagnostics.json")
+    assertContains(error.message!!, "schemaVersion")
+  }
+
+  @Test
+  fun `an object root with no schemaVersion fails naming the field`() {
+    val error = assertFailsWith<IllegalArgumentException> {
+      parseForwardDiagnostics("""{ "diagnostics": [] }""", "NugetDiagnostics.json")
+    }
+    assertContains(error.message!!, "schemaVersion")
+  }
+
+  @Test
+  fun `a newer schemaVersion fails with the version it found`() {
+    val error = assertFailsWith<IllegalArgumentException> {
+      parseForwardDiagnostics("""{ "schemaVersion": 2, "diagnostics": [] }""", "NugetDiagnostics.json")
+    }
+    assertContains(error.message!!, "schemaVersion 2")
+    assertContains(error.message!!, "NugetDiagnostics.json")
+  }
+
+  @Test
+  fun `unknown additive fields are ignored`() {
+    val entry: ForwardDiagnosticEntry = parseForwardDiagnostics(
+      """
+      { "schemaVersion": 1, "producer": "x", "diagnostics": [
+        {"severity":"WARNING","kind":"K","declaration":"d","message":"m","column":"3"}
+      ] }
+      """.trimIndent()
+    ).single()
+    assertEquals("m", entry.message)
   }
 
   @Test
   fun `a missing field fails fast naming the file`() {
     val failure = assertFailsWith<IllegalArgumentException> {
-      parseForwardDiagnostics("""[{"severity": "WARNING", "kind": "SKIPPED_INHERITED_MEMBER"}]""")
+      parseForwardDiagnostics(
+        file("""{"severity": "WARNING", "kind": "SKIPPED_INHERITED_MEMBER"}"""),
+        "build/x/NugetDiagnostics.json",
+      )
     }
-    assertTrue(failure.message!!.contains("`declaration`"))
+    assertContains(failure.message!!, "build/x/NugetDiagnostics.json")
+    assertContains(failure.message!!, "declaration")
   }
 
   /**
@@ -111,8 +157,8 @@ class NugetReportDiagnosticsTaskTest {
   @Test
   fun `a located entry composes a leading path and line`() {
     val entry: ForwardDiagnosticEntry = parseForwardDiagnostics(
-      """
-      [
+      file(
+        """
         {
           "severity": "WARNING",
           "kind": "SKIPPED_INHERITED_MEMBER",
@@ -121,8 +167,8 @@ class NugetReportDiagnosticsTaskTest {
           "line": "12",
           "message": "[nuget:SKIPPED_INHERITED_MEMBER] Skipping com.example.Tag.length: reason. hint\n    at C:/src/Tag.kt:12"
         }
-      ]
-      """.trimIndent()
+        """.trimIndent()
+      )
     ).single()
 
     assertEquals("C:/src/Tag.kt", entry.file)
@@ -136,22 +182,22 @@ class NugetReportDiagnosticsTaskTest {
   }
 
   /**
-   * The two fields are additive, so a `NugetDiagnostics.json` written by an older processor (and a
-   * scope-level diagnostic, which has no declaration to point at) must still parse and print.
+   * The two fields are additive, so a scope-level diagnostic (which has no declaration to point
+   * at) must still parse and print.
    */
   @Test
   fun `an entry with no location prints the message alone`() {
     val entry: ForwardDiagnosticEntry = parseForwardDiagnostics(
-      """
-      [
+      file(
+        """
         {
           "severity": "WARNING",
           "kind": "SKIPPED_ALL_DECLARATIONS",
           "declaration": "com.example",
           "message": "[nuget:SKIPPED_ALL_DECLARATIONS] Skipping com.example: reason. hint"
         }
-      ]
-      """.trimIndent()
+        """.trimIndent()
+      )
     ).single()
 
     assertEquals(null, entry.file)

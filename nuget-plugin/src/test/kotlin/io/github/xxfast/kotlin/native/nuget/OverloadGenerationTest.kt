@@ -226,13 +226,15 @@ class OverloadGenerationTest {
   @Test
   fun `error diagnostics fail generation while skipped and info diagnostics remain reportable`() {
     val nonErrors: RirFile = overloadRir(reversed = false, includeUnsupportedDiagnostic = true)
-    assertTrue(diagnosticWarnings(nonErrors).all { it.startsWith("w: ") })
+    assertTrue(
+      diagnosticWarnings(nonErrors).all { it.startsWith("[nuget:SKIPPED_") || it.startsWith("[nuget:INFO_") },
+    )
 
     val error: IllegalArgumentException = assertFailsWith {
       val rir: RirFile = parseReverseIr(errorDiagnosticJson())
       generateKotlinStubs(rir)
     }
-    assertContains(error.message.orEmpty(), "error_kotlin_signature_collision")
+    assertContains(error.message.orEmpty(), "ERROR_KOTLIN_SIGNATURE_COLLISION")
     assertContains(error.message.orEmpty(), collisionLeft)
     assertContains(error.message.orEmpty(), collisionRight)
   }
@@ -315,7 +317,7 @@ class OverloadGenerationTest {
     }
     val diagnostics: String = if (includeUnsupportedDiagnostic) """
       [{
-        "kind":"skipped_ref_struct",
+        "kind":"SKIPPED_REF_STRUCT",
         "typeName":"OverloadLab",
         "memberName":"Describe",
         "memberSignature":"Describe(System.ReadOnlySpan`1<System.Char>)",
@@ -469,7 +471,7 @@ class OverloadGenerationTest {
     types = classJson("Reader", "", ""),
     diagnostics = """
       [{
-        "kind":"error_kotlin_signature_collision",
+        "kind":"ERROR_KOTLIN_SIGNATURE_COLLISION",
         "typeName":"Reader",
         "memberName":"Read",
         "memberSignature":"fun read(value: String)",
@@ -559,8 +561,8 @@ class OverloadGenerationTest {
     )
 
     val error: IllegalArgumentException = assertFailsWith { generateKotlinStubs(rir) }
-    assertContains(error.message.orEmpty(), "error_kotlin_signature_collision")
-    assertContains(error.message.orEmpty(), "[nuget:Acme.Api]")
+    assertContains(error.message.orEmpty(), "ERROR_KOTLIN_SIGNATURE_COLLISION")
+    assertContains(error.message.orEmpty(), "[nuget:ERROR_KOTLIN_SIGNATURE_COLLISION] Error Acme.Api/")
     assertContains(error.message.orEmpty(), "var name: String")
   }
 
@@ -584,7 +586,7 @@ class OverloadGenerationTest {
     )
 
     val error: IllegalArgumentException = assertFailsWith { generateKotlinStubs(rir) }
-    assertContains(error.message.orEmpty(), "error_kotlin_signature_collision")
+    assertContains(error.message.orEmpty(), "ERROR_KOTLIN_SIGNATURE_COLLISION")
     assertContains(error.message.orEmpty(), "fun read()")
   }
 
@@ -612,7 +614,7 @@ class OverloadGenerationTest {
     )
 
     val error: IllegalArgumentException = assertFailsWith { generateKotlinStubs(rir) }
-    assertContains(error.message.orEmpty(), "error_kotlin_signature_collision")
+    assertContains(error.message.orEmpty(), "ERROR_KOTLIN_SIGNATURE_COLLISION")
   }
 
   private fun assertInOrder(content: String, values: List<String>) {

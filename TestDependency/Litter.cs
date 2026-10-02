@@ -77,7 +77,7 @@ public static class Litters
     /// <summary>
     /// ADVERSARIAL, and the reason ADR-059 Decision 5 exists: 8 + 8 in, 8 out = 24 ABI arguments,
     /// over the verified 22-argument CFunction ceiling. Must be SKIPPED with
-    /// <c>skipped_abi_arity_limit</c>, naming this method and the count. It must NOT appear in the
+    /// <c>SKIPPED_ABI_ARITY_LIMIT</c>, naming this method and the count. It must NOT appear in the
     /// generated Kotlin, and the rest of <see cref="Litters"/> must still bind.
     /// </summary>
     public static Litter Merge(Litter a, Litter b) =>

@@ -204,7 +204,7 @@ class NugetGenericClassGenerationTest {
       val warnings: List<String> = diagnosticWarnings(fileForOrder)
       assertTrue(
         warnings.any { it.contains("ambiguous", ignoreCase = true) },
-        "expected a skipped_ambiguous_generic_constructor warning for the (String) collision, " +
+        "expected a SKIPPED_AMBIGUOUS_GENERIC_CONSTRUCTOR warning for the (String) collision, " +
             "got $warnings",
       )
     }
@@ -290,7 +290,7 @@ class NugetGenericClassGenerationTest {
   }
 
   @Test
-  fun `a namespace declaring both Box and Box backtick-1 fails generation with error_generic_arity_name_collision`() {
+  fun `a namespace declaring both Box and Box backtick-1 fails generation with ERROR_GENERIC_ARITY_NAME_COLLISION`() {
     val nonGenericBox = RirClass(name = "Box", constructors = emptyList())
     val collidingFile = RirFile(
       assemblies = listOf(
@@ -313,7 +313,7 @@ class NugetGenericClassGenerationTest {
     assertTrue(
       threw,
       "Decision 10: `Box` and `Box`1` in the same namespace must fail generation with " +
-          "error_generic_arity_name_collision (ADR-057's error_kotlin_signature_collision " +
+          "ERROR_GENERIC_ARITY_NAME_COLLISION (ADR-057's ERROR_KOTLIN_SIGNATURE_COLLISION " +
           "precedent), not silently pick one",
     )
   }

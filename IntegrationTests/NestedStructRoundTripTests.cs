@@ -23,7 +23,7 @@ namespace IntegrationTests;
 //
 // `Litters.Merge(Litter, Litter)` is a deliberate adversarial fixture member (24 flattened ABI
 // arguments, over the 22-argument CFunction ceiling) that the generator must SKIP with a
-// `skipped_abi_arity_limit` diagnostic. It has no Kotlin binding by design, so it is not, and
+// `SKIPPED_ABI_ARITY_LIMIT` diagnostic. It has no Kotlin binding by design, so it is not, and
 // must never be, called from this test file.
 //
 // These tests are EXPECTED TO FAIL (not even compile) until kotlin-dev lands the fixed-point

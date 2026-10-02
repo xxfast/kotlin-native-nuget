@@ -242,9 +242,9 @@ internal static class AssemblyExtractor
         // as collected above (they are rare, precise, and actionable).
         if (!assemblyHasAnyNullableAnnotation)
         {
-            diagnostics.RemoveAll(d => d.Kind == "info_oblivious_nullability");
+            diagnostics.RemoveAll(d => d.Kind == "INFO_OBLIVIOUS_NULLABILITY");
             diagnostics.Add(new RirDiagnostic(
-                kind: "info_oblivious_nullability",
+                kind: "INFO_OBLIVIOUS_NULLABILITY",
                 typeName: "",
                 memberName: "",
                 memberSignature: assemblyName,
@@ -430,7 +430,7 @@ internal static class AssemblyExtractor
     /// check (the admissibility set being computed is not yet known to itself). This can only ever
     /// make an interface member LOOK less admissible than it truly is — never falsely admissible —
     /// so the worst case is an interface with an interface-typed member and no other admissible
-    /// member is (incorrectly) reported as <c>skipped_empty_interface</c>. Not hit by the shipped
+    /// member is (incorrectly) reported as <c>SKIPPED_EMPTY_INTERFACE</c>. Not hit by the shipped
     /// fixture (no interface declares an interface-typed member); fixing it is a straightforward
     /// fixed-point extension if a future fixture needs it.
     /// </remarks>
@@ -461,7 +461,7 @@ internal static class AssemblyExtractor
                 if (typeName.Contains('`'))
                 {
                     diagnostics.Add(new RirDiagnostic(
-                        kind: "skipped_generic_interface",
+                        kind: "SKIPPED_GENERIC_INTERFACE",
                         typeName: typeName,
                         memberName: "",
                         memberSignature: fullName,
@@ -475,7 +475,7 @@ internal static class AssemblyExtractor
                 // No diagnostic here for the empty case (unlike the generic-interface branch
                 // above): ProcessType's REAL member processing (per-member diagnostics: static,
                 // DIM, indexer, ...) runs regardless of this admissibility pre-check, and adds its
-                // own skipped_empty_interface only after seeing the true (post-diagnostic) empty
+                // own SKIPPED_EMPTY_INTERFACE only after seeing the true (post-diagnostic) empty
                 // result — adding one here too would duplicate it.
                 if (!HasAtLeastOneAdmissibleInterfaceMember(
                     mr, typeDef, boundHandleTypeNames, enumTypes, structTypes, emptyInterfaceNames))
@@ -494,8 +494,8 @@ internal static class AssemblyExtractor
     /// ADR-070 Decision 6: does this interface have at least one instance method or instance
     /// property whose declared signature is fully in the v1 vocabulary, is not a default
     /// interface method, and (for a property) is not an indexer? No diagnostics here — the real
-    /// per-member diagnostics (skipped_default_interface_method, skipped_interface_static_member,
-    /// skipped_indexer, ...) are emitted once, by the real extraction pass in <c>ProcessType</c>/
+    /// per-member diagnostics (SKIPPED_DEFAULT_INTERFACE_METHOD, SKIPPED_INTERFACE_STATIC_MEMBER,
+    /// SKIPPED_INDEXER, ...) are emitted once, by the real extraction pass in <c>ProcessType</c>/
     /// <c>TryMapMethod</c>/<c>TryDecodePropertyType</c>, not duplicated here.
     /// </summary>
     private static bool HasAtLeastOneAdmissibleInterfaceMember(
@@ -954,7 +954,7 @@ internal static class AssemblyExtractor
     // Constraint 3 bug: today every struct shape is emitted as `RirClass`). Ref structs and
     // generic structs are collected here too (and marked Unsupported) for the same reason, even
     // though a *reference* to one from another member's signature is separately diagnosed earlier
-    // by SignatureDecoder (`skipped_ref_struct`, `skipped_open_generic`).
+    // by SignatureDecoder (`SKIPPED_REF_STRUCT`, `SKIPPED_OPEN_GENERIC`).
     private static Dictionary<string, StructExtraction> CollectStructTypes(
         MetadataReader mr,
         Dictionary<string, List<TypeDefinitionHandle>> namespaceMap,
@@ -1037,7 +1037,7 @@ internal static class AssemblyExtractor
                 foreach (var handle in extraction.ConstructorHandles)
                 {
                     diagnostics.Add(new RirDiagnostic(
-                        kind: "skipped_unsupported_struct",
+                        kind: "SKIPPED_UNSUPPORTED_STRUCT",
                         typeName: name,
                         memberName: ".ctor",
                         memberSignature: BuildSignatureString(mr, mr.GetMethodDefinition(handle), ".ctor"),
@@ -1164,7 +1164,7 @@ internal static class AssemblyExtractor
                         if (resolution.Oblivious)
                         {
                             diagnostics.Add(new RirDiagnostic(
-                                kind: "info_oblivious_nullability",
+                                kind: "INFO_OBLIVIOUS_NULLABILITY",
                                 typeName: name,
                                 memberName: propName,
                                 memberSignature: propName,
@@ -1680,7 +1680,7 @@ internal static class AssemblyExtractor
         // a class produced an `Invoke` method, an empty constructor list and two noise diagnostics
         // (`BeginInvoke`/`EndInvoke` reference `System.AsyncCallback`/`System.IAsyncResult`).
         // Silent at TYPE level on purpose: the delegate itself is not a skipped member, and every
-        // member that mentions it carries the named `skipped_delegate_signature` diagnostic.
+        // member that mentions it carries the named `SKIPPED_DELEGATE_SIGNATURE` diagnostic.
         if (MetadataHelpers.IsDelegate(mr, typeDef)) return (null, Array.Empty<RirDiagnostic>());
 
         if (enumTypes.TryGetValue(fullName, out var enumType))
@@ -1688,7 +1688,7 @@ internal static class AssemblyExtractor
             if (enumType.Enum is not null) return (enumType.Enum, Array.Empty<RirDiagnostic>());
 
             return (null, new[] { new RirDiagnostic(
-                kind: "skipped_unsupported_enum",
+                kind: "SKIPPED_UNSUPPORTED_ENUM",
                 typeName: typeName,
                 memberName: typeName,
                 memberSignature: fullName,
@@ -1705,7 +1705,7 @@ internal static class AssemblyExtractor
             if (structType.Struct is not null) return (structType.Struct, structType.Diagnostics);
 
             return (null, new[] { new RirDiagnostic(
-                kind: "skipped_unsupported_struct",
+                kind: "SKIPPED_UNSUPPORTED_STRUCT",
                 typeName: typeName,
                 memberName: typeName,
                 memberSignature: fullName,
@@ -1729,7 +1729,7 @@ internal static class AssemblyExtractor
                 || discoveredInstantiations.Count == 0)
             {
                 return (null, new[] { new RirDiagnostic(
-                    kind: "info_uninstantiated_generic_type",
+                    kind: "INFO_UNINSTANTIATED_GENERIC_TYPE",
                     typeName: typeName,
                     memberName: "",
                     memberSignature: fullName,
@@ -1748,7 +1748,7 @@ internal static class AssemblyExtractor
         var isStatic = isAbstract && isSealed;
 
         // ADR-070 Decision 6: a generic interface's mangled name (IFoo`1) is not valid Kotlin —
-        // CollectBoundInterfaceTypeNames already added the skipped_generic_interface diagnostic;
+        // CollectBoundInterfaceTypeNames already added the SKIPPED_GENERIC_INTERFACE diagnostic;
         // skip silently here (member processing would be pointless and the arity-mangled name
         // must never reach a RirInterface).
         if (isInterface && typeName.Contains('`'))
@@ -1873,7 +1873,7 @@ internal static class AssemblyExtractor
 
             var eventName = mr.GetString(eventDef.Name);
             diagnostics.Add(new RirDiagnostic(
-                kind: "skipped_event",
+                kind: "SKIPPED_EVENT",
                 typeName: typeName,
                 memberName: eventName,
                 memberSignature: eventName,
@@ -1907,7 +1907,7 @@ internal static class AssemblyExtractor
             if (isInterface && propIsStatic)
             {
                 diagnostics.Add(new RirDiagnostic(
-                    kind: "skipped_interface_static_member",
+                    kind: "SKIPPED_INTERFACE_STATIC_MEMBER",
                     typeName: typeName,
                     memberName: propName,
                     memberSignature: propName,
@@ -1924,7 +1924,7 @@ internal static class AssemblyExtractor
             if (getterDef.GetParameters().Count > 0)
             {
                 diagnostics.Add(new RirDiagnostic(
-                    kind: "skipped_indexer",
+                    kind: "SKIPPED_INDEXER",
                     typeName: typeName,
                     memberName: propName,
                     memberSignature: propName,
@@ -1996,7 +1996,7 @@ internal static class AssemblyExtractor
                     if (resolution.Oblivious)
                     {
                         diagnostics.Add(new RirDiagnostic(
-                            kind: "info_oblivious_nullability",
+                            kind: "INFO_OBLIVIOUS_NULLABILITY",
                             typeName: typeName,
                             memberName: propName,
                             memberSignature: propName,
@@ -2023,11 +2023,11 @@ internal static class AssemblyExtractor
         // per-member diagnostics already fired. This runs AFTER real member processing (not a
         // separate silent pre-check) specifically so a lone-member interface like
         // `IWithDim { string Greeting() => ...; }` still gets its real
-        // skipped_default_interface_method diagnostic, not just the coarser empty-interface one.
+        // SKIPPED_DEFAULT_INTERFACE_METHOD diagnostic, not just the coarser empty-interface one.
         if (isInterface && methods.Count == 0 && properties.Count == 0)
         {
             diagnostics.Add(new RirDiagnostic(
-                kind: "skipped_empty_interface",
+                kind: "SKIPPED_EMPTY_INTERFACE",
                 typeName: typeName,
                 memberName: "",
                 memberSignature: fullName,
@@ -2169,7 +2169,7 @@ internal static class AssemblyExtractor
             if (paramTypeRef is RirAsyncType)
             {
                 return (null, new RirDiagnostic(
-                    kind: "info_async_not_yet_mapped",
+                    kind: "INFO_ASYNC_NOT_YET_MAPPED",
                     typeName: typeName,
                     memberName: ".ctor",
                     memberSignature: BuildSignatureString(mr, methodDef, ".ctor"),
@@ -2223,7 +2223,7 @@ internal static class AssemblyExtractor
 
         RirDiagnostic? obliviousDiagnostic = anyOblivious
             ? new RirDiagnostic(
-                kind: "info_oblivious_nullability",
+                kind: "INFO_OBLIVIOUS_NULLABILITY",
                 typeName: typeName,
                 memberName: ".ctor",
                 memberSignature: BuildSignatureString(mr, methodDef, ".ctor"),
@@ -2261,7 +2261,7 @@ internal static class AssemblyExtractor
             && methodDef.RelativeVirtualAddress != 0)
         {
             return (null, new RirDiagnostic(
-                kind: "skipped_default_interface_method",
+                kind: "SKIPPED_DEFAULT_INTERFACE_METHOD",
                 typeName: typeName,
                 memberName: methodName,
                 memberSignature: methodName,
@@ -2274,7 +2274,7 @@ internal static class AssemblyExtractor
         if (isInterface && isStatic)
         {
             return (null, new RirDiagnostic(
-                kind: "skipped_interface_static_member",
+                kind: "SKIPPED_INTERFACE_STATIC_MEMBER",
                 typeName: typeName,
                 memberName: methodName,
                 memberSignature: methodName,
@@ -2292,7 +2292,7 @@ internal static class AssemblyExtractor
         if (methodDef.GetGenericParameters().Count > 0)
         {
             return (null, new RirDiagnostic(
-                kind: "skipped_open_generic",
+                kind: "SKIPPED_OPEN_GENERIC",
                 typeName: typeName,
                 memberName: methodName,
                 memberSignature: BuildSignatureString(mr, methodDef, methodName),
@@ -2345,7 +2345,7 @@ internal static class AssemblyExtractor
                 var fullSig = BuildSignatureString(mr, methodDef, methodName);
                 // Emit info diagnostic but still skip for now (unmapped).
                 return (null, new RirDiagnostic(
-                    kind: "info_async_not_yet_mapped",
+                    kind: "INFO_ASYNC_NOT_YET_MAPPED",
                     typeName: typeName,
                     memberName: methodName,
                     memberSignature: fullSig,
@@ -2394,7 +2394,7 @@ internal static class AssemblyExtractor
             {
                 var fullSig = BuildSignatureString(mr, methodDef, methodName);
                 return (null, new RirDiagnostic(
-                    kind: "info_async_not_yet_mapped",
+                    kind: "INFO_ASYNC_NOT_YET_MAPPED",
                     typeName: typeName,
                     memberName: methodName,
                     memberSignature: fullSig,
@@ -2413,7 +2413,7 @@ internal static class AssemblyExtractor
             {
                 var fullSig = BuildSignatureString(mr, methodDef, methodName);
                 return (null, new RirDiagnostic(
-                    kind: "info_async_not_yet_mapped",
+                    kind: "INFO_ASYNC_NOT_YET_MAPPED",
                     typeName: typeName,
                     memberName: methodName,
                     memberSignature: fullSig,
@@ -2480,7 +2480,7 @@ internal static class AssemblyExtractor
             {
                 var fullSig = BuildSignatureString(mr, methodDef, methodName);
                 return (null, new RirDiagnostic(
-                    kind: "info_async_not_yet_mapped",
+                    kind: "INFO_ASYNC_NOT_YET_MAPPED",
                     typeName: typeName,
                     memberName: methodName,
                     memberSignature: fullSig,
@@ -2520,7 +2520,7 @@ internal static class AssemblyExtractor
 
         RirDiagnostic? obliviousDiagnostic = anyOblivious
             ? new RirDiagnostic(
-                kind: "info_oblivious_nullability",
+                kind: "INFO_OBLIVIOUS_NULLABILITY",
                 typeName: typeName,
                 memberName: methodName,
                 memberSignature: BuildSignatureString(mr, methodDef, methodName),
@@ -2580,7 +2580,7 @@ internal static class AssemblyExtractor
         if (t.TypeRef is RirAsyncType)
         {
             return (null, new RirDiagnostic(
-                kind: "info_async_not_yet_mapped",
+                kind: "INFO_ASYNC_NOT_YET_MAPPED",
                 typeName: typeName,
                 memberName: propName,
                 memberSignature: propName,
@@ -2712,7 +2712,7 @@ internal static class AssemblyExtractor
         foreach (var method in dropped)
         {
             diagnostics.Add(new RirDiagnostic(
-                kind: "info_cancellation_overload_folded",
+                kind: "INFO_CANCELLATION_OVERLOAD_FOLDED",
                 typeName: typeName,
                 memberName: method.Name,
                 memberSignature: method.ManagedSignature,
@@ -2998,7 +2998,7 @@ internal static class NullabilityHelpers
             // byte) here would be exactly the ADR-053 failure class this project has already paid
             // for twice.
             return new TreeResolution(null, false, new PendingDiagnostic(
-                "skipped_generic_type_argument",
+                "SKIPPED_GENERIC_TYPE_ARGUMENT",
                 $"NullableAttribute byte count did not resolve to the {nodeCount} annotatable " +
                     "node(s) computed for this member's type (ADR-072 Decision 7); refusing to guess",
                 "Simplify this member's nullable annotations, or expose an equivalent C# adapter " +
@@ -3011,7 +3011,7 @@ internal static class NullabilityHelpers
         if (hitNullableTypeParameter)
         {
             return new TreeResolution(null, false, new PendingDiagnostic(
-                "skipped_nullable_type_parameter",
+                "SKIPPED_NULLABLE_TYPE_PARAMETER",
                 "a bare type-parameter-typed member is annotated nullable (`T?`), not " +
                     "representable per instantiation (ADR-072 Decision 7)",
                 "Expose a non-nullable overload, or wrap the nullable case in a dedicated C# " +
@@ -3142,7 +3142,7 @@ internal static class NullabilityHelpers
             // description says that single byte expands to the node count; it did not: the
             // length-1 array fell straight into the count check below and any multi-node member
             // whose nodes all agreed (e.g. `Task<string>` or `Box<string>` under a method
-            // `NullableContext(2)`) was skipped as `skipped_generic_type_argument` instead of
+            // `NullableContext(2)`) was skipped as `SKIPPED_GENERIC_TYPE_ARGUMENT` instead of
             // binding. Broadcast it, exactly as the context tiers below already do.
             if (memberBytes.Length == 1 && nodeCount > 1)
             {
@@ -3415,7 +3415,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
     /// <c>TryExtractShapeBComponents</c>), this is the fixed point's currently-known map (Decision
     /// 6a) — grown pass by pass by <c>CollectStructTypes</c> — so a struct-typed component resolves
     /// to <see cref="RirStructType"/> once the struct it references has itself been classified as
-    /// supported, and reports a path-naming <c>skipped_unsupported_struct</c> diagnostic otherwise
+    /// supported, and reports a path-naming <c>SKIPPED_UNSUPPORTED_STRUCT</c> diagnostic otherwise
     /// (Decision 6c). It is never null here: every struct candidate has a placeholder entry from the
     /// first pass onward, which is what stops an unresolved reference from ever falling through to
     /// the unrelated "not a bridgeable bound class" message.
@@ -3435,7 +3435,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
     /// for <c>Pairing\`2</c>), or null when decoding a member of a non-generic type (the
     /// overwhelming majority). A bare <c>!0</c> reference in the signature resolves against this
     /// list to <see cref="RirTypeParameterType"/> when non-null and in range; otherwise it is an
-    /// unresolvable open generic type parameter (<c>skipped_open_generic</c>, ADR-043's surviving
+    /// unresolvable open generic type parameter (<c>SKIPPED_OPEN_GENERIC</c>, ADR-043's surviving
     /// half, unchanged by this ADR).
     /// </summary>
     private readonly IReadOnlyList<string>? _declaringTypeParameters;
@@ -3499,7 +3499,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         {
             return new TypeRefOrDiag(null,
                 new PendingDiagnostic(
-                    "skipped_ref_struct",
+                    "SKIPPED_REF_STRUCT",
                     $"ref struct parameter — `{fullName}` is stack-only (IsByRefLike) and cannot cross the C ABI",
                     "Expose this method in a C# adapter shim with a different parameter type."),
                 fullName);
@@ -3507,7 +3507,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
 
         // ADR-158: a package-declared delegate is not a bound handle type (it is excluded from the
         // collector), so without this branch a member taking one would be reported as
-        // `skipped_unbound_type_reference` telling the user to bind a namespace that is already
+        // `SKIPPED_UNBOUND_TYPE_REFERENCE` telling the user to bind a namespace that is already
         // bound. Its shape comes from its own `Invoke` MethodDef rather than from type arguments,
         // and a shape this reader declines keeps the named delegate skip.
         if (MetadataHelpers.IsDelegate(mr, typeDef))
@@ -3520,7 +3520,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
 
             return new TypeRefOrDiag(null,
                 new PendingDiagnostic(
-                    "skipped_unsupported_enum",
+                    "SKIPPED_UNSUPPORTED_ENUM",
                     $"enum `{fullName}` is not bridgeable: {enumType.Reason}",
                     "Use a non-[Flags] default-int enum with unique contiguous values from 0 through N-1."),
                 fullName);
@@ -3530,7 +3530,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         {
             return new TypeRefOrDiag(null,
                 new PendingDiagnostic(
-                    "skipped_unsupported_enum",
+                    "SKIPPED_UNSUPPORTED_ENUM",
                     $"enum `{fullName}` is not part of the bound extraction set",
                     "Bind the enum namespace and use a supported ordinal enum shape."),
                 fullName);
@@ -3546,7 +3546,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
 
             return new TypeRefOrDiag(null,
                 new PendingDiagnostic(
-                    "skipped_unsupported_struct",
+                    "SKIPPED_UNSUPPORTED_STRUCT",
                     $"struct `{fullName}` is not bridgeable: {structType.Reason}",
                     "See ADR-056 Decision 3a for the bridgeable struct shape."),
                 fullName);
@@ -3575,7 +3575,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
             == System.Reflection.TypeAttributes.Interface;
         return new TypeRefOrDiag(null,
             new PendingDiagnostic(
-                "skipped_unbound_type_reference",
+                "SKIPPED_UNBOUND_TYPE_REFERENCE",
                 isInadmissibleInterface
                     ? $"type `{fullName}` is an interface, but is not admissible (ADR-070 Decision 6 " +
                       "— generic, empty, or every member is skipped) in this extraction run"
@@ -3602,7 +3602,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         // ADR-152: non-generic `Task` is an async shape, not an unbound handle. It never reached
         // `IsAsyncType` before (that check only runs for a null TypeRef with a raw name, which the
         // GENERIC instantiation path produces), so it was reported as
-        // `skipped_unbound_type_reference`, a diagnostic that told the user to bind
+        // `SKIPPED_UNBOUND_TYPE_REFERENCE`, a diagnostic that told the user to bind
         // System.Private.CoreLib. Non-generic `ValueTask` is still out of v1 scope, but it is out
         // of scope as an ASYNC shape, so it moves onto the async info diagnostic too.
         if (fullName == "System.Threading.Tasks.Task")
@@ -3623,7 +3623,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         if (fullName == "System.Threading.Tasks.ValueTask")
             return new TypeRefOrDiag(null,
                 new PendingDiagnostic(
-                    "info_async_not_yet_mapped",
+                    "INFO_ASYNC_NOT_YET_MAPPED",
                     $"async return type `{fullName}` is not yet mapped in v1 (ADR-152 maps `Task` " +
                         "and `Task<T>` only)",
                     "Expose a `Task`-returning member instead; `ValueTask` is one more " +
@@ -3639,7 +3639,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         // is the correct v1 behaviour for complex types.
         return new TypeRefOrDiag(null,
             new PendingDiagnostic(
-                "skipped_unbound_type_reference",
+                "SKIPPED_UNBOUND_TYPE_REFERENCE",
                 $"type `{fullName}` is defined outside the bound assemblies and cannot be an opaque handle in this extraction run",
                 "Include this type's assembly in the extraction run to bind it, or expose an equivalent static API."),
             fullName);
@@ -3650,11 +3650,11 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
     /// package-declared delegate TypeDef, a non-generic BCL delegate TypeReference, and a generic
     /// BCL delegate TypeSpec), because the user-visible fact is the same in all three: this member
     /// takes or returns a delegate and no delegate shape is bound in this build. Replaces the two
-    /// misleading diagnostics the shipped reader gave (`skipped_unbound_type_reference`, which says
-    /// to include System.Private.CoreLib, and `skipped_unbound_generic_instantiation`, which says
+    /// misleading diagnostics the shipped reader gave (`SKIPPED_UNBOUND_TYPE_REFERENCE`, which says
+    /// to include System.Private.CoreLib, and `SKIPPED_UNBOUND_GENERIC_INSTANTIATION`, which says
     /// to expose a BCL collection).
     /// </summary>
-    internal const string DelegateSkipKind = "skipped_delegate_signature";
+    internal const string DelegateSkipKind = "SKIPPED_DELEGATE_SIGNATURE";
 
     private static PendingDiagnostic DelegatePending(string fullName) =>
         new(DelegateSkipKind,
@@ -3994,7 +3994,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
             var awaited = typeArguments[0];
             if (awaited.Diagnostic is not null) return new TypeRefOrDiag(null, awaited.Diagnostic, rawName);
             // ADR-155: `Task<IReadOnlyList<T>>` is OUT of v1. Falling through to the async-shape
-            // branch below keeps the existing `info_async_not_yet_mapped` rather than inventing a
+            // branch below keeps the existing `INFO_ASYNC_NOT_YET_MAPPED` rather than inventing a
             // second name for it, and the nullable bytes ([1, 1, 2]: Task, collection, element)
             // compose without change for whoever lifts the deferral.
             if (awaited.TypeRef is not null and not RirAsyncType and not RirCollectionType)
@@ -4039,7 +4039,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
                 {
                     return new TypeRefOrDiag(null,
                         new PendingDiagnostic(
-                            "skipped_generic_type_argument",
+                            "SKIPPED_GENERIC_TYPE_ARGUMENT",
                             $"type argument `{arg.RawTypeName ?? "?"}` of `{rawName}` is outside the " +
                                 "v1 generic type-argument vocabulary (ADR-072 Decision 6): only a " +
                                 "primitive, string, bound enum, bound class handle, bound interface, " +
@@ -4079,7 +4079,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
                 {
                     return new TypeRefOrDiag(null,
                         new PendingDiagnostic(
-                            "skipped_collection_element",
+                            "SKIPPED_COLLECTION_ELEMENT",
                             $"element `{arg.RawTypeName ?? "?"}` of `{rawName}` is outside the v1 " +
                                 "collection-element vocabulary (ADR-155): only a primitive, " +
                                 "string, bound enum, bound class handle or bound interface is " +
@@ -4104,7 +4104,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         // silently dropped (this used to be a deliberate, undiagnosed drop).
         return new TypeRefOrDiag(null,
             new PendingDiagnostic(
-                "skipped_unbound_generic_instantiation",
+                "SKIPPED_UNBOUND_GENERIC_INSTANTIATION",
                 $"instantiation of `{rawName}`: its generic definition lives outside the bound " +
                     "assemblies, so it has no extracted members and cannot be bound as a handle " +
                     "(ADR-072 Decision 9)",
@@ -4177,7 +4177,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
 
         return new TypeRefOrDiag(null,
             new PendingDiagnostic(
-                "skipped_open_generic",
+                "SKIPPED_OPEN_GENERIC",
                 "open generic type parameter in signature — no concrete type at code-generation time",
                 "Expose a concrete overload in a C# adapter shim."),
             $"T{index}");
@@ -4187,7 +4187,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
     {
         return new TypeRefOrDiag(null,
             new PendingDiagnostic(
-                "skipped_open_generic",
+                "SKIPPED_OPEN_GENERIC",
                 "open generic method parameter in signature — no concrete type at code-generation time",
                 "Expose a concrete overload in a C# adapter shim."),
             $"M{index}");
@@ -4202,7 +4202,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
         {
             return new TypeRefOrDiag(null,
                 new PendingDiagnostic(
-                    "skipped_dynamic",
+                    "SKIPPED_DYNAMIC",
                     "dynamic type — DLR late-binding cannot be represented in a static C ABI signature",
                     "Replace the dynamic parameter with a concrete type in a C# adapter shim."),
                 "dynamic");
@@ -4232,7 +4232,7 @@ internal sealed class SignatureDecoder : ISignatureTypeProvider<TypeRefOrDiag, o
     private static TypeRefOrDiag ArrayPending(string rawName) =>
         new(null,
             new PendingDiagnostic(
-                "skipped_array",
+                "SKIPPED_ARRAY",
                 $"`{rawName}`: arrays are deferred (ADR-155). The Kotlin type for an array is its " +
                     "own decision, and `byte[]` wants the ADR-151 blit rather than a slot buffer.",
                 "Expose IReadOnlyList<T> (or another mapped BCL collection) instead of an array."),
@@ -4326,7 +4326,7 @@ internal sealed class RirClass : RirType
     /// ADR-072 Decision 2: the closed instantiations of this generic definition discovered by the
     /// reader's Phase A/B fixed-point enumeration. Empty for a non-generic class, and ALSO empty for
     /// a generic definition with zero discovered instantiations. Decision 10: such a definition
-    /// emits NOTHING at all (see the <c>info_uninstantiated_generic_type</c> guard in
+    /// emits NOTHING at all (see the <c>INFO_UNINSTANTIATED_GENERIC_TYPE</c> guard in
     /// <c>ProcessType</c>), so this field is never observed empty for a type that reached the RIR
     /// with a non-empty <see cref="TypeParameters"/>.
     /// </summary>
@@ -4640,12 +4640,12 @@ internal sealed class RirCancellationTokenType : RirTypeRef
 
 /// <summary>
 /// ADR-153: the one named diagnostic every out-of-scope token position shares. Named, because the
-/// diagnostic these used to get (<c>skipped_unbound_type_reference</c>) tells the reader's user to
+/// diagnostic these used to get (<c>SKIPPED_UNBOUND_TYPE_REFERENCE</c>) tells the reader's user to
 /// bind System.Private.CoreLib, which never makes a token bind.
 /// </summary>
 internal static class CancellationTokenDiagnostics
 {
-    internal const string Kind = "info_cancellation_token_not_yet_mapped";
+    internal const string Kind = "INFO_CANCELLATION_TOKEN_NOT_YET_MAPPED";
 
     internal const string Hint =
         "Expose an async (`Task`/`Task<T>`-returning) overload taking exactly one plain " +
@@ -4964,7 +4964,17 @@ internal sealed class RirPublicSurface
 
 internal sealed class RirFile
 {
+    // ADR-182: bumped only on a change a reader that ignores unknown keys would misread (a field
+    // removed, renamed or retyped, a diagnostic code renamed). Additive fields never bump it. The
+    // plugin's nugetGenerateBindings/nugetGenerateShims refuse any other value.
+    public const int CurrentSchemaVersion = 1;
+
     public RirFile(IReadOnlyList<RirAssembly> assemblies) => Assemblies = assemblies;
+
+    // Declared first so it serializes first: the version is the one field a reader checks before
+    // trusting the rest.
+    public int SchemaVersion => CurrentSchemaVersion;
+
     public IReadOnlyList<RirAssembly> Assemblies { get; }
 }
 

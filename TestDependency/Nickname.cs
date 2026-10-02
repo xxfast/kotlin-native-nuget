@@ -74,7 +74,7 @@ public class NicknameBook
 /// Oblivious island inside an otherwise-annotated assembly: every reference type here is
 /// byte 0 (no <see cref="System.Runtime.CompilerServices.NullableAttribute"/> anywhere).
 /// Binds non-null under ADR-053 decision 1a, and raises one
-/// <c>info_oblivious_nullability</c> diagnostic per member.
+/// <c>INFO_OBLIVIOUS_NULLABILITY</c> diagnostic per member.
 /// </summary>
 public class LegacyNicknameBook
 {

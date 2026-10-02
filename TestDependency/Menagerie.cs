@@ -311,7 +311,7 @@ public interface IWithStatics
     static abstract int Rank();
 }
 
-/// <summary>Default interface method -&gt; skipped_default_interface_method (pre-existing
+/// <summary>Default interface method -&gt; SKIPPED_DEFAULT_INTERFACE_METHOD (pre-existing
 /// diagnostic, unchanged by this ADR).</summary>
 public interface IWithDim
 {

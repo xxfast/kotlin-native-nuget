@@ -38,9 +38,9 @@
     "staticMethod": { "seen": 10, "bound": 10 }
   },
   "diagnostics": {
-    "skipped_empty_interface": 2,
-    "skipped_open_generic": 1,
-    "skipped_unbound_type_reference": 26
+    "SKIPPED_EMPTY_INTERFACE": 2,
+    "SKIPPED_OPEN_GENERIC": 1,
+    "SKIPPED_UNBOUND_TYPE_REFERENCE": 26
   },
   "unboundTypeReferences": {
     "NuGet.Versioning.IVersionComparer": 8,

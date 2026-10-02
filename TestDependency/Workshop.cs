@@ -63,7 +63,7 @@ public delegate int Transform(int value);
 ///         second of the two insertion points in the reader.</item>
 ///   <item><see cref="LaterAsync"/>: an ASYNC delegate (<c>Func&lt;Task&lt;int&gt;&gt;</c>),
 ///         deliberately OUT of v1. It must stay a NAMED skip
-///         (<c>skipped_delegate_signature</c>), never bind and never vanish silently.</item>
+///         (<c>SKIPPED_DELEGATE_SIGNATURE</c>), never bind and never vanish silently.</item>
 /// </list>
 ///
 /// The throwing-lambda path needs no member of its own: <see cref="Apply"/> is called from Kotlin

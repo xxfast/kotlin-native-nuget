@@ -36,7 +36,7 @@ import test.structs.Shelter
 //
 // `Litters.Merge(Litter, Litter)` is a deliberate ADVERSARIAL negative (8 + 8 in, 8 out = 24 ABI
 // arguments, over the 22-argument CFunction ceiling) and must be SKIPPED by the generator with a
-// `skipped_abi_arity_limit` diagnostic. It is intentionally NOT called here: it must not exist in
+// `SKIPPED_ABI_ARITY_LIMIT` diagnostic. It is intentionally NOT called here: it must not exist in
 // the generated Kotlin bindings at all, while the rest of `Litters` still binds.
 //
 // The forward-exported functions below stay in the existing String/Int/Boolean vocabulary

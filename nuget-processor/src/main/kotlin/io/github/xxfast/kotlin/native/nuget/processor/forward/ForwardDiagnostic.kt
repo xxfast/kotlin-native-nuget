@@ -507,9 +507,9 @@ internal enum class ForwardDiagnosticKind(
 
 /**
  * ADR-064's message-format contract: the rendered line always embeds the kind's [Enum.name] (e.g.
- * `[nuget:SKIPPED_UNSUPPORTED_COMBINATION]`), in the reverse `formatDiagnostic()` house style
- * (`NugetGenerateBindingsTask.kt`'s `w: [nuget:{pkg}] {Skipping|Note}{location}: {reason}.
- * {hint}`), plus the `KSNode` source location reverse cannot carry.
+ * `[nuget:SKIPPED_UNSUPPORTED_COMBINATION]`). ADR-182: reverse's `formatDiagnostic()`
+ * (`NugetGenerateBindingsTask.kt`) renders the same shape, `[nuget:<CODE>] <Verb> <location>:
+ * <reason>. <hint>`; forward adds the `KSNode` source location reverse cannot carry.
  */
 internal fun ForwardDiagnostic.format(): String {
   val location: String = if (signature.isBlank()) declaration else "$declaration($signature)"

@@ -55,6 +55,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgePlan
 import io.github.xxfast.kotlin.native.nuget.rir.mapSlots
 import io.github.xxfast.kotlin.native.nuget.rir.nameSuffix
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
+import io.github.xxfast.kotlin.native.nuget.rir.requireCurrentSchema
 import io.github.xxfast.kotlin.native.nuget.rir.registrationExportName
 import io.github.xxfast.kotlin.native.nuget.rir.slotCount
 import io.github.xxfast.kotlin.native.nuget.rir.structContractHash
@@ -3252,7 +3253,8 @@ abstract class NugetGenerateShimsTask : DefaultTask() {
 
   @TaskAction
   fun generate() {
-    val rir: RirFile = parseReverseIr(reverseIrFile.get().asFile.readText())
+    val reverseIr: File = reverseIrFile.get().asFile
+    val rir: RirFile = parseReverseIr(reverseIr.readText()).requireCurrentSchema(reverseIr.path)
 
     val files: List<GeneratedFile> = generateCSharpShims(
       file = rir,

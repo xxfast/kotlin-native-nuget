@@ -75,6 +75,6 @@ fun noteRoundTrip(value: String?): String? {
 /**
  * ADR-053 oblivious-island round trip: `LegacyNicknameBook` is compiled under
  * `#nullable disable`, so every reference type in it binds non-null (ADR-053 decision 1a),
- * with one `info_oblivious_nullability` diagnostic emitted per member.
+ * with one `INFO_OBLIVIOUS_NULLABILITY` diagnostic emitted per member.
  */
 fun legacyFindNickname(name: String): String = LegacyNicknameBook().find(name)

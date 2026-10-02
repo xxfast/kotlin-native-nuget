@@ -1209,7 +1209,7 @@ class NugetGenerateBindingsTaskTest {
 
   // ROADMAP 0.9.0 (reverse enum acronyms): entries follow kotlinx-serialization's SnakeCase rule,
   // uppercased, so an acronym run stays one word. Members that collapse to one name keep their C#
-  // names verbatim and are named by info_enum_entry_kept_verbatim.
+  // names verbatim and are named by INFO_ENUM_ENTRY_KEPT_VERBATIM.
   private fun statusRir(vararg names: String): RirFile = RirFile(
     assemblies = listOf(
       RirAssembly(
@@ -1795,7 +1795,7 @@ class NugetGenerateBindingsTaskTest {
   // ------------------------------------------------------------------
   // ROADMAP line 142 ("surface RirDiagnostics to the build") + rule 5: diagnosticWarnings(rir)
   // generalizes the collision-only warn loop to also walk every RirAssembly.diagnostics entry the
-  // metadata reader itself emitted (e.g. ADR-053's info_oblivious_nullability), through the same
+  // metadata reader itself emitted (e.g. ADR-053's INFO_OBLIVIOUS_NULLABILITY), through the same
   // formatting path as the existing rule-5 SKIPPED_MEMBER_NAME_COLLISION warning.
   // ------------------------------------------------------------------
 
@@ -1824,7 +1824,10 @@ class NugetGenerateBindingsTaskTest {
     val warnings: List<String> = diagnosticWarnings(rir)
 
     assertEquals(1, warnings.size)
-    assertContains(warnings[0], "[nuget:MimeMapping]")
+    assertTrue(
+      warnings[0].startsWith("[nuget:INFO_OBLIVIOUS_NULLABILITY] Note MimeMapping: no NullableAttribute"),
+      "ADR-182: forward's shape, code in the bracket, package id leading the location: ${warnings[0]}",
+    )
     assertContains(warnings[0], "Note")
     assertFalse(warnings[0].contains("Skipping"), "an info diagnostic is not a skip")
     assertContains(
@@ -1895,7 +1898,7 @@ class NugetGenerateBindingsTaskTest {
     assertEquals(2, warnings.size)
     assertTrue(warnings.any { it.contains("whole-assembly oblivious") })
     assertTrue(
-      warnings.any { it.contains("Skipping Widget.Close") },
+      warnings.any { it.contains("] Skipping ") && it.contains("/Widget.Close(") },
       "the existing rule-5 collision warning must still fire — got $warnings",
     )
   }

@@ -15,7 +15,7 @@ import test.roster.Roster
 //           -> real C# TestDependency   Test.Roster.{Roster, Tag, ILabelled}
 //
 // EXPECTED TO FAIL TODAY: every member named below is currently dropped by the reader with
-// `skipped_unbound_generic_instantiation`, so `test.roster.Roster` is generated without any of
+// `SKIPPED_UNBOUND_GENERIC_INSTANTIATION`, so `test.roster.Roster` is generated without any of
 // them and this file does not compile. That failure is the point of this file at this stage.
 //
 // Organised by the SEAM each row crosses, because the conversion is per ELEMENT and per

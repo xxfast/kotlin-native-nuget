@@ -12,6 +12,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirConstructor
 import io.github.xxfast.kotlin.native.nuget.rir.RirDelegateType
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnostic
 import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnosticKind
+import io.github.xxfast.kotlin.native.nuget.rir.RirDiagnosticSeverity
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnum
 import io.github.xxfast.kotlin.native.nuget.rir.RirEnumType
 import io.github.xxfast.kotlin.native.nuget.rir.RirFile
@@ -71,6 +72,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.mapSlots
 import io.github.xxfast.kotlin.native.nuget.rir.nameSuffix
 import io.github.xxfast.kotlin.native.nuget.rir.parseInterfaceRef
 import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
+import io.github.xxfast.kotlin.native.nuget.rir.requireCurrentSchema
 import io.github.xxfast.kotlin.native.nuget.rir.registrationExportName
 import io.github.xxfast.kotlin.native.nuget.rir.slotCount
 import io.github.xxfast.kotlin.native.nuget.rir.structArityLimitDiagnostics
@@ -1557,7 +1559,7 @@ private fun validateGenericArityCollisions(rir: RirFile) {
       bySimpleName.forEach { (simpleName, group) ->
         require(group.size == 1) {
           val names: String = group.joinToString("`, `") { it.name }
-          "[nuget] error_generic_arity_name_collision: `$names` in namespace `${namespace.name}` " +
+          "[nuget] ERROR_GENERIC_ARITY_NAME_COLLISION: `$names` in namespace `${namespace.name}` " +
               "all strip to the Kotlin name `$simpleName`."
         }
       }
@@ -1566,7 +1568,7 @@ private fun validateGenericArityCollisions(rir: RirFile) {
           cls.instantiations.groupBy { instantiationTag(cls, it) }
         tags.forEach { (tag, group) ->
           require(group.size == 1) {
-            "[nuget] error_generic_arity_name_collision: two instantiations of `${cls.name}` " +
+            "[nuget] ERROR_GENERIC_ARITY_NAME_COLLISION: two instantiations of `${cls.name}` " +
                 "both produce the internal tag `$tag`."
           }
         }
@@ -2046,7 +2048,7 @@ internal fun enumEntryKotlinNames(enum: RirEnum): List<Pair<String, Boolean>> {
   }
 }
 
-// ADR-006 2026-10-02 amendment: one info_enum_entry_kept_verbatim per member that kept its C# name
+// ADR-006 2026-10-02 amendment: one INFO_ENUM_ENTRY_KEPT_VERBATIM per member that kept its C# name
 // because its SCREAMING_SNAKE form collided with another member of the same enum.
 internal fun enumEntryVerbatimDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> =
   rir.assemblies.flatMap { assembly ->
@@ -7040,8 +7042,8 @@ private fun kotlinBridgeOutbound(type: RirTypeRef, expr: String, dupFnRef: Strin
 // ROADMAP line 142 ("surface RirDiagnostics to the build") + rule 5's existing
 // member-name-collision warning generalized into ONE pure, testable function: every diagnostic
 // that will ever reach a consumer's build log — whether it was emitted directly by the metadata
-// reader into RirAssembly.diagnostics (skipped_overload_set, skipped_ref_struct, ..., and
-// ADR-053's info_oblivious_nullability), or derived Gradle-plugin-side by
+// reader into RirAssembly.diagnostics (SKIPPED_OVERLOAD_SET, SKIPPED_REF_STRUCT, ..., and
+// ADR-053's INFO_OBLIVIOUS_NULLABILITY), or derived Gradle-plugin-side by
 // collisionDiagnostics(cls) (rule 5's SKIPPED_MEMBER_NAME_COLLISION) — is formatted through the
 // same code path. Kept pure (no logger access) so it is unit-testable like every other generator
 // function in this file; the task below is the only place that actually calls logger.warn.
@@ -7074,7 +7076,7 @@ internal fun allDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> {
   }
   // ADR-059 Decision 5a: the same shared arityLimitDiagnostics/structArityLimitDiagnostics
   // bridgeableRegistrables/bridgeableStructRegistrables already filter by, surfaced here too
-  // (mirroring fromCollisions above) so a skipped_abi_arity_limit member is reported, not silently
+  // (mirroring fromCollisions above) so a SKIPPED_ABI_ARITY_LIMIT member is reported, not silently
   // dropped.
   val fromArityLimits: List<Pair<String, RirDiagnostic>> = rir.assemblies.flatMap { assembly ->
     assembly.namespaces.flatMap { namespace ->
@@ -7087,7 +7089,7 @@ internal fun allDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> {
     }
   }
   // ADR-072 Decision 5: the analogous plugin-derived entry point for
-  // skipped_ambiguous_generic_constructor, mirroring fromCollisions/fromArityLimits above,
+  // SKIPPED_AMBIGUOUS_GENERIC_CONSTRUCTOR, mirroring fromCollisions/fromArityLimits above,
   // routed through the SAME internal diagnosticWarnings(rir) surface as every other
   // plugin-derived kind, rather than left with no named entry point at all.
   val fromAmbiguousGenericConstructors: List<Pair<String, RirDiagnostic>> =
@@ -7198,7 +7200,7 @@ private fun differsOnlyByDelegateShape(set: List<RirMethod>): Boolean {
   return differing.isNotEmpty() && differing.all { i -> positions.all { it[i] is RirDelegateType } }
 }
 
-// ADR-155 Q8: one skipped_overload_set per DROPPED MEMBER (never one per set: a user reading the
+// ADR-155 Q8: one SKIPPED_OVERLOAD_SET per DROPPED MEMBER (never one per set: a user reading the
 // log needs to see each C# member they lose by name), naming the single Kotlin signature the set
 // collapsed to. The set is computed by the shared filter, so this can never name a member either
 // generator actually bound.
@@ -7232,19 +7234,13 @@ internal fun collapsedOverloadDiagnostics(
 private fun validateDiagnostics(rir: RirFile) {
   val errors: List<Pair<String, RirDiagnostic>> = rir.assemblies.flatMap { assembly ->
     assembly.diagnostics
-      .filter { it.kind.name.startsWith("ERROR") }
+      .filter { it.kind.severity == RirDiagnosticSeverity.ERROR }
       .map { assembly.packageId to it }
   }
   require(errors.isEmpty()) {
-    errors.joinToString("\n") { (packageId, d) -> errorLine(packageId, d) }
+    errors.joinToString("\n") { (packageId, d) -> formatDiagnostic(packageId, d) }
   }
 }
-
-// The one rendering of a fatal reverse diagnostic, whether the READER produced it or the plugin
-// did (ADR-057: a Kotlin signature collision is derived here, from Kotlin's own overload rules, and
-// the reader cannot know them).
-private fun errorLine(packageId: String, diagnostic: RirDiagnostic): String =
-  "[nuget:$packageId] ${diagnostic.kind.name.lowercase()}: ${diagnostic.reason}. " + diagnostic.hint
 
 // ADR-057 finishing move: collisions were already detected and already fatal, but through a bare
 // `require(false)` that carried no diagnostic kind and no package id, and they never reached the
@@ -7254,7 +7250,7 @@ private fun errorLine(packageId: String, diagnostic: RirDiagnostic): String =
 private fun validateKotlinSignatures(rir: RirFile) {
   val collisions: List<Pair<String, RirDiagnostic>> = kotlinSignatureCollisions(rir)
   require(collisions.isEmpty()) {
-    collisions.joinToString("\n") { (packageId, d) -> errorLine(packageId, d) }
+    collisions.joinToString("\n") { (packageId, d) -> formatDiagnostic(packageId, d) }
   }
 }
 
@@ -7411,21 +7407,21 @@ private fun RirTypeRef.kotlinCollisionType(): String = when (this) {
   else -> declKotlinType(this)
 }
 
-// A SKIPPED_* diagnostic means the member is absent from the generated output ("Skipping ...");
-// an INFO_* diagnostic (e.g. info_oblivious_nullability) is not a skip — the member still binds,
-// just under an assumed policy — so it reads as a "Note" instead. typeName/memberName may both be
-// empty (a whole-assembly diagnostic, e.g. ADR-053's one-per-assembly oblivious signal), typeName
-// alone may be populated with memberName empty, or both may be populated (member-scoped, or rule
-// 5's per-member collision) — each renders progressively more of the location.
-private fun formatDiagnostic(packageId: String, diagnostic: RirDiagnostic): String {
-  val isSkip: Boolean = diagnostic.kind.name.startsWith("SKIPPED")
-  val verb: String = if (isSkip) "Skipping" else "Note"
+// ADR-182: the one rendering of every reverse diagnostic, fatal or not, whether the READER produced
+// it or the plugin did (ADR-057: a Kotlin signature collision is derived here). Forward's ADR-064
+// shape, `[nuget:<CODE>] <Verb> <location>: <reason>. <hint>`, so the bracket holds the code in
+// both directions and the verb comes off the code's prefix (`Skipping`, `Note`, `Error`). The
+// location leads with the package id, then as much of `<Type>.<member>(<sig>)` as the diagnostic
+// carries: both names empty is a whole-assembly diagnostic (ADR-053's oblivious signal), a type
+// alone is type-scoped, both is member-scoped.
+internal fun formatDiagnostic(packageId: String, diagnostic: RirDiagnostic): String {
   val location: String = when {
-    diagnostic.typeName.isEmpty() && diagnostic.memberName.isEmpty() -> ""
-    diagnostic.memberName.isEmpty() -> " ${diagnostic.typeName}"
-    else -> " ${diagnostic.typeName}.${diagnostic.memberName}(${diagnostic.memberSignature})"
+    diagnostic.typeName.isEmpty() && diagnostic.memberName.isEmpty() -> packageId
+    diagnostic.memberName.isEmpty() -> "$packageId/${diagnostic.typeName}"
+    else -> "$packageId/${diagnostic.typeName}.${diagnostic.memberName}(${diagnostic.memberSignature})"
   }
-  return "w: [nuget:$packageId] $verb$location: ${diagnostic.reason}. ${diagnostic.hint}"
+  return "[nuget:${diagnostic.kind.name}] ${diagnostic.kind.verb} $location: " +
+      "${diagnostic.reason}. ${diagnostic.hint}"
 }
 
 abstract class NugetGenerateBindingsTask : DefaultTask() {
@@ -7450,7 +7446,8 @@ abstract class NugetGenerateBindingsTask : DefaultTask() {
 
   @TaskAction
   fun generate() {
-    val rir: RirFile = parseReverseIr(reverseIrFile.get().asFile.readText())
+    val reverseIr: File = reverseIrFile.get().asFile
+    val rir: RirFile = parseReverseIr(reverseIr.readText()).requireCurrentSchema(reverseIr.path)
 
     // ROADMAP line 142 / Phase 9 (rule 5) / ADR-053: surface every diagnostic — reader-emitted
     // (RirAssembly.diagnostics) and Gradle-plugin-derived (rule 5's collisionDiagnostics) alike —

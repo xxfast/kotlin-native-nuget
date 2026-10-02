@@ -16,7 +16,7 @@ public class Box<T>
     public T Value { get; }                        // T at a property position: the marshalling seam
     public string Describe() => $"box[{Value}]";    // T-FREE member: still needs a per-instantiation thunk
     public Box<T> Rewrap() => new(Value);            // instantiation reached by substitution (Decision 2 phase B)
-    public T? Peek() => Value;                       // -> skipped_nullable_type_parameter
+    public T? Peek() => Value;                       // -> SKIPPED_NULLABLE_TYPE_PARAMETER
 }
 
 /// <summary>
@@ -41,7 +41,7 @@ public class Crate<T> where T : class
 
 /// <summary>
 /// Never instantiated anywhere. MUST produce no Kotlin type, no export, no C# class, and exactly
-/// one <c>info_uninstantiated_generic_type</c>. This is the regression test for the <c>Box`1</c>
+/// one <c>INFO_UNINSTANTIATED_GENERIC_TYPE</c>. This is the regression test for the <c>Box`1</c>
 /// leak (ADR-072 Context item 2 / Decision 10).
 /// </summary>
 public class Unused<T>
@@ -61,19 +61,19 @@ public static class Boxes
     public static Pairing<string, int> Tally(string label, int count) => new(label, count);
     public static Crate<string> CrateOfText(string item) => new(item);
 
-    // ADR-155: these two used to be `skipped_unbound_generic_instantiation` and now BIND, because
+    // ADR-155: these two used to be `SKIPPED_UNBOUND_GENERIC_INSTANTIATION` and now BIND, because
     // `List<T>` and `Dictionary<K,V>` are mapped BCL definitions. Kept as the ADR-072 Decision 9
     // shapes they were, so the change of verdict is visible on the same members.
     public static List<int> Numbers() => new() { 1, 2, 3 };
     public static Dictionary<string, int> Counts() => new() { ["Oreo"] = 9 };
 
     // Each of the next three must be SKIPPED, each with its own named diagnostic, not silently:
-    public static Queue<int> Waiting() => new();                         // skipped_unbound_generic_instantiation
-    public static Box<Box<int>> Nested() => new(new Box<int>(1));        // skipped_generic_type_argument
-    public static T Identity<T>(T value) => value;                       // skipped_open_generic (ADR-043 survives)
+    public static Queue<int> Waiting() => new();                         // SKIPPED_UNBOUND_GENERIC_INSTANTIATION
+    public static Box<Box<int>> Nested() => new(new Box<int>(1));        // SKIPPED_GENERIC_TYPE_ARGUMENT
+    public static T Identity<T>(T value) => value;                       // SKIPPED_OPEN_GENERIC (ADR-043 survives)
 
     // Phantom generic methods: the type parameter appears in no parameter and no return type, so
-    // decoding never meets `!!n`. Both must be skipped_open_generic. `Reset<T>()` shares its
+    // decoding never meets `!!n`. Both must be SKIPPED_OPEN_GENERIC. `Reset<T>()` shares its
     // canonical managed signature with the non-generic `Reset()` (the CsvHelper
     // `UnregisterClassMap` crash), and `Describe<T>()` has no sibling (the Serilog
     // `ForContext<TSource>()` CS0411 binding). The non-generic `Reset()` must still bind.

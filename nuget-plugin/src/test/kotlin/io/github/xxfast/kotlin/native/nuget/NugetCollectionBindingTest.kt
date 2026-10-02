@@ -481,13 +481,13 @@ class NugetCollectionBindingTest {
           "assemblyName":"TestDependency",
           "diagnostics":[
             {
-              "kind":"skipped_collection_element",
+              "kind":"SKIPPED_COLLECTION_ELEMENT",
               "typeName":"Roster","memberName":"Corners",
               "memberSignature":"Corners()",
               "reason":"struct elements are deferred","hint":"Expose a list of primitives."
             },
             {
-              "kind":"skipped_array",
+              "kind":"SKIPPED_ARRAY",
               "typeName":"Roster","memberName":"Ages",
               "memberSignature":"Ages()",
               "reason":"arrays are deferred","hint":"Expose IReadOnlyList<T>."

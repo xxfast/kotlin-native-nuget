@@ -223,7 +223,7 @@ public class MenagerieRoundTripTests
 
     // Phase 13 Wave 2, item 1 (ADR-086 addendum / ADR-085's "Deferred" list): derived-interface
     // flattening. `ITagged : IFeedable` plans no Kotlin bridge factory today, so a Kotlin class
-    // implementing `ITagged` is a named `skipped_kotlin_bridge` and minting hits `nugetHandle()`'s
+    // implementing `ITagged` is a named `SKIPPED_KOTLIN_BRIDGE` and minting hits `nugetHandle()`'s
     // `error(...)` fallback. EXPECTED TO FAIL as of this commit: both tests below throw instead of
     // returning their expected string (see the task report for the exact exception surfaced).
 
@@ -532,8 +532,8 @@ public class MenagerieDiagnosticsTests
         // case in this fixture that is NOT expected to newly fail: the diagnostic already exists.
         JsonElement diagnostics = TestDependencyDiagnostics();
         Assert.True(
-            HasDiagnostic(diagnostics, "IWithDim", "Greeting", "skipped_default_interface_method"),
-            "expected the pre-existing skipped_default_interface_method diagnostic naming " +
+            HasDiagnostic(diagnostics, "IWithDim", "Greeting", "SKIPPED_DEFAULT_INTERFACE_METHOD"),
+            "expected the pre-existing SKIPPED_DEFAULT_INTERFACE_METHOD diagnostic naming " +
             "IWithDim.Greeting");
     }
 

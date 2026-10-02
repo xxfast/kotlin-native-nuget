@@ -138,7 +138,7 @@ public class NullabilityRoundTripTests
     public void LegacyFindNickname_Oreo_ReturnsOreo()
     {
         // Oblivious island (`#nullable disable`): binds non-null either way, but should raise
-        // one info_oblivious_nullability diagnostic per member (checked at the build level,
+        // one INFO_OBLIVIOUS_NULLABILITY diagnostic per member (checked at the build level,
         // not assertable here).
         string result = NicknameSample.LegacyFindNickname("Oreo");
         Assert.Equal("Oreo", result);

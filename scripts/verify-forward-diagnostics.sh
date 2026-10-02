@@ -125,7 +125,11 @@ for module, sibling in (("test-library", "TestCompanion"), ("test-companion", "T
     interops = list(generated.rglob("Interop.cs"))
     assert manifests and interops, f"No real generated outputs for {module}"
     for manifest in manifests:
-        entries = json.loads(manifest.read_text())
+        data = json.loads(manifest.read_text())
+        # ADR-182: a versioned object root, not the pre-0.9.0 bare array.
+        assert isinstance(data, dict) and data.get("schemaVersion") == 1, \
+            f"{manifest} has no schemaVersion 1 object root"
+        entries = data["diagnostics"]
         assert any(entry["kind"] == "WARNING_DUPLICATED_DEPENDENCY_TYPE"
                    and entry["declaration"] == sys.argv[2]
                    and f"{sibling} NuGet package" in entry["message"]

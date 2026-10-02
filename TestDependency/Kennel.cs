@@ -59,7 +59,7 @@ public class Kitten
 ///
 /// <list type="bullet">
 ///   <item><see cref="NapAsync"/>: non-generic <c>Task</c>, no result at all (the reader bug this
-///         ADR fixes: today it lands on <c>skipped_unbound_type_reference</c> rather than the
+///         ADR fixes: today it lands on <c>SKIPPED_UNBOUND_TYPE_REFERENCE</c> rather than the
 ///         async path, because <c>GetTypeFromReference</c> knows only <c>System.String</c>).</item>
 ///   <item><see cref="CountAsync"/>: <c>Task&lt;int&gt;</c>, a pass-through scalar needing NO
 ///         conversion in <c>End</c>.</item>
@@ -93,7 +93,7 @@ public class Kitten
 ///         await, when the transfer scope that minted the bridge <c>GCHandle</c> is long gone.
 ///         ADR-152's inferred claim C, which is SILENT if wrong.</item>
 ///   <item><see cref="PurrsAsync"/>: <c>ValueTask&lt;int&gt;</c>, deliberately OUT of v1 scope.
-///         It must stay skipped with a named <c>info_async_not_yet_mapped</c> diagnostic rather
+///         It must stay skipped with a named <c>INFO_ASYNC_NOT_YET_MAPPED</c> diagnostic rather
 ///         than binding or disappearing silently.</item>
 /// </list>
 ///
@@ -212,7 +212,7 @@ public class Kennel
 
     /// <summary>
     /// <c>ValueTask&lt;int&gt;</c>: out of v1 scope. Must stay SKIPPED with a named
-    /// <c>info_async_not_yet_mapped</c> diagnostic, never bound and never silently dropped.
+    /// <c>INFO_ASYNC_NOT_YET_MAPPED</c> diagnostic, never bound and never silently dropped.
     /// </summary>
     public ValueTask<int> PurrsAsync() => ValueTask.FromResult(3);
 
@@ -349,8 +349,8 @@ public class Kennel
 
     /// <summary>
     /// SYNC and token-taking: OUT of scope, must be absent from the Kotlin surface with the named
-    /// <c>info_cancellation_token_not_yet_mapped</c> diagnostic rather than the misleading
-    /// <c>skipped_unbound_type_reference</c> hint that tells the user to bind the BCL.
+    /// <c>INFO_CANCELLATION_TOKEN_NOT_YET_MAPPED</c> diagnostic rather than the misleading
+    /// <c>SKIPPED_UNBOUND_TYPE_REFERENCE</c> hint that tells the user to bind the BCL.
     /// </summary>
     public int Wait(CancellationToken ct) => 0;
 
@@ -517,7 +517,7 @@ public class Kennel
 
     /// <summary>
     /// The nullable VALUE element, kept here as the live regression fixture for the split-out
-    /// item above: it must produce `info_async_not_yet_mapped` (or another NAMED skip), never a
+    /// item above: it must produce `INFO_ASYNC_NOT_YET_MAPPED` (or another NAMED skip), never a
     /// silent bind that drops the nulls.
     /// </summary>
     public static async IAsyncEnumerable<int?> NullableTicks()

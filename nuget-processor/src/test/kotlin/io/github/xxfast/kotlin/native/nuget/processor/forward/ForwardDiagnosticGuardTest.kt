@@ -166,4 +166,27 @@ class ForwardDiagnosticGuardTest {
       "an absent location is omitted, not written as null",
     )
   }
+
+  /**
+   * ADR-182: the root is an object carrying a bare-integer `schemaVersion` ahead of the
+   * `diagnostics` array, for an empty round as much as a populated one.
+   */
+  @Test
+  fun `NugetDiagnostics json is a versioned object root`() {
+    assertEquals(
+      "{\n  \"schemaVersion\": 1,\n  \"diagnostics\": []\n}\n",
+      renderForwardDiagnosticsJson(emptyList()),
+    )
+
+    val record = ForwardDiagnosticRecord(
+      severity = ForwardDiagnosticSeverity.WARNING,
+      kind = ForwardDiagnosticKind.SKIPPED_ALL_DECLARATIONS,
+      declaration = "sample",
+      message = "m",
+    )
+    val rendered: String = renderForwardDiagnosticsJson(listOf(record))
+    assertTrue(rendered.startsWith("{\n  \"schemaVersion\": 1,\n  \"diagnostics\": [\n"), rendered)
+    assertTrue(rendered.trimEnd().endsWith("]\n}"), rendered)
+    assertTrue("\"kind\": \"SKIPPED_ALL_DECLARATIONS\"" in rendered, rendered)
+  }
 }

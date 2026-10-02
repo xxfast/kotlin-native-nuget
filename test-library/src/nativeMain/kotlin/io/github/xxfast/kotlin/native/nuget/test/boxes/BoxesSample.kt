@@ -28,7 +28,7 @@ fun boxOfIntDescribe(value: Int): String = Box(value).describe()
 
 /**
  * `Box<String>` and `Box<String?>` both lose their fake constructor to
- * `skipped_ambiguous_generic_constructor` (both erase to `(String)`), so `Box<String>` is only
+ * `SKIPPED_AMBIGUOUS_GENERIC_CONSTRUCTOR` (both erase to `(String)`), so `Box<String>` is only
  * reachable via `Boxes.ofText`. `.uppercase()` proves a real Kotlin `String`, not a pointer.
  */
 fun boxOfTextUppercased(value: String): String = Boxes.ofText(value).value.uppercase()
@@ -73,7 +73,7 @@ fun describeAllBoxOfInt(first: Int, second: Int): String =
 
 /**
  * ADR-155: `Boxes.Counts` returns `Dictionary<String, Int>`, which used to be
- * `skipped_unbound_generic_instantiation` (ADR-072 Decision 9) and now binds as a read-only
+ * `SKIPPED_UNBOUND_GENERIC_INSTANTIATION` (ADR-072 Decision 9) and now binds as a read-only
  * Kotlin `Map`. A STATIC route on a static class, which is the position no Roster row stands on.
  */
 fun countOf(name: String): Int = Boxes.counts().getValue(name)

@@ -38,18 +38,18 @@
     "staticMethod": { "seen": 19, "bound": 17 }
   },
   "diagnostics": {
-    "info_async_not_yet_mapped": 3,
-    "info_uninstantiated_generic_type": 2,
-    "skipped_array": 22,
-    "skipped_collection_element": 3,
-    "skipped_default_interface_method": 79,
-    "skipped_delegate_position": 2,
-    "skipped_delegate_signature": 1,
-    "skipped_empty_interface": 8,
-    "skipped_event": 1,
-    "skipped_open_generic": 99,
-    "skipped_unbound_generic_instantiation": 4,
-    "skipped_unbound_type_reference": 72
+    "INFO_ASYNC_NOT_YET_MAPPED": 3,
+    "INFO_UNINSTANTIATED_GENERIC_TYPE": 2,
+    "SKIPPED_ARRAY": 22,
+    "SKIPPED_COLLECTION_ELEMENT": 3,
+    "SKIPPED_DEFAULT_INTERFACE_METHOD": 79,
+    "SKIPPED_DELEGATE_POSITION": 2,
+    "SKIPPED_DELEGATE_SIGNATURE": 1,
+    "SKIPPED_EMPTY_INTERFACE": 8,
+    "SKIPPED_EVENT": 1,
+    "SKIPPED_OPEN_GENERIC": 99,
+    "SKIPPED_UNBOUND_GENERIC_INSTANTIATION": 4,
+    "SKIPPED_UNBOUND_TYPE_REFERENCE": 72
   },
   "unboundTypeReferences": {
     "Serilog.Core.ILogEventEnricher": 4,

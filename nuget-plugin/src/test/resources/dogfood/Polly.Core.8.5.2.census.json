@@ -38,17 +38,17 @@
     "staticMethod": { "seen": 2, "bound": 2 }
   },
   "diagnostics": {
-    "info_async_not_yet_mapped": 2,
-    "info_cancellation_token_not_yet_mapped": 4,
-    "info_uninstantiated_generic_type": 15,
-    "skipped_collection_element": 1,
-    "skipped_delegate_position": 1,
-    "skipped_delegate_signature": 12,
-    "skipped_indexer": 5,
-    "skipped_open_generic": 47,
-    "skipped_unbound_generic_instantiation": 2,
-    "skipped_unbound_type_reference": 14,
-    "skipped_unsupported_struct": 35
+    "INFO_ASYNC_NOT_YET_MAPPED": 2,
+    "INFO_CANCELLATION_TOKEN_NOT_YET_MAPPED": 4,
+    "INFO_UNINSTANTIATED_GENERIC_TYPE": 15,
+    "SKIPPED_COLLECTION_ELEMENT": 1,
+    "SKIPPED_DELEGATE_POSITION": 1,
+    "SKIPPED_DELEGATE_SIGNATURE": 12,
+    "SKIPPED_INDEXER": 5,
+    "SKIPPED_OPEN_GENERIC": 47,
+    "SKIPPED_UNBOUND_GENERIC_INSTANTIATION": 2,
+    "SKIPPED_UNBOUND_TYPE_REFERENCE": 14,
+    "SKIPPED_UNSUPPORTED_STRUCT": 35
   },
   "unboundTypeReferences": {
     "System.Exception": 3,

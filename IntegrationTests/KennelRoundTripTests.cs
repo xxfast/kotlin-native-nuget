@@ -41,7 +41,7 @@ public class KennelRoundTripTests
         Assert.Equal(message, parts[1]);
     }
 
-    // Non-generic `Task`: the shape the reader used to misfile as `skipped_unbound_type_reference`
+    // Non-generic `Task`: the shape the reader used to misfile as `SKIPPED_UNBOUND_TYPE_REFERENCE`
     // because `GetTypeFromReference` knew only `System.String`. Nothing comes back but the
     // resumption itself, so this row fails as a hang or a wrong value, never as a marshalling bug.
     [Fact]
@@ -149,7 +149,7 @@ public class KennelRoundTripTests
     //
     // The two token-taking members that must stay SKIPPED (the sync `Wait(CancellationToken)` and
     // the two-token `HerdAsync`) cannot be asserted from here: their absence is a property of the
-    // generated Kotlin surface, pinned by the `info_cancellation_token_not_yet_mapped` diagnostic
+    // generated Kotlin surface, pinned by the `INFO_CANCELLATION_TOKEN_NOT_YET_MAPPED` diagnostic
     // on the generator side. If they ever bind, KennelSample.kt is where it shows.
     // ----------------------------------------------------------------------------------------
 
