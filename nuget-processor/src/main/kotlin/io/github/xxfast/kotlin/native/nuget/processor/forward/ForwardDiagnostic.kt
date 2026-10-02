@@ -643,6 +643,9 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   ForwardPlanSkipReason.RECEIVER_FAN_OUT -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
   // Only the extension-PROPERTY route records it, so it reports under that route's kind.
   ForwardPlanSkipReason.SHADOWED_BY_MEMBER -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY
+  // ADR-188: the same route, the same kind.
+  ForwardPlanSkipReason.SHADOWED_BY_EXTENSION_FUNCTION ->
+    ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY
   ForwardPlanSkipReason.NULLABLE ->
     if (position == ForwardSkipPosition.INPUT) ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
     else ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN
@@ -1006,6 +1009,13 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       "the member property ${detail?.let { "`$it`" } ?: "of the same name"} shadows it: Kotlin " +
           "resolves `receiver.${detail?.substringAfterLast('.') ?: "name"}` to the member, so " +
           "the extension is unreachable by call syntax ($name)"
+
+    // ADR-188: C#'s own resolution, not Kotlin's. Both members declare; only the access is broken.
+    ForwardPlanSkipReason.SHADOWED_BY_EXTENSION_FUNCTION ->
+      "the extension function ${detail?.let { "`$it`" } ?: "of the same name"} on the same " +
+          "receiver renders the same C# name, and a C# 14 extension property beside a same-named " +
+          "extension method makes every access to either ambiguous (CS9339), so the function " +
+          "keeps the name ($name)"
 
     // Issue #131 names the parameter at an input position; the ADR-064 2026-09-29 amendment names
     // the declared type at a return. With neither, the shipped generic sentence stands.
@@ -1455,6 +1465,12 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   ForwardPlanSkipReason.SHADOWED_BY_MEMBER ->
     "rename the extension property so the member no longer shadows it, or expose a top-level " +
         "function that computes the value instead"
+
+  // ADR-188: the generator never invents the second name (ADR-110); `@CSharpName` (ADR-179) is
+  // how the author keeps both.
+  ForwardPlanSkipReason.SHADOWED_BY_EXTENSION_FUNCTION ->
+    "to keep both, give the property (or the function) its own C# name with " +
+        "`@CSharpName(\"...\")`; or rename one of them in Kotlin"
 
   // ROADMAP Phase 4 (ADR-151 amendment): since a `ByteArray` binds as a `List` element and as a
   // `Map` VALUE, the only shapes that still reach this reason are the two DECLINED equality slots,

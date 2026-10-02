@@ -894,8 +894,8 @@ class Tier1NestedTypesTest {
     )
     listOf(
       Regex("""Summarize\(this global::[\w.]*Owner\.Nested receiver\)"""),
-      // ADR-013 spells an extension property as `Get{Name}`.
-      Regex("""GetIsHigh\(this global::[\w.]*Owner\.Nested receiver\)"""),
+      // ADR-188 spells an extension property as a C# 14 `extension` block member.
+      Regex("""extension\(global::[\w.]*Owner\.Nested receiver\)\s*\{\s*public bool IsHigh"""),
     ).forEach { signature ->
       assertTrue(
         signature.containsMatchIn(csharp),

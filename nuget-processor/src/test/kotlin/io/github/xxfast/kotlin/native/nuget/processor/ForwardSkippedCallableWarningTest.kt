@@ -304,6 +304,7 @@ class ForwardSkippedCallableWarningTest {
         // expressed as a single first RECEIVER-role slot, and no legacy route re-emits it.
         ForwardPlanSkipReason.RECEIVER_FAN_OUT,
         ForwardPlanSkipReason.SHADOWED_BY_MEMBER,
+        ForwardPlanSkipReason.SHADOWED_BY_EXTENSION_FUNCTION,
         ForwardPlanSkipReason.OBJECT,
         ForwardPlanSkipReason.STRING,
         ForwardPlanSkipReason.UNSUPPORTED,

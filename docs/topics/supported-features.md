@@ -76,7 +76,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | top-level property | → | static property | get and set, including nullable. | [Top-level declarations](top-level-declarations.md) |
 | `const val` | → | `const` | Value is the compiler's evaluated constant, so an expression or a dependency const binds; hex/underscore literal spelling isn't kept. | [Top-level declarations](top-level-declarations.md) |
 | extension function | → | static method | A real C# extension method. The receiver may be a class, `String`, a primitive, enum, value class, interface, sealed base or a nullable handle; a has-value receiver skips, named. | [Extensions](extensions.md) |
-| extension property | → | static accessor | The same receiver set as an extension function, plus a collection and a bound C# interface. A nullable collection, nullable bound interface, has-value, or member-shadowed receiver skip, named. | [Extensions](extensions.md) |
+| extension property | → | C# 14 `extension` property (`cat.IsKitten`) | The same receiver set as an extension function, plus a collection and a bound C# interface. A shadowing member or same-named extension function skips it, named; needs C# 14. | [Extensions](extensions.md) |
 
 ## Generics
 

@@ -978,7 +978,7 @@ public class LiveHandleTests
     // getter rather than an extension function. The getter body is the new surface: the setter
     // route already owns a handle scope, the getter body is flat, so without a `finally`-dispose
     // around it a read on a C#-implemented receiver leaks one StableRef per call, invisible to
-    // IntegrationTests. (The nullable handle receiver, `Cat?.GetNameOrStray()`, mints nothing on
+    // IntegrationTests. (The nullable handle receiver, the `Cat?.nameOrStray()` function, mints nothing on
     // either side, so it gets no row.)
     [Fact]
     public void InterfaceReceiverExtensionProperty_CSharpImplementedPet_ReleasesTransferHandle()
@@ -986,7 +986,7 @@ public class LiveHandleTests
         AssertNoLeak(() =>
         {
             using IPet rex = new Dog("Rex");
-            Assert.Equal("Rex/4/Woof!", rex.GetSummary());
+            Assert.Equal("Rex/4/Woof!", rex.Summary);
         });
     }
 
@@ -1004,7 +1004,7 @@ public class LiveHandleTests
         AssertNoLeak(() =>
         {
             var basket = new List<string> { "Oreo", "Mylo", "Whiskers" };
-            Assert.Equal("Whiskers", basket.GetLongestName());
+            Assert.Equal("Whiskers", basket.LongestName);
         });
     }
 
@@ -1020,9 +1020,9 @@ public class LiveHandleTests
         AssertNoLeak(() =>
         {
             using IPet rex = new Dog("Rex");
-            rex.SetNapQuota(2);
-            Assert.Equal(2, rex.GetNapQuota());
-            rex.SetNapQuota(null);
+            rex.NapQuota = 2;
+            Assert.Equal(2, rex.NapQuota);
+            rex.NapQuota = null;
         });
     }
 
@@ -1047,7 +1047,7 @@ public class LiveHandleTests
         AssertNoLeak(() =>
         {
             IFeedable nibbles = new LeakGoat();
-            Assert.Equal("Nibbles the C#-side goat needs 4 bowls", nibbles.GetFeedingNote());
+            Assert.Equal("Nibbles the C#-side goat needs 4 bowls", nibbles.FeedingNote);
         });
     }
 

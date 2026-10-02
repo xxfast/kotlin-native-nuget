@@ -629,7 +629,7 @@ public class Issue54Tests
 
     /// <summary>
     /// The extension-<em>property</em> half of the amendment: <c>val Issue54Shape.area: Double</c>
-    /// has to reach <c>Issue54ShapeExtensions</c> as <c>GetArea()</c>, the same way
+    /// has to reach <c>Issue54ShapeExtensions</c> as the C# 14 extension property <c>Area</c>, the same way
     /// <c>Footprint()</c> does. The property planner classifies its receiver on its own path and
     /// admits only object-handle, primitive, string and value-class receivers, so a sealed receiver
     /// is dropped with <c>SKIPPED_UNSUPPORTED_PROPERTY</c> today and this does not compile.
@@ -643,8 +643,8 @@ public class Issue54Tests
 
         using Issue54Shape shape = drawing.Shape;
 
-        Assert.Equal(Math.PI * 7.5 * 7.5, shape.GetArea(), 9);
-        Assert.Equal(Math.PI * 7.5 * 7.5, Assert.IsType<Issue54Shape.Circle>(shape).GetArea(), 9);
+        Assert.Equal(Math.PI * 7.5 * 7.5, shape.Area, 9);
+        Assert.Equal(Math.PI * 7.5 * 7.5, Assert.IsType<Issue54Shape.Circle>(shape).Area, 9);
     }
 
     /// <summary>
@@ -659,6 +659,6 @@ public class Issue54Tests
 
         using Issue54Shape shape = drawing.Current;
 
-        Assert.Equal(0.0, shape.GetArea());
+        Assert.Equal(0.0, shape.Area);
     }
 }

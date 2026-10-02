@@ -119,7 +119,7 @@ public class InterfaceParameterTests
         // is what separates a real crossing from a Kotlin-side constant.
         using ISitter sitter = new HouseSitter();
 
-        Assert.Equal("at number 9", sitter.GetAddress());
+        Assert.Equal("at number 9", sitter.Address);
         Assert.Equal(1, ((HouseSitter)sitter).Visits);
     }
 

@@ -8,6 +8,7 @@ import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
@@ -139,6 +140,10 @@ internal class ForwardPropertyPlanner(
   private val dropped: MutableList<ForwardDroppedProperty> = mutableListOf()
   private val droppedReceivers: MutableList<ForwardDroppedExtensionReceiver> = mutableListOf()
 
+  // ADR-188: (receiver declaration, C# name) -> Kotlin name of every exported extension function,
+  // set by [catalog] before its extension-property walk.
+  private var extensionFunctionNames: Map<Pair<String, String>, String> = emptyMap()
+
   /** ADR-075: every collection property setter this planner declined to build because a
    *  component failed [isWrappableComponent] — the property itself is still planned, get-only. */
   val droppedPropertySetters: List<ForwardDroppedPropertySetter> get() = droppedSetters
@@ -161,7 +166,18 @@ internal class ForwardPropertyPlanner(
     // ADR-006 amendment: every exported enum, top-level, nested (ADR-133) or the enum arm of a
     // sealed interface (ADR-157) alike; its own member properties plan as [ENUM_MEMBER].
     enums: List<KSClassDeclaration> = emptyList(),
+    // ADR-188: the exported extension functions, read only to refuse an extension property that
+    // shares its C# name and receiver with one of them (C# 14 member lookup is ambiguous, CS9339).
+    extensionFunctions: List<KSFunctionDeclaration> = emptyList(),
   ): List<ForwardPropertyPlan> = buildList {
+    extensionFunctionNames = extensionFunctions.mapNotNull { function ->
+      val receiver: String = function.extensionReceiver?.resolve()?.expandAliases()?.declaration
+        ?.qualifiedName?.asString() ?: return@mapNotNull null
+      val name: String =
+        if (Modifier.SUSPEND in function.modifiers) function.csharpAsyncMemberName().removePrefix("@")
+        else function.csharpMemberName()
+      (receiver to name) to function.simpleName.asString()
+    }.toMap()
     enums.forEach { enum ->
       inOwner(enum.forwardDiagnosticOwner()) {
         addAll(enumMemberProperties(enum))
@@ -660,6 +676,26 @@ internal class ForwardPropertyPlanner(
           receiverDescription = receiverType.diagnosticTypeName(),
           reason = ForwardPlanSkipReason.SHADOWED_BY_MEMBER,
           detail = member,
+        ),
+      )
+      return null
+    }
+    // ADR-188: a C# 14 extension property and a classic extension method of one name on one
+    // receiver both declare fine, but every `receiver.Name` access is then ambiguous (CS9339), so
+    // the consumer could call neither spelling it expects. The function keeps the name: it is the
+    // shape C# has always had, and dropping it would be the larger loss. Matched on the receiver
+    // DECLARATION, so `fun Cat?.x()` and `val Cat.x` meet, and on the C# name, so a `@CSharpName`
+    // on either side (ADR-179) is what separates them. Never a rename (ADR-110).
+    val receiverDeclaration: String? = receiver.declaration.qualifiedName?.asString()
+    val csharpName: String = prop.csharpMemberName()
+    extensionFunctionNames[receiverDeclaration.orEmpty() to csharpName]?.let { function ->
+      droppedReceivers.add(
+        ForwardDroppedExtensionReceiver(
+          symbol = "${prop.packageName.asString()}.$receiverName.$name",
+          node = prop,
+          receiverDescription = receiverType.diagnosticTypeName(),
+          reason = ForwardPlanSkipReason.SHADOWED_BY_EXTENSION_FUNCTION,
+          detail = function,
         ),
       )
       return null

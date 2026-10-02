@@ -534,7 +534,32 @@ internal fun StringBuilder.renderMember(member: CirMember, className: String = "
     is CirCallbackMethod -> renderCallbackMethod(member)
     is CirStoredCallbackMethod -> renderStoredCallbackMethod(member)
     is CirInterfaceBridgeMethod -> renderInterfaceBridgeMethod(member)
+    is CirExtensionProperty -> renderExtensionProperty(member)
   }
+}
+
+/**
+ * ADR-188: one C# 14 `extension(Receiver receiver)` block per Kotlin extension property. The bodies
+ * arrive at the extension-method depth (brace at column 8), and an accessor brace here sits at
+ * column 16, so each body moves in two levels.
+ */
+internal fun StringBuilder.renderExtensionProperty(prop: CirExtensionProperty) {
+  appendLine("        extension(${prop.receiverType} receiver)")
+  appendLine("        {")
+  renderDoc(prop.doc, "            ")
+  appendLine("            public ${prop.type} ${prop.name}")
+  appendLine("            {")
+  appendLine("                get")
+  appendLine("                {${prop.getter.indentNestedBody().indentNestedBody()}")
+  appendLine("                }")
+  if (prop.setter != null) {
+    appendLine("                set")
+    appendLine("                {${prop.setter.indentNestedBody().indentNestedBody()}")
+    appendLine("                }")
+  }
+  appendLine("            }")
+  appendLine("        }")
+  appendLine()
 }
 
 internal fun StringBuilder.renderConst(const: CirConst) {

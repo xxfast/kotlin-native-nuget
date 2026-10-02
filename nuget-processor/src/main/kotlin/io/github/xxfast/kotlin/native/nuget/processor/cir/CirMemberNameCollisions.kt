@@ -54,6 +54,10 @@ internal fun List<CirMember>.csMemberNames(): List<CsMemberName> = mapNotNull { 
     is CirStoredCallbackMethod -> CsMemberName(member.csMethodName, CsMemberKind.METHOD)
     is CirInterfaceBridgeMethod -> CsMemberName(member.csMethodName, CsMemberKind.METHOD)
     is CirDllImport -> null
+    // ADR-188: not a member name of the static class. Two extension properties are only a clash on
+    // the SAME receiver (`extension(A.Mood)` and `extension(B.Mood)` may both declare `Pounce`), so
+    // `CirTranslator`'s extension-property loop checks them per receiver instead.
+    is CirExtensionProperty -> null
   }
 }
 

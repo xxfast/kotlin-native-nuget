@@ -116,6 +116,13 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  return the member's value. Only the extension-property route records it. The shadowing
    *  member (`Owner.name`) rides in the detail slot. */
   SHADOWED_BY_MEMBER(droppedFromCSharp = true),
+
+  /** ADR-188: an extension property whose C# name and receiver declaration match an exported
+   *  extension function's (`val Cat.nameOrStray` beside `fun Cat?.nameOrStray()`). Both declare
+   *  in one C# 14 static class, but every `cat.NameOrStray` access is then ambiguous (CS9339), so
+   *  the property is skipped and the function keeps the name. Only the extension-property route
+   *  records it; the function's Kotlin name rides in the detail slot. */
+  SHADOWED_BY_EXTENSION_FUNCTION(droppedFromCSharp = true),
   OBJECT(droppedFromCSharp = true),
   STRING(droppedFromCSharp = true),
   UNSUPPORTED(droppedFromCSharp = true),
@@ -893,6 +900,7 @@ internal class ForwardCallablePlanner(
     val planner = ForwardPropertyPlanner(classifier, symbols, expects)
     val propertyPlans: List<ForwardPropertyPlan> = planner.catalog(
       classes, properties, extensionProperties, sealedClasses, objects, enums,
+      extensionFunctions = extensionFunctions,
     )
     return ForwardCallablePlanCatalog(
       entries.map { entry -> entry.withLegacyDefaults() },

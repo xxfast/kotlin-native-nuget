@@ -18,9 +18,36 @@ fun String.meowify(): String = "$this meow!"
 ```C#
 using var cat = new Cat("Oreo", 9);
 cat.SayName();       // "My name is Oreo"
-cat.GetIsKitten();    // extension property, called as a method
+var kitten = cat.IsKitten; // extension property, read like a property
 "Oreo".Meowify();
 ```
+
+An extension property becomes a C# 14 `extension` block, so it reads and writes like a property.
+The generated package therefore requires C# 14 (`net10.0`).
+
+### Extension properties as C# 14 extension blocks {id="extension-property-blocks"}
+
+```kotlin
+val Cat.isKitten: Boolean get() = lives > 7
+
+var PropertyProbe.extensionLives: Int
+  get() = extensionPropertyState().lives
+  set(value) { extensionPropertyState().lives = value }
+```
+
+```C#
+bool kitten = cat.IsKitten;
+probe.ExtensionLives = 3; // a var also has a setter
+```
+
+Two imported namespaces can each declare a property with the same name on the same receiver, which
+makes `cat.IsKitten` ambiguous. Call the lowered accessors on the declaring class instead:
+`CatExtensions.get_IsKitten(cat)` and `CatExtensions.set_Label(cat, value)`.
+
+> **Breaking in 0.9.0.** The `GetIsKitten(this Cat)` and `SetLabel(this Cat, string)` static
+> methods are gone. Replace `cat.GetIsKitten()` with `cat.IsKitten` and `cat.SetLabel(x)` with
+> `cat.Label = x`. The generated source now needs C# 14, and the floor only rises in a major
+> version.
 
 ## Where the generated class lands
 
@@ -88,6 +115,26 @@ neither does a nullable receiver (`val Foo?.x`). The extension-**function** equi
 (`fun Foo.y()` beside a member `Foo.y()`) is not caught yet and still exports, silently calling the
 member; avoid giving an extension function the same name as a member on its receiver.
 
+An extension property is skipped, named `SHADOWED_BY_EXTENSION_FUNCTION` under
+`SKIPPED_UNSUPPORTED_PROPERTY`, when an extension function on the same receiver has the same C# name,
+because `cat.NameOrStray` would be ambiguous. The function keeps the name. Put `@CSharpName` on the
+property to keep both:
+
+```kotlin
+fun Cat.homeLabel(): String = "${name}'s basket"
+
+@CSharpName("HomeTag")
+val Cat.homeLabel: String get() = "${name}'s tag"
+```
+
+```C#
+cat.HomeLabel(); // "Oreo's basket"
+cat.HomeTag;     // "Oreo's tag"
+```
+
+Two extension properties with the same C# name on the same receiver are a build error
+(`ERROR_CSHARP_SIGNATURE_COLLISION`); rename one with `@CSharpName`.
+
 `Instant`, `Duration`, and `Uuid` map to `DateTimeOffset`, `TimeSpan`, and `Guid` at a receiver the
 same way they do everywhere else (see
 [Primitives and strings](primitives-and-strings.md#instant)). A nullable collection or a nullable
@@ -112,7 +159,7 @@ Cat? none = null;
 none.NameOrStray(); // "stray"
 ```
 
-An extension property behaves the same way (`none.GetNameOrStray()`).
+An extension property on a nullable receiver (`val Cat?.x`) behaves the same way.
 
 ### Interface receivers {id="interface-receivers"}
 
@@ -141,15 +188,14 @@ val Pet.summary: String get() = "$name/$legs/${speak()}"
 ```
 
 ```C#
-rex.GetSummary(); // "Rex/4/Woof!"
+var summary = rex.Summary; // "Rex/4/Woof!"
 ```
 
 ### Converting and collection receivers {id="converting-and-collection-receivers"}
 
 An extension property's receiver may also be a converting scalar (`Enum`, `Uuid`, `Instant`,
 `Duration`), a `Collection`, or a bound C# interface from a NuGet dependency, the same shapes an
-extension *function* receiver already takes. A `var` carries the receiver on the setter export too,
-in front of the value:
+extension *function* receiver already takes. A `var` works too:
 
 ```kotlin
 val Uuid.shortForm: String get() = toString().substringBefore('-')
@@ -160,17 +206,10 @@ var Uuid.nickname: String
 ```
 
 ```C#
-public static string GetShortForm(this global::System.Guid receiver);
-
-public static string GetNickname(this global::System.Guid receiver);
-public static void SetNickname(this global::System.Guid receiver, string value);
-```
-
-```C#
 Guid chip = Guid.Parse("7f9c2ba4-0000-4e10-8c1a-11111111abcd");
-chip.GetNickname();            // "unnamed chip"
-chip.SetNickname("Oreo's chip");
-chip.GetNickname();            // "Oreo's chip"
+string before = chip.Nickname; // "unnamed chip"
+chip.Nickname = "Oreo's chip";
+string after = chip.Nickname;  // "Oreo's chip"
 ```
 
 A collection receiver (`val List<String>.longestName`) disposes a handle the C# side builds for the
@@ -228,7 +267,7 @@ new CatId("Oreo-1").OrAnonymous(); // CS1929: call it on a CatId? variable inste
 ```
 
 `Guid?` has the same asymmetry for the same reason: a nullable `Uuid` receiver (`val
-Uuid?.isMissing`) only binds `this Guid? receiver`, so `missing.GetIsMissing()` needs a `Guid?`
+Uuid?.isMissing`) only binds `this Guid? receiver`, so `missing.IsMissing` needs a `Guid?`
 local, not a bare `Guid`.
 
 ### Nested receivers

@@ -728,15 +728,31 @@ internal fun translate(
       if (plan != null) {
         tracker.trackProperty(plan)
         ForwardCirPropertyProjection.extension(plan, context.libraryName)
+          // ADR-188: the projection emits a C# 14 extension-block property, not a `GetX`/`SetX`
+          // method pair, so nothing here feeds the ADR-095 extension-method signature check. Its
+          // one clash, a same-named extension function on the same receiver, is refused by the
+          // planner (`SHADOWED_BY_EXTENSION_FUNCTION`).
           .also { emitted ->
+            // The property's C# signature, spelled as the `Name(Receiver)` it lowers next to, so
+            // the ADR-095 / ADR-006 signature checks still see it: two properties of one C# name
+            // on one receiver, or an enum member method `Name(this Mood)` beside one, stay fatal
+            // rather than reaching the consumer's compiler.
             val keyword: String = if (prop.isMutable) "var" else "val"
             val receiverText: String = prop.extensionReceiver?.resolve()?.declaration?.simpleName
               ?.asString().orEmpty()
             extensionClassMethods.getOrPut(key) { mutableListOf() } += emitted
-              .filterIsInstance<CirMethod>()
-              .map { method ->
+              .filterIsInstance<CirExtensionProperty>()
+              .map { property ->
                 SpelledMethod(
-                  method, "`$keyword $receiverText.${prop.simpleName.asString()}`", prop,
+                  CirMethod(
+                    name = property.name,
+                    returnType = property.type,
+                    parameters = listOf(CirParameter("receiver", property.receiverType)),
+                    body = "",
+                    isStatic = true,
+                    isExtension = true,
+                  ),
+                  "`$keyword $receiverText.${prop.simpleName.asString()}`", prop,
                 )
               }
             recordStatic(namespace, className, emitted, prop, prop.topLevelSpelling())
@@ -744,6 +760,28 @@ internal fun translate(
       } else {
         emptyList()
       }
+    }
+
+    // ADR-188: two extension properties of one C# name on one receiver type (a `@CSharpName`
+    // landing on a sibling's name) are two `public T X` members of one extension block: fatal
+    // here, as the two `GetX(this R)` methods they replaced were. Properties only: the function
+    // group above already checked the functions, and the planner refused function/property pairs.
+    // Keyed on the receiver DECLARATION, not its rendered C# spelling: two same-named enums in two
+    // packages may render one spelling here and are still two receivers.
+    val propertySignatures: List<CirMethod> = extensionClassMethods[key].orEmpty()
+      .filter { spelled -> spelled.node is KSPropertyDeclaration }
+      .map { spelled ->
+        val declaration: String = (spelled.node as KSPropertyDeclaration).extensionReceiver
+          ?.resolve()?.declaration?.qualifiedName?.asString().orEmpty()
+        spelled.method.copy(parameters = listOf(CirParameter("receiver", declaration)))
+      }
+    if (propertySignatures.isNotEmpty()) {
+      emitCsharpSignatureCollisions(
+        methods = propertySignatures,
+        container = "$namespace.$className",
+        symbol = props.first(),
+        logger = logger,
+      )
     }
 
     // Same rule as the extension-function groups above: no surviving member, no class. Merging an

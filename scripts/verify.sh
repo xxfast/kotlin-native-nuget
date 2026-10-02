@@ -85,7 +85,7 @@ echo "==> Runtime exports present in the linked library (scripts/verify-runtime-
 echo "==> Forward diagnostic delivery (scripts/verify-forward-diagnostics.sh)"
 "$ROOT/scripts/verify-forward-diagnostics.sh"
 
-echo "==> Check generated bindings compile as a consumer (net10.0, warnings as errors)"
+echo "==> Check generated bindings compile as a consumer (net10.0, C# 14, warnings as errors)"
 dotnet build GeneratedBindingsCheck
 
 # ADR-150: the fixture's KDoc must reach the documentation XML a consumer's compiler emits, not

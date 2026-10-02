@@ -191,6 +191,7 @@ private fun CirMember.resolveDocLinks(index: Map<String, String>): CirMember = w
   is CirStoredCallbackMethod -> this
   is CirCallbackMethod -> this
   is CirConst -> this
+  is CirExtensionProperty -> copy(doc = doc.resolve(index))
 }
 
 private fun CirDoc?.resolve(index: Map<String, String>): CirDoc? {

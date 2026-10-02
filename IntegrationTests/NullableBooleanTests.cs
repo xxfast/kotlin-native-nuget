@@ -267,20 +267,20 @@ public class NullableBooleanTests
     public void Cat_HasChip_True_WhenNineLives()
     {
         using var oreo = new Cat("Oreo", 9);
-        Assert.True(oreo.GetHasChip());
+        Assert.True(oreo.HasChip);
     }
 
     [Fact]
     public void Cat_HasChip_False_WhenZeroLives()
     {
         using var mylo = new Cat("Mylo", 0);
-        Assert.False(mylo.GetHasChip());
+        Assert.False(mylo.HasChip);
     }
 
     [Fact]
     public void Cat_HasChip_Null_Otherwise()
     {
         using var stray = new Cat("Stray", 3);
-        Assert.Null(stray.GetHasChip());
+        Assert.Null(stray.HasChip);
     }
 }

@@ -8,62 +8,78 @@ namespace IntegrationTests;
 public class ExtensionPropertyTests
 {
     [Fact]
-    public void Cat_GetIsKitten_ReturnsTrueForNewCatWithNineLives()
+    public void Cat_IsKitten_ReturnsTrueForNewCatWithNineLives()
     {
         using var cat = new Cat("Oreo", 9);
-        Assert.True(cat.GetIsKitten());
+        Assert.True(cat.IsKitten);
     }
 
     [Fact]
-    public void Cat_GetIsKitten_ReturnsFalseForCatWithFewLivesLeft()
+    public void Cat_IsKitten_ReturnsFalseForCatWithFewLivesLeft()
     {
         using var cat = new Cat("Mylo", 3);
-        Assert.False(cat.GetIsKitten());
+        Assert.False(cat.IsKitten);
     }
 
     [Fact]
-    public void Cat_GetIsKitten_ReturnsFalseAtExactlySevenLives()
+    public void Cat_IsKitten_ReturnsFalseAtExactlySevenLives()
     {
         using var cat = new Cat("Oreo", 7);
-        Assert.False(cat.GetIsKitten());
+        Assert.False(cat.IsKitten);
+    }
+
+    // ADR-188: extension properties are C# 14 `extension` blocks, and the old `GetXxx`/`SetXxx`
+    // static methods are removed outright (no [Obsolete] release). The property compiles to a
+    // `get_IsKitten(Cat)` accessor on the same static class; `GetIsKitten` must be gone, for a
+    // read-only property (Oreo's kittenhood) and for a mutable one (Mylo's nap quota setter).
+    [Fact]
+    public void ExtensionProperty_IsACSharp14Property_GetSetMethodsAreRemoved()
+    {
+        Assert.NotNull(typeof(CatExtensions).GetMethod("get_IsKitten"));
+        Assert.Null(typeof(CatExtensions).GetMethod("GetIsKitten"));
+
+        Assert.NotNull(typeof(PetExtensions).GetMethod("get_NapQuota"));
+        Assert.NotNull(typeof(PetExtensions).GetMethod("set_NapQuota"));
+        Assert.Null(typeof(PetExtensions).GetMethod("GetNapQuota"));
+        Assert.Null(typeof(PetExtensions).GetMethod("SetNapQuota"));
     }
 
     [Fact]
-    public void Cat_GetLabel_ReturnsNameWithMood()
+    public void Cat_Label_ReturnsNameWithMood()
     {
         using var cat = new Cat("Oreo", 9);
-        Assert.Equal("Oreo (sleepy)", cat.GetLabel());
+        Assert.Equal("Oreo (sleepy)", cat.Label);
     }
 
     [Fact]
-    public void Cat_GetLabel_ReturnsMyloWithMood()
+    public void Cat_Label_ReturnsMyloWithMood()
     {
         using var cat = new Cat("Mylo", 9);
-        Assert.Equal("Mylo (sleepy)", cat.GetLabel());
+        Assert.Equal("Mylo (sleepy)", cat.Label);
     }
 
     [Fact]
-    public void String_GetWordCount_ReturnsTwoForTwoWords()
+    public void String_WordCount_ReturnsTwoForTwoWords()
     {
-        Assert.Equal(2, "hello world".GetWordCount());
+        Assert.Equal(2, "hello world".WordCount);
     }
 
     [Fact]
-    public void String_GetWordCount_ReturnsOneForSingleWord()
+    public void String_WordCount_ReturnsOneForSingleWord()
     {
-        Assert.Equal(1, "Oreo".GetWordCount());
+        Assert.Equal(1, "Oreo".WordCount);
     }
 
     [Fact]
-    public void String_GetWordCount_IgnoresLeadingAndTrailingSpaces()
+    public void String_WordCount_IgnoresLeadingAndTrailingSpaces()
     {
-        Assert.Equal(2, "  Oreo Mylo  ".GetWordCount());
+        Assert.Equal(2, "  Oreo Mylo  ".WordCount);
     }
 
     [Fact]
-    public void String_GetWordCount_CountsCatNames()
+    public void String_WordCount_CountsCatNames()
     {
-        Assert.Equal(3, "Oreo and Mylo".GetWordCount());
+        Assert.Equal(3, "Oreo and Mylo".WordCount);
     }
 
     // ---- ADR-132 receiver lowering at the extension-property position ----
@@ -87,37 +103,58 @@ public class ExtensionPropertyTests
     // Interface receiver, Kotlin-backed wrapper: `Cat` is an `Animal` is a `Pet`, so the receiver
     // crosses as Oreo's own StableRef handle (nothing minted, nothing to dispose).
     [Fact]
-    public void PetReceiver_GetSummary_KotlinBackedCat()
+    public void PetReceiver_Summary_KotlinBackedCat()
     {
         using var oreo = new Cat("Oreo", 9);
-        Assert.Equal("Oreo/4/Meow! My name is Oreo", oreo.GetSummary());
+        Assert.Equal("Oreo/4/Meow! My name is Oreo", oreo.Summary);
     }
 
     // Interface receiver, C#-implemented: Kotlin composes the string from three slot invocations
     // back into this `Dog`, so an echo or a Kotlin-side default cannot pass.
     [Fact]
-    public void PetReceiver_GetSummary_CSharpImplementedDog_DispatchesAllThreeSlots()
+    public void PetReceiver_Summary_CSharpImplementedDog_DispatchesAllThreeSlots()
     {
         using IPet rex = new Dog("Rex");
-        Assert.Equal("Rex/4/Woof!", rex.GetSummary());
+        Assert.Equal("Rex/4/Woof!", rex.Summary);
+    }
+
+    // ADR-188: `val Cat?.nameOrStray` and `fun Cat?.nameOrStray()` share the C# name on one
+    // receiver, which C# 14 makes ambiguous at every access (CS9339). The property is skipped
+    // (SHADOWED_BY_EXTENSION_FUNCTION) and the function keeps the name, so the two cells below call
+    // the function; it lowers the nullable handle receiver the same way the property would have.
+    [Fact]
+    public void NameOrStray_PropertySkipped_FunctionKeepsTheName()
+    {
+        Assert.Null(typeof(CatExtensions).GetMethod("get_NameOrStray"));
+        Assert.NotNull(typeof(CatExtensions).GetMethod("NameOrStray"));
+    }
+
+    // ADR-179's remedy for the skip above: `@CSharpName("HomeTag")` on `val Cat.homeLabel` keeps
+    // it apart from `fun Cat.homeLabel()`, so Oreo has both a basket and a tag.
+    [Fact]
+    public void CSharpNameOnExtensionProperty_KeepsBothNames()
+    {
+        using var oreo = new Cat("Oreo", 9);
+        Assert.Equal("Oreo's basket", oreo.HomeLabel());
+        Assert.Equal("Oreo's tag", oreo.HomeTag);
     }
 
     // Nullable handle receiver, absent: null crosses as IntPtr.Zero, `this?.name` is null on the
     // Kotlin side, and the call site is static dispatch so there is no NullReferenceException.
     [Fact]
-    public void NullableCatReceiver_GetNameOrStray_NullCat()
+    public void NullableCatReceiver_NameOrStray_NullCat()
     {
         Cat? none = null;
-        Assert.Equal("stray", none.GetNameOrStray());
+        Assert.Equal("stray", none.NameOrStray());
     }
 
     // Nullable handle receiver, present: Mylo is home, so the handle crosses and Kotlin reads his
     // name off it.
     [Fact]
-    public void NullableCatReceiver_GetNameOrStray_LiveCat()
+    public void NullableCatReceiver_NameOrStray_LiveCat()
     {
         using var mylo = new Cat("Mylo", 3);
-        Assert.Equal("Mylo", mylo.GetNameOrStray());
+        Assert.Equal("Mylo", mylo.NameOrStray());
     }
 
     // ---- ADR-132 parity: the receiver shapes the extension-FUNCTION route already binds ----
@@ -132,127 +169,127 @@ public class ExtensionPropertyTests
     // `Patient`/`ChartRef` cells further down -- declares a `Mood` of its own: the bare name is
     // CS0104 in this file, not in the library.
     [Fact]
-    public void MoodReceiver_GetEmoji_HappyCat()
+    public void MoodReceiver_Emoji_HappyCat()
     {
-        Assert.Equal("=^.^=", TestLibrary.Cat.Mood.Happy.GetEmoji());
+        Assert.Equal("=^.^=", TestLibrary.Cat.Mood.Happy.Emoji);
     }
 
     [Fact]
-    public void MoodReceiver_GetEmoji_GrumpyCatIsNotHappyCat()
+    public void MoodReceiver_Emoji_GrumpyCatIsNotHappyCat()
     {
-        Assert.Equal(">:(", TestLibrary.Cat.Mood.Grumpy.GetEmoji());
-        Assert.Equal("(-.-)zzZ", TestLibrary.Cat.Mood.Sleepy.GetEmoji());
+        Assert.Equal(">:(", TestLibrary.Cat.Mood.Grumpy.Emoji);
+        Assert.Equal("(-.-)zzZ", TestLibrary.Cat.Mood.Sleepy.Emoji);
     }
 
     // Converting receiver: `Guid` crosses as its hex-dash text and Kotlin parses it back, so a
     // receiver whose text was mangled cannot produce the leading block.
     [Fact]
-    public void GuidReceiver_GetShortForm_ReturnsLeadingBlock()
+    public void GuidReceiver_ShortForm_ReturnsLeadingBlock()
     {
         Guid chip = Guid.Parse("123e4567-e89b-12d3-a456-426614174000");
-        Assert.Equal("123e4567", chip.GetShortForm());
+        Assert.Equal("123e4567", chip.ShortForm);
     }
 
     // The `var` over a converting receiver: the setter export carries the receiver slot in front of
     // the value slot, and the read afterwards has to find the same Kotlin-side key.
     [Fact]
-    public void GuidReceiver_SetNickname_ThenGetNickname_RoundTrips()
+    public void GuidReceiver_Nickname_SetThenRead_RoundTrips()
     {
         Guid chip = Guid.Parse("7f9c2ba4-0000-4e10-8c1a-11111111abcd");
-        Assert.Equal("unnamed chip", chip.GetNickname());
+        Assert.Equal("unnamed chip", chip.Nickname);
 
-        chip.SetNickname("Oreo's chip");
-        Assert.Equal("Oreo's chip", chip.GetNickname());
+        chip.Nickname = "Oreo's chip";
+        Assert.Equal("Oreo's chip", chip.Nickname);
     }
 
     // Nullable converting receiver, absent: the null rides the string wire as a null pointer, and
     // the call site needs a `Guid?` local (ADR-132 sub-decision (a): a bare `Guid` is CS1929).
     [Fact]
-    public void NullableGuidReceiver_GetIsMissing_NoChip()
+    public void NullableGuidReceiver_IsMissing_NoChip()
     {
         Guid? missing = null;
-        Assert.True(missing.GetIsMissing());
+        Assert.True(missing.IsMissing);
     }
 
     [Fact]
-    public void NullableGuidReceiver_GetIsMissing_ChippedCat()
+    public void NullableGuidReceiver_IsMissing_ChippedCat()
     {
         Guid? present = Guid.Parse("123e4567-e89b-12d3-a456-426614174000");
-        Assert.False(present.GetIsMissing());
+        Assert.False(present.IsMissing);
     }
 
     // Instant receiver, NON-UTC offset. Mylo was photographed at 05:00 on 2 January 1970 in
     // Melbourne (+10:00), which is still 1 January in UTC: `UtcTicks` answers day 0, the
     // wall-clock `Ticks` would answer day 1. That one-day gap is the whole point of this cell.
     [Fact]
-    public void InstantReceiver_GetEpochDay_UsesUtcTicksNotWallClock()
+    public void InstantReceiver_EpochDay_UsesUtcTicksNotWallClock()
     {
         var melbourneMorning = new DateTimeOffset(1970, 1, 2, 5, 0, 0, TimeSpan.FromHours(10));
-        Assert.Equal(0L, melbourneMorning.GetEpochDay());
+        Assert.Equal(0L, melbourneMorning.EpochDay);
     }
 
     // The UTC control beside it, so a fix that ignores the offset entirely still fails the pair.
     [Fact]
-    public void InstantReceiver_GetEpochDay_Utc()
+    public void InstantReceiver_EpochDay_Utc()
     {
-        Assert.Equal(1L, DateTimeOffset.FromUnixTimeSeconds(86_400).GetEpochDay());
+        Assert.Equal(1L, DateTimeOffset.FromUnixTimeSeconds(86_400).EpochDay);
     }
 
     // Duration receiver: one tick domain, no conversion at all - the cell that catches a fix that
     // only ever works when there IS a conversion to get right.
     [Fact]
-    public void DurationReceiver_GetWholeHours_NinetyMinuteNapIsOneHour()
+    public void DurationReceiver_WholeHours_NinetyMinuteNapIsOneHour()
     {
-        Assert.Equal(1L, TimeSpan.FromMinutes(90).GetWholeHours());
+        Assert.Equal(1L, TimeSpan.FromMinutes(90).WholeHours);
     }
 
     // Nullable String receiver, both branches. The null one is the reason the receiver's DllImport
     // parameter cannot be spelled bare `string` under `<Nullable>enable</Nullable>`.
     [Fact]
-    public void NullableStringReceiver_GetOrPlaceholder_NobodyCameThroughTheFlap()
+    public void NullableStringReceiver_OrPlaceholder_NobodyCameThroughTheFlap()
     {
         string? nobody = null;
-        Assert.Equal("(no cat)", nobody.GetOrPlaceholder());
+        Assert.Equal("(no cat)", nobody.OrPlaceholder);
     }
 
     [Fact]
-    public void NullableStringReceiver_GetOrPlaceholder_OreoCameThrough()
+    public void NullableStringReceiver_OrPlaceholder_OreoCameThrough()
     {
-        Assert.Equal("Oreo", "Oreo".GetOrPlaceholder());
+        Assert.Equal("Oreo", "Oreo".OrPlaceholder);
     }
 
     // Nullable value class over a String underlying: null pointer in-band, the underlying text
     // otherwise. A `CatId?` local for the same CS1929 reason as `Guid?` above.
     [Fact]
-    public void NullableValueClassReceiver_GetDisplay_StrayHasNoId()
+    public void NullableValueClassReceiver_Display_StrayHasNoId()
     {
         CatId? none = null;
-        Assert.Equal("anonymous", none.GetDisplay());
+        Assert.Equal("anonymous", none.Display);
     }
 
     [Fact]
-    public void NullableValueClassReceiver_GetDisplay_OreoHasOne()
+    public void NullableValueClassReceiver_Display_OreoHasOne()
     {
         CatId? oreo = new CatId("oreo-1");
-        Assert.Equal("oreo-1", oreo.GetDisplay());
+        Assert.Equal("oreo-1", oreo.Display);
     }
 
     // The same nullable value class one underlying over: `ChartRef` wraps a `Patient` handle, so
     // the receiver is reconstructed from a StableRef rather than from text, and the absent case is
     // `IntPtr.Zero` rather than a null string.
     [Fact]
-    public void NullableHandleValueClassReceiver_GetPatientName_NoChartOnFile()
+    public void NullableHandleValueClassReceiver_PatientName_NoChartOnFile()
     {
         ChartRef? none = null;
-        Assert.Equal("(unfiled)", none.GetPatientName());
+        Assert.Equal("(unfiled)", none.PatientName);
     }
 
     [Fact]
-    public void NullableHandleValueClassReceiver_GetPatientName_OreosChart()
+    public void NullableHandleValueClassReceiver_PatientName_OreosChart()
     {
         using var patient = new Patient("Oreo");
         ChartRef? chart = new ChartRef(patient);
-        Assert.Equal("Oreo", chart.GetPatientName());
+        Assert.Equal("Oreo", chart.PatientName);
     }
 
     // Folded in by decision: a `var` of NULLABLE-PRIMITIVE type over an INTERFACE receiver. The
@@ -265,28 +302,28 @@ public class ExtensionPropertyTests
         using var oreo = new Cat("Oreo", 9);
         IPet pet = oreo;
 
-        Assert.Null(pet.GetNapQuota());
+        Assert.Null(pet.NapQuota);
 
-        pet.SetNapQuota(3);
-        Assert.Equal(3, pet.GetNapQuota());
+        pet.NapQuota = 3;
+        Assert.Equal(3, pet.NapQuota);
 
-        pet.SetNapQuota(null);
-        Assert.Null(pet.GetNapQuota());
+        pet.NapQuota = null;
+        Assert.Null(pet.NapQuota);
     }
 
     // Collection receiver: the C# side builds a Kotlin list for the crossing (LeakTests Row 6i
     // holds the lifecycle end of this).
     [Fact]
-    public void ListReceiver_GetLongestName_PicksTheLongestCatName()
+    public void ListReceiver_LongestName_PicksTheLongestCatName()
     {
         var basket = new List<string> { "Oreo", "Mylo", "Whiskers" };
-        Assert.Equal("Whiskers", basket.GetLongestName());
+        Assert.Equal("Whiskers", basket.LongestName);
     }
 
     [Fact]
-    public void ListReceiver_GetLongestName_EmptyBasket()
+    public void ListReceiver_LongestName_EmptyBasket()
     {
-        Assert.Equal("(empty basket)", new List<string>().GetLongestName());
+        Assert.Equal("(empty basket)", new List<string>().LongestName);
     }
 
     // Bound-interface receiver (ADR-088): a C# interface from the TestDependency package, used as
@@ -301,9 +338,9 @@ public class ExtensionPropertyTests
     }
 
     [Fact]
-    public void BoundInterfaceReceiver_GetFeedingNote_DispatchesBackIntoTheCSharpGoat()
+    public void BoundInterfaceReceiver_FeedingNote_DispatchesBackIntoTheCSharpGoat()
     {
         IFeedable nibbles = new Goat();
-        Assert.Equal("Nibbles the C#-side goat needs 4 bowls", nibbles.GetFeedingNote());
+        Assert.Equal("Nibbles the C#-side goat needs 4 bowls", nibbles.FeedingNote);
     }
 }

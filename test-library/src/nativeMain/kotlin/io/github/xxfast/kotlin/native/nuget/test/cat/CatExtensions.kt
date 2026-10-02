@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.test.cat
 
+import io.github.xxfast.kotlin.native.nuget.annotations.CSharpName
+
 fun Cat.sayName(): String = "My name is ${this.name}"
 fun Cat.greetWith(greeting: String): String = "$greeting, ${this.name}!"
 
@@ -78,5 +80,20 @@ val Pet.summary: String get() = "$name/$legs/${speak()}"
  * ADR-132 receiver lowering, nullable handle receiver on a property. Oreo is home and answers to
  * his name; the cat that is not there is a stray. Sits beside `fun Cat?.nameOrStray()`, which is
  * the same shape one slot to the right.
+ *
+ * ADR-188: on C# 14 the two share the C# name `NameOrStray` on one receiver, which makes every
+ * `cat.NameOrStray` access ambiguous (CS9339), so this property is skipped with
+ * `SHADOWED_BY_EXTENSION_FUNCTION` and the function keeps the name. `homeLabel` below is the
+ * remedy the diagnostic names.
  */
 val Cat?.nameOrStray: String get() = this?.name ?: "stray"
+
+/** ADR-188: the function half of the `@CSharpName` remedy pair; keeps the C# name `HomeLabel`. */
+fun Cat.homeLabel(): String = "${name}'s basket"
+
+/**
+ * ADR-188 / ADR-179: the same Kotlin name as `fun Cat.homeLabel()`, kept apart in C# by
+ * `@CSharpName`, so both survive: `cat.HomeLabel()` and `cat.HomeTag`.
+ */
+@CSharpName("HomeTag")
+val Cat.homeLabel: String get() = "${name}'s tag"
