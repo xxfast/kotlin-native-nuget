@@ -5,7 +5,7 @@ import kotlin.native.ref.WeakReference
 
 /**
  * Watches one forward object weakly so C# can prove Kotlin's GC collects it once the last
- * wrapper is disposed (ADR-121). C# drives the collection through `NugetBridge.GcCollect()`.
+ * wrapper is disposed (ADR-121). C# drives the collection through `NugetMarshal.GcCollect()`.
  */
 @OptIn(ExperimentalNativeApi::class)
 object Morgue {

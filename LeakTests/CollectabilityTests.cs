@@ -8,7 +8,7 @@ namespace LeakTests;
 /// <summary>
 /// ADR-121: ADR-120's counter proves the <c>StableRef</c> goes; this proves the *object* goes.
 /// Kotlin's <see cref="Morgue"/> holds one weak reference, C# disposes the last wrapper and drives
-/// Kotlin's GC through <c>NugetBridge.GcCollect()</c> until the weak reference reads dead.
+/// Kotlin's GC through <c>NugetMarshal.GcCollect()</c> until the weak reference reads dead.
 ///
 /// Oreo checks in, and the point of the exercise is that Oreo checks out.
 /// </summary>
@@ -29,7 +29,7 @@ public class CollectabilityTests
         {
             GC.Collect();
             GC.WaitForPendingFinalizers();
-            NugetBridge.GcCollect();
+            NugetMarshal.GcCollect();
             if (!Morgue.IsAlive()) return true;
             Thread.Sleep(25);
         }
@@ -121,7 +121,7 @@ public class CollectabilityTests
     // clean one.
     private const int LabelLength = 4;
 
-    // Deliberately NOT NugetBridge.GcCollect(): the Kotlin wrappers are closed explicitly by
+    // Deliberately NOT NugetMarshal.GcCollect(): the Kotlin wrappers are closed explicitly by
     // RosterSample.IssueTags, so the element handles must be gone without waiting on Kotlin's GC
     // to run a Cleaner. Only the managed side needs collecting, and Roster.AliveTags() does that
     // itself before counting.

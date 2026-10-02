@@ -101,7 +101,7 @@ public class LiveHandleTests
         {
             GC.Collect();
             GC.WaitForPendingFinalizers();
-            NugetBridge.GcCollect();   // ADR-084 cleaner round; harmless when nothing is pending
+            NugetMarshal.GcCollect();   // ADR-084 cleaner round; harmless when nothing is pending
             Thread.Sleep(50);
 
             long current = NugetMarshal.LiveHandles;

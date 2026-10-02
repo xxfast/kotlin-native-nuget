@@ -70,6 +70,16 @@ public object NugetHandles {
   }
 }
 
+/**
+ * `int64_t nuget_live_handles(void)`: frozen 1.0 `nuget_*` ABI (ADR-186).
+ *
+ * Frozen contract: in a process where nothing else crosses concurrently, a balanced sequence of
+ * crossings (every minted handle disposed, pending cleaner rounds flushed) returns this value to its
+ * prior reading. Process-global per native library.
+ *
+ * Not frozen: the absolute value and which handle kinds are counted. A later ADR may count a new
+ * kind in a minor release, so compare deltas within one process, never absolutes across versions.
+ */
 @NugetRuntimeApi
 @CName("nuget_live_handles")
 public fun export_nuget_live_handles(): Long = NugetHandles.live.value
@@ -806,6 +816,16 @@ public interface NugetCSharpBridge {
 public fun export_nuget_csharp_token(handle: COpaquePointer): COpaquePointer? =
   (handle.asStableRef<Any>().get() as? NugetCSharpBridge)?.nugetToken
 
+/**
+ * `void nuget_gc_collect(void)`: frozen 1.0 `nuget_*` ABI (ADR-186).
+ *
+ * Frozen contract: performs one Kotlin GC round before returning. Cleaner-driven releases
+ * (ADR-084) are not guaranteed complete on return; callers loop.
+ *
+ * The body depends on the experimental `GC.collect()`. If a future Kotlin/Native removes it, this
+ * export calls the replacement; with no replacement, a no-op body is a documented minor change.
+ * Removing the symbol is a major change.
+ */
 @NugetRuntimeApi
 @CName("nuget_gc_collect")
 @OptIn(NativeRuntimeApi::class)

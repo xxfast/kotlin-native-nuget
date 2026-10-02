@@ -165,7 +165,7 @@ public class WorkshopRoundTripTests
         {
             GC.Collect();
             GC.WaitForPendingFinalizers();
-            NugetBridge.GcCollect();
+            NugetMarshal.GcCollect();
         }
 
         // Invoked on the calling thread, long after the crossing that passed it returned.
