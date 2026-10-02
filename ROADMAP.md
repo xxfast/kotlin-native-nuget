@@ -19,7 +19,7 @@ Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is
 - [ ] `include` / `exclude` mean Kotlin packages in `publish {}` and C# namespaces in `bind {}`; rename one pair. Verified.
 - [ ] One naming scheme for task names: `packNuget` and `publishNuget` are verb-first, `nugetGen`, `nugetRestore` and the rest are `nuget`-first, and `nugetGen` is vague. Verified.
 - [ ] One casing and one prefix set for diagnostic codes across forward (`SKIPPED_*`) and reverse (`skipped_*`), and a schema version on `NugetDiagnostics.json` and `reverse-ir.json`. Verified.
-- [ ] Decide the forward finalizer contract: [ADR-003](docs/adr/003-memory-management-across-bridge.md) lists a finalizer as a mitigation and [ADR-121](docs/adr/121-kotlin-object-collectability-after-last-dispose.md) says none. The callback-payload wrapper item under Performance & Resource Hygiene depends on the answer.
+- [ ] Implement [ADR-187](docs/adr/187-forward-finalizer-contract.md): SafeHandle-owned forward handles; the callback-payload wrapper item under Performance & Resource Hygiene closes with it. ([details](docs/backlog/implement-adr-187-safehandle-forward-handles.md))
 - [ ] Decide the minimum C# version: [ADR-013](docs/adr/013-extension-property-mapping.md) defers C# 14 extension properties to a major bump.
 - [ ] The reverse opt-in itself: the marker or DSL switch that makes the reverse direction experimental.
 - [ ] Reverse only, not a 1.0.0 blocker: the generated `NugetManagedException` is `internal` (`NugetGenerateBindingsTask.kt:5368`, verified), so Kotlin cannot catch it by type; fold it onto the runtime's public class.
