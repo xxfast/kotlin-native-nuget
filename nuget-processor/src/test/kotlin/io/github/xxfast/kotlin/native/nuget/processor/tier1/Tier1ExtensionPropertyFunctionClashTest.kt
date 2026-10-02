@@ -69,4 +69,34 @@ class Tier1ExtensionPropertyFunctionClashTest {
       "a renamed property must not warn; kspWarnings=${result.kspWarnings}",
     )
   }
+
+  /**
+   * Two extension properties rendering one C# name into one class were fatal as two `GetTag`
+   * methods; as two `public string Tag` extension members they must stay fatal, not reach the
+   * consumer's compiler.
+   */
+  @Test
+  fun `two extension properties of one C# name on one receiver stay a fatal collision`() {
+    val result = Tier1Harness.run(
+      mapOf(
+        "Cat.kt" to """
+          package tier1.extpropnames
+
+          import io.github.xxfast.kotlin.native.nuget.annotations.CSharpName
+
+          class Cat(val name: String)
+
+          val Cat.tag: String get() = name
+          @CSharpName("Tag")
+          val Cat.label: String get() = name
+        """.trimIndent(),
+      ),
+      libraries = listOf(csharpNameLibrary),
+    )
+
+    assertTrue(
+      result.kspErrors.any { it.contains("ERROR_CSHARP_SIGNATURE_COLLISION") && it.contains("Tag") },
+      "expected a fatal name collision; kspErrors=${result.kspErrors}",
+    )
+  }
 }
