@@ -621,6 +621,7 @@ public class NugetPlugin : Plugin<Project> {
         val shared: Provider<List<String>> =
           project.provider { resolvedShared(extension.sources.get(), projectDir) }
         wireDotnet(project, task.dotnet, task.dotnetSource)
+        task.strictCompileCheck.set(pub.strictCompileCheck)
         task.dependencySources.addAll(
           project.provider {
             val feedDir: File = interopDir.get().dir("feed").asFile

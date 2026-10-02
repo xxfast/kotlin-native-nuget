@@ -141,8 +141,13 @@ public abstract class NugetCompileInteropTask : DefaultTask() {
   @get:Internal
   public abstract val packagesDir: DirectoryProperty
 
+  // `publish { strictCompileCheck }`: an absent or unusable SDK fails instead of skipping.
+  @get:Input
+  public abstract val strictCompileCheck: Property<Boolean>
+
   init {
     targetFramework.convention(DEFAULT_TARGET_FRAMEWORK)
+    strictCompileCheck.convention(false)
   }
 
   // Where interop-check.csproj and its obj/ and bin/ land: build/nuget-compile/.
@@ -173,8 +178,8 @@ public abstract class NugetCompileInteropTask : DefaultTask() {
       searchPath = dotnetSearchPath.orNull ?: System.getenv("PATH"),
     )
     if (dotnet == null) {
-      logger.warn(
-        "w: [nuget] dotnet is not on PATH, so the generated C# bindings were not compiled " +
+      skipOrFail(
+        "dotnet is not on PATH, so the generated C# bindings were not compiled " +
           "before packing. A binding that does not compile will only surface in a consumer's " +
           "build. Install the .NET SDK 10.0 or later from https://dot.net/download " +
           "to check at pack."
@@ -215,8 +220,8 @@ public abstract class NugetCompileInteropTask : DefaultTask() {
     if (probe.exitValue != 0) {
       val probeOutput: String =
         (probeOut.toString().trimEnd() + "\n" + probeErr.toString().trimEnd()).trim()
-      logger.warn(
-        "w: [nuget] The .NET SDK on PATH could not be used (dotnet --version exit code " +
+      skipOrFail(
+        "The .NET SDK on PATH could not be used (dotnet --version exit code " +
           "${probe.exitValue}), so the generated C# bindings were not compiled before packing. " +
           "A binding that does not compile will only surface in a consumer's build. Install the " +
           ".NET SDK 10.0 or later from https://dot.net/download to check at pack. dotnet said:\n" +
@@ -260,5 +265,18 @@ public abstract class NugetCompileInteropTask : DefaultTask() {
           (stdout.toString().trimEnd() + "\n" + stderr.toString().trimEnd()).trim()
       )
     }
+  }
+
+  // Off: today's warning, byte for byte. On: the same reason, fatal.
+  private fun skipOrFail(reason: String) {
+    if (!strictCompileCheck.get()) {
+      logger.warn("w: [nuget] $reason")
+      return
+    }
+
+    throw GradleException(
+      "[nuget] $reason\nThis fails the build because nuget { publish { strictCompileCheck } } " +
+        "is on; turn it off to skip the check with a warning instead."
+    )
   }
 }

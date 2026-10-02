@@ -41,6 +41,12 @@ public abstract class NugetPublishConfig @Inject constructor(objects: ObjectFact
   // behaviour.
   public abstract val strictDependencyTypes: Property<Boolean>
 
+  // ADR-138 open question: opt-in. A missing `dotnet`, or an SDK whose `dotnet --version` fails,
+  // fails `nugetCompileInterop` (and so `packNuget` and `check`) instead of warning and packing
+  // unchecked bindings, for a CI that forgot to install the SDK. Default false: publishing still
+  // needs no .NET SDK.
+  public abstract val strictCompileCheck: Property<Boolean>
+
   public abstract val include: ListProperty<String>
   public abstract val exclude: ListProperty<String>
 
@@ -69,6 +75,7 @@ public abstract class NugetPublishConfig @Inject constructor(objects: ObjectFact
   init {
     snapshot.convention(false)
     strictDependencyTypes.convention(false)
+    strictCompileCheck.convention(false)
   }
 
   // An explicit function, not only the container: without it `repositories { }` inside

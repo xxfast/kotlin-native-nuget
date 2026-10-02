@@ -53,6 +53,18 @@ When `dotnet` is not found (on `PATH`, or at `nuget.dotnet` if you set it; see [
 skips the check, so publishing a Kotlin/Native library still needs no .NET SDK. A `nuget.dotnet` that
 doesn't point at an executable fails instead of skipping, in `check` as well as `packNuget`.
 
+To make a CI that forgot to install the SDK fail instead, opt in to strict mode. With it on, a missing
+or unusable `dotnet` fails `check` and `packNuget` with the same reason the warning would have given,
+rather than packing unchecked bindings:
+
+```kotlin
+nuget {
+  publish {
+    strictCompileCheck = true
+  }
+}
+```
+
 Registered on every project with a `publish {}` block. `packNuget` depends on them only when `snapshot = true`:
 
 | Task | Description | Writes |

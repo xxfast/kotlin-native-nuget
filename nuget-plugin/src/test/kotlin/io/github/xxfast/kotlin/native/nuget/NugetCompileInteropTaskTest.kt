@@ -405,6 +405,83 @@ class NugetCompileInteropTaskTest {
   }
 
   @Test
+  fun `strict mode fails when dotnet is not on the search path`() {
+    val task: NugetCompileInteropTask = compileTask()
+    val sources: File = tempDir("compile-interop-strict-src")
+    File(sources, "Interop.cs").writeText("namespace Sample { public class Ok { } }")
+
+    task.generatedCsDirs.from(sources)
+    task.dotnetSearchPath.set(tempDir("compile-interop-strict-nodotnet").absolutePath)
+    task.projectDir.set(tempDir("compile-interop-strict-out"))
+    task.dependencyVersions.set(emptyMap())
+    task.dependencySources.set(emptyList())
+    task.strictCompileCheck.set(true)
+
+    val failure: GradleException = assertFailsWith<GradleException> { task.compile() }
+
+    assertContains(failure.message.orEmpty(), "dot.net/download")
+    assertContains(failure.message.orEmpty(), "strictCompileCheck")
+  }
+
+  @Test
+  fun `strict mode fails when the sdk cannot run`() {
+    // A shell script cannot stand in for dotnet.exe on Windows.
+    Assumptions.assumeFalse(
+      System.getProperty("os.name").startsWith("Windows", ignoreCase = true),
+      "needs a shell script as the dotnet executable",
+    )
+
+    val bin: File = tempDir("compile-interop-strict-badsdk-bin")
+    val fake = File(bin, "dotnet")
+    fake.writeText("#!/bin/sh\necho \"the SDK could not be resolved\" 1>&2\nexit 155\n")
+    fake.setExecutable(true)
+
+    val sources: File = tempDir("compile-interop-strict-badsdk-src")
+    File(sources, "Interop.cs").writeText("namespace Sample { public class Ok { } }")
+
+    val task: NugetCompileInteropTask = compileTask()
+    task.generatedCsDirs.from(sources)
+    task.dotnetSearchPath.set(bin.absolutePath)
+    task.projectDir.set(tempDir("compile-interop-strict-badsdk-out"))
+    task.dependencyVersions.set(emptyMap())
+    task.dependencySources.set(emptyList())
+    task.strictCompileCheck.set(true)
+
+    val failure: GradleException = assertFailsWith<GradleException> { task.compile() }
+
+    val message: String = failure.message.orEmpty()
+    assertContains(message, "exit code 155")
+    assertContains(message, "the SDK could not be resolved")
+    assertContains(message, "strictCompileCheck")
+  }
+
+  @Test
+  fun `strict mode still skips when there is no generated C#`() {
+    val task: NugetCompileInteropTask = compileTask()
+    task.generatedCsDirs.from(tempDir("compile-interop-strict-empty"))
+    task.dotnetSearchPath.set(tempDir("compile-interop-strict-empty-path").absolutePath)
+    task.projectDir.set(tempDir("compile-interop-strict-empty-out"))
+    task.strictCompileCheck.set(true)
+
+    task.compile()
+  }
+
+  @Test
+  fun `strictCompileCheck defaults to off and is wired from publish`() {
+    assertFalse(compileTask().strictCompileCheck.get())
+
+    val project: Project = buildProject()
+    publish(project)
+    project.extensions.getByType(NugetExtension::class.java).publish {
+      it.strictCompileCheck.set(true)
+    }
+    project.evaluate()
+
+    val compile = project.tasks.getByName("nugetCompileInterop") as NugetCompileInteropTask
+    assertTrue(compile.strictCompileCheck.get())
+  }
+
+  @Test
   fun `a duplicate class fails the task with the compiler error text`() {
     // Skipped when the .NET SDK is absent, exactly as the task itself skips.
     findExecutable("dotnet") ?: return

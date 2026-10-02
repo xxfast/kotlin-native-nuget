@@ -23,7 +23,8 @@
     <p>
       If a .NET SDK is on <code>PATH</code>, <code>packNuget</code> also compiles the generated C#
       bindings before packing and fails the build on a compiler error. Without the SDK (or one
-      that can't run), this check is skipped with a warning and publishing proceeds as before. See
+      that can't run), this check is skipped with a warning and publishing proceeds as before, unless
+      you set <code>publish { strictCompileCheck = true }</code>, which fails the build instead. See
       <a href="gradle-tasks.md#nugetcompileinterop">Gradle tasks</a>.
     </p>
   </note>

@@ -112,7 +112,7 @@ The same task, but failing instead of skipping when `dotnet` is absent.
 `getting-started.md:84`) for authors who publish only. The gain is small: an author with no .NET SDK
 cannot consume the package either, so the defect surfaces at their first consumer build instead of
 at pack. Revisit if the skip is found to hide a real defect in the field; an opt-in strict switch is
-listed under open questions.
+listed under open questions. Revisited as opt-in in the 2026-10-03 strict-mode amendment.
 
 ### 4. Reuse the reverse direction's `build/nuget-interop/interop.csproj` (rejected)
 
@@ -428,8 +428,9 @@ Three seams, all on the plugin's JVM tests plus one line in verify:
 ## Open questions
 
 - Should the skip be opt-out (`nuget { publish { requireCompileCheck = true } }`, or a Gradle
-  property) so a CI that forgot to install the SDK fails loudly instead of warning? Not decided
-  here; the warning is the v1 answer.
+  property) so a CI that forgot to install the SDK fails loudly instead of warning? Yes, as
+  `publish { strictCompileCheck }`; see the 2026-10-03 strict-mode amendment. The warning stays the
+  default.
 - Does the check belong on the `check` lifecycle task as well as on `packNuget`? Yes, see the
   2026-10-03 amendment.
 
@@ -501,3 +502,23 @@ skipping, and passed in 33s.
   well as `packNuget`.
 - Inferred, not verified on such a host: `check` on a host that cannot build every target is
   unaffected.
+
+## Amendment (2026-10-03): opt-in strict mode
+
+`nuget { publish { strictCompileCheck = true } }` makes the two soft-skip paths fatal: `dotnet` not
+found, and an SDK that cannot run (`dotnet --version` exits non-zero). The task throws a
+`GradleException` carrying the same reason text the warning would have shown. It defaults to
+`false`, in which case behaviour and warning text are unchanged and publishing still needs no .NET
+SDK. The "no generated C#" info skip is not affected. Because `check` depends on the task (previous
+amendment), strict mode fails `check` as well as `packNuget`.
+
+This resolves the Open question about an opt-out and revisits Alternative 3 as an opt-in instead of
+a hard requirement.
+
+The name and placement (a `publish {}` property modelled on `strictDependencyTypes`, rather than the
+floated `requireCompileCheck` or a Gradle property) were chosen by the assistant while the owner was
+away, without a decision gate. They are open to change before 1.0.0.
+
+Verified by unit tests and a real run for the missing-`dotnet` path. The unusable-SDK path is proven
+by unit test only, not by a real build. Left on the ROADMAP: no Gradle property switch, and the
+missing-`dotnet` reason does not name the `nuget.dotnet` override.
