@@ -79,7 +79,10 @@ class Tier1ReceiverShapesExtensionPropertyTest {
     val result = Tier1Harness.run(source)
     val cs: String = result.generatedCSharp
 
-    assertContains(cs, "extension(global::Interop.IPet receiver)\n        {\n            public string Summary\n")
+    assertContains(
+      cs,
+      "extension(global::Interop.IPet receiver)\n        {\n            public string Summary\n",
+    )
     assertContains(cs, "NugetMarshal.HandleOf(receiver, out receiverOwned)")
     // ADR-135's guard: the mint itself can throw, and this `finally` is then reached with the
     // handle still Zero. Without the scope at all, the getter leaked one StableRef per read.
@@ -95,7 +98,8 @@ class Tier1ReceiverShapesExtensionPropertyTest {
 
     assertContains(
       result.generatedCSharp,
-      "extension(global::Interop.Cat? receiver)\n        {\n            public string NameOrStray\n",
+      "extension(global::Interop.Cat? receiver)\n        {\n" +
+        "            public string NameOrStray\n",
     )
     // Parenthesised: `a?.b()?.c().d` binds `.d` to the safe-called result, which is not what the
     // `Cat?` extension declares its receiver to be.
@@ -117,7 +121,10 @@ class Tier1ReceiverShapesExtensionPropertyTest {
     val cs: String = result.generatedCSharp
 
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
-    assertContains(cs, "extension(global::Interop.IPet receiver)\n        {\n            public string Tag\n")
+    assertContains(
+      cs,
+      "extension(global::Interop.IPet receiver)\n        {\n            public string Tag\n",
+    )
     // ADR-188: one C# 14 property with both accessors; the setter's `value` is implicit.
     assertContains(cs, Regex("""public string Tag\n\s+\{\n\s+get\n[\s\S]*?\n\s+set\n\s+\{"""))
     assertFalse(cs.contains(" SetTag("), "the ADR-013 setter method must be gone: $cs")
@@ -318,7 +325,8 @@ class Tier1ReceiverShapesExtensionPropertyTest {
     assertContains(result.generated, "durationFromDotNetTicks(receiver).wholeHours")
     assertContains(
       result.generatedCSharp,
-      "extension(global::System.DateTimeOffset receiver)\n        {\n            public long EpochDay\n",
+      "extension(global::System.DateTimeOffset receiver)\n        {\n" +
+        "            public long EpochDay\n",
     )
     // ADR-076: `UtcTicks`, never the wall-clock `Ticks`, at the receiver position too.
     assertContains(result.generatedCSharp, "Native_InstantGetEpochDay(receiver.UtcTicks")
@@ -338,13 +346,31 @@ class Tier1ReceiverShapesExtensionPropertyTest {
     val result = Tier1Harness.run(paritySource)
     val cs: String = result.generatedCSharp
 
-    assertContains(cs, "extension(string? receiver)\n        {\n            public string OrPlaceholder\n")
-    assertContains(cs, "extension(global::System.Guid? receiver)\n        {\n            public bool IsMissing\n")
-    assertContains(cs, "extension(global::Interop.CatId? receiver)\n        {\n            public string Display\n")
+    assertContains(
+      cs,
+      "extension(string? receiver)\n        {\n            public string OrPlaceholder\n",
+    )
+    assertContains(
+      cs,
+      "extension(global::System.Guid? receiver)\n        {\n            public bool IsMissing\n",
+    )
+    assertContains(
+      cs,
+      "extension(global::Interop.CatId? receiver)\n        {\n            public string Display\n",
+    )
 
-    assertContains(cs, "Native_StringGetOrPlaceholder([MarshalAs(UnmanagedType.LPUTF8Str)] string? receiver")
-    assertContains(cs, "Native_UuidGetIsMissing([MarshalAs(UnmanagedType.LPUTF8Str)] string? receiver")
-    assertContains(cs, "Native_CatidGetDisplay([MarshalAs(UnmanagedType.LPUTF8Str)] string? receiver")
+    assertContains(
+      cs,
+      "Native_StringGetOrPlaceholder([MarshalAs(UnmanagedType.LPUTF8Str)] string? receiver",
+    )
+    assertContains(
+      cs,
+      "Native_UuidGetIsMissing([MarshalAs(UnmanagedType.LPUTF8Str)] string? receiver",
+    )
+    assertContains(
+      cs,
+      "Native_CatidGetDisplay([MarshalAs(UnmanagedType.LPUTF8Str)] string? receiver",
+    )
 
     // Kotlin side: the null rides the wire in-band, and the lowering is parenthesised so `.display`
     // binds to the nullable extension rather than to a safe-called result.
@@ -363,7 +389,8 @@ class Tier1ReceiverShapesExtensionPropertyTest {
 
     assertContains(
       result.generatedCSharp,
-      "extension(global::Interop.ChartRef? receiver)\n        {\n            public string PatientName\n",
+      "extension(global::Interop.ChartRef? receiver)\n        {\n" +
+        "            public string PatientName\n",
     )
     assertContains(result.generatedCSharp, "Native_ChartrefGetPatientName(IntPtr receiver")
     assertContains(result.generatedCSharp, "receiver?.Chart._handle ?? IntPtr.Zero")
@@ -419,7 +446,8 @@ class Tier1ReceiverShapesExtensionPropertyTest {
 
     assertContains(
       cs,
-      "extension(IReadOnlyList<string> receiver)\n        {\n            public string LongestName\n",
+      "extension(IReadOnlyList<string> receiver)\n        {\n" +
+        "            public string LongestName\n",
     )
     assertContains(cs, "receiverHandle = NugetMarshal.CreateList(receiver);")
     assertContains(
@@ -477,7 +505,8 @@ class Tier1ReceiverShapesExtensionPropertyTest {
     val cs: String = result.generatedCSharp
     assertContains(
       cs,
-      "extension(global::Test.Menagerie.IFeedable receiver)\n        {\n            public string FeedingNote\n",
+      "extension(global::Test.Menagerie.IFeedable receiver)\n        {\n" +
+        "            public string FeedingNote\n",
     )
     assertContains(cs, "IntPtr receiverHandle = GCHandle.ToIntPtr(GCHandle.Alloc(receiver));")
     assertContains(cs, "Native_IfeedableGetFeedingNote(IntPtr receiver")
@@ -500,7 +529,10 @@ class Tier1ReceiverShapesExtensionPropertyTest {
     val result = Tier1Harness.run(source)
     val cs: String = result.generatedCSharp
 
-    assertContains(cs, "extension(global::Interop.IPet receiver)\n        {\n            public int? NapQuota\n")
+    assertContains(
+      cs,
+      "extension(global::Interop.IPet receiver)\n        {\n            public int? NapQuota\n",
+    )
     assertContains(cs, "receiverHandle = NugetMarshal.HandleOf(receiver, out receiverOwned);")
     assertContains(
       cs,
@@ -547,7 +579,10 @@ class Tier1ReceiverShapesExtensionPropertyTest {
     // and the extension property.
     assertContains(cs, "public static string Description(this global::Interop.Mood mood)")
     assertContains(cs, "RallyCry(this global::Interop.Mood receiver)")
-    assertContains(cs, "extension(global::Interop.Mood receiver)\n        {\n            public string Emoji\n")
+    assertContains(
+      cs,
+      "extension(global::Interop.Mood receiver)\n        {\n            public string Emoji\n",
+    )
   }
 
   /**

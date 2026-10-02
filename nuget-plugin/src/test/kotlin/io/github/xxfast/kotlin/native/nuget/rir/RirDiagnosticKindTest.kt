@@ -48,7 +48,8 @@ class RirDiagnosticKindTest {
     assertEquals(
       "[nuget:SKIPPED_REF_STRUCT] Skipping Acme.Api/Widget.Span(Span<byte>): why. Do this.",
       formatDiagnostic(
-        "Acme.Api", diagnostic(RirDiagnosticKind.SKIPPED_REF_STRUCT, "Widget", "Span", "Span<byte>"),
+        "Acme.Api",
+        diagnostic(RirDiagnosticKind.SKIPPED_REF_STRUCT, "Widget", "Span", "Span<byte>"),
       ),
     )
     assertEquals(
@@ -66,7 +67,8 @@ class RirDiagnosticKindTest {
     assertEquals(
       "[nuget:ERROR_KOTLIN_SIGNATURE_COLLISION] Error Acme.Api/Widget.Run(): why. Do this.",
       formatDiagnostic(
-        "Acme.Api", diagnostic(RirDiagnosticKind.ERROR_KOTLIN_SIGNATURE_COLLISION, "Widget", "Run", ""),
+        "Acme.Api",
+        diagnostic(RirDiagnosticKind.ERROR_KOTLIN_SIGNATURE_COLLISION, "Widget", "Run", ""),
       ),
     )
   }
@@ -84,12 +86,14 @@ class RirDiagnosticKindTest {
     )
 
     assertEquals(
-      "[nuget:SKIPPED_ARRAY] Skipping MimeMapping/MimeUtility.GetExtensions(GetExtensions(string)): " +
+      "[nuget:SKIPPED_ARRAY] Skipping MimeMapping/MimeUtility." +
+          "GetExtensions(GetExtensions(string)): " +
           "$reason $hint",
       formatDiagnostic("MimeMapping", array),
     )
     assertEquals(
-      "[nuget:SKIPPED_ARRAY] Skipping MimeMapping/MimeUtility.GetExtensions(GetExtensions(string)): " +
+      "[nuget:SKIPPED_ARRAY] Skipping MimeMapping/MimeUtility." +
+          "GetExtensions(GetExtensions(string)): " +
           "no wire. $hint",
       formatDiagnostic("MimeMapping", array.copy(reason = "no wire")),
     )
@@ -105,7 +109,10 @@ class RirDiagnosticKindTest {
       """.trimIndent()
     )
     assertEquals(1, parsed.schemaVersion)
-    assertEquals(RirDiagnosticKind.SKIPPED_REF_STRUCT, parsed.assemblies.single().diagnostics.single().kind)
+    assertEquals(
+      RirDiagnosticKind.SKIPPED_REF_STRUCT,
+      parsed.assemblies.single().diagnostics.single().kind,
+    )
   }
 
   @Test
@@ -161,14 +168,18 @@ class RirDiagnosticKindTest {
     val enumBody: String = source.readText()
       .substringAfter("internal enum class ForwardDiagnosticKind(")
       .substringAfter(") {")
-    val forward: Set<String> = Regex("""^\s{2}((?:SKIPPED|WARNING|INFO|ERROR)_[A-Z0-9_]+)\s*[(,;]""", RegexOption.MULTILINE)
+    val forward: Set<String> =
+      Regex("""^\s{2}((?:SKIPPED|WARNING|INFO|ERROR)_[A-Z0-9_]+)\s*[(,;]""", RegexOption.MULTILINE)
       .findAll(enumBody)
       .map { it.groupValues[1] }
       .toSet()
 
     // Guard against a vacuous pass: a regex that matches nothing would make every set disjoint.
     listOf("SKIPPED_", "WARNING_", "INFO_", "ERROR_").forEach { prefix ->
-      assertTrue(forward.any { it.startsWith(prefix) }, "no forward $prefix code extracted: $forward")
+      assertTrue(
+        forward.any { it.startsWith(prefix) },
+        "no forward $prefix code extracted: $forward",
+      )
     }
     assertTrue(forward.size >= 30, "only ${forward.size} forward codes extracted: $forward")
 

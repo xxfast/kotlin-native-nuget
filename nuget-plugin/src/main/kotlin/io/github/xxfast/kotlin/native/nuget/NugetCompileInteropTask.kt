@@ -49,7 +49,8 @@ internal fun hermeticNugetConfig(): String = """
 /**
  * ADR-138: the throwaway csproj `nugetCompileInterop` builds. Its property set is
  * `GeneratedBindingsCheck/GeneratedBindingsCheck.csproj`'s, verbatim, plus `AllowUnsafeBlocks`
- * (which a real consumer gets from the package's own `build/<tfm>/<id>.targets`, and this project has no
+ * (which a real consumer gets from the package's own `build/<tfm>/<id>.targets`, and this
+ * project has no
  * package to import it from). If that csproj changes, this function changes with it;
  * `NugetCompileInteropTaskTest` pins every property so the drift is loud.
  */
@@ -165,7 +166,8 @@ public abstract class NugetCompileInteropTask : DefaultTask() {
       logger.warn(
         "w: [nuget] dotnet is not on PATH, so the generated C# bindings were not compiled " +
           "before packing. A binding that does not compile will only surface in a consumer's " +
-          "build. Install the .NET SDK 10.0 or later from https://dot.net/download to check at pack."
+          "build. Install the .NET SDK 10.0 or later from https://dot.net/download " +
+          "to check at pack."
       )
       return
     }

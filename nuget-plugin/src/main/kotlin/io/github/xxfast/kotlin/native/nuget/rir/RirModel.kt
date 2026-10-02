@@ -399,7 +399,10 @@ internal data class RirDiagnostic(
   val hint: String,
 )
 
-/** ADR-182: how a reverse diagnostic is surfaced, derived from its code's prefix (never declared). */
+/**
+ * ADR-182: how a reverse diagnostic is surfaced, derived from its code's prefix (never
+ * declared).
+ */
 internal enum class RirDiagnosticSeverity { WARNING, INFO, ERROR }
 
 /**

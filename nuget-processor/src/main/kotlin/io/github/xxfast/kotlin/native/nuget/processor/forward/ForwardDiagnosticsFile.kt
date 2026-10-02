@@ -43,9 +43,10 @@ internal const val FORWARD_DIAGNOSTICS_SCHEMA_VERSION: Int = 1
 /**
  * ADR-100: the JSON file the KSP round writes and `NugetReportDiagnosticsTask` reads back.
  *
- * ADR-182: the root is `{ "schemaVersion": 1, "diagnostics": [ ... ] }`. [FORWARD_DIAGNOSTICS_SCHEMA_VERSION]
- * is a bare JSON integer, bumped only on a change a reader that ignores unknown keys would misread
- * (a field removed, renamed or retyped, a code renamed); an additive field never bumps it.
+ * ADR-182: the root is `{ "schemaVersion": 1, "diagnostics": [ ... ] }`.
+ * [FORWARD_DIAGNOSTICS_SCHEMA_VERSION] is a bare JSON integer, bumped only on a change a
+ * reader that ignores unknown keys would misread (a field removed, renamed or retyped, a
+ * code renamed); an additive field never bumps it.
  *
  * Hand-rolled rather than kotlinx.serialization, following the `bound-types.json` precedent
  * ([parseBoundTypesManifest]): the processor has no JSON dependency and adding one to every
@@ -75,8 +76,10 @@ internal fun renderForwardDiagnosticsJson(records: List<ForwardDiagnosticRecord>
     |  }
     """.trimMargin()
   }
-  val diagnostics: String = if (records.isEmpty()) "[]" else "[\n${entries.prependIndent("  ")}\n  ]"
-  return "{\n  \"schemaVersion\": $FORWARD_DIAGNOSTICS_SCHEMA_VERSION,\n  \"diagnostics\": $diagnostics\n}\n"
+  val diagnostics: String =
+    if (records.isEmpty()) "[]" else "[\n${entries.prependIndent("  ")}\n  ]"
+  return "{\n  \"schemaVersion\": $FORWARD_DIAGNOSTICS_SCHEMA_VERSION," +
+    "\n  \"diagnostics\": $diagnostics\n}\n"
 }
 
 private fun String.jsonString(): String {

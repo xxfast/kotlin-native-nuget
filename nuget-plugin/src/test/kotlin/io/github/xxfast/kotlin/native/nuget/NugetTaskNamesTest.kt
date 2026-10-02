@@ -102,7 +102,8 @@ class NugetTaskNamesTest {
     assertTrue(project.tasks.getByName(NugetTaskNames.PACK) is PackNugetTask)
     assertTrue(project.tasks.getByName(NugetTaskNames.publishTo("local")) is PublishNugetTask)
     assertTrue(
-      project.tasks.getByName(NugetTaskNames.GENERATE_RESTORE_PROJECT) is NugetGenerateRestoreProjectTask
+      project.tasks.getByName(NugetTaskNames.GENERATE_RESTORE_PROJECT)
+        is NugetGenerateRestoreProjectTask
     )
     assertTrue(
       project.tasks.getByName(NugetTaskNames.SNAPSHOT_VERSION) is NugetSnapshotVersionTask
@@ -132,7 +133,9 @@ class NugetTaskNamesTest {
   // annotation is read reflectively; the migrated fixture build scripts prove the compiler side.
   @Test
   fun `the old bind include and exclude are ERROR-level deprecations pointing at the new names`() {
-    listOf("include" to "includeNamespaces", "exclude" to "excludeNamespaces").forEach { (old, new) ->
+    val renames: Map<String, String> =
+      mapOf("include" to "includeNamespaces", "exclude" to "excludeNamespaces")
+    renames.forEach { (old, new) ->
       val deprecated: Deprecated = assertNotNull(
         NugetBindConfig::class.java
           .getDeclaredMethod(old, Array<String>::class.java)

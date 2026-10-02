@@ -42,13 +42,20 @@ class Tier1ExtensionPropertyFunctionClashTest {
     // The function keeps the name on both halves.
     assertContains(csharp, "public static string NameOrStray(this global::Interop.Cat? receiver)")
     // The property is gone from both halves: no export, no import, no extension member.
-    assertFalse(kotlin.contains("cat_get_nameOrStray"), "property must not export; generated=$kotlin")
+    assertFalse(
+      kotlin.contains("cat_get_nameOrStray"),
+      "property must not export; generated=$kotlin",
+    )
     assertFalse(csharp.contains("cat_get_nameOrStray"), "property must not import; csharp=$csharp")
     assertFalse(csharp.contains("public string NameOrStray"), "no extension member; csharp=$csharp")
 
     val warning: List<String> =
       result.kspWarnings.filter { it.contains("SHADOWED_BY_EXTENSION_FUNCTION") }
-    assertEquals(1, warning.size, "expected exactly one clash warning; kspWarnings=${result.kspWarnings}")
+    assertEquals(
+      1,
+      warning.size,
+      "expected exactly one clash warning; kspWarnings=${result.kspWarnings}",
+    )
     assertContains(warning.single(), "SKIPPED_UNSUPPORTED_PROPERTY")
     assertContains(warning.single(), "the extension function `nameOrStray`")
     assertContains(warning.single(), "CS9339")
@@ -95,7 +102,9 @@ class Tier1ExtensionPropertyFunctionClashTest {
     )
 
     assertTrue(
-      result.kspErrors.any { it.contains("ERROR_CSHARP_SIGNATURE_COLLISION") && it.contains("Tag") },
+      result.kspErrors.any {
+        it.contains("ERROR_CSHARP_SIGNATURE_COLLISION") && it.contains("Tag")
+      },
       "expected a fatal name collision; kspErrors=${result.kspErrors}",
     )
   }

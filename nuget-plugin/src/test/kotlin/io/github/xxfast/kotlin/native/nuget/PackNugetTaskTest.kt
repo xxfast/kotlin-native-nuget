@@ -55,7 +55,8 @@ class PackNugetTaskTest {
     val contentDir = File(outputDir, "TestLibrary.1.0.0/contentFiles/cs/net10.0")
     assertTrue(
       File(contentDir, "Interop.cs").exists(),
-      "Interop.cs from the first generatedCsDirs entry must be copied into contentFiles/cs/net10.0/",
+      "Interop.cs from the first generatedCsDirs entry must be copied into " +
+        "contentFiles/cs/net10.0/",
     )
     assertTrue(
       File(contentDir, "FooRegistration.cs").exists(),
@@ -66,7 +67,8 @@ class PackNugetTaskTest {
     val nuspec: String = File(outputDir, "TestLibrary.1.0.0/TestLibrary.nuspec").readText()
     assertContains(
       nuspec,
-      """<file src="contentFiles/cs/net10.0/Interop.cs" target="contentFiles/cs/net10.0/Interop.cs" />""",
+      """<file src="contentFiles/cs/net10.0/Interop.cs" """ +
+        """target="contentFiles/cs/net10.0/Interop.cs" />""",
     )
     assertContains(
       nuspec,

@@ -67,7 +67,11 @@ object RealPackageFixture {
 
     val assets = File(restoreDir, "obj/project.assets.json")
     require(assets.exists()) { "no project.assets.json after restoring $id $version" }
-    return deriveDllPaths(assetsJson = assets.readText(), packageIds = setOf(id), targetFramework = "net8.0")
+    return deriveDllPaths(
+      assetsJson = assets.readText(),
+      packageIds = setOf(id),
+      targetFramework = "net8.0",
+    )
   }
 
   fun readerOutcome(

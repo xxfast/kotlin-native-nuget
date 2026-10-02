@@ -87,7 +87,8 @@ tasks.test {
   // ADR-182: RirDiagnosticKindTest keeps the forward and reverse diagnostic codes disjoint. No
   // module sees both enums, so it reads the processor's enum source as text.
   val forwardDiagnosticSource: File = rootDir.resolve(
-    "../nuget-processor/src/main/kotlin/io/github/xxfast/kotlin/native/nuget/processor/forward/ForwardDiagnostic.kt",
+    "../nuget-processor/src/main/kotlin/io/github/xxfast/kotlin/native/nuget/processor/" +
+      "forward/ForwardDiagnostic.kt",
   )
   inputs.file(forwardDiagnosticSource).withPropertyName("forwardDiagnosticSource")
   systemProperty("nuget.forwardDiagnosticSource", forwardDiagnosticSource.absolutePath)

@@ -196,7 +196,10 @@ private fun requireDistinctAbiNames(args: List<AbiArg>): List<AbiArg> {
 // Kotlin CFunction types and NugetGenerateShimsTask's C# thunk signatures) MUST call this shared
 // function — not re-derive the expansion — or the registration slots still line up while the
 // arguments inside a slot silently misalign, which is memory corruption with no error.
-internal fun abiArgs(parameters: List<RirParameter>, structs: Map<RirTypeKey, RirStruct>): List<AbiArg> =
+internal fun abiArgs(
+  parameters: List<RirParameter>,
+  structs: Map<RirTypeKey, RirStruct>,
+): List<AbiArg> =
   requireDistinctAbiNames(
     parameters.flatMap { p ->
       flattenLeaves(p.type, structs).map { (path, leafType) ->
@@ -221,7 +224,10 @@ internal fun abiOutArgs(returnType: RirTypeRef, structs: Map<RirTypeKey, RirStru
 
 // ADR-056: the ABI-level return type — RirVoidType when the real return is a struct (its
 // components cross via abiOutArgs instead), the real return type unchanged otherwise.
-internal fun abiReturnType(returnType: RirTypeRef, structs: Map<RirTypeKey, RirStruct>): RirTypeRef =
+internal fun abiReturnType(
+  returnType: RirTypeRef,
+  structs: Map<RirTypeKey, RirStruct>,
+): RirTypeRef =
   if (resolveStruct(returnType, structs) != null) RirVoidType else returnType
 
 // ADR-049 Alternative 10: a single, shared source of truth for "which static methods on a bound
@@ -427,14 +433,16 @@ internal sealed interface RirRegistrable {
   data class PropertySetter(val property: RirProperty) : RirRegistrable
 }
 
-internal fun RirMethod.identity(): String = if (managedSignature.isNotEmpty()) managedSignature else {
+internal fun RirMethod.identity(): String {
+  if (managedSignature.isNotEmpty()) return managedSignature
   val receiver: String = if (isStatic) "static" else "instance"
-  "method|$receiver||$name|(${parameters.joinToString(",") { it.type.describe() }})|" +
-      returnType.describe()
+  return "method|$receiver||$name|(${parameters.joinToString(",") { it.type.describe() }})|" +
+    returnType.describe()
 }
 
-internal fun RirConstructor.identity(): String = if (managedSignature.isNotEmpty()) managedSignature else
-  "ctor|instance||.ctor|(${parameters.joinToString(",") { it.type.describe() }})|void"
+internal fun RirConstructor.identity(): String =
+  if (managedSignature.isNotEmpty()) managedSignature
+  else "ctor|instance||.ctor|(${parameters.joinToString(",") { it.type.describe() }})|void"
 
 internal fun RirMethod.bridgeId(): String = bridgeId(identity())
 
@@ -524,7 +532,9 @@ internal fun List<RirRegistrable>.slotCount(): Int = sumOf { it.slotRoles().size
 
 // Renders one text fragment per registration SLOT, in slot order, for a generator that used to
 // map one fragment per registrable.
-internal fun <T> List<RirRegistrable>.mapSlots(transform: (RirRegistrable, RirSlotRole) -> T): List<T> =
+internal fun <T> List<RirRegistrable>.mapSlots(
+  transform: (RirRegistrable, RirSlotRole) -> T,
+): List<T> =
   flatMap { r -> r.slotRoles().map { role -> transform(r, role) } }
 
 // Phase 9 (ROADMAP line 151): v1-bridgeable instance methods on a bound class — mirrors
@@ -1047,7 +1057,10 @@ internal fun delegatePlans(
 // ADR-158: the same plans off an ALREADY-computed registrable list, which is what both generators
 // have in hand when they render a type's registration (and is why neither needs to re-run the
 // admission filter and risk disagreeing with the other about the slot list).
-internal fun delegatePlans(registrables: List<RirRegistrable>, typeName: String): List<KotlinDelegatePlan> {
+internal fun delegatePlans(
+  registrables: List<RirRegistrable>,
+  typeName: String,
+): List<KotlinDelegatePlan> {
   val delegates: List<RirDelegateType> = registrables.flatMap { r ->
     when (r) {
       is RirRegistrable.Method -> r.method.parameters.map { it.type }

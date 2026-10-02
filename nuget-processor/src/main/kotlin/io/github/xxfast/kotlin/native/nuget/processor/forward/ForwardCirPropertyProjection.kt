@@ -102,7 +102,9 @@ internal object ForwardCirPropertyProjection {
       name = plan.publicName,
       type = plan.type.csharpType(),
       getter = getterBody(plan, receiverArgument, receiverStep, receiverCleanup),
-      setter = plan.setter?.let { setterBody(plan, receiverArgument, receiverStep, receiverCleanup) },
+      setter = plan.setter?.let {
+        setterBody(plan, receiverArgument, receiverStep, receiverCleanup)
+      },
       doc = plan.doc?.toCirDoc(),
     )
     return imports + property
@@ -112,9 +114,10 @@ internal object ForwardCirPropertyProjection {
    * ADR-006 amendment: an enum's own member property, projected onto the `{Enum}Extensions` class
    * off the same plan the Kotlin half reads. Unlike [extension], which is a C# 14 extension
    * property since ADR-188, it keeps ADR-006's method shape (enum statics are out of ADR-188's
-   * scope): the getter keeps ADR-006's bare name (`Description()`, not `GetDescription()`) and the receiver
-   * parameter keeps the lowercased enum name ([receiverName], `mood`), both public surface a
-   * named-argument caller binds to. The setter mirrors ADR-132's `SetX(this Mood mood, value)`.
+   * scope): the getter keeps ADR-006's bare name (`Description()`, not `GetDescription()`) and
+   * the receiver parameter keeps the lowercased enum name ([receiverName], `mood`), both
+   * public surface a named-argument caller binds to. The setter mirrors ADR-132's
+   * `SetX(this Mood mood, value)`.
    */
   fun enumMember(
     plan: ForwardPropertyPlan,
@@ -177,10 +180,11 @@ internal object ForwardCirPropertyProjection {
       nativeSetterType = if (plan.setter != null) setterNativeType(plan.type) else directGetter.result.csharpWireType(),
       nativeName = plan.kotlinName,
       // ROADMAP:29: the bodies are baked at the method position's depth (the brace at column 8,
-      // statements at 12), the extension-method depth (ADR-188's extension block moves them in two levels itself). A property
-      // accessor's brace sits one level deeper (column 12, and 16 inside a sealed arm, which
-      // `CirSealedRenderer` reaches by composing this same shift again), so the shared body is
-      // moved in one level here rather than threaded as an indent through every helper below.
+      // statements at 12), the extension-method depth (ADR-188's extension block moves them in two
+      // levels itself). A property accessor's brace sits one level deeper (column 12, and 16
+      // inside a sealed arm, which `CirSealedRenderer` reaches by composing this same shift
+      // again), so the shared body is moved in one level here rather than threaded as an
+      // indent through every helper below.
       getter = getterBody(plan, receiver).indentNestedBody(),
       setter = plan.setter?.let { setterBody(plan, receiver).indentNestedBody() },
       extraNatives = classExtraNatives(plan),

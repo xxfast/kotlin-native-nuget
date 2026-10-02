@@ -35,9 +35,10 @@ public abstract class NugetPublishConfig @Inject constructor(objects: ObjectFact
   // ADR-154 §6: opt-in. Every skip whose reason is a dependency-scope refusal the author can act
   // on (`NOT_INCLUDED`, `CROSS_MODULE_ADMISSION_DISABLED`) becomes an ERROR instead of a warning,
   // so every dependency type in a public signature is either admitted or excluded BY NAME. A skip
-  // the author already declared deliberate — `exclude(...)` — stays a warning, which is what makes
-  // the pair a once-per-type decision rather than a wall. Default false: ADR-066 section 4's
-  // "named diagnostic + skip, never a hard error" is still the shipped behaviour.
+  // the author already declared deliberate — `exclude(...)` — stays a warning, which is what
+  // makes the pair a once-per-type decision rather than a wall. Default false: ADR-066
+  // section 4's "named diagnostic + skip, never a hard error" is still the shipped
+  // behaviour.
   public abstract val strictDependencyTypes: Property<Boolean>
 
   public abstract val include: ListProperty<String>

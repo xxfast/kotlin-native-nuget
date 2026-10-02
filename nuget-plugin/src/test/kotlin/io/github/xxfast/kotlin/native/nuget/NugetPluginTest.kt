@@ -56,7 +56,10 @@ class NugetPluginTest {
     val nugetRestore: Task = project.tasks.getByName("nugetRestore")
     val deps: Set<Task> = nugetRestore.taskDependencies.getDependencies(nugetRestore)
 
-    assertTrue(deps.contains(nugetGenerateRestoreProject), "nugetRestore must depend on nugetGenerateRestoreProject")
+    assertTrue(
+      deps.contains(nugetGenerateRestoreProject),
+      "nugetRestore must depend on nugetGenerateRestoreProject",
+    )
   }
 
   @Test
@@ -86,7 +89,8 @@ class NugetPluginTest {
 
     project.evaluate()
 
-    val nugetGenerateRestoreProject: NugetGenerateRestoreProjectTask = project.tasks.getByName("nugetGenerateRestoreProject") as NugetGenerateRestoreProjectTask
+    val nugetGenerateRestoreProject: NugetGenerateRestoreProjectTask =
+      project.tasks.getByName("nugetGenerateRestoreProject") as NugetGenerateRestoreProjectTask
     val path: String = nugetGenerateRestoreProject.csprojFile.get().asFile.absolutePath
 
     assertTrue(path.contains("nuget-interop"), "csprojFile must be under nuget-interop/")

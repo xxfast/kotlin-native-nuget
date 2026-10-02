@@ -100,7 +100,8 @@ class NugetDslLazinessTest {
       deps.dependency("Acme") { dep -> dep.source.set("https://feed") }
     }
 
-    val gen = project.tasks.getByName("nugetGenerateRestoreProject") as NugetGenerateRestoreProjectTask
+    val gen =
+      project.tasks.getByName("nugetGenerateRestoreProject") as NugetGenerateRestoreProjectTask
     assertEquals(listOf("Acme"), gen.dependencyIds.get())
     assertEquals(mapOf("Acme" to "1.0.0"), gen.dependencyVersions.get())
     assertEquals(mapOf("Acme" to "https://feed"), gen.dependencySources.get())
@@ -110,7 +111,9 @@ class NugetDslLazinessTest {
   fun `the first bind registers the reverse tasks without evaluate`() {
     val project: Project = project()
     project.nuget().dependencies { deps ->
-      deps.dependency("Acme", "1.0.0") { dep -> dep.bind { bind -> bind.includeNamespaces("Acme.Core") } }
+      deps.dependency("Acme", "1.0.0") { dep ->
+        dep.bind { bind -> bind.includeNamespaces("Acme.Core") }
+      }
     }
 
     val extract = project.tasks.getByName("nugetExtractApi") as NugetExtractApiTask

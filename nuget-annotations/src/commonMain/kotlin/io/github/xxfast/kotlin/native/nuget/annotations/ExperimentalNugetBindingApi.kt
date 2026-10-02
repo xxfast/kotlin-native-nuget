@@ -5,7 +5,13 @@ package io.github.xxfast.kotlin.native.nuget.annotations
  * reverse direction (C# to Kotlin) is experimental: these bindings may change in any 1.x release.
  *
  * Opt in per file with `@file:OptIn(ExperimentalNugetBindingApi::class)`, or module-wide with
- * `kotlin { compilerOptions { optIn.add("io.github.xxfast.kotlin.native.nuget.annotations.ExperimentalNugetBindingApi") } }`.
+ * ```
+ * kotlin {
+ *   compilerOptions {
+ *     optIn.add("io.github.xxfast.kotlin.native.nuget.annotations.ExperimentalNugetBindingApi")
+ *   }
+ * }
+ * ```
  */
 @RequiresOptIn(
   level = RequiresOptIn.Level.ERROR,

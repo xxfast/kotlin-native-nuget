@@ -8,7 +8,10 @@ private val json = Json { ignoreUnknownKeys = true }
 
 internal fun parseReverseIr(jsonString: String): RirFile = json.decodeFromString(jsonString)
 
-/** ADR-182: the `reverse-ir.json` schema this plugin reads; NugetMetadataReader's `RirFile.CurrentSchemaVersion`. */
+/**
+ * ADR-182: the `reverse-ir.json` schema this plugin reads; NugetMetadataReader's
+ * `RirFile.CurrentSchemaVersion`.
+ */
 internal const val REVERSE_IR_SCHEMA_VERSION: Int = 1
 
 /**
@@ -67,7 +70,10 @@ internal fun deriveDllPaths(
 // version NuGet actually resolved (read from project.assets.json), not the DSL-declared/floating
 // version — the shim's method signatures are frozen against one specific assembly's metadata.
 // Mirrors deriveDllPaths(): parses the same `libraries` map, whose keys are "{id}/{version}".
-internal fun deriveResolvedVersions(assetsJson: String, packageIds: Set<String>): Map<String, String> {
+internal fun deriveResolvedVersions(
+  assetsJson: String,
+  packageIds: Set<String>,
+): Map<String, String> {
   if (packageIds.isEmpty()) return emptyMap()
 
   val assets: AssetsFile = json.decodeFromString(assetsJson)

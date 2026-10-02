@@ -138,7 +138,8 @@ internal fun registerSnapshotVersioning(
     }
 
   pub.versionPropsFile.convention(
-    project.rootProject.layout.buildDirectory.file(pub.packageId.map { id -> "${id}Versions.props" })
+    project.rootProject.layout.buildDirectory
+      .file(pub.packageId.map { id -> "${id}Versions.props" })
   )
 
   val propsTask: TaskProvider<NugetSnapshotVersionPropsTask> =

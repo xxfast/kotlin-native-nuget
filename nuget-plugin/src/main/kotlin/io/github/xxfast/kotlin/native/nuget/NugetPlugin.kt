@@ -173,7 +173,10 @@ public class NugetPlugin : Plugin<Project> {
     val dependencies = extension.dependencies
 
     val nugetGenerateRestoreProject: TaskProvider<NugetGenerateRestoreProjectTask> =
-      project.tasks.register(NugetTaskNames.GENERATE_RESTORE_PROJECT, NugetGenerateRestoreProjectTask::class.java) { task ->
+      project.tasks.register(
+        NugetTaskNames.GENERATE_RESTORE_PROJECT,
+        NugetGenerateRestoreProjectTask::class.java,
+      ) { task ->
         task.group = "nuget"
         task.description = "Generates the synthetic interop.csproj for NuGet dependency resolution"
         task.dependencyIds.set(project.provider { dependencies.map { it.id } })

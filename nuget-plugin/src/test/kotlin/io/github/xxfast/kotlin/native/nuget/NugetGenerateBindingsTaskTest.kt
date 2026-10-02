@@ -1231,7 +1231,8 @@ class NugetGenerateBindingsTaskTest {
   )
 
   private fun statusEntries(rir: RirFile): List<String> {
-    val enum: GeneratedFile = generateKotlinStubs(rir).single { it.relativePath.endsWith("/Status.kt") }
+    val enum: GeneratedFile =
+      generateKotlinStubs(rir).single { it.relativePath.endsWith("/Status.kt") }
     return enum.content.substringAfter("enum class Status {").substringBefore("}")
       .split(",").map { it.trim() }.filter { it.isNotEmpty() }
   }
@@ -1825,8 +1826,11 @@ class NugetGenerateBindingsTaskTest {
 
     assertEquals(1, warnings.size)
     assertTrue(
-      warnings[0].startsWith("[nuget:INFO_OBLIVIOUS_NULLABILITY] Note MimeMapping: no NullableAttribute"),
-      "ADR-182: forward's shape, code in the bracket, package id leading the location: ${warnings[0]}",
+      warnings[0].startsWith(
+        "[nuget:INFO_OBLIVIOUS_NULLABILITY] Note MimeMapping: no NullableAttribute",
+      ),
+      "ADR-182: forward's shape, code in the bracket, package id leading the location: " +
+        "${warnings[0]}",
     )
     assertContains(warnings[0], "Note")
     assertFalse(warnings[0].contains("Skipping"), "an info diagnostic is not a skip")

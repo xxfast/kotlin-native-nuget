@@ -174,8 +174,11 @@ internal class ForwardPropertyPlanner(
       val receiver: String = function.extensionReceiver?.resolve()?.expandAliases()?.declaration
         ?.qualifiedName?.asString() ?: return@mapNotNull null
       val name: String =
-        if (Modifier.SUSPEND in function.modifiers) function.csharpAsyncMemberName().removePrefix("@")
-        else function.csharpMemberName()
+        if (Modifier.SUSPEND in function.modifiers) {
+          function.csharpAsyncMemberName().removePrefix("@")
+        } else {
+          function.csharpMemberName()
+        }
       (receiver to name) to function.simpleName.asString()
     }.toMap()
     enums.forEach { enum ->

@@ -155,7 +155,8 @@ public abstract class PackNugetTask : DefaultTask() {
     }
 
     // ADR-184: without a lib/<tfm>/ entry NuGet treats a contentFiles-only package as compatible
-    // with every TFM and silently drops its dependency group for a lower consumer (memo spike, Q/R).
+    // with every TFM and silently drops its dependency group for a lower consumer (memo
+    // spike, Q/R).
     val libDir = File(nupkgDir, "lib/$tfm")
     libDir.mkdirs()
     File(libDir, "_._").writeText("")

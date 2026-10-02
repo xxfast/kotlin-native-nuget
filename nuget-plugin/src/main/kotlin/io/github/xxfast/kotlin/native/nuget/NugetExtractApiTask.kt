@@ -43,7 +43,8 @@ public abstract class NugetExtractApiTask : DefaultTask() {
         if (!File(path).exists()) {
           throw GradleException(
             "[nuget] DLL not found at '$path' (package '$packageId'). " +
-              "The global NuGet cache may have been cleared. Re-run ${NugetTaskNames.RESTORE} to re-download."
+              "The global NuGet cache may have been cleared. " +
+              "Re-run ${NugetTaskNames.RESTORE} to re-download."
           )
         }
       }
@@ -73,7 +74,8 @@ public abstract class NugetExtractApiTask : DefaultTask() {
       throw GradleException(
         "[nuget] metadata reader failed (exit code ${result.exitValue}).\n" +
           stderr.toString().trimEnd() + "\n\n" +
-          "Check that the NuGet DLLs are valid and re-run ${NugetTaskNames.RESTORE} if paths are missing."
+          "Check that the NuGet DLLs are valid and " +
+          "re-run ${NugetTaskNames.RESTORE} if paths are missing."
       )
     }
 

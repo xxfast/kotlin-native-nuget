@@ -184,7 +184,10 @@ class ForwardPropertyEmitterTest {
 
     val csharp = renderClassProperty(plan)
     assertContains(csharp, "public Friend? Buddy")
-    assertContains(csharp, "return nativeResult == IntPtr.Zero ? null : new Friend(nativeResult, out _);")
+    assertContains(
+      csharp,
+      "return nativeResult == IntPtr.Zero ? null : new Friend(nativeResult, out _);",
+    )
   }
 
   @Test
@@ -286,7 +289,10 @@ class ForwardPropertyEmitterTest {
     assertContains(kotlin, "alias = value")
 
     val csharp = renderExtension(plan)
-    assertContains(csharp, "extension(Patient receiver)\n        {\n            public string Alias\n")
+    assertContains(
+      csharp,
+      "extension(Patient receiver)\n        {\n            public string Alias\n",
+    )
     assertContains(csharp, "Native_PatientGetAlias(receiver._handle, out IntPtr error)")
     assertContains(csharp, "                set\n")
   }
