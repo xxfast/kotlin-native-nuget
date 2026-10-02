@@ -97,9 +97,9 @@ class NugetExtensionTest {
         dep.source.set("https://pkgs.dev.azure.com/myorg")
         dep.bind { bind ->
           bind.packageName.set("acme")
-          bind.include("Acme.Utilities.Core")
-          bind.include("Acme.Utilities.Math")
-          bind.exclude("Acme.Utilities.Internal")
+          bind.includeNamespaces("Acme.Utilities.Core")
+          bind.includeNamespaces("Acme.Utilities.Math")
+          bind.excludeNamespaces("Acme.Utilities.Internal")
           bind.alias("Acme.Utilities.Core", kotlinPackage = "acme.core")
           bind.alias("Acme.Utilities.Math", kotlinPackage = "acme.math")
         }
@@ -114,8 +114,8 @@ class NugetExtensionTest {
 
     val bind: NugetBindConfig = dep.bind
     assertEquals("acme", bind.packageName.get())
-    assertEquals(listOf("Acme.Utilities.Core", "Acme.Utilities.Math"), bind.include.get())
-    assertEquals(listOf("Acme.Utilities.Internal"), bind.exclude.get())
+    assertEquals(listOf("Acme.Utilities.Core", "Acme.Utilities.Math"), bind.includeNamespaces.get())
+    assertEquals(listOf("Acme.Utilities.Internal"), bind.excludeNamespaces.get())
     assertEquals(
       mapOf(
         "Acme.Utilities.Core" to "acme.core",
@@ -154,26 +154,26 @@ class NugetExtensionTest {
   fun `a second dependency with the same id merges into one entry`() {
     extension.dependencies { it.dependency("Acme", version = "1.0.0") }
     extension.dependencies {
-      it.dependency("Acme") { dep -> dep.bind { bind -> bind.include("Acme.Core") } }
+      it.dependency("Acme") { dep -> dep.bind { bind -> bind.includeNamespaces("Acme.Core") } }
     }
 
     val dep: NugetDependency = extension.dependencies.single()
     assertEquals("1.0.0", dep.version.get())
     assertTrue(dep.bound)
-    assertEquals(listOf("Acme.Core"), dep.bind.include.get())
+    assertEquals(listOf("Acme.Core"), dep.bind.includeNamespaces.get())
   }
 
   @Test
   fun `a second bind block merges into the first`() {
     extension.dependencies {
       it.dependency("Acme") { dep ->
-        dep.bind { bind -> bind.include("Acme.Core") }
-        dep.bind { bind -> bind.include("Acme.Math") }
+        dep.bind { bind -> bind.includeNamespaces("Acme.Core") }
+        dep.bind { bind -> bind.includeNamespaces("Acme.Math") }
       }
     }
 
     val bind: NugetBindConfig = extension.dependencies.single().bind
-    assertEquals(listOf("Acme.Core", "Acme.Math"), bind.include.get())
+    assertEquals(listOf("Acme.Core", "Acme.Math"), bind.includeNamespaces.get())
   }
 
   @Test

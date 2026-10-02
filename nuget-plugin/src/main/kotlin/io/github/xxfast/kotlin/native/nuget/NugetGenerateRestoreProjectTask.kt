@@ -52,7 +52,7 @@ fun generateCsproj(
   """.trimMargin().trim()
 }
 
-abstract class NugetGenTask : DefaultTask() {
+abstract class NugetGenerateRestoreProjectTask : DefaultTask() {
   @get:Input abstract val dependencyIds: ListProperty<String>
   @get:Input abstract val dependencyVersions: MapProperty<String, String>
   @get:Input abstract val dependencySources: MapProperty<String, String>

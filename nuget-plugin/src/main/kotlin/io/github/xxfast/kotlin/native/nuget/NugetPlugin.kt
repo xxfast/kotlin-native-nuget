@@ -172,8 +172,8 @@ class NugetPlugin : Plugin<Project> {
     val interopDir: Provider<Directory> = project.layout.buildDirectory.dir("nuget-interop")
     val dependencies = extension.dependencies
 
-    val nugetGen: TaskProvider<NugetGenTask> =
-      project.tasks.register("nugetGen", NugetGenTask::class.java) { task ->
+    val nugetGenerateRestoreProject: TaskProvider<NugetGenerateRestoreProjectTask> =
+      project.tasks.register(NugetTaskNames.GENERATE_RESTORE_PROJECT, NugetGenerateRestoreProjectTask::class.java) { task ->
         task.group = "nuget"
         task.description = "Generates the synthetic interop.csproj for NuGet dependency resolution"
         task.dependencyIds.set(project.provider { dependencies.map { it.id } })
@@ -205,15 +205,15 @@ class NugetPlugin : Plugin<Project> {
       }
 
     val nugetRestore: TaskProvider<NugetRestoreTask> =
-      project.tasks.register("nugetRestore", NugetRestoreTask::class.java) { task ->
+      project.tasks.register(NugetTaskNames.RESTORE, NugetRestoreTask::class.java) { task ->
         task.group = "nuget"
         task.description = "Runs dotnet restore to download declared NuGet packages"
-        task.csprojFile.set(nugetGen.flatMap { it.csprojFile })
+        task.csprojFile.set(nugetGenerateRestoreProject.flatMap { it.csprojFile })
         task.targetFramework.set(extension.validatedTargetFramework)
         task.assetsFile.set(interopDir.map { it.file("obj/project.assets.json") })
       }
 
-    project.tasks.register("nugetImport") { task ->
+    project.tasks.register(NugetTaskNames.IMPORT) { task ->
       task.group = "nuget"
       task.description = "IDE-sync umbrella task: resolve NuGet dependencies"
       task.dependsOn(nugetRestore)
@@ -235,12 +235,12 @@ class NugetPlugin : Plugin<Project> {
       bound.map { deps -> deps.associate { it.id to it.bind.aliases.get() } }
 
     val nugetRestore: TaskProvider<NugetRestoreTask> =
-      project.tasks.named("nugetRestore", NugetRestoreTask::class.java)
+      project.tasks.named(NugetTaskNames.RESTORE, NugetRestoreTask::class.java)
 
-    val nugetImport: TaskProvider<*> = project.tasks.named("nugetImport")
+    val nugetImport: TaskProvider<*> = project.tasks.named(NugetTaskNames.IMPORT)
 
     val nugetExtractApi: TaskProvider<NugetExtractApiTask> =
-      project.tasks.register("nugetExtractApi", NugetExtractApiTask::class.java) { task ->
+      project.tasks.register(NugetTaskNames.EXTRACT_API, NugetExtractApiTask::class.java) { task ->
         task.group = "nuget"
         task.description =
           "Extracts the public API surface of bound NuGet packages into reverse-ir.json"
@@ -249,10 +249,10 @@ class NugetPlugin : Plugin<Project> {
         task.boundPackageIds.set(bound.map { deps -> deps.map { it.id } })
         task.packageNameOverrides.set(packageNameOverrides)
         task.namespaceIncludes.set(
-          bound.map { deps -> deps.associate { it.id to it.bind.include.get() } }
+          bound.map { deps -> deps.associate { it.id to it.bind.includeNamespaces.get() } }
         )
         task.namespaceExcludes.set(
-          bound.map { deps -> deps.associate { it.id to it.bind.exclude.get() } }
+          bound.map { deps -> deps.associate { it.id to it.bind.excludeNamespaces.get() } }
         )
         task.namespaceAliases.set(aliases)
         task.reverseIrFile.set(interopDir.map { it.file("reverse-ir.json") })
@@ -262,7 +262,7 @@ class NugetPlugin : Plugin<Project> {
 
     val nugetGenerateBindings: TaskProvider<NugetGenerateBindingsTask> =
       project.tasks.register(
-        "nugetGenerateBindings",
+        NugetTaskNames.GENERATE_BINDINGS,
         NugetGenerateBindingsTask::class.java,
       ) { task ->
         task.group = "nuget"
@@ -298,7 +298,7 @@ class NugetPlugin : Plugin<Project> {
 
     val nugetGenerateShims: TaskProvider<NugetGenerateShimsTask> =
       project.tasks.register(
-        "nugetGenerateShims",
+        NugetTaskNames.GENERATE_SHIMS,
         NugetGenerateShimsTask::class.java,
       ) { task ->
         task.group = "nuget"
@@ -564,7 +564,7 @@ class NugetPlugin : Plugin<Project> {
     // declared KSP output, so it is there even when `kspKotlin{Target}` is FROM-CACHE or
     // UP-TO-DATE; this task is never up-to-date and re-emits it ahead of every packNuget.
     val reportDiagnostics: TaskProvider<NugetReportDiagnosticsTask> = project.tasks
-      .register("nugetReportDiagnostics", NugetReportDiagnosticsTask::class.java) { task ->
+      .register(NugetTaskNames.REPORT_DIAGNOSTICS, NugetReportDiagnosticsTask::class.java) { task ->
         task.group = "nuget"
         task.description = "Reports declarations the forward bridge could not generate"
         task.diagnosticsFiles.from(kspOutputDir)
@@ -577,10 +577,10 @@ class NugetPlugin : Plugin<Project> {
     // a warning when no .NET SDK is installed. `registerReverse` adds the shims and the resolved
     // versions when a dependency is bound, so the check compiles exactly what the pack ships.
     val compileInterop: TaskProvider<NugetCompileInteropTask> = project.tasks
-      .register("nugetCompileInterop", NugetCompileInteropTask::class.java) { task ->
+      .register(NugetTaskNames.COMPILE_INTEROP, NugetCompileInteropTask::class.java) { task ->
         task.group = "nuget"
         task.description =
-          "Compiles the generated C# bindings with dotnet before packNuget stages them"
+          "Compiles the generated C# bindings with dotnet before ${NugetTaskNames.PACK} stages them"
         task.generatedCsDirs.from(kspOutputDir)
         task.projectDir.set(project.layout.buildDirectory.dir("nuget-compile"))
         task.targetFramework.set(extension.validatedTargetFramework)
@@ -595,7 +595,7 @@ class NugetPlugin : Plugin<Project> {
       }
 
     val packNuget: TaskProvider<PackNugetTask> =
-      project.tasks.register("packNuget", PackNugetTask::class.java) { task ->
+      project.tasks.register(NugetTaskNames.PACK, PackNugetTask::class.java) { task ->
         task.group = "nuget"
         task.description = "Packages the Kotlin/Native shared library as a NuGet package"
         task.packageId.set(pub.packageId)
@@ -655,11 +655,11 @@ class NugetPlugin : Plugin<Project> {
     pub.repositories.all { repository ->
       val name: String = repository.name
       project.tasks.register(
-        "publishNugetTo${name.replaceFirstChar { it.uppercase() }}Repository",
+        NugetTaskNames.publishTo(name),
         PublishNugetTask::class.java,
       ) { task ->
         task.group = "publishing"
-        task.description = "Pushes the NuGet package built by packNuget to the '$name' repository"
+        task.description = "Pushes the NuGet package built by ${NugetTaskNames.PACK} to the '$name' repository"
         task.dependsOn(packNuget)
         task.packageFile.set(file)
         task.repositoryName.set(name)
@@ -678,10 +678,10 @@ class NugetPlugin : Plugin<Project> {
       }
     }
 
-    project.tasks.register("publishNuget") { task ->
+    project.tasks.register(NugetTaskNames.PUBLISH) { task ->
       task.group = "publishing"
       task.description =
-        "Pushes the NuGet package built by packNuget to every configured repository"
+        "Pushes the NuGet package built by ${NugetTaskNames.PACK} to every configured repository"
       task.dependsOn(project.tasks.withType(PublishNugetTask::class.java))
     }
   }

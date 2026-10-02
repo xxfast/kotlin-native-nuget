@@ -13,7 +13,7 @@ import kotlin.test.assertTrue
  * `publish { prebuiltRuntimes = ... }` pointing at a `rid/native` tree of dll, dylib or so files
  * staged by another CI host, plus fail-fast validation replacing the silent skip.
  */
-class PackNugetMultiRidTest {
+class NugetMultiRidTest {
   private fun newTask(): PackNugetTask {
     val project = ProjectBuilder.builder().build()
     return project.tasks.create("packNuget", PackNugetTask::class.java)

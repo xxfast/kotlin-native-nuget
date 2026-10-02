@@ -62,6 +62,17 @@ matter if you read the DSL back or depend on task shape:
 - A second `publish {}`, `bind {}`, `dependency("X")` or `nuget("x")` used to replace the first or
   register a duplicate (a duplicate `nuget("x")` failed the build). It now merges.
 
+Renamed so a name says what it selects or does. There are no aliases: a script or CI step using an
+old task name fails with "task not found".
+
+| Before | Now |
+|---|---|
+| `bind { include(...) }`, `bind { exclude(...) }` | `includeNamespaces(...)`, `excludeNamespaces(...)`. The old functions are deprecated at `ERROR` level with a `ReplaceWith`. `publish { include/exclude }` is unchanged: it selects Kotlin packages. |
+| `nugetGen` | `nugetGenerateRestoreProject` |
+| `NugetGenTask` | `NugetGenerateRestoreProjectTask` |
+
+Tasks that pack or publish are verb-first (`packNuget`, `publishNuget`) and steps that drive the .NET tool start with `nuget`, as in Kotlin's Gradle plugin; see [Gradle tasks](gradle-tasks.md).
+
 Groovy build scripts can use the same blocks, but are not tested.
 
 ## Annotations dependency {id="annotations-dependency"}
@@ -375,20 +386,20 @@ Configures `NugetBindConfig`. Declaring `bind {}` at all is what triggers `nuget
 | Property / function | Type | Required | Default |
 |---|---|---|---|
 | `packageName` | `Property<String>` | no | the dependency id, lowercased with `-` replaced by `_` (e.g. `TestDependency` becomes `sampledependency`) |
-| `include(vararg namespace: String)` | function | no | empty, with no `include` at all, every namespace in the package is considered, subject to `exclude` |
-| `exclude(vararg namespace: String)` | function | no | empty |
+| `includeNamespaces(vararg namespace: String)` | function | no | empty, with no `includeNamespaces` at all, every namespace in the package is considered, subject to `excludeNamespaces` |
+| `excludeNamespaces(vararg namespace: String)` | function | no | empty |
 | `alias(csharpNamespace, kotlinPackage)` | function | no | none |
 
-`include`/`exclude` match a C# namespace exactly, or any of its sub-namespaces (`ns == filter` or
-`ns.startsWith("$filter.")`); when both match the same namespace, `exclude` wins. `alias` maps one
+`includeNamespaces`/`excludeNamespaces` match a C# namespace exactly, or any of its sub-namespaces (`ns == filter` or
+`ns.startsWith("$filter.")`); when both match the same namespace, `excludeNamespaces` wins. `alias` maps one
 specific C# namespace to a Kotlin package, overriding both `packageName` and the id-derived default
 for that namespace only.
 
 ```kotlin
 dependency("TestDependency", version = "1.0.0") {
   bind {
-    include("Test.Text")
-    exclude("Test.Text.Internal")
+    includeNamespaces("Test.Text")
+    excludeNamespaces("Test.Text.Internal")
     alias("Test.Text", "sample.text")
   }
 }

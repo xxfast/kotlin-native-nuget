@@ -50,7 +50,7 @@ full in [ADR-041](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/a
 ## The pipeline
 
 ```
-nugetGen              generates a synthetic interop.csproj
+nugetGenerateRestoreProject              generates a synthetic interop.csproj
     ↓
 nugetRestore          dotnet restore → obj/project.assets.json
     ↓
@@ -66,7 +66,7 @@ packNuget              merges the shims into contentFiles, pins the bound
 `nugetImport` is the umbrella IDE-sync task that runs the whole chain (mirroring `podImport` in the
 Kotlin CocoaPods plugin).
 
-### `nugetGen`: a synthetic `.csproj`
+### `nugetGenerateRestoreProject`: a synthetic `.csproj`
 
 For every declared dependency (see [Declaring dependencies](declaring-dependencies.md)) the plugin
 writes a throwaway `interop.csproj` with one `<PackageReference>` per package, pinned to

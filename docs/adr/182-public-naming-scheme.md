@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposed
+Accepted
+
+Revised 2026-10-02: section 2 (task names) changed from `nuget<Verb><Object>` for every task to the two-part rule matching Kotlin's Gradle plugin; only `nugetGen` is renamed. Sections 1 and 3 are unchanged.
 
 ## Context
 
@@ -14,9 +16,9 @@ inconsistent:
 - `include` / `exclude` filter Kotlin packages (and, for `exclude`, declarations) in `publish {}`
   (`NugetPublishConfig.kt:66-72`) and C# namespaces in `bind {}` (`NugetBindConfig.kt:14-15`).
   Verified by reading.
-- Task names mix `nuget`-first (`nugetGen`, `nugetRestore`, `nugetExtractApi`, ...) with
-  verb-first (`packNuget`, `publishNuget`, `publishNugetTo<Name>Repository`), and `nugetGen` does
-  not say what it generates (`NugetPlugin.kt:73-654`, `NugetSnapshotVersionTask.kt:122,133`).
+- `nugetGen` does not say what it generates, and nothing in the task names states a rule for which
+  tasks are verb-first (`packNuget`, `publishNuget`, `publishNugetTo<Name>Repository`) and which are
+  `nuget`-first (`nugetRestore`, `nugetExtractApi`, ...) (`NugetPlugin.kt:73-654`). Verified by reading.
   Verified by reading.
 - Forward diagnostic codes are `SCREAMING_SNAKE` (`ForwardDiagnosticKind`, 34 entries,
   `ForwardDiagnostic.kt:140-490`); reverse codes serialize as lowercase `snake_case`
@@ -25,10 +27,8 @@ inconsistent:
   Neither `NugetDiagnostics.json` (a bare array, `ForwardDiagnosticsFile.kt:51-77`) nor
   `reverse-ir.json` (`RirFile(assemblies)`) carries a version. Verified by reading.
 
-The research memos carry the full inventories and counts:
-[include-exclude-rename](../research/roadmap/include-exclude-rename.md),
-[task-name-scheme](../research/roadmap/task-name-scheme.md),
-[diagnostic-code-scheme](../research/roadmap/diagnostic-code-scheme.md).
+The research memos that carried the full inventories and counts (`include-exclude-rename`,
+`task-name-scheme`, `diagnostic-code-scheme`) were deleted at close-out.
 
 The C# fixed types were checked for the same Open decisions line and need no change: every public
 fixed type is `Kotlin`-prefixed (`KotlinFlow<T>`, `KotlinStateFlow<T>`, `KotlinMutableStateFlow<T>`,
@@ -62,23 +62,33 @@ Rejected: the cost of 1b plus 1a, and still hits the `excludePackages` misnomer.
 
 ### Section 2: task naming scheme
 
-#### 2a. `nuget` + verb + object for every task (chosen)
+#### 2a. Two-part rule matching Kotlin's Gradle plugin; rename only `nugetGen` (chosen)
 
-Seven of thirteen names already fit `nuget` + verb + object (`nugetRestore`, `nugetImport`, `nugetExtractApi`, `nugetGenerateBindings`, `nugetGenerateShims`, `nugetReportDiagnostics`, `nugetCompileInterop`); ten are `nuget`-first, three are verb-first. The Kotlin CocoaPods plugin, which this plugin's
-consumption pipeline is modelled on (`docs/research/nuget-plugin-architecture-synthesis.md:57,146`),
-prefixes its pipeline with `pod` (`podGen`, `podInstall`, `podImport`) and prefixes its publish
-tasks too (`podPublishXCFramework`, inferred from the
-[KMP docs](https://kotlinlang.org/docs/multiplatform/multiplatform-build-native-binaries.html)).
+Tasks that produce or publish the artifact are verb-first (`packNuget`, `publishNuget`,
+`publishNugetTo<Name>Repository`); steps that drive the external .NET/NuGet tool take the `nuget`
+prefix (`nugetRestore`, `nugetExtractApi`, `nugetGenerateBindings`, `nugetGenerateShims`,
+`nugetCompileInterop`, `nugetReportDiagnostics`, `nugetImport`, `nugetSnapshotVersion`,
+`nugetSnapshotVersionProps`). This is the split in kotlin-gradle-plugin 2.4.10 (verified in its
+sources): packaging and publishing tasks are verb-first (`assemble<Name>XCFramework`,
+`link<Build><Kind><Target>`, `archiveUklib`, `embedAndSign...`, and maven-publish's
+`publish<Pub>PublicationTo<Repo>Repository`), while the tasks that wrap an external tool carry the
+tool's prefix (CocoaPods `podInstall`, `podGen`, `podPublishXCFramework`; npm `kotlinNpmInstall`).
+`pack` is NuGet's own verb (`dotnet pack`), as `assemble` is Gradle's. The names already followed
+this split. The one outlier is `nugetGen`, which does not say what it generates, so it becomes
+`nugetGenerateRestoreProject`.
 
-#### 2b. Verb-first for every task (`generateNugetRestoreProject`, `restoreNuget`, ...)
+#### 2b. `nuget<Verb><Object>` for every task (`nugetPack`, `nugetPublish`, ...)
 
-Rejected. Gradle-core shaped and keeps `packNuget`, but renames eleven tasks that the ADRs and the
-CocoaPods synthesis already use. Churn is the same either way, about 306 against 315 occurrences
-(verified by counting, see the task-name memo), so precedent decides.
+Rejected. This was the first version of this decision. It rested on one precedent,
+`podPublishXCFramework`, which is KGP's tool-wrapper exception, not its packaging convention.
+Following it renamed `packNuget`, `publishNuget`, `publishNugetTo<Name>Repository` and the two
+snapshot tasks, and broke ADR-165's names, for a uniformity KGP itself does not have.
 
-#### 2c. Rename only `nugetGen`
+#### 2c. Verb-first for every task (`generateNugetRestoreProject`, `restoreNuget`, ...)
 
-Rejected: does not give one scheme.
+Rejected. Renames the eleven tool-driving tasks that the ADRs and the CocoaPods synthesis
+(`docs/research/nuget-plugin-architecture-synthesis.md:57,146`) already use, against KGP's own
+`pod*` and `kotlinNpm*` precedent.
 
 ### Section 3: diagnostic code scheme and schema version
 
@@ -103,25 +113,29 @@ Rejected: every consumer would have to skip a non-diagnostic element forever; on
 
 ### Section 4: what happens to the old names
 
-#### 4a. Fail-fast tombstones for 0.9.x, deleted in 0.10.0 (chosen)
+#### 4a. Fail-fast tombstones for 0.9.x, deleted in 0.10.0
 
 ROADMAP.md:12 puts every break in 0.9.0 and none in 0.10.0 or 1.0.0. A working deprecated alias is
 therefore either removed in 0.10.0 (a break) or frozen into 1.0.0's semver surface. A tombstone
 that never works breaks nothing that *ran* in 0.9.x when it is deleted, and still tells a stale
 build script the new name. The DSL half is airtight (an ERROR-level deprecation already fails
 compilation). The task half has one residual: a script that only *configures* the old name
-(`tasks.named("packNuget") { dependsOn(...) }`, a `finalizedBy`) succeeds against the tombstone in
+(`tasks.named("nugetGen") { dependsOn(...) }`, a `finalizedBy`) succeeds against the tombstone in
 0.9.x and fails with `UnknownTaskException` in 0.10.0. Choosing between 4a and 4c is choosing
-whether that edge case is acceptable.
+whether that edge case is acceptable. Rejected for the tasks: deleting the tombstones in 0.10.0 is
+itself a removal, and 0.10.0 must have no breaks. The DSL half keeps its ERROR-level deprecation,
+because deleting a symbol nothing can compile against breaks no build.
 
 #### 4b. Working deprecated aliases
 
 Rejected for the reason above. Not researched: how KGP or AGP handled their own task renames; the release-policy constraint in ROADMAP.md:12 decides this regardless of their precedent.
 
-#### 4c. Clean break, no tombstones
+#### 4c. Clean break for the tasks, no tombstones (chosen)
 
-Viable; the migration guide (ROADMAP.md:47) carries the mapping. Rejected only because a tombstone
-costs a few lines and saves every CI script a search.
+The migration guide (ROADMAP.md:47) carries the mapping, and Gradle's own "Task 'nugetGen' not
+found" fails the build at the first invocation in 0.9.0, the one release allowed to break. A
+tombstone would save a CI script a search but would have to be deleted in 0.10.0, which allows no
+breaks; it would also make `tasks.named("nugetGen")` configure cleanly in 0.9.x and fail in 0.10.0.
 
 ## Decision
 
@@ -150,29 +164,44 @@ nuget {
 }
 ```
 
+The `ListProperty` behind each function takes the same name (`includeNamespaces`,
+`excludeNamespaces`), keeping the file's property-plus-same-named-function idiom; the old `include` /
+`exclude` properties are removed outright, since ADR-180 already broke them (`List<String>` to
+`ListProperty<String>`) in this same 0.9.0.
+
 The KSP option keys (`nuget.includePackages`, `nuget.excludePackages`, `NugetPlugin.kt:339-340`)
 and the task inputs (`namespaceIncludes`, `namespaceExcludes`, `NugetPlugin.kt:122-123`) are
 plumbing and do not change.
 
 ### 2. Task names
 
-`nuget` + verb + object, lowerCamelCase, verbs from one set: Generate (writes files), Restore,
-Import, Extract, Report, Compile, Pack, Publish.
+Two-part rule, as in Kotlin's Gradle plugin:
+
+- Tasks that produce or publish the artifact are verb-first: `packNuget`, `publishNuget`,
+  `publishNugetTo<Name>Repository`.
+- Steps that drive the external .NET/NuGet tool take the `nuget` prefix: `nugetRestore`,
+  `nugetExtractApi`, `nugetGenerateBindings`, `nugetGenerateShims`, `nugetCompileInterop`,
+  `nugetReportDiagnostics`, `nugetImport`, `nugetSnapshotVersion`, `nugetSnapshotVersionProps`.
+
+The only rename:
 
 | Old | New |
 |---|---|
 | `nugetGen` | `nugetGenerateRestoreProject` |
-| `packNuget` | `nugetPack` |
-| `publishNuget` | `nugetPublish` |
-| `publishNugetTo<Name>Repository` | `nugetPublishTo<Name>Repository` |
-| `nugetSnapshotVersion` | `nugetGenerateSnapshotVersion` |
-| `nugetSnapshotVersionProps` | `nugetGenerateSnapshotVersionProps` |
-| `nugetRestore`, `nugetImport`, `nugetExtractApi`, `nugetGenerateBindings`, `nugetGenerateShims`, `nugetReportDiagnostics`, `nugetCompileInterop` | unchanged |
 
-This supersedes [ADR-165](165-publish-nuget-task.md)'s task-name prefix only: the
-`To<Name>Repository` tail and the `publishing` group, the parts that make the publish tasks read like
-`maven-publish`'s, are kept. Every name moves into one internal `NugetTaskNames` object; the
-string lookups at `NugetPlugin.kt:530,536` and the hints at `NugetExtractApiTask.kt:43,73` read it.
+[ADR-165](165-publish-nuget-task.md)'s task names stand. Every name moves into one internal
+`NugetTaskNames` object; the string lookups at `NugetPlugin.kt:530,536` and the hints at
+`NugetExtractApiTask.kt:43,73` read it.
+
+The task class renames with its task, because a build script can name it in
+`tasks.withType<...>()` and ADR-183 freezes it as public API:
+
+| Old class | New class |
+|---|---|
+| `NugetGenTask` | `NugetGenerateRestoreProjectTask` |
+
+`PackNugetTask`, `PublishNugetTask`, `NugetSnapshotVersionTask` and `NugetSnapshotVersionPropsTask`
+keep their names.
 
 ### 3. Diagnostic codes and schema versions
 
@@ -213,8 +242,7 @@ reader can only come from a stale file, because the plugin pins the processor to
 (`NugetPlugin.kt:236-237`, verified by reading); the inference is that KSP's cache key includes the
 processor artifact.
 
-Implemented (2026-10-02, this section only; sections 1 and 2, the DSL filter and task renames, land
-separately):
+Implemented (2026-10-02, diagnostics half; the DSL filter and task renames follow below):
 
 - `RirDiagnosticKind` has no `@SerialName` left; the enum name is the wire code. It derives
   `severity` (`RirDiagnosticSeverity`) and `verb` from the prefix, and any other prefix, or a
@@ -240,18 +268,29 @@ separately):
 
 ### 4. Old names
 
-- `NugetBindConfig.include` / `exclude` stay in 0.9.x as
+- The functions `NugetBindConfig.include` / `exclude` stay in 0.9.x as
   `@Deprecated(level = DeprecationLevel.ERROR, ReplaceWith("includeNamespaces(*namespace)"))`
   (and the `exclude` twin), and are deleted in 0.10.0.
-- `packNuget` and `publishNuget` stay in 0.9.x as tasks whose action throws
-  "`packNuget` was renamed to `nugetPack` in 0.9.0", and are deleted in 0.10.0. The other renamed
-  tasks get no tombstone.
+- `nugetGen` is a clean break (4c): no task is registered under the old name, and the old task
+  class is gone. A stub would have to be removed in 0.10.0, which must have no breaks.
 - Diagnostic codes and the JSON files get no compatibility shim; `schemaVersion` is the signal.
+
+Implemented (2026-10-02, sections 1, 2 and 4, the DSL filter and task-name half):
+
+- `NugetBindConfig` has `includeNamespaces` / `excludeNamespaces` (property and vararg function);
+  the old functions are ERROR-level deprecations forwarding to them, asserted reflectively in
+  `NugetTaskNamesTest`. Fixture build scripts, README and the docs pages use the new names.
+- `NugetTaskNames` holds every task name; every `register(...)` / `named(...)` in the plugin and the
+  messages that name a task (`NugetExtractApiTask`, `PackNugetTask`, `NugetPusher`, the task
+  descriptions) read it. `NugetTaskNamesTest` asserts all thirteen names are registered, that the
+  packaging tasks are verb-first and the tool-driving ones `nuget`-prefixed, and that `nugetGen` is gone.
+- `NugetGenTask`, its file and its tests renamed as in the table above.
 
 ## Consequences
 
 - Breaking in 0.9.0: every `bind { include(...) }` (stale scripts fail to compile with a quick-fix),
-  every `packNuget` / `publishNuget` invocation in CI (fails naming the new task), every reverse
+  every `nugetGen` invocation (Gradle's "Task not found"; the migration guide
+  names the new task), every `tasks.withType<NugetGenTask>()`, every reverse
   diagnostic consumer matching lowercase codes, and every `NugetDiagnostics.json` reader expecting an
   array. The 1.0.0 migration guide lists all four.
 - Docs: `docs/topics` (`nuget-dsl.md`, `declaring-dependencies.md`, `bind-nuget-package-for-kotlin.md`,
@@ -263,9 +302,8 @@ separately):
   says additive fields never bump it.
 - Overlaps: ADR-180 rewrites `NugetBindConfig.kt`, the `afterEvaluate` blocks that register every
   task, and `NugetPlugin.kt:122-123`; the configurable-TFM item edits the `nugetGen` registration
-  block (`NugetPlugin.kt:89`); the internalise + `explicitApi()` item decides whether `PackNugetTask`,
-  `PublishNugetTask` and `NugetGenTask` stay public (if they do, they rename to `NugetPackTask`,
-  `NugetPublishTask`, `NugetGenerateRestoreProjectTask` with their tasks) and touches the `rir`
+  block (`NugetPlugin.kt:89`); the internalise + `explicitApi()` item decides whether `NugetGenTask`
+  stays public (if it does, it renames to `NugetGenerateRestoreProjectTask` with its task) and touches the `rir`
   package. Land ADR-180 first, or share a worktree.
 - Deferred: a published JSON Schema (`$schema`) for either file; the producing plugin version inside
   `NugetDiagnostics.json`; a `schemaVersion` on the dogfood `*.census.json`; renaming the JSON field

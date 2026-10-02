@@ -5,7 +5,7 @@ import kotlin.test.assertContains
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-class NugetGenTaskTest {
+class NugetGenerateRestoreProjectTaskTest {
   @Test
   fun `csproj pins the TargetFramework it is given`() {
     val csproj: String = generateCsproj(

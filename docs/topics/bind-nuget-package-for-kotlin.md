@@ -17,7 +17,7 @@ nuget {
     dependency("MimeMapping", version = "4.0.0") {
       bind {
         packageName = "mimemapping"
-        include("MimeMapping")
+        includeNamespaces("MimeMapping")
       }
     }
   }
@@ -25,7 +25,7 @@ nuget {
 ```
 
 <note>
-<p>Use <code>include</code>, <code>exclude</code>, and <code>alias</code> to keep the generated
+<p>Use <code>includeNamespaces</code>, <code>excludeNamespaces</code>, and <code>alias</code> to keep the generated
 surface focused. See <a href="declaring-dependencies.md">Declaring dependencies</a> for their
 matching rules and <a href="bridgeable-subset.md">The bridgeable subset</a> before choosing an API
 to bind.</p>

@@ -14,7 +14,7 @@ import io.github.xxfast.kotlin.native.nuget.test.models.Grooming
  * declared value-parameter types, at every arity, regardless of what the default expression reads
  * (verified against Kotlin 2.4.10; `DefaultReadsMarked(val n: Int = Mode.Fast.ordinal)` is fine,
  * `Mixed(a = 5)` where `a`'s sibling is marked-typed is not). So this file is **red before the
- * fix**, and it is red in the strongest available way: `nugetGen` emits `GroomingPlan(name)`,
+ * fix**, and it is red in the strongest available way: `nugetGenerateRestoreProject` emits `GroomingPlan(name)`,
  * `compileKotlin` rejects it, `packNuget` fails, and `IntegrationTests` cannot build.
  *
  * No `@file:OptIn` and no `optIn` compiler flag: this module builds exactly as a consumer's does

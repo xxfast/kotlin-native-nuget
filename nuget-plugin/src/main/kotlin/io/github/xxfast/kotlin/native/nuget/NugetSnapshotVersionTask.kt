@@ -129,7 +129,7 @@ internal fun registerSnapshotVersioning(
   // ADR-180: registered with `publish {}` whatever `snapshot` is; packNuget only depends on these
   // when it is true. A missing version or packageId fails in the mint task's action.
   val versionTask: TaskProvider<NugetSnapshotVersionTask> =
-    project.tasks.register("nugetSnapshotVersion", NugetSnapshotVersionTask::class.java) { task ->
+    project.tasks.register(NugetTaskNames.SNAPSHOT_VERSION, NugetSnapshotVersionTask::class.java) { task ->
       task.group = "nuget"
       task.description = "Mints a unique snapshot version for this build"
       task.baseVersion.set(pub.version)
@@ -143,7 +143,7 @@ internal fun registerSnapshotVersioning(
 
   val propsTask: TaskProvider<NugetSnapshotVersionPropsTask> =
     project.tasks.register(
-      "nugetSnapshotVersionProps",
+      NugetTaskNames.SNAPSHOT_VERSION_PROPS,
       NugetSnapshotVersionPropsTask::class.java,
     ) { task ->
       task.group = "nuget"

@@ -1,6 +1,6 @@
 import io.github.xxfast.kotlin.native.nuget.NugetCompileInteropTask
 import io.github.xxfast.kotlin.native.nuget.NugetExtension
-import io.github.xxfast.kotlin.native.nuget.NugetGenTask
+import io.github.xxfast.kotlin.native.nuget.NugetGenerateRestoreProjectTask
 import io.github.xxfast.kotlin.native.nuget.PackNugetTask
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.ConfigurableFileCollection
@@ -222,9 +222,9 @@ afterEvaluate {
 
   tasks.matching { it.name == "nugetRestore" }.configureEach { dependsOn(packTestDependency) }
 
-  val nugetGen = tasks.named("nugetGen", NugetGenTask::class.java).get()
-  nugetGen.dependsOn(writeFixtureVersion)
-  nugetGen.dependencyVersions.set(
+  val nugetGenerateRestoreProject = tasks.named("nugetGenerateRestoreProject", NugetGenerateRestoreProjectTask::class.java).get()
+  nugetGenerateRestoreProject.dependsOn(writeFixtureVersion)
+  nugetGenerateRestoreProject.dependencyVersions.set(
     fixturePackageVersion.map { version ->
       mapOf(
         "MimeMapping" to "4.0.0",
@@ -283,38 +283,38 @@ nuget {
     dependency("MimeMapping", version = "4.0.0") {
       bind {
         packageName = "mimemapping"
-        include("MimeMapping")
+        includeNamespaces("MimeMapping")
       }
     }
     dependency("TestDependency", version = "1.0.0") {
       bind {
-        include("Test.Text")
+        includeNamespaces("Test.Text")
         alias("Test.Text", "test.text")
-        include("Test.Enums")
+        includeNamespaces("Test.Enums")
         alias("Test.Enums", "test.enums")
-        include("Test.Nullability")
+        includeNamespaces("Test.Nullability")
         alias("Test.Nullability", "test.nullability")
-        include("Test.Household")
+        includeNamespaces("Test.Household")
         alias("Test.Household", "test.household")
-        include("Test.Overloads")
+        includeNamespaces("Test.Overloads")
         alias("Test.Overloads", "test.overloads")
-        include("Test.Structs")
+        includeNamespaces("Test.Structs")
         alias("Test.Structs", "test.structs")
-        include("Test.Nested")
+        includeNamespaces("Test.Nested")
         alias("Test.Nested", "test.nested")
-        include("Test.Menagerie")
+        includeNamespaces("Test.Menagerie")
         alias("Test.Menagerie", "test.menagerie")
-        include("Test.Wellness")
+        includeNamespaces("Test.Wellness")
         alias("Test.Wellness", "test.wellness")
-        include("Test.Boxes")
+        includeNamespaces("Test.Boxes")
         alias("Test.Boxes", "test.boxes")
-        include("Test.Infirmary")
+        includeNamespaces("Test.Infirmary")
         alias("Test.Infirmary", "test.infirmary")
-        include("Test.Kennel")
+        includeNamespaces("Test.Kennel")
         alias("Test.Kennel", "test.kennel")
-        include("Test.Roster")
+        includeNamespaces("Test.Roster")
         alias("Test.Roster", "test.roster")
-        include("Test.Workshop")
+        includeNamespaces("Test.Workshop")
         alias("Test.Workshop", "test.workshop")
       }
     }

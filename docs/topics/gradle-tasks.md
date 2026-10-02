@@ -74,8 +74,8 @@ of `publish {}`, and even of Kotlin Multiplatform being applied.
 
 | Task | Description | Depends on | Writes |
 |---|---|---|---|
-| `nugetGen` | Generates the synthetic interop.csproj for NuGet dependency resolution | (none) | `build/nuget-interop/interop.csproj` |
-| `nugetRestore` | Runs dotnet restore to download declared NuGet packages | `nugetGen` | `build/nuget-interop/obj/project.assets.json` |
+| `nugetGenerateRestoreProject` | Generates the synthetic interop.csproj for NuGet dependency resolution | (none) | `build/nuget-interop/interop.csproj` |
+| `nugetRestore` | Runs dotnet restore to download declared NuGet packages | `nugetGenerateRestoreProject` | `build/nuget-interop/obj/project.assets.json` |
 | `nugetImport` | IDE-sync umbrella task: resolve NuGet dependencies | `nugetRestore`, plus `nugetExtractApi` / `nugetGenerateBindings` / `nugetGenerateShims` when any dependency binds | (none, umbrella task) |
 
 The following three are registered only when at least one dependency declares a `bind { }` block:

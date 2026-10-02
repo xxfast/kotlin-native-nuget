@@ -128,7 +128,7 @@ nuget {
   dependencies {
     dependency("TestDependency", version = "1.0.0") {
       bind {
-        include("Test.Text")               // C# namespaces to bind
+        includeNamespaces("Test.Text")     // C# namespaces to bind
         alias("Test.Text", "sample.text")  // C# namespace to Kotlin package
       }
     }

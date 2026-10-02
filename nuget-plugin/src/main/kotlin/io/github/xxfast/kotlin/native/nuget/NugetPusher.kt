@@ -55,7 +55,7 @@ class NugetPusher(private val userAgent: String = "kotlin-native-nuget/$PLUGIN_V
   fun push(request: NugetPushRequest): NugetPushResult {
     val file: File = request.packageFile
     if (!file.isFile) {
-      throw GradleException("NuGet package not found at ${file.absolutePath}; run packNuget first")
+      throw GradleException("NuGet package not found at ${file.absolutePath}; run ${NugetTaskNames.PACK} first")
     }
 
     val endpoint: URI = publishEndpoint(request.serviceIndex)

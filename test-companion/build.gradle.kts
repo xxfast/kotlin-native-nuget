@@ -1,4 +1,4 @@
-import io.github.xxfast.kotlin.native.nuget.NugetGenTask
+import io.github.xxfast.kotlin.native.nuget.NugetGenerateRestoreProjectTask
 import io.github.xxfast.kotlin.native.nuget.NugetCompileInteropTask
 import io.github.xxfast.kotlin.native.nuget.PackNugetTask
 
@@ -41,7 +41,7 @@ afterEvaluate {
   tasks.matching { it.name == "nugetRestore" }.configureEach {
     dependsOn(":test-library:packTestDependency")
   }
-  tasks.named("nugetGen", NugetGenTask::class.java) {
+  tasks.named("nugetGenerateRestoreProject", NugetGenerateRestoreProjectTask::class.java) {
     dependsOn(":test-library:writeFixtureVersion")
     dependencyVersions.set(fixtureVersion.map { mapOf("TestDependency" to it) })
   }
@@ -66,7 +66,7 @@ nuget {
   dependencies {
     dependency("TestDependency", version = "1.0.0") {
       bind {
-        include("Test.Text")
+        includeNamespaces("Test.Text")
         alias("Test.Text", "test.text")
       }
     }

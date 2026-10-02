@@ -91,14 +91,14 @@ abstract class PackNugetTask : DefaultTask() {
   fun pack() {
     val id: String = packageId.get()
     require(id.isNotBlank()) {
-      "[nuget] packNuget needs a non-blank package id: " +
+      "[nuget] ${NugetTaskNames.PACK} needs a non-blank package id: " +
         "set nuget { publish { packageId = \"...\" } }"
     }
     val version: String = packageVersion.get()
 
     check(hasSupportedTargets.getOrElse(true)) {
       "[nuget] No supported native targets found (expected mingw or macOS) in $path, so " +
-        "packNuget has nothing to pack. Add a supported Kotlin/Native target."
+        "${NugetTaskNames.PACK} has nothing to pack. Add a supported Kotlin/Native target."
     }
 
     skippedRids.get().forEach { (rid, target) ->

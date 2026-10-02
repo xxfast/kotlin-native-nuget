@@ -11,7 +11,7 @@ nuget {
     dependency("MimeMapping", version = "4.0.0") {
       bind {
         packageName = "mimemapping"
-        include("MimeMapping")
+        includeNamespaces("MimeMapping")
       }
     }
   }
@@ -25,14 +25,14 @@ The bridgeable types in the `MimeMapping` namespace bind under the `mimemapping`
 
 ## Choosing namespaces
 
-`include()`, `exclude()`, and `alias()` scope and rename what a `bind { }` block generates:
+`includeNamespaces()`, `excludeNamespaces()`, and `alias()` scope and rename what a `bind { }` block generates:
 
 ```kotlin
 nuget {
   dependencies {
     dependency("TestDependency", version = "1.0.0") {
       bind {
-        include("Test.Text")
+        includeNamespaces("Test.Text")
         alias("Test.Text", "test.text")
       }
     }
@@ -40,8 +40,8 @@ nuget {
 }
 ```
 
-- No `include()` call means every public namespace in the package is a candidate.
-- `include()` narrows candidates to the named namespaces and their sub-namespaces; `exclude()` then
+- No `includeNamespaces()` call means every public namespace in the package is a candidate.
+- `includeNamespaces()` narrows candidates to the named namespaces and their sub-namespaces; `excludeNamespaces()` then
   removes from that set and always wins on a conflict.
 - A namespace outside the final set gets no Kotlin at all: no stub, no import, nothing to call.
 - `alias(csharpNamespace, kotlinPackage)` overrides `packageName` for that one namespace. A
