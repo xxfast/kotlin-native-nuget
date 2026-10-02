@@ -57,6 +57,8 @@ Android's `viewModelScope` is an explicit opt-in, not implicit behavior. A Kotli
 
 In the bridge, the "caller" is C# — which has no concept of providing a Kotlin `CoroutineScope`. The bridge must own the scope on behalf of the C# consumer. This is invisible to both sides: the Kotlin author writes normal suspend functions, the C# consumer sees `Dispose()` doing the right thing.
 
+> **Withdrawn (2026-10-02):** the opt-in described in the next paragraph never shipped and will not; see the amendment at the end of this ADR.
+
 Because this is a non-obvious behavior imposed by the bridge, Kotlin library authors must **opt in** via `@OptIn(ExperimentalNugetCoroutineApi::class)`. This:
 - Makes the scope attachment explicit at the declaration site
 - Surfaces the behavior in a way the developer must acknowledge
@@ -132,6 +134,8 @@ Add only `ObjectDisposedException` guards to async methods — check `_handle !=
 Use **option 1: scope handle as a separate C# field with dedicated exports**.
 
 ### Opt-in annotation
+
+> **Withdrawn, never implemented.** The opt-in marker and the KSP warning described in this subsection were dropped before 1.0.0; see [Amendment (2026-10-02)](#amendment-2026-10-02-the-opt-in-marker-is-withdrawn). Scope ownership itself is unchanged.
 
 ```kotlin
 @RequiresOptIn(
@@ -368,8 +372,8 @@ Top-level suspend functions have no associated class instance and no natural lif
 
 ### New infrastructure
 
-- `ExperimentalNugetCoroutineApi` annotation in the annotations module
-- KSP warning when classes with suspend methods lack `@OptIn(ExperimentalNugetCoroutineApi::class)`
+- ~~`ExperimentalNugetCoroutineApi` annotation in the annotations module~~ (withdrawn 2026-10-02, never implemented)
+- ~~KSP warning when classes with suspend methods lack `@OptIn(ExperimentalNugetCoroutineApi::class)`~~ (withdrawn 2026-10-02, never implemented)
 - `nuget_scope_create`, `nuget_scope_cancel`, `nuget_scope_dispose` exports in `GenericClassExports.kt`
 - `CirScopeHelper` CIR declaration → `NugetScopeNative` class in `CirRenderer`
 - `CirClass.hasSuspendMethods: Boolean` flag to conditionally generate `_scopeHandle`
@@ -433,3 +437,28 @@ projects an async or Flow member, with an abstract owner declaring `DisposeAsync
 each concrete class below carrying the body as `override`. A sealed arm's own scope ownership was
 already closed separately by ADR-118/ADR-124, declared-only per arm.
 
+
+## Amendment (2026-10-02): the opt-in marker is withdrawn
+
+**`ExperimentalNugetCoroutineApi` and its KSP warning are dropped.** Neither was ever implemented (verified: the name occurs nowhere in `nuget-annotations`, `nuget-processor` or `nuget-runtime`; `nuget-annotations` ships only `CSharpName.kt`). This amendment closes the 0.9.0 ROADMAP item "Add `@ExperimentalNugetCoroutineApi` opt-in annotation and KSP warning for classes with suspend methods" and the matching half of the "Open decisions" line. The scope-per-instance contract, cancel-on-`Dispose()`, the `isCancelled` callback arm and the `ObjectDisposedException` guard all stand. Research: [docs/research/roadmap/experimental-coroutine-api.md](../research/roadmap/experimental-coroutine-api.md).
+
+### Why
+
+1. **The marker gates nothing.** A `@RequiresOptIn` marker constrains *use* of a declaration that carries it ([Kotlin docs: opt-in requirements](https://kotlinlang.org/docs/opt-in-requirements.html)). Under this ADR the library author never calls anything marked with it: they declare a class with `suspend` members and the bridge, not the author, attaches the scope. So `@OptIn(ExperimentalNugetCoroutineApi::class)` on the author's class is a compiler no-op, and the Decision above already concedes the point: both paths produce the same output and the annotation is informational, not gating. The only enforcement would be the processor's own warning. Inferred, not spiked: the Kotlin compiler emits no diagnostic for an `@OptIn` whose marker is never used.
+2. **The other legal acknowledgement deletes the class.** A Kotlin author may also acknowledge a marker by propagating it: `@ExperimentalNugetCoroutineApi class CatNapService`. [ADR-115](115-opt-in-marker-declarations.md) treats any declaration carrying a `@RequiresOptIn`-meta-annotated annotation as outside the forward-exported surface (verified by reading `ForwardOptInMarkers.kt:35-50`, `optInMarkerName`, and its read sites at `NugetProcessor.kt:1143-1147`). The acknowledgement would remove the class from `Interop.cs` unless the marker were special-cased in the one function ADR-115 deliberately keeps single-purpose.
+3. **1.0.0 freezes exactly this surface.** ROADMAP.md:12 declares the forward direction stable at 1.0.0 with semver over the fixed `nuget_*` runtime ABI, and the ADR index's runtime bullet lists the "callback and coroutine exports" among that ABI (`docs/adr/README.md:302`). An "experimental" marker on a surface the release plan freezes contradicts the plan; any future change to the async contract is a semver question, handled by the 1.0.0 deprecation policy, not by a marker.
+4. **The contract it hedged against has settled.** The async family is ADR-019, 020, 021, 022, 025, 026, 065, 067, 068, 071, 102, 128, 159, 174 and 175. Every refinement listed under Further Refinements above has landed (verified by reading): `CoroutineStart.ATOMIC` (`NugetLaunch.kt:40,77`, same directory), null-tolerant scope exports and `nuget_scope_drain` (`nuget-runtime/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/runtime/NugetRuntime.kt:482-506`), lazy `Interlocked.CompareExchange` scope allocation (`nuget-processor/src/main/kotlin/io/github/xxfast/kotlin/native/nuget/processor/cir/CirClassRenderer.kt:715-794`). The mechanism details this ADR first described have been superseded (lazy scope, `DisposeAsync` per ADR-025, `CancellationToken` per ADR-022, AOT-safe callbacks per ADR-102, hierarchy ownership per ADR-159/174/175), but the core contract has not moved. Every open Phase 6 item is additive (`SharedFlow`, `Flow` parameters, wider `MutableStateFlow`, backpressure) or an edge-case bug; none changes scope ownership, cancel-on-dispose or the callback ABI.
+5. **A per-class warning is noise without a fix.** Every library with an async class would warn on every build, which breaks builds that treat warnings as errors. Inferred, not spiked: `kotlin.OptIn` is `SOURCE`-retained, so for an ADR-154-admitted dependency class (read from a klib) the processor could never see the author's `@OptIn` and the warning could not be silenced at all.
+
+Neither inferred claim is load-bearing for the drop: nothing is implemented on the strength of either, so no spike was run.
+
+### Alternatives considered
+
+- **Ship as designed** (marker in `nuget-annotations`, warning on absence): rejected for reasons 1, 2, 3 and 5.
+- **Ship as a Gradle acknowledgement** (`publish { acknowledgeCoroutineScope() }` silencing one build-level warning): coherent where the marker is not, but it still labels a frozen surface experimental (reason 3) and buys nothing a documentation page does not.
+- **Drop and document** (chosen): the scope behaviour is stated in the memory, threading and disposal topic that the 1.0.0 section of ROADMAP.md already requires.
+
+### Not affected
+
+- The processor-emitted file-level `@OptIn` for `CoroutineStart.ATOMIC` in the generated `CNameExports.kt` (Implementation Addendum 2026-08-20, ROADMAP Phase 6 "Re-evaluate the generated `@OptIn`") is a different thing: generated, not author-facing.
+- The reverse direction's opt-in (ADR-181, designed in parallel) is coherent where this one was not, because it gates *use* of generated Kotlin declarations. If a Kotlin-side forward marker is ever reintroduced, `ExperimentalNuget*Api` is the naming prefix.

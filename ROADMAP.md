@@ -19,7 +19,6 @@ Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is
 - [ ] `include` / `exclude` mean Kotlin packages in `publish {}` and C# namespaces in `bind {}`; rename one pair. Verified.
 - [ ] One naming scheme for task names: `packNuget` and `publishNuget` are verb-first, `nugetGen`, `nugetRestore` and the rest are `nuget`-first, and `nugetGen` is vague. Verified.
 - [ ] One casing and one prefix set for diagnostic codes across forward (`SKIPPED_*`) and reverse (`skipped_*`), and a schema version on `NugetDiagnostics.json` and `reverse-ir.json`. Verified.
-- [ ] Add `@ExperimentalNugetCoroutineApi` opt-in annotation and KSP warning for classes with suspend methods (see [ADR-021](docs/adr/021-structured-concurrency.md))
 - [ ] Decide the forward finalizer contract: [ADR-003](docs/adr/003-memory-management-across-bridge.md) lists a finalizer as a mitigation and [ADR-121](docs/adr/121-kotlin-object-collectability-after-last-dispose.md) says none. The callback-payload wrapper item under Performance & Resource Hygiene depends on the answer.
 - [ ] Decide the minimum C# version: [ADR-013](docs/adr/013-extension-property-mapping.md) defers C# 14 extension properties to a major bump.
 - [ ] The reverse opt-in itself: the marker or DSL switch that makes the reverse direction experimental.
@@ -42,7 +41,7 @@ Two minor releases lead to 1.0.0: 0.9.0 carries every breaking change, 0.10.0 is
 
 - [ ] A stability policy: semver, the deprecation cycle, which surfaces are covered and the supported toolchain range. README says anything can change today.
 - [ ] A binary-compatibility-validator baseline for the published modules, checked in CI.
-- [ ] A memory, threading and disposal topic that states the forward finalizer contract decided in 0.9.0.
+- [ ] A memory, threading and disposal topic that states the forward finalizer contract decided in 0.9.0 and the scope-ownership rule of [ADR-021](docs/adr/021-structured-concurrency.md).
 - [ ] A troubleshooting topic, a 0.x to 1.0 migration guide and a changelog.
 
 ### Deferred to 1.x
@@ -52,7 +51,7 @@ Additive, so none of it forces a major; each stays in its phase below: `SharedFl
 ### Open decisions
 
 - [ ] The names for the `include` / `exclude` rename, the task names, the diagnostic codes and the C# fixed types.
-- [ ] Each contract in 0.9.0 marked "Decide", and whether `@ExperimentalNugetCoroutineApi` ships or is dropped.
+- [ ] Each contract in 0.9.0 marked "Decide".
 
 ## Phase 1: Basic bridging
 
