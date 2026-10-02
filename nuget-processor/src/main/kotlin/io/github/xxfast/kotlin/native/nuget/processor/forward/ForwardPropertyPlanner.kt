@@ -801,7 +801,7 @@ internal class ForwardPropertyPlanner(
       return null
     }
     val name: String = prop.simpleName.asString()
-    val publicName: String = name.replaceFirstChar { it.uppercase() }
+    val publicName: String = prop.csharpMemberName()
     // ADR-076: Instant shares the nullable-primitive LegacyTwoCall shape exactly.
     // ADR-079: so does a Primitive/Enum-underlying value class, with the `_value` call returning
     // the underlying's wire (`wireType()` already delegates through the value class).

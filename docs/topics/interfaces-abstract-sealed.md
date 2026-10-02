@@ -465,6 +465,25 @@ As on the class route, C# cannot overload on reference nullability alone: a `fun
 `fun tag(s: String?)` pair on an interface fails generation with `ERROR_CSHARP_SIGNATURE_COLLISION`
 instead of producing invalid C#.
 
+### Choosing the C# name {id="interface-csharp-name"}
+
+A property and a method with one Kotlin name on an interface collide in C#. Put `@CSharpName` on the
+interface member; implementing classes inherit the name without repeating it (see
+[Choosing the C# name](instance-members.md#choosing-the-csharp-name) for the rules):
+
+```kotlin
+interface Advertisement {
+  val collarTag: CollarTag?
+
+  @CSharpName("CollarTagBytes")
+  fun collarTag(code: Int): ByteArray?
+}
+```
+
+```C#
+byte[]? CollarTagBytes(int code);
+```
+
 ### An interface extending another interface {id="interface-super-interfaces"}
 
 `interface Derived : Base` renders real C# interface inheritance: `IDerived` declares only its own

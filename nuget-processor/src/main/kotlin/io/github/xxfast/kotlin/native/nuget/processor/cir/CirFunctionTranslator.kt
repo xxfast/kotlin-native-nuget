@@ -8,6 +8,8 @@ import com.google.devtools.ksp.symbol.KSType
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.abiSlotParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericReturnRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.legacyGenericRouteParameterIndex
@@ -96,7 +98,7 @@ internal fun translateFunction(
   // library- and package-qualified, so a `csName` read off it would rename the public C# method
   // (and the `${csName}_native` extern) every time the symbol scheme changes. The class route
   // already names its externs from member names; this is that rule, on the legacy top-level route.
-  val csName: String = toCSharpName(func.simpleName.asString().replaceFirstChar { it.uppercase() })
+  val csName: String = toCSharpName(func.csharpMemberName())
   val returnType = func.returnType?.resolve()?.expandAliases()
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
 
@@ -789,7 +791,7 @@ internal fun translateSuspendFunction(
   val taskReturnType: String = if (isUnit) "Task" else "Task<$asyncReturnType>"
 
   val asyncMethod = CirMethod(
-    name = "${csName}Async",
+    name = func.csharpAsyncMemberName(),
     returnType = taskReturnType,
     nativeName = nativeName,
     parameters = params,
@@ -841,7 +843,7 @@ internal fun translateGenericFunction(
   val funcName: String = func.simpleName.asString()
   // ADR-110: PascalCase, escaped after the case change; every DllImport on this route pins its
   // own explicit entry point.
-  val csName: String = toCSharpName(funcName.replaceFirstChar { it.uppercase() })
+  val csName: String = toCSharpName(func.csharpMemberName())
   val returnType = func.returnType?.resolve()?.expandAliases()
   val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
   val returnTypeName: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"

@@ -36,7 +36,11 @@ class Tier1Issue112InterfaceProjectionTest {
    */
   @Test
   fun `interface projects the same C# types the implementing class does`() {
-    val result = Tier1Harness.run(ADVERTISEMENT_FIXTURE, fileName = "Issue112Sample.kt")
+    val result = Tier1Harness.run(
+      ADVERTISEMENT_FIXTURE,
+      fileName = "Issue112Sample.kt",
+      libraries = listOf(csharpNameLibrary),
+    )
 
     assertTrue(result.kspErrors.isEmpty(), "expected no failure; kspErrors=${result.kspErrors}")
     assertTrue(result.compiledClean, "got: ${result.compileErrors}")
@@ -62,10 +66,12 @@ class Tier1Issue112InterfaceProjectionTest {
 
     // Sub-problem 2: members the class route skipped are absent, and silently so.
     assertFalse("Codes" in iface, "expected Codes to be absent from IAdvertisement; block=$iface")
+    // ADR-179: the colliding method renders under its declared `@CSharpName` beside the property.
     assertFalse(
       "CollarTag(int" in iface,
-      "expected the unbridgeable collarTag(code) method to be absent; block=$iface",
+      "expected no method under the property's name; block=$iface",
     )
+    assertContains(iface, "byte[]? CollarTagBytes(int code);")
     assertContains(iface, "string Identifier { get; }")
     assertContains(iface, "string Describe(string prefix);")
   }
@@ -89,7 +95,11 @@ class Tier1Issue112InterfaceProjectionTest {
    */
   @Test
   fun `a skipped interface member is named once per owner, on the class and on the interface`() {
-    val result = Tier1Harness.run(ADVERTISEMENT_FIXTURE, fileName = "Issue112Sample.kt")
+    val result = Tier1Harness.run(
+      ADVERTISEMENT_FIXTURE,
+      fileName = "Issue112Sample.kt",
+      libraries = listOf(csharpNameLibrary),
+    )
 
     val codesSkips: List<String> = result.kspWarnings.filter { "codes" in it }
     assertEquals(
@@ -104,17 +114,13 @@ class Tier1Issue112InterfaceProjectionTest {
           "kspWarnings=$codesSkips",
     )
 
-    val methodSkips: List<String> = result.kspWarnings.filter { "collarTag" in it }
-    assertEquals(
-      1,
-      methodSkips.count { "BleAdvertisement.collarTag" in it },
-      "expected exactly one skip naming the class's collarTag hole; kspWarnings=$methodSkips",
-    )
-    assertEquals(
-      1,
-      methodSkips.count { "Advertisement.collarTag" in it && "BleAdvertisement" !in it },
-      "expected exactly one skip naming the interface's own collarTag hole; " +
-          "kspWarnings=$methodSkips",
+    // ADR-179: `collarTag(code)` is bridged under `@CSharpName("CollarTagBytes")` now, so no
+    // owner reports a hole for it.
+    val methodSkips: List<String> = result.kspWarnings
+      .filter { "collarTag(" in it || ".collarTag" in it }
+    assertTrue(
+      methodSkips.none { "collarTag" in it && "codes" !in it && "SKIPPED" in it },
+      "expected no skip naming collarTag; kspWarnings=$methodSkips",
     )
   }
 
@@ -230,7 +236,11 @@ class Tier1Issue112InterfaceProjectionTest {
    */
   @Test
   fun `collision guard does not fire when the colliding method is unbridgeable`() {
-    val result = Tier1Harness.run(ADVERTISEMENT_FIXTURE, fileName = "Issue112Sample.kt")
+    val result = Tier1Harness.run(
+      ADVERTISEMENT_FIXTURE,
+      fileName = "Issue112Sample.kt",
+      libraries = listOf(csharpNameLibrary),
+    )
 
     assertTrue(
       result.kspErrors.none {
@@ -308,13 +318,16 @@ class Tier1Issue112InterfaceProjectionTest {
 private val ADVERTISEMENT_FIXTURE: String = """
   package tier1.issue112
 
+  import io.github.xxfast.kotlin.native.nuget.annotations.CSharpName
+
   class CollarTag(val label: String)
 
   interface Advertisement {
     val identifier: String
     val collarTag: CollarTag?
     val codes: Collection<String>
-    fun collarTag(code: Int): Sequence<Int>
+    @CSharpName("CollarTagBytes")
+    fun collarTag(code: Int): ByteArray?
     fun describe(prefix: String): String
   }
 
@@ -323,7 +336,7 @@ private val ADVERTISEMENT_FIXTURE: String = """
     override val collarTag: CollarTag?,
   ) : Advertisement {
     override val codes: Collection<String> get() = listOf(identifier)
-    override fun collarTag(code: Int): Sequence<Int> = sequenceOf(code)
+    override fun collarTag(code: Int): ByteArray? = byteArrayOf(code.toByte())
     override fun describe(prefix: String): String = "${'$'}prefix${'$'}identifier"
   }
 """.trimIndent()

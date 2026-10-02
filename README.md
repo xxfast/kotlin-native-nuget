@@ -53,7 +53,7 @@ nuget {
 
 Applying the plugin also adds `nuget-runtime`, a small Kotlin/Native library carrying the fixed
 `nuget_*` ABI (handles, errors, collections, callbacks, coroutines), as a dependency and exports it
-into your shared library; you never reference it yourself. It's the project's first published
+into your shared library; you never reference it yourself. It also adds `nuget-annotations`, which carries `@CSharpName`, to `commonMainApi`. It's the project's first published
 artifact that's a real klib rather than a JVM jar, which makes it indexable on
 [klibs.io](https://klibs.io). See [ADR-127](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md).
 

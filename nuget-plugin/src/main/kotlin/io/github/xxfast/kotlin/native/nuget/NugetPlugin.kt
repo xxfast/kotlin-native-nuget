@@ -243,6 +243,14 @@ class NugetPlugin : Plugin<Project> {
       val runtimeDep: Any = project.findProject(":nuget-runtime")
         ?: "io.github.xxfast:nuget-runtime:$PLUGIN_VERSION"
 
+      // ADR-179: `@CSharpName` lives in a pure-common module so an author writes it in
+      // `commonMain` with nothing else to add. `api`, so a downstream KMP consumer compiling
+      // against this klib never sees an unresolved annotation class. No `export()`: it has no
+      // `@CName`. Same local-vs-published fallback as the runtime.
+      val annotationsDep: Any = project.findProject(":nuget-annotations")
+        ?: "io.github.xxfast:nuget-annotations:$PLUGIN_VERSION"
+      project.dependencies.add("commonMainApi", annotationsDep)
+
       // ADR-156: a method bound from a C# `IAsyncEnumerable<T>` return names
       // `kotlinx.coroutines.flow.Flow` in a PUBLIC signature of a generated class, and generated
       // classes compile from `nativeMain` (see the srcDir wiring above) while `nuget-runtime` —

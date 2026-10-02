@@ -70,6 +70,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | Kotlin | ⇄ | C# | Notes | Docs |
 |---|:-:|---|---|---|
 | member property (get/set) | ⇄ | property (get/set) | → nullable and handle-typed properties; an inherited unimplemented member renders `abstract`; no public setter, or an override of a base with none, binds get-only · ← `val` read-only, `var` settable | [Classes and objects](classes-and-objects.md) · [Instance members](instance-members.md) |
+| `@CSharpName("X")` on a `fun` or property | → | member named `X` | Sets one `fun` or property's exact C# name, verbatim with no `Async` suffix. Overrides inherit it; a keyword is `@`-escaped. | [Instance members](instance-members.md) |
 | instance method return (object, `T?`, `List`/`Map`/`Set`, enum, `Char`, `String?`, `Int?`, …) | → | matching C# return type | Same plan cascade as a property getter, except a nullable numeric return uses a single call: a method may have side effects and cannot be invoked twice. | [Classes and objects](classes-and-objects.md) |
 | top-level function | → | `static class` method, `PascalCase` | One static class per source file. A file whose every declaration skips emits no class at all, and a name colliding with a same-file top-level property fails generation. | [Top-level declarations](top-level-declarations.md) |
 | top-level property | → | static property | get and set, including nullable. | [Top-level declarations](top-level-declarations.md) |

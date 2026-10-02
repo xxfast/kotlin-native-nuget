@@ -169,7 +169,7 @@ internal object ForwardInterfaceBridgePlanner {
     val name: String = property.simpleName.asString()
     return ForwardBridgeSlot(
       name = name,
-      csName = name.replaceFirstChar { it.uppercase() },
+      csName = property.csharpMemberName(),
       isProperty = true,
       result = result,
       parameters = emptyList(),
@@ -194,7 +194,7 @@ internal object ForwardInterfaceBridgePlanner {
     val name: String = function.simpleName.asString()
     return ForwardBridgeSlot(
       name = name,
-      csName = name.replaceFirstChar { it.uppercase() },
+      csName = function.csharpMemberName(),
       isProperty = false,
       result = result,
       parameters = parameters,

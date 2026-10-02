@@ -21,7 +21,7 @@ Gradle Plugin (Kotlin side)          NuGet Package       C# Consumer
 - **NuGet package** ships native libs + pre-generated `Interop.cs`. No consumer-side tooling required.
 - **Consumer** just includes the package — bindings are ready at build time.
 
-The project publishes three Maven Central artifacts: `nuget-processor` (the KSP reader/renderer), `nuget-plugin` (the Gradle plugin), and `nuget-runtime` (the fixed ABI, [ADR-127](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md)). `nuget-runtime` is the project's first artifact carrying `kotlin-tooling-metadata.json`, which makes it indexable on [klibs.io](https://klibs.io); the other two are plain JVM jars.
+The project publishes four Maven Central artifacts: `nuget-processor` (the KSP reader/renderer), `nuget-plugin` (the Gradle plugin), `nuget-runtime` (the fixed ABI, [ADR-127](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/127-nuget-runtime-library.md)). `nuget-runtime` is the project's first artifact carrying `kotlin-tooling-metadata.json`, which makes it indexable on [klibs.io](https://klibs.io); `nuget-processor` and `nuget-plugin` are plain JVM jars. The fourth, `nuget-annotations`, is a common KMP module holding `@CSharpName`.
 
 ## Two mirrored IRs
 

@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.test.issue112
 
+import io.github.xxfast.kotlin.native.nuget.annotations.CSharpName
+
 /**
  * Fixture for [#112](https://github.com/xxfast/kotlin-native-nuget/issues/112) / ADR-113: the
  * generated C# `IFoo` is projected from Kotlin *simple names* while every implementation of it is
@@ -30,8 +32,12 @@ package io.github.xxfast.kotlin.native.nuget.test.issue112
  *   no `advertisement_*` dispatch exports). It carries all three sub-problems at once: a
  *   reference-typed member that must project the wrapper the class uses, two members the class
  *   route skipped that must vanish, and the issue's literal `val collarTag` + `fun collarTag(code)`
- *   pair whose method is unbridgeable, which is why the fatal CS0102 guard has to run POST-filter
- *   or this perfectly reasonable Kotlin stops building.
+ *   pair. The method used to be an unbridgeable `Sequence` stand-in so the fatal CS0102 guard
+ *   (post-filter) stayed quiet; since #366 / ADR-179 it is the issue's real `ByteArray?` shape and
+ *   `@CSharpName("CollarTagBytes")` on the interface declaration resolves the collision. The class
+ *   override carries no annotation: it inherits the declared name.
+ * - [CollarReader]: the same collision on the ordinary *class* route (#366 said that route was
+ *   unchecked), plus a `suspend` member whose declared name must render verbatim (no `Async`).
  * - [Microchipped] / [MicrochippedCat]: the ADR-040 regression guard. Also non-reachable, but every
  *   member is bridgeable today, so `IMicrochipped` is *correct* right now. Interface plans are
  *   computed only for reachable interfaces, so a fix that naively threads today's catalog into
@@ -45,9 +51,8 @@ package io.github.xxfast.kotlin.native.nuget.test.issue112
  *   channels" is about: its skip must still be reported exactly once.
  *
  * Deliberately absent: an interface `val` whose setter should survive (`hasSetter` is never set, so
- * a `var` interface property renders get-only; ADR-113 defers that), super-interface members (a
- * separate deferred item, `CirInterface` has no base list), and the same CS0102 collision on the
- * ordinary *class* route (unguarded, also deferred). The fatal collision cell itself cannot live
+ * a `var` interface property renders get-only; ADR-113 defers that) and super-interface members (a
+ * separate deferred item, `CirInterface` has no base list). The fatal collision cell itself cannot live
  * here at all: it must fail the build, so it is a Tier 1 cell
  * (`Tier1Issue112InterfaceProjectionTest`).
  *
@@ -80,13 +85,13 @@ interface Advertisement {
   val codes: Collection<String>
 
   /**
-   * The issue's literal collision: same Kotlin name as [collarTag], different namespace in Kotlin,
-   * the same member name `CollarTag` in C#. Unbridgeable (a `Sequence` return: ADR-064 refuses
-   * `kotlin.sequences.Sequence` by name, because a lazy sequence has no bridge shape, so this
-   * stand-in is refused by decision and cannot be mapped out from under the fixture later), so the
-   * forward plan drops it and the fatal CS0102 guard must NOT fire for this hierarchy.
+   * The issue's literal collision (#366): same Kotlin name as [collarTag], different namespace in
+   * Kotlin, but the generated C# name would be `CollarTag` for both (CS0102). Bridgeable (ADR-151
+   * `ByteArray?`), so the forward plan keeps it and only the declared name below avoids
+   * `ERROR_CSHARP_NAME_COLLISION`. Declared on the interface only; overrides inherit it (ADR-179).
    */
-  fun collarTag(code: Int): Sequence<Int>
+  @CSharpName("CollarTagBytes")
+  fun collarTag(code: Int): ByteArray?
 
   /** Bridgeable method: `string` in, `string` out. */
   fun describe(prefix: String): String
@@ -99,7 +104,8 @@ class BleAdvertisement(
 ) : Advertisement {
   override val codes: Collection<String> get() = listOf(identifier)
 
-  override fun collarTag(code: Int): Sequence<Int> = sequenceOf(code)
+  // No annotation here: the override inherits `CollarTagBytes` from the interface (ADR-179).
+  override fun collarTag(code: Int): ByteArray? = if (code < 0) null else byteArrayOf(code.toByte())
 
   override fun describe(prefix: String): String = "$prefix$identifier"
 }
@@ -147,4 +153,24 @@ fun prowl(): Prowling = object : Prowling {
   override val collarTag: CollarTag? = CollarTag("Mylo")
   override val codes: Collection<String> get() = listOf("brown", "creamy")
   override fun describe(prefix: String): String = "$prefix roams the hallway"
+}
+
+/**
+ * #366 on the ordinary **class** route: a property and a function sharing the Kotlin name
+ * `payload`, which would both render `Payload` in C#. `@CSharpName` on the function resolves it.
+ * Also pins ADR-179's verbatim rule on a `suspend` member: [readCollar] renders `ReadCollar`, not
+ * `ReadCollarAsync`, because a name the author spelled out is never suffixed.
+ */
+class CollarReader(val owner: String) {
+  /** Reference-typed, nullable property. Keeps the generated name `Payload`. */
+  val payload: CollarTag? get() = if (owner.isEmpty()) null else CollarTag(owner)
+
+  /** Same Kotlin name as [payload]; renders as `PayloadBytes`. Null for a negative code. */
+  @CSharpName("PayloadBytes")
+  fun payload(code: Int): ByteArray? =
+    if (code < 0) null else byteArrayOf(code.toByte(), owner.length.toByte())
+
+  /** Declared name rendered verbatim: `Task<string> ReadCollar(string)`, no `Async` suffix. */
+  @CSharpName("ReadCollar")
+  suspend fun readCollar(prefix: String): String = "$prefix$owner"
 }

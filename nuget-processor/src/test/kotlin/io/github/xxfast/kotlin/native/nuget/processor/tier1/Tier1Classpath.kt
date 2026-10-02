@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.annotations.CSharpName
 import java.io.File
 
 /**
@@ -44,4 +45,9 @@ internal object Tier1Classpath {
    * compiles with [Tier1Harness.run]'s `coroutinesOnCompileClasspath = false` to prove it.
    */
   val kotlinxCoroutinesCore: File by lazy { jar("kotlinx-coroutines-core-jvm-") }
+}
+
+/** ADR-179: the classpath entry holding the real `@CSharpName`, for a fixture's KSP `libraries`. */
+internal val csharpNameLibrary: File by lazy {
+  File(CSharpName::class.java.protectionDomain.codeSource.location.toURI())
 }

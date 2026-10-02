@@ -14,6 +14,13 @@ package with no reverse bindings; `dependencies {}` alone binds C# packages into
 publishing anything. See [Gradle tasks](gradle-tasks.md) for exactly which tasks each combination
 registers.
 
+## Annotations dependency {id="annotations-dependency"}
+
+Applying the plugin adds `nuget-annotations`, which carries `@CSharpName`, to your `commonMainApi`
+(published as `io.github.xxfast:nuget-annotations`). It's a common module, so JVM, JS and native
+targets all resolve it; you add nothing yourself. See
+[Choosing the C# name](instance-members.md#choosing-the-csharp-name).
+
 ## `publish { }`
 
 Configures `NugetPublishConfig`. Every field is a nullable `String` with no default. Nothing in

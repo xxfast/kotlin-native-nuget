@@ -144,8 +144,9 @@ class Counter(val start: Int) {
 }
 ```
 
-Renaming either `count` fixes it; there is no automatic rename, since either direction would
-silently change the API. Casing counts too: `val size` beside `fun Size()` collides once both
+Renaming either `count` fixes it, or put `@CSharpName` on one to give just its C# member another
+name (see [Choosing the C# name](instance-members.md#choosing-the-csharp-name)). There is no
+automatic rename, since either direction would silently change the API. Casing counts too: `val size` beside `fun Size()` collides once both
 PascalCase to `Size`, and a `const val` collides with an ordinary property or method the same way.
 The same check runs on every C# type a Kotlin declaration can render into: a class and its companion
 together (they share one C# type), a sealed base and each of its arms, a `value class`'s own

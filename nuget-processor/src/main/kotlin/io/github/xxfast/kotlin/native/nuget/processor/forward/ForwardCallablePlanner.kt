@@ -29,6 +29,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.PLAN_OWNED_NAMES
 import io.github.xxfast.kotlin.native.nuget.processor.bridgeParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
+import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_EXCEPTION_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.KotlinExceptionMatch
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
@@ -1128,7 +1129,7 @@ internal class ForwardCallablePlanner(
       }
       planOrSkip(
         symbol = "$owner.$name",
-        publicName = name.replaceFirstChar { it.uppercase() },
+        publicName = prop.csharpMemberName(),
         exportName = "${prefix}_get_$name",
         receiver = receiver,
         parameters = emptyList(),
@@ -1191,7 +1192,7 @@ internal class ForwardCallablePlanner(
         } else {
           planOrSkip(
             symbol = symbol,
-            publicName = name.replaceFirstChar { it.uppercase() },
+            publicName = method.csharpMemberName(),
             exportName = "${prefix}_$name$suffix",
             receiver = receiver,
             parameters = method.parameters.map { parameter ->
@@ -1266,7 +1267,7 @@ internal class ForwardCallablePlanner(
       } else {
         planOrSkip(
           symbol = symbol,
-          publicName = name.replaceFirstChar { it.uppercase() },
+          publicName = method.csharpMemberName(),
           exportName = "${prefix}_$name$suffix",
           receiver = ForwardReceiver.Handle(receiverType),
           parameters = method.parameters.map { parameter ->
@@ -1384,7 +1385,7 @@ internal class ForwardCallablePlanner(
       } else {
         planOrSkip(
           symbol = symbol,
-          publicName = name.replaceFirstChar { it.uppercase() },
+          publicName = method.csharpMemberName(),
           exportName = "${prefix}_$name$suffix",
           receiver = ForwardReceiver.Handle(receiverType),
           parameters = method.parameters.map { parameter ->
@@ -1502,7 +1503,7 @@ internal class ForwardCallablePlanner(
       } else {
         planOrSkip(
           symbol = symbol,
-          publicName = name.replaceFirstChar { it.uppercase() },
+          publicName = method.csharpMemberName(),
           exportName = "${prefix}_$name$suffix",
           receiver = ForwardReceiver.Handle(receiverType),
           parameters = method.parameters.map { parameter ->
@@ -1634,7 +1635,7 @@ internal class ForwardCallablePlanner(
       } else {
         planOrSkip(
           symbol = symbol,
-          publicName = name.replaceFirstChar { it.uppercase() },
+          publicName = method.csharpMemberName(),
           exportName = "${prefix}_$name$suffix",
           receiver = ForwardReceiver.Handle(receiverType),
           parameters = method.parameters.map { parameter ->
@@ -1978,7 +1979,7 @@ internal class ForwardCallablePlanner(
     // ADR-110: PascalCase, byte-identical to `objectEntries`/`companionEntries`. `toCName` stays
     // on the export name only (it is the C symbol); a PascalCased name is never a C# keyword, so
     // no verbatim-identifier escape is needed either.
-    publicName = function.simpleName.asString().replaceFirstChar { it.uppercase() },
+    publicName = function.csharpMemberName(),
     // ADR-163: the library and package qualification, which is what makes a top-level
     // `fun signal(dbm: Int)` bind at all and two `rollCall()` in two packages coexist.
     exportName = "${symbols.topLevel(function)}$suffix",
@@ -2028,7 +2029,7 @@ internal class ForwardCallablePlanner(
       return staticEntry(
         function = function,
         symbol = "$owner.$name$suffix",
-        publicName = name.replaceFirstChar { it.uppercase() },
+        publicName = function.csharpMemberName(),
         exportName = "${prefix}_${toCName(name)}$suffix",
         origin = ForwardCallableOrigin.OBJECT,
         target = owner,
@@ -2082,7 +2083,7 @@ internal class ForwardCallablePlanner(
       }
       return planOrSkip(
         symbol = symbol,
-        publicName = name.replaceFirstChar { it.uppercase() },
+        publicName = function.csharpMemberName(),
         exportName = "${prefix}_${toCName(name)}$suffix",
         receiver = ForwardReceiver.Value(type),
         parameters = function.parameters.map { parameter ->
@@ -2133,7 +2134,7 @@ internal class ForwardCallablePlanner(
       return staticEntry(
         function = function,
         symbol = "$owner.Companion.$name$suffix",
-        publicName = name.replaceFirstChar { it.uppercase() },
+        publicName = function.csharpMemberName(),
         exportName = "${prefix}_companion_${toCName(name)}$suffix",
         origin = ForwardCallableOrigin.COMPANION,
         target = owner,
@@ -2316,7 +2317,8 @@ internal class ForwardCallablePlanner(
 
     return planOrSkip(
       symbol = symbol,
-      publicName = toCName(functionName).replaceFirstChar { it.uppercase() },
+      publicName = function.declaredCSharpName()
+        ?: toCName(functionName).replaceFirstChar { it.uppercase() },
       exportName = symbols.extension(function, receiverPrefix, "${toCName(functionName)}$suffix"),
       // ADR-105 amendment: the receiver gets the same sealed rewrite scope (d) applies to every
       // declared parameter, here rather than in `planOrSkip`, because the extension route is the

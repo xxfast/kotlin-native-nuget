@@ -3,6 +3,8 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 import com.google.devtools.ksp.processing.KSPLogger
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredCSharpName
 import io.github.xxfast.kotlin.native.nuget.processor.sanitizeLibrarySegment
 import io.github.xxfast.kotlin.native.nuget.processor.csharpIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
@@ -214,7 +216,7 @@ internal fun translate(
   }
 
   fun csharpMemberName(function: KSFunctionDeclaration): String =
-    function.simpleName.asString().replaceFirstChar { it.uppercase() }
+    function.csharpMemberName()
 
   fun resolveStaticClassName(fileClassName: String, namespace: String): String {
     val conflictsWithClass: Boolean = classes.any {
@@ -312,10 +314,12 @@ internal fun translate(
       }
     }
   }
+  fun KSDeclaration.spelling(keyword: String): KotlinSpelling =
+    KotlinSpelling(keyword, simpleName.asString(), declared = declaredCSharpName())
   fun KSPropertyDeclaration.topLevelSpelling(): KotlinSpelling = when {
-    modifiers.contains(Modifier.CONST) -> KotlinSpelling("const val", simpleName.asString())
-    isMutable -> KotlinSpelling("var", simpleName.asString())
-    else -> KotlinSpelling("val", simpleName.asString())
+    modifiers.contains(Modifier.CONST) -> spelling("const val")
+    isMutable -> spelling("var")
+    else -> spelling("val")
   }
 
   groupByNamespaceAndFile(functions).forEach { (key, funcs) ->
@@ -344,7 +348,7 @@ internal fun translate(
       }
       recordStatic(
         namespace, finalClassName, emitted, function,
-        KotlinSpelling("fun", function.simpleName.asString()),
+        function.spelling("fun"),
       )
       emitted
     }
@@ -366,7 +370,7 @@ internal fun translate(
         translateGenericFunction(function, context.libraryName, context).also { emitted ->
           recordStatic(
             namespace, finalClassName, emitted, function,
-            KotlinSpelling("fun", function.simpleName.asString()),
+            function.spelling("fun"),
           )
         }
       }
@@ -383,7 +387,7 @@ internal fun translate(
       ).also { emitted ->
         recordStatic(
           namespace, finalClassName, emitted, function,
-          KotlinSpelling("fun", function.simpleName.asString()),
+          function.spelling("fun"),
         )
       }
     }
@@ -680,7 +684,7 @@ internal fun translate(
               SpelledMethod(method, "`fun $receiverText.${func.simpleName.asString()}()`", func)
             }
           recordStatic(
-            namespace, className, emitted, func, KotlinSpelling("fun", func.simpleName.asString()),
+            namespace, className, emitted, func, func.spelling("fun"),
           )
         }
     }
@@ -1218,8 +1222,8 @@ internal fun translateExtensionFunction(
   tracker: CollectionHelperTracker,
 ): List<CirMember> {
   val funcName: String = func.simpleName.asString()
-  val csName: String = toCSharpName(toCName(funcName))
-    .replaceFirstChar { it.uppercase() }
+  val csName: String = func.declaredCSharpName()?.let(::toCSharpName)
+    ?: toCSharpName(toCName(funcName)).replaceFirstChar { it.uppercase() }
   val receiverPrefix: String = receiverName.lowercase()
   val cname: String = "${receiverPrefix}_${toCName(funcName)}"
 
@@ -1529,7 +1533,7 @@ internal fun translateProperty(
   val propType: String = propTypeResolved.declaration.simpleName.asString()
   val isNullable: Boolean = propTypeResolved.isMarkedNullable
   val isMutable: Boolean = prop.isMutable
-  val csPropName: String = propName.replaceFirstChar { it.uppercase() }
+  val csPropName: String = prop.csharpMemberName()
 
   if (propType !in KOTLIN_TO_CSHARP_RETURN) return emptyList()
 

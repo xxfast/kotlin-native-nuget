@@ -69,12 +69,12 @@ public class Issue112Tests
     }
 
     [Fact]
-    public void InterfaceMethod_SkippedByThePlan_IsAbsent()
+    public void InterfaceMethod_CollidingWithAProperty_IsNotRenderedUnderTheGeneratedName()
     {
-        // `fun collarTag(code: Int): Sequence<Int>` is unbridgeable (ADR-064 refuses `Sequence` by
-        // name, a decision rather than a gap), so it is dropped. That drop is
-        // also what keeps ADR-113's fatal CS0102 guard from firing on this hierarchy: the guard is
-        // post-filter, and only one `CollarTag` member survives the plan.
+        // #366 / ADR-179: `fun collarTag(code: Int): ByteArray?` is bridgeable now, and only its
+        // `@CSharpName("CollarTagBytes")` keeps it from becoming a second `CollarTag` (CS0102).
+        Assert.Null(typeof(IAdvertisement).GetMethod("CollarTag", new[] { typeof(int) }));
+        Assert.Null(typeof(BleAdvertisement).GetMethod("CollarTag", new[] { typeof(int) }));
         Assert.DoesNotContain(
             typeof(IAdvertisement).GetMethods(),
             method => method.Name == nameof(IAdvertisement.CollarTag));
@@ -87,7 +87,7 @@ public class Issue112Tests
             new[] { "CollarTag", "Identifier" },
             typeof(IAdvertisement).GetProperties().Select(p => p.Name).OrderBy(n => n));
         Assert.Equal(
-            new[] { "Describe" },
+            new[] { "CollarTagBytes", "Describe" },
             typeof(IAdvertisement).GetMethods().Where(m => !m.IsSpecialName).Select(m => m.Name).OrderBy(n => n));
     }
 
@@ -190,6 +190,69 @@ public class Issue112Tests
 
         Assert.Equal("Mylo", prowling.CollarTag!.Label);
         Assert.Equal("Mylo roams the hallway", prowling.Describe("Mylo"));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // #366 / ADR-179: `@CSharpName` sets one member's exact C# name.
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public void CollarTagBytes_RendersUnderTheDeclaredName_BesideTheProperty()
+    {
+        using var advertisement = new BleAdvertisement("beacon-1", null);
+        IAdvertisement ad = advertisement;
+
+        Assert.Null(ad.CollarTag);
+        Assert.Equal(new byte[] { 7 }, ad.CollarTagBytes(7));
+        Assert.Null(advertisement.CollarTagBytes(-1));
+    }
+
+    [Fact]
+    public void CollarTagBytes_OverrideInheritsTheInterfaceDeclaredName()
+    {
+        // The class override carries no annotation; it must still render `CollarTagBytes`, or
+        // `BleAdvertisement` would not implement `IAdvertisement` at all.
+        MethodInfo? onInterface = typeof(IAdvertisement).GetMethod("CollarTagBytes", new[] { typeof(int) });
+        MethodInfo? onClass = typeof(BleAdvertisement).GetMethod("CollarTagBytes", new[] { typeof(int) });
+
+        Assert.NotNull(onInterface);
+        Assert.NotNull(onClass);
+        Assert.Equal(typeof(byte[]), onInterface!.ReturnType);
+        Assert.Equal(onInterface.ReturnType, onClass!.ReturnType);
+        Assert.NotNull(typeof(IAdvertisement).GetProperty("CollarTag"));
+    }
+
+    [Fact]
+    public void ClassRoute_PropertyAndRenamedFunction_LiveSideBySide()
+    {
+        using var oreo = new CollarReader("Oreo");
+        using var stray = new CollarReader("");
+
+        using var tag = oreo.Payload;
+        Assert.Equal("Oreo", tag!.Label);
+        Assert.Null(stray.Payload);
+        Assert.Equal(new byte[] { 3, 4 }, oreo.PayloadBytes(3));
+        Assert.Null(oreo.PayloadBytes(-1));
+    }
+
+    [Fact]
+    public void ClassRoute_NoMethodUnderTheGeneratedName()
+    {
+        Assert.NotNull(typeof(CollarReader).GetProperty("Payload"));
+        Assert.NotNull(typeof(CollarReader).GetMethod("PayloadBytes", new[] { typeof(int) }));
+        Assert.Null(typeof(CollarReader).GetMethod("Payload", new[] { typeof(int) }));
+    }
+
+    [Fact]
+    public async Task SuspendMember_DeclaredName_IsVerbatim_WithNoAsyncSuffix()
+    {
+        Assert.Null(typeof(CollarReader).GetMethod("ReadCollarAsync"));
+        MethodInfo? declared = typeof(CollarReader).GetMethod("ReadCollar", new[] { typeof(string), typeof(CancellationToken) });
+        Assert.NotNull(declared);
+        Assert.Equal(typeof(Task<string>), declared!.ReturnType);
+
+        using var mylo = new CollarReader("Mylo");
+        Assert.Equal("brown and creamy Mylo", await mylo.ReadCollar("brown and creamy "));
     }
 
     private static IEnumerable<string> RawPointerMembers(Type type)

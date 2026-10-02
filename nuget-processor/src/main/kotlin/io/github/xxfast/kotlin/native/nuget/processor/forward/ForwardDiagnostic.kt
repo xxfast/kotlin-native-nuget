@@ -380,6 +380,15 @@ internal enum class ForwardDiagnosticKind(
    *  (issue #112's shipped shape) renders one member and stays green. */
   ERROR_CSHARP_NAME_COLLISION(ForwardDiagnosticSeverity.ERROR),
 
+  /** ADR-179: a `@CSharpName` argument that is not a C# identifier (`^[A-Za-z_][A-Za-z0-9_]*$`).
+   *  A keyword passes and is escaped like every generated name. */
+  ERROR_CSHARP_NAME_INVALID(ForwardDiagnosticSeverity.ERROR),
+
+  /** ADR-179: an override declaring a `@CSharpName` different from its override root's, or one
+   *  when the root has none. Overrides inherit the root's name; a different one would break the C#
+   *  interface/base implementation. */
+  ERROR_CSHARP_NAME_OVERRIDE_MISMATCH(ForwardDiagnosticSeverity.ERROR),
+
   /** ADR-110: a top-level function whose PascalCase C# name equals its file class's name
    *  (`fun beam()` in `Beam.kt`), which C# forbids as a member named like its enclosing type
    *  (CS0542). `fun beam()` in `Beam.kt` is ordinary Kotlin and must keep binding, so ADR-007's
