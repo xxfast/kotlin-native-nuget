@@ -112,8 +112,8 @@ internal object Tier1UnwrappableWitness {
     ?: error(
       "Tier1UnwrappableWitness: no candidate is left for $role; none of " +
         "${candidates.map { candidate -> candidate.kotlin }} still fails isWrappableComponent() " +
-        "there. The unwrappable-component category has emptied: decide whether the cells using this " +
-        "witness (and the planner arm they guard) are now dead code to delete, or whether a " +
-        "deliberate permanent refusal should be added to the candidate list.",
+        "there. The unwrappable-component category has emptied: decide whether the cells using " +
+        "this witness (and the planner arm they guard) are now dead code to delete, or whether " +
+        "a deliberate permanent refusal should be added to the candidate list.",
     )
 }
