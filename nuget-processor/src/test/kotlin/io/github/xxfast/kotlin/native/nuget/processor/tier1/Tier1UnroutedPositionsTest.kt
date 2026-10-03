@@ -477,4 +477,251 @@ class Tier1UnroutedPositionsTest {
       "kspWarnings=${result.kspWarnings}",
     )
   }
+
+  /**
+   * The positions ADR-064's 2026-09-13 amendment left silent or unmeasured: (a) a member inherited
+   * from an UNEXPORTED supertype (interface or base class), named once per inheriting class; (b) a
+   * value-class member no route binds; (c) a class companion member; (d) a member of an interface's
+   * `companion object`, which C# has no carrier for. Plus the companions of a sealed base, a sealed
+   * arm and a value class, which the planner never walks.
+   *
+   * `tier1.residualshidden` is a sibling of the export root, not a subpackage, so its declarations
+   * are out of scope however the fixture grows.
+   */
+  private val residualSources: Map<String, String> = mapOf(
+    "Hidden.kt" to """
+      package tier1.residualshidden
+
+      import kotlinx.coroutines.flow.Flow
+      import kotlinx.coroutines.flow.flowOf
+
+      interface Hidden {
+        fun <T> tally(item: T): Int = 1
+        fun feedHidden(ticks: Flow<Int>): Int = 0
+        fun okHidden(): Int = 1
+        fun hiddenTicks(): Flow<Int> = flowOf(1)
+        fun onHidden(cb: (Int) -> Unit) { cb(1) }
+      }
+
+      open class HiddenBase {
+        fun <T> weigh(item: T): Int = 1
+        fun drainBase(ticks: Flow<Int>): Int = 0
+        fun okBase(): Int = 2
+      }
+
+      interface HiddenPacer {
+        suspend fun pace(): Int
+      }
+    """.trimIndent(),
+    "Residuals.kt" to """
+      package tier1.residuals
+
+      import kotlinx.coroutines.flow.Flow
+      import tier1.residualshidden.Hidden
+      import tier1.residualshidden.HiddenBase
+      import tier1.residualshidden.HiddenPacer
+
+      class Shelf : Hidden {
+        fun okShelf(): Int = 1
+      }
+
+      class Rack : Hidden {
+        fun okRack(): Int = 1
+      }
+
+      class Ledge : HiddenBase() {
+        fun okLedge(): Int = 3
+      }
+
+      class Crate<T>(val item: T) : HiddenPacer {
+        override suspend fun pace(): Int = 1
+        fun okCrate(): Int = 4
+      }
+
+      @JvmInline
+      value class Tag(val label: String) {
+        fun okTag(): Int = 1
+        fun tagOn(cb: (Int) -> Unit) { cb(1) }
+        fun <T> tagPick(item: T): Int = 1
+        fun tagFeed(ticks: Flow<Int>): Int = 0
+        fun tagTicker(): (Int) -> Unit = {}
+        suspend fun tagSettle(): Int = 1
+
+        companion object {
+          fun tagBlank(): Int = 0
+        }
+      }
+
+      class Den {
+        fun okDen(): Int = 1
+
+        companion object {
+          fun okDenCompanion(): Int = 1
+          fun <T> denPick(item: T): Int = 1
+          fun denFeed(ticks: Flow<Int>): Int = 0
+          fun denTicker(): (Int) -> Unit = {}
+        }
+      }
+
+      interface Keeper {
+        fun greet(): String
+
+        companion object {
+          fun summon(): Int = 1
+          val all: Int = 2
+          const val LIMIT: Int = 3
+        }
+      }
+
+      class Warden : Keeper {
+        override fun greet(): String = "hi"
+      }
+
+      sealed class Job {
+        fun okJob(): Int = 1
+
+        companion object {
+          fun hire(): Int = 1
+        }
+
+        class Cook(val dish: String) : Job() {
+          companion object {
+            fun hireCook(): Int = 2
+          }
+        }
+
+        object Idle : Job()
+      }
+    """.trimIndent(),
+  )
+
+  private fun runResiduals(): Tier1Result = Tier1Harness.run(
+    residualSources,
+    processorOptions = mapOf("nuget.rootPackage" to "tier1.residuals"),
+    libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+  )
+
+  /** The warnings that name [member] as the skipped declaration, not merely mention it. */
+  private fun Tier1Result.warningsNaming(member: String): List<String> {
+    val declaration = Regex("Skipping ${Regex.escape(member)}[(:]")
+    return kspWarnings.filter { warning -> declaration.containsMatchIn(warning) }
+  }
+
+  /** C# lines that are not comments: generated `///` remarks deliberately name skipped members. */
+  private fun Tier1Result.csharpDeclarations(): List<String> =
+    generatedCSharp.lines().filterNot { line -> line.trimStart().startsWith("//") }
+
+  private val residualCells: List<Cell> = listOf(
+    // (a) inherited from an unexported interface, once per inheriting class.
+    structural("tier1.residuals.Shelf.tally"),
+    input("tier1.residuals.Shelf.feedHidden"),
+    structural("tier1.residuals.Rack.tally"),
+    input("tier1.residuals.Rack.feedHidden"),
+    // (a) inherited from an unexported base class.
+    structural("tier1.residuals.Ledge.weigh"),
+    input("tier1.residuals.Ledge.drainBase"),
+    // (a) on a generic owner: an override of an unexported interface's `suspend` member.
+    structural("tier1.residuals.Crate.pace"),
+    // (b) value-class members no route binds. A lambda parameter is one too: the ADR-160 plan
+    // binds it on ordinary owners, not on a value class.
+    structural("tier1.residuals.Tag.tagPick"),
+    input("tier1.residuals.Tag.tagFeed"),
+    returns("tier1.residuals.Tag.tagTicker"),
+    structural("tier1.residuals.Tag.tagSettle"),
+    input("tier1.residuals.Tag.tagOn"),
+    // (c) class companion members (already named before this cell existed; coverage only).
+    structural("tier1.residuals.Den.Companion.denPick"),
+    input("tier1.residuals.Den.Companion.denFeed"),
+    returns("tier1.residuals.Den.Companion.denTicker"),
+    // (d) interface companion members, a function, a `val` and a `const val`.
+    structural("tier1.residuals.Keeper.Companion.summon"),
+    property("tier1.residuals.Keeper.Companion.all"),
+    property("tier1.residuals.Keeper.Companion.LIMIT"),
+    // The companions no route renders: a value class's, a sealed base's, a sealed arm's.
+    structural("tier1.residuals.Tag.Companion.tagBlank"),
+    structural("tier1.residuals.Job.Companion.hire"),
+    structural("tier1.residuals.Job.Cook.Companion.hireCook"),
+  )
+
+  private fun property(member: String): Cell =
+    Cell(member, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY)
+
+  @Test
+  fun `every residual unrouted member is named exactly once`() {
+    val result: Tier1Result = runResiduals()
+
+    residualCells.forEach { cell ->
+      val matches: List<String> = result.warningsNaming(cell.member)
+      assertEquals(
+        1,
+        matches.size,
+        "${cell.member} is dropped from C# and must be named exactly once; " +
+            "kspWarnings=${result.kspWarnings}",
+      )
+      assertTrue(
+        matches.single().contains(cell.kind.name),
+        "expected ${cell.member} to be named by ${cell.kind.name}; got=$matches",
+      )
+    }
+  }
+
+  @Test
+  fun `the residual control members still bind and are not named`() {
+    val result: Tier1Result = runResiduals()
+    val declarations: List<String> = result.csharpDeclarations()
+
+    listOf(
+      "OkShelf(", "OkRack(", "OkLedge(", "OkHidden(", "OkBase(", "OkCrate(", "OkTag(", "OkDen(",
+      "OkDenCompanion(", "Greet(", "OkJob(",
+    ).forEach { member ->
+      assertTrue(
+        declarations.any { line -> line.contains(member) },
+        "$member is a control member and must still bind; generatedCSharp=" +
+            result.generatedCSharp.take(4000),
+      )
+    }
+    // An unexported interface's Flow-return and lambda-parameter defaults are re-emitted by the
+    // class legacy routes on every implementing class, so the new naming must leave them alone.
+    listOf("public KotlinFlow<int> HiddenTicks()", "public void OnHidden(Action<int> cb)")
+      .forEach { member ->
+        assertEquals(
+          2,
+          declarations.count { line -> line.contains(member) },
+          "`$member` binds on Shelf and on Rack through the class legacy route",
+        )
+      }
+    listOf(
+      "okShelf", "okHidden", "okBase", "okTag", "okDenCompanion", "greet", "hiddenTicks",
+      "onHidden",
+    ).forEach { name ->
+      assertTrue(
+        result.kspWarnings.none { warning -> warning.contains(".$name") },
+        "$name binds, so it must not be named; kspWarnings=${result.kspWarnings}",
+      )
+    }
+  }
+
+  @Test
+  fun `every residual unrouted member is absent from the generated C#`() {
+    val result: Tier1Result = runResiduals()
+    val declarations: List<String> = result.csharpDeclarations()
+
+    listOf(
+      "Tally", "FeedHidden", "Weigh", "DrainBase", "TagPick", "TagFeed", "TagTicker",
+      "TagSettle", "TagOn", "DenPick", "DenFeed", "DenTicker", "Summon", "TagBlank", "Hire",
+      "HireCook",
+    ).forEach { member ->
+      val leaks: List<String> = declarations.filter { line ->
+        Regex("\\b${member}(Async)?\\s*[(<]").containsMatchIn(line)
+      }
+      assertTrue(leaks.isEmpty(), "$member is skipped, so no C# may declare it; got=$leaks")
+    }
+    // The two interface companion properties: no C# property or constant of either name.
+    listOf("All", "LIMIT", "Limit").forEach { member ->
+      val leaks: List<String> = declarations.filter { line ->
+        Regex("\\b(int|var)\\s+$member\\b").containsMatchIn(line)
+      }
+      assertTrue(leaks.isEmpty(), "$member is skipped, so no C# may declare it; got=$leaks")
+    }
+  }
 }

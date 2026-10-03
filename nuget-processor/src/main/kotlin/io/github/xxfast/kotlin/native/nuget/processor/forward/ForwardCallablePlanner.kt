@@ -192,6 +192,12 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  [ForwardCallableCatalogEntry.Skipped.detail]. */
   UNROUTED_POSITION(droppedFromCSharp = true),
 
+  /** ADR-064 amendment: a member of a `companion object` whose owner no route renders statics for
+   *  (an interface, a sealed base or arm, a value class). ADR-013 folds only an ordinary class's
+   *  (and, per ADR-006, an enum's) companion into its owner, so the member is in neither half. The
+   *  owner kind rides in [ForwardCallableCatalogEntry.Skipped.detail]. */
+  COMPANION_NO_CARRIER(droppedFromCSharp = true),
+
   /** ADR-160 amendment (issue #111 on the plan): a top-level function returning a lambda one of
    *  whose type arguments C# cannot spell (`() -> Flow<Snapshot>`, `() -> List<Int>`). The
    *  offending argument's Kotlin name rides in [ForwardCallableCatalogEntry.Skipped.detail]. */
@@ -425,9 +431,17 @@ private val GENERIC_OWNER_LEGACY_REASONS: Set<ForwardPlanSkipReason> = setOf(
   ForwardPlanSkipReason.CALLBACK_PROTOCOL,
 )
 
-/** Whether this member overrides a member an interface declares (ADR-174's forwarding case). */
-private fun KSFunctionDeclaration.overridesInterfaceMember(): Boolean =
-  (findOverridee()?.parentDeclaration as? KSClassDeclaration)?.classKind == ClassKind.INTERFACE
+/**
+ * Whether this member overrides a member an EXPORTED interface declares (ADR-174's forwarding
+ * case): that interface binds the member or names it on its own declaration. An unexported one
+ * does neither (ADR-064 amendment).
+ */
+private fun KSFunctionDeclaration.overridesExportedInterfaceMember(exported: Set<String>): Boolean {
+  val declaring: KSClassDeclaration =
+    findOverridee()?.parentDeclaration as? KSClassDeclaration ?: return false
+  return declaring.classKind == ClassKind.INTERFACE &&
+      declaring.qualifiedName?.asString() in exported
+}
 
 /**
  * ADR-064 amendment (2026-09-13), shaped after ADR-116's sealed reclassification: turn a
@@ -458,6 +472,71 @@ internal fun ForwardCallableCatalogEntry.nameUnroutedPosition(
     structural = reason == ForwardPlanSkipReason.GENERIC &&
         (node as? KSFunctionDeclaration)?.typeParameters?.isNotEmpty() == true,
   )
+}
+
+/** The [ForwardPlanSkipReason.COMPANION_NO_CARRIER] detail that selects the interface sentence. */
+internal const val COMPANION_OWNER_INTERFACE: String = "interface"
+
+/** What [carrierlessCompanionDrops] names: the companion's functions and its properties. */
+internal class ForwardCarrierlessCompanion(
+  val callables: List<ForwardCallableCatalogEntry>,
+  val properties: List<ForwardDroppedProperty>,
+)
+
+/**
+ * ADR-064 amendment: every public member of this owner's `companion object`, named as a
+ * [ForwardPlanSkipReason.COMPANION_NO_CARRIER] drop. For an owner no route renders companion
+ * statics for: an interface (whose C# twin declares no statics), a sealed base or arm, a value
+ * class. One drop per member, owned by this declaration (issue #249), so the remark lands on the
+ * C# type the author would have looked for it on.
+ *
+ * @param ownerKind the owner kind the sentence names ([COMPANION_OWNER_INTERFACE] for an
+ *   interface, which reads its own sentence).
+ */
+internal fun KSClassDeclaration.carrierlessCompanionDrops(
+  ownerKind: String,
+): ForwardCarrierlessCompanion {
+  val owner: String = qualifiedName?.asString()
+    ?: return ForwardCarrierlessCompanion(emptyList(), emptyList())
+  val companion: KSClassDeclaration = declarations.filterIsInstance<KSClassDeclaration>()
+    .firstOrNull { it.isCompanionObject && it.getVisibility() == Visibility.PUBLIC }
+    ?: return ForwardCarrierlessCompanion(emptyList(), emptyList())
+  val diagnosticOwner: ForwardDiagnosticOwner = forwardDiagnosticOwner()
+  val prefix: String = "$owner.${companion.simpleName.asString()}"
+  // Numbered like `companionEntries`, so two overloads stay two entries under two symbols.
+  val occurrences: MutableMap<String, Int> = mutableMapOf()
+  val callables: List<ForwardCallableCatalogEntry> = companion.getAllFunctions()
+    .filter { function -> function.getVisibility() == Visibility.PUBLIC }
+    .filter { function -> !function.isCompilerOwnedMember(companion) }
+    .map { function ->
+      val name: String = function.simpleName.asString()
+      val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
+      val suffix: String = if (occurrence == 1) "" else "_$occurrence"
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "$prefix.$name$suffix",
+        reason = ForwardPlanSkipReason.COMPANION_NO_CARRIER,
+        node = function,
+        detail = ownerKind,
+        owner = diagnosticOwner,
+      )
+    }
+    .toList()
+  // `const val` included: the constants route is keyed to an ordinary class's companion too.
+  val properties: List<ForwardDroppedProperty> = companion.getAllProperties()
+    .filter { property -> property.getVisibility() == Visibility.PUBLIC }
+    .filter { property -> !property.isCompilerOwnedMember(companion) }
+    .map { property ->
+      ForwardDroppedProperty(
+        symbol = "$prefix.${property.simpleName.asString()}",
+        node = property,
+        typeDescription = property.type.toString(),
+        reason = ForwardPlanSkipReason.COMPANION_NO_CARRIER,
+        detail = ownerKind,
+        owner = diagnosticOwner,
+      )
+    }
+    .toList()
+  return ForwardCarrierlessCompanion(callables, properties)
 }
 
 /** The same reclassification over a producer's whole entry list. */
@@ -831,6 +910,27 @@ internal class ForwardCallablePlanner(
   ): ForwardCallablePlanCatalog {
     topLevelFunctions = functions
     topLevelExtensions = extensionFunctions
+    // ADR-064 amendment: the companions no walk below renders (ADR-013 folds only an ordinary
+    // class's companion into the class, ADR-006 an enum's into `{Enum}Extensions`). An enum arm's
+    // enum is planned on the enum route, companion included.
+    // Keyed by declaration: a nested sealed base is also an arm of its parent, and is named once.
+    val carrierlessOwners: Map<KSClassDeclaration, String> = buildMap {
+      sealedClasses.forEach { sealed ->
+        sealed.getSealedSubclasses()
+          .filterNot { sub -> sub.isEnumArm() }
+          .forEach { sub -> put(sub, "sealed subclass") }
+      }
+      sealedClasses.forEach { sealed ->
+        val kind: String =
+          if (sealed.classKind == ClassKind.INTERFACE) "sealed interface" else "sealed class"
+        put(sealed, kind)
+      }
+      valueClasses.forEach { cls -> put(cls, "value class") }
+    }
+    val carrierless: List<ForwardCarrierlessCompanion> = carrierlessOwners
+      .entries
+      .distinctBy { (owner, _) -> owner.qualifiedName?.asString() }
+      .map { (owner, kind) -> owner.carrierlessCompanionDrops(kind) }
     val entries: List<ForwardCallableCatalogEntry> = buildList {
       // Issue #249: every walk below stamps the C# owner of what it planned onto its skips, so a
       // dropped member can be named on the declaration that would have declared it. Constructors
@@ -926,6 +1026,7 @@ internal class ForwardCallablePlanner(
       valueClasses.forEach { cls ->
         addAll(valueClassEntries(cls).ownedBy(cls.forwardDiagnosticOwner()))
       }
+      carrierless.forEach { companion -> addAll(companion.callables) }
     }
     val planner = ForwardPropertyPlanner(classifier, symbols, expects)
     val propertyPlans: List<ForwardPropertyPlan> = planner.catalog(
@@ -934,10 +1035,19 @@ internal class ForwardCallablePlanner(
     )
     return ForwardCallablePlanCatalog(
       entries.map { entry -> entry.withLegacyDefaults() },
-      propertyPlans, planner.droppedPropertySetters, planner.droppedProperties,
+      propertyPlans, planner.droppedPropertySetters,
+      planner.droppedProperties + carrierless.flatMap { companion -> companion.properties },
       planner.droppedExtensionReceivers,
     )
   }
+
+  /**
+   * ADR-064 amendment: whether the type declaring this member runs a planning pass of its own (an
+   * exported class, interface or sealed base), and so names the member's unrouted positions there.
+   */
+  private fun KSFunctionDeclaration.isDeclaredOnExportedType(): Boolean =
+    (parentDeclaration as? KSClassDeclaration)?.qualifiedName?.asString() in
+        classifier.exportedObjectHandles
 
   /**
    * ADR-164 on the legacy routes: a `suspend` or `Flow`-returning member never gets a plan, but it
@@ -1247,7 +1357,11 @@ internal class ForwardCallablePlanner(
           )
         }
       }
+      // ADR-064 amendment: no legacy route takes a value class (not the suspend, Flow, callback or
+      // generic one), so every deferral here is a drop and is named.
+      .map { entry -> entry.namedSuspend() }
       .toList()
+      .nameUnroutedPositions()
   }
 
   /**
@@ -1454,7 +1568,10 @@ internal class ForwardCallablePlanner(
         // One warning per *declaration*: a defaulted interface member binds here too, and naming
         // it on every implementing class would report the author's one declaration N times. The
         // interface's own planner names it (`interfaceEntries`).
-        method.parentDeclaration != cls -> true
+        // ADR-064 amendment: only when that declaration HAS its own pass. An unexported interface
+        // or base class gets none, so its member is named on each inheriting class (issue #249: a
+        // different owner is a different hole).
+        method.parentDeclaration != cls && method.isDeclaredOnExportedType() -> true
         // The Flow route owns the whole member, not just its return: a parameter or element it
         // cannot marshal makes the route refuse the member, and ADR-114/ADR-123 already name that
         // refusal (`warnRefusedLegacyRouteMembers`) with a message that says which type failed.
@@ -1517,11 +1634,13 @@ internal class ForwardCallablePlanner(
         }
         .forEach { pair -> addAll(pair.toList()) }
     }
+    // ADR-064 amendment: "named there" holds only for a declaration with a pass of its own, so an
+    // unexported supertype's member, or an override of one, is named here.
     fun KSFunctionDeclaration.isNamedElsewhere(): Boolean =
-      parentDeclaration != cls ||
+      (parentDeclaration != cls && isDeclaredOnExportedType()) ||
           refusedLegacyLambdaShape() != null ||
           this in namedPairMembers ||
-          overridesInterfaceMember() ||
+          overridesExportedInterfaceMember(classifier.exportedObjectHandles) ||
           (isForwardLegacyAsyncRoute() &&
               (classifier.legacyRefusedParameter(parameters) != null ||
                   classifier.legacyRefusedReturn(this) != null))

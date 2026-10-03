@@ -670,6 +670,8 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   ForwardPlanSkipReason.SEALED_BASE_UNROUTED,
   // ADR-147: the same absence for a generic owner, which no legacy route is keyed to either.
   ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE,
+  // ADR-064 amendment: and for a companion whose owner renders no statics.
+  ForwardPlanSkipReason.COMPANION_NO_CARRIER,
     -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION
 
   // ADR-162: the one reason that maps to an ERROR_* kind by construction. It is not a "cannot
@@ -901,8 +903,8 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       // ROADMAP Phase 4 line 23 fold-in: the suspend route covers top-level functions and class,
       // sealed-arm members, never an extension.
       ForwardPlanSkipReason.SUSPEND.name ->
-        "a `suspend` function binds at the top level and on a class, but not as an extension " +
-          "or on an enum or its companion"
+        "a `suspend` function binds at the top level and on a class, but not as an extension, " +
+          "on an enum or its companion, or on a value class"
 
       ForwardPlanSkipReason.GENERIC.name ->
         "a generic type binds at a top-level function return, and a generic function at a " +
@@ -928,6 +930,18 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
     ForwardPlanSkipReason.SEALED_BASE_UNROUTED ->
       "it is a ${detail ?: "specialized"} member of a sealed base class, which has no route yet " +
           "(ADR-116)"
+
+    // ADR-064 amendment: names the owner kind, not a type: the member binds unchanged on an
+    // ordinary class's companion. An interface gets its own sentence because its C# twin is an
+    // `interface`, which this generator never gives static members.
+    ForwardPlanSkipReason.COMPANION_NO_CARRIER ->
+      if (detail == COMPANION_OWNER_INTERFACE) {
+        "it is a member of an interface's companion object, and the generated C# interface " +
+            "declares no static members to carry it"
+      } else {
+        "it is a member of the companion object of a ${detail ?: "type"}, and no route renders " +
+            "that companion's members yet (only an ordinary class's or an enum's companion binds)"
+      }
 
     // ADR-147: names the owner, not a type: the member binds unchanged on a non-generic class.
     ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE ->
@@ -1373,6 +1387,10 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     // what is left unrouted on it is the callback and generic-member shapes.
     "declare the member on each arm of the sealed class instead (the arms carry the callback " +
         "routes the base does not), or move it onto an ordinary class"
+
+  ForwardPlanSkipReason.COMPANION_NO_CARRIER ->
+    "move it to a top-level declaration, an `object`, or the companion object of an ordinary " +
+        "class"
 
   ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE ->
     "move the member onto a non-generic class (for example a wrapper that holds this one), " +

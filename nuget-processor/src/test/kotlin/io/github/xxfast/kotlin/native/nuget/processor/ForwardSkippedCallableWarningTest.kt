@@ -270,6 +270,20 @@ class ForwardSkippedCallableWarningTest {
         position = ForwardSkipPosition.INPUT,
       ) to "its extension receiver `Int?` crosses the bridge as a has-value flag plus a value " +
           "(two slots), and an extension receiver can carry only one (RECEIVER_FAN_OUT)",
+      // ADR-064 amendment: an owner kind, not a type. The interface reads its own sentence,
+      // because its C# twin is an `interface`, which is given no statics at all.
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Keeper.Companion.summon",
+        reason = ForwardPlanSkipReason.COMPANION_NO_CARRIER,
+        detail = "interface",
+      ) to "it is a member of an interface's companion object, and the generated C# interface " +
+          "declares no static members to carry it",
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Tag.Companion.blank",
+        reason = ForwardPlanSkipReason.COMPANION_NO_CARRIER,
+        detail = "value class",
+      ) to "it is a member of the companion object of a value class, and no route renders that " +
+          "companion's members yet (only an ordinary class's or an enum's companion binds)",
     )
 
     val logger = RecordingLogger()
@@ -420,6 +434,9 @@ class ForwardSkippedCallableWarningTest {
         // member stays silent on an ordinary class because a legacy route re-emits it; no legacy
         // route is keyed to a generic class, so the same member is a real drop there.
         ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE,
+        // ADR-064 amendment: a member of a companion whose owner no route renders statics for (an
+        // interface, a sealed base or arm, a value class). In neither half, so it warns.
+        ForwardPlanSkipReason.COMPANION_NO_CARRIER,
         // ADR-162: the generator's own invariant failing on a callable. `droppedFromCSharp`, so the
         // catalog's drop-reporting path carries it, which is the only thing that reports it at all;
         // unlike every other entry here it maps to an ERROR_* kind and fails the build.
