@@ -32,6 +32,18 @@ internal const val NUGET_ORG_FEED = "https://api.nuget.org/v3/index.json"
  */
 internal const val HERMETIC_GLOBAL_JSON = "{}"
 
+/** The package floor through the framework ceiling of the selected SDK, never future SDKs. */
+internal fun compileTargetFrameworks(floor: String, sdk: String): List<String> {
+  val floorMajor: Int = Regex("net(\\d+)\\.0").matchEntire(floor)
+    ?.groupValues?.get(1)?.toIntOrNull()
+    ?: throw GradleException("[nuget] Invalid compile-check target framework '$floor'.")
+  val sdkMajor: Int = Regex("(\\d+)\\.\\d+\\.\\d+(?:-[A-Za-z0-9.-]+)?")
+    .matchEntire(sdk.trim())?.groupValues?.get(1)?.toIntOrNull()
+    ?: throw GradleException("[nuget] Cannot determine compile-check frameworks from SDK '$sdk'.")
+  // An older SDK still attempts the floor, preserving its visible unsupported-framework error.
+  return (floorMajor..maxOf(floorMajor, sdkMajor)).map { major -> "net$major.0" }
+}
+
 /**
  * ADR-138 amendment: the `NuGet.config` the check restores with, passed as `RestoreConfigFile` so a
  * consumer's own config (extra feeds, package source mapping) is never consulted. `RestoreSources`
@@ -61,6 +73,7 @@ internal fun generateCheckCsproj(
   dependencySources: List<String>,
   targetFramework: String = DEFAULT_TARGET_FRAMEWORK,
   packagesPath: String? = null,
+  targetFrameworks: List<String> = listOf(targetFramework),
 ): String {
   val restoreSourcesLine: String = restoreLines(dependencySources, packagesPath)
 
@@ -85,7 +98,7 @@ internal fun generateCheckCsproj(
   return """
     |<Project Sdk="Microsoft.NET.Sdk">
     |  <PropertyGroup>
-    |    <TargetFramework>$targetFramework</TargetFramework>
+    |    <TargetFrameworks>${targetFrameworks.joinToString(";")}</TargetFrameworks>
     |    <LangVersion>14.0</LangVersion>
     |    <Nullable>enable</Nullable>
     |    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
@@ -130,7 +143,7 @@ public abstract class NugetCompileInteropTask : DefaultTask() {
   @get:Input
   public abstract val dependencySources: ListProperty<String>
 
-  // ADR-184: the package's floor TFM, the one consumer TFM this check compiles at. The plugin wires
+  // ADR-184: the package's floor TFM; the check also compiles higher selected-SDK frameworks. The plugin wires
   // it from `nuget { targetFramework }`; the convention serves a task built by hand.
   @get:Input
   public abstract val targetFramework: Property<String>
@@ -148,6 +161,9 @@ public abstract class NugetCompileInteropTask : DefaultTask() {
   init {
     targetFramework.convention(DEFAULT_TARGET_FRAMEWORK)
     strictCompileCheck.convention(false)
+    // SDK installation and selection are external state. Always probe so adding an SDK expands
+    // the matrix even when the generated sources are unchanged; MSBuild remains incremental.
+    outputs.upToDateWhen { false }
   }
 
   // Where interop-check.csproj and its obj/ and bin/ land: build/nuget-compile/.
@@ -190,14 +206,6 @@ public abstract class NugetCompileInteropTask : DefaultTask() {
     val dir: File = projectDir.get().asFile
     dir.mkdirs()
 
-    val csproj = File(dir, "interop-check.csproj")
-    csproj.writeText(
-      generateCheckCsproj(
-        csFiles, dependencyVersions.get(), dependencySources.get(), targetFramework.get(),
-        packagesDir.orNull?.asFile?.absolutePath,
-      )
-    )
-
     // The scratch dir sits inside the consumer's tree, so the check writes its own SDK and feed
     // selection next to the csproj rather than inheriting whatever is above it.
     File(dir, "global.json").writeText(HERMETIC_GLOBAL_JSON)
@@ -230,6 +238,17 @@ public abstract class NugetCompileInteropTask : DefaultTask() {
       return
     }
 
+    val sdk: String = probeOut.toString().trim()
+    val frameworks: List<String> = compileTargetFrameworks(targetFramework.get(), sdk)
+    logger.lifecycle("[nuget] Compiling generated C# for ${frameworks.joinToString(", ")} (SDK $sdk)")
+    val csproj = File(dir, "interop-check.csproj")
+    csproj.writeText(
+      generateCheckCsproj(
+        csFiles, dependencyVersions.get(), dependencySources.get(), targetFramework.get(),
+        packagesDir.orNull?.asFile?.absolutePath, frameworks,
+      ),
+    )
+
     // Both streams are captured: the C# compiler writes `error CS....` and `Build FAILED.` to
     // stdout, not stderr, so a stderr-only capture (NugetRestoreTask's) would report a failure
     // with no errors in it.
@@ -259,9 +278,8 @@ public abstract class NugetCompileInteropTask : DefaultTask() {
     val exitCode: Int = result.exitValue
     if (exitCode != 0) {
       throw GradleException(
-        "[nuget] The generated C# bindings do not compile (dotnet build exit code $exitCode). " +
-          "This is a generator defect: the package would fail in every consumer's build. " +
-          "Compiler output:\n" +
+        "[nuget] The generated C# compile check failed for ${frameworks.joinToString(", ")} " +
+          "(dotnet build exit code $exitCode). Restore or compiler output:\n" +
           (stdout.toString().trimEnd() + "\n" + stderr.toString().trimEnd()).trim()
       )
     }
