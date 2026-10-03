@@ -385,7 +385,7 @@ class Tier1KdocXmlDocTest {
     assertTrue(kotlin.contains("@CName(\"library_tier1_kdocexpectdefault__sunspot_stretchFor\")"), kotlin)
     // One export; the mask arm omits the argument so Kotlin evaluates the `expect`'s default.
     assertFalse(kotlin.contains("sunspot_stretchFor_2"), kotlin)
-    assertTrue(kotlin.contains(".stretchFor()"), kotlin)
+    assertTrue(kotlin.contains(".nuget_ext_tier1__kdocexpectdefault__stretchFor()"), kotlin)
 
     assertTrue(
       cs.contains("StretchFor(this global::Interop.SunSpot receiver, int? minutes = null)"), cs,

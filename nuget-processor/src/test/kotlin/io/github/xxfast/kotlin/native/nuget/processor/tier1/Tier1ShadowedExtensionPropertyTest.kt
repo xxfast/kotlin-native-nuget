@@ -88,15 +88,15 @@ class Tier1ShadowedExtensionPropertyTest {
   }
 
   /**
-   * Known gap, pinned so it stays visible: the extension FUNCTION twin has the same defect
-   * (`receiver...get().y()` resolves to the member `Foo.y()`), and is still exported. Detecting it
-   * needs overload applicability, not a name match, so it is not fixed here.
+   * The extension FUNCTION twin is not skipped: it is called through an aliased import, which
+   * reaches the extension past the member `Foo.y()` (see `Tier1ShadowedExtensionFunctionTest`).
    */
   @Test
-  fun `a member-shadowed extension function still exports`() {
+  fun `a member-shadowed extension function exports and calls the extension`() {
     val result = Tier1Harness.run(sources)
 
     assertContains(result.generated, "@CName(\"library_tier1_shadowed_model__foo_y\")")
     assertContains(result.generated, "@CName(\"library_tier1_shadowed_ext__foo_y\")")
+    assertContains(result.generated, ".get().nuget_ext_tier1__shadowed__ext__y()")
   }
 }

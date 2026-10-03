@@ -57,7 +57,8 @@ class Tier1ReceiverShapesExtensionTest {
     // serves both implementations.
     assertContains(
       result.generated,
-      "receiver.asStableRef<tier1.receivershapes.Pet>().get().describe()",
+      "receiver.asStableRef<tier1.receivershapes.Pet>().get()" +
+        ".nuget_ext_tier1__receivershapes__describe()",
     )
   }
 

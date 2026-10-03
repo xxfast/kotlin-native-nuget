@@ -71,8 +71,10 @@ class Tier1FunctionDefaultParameterTest {
     // The load-bearing assertion: the unset arm calls Kotlin without the argument, and the
     // extension keeps its receiver even when every parameter is left unset.
     assertContains(kotlin, "0 -> tier1.fundefaultsstatic.hail(name)")
-    assertContains(kotlin, ".get().knead()")
-    assertContains(kotlin, ".get().knead(surface = default_surface!!)")
+    assertContains(kotlin, ".get().nuget_ext_tier1__fundefaultsstatic__knead()")
+    assertContains(
+      kotlin, ".get().nuget_ext_tier1__fundefaultsstatic__knead(surface = default_surface!!)",
+    )
 
     val cs: String = result.generatedCSharp
     assertContains(cs, "public static string Hail(string name, bool? loud = null)")

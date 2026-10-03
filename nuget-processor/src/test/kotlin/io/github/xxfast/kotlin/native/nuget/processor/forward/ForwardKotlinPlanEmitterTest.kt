@@ -30,7 +30,7 @@ class ForwardKotlinPlanEmitterTest {
     assertContains(source, "`receiver`: Int,")
     assertContains(source, "amount: Int,")
     assertContains(source, "errorOut: COpaquePointer?,")
-    assertContains(source, "receiver.adjust(amount)")
+    assertContains(source, "receiver.nuget_ext_sample__adjust(amount)")
     assertContains(source, "try {")
     assertContains(source, "errorOut.reinterpret<COpaquePointerVar>().pointed.value")
   }
@@ -374,7 +374,11 @@ class ForwardKotlinPlanEmitterTest {
       listOf(receiver, error),
     )
     val plan = ForwardCallablePlan(
-      invocation = ForwardInvocation("sample.shout", origin = ForwardCallableOrigin.EXTENSION),
+      invocation = ForwardInvocation(
+        "sample.shout",
+        origin = ForwardCallableOrigin.EXTENSION,
+        extensionImportAlias = forwardExtensionImportAlias("sample", "shout"),
+      ),
       publicSignature = ForwardPublicSignature("Shout", emptyList(), BridgeType.Unit),
       evaluation = ForwardEvaluation.EXACTLY_ONCE,
       nativeExports = listOf(call),
@@ -388,7 +392,7 @@ class ForwardKotlinPlanEmitterTest {
     ).validate()
 
     val source = render(plan)
-    assertContains(source, "receiver.asStableRef<sample.Patient>().get().shout()")
+    assertContains(source, "receiver.asStableRef<sample.Patient>().get().nuget_ext_sample__shout()")
   }
 
   private fun render(plan: ForwardCallablePlan): String {
@@ -605,6 +609,9 @@ class ForwardKotlinPlanEmitterTest {
       invocation = ForwardInvocation(
         symbol = symbol,
         origin = if (receiver.name == "handle") ForwardCallableOrigin.CLASS else ForwardCallableOrigin.EXTENSION,
+        extensionImportAlias = forwardExtensionImportAlias(
+          symbol.substringBeforeLast('.'), symbol.substringAfterLast('.'),
+        ).takeIf { receiver.name != "handle" },
       ),
       publicSignature = ForwardPublicSignature(
         name = symbol.substringAfterLast('.'),

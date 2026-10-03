@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
+import com.squareup.kotlinpoet.MemberName
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.TypeName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.cNameAnnotation
@@ -887,6 +888,35 @@ internal fun FileSpec.Builder.importIfDefaultPackage(declaration: KSDeclaration)
   }
 }
 
+/**
+ * The alias an extension function named [name] in [packageName] is imported and called under.
+ *
+ * A pure function of the qualified name, never of the export: KotlinPoet keeps ONE import per
+ * qualified name (`FileSpec` keys them by `qualifiedName`), so per-overload aliases would drop all
+ * but one, and `import pkg.y as A` already brings every overload of `pkg.y` in under `A`.
+ * Injective, so two packages never share an alias: `_` becomes `_u` and `.` becomes `__`.
+ */
+internal fun forwardExtensionImportAlias(packageName: String, name: String): String {
+  val qualified: String = if (packageName.isEmpty()) name else "$packageName.$name"
+  return "nuget_ext_" + qualified.replace("_", "_u").replace(".", "__")
+}
+
+/**
+ * Imports the extension function [name] of [packageName] under [alias].
+ *
+ * The simple name is backticked on purpose. KotlinPoet keys imports by qualified name, so an
+ * aliased `pkg.q` would replace a plain `pkg.q` import another route needs (a top-level `val q`
+ * beside `fun Foo.q()`). Kotlin reads `pkg.`q`` and `pkg.q` as the same name; KotlinPoet keys
+ * them apart.
+ */
+internal fun FileSpec.Builder.addForwardExtensionImport(
+  packageName: String,
+  name: String,
+  alias: String,
+) {
+  addAliasedImport(MemberName(packageName, "`$name`"), alias)
+}
+
 /** The Kotlin hard keywords, which a package segment may be and a qualified reference may not. */
 private val KOTLIN_HARD_KEYWORDS: Set<String> = setOf(
   "as", "break", "class", "continue", "do", "else", "false", "for", "fun", "if", "in",
@@ -1010,8 +1040,17 @@ private fun invocationExpression(
 
     // ADR-006 amendment: an enum member is called exactly like an extension on the enum value,
     // which is also how Kotlin spells a member call, so per-entry `abstract fun` bodies dispatch.
-    ForwardCallableOrigin.EXTENSION, ForwardCallableOrigin.ENUM_MEMBER ->
+    ForwardCallableOrigin.ENUM_MEMBER ->
       "${receiverExpression(requireNotNull(receiver))}.$functionName($arguments)"
+    // Called through the alias `addForwardExtensionImport` imports it under: the declared name
+    // resolves to an applicable member of the same name first (exact, defaulted, vararg, generic,
+    // `invoke` property, supertype parameter), which would silently run the member instead.
+    ForwardCallableOrigin.EXTENSION -> {
+      val alias: String = requireNotNull(plan.invocation.extensionImportAlias) {
+        "Forward extension plan ${plan.invocation.symbol} carries no import alias"
+      }
+      "${receiverExpression(requireNotNull(receiver))}.$alias($arguments)"
+    }
     // ADR-163: fully qualified, never imported by simple name. Two `rollCall()` in two packages
     // both become exported symbols now that the C name is package-qualified, and a bare call with
     // two simple-name imports beside it is an overload-resolution ambiguity in the generated file

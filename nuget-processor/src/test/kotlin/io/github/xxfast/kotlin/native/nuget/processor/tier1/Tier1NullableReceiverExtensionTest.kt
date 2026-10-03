@@ -36,7 +36,8 @@ class Tier1NullableReceiverExtensionTest {
     )
     assertTrue(
       result.generated.contains(
-        "receiver?.asStableRef<tier1.nullablereceiver.Cat>()?.get().nameOrStray()",
+        "receiver?.asStableRef<tier1.nullablereceiver.Cat>()?.get()" +
+          ".nuget_ext_tier1__nullablereceiver__nameOrStray()",
       ),
       "expected the export to read the nullable receiver back through a safe StableRef chain; " +
           "generated=${result.generated}",
@@ -70,7 +71,8 @@ class Tier1NullableReceiverExtensionTest {
 
     assertTrue(
       result.generated.contains(
-        "receiver.asStableRef<tier1.nullablereceiver.Cat>().get().loud()",
+        "receiver.asStableRef<tier1.nullablereceiver.Cat>().get()" +
+          ".nuget_ext_tier1__nullablereceiver__loud()",
       ),
       "expected the non-null receiver to keep its direct StableRef read; " +
           "generated=${result.generated}",

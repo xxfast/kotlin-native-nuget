@@ -734,6 +734,14 @@ internal data class ForwardInvocation(
    * where the bare qualified name off [symbol] (or [target]) is already a legal type.
    */
   val ownerType: String? = null,
+  /**
+   * The alias an [ForwardCallableOrigin.EXTENSION] callable is imported under and called through
+   * (`receiver.nuget_ext_pkg__y()`), from [forwardExtensionImportAlias]. A plain `receiver.y()`
+   * resolves to an applicable MEMBER `y` whenever one exists, so it would silently run the
+   * member; an aliased import reaches the extension in every such shape. Null for every other
+   * origin.
+   */
+  val extensionImportAlias: String? = null,
 )
 
 internal data class ForwardResultConvention(

@@ -90,12 +90,19 @@ class Tier1ValueClassReceiverTest {
     assertTrue(result.compiledClean, "expected the value-class receivers to compile; got: ${result.compileErrors}")
 
     val kotlin: String = result.generated
-    // Before the widening these read `receiver.abbreviate(length)` / `receiver.escalate()`, which
+    // Before the widening these read `receiver.abbreviate(length)` / `receiver.escalate()` (now
+    // through their import aliases), which
     // konanc rejected: the parameter is typed as the wire (`String` / `Int`), not the value class.
-    assertContains(kotlin, "tier1.valueclassreceiverfun.ChartId(receiver).abbreviate(length)")
     assertContains(
       kotlin,
-      "tier1.valueclassreceiverfun.Temperament(tier1.valueclassreceiverfun.Mood.entries[receiver]).escalate().mood.ordinal",
+      "tier1.valueclassreceiverfun.ChartId(receiver)" +
+        ".nuget_ext_tier1__valueclassreceiverfun__abbreviate(length)",
+    )
+    assertContains(
+      kotlin,
+      "tier1.valueclassreceiverfun.Temperament(" +
+        "tier1.valueclassreceiverfun.Mood.entries[receiver])" +
+        ".nuget_ext_tier1__valueclassreceiverfun__escalate().mood.ordinal",
     )
 
     val cs: String = result.generatedCSharp

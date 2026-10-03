@@ -107,11 +107,13 @@ class Tier1DeadImportTest {
         "${result.compileErrors}",
     )
     assertTrue(
-      "import tier1.deadext.ping" in result.generated,
+      "import tier1.deadext.`ping` as nuget_ext_tier1__deadext__ping" in result.generated,
       "expected the surviving extension to keep its import; generated=${result.generated}",
     )
+    // Neither spelling: no aliased import, and no plain one leaking back in.
     assertFalse(
-      "import tier1.deadext.sift" in result.generated,
+      "nuget_ext_tier1__deadext__sift" in result.generated ||
+        "import tier1.deadext.sift" in result.generated,
       "expected no import for the skipped extension; generated=${result.generated}",
     )
   }
