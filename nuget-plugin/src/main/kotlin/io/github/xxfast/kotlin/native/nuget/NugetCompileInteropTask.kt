@@ -143,8 +143,8 @@ public abstract class NugetCompileInteropTask : DefaultTask() {
   @get:Input
   public abstract val dependencySources: ListProperty<String>
 
-  // ADR-184: the package's floor TFM; the check also compiles higher selected-SDK frameworks. The plugin wires
-  // it from `nuget { targetFramework }`; the convention serves a task built by hand.
+  // ADR-184: the plugin wires the package's floor TFM from `nuget { targetFramework }`; the check
+  // also compiles higher selected-SDK frameworks. The convention serves a task built by hand.
   @get:Input
   public abstract val targetFramework: Property<String>
 
@@ -240,7 +240,9 @@ public abstract class NugetCompileInteropTask : DefaultTask() {
 
     val sdk: String = probeOut.toString().trim()
     val frameworks: List<String> = compileTargetFrameworks(targetFramework.get(), sdk)
-    logger.lifecycle("[nuget] Compiling generated C# for ${frameworks.joinToString(", ")} (SDK $sdk)")
+    logger.lifecycle(
+      "[nuget] Compiling generated C# for ${frameworks.joinToString(", ")} (SDK $sdk)",
+    )
     val csproj = File(dir, "interop-check.csproj")
     csproj.writeText(
       generateCheckCsproj(

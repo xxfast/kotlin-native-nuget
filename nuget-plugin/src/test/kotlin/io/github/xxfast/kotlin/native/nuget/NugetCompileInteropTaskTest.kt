@@ -82,9 +82,15 @@ class NugetCompileInteropTaskTest {
   @Test
   fun `the framework sweep follows the selected SDK and includes the floor`() {
     assertEquals(listOf("net10.0"), compileTargetFrameworks("net10.0", "10.0.301"))
-    assertEquals(listOf("net10.0", "net11.0", "net12.0"), compileTargetFrameworks("net10.0", "12.0.100"))
+    assertEquals(
+      listOf("net10.0", "net11.0", "net12.0"),
+      compileTargetFrameworks("net10.0", "12.0.100"),
+    )
     assertEquals(listOf("net11.0", "net12.0"), compileTargetFrameworks("net11.0", "12.0.100"))
-    assertEquals(listOf("net10.0", "net11.0"), compileTargetFrameworks("net10.0", "11.0.100-preview.1"))
+    assertEquals(
+      listOf("net10.0", "net11.0"),
+      compileTargetFrameworks("net10.0", "11.0.100-preview.1"),
+    )
     assertEquals(listOf("net10.0"), compileTargetFrameworks("net10.0", "9.0.100"))
     assertFailsWith<GradleException> { compileTargetFrameworks("net10.0", "unrecognized SDK") }
     assertFailsWith<GradleException> { compileTargetFrameworks("net10", "10.0.100") }
