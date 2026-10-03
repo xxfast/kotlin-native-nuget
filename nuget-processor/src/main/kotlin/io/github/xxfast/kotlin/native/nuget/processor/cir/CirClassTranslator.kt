@@ -31,6 +31,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceSu
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKdoc
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toCirDoc
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedCallbackMember
+import io.github.xxfast.kotlin.native.nuget.processor.forward.optInMarker
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedInterfaceBridgePair
 import io.github.xxfast.kotlin.native.nuget.processor.forward.InterfaceBridgeWire
 import io.github.xxfast.kotlin.native.nuget.processor.forward.interfaceBridgeWire
@@ -1147,6 +1148,8 @@ internal fun translateClass(
     // ADR-160 step 4: the C# half of the same named refusal the Kotlin half applies, so a member
     // this route cannot carry is absent from both artifacts rather than half-declared.
     .filterNot { method -> legacyRefusedCallbackMember(method) != null }
+    // ADR-115 / issue #121: the C# half of the Kotlin half's marker gate (the planner names it).
+    .filterNot { method -> method.optInMarker(classifier.exportMarkers) != null }
     .mapNotNull { method ->
       translateCallbackMethod(method, libraryName, prefix, exportedTypes, tracker)
     }
@@ -1154,6 +1157,8 @@ internal fun translateClass(
   val storedCallbackMembers: List<CirStoredCallbackMethod> = storedCallbackPairs
     // ADR-037 amendment: the C# half of the Kotlin half's post-detection refusal.
     .filter { (addMethod, _) -> legacyRefusedStoredCallbackPair(addMethod) == null }
+    // ADR-115 / issue #121: the C# half of the Kotlin half's pair-wide marker gate.
+    .filter { pair -> pair.toList().none { it.optInMarker(classifier.exportMarkers) != null } }
     .mapNotNull { (addMethod, removeMethod) ->
       translateStoredCallbackMethod(
         addMethod,
@@ -1176,6 +1181,8 @@ internal fun translateClass(
   val interfaceBridgeMembers: List<CirInterfaceBridgeMethod> = interfaceBridgePairs
     // ADR-090 amendment (2026-09-26): the C# half of the same named refusal.
     .filter { (addMethod, _) -> classifier.legacyRefusedInterfaceBridgePair(addMethod) == null }
+    // ADR-115 / issue #121: the C# half of the Kotlin half's pair-wide marker gate.
+    .filter { pair -> pair.toList().none { it.optInMarker(classifier.exportMarkers) != null } }
     .mapNotNull { (addMethod, removeMethod) ->
       translateInterfaceBridgeMethod(
         addMethod, removeMethod, libraryName, prefix, name, tracker, classifier, context,
