@@ -240,12 +240,17 @@ class NugetCompileGeneratedKotlinTest {
     private fun findCompiler(unpackDir: File): File? {
       val tops: Array<File>? = unpackDir.listFiles()
       if (tops == null) return null
+      // The Windows zip ships the extensionless Unix script too, and CreateProcess rejects it
+      // (error 193), so the .bat has to win there.
+      val windows: Boolean = System.getProperty("os.name").lowercase().startsWith("windows")
+      val names: List<String> =
+        if (windows) listOf("kotlinc-native.bat", "kotlinc-native") else listOf("kotlinc-native")
       for (top in tops) {
         if (!top.isDirectory || top.name.startsWith(".")) continue
-        val script: File = File(top, "bin/kotlinc-native")
-        if (script.isFile) return script
-        val bat: File = File(top, "bin/kotlinc-native.bat")
-        if (bat.isFile) return bat
+        for (name in names) {
+          val launcher: File = File(top, "bin/$name")
+          if (launcher.isFile) return launcher
+        }
       }
       return null
     }
