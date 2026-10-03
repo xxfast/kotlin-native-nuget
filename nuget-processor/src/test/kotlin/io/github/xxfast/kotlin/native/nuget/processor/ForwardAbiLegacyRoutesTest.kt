@@ -386,7 +386,9 @@ class ForwardAbiLegacyRoutesTest {
   fun `a type nested in a sealed arm registers its own routes`() {
     val base: CirSealedClass = arm(perCallCallback)
     val withNested: CirSealedClass = base.copy(
-      subclasses = base.subclasses.map { it.copy(nestedDeclarations = listOf(nested)) },
+      subclasses = base.subclasses.map { subclass ->
+        subclass.copy(nestedDeclarations = listOf(nested))
+      },
     )
     assertEquals(
       setOf(ForwardAbiLegacyRoute.SEALED_CLASS, ForwardAbiLegacyRoute.LAMBDA_PARAMETER_METHOD) +
