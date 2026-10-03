@@ -817,12 +817,39 @@ private const val RESULT_QUALIFIED_NAME: String = "kotlin.Result"
 /**
  * ADR-147: the first upper bound's Kotlin FQCN, or null when the parameter is unconstrained.
  * `kotlin.Any` is not a bound for this purpose: it is what an unconstrained parameter's implicit
- * `Any?` resolves to, and `asStableRef<Any>()` is already the unconstrained decode.
+ * `Any?` resolves to, and `asStableRef<Any>()` is already the unconstrained decode. A generic bound
+ * carries its arguments ([forwardKotlinBoundSpelling]).
  */
 internal fun KSTypeParameter.forwardBoundQualifiedName(): String? = bounds.toList()
   .firstNotNullOfOrNull { bound ->
-    bound.resolve().declaration.qualifiedName?.asString()?.takeIf { name -> name != "kotlin.Any" }
+    val resolved: KSType = bound.resolve()
+    val name: String? = resolved.declaration.qualifiedName?.asString()
+    if (name == null || name == "kotlin.Any") null else resolved.forwardKotlinBoundSpelling()
   }
+
+/**
+ * The Kotlin spelling of a type-parameter bound as a concrete type argument: its qualified name,
+ * then its arguments with every type-parameter reference erased to `Any?`. The bare
+ * `kotlin.Comparable` of `T : Comparable<T>` is not a type, so `Sorted<kotlin.Comparable>` and
+ * `asStableRef<kotlin.Comparable>()` did not compile. `kotlin.Comparable<Any?>` satisfies that
+ * F-bound, nullable or not, because `Comparable` is contravariant (`Comparable<Any?>` is a
+ * `Comparable<Comparable<Any?>?>`). An invariant F-bound (`T : Enum<T>`) has no such spelling; it
+ * still renders, and still fails to compile, as a known limit.
+ */
+internal fun KSType.forwardKotlinBoundSpelling(): String {
+  val name: String = declaration.qualifiedName?.asString() ?: declaration.simpleName.asString()
+  if (arguments.isEmpty()) return name
+  val spelled: String = arguments.joinToString(", ") { argument ->
+    val argumentType: KSType? = argument.type?.resolve()
+    when {
+      argumentType == null -> "*"
+      argumentType.declaration is KSTypeParameter -> "Any?"
+      else -> argumentType.forwardKotlinBoundSpelling() +
+          if (argumentType.isMarkedNullable) "?" else ""
+    }
+  }
+  return "$name<$spelled>"
+}
 
 /**
  * ADR-147: the fully applied Kotlin spelling of a generic owner (`io.pkg.Crate<Any?>`,

@@ -200,6 +200,11 @@ internal enum class ForwardDiagnosticKind(
    *  a note, not a skip. */
   INFO_DROPPED_VARIANCE(ForwardDiagnosticSeverity.INFO),
 
+  /** A Kotlin builtin bound (`T : Comparable<T>`, `T : Number`) has no C# spelling, so it is
+   *  dropped from the `where` clause (`notnull` kept for a non-null bound); the declaration still
+   *  binds, so this is a note, not a skip. */
+  INFO_DROPPED_BOUND(ForwardDiagnosticSeverity.INFO),
+
   /** ADR-034: two or more constructors render identical C# parameter types. Fatal: silently
    *  dropping one would change the API contract unpredictably. */
   ERROR_CSHARP_SIGNATURE_COLLISION(ForwardDiagnosticSeverity.ERROR),

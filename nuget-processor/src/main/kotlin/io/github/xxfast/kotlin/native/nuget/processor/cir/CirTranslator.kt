@@ -366,7 +366,7 @@ internal fun translate(
     val finalClassName: String = resolveStaticClassName(fileClassName, namespace)
     val members: List<CirMember> =
       funcs.flatMap { function ->
-        translateGenericFunction(function, context.libraryName, context).also { emitted ->
+        translateGenericFunction(function, context.libraryName, context, logger).also { emitted ->
           recordStatic(
             namespace, finalClassName, emitted, function,
             function.spelling("fun"),
