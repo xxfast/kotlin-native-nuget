@@ -30,9 +30,8 @@ package io.github.xxfast.kotlin.native.nuget.test.issue285
  * - [HTTP_Status] (all-caps segment plus a Pascal segment): stays `HttpStatus`.
  *
  * Deliberately NOT here, and why:
- * - `_1ST` and `_` / `__`: today they generate `1st = 0` and an empty member name, which is
- *   illegal C# (CS1001) in `Interop.cs` itself, so they would break every consumer test file
- *   rather than this one. The memo assigns them to Tier 1 cells.
+ * - `_` and `__` together: both guard to `_`, so their collision stays a fatal Tier 1 cell.
+ *   Separate enums below exercise each guarded spelling through Native packaging.
  * - Any pair that collides after casing (`FOO` + `Foo`, or `FOO_BAR` + `FooBar` under the new
  *   rule): that is a fatal generation error Tier 1 pins, and it would break `packNuget` here.
  * - Any property on the enum: an entry-name fixture has no use for one. The one this bullet used to
@@ -93,3 +92,17 @@ object Issue285Limits {
   /** SCREAMING_SNAKE control beside it: `MaxNaps` today AND after. Mylo's daily nap budget. */
   const val MAX_NAPS: Int = 7
 }
+
+// Underscore-only entries live in separate enums because both map to the C# spelling `_`.
+enum class DigitGuard { _1ST, OK }
+enum class BareGuard { _, OK }
+enum class DoubleBareGuard { __, OK }
+
+fun echoDigitGuard(value: DigitGuard): DigitGuard = value
+fun digitGuardKotlinName(value: DigitGuard): String = value.name
+
+fun echoBareGuard(value: BareGuard): BareGuard = value
+fun bareGuardKotlinName(value: BareGuard): String = value.name
+
+fun echoDoubleBareGuard(value: DoubleBareGuard): DoubleBareGuard = value
+fun doubleBareGuardKotlinName(value: DoubleBareGuard): String = value.name
