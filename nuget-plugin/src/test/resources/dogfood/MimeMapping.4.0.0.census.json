@@ -39,7 +39,8 @@
   },
   "diagnostics": {
     "SKIPPED_ARRAY": 1,
-    "SKIPPED_INDEXER": 2
+    "SKIPPED_INDEXER": 2,
+    "SKIPPED_NESTED_TYPE": 1
   },
   "unboundTypeReferences": {},
   "collapsedOverloads": {

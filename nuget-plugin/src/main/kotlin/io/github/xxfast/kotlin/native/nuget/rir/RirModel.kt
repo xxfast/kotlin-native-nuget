@@ -581,6 +581,12 @@ internal enum class RirDiagnosticKind(private val declaredVerb: String? = null) 
   // metadata reader, which cannot know which positions the generators share. Named rather than
   // dropped silently, and named rather than hand-patched at the site: the ADR-155 rule.
   SKIPPED_COLLECTION_POSITION,
+
+  // A nested public type (`On.January`, `Outer.Inner`): the reader binds top-level public types
+  // only, so it and all its members are absent. Type-level (memberName empty, typeName the
+  // nested type, memberSignature its `<namespace>.Outer.Inner` name). Emitted by the reader, never
+  // derived plugin-side, so the gap reads as a named skip instead of a low member count.
+  SKIPPED_NESTED_TYPE,
 ;
 
   val severity: RirDiagnosticSeverity = when {

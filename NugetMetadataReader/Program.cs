@@ -157,11 +157,17 @@ internal static class AssemblyExtractor
         {
             var typeDef = mr.GetTypeDefinition(handle);
 
-            // Must be public (TypeAttributes.Public = 0x00000001).
-            // Note: nested public types have TypeAttributes.NestedPublic = 0x00000002.
-            // v1 scope: top-level public types only.
-            if ((typeDef.Attributes & System.Reflection.TypeAttributes.VisibilityMask)
-                != System.Reflection.TypeAttributes.Public)
+            // v1 scope: top-level public types only. A publicly reachable nested type (same rule
+            // as the census's nestedTypes) is dropped with a named SKIPPED_NESTED_TYPE.
+            var visibility = typeDef.Attributes & System.Reflection.TypeAttributes.VisibilityMask;
+            if (visibility == System.Reflection.TypeAttributes.NestedPublic)
+            {
+                var nested = DescribeNestedType(mr, typeDef, includes, excludes);
+                if (nested != null) diagnostics.Add(nested);
+                continue;
+            }
+
+            if (visibility != System.Reflection.TypeAttributes.Public)
                 continue;
 
             // Skip the synthetic <Module> type.
@@ -356,6 +362,43 @@ internal static class AssemblyExtractor
         var method = mr.GetMethodDefinition(handle);
         return (method.Attributes & System.Reflection.MethodAttributes.MemberAccessMask)
             == System.Reflection.MethodAttributes.Public;
+    }
+
+    /// <summary>
+    /// The SKIPPED_NESTED_TYPE diagnostic for a nested public type, or null when it is not public
+    /// surface (an enclosing type is not public) or its namespace is filtered out. A nested type's
+    /// own metadata Namespace is empty, so the namespace comes from the outermost declaring type.
+    /// </summary>
+    private static RirDiagnostic? DescribeNestedType(
+        MetadataReader mr,
+        TypeDefinition typeDef,
+        IReadOnlyList<string> includes,
+        IReadOnlyList<string> excludes)
+    {
+        if (!IsPubliclyReachable(mr, typeDef)) return null;
+
+        var chain = new List<string> { mr.GetString(typeDef.Name) };
+        var outermost = typeDef;
+        while (!outermost.GetDeclaringType().IsNil)
+        {
+            outermost = mr.GetTypeDefinition(outermost.GetDeclaringType());
+            chain.Insert(0, mr.GetString(outermost.Name));
+        }
+
+        var ns = mr.GetString(outermost.Namespace);
+        if (!IsNamespaceIncluded(ns, includes, excludes)) return null;
+
+        var typeName = string.Join(".", chain);
+        var declaringName = string.Join(".", chain.Take(chain.Count - 1));
+        var fullName = string.IsNullOrEmpty(ns) ? typeName : $"{ns}.{typeName}";
+        return new RirDiagnostic(
+            kind: "SKIPPED_NESTED_TYPE",
+            typeName: typeName,
+            memberName: "",
+            memberSignature: fullName,
+            reason: $"nested public type `{fullName}` (declared in `{declaringName}`) is outside " +
+                "the top-level-only v1 scope",
+            hint: "Nested types are not bound yet; expose it as a top-level public type.");
     }
 
     private static bool IsPubliclyReachable(MetadataReader mr, TypeDefinition typeDef)

@@ -17,6 +17,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirPrimitiveType
 import io.github.xxfast.kotlin.native.nuget.rir.RirProperty
 import io.github.xxfast.kotlin.native.nuget.rir.RirStringType
 import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
+import io.github.xxfast.kotlin.native.nuget.rir.parseReverseIr
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -1866,6 +1867,42 @@ class NugetGenerateBindingsTaskTest {
 
     assertEquals(1, warnings.size)
     assertContains(warnings[0], "LegacyNicknameBook.Find(Find(string): string)")
+  }
+
+  // The reader drops nested public types (v1: top-level only); each one must reach the build log
+  // as a named type-level skip, parsed from the wire code the reader writes.
+  @Test
+  fun `diagnosticWarnings surfaces a dropped nested public type naming its declaring type`() {
+    val rir: RirFile = parseReverseIr(
+      """
+      {
+        "assemblies":[{
+          "packageId":"Humanizer.Core",
+          "assemblyName":"Humanizer",
+          "diagnostics":[{
+            "kind":"SKIPPED_NESTED_TYPE",
+            "typeName":"On.January",
+            "memberName":"",
+            "memberSignature":"Humanizer.On.January",
+            "reason":"nested public type `On.January` (declared in `On`) is out of v1 scope",
+            "hint":"Expose it as a top-level public type."
+          }],
+          "namespaces":[]
+        }]
+      }
+      """.trimIndent(),
+    )
+
+    val warnings: List<String> = diagnosticWarnings(rir)
+
+    assertEquals(
+      listOf(
+        "[nuget:SKIPPED_NESTED_TYPE] Skipping Humanizer.Core/On.January: nested public type " +
+          "`On.January` (declared in `On`) is out of v1 scope. " +
+          "Expose it as a top-level public type.",
+      ),
+      warnings,
+    )
   }
 
   @Test
