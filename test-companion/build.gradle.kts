@@ -22,8 +22,10 @@ kotlin {
   macosArm64 {
     binaries.sharedLib { baseName = "shared" }
   }
+  // Never name `nativeMain` here: this fixture is the real build proving the reverse bindings
+  // reach a `nativeMain` that only the default hierarchy creates (its sources import them).
   sourceSets {
-    nativeMain.dependencies {
+    commonMain.dependencies {
       implementation(project(":test-models"))
     }
   }
