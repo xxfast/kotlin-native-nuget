@@ -266,6 +266,21 @@ class CatMoodTracker(private val catName: String) {
 fun sulkBox(): Box<Mood> = Box(Mood.GRUMPY)
 
 /**
+ * A nullable type argument on the generic-return route keeps its `?` (`Box<int?>`,
+ * `Box<string?>`), so a null item reads back as null rather than `0` or an empty string.
+ */
+fun unknownNaps(): Box<Int?> = Box(null)
+
+/** The value-carrying twin of [unknownNaps]. */
+fun countedNaps(): Box<Int?> = Box(5)
+
+/** A stray with no name yet: the reference-type twin of [unknownNaps]. */
+fun unnamedStray(): Box<String?> = Box(null)
+
+/** The value-carrying twin of [unnamedStray]. */
+fun namedStray(): Box<String?> = Box("Mylo")
+
+/**
  * ADR-071: an element type whose `equals` throws, so the Kotlin `value` setter itself throws
  * (MutableStateFlow conflates by Any.equals -- StateFlow.kt:332). Forces the ADR-030 errorOut
  * path on the setter export to be genuinely reachable rather than defensive-only.

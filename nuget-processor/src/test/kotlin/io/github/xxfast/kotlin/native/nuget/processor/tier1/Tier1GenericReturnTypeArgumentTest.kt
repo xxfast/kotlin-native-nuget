@@ -80,6 +80,20 @@ class Tier1GenericReturnTypeArgumentTest {
       fun maybeCrateOfList(): Crate<List<Int>>? = null
 
       fun maybeCrateOfInt(): Crate<Int>? = null
+
+      enum class Mood { CALM, GRUMPY }
+
+      fun crateOfMaybeInt(): Crate<Int?> = Crate(null)
+
+      fun crateOfMaybeName(): Crate<String?> = Crate(null)
+
+      fun crateOfMaybeMood(): Crate<Mood?> = Crate(Mood.GRUMPY)
+
+      fun crateOfMaybeSnapshot(): Crate<Snapshot?> = Crate(null)
+
+      fun <T> crateOfMaybe(item: T): Crate<T?> = Crate(item)
+
+      fun <T> emptyCrateOfMaybe(): Crate<T?> = Crate(null)
     """.trimIndent(),
   )
 
@@ -215,6 +229,74 @@ class Tier1GenericReturnTypeArgumentTest {
         "expected no skip for $function; kspWarnings=${result.kspWarnings}",
       )
     }
+  }
+
+  /**
+   * `csTypeArgument` reads the argument's own nullability, so a nullable type argument keeps its
+   * `?` on this route: `Crate<Int?>` is `Crate<int?>`, never `Crate<int>` where null reads `0`.
+   */
+  @Test
+  fun `a nullable generic-return type argument keeps its question mark`() {
+    val result = run()
+    val cs: String = result.generatedCSharp
+
+    mapOf(
+      "CrateOfMaybeInt" to "global::Interop.Catcam.Crate<int?>",
+      "CrateOfMaybeName" to "global::Interop.Catcam.Crate<string?>",
+      "CrateOfMaybeMood" to "global::Interop.Catcam.Crate<global::Interop.Catcam.Mood?>",
+      "CrateOfMaybeSnapshot" to
+        "global::Interop.Catcam.Crate<global::Interop.Catcam.Lens.Snapshot?>",
+    ).forEach { (function, spelled) ->
+      assertTrue(
+        cs.contains("public static $spelled $function()"),
+        "expected $function to return $spelled; got: " +
+          "${cs.lines().filter { it.contains(" $function(") }}",
+      )
+    }
+    listOf(
+      "crateOfMaybeInt",
+      "crateOfMaybeName",
+      "crateOfMaybeMood",
+      "crateOfMaybeSnapshot",
+      "crateOfMaybe",
+    ).forEach { function ->
+      assertTrue(
+        result.kspWarnings.none { it.contains("[nuget:SKIPPED_") && it.contains("$function: ") },
+        "expected no skip for $function; kspWarnings=${result.kspWarnings}",
+      )
+    }
+  }
+
+  /**
+   * `Crate<T?>` at a type parameter never reaches `csTypeArgument`. With a parameter of its own
+   * type parameter it binds on the generic-function route, which spells the return by ADR-147's
+   * bare-`T` rule as `Crate<T>`: the `?` written on `T?` is not carried into C#, the instantiation
+   * says whether the item holds null (`CrateOfMaybe<int?>` does, `CrateOfMaybe<int>` reads `0`).
+   * Without one it is the generic route's existing named skip. Both are pinned as they stand.
+   */
+  @Test
+  fun `a nullable type-parameter argument keeps the generic-function route's spelling`() {
+    val result = run()
+    val cs: String = result.generatedCSharp
+
+    assertTrue(
+      cs.contains("public static Crate<T> CrateOfMaybe<T>(T item)"),
+      "expected the generic-function route's Crate<T>; got: " +
+        "${cs.lines().filter { it.contains("CrateOfMaybe<") }}",
+    )
+    assertTrue(
+      cs.lines().none { it.trimStart().startsWith("public static") && " EmptyCrateOfMaybe" in it },
+      "expected no EmptyCrateOfMaybe declaration; got: " +
+        "${cs.lines().filter { it.contains("EmptyCrateOfMaybe") }}",
+    )
+    assertTrue(
+      result.kspWarnings.any {
+        it.contains("[nuget:${ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN.name}]") &&
+          it.contains("emptyCrateOfMaybe: ")
+      },
+      "expected a SKIPPED_UNSUPPORTED_RETURN naming emptyCrateOfMaybe; " +
+        "kspWarnings=${result.kspWarnings}",
+    )
   }
 
   /** The Kotlin half keeps its orphan export (like the lambda-return skip) and still compiles. */
