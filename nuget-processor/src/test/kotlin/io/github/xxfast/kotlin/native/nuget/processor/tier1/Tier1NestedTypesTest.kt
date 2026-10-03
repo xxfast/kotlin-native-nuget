@@ -1510,6 +1510,8 @@ class Tier1NestedTypesTest {
       assertFalse(result.generated.contains("${owner.lowercase()}_get_${method.lowercase()}("),
         "refused property $member must have no export: ${result.generated}")
     }
+    assertContains(result.generated, "reader_control")
+    assertContains(result.generatedCSharp.withoutDocComments(), "public int Control(")
     compileCollisionConsumer(result, shape)
   }
 
