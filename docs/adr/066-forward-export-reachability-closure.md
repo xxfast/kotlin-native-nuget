@@ -445,6 +445,30 @@ correctly reported (**verified**), so this filter is real work, not a no-op).
 > named` (`dep.deferred.Season.Almanac`: the enum is declared, `Almanac` is absent from the
 > generated C#, the member binds nothing, the skip names the type, and the manifest names the
 > owner only), and by a comment at the climb itself.
+>
+> **Amendment (2026-10-03, coverage: a generic dependency owner reached only through its nested
+> type).** The "Cross-module generic classes" deferral below recorded the generic route as never
+> exercised across a module boundary. The owner-climb case is now exercised end to end; this adds
+> no production change and does not bind generic nested types.
+>
+> - **Verified, real klib:** `test-models`' `Parcel<T>(val value: T) { class Lid }` is reached only
+>   through `Parcel.Lid`, returned by the publisher's `ParcelDesk.lid()`. Nothing in the publisher
+>   API names `Parcel<T>` directly.
+> - **Verified, fresh manifest:** `INFO_EXPORTED_FROM_DEPENDENCY` admits `Parcel` and not `Lid`.
+>   `Lid` gets `SKIPPED_NESTED_DECLARATION` naming the generic owner, and `ParcelDesk.lid` gets
+>   `SKIPPED_UNSUPPORTED_TYPE` (`UNDECLARED_CLASS`). `Lid` keeps its named refusal.
+> - **Verified, C# consumer:** `Parcel<T>` is declared once at namespace level, with no nested
+>   `Lid`, and constructs and reads back for `int` and `string` (`GenericDependencyOwnerTests`).
+>   The leak row `DependencyGenericOwner_PrimitiveAndStringPayloadsReturnToBaseline` returns to
+>   baseline. Full verify: Integration 2978, Leak 157, all six AOT targets.
+> - **Verified, coverage:** `Native_Create`, `Native_Get_value` and `Dispose` are fully hit. The
+>   handle-based constructor is intentionally cold: exposing `Parcel<T>` directly would defeat the
+>   owner-only-via-`Lid` proof.
+> - **Inferred, not tested:** other type arguments (a class, a collection) on a dependency generic
+>   class follow the module-local ADR-147 route; only `Int` and `String` were checked.
+>
+> Pinned by `Tier1ReachabilityClosureTest.kt`'s `a generic dependency owner reached only through
+> its nested type stays usable`, alongside the enum-owner cell above.
 
 ### 3. Admission predicate
 
