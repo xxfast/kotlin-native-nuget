@@ -543,7 +543,10 @@ class Tier1ReachabilityClosureTest {
       processorOptions = mapOf("nuget.includePackages" to "tier1.parcel,dep.parcel"),
       libraries = listOf(dependency),
     )
-    assertTrue(result.compiledClean, "expected cross-module exports to compile: ${result.compileErrors}")
+    assertTrue(
+      result.compiledClean,
+      "expected cross-module exports to compile: ${result.compileErrors}",
+    )
     assertTrue(result.generatedCSharp.contains("public class Parcel<T>"), result.generatedCSharp)
     assertTrue(result.generatedCSharp.contains("class ParcelNative"), result.generatedCSharp)
     assertFalse(result.generatedCSharp.withoutDocComments().contains("Lid"), result.generatedCSharp)
@@ -561,4 +564,5 @@ class Tier1ReachabilityClosureTest {
     assertTrue(admission.contains("dep.parcel.Parcel"), admission)
     assertFalse(admission.contains("dep.parcel.Parcel.Lid"), admission)
   }
+
 }
