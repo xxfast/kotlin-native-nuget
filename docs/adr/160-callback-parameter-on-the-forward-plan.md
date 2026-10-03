@@ -107,7 +107,8 @@ identifier is itself a C# keyword, the same rule every other plan slot follows.
 `translateCallbackMethod` and `addLambdaParamMethodExport` are retired for every position the plan
 now owns. What is left on the hand-written route is exactly what the classifier declines to
 project, and a member on that route that also cannot be marshaled at all is refused by name on both
-halves (`legacyRefusedCallbackMember`, `forward/ForwardLegacyRouteCollections.kt:142`) instead of
+halves (`legacyRefusedCallbackMember`, `forward/ForwardLegacyRouteCollections.kt:142`; one warning per
+member, see the 2026-10-03 amendment) instead of
 failing with a forward ABI mismatch or emitting C# that will not compile:
 
 - more than one lambda parameter;
@@ -339,3 +340,25 @@ Evidence:
   `Materialize<T>` inside the thunk. The native pipeline was not run before the fix.
 - Not measured: whether the payload handle leaks when `Materialize<T>` throws; only the success
   path has a row.
+
+## Amendment (2026-10-03): a member both callback gates refuse is named once
+
+Step 4 names a refused member by name, but two gates could each do it for the same class member:
+the planner's `classEntries` (a `CALLBACK_PROTOCOL` skip, generic wording) and the class walk
+`warnRefusedLegacyRouteMembers` (the specific "a lambda carrying the nullable type ..." wording).
+`fun ask(cb: (Int) -> String?): String?` and `fun mixed(x: Int, cb: (Int?) -> Unit)` hit both and
+received two `SKIPPED_UNSUPPORTED_INPUT` warnings, spelled differently, and the C# `<remarks>` on
+the owner kept the weaker generic reason.
+
+The rule: one warning per member, and the walk's specific reason wins. `classEntries` now also
+suppresses its `CALLBACK_PROTOCOL` skip when `refusedLegacyLambdaShape()` is non-null, because the
+walk names that member. `legacyRefusedCallbackMember` is unchanged, so no member is re-admitted to
+a route. The C# `<remarks>` on the owner carries the specific wording.
+
+Deliberately unchanged: an interface default plus a class implementing it still yields two
+warnings, because they name two different C# owners (the interface and the implementing class).
+
+Evidence, verified: the Tier 1 test `a member both callback gates refuse is named once, with the
+specific reason` failed before the change and passes after it; `:nuget-processor:test` passed
+(1546 tests, 0 failed). Inferred: the native pipeline was not run for this item, and nothing new is
+generated, so no `LeakTests` row applies.
