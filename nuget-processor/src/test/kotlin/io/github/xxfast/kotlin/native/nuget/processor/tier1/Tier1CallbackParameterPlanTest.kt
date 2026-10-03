@@ -284,7 +284,8 @@ class Tier1CallbackParameterPlanTest {
 
   /**
    * An interface reachable ONLY as a per-call callback payload. C# reads the payload with
-   * `NugetMarshal.FromHandle<IVisitor>(a0)`, which materialises through `Factories[typeof(IVisitor)]`
+   * `NugetMarshal.FromHandle<IVisitor>(a0)`, which materialises through
+   * `Factories[typeof(IVisitor)]`
    * and throws `NotSupportedException` on a miss. The key exists only for a reachable interface, so
    * the reachability walk has to see inside a `BridgeType.Callback`, exactly as ADR-176 made it see
    * inside a collection component. `Visitor` appears nowhere else in the module.

@@ -1899,9 +1899,9 @@ internal class NugetProcessor(
         }
 
       // ADR-160: a per-call lambda payload (`(Drummer) -> Unit`) is read C#-side with
-      // `FromHandle<IDrummer>`, so an interface reachable only there needs the same backing wrapper,
-      // `Factories` key and bridge arm. Parameters only: an interface is not an admitted lambda
-      // result.
+      // `FromHandle<IDrummer>`, so an interface reachable only there needs the same backing
+      // wrapper, `Factories` key and bridge arm. Parameters only: an interface is not an admitted
+      // lambda result.
       is BridgeType.Callback -> parameters.flatMapTo(mutableSetOf()) { parameter ->
         listOfNotNull(parameter.interfaceQualifiedNameOrNull()) +
             parameter.componentInterfaceQualifiedNames()
