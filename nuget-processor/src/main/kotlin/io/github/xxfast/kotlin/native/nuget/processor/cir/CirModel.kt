@@ -1169,9 +1169,10 @@ internal val CirProperty.explicitName: String
   get() = if (explicitInterface != null) "$explicitInterface.$identifier" else identifier
 
 /**
- * ADR-179: the stem of a legacy Flow/StateFlow property's private externs (`Native_Get${stem}Collect`
- * and siblings), from the Kotlin name in [CirProperty.nativeName]. Never from the public name: a
- * `@CSharpName` renames the C# property, not the externs the getter body calls.
+ * ADR-179: the stem of a legacy Flow/StateFlow property's private externs
+ * (`Native_Get${stem}Collect` and siblings), from the Kotlin name in [CirProperty.nativeName].
+ * Never from the public name: a `@CSharpName` renames the C# property, not the externs the
+ * getter body calls.
  */
 internal val CirProperty.nativeStem: String
   get() = nativeName.replaceFirstChar { it.uppercase() }

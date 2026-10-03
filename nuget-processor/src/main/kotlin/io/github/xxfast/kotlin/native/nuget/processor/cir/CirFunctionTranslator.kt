@@ -710,7 +710,8 @@ internal fun translateSuspendFunction(
   val suffix: String = callableCatalog.overloadSuffix(func)
   // ADR-163: library- and package-qualified; `_async` is appended by the entry points below.
   val cname: String = symbols.topLevel(func) + suffix
-  // ADR-110: the case change alone, so `suspend fun lock()` renders `LockAsync`; the renderer escapes.
+  // ADR-110: the case change alone, so `suspend fun lock()` renders `LockAsync`;
+  // the renderer escapes.
   // ADR-163: from the declaration name, not from [cname] (see `translateFunction`).
   val csName: String = func.simpleName.asString().replaceFirstChar { it.uppercase() }
   // The public name stays `${csName}Async`: the overloads are one natural C# overload set.

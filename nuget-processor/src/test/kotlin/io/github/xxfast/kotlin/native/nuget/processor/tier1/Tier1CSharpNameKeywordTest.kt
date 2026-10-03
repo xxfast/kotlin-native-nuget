@@ -28,7 +28,10 @@ class Tier1CSharpNameKeywordTest {
     assertTrue(result.kspErrors.isEmpty(), "kspErrors=${result.kspErrors}")
     assertTrue(result.compiledClean, "compileErrors=${result.compileErrors}")
     val escapedExtern: MatchResult? = Regex("Native_[A-Za-z0-9_]*@").find(result.generatedCSharp)
-    assertTrue(escapedExtern == null, "escaped extern ${escapedExtern?.value}\n${result.generatedCSharp}")
+    assertTrue(
+      escapedExtern == null,
+      "escaped extern ${escapedExtern?.value}\n${result.generatedCSharp}",
+    )
     return result
   }
 
