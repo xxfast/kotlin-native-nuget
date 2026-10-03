@@ -34,7 +34,7 @@
     "constructor": { "seen": 17, "bound": 16 },
     "instanceMethod": { "seen": 40, "bound": 38 },
     "property": { "seen": 7, "bound": 6 },
-    "readerSkippedMember": { "seen": 271, "bound": 0 },
+    "readerSkippedMember": { "seen": 270, "bound": 0 },
     "staticMethod": { "seen": 51, "bound": 51 }
   },
   "diagnostics": {
@@ -48,7 +48,8 @@
     "SKIPPED_UNBOUND_GENERIC_INSTANTIATION": 8,
     "SKIPPED_UNBOUND_TYPE_REFERENCE": 184,
     "SKIPPED_UNSUPPORTED_ENUM": 1,
-    "SKIPPED_UNSUPPORTED_STRUCT": 54
+    "SKIPPED_UNSUPPORTED_STRUCT": 53,
+    "SKIPPED_UNSUPPORTED_STRUCT_TYPE": 1
   },
   "unboundTypeReferences": {
     "Humanizer.DateTimeHumanizeStrategy.IDateOnlyHumanizeStrategy": 1,

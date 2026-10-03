@@ -991,3 +991,7 @@ fun collarNamedArgs(): Collar =
 - [Kotlin: calling Java from Kotlin](https://kotlinlang.org/docs/java-interop.html)
 - [Kotlin/Native C interop](https://kotlinlang.org/docs/native-c-interop.html)
 - [.NET for Android binding libraries](https://learn.microsoft.com/en-us/dotnet/android/binding-libs/)
+
+## Amendment (2026-10-03): the struct itself gets its own diagnostic kind
+
+A struct that fails the shape rules (or is a `ref struct` or generic) is now reported once as `SKIPPED_UNSUPPORTED_STRUCT_TYPE`, with an empty member name and the failed rules in the reason. `SKIPPED_UNSUPPORTED_STRUCT` is reserved for members that mention such a struct. Previously the struct itself was filed under `SKIPPED_UNSUPPORTED_STRUCT` with its own name as the member name.

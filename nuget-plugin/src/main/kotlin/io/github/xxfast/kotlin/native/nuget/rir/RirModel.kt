@@ -587,6 +587,15 @@ internal enum class RirDiagnosticKind(private val declaredVerb: String? = null) 
   // nested type, memberSignature its `<namespace>.Outer.Inner` name). Emitted by the reader, never
   // derived plugin-side, so the gap reads as a named skip instead of a low member count.
   SKIPPED_NESTED_TYPE,
+
+  // ADR-056: a public struct that fails every shape rule (no single covering constructor, private
+  // state no public component covers, a ref or generic struct). The root cause of the
+  // member-level SKIPPED_UNSUPPORTED_STRUCT cascade, which stays as is on OTHER types' members
+  // that mention it. One entry per struct the bridge cannot bind. Type-level (memberName empty,
+  // typeName the struct, memberSignature `<namespace>.<Struct>`),
+  // reason the reader's own failed-rule text, so demand for each shape extension can be ranked.
+  // Emitted by the reader, never derived plugin-side.
+  SKIPPED_UNSUPPORTED_STRUCT_TYPE,
 ;
 
   val severity: RirDiagnosticSeverity = when {

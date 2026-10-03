@@ -62,7 +62,8 @@ bridgeable, so array and `Nullable<T>` siblings never get there.
 - `SKIPPED_UNBOUND_GENERIC_INSTANTIATION`: 170
 - `SKIPPED_UNBOUND_TYPE_REFERENCE`: 792
 - `SKIPPED_UNSUPPORTED_ENUM`: 62
-- `SKIPPED_UNSUPPORTED_STRUCT`: 294
+- `SKIPPED_UNSUPPORTED_STRUCT`: 225
+- `SKIPPED_UNSUPPORTED_STRUCT_TYPE`: 69
 
 ## Most demanded unmapped type references
 

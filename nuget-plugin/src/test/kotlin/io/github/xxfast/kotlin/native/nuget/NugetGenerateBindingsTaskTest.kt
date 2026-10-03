@@ -1905,6 +1905,42 @@ class NugetGenerateBindingsTaskTest {
     )
   }
 
+  // A struct failing every ADR-056 shape rule reaches the log once, naming the struct and the rule
+  // it failed, not only as the member-level cascade on other types' members.
+  @Test
+  fun `diagnosticWarnings surfaces an unsupported struct type naming its failed shape rule`() {
+    val rir: RirFile = parseReverseIr(
+      """
+      {
+        "assemblies":[{
+          "packageId":"NodaTime",
+          "assemblyName":"NodaTime",
+          "diagnostics":[{
+            "kind":"SKIPPED_UNSUPPORTED_STRUCT_TYPE",
+            "typeName":"Instant",
+            "memberName":"",
+            "memberSignature":"NodaTime.Instant",
+            "reason":"struct `Instant` fails every ADR-056 shape: field `duration` is private",
+            "hint":"Members that mention `Instant` are skipped as SKIPPED_UNSUPPORTED_STRUCT."
+          }],
+          "namespaces":[]
+        }]
+      }
+      """.trimIndent(),
+    )
+
+    val warnings: List<String> = diagnosticWarnings(rir)
+
+    assertEquals(
+      listOf(
+        "[nuget:SKIPPED_UNSUPPORTED_STRUCT_TYPE] Skipping NodaTime/Instant: struct `Instant` " +
+          "fails every ADR-056 shape: field `duration` is private. " +
+          "Members that mention `Instant` are skipped as SKIPPED_UNSUPPORTED_STRUCT.",
+      ),
+      warnings,
+    )
+  }
+
   @Test
   fun `diagnosticWarnings still surfaces a rule-5 member-name collision alongside reader diagnostics`() {
     val cls = RirClass(
