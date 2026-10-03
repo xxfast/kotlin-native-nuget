@@ -25,6 +25,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyFlowRetur
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericReturnRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyLambdaParameter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
+import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedLegacyLambdaShape
 import io.github.xxfast.kotlin.native.nuget.processor.PLAN_OWNED_NAMES
 import io.github.xxfast.kotlin.native.nuget.processor.bridgeParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
@@ -1443,7 +1444,11 @@ internal class ForwardCallablePlanner(
           method in interfaceBridgeMethods || method in storedCallbackMethods ||
               // ADR-160 step 4: as above, only a member the legacy route actually emits is
               // suppressed here; one it refuses by name is reported.
-              (method.hasLegacyLambdaParameter() && legacyRefusedCallbackMember(method) == null)
+              (method.hasLegacyLambdaParameter() && legacyRefusedCallbackMember(method) == null) ||
+              // A refused lambda shape is named by `warnRefusedLegacyRouteMembers` with the type
+              // that failed; naming it here too would report one member twice, and the C# remark
+              // would keep this generic wording instead.
+              method.refusedLegacyLambdaShape() != null
 
         else -> false
       }
