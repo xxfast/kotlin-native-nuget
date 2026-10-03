@@ -92,11 +92,13 @@ class ForwardSkippedCallableWarningTest {
         reason = ForwardPlanSkipReason.OPT_IN_MARKER_TYPE,
         detail = "com.example.Draft->com.example.Experimental",
       ) to "its type `com.example.Draft` is marked with an opt-in marker",
+      // ADR-118 routed suspend on an arm, so the example is a detail the planner still produces
+      // there: the original reason's name, as the sealed post-process copies it.
       ForwardCallableCatalogEntry.Skipped(
         symbol = "com.example.Shape.Circle.observe",
         reason = ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,
-        detail = "suspend",
-      ) to "it is a suspend member of a sealed subclass, which has no route yet (ADR-116)",
+        detail = "GENERIC",
+      ) to "it is a GENERIC member of a sealed subclass, which has no route yet (ADR-116)",
       ForwardCallableCatalogEntry.Skipped(
         // ADR-175: a suspend member of a non-generic base is routed now, so the example is a
         // generic member, which still has no route on the base.
@@ -138,6 +140,44 @@ class ForwardSkippedCallableWarningTest {
       assertTrue(
         logger.warnings[index].contains(sentence),
         "${skipped.symbol} keeps its shipped wording: ${logger.warnings[index]}",
+      )
+    }
+  }
+
+  // ADR-116: what still reaches SEALED_SUBCLASS_UNROUTED on an arm is a generic method and a
+  // `suspend` lambda parameter, and an ordinary class has no route for either. The hint used to
+  // send the author there ("which still has the legacy route this member kind needs"), where the
+  // same member is skipped again; each detail now names a shape that does bind.
+  @Test
+  fun `a sealed arm residual hints at a shape that binds, not at an ordinary class`() {
+    val expected: List<Pair<ForwardCallableCatalogEntry.Skipped, String>> = listOf(
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Shape.Circle.echo",
+        reason = ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,
+        detail = ForwardPlanSkipReason.GENERIC.name,
+      ) to "expose a non-generic wrapper (`fun f(value: Int)` beside `fun <T> f(value: T)`), or " +
+          "move the declaration to a top-level function with a parameter of its own type parameter",
+      ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Shape.Circle.later",
+        reason = ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,
+        detail = ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL.name,
+      ) to "take or return a plain (non-suspend) lambda instead, or expose the `suspend` lambda " +
+          "as a property of an ordinary class",
+    )
+
+    val logger = RecordingLogger()
+    warnDroppedForwardCallables(
+      ForwardCallablePlanCatalog(entries = expected.map { (skipped, _) -> skipped }),
+      logger,
+    )
+
+    assertEquals(expected.size, logger.warnings.size, "one warning per skip: ${logger.warnings}")
+    expected.forEachIndexed { index, (skipped, hint) ->
+      val warning: String = logger.warnings[index]
+      assertTrue(warning.contains(hint), "${skipped.symbol} carries its own hint: $warning")
+      assertFalse(
+        warning.contains("move the member onto an ordinary class"),
+        "${skipped.symbol} is not sent to an owner that skips it too: $warning",
       )
     }
   }
