@@ -4,6 +4,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticK
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -24,6 +26,22 @@ import kotlin.test.assertTrue
  */
 class Tier1ExportSymbolSchemeTest {
 
+  /**
+   * The cross-package cells declare one simple name in `pkg.a` and `pkg.b`. With no root package
+   * both land in C# namespace `Interop`, which is a named collision, so they root at `pkg` and the
+   * relative package (`a`, `b`) is what qualifies each symbol.
+   */
+  private val rootedAtPkg: Map<String, String> = mapOf("nuget.rootPackage" to "pkg")
+
+  private val moodSources: Map<String, String> = mapOf(
+    "A.kt" to "package pkg.a\n\nenum class Mood { CURIOUS, SMUG }\n\n" +
+        "fun moodOf(name: String): Mood = Mood.SMUG\n\n" +
+        "val Mood.pounce: String get() = \"a\"",
+    "B.kt" to "package pkg.b\n\nenum class Mood { CURIOUS, SMUG }\n\n" +
+        "fun moodOf(name: String): Mood = Mood.CURIOUS\n\n" +
+        "val Mood.pounce: String get() = \"b\"",
+  )
+
   /** The primary shape (backlog shape 1): the class route, three symbols each, none colliding. */
   @Test
   fun `two classes with one simple name in two packages both bind`() {
@@ -32,6 +50,8 @@ class Tier1ExportSymbolSchemeTest {
         "A.kt" to "package pkg.a\n\nclass Kitten(val name: String) { fun greet(): String = \"a\" }",
         "B.kt" to "package pkg.b\n\nclass Kitten(val name: String) { fun greet(): String = \"b\" }",
       ),
+      // Without a root package both `Kitten`s land in namespace `Interop`: CS0101.
+      processorOptions = rootedAtPkg,
     )
 
     assertTrue(
@@ -40,10 +60,16 @@ class Tier1ExportSymbolSchemeTest {
       },
       "package qualification must remove the collision; kspErrors=${result.kspErrors}",
     )
-    assertContains(result.generated, "@CName(\"library_pkg_a__kitten_create\")")
-    assertContains(result.generated, "@CName(\"library_pkg_b__kitten_create\")")
-    assertContains(result.generatedCSharp, "EntryPoint = \"library_pkg_a__kitten_greet\"")
-    assertContains(result.generatedCSharp, "EntryPoint = \"library_pkg_b__kitten_greet\"")
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      "public static class Probe {\n" +
+          "  public static string A(global::Interop.A.Kitten k) => k.Greet();\n" +
+          "  public static string B(global::Interop.B.Kitten k) => k.Greet();\n}",
+    )
+    assertContains(result.generated, "@CName(\"library_a__kitten_create\")")
+    assertContains(result.generated, "@CName(\"library_b__kitten_create\")")
+    assertContains(result.generatedCSharp, "EntryPoint = \"library_a__kitten_greet\"")
+    assertContains(result.generatedCSharp, "EntryPoint = \"library_b__kitten_greet\"")
     assertTrue(result.compiledClean, "compileErrors=${result.compileErrors}")
   }
 
@@ -136,24 +162,101 @@ class Tier1ExportSymbolSchemeTest {
    */
   @Test
   fun `two enum receivers in two packages take distinct extension property symbols`() {
-    val result = Tier1Harness.run(
-      mapOf(
-        "A.kt" to "package pkg.a\n\nenum class Mood { CURIOUS, SMUG }\n\n" +
-            "fun moodOf(name: String): Mood = Mood.SMUG\n\n" +
-            "val Mood.pounce: String get() = \"a\"",
-        "B.kt" to "package pkg.b\n\nenum class Mood { CURIOUS, SMUG }\n\n" +
-            "fun moodOf(name: String): Mood = Mood.CURIOUS\n\n" +
-            "val Mood.pounce: String get() = \"b\"",
-      ),
-    )
+    val result = Tier1Harness.run(moodSources, processorOptions = rootedAtPkg)
 
     assertTrue(result.compiledClean, "compileErrors=${result.compileErrors}")
     // The package part of an extension symbol is the EXTENSION's own package (ADR-095's counter
-    // scope), and the owner chain is the receiver's simple name.
-    assertContains(result.generated, "@CName(\"library_pkg_a__mood_get_pounce\")")
-    assertContains(result.generated, "@CName(\"library_pkg_b__mood_get_pounce\")")
-    assertContains(result.generatedCSharp, "EntryPoint = \"library_pkg_a__mood_get_pounce\"")
-    assertContains(result.generatedCSharp, "EntryPoint = \"library_pkg_b__mood_get_pounce\"")
+    // scope) relative to rootPackage, and the owner chain is the receiver's simple name.
+    assertContains(result.generated, "@CName(\"library_a__mood_get_pounce\")")
+    assertContains(result.generated, "@CName(\"library_b__mood_get_pounce\")")
+    assertContains(result.generatedCSharp, "EntryPoint = \"library_a__mood_get_pounce\"")
+    assertContains(result.generatedCSharp, "EntryPoint = \"library_b__mood_get_pounce\"")
+    // The two enums, and the two `Pounce` extensions, are distinct C# declarations that build.
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      "using Interop.A;\nusing Interop.B;\n\npublic static class Probe {\n" +
+          "  public static string A => global::Interop.A.Mood.Smug.Pounce;\n" +
+          "  public static string B => global::Interop.B.Mood.Smug.Pounce;\n}",
+    )
+  }
+
+  /**
+   * The same two `Mood`s with `rootPackage` unset (the plugin default): every package maps to
+   * namespace `Interop`, so the generated C# declares `enum Mood` twice. Compiling that output is
+   * CS0101; the processor names the collision and the fix instead of leaving the author with it.
+   */
+  @Test
+  fun `two same-named enums in one CSharp namespace are a named collision`() {
+    val result = Tier1Harness.run(moodSources)
+
+    val collision: String? = result.kspErrors.firstOrNull { message ->
+      message.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name)
+    }
+    assertNotNull(collision, "expected a named collision; kspErrors=${result.kspErrors}")
+    assertContains(collision, "'pkg.a.Mood'")
+    assertContains(collision, "'pkg.b.Mood'")
+    assertContains(collision, "namespace 'Interop'")
+    assertContains(collision, "rootPackage")
+    // What the named error replaces: the raw output does not build.
+    val build: Tier1CSharpBuild = Tier1CSharpCompile.compile(result, "")
+    assertFalse(build.succeeded, "expected the unrooted output to fail; log=${build.log}")
+    assertContains(build.log, "CS0101")
+  }
+
+  /**
+   * A root package does not separate everything: a package outside it, admitted through
+   * `includePackages`, keeps its whole name, so `a` and `pkg.a` under root `pkg` both map to
+   * namespace `Interop.A`. Setting rootPackage is no longer the fix, so the hint says rename.
+   */
+  @Test
+  fun `a same-named type outside rootPackage that maps onto a rooted namespace is a collision`() {
+    val result = Tier1Harness.run(
+      mapOf(
+        "A.kt" to "package pkg.a\n\nenum class Mood { CURIOUS, SMUG }",
+        "Outside.kt" to "package a\n\nenum class Mood { CURIOUS, SMUG }",
+      ),
+      processorOptions = rootedAtPkg + ("nuget.includePackages" to "pkg,a"),
+    )
+
+    val collision: String? = result.kspErrors.firstOrNull { message ->
+      message.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name)
+    }
+    assertNotNull(collision, "expected a named collision; kspErrors=${result.kspErrors}")
+    assertContains(collision, "'a.Mood'")
+    assertContains(collision, "'pkg.a.Mood'")
+    assertContains(collision, "namespace 'Interop.A'")
+    assertContains(collision, "rename one of the declarations")
+  }
+
+  /**
+   * The check is about two DIFFERENT types under one C# name. Output that is merged on purpose must
+   * not trip it: `{Receiver}Extensions` classes for an unexported receiver merged across packages,
+   * a sealed arm that is also an exported top-level class (one type reached twice), and `Box` beside
+   * `Box<T>`, which C# declares side by side by arity.
+   */
+  @Test
+  fun `merged extension classes, a type reached twice and distinct arities are no collision`() {
+    val result = Tier1Harness.run(
+      mapOf(
+        "A.kt" to "package pkg.a\n\nfun String.purr(): String = this\n\n" +
+            "sealed class Shape\n\nclass Circle(val r: Int) : Shape()\n\n" +
+            "class Box<T>(val value: T)",
+        "B.kt" to "package pkg.b\n\nfun String.hiss(): String = this\n\nclass Box(val size: Int)",
+      ),
+    )
+
+    assertTrue(
+      result.kspErrors.none { message ->
+        message.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name)
+      },
+      "kspErrors=${result.kspErrors}",
+    )
+    assertTrue(result.compiledClean, "compileErrors=${result.compileErrors}")
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      "using Interop;\n\npublic static class Probe {\n" +
+          "  public static string P => \"x\".Purr() + \"y\".Hiss();\n}",
+    )
   }
 
   /**
@@ -240,6 +343,7 @@ class Tier1ExportSymbolSchemeTest {
         """.trimIndent(),
       ),
       libraries = listOf(Tier1Classpath.kotlinxCoroutinesCore),
+      processorOptions = rootedAtPkg,
     )
 
     assertTrue(
@@ -248,12 +352,13 @@ class Tier1ExportSymbolSchemeTest {
       },
       "kspErrors=${result.kspErrors}",
     )
-    assertContains(result.generated, "@CName(\"library_pkg_a__radio_get_purrs_collect\")")
-    assertContains(result.generated, "@CName(\"library_pkg_b__radio_get_purrs_collect\")")
-    assertContains(result.generated, "@CName(\"library_pkg_a__radio_stream_collect\")")
-    assertContains(result.generated, "@CName(\"library_pkg_b__radio_stream_collect\")")
-    assertContains(result.generatedCSharp, "EntryPoint = \"library_pkg_a__radio_get_purrs_collect\"")
-    assertContains(result.generatedCSharp, "EntryPoint = \"library_pkg_b__radio_get_purrs_collect\"")
+    Tier1CSharpCompile.assertCompiles(result, "", allowUnsafe = true)
+    assertContains(result.generated, "@CName(\"library_a__radio_get_purrs_collect\")")
+    assertContains(result.generated, "@CName(\"library_b__radio_get_purrs_collect\")")
+    assertContains(result.generated, "@CName(\"library_a__radio_stream_collect\")")
+    assertContains(result.generated, "@CName(\"library_b__radio_stream_collect\")")
+    assertContains(result.generatedCSharp, "EntryPoint = \"library_a__radio_get_purrs_collect\"")
+    assertContains(result.generatedCSharp, "EntryPoint = \"library_b__radio_get_purrs_collect\"")
   }
 
   /**
@@ -270,6 +375,7 @@ class Tier1ExportSymbolSchemeTest {
         "B.kt" to "package pkg.b\n\nsealed class LoadState {\n" +
             "  data class Ready(val bowls: Int) : LoadState()\n}",
       ),
+      processorOptions = rootedAtPkg,
     )
 
     assertTrue(
@@ -278,10 +384,11 @@ class Tier1ExportSymbolSchemeTest {
       },
       "kspErrors=${result.kspErrors}",
     )
-    assertContains(result.generated, "@CName(\"library_pkg_a__loadstate_get_type\")")
-    assertContains(result.generated, "@CName(\"library_pkg_b__loadstate_get_type\")")
-    assertContains(result.generated, "@CName(\"library_pkg_a__loadstate_ready_equals\")")
-    assertContains(result.generated, "@CName(\"library_pkg_b__loadstate_ready_equals\")")
+    Tier1CSharpCompile.assertCompiles(result, "")
+    assertContains(result.generated, "@CName(\"library_a__loadstate_get_type\")")
+    assertContains(result.generated, "@CName(\"library_b__loadstate_get_type\")")
+    assertContains(result.generated, "@CName(\"library_a__loadstate_ready_equals\")")
+    assertContains(result.generated, "@CName(\"library_b__loadstate_ready_equals\")")
     assertTrue(result.compiledClean, "compileErrors=${result.compileErrors}")
   }
 
@@ -298,6 +405,7 @@ class Tier1ExportSymbolSchemeTest {
         "A.kt" to "package pkg.a\n\nclass Box<T>(val value: T)\n\nfun <T> wrap(treat: T): T = treat",
         "B.kt" to "package pkg.b\n\nclass Box<T>(val value: T)\n\nfun <T> wrap(treat: T): T = treat",
       ),
+      processorOptions = rootedAtPkg,
     )
 
     assertTrue(
@@ -307,10 +415,11 @@ class Tier1ExportSymbolSchemeTest {
       "kspErrors=${result.kspErrors}",
     )
     assertTrue(result.compiledClean, "compileErrors=${result.compileErrors}")
-    assertContains(result.generated, "@CName(\"library_pkg_a__box_create\")")
-    assertContains(result.generated, "@CName(\"library_pkg_b__box_create\")")
-    assertContains(result.generated, "@CName(\"library_pkg_a__wrap_string\")")
-    assertContains(result.generated, "@CName(\"library_pkg_b__wrap_string\")")
+    Tier1CSharpCompile.assertCompiles(result, "")
+    assertContains(result.generated, "@CName(\"library_a__box_create\")")
+    assertContains(result.generated, "@CName(\"library_b__box_create\")")
+    assertContains(result.generated, "@CName(\"library_a__wrap_string\")")
+    assertContains(result.generated, "@CName(\"library_b__wrap_string\")")
   }
 
   /**

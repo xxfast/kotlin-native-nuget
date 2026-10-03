@@ -1,9 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
-import java.io.File
-import java.nio.file.Files
-import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertFalse
@@ -1582,46 +1579,10 @@ class Tier1NestedTypesTest {
 
   private fun compileCollisionConsumer(result: Tier1Result, shape: String) {
     // Build the actual output of this KSP run; a DLL or restored cache cannot prove this cell.
-    val root: File = generateSequence(File(System.getProperty("user.dir")).canonicalFile) {
-      it.parentFile
-    }.first { it.resolve("Kotlin.Native.Interop/Kotlin.Native.Interop.csproj").isFile }
-    val directory: File = Files.createTempDirectory("nuget-collision-consumer-").toFile()
-    try {
-      directory.resolve("Interop.cs").writeText(result.generatedCSharp)
-      val consumer: String = requireNotNull(
-        javaClass.getResource("/csharp/NestedCollisionConsumer.cs"),
-      ) { "missing compile-only collision consumer resource" }.readText()
-      directory.resolve("Consumer.cs").writeText(consumer)
-      val contract: String = root.resolve("Kotlin.Native.Interop/Kotlin.Native.Interop.csproj")
-        .path.replace('\\', '/')
-      directory.resolve("Consumer.csproj").writeText(
-        """
-        <Project Sdk="Microsoft.NET.Sdk">
-          <PropertyGroup>
-            <TargetFramework>net10.0</TargetFramework>
-            <LangVersion>14</LangVersion>
-            <Nullable>enable</Nullable>
-            <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-            <DefineConstants>$shape</DefineConstants>
-          </PropertyGroup>
-          <ItemGroup><ProjectReference Include="$contract" /></ItemGroup>
-        </Project>
-        """.trimIndent(),
-      )
-      directory.resolve("NuGet.Config").writeText(
-        "<configuration><packageSources><clear /></packageSources></configuration>",
-      )
-      val output: File = directory.resolve("build.log")
-      val process: Process = ProcessBuilder("dotnet", "build", "Consumer.csproj", "--nologo")
-        .directory(directory).redirectErrorStream(true).redirectOutput(output).start()
-      val finished: Boolean = process.waitFor(120, TimeUnit.SECONDS)
-      if (!finished) process.destroyForcibly().waitFor()
-      assertTrue(finished, "dotnet collision consumer compilation timed out: ${output.readText()}")
-      assertTrue(process.exitValue() == 0,
-        "fresh generated C# must compile (requires dotnet SDK 10): ${output.readText()}")
-    } finally {
-      directory.deleteRecursively()
-    }
+    val consumer: String = requireNotNull(
+      javaClass.getResource("/csharp/NestedCollisionConsumer.cs"),
+    ) { "missing compile-only collision consumer resource" }.readText()
+    Tier1CSharpCompile.assertCompiles(result, consumer, defines = shape)
   }
 
   private fun assertCollisionMatrix(
