@@ -123,6 +123,8 @@ tasks.test {
   // `test` and lives in `dogfoodCensus` below. The PURE half (RirCensusTest) is untagged and
   // runs here.
   useJUnitPlatform { excludeTags("dogfood") }
+  // The compile test shells out; a bare exception class on CI says nothing about which process.
+  testLogging { exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL }
   // ADR-182: RirDiagnosticKindTest keeps the forward and reverse diagnostic codes disjoint. No
   // module sees both enums, so it reads the processor's enum source as text.
   val forwardDiagnosticSource: File = rootDir.resolve(

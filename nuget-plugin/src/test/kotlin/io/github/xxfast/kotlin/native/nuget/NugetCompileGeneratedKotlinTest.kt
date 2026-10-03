@@ -9,6 +9,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirProperty
 import io.github.xxfast.kotlin.native.nuget.rir.RirStringType
 import io.github.xxfast.kotlin.native.nuget.rir.RirVoidType
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -309,7 +310,15 @@ class NugetCompileGeneratedKotlinTest {
     private fun run(command: List<String>, workDir: File, timeout: Duration): CompileOutput {
       val builder = ProcessBuilder(command)
       builder.directory(workDir)
-      val process: Process = builder.start()
+      val process: Process = try {
+        builder.start()
+      } catch (e: IOException) {
+        // The bare IOException hides which process and why; the OS message is the whole clue.
+        throw IllegalStateException(
+          "could not start ${command.joinToString(" ")} in ${workDir.absolutePath}: ${e.message}",
+          e,
+        )
+      }
       val stdout: StringBuilder = StringBuilder()
       val stderr: StringBuilder = StringBuilder()
       val outThread = Thread {
