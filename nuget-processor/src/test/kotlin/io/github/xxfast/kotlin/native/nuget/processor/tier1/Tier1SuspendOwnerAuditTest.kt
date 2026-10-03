@@ -178,7 +178,11 @@ class Tier1SuspendOwnerAuditTest {
         declarations().any { line -> Regex("\\b$csharp\\s*\\(").containsMatchIn(line) },
         "$member binds on the arm through its legacy route",
       )
-      assertEquals(0, warningsNaming(member).size, "$member binds; kspWarnings=${result.kspWarnings}")
+      assertEquals(
+        0,
+        warningsNaming(member).size,
+        "$member binds; kspWarnings=${result.kspWarnings}",
+      )
     }
   }
 
@@ -188,7 +192,11 @@ class Tier1SuspendOwnerAuditTest {
       declarations().any { line -> Regex("\\bCarryAsync\\s*\\(").containsMatchIn(line) },
       "Carrier is returned, so ADR-174 declares CarryAsync on ICarrier",
     )
-    assertEquals(0, warningsNaming("tier1.suspendowners.Carrier.carry").size, "${result.kspWarnings}")
+    assertEquals(
+      0,
+      warningsNaming("tier1.suspendowners.Carrier.carry").size,
+      "${result.kspWarnings}",
+    )
     val hold: List<String> = result.kspWarnings.filter { "tier1.suspendowners.Holder.hold" in it }
     assertEquals(1, hold.size, "Holder.hold must be named once; kspWarnings=${result.kspWarnings}")
   }
@@ -202,12 +210,13 @@ class Tier1SuspendOwnerAuditTest {
       }
       assertTrue(leaks.isEmpty(), "$member is skipped, so no C# may declare it; got=$leaks")
     }
-    listOf("Count(", "Size(", "Make(", "Len(", "Peek(", "SettleAsync(", "Steps(").forEach { member ->
-      assertTrue(
-        declarations.any { line -> member in line },
-        "$member is a control member and must still bind",
-      )
-    }
+    listOf("Count(", "Size(", "Make(", "Len(", "Peek(", "SettleAsync(", "Steps(")
+      .forEach { member ->
+        assertTrue(
+          declarations.any { line -> member in line },
+          "$member is a control member and must still bind",
+        )
+      }
     listOf("count", "size", "make", "len", "peek", "settle", "steps").forEach { name ->
       assertTrue(
         result.kspWarnings.none { warning -> warning.contains(".$name") },

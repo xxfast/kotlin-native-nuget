@@ -100,9 +100,11 @@ class Tier1SuspendFlowTest {
       declarations.none { line -> Regex("\\bOwnObject(Async)?\\s*\\(").containsMatchIn(line) },
       result.generatedCSharp,
     )
-    listOf("tier1.suspendflow.Standalone.ownObject", "tier1.suspendflow.Generic.own").forEach { member ->
-      val named: List<String> = result.kspWarnings.filter { warning -> "Skipping $member:" in warning }
-      assertEquals(1, named.size, "$member must be named once; kspWarnings=${result.kspWarnings}")
-    }
+    listOf("tier1.suspendflow.Standalone.ownObject", "tier1.suspendflow.Generic.own")
+      .forEach { member ->
+        val named: List<String> = result.kspWarnings
+          .filter { warning -> "Skipping $member:" in warning }
+        assertEquals(1, named.size, "$member must be named once; kspWarnings=${result.kspWarnings}")
+      }
   }
 }
