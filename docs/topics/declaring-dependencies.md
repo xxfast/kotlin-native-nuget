@@ -66,6 +66,23 @@ dependency("TestDependency", version = "1.0.0") {
 See [The nuget {} DSL](nuget-dsl.md) for every `bind { }` property, its default, and whether it's
 required.
 
+## Shared feeds {id="shared-feeds"}
+
+Declare feeds once at the `nuget {}` level and every dependency restores against them. Entries are feed URLs or directories of `.nupkg` files; relative directories resolve against the project directory. Repeated calls append.
+
+```kotlin
+nuget {
+  sources("https://feed.example/v3/index.json", "../local-feed")
+  dependencies { dependency("Acme.Text", "1.2.0") { bind { } } }
+}
+```
+
+- The restore feeds are nuget.org, then the shared list, then each dependency's own `source`, with duplicates dropped.
+- The feeds are a union. A per-dependency remote `source` adds a feed rather than replacing the list, and no feed is preferred for an id: if two remote feeds serve the same id and version, which one wins is unspecified.
+- A directory entry behaves like a [local `source`](#binding-a-locally-built-package): same-version rebuilds are picked up, restore moves to `build/nuget-interop/packages`, and the build fails if a package that a local feed holds at that exact id and version was restored from anywhere else. A local feed holding only other versions of an id is ignored.
+- A `.nupkg` file, a `file://` URL and a directory that does not exist fail the build. For a single package, set `source` on its dependency.
+- Declaring nothing leaves restore to your own NuGet.Config.
+
 ## Binding a locally built package
 
 Set `source` to a directory of `.nupkg` files or to one `.nupkg` file to bind a package you built
@@ -92,11 +109,6 @@ consumer needs a feed that serves it.
 
 The path is read as plain text, so a task that builds the `.nupkg` in the same Gradle build is not
 run for you; add a `dependsOn` from `nugetRestore` if you need that.
-
-## Limitations
-
-- A private feed is set per package with `source = "https://.../index.json"` inside `dependency()`;
-  there's no extension-level shared feed list yet.
 
 <seealso>
     <category ref="related">

@@ -24,9 +24,11 @@ internal fun generateCsproj(
   targetFramework: String,
   rids: List<String>,
   packagesPath: String? = null,
+  shared: List<String> = emptyList(),
 ): String {
   val ridsJoined: String = rids.joinToString(";")
-  val restoreLines: String = restoreLines(sources.values.toList(), packagesPath)
+  // ADR-191: nuget.org (added by restoreLines), the shared list, then per-dependency feeds.
+  val restoreLines: String = restoreLines(shared + sources.values, packagesPath)
 
   val packageReferences: String = ids.joinToString("\n") { id ->
     val version: String? = versions[id]
@@ -58,6 +60,9 @@ public abstract class NugetGenerateRestoreProjectTask : DefaultTask() {
 
   // ADR-190: URLs as declared; local paths already resolved against the project directory.
   @get:Input public abstract val dependencySources: MapProperty<String, String>
+
+  // ADR-191: `nuget { sources }`, URLs as declared and directories resolved.
+  @get:Input public abstract val sharedSources: ListProperty<String>
   @get:Input public abstract val targetFramework: Property<String>
   @get:Input public abstract val runtimeIdentifiers: ListProperty<String>
 
@@ -74,8 +79,13 @@ public abstract class NugetGenerateRestoreProjectTask : DefaultTask() {
   @get:OutputDirectory public abstract val feedDir: DirectoryProperty
   @get:OutputFile public abstract val csprojFile: RegularFileProperty
 
+  init {
+    sharedSources.convention(emptyList())
+  }
+
   @TaskAction
   public fun generate() {
+    checkSharedSources(sharedSources.get())
     val plan: LocalRestorePlan = stageLocalSources(
       versions = dependencyVersions.get(),
       sources = dependencySources.get(),
@@ -89,6 +99,7 @@ public abstract class NugetGenerateRestoreProjectTask : DefaultTask() {
       targetFramework = targetFramework.get(),
       rids = runtimeIdentifiers.get(),
       packagesPath = packagesDir.orNull?.asFile?.absolutePath,
+      shared = sharedSources.get(),
     )
 
     val file: File = csprojFile.get().asFile

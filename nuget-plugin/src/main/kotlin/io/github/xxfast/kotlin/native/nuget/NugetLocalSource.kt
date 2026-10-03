@@ -227,3 +227,85 @@ internal fun verifyLocalPackages(localSources: Map<String, String>, folders: Map
     }
   }
 }
+
+/**
+ * ADR-191: a shared feed is a URL or a directory. A `.nupkg` is one package, not a feed, so it
+ * belongs on the dependency it is.
+ */
+internal fun checkSharedSources(shared: List<String>) {
+  shared.forEach { value ->
+    when (val source: DependencySource = classifySource("nuget { sources }", value)) {
+      is DependencySource.Remote -> Unit
+
+      is DependencySource.Package -> throw IllegalArgumentException(
+        "[nuget] nuget { sources(\"$value\") } names a .nupkg file, but a shared source is a " +
+          "feed URL or a directory. Declare the file on its dependency instead: " +
+          "dependency(\"<id>\") { source = \"$value\" }."
+      )
+
+      is DependencySource.Directory -> require(source.dir.isDirectory) {
+        "[nuget] nuget { sources } names '${source.dir.absolutePath}', " +
+          "which is not an existing directory."
+      }
+    }
+  }
+}
+
+/** A package restore extracted: its id and version from the assets file, and its folder. */
+internal data class RestoredPackage(val id: String, val version: String, val folder: File)
+
+/**
+ * NuGet's normalized form, enough to compare a `.nuspec` version with an assets file key: no build
+ * metadata, at least three numeric parts, and no fourth part when it is zero.
+ */
+internal fun normalizeVersion(version: String): String {
+  val bare: String = version.substringBefore('+').lowercase()
+  val release: String = bare.substringBefore('-')
+  val suffix: String = bare.removePrefix(release)
+  val parts: MutableList<String> = release.split('.').toMutableList()
+  while (parts.size < 3) parts.add("0")
+  if (parts.size == 4 && parts[3].toIntOrNull() == 0) parts.removeAt(3)
+  return parts.joinToString(".") { part -> part.toIntOrNull()?.toString() ?: part } + suffix
+}
+
+/**
+ * ADR-191: the post-restore check for packages no `source` names (a shared directory, or a
+ * transitive package a local feed happens to hold). When a local feed holds the exact id and
+ * version restore resolved, the restored bytes must be that feed's: anything else is an eviction
+ * miss or another feed winning the same id and version, and would bind stale bytes silently. A
+ * local feed holding only other versions says nothing: another feed served it legitimately.
+ */
+internal fun verifyFeedPackages(feeds: Collection<File>, restored: List<RestoredPackage>) {
+  val held: Map<Pair<String, String>, List<File>> = feeds
+    .filter { feed -> feed.isDirectory }
+    .flatMap { feed -> nupkgsIn(feed) }
+    .groupBy { nupkg ->
+      val identity: NuspecIdentity = readNuspecIdentity(nupkg)
+      identity.id.lowercase() to normalizeVersion(identity.version)
+    }
+
+  restored.forEach { pkg ->
+    val candidates: List<File> = held[pkg.id.lowercase() to normalizeVersion(pkg.version)]
+      ?: return@forEach
+
+    val extracted: File = pkg.folder.listFiles().orEmpty()
+      .singleOrNull { file -> file.name.endsWith(".nupkg", ignoreCase = true) }
+      ?: error("[nuget] ${pkg.id} ${pkg.version}: expected one .nupkg in '${pkg.folder}'.")
+
+    val hash: String = sha512(extracted)
+    check(candidates.any { candidate -> sha512(candidate) == hash }) {
+      "[nuget] ${pkg.id} ${pkg.version} restored '${extracted.absolutePath}', but the local " +
+        "feed copy ${candidates.map { it.absolutePath }} has different bytes. Another feed " +
+        "served the same id and version, or a stale copy survived eviction. Remove one of the " +
+        "two, or run `./gradlew clean` and build again."
+    }
+  }
+}
+
+/** ADR-191: `nuget { sources }`, local paths resolved against [projectDir]. */
+internal fun resolvedShared(values: List<String>, projectDir: File): List<String> =
+  values.map { value -> resolveSource(value, projectDir) }
+
+/** ADR-191: the shared entries that are directories, the ones that join the local-feed set. */
+internal fun sharedDirectories(shared: List<String>): List<File> =
+  shared.filterNot { value -> value.contains("://") }.map(::File)

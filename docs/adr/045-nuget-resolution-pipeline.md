@@ -553,6 +553,7 @@ deletes it as part of the standard `build/` cleanup.
   ADR; the generated Kotlin stubs must exist before Kotlin compilation can use them).
 - Per-package `nuget.config` source mapping for precise feed routing (v2; deferred per
   Alternative 4).
+  See [ADR-191](191-shared-feed-list.md): a shared feed list ships as a union; source mapping stays deferred.
 - Local path / `.nupkg` file source for a dependency (synthesis D6, ADR-044 deferred scope).
   Shipped: [ADR-190](190-local-nupkg-dependency-source.md).
 - The `--packages` flag to redirect the global NuGet cache into the Gradle build directory for

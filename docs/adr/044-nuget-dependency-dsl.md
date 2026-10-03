@@ -522,6 +522,7 @@ The task names follow the `nuget*` prefix convention established in the synthesi
   See [ADR-190](190-local-nupkg-dependency-source.md): `source` accepts a directory or a `.nupkg` path (a plain string, not `file(...)`).
 - Extension-level custom feed URL applied to all dependencies (a `sources { url("...") }` block
   at the `nuget {}` root); v1 supports per-dependency `source` only.
+  See [ADR-191](191-shared-feed-list.md): `nuget { sources("...") }`, a union with per-dependency feeds.
 - Multiple `bind {}` calls per dependency (multiple namespace groups with distinct `packageName`
   values in one package); v1 allows only one `bind {}` per `dependency()`.
   See [ADR-192](192-reverse-namespace-groups-via-alias.md): namespace groups use `alias()`, and a repeated `bind {}` merges.

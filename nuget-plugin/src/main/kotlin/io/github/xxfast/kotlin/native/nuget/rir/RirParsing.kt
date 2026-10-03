@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.rir
 
+import io.github.xxfast.kotlin.native.nuget.RestoredPackage
 import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -137,4 +138,16 @@ internal fun derivePackageFolders(assetsJson: String, packageIds: Set<String>): 
       id to File(assets.project.restore.packagesPath, library.path)
     }
     .toMap()
+}
+
+/** ADR-191: every library the assets file resolved, with its extracted folder. */
+internal fun deriveRestoredPackages(assetsJson: String): List<RestoredPackage> {
+  val assets: AssetsFile = json.decodeFromString(assetsJson)
+  return assets.libraries.map { (key, library) ->
+    RestoredPackage(
+      id = key.substringBefore("/"),
+      version = key.substringAfter("/"),
+      folder = File(assets.project.restore.packagesPath, library.path),
+    )
+  }
 }

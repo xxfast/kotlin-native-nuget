@@ -131,16 +131,23 @@ class NugetRestoreIntegrationTest {
     return File(output, "Probe.Local.1.0.0.nupkg")
   }
 
-  private fun consumer(id: String, version: String?, source: String): Project {
+  private fun consumer(
+    id: String,
+    version: String?,
+    source: String?,
+    shared: List<String> = emptyList(),
+  ): Project {
     val dir: File = Files.createTempDirectory("local-source-consumer").toFile()
     val project: Project = ProjectBuilder.builder().withProjectDir(dir).build()
     project.plugins.apply("org.jetbrains.kotlin.multiplatform")
     project.plugins.apply("io.github.xxfast.kotlin.native.nuget")
     project.extensions.getByType(KotlinMultiplatformExtension::class.java)
       .mingwX64 { target -> target.binaries { sharedLib { baseName = "test" } } }
-    project.extensions.getByType(NugetExtension::class.java).dependencies { deps ->
+    val nuget: NugetExtension = project.extensions.getByType(NugetExtension::class.java)
+    nuget.sources.addAll(shared)
+    nuget.dependencies { deps ->
       deps.dependency(id, version) { dep ->
-        dep.source.set(source)
+        if (source != null) dep.source.set(source)
         dep.bind { }
       }
     }
@@ -202,5 +209,41 @@ class NugetRestoreIntegrationTest {
 
     assertContains(error.message.orEmpty(), "Newtonsoft.Json")
     assertContains(error.message.orEmpty(), empty.absolutePath)
+  }
+
+  // ADR-191: a shared directory serves a dependency that names no `source`, and, because it joins
+  // ADR-190's local-feed set, a same-version repack there is rebound too.
+  @Test
+  fun `a shared directory feed serves a dependency without a source and rebinds a repack`() {
+    val dotnet: String = findDotnet() ?: return
+    val feed: File = Files.createTempDirectory("probe-shared-feed").toFile()
+    packProbe(dotnet, "MarkerOne", feed)
+
+    val project: Project =
+      consumer("Probe.Local", "1.0.0", source = null, shared = listOf(feed.absolutePath))
+    assertContains(project.restoreAndExtract(), "MarkerOne")
+
+    packProbe(dotnet, "MarkerTwo", feed)
+    val second: String = project.restoreAndExtract()
+    assertContains(second, "MarkerTwo")
+    assertFalse(second.contains("MarkerOne"), "the V1 assembly must not be bound after a repack")
+  }
+
+  // ADR-191: the shared directory holds Newtonsoft.Json, but not the version restore resolves from
+  // nuget.org. That is a legitimate resolution, so the post-restore check must not fail it.
+  @Test
+  fun `a shared directory holding another version does not fail a package nuget org serves`() {
+    findDotnet() ?: return
+    val feed: File = Files.createTempDirectory("shared-other-version").toFile()
+    writeNupkg(File(feed, "Newtonsoft.Json.12.0.1.nupkg"), "Newtonsoft.Json", "12.0.1")
+    val project: Project =
+      consumer("Newtonsoft.Json", "13.0.3", source = null, shared = listOf(feed.absolutePath))
+
+    (project.tasks.getByName(NugetTaskNames.GENERATE_RESTORE_PROJECT)
+      as NugetGenerateRestoreProjectTask).generate()
+    (project.tasks.getByName(NugetTaskNames.RESTORE) as NugetRestoreTask).restore()
+
+    val packages: File = project.layout.buildDirectory.dir("nuget-interop/packages").get().asFile
+    assertTrue(File(packages, "newtonsoft.json/13.0.3").isDirectory)
   }
 }

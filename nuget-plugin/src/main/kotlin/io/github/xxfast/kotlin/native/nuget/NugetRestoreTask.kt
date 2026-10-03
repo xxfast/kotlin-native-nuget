@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget
 
 import io.github.xxfast.kotlin.native.nuget.rir.derivePackageFolders
+import io.github.xxfast.kotlin.native.nuget.rir.deriveRestoredPackages
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.file.ConfigurableFileCollection
@@ -80,11 +81,11 @@ public abstract class NugetRestoreTask : DefaultTask() {
       )
     }
 
-    if (localSources.get().isEmpty()) return
-    val folders: Map<String, File> = derivePackageFolders(
-      assetsFile.get().asFile.readText(),
-      localSources.get().keys,
-    )
+    if (packages == null) return
+    val assetsJson: String = assetsFile.get().asFile.readText()
+    val folders: Map<String, File> = derivePackageFolders(assetsJson, localSources.get().keys)
     verifyLocalPackages(localSources.get(), folders)
+    // ADR-191: also covers packages no `source` names, served by a shared directory.
+    verifyFeedPackages(localFeeds.files, deriveRestoredPackages(assetsJson))
   }
 }

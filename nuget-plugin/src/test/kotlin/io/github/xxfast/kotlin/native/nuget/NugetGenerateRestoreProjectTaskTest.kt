@@ -214,6 +214,97 @@ class NugetGenerateRestoreProjectTaskTest {
     assertContains(csproj, "<RestoreSources>https://api.nuget.org/v3/index.json;/a&amp;b/feed")
     assertContains(csproj, "<RestorePackagesPath>/a&amp;b/packages</RestorePackagesPath>")
   }
+
+  // ADR-191: one union, in a stable order: nuget.org, the shared list, then per-dependency feeds.
+  @Test
+  fun `restore sources are nuget org, then shared, then per-dependency, de-duplicated`() {
+    val csproj: String = generateCsproj(
+      ids = listOf("Acme", "Other"),
+      versions = emptyMap(),
+      sources = mapOf("Acme" to "https://dep/v3", "Other" to "https://shared-a/v3"),
+      targetFramework = "net8.0",
+      rids = listOf("osx-arm64"),
+      shared = listOf("https://shared-a/v3", "/shared/b", "https://api.nuget.org/v3/index.json"),
+    )
+
+    assertContains(
+      csproj,
+      "<RestoreSources>https://api.nuget.org/v3/index.json;https://shared-a/v3;/shared/b;" +
+        "https://dep/v3</RestoreSources>",
+    )
+  }
+
+  @Test
+  fun `shared sources alone emit RestoreSources`() {
+    val csproj: String = generateCsproj(
+      ids = listOf("Acme"),
+      versions = emptyMap(),
+      sources = emptyMap(),
+      targetFramework = "net8.0",
+      rids = listOf("osx-arm64"),
+      shared = listOf("https://shared/v3"),
+    )
+
+    assertContains(
+      csproj,
+      "<RestoreSources>https://api.nuget.org/v3/index.json;https://shared/v3</RestoreSources>",
+    )
+  }
+
+  @Test
+  fun `a nupkg in the shared list is rejected with a pointer to source`() {
+    val error: IllegalArgumentException = assertFailsWith {
+      checkSharedSources(listOf("/libs/Acme.1.0.0.nupkg"))
+    }
+
+    assertContains(error.message.orEmpty(), "/libs/Acme.1.0.0.nupkg")
+    assertContains(error.message.orEmpty(), "dependency(\"<id>\") { source = ")
+  }
+
+  @Test
+  fun `a missing shared directory fails naming the resolved path`() {
+    val missing = File(Files.createTempDirectory("shared-missing").toFile(), "nope")
+
+    val error: IllegalArgumentException = assertFailsWith {
+      checkSharedSources(listOf("https://ok/v3", missing.absolutePath))
+    }
+
+    assertContains(error.message.orEmpty(), missing.absolutePath)
+  }
+
+  // ADR-191: the post-restore check for packages no `source` names. When a local feed holds the
+  // exact id and version restore resolved, the restored bytes must be that feed's; a different
+  // version means another feed legitimately served it, so it is left alone.
+  @Test
+  fun `a restored package whose id and version a local feed holds must be that feed's bytes`() {
+    val dir: File = Files.createTempDirectory("feed-check").toFile()
+    val feed = File(dir, "feed")
+    writeNupkg(File(feed, "Acme.1.0.nupkg"), "Acme", "1.0")
+    val extracted: File =
+      writeNupkg(File(dir, "packages/acme/1.0.0/acme.1.0.0.nupkg"), "Acme", "1.0.0")
+    val restored = RestoredPackage("Acme", "1.0.0", extracted.parentFile)
+
+    val error: IllegalStateException = assertFailsWith {
+      verifyFeedPackages(listOf(feed), listOf(restored))
+    }
+    assertContains(error.message.orEmpty(), "Acme 1.0.0")
+    assertContains(error.message.orEmpty(), feed.absolutePath)
+
+    File(feed, "Acme.1.0.nupkg").copyTo(extracted, overwrite = true)
+    verifyFeedPackages(listOf(feed), listOf(restored))
+  }
+
+  @Test
+  fun `a local feed holding another version of a restored id does not fail the check`() {
+    val dir: File = Files.createTempDirectory("feed-check-version").toFile()
+    val feed = File(dir, "feed")
+    writeNupkg(File(feed, "Acme.2.0.0.nupkg"), "Acme", "2.0.0")
+    val extracted: File =
+      writeNupkg(File(dir, "packages/acme/1.0.0/acme.1.0.0.nupkg"), "Acme", "1.0.0")
+
+    val restored = RestoredPackage("Acme", "1.0.0", extracted.parentFile)
+    verifyFeedPackages(listOf(feed), listOf(restored))
+  }
 }
 
 /** A minimal `.nupkg`: a zip with `<id>.nuspec` at its root, which is all the plugin reads. */
