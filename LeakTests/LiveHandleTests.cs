@@ -401,6 +401,42 @@ public class LiveHandleTests
         });
     }
 
+    // Row 1j. Row 1d one level down: an inner class owning an inner class
+    // (`hearth_sunbather_paw_create(outer, toes, error)`). The borrowed receiver is itself an inner
+    // handle, and the intermediate Sunbather is disposed BEFORE the Paw, so a release order that
+    // only holds when outers outlive their inners shows up here as a rising count. Oreo's paw
+    // touches the hearth fifty times.
+    [Fact]
+    public void InnerOfInnerConstructor_IntermediateOuterDisposedFirst_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var hearth = new Hearth("The bay window");
+            var sunbather = new Hearth.Sunbather(hearth, 3);
+            using var paw = new Hearth.Sunbather.Paw(sunbather, 2);
+            sunbather.Dispose();
+            Assert.Equal("The bay window/3/2", paw.Trail());
+        });
+    }
+
+    // Row 1k. Row 1d with a SEALED outer: the receiver of `purr_whisker_create` and
+    // `purr_on_echo_create` is a handle whose field lives on the abstract sealed base, read through
+    // an arm obtained from a factory rather than constructed. Mylo purrs fifty times.
+    [Fact]
+    public void InnerUnderSealedOwnerConstructor_UsingDispose_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            // Qualified: `TestLibrary.Models.Purr` (the ADR-066 cycle fixture) is also in scope.
+            using TestLibrary.Nested.Purr purr = Deferred.PurringPurr(4);
+            using var whisker = new TestLibrary.Nested.Purr.Whisker(purr, 1);
+            var on = (TestLibrary.Nested.Purr.On)purr;
+            using var echo = new TestLibrary.Nested.Purr.On.Echo(on, 5);
+            Assert.Equal("whisker#1 at level 4", whisker.Describe());
+            Assert.Equal(9, echo.Both());
+        });
+    }
+
     // Row 1f. ADR-157 (issue #236): the boxed enum arm's constructor, the one new mint path of the
     // feature. `new PatchArm(Patch.Socks)` mints a StableRef to a Kotlin enum *entry*, a permanent
     // singleton, so nothing about the Kotlin object's lifetime can hide a missed release: the count

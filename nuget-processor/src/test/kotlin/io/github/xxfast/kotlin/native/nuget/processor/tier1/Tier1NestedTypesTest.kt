@@ -7,6 +7,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -26,13 +27,14 @@ import kotlin.test.assertTrue
  * interface), a sealed *arm* owner, and the nested `value class` candidate.
  *
  * [deferredSource] is the other half and is not a copy of the old skip test: ADR-134 keeps
- * `SKIPPED_NESTED_DECLARATION` permanently for a generic owner and an `enum class` owner, and
- * ADR-141 keeps it for an `inner class` **owner** (inner-of-inner), so the named skip has to
- * survive for those and only those. A fix that declares everything nested passes every presence
- * cell above and fails here.
+ * `SKIPPED_NESTED_DECLARATION` permanently for a generic owner and an `enum class` owner, and a
+ * generic nested candidate (an `inner` one included), so the named skip has to survive for those
+ * and only those. A fix that declares everything nested passes every presence cell above and fails
+ * here.
  *
  * [innerSource] is ADR-141's own half: an `inner class` is a declared C# nested type whose
- * constructor takes the outer instance first.
+ * constructor takes the outer instance first, at any depth (an inner class owning another inner
+ * class), and under a sealed base or a sealed arm ([sealedInnerSource]).
  *
  * Oreo supervises from the top perch; Mylo runs the registry two levels down.
  */
@@ -134,6 +136,12 @@ class Tier1NestedTypesTest {
     class Box<T>(val item: T) {
       class Lid(val tight: Boolean)
 
+      // The inner variant of `Lid`: it captures the outer's `T`, so it is refused by the generic
+      // owner arm, never declared under a non-generic `Box`.
+      inner class Latch(val turns: Int) {
+        fun peek(): T = item
+      }
+
       @JvmInline
       value class Seal(val stamped: Boolean)
     }
@@ -150,12 +158,9 @@ class Tier1NestedTypesTest {
     }
 
     class Host(val name: String) {
-      // ADR-141: `Guest` itself is declared now (the candidate arm is gone); `Deep` is the
-      // inner-of-inner the OWNER arm still defers, and the only shape that can reach it -- Kotlin
-      // forbids a non-inner class inside an inner class (NESTED_CLASS_NOT_ALLOWED).
-      inner class Guest(val visits: Int) {
-        inner class Deep(val depth: Int)
-      }
+      // A generic `inner class` under a non-generic owner: refused by the generic candidate arm,
+      // the same arm a plain generic nested class takes.
+      inner class GenInner<T>(val item: T)
     }
 
     class Reader(val name: String) {
@@ -177,6 +182,17 @@ class Tier1NestedTypesTest {
     class Host(val name: String) {
       inner class Guest(val visits: Int) {
         fun greeting(): String = this@Host.name + " welcomes guest #" + visits
+
+        // Inner-of-inner: Kotlin allows only an `inner class` here, and its receiver is the
+        // immediately enclosing `Guest`, never `Host` (that one rides the Kotlin heap).
+        inner class Deep(val depth: Int) {
+          fun trail(): String = this@Host.name + "/" + visits + "/" + depth
+
+          inner class Deeper(val z: Int)
+        }
+
+        fun deepAt(depth: Int): Deep = Deep(depth)
+        fun depthOf(deep: Deep): Int = deep.depth
       }
 
       inner class Tag(val text: String = "plain") {
@@ -185,6 +201,34 @@ class Tier1NestedTypesTest {
 
       fun guestAt(visits: Int): Guest = Guest(visits)
       fun visitsOf(guest: Guest): Int = guest.visits
+    }
+  """.trimIndent()
+
+  /**
+   * An `inner class` under a sealed owner, which Kotlin allows in exactly two cells: a `sealed
+   * class` base ([Purr.Whisker], outer typed as the base) and a `class` arm ([Purr.On.Trace], outer
+   * typed as the arm). An `object` arm and any interface cannot host one (compiler: "modifier
+   * 'inner' is not applicable inside 'standalone object' / 'interface'").
+   */
+  private val sealedInnerSource: String = """
+    package tier1.sealedinner
+
+    sealed class Purr {
+      inner class Whisker(val n: Int) {
+        fun describe(): String = "whisker#" + n + " of " + this@Purr
+      }
+
+      data class On(val level: Int) : Purr() {
+        inner class Trace(val at: Int) {
+          fun both(): Int = level + at
+        }
+
+        fun traceAt(at: Int): Trace = Trace(at)
+      }
+
+      data object Off : Purr()
+
+      fun whiskerAt(n: Int): Whisker = Whisker(n)
     }
   """.trimIndent()
 
@@ -394,16 +438,13 @@ class Tier1NestedTypesTest {
     listOf(
       // generic owner: `Box<T>.Lid` is a generic nested type in C#, one per `T`
       "tier1.nesteddeferred.Box.Lid",
-      // ADR-141: an `inner class` OWNER is still deferred (inner-of-inner), though the inner
-      // class itself is declared now.
-      "tier1.nesteddeferred.Host.Guest.Deep",
     ).forEach { declaration ->
       assertTrue(
         warnings.any { it.contains(declaration) },
         "expected $declaration to still skip named; warnings=$warnings",
       )
     }
-    listOf("Lid", "Deep").forEach { name ->
+    listOf("Lid").forEach { name ->
       assertFalse(
         result.generatedCSharp.withoutDocComments().contains(name),
         "expected no declaration of, or dangling reference to, $name; csharp=" +
@@ -454,6 +495,92 @@ class Tier1NestedTypesTest {
   }
 
   @Test
+  fun `both generic inner shapes skip named, with their reason and a followable hint`() {
+    val result = Tier1Harness.run(deferredSource, fileName = "Deferred.kt")
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val warnings: List<String> = result.kspWarnings
+      .filter { it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) }
+    // An inner class cannot be moved to the top level as it stands (it reads `this@Outer`), so its
+    // remedy has to say what to do with the outer instance.
+    val innerHint = "drop `inner`, take the outer instance as a constructor parameter, and move " +
+        "it to the top level of its file"
+    mapOf(
+      "Skipping tier1.nesteddeferred.Host.GenInner:" to "a generic nested type is deferred",
+      "Skipping tier1.nesteddeferred.Box.Latch:" to
+          "its enclosing declaration `tier1.nesteddeferred.Box` cannot own one: a generic " +
+          "owner's nested type is itself generic in C# (`Owner<T>.Nested`)",
+    ).forEach { (declaration, reason) ->
+      val warning: String = assertNotNull(
+        warnings.singleOrNull { it.contains(declaration) },
+        "expected one named skip for $declaration; warnings=$warnings",
+      )
+      assertContains(warning, reason)
+      assertContains(warning, innerHint)
+    }
+    // The non-inner neighbour keeps its own hint: top-level is followable for it.
+    val lid: String = warnings.single { it.contains("Skipping tier1.nesteddeferred.Box.Lid:") }
+    assertFalse(lid.contains("drop `inner`"), lid)
+    assertContains(lid, "move it to the top level of its file")
+    listOf("GenInner", "Latch").forEach { name ->
+      assertFalse(
+        result.generatedCSharp.withoutDocComments().contains(name),
+        "expected no declaration of, or dangling reference to, $name; csharp=" +
+            "${result.generatedCSharp.lines().filter { it.contains(name) }}",
+      )
+    }
+  }
+
+  @Test
+  fun `an inner class owning an inner class is declared, its receiver the nearest outer`() {
+    val result = Tier1Harness.run(innerSource, fileName = "Inner.kt")
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    assertFalse(
+      result.kspWarnings.any {
+        it.contains("SKIPPED_") && it.contains("tier1.nestedinner.Host.Guest.Deep")
+      },
+      "expected no skip for an inner-of-inner; warnings=${result.kspWarnings}",
+    )
+    val kotlin: String = result.generated
+    assertContains(kotlin, "@CName(\"library_tier1_nestedinner__host_guest_deep_create\")")
+    assertContains(kotlin, "@CName(\"library_tier1_nestedinner__host_guest_deep_deeper_create\")")
+    assertContains(kotlin, "outer.asStableRef<tier1.nestedinner.Host.Guest>().get().Deep(depth)")
+    assertContains(kotlin, "outer.asStableRef<tier1.nestedinner.Host.Guest.Deep>().get().Deeper(z)")
+    val host: String = blockBody(result.generatedCSharp, "public class Host")
+    val guest: String = blockBody(host, "public class Guest")
+    assertContains(guest, "public Deep(Guest outer, int depth)")
+    assertContains(blockBody(guest, "public class Deep"), "public Deeper(Deep outer, int z)")
+    // The member positions the owner arm used to skip as UNDECLARED_CLASS bind now.
+    assertContains(guest, "public global::Interop.Host.Guest.Deep DeepAt(int depth)")
+    assertContains(guest, "public int DepthOf(global::Interop.Host.Guest.Deep deep)")
+  }
+
+  @Test
+  fun `an inner class under a sealed base or a sealed arm is declared with the outer first`() {
+    val result = Tier1Harness.run(sealedInnerSource, fileName = "Purr.kt")
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    assertFalse(
+      result.kspWarnings.any { it.contains("SKIPPED_") && it.contains("tier1.sealedinner") },
+      "expected no skip for an inner class under a sealed owner; warnings=${result.kspWarnings}",
+    )
+    val kotlin: String = result.generated
+    assertContains(kotlin, "@CName(\"library_tier1_sealedinner__purr_whisker_create\")")
+    assertContains(kotlin, "@CName(\"library_tier1_sealedinner__purr_on_trace_create\")")
+    assertContains(kotlin, "outer.asStableRef<tier1.sealedinner.Purr>().get().Whisker(n)")
+    assertContains(kotlin, "outer.asStableRef<tier1.sealedinner.Purr.On>().get().Trace(at)")
+    val purr: String = blockBody(result.generatedCSharp, "public abstract class Purr")
+    // Base owner: the outer is typed as the base, so any arm (including the object one) can be it.
+    assertContains(blockBody(purr, "public class Whisker"), "public Whisker(Purr outer, int n)")
+    // Arm owner: the outer is typed as the arm.
+    val on: String = blockBody(purr, "public sealed class On")
+    assertContains(blockBody(on, "public class Trace"), "public Trace(On outer, int at)")
+    assertContains(on, "TraceAt(int at)")
+    assertContains(purr, "WhiskerAt(int n)")
+  }
+
+  @Test
   fun `an inner class widened default keeps the outer instance`() {
     val result = Tier1Harness.run(innerSource, fileName = "Inner.kt")
 
@@ -472,7 +599,7 @@ class Tier1NestedTypesTest {
     // Its own cell, because it is red for a different reason from the other three: the ADR-064
     // 2026-09-11 amendment made an `enum class` a *candidate* but never an *owner*, so the
     // declaration walk does not descend into one and `Season.Almanac` is skipped SILENTLY today,
-    // where `Box.Lid`, `Cage.Bar` and `Host.Guest.Deep` are all named. ADR-133 keeps the enum
+    // where `Box.Lid` and `Cage.Bar` are both named. ADR-133 keeps the enum
     // owner in the deferred set and says the deferred set stays named, so the walk has to descend
     // into an enum owner for the diagnostic even though it never declares anything there. Worth
     // settling in the ADR rather than inheriting the silence.

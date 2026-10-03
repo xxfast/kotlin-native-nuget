@@ -26,6 +26,11 @@ namespace IntegrationTests;
 /// the same list the prelude walks (<c>Cushion</c>, a <c>string</c>),</item>
 /// <item>a member reading <c>this@Hearth</c> answers, including after C# has disposed the outer
 /// handle: the inner's own reference keeps the outer alive on the Kotlin heap.</item>
+/// <item>an inner class owning its own inner class takes the <em>nearest</em> outer
+/// (<c>new Hearth.Sunbather.Paw(sunbather, 2)</c>), and an intermediate outer may be disposed
+/// first.</item>
+/// <item>an inner class under a sealed base (<c>Purr.Whisker</c>) or a sealed arm
+/// (<c>Purr.On.Echo</c>) takes that sealed owner as its outer.</item>
 /// </list>
 ///
 /// Oreo owns the hearth. Mylo gets the cushion.
@@ -143,5 +148,123 @@ public class InnerClassTests
         {
             sunbather.Dispose();
         }
+    }
+
+    // --- Inner-of-inner: Hearth.Sunbather.Paw, the outer is the Sunbather ---
+
+    [Fact]
+    public void InnerOfInner_ConstructsWithTheInnerInstanceAsOuter()
+    {
+        using var hearth = new Hearth("The bay window");
+        using var sunbather = new Hearth.Sunbather(hearth, 3);
+        using var paw = new Hearth.Sunbather.Paw(sunbather, 2);
+
+        // `this@Hearth` and `this@Sunbather` on the Kotlin side; only `sunbather` crossed the ABI.
+        Assert.Equal(2, paw.Toes);
+        Assert.Equal("The bay window/3/2", paw.Trail());
+    }
+
+    [Fact]
+    public void InnerOfInner_FirstConstructorParameter_IsTheNearestOuterNamedOuter()
+    {
+        Type? paw = typeof(Hearth.Sunbather).GetNestedType("Paw");
+        Assert.NotNull(paw);
+        Assert.Same(typeof(Hearth.Sunbather), paw!.DeclaringType);
+
+        ParameterInfo[] parameters = paw.GetConstructors().Single().GetParameters();
+
+        Assert.Equal(2, parameters.Length);
+        Assert.Same(typeof(Hearth.Sunbather), parameters[0].ParameterType);
+        Assert.Equal("outer", parameters[0].Name);
+        Assert.Equal("toes", parameters[1].Name);
+    }
+
+    [Fact]
+    public void InnerOfInner_ReturnedAndPassedBack_RoundTrips()
+    {
+        using var hearth = new Hearth("The bay window");
+        using var sunbather = hearth.SunbatherAt(4);
+        using var paw = sunbather.PawAt(5);
+
+        Assert.IsType<Hearth.Sunbather.Paw>(paw);
+        Assert.Equal(5, sunbather.ToesOf(paw));
+        Assert.Equal("The bay window/4/5", paw.Trail());
+    }
+
+    /// <summary>
+    /// ADR-141's lifetime rule at depth 2: disposing a C# outer only drops that outer's StableRef,
+    /// and each inner instance's own reference keeps its Kotlin outer alive, so disposing the
+    /// intermediate <c>Sunbather</c> and then the <c>Hearth</c> before the <c>Paw</c> still lets
+    /// the paw read both. No <c>using</c>, because the dispose order is the point.
+    /// </summary>
+    [Fact]
+    public void InnerOfInner_BothOutersDisposedFirst_StillReadsBoth()
+    {
+        var hearth = new Hearth("The bay window");
+        var sunbather = new Hearth.Sunbather(hearth, 6);
+        var paw = new Hearth.Sunbather.Paw(sunbather, 4);
+
+        try
+        {
+            sunbather.Dispose();
+            Assert.Equal("The bay window/6/4", paw.Trail());
+
+            hearth.Dispose();
+            Assert.Equal("The bay window/6/4", paw.Trail());
+            Assert.Equal(4, paw.Toes);
+        }
+        finally
+        {
+            paw.Dispose();
+        }
+    }
+
+    // --- Inner class under a sealed owner: Purr.Whisker (base), Purr.On.Echo (arm) ---
+
+    [Fact]
+    public void InnerUnderSealedBase_TakesTheObjectArmAsOuter()
+    {
+        using Purr off = Deferred.SleepingPurr();
+        using var whisker = new Purr.Whisker(off, 1);
+
+        Assert.Equal(1, whisker.N);
+        Assert.Equal("whisker#1 asleep", whisker.Describe());
+    }
+
+    [Fact]
+    public void InnerUnderSealedBase_TakesThePayloadArmAsOuter()
+    {
+        using Purr on = Deferred.PurringPurr(4);
+        using var whisker = new Purr.Whisker(on, 2);
+
+        Assert.Equal("whisker#2 at level 4", whisker.Describe());
+    }
+
+    [Fact]
+    public void InnerUnderSealedArm_TakesTheArmAsOuter()
+    {
+        using Purr purr = Deferred.PurringPurr(4);
+        Purr.On on = Assert.IsType<Purr.On>(purr);
+        using var echo = new Purr.On.Echo(on, 5);
+
+        Assert.Equal(5, echo.At);
+        Assert.Equal(9, echo.Both());
+    }
+
+    [Fact]
+    public void InnerUnderSealedOwners_OuterParameterIsTypedAsTheOwner()
+    {
+        Type? whisker = typeof(Purr).GetNestedType("Whisker");
+        Type? echo = typeof(Purr.On).GetNestedType("Echo");
+        Assert.NotNull(whisker);
+        Assert.NotNull(echo);
+
+        ParameterInfo baseOuter = whisker!.GetConstructors().Single().GetParameters()[0];
+        ParameterInfo armOuter = echo!.GetConstructors().Single().GetParameters()[0];
+
+        Assert.Same(typeof(Purr), baseOuter.ParameterType);
+        Assert.Equal("outer", baseOuter.Name);
+        Assert.Same(typeof(Purr.On), armOuter.ParameterType);
+        Assert.Equal("outer", armOuter.Name);
     }
 }
