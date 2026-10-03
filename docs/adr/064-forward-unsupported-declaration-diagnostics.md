@@ -1538,9 +1538,8 @@ previously warned nothing.
   whether the result compiles is unmeasured; `VALUE_CLASS` origin is not reclassified by this pass
   and `COMPANION` is reclassified but was not exercised by the fixture. (**2026-10-03:** the first
   and third are closed by the 2026-10-03 amendment below; the second is still open.)
-- **`ABSTRACT`, `SUSPEND`, and `TYPE_PARAMETER`** rest on the identical assumption and were not
-  audited; a `suspend fun` on an `object` is a likely candidate, since `NugetProcessor.kt` walks
-  `classes` only.
+- **`ABSTRACT`, `SUSPEND`, and `TYPE_PARAMETER`** rest on the identical assumption. (**2026-10-03:**
+  audited; see the last amendment at the end of this ADR.)
 
 ### Testing seam, as shipped
 
@@ -2008,3 +2007,47 @@ overrides) a `suspend` default. The native pipeline was not run for this item.
 **Found, not fixed.** The `SKIPPED_UNEXPORTED_SUPERTYPE` text "its public members are bound on X
 directly" (`cir/CirClassTranslator.kt`) is partly false when an inherited member is unrouted and
 named separately. Recorded in `ROADMAP.md`.
+
+## Amendment (2026-10-03): the `ABSTRACT`, `SUSPEND` and `TYPE_PARAMETER` audit
+
+The 2026-09-13 amendment's "some route re-emits this" assumption was left unaudited for these three
+reasons. It is false for `SUSPEND` and, on a sealed arm, for `ABSTRACT`. Diagnostics only: nothing
+new is bound.
+
+**Rule.** A member the planner defers is named unless the route that re-emits it is keyed to that
+owner. The suspend route is keyed to top-level functions, classes, sealed arms and interfaces a
+function returns. Every other owner now names its `suspend` member as one
+`SKIPPED_UNSUPPORTED_COMBINATION` warning, with one wider sentence and hint (it used to name only
+extension and enum owners):
+
+- a `suspend fun` on an `object`;
+- a `suspend fun` in a `companion object`, of a class or an enum;
+- a `suspend fun` on an exported, non-generic, non-sealed interface that no function returns.
+
+A `suspend` member of a value class, of a generic class and of a generic interface was already named
+by earlier work and is now pinned to exactly one warning. A sealed interface's arms bind it.
+
+`ABSTRACT` on a sealed arm: a plain or lambda-parameter `abstract fun` declared on an `abstract` or
+nested `sealed` arm is named with the sealed-subclass sentence. `abstract suspend fun` and
+`abstract fun f(): Flow<Int>` on such an arm stay silent, because the arm's suspend and Flow routes
+declare them (`abstractOnAsyncRoute`); naming them would be a false positive.
+
+`TYPE_PARAMETER` had no producer anywhere and is deleted. A type parameter at a position it cannot
+bind already reports `UNSUPPORTED`.
+
+Binding `suspend` on an object or companion is not done: it needs a static scope-owner design and
+would be its own feature.
+
+**Verified.** `Tier1SuspendOwnerAuditTest` (5 tests; three were red before the change, all green
+after) pins each owner above to exactly one warning, absent from the C#, with control members still
+binding. The `Tier1SuspendFlowTest` pin for `OwnObjectAsync(` flipped from "absent, no warning" to
+"absent and named exactly once". `:nuget-processor:test`: 1565 passed, 0 failed. A real
+`kspKotlinMingwX64` run on the packaged test library shows no member that used to bind stops binding
+and no new warning on packaged fixtures; the only `suspend`-sentence line is the existing enum
+member `Curl.area`. The abstract-arm silence was measured before the change.
+
+**Inferred, not covered.** The native pipeline was not run for this item.
+
+**Found, not fixed.** A Kotlin `abstract class Deep : Nap()` sealed arm renders as
+`public sealed class Deep : Nap`; inferred from generated C#, renderer line not located. Harmless
+while the arm has no constructor. Recorded in `ROADMAP.md`.

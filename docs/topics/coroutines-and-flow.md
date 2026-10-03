@@ -52,6 +52,11 @@ await AsyncFunctions.FetchTreatAsync();  // "one treat for Oreo"
 await AsyncFunctions.FetchTreatAsync(3); // "3 treats for Mylo"
 ```
 
+A `suspend fun` binds at the top level, on a class or sealed type, and on an interface that some
+function returns. On an `object`, a companion object, a value class, an enum, an interface nothing
+returns, or as an extension, it is not bound: the member is skipped with a
+`SKIPPED_UNSUPPORTED_COMBINATION` warning naming it.
+
 ## `suspend fun` returning a nullable type {id="suspend-fun-returning-a-nullable-type"}
 
 A nullable primitive, `String?`, or object return carries its `?` all the way through:
