@@ -13,6 +13,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.cir.extensionNamespace
 import io.github.xxfast.kotlin.native.nuget.processor.cir.mapPackageToNamespace
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedInterfaceCsName
@@ -82,6 +83,15 @@ internal class ForwardBridgeTypeClassifier(
       context.rootNamespace,
     )
   }
+
+  /**
+   * ADR-188 amendment: the namespace an extension on [receiver] declared by [declaring] lands in,
+   * by the translator's own ADR-126 rule ([extensionNamespace]) over the identical export set.
+   */
+  internal fun extensionNamespaceOf(receiver: KSDeclaration, declaring: KSDeclaration): String =
+    extensionNamespace(receiver, declaring, context.exportedObjectHandles) { pkg ->
+      mapPackageToNamespace(pkg, context.rootPackage, context.rootNamespace)
+    }
 
   fun classify(type: KSType): BridgeType {
     val expanded: KSType = type.expandAliases()

@@ -140,9 +140,9 @@ internal class ForwardPropertyPlanner(
   private val dropped: MutableList<ForwardDroppedProperty> = mutableListOf()
   private val droppedReceivers: MutableList<ForwardDroppedExtensionReceiver> = mutableListOf()
 
-  // ADR-188: (receiver declaration, C# name) -> Kotlin name of every exported extension function,
-  // set by [catalog] before its extension-property walk.
-  private var extensionFunctionNames: Map<Pair<String, String>, String> = emptyMap()
+  // ADR-188: (extension namespace, receiver declaration, C# name) -> Kotlin name of every exported
+  // extension function, set by [catalog] before its extension-property walk.
+  private var extensionFunctionNames: Map<Triple<String, String, String>, String> = emptyMap()
 
   /** ADR-075: every collection property setter this planner declined to build because a
    *  component failed [isWrappableComponent] — the property itself is still planned, get-only. */
@@ -171,15 +171,18 @@ internal class ForwardPropertyPlanner(
     extensionFunctions: List<KSFunctionDeclaration> = emptyList(),
   ): List<ForwardPropertyPlan> = buildList {
     extensionFunctionNames = extensionFunctions.mapNotNull { function ->
-      val receiver: String = function.extensionReceiver?.resolve()?.expandAliases()?.declaration
-        ?.qualifiedName?.asString() ?: return@mapNotNull null
+      val receiverDeclaration: KSDeclaration = function.extensionReceiver?.resolve()
+        ?.expandAliases()?.declaration ?: return@mapNotNull null
+      val receiver: String = receiverDeclaration.qualifiedName?.asString()
+        ?: return@mapNotNull null
+      val namespace: String = classifier.extensionNamespaceOf(receiverDeclaration, function)
       val name: String =
         if (Modifier.SUSPEND in function.modifiers) {
           function.csharpAsyncMemberName()
         } else {
           function.csharpMemberName()
         }
-      (receiver to name) to function.simpleName.asString()
+      Triple(namespace, receiver, name) to function.simpleName.asString()
     }.toMap()
     enums.forEach { enum ->
       inOwner(enum.forwardDiagnosticOwner()) {
@@ -688,10 +691,15 @@ internal class ForwardPropertyPlanner(
     // the consumer could call neither spelling it expects. The function keeps the name: it is the
     // shape C# has always had, and dropping it would be the larger loss. Matched on the receiver
     // DECLARATION, so `fun Cat?.x()` and `val Cat.x` meet, and on the C# name, so a `@CSharpName`
-    // on either side (ADR-179) is what separates them. Never a rename (ADR-110).
+    // on either side (ADR-179) is what separates them. Never a rename (ADR-110). Keyed on the
+    // ADR-126 namespace too: an unexported receiver's pair in two packages renders two classes in
+    // two namespaces, and a consumer importing either one sees no ambiguity, so both bind.
     val receiverDeclaration: String? = receiver.declaration.qualifiedName?.asString()
     val csharpName: String = prop.csharpMemberName()
-    extensionFunctionNames[receiverDeclaration.orEmpty() to csharpName]?.let { function ->
+    val namespace: String = classifier.extensionNamespaceOf(receiver.declaration, prop)
+    val key: Triple<String, String, String> =
+      Triple(namespace, receiverDeclaration.orEmpty(), csharpName)
+    extensionFunctionNames[key]?.let { function ->
       droppedReceivers.add(
         ForwardDroppedExtensionReceiver(
           symbol = "${prop.packageName.asString()}.$receiverName.$name",

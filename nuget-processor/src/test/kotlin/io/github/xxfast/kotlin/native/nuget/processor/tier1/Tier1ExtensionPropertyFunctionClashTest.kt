@@ -108,4 +108,124 @@ class Tier1ExtensionPropertyFunctionClashTest {
       "expected a fatal name collision; kspErrors=${result.kspErrors}",
     )
   }
+
+  private fun runSplit(sources: Map<String, String>): Tier1Result = Tier1Harness.run(
+    sources,
+    processorOptions = mapOf(
+      "nuget.rootPackage" to "tier1.extsplit",
+      "nuget.namespace" to "Split",
+    ),
+  )
+
+  /** The body of one `namespace X { ... }` block, up to the next top-level `namespace` header. */
+  private fun namespaceBlock(cs: String, namespace: String): String {
+    val header: String = "namespace $namespace\n"
+    assertContains(cs, header)
+    return cs.substringAfter(header).substringBefore("\nnamespace ")
+  }
+
+  private fun shadowWarnings(result: Tier1Result): List<String> =
+    result.kspWarnings.filter { it.contains("SHADOWED_BY_EXTENSION_FUNCTION") }
+
+  /**
+   * An unexported receiver homes `{Receiver}Extensions` on the DECLARING package (ADR-126), so a
+   * property in one package and a function in another render into two classes in two namespaces.
+   * A consumer importing one namespace sees no ambiguity, so both bind.
+   */
+  @Test
+  fun `an unexported-receiver pair in two packages binds both`() {
+    val result: Tier1Result = runSplit(
+      mapOf(
+        "A.kt" to """
+          package tier1.extsplit.a
+
+          val String.tag: Int get() = 1
+        """.trimIndent(),
+        "B.kt" to """
+          package tier1.extsplit.b
+
+          fun String.tag(): Int = 2
+        """.trimIndent(),
+      ),
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    assertEquals(
+      emptyList(),
+      shadowWarnings(result),
+      "two namespaces must not clash; kspWarnings=${result.kspWarnings}",
+    )
+    val csharp: String = result.generatedCSharp
+    val aBlock: String = namespaceBlock(csharp, "Split.A")
+    val bBlock: String = namespaceBlock(csharp, "Split.B")
+    assertContains(aBlock, "extension(string receiver)")
+    assertContains(aBlock, "public int Tag\n")
+    assertContains(bBlock, "public static int Tag(this string receiver)")
+    assertFalse(aBlock.contains("public static int Tag("), "function leaked into A: $aBlock")
+    assertFalse(bBlock.contains("public int Tag\n"), "property leaked into B: $bBlock")
+  }
+
+  /** The same pair in ONE package shares one class, so the ADR-188 skip stays. */
+  @Test
+  fun `an unexported-receiver pair in one package is still a named skip`() {
+    val result: Tier1Result = runSplit(
+      mapOf(
+        "A.kt" to """
+          package tier1.extsplit.a
+
+          val String.tag: Int get() = 1
+          fun String.tag(): Int = 2
+        """.trimIndent(),
+      ),
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    assertEquals(1, shadowWarnings(result).size, "kspWarnings=${result.kspWarnings}")
+    val aBlock: String = namespaceBlock(result.generatedCSharp, "Split.A")
+    assertContains(aBlock, "public static int Tag(this string receiver)")
+    assertFalse(aBlock.contains("public int Tag\n"), "property must be skipped: $aBlock")
+  }
+
+  /**
+   * An exported receiver homes `{Receiver}Extensions` on the RECEIVER's package, so a property and
+   * a function declared in two other packages still merge into one `CatExtensions`, where every
+   * `cat.Tag` is CS9339. The skip stays across packages.
+   */
+  @Test
+  fun `an exported-receiver pair in two packages is still a named skip`() {
+    val result: Tier1Result = runSplit(
+      mapOf(
+        "Cat.kt" to """
+          package tier1.extsplit.model
+
+          class Cat(val name: String)
+        """.trimIndent(),
+        "A.kt" to """
+          package tier1.extsplit.a
+
+          import tier1.extsplit.model.Cat
+
+          val Cat.tag: Int get() = 1
+        """.trimIndent(),
+        "B.kt" to """
+          package tier1.extsplit.b
+
+          import tier1.extsplit.model.Cat
+
+          fun Cat.tag(): Int = 2
+        """.trimIndent(),
+      ),
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val warning: List<String> = shadowWarnings(result)
+    assertEquals(1, warning.size, "kspWarnings=${result.kspWarnings}")
+    assertContains(warning.single(), "the extension function `tag`")
+    val modelBlock: String = namespaceBlock(result.generatedCSharp, "Split.Model")
+    assertContains(modelBlock, "public static int Tag(this global::Split.Model.Cat receiver)")
+    assertFalse(
+      result.generatedCSharp.contains("public int Tag\n"),
+      "property must be skipped: ${result.generatedCSharp}",
+    )
+  }
 }
