@@ -4,6 +4,12 @@
 handle through `SafeHandle`; explicit `Dispose()` is prompt release and GC finalization is fallback
 ([ADR-194](194-suspend-returning-flow.md)). The feature adds no cross-platform finalizer evidence.
 
+2026-10-03 amendment: a boxed element is owned by a `NugetKotlinHandle` before its wrapper factory
+runs, and the wrapper adopts that same handle, so a factory that throws before constructing a
+wrapper no longer leaks the box and a wrapper saved from a construct-then-throw factory still
+releases once ([ADR-120](120-live-stableref-counter-and-leak-harness.md), Amendment 3). Verified in
+the full verify; not run under NativeAOT.
+
 ## Status
 Accepted. Contract decided at the human gate on 2026-10-02; implemented on the same day. Corrected against the implementation and a spike when it moved to Accepted: the sketch's release call, the `Dispose()` shape, the Flow and StateFlow capture points, and the subscription token decision differ from the Proposed text.
 
