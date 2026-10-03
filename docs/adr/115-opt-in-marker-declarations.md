@@ -607,3 +607,27 @@ Pinned by `Tier1OptInMarkerExportTest` (waived member exports, unlisted control 
 generated Kotlin still compiles), `NugetPluginKspArgsWiringTest` (the argument threads and is empty
 when unset), and the `issue113/ExportMarkersSample.kt` fixture, whose `ExperimentalDiet` is the one
 marker `test-library` waives while every other marker in that package is not.
+
+## Amendment (2026-10-03): the invariant was broken on the ordinary-class callback routes
+
+Issue #121 fixed the property routes. The three hand-written callback method routes on an ordinary
+class (stored-callback pair, interface-bridge pair, per-call lambda member) had no marker filter, so
+the invariant above did not hold there until this amendment. Before it, with a marked member
+(**verified**, spiked and pinned by `Tier1OptInClassCallbackRouteTest`):
+
+- A marked stored pair and a marked interface-bridge pair were exported on both halves with no
+  warning.
+- A marked per-call lambda member was reported `SKIPPED_OPT_IN_MARKER` and exported anyway, under a
+  "Not generated" remark.
+- With a `Level.ERROR` marker the generated Kotlin failed to compile (three opt-in errors).
+
+Rule now: a pair is dropped if either half is marked, and both halves are named
+`SKIPPED_OPT_IN_MARKER` (the same `nameMarkedPair` that names an arm's pair, see
+[ADR-116](116-sealed-subclass-methods-on-the-callable-plan.md)'s 2026-10-03 amendment). A marked
+per-call lambda member is no longer exported; the planner's existing warning is its only name, so it
+is not named twice. The `Level.ERROR` case now compiles clean.
+
+Evidence, verified: four cells red before and all green after, including the `Level.ERROR` cell; a
+full `:nuget-processor:test` run of 1552 passed, 0 failed. No packaged fixture has a marked
+add/remove or lambda member, so the native pipeline was not run for this item. No `LeakTests` row:
+exports are removed and no handle route is added.
