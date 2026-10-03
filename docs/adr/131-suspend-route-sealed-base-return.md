@@ -91,7 +91,7 @@ Alternative 1, shipped as described. Scope:
   this ADR: the discriminated read is spelled exactly as relatively as every other suspend-route
   return); a `suspend fun` returning a collection of a sealed base (`List<Shape>`, ROADMAP Phase 6)
   is a **separate** mapping decision and was **not** folded in here, since it needs its own unwrap
-  in `legacyReturnCollectionKinds`/the collection element read, not this return-position rewrite;
+  in the collection element read (`legacyReturnCollectionKinds`, since deleted), not this return-position rewrite;
   Flow/StateFlow elements (ADR-123/124 own those, and `legacyFlowElementShape` is a separate
   function).
 
@@ -148,7 +148,7 @@ to `renderAsyncMethod`, `legacyBoxedResult`, or `resultRefExpression`.
   draft only inferred, now confirmed by the negative-control cell.
 - The `List<Shape>` suspend-return fold-in (ROADMAP Phase 6, formerly proposed as an in-scope item
   of this ADR) was **not attempted**: it needs `.sealedAsHandle()` applied inside
-  `legacyReturnCollectionKinds`/the collection element read, a different code path from the one this
+  the collection element read, a different code path from the one this
   ADR changed, and remains an open ROADMAP line.
 
 ### Fixture and tests, as shipped
@@ -192,6 +192,5 @@ Verify: `scripts/verify.sh` green, 1731 passed / 0 skipped / 0 failed (`Integrat
 - `LeakTests` baseline count moves by the three new rows (9e/9f/9g) only; no existing mint changes.
 - Still open, deliberately: `global::` qualification on the suspend route (ADR-118); the
   `List<Shape>` suspend-return fold-in (ROADMAP Phase 6); `legacyReturnCollectionKinds`'s
-  `else -> emptySequence()` branch (`ForwardLegacyRouteCollections.kt:~340`) has no test coverage on
-  the non-`Marshalled` path, a residual noticed while reading this feature's code but not exercised
-  by its fixture (ROADMAP Phase 4).
+  `else -> emptySequence()` coverage gap, which was superseded by ADR-127 (the helper had no caller
+  once the collection exports became unconditional) and deleted on 2026-10-03.
