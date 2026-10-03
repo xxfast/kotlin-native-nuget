@@ -172,3 +172,8 @@ Option 1, as decided, with these confirmed and added details.
   echo with a token hit, and a throwing element factory asserting a C# element is not disposed.
 - Deferred: `(List<Pet>) -> Unit` callback payloads (callback rule, unchanged), `BoundInterface`
   components (ADR-088), generic-interface components.
+
+## Amendment 2026-10-03: callback payloads
+
+The interface reachability walk also enters a lambda parameter's payload types; see the "interface and unsigned payload coverage"
+amendment to [ADR-160](160-callback-parameter-on-the-forward-plan.md).

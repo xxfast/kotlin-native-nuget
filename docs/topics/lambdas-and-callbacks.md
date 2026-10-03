@@ -145,7 +145,10 @@ Kotlin invokes it once per call and does not retain a reference afterwards; do n
 delegate passed here firing again later (use a stored callback, below, for that). A `kotlin.*`
 primitive parameter (`Int`, `Boolean`, `Byte`, `Double`, ...) crosses by value, not through a
 handle, so the callback body receives it directly with nothing to dispose; so does a primitive or
-`String` value the lambda itself returns. The member's own return can be a scalar, `String`, an
+`String` value the lambda itself returns. Unsigned primitives (`UInt`, `ULong`, `UByte`, `UShort`)
+cross the same way and keep their full range. A Kotlin interface is a supported payload even when
+no other member exposes it: the callback receives a live `I...` wrapper that you
+[own and dispose](#ownership-of-a-callback-payload). The member's own return can be a scalar, `String`, an
 exported object, its nullable twin, or an enum, the same set an ordinary method return supports.
 
 Passing `null` throws `ArgumentNullException` naming the Kotlin parameter, at the call site, before
