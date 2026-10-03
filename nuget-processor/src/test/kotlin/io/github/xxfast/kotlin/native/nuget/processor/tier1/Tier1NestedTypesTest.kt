@@ -59,8 +59,9 @@ class Tier1NestedTypesTest {
     """.trimIndent())
 
     assertTrue(result.compiledClean, "fixture must compile: ${result.compileErrors}")
-    val declarations = result.generatedCSharp.lineSequence()
-      .filterNot { it.trimStart().startsWith("///") }.joinToString("\n")
+    val declarations: String = result.generatedCSharp.lineSequence()
+      .filterNot { it.trimStart().startsWith("///") }
+      .joinToString("\n")
     assertFalse("record struct Tag" in declarations)
     assertFalse("class Child" in declarations)
     assertFalse("NestedSealed.Tag" in declarations, declarations)
