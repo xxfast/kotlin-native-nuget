@@ -164,7 +164,10 @@ class Tier1ReceiverShapesExtensionTest {
       "no fan-out receiver may warn; got: ${result.kspWarnings}",
     )
     val kotlin: String = requireNotNull(result.generated)
-    assertContains(kotlin, "(if (receiverHasValue) tier1.receiverfanoutkinds.Mood.entries[receiver]")
+    assertContains(
+      kotlin,
+      "(if (receiverHasValue) tier1.receiverfanoutkinds.Mood.entries[receiver]",
+    )
     assertContains(kotlin, "(if (receiverHasValue) tier1.receiverfanoutkinds.Dosage(receiver)")
     assertContains(kotlin, "(if (receiverHasValue) durationFromDotNetTicks(receiver)")
     assertContains(kotlin, "(if (receiverHasValue) instantFromDotNetTicks(receiver)")
