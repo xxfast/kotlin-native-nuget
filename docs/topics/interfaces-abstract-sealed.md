@@ -730,6 +730,18 @@ public abstract class Lounger : IDisposable, INugetHandle
 }
 ```
 
+When the unexported base only **redeclares** a property that an exported base further up already
+declares abstract, the re-homed member renders `abstract override`, so a concrete subclass binds to the
+single inherited slot. A property that is new on the unexported base stays plain `abstract`:
+
+```C#
+public abstract class RedefinedDinghy : RedefinedVessel // RedefinedSkiff in between is unexported
+{
+    public abstract override string Sail { get; }   // RedefinedVessel declares it too
+    public abstract string Rigging { get; }         // new on RedefinedSkiff
+}
+```
+
 A member the planner declines to plan, for example a generic interface default the type mapper
 cannot spell abstractly, or one whose own type has no C# declaration (a nested class never exported),
 is dropped from the generated class instead of rendered `abstract`, named on a build warning; an
