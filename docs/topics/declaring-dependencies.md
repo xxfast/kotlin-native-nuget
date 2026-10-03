@@ -66,11 +66,37 @@ dependency("TestDependency", version = "1.0.0") {
 See [The nuget {} DSL](nuget-dsl.md) for every `bind { }` property, its default, and whether it's
 required.
 
+## Binding a locally built package
+
+Set `source` to a directory of `.nupkg` files or to one `.nupkg` file to bind a package you built
+yourself. Relative paths resolve against the project directory.
+
+```kotlin
+dependency("Acme.Text", "1.2.0") { source = "../acme/artifacts"; bind { } }
+dependency("Acme.Local") { source = "../acme/bin/Release/Acme.Local.1.0.0.nupkg"; bind { } }
+```
+
+- A directory source needs a `version`; without one, restore fails with `NU1015`.
+- A `.nupkg` file source takes its id and version from the package. The `version` may be omitted; a different
+  `version` or id fails the build.
+- `file://` URLs are rejected; use a plain path.
+
+Rebuilding the package under the same version is picked up on the next build: a project with a
+local source restores into `build/nuget-interop/packages`, and the plugin refreshes the local
+packages there before each restore. If the restored package is not the one from your source (for
+example nuget.org serves the same id and version), the build fails naming the dependency and the
+path instead of binding the wrong assembly.
+
+A bound package restored from a local source is pinned at its version when you `packNuget`, so a
+consumer needs a feed that serves it.
+
+The path is read as plain text, so a task that builds the `.nupkg` in the same Gradle build is not
+run for you; add a `dependsOn` from `nugetRestore` if you need that.
+
 ## Limitations
 
 - A private feed is set per package with `source = "https://.../index.json"` inside `dependency()`;
   there's no extension-level shared feed list yet.
-- There's no local `.nupkg` or path-based dependency source yet, only registry resolution.
 
 <seealso>
     <category ref="related">

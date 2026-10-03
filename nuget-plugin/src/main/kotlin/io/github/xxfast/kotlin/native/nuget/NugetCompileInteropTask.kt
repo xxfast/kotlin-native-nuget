@@ -21,7 +21,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.inject.Inject
 
-private const val NUGET_ORG_FEED = "https://api.nuget.org/v3/index.json"
+internal const val NUGET_ORG_FEED = "https://api.nuget.org/v3/index.json"
 
 /**
  * ADR-138 amendment: an empty `global.json` beside the check's csproj. MSBuild takes the nearest
@@ -59,13 +59,9 @@ internal fun generateCheckCsproj(
   dependencyVersions: Map<String, String>,
   dependencySources: List<String>,
   targetFramework: String = DEFAULT_TARGET_FRAMEWORK,
+  packagesPath: String? = null,
 ): String {
-  val restoreSourcesLine: String = if (dependencySources.isEmpty()) {
-    ""
-  } else {
-    val urls: List<String> = (listOf(NUGET_ORG_FEED) + dependencySources).distinct()
-    "\n    <RestoreSources>${urls.joinToString(";")}</RestoreSources>"
-  }
+  val restoreSourcesLine: String = restoreLines(dependencySources, packagesPath)
 
   val compileItems: String = csFiles.joinToString("\n") { file ->
     """    <Compile Include="${file.absolutePath}" />"""
@@ -138,6 +134,12 @@ public abstract class NugetCompileInteropTask : DefaultTask() {
   @get:Input
   public abstract val targetFramework: Property<String>
 
+  // ADR-190: nugetRestore's project-local packages folder, set by the plugin only when a dependency
+  // declares a local source, so the check restores the same extracted copy. Never derived from
+  // [dependencySources]: the repo fixtures add an absolute directory there and stay global.
+  @get:Internal
+  public abstract val packagesDir: DirectoryProperty
+
   init {
     targetFramework.convention(DEFAULT_TARGET_FRAMEWORK)
   }
@@ -179,6 +181,7 @@ public abstract class NugetCompileInteropTask : DefaultTask() {
     csproj.writeText(
       generateCheckCsproj(
         csFiles, dependencyVersions.get(), dependencySources.get(), targetFramework.get(),
+        packagesDir.orNull?.asFile?.absolutePath,
       )
     )
 

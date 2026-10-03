@@ -1,8 +1,15 @@
 package io.github.xxfast.kotlin.native.nuget
 
+import java.io.File
+import java.nio.file.Files
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class NugetGenerateRestoreProjectTaskTest {
@@ -111,4 +118,121 @@ class NugetGenerateRestoreProjectTaskTest {
       "Duplicate custom source URL must appear only once but appeared $count times",
     )
   }
+
+  @Test
+  fun `a source is remote, a nupkg file or a directory`() {
+    assertIs<DependencySource.Remote>(classifySource("Acme", "https://feed/v3/index.json"))
+    assertIs<DependencySource.Package>(classifySource("Acme", "/libs/Acme.1.0.0.nupkg"))
+    assertIs<DependencySource.Directory>(classifySource("Acme", "/libs/artifacts"))
+  }
+
+  @Test
+  fun `a file url fails fast naming the dependency`() {
+    val error: IllegalArgumentException = assertFailsWith {
+      classifySource("Acme", "file:///libs/artifacts")
+    }
+
+    assertContains(error.message.orEmpty(), "Acme")
+    assertContains(error.message.orEmpty(), "plain path")
+  }
+
+  @Test
+  fun `a nupkg is staged under its nuspec id and version and the feed is synced`() {
+    val dir: File = Files.createTempDirectory("stage-local").toFile()
+    val nupkg: File = writeNupkg(File(dir, "bin/whatever.nupkg"), "Acme.Local", "1.2.0")
+    val feed = File(dir, "feed")
+    feed.mkdirs()
+    File(feed, "Gone.1.0.0.nupkg").writeText("stale")
+
+    val plan: LocalRestorePlan = stageLocalSources(
+      versions = emptyMap(),
+      sources = mapOf("Acme.Local" to nupkg.absolutePath, "Remote" to "https://feed"),
+      feedDir = feed,
+    )
+
+    assertEquals(setOf("Acme.Local.1.2.0.nupkg"), feed.list().orEmpty().toSet())
+    assertEquals(mapOf("Acme.Local" to "1.2.0"), plan.versions)
+    assertEquals(
+      mapOf("Acme.Local" to feed.absolutePath, "Remote" to "https://feed"),
+      plan.sources,
+    )
+  }
+
+  @Test
+  fun `a declared version that differs from the nupkg fails naming both`() {
+    val dir: File = Files.createTempDirectory("stage-version").toFile()
+    val nupkg: File = writeNupkg(File(dir, "Acme.nupkg"), "Acme", "1.2.0")
+
+    val error: IllegalArgumentException = assertFailsWith {
+      stageLocalSources(
+        mapOf("Acme" to "9.9.9"), mapOf("Acme" to nupkg.absolutePath), File(dir, "feed"),
+      )
+    }
+
+    assertContains(error.message.orEmpty(), "9.9.9")
+    assertContains(error.message.orEmpty(), "1.2.0")
+    assertContains(error.message.orEmpty(), nupkg.absolutePath)
+  }
+
+  @Test
+  fun `a nupkg whose id differs from the dependency fails`() {
+    val dir: File = Files.createTempDirectory("stage-id").toFile()
+    val nupkg: File = writeNupkg(File(dir, "Other.nupkg"), "Other", "1.0.0")
+
+    val error: IllegalArgumentException = assertFailsWith {
+      stageLocalSources(emptyMap(), mapOf("Acme" to nupkg.absolutePath), File(dir, "feed"))
+    }
+
+    assertContains(error.message.orEmpty(), "'Acme'")
+    assertContains(error.message.orEmpty(), "'Other'")
+  }
+
+  @Test
+  fun `a missing local path fails naming the dependency and the resolved path`() {
+    val dir: File = Files.createTempDirectory("stage-missing").toFile()
+    val missing = File(dir, "nope")
+
+    val error: IllegalArgumentException = assertFailsWith {
+      stageLocalSources(emptyMap(), mapOf("Acme" to missing.absolutePath), File(dir, "feed"))
+    }
+
+    assertContains(error.message.orEmpty(), "'Acme'")
+    assertContains(error.message.orEmpty(), missing.absolutePath)
+  }
+
+  @Test
+  fun `a packages path is rendered as RestorePackagesPath and paths are xml escaped`() {
+    val csproj: String = generateCsproj(
+      ids = listOf("Acme"),
+      versions = emptyMap(),
+      sources = mapOf("Acme" to "/a&b/feed"),
+      targetFramework = "net8.0",
+      rids = listOf("osx-arm64"),
+      packagesPath = "/a&b/packages",
+    )
+
+    assertContains(csproj, "<RestoreSources>https://api.nuget.org/v3/index.json;/a&amp;b/feed")
+    assertContains(csproj, "<RestorePackagesPath>/a&amp;b/packages</RestorePackagesPath>")
+  }
+}
+
+/** A minimal `.nupkg`: a zip with `<id>.nuspec` at its root, which is all the plugin reads. */
+internal fun writeNupkg(file: File, id: String, version: String): File {
+  file.parentFile.mkdirs()
+  ZipOutputStream(file.outputStream()).use { zip ->
+    zip.putNextEntry(ZipEntry("$id.nuspec"))
+    val nuspec = """
+      |<?xml version="1.0" encoding="utf-8"?>
+      |<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
+      |  <metadata>
+      |    <id>$id</id>
+      |    <version>$version</version>
+      |    <dependencies><dependency id="Dep" version="1.0.0" /></dependencies>
+      |  </metadata>
+      |</package>
+    """.trimMargin()
+    zip.write(nuspec.toByteArray())
+    zip.closeEntry()
+  }
+  return file
 }

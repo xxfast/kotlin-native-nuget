@@ -365,7 +365,7 @@ Inside the trailing block, `NugetDependency` exposes:
 | Property / function | Type | Required | Notes |
 |---|---|---|---|
 | `version` | `Property<String>` | no | same as the `version` parameter; settable inside the block instead of passing it positionally |
-| `source` | `Property<String>` | no | an extra NuGet feed URL, added to `<RestoreSources>` alongside `api.nuget.org`, for a private/internal feed |
+| `source` | `Property<String>` | no | where to restore from: a feed URL (added to `<RestoreSources>` alongside `api.nuget.org`), a directory of `.nupkg` files (needs `version`), or one `.nupkg` file (id and version read from the package; a differing `version` fails). A same-version rebuild of a local source is picked up, and the build fails if the restored package is not the local one. See [Declaring dependencies](declaring-dependencies.md#binding-a-locally-built-package) |
 | `bind { }` | function, configures `NugetBindConfig` | no | omit to resolve the dependency without generating any Kotlin bindings for it |
 
 ```kotlin

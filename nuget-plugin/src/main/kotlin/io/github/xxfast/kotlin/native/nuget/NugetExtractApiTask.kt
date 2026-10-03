@@ -43,7 +43,8 @@ public abstract class NugetExtractApiTask : DefaultTask() {
         if (!File(path).exists()) {
           throw GradleException(
             "[nuget] DLL not found at '$path' (package '$packageId'). " +
-              "The global NuGet cache may have been cleared. " +
+              "The packages folder it was restored into (the global NuGet cache, or " +
+              "build/nuget-interop/packages for a local source) may have been cleared. " +
               "Re-run ${NugetTaskNames.RESTORE} to re-download."
           )
         }

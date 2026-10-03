@@ -519,6 +519,7 @@ The task names follow the `nuget*` prefix convention established in the synthesi
 **Deferred:**
 - Local path / `.nupkg` file source (`source = file("...")`) for the KMMBridge-style local-vs-
   published dev loop (synthesis D6; tracked under Pre-Launch Checklist).
+  See [ADR-190](190-local-nupkg-dependency-source.md): `source` accepts a directory or a `.nupkg` path (a plain string, not `file(...)`).
 - Extension-level custom feed URL applied to all dependencies (a `sources { url("...") }` block
   at the `nuget {}` root); v1 supports per-dependency `source` only.
 - Multiple `bind {}` calls per dependency (multiple namespace groups with distinct `packageName`

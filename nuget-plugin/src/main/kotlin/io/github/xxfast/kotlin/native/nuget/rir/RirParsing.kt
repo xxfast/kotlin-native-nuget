@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.rir
 
+import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -122,3 +123,18 @@ private data class AssetsProject(
 private data class AssetsRestore(
   val packagesPath: String,
 )
+
+/**
+ * ADR-190: the extracted folder of each of [packageIds] (case-insensitive), from
+ * `project.restore.packagesPath` and `libraries[key].path`, the same pair [deriveDllPaths] uses.
+ */
+internal fun derivePackageFolders(assetsJson: String, packageIds: Set<String>): Map<String, File> {
+  val assets: AssetsFile = json.decodeFromString(assetsJson)
+  val idLookup: Map<String, String> = packageIds.associateBy { it.lowercase() }
+  return assets.libraries.entries
+    .mapNotNull { (key, library) ->
+      val id: String = idLookup[key.substringBefore("/").lowercase()] ?: return@mapNotNull null
+      id to File(assets.project.restore.packagesPath, library.path)
+    }
+    .toMap()
+}

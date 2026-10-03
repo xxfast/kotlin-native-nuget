@@ -17,6 +17,12 @@ public abstract class NugetDependency @Inject constructor(
   public val id: String get() = name
 
   public abstract val version: Property<String>
+
+  /**
+   * Where to restore this package from: a feed URL, a directory of `.nupkg` files, or one `.nupkg`
+   * file (ADR-190). Paths resolve against the project directory. A local source restores into
+   * `build/nuget-interop/packages`, and a rebuilt package with the same version is picked up.
+   */
   public abstract val source: Property<String>
 
   public val bind: NugetBindConfig = objects.newInstance(NugetBindConfig::class.java)
