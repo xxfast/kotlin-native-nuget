@@ -37,9 +37,11 @@ import test.menagerie.IFeedable
  *  - [longestName] and [feedingNote] are the two receivers that **mint a handle** for the crossing
  *    (a Kotlin list StableRef, and a GCHandle over the C#-side object), so both get a leak row.
  *
- * Refused on purpose, and deliberately NOT declared here: `Int?`, `Mood?`, `Instant?`, `Duration?`
- * and a nullable value class over a primitive or enum underlying. Each fans out to an adjacent
- * `HasValue` slot, the receiver slot is exactly one, and admitting them would silently lose null.
+ * Refused on purpose at the PROPERTY position, and deliberately NOT declared as properties here:
+ * `Int?`, `Mood?`, `Instant?`, `Duration?` and a nullable value class over a primitive or enum
+ * underlying. Each fans out to an adjacent `HasValue` slot, and the property route's receiver slot
+ * is exactly one. The extension-FUNCTION route binds them (ADR-132 amendment): see the has-value
+ * fan-out section at the bottom of this file.
  *
  * Oreo files his paperwork; Mylo naps through his.
  */
@@ -138,3 +140,38 @@ val List<String>.longestName: String get() = maxByOrNull { it.length } ?: "(empt
  * fired. The receiver crosses as a fresh GCHandle the Kotlin side takes ownership of.
  */
 val IFeedable.feedingNote: String get() = "${describe()} needs ${legs} bowls"
+
+// ---- has-value fan-out receivers (extension FUNCTIONS) -------------------------------------
+
+/** A value class over a primitive: how many naps Mylo got through today. */
+value class NapCount(val naps: Int)
+
+/** A value class over an enum: the mood ring on Oreo's collar. */
+value class MoodRing(val mood: Mood)
+
+/** `Int?` receiver: a cat with no lives on file has none. */
+fun Int?.orNoLives(): Int = this ?: 0
+
+/**
+ * The ADR-095 overload pair: a non-null and a nullable receiver of one name. A null crossing has
+ * to reach the nullable one with a real `null`; a dropped flag would answer `lives:0` instead.
+ */
+fun Int.describeLives(): String = "lives:$this"
+
+/** The nullable half of the pair. */
+fun Int?.describeLives(): String = "lives?:$this"
+
+/** `Mood?` receiver: no mood reported, just a shrug. */
+fun Mood?.moodOrShrug(): String = this?.name ?: "shrug"
+
+/** `Instant?` receiver: never seen at the flap means the epoch. */
+fun Instant?.lastSeenOrEpoch(): Instant = this ?: Instant.fromEpochSeconds(0)
+
+/** `Duration?` receiver: no nap logged is a zero-length nap. */
+fun Duration?.napOrNone(): Duration = this ?: Duration.ZERO
+
+/** `NapCount?` receiver, over a primitive underlying: -1 when nobody counted. */
+fun NapCount?.napsOrNone(): Int = this?.naps ?: -1
+
+/** `MoodRing?` receiver, over an enum underlying: no ring, no reading. */
+fun MoodRing?.ringMood(): String = this?.mood?.name ?: "no ring"

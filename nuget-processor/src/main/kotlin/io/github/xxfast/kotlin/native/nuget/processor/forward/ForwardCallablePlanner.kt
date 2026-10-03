@@ -103,11 +103,11 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
   THROWABLE(droppedFromCSharp = true),
   NULLABLE(droppedFromCSharp = true),
 
-  /** ADR-132: an extension receiver whose wire is the ADR-079/080 adjacent `HasValue` + value
-   *  PAIR (`fun Int?.x()`, `fun Dosage?.x()`). Every other admitted receiver shape now lowers
-   *  exactly like a parameter; this one cannot, because the plan model allows a single
-   *  RECEIVER-role slot and it must come first. A genuine drop, named rather than crashing plan
-   *  validation. */
+  /** ADR-132: an extension PROPERTY receiver whose wire is the ADR-079/080 adjacent `HasValue` +
+   *  value PAIR (`val Int?.x`, `val Dosage?.x`): the property plan's receiver is exactly one slot.
+   *  Only the extension-property route records it; the extension-FUNCTION route binds the same
+   *  receivers since the ADR-132 amendment, carrying the pair as
+   *  `ForwardPublicSignature.receiver`. */
   RECEIVER_FAN_OUT(droppedFromCSharp = true),
 
   /** An extension property shadowed by a member property of the same name on its receiver type
@@ -2310,27 +2310,9 @@ internal class ForwardCallablePlanner(
         .nameUnroutedPosition { false }
     }
 
-    // ADR-132: a receiver whose wire is the ADR-079/080 adjacent `receiverHasValue` + `receiver`
-    // PAIR is a named drop, not a plan. `validateRoles` requires at most one RECEIVER-role slot,
-    // and it must be first; `nativeInputParameters` marks only the *value* half of a fan-out with
-    // the caller's role, so such a receiver lands its RECEIVER slot at index 1 and fails plan
-    // validation outright (an exception out of the processor, not a diagnostic). Supporting it
-    // needs a multi-slot receiver in the model, which no fixture asks for; until then it is
-    // dropped by name rather than crashing the build.
-    val wireReceiverType: BridgeType = receiverType.sealedAsHandle()
-    if (wireReceiverType.isHasValueFanOutInput()) {
-      return ForwardCallableCatalogEntry.Skipped(
-        symbol, ForwardPlanSkipReason.RECEIVER_FAN_OUT, node = function,
-        // ADR-064 amendment (2026-09-20): the rendered receiver type, which the reason's own
-        // sentence and hint name. The symbol cannot supply it (an extension symbol is
-        // receiver-agnostic by ADR-095), so without this slot the message named no type at all.
-        detail = wireReceiverType.diagnosticTypeName(),
-        // The receiver is input zero, which is what the kind already says; carried so the two
-        // agree rather than relying on the fixed mapping.
-        position = ForwardSkipPosition.INPUT,
-      )
-    }
-
+    // ADR-132 amendment: a receiver whose wire is the ADR-079/080 adjacent `receiverHasValue` +
+    // `receiver` PAIR plans like any other; the plan carries it as its public receiver parameter
+    // (nullable type plus minted flag slot), see `ForwardPublicSignature.receiver`.
     return planOrSkip(
       symbol = symbol,
       publicName = function.declaredCSharpName()
@@ -2448,7 +2430,9 @@ internal class ForwardCallablePlanner(
     // ADR-164: whether a per-call lambda can ride the PRESENCE encoding. False where the lambda
     // would be stored past the call (a constructor, `copy`), which ADR-160 forbids.
     presence: Boolean = false,
-  ): ForwardWidening = widenDeclared(declared, defaults, presence).withDerivedNames()
+    // ADR-132 amendment: the value receiver, whose has-value flag is minted in the same pool.
+    receiver: Pair<String, BridgeType>? = null,
+  ): ForwardWidening = widenDeclared(declared, defaults, presence).withDerivedNames(receiver)
 
   /**
    * The generator names derived from each public parameter's name, minted here once and carried on
@@ -2465,10 +2449,23 @@ internal class ForwardCallablePlanner(
    * Only a name a parameter actually uses is minted, so an unused spelling can never push a used
    * one off its unrenamed form.
    */
-  private fun ForwardWidening.withDerivedNames(): ForwardWidening {
+  private fun ForwardWidening.withDerivedNames(
+    receiver: Pair<String, BridgeType>?,
+  ): ForwardWidening {
     val users: Set<String> = parameters.map { parameter -> parameter.name }.toSet()
     val kotlin: MutableSet<String> = (users + PLAN_OWNED_NAMES).toMutableSet()
     fun MutableSet<String>.mint(base: String): String = freshName(base, this).also { add(it) }
+    // ADR-132 amendment: the receiver's flag is minted first, so no parameter's derived name can
+    // move it, and from the same pool, so a user parameter spelled `receiverHasValue` keeps its
+    // name and the flag moves instead. Nothing is reserved library-wide.
+    val publicReceiver: ForwardPublicParameter? = receiver?.let { (name, type) ->
+      val flag: String = "${name}HasValue"
+      ForwardPublicParameter(
+        name = name,
+        type = type,
+        hasValueSlot = if (type.isHasValueFanOutInput()) kotlin.mint(flag) else flag,
+      )
+    }
     val slotted: List<ForwardPublicParameter> = parameters.map { parameter ->
       val callback: Boolean = parameter.type is BridgeType.Callback
       parameter.copy(
@@ -2516,7 +2513,7 @@ internal class ForwardCallablePlanner(
     }
     val hasDefault: Boolean = parameters.any { parameter -> parameter.default != null }
     val dispatchMask: String = if (hasDefault) kotlin.mint("mask") else "mask"
-    return copy(parameters = named, dispatchMask = dispatchMask)
+    return copy(parameters = named, dispatchMask = dispatchMask, receiver = publicReceiver)
   }
 
   private fun widenDeclared(
@@ -2700,6 +2697,7 @@ internal class ForwardCallablePlanner(
       parameters.map { (name, type) -> name to type.sealedAsHandle() },
       defaults,
       presence = origin !in STORED_CALLBACK_ORIGINS,
+      receiver = (receiver as? ForwardReceiver.Value)?.let { value -> value.name to value.type },
     )
     if (widening.marked != null) {
       return ForwardCallableCatalogEntry.Skipped(
@@ -2808,7 +2806,8 @@ internal class ForwardCallablePlanner(
     }
 
     val error: ForwardAbiParameter? = if (includeError) errorParameter() else null
-    val nativeParameters: List<ForwardAbiParameter> = receiverParameter(receiver) +
+    val nativeParameters: List<ForwardAbiParameter> =
+      receiverParameter(receiver, widening.receiver) +
         publicParameters.flatMap { parameter -> nativeInputParameters(parameter) } +
         resultShape.extraParameters + listOfNotNull(error)
     val nativeCall = ForwardNativeCall(
@@ -2882,6 +2881,7 @@ internal class ForwardCallablePlanner(
         isVirtual = isVirtual,
         doc = doc.forPublic(publicParameters),
         dispatchMask = widening.dispatchMask,
+        receiver = widening.receiver,
       ),
       evaluation = ForwardEvaluation.EXACTLY_ONCE,
       nativeExports = listOf(nativeCall),
@@ -2951,8 +2951,8 @@ internal class ForwardCallablePlanner(
     type: BridgeType,
     role: ForwardAbiRole = ForwardAbiRole.USER,
     // The planner-minted name of the fan-out's BOOLEAN slot
-    // (`ForwardPublicParameter.hasValueSlot`). Only a receiver takes the default, and ADR-132
-    // drops every receiver that would fan out.
+    // (`ForwardPublicParameter.hasValueSlot`); a value receiver passes its own minted one too
+    // (ADR-132 amendment), so the default is only the unrenamed spelling.
     hasValueSlot: String = "${name}HasValue",
     // Likewise `ForwardPublicParameter.callbackPtrSlot` / `callbackUserDataSlot`.
     callbackSlots: List<String> = listOf("${name}Ptr", "${name}UserData"),
@@ -3890,7 +3890,11 @@ internal class ForwardCallablePlanner(
     return ForwardReceiver.Handle(BridgeType.ObjectHandle(outer), name = "outer")
   }
 
-  private fun receiverParameter(receiver: ForwardReceiver): List<ForwardAbiParameter> = when (receiver) {
+  private fun receiverParameter(
+    receiver: ForwardReceiver,
+    // ADR-132 amendment: the planner's public receiver, carrying the minted has-value flag name.
+    publicReceiver: ForwardPublicParameter?,
+  ): List<ForwardAbiParameter> = when (receiver) {
     is ForwardReceiver.Handle -> listOf(
       ForwardAbiParameter(
         name = receiver.name,
@@ -3910,6 +3914,7 @@ internal class ForwardCallablePlanner(
 
     is ForwardReceiver.Value -> nativeInputParameters(
       receiver.name, receiver.type, ForwardAbiRole.RECEIVER,
+      hasValueSlot = publicReceiver?.hasValueSlot ?: "${receiver.name}HasValue",
     )
     ForwardReceiver.Static -> emptyList()
   }
@@ -4949,6 +4954,8 @@ internal data class ForwardWidening(
   val marked: String? = null,
   /** The ADR-164 dispatcher's bitmask local, minted beside [parameters]' derived names. */
   val dispatchMask: String = "mask",
+  /** ADR-132 amendment: the value receiver, its has-value flag minted beside [parameters]'. */
+  val receiver: ForwardPublicParameter? = null,
 )
 
 private enum class ForwardDefaultRole(val isWidened: Boolean) {
