@@ -26,6 +26,47 @@ import kotlin.test.assertTrue
  */
 class Tier1AbstractUnexportedBasePropertyTest {
 
+  @Test
+  fun `a dropped intermediate abstract redeclaration overrides the kept property slot`() {
+    val result = Tier1Harness.run(
+      mapOf(
+        "Skiff.kt" to """
+          package tier1.hiddenyard
+          import tier1.dock.Vessel
+          abstract class Skiff : Vessel() {
+            abstract override val sail: String
+            abstract override var height: Int
+            abstract val rigging: String
+          }
+        """.trimIndent(),
+        "Dock.kt" to """
+          package tier1.dock
+          import tier1.hiddenyard.Skiff
+          abstract class Vessel {
+            abstract val sail: String
+            abstract var height: Int
+          }
+          abstract class Dinghy : Skiff()
+          class Rowboat : Dinghy() {
+            override val sail: String = "canvas"
+            override var height: Int = 3
+            override val rigging: String = "rope"
+          }
+        """.trimIndent(),
+      ),
+      processorOptions = mapOf("nuget.rootPackage" to "tier1.dock"),
+    )
+
+    assertTrue(result.compiledClean, "fixture must compile: ${result.compileErrors}")
+    val dinghy: String = result.generatedCSharp
+      .substringAfter("abstract class Dinghy")
+      .substringBefore("class Rowboat")
+    assertContains(dinghy, "public abstract override string Sail { get; }")
+    assertContains(dinghy, "public abstract override int Height { get; set; }")
+    assertContains(dinghy, "public abstract string Rigging { get; }")
+    assertFalse("class Skiff" in result.generatedCSharp)
+  }
+
   // Two files: a Kotlin file declares one package, and the base class must live in a package
   // OUTSIDE the export root. `tier1.hiddenroost` is a sibling of `tier1.nester`, not a subpackage,
   // so no rootPackage prefix match can pull it into the export set.
