@@ -135,6 +135,12 @@ cat.HomeLabel(); // "Oreo's basket"
 cat.HomeTag;     // "Oreo's tag"
 ```
 
+The clash is per generated C# extension class. On an exported receiver such as `Cat`, extensions
+from every package merge into one `CatExtensions`, so the skip applies across packages. On an
+unexported receiver such as `String`, each package gets its own `StringExtensions`, so a property
+and a function of the same name in different packages both bind. A file that imports both
+namespaces gets CS9339 on the property syntax; call `A.StringExtensions.get_Tag(s)` instead.
+
 Two extension properties with the same C# name on the same receiver are a build error
 (`ERROR_CSHARP_SIGNATURE_COLLISION`); rename one with `@CSharpName`.
 
