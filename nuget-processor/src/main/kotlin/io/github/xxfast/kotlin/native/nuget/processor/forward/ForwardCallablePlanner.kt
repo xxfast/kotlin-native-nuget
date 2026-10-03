@@ -3691,10 +3691,11 @@ internal class ForwardCallablePlanner(
     // ordinal step replaced by `.code`. `valueOut` carries Primitive(USHORT), so it renders as a
     // blittable `out ushort` and Kotlin writes through a `UShortVar` (kotlinx.cinterop has no
     // `CharVar`). Deliberately NOT an `out char`: a BARE `out char` marshals one ANSI byte and
-    // silently corrupts every non-ASCII character ('e-acute' to U+FFFD), and while
-    // `[MarshalAs(UnmanagedType.U2)] out char` measures correct on JIT it is unverified under
-    // NativeAOT and would need a second arm in `outParameterMarshalPrefix`. `ushort` is blittable
-    // by construction and reuses the Enum `valueOutTransferType()` path unchanged.
+    // silently corrupts non-ASCII characters on both runtimes ('e-acute' to U+FFFD on JIT, the
+    // high byte of anything above U+00FF lost on NativeAOT). `[MarshalAs(UnmanagedType.U2)] out
+    // char` measures correct on JIT and NativeAOT alike, but would need a second arm in
+    // `outParameterMarshalPrefix`. `ushort` is blittable by construction and reuses the Enum
+    // `valueOutTransferType()` path unchanged.
     BridgeType.Char -> ForwardResultShape(
       wireType = ForwardAbiWireType.BOOLEAN,
       transfer = ForwardTransfer(

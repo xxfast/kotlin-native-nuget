@@ -6,7 +6,7 @@ namespace AotSmokeTest;
 /// <summary>
 /// ADR-102 proof-of-done lane. One step per forward callback shape - every one of them makes
 /// Kotlin call back into managed code, which today needs a runtime-built native-to-managed thunk.
-/// Under the JIT all five pass (the same paths IntegrationTests covers); the question this app
+/// Under the JIT all seven pass (the same paths IntegrationTests covers); the question this app
 /// exists to answer is what happens with no JIT at all:
 ///
 ///     dotnet publish AotSmokeTest -r win-x64 -c Release -p:PublishAot=true
@@ -14,7 +14,11 @@ namespace AotSmokeTest;
 ///
 /// Every step is labelled and flushed BEFORE it runs, because an AOT failure in a native->managed
 /// frame can be process-fatal (ExecutionEngineException / FailFast) and unwind nothing: the last
-/// flushed label is then the per-shape evidence. Exit code 0 only if all five report PASS.
+/// flushed label is then the per-shape evidence. Exit code 0 only if all seven report PASS.
+///
+/// Step 7 is not a callback: it is the ADR-098 `Char` wire (by-value U2 and the `Char?`
+/// `out ushort` slot), on this lane because the .NET marshaller's `char` handling differs between
+/// the JIT and NativeAOT, so a JIT-only measurement does not cover a `PublishAot` consumer.
 ///
 /// Cast: Oreo (black with a white middle, drama king at dinner) and Mylo (brown and creamy, treat
 /// vacuum), plus Rex the C#-implemented dog, who exists only to be dispatched back into.
@@ -30,15 +34,16 @@ internal static class Program
         Console.Out.Flush();
 
         // Measure exact counters before callbacks can leave asynchronous cleaner work behind.
-        await Step("1/6 coexistence  (Oreo and Mylo have separate native runtimes)", CoexistenceStep);
-        await Step("2/6 flow          (Oreo narrates dinner)", FlowStep);
-        await Step("3/6 suspend       (greeting Oreo asynchronously)", SuspendStep);
-        await Step("4/6 percall-lambda(describing Oreo through a C# lambda)", PerCallLambdaStep);
-        await Step("5/6 stored-cb     (Mylo's mood listener)", StoredCallbackStep);
-        await Step("6/6 iface-bridge  (Rex the C# dog crosses into Kotlin)", InterfaceBridgeStep);
+        await Step("1/7 coexistence  (Oreo and Mylo have separate native runtimes)", CoexistenceStep);
+        await Step("2/7 flow          (Oreo narrates dinner)", FlowStep);
+        await Step("3/7 suspend       (greeting Oreo asynchronously)", SuspendStep);
+        await Step("4/7 percall-lambda(describing Oreo through a C# lambda)", PerCallLambdaStep);
+        await Step("5/7 stored-cb     (Mylo's mood listener)", StoredCallbackStep);
+        await Step("6/7 iface-bridge  (Rex the C# dog crosses into Kotlin)", InterfaceBridgeStep);
+        await Step("7/7 char-wire     (Mylo's Hangul name tag, by value and Char?)", CharWireStep);
 
         Console.WriteLine(_failures == 0
-            ? "== ALL 6 SHAPES PASS =="
+            ? "== ALL 7 SHAPES PASS =="
             : $"== {_failures} SHAPE(S) FAILED ==");
         Console.Out.Flush();
         return _failures == 0 ? 0 : 1;
@@ -173,6 +178,50 @@ internal static class Program
         Expect(interview == "Rex says: Woof!", $"interview returned '{interview}'");
         return Task.CompletedTask;
     }
+
+    // Shape 7: the ADR-098 Char wire with no JIT. Every non-null payload is above U+00FF on
+    // purpose: under NativeAOT a bare (unattributed) `char` widens one byte and so reads Latin-1
+    // back correctly, while '한' (U+D55C) still loses its high byte. U+D55C also has the top bit
+    // set, so a signed 16-bit slot where the wire wants `ushort` cannot pass either.
+    private static Task CharWireStep()
+    {
+        // Char? property, both directions: Mylo's tag starts blank, gets his Hangul initial, and
+        // is wiped again (null after non-null catches a setter that ignores the has-value flag).
+        using var tag = new TestLibrary.Clinic.Tag(null);
+        Expect(tag.Initial == null, $"blank tag reads {Describe(tag.Initial)}");
+        tag.Initial = '한';
+        Expect(tag.Initial == '한', $"Char? property reads {Describe(tag.Initial)}");
+        tag.Initial = null;
+        Expect(tag.Initial == null, $"wiped tag reads {Describe(tag.Initial)}");
+
+        // Char? parameter and return in one call: the has-value pair plus the `out ushort` slot.
+        Expect(tag.Echo(null) == null, $"Echo(null) is {Describe(tag.Echo(null))}");
+        char? echoed = tag.Echo('한');
+        Expect(echoed == '한', $"Echo('한') is {Describe(echoed)}");
+
+        // By-value `[MarshalAs(U2)] char` parameter and `[return: U2]` char return.
+        using var oreo = new TestLibrary.Clinic.Patient("Oreo");
+        string engraved = oreo.Tag('한');
+        Expect(engraved == "한-Oreo", $"Tag('한') engraved '{engraved}'");
+        using var mylo = new TestLibrary.Clinic.Patient("한마일로");
+        char initial = mylo.Initial();
+        Expect(initial == '한', $"Initial() is {Describe(initial)}");
+
+        // By-value char at the property-getter position, and the List<Char> read
+        // (nuget_wrap_char's element wire), both on fixtures that already exist.
+        using var readings = new TestLibrary.Clinic.Readings();
+        char glyph = readings.Glyph;
+        Expect(glyph == 'Ω', $"Glyph is {Describe(glyph)}");
+        IReadOnlyList<char> marks = readings.Marks();
+        Expect(marks.Count == 2 && marks[0] == 'é' && marks[1] == '日',
+            $"Marks() is [{string.Join(", ", marks.Select(mark => Describe(mark)))}]");
+        return Task.CompletedTask;
+    }
+
+    /// <summary>The observed UTF-16 code unit as hex, so a failure tells a truncated high byte
+    /// (U+005C for '한') apart from a lost character (U+FFFD).</summary>
+    private static string Describe(char? value) =>
+        value is char c ? $"U+{(int)c:X4}" : "null";
 
     private sealed class Dog : IPet
     {
