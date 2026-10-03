@@ -144,6 +144,6 @@ reaches C#. Nothing about discrimination, enum ordinals, or value-class unwrappi
   [Documentation comments](documentation-comments.md#expectactual).
 - `expect annotation class` never binds; there is no C# projection of a Kotlin annotation class
   regardless of `expect`/`actual`.
-- Two packaged targets can legitimately produce different C# if their actuals diverge beyond the
-  expect's contract, but a package ships only one target's generated API surface; nothing diffs the
-  two.
+- Packaged targets must produce the same generated C# and native contract. `packNuget` compares
+  them and fails with the differences when their `actual` declarations diverge; see
+  [Publish a Kotlin/Native library as NuGet](publish-kotlin-library-as-nuget.md#one-package-for-every-platform).

@@ -43,6 +43,12 @@ public abstract class PackNugetTask : DefaultTask() {
   @get:Input
   public abstract val nativeLibDirs: MapProperty<String, String>
 
+  @get:Input
+  public abstract val localContractDirs: MapProperty<String, String>
+
+  @get:InputFiles
+  public abstract val contractFiles: ConfigurableFileCollection
+
   @get:InputFiles
   public abstract val nativeLibFiles: ConfigurableFileCollection
 
@@ -72,6 +78,7 @@ public abstract class PackNugetTask : DefaultTask() {
 
   init {
     targetFramework.convention(DEFAULT_TARGET_FRAMEWORK)
+    localContractDirs.convention(emptyMap())
   }
 
   @get:OutputDirectory
@@ -117,6 +124,22 @@ public abstract class PackNugetTask : DefaultTask() {
         "disabled on this host and no prebuiltRuntimes is set. Build on a host that can link " +
         "one, or set nuget { publish { prebuiltRuntimes = ... } }."
     }
+    nativeLibDirs.get().forEach { (rid, path) ->
+      val dir = File(path)
+      val libs = nativeLibsIn(dir)
+      check(libs.isNotEmpty()) { "No native library (.dll, .dylib, .so) found for RID '$rid' in ${dir.absolutePath}. The link task produced nothing to pack." }
+      validateNativeLibs(id, rid, dir, libs)
+    }
+    val producers: List<ForwardPackageProducer> = forwardPackageProducers(
+      nativeLibDirs.get(), localContractDirs.get(), prebuiltRuntimesDir.orNull?.asFile,
+    )
+    producers.filter { it.rid !in nativeLibDirs.get() }.forEach { producer ->
+      val dir = File(producer.directory, "native")
+      val libs = nativeLibsIn(dir)
+      require(libs.isNotEmpty()) { "Prebuilt RID '${producer.rid}' contributes no native library in ${dir.absolutePath}. Expected <prebuiltRuntimes>/<rid>/native/." }
+      validateNativeLibs(id, producer.rid, dir, libs)
+    }
+    validateForwardPackageContracts(producers)
     val outDir: File = outputDir.get().asFile
 
     val nupkgDir = File(outDir, "$id.$version")
@@ -143,12 +166,21 @@ public abstract class PackNugetTask : DefaultTask() {
     }
 
     stagePrebuiltRuntimes(nupkgDir, localRids)
+    producers.forEach { producer ->
+      val dir = File(nupkgDir, "runtimes/${producer.rid}")
+      dir.mkdirs()
+      listOf("ForwardAbi.json", "Interop.cs").forEach { name ->
+        File(producer.directory, name).copyTo(File(dir, name), overwrite = true)
+      }
+    }
 
     val tfm: String = targetFramework.get()
     val contentDir = File(nupkgDir, "contentFiles/cs/$tfm")
     contentDir.mkdirs()
 
-    val csFiles: List<File> = generatedCsFiles(generatedCsDirs.files)
+    val csFiles: List<File> = generatedCsFiles(generatedCsDirs.files).filter {
+      producers.isEmpty() || it.name != "Interop.cs"
+    } + producers.take(1).map { File(it.directory, "Interop.cs") }
 
     for (csFile in csFiles) {
       csFile.copyTo(File(contentDir, csFile.name), overwrite = true)

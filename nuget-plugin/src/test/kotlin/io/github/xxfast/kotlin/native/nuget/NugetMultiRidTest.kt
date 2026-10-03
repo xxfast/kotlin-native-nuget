@@ -32,6 +32,7 @@ class NugetMultiRidTest {
   private fun nativeDir(name: String, libName: String): File {
     val dir: File = Files.createTempDirectory(name).toFile()
     File(dir, libName).writeText("fake native binary")
+    writeProducerContract(dir)
     return dir
   }
 
@@ -40,6 +41,7 @@ class NugetMultiRidTest {
     val native = File(root, "$rid/native")
     native.mkdirs()
     File(native, libName).writeText("fake native binary")
+    writeProducerContract(native.parentFile)
     return root
   }
 
@@ -49,7 +51,9 @@ class NugetMultiRidTest {
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
 
     configureCommon(task, outputDir)
-    task.nativeLibDirs.set(mapOf("osx-arm64" to nativeDir("local", "libkn_746573746c696272617279.dylib").path))
+    val local = nativeDir("local", "libkn_746573746c696272617279.dylib")
+    task.nativeLibDirs.set(mapOf("osx-arm64" to local.path))
+    task.localContractDirs.set(mapOf("osx-arm64" to local.path))
     task.prebuiltRuntimesDir.set(prebuiltTree("win-x64", "kn_746573746c696272617279.dll"))
 
     task.pack()
@@ -172,6 +176,7 @@ class NugetMultiRidTest {
 
     configureCommon(task, outputDir)
     task.nativeLibDirs.set(mapOf("win-x64" to local.path))
+    task.localContractDirs.set(mapOf("win-x64" to local.path))
     task.prebuiltRuntimesDir.set(prebuiltTree("win-x64", "kn_746573746c696272617279.dll"))
 
     val error = assertFailsWith<IllegalArgumentException> { task.pack() }

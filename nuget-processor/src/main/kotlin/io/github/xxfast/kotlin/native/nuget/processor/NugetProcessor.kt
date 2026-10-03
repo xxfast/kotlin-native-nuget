@@ -2292,6 +2292,11 @@ internal class NugetProcessor(
             ).toSet(),
       ),
     )
+    codeGenerator.createNewFile(deps, "", "ForwardAbi", "json").writer().use { writer ->
+      val abi = csharpContracts.canonicalText().lines().filter { it.isNotBlank() }
+      writer.write("{\n  \"schemaVersion\": 1,\n  \"abi\": [" +
+        abi.joinToString(",") { "\"$it\"" } + "]\n}\n")
+    }
     cNameExports.writeTo(codeGenerator, deps)
     // ADR-133: the owner-scope collisions, after both files are written. The colliding nested type
     // was skipped, so the output compiles; the ERROR still fails the consumer build by name.

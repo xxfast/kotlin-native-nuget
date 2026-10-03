@@ -569,19 +569,24 @@ public class NugetPlugin : Plugin<Project> {
         .associate { it.rid to it.library.outputDirectory.absolutePath }
     }
 
-    // KSP generates Interop.cs at build/generated/ksp/<target>/<target>Main/resources/Interop.cs;
-    // pick the first supported target's output.
-    val firstTarget: Provider<String> = project.provider { supportedTargets().firstOrNull()?.name }
-    val kspOutputDir: Provider<Directory> = project.layout.buildDirectory.dir(
-      firstTarget.map { "generated/ksp/$it/${it}Main/resources" }.orElse("generated/ksp/none")
-    )
-
-    // A Callable, not a task name: with no supported target there is no `kspKotlin{Target}`, and
-    // a dangling name would fail the task graph instead of packNuget's own message.
+    val contractDirs: Provider<Map<String, String>> = project.provider {
+      localLibraries().filter { it.enabled }.sortedBy { it.rid }.associate {
+        it.rid to project.layout.buildDirectory.dir(
+          "generated/ksp/${it.target.name}/${it.target.name}Main/resources"
+        ).get().asFile.absolutePath
+      }
+    }
+    val kspOutputDir: Provider<Directory> = project.layout.dir(project.provider {
+      val local = contractDirs.get().values.firstOrNull()
+      if (local != null) project.file(local)
+      else pub.prebuiltRuntimes.orNull?.asFile?.listFiles()?.filter { it.isDirectory }
+        ?.sortedBy { it.name }?.firstOrNull() ?: project.file("build/generated/ksp/none")
+    })
     val kspTask: Callable<List<String>> = Callable {
-      val target: String = supportedTargets().firstOrNull()?.name ?: return@Callable emptyList()
-      val name = "kspKotlin${target.replaceFirstChar { it.uppercase() }}"
-      if (name in project.tasks.names) listOf(name) else emptyList()
+      localLibraries().filter { it.enabled }.sortedBy { it.rid }.mapNotNull {
+        val name = "kspKotlin${it.target.name.replaceFirstChar { char -> char.uppercase() }}"
+        if (name in project.tasks.names) name else null
+      }
     }
 
     // ADR-092: `snapshot = true` replaces the declared version with one minted at execution time,
@@ -673,6 +678,8 @@ public class NugetPlugin : Plugin<Project> {
           }
         )
         task.nativeLibDirs.set(libDirs)
+        task.localContractDirs.set(contractDirs)
+        task.contractFiles.from(contractDirs.map { dirs -> dirs.values.map { project.fileTree(it) } })
         task.nativeLibFiles.from(libDirs.map { dirs -> dirs.values.map { project.fileTree(it) } })
         task.dependsOn(
           Callable { localLibraries().filter { it.enabled }.map { it.library.linkTaskProvider } }
