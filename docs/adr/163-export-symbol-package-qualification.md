@@ -221,9 +221,8 @@ declared return type. Verified by spike (render only, no C# compile — Tier 1 n
 
 - Full JNI-grade escaping of `_` inside a Kotlin identifier that happens to read as this scheme's own
   `__` separator. The residual `ERROR_C_ENTRY_POINT_COLLISION` diagnostic is the backstop.
-- A named diagnostic for an empty `rootPackage`, under which every package collapses to one C#
-  namespace regardless of this ADR's own symbol qualification (a pre-existing `mapPackageToNamespace`
-  behaviour, not new here). Left for its own item if it proves worth a diagnostic.
+- ~~A named diagnostic for an empty `rootPackage`, under which every package collapses to one C#
+  namespace~~ Shipped for same-named types; see the 2026-10-03 amendment at the end of this ADR.
 - Reverse-direction symbols (`nuget_runtime_register` and its registration thunks) are fixed names,
   not user-derived, and are out of scope for this ADR.
 - Confirming the `ld.lld` `__imp_` lazy-symbol matching rule against the exact LLVM version Kotlin/
@@ -242,3 +241,35 @@ declared return type. Verified by spike (render only, no C# compile — Tier 1 n
 - **ADR-133**: `ForwardAbiContract.hint`'s wording it records ("derived from the declaration's own
   enclosing chain of simple names, never its package") is no longer true; the entry point is now
   package-qualified, and the hint text is reworded as this ADR describes.
+
+## Amendment 2026-10-03: same-named top-level types are a named error
+
+With `rootPackage` unset (the plugin default) every package maps to one C# namespace, so two exported
+top-level types with one simple name in different Kotlin packages (`pkg.a.Mood`, `pkg.b.Mood`)
+declare the same C# type. This closes the Deferred-scope bullet about a named diagnostic for that
+setup.
+
+**Rule.** `translate` now records each exported top-level enum, class, object, value class, sealed
+class (and its non-enum-arm subclasses) and interface (under its `IName` spelling) by C# namespace
+and name. The key includes the type-parameter count, because C# allows `Box` beside `Box<T>`. Two
+different Kotlin declarations on one key are the fatal `ERROR_CSHARP_SIGNATURE_COLLISION`, which
+names both and hints to set `rootPackage` or rename one (only "rename or move" when `rootPackage` is
+already set). One type reached twice, such as a sealed arm that is also an exported class, is not a
+collision. Output that merges legitimately stays clean. Enum arms (`{Enum}Arm`) are not checked.
+
+**Behaviour change.** This is a new fatal error for a setup that previously worked until the C#
+compile: the build used to fail with raw CS0101 from `nugetCompileInterop` when `dotnet` was on PATH,
+and produced a broken package with only a warning when it was not. Such a build now fails earlier,
+in the processor.
+
+**Evidence.**
+- Verified: compiling the old unrooted Mood cell's real `Interop.cs` gave CS0101 on `Mood`, CS0102 on
+  `Pounce` and CS0111 on the native import.
+- Verified: `Tier1ExportSymbolSchemeTest` has 14 cells. Three are new: unrooted `Mood` gives the
+  named error and its raw C# still fails with CS0101; a type outside the root admitted through
+  `includePackages` gets the "rename" hint; merged-on-purpose output compiles. With the check
+  disabled, both named-error cells fail.
+- Verified: `:nuget-processor:test` 1550 passed, 0 failed. Processor-only; the native pipeline was
+  not run for this item (`test-library`, `test-companion` and `smoke-test` all set `rootPackage`).
+- The Kitten, Mood, LoadState, Radio and Box cells now set `rootPackage` and compile their C# through
+  the shared `Tier1CSharpCompile` helper, which fails rather than skips when `dotnet` is absent.
