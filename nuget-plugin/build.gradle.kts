@@ -69,7 +69,7 @@ dependencies {
     add(
       "kotlinNativeCompiler",
       "org.jetbrains.kotlin:kotlin-native-prebuilt:$kotlinNativeVersion:" +
-        "${kotlinNativeHost.compilerClassifier}@tar.gz",
+        "${kotlinNativeHost.compilerClassifier}@${kotlinNativeHost.archiveExtension}",
     )
     add(
       "hostCoroutinesKlib",
@@ -262,6 +262,7 @@ publishing {
 
 data class HostKotlinNative(
   val compilerClassifier: String,
+  val archiveExtension: String,
   val coroutinesModule: String,
   val actualSet: String,
 )
@@ -272,16 +273,16 @@ fun hostKotlinNative(): HostKotlinNative? {
   val x64: Boolean = arch == "x86_64" || arch == "amd64"
   val arm64: Boolean = arch == "aarch64" || arch == "arm64"
   if (os.startsWith("mac") && arm64) {
-    return HostKotlinNative("macos-aarch64", "macosarm64", "posixMain")
+    return HostKotlinNative("macos-aarch64", "tar.gz", "macosarm64", "posixMain")
   }
   if (os.startsWith("mac") && x64) {
-    return HostKotlinNative("macos-x64", "macosx64", "posixMain")
+    return HostKotlinNative("macos-x86_64", "tar.gz", "macosx64", "posixMain")
   }
   if (os.startsWith("linux") && x64) {
-    return HostKotlinNative("linux-x64", "linuxx64", "posixMain")
+    return HostKotlinNative("linux-x86_64", "tar.gz", "linuxx64", "posixMain")
   }
   if (os.startsWith("windows") && x64) {
-    return HostKotlinNative("mingw-x64", "mingwx64", "mingwMain")
+    return HostKotlinNative("windows-x86_64", "zip", "mingwx64", "mingwMain")
   }
   return null
 }

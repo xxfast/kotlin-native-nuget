@@ -216,11 +216,12 @@ class NugetCompileGeneratedKotlinTest {
       unpackDir.deleteRecursively()
       unpackDir.mkdirs()
       val archive: File = File(property("nuget.kotlinNativeArchive"))
-      check(archive.isFile && archive.name.endsWith(".tar.gz")) {
-        "expected a kotlin-native-prebuilt tar.gz, got ${archive.absolutePath}"
+      check(archive.isFile && (archive.name.endsWith(".tar.gz") || archive.name.endsWith(".zip"))) {
+        "expected a kotlin-native-prebuilt tar.gz or zip, got ${archive.absolutePath}"
       }
       val extracted: CompileOutput = run(
-        command = listOf("tar", "-xzf", archive.absolutePath, "-C", unpackDir.absolutePath),
+        // Plain -x: tar detects gzip itself, and Windows bsdtar unpacks the .zip the same way.
+        command = listOf("tar", "-xf", archive.absolutePath, "-C", unpackDir.absolutePath),
         workDir = unpackDir,
         timeout = 5.minutes,
       )
