@@ -415,4 +415,5 @@ will automatically use the updated command shape.
 - Multiple `bind {}` blocks per dependency (ROADMAP line 128) — the per-package map approach
   supports multiple filter groups per package ID at the task-input level (each `bind {}` could
   contribute additional entries), but the DSL currently allows only one `bind {}` per dependency.
+  See [ADR-192](192-reverse-namespace-groups-via-alias.md): namespace groups use `alias()`, and a repeated `bind {}` merges.
   That extension is a separate ROADMAP item.

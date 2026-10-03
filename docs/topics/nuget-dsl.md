@@ -387,15 +387,17 @@ Configures `NugetBindConfig`. Declaring `bind {}` at all is what triggers `nuget
 
 | Property / function | Type | Required | Default |
 |---|---|---|---|
-| `packageName` | `Property<String>` | no | the dependency id, lowercased with `-` replaced by `_` (e.g. `TestDependency` becomes `sampledependency`) |
+| `packageName` | `Property<String>` | no | the dependency id, lowercased with `-` replaced by `_` (e.g. `TestDependency` becomes `testdependency`) |
 | `includeNamespaces(vararg namespace: String)` | function | no | empty, with no `includeNamespaces` at all, every namespace in the package is considered, subject to `excludeNamespaces` |
 | `excludeNamespaces(vararg namespace: String)` | function | no | empty |
 | `alias(csharpNamespace, kotlinPackage)` | function | no | none |
 
 `includeNamespaces`/`excludeNamespaces` match a C# namespace exactly, or any of its sub-namespaces (`ns == filter` or
 `ns.startsWith("$filter.")`); when both match the same namespace, `excludeNamespaces` wins. `alias` maps one
-specific C# namespace to a Kotlin package, overriding both `packageName` and the id-derived default
-for that namespace only.
+C# namespace to a Kotlin package, overriding both `packageName` and the id-derived default
+for that namespace only. Unlike the filters, `alias` is exact: an included sub-namespace such as
+`Test.Text.Internal` needs its own `alias` line or it lands in the `packageName` package.
+Several namespaces may alias to the same Kotlin package.
 
 ```kotlin
 dependency("TestDependency", version = "1.0.0") {
@@ -407,6 +409,8 @@ dependency("TestDependency", version = "1.0.0") {
 }
 ```
 
-A second `bind { }` block for the same dependency merges into the first. For
+A second `bind { }` block for the same dependency merges into the first: namespace lists and
+aliases accumulate, and `packageName` is last-wins. To put namespace groups in different Kotlin
+packages, use one `alias` per namespace rather than one block per group. For
 what actually gets bound once a namespace is included, see
 [Consuming C# in Kotlin](reverse-overview.md).
