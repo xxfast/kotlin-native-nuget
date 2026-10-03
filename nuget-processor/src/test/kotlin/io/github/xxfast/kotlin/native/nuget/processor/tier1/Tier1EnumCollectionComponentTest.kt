@@ -206,15 +206,18 @@ class Tier1EnumCollectionComponentTest {
    * Both became the same named skip `Map`/`Set` already emit.
    *
    * ADR-098 then minted `nuget_wrap_short`, so `List<Short>` moves out of the skip and binds: the
-   * gate is unchanged, its allow-list grew. `List<List<String>>` stays skipped -- nested
-   * collections have no wire at all -- which is what keeps this cell honest about the gate still
-   * being a gate.
+   * gate is unchanged, its allow-list grew. `logNested` keeps this cell honest about the gate
+   * still being a gate: its element is [Tier1UnwrappableWitness.inputComponent], whichever
+   * bridgeable component the gate still refuses, so it must stay skipped named.
    */
   @Test
-  fun `list input over a narrow primitive binds while a nested collection still skips named`() {
+  fun `list input over a narrow primitive binds while an unwrappable element still skips named`() {
+    val witness: Tier1UnwrappableCandidate = Tier1UnwrappableWitness.inputComponent
     val result = Tier1Harness.run(
       """
       package tier1.enumcollectionnarrowing
+
+      ${witness.importLine}
 
       enum class Mood { CALM, ANXIOUS }
 
@@ -223,7 +226,7 @@ class Tier1EnumCollectionComponentTest {
 
         fun logSpans(spans: List<Short>): Int = spans.size
 
-        fun logNested(rows: List<List<String>?>): Int = rows.size
+        fun logNested(rows: List<${witness.kotlin}>): Int = rows.size
       }
       """.trimIndent(),
     )

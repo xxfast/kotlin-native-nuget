@@ -29,7 +29,7 @@ import kotlin.test.assertTrue
 class Tier1EmptyStaticClassElisionTest {
 
   /**
-   * `List<List<String>?>` is an unsupported input (ADR-099's nullable nested component), so `scan`
+   * `Map<String?, Int>` is a permanently refused input (ADR-083's nullable map key), so `scan`
    * is skipped and the file has nothing left to declare. Since issue #249 the holder is kept for
    * its remark alone -- the drop reaches a consumer in `Interop.cs` itself or nowhere -- and it
    * carries no member of any kind.
@@ -40,7 +40,7 @@ class Tier1EmptyStaticClassElisionTest {
       """
       package tier1.husk
 
-      fun scan(litters: List<List<String>?>): Int = litters.size
+      fun scan(litters: Map<String?, Int>): Int = litters.size
       """.trimIndent(),
       fileName = "HuskOnly.kt",
     )
@@ -125,7 +125,7 @@ class Tier1EmptyStaticClassElisionTest {
       """
       package tier1.mixed
 
-      fun sift(litters: List<List<String>?>): Int = litters.size
+      fun sift(litters: Map<String?, Int>): Int = litters.size
 
       fun ping(): Int = 1
       """.trimIndent(),
@@ -170,7 +170,7 @@ class Tier1EmptyStaticClassElisionTest {
       """
       package tier1.suspendmix
 
-      fun sift(litters: List<List<String>?>): Int = litters.size
+      fun sift(litters: Map<String?, Int>): Int = litters.size
 
       suspend fun fetch(): Int = 7
       """.trimIndent(),

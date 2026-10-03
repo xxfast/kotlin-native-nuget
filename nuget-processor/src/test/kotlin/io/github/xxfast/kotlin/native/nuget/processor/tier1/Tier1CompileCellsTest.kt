@@ -354,27 +354,24 @@ class Tier1CompileCellsTest {
   }
 
   /**
-   * ADR-075 Decision 2, sibling of the two cells above: an *ineligible* setter. A nested
-   * collection has no per-element wire at all (it sits outside `isWrappableComponent()`), so the
-   * getter still binds but the setter must be absent, with a `SKIPPED_UNSUPPORTED_INPUT`
-   * diagnostic naming it (worded as the C# property remaining read-only, never as the property
-   * having been dropped).
-   *
-   * ADR-097 moved this cell off `List<Mood>` and ADR-098 off `List<Char>`: a bare enum component
-   * is wrappable now, and so is `Char`, so both of those properties gained a setter instead.
-   * ADR-099 moved this cell off a plain nested collection: nesting is wrappable now (the inner
-   * handle is the component's wire value), so the remaining bridgeable-but-unwrappable
-   * component is a NULLABLE nested collection, which ADR-099 guards explicitly (its write
-   * projection has no null arm).
+   * ADR-075 Decision 2, sibling of the two cells above: an *ineligible* setter. An element that
+   * can be read but sits outside `isWrappableComponent()` has no write wire, so the getter still
+   * binds but the setter must be absent, with a `SKIPPED_UNSUPPORTED_INPUT` diagnostic naming the
+   * element (worded as the C# property remaining read-only, never as the property having been
+   * dropped). The element is [Tier1UnwrappableWitness.setterComponent], selected by that predicate
+   * rather than named here.
    */
   @Test
-  fun `class property with nested-collection element has no setter and fires SKIPPED_UNSUPPORTED_INPUT`() {
+  fun `class property with readable but unwrappable element has no setter and fires SKIPPED_UNSUPPORTED_INPUT`() {
+    val witness: Tier1UnwrappableCandidate = Tier1UnwrappableWitness.setterComponent
     val result = Tier1Harness.run(
       """
       package tier1.moodbox
 
+      ${witness.importLine}
+
       class Box {
-        var moods: List<List<String>?> = emptyList()
+        var moods: List<${witness.kotlin}> = emptyList()
       }
       """.trimIndent()
     )
@@ -389,35 +386,37 @@ class Tier1CompileCellsTest {
     )
     assertTrue(
       "export_library_tier1_moodbox__box_set_moods" !in result.generated,
-      "expected no setter export (a nullable nested collection is not a wrappable element); " +
+      "expected no setter export (${witness.kotlin} is not a wrappable element); " +
           "generated=${result.generated}",
     )
     assertTrue(
-      result.kspWarnings.any { it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) },
-      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Box.moods's setter; " +
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) &&
+            it.contains("element type ${witness.diagnosticName}")
+      },
+      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Box.moods's element type; " +
           "kspWarnings=${result.kspWarnings}",
     )
   }
 
   /**
-   * ADR-075 Decision 2, the `Map` sibling of the cell above — the fixture corpus only exercises
+   * ADR-075 Decision 2, the `Map` sibling of the cell above: the fixture corpus only exercises
    * an ineligible `List` element (`aliases`); this is the only cell anywhere that reaches
-   * `ineligibleComponentDescription()`'s map branch (a wrappable `String` key, an unwrappable
-   * nested-collection value), so the diagnostic must name the *value*, not the element. ADR-097
-   * moved this cell off a `Mood` value and ADR-098 off a `Char` one, for the same reason as the
-   * cell above. ADR-099 moved this cell off a plain nested collection: nesting is wrappable now
-   * (the inner handle is the component's wire value), so the remaining bridgeable-but-unwrappable
-   * component is a NULLABLE nested collection, which ADR-099 guards explicitly (its write
-   * projection has no null arm).
+   * `componentDescription()`'s value-only map branch (a wrappable `String` key, an unwrappable
+   * value), so the diagnostic must name the *value*, not the element. The value is
+   * [Tier1UnwrappableWitness.setterComponent].
    */
   @Test
-  fun `class property with Map of String to nested-collection value has no setter and names the value type`() {
+  fun `class property with Map of String to unwrappable value has no setter and names the value type`() {
+    val witness: Tier1UnwrappableCandidate = Tier1UnwrappableWitness.setterComponent
     val result = Tier1Harness.run(
       """
       package tier1.moodmap
 
+      ${witness.importLine}
+
       class Box {
-        var scores: Map<String, List<String>?> = emptyMap()
+        var scores: Map<String, ${witness.kotlin}> = emptyMap()
       }
       """.trimIndent()
     )
@@ -432,15 +431,16 @@ class Tier1CompileCellsTest {
     )
     assertTrue(
       "export_library_tier1_moodmap__box_set_scores" !in result.generated,
-      "expected no setter export (a nullable nested collection is not a wrappable map value); " +
+      "expected no setter export (${witness.kotlin} is not a wrappable map value); " +
           "generated=${result.generated}",
     )
+    val skip: String? = result.kspWarnings.firstOrNull {
+      it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) && it.contains("scores")
+    }
     assertTrue(
-      result.kspWarnings.any {
-        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) &&
-            it.contains("value type Collection")
-      },
-      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Box.scores's value type; " +
+      skip != null && skip.contains("value type ${witness.diagnosticName}") &&
+          !skip.contains("key type"),
+      "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming Box.scores's value type alone; " +
           "kspWarnings=${result.kspWarnings}",
     )
   }
@@ -449,22 +449,24 @@ class Tier1CompileCellsTest {
    * `ForwardPropertyPlanner.componentDescription()`'s `!keyOk && !valueOk` arm: a `Map` whose key
    * AND value both fail `isWrappableComponent()`, so the diagnostic must name both sides.
    *
-   * ADR-083 amendment (boundary nullability part B) moved this cell off a NULLABLE key
-   * (`Map<List<String>?, List<String>?>`): a nullable key is now declined at the READ position too,
-   * so that shape drops the whole property and has no getter to assert. The key is an `Instant`
-   * instead, which is readable (it has a C# spelling) but not wrappable (ADR-076 defers an Instant
-   * collection component), which is exactly the pairing this arm needs.
+   * The key comes from [Tier1UnwrappableWitness.setterMapKey], which excludes a nullable key: the
+   * ADR-083 amendment (boundary nullability part B) declines one at the READ position too, so that
+   * shape would drop the whole property and leave no getter to assert. Key and value may be the
+   * same type; the arm only needs both sides to fail.
    */
   @Test
-  fun `class property with Map of nested-collection key and value has no setter and names both types`() {
+  fun `class property with Map of unwrappable key and value has no setter and names both types`() {
+    val key: Tier1UnwrappableCandidate = Tier1UnwrappableWitness.setterMapKey
+    val value: Tier1UnwrappableCandidate = Tier1UnwrappableWitness.setterComponent
+    val imports: String = setOf(key.importLine, value.importLine).joinToString("\n")
     val result = Tier1Harness.run(
       """
       package tier1.moodmapboth
 
-      import kotlin.time.Instant
+      $imports
 
       class Box {
-        var scores: Map<Instant, List<String>?> = emptyMap()
+        var scores: Map<${key.kotlin}, ${value.kotlin}> = emptyMap()
       }
       """.trimIndent()
     )
@@ -485,8 +487,8 @@ class Tier1CompileCellsTest {
     assertTrue(
       result.kspWarnings.any {
         it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT.name) &&
-            it.contains("key type Instant") &&
-            it.contains("and value type Collection?")
+            it.contains("key type ${key.diagnosticName}") &&
+            it.contains("and value type ${value.diagnosticName}")
       },
       "expected a SKIPPED_UNSUPPORTED_INPUT diagnostic naming both Box.scores's key and value " +
           "types; kspWarnings=${result.kspWarnings}",
