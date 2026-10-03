@@ -396,10 +396,10 @@ class ForwardSkippedCallableWarningTest {
         // Real drops: no legacy route re-emits a marked declaration, by design.
         ForwardPlanSkipReason.OPT_IN_MARKER,
         ForwardPlanSkipReason.OPT_IN_MARKER_TYPE,
-        // ADR-116: a suspend/Flow/generic/callback member of a sealed subclass. The reasons above
-        // that stay silent do so because a legacy route re-emits them for an ordinary class; no
-        // legacy route is keyed to a sealed subclass, so the same member kinds are real drops
-        // there and are reclassified into this reason by the planner.
+        // ADR-116: a generic method or `suspend` lambda parameter of a sealed subclass (ADR-118/124
+        // routed its suspend and Flow members). The reasons above that stay silent do so because a
+        // legacy route re-emits them for an ordinary class; none is keyed to a sealed subclass, so
+        // these are real drops there and the planner reclassifies them into this reason.
         ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,
         // ADR-116 amendment (2026-09-11): the same, one level up, for a member the sealed *base*
         // declares. The base carries its ordinary members now, but no legacy route is keyed to it

@@ -4,6 +4,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticK
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipReason
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -124,8 +125,8 @@ class Tier1SealedArmResidualSkipTest {
       "expected the ${detail.name} sealed-subclass sentence; got: $warning",
     )
     assertTrue(warning.contains(hint), "expected the hint `$hint`; got: $warning")
-    assertTrue(
-      !warning.contains("move the member onto an ordinary class"),
+    assertFalse(
+      warning.contains("move the member onto an ordinary class"),
       "expected no hint toward an ordinary class, which skips the member too; got: $warning",
     )
   }
