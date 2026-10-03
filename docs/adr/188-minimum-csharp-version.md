@@ -90,3 +90,39 @@ cell failed before and passes after, the two controls are unchanged); `:nuget-pr
 (1553); `scripts/verify.sh` is green, where one xunit file imports each namespace and calls the property
 or the function. The research spike with SDK 10 showed that importing both namespaces gives CS9339 on
 `"x".Tag` only. No LeakTests row, since `String` crosses without a handle.
+
+## Amendment 2026-10-03: member functions beside an extension property, and the nullable-receiver twin
+
+Two legal Kotlin pairs were unverified. Both are now handled.
+
+- Member function beside an extension property. The `SHADOWED_BY_EXTENSION_FUNCTION` skip also fires
+  when the receiver's enum, class, interface or value class declares a member function with the same
+  C# name, at any arity (the suspend `Async` spelling counts on a class). The key is C#'s resolution,
+  so a nullable receiver is no exemption, unlike `SHADOWED_BY_MEMBER`. An enum member function renders
+  `Name(this Enum ...)` in the same `{Enum}Extensions` class, giving CS9339 with no parameters and
+  CS1061 with any; an instance method makes `cat.Name` a method group (CS0428). The property is
+  skipped, the function keeps the name, and the warning names the kind (for example "the enum member function `Coat.grooming`" or
+  "the member function `Cat.grooming`"). A suspend or generic enum function is a named
+  drop on its own route and never renders, so it is no clash. Behaviour change: the zero-parameter enum
+  case was a fatal `ERROR_CSHARP_SIGNATURE_COLLISION` from the translator and is now this warning,
+  uniform with the extension-function rule. The `NugetDiagnostics.json` detail for the code now carries
+  the kind ("extension function `tag`") instead of the bare name.
+- `val Cat.x` beside `val Cat?.x`. Kotlin compiles the pair; C# rejects it at declaration (CS0102).
+  The plan symbol and the C entry point derive from the receiver declaration with nullability
+  dropped, so both planned as one symbol and generation died with `ERROR_INTERNAL_GENERATOR_FAILURE`
+  blaming expect/actual, reported twice. It is now a fatal `ERROR_CSHARP_SIGNATURE_COLLISION`
+  (skip reason `NULLABLE_RECEIVER_TWIN`) naming both declarations, hint "rename one of them in
+  Kotlin". `@CSharpName` cannot separate them. Neither twin is a safe survivor: dropping either
+  changes the value one receiver type reads. Letting `@CSharpName` separate them would mean carrying
+  nullability in the symbol and export, and is not done.
+
+Known imprecision: twins are grouped by plan symbol, so two same-named receivers from two packages,
+both extended in a third package, would get the twin message. That case hit the internal failure
+before, and their C entry points collide either way.
+
+Evidence. Verified: `Tier1EnumMemberExtensionNameClashTest` (two cells, zero and one parameter) and
+`Tier1ExtensionPropertyFunctionClashTest` (three cells: class member function, value-class member
+function, nullable twin) were each red before and green after; `:nuget-processor:test` passed (1558).
+The C# compiler behaviour (CS9339, CS1061, CS0428, CS0102) was verified by the research spike with
+SDK 10, not by a compile in this change. Processor-only; the native pipeline was not run for this
+item. No LeakTests row.
