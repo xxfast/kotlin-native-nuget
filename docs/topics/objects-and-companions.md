@@ -142,6 +142,10 @@ using var cat = Cat.FromName("Whiskers");
 
 There is no separate `Cat.Companion` class in the generated output.
 
+This applies to the companion of an ordinary class or an enum. The companion of an `interface`, a
+value class, or a sealed class or arm binds nothing: each of its members is skipped with a named
+warning, so move it to a top-level declaration or an `object`.
+
 ## Method overloads {id="method-overloads"}
 
 Two or more same-named members on an `object` or a `companion object` generate one natural C#

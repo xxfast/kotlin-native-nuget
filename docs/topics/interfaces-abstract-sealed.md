@@ -110,6 +110,10 @@ public class CarpetPost : ScratchingPost
 }
 ```
 
+If the interface is not exported, a generic default (or any default no route binds) is not carried
+and is named once on each exported class that inherits it. Its `Flow`-return and lambda-parameter
+defaults still bind on each implementing class.
+
 The same applies to an `open` [sealed arm](#open-arms-and-further-nesting) inheriting a default from
 one of its own interfaces: the arm renders it `virtual` too, so a further Kotlin subclass of the arm
 compiles. A `final` owner's inherited default stays non-virtual either way, since Kotlin agrees it
@@ -1306,6 +1310,9 @@ generic class or an `enum class` owner still cannot host a nested declaration.
   resolution) is not supported, and neither is a generic interface type parameter at a return
   position. A generic interface's own `suspend`/`Flow`/`StateFlow` members are a named skip too;
   see [Async members on an interface](#async-members-on-an-interface).
+- An interface's `companion object` members (functions, `val`, `const val`) are not bound: the C#
+  interface has no statics. Each is skipped with a named warning; move it to a top-level
+  declaration or an `object`.
 - Object identity is not preserved across two reads of a **Kotlin-backed** interface property: each
   read is a distinct C# wrapper over the same Kotlin object. A stored **C#-implemented** object is
   the exception: it always resolves back to the original instance.

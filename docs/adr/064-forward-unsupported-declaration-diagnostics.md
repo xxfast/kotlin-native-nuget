@@ -1536,7 +1536,8 @@ previously warned nothing.
   *unexported* interface (the ADR-075 path) is still named nowhere; a top-level `fun f(): List<Box<Int>>`
   / `List<Flow<Int>>` passes the generic-return gate and stays silent because the route emits,
   whether the result compiles is unmeasured; `VALUE_CLASS` origin is not reclassified by this pass
-  and `COMPANION` is reclassified but was not exercised by the fixture.
+  and `COMPANION` is reclassified but was not exercised by the fixture. (**2026-10-03:** the first
+  and third are closed by the 2026-10-03 amendment below; the second is still open.)
 - **`ABSTRACT`, `SUSPEND`, and `TYPE_PARAMETER`** rest on the identical assumption and were not
   audited; a `suspend fun` on an `object` is a likely candidate, since `NugetProcessor.kt` walks
   `classes` only.
@@ -1953,3 +1954,57 @@ is a value and one that returns it), instead". The `(NULLABLE)` tag stays as the
 
 Not changed: a nullable return of an unmapped stdlib type such as `Regex?` still reaches `NULLABLE`
 rather than `UNSUPPORTED`, so it gets this wording and not the stdlib hint the non-null type gets.
+
+## Amendment (2026-10-03): the inferred residuals are named
+
+Judgement: an **amendment**, not a new ADR. It names four positions the 2026-09-13 amendment's
+"Residuals" left silent or unmeasured. It binds nothing new: every member below stays absent from
+the generated C#, and each now gets one `SKIPPED_*` warning at the author's own Kotlin source.
+
+**The rule.** A member that no route binds is named once, on the type that would have carried it.
+
+- **Inherited from an unexported supertype.** `classEntries` used to treat every member the class
+  does not declare as routed, on the assumption that the declaring interface's own pass names it.
+  That holds only when the declaring type is an exported interface or an exported class. A member
+  inherited from an unexported interface or an unexported base class that no route binds is now
+  named on each inheriting class (the issue #249 rule: a different owner is a different hole), so
+  N exported classes inheriting one hidden declaration give N warnings, none on the hidden
+  declaration. An unexported interface's `Flow`-return and lambda-parameter defaults still bind on
+  each implementing class through the class legacy routes and are not named.
+- **Value-class members.** `valueClassMethodEntries` is now reclassified like the class and
+  companion entries. A generic, `Flow`, `suspend` or lambda-parameter member no route binds is named
+  under the existing kinds. The `SUSPEND` sentence now ends "or on a value class". A lambda
+  parameter is unbound on a value class even though ADR-160 binds it on ordinary owners.
+- **Class companions.** Already named through `companionEntries`; this adds only the missing
+  coverage.
+- **Interface companions.** Every member of an interface's `companion object` is named: functions as
+  `SKIPPED_UNSUPPORTED_COMBINATION`, a `val` or `const val` as `SKIPPED_UNSUPPORTED_PROPERTY`. The
+  generated C# `interface` declares no statics, and the nested-declaration walk skips companions on
+  ADR-013's premise that they fold into the owner, which does not hold here. Binding them is a
+  separate feature.
+
+A new reason, `COMPANION_NO_CARRIER` (kind `SKIPPED_UNSUPPORTED_COMBINATION`), names the companions
+of an interface, a value class, a sealed base and a sealed arm, which no route renders. Its detail
+is the owner kind. The interface sentence is "it is a member of an interface's companion object, and
+the generated C# interface declares no static members to carry it"; the others read "the companion
+object of a value class (or sealed ...), and no route renders that companion's members yet".
+
+On a generic class, the override exemption (a member the class overrides is not named) now counts
+only **exported** interfaces, so a generic class overriding a member of a non-exported interface,
+such as a stdlib or kotlinx one, is named instead of staying silent.
+
+**Verified.** `Tier1UnroutedPositionsTest` has a 21-cell fixture: each member is named exactly once
+under the expected kind, is absent from the C# declarations, and its control members still bind. The
+(a), (b) and interface-companion-function cells were red before the change; the sealed and
+value-class companions and the interface companion properties were observed silent before it; the
+class companion cells were green from the start. `:nuget-processor:test`: 1558 passed, 0 failed. A
+real `:test-library:kspKotlinMingwX64` run shows the packaged test library is unaffected apart from
+one existing warning (`curlup.Curl.area`), whose sentence now ends "...or on a value class".
+
+**Inferred, not covered.** The "sealed interface" owner kind of `COMPANION_NO_CARRIER`; the `_2`
+overload suffix on a named member; private-companion filtering; a generic class that inherits (not
+overrides) a `suspend` default. The native pipeline was not run for this item.
+
+**Found, not fixed.** The `SKIPPED_UNEXPORTED_SUPERTYPE` text "its public members are bound on X
+directly" (`cir/CirClassTranslator.kt`) is partly false when an inherited member is unrouted and
+named separately. Recorded in `ROADMAP.md`.
