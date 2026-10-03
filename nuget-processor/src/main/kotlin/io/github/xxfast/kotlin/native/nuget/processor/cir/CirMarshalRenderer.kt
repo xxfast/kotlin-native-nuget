@@ -54,9 +54,12 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("        private static extern int nuget_unwrap_enum_ordinal(IntPtr handle);")
   appendLine()
   appendLine("        internal static int UnwrapEnumOrdinal(IntPtr handle)")
+  appendLine("            => UnwrapEnumOrdinal(new NugetKotlinHandle(handle));")
+  appendLine()
+  appendLine("        internal static int UnwrapEnumOrdinal(NugetKotlinHandle handle)")
   appendLine("        {")
-  appendLine("            try { return nuget_unwrap_enum_ordinal(handle); }")
-  appendLine("            finally { Native_dispose(handle); }")
+  appendLine("            try { return nuget_unwrap_enum_ordinal(handle.DangerousGetHandle()); }")
+  appendLine("            finally { handle.Dispose(); }")
   appendLine("        }")
   appendLine()
   appendLine("        [DllImport(\"${helper.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"nuget_dispose\")]")
@@ -135,8 +138,8 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   // wrapper, so the trimmer keeps each constructor and the AOT compiler pre-compiles it. A plain
   // static field initializer is enough: the CLR runs the type initializer before the first access
   // to any static member of NugetMarshal, and every read goes through Materialize<T> below.
-  appendLine("        internal static readonly System.Collections.Generic.Dictionary<Type, Func<IntPtr, object>> Factories =")
-  appendLine("            new System.Collections.Generic.Dictionary<Type, Func<IntPtr, object>>")
+  appendLine("        internal static readonly System.Collections.Generic.Dictionary<Type, Func<NugetKotlinHandle, object>> Factories =")
+  appendLine("            new System.Collections.Generic.Dictionary<Type, Func<NugetKotlinHandle, object>>")
   appendLine("        {")
   for (entry in helper.factories) {
     // Issue #40: a sealed base has no handle constructor, so it routes through the discriminator
@@ -179,8 +182,15 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("            if (!key.IsValueType && (key.IsInterface || !Factories.ContainsKey(key))")
   appendLine("                && TryResolveCSharpObject(handle, out object original))")
   appendLine("                return (T)original;")
-  appendLine("            if (Factories.TryGetValue(key, out Func<IntPtr, object>? factory)) return (T)factory(handle);")
-  appendLine("            throw new NotSupportedException($\"No generated factory materialises {typeof(T)} from a Kotlin handle\");")
+  appendLine("            var owned = new NugetKotlinHandle(handle);")
+  appendLine("            try")
+  appendLine("            {")
+  appendLine("                if (Factories.TryGetValue(key, out Func<NugetKotlinHandle, object>? factory)) return (T)factory(owned);")
+  appendLine("                throw new NotSupportedException($\"No generated factory materialises {typeof(T)} from a Kotlin handle\");")
+  appendLine("            }")
+  // A factory can throw before or after constructing a wrapper. Both share this owner, so
+  // cleanup releases exactly once even if that wrapper is subsequently disposed or finalized.
+  appendLine("            catch { owned.Dispose(); throw; }")
   appendLine("        }")
   appendLine()
   appendLine("        public static T FromHandle<T>(IntPtr handle)")

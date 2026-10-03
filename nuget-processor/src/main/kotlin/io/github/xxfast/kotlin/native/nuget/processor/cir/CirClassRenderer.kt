@@ -230,18 +230,25 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
   }
 
   if (cls.hasInternalHandleConstructor) {
+    appendLine(
+      "        internal ${cls.name}(IntPtr handle, out NugetHandleTag tag) : " +
+          "this(new NugetKotlinHandle(handle), out tag)",
+    )
+    appendLine("        {")
+    appendLine("        }")
+    appendLine()
     if (cls.superClass != null) {
       appendLine(
-        "        internal ${cls.name}(IntPtr handle, out NugetHandleTag tag) : " +
+        "        internal ${cls.name}(NugetKotlinHandle handle, out NugetHandleTag tag) : " +
             "base(handle, out tag)"
       )
       appendLine("        {")
       appendLine("        }")
     } else {
-      appendLine("        internal ${cls.name}(IntPtr handle, out NugetHandleTag tag)")
+      appendLine("        internal ${cls.name}(NugetKotlinHandle handle, out NugetHandleTag tag)")
       appendLine("        {")
       appendLine("            tag = default;")
-      appendLine("            _handle = new NugetKotlinHandle(handle);")
+      appendLine("            _handle = handle;")
       appendLine("        }")
     }
     appendLine()

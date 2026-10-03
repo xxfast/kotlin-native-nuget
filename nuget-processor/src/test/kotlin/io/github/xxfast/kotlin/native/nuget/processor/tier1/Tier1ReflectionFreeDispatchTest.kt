@@ -33,9 +33,14 @@ class Tier1ReflectionFreeDispatchTest {
     assertContains(cs, "IntPtr Handle { get; }")
     assertContains(cs, "public class Cat : IDisposable, INugetHandle")
     assertContains(cs, "IntPtr INugetHandle.Handle => _handle.DangerousGetHandle();")
-    assertContains(cs, "Dictionary<Type, Func<IntPtr, object>> Factories")
+    assertContains(cs, "Dictionary<Type, Func<NugetKotlinHandle, object>> Factories")
     assertContains(cs, "[typeof(global::Tier1.Cat)] = static handle => new global::Tier1.Cat(handle, out _),")
     assertContains(cs, "internal static T Materialize<T>(IntPtr handle)")
+    assertContains(cs, "var owned = new NugetKotlinHandle(handle);")
+    assertContains(cs, "return (T)factory(owned);")
+    assertContains(cs, "catch { owned.Dispose(); throw; }")
+    assertContains(cs, "internal Cat(NugetKotlinHandle handle, out NugetHandleTag tag)")
+    assertContains(cs, "_handle = handle;")
   }
 
   @Test
