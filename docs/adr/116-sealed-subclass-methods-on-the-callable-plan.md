@@ -799,3 +799,28 @@ the raw `hasDefault` bit is not reliably `false` on an `override`, contrary to w
 A non-generic sealed base now projects its own `suspend`, `Flow` and `StateFlow` members, so
 `SEALED_BASE_UNROUTED` no longer fires for them. A member the class route's own selectors refuse keeps a
 named skip carrying that route's reason. See [ADR-175](175-sealed-base-async-members.md).
+
+## Amendment (2026-10-03): `ForwardAbiLegacyRoutes` registers an arm's callback routes
+
+`ForwardAbiLegacyRoutes.collect` is the per-file set of legacy routes a file uses. Its sealed branch
+walked an arm's async members, Flow members and properties but not `callbackMembers`, so an arm's
+per-call lambda, stored-callback pair and interface-bridge pair routes were missing from the set.
+The branch now walks every arm's `callbackMembers` through the same member dispatcher the ordinary
+class branch uses, so the member type (`CirCallbackMethod`, `CirStoredCallbackMethod`,
+`CirInterfaceBridgeMethod`) picks `LAMBDA_PARAMETER_METHOD`, `STORED_CALLBACK_METHOD` or
+`INTERFACE_BRIDGE_METHOD`. The sealed base has no callback field, so walking the arms is complete.
+In the same walk, `collect` also visits types declared inside a sealed base, an arm, an ordinary
+class, an object or an interface (`nestedDeclarations`) at any depth, so a suspend, Flow or callback
+member on a nested type registers its route.
+
+This is bookkeeping only: the set is read by its unit test, and the C# half of the ABI check
+scrapes the generated externs directly (`csharpLegacy`), so no generated output changed and the
+callback externs were already contract-checked. The collector and its enum are kept; whether to
+retire them is a separate ADR-078 decision.
+
+Evidence. **Verified by reading:** `CirSealedClass` has no callback field; the arm's list carries all
+three callback kinds. **Verified by execution:** `ForwardAbiLegacyRoutesTest` (17 cells), where the
+three arm cells and the six nested-type cells failed before the change and pass after; the ordinary
+class cells for the three callback kinds, previously untested, passed from the start; the full
+`:nuget-processor:test` run passed (1559 passed, 0 failed). The native pipeline was not run for this
+item.
