@@ -69,7 +69,16 @@ class Tier1SealedSubclassNoPublicConstructorWarningTest {
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
     val cs: String = result.generatedCSharp
 
-    assertContains(cs, "internal Groomed(IntPtr handle, out NugetHandleTag tag) : base(handle, out tag)")
+    assertContains(
+      cs,
+      "internal Groomed(IntPtr handle, out NugetHandleTag tag) : " +
+        "this(new NugetKotlinHandle(handle), out tag)",
+    )
+    assertContains(
+      cs,
+      "internal Groomed(NugetKotlinHandle handle, out NugetHandleTag tag) : " +
+        "base(handle, out tag)",
+    )
     assertFalse(
       cs.contains("public Groomed("),
       "an opt-in-marked constructor parameter must reach neither artifact; generated=$cs",

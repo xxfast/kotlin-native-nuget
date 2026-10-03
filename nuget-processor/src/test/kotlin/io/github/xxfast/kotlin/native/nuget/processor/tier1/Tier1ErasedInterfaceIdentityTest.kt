@@ -94,8 +94,14 @@ class Tier1ErasedInterfaceIdentityTest {
     val cs: String = Tier1Harness.run(source).generatedCSharp
     val probe: Int = cs.indexOf("TryResolveCSharpObject(handle, out object original)")
     val factory: Int =
-      cs.indexOf("if (Factories.TryGetValue(key, out Func<IntPtr, object>? factory))")
+      cs.indexOf("if (Factories.TryGetValue(key, out Func<NugetKotlinHandle, object>? factory))")
     assertTrue(probe in 0 until factory, "the token probe must run before the Factories lookup")
+    // A token hit returns the original C# object, so the handle owner is acquired only after it.
+    val owner: Int = cs.indexOf("var owned = new NugetKotlinHandle(handle);", startIndex = probe)
+    assertTrue(
+      owner in probe until factory,
+      "the handle owner must be acquired between the probe and the lookup",
+    )
     assertTrue(
       "IntPtr bridged = HandleOf((object)value!, typeof(T));" in cs,
       "Wrap<T> bridge fallback",
