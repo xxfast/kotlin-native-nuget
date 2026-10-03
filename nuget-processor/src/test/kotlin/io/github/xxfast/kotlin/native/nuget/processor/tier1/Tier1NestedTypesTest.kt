@@ -35,6 +35,46 @@ import kotlin.test.assertTrue
  */
 class Tier1NestedTypesTest {
 
+  @Test
+  fun `descendants of a deferred nested sealed owner are refused with their members`() {
+    val result = Tier1Harness.run("""
+      package tier1.nestedsealedowner
+
+      class Owner {
+        sealed class NestedSealed {
+          @JvmInline
+          value class Tag(val value: Int)
+          class Child(val value: Int)
+          class Leaf : NestedSealed()
+        }
+      }
+
+      class Reader {
+        fun tag(): Owner.NestedSealed.Tag = Owner.NestedSealed.Tag(7)
+        fun read(tag: Owner.NestedSealed.Tag): Int = tag.value
+        val current: Owner.NestedSealed.Tag get() = tag()
+        fun child(): Owner.NestedSealed.Child = Owner.NestedSealed.Child(8)
+        fun control(): Int = 9
+      }
+    """.trimIndent())
+
+    assertTrue(result.compiledClean, "fixture must compile: ${result.compileErrors}")
+    val declarations = result.generatedCSharp.lineSequence()
+      .filterNot { it.trimStart().startsWith("///") }.joinToString("\n")
+    assertFalse("record struct Tag" in declarations)
+    assertFalse("class Child" in declarations)
+    assertFalse("NestedSealed.Tag" in declarations, declarations)
+    assertFalse("NestedSealed.Child" in declarations, declarations)
+    assertContains(declarations, "Control()")
+    assertTrue(result.kspWarnings.any {
+      it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
+        it.contains("NestedSealed.Tag")
+    }, "expected a named declaration refusal: ${result.kspWarnings}")
+    assertTrue(result.kspWarnings.any {
+      it.contains("UNDECLARED_VALUE_CLASS") || it.contains("value class")
+    }, "dependent members must have a named refusal: ${result.kspWarnings}")
+  }
+
   private val source: String = """
     package tier1.nestedtypes
 

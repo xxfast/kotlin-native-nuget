@@ -256,6 +256,8 @@ internal fun KSClassDeclaration.unsupportedNestedOwnerReason(): String? = when {
     "an `inner class` owner's own nested types are deferred"
   isValueClass() -> "a `value class` owner has no nested-type slot"
   isCompanionObject -> "a companion object is folded into its owner's statics (ADR-013)"
+  parentDeclaration is KSClassDeclaration && !isSealedSubclass() ->
+    unsupportedNestedCandidateReason()
   else -> null
 }
 
