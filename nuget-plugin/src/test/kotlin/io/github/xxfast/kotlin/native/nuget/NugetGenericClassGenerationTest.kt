@@ -16,6 +16,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.RirTypeParameterType
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
@@ -304,17 +305,14 @@ class NugetGenericClassGenerationTest {
       ),
     )
 
-    var threw = false
-    try {
-      generateKotlinStubs(collidingFile)
-    } catch (e: Exception) {
-      threw = true
-    }
-    assertTrue(
-      threw,
-      "Decision 10: `Box` and `Box`1` in the same namespace must fail generation with " +
-          "ERROR_GENERIC_ARITY_NAME_COLLISION (ADR-057's ERROR_KOTLIN_SIGNATURE_COLLISION " +
-          "precedent), not silently pick one",
+    // Decision 10: fail, never silently pick one. ADR-182: rendered like every other reverse
+    // diagnostic, package-led, so the consumer can tell which package collided.
+    val error: IllegalArgumentException = assertFailsWith { generateKotlinStubs(collidingFile) }
+    assertEquals(
+      "[nuget:ERROR_GENERIC_ARITY_NAME_COLLISION] Error TestDependency/Box: `Box`1`, `Box` in " +
+          "namespace `$boxNamespace` all strip to the Kotlin name `Box`. Rename one of the C# " +
+          "types or move one to another namespace.",
+      error.message,
     )
   }
 

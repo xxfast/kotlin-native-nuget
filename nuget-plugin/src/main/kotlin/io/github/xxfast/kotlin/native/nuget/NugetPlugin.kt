@@ -277,6 +277,7 @@ public class NugetPlugin : Plugin<Project> {
         task.kotlinOutputDir.set(interopDir.map { it.dir("kotlin") })
         // ADR-088: beside the generated Kotlin, not inside it — see the task property.
         task.boundTypesManifestFile.set(interopDir.map { it.file("bound-types.json") })
+        task.diagnosticsFile.set(interopDir.map { it.file("NugetDiagnostics.json") })
       }
 
     nugetImport.configure { task -> task.dependsOn(nugetGenerateBindings) }

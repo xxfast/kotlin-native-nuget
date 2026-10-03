@@ -83,7 +83,7 @@ The following three are registered only when at least one dependency declares a 
 | Task | Description | Depends on | Writes |
 |---|---|---|---|
 | `nugetExtractApi` | Extracts the public API surface of bound NuGet packages into reverse-ir.json | `nugetRestore` (reads its `project.assets.json`) | `build/nuget-interop/reverse-ir.json` |
-| `nugetGenerateBindings` | Generates Kotlin stubs and the C# registration contract from reverse-ir.json | `nugetExtractApi` | `build/nuget-interop/kotlin/` |
+| `nugetGenerateBindings` | Generates Kotlin stubs and the C# registration contract from reverse-ir.json, and logs every skipped member | `nugetExtractApi` | `build/nuget-interop/kotlin/`, `build/nuget-interop/NugetDiagnostics.json` ([report](bridgeable-subset.md#unsupported-members-show-up-as-build-warnings)) |
 | `nugetGenerateShims` | Generates C#-side [UnmanagedCallersOnly] thunks and startup registration shims from reverse-ir.json | `nugetExtractApi` | `build/nuget-interop/csharp/` |
 
 `nugetGenerateBindings`'s output directory is added as a Kotlin source directory on `nativeMain`

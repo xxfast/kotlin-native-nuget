@@ -67,6 +67,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.interfaceBaseKeys
 import io.github.xxfast.kotlin.native.nuget.rir.isNullable
 import io.github.xxfast.kotlin.native.nuget.rir.isHandleBacked
 import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgeContractHash
+import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgeDiagnostics
 import io.github.xxfast.kotlin.native.nuget.rir.kotlinBridgePlan
 import io.github.xxfast.kotlin.native.nuget.rir.mapSlots
 import io.github.xxfast.kotlin.native.nuget.rir.nameSuffix
@@ -79,6 +80,7 @@ import io.github.xxfast.kotlin.native.nuget.rir.structArityLimitDiagnostics
 import io.github.xxfast.kotlin.native.nuget.rir.structContractHash
 import io.github.xxfast.kotlin.native.nuget.rir.structReceiverAbiArgs
 import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.MapProperty
@@ -1549,33 +1551,55 @@ internal fun ambiguousGenericConstructorDiagnostics(cls: RirClass): List<RirDiag
 }
 
 // ADR-072 Decision 10: `Box` and `Box`1` in one namespace (or two instantiations of ONE
-// definition sharing an internal tag) is a hard generation failure.
+// definition sharing an internal tag) is a hard generation failure. Every collision is reported
+// together, mirroring validateKotlinSignatures.
 private fun validateGenericArityCollisions(rir: RirFile) {
-  rir.assemblies.forEach { assembly ->
-    assembly.namespaces.forEach { namespace ->
-      val classes: List<RirClass> = namespace.types.filterIsInstance<RirClass>()
-      val bySimpleName: Map<String, List<RirClass>> =
-        classes.groupBy { it.name.substringBefore('`') }
-      bySimpleName.forEach { (simpleName, group) ->
-        require(group.size == 1) {
-          val names: String = group.joinToString("`, `") { it.name }
-          "[nuget] ERROR_GENERIC_ARITY_NAME_COLLISION: `$names` in namespace `${namespace.name}` " +
-              "all strip to the Kotlin name `$simpleName`."
-        }
-      }
-      classes.filter { it.typeParameters.isNotEmpty() }.forEach { cls ->
-        val tags: Map<String, List<RirInstantiation>> =
-          cls.instantiations.groupBy { instantiationTag(cls, it) }
-        tags.forEach { (tag, group) ->
-          require(group.size == 1) {
-            "[nuget] ERROR_GENERIC_ARITY_NAME_COLLISION: two instantiations of `${cls.name}` " +
-                "both produce the internal tag `$tag`."
-          }
-        }
-      }
-    }
+  val collisions: List<Pair<String, RirDiagnostic>> = genericArityCollisions(rir)
+  require(collisions.isEmpty()) {
+    collisions.joinToString("\n") { (packageId, d) -> formatDiagnostic(packageId, d) }
   }
 }
+
+internal fun genericArityCollisions(rir: RirFile): List<Pair<String, RirDiagnostic>> =
+  rir.assemblies.flatMap { assembly ->
+    assembly.namespaces.flatMap { namespace ->
+      val classes: List<RirClass> = namespace.types.filterIsInstance<RirClass>()
+      val byName: List<RirDiagnostic> = classes
+        .groupBy { it.name.substringBefore('`') }
+        .filterValues { it.size > 1 }
+        .map { (simpleName, group) ->
+          val names: String = group.joinToString("`, `") { it.name }
+          RirDiagnostic(
+            kind = RirDiagnosticKind.ERROR_GENERIC_ARITY_NAME_COLLISION,
+            typeName = simpleName,
+            memberName = "",
+            memberSignature = "${namespace.name}.$simpleName",
+            reason = "`$names` in namespace `${namespace.name}` all strip to the Kotlin name " +
+                "`$simpleName`",
+            hint = "Rename one of the C# types or move one to another namespace.",
+          )
+        }
+      val byTag: List<RirDiagnostic> = classes
+        .filter { it.typeParameters.isNotEmpty() }
+        .flatMap { cls ->
+          cls.instantiations
+            .groupBy { instantiationTag(cls, it) }
+            .filterValues { it.size > 1 }
+            .map { (tag, group) ->
+              RirDiagnostic(
+                kind = RirDiagnosticKind.ERROR_GENERIC_ARITY_NAME_COLLISION,
+                typeName = cls.name,
+                memberName = "",
+                memberSignature =
+                  group.joinToString(" and ") { canonicalInstantiationSignature(it) },
+                reason = "two instantiations of `${cls.name}` both produce the internal tag `$tag`",
+                hint = "Expose only one of these instantiations from the bound API.",
+              )
+            }
+        }
+      (byName + byTag).map { assembly.packageId to it }
+    }
+  }
 
 // ADR-072 Decision 10: a generic definition with zero discovered instantiations emits NOTHING at
 // all: no Kotlin type, no witness, no bindings, no registration export (this is what closes the
@@ -7062,6 +7086,12 @@ internal fun diagnosticWarnings(rir: RirFile): List<String> {
   }
 }
 
+// ADR-182 amendment: everything nugetGenerateBindings reports, in the order it reports it: the
+// non-throwing allDiagnostics, then the two plugin-derived fatal families the validators in
+// generateKotlinStubs throw on. Reader-emitted ERROR kinds are already in allDiagnostics.
+internal fun reverseDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> =
+  allDiagnostics(rir) + kotlinSignatureCollisions(rir) + genericArityCollisions(rir)
+
 // The same seven sources diagnosticWarnings concatenates, STRUCTURED, before formatDiagnostic
 // throws the kind away. The reverse census buckets by kind and cannot recover it from the
 // rendered string. validateDiagnostics deliberately stays in diagnosticWarnings and not here:
@@ -7148,9 +7178,23 @@ internal fun allDiagnostics(rir: RirFile): List<Pair<String, RirDiagnostic>> {
         }
       }
     }
+  // ADR-085: why a bound interface gets no Kotlin-implementable bridge. Over the same interfaces
+  // the stub loop in generateKotlinStubs plans a bridge for, so it names exactly those that
+  // lost it.
+  val boundIfaces: Map<RirTypeKey, RirInterface> = boundInterfaceTypes(rir)
+  val fromKotlinBridges: List<Pair<String, RirDiagnostic>> = rir.assemblies.flatMap { assembly ->
+    assembly.namespaces.flatMap { namespace ->
+      namespace.types.filterIsInstance<RirInterface>()
+        .filter { bridgeableInterfaceRegistrables(it, boundTypes, boundIfaces).isNotEmpty() }
+        .flatMap { iface ->
+          kotlinBridgeDiagnostics(iface, boundTypes, boundIfaces).map { assembly.packageId to it }
+        }
+    }
+  }
   return fromReader + fromCollisions + fromArityLimits + fromAmbiguousGenericConstructors +
       fromDeferredAsync + fromCollapsedOverloads + fromCollectionPositions +
-      fromDelegatePositions + fromDelegateOverloads + enumEntryVerbatimDiagnostics(rir)
+      fromDelegatePositions + fromDelegateOverloads + enumEntryVerbatimDiagnostics(rir) +
+      fromKotlinBridges
 }
 
 // ADR-158 Decision 9: one note per bound overload SET (not per member: the ambiguity is a property
@@ -7423,17 +7467,21 @@ private fun RirTypeRef.kotlinCollisionType(): String = when (this) {
 // carries: both names empty is a whole-assembly diagnostic (ADR-053's oblivious signal), a type
 // alone is type-scoped, both is member-scoped.
 internal fun formatDiagnostic(packageId: String, diagnostic: RirDiagnostic): String {
-  val location: String = when {
-    diagnostic.typeName.isEmpty() && diagnostic.memberName.isEmpty() -> packageId
-    diagnostic.memberName.isEmpty() -> "$packageId/${diagnostic.typeName}"
-    else ->
-      "$packageId/${diagnostic.typeName}.${diagnostic.memberName}(${diagnostic.memberSignature})"
-  }
+  val location: String = diagnosticLocation(packageId, diagnostic)
   // A reason that already closes its own sentence (the reader's SKIPPED_ARRAY one does) keeps its
   // period rather than gaining a second: forward's `ForwardDiagnostic.format()` does the same.
   val reason: String = diagnostic.reason.let { if (it.endsWith('.')) it else "$it." }
   return "[nuget:${diagnostic.kind.name}] ${diagnostic.kind.verb} $location: $reason " +
       diagnostic.hint
+}
+
+// The `<packageId>/<Type>.<member>(<sig>)` part of the console line, also the report's
+// `declaration`: both names empty is assembly-scoped, a type alone is type-scoped.
+internal fun diagnosticLocation(packageId: String, diagnostic: RirDiagnostic): String = when {
+  diagnostic.typeName.isEmpty() && diagnostic.memberName.isEmpty() -> packageId
+  diagnostic.memberName.isEmpty() -> "$packageId/${diagnostic.typeName}"
+  else ->
+    "$packageId/${diagnostic.typeName}.${diagnostic.memberName}(${diagnostic.memberSignature})"
 }
 
 public abstract class NugetGenerateBindingsTask : DefaultTask() {
@@ -7456,20 +7504,33 @@ public abstract class NugetGenerateBindingsTask : DefaultTask() {
   @get:OutputFile
   public abstract val boundTypesManifestFile: RegularFileProperty
 
+  @get:OutputFile
+  public abstract val diagnosticsFile: RegularFileProperty
+
   @TaskAction
   public fun generate() {
     val reverseIr: File = reverseIrFile.get().asFile
     val rir: RirFile = parseReverseIr(reverseIr.readText()).requireCurrentSchema(reverseIr.path)
 
-    // ROADMAP line 142 / Phase 9 (rule 5) / ADR-053: surface every diagnostic — reader-emitted
-    // (RirAssembly.diagnostics) and Gradle-plugin-derived (rule 5's collisionDiagnostics) alike —
-    // as a Gradle warning, ADR-043 diagnostic-format style: "a diagnostic nobody sees is just a
-    // silent skip." Detected here (not in generateKotlinStubs, which stays pure) because this
-    // task's logger is the narrowest place to make it visible to a user running the build; the
-    // actual skip (excluding a rule-5 collision from generated output) already happens inside the
-    // shared bridgeableRegistrables() so both this task and NugetGenerateShimsTask agree on what
-    // was dropped.
-    diagnosticWarnings(rir).forEach { logger.warn(it) }
+    // ADR-182 amendment: every diagnostic of every severity, written BEFORE anything can fail, so
+    // a fatal run still leaves a report holding its ERROR entries and that run's warnings. Then the
+    // log, same text as before: warnings and notes via logger.warn, ADR-043 style ("a diagnostic
+    // nobody sees is just a silent skip"), and the errors once, as the failure. Detected here (not
+    // in generateKotlinStubs, which stays pure); the actual skips happen in the shared
+    // bridgeableRegistrables() so both this task and NugetGenerateShimsTask agree on what dropped.
+    val diagnostics: List<Pair<String, RirDiagnostic>> = reverseDiagnostics(rir)
+    val report: File = diagnosticsFile.get().asFile
+    report.parentFile.mkdirs()
+    report.writeText(reverseDiagnosticsJson(diagnostics))
+    val (errors, rest) = diagnostics.partition { (_, d) ->
+      d.kind.severity == RirDiagnosticSeverity.ERROR
+    }
+    rest.forEach { (packageId, d) -> logger.warn(formatDiagnostic(packageId, d)) }
+    if (errors.isNotEmpty()) {
+      val lines: String =
+        errors.joinToString("\n") { (packageId, d) -> formatDiagnostic(packageId, d) }
+      throw GradleException(lines)
+    }
 
     val files: List<GeneratedFile> = generateKotlinStubs(
       file = rir,

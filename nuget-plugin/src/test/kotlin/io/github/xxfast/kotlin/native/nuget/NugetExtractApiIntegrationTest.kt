@@ -44,49 +44,6 @@ class NugetExtractApiIntegrationTest {
     "dotnet"
   }.getOrNull()
 
-  private fun runMetadataReader(
-    dotnet: String,
-    readerProjectDir: File,
-    dllPaths: Map<String, List<String>>,
-  ): String {
-    val cmd: List<String> = metadataReaderCommand(
-      dotnet = dotnet,
-      readerProjectDir = readerProjectDir,
-      dllPaths = dllPaths,
-      includes = emptyMap(),
-      excludes = emptyMap(),
-    )
-    val process: Process = ProcessBuilder(cmd).redirectErrorStream(false).start()
-    val stdout: String = process.inputStream.bufferedReader().readText()
-    val stderr: String = process.errorStream.bufferedReader().readText()
-    val exitCode: Int = process.waitFor()
-    assertEquals(0, exitCode, "metadata reader must succeed\n$stderr")
-    return stdout
-  }
-
-  private fun compileFixture(dotnet: String, source: String, name: String): File {
-    val dir: File = Files.createTempDirectory(name).toFile()
-    File(dir, "$name.csproj").writeText(
-      """
-      <Project Sdk="Microsoft.NET.Sdk">
-        <PropertyGroup>
-          <TargetFramework>net8.0</TargetFramework>
-          <Nullable>enable</Nullable>
-        </PropertyGroup>
-      </Project>
-      """.trimIndent(),
-    )
-    File(dir, "Fixture.cs").writeText(source)
-
-    val process: Process = ProcessBuilder(dotnet, "build", "--nologo", "--verbosity", "quiet")
-      .directory(dir)
-      .redirectErrorStream(true)
-      .start()
-    val output: String = process.inputStream.bufferedReader().readText()
-    assertEquals(0, process.waitFor(), "fixture compilation must succeed\n$output")
-    return File(dir, "bin/Debug/net8.0/$name.dll")
-  }
-
   private fun JsonObject.type(namespace: String, name: String): JsonObject {
     val assembly: JsonObject = getValue("assemblies").jsonArray.single().jsonObject
     val ns: JsonObject = assembly.getValue("namespaces").jsonArray
@@ -151,7 +108,7 @@ class NugetExtractApiIntegrationTest {
     val toolDir: File = Files.createTempDirectory("NugetMetadataReader-test").toFile()
     unpackMetadataReader(toolDir, javaClass.classLoader)
 
-    val json: String = runMetadataReader(dotnet, toolDir, dllPaths)
+    val json: String = RealPackageFixture.runMetadataReader(dotnet, toolDir, dllPaths)
 
     // 4. Parse the result
     val file: RirFile = parseReverseIr(json)
@@ -217,7 +174,7 @@ class NugetExtractApiIntegrationTest {
     val toolDir: File = Files.createTempDirectory("NugetMetadataReader-overloads").toFile()
     unpackMetadataReader(toolDir, javaClass.classLoader)
 
-    val json: String = runMetadataReader(dotnet, toolDir, dllPaths)
+    val json: String = RealPackageFixture.runMetadataReader(dotnet, toolDir, dllPaths)
 
     val file: RirFile = parseReverseIr(json)
 
@@ -283,13 +240,15 @@ class NugetExtractApiIntegrationTest {
         }
       """.trimIndent()
       val name = "OverloadReaderFixture$index"
-      val dll: File = compileFixture(dotnet, source, name)
+      val dll: File = RealPackageFixture.compileFixture(dotnet, source, name)
       val toolDir: File = Files
         .createTempDirectory("NugetMetadataReader-overload-fixture")
         .toFile()
       unpackMetadataReader(toolDir, javaClass.classLoader)
       Json.parseToJsonElement(
-        runMetadataReader(dotnet, toolDir, mapOf("OverloadFixture" to listOf(dll.absolutePath))),
+        RealPackageFixture.runMetadataReader(
+          dotnet, toolDir, mapOf("OverloadFixture" to listOf(dll.absolutePath)),
+        ),
       ).jsonObject
     }
 
@@ -409,11 +368,13 @@ class NugetExtractApiIntegrationTest {
       }
     """.trimIndent()
 
-    val dll: File = compileFixture(dotnet, source, "CollectionReaderFixture")
+    val dll: File = RealPackageFixture.compileFixture(dotnet, source, "CollectionReaderFixture")
     val toolDir: File = Files.createTempDirectory("NugetMetadataReader-collection-fixture").toFile()
     unpackMetadataReader(toolDir, javaClass.classLoader)
     val root: JsonObject = Json.parseToJsonElement(
-      runMetadataReader(dotnet, toolDir, mapOf("CollectionFixture" to listOf(dll.absolutePath))),
+      RealPackageFixture.runMetadataReader(
+        dotnet, toolDir, mapOf("CollectionFixture" to listOf(dll.absolutePath)),
+      ),
     ).jsonObject
 
     val type: JsonObject = root.type("Probe.Collections", "Roster")
@@ -531,11 +492,13 @@ class NugetExtractApiIntegrationTest {
       }
     """.trimIndent()
 
-    val dll: File = compileFixture(dotnet, source, "DelegateReaderFixture")
+    val dll: File = RealPackageFixture.compileFixture(dotnet, source, "DelegateReaderFixture")
     val toolDir: File = Files.createTempDirectory("NugetMetadataReader-delegate-fixture").toFile()
     unpackMetadataReader(toolDir, javaClass.classLoader)
     val root: JsonObject = Json.parseToJsonElement(
-      runMetadataReader(dotnet, toolDir, mapOf("DelegateFixture" to listOf(dll.absolutePath))),
+      RealPackageFixture.runMetadataReader(
+        dotnet, toolDir, mapOf("DelegateFixture" to listOf(dll.absolutePath)),
+      ),
     ).jsonObject
 
     val types: List<String> = root.getValue("assemblies").jsonArray.single().jsonObject
@@ -723,11 +686,13 @@ class NugetExtractApiIntegrationTest {
       }
     """.trimIndent()
 
-    val dll: File = compileFixture(dotnet, source, "AsyncReaderFixture")
+    val dll: File = RealPackageFixture.compileFixture(dotnet, source, "AsyncReaderFixture")
     val toolDir: File = Files.createTempDirectory("NugetMetadataReader-async-fixture").toFile()
     unpackMetadataReader(toolDir, javaClass.classLoader)
     val root: JsonObject = Json.parseToJsonElement(
-      runMetadataReader(dotnet, toolDir, mapOf("AsyncFixture" to listOf(dll.absolutePath))),
+      RealPackageFixture.runMetadataReader(
+        dotnet, toolDir, mapOf("AsyncFixture" to listOf(dll.absolutePath)),
+      ),
     ).jsonObject
 
     val methods: List<JsonObject> = root.type("Probe.Async", "Kennel")
@@ -882,11 +847,13 @@ class NugetExtractApiIntegrationTest {
       }
     """.trimIndent()
 
-    val dll: File = compileFixture(dotnet, source, "CancelReaderFixture")
+    val dll: File = RealPackageFixture.compileFixture(dotnet, source, "CancelReaderFixture")
     val toolDir: File = Files.createTempDirectory("NugetMetadataReader-cancel-fixture").toFile()
     unpackMetadataReader(toolDir, javaClass.classLoader)
     val root: JsonObject = Json.parseToJsonElement(
-      runMetadataReader(dotnet, toolDir, mapOf("CancelFixture" to listOf(dll.absolutePath))),
+      RealPackageFixture.runMetadataReader(
+        dotnet, toolDir, mapOf("CancelFixture" to listOf(dll.absolutePath)),
+      ),
     ).jsonObject
 
     val type: JsonObject = root.type("Probe.Cancel", "Kennel")
@@ -1012,7 +979,7 @@ class NugetExtractApiIntegrationTest {
     val toolDir: File = Files.createTempDirectory("NugetMetadataReader-mimemapping-test").toFile()
     unpackMetadataReader(toolDir, javaClass.classLoader)
 
-    val json: String = runMetadataReader(dotnet, toolDir, dllPaths)
+    val json: String = RealPackageFixture.runMetadataReader(dotnet, toolDir, dllPaths)
 
     // 4. Parse the result
     val file: RirFile = parseReverseIr(json)
@@ -1072,11 +1039,13 @@ class NugetExtractApiIntegrationTest {
       }
     """.trimIndent()
 
-    val dll: File = compileFixture(dotnet, source, "InitReaderFixture")
+    val dll: File = RealPackageFixture.compileFixture(dotnet, source, "InitReaderFixture")
     val toolDir: File = Files.createTempDirectory("NugetMetadataReader-init-fixture").toFile()
     unpackMetadataReader(toolDir, javaClass.classLoader)
     val file: RirFile = parseReverseIr(
-      runMetadataReader(dotnet, toolDir, mapOf("InitFixture" to listOf(dll.absolutePath))),
+      RealPackageFixture.runMetadataReader(
+        dotnet, toolDir, mapOf("InitFixture" to listOf(dll.absolutePath)),
+      ),
     )
     val ns: RirNamespace = file.assemblies.single().namespaces.single { it.name == "Probe.Init" }
     val kennel: RirClass = ns.types.filterIsInstance<RirClass>().single { it.name == "Kennel" }
@@ -1124,11 +1093,13 @@ class NugetExtractApiIntegrationTest {
       }
     """.trimIndent()
 
-    val dll: File = compileFixture(dotnet, source, "PhantomGenericReaderFixture")
+    val dll: File = RealPackageFixture.compileFixture(dotnet, source, "PhantomGenericReaderFixture")
     val toolDir: File = Files.createTempDirectory("NugetMetadataReader-phantom-fixture").toFile()
     unpackMetadataReader(toolDir, javaClass.classLoader)
     val file: RirFile = parseReverseIr(
-      runMetadataReader(dotnet, toolDir, mapOf("PhantomFixture" to listOf(dll.absolutePath))),
+      RealPackageFixture.runMetadataReader(
+        dotnet, toolDir, mapOf("PhantomFixture" to listOf(dll.absolutePath)),
+      ),
     )
     val registry: RirClass = file.assemblies.single()
       .namespaces.single { it.name == "Probe.Phantom" }
@@ -1177,11 +1148,13 @@ class NugetExtractApiIntegrationTest {
       }
     """.trimIndent()
 
-    val dll: File = compileFixture(dotnet, source, "NestedReaderFixture")
+    val dll: File = RealPackageFixture.compileFixture(dotnet, source, "NestedReaderFixture")
     val toolDir: File = Files.createTempDirectory("NugetMetadataReader-nested-fixture").toFile()
     unpackMetadataReader(toolDir, javaClass.classLoader)
     val file: RirFile = parseReverseIr(
-      runMetadataReader(dotnet, toolDir, mapOf("NestedFixture" to listOf(dll.absolutePath))),
+      RealPackageFixture.runMetadataReader(
+        dotnet, toolDir, mapOf("NestedFixture" to listOf(dll.absolutePath)),
+      ),
     )
 
     // The declaring type still binds as before.
@@ -1258,11 +1231,13 @@ class NugetExtractApiIntegrationTest {
       }
     """.trimIndent()
 
-    val dll: File = compileFixture(dotnet, source, "StructShapeReaderFixture")
+    val dll: File = RealPackageFixture.compileFixture(dotnet, source, "StructShapeReaderFixture")
     val toolDir: File = Files.createTempDirectory("NugetMetadataReader-struct-fixture").toFile()
     unpackMetadataReader(toolDir, javaClass.classLoader)
     val file: RirFile = parseReverseIr(
-      runMetadataReader(dotnet, toolDir, mapOf("StructFixture" to listOf(dll.absolutePath))),
+      RealPackageFixture.runMetadataReader(
+        dotnet, toolDir, mapOf("StructFixture" to listOf(dll.absolutePath)),
+      ),
     )
     val assembly: RirAssembly = file.assemblies.single()
 

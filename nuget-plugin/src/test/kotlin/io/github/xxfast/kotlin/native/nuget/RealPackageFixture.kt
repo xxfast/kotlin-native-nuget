@@ -101,6 +101,51 @@ object RealPackageFixture {
     )
   }
 
+  /** Runs the reader over local DLLs and returns its `reverse-ir.json`; a reader failure fails. */
+  fun runMetadataReader(
+    dotnet: String,
+    readerProjectDir: File,
+    dllPaths: Map<String, List<String>>,
+  ): String {
+    val cmd: List<String> = metadataReaderCommand(
+      dotnet = dotnet,
+      readerProjectDir = readerProjectDir,
+      dllPaths = dllPaths,
+      includes = emptyMap(),
+      excludes = emptyMap(),
+    )
+    val process: Process = ProcessBuilder(cmd).redirectErrorStream(false).start()
+    val stdout: String = process.inputStream.bufferedReader().readText()
+    val stderr: String = process.errorStream.bufferedReader().readText()
+    val exitCode: Int = process.waitFor()
+    check(exitCode == 0) { "metadata reader must succeed\n$stderr" }
+    return stdout
+  }
+
+  /** Compiles one C# source file into a net8.0 DLL named [name], nullable context enabled. */
+  fun compileFixture(dotnet: String, source: String, name: String): File {
+    val dir: File = Files.createTempDirectory(name).toFile()
+    File(dir, "$name.csproj").writeText(
+      """
+      <Project Sdk="Microsoft.NET.Sdk">
+        <PropertyGroup>
+          <TargetFramework>net8.0</TargetFramework>
+          <Nullable>enable</Nullable>
+        </PropertyGroup>
+      </Project>
+      """.trimIndent(),
+    )
+    File(dir, "Fixture.cs").writeText(source)
+
+    val process: Process = ProcessBuilder(dotnet, "build", "--nologo", "--verbosity", "quiet")
+      .directory(dir)
+      .redirectErrorStream(true)
+      .start()
+    val output: String = process.inputStream.bufferedReader().readText()
+    check(process.waitFor() == 0) { "fixture compilation must succeed\n$output" }
+    return File(dir, "bin/Debug/net8.0/$name.dll")
+  }
+
   /**
    * Cuts an absolute NuGet-cache path down to the part that is the same on every machine. The
    * cache path is `<home>/.nuget/packages/<id lowercased>/<version>/lib/<tfm>/<name>.dll`, and

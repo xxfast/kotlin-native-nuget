@@ -114,6 +114,40 @@ abstract class CheckWritersideReport : DefaultTask() {
   }
 }
 
+/**
+ * ADR-182 amendment: reads the reverse report `nugetGenerateBindings` wrote for `test-library`'s
+ * `bind {}` dependency during the pack `scripts/verify.sh` just ran.
+ */
+@DisableCachingByDefault(because = "only asserts on a generated file that a prior build wrote")
+abstract class VerifyReverseDiagnostics : DefaultTask() {
+  // Internal, not an input file: a missing report must reach the check below with its own message.
+  @get:Internal
+  abstract val report: RegularFileProperty
+
+  @TaskAction
+  fun verify() {
+    val file = report.get().asFile
+    check(file.isFile) { "No reverse diagnostics report at $file" }
+    val data = JsonSlurper().parseText(file.readText())
+    check(data is Map<*, *> && data["schemaVersion"] == 1) {
+      "$file has no schemaVersion 1 object root"
+    }
+    val entries: List<*> = data["diagnostics"] as List<*>
+    check(entries.isNotEmpty()) { "$file is empty; the bound TestDependency has known skips" }
+    entries.forEach { item ->
+      val entry = item as Map<*, *>
+      val kind = entry["kind"]
+      check(entry["severity"] in setOf("WARNING", "INFO") && entry["packageId"] != null) {
+        "$file holds a malformed or fatal entry: $entry"
+      }
+      check((entry["message"] as String).startsWith("[nuget:$kind] ")) {
+        "$file entry does not carry its code in the console shape: $entry"
+      }
+    }
+    println("reverse diagnostics report: ${entries.size} entries in $file")
+  }
+}
+
 tasks.register<VerifyForwardDiagnostics>("verifyForwardDiagnostics") {
   root.set(layout.projectDirectory)
   siblings.set(mapOf("test-library" to "TestCompanion", "test-companion" to "TestLibrary"))
@@ -126,4 +160,8 @@ tasks.register<VerifyForwardDiagnostics>("verifyForwardDiagnostics") {
 tasks.register<CheckWritersideReport>("checkWritersideReport") {
   val projectDirectory = layout.projectDirectory
   report.set(providers.gradleProperty("writersideReport").map { projectDirectory.file(it) })
+}
+
+tasks.register<VerifyReverseDiagnostics>("verifyReverseDiagnostics") {
+  report.set(layout.projectDirectory.file("test-library/build/nuget-interop/NugetDiagnostics.json"))
 }
