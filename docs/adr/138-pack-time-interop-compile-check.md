@@ -479,7 +479,31 @@ The `TargetFramework` row above is no longer a constant: `generateCheckCsproj` w
 lookup and the `.nuspec` dependency group use. `LangVersion` moves from `12.0` to `14.0`, the C#
 level ADR-188 sets as the generated code's floor and the default language of `net10.0`.
 `GeneratedBindingsCheck/GeneratedBindingsCheck.csproj` moves to `net10.0` / `14.0` with it, so the
-two property sets still match. Compiling against TFMs above the floor stays on its own ROADMAP line.
+two property sets still match. Compiling above the floor is covered by the 2026-10-03 amendment below.
+
+## Amendment (2026-10-03): the check also compiles higher frameworks
+
+The csproj now sets `TargetFrameworks` instead of `TargetFramework`: every `netX.0` from the
+configured floor through the major of the SDK selected by the hermetic `dotnet --version` probe,
+built as one project. The package still ships the single floor TFM (ADR-184), there is no public
+matrix DSL, and nothing is promised about frameworks newer than the installed SDK.
+
+- The floor is always in the set, even when the SDK is older, so an unsupported-framework error stays
+  visible rather than the floor being dropped.
+- Preview SDK versions (`11.0.100-preview.1.x`) parse; any other malformed `dotnet --version` output
+  fails the task. A framework whose targeting pack is missing is never silently omitted: restore or
+  build fails and the failure is fatal.
+- A missing or unusable SDK keeps the existing warn or strict policy above.
+- The task logs the checked frameworks and the SDK (`Compiling generated C# for net10.0 (SDK 10...)`).
+  The compile-failure message now reads "The generated C# compile check failed for <frameworks>".
+- Gradle up-to-date suppression is disabled (`outputs.upToDateWhen { false }`): the installed SDK is
+  not a tracked input, so installing a newer one must widen the check. MSBuild stays incremental.
+
+Verified: the full `verify.sh --plugin` run passed (plugin suite, Integration, Leak, MultiPackage,
+SharedException, all six AOT checks) and the host check logged `net10.0` with SDK 10. An internal
+task test with floor `net9.0` through SDK 10 proves that C# which fails only on `net10.0`
+(`#error`) is caught and that both DLLs are produced. Inferred, not run: a host with SDK 11 or a
+preview SDK end to end (the version parse is unit-tested). The public DSL still requires `>= net10`.
 
 ## Amendment (2026-10-03): `check` depends on the check
 

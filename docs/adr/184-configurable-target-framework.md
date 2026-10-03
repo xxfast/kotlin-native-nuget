@@ -86,8 +86,17 @@ Mechanism:
 - Package layout change at every TFM, including the default: `contentFiles/cs/any/` becomes `contentFiles/cs/<tfm>/`, `build/<id>.targets` becomes `build/<tfm>/<id>.targets`, and `lib/<tfm>/_._` appears. Consumers at or above the floor see no difference (verified: `GeneratedBindingsCheck`, `IntegrationTests`, `LeakTests`, `MultiPackageTests`, `SharedExceptionTests` and the NativeAOT smoke test, all `net10.0`, against the new layout). ADR-050 and ADR-138 carry dated amendments; the `NugetGenerateBindingsTask` registry diagnostic now names `contentFiles/cs/<tfm>/`.
 - The repo's net8.0 consumers (`GeneratedBindingsCheck`, `FirstPublisherConsumer`, `SecondPublisherConsumer`) move to `net10.0`.
 - `Kotlin.Native.Interop` stays `lib/net8.0`; a `net10.0` package depends on it unchanged. Bound reverse packages that ship only `lib/net8.0` still restore under the `net10.0` restore project (verified: `TestDependency`).
-- `nugetCompileInterop` compiles at the configured floor only; the every-TFM sweep stays on its own ROADMAP line.
+- `nugetCompileInterop` compiles at the floor and, since the 2026-10-03 amendment, every higher framework through the installed SDK.
 - Deferred: multi-targeting, platform-specific TFMs, netstandard, .NET Framework, per-dependency TFMs for reverse.
 - Lands with or after ADR-180 (same `NugetExtension.kt` rewrite); textual overlap with ADR-181 and ADR-182 in `NugetPlugin.kt` and the plugin tests.
 
 **Inferred claims in this ADR, not verified:** the net6.0 API floor of the generated code (no per-TFM compile run); the silent drop for today's net6.0/net7.0 consumers (same mechanism as the verified net8.0-under-net10.0 case, not run); the assets.json key being the normalized short name for spellings other than `netX.0`; .NET 8 end-of-support date; C# 14 being the net10.0 default language. None of these changes the chosen mechanism; the first and third are guarded by the `>= 10` and exact-form validation.
+
+## Amendment (2026-10-03): the compile check also covers higher frameworks
+
+`nugetCompileInterop` builds one multi-target project from the configured floor through the major of
+the installed .NET SDK, so C# that breaks only on a higher framework fails the pack. The package
+still ships one floor TFM, the public DSL still requires `>= net10`, and no future-TFM guarantee is
+made. Details, edge cases and evidence are in the ADR-138 amendment of the same date. Verified: the
+full `verify.sh --plugin` run passed and the host check logged `net10.0` with SDK 10; a floor `net9.0`
+task test through SDK 10 caught a `net10.0`-only error.
