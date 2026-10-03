@@ -198,6 +198,16 @@ tasks.register<Test>("dogfoodCensus") {
   testLogging { showStandardStreams = true }
 }
 
+// Kover instruments every `Test` task and makes its reports depend on all of them, which pulled
+// the census (and nuget.org) into `koverXmlReport` and so into every PR's matrix.
+kover {
+  currentProject {
+    instrumentation {
+      disabledForTestTasks.add("dogfoodCensus")
+    }
+  }
+}
+
 gradlePlugin {
   website.set("https://github.com/xxfast/kotlin-native-nuget")
   vcsUrl.set("https://github.com/xxfast/kotlin-native-nuget")
