@@ -842,7 +842,9 @@ internal fun warnRefusedLegacyRouteMembers(
     ownerDeclaration: ForwardDiagnosticOwner?,
   ): Boolean {
     val (marked: KSFunctionDeclaration, marker: String) = listOf(addMethod, removeMethod)
-      .firstNotNullOfOrNull { half -> half.optInMarker(classifier.exportMarkers)?.let { half to it } }
+      .firstNotNullOfOrNull { half ->
+        half.optInMarker(classifier.exportMarkers)?.let { marker -> half to marker }
+      }
       ?: return false
     listOf(addMethod, removeMethod).forEach { member ->
       add(
