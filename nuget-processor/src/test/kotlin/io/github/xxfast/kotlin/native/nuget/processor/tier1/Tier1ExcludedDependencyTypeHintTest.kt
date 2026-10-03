@@ -235,4 +235,70 @@ class Tier1ExcludedDependencyTypeHintTest {
       "expected the admission-rule-4 sentence and remedy; got: $crossModule",
     )
   }
+  private fun nestedValueScope(options: Map<String, String>, hint: String) {
+    val dependency: File = Tier1DependencyLibrary.compile(
+      """
+      package dep.labels
+      class Owner {
+        @JvmInline value class Tag(val value: String)
+      }
+      """.trimIndent(),
+      fileName = "Labels.kt",
+    )
+    val result = Tier1Harness.run(
+      """
+      package tier1.labels
+      import dep.labels.Owner
+      class Desk {
+        fun tag(): Owner.Tag = Owner.Tag("Oreo")
+        val badge: Owner.Tag get() = Owner.Tag("Mylo")
+        fun control(): Int = 7
+      }
+      """.trimIndent(),
+      processorOptions = options,
+      libraries = listOf(dependency),
+    )
+    assertTrue(result.compiledClean, "expected valid generated exports: ${result.compileErrors}")
+    listOf("Desk.tag", "Desk.badge").forEach { member ->
+      val warnings: List<String> = result.kspWarnings.filter {
+        it.contains(member) && it.contains("SKIPPED_")
+      }
+      assertTrue(warnings.isNotEmpty(), "expected named $member refusal: ${result.kspWarnings}")
+      val warning: String = warnings.joinToString("\n")
+      assertTrue(warning.contains("dep.labels.Owner.Tag"), warning)
+      assertTrue(warning.contains(hint), warning)
+      assertFalse(warning.contains("move it to the top level"), warning)
+      assertFalse(warning.contains("add include("), warning)
+    }
+    assertTrue(result.kspWarnings.any {
+      it.contains("Desk.tag") &&
+          it.contains(ForwardDiagnosticKind.SKIPPED_UNEXPORTED_DEPENDENCY_TYPE.name)
+    }, "expected dependency-scope method kind: ${result.kspWarnings}")
+    val csharp: String = result.generatedCSharp.withoutDocComments()
+    assertFalse(csharp.contains("record struct Tag"), csharp)
+    assertFalse(csharp.contains(" Tag("), csharp)
+    assertFalse(csharp.contains(" Badge"), csharp)
+    assertFalse(result.generated.contains("desk_tag"), result.generated)
+    assertFalse(result.generated.contains("desk_get_badge"), result.generated)
+    assertTrue(result.generated.contains("desk_control"), result.generated)
+  }
+
+  @Test
+  fun `nested value class outside admission names additive owner remedy`() {
+    nestedValueScope(mapOf("nuget.rootPackage" to "tier1.labels"),
+      "add admit(\"dep.labels.Owner\")")
+  }
+
+  @Test
+  fun `nested value class inherits explicit owner exclusion`() {
+    nestedValueScope(mapOf(
+      "nuget.includePackages" to "tier1.labels,dep.labels",
+      "nuget.excludePackages" to "dep.labels.Owner",
+    ), "exclude(\"dep.labels.Owner\")")
+  }
+
+  @Test
+  fun `nested value class names disabled cross module admission`() {
+    nestedValueScope(emptyMap(), "cross-module export is off")
+  }
 }
