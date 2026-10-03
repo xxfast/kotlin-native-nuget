@@ -138,8 +138,14 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   // wrapper, so the trimmer keeps each constructor and the AOT compiler pre-compiles it. A plain
   // static field initializer is enough: the CLR runs the type initializer before the first access
   // to any static member of NugetMarshal, and every read goes through Materialize<T> below.
-  appendLine("        internal static readonly System.Collections.Generic.Dictionary<Type, Func<NugetKotlinHandle, object>> Factories =")
-  appendLine("            new System.Collections.Generic.Dictionary<Type, Func<NugetKotlinHandle, object>>")
+  appendLine(
+    "        internal static readonly System.Collections.Generic.Dictionary<Type, " +
+        "Func<NugetKotlinHandle, object>> Factories =",
+  )
+  appendLine(
+    "            new System.Collections.Generic.Dictionary<Type, " +
+        "Func<NugetKotlinHandle, object>>",
+  )
   appendLine("        {")
   for (entry in helper.factories) {
     // Issue #40: a sealed base has no handle constructor, so it routes through the discriminator
@@ -185,8 +191,14 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("            var owned = new NugetKotlinHandle(handle);")
   appendLine("            try")
   appendLine("            {")
-  appendLine("                if (Factories.TryGetValue(key, out Func<NugetKotlinHandle, object>? factory)) return (T)factory(owned);")
-  appendLine("                throw new NotSupportedException($\"No generated factory materialises {typeof(T)} from a Kotlin handle\");")
+  appendLine(
+    "                if (Factories.TryGetValue(key, out " +
+        "Func<NugetKotlinHandle, object>? factory)) return (T)factory(owned);",
+  )
+  appendLine(
+    "                throw new NotSupportedException($\"No generated factory materialises " +
+        "{typeof(T)} from a Kotlin handle\");",
+  )
   appendLine("            }")
   // A factory can throw before or after constructing a wrapper. Both share this owner, so
   // cleanup releases exactly once even if that wrapper is subsequently disposed or finalized.

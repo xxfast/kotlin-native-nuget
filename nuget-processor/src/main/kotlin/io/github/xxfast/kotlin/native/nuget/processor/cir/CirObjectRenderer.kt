@@ -175,7 +175,10 @@ private fun StringBuilder.renderValueClassBoxing(cls: CirValueClass) {
   appendLine("            $wire nativeResult;")
   appendLine("            try")
   appendLine("            {")
-  appendLine("                nativeResult = ${boxing.unboxImport.name}(boxed.DangerousGetHandle(), out IntPtr error);")
+  appendLine(
+    "                nativeResult = ${boxing.unboxImport.name}(" +
+        "boxed.DangerousGetHandle(), out IntPtr error);",
+  )
   appendLine("                if (error != IntPtr.Zero)")
   appendLine("                {")
   appendLine("                    throw NugetErrorNative.BuildException(error);")
