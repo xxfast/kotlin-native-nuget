@@ -67,8 +67,17 @@ bash "$ROOT/scripts/verify-contract-version-ranges.sh"
 
 # ADR-128: the `launchForCSharp` / `collectForCSharp` runtime helpers are ordinary Kotlin/Native
 # code, so they are driven in-process here before the link that would only exercise them via C#.
-echo "==> Runtime helper tests (:nuget-runtime:allTests)"
-./gradlew :nuget-runtime:allTests
+#
+# `allTests` compiles and links the test binary of every declared target but can only run the
+# host's, so name the host's test task and skip the other three links.
+case "$(uname -s)" in
+  MINGW* | MSYS*) runtime_test=mingwX64Test ;;
+  Darwin) if [ "$(uname -m)" = arm64 ]; then runtime_test=macosArm64Test; else runtime_test=macosX64Test; fi ;;
+  Linux) runtime_test=linuxX64Test ;;
+  *) runtime_test=allTests ;;
+esac
+echo "==> Runtime helper tests (:nuget-runtime:$runtime_test)"
+./gradlew ":nuget-runtime:$runtime_test"
 
 echo "==> Pack both independent Kotlin NuGet publishers"
 ./gradlew :test-library:clean :test-companion:clean \

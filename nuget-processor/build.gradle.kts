@@ -56,8 +56,15 @@ dependencies {
 // (ADR-060 Verification, "KSP2 is re-entrant in one JVM"), which is exactly what lets every
 // Tier 1 test share one warm worker and hit the ADR's measured per-cell cost instead of paying
 // the ~5-6s cold-JVM cost per cell.
+//
+// Parallel forks keep that property: each worker stays warm for its whole share of the suite, so
+// the cold-JVM cost is paid once per fork rather than once per cell. One fork per four cores,
+// because each KSP session and in-process compile is already multi-threaded: measured, four forks
+// on 16 cores cut the task from 342 s to 205 s, while two and three forks on the 3- and 4-core CI
+// runners were no faster than one. Those runners therefore still get a single worker.
 tasks.test {
   useJUnitPlatform()
+  maxParallelForks = (Runtime.getRuntime().availableProcessors() / 4).coerceIn(1, 4)
 }
 
 // Publishes to the Sonatype Central Portal. Credentials and signing come from Gradle
