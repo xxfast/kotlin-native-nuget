@@ -1432,6 +1432,7 @@ class Tier1NestedTypesTest {
           "${csharp.lines().filter { it.contains("class Marker") }}",
     )
   }
+
   private fun compileCollisionConsumer(result: Tier1Result, shape: String) {
     // Build the actual output of this KSP run; a DLL or restored cache cannot prove this cell.
     val root: File = generateSequence(File(System.getProperty("user.dir")).canonicalFile) {
@@ -1440,9 +1441,9 @@ class Tier1NestedTypesTest {
     val directory: File = Files.createTempDirectory("nuget-collision-consumer-").toFile()
     try {
       directory.resolve("Interop.cs").writeText(result.generatedCSharp)
-      val consumer: String = requireNotNull(javaClass.getResource("/csharp/NestedCollisionConsumer.cs")) {
-        "missing compile-only collision consumer resource"
-      }.readText()
+      val consumer: String = requireNotNull(
+        javaClass.getResource("/csharp/NestedCollisionConsumer.cs"),
+      ) { "missing compile-only collision consumer resource" }.readText()
       directory.resolve("Consumer.cs").writeText(consumer)
       val contract: String = root.resolve("Kotlin.Native.Interop/Kotlin.Native.Interop.csproj")
         .path.replace('\\', '/')
@@ -1484,7 +1485,7 @@ class Tier1NestedTypesTest {
   ) {
     assertTrue(result.kspErrors.any {
       it.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name)
-    }, "expected fatal KSP failure, independently of generated-output compilation: ${result.kspErrors}")
+    }, "expected fatal KSP failure, independent of generated-output compile: ${result.kspErrors}")
     collisions.forEach { collision ->
       assertTrue((result.kspErrors + result.kspWarnings).any {
         it.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name) &&
