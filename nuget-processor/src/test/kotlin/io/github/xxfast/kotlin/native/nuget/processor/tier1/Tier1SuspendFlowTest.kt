@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -89,7 +90,19 @@ class Tier1SuspendFlowTest {
       assertFalse("${name}_collect" in result.generated, result.generated)
       assertFalse("${name.replaceFirstChar { it.uppercase() }}Async(" in result.generatedCSharp, result.generatedCSharp)
     }
-    assertFalse("OwnObjectAsync(" in result.generatedCSharp, result.generatedCSharp)
     assertFalse("Generic_own_collect" in result.generated, result.generated)
+  }
+
+  @Test fun `a suspend member on an object is absent and named exactly once`() {
+    val declarations: List<String> = result.generatedCSharp.lines()
+      .filterNot { line -> line.trimStart().startsWith("//") }
+    assertTrue(
+      declarations.none { line -> Regex("\\bOwnObject(Async)?\\s*\\(").containsMatchIn(line) },
+      result.generatedCSharp,
+    )
+    listOf("tier1.suspendflow.Standalone.ownObject", "tier1.suspendflow.Generic.own").forEach { member ->
+      val named: List<String> = result.kspWarnings.filter { warning -> "Skipping $member:" in warning }
+      assertEquals(1, named.size, "$member must be named once; kspWarnings=${result.kspWarnings}")
+    }
   }
 }

@@ -55,7 +55,6 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
   GENERIC(droppedFromCSharp = false),
   SUSPEND(droppedFromCSharp = false),
   SUSPEND_CALLBACK_PROTOCOL(droppedFromCSharp = false),
-  TYPE_PARAMETER(droppedFromCSharp = false),
 
   // No legacy home: the callable is dropped from the C# API and must warn. CHAR/STRING/ENUM/HANDLE/
   // OBJECT are supported ordinary types with no legacy route, so a skip carrying them can only mean
@@ -410,8 +409,12 @@ internal fun ForwardCallableCatalogEntry.ownedBy(
 /**
  * ADR-064 amendment (2026-09-13): the deferral reasons whose legacy route exists only at *some*
  * owner/position combinations, so a skip carrying one has to be checked against the route's own
- * gate before it is allowed to stay silent. `SUSPEND` is deliberately absent (the suspend route is
- * keyed to every owner the planner reaches), and so are `ABSTRACT` and `TYPE_PARAMETER`.
+ * gate before it is allowed to stay silent. `SUSPEND` and `ABSTRACT` are absent. The suspend
+ * route is NOT keyed to every owner the planner reaches (the ADR-064 audit amendment measured an
+ * object, a class companion, a value class and an unreachable interface silent), but each owner
+ * the route skips names its SUSPEND deferral directly, through `namedSuspend()`, rather than
+ * through a routed predicate here. `ABSTRACT` is declared by the class declaration walk, and named
+ * on a sealed arm by `sealedSubclassEntries`.
  */
 private val UNROUTED_CANDIDATE_REASONS: Set<ForwardPlanSkipReason> = setOf(
   ForwardPlanSkipReason.GENERIC,
@@ -1012,16 +1015,11 @@ internal class ForwardCallablePlanner(
       // class -- which is what `forwardDiagnosticOwner()` returns for a companion.
       classes.forEach { cls -> addAll(companionEntries(cls).ownedBy(cls.forwardDiagnosticOwner())) }
       // ADR-006 amendment: an enum's own functions and its companion's functions, both rendered in
-      // `{Enum}Extensions`, so a skip is named on the enum. No suspend route is keyed to an enum
-      // companion (the class suspend route reads `classes`), so a suspend one is named here rather
-      // than left a silent SUSPEND deferral.
+      // `{Enum}Extensions`, so a skip is named on the enum. A suspend companion member is named by
+      // `companionEntries` itself, as it is for a class companion.
       enums.forEach { enum ->
         addAll(enumEntries(enum).ownedBy(enum.forwardDiagnosticOwner()))
-        addAll(
-          companionEntries(enum)
-            .map { entry -> entry.namedSuspend() }
-            .ownedBy(enum.forwardDiagnosticOwner())
-        )
+        addAll(companionEntries(enum).ownedBy(enum.forwardDiagnosticOwner()))
       }
       valueClasses.forEach { cls ->
         addAll(valueClassEntries(cls).ownedBy(cls.forwardDiagnosticOwner()))
@@ -1396,6 +1394,12 @@ internal class ForwardCallablePlanner(
     // same-name members shared one symbol and one export name, and a reachable interface aborted
     // generation on a duplicate plan.
     val occurrences: MutableMap<String, Int> = mutableMapOf()
+    // ADR-064 audit amendment: the ADR-174 suspend route carries an interface only when it is
+    // reachable. A generic interface's suspend member is already named by
+    // SKIPPED_GENERIC_INTERFACE_ASYNC_MEMBER, and a sealed interface's arms bind it, so only an
+    // unreachable, non-generic, non-sealed interface names its SUSPEND deferral here.
+    val namesSuspend: Boolean = !ForwardAsyncInterfaces.carries(iface) &&
+        iface.typeParameters.isEmpty() && !iface.isSealedInterface()
     return methods.mapIndexed { index, method ->
       val name: String = method.simpleName.asString()
       val occurrence: Int = occurrences.merge(name, 1, Int::plus)!!
@@ -1415,7 +1419,8 @@ internal class ForwardCallablePlanner(
         else -> null
       }
       if (structuralReason != null) {
-        ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = method)
+        val skipped = ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = method)
+        if (namesSuspend) skipped.namedSuspend() else skipped
       } else {
         planOrSkip(
           symbol = symbol,
@@ -1882,13 +1887,19 @@ internal class ForwardCallablePlanner(
 
     // ADR-116 Diagnostics: `droppedFromCSharp = false` means "a named legacy route re-emits it",
     // which is only true for an ordinary class. On a sealed arm the member is simply gone, so the
-    // silent deferral becomes a named drop carrying the reason it came from. ABSTRACT cannot occur
-    // on a concrete arm's declared member, and its base-declared form is deferred with the
-    // base-type item, so it is deliberately left silent.
+    // silent deferral becomes a named drop carrying the reason it came from. ABSTRACT included
+    // (ADR-064 audit amendment): only an `abstract` or `sealed` arm can declare one, and the sealed
+    // route declares no abstract member on the arm except through the arm suspend and Flow routes
+    // (measured: `abstract suspend fun` and `abstract fun f(): Flow<Int>` are declared), which read
+    // the declaration themselves, so those two stay exempt.
     return entries.map { entry ->
       if (entry !is ForwardCallableCatalogEntry.Skipped) return@map entry
+      val abstractOnAsyncRoute: Boolean = entry.reason == ForwardPlanSkipReason.ABSTRACT &&
+          (entry.node as? KSFunctionDeclaration)?.let { method ->
+            method.modifiers.contains(Modifier.SUSPEND) || method.hasLegacyFlowReturn()
+          } == true
       val isUnrouted: Boolean =
-        !entry.reason.droppedFromCSharp && entry.reason != ForwardPlanSkipReason.ABSTRACT &&
+        !entry.reason.droppedFromCSharp && !abstractOnAsyncRoute &&
             // ADR-118: the legacy suspend route is keyed to sealed arms now, so a SUSPEND skip on
             // an arm means exactly what it means on an ordinary class -- "the plan does not own
             // this one, the named legacy route does" -- and stays silent. The numbered symbol is
@@ -2261,8 +2272,9 @@ internal class ForwardCallablePlanner(
       )
     }
     // ADR-064 amendment (2026-09-13): no legacy route is keyed to an object owner at all,
-    // measured, cells 3a/13a/18a/22a, so every deferral here is a drop, with no exemption.
-    return members.map { member -> entryFor(member) }.nameUnroutedPositions()
+    // measured, cells 3a/13a/18a/22a, so every deferral here is a drop, with no exemption. The
+    // audit amendment: SUSPEND included (the suspend route walks classes, never an object).
+    return members.map { member -> entryFor(member).namedSuspend() }.nameUnroutedPositions()
   }
 
   /**
@@ -2324,8 +2336,10 @@ internal class ForwardCallablePlanner(
   }
 
   /**
-   * ADR-006 amendment: a SUSPEND deferral on an enum owner has no suspend route to defer to, so it
-   * becomes the named structural drop `extensionEntry` already uses for a suspend extension.
+   * ADR-006 amendment, widened by the ADR-064 audit amendment: a SUSPEND deferral on an owner no
+   * suspend route reads (an enum, an object, a companion, a value class, an unreachable interface)
+   * has nothing to defer to, so it becomes the named structural drop `extensionEntry` already uses
+   * for a suspend extension.
    */
   private fun ForwardCallableCatalogEntry.namedSuspend(): ForwardCallableCatalogEntry =
     if (this is ForwardCallableCatalogEntry.Skipped && reason == ForwardPlanSkipReason.SUSPEND) {
@@ -2368,8 +2382,10 @@ internal class ForwardCallablePlanner(
     }
     // ADR-064 amendment (2026-09-13): a companion is a static owner like an object, and the
     // legacy routes are keyed to instance members; unmeasured, so a companion member appearing
-    // in the diagnostic diff is worth checking against `Interop.cs` before it is believed.
-    return members.map { member -> entryFor(member) }.nameUnroutedPositions()
+    // in the diagnostic diff is worth checking against `Interop.cs` before it is believed. The
+    // audit amendment: no suspend route reads a companion either (an enum's or a class's), so a
+    // SUSPEND deferral here is a named drop too.
+    return members.map { member -> entryFor(member).namedSuspend() }.nameUnroutedPositions()
   }
 
   private fun staticEntry(
@@ -5026,8 +5042,8 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
   }
 
   // ADR-147 v1: only reached from a position a `T` cannot bind at (nested in a collection, a
-  // lambda or a value class); a top-level `T` plans a shape and never asks. UNSUPPORTED rather
-  // than the silent TYPE_PARAMETER deferral, which is reserved for a reason with a legacy route.
+  // lambda or a value class); a top-level `T` plans a shape and never asks. UNSUPPORTED, a named
+  // drop: no legacy route carries a type parameter at such a position.
   is BridgeType.TypeParameter -> ForwardPlanSkipReason.UNSUPPORTED
 
   is BridgeType.RawCollection -> ForwardPlanSkipReason.COLLECTION
