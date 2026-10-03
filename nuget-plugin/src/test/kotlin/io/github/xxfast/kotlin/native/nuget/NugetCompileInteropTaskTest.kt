@@ -14,6 +14,7 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -200,6 +201,36 @@ class NugetCompileInteropTaskTest {
     assertTrue(deps.contains(compile), "packNuget must depend on nugetCompileInterop")
     assertEquals(packNuget.generatedCsDirs.files, compile.generatedCsDirs.files)
     assertEquals(emptyMap(), compile.dependencyVersions.get())
+  }
+
+  @Test
+  fun `check depends on nugetCompileInterop when publish is configured`() {
+    val project: Project = buildProject()
+    publish(project)
+    project.evaluate()
+
+    val check: Task = project.tasks.getByName("check")
+    val compile: Task = project.tasks.getByName("nugetCompileInterop")
+
+    assertTrue(
+      check.taskDependencies.getDependencies(check).contains(compile),
+      "check must compile the generated C# bindings, not only packNuget",
+    )
+  }
+
+  @Test
+  fun `check gains no compile dependency without publish`() {
+    val project: Project = buildProject()
+    project.extensions.getByType(NugetExtension::class.java).dependencies {
+      it.dependency("TestDependency", version = "1.0.0") { dep -> dep.bind { } }
+    }
+    project.evaluate()
+
+    val check: Task = project.tasks.getByName("check")
+    val names: Set<String> = check.taskDependencies.getDependencies(check).map { it.name }.toSet()
+
+    assertNull(project.tasks.findByName("nugetCompileInterop"))
+    assertFalse("nugetCompileInterop" in names, "check depended on $names")
   }
 
   @Test

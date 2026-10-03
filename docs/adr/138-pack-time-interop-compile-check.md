@@ -421,17 +421,17 @@ Three seams, all on the plugin's JVM tests plus one line in verify:
 - Files touched: `NugetCompileInteropTask.kt` (new), `NugetPlugin.kt` (register + `dependsOn`,
   hoist the bound-deps providers), `PackNugetTask.kt` (extract `generatedCsFiles`),
   `NugetCompileInteropTaskTest.kt` (new), plus the two doc pages and the ROADMAP tick.
-- Deferred: an opt-in strict mode that fails instead of skipping when `dotnet` is absent; wiring
-  the task into Gradle's `check` lifecycle; compiling against more than one TFM; a negative
-  end-to-end fixture.
+- Deferred: an opt-in strict mode that fails instead of skipping when `dotnet` is absent; compiling
+  against more than one TFM; a negative end-to-end fixture. Wiring into `check` is done, see the
+  2026-10-03 amendment.
 
 ## Open questions
 
 - Should the skip be opt-out (`nuget { publish { requireCompileCheck = true } }`, or a Gradle
   property) so a CI that forgot to install the SDK fails loudly instead of warning? Not decided
   here; the warning is the v1 answer.
-- Does the check belong on the `check` lifecycle task as well as on `packNuget`? Harmless either
-  way; left out to keep the wiring to one `dependsOn`.
+- Does the check belong on the `check` lifecycle task as well as on `packNuget`? Yes, see the
+  2026-10-03 amendment.
 
 ## Amendment (2026-09-15): the check is hermetic and an unusable SDK is an environment skip
 
@@ -479,3 +479,25 @@ lookup and the `.nuspec` dependency group use. `LangVersion` moves from `12.0` t
 level ADR-188 sets as the generated code's floor and the default language of `net10.0`.
 `GeneratedBindingsCheck/GeneratedBindingsCheck.csproj` moves to `net10.0` / `14.0` with it, so the
 two property sets still match. Compiling against TFMs above the floor stays on its own ROADMAP line.
+
+## Amendment (2026-10-03): `check` depends on the check
+
+`check` now depends on `nugetCompileInterop` as well as `packNuget`, wired through
+`LifecycleBasePlugin` when `publish {}` is configured. A Kotlin author running `./gradlew check`
+gets the generated C# compiled instead of finding out at `packNuget`. The Decision's "Wiring"
+section describes a `packNuget` `afterEvaluate` block that predates ADR-180, which moved the
+registration into `registerPublish`; it is left as written.
+
+Measured on `test-library` (macOS arm64): `./gradlew :test-library:check --dry-run` went from 68 to
+70 tasks. The two new ones are `nugetGenerateShims` (only because that project also binds a
+dependency) and `nugetCompileInterop`. No new KSP or link task appears, since the
+`kspKotlin<first supported target>` the check depends on was already part of `check`. The cost is
+one `dotnet build` of the generated C#. A real `check` run executed the compile rather than
+skipping, and passed in 33s.
+
+- Without `dotnet` the task keeps its soft skip with a warning.
+- A project without `publish {}` does not register the task, so its `check` gains nothing.
+- A configured but wrong `nuget.dotnet` (the override in `prerequisites.md`) now fails `check` as
+  well as `packNuget`.
+- Inferred, not verified on such a host: `check` on a host that cannot build every target is
+  unaffected.

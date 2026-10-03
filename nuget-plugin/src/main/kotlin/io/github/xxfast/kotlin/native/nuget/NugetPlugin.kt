@@ -7,6 +7,7 @@ import org.gradle.api.file.Directory
 import org.gradle.api.file.RegularFile
 import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.TaskProvider
+import org.gradle.language.base.plugins.LifecycleBasePlugin
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.SharedLibrary
@@ -639,6 +640,13 @@ public class NugetPlugin : Plugin<Project> {
         task.dependencyVersions.convention(emptyMap())
         task.dependsOn(kspTask)
       }
+
+    // `check` compiles the bindings too, so a broken binding surfaces before `packNuget`.
+    // `withType`, not `tasks.matching`: lazy, any plugin order, no-op without lifecycle-base.
+    project.plugins.withType(LifecycleBasePlugin::class.java) {
+      project.tasks.named(LifecycleBasePlugin.CHECK_TASK_NAME)
+        .configure { it.dependsOn(compileInterop) }
+    }
 
     val packNuget: TaskProvider<PackNugetTask> =
       project.tasks.register(NugetTaskNames.PACK, PackNugetTask::class.java) { task ->
