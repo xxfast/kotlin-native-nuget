@@ -62,6 +62,12 @@ class Readings {
   fun offsets(deltas: List<Byte>): String = deltas.joinToString(",")
 
   /**
+   * ADR-098 part A · `List<UShort>` parameter. The one narrow kind no other cell reached: a value
+   * above `Short.MAX_VALUE` comes back negative through a signed 16-bit wire.
+   */
+  fun pulses(beats: List<UShort>): String = beats.joinToString(",")
+
+  /**
    * ADR-098 part A · `Set<ULong>` parameter. Unsigned, so Kotlin boxes an inline class while C#
    * sends a plain `ulong`, and the widest of the six, so a wire that quietly narrowed would lose
    * `ULong.MAX_VALUE`. A `Set` position as well, so the shared predicate is proven at a second
