@@ -76,6 +76,11 @@ class NugetExtensionTest {
   }
 
   @Test
+  fun `strictCompileCheck defaults to false`() {
+    assertFalse(extension.publish.strictCompileCheck.get())
+  }
+
+  @Test
   fun `dependency without bind is resolve-only`() {
     extension.dependencies {
       it.dependency("Serilog") { dep ->
