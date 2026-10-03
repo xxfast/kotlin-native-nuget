@@ -2359,7 +2359,7 @@ public class LiveHandleTests
     // Row 11. ROADMAP Phase 4 (object properties): a handle-typed getter on a STATIC owner. No
     // static-property getter row existed before this one, so it is also the first row covering the
     // companion and top-level getter mint. `TreatPantry.Favourite` hands back a fresh StableRef on
-    // every read â€” the singleton keeps its own Oreo, the wrapper owns only the ref â€” so fifty
+    // every read — the singleton keeps its own Oreo, the wrapper owns only the ref — so fifty
     // reads with fifty disposes have to come back to exactly the baseline. A getter that retains
     // without the wrapper's `Dispose` releasing shows up here as a delta of fifty.
     [Fact]
@@ -2453,8 +2453,8 @@ public class LiveHandleTests
     }
 
     // Row 12. ADR-154: the admitted-dependency-class route. `dev.other.bytype.Waterbowl` reaches
-    // C# through `admit("dev.other.bytype.Waterbowl")` alone â€” no `include(...)` entry covers its
-    // package â€” and it is a handle type, so every `Storeroom.Bowl()` mints a StableRef that the
+    // C# through `admit("dev.other.bytype.Waterbowl")` alone — no `include(...)` entry covers its
+    // package — and it is a handle type, so every `Storeroom.Bowl()` mints a StableRef that the
     // wrapper's `Dispose` has to release. A klib type admitted BY NAME takes a different planning
     // path from a module-local class and from the `include`-admitted `dev.other.admitted.Billboard`
     // (which mints no handle in any existing row), so a missing release on the per-type admission
