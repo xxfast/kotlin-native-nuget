@@ -109,11 +109,14 @@ val Foo.x: Int get() = 2 // skipped: Foo already has a member `x`
 ```
 
 Kotlin resolves `receiver.x` to the member in both the generated export body and in your own call
-sites, so the extension is unreachable either way, not merely un-exported. Rename the extension
-property or expose a top-level function instead. A private or protected member does not shadow, and
-neither does a nullable receiver (`val Foo?.x`). The extension-**function** equivalent
-(`fun Foo.y()` beside a member `Foo.y()`) is not caught yet and still exports, silently calling the
-member; avoid giving an extension function the same name as a member on its receiver.
+sites, so the extension is unreachable by plain call syntax, not merely un-exported. Rename the
+extension property or expose a top-level function instead. A private or protected member does not
+shadow, and neither does a nullable receiver (`val Foo?.x`).
+
+An extension **function** shadowed by a member is kept, unlike a property. `FooExtensions.Y(foo)`
+runs the extension and `foo.Y()` runs the member, as Kotlin and C# each resolve the call. Declare the
+extension in a different package from the member: in the same package the two claim one C entry point
+and the build fails with `ERROR_C_ENTRY_POINT_COLLISION`.
 
 An extension property is skipped, named `SHADOWED_BY_EXTENSION_FUNCTION` under
 `SKIPPED_UNSUPPORTED_PROPERTY`, when an extension function on the same receiver has the same C# name,
