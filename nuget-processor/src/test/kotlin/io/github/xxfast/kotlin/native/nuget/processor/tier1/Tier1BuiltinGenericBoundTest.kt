@@ -154,9 +154,9 @@ class Tier1BuiltinGenericBoundTest {
 
   /**
    * `where T : Enum` compiled in C# by accident, but the Kotlin half has no type argument that
-   * satisfies the invariant F-bound `T : Enum<T>` (`Enum<Any?>` is not an `Enum<Enum<Any?>>`), so the
-   * generated Kotlin does not compile on either route. The C# side follows the same drop rule; the
-   * Kotlin limit is pinned here so a fix shows up as this cell going red.
+   * satisfies the invariant F-bound `T : Enum<T>` (`Enum<Any?>` is not an `Enum<Enum<Any?>>`),
+   * so the generated Kotlin does not compile on either route. The C# side follows the same drop
+   * rule; the Kotlin limit is pinned here so a fix shows up as this cell going red.
    */
   @Test
   fun `an Enum bound is dropped on the C# half and the Kotlin half remains a known limit`() {
