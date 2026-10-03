@@ -521,4 +521,44 @@ class Tier1ReachabilityClosureTest {
           "kspWarnings=${result.kspWarnings}",
     )
   }
+  @Test
+  fun `a generic dependency owner reached only through its nested type stays usable`() {
+    val dependency: File = Tier1DependencyLibrary.compile(
+      """
+      package dep.parcel
+      class Parcel<T>(val value: T) {
+        class Lid(val number: Int)
+      }
+      """.trimIndent(),
+      fileName = "Parcel.kt",
+    )
+    val result = Tier1Harness.run(
+      """
+      package tier1.parcel
+      import dep.parcel.Parcel
+      class Desk {
+        fun lid(): Parcel.Lid = Parcel.Lid(3)
+      }
+      """.trimIndent(),
+      processorOptions = mapOf("nuget.includePackages" to "tier1.parcel,dep.parcel"),
+      libraries = listOf(dependency),
+    )
+    assertTrue(result.compiledClean, "expected cross-module exports to compile: ${result.compileErrors}")
+    assertTrue(result.generatedCSharp.contains("public class Parcel<T>"), result.generatedCSharp)
+    assertTrue(result.generatedCSharp.contains("class ParcelNative"), result.generatedCSharp)
+    assertFalse(result.generatedCSharp.withoutDocComments().contains("Lid"), result.generatedCSharp)
+    assertFalse(result.generated.contains("desk_lid"), result.generated)
+    val skip: String = requireNotNull(result.kspWarnings.firstOrNull {
+      it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
+          it.contains("dep.parcel.Parcel.Lid")
+    }) { "expected a named Lid declaration refusal: ${result.kspWarnings}" }
+    assertTrue(skip.contains("generic"), skip)
+    assertTrue(result.kspWarnings.any { it.contains("Desk.lid") && it.contains("SKIPPED_") },
+      "expected the refused return to be named: ${result.kspWarnings}")
+    val admission: String = result.kspWarnings.first {
+      it.contains(ForwardDiagnosticKind.INFO_EXPORTED_FROM_DEPENDENCY.name)
+    }
+    assertTrue(admission.contains("dep.parcel.Parcel"), admission)
+    assertFalse(admission.contains("dep.parcel.Parcel.Lid"), admission)
+  }
 }

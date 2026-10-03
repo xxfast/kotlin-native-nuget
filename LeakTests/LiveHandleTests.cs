@@ -166,6 +166,18 @@ public class LiveHandleTests
     }
 
     [Fact]
+    public void DependencyGenericOwner_PrimitiveAndStringPayloadsReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var oreo = new TestLibrary.Models.Parcel<int>(7);
+            Assert.Equal(7, oreo.Value);
+            using var mylo = new TestLibrary.Models.Parcel<string>("Mylo");
+            Assert.Equal("Mylo", mylo.Value);
+        });
+    }
+
+    [Fact]
     public async Task SuspendFlow_AcquireCollectDispose_AllOwnerRoutesReturnToBaseline()
     {
         await AssertNoLeakAsync(async () =>
