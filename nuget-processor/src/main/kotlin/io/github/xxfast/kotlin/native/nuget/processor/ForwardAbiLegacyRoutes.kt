@@ -86,15 +86,21 @@ internal object ForwardAbiLegacyRoutes {
         if (declaration.interfaceBridgeMethods.isNotEmpty()) {
           add(ForwardAbiLegacyRoute.INTERFACE_BRIDGE_METHOD)
         }
+        addNested(declaration.nestedDeclarations)
       }
 
       is CirStaticClass -> declaration.members.forEach { member ->
         add(member, ForwardAbiLegacyRoute.SUSPEND_FUNCTION)
       }
 
-      is CirObject -> declaration.methods.forEach { member ->
-        add(member, ForwardAbiLegacyRoute.SUSPEND_METHOD)
+      is CirObject -> {
+        declaration.methods.forEach { member -> add(member, ForwardAbiLegacyRoute.SUSPEND_METHOD) }
+        addNested(declaration.nestedDeclarations)
       }
+
+      // ADR-174: the interface's own async members ride its backing wrapper, a `CirClass`; the
+      // interface block itself only owns the types declared inside it (ADR-134).
+      is CirInterface -> addNested(declaration.nestedDeclarations)
 
       is CirBridgeHelper -> add(ForwardAbiLegacyRoute.INTERFACE_BRIDGE_FACTORY)
       is CirSealedClass -> {
@@ -113,6 +119,14 @@ internal object ForwardAbiLegacyRoutes {
         declaration.subclasses
           .flatMap { subclass -> subclass.properties }
           .forEach { property -> add(property) }
+        // ADR-116 amendments (2026-09-11, 2026-09-13): an arm's per-call lambda, stored-callback
+        // pair and interface-bridge pair all ride one `callbackMembers` list, so the member type,
+        // not the list, picks the route. The base carries no callback members of its own.
+        declaration.subclasses
+          .flatMap { subclass -> subclass.callbackMembers }
+          .forEach { member -> add(member, ForwardAbiLegacyRoute.SUSPEND_METHOD) }
+        addNested(declaration.nestedDeclarations)
+        addNested(declaration.subclasses.flatMap { subclass -> subclass.nestedDeclarations })
       }
 
       is CirAsyncHelper,
@@ -123,7 +137,6 @@ internal object ForwardAbiLegacyRoutes {
       is CirFlowHelper,
       is CirFuncHelper,
       is CirFuncNativeHelper,
-      is CirInterface,
       is CirJobHelper,
       is CirListHelper,
       is CirMapHelper,
@@ -138,6 +151,15 @@ internal object ForwardAbiLegacyRoutes {
       is CirValueClass,
         -> Unit
     }
+  }
+
+  /**
+   * ADR-133/ADR-134: a type declared inside a class, object, interface, sealed base or arm is
+   * rendered inside its owner's block but carries its own legacy members, so it is walked exactly
+   * as a top-level declaration is, at any depth.
+   */
+  private fun MutableSet<ForwardAbiLegacyRoute>.addNested(declarations: List<CirDeclaration>) {
+    declarations.forEach { declaration -> add(declaration) }
   }
 
   private fun MutableSet<ForwardAbiLegacyRoute>.add(

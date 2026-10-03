@@ -1,13 +1,21 @@
 package io.github.xxfast.kotlin.native.nuget.processor
 
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirCallbackMethod
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirClass
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDeclaration
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirInterface
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirInterfaceBridgeMethod
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMember
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMethod
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirNamespace
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirObject
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirProperty
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirSealedClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirSealedSubclass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirStaticClass
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirStoredCallbackMethod
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirTypeParameter
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -299,4 +307,230 @@ class ForwardAbiLegacyRoutesTest {
       ForwardAbiLegacyRoutes.collect(file),
     )
   }
+
+  /**
+   * The three callback member kinds on an ordinary class: a per-call lambda parameter (ADR-036), a
+   * stored-callback add/remove pair and an interface-bridge pair, each on its own route.
+   */
+  @Test
+  fun `an ordinary class's per-call callback member is the lambda parameter route`() {
+    assertEquals(
+      setOf(ForwardAbiLegacyRoute.LAMBDA_PARAMETER_METHOD),
+      ForwardAbiLegacyRoutes.collect(fileOf(owner(callbackMethods = listOf(perCallCallback)))),
+    )
+  }
+
+  @Test
+  fun `an ordinary class's stored callback pair is the stored callback route`() {
+    assertEquals(
+      setOf(ForwardAbiLegacyRoute.STORED_CALLBACK_METHOD),
+      ForwardAbiLegacyRoutes.collect(fileOf(owner(storedCallbackMethods = listOf(storedCallback)))),
+    )
+  }
+
+  @Test
+  fun `an ordinary class's interface bridge pair is the interface bridge route`() {
+    assertEquals(
+      setOf(ForwardAbiLegacyRoute.INTERFACE_BRIDGE_METHOD),
+      ForwardAbiLegacyRoutes.collect(
+        fileOf(owner(interfaceBridgeMethods = listOf(interfaceBridge))),
+      ),
+    )
+  }
+
+  /**
+   * ADR-116 amendments (2026-09-11, 2026-09-13): an arm carries all three callback kinds in one
+   * [CirSealedSubclass.callbackMembers] list, each preceded by its [CirDllImport]s, so the arm's
+   * list is walked and dispatched by member type rather than by which list it came from.
+   */
+  @Test
+  fun `a sealed arm's per-call callback member is the lambda parameter route`() {
+    assertEquals(
+      setOf(ForwardAbiLegacyRoute.SEALED_CLASS, ForwardAbiLegacyRoute.LAMBDA_PARAMETER_METHOD),
+      ForwardAbiLegacyRoutes.collect(fileOf(arm(perCallCallback))),
+    )
+  }
+
+  @Test
+  fun `a sealed arm's stored callback pair is the stored callback route`() {
+    assertEquals(
+      setOf(ForwardAbiLegacyRoute.SEALED_CLASS, ForwardAbiLegacyRoute.STORED_CALLBACK_METHOD),
+      ForwardAbiLegacyRoutes.collect(fileOf(arm(storedCallback))),
+    )
+  }
+
+  @Test
+  fun `a sealed arm's interface bridge pair is the interface bridge route`() {
+    assertEquals(
+      setOf(ForwardAbiLegacyRoute.SEALED_CLASS, ForwardAbiLegacyRoute.INTERFACE_BRIDGE_METHOD),
+      ForwardAbiLegacyRoutes.collect(fileOf(arm(interfaceBridge))),
+    )
+  }
+
+  /**
+   * ADR-133/ADR-134: a type declared inside another is rendered inside its owner's block and
+   * carries its own legacy members, so the collector descends into every owner's
+   * `nestedDeclarations` exactly as it walks a top-level declaration.
+   */
+  @Test
+  fun `a type nested in a sealed base registers its own routes`() {
+    val base: CirSealedClass = arm(perCallCallback).copy(nestedDeclarations = listOf(nested))
+    assertEquals(
+      setOf(ForwardAbiLegacyRoute.SEALED_CLASS, ForwardAbiLegacyRoute.LAMBDA_PARAMETER_METHOD) +
+        nestedRoutes,
+      ForwardAbiLegacyRoutes.collect(fileOf(base)),
+    )
+  }
+
+  @Test
+  fun `a type nested in a sealed arm registers its own routes`() {
+    val base: CirSealedClass = arm(perCallCallback)
+    val withNested: CirSealedClass = base.copy(
+      subclasses = base.subclasses.map { it.copy(nestedDeclarations = listOf(nested)) },
+    )
+    assertEquals(
+      setOf(ForwardAbiLegacyRoute.SEALED_CLASS, ForwardAbiLegacyRoute.LAMBDA_PARAMETER_METHOD) +
+        nestedRoutes,
+      ForwardAbiLegacyRoutes.collect(fileOf(withNested)),
+    )
+  }
+
+  @Test
+  fun `a type nested in an ordinary class registers its own routes`() {
+    val outer: CirClass = owner().copy(name = "Outer", nestedDeclarations = listOf(nested))
+    assertEquals(nestedRoutes, ForwardAbiLegacyRoutes.collect(fileOf(outer)))
+  }
+
+  @Test
+  fun `a type nested in an object registers its own routes`() {
+    val outer = CirObject(
+      name = "Registry",
+      libraryName = "sample",
+      nativePrefix = "registry",
+      methods = emptyList(),
+      nestedDeclarations = listOf(nested),
+    )
+    assertEquals(nestedRoutes, ForwardAbiLegacyRoutes.collect(fileOf(outer)))
+  }
+
+  @Test
+  fun `a type nested in an interface registers its own routes`() {
+    val outer = CirInterface(
+      name = "IFeed",
+      properties = emptyList(),
+      methods = emptyList(),
+      nestedDeclarations = listOf(nested),
+    )
+    assertEquals(nestedRoutes, ForwardAbiLegacyRoutes.collect(fileOf(outer)))
+  }
+
+  /** Two levels deep, so the descent is recursive rather than one level. */
+  @Test
+  fun `a type nested two levels deep registers its own routes`() {
+    val middle: CirClass = owner().copy(name = "Middle", nestedDeclarations = listOf(nested))
+    val outer: CirClass = owner().copy(name = "Outer", nestedDeclarations = listOf(middle))
+    assertEquals(nestedRoutes, ForwardAbiLegacyRoutes.collect(fileOf(outer)))
+  }
+
+  private val perCallCallback: CirCallbackMethod = CirCallbackMethod(
+    csMethodName = "OnTick",
+    nativeEntryPoint = "job_idle_onTick",
+    libraryName = "sample",
+    nativeImportReturnType = "void",
+    lambdaParamName = "block",
+    delegateName = "NugetIntVoidCallback",
+    delegateParamList = "(int arg0, IntPtr _)",
+    csReturnType = "void",
+    csParamType = "Action<int>",
+    callbackBody = "",
+    wrapperBody = "",
+  )
+
+  private val storedCallback: CirStoredCallbackMethod = CirStoredCallbackMethod(
+    csMethodName = "AddTickListener",
+    csRemoveNativeName = "Native_RemoveTickListener",
+    subscribeEntryPoint = "job_idle_addTickListener",
+    removeEntryPoint = "job_idle_removeTickListener",
+    libraryName = "sample",
+    delegateName = "NugetIntVoidCallback",
+    delegateParamList = "(int arg0, IntPtr _)",
+    csParamType = "Action<int>",
+    nativeCallbackBody = "",
+    className = "Idle",
+  )
+
+  private val interfaceBridge: CirInterfaceBridgeMethod = CirInterfaceBridgeMethod(
+    csMethodName = "AddListener",
+    csRemoveNativeName = "Native_RemoveListener",
+    subscribeEntryPoint = "job_idle_addListener",
+    removeEntryPoint = "job_idle_removeListener",
+    libraryName = "sample",
+    interfaceCsName = "IJobListener",
+    className = "Idle",
+    entries = emptyList(),
+  )
+
+  // Declared after the callback fixtures it reads, so they are initialized first.
+  private val nested: CirClass = owner(storedCallbackMethods = listOf(storedCallback)).copy(
+    name = "Trace",
+    nativePrefix = "job_trace",
+    companionMembers = listOf(
+      CirMethod(
+        name = "FlushAsync",
+        returnType = "Task<int>",
+        parameters = emptyList(),
+        body = "",
+        isAsync = true,
+        asyncReturnType = "int",
+      ),
+    ),
+  )
+
+  private val nestedRoutes: Set<ForwardAbiLegacyRoute> = setOf(
+    ForwardAbiLegacyRoute.SUSPEND_METHOD,
+    ForwardAbiLegacyRoute.STORED_CALLBACK_METHOD,
+  )
+
+  private fun owner(
+    callbackMethods: List<CirCallbackMethod> = emptyList(),
+    storedCallbackMethods: List<CirStoredCallbackMethod> = emptyList(),
+    interfaceBridgeMethods: List<CirInterfaceBridgeMethod> = emptyList(),
+  ): CirClass = CirClass(
+    name = "Job",
+    libraryName = "sample",
+    nativePrefix = "job",
+    constructor = null,
+    properties = emptyList(),
+    methods = emptyList(),
+    callbackMethods = callbackMethods,
+    storedCallbackMethods = storedCallbackMethods,
+    interfaceBridgeMethods = interfaceBridgeMethods,
+  )
+
+  private fun arm(member: CirMember): CirSealedClass = CirSealedClass(
+    name = "Job",
+    libraryName = "sample",
+    nativePrefix = "job",
+    subclasses = listOf(
+      CirSealedSubclass(
+        name = "Idle",
+        nativePrefix = "job_idle",
+        properties = emptyList(),
+        callbackMembers = listOf(
+          CirDllImport(
+            libraryName = "sample",
+            entryPoint = "job_idle_native",
+            returnType = "void",
+            name = "Native_Idle",
+            parameters = emptyList(),
+          ),
+          member,
+        ),
+      ),
+    ),
+  )
+
+  private fun fileOf(declaration: CirDeclaration): CirFile = CirFile(
+    namespaces = listOf(CirNamespace(name = "Sample", declarations = listOf(declaration))),
+  )
 }
