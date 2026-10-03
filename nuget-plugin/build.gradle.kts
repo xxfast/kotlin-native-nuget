@@ -17,6 +17,12 @@ rootDir.parentFile.resolve("gradle.properties").inputStream().use(rootProperties
 group = requireNotNull(rootProperties.getProperty("group")) { "`group` missing from the root gradle.properties" }
 version = requireNotNull(rootProperties.getProperty("version")) { "`version` missing from the root gradle.properties" }
 
+// This included build cannot read the version catalog. Keep aligned with kotlin("jvm") above.
+val kotlinNativeVersion = "2.4.10"
+
+// ADR-156. NugetCompileGeneratedKotlinTest resolves the host klib at this same pin.
+val coroutinesVersion = "1.10.2"
+
 // Java 17 is Gradle 9's own floor, so it is the lowest a consumer can be on. This build's daemon
 // runs on 21 (gradle/gradle-daemon-jvm.properties); without pinning the toolchain, the published
 // Gradle module metadata records `org.gradle.jvm.version: 21` and every consumer on 17 fails to
@@ -30,6 +36,27 @@ repositories {
   mavenCentral()
 }
 
+val kotlinNativeHost: HostKotlinNative? = hostKotlinNative()
+
+// ADR-193: the plugin tests compile generated Kotlin with the host kotlinc-native. Resolved
+// here so a clean test run does not depend on ~/.konan.
+val kotlinNativeCompiler: Configuration by configurations.creating {
+  isCanBeConsumed = false
+  isCanBeResolved = true
+  isTransitive = false
+  description = "Host kotlin-native-prebuilt archive for NugetCompileGeneratedKotlinTest."
+}
+
+val hostCoroutinesKlib: Configuration by configurations.creating {
+  isCanBeConsumed = false
+  isCanBeResolved = true
+  isTransitive = false
+  description = "Host kotlinx-coroutines-core klib for NugetCompileGeneratedKotlinTest."
+  attributes {
+    attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage::class.java, "kotlin-api"))
+  }
+}
+
 dependencies {
   implementation(kotlin("gradle-plugin-api"))
   implementation(kotlin("gradle-plugin"))
@@ -37,6 +64,19 @@ dependencies {
   implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
 
   testImplementation(kotlin("test"))
+
+  if (kotlinNativeHost != null) {
+    add(
+      "kotlinNativeCompiler",
+      "org.jetbrains.kotlin:kotlin-native-prebuilt:$kotlinNativeVersion:" +
+        "${kotlinNativeHost.compilerClassifier}@${kotlinNativeHost.archiveExtension}",
+    )
+    add(
+      "hostCoroutinesKlib",
+      "org.jetbrains.kotlinx:kotlinx-coroutines-core-${kotlinNativeHost.coroutinesModule}:" +
+        "$coroutinesVersion@klib",
+    )
+  }
 }
 
 // `PLUGIN_VERSION` is generated, never hand-written: `NugetPlugin` uses it to resolve
@@ -45,7 +85,6 @@ dependencies {
 val generateVersionConstant: TaskProvider<Task> = tasks.register("generateVersionConstant") {
   val outputDir: Provider<Directory> = layout.buildDirectory.dir("generated/source/version/main")
   val pluginVersion: String = version.toString()
-  val coroutinesVersion: String = "1.10.2"
   inputs.property("pluginVersion", pluginVersion)
   inputs.property("coroutinesVersion", coroutinesVersion)
   outputs.dir(outputDir)
@@ -84,6 +123,8 @@ tasks.test {
   // `test` and lives in `dogfoodCensus` below. The PURE half (RirCensusTest) is untagged and
   // runs here.
   useJUnitPlatform { excludeTags("dogfood") }
+  // The compile test shells out; a bare exception class on CI says nothing about which process.
+  testLogging { exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL }
   // ADR-182: RirDiagnosticKindTest keeps the forward and reverse diagnostic codes disjoint. No
   // module sees both enums, so it reads the processor's enum source as text.
   val forwardDiagnosticSource: File = rootDir.resolve(
@@ -92,6 +133,44 @@ tasks.test {
   )
   inputs.file(forwardDiagnosticSource).withPropertyName("forwardDiagnosticSource")
   systemProperty("nuget.forwardDiagnosticSource", forwardDiagnosticSource.absolutePath)
+
+  // ADR-193: paths the compile-generated-kotlin test needs. The included build cannot take a
+  // project dependency on :nuget-runtime (the dependency runs the other way).
+  val runtimeSources: File = rootDir.parentFile.resolve("nuget-runtime/src/nativeMain")
+  inputs.dir(runtimeSources).withPropertyName("runtimeSources")
+  systemProperty("nuget.runtimeSources", runtimeSources.absolutePath)
+
+  val annotationSource: File = rootDir.parentFile.resolve(
+    "nuget-annotations/src/commonMain/kotlin/io/github/xxfast/kotlin/native/nuget/" +
+      "annotations/ExperimentalNugetBindingApi.kt",
+  )
+  inputs.file(annotationSource).withPropertyName("annotationSource")
+  systemProperty("nuget.annotationSource", annotationSource.absolutePath)
+  systemProperty(
+    "nuget.compileWorkDir",
+    layout.buildDirectory.dir("compile-generated-kotlin").get().asFile.absolutePath,
+  )
+
+  if (kotlinNativeHost == null) {
+    systemProperty("nuget.hostActualSet", "unsupported")
+  } else {
+    // Providers, not the configurations themselves: Gradle 9 will not resolve a configuration
+    // while the project is being configured, and configuration cache cannot store one.
+    val archivePath: Provider<String> = kotlinNativeCompiler.elements.map { locations ->
+      locations.single().asFile.absolutePath
+    }
+    val coroutinesPath: Provider<String> = hostCoroutinesKlib.elements.map { locations ->
+      locations.single().asFile.absolutePath
+    }
+    inputs.files(kotlinNativeCompiler).withPropertyName("kotlinNativeArchive")
+    inputs.files(hostCoroutinesKlib).withPropertyName("coroutinesKlib")
+    val actualSet: String = kotlinNativeHost.actualSet
+    doFirst {
+      systemProperty("nuget.kotlinNativeArchive", archivePath.get())
+      systemProperty("nuget.coroutinesKlib", coroutinesPath.get())
+      systemProperty("nuget.hostActualSet", actualSet)
+    }
+  }
 }
 
 // scripts/verify-dogfood.sh runs this. `--update` there maps to -Pdogfood.update=true, which
@@ -181,4 +260,31 @@ publishing {
       url = uri(rootDir.parentFile.resolve("build/local-repo"))
     }
   }
+}
+
+data class HostKotlinNative(
+  val compilerClassifier: String,
+  val archiveExtension: String,
+  val coroutinesModule: String,
+  val actualSet: String,
+)
+
+fun hostKotlinNative(): HostKotlinNative? {
+  val os: String = System.getProperty("os.name").lowercase()
+  val arch: String = System.getProperty("os.arch").lowercase()
+  val x64: Boolean = arch == "x86_64" || arch == "amd64"
+  val arm64: Boolean = arch == "aarch64" || arch == "arm64"
+  if (os.startsWith("mac") && arm64) {
+    return HostKotlinNative("macos-aarch64", "tar.gz", "macosarm64", "posixMain")
+  }
+  if (os.startsWith("mac") && x64) {
+    return HostKotlinNative("macos-x86_64", "tar.gz", "macosx64", "posixMain")
+  }
+  if (os.startsWith("linux") && x64) {
+    return HostKotlinNative("linux-x86_64", "tar.gz", "linuxx64", "posixMain")
+  }
+  if (os.startsWith("windows") && x64) {
+    return HostKotlinNative("windows-x86_64", "zip", "mingwx64", "mingwMain")
+  }
+  return null
 }
