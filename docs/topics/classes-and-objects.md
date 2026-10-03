@@ -515,7 +515,8 @@ interfaces](interfaces-abstract-sealed.md#sealed-classes-and-interfaces) for the
   parameter as required. See
   [expect/actual declarations](expect-actual.md#function-default-parameters-on-an-expect-function-or-member).
 - A nested type under an owner other than the shapes covered above stays a named
-  `SKIPPED_NESTED_DECLARATION` skip. A member typed with a nested `value class` under a
+  `SKIPPED_NESTED_DECLARATION` skip, as is every descendant of a nested `sealed class` (it is not a
+  declared owner). A member typed with a nested `value class` under a
   still-deferred owner (a generic or `enum class` owner) skips named too
   (`SKIPPED_UNSUPPORTED_TYPE`, reason `UNDECLARED_VALUE_CLASS`) instead of emitting an unusable
   struct name; move the value class to the top level of its file, or to an admitted owner, to

@@ -336,3 +336,23 @@ legs.
 
 Inferred, not separately run: the early direct refusal of an out-of-scope child and the owner-climb
 propagation share one scope kind, so the three cells exercise both without a dedicated fourth.
+
+## Amendment (2026-10-03): descendants of an undeclared nested sealed owner are named skips
+
+Closes the second gap the 2026-09-19 amendment deferred. `unsupportedNestedOwnerReason()` gains one
+arm: a parented class that is not a supported sealed arm (`!isSealedSubclass()`) reuses
+`unsupportedNestedCandidateReason()`. A nested sealed class that is itself a deferred candidate is
+therefore an undeclared owner, and every descendant of `Owner.NestedSealed` (a nested `value class`,
+a plain nested class, and members typed with either) skips named instead of spelling a type under
+an owner that was never declared. Top-level sealed owners and supported sealed arms stay admitted.
+No new handle route and no leak row: nothing the refusal covers mints a handle.
+
+Evidence:
+
+- Verified: full verify Integration 2976, Leak 156, all 6 AOT shapes; `Tier1NestedTypesTest` 34
+  passed; Kover covers all 4 branches of the new predicate.
+- Verified: the red run against the original source produced real `Current`, `Tag`, `Read` and
+  `Child` signatures in the generated C#, not comment-only matches.
+- Verified: the generated XML doc remarks intentionally name skipped types, so absence assertions
+  inspect code declarations and signatures (excluding `///` lines) rather than the raw text.
+- Inferred, not probed: how a nested intermediate sealed arm behaves beyond the supported-arm control.

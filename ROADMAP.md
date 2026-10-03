@@ -50,7 +50,6 @@ Complete.
 Complete.
 
 ## Phase 4: Rich type support
-- [ ] Inferred, unverified: `unsupportedNestedOwnerReason()` (`NugetProcessor.kt`) has no arm for a nested SEALED owner, so a value class under `Owner.NestedSealed` may be declared under an owner that is never declared. Discovered alongside [ADR-134](docs/adr/134-nested-types-under-deferred-owners.md).
 - [ ] Inferred: a CROSS-MODULE (klib) unexported abstract base is assumed to behave like the same-module one when its abstract property reaches an exported subclass; no cell proves it. Discovered alongside [ADR-075](docs/adr/075-collection-property-getter-setter-independence.md)'s 2026-09-19 amendment.
 - [ ] Inferred: a dropped intermediate base whose abstract property re-declares one the KEPT exported base also declares abstract renders `abstract` without `override` on the exported subclass, hiding the kept base's member (`CS0108` warning, compiles, does not throw). Discovered alongside [ADR-075](docs/adr/075-collection-property-getter-setter-independence.md)'s 2026-09-19 amendment.
 - [ ] Inferred, not probed: a member typed with a nested type skipped for an owner-scope collision may not be consistently re-gated to a named skip at every owner shape. ([details](docs/backlog/nested-collision-skip-regating.md)) Discovered alongside [ADR-133](docs/adr/133-nested-types.md).
