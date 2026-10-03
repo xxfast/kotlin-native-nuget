@@ -373,7 +373,8 @@ interface-owner false positive.
 Three gaps this reconciliation left open, tracked on ROADMAP Phase 4 (discovered alongside this
 ADR; the first is closed by "Amendment (2026-10-03)" below): whether every collision-skipped nested type is consistently re-gated at a member typed with
 it, a nested `ICage.Cage` shadowing the namespace-level ADR-040 wrapper `Cage` inside `ICage`'s own
-body, and two cosmetic gaps in `nestedDeclarationKind()`/the CS0542 hint text.
+body, and two cosmetic gaps in `nestedDeclarationKind()`/the CS0542 hint text (both closed by
+"Amendment (2026-10-03, diagnostic wording)" below).
 
 **Closed (2026-09-28).** The wrapper-shadow guess above was disproved, and a related, real defect
 was found and fixed one reference over; see "Amendment (2026-09-28)" below.
@@ -471,3 +472,25 @@ There is no new runtime route and no leak row: refused types and callables mint 
 
 **Inferred, not covered.** Other candidate kinds (enum, interface, value class) rely on the same
 shared gate but were not given their own matrix cells.
+
+## Amendment (2026-10-03, diagnostic wording)
+
+Closes the two cosmetic gaps listed after the 2026-09-19 reconciliation. Diagnostic text only; no
+generated C# or Kotlin changes.
+
+**Rule.** `nestedDeclarationKind()` tests `isValueClass()` before the `classKind` dispatch (a
+`value class` is `ClassKind.CLASS`), so a nested value class reads "nested value class" in both
+the collision error (`ERROR_CSHARP_SIGNATURE_COLLISION`) and the deferral warning
+(`SKIPPED_NESTED_DECLARATION`). `nestedOwnerScopeCollision()` now returns a typed result with
+`OwnerName` (CS0542) and `Member(name)` (CS0102) cases, and the hint follows the case:
+
+- CS0542: "rename the nested declaration, or its owner, so the two names differ". No member is
+  involved, so no "colliding member" and no PascalCasing remark.
+- CS0102: unchanged, "rename the nested declaration, or the colliding member, so the two names
+  differ after PascalCasing".
+
+**Evidence.** Verified: three `Tier1NestedTypesTest` cells were red before and green after (a
+nested value class under a deferred owner, `Box.Seal` and `Season.Stamp`; the CS0542 case
+`Owner.Owner`; the value-class collision `Hamper.Weight`). Full `:nuget-processor:test`: 1545
+passed, 0 failed. Processor only: the native pipeline was not run for this item (the assembled
+stack is verified as a whole). No leak row: no handle route was added.
