@@ -1258,6 +1258,7 @@ class CirOrdinaryRendererTest {
         namespaces = listOf(CirNamespace(namespace, declarations.toList())),
       ),
     )
+
   @Test
   fun `abstract subclass disposal overrides the retained base slot`() {
     val cls = CirClass(
