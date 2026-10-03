@@ -261,8 +261,8 @@ second sealed-interface parent, or a sub-interface arm.
 - Still deferred: sub-interfaces, generic sealed interfaces, base members with bodies rendered on
   the abstract class, an arm's extra interfaces. Boxed enum arms shipped in ADR-157.
 - No new handle kind and no new marshalling path: a sibling arm rides the same `FromHandle` mint a
-  nested arm does, so `LeakTests` gains no row. `LiveHandleTests.cs` has no sealed row at all today,
-  which is a general gap and belongs on ROADMAP rather than here.
+  nested arm does, so the change itself adds no leak row. (The claim that `LiveHandleTests.cs` had no sealed row
+  was wrong; see the 2026-10-03 amendment, which also adds the sibling-arm rows.)
 
 ## Prior art (to the depth that changes the decision)
 
@@ -315,3 +315,31 @@ interface declares, defaulted or abstract, binds on the arm the same way
 ordinary class. See [interfaces-abstract-sealed.md](../topics/interfaces-abstract-sealed.md#sealed-arm-own-interfaces)
 for the shipped shape, and [ADR-168](168-interface-var-explicit-setter.md)'s own 2026-09-27 amendment
 for the accompanying explicit-setter fold-in this widening required.
+
+## 2026-10-03 amendment: sealed arm handles have leak rows
+
+The Consequences bullet above that says `LiveHandleTests.cs` has no sealed row was wrong: it has
+sealed rows, and `NugetMarshal.LiveHandles` is process-wide, so rows 8c, 8c-null and 9e (a class arm
+through the base discriminator) and 16k (a concrete arm return) already caught an arm-handle leak
+incidentally. What no row crossed was an object arm through the base discriminator, a sibling arm
+of either kind, and repeated reads of one holder. Three rows now do, and none found a leak.
+
+The rule they pin: every read of a sealed value mints its own handle, and disposing the arm wrapper
+is the only release, whether the arm arrives through `Base.FromHandle` or as a concrete arm return.
+
+- Row 1c-read, `SealedArm_ReadThroughTheBaseDiscriminator_ReturnsToBaseline`: an object arm
+  (`PeekBox`) and a class arm (`OpenBox("Mylo")`, a `Dead`) read through the base discriminator.
+- Row 1c-sibling, `SealedSiblingArm_RepeatedReadsOfOneHolder_ReturnsToBaseline`: this ADR's sibling
+  arms `Silence` then `Ping`, read by method (`Latest()`) and by property (`Current`), repeatedly on
+  one radio.
+- Row 1c-arm, `SealedArm_ConcreteArmReturn_ReturnsToBaseline`: `JobFactory.Running` and
+  `JobFactory.Idle`, which skip the discriminator.
+
+Evidence, verified: all three rows passed on their first run, and the full `scripts/verify.sh` was
+green on that branch (Contract 3, Integration 2998, Leak 162, MultiPackage 9, SharedException 2, all
+six NativeAOT shapes). No production change was needed.
+
+Known limit of the harness, inferred and not tested: each wrapper holds its handle in a
+`SafeHandle`, so the GC and finalizer passes before each measurement can release a wrapper nobody
+disposed. These rows catch a handle that is never released, not necessarily a missing `Dispose`
+call.
