@@ -829,6 +829,39 @@ internal fun warnRefusedLegacyRouteMembers(
     member = member.simpleName.asString(),
   )
 
+  // ADR-115 / issue #121: a pair with an opt-in-marked half is refused after pair detection on
+  // both halves (the marked half takes its partner with it), and the planner's CALLBACK_PROTOCOL
+  // skip is suppressed for pair members before its own opt-in check runs, so nothing else names
+  // either half. Named on both, as every other pair refusal is: the unmarked `removeX` is gone too.
+  // Returns whether the pair was named, so a pair gets one reason, not two.
+  fun MutableList<ForwardDiagnostic>.nameMarkedPair(
+    addMethod: KSFunctionDeclaration,
+    removeMethod: KSFunctionDeclaration,
+    route: String,
+    owner: String,
+    ownerDeclaration: ForwardDiagnosticOwner?,
+  ): Boolean {
+    val (marked: KSFunctionDeclaration, marker: String) = listOf(addMethod, removeMethod)
+      .firstNotNullOfOrNull { half -> half.optInMarker(classifier.exportMarkers)?.let { half to it } }
+      ?: return false
+    listOf(addMethod, removeMethod).forEach { member ->
+      add(
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.SKIPPED_OPT_IN_MARKER,
+          symbol = member,
+          declaration = "$owner.${member.simpleName.asString()}",
+          reason = "the `${addMethod.simpleName.asString()}` / " +
+              "`${removeMethod.simpleName.asString()}` $route pair is not bound: " +
+              "`${marked.simpleName.asString()}` is marked with the opt-in marker `$marker`",
+          hint = ForwardPlanSkipReason.OPT_IN_MARKER.diagnosticHint(marker),
+          owner = ownerDeclaration,
+          member = member.simpleName.asString(),
+        ),
+      )
+    }
+    return true
+  }
+
   // ADR-037 amendment: the stored-callback route calls a listener back as an `Action`, so a pair
   // whose listener returns anything but `Unit` is refused after pair detection on both halves. The
   // planner's CALLBACK_PROTOCOL skip is suppressed for these members, so this walk names both.
@@ -842,6 +875,9 @@ internal fun warnRefusedLegacyRouteMembers(
         .filter { it.hasLegacyLambdaParameter() }
         .filter { it.refusedLegacyLambdaShape() == null },
     ).forEach { (addMethod, removeMethod) ->
+      if (nameMarkedPair(addMethod, removeMethod, "stored-callback", owner, ownerDeclaration)) {
+        return@forEach
+      }
       val refused: LegacyRefusedInterfaceBridgePair =
         legacyRefusedStoredCallbackPair(addMethod) ?: return@forEach
       listOf(addMethod, removeMethod).forEach { member ->
@@ -876,6 +912,9 @@ internal fun warnRefusedLegacyRouteMembers(
   ) {
     findInterfaceBridgePairs(members.filterNot { it.hasLegacyLambdaParameter() })
       .forEach { (addMethod, removeMethod) ->
+        if (nameMarkedPair(addMethod, removeMethod, "subscription", owner, ownerDeclaration)) {
+          return@forEach
+        }
         val refused: LegacyRefusedInterfaceBridgePair =
           classifier.legacyRefusedInterfaceBridgePair(addMethod) ?: return@forEach
         listOf(addMethod, removeMethod).forEach { member ->
