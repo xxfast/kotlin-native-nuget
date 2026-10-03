@@ -793,7 +793,10 @@ internal fun StringBuilder.renderDispose(
   val override: String = if (hasSuperClass) "override " else if (isOpen) "virtual " else ""
 
   if (isAbstract) {
-    appendLine("        public ${abstract}void Dispose();")
+    // An abstract class below an exported base re-abstracts the inherited slot; a bare `abstract`
+    // hides it, and the concrete subclass then cannot implement both (CS0533/CS0114/CS0534).
+    val abstractOverride: String = if (hasSuperClass) "override " else ""
+    appendLine("        public ${abstract}${abstractOverride}void Dispose();")
     // ADR-159: an abstract scope owner can only DECLARE the drain -- it has no `Native_Dispose`
     // import to call -- so `DisposeAsync` follows `Dispose`'s spelling and each concrete class
     // below renders the body as an `override`. Without this the abstract class advertised
