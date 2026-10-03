@@ -74,8 +74,8 @@ The bridge layer (Kotlin CName exports) requires **no changes** — constraints 
 | `kotlin.Any`                                      | `class`                                         |
 | Exported interface `Pet`                          | `IPet` (I-prefix per existing interface naming) |
 | Exported class `Animal`                           | `Animal`                                        |
-| `kotlin.Comparable<T>`                            | `IComparable<T>`                                |
-| Unrecognized / external                           | emitted as simple name with warning             |
+| `kotlin.Comparable<T>` and other stdlib bounds     | dropped (see 2026-10-03 amendment)              |
+| Unrecognized / external                           | not shipped; see the 2026-10-03 amendment       |
 | Unconstrained (no bounds or only implicit `Any?`) | no `where` clause                               |
 
 ### CIR changes
@@ -125,3 +125,43 @@ fun export_petbox_get_value(handle: COpaquePointer): COpaquePointer { ... }
 - The bridge layer is unchanged — no new CName functions generated
 - `NugetMarshal` unchanged — runtime dispatch logic is type-parameter-agnostic
 - Extensible: variance (`in`/`out`) can be added to `CirTypeParameter` later
+
+## Amendment (2026-10-03): stdlib bounds are dropped
+
+The table's `Comparable<T>` to `IComparable<T>` row and its "simple name with warning" row never
+shipped and are superseded. A bound declared in a Kotlin builtin package (`Comparable<T>`,
+`Number`, `CharSequence`, `Enum<T>`) used to produce C# and Kotlin that did not compile: the
+`where` clause named `global::...Kotlin.IComparable` or a bare `Number` (CS0234, CS0246, CS0701),
+and the generic function and class routes spelled `kotlin.Comparable` with no type arguments.
+
+Rule: a builtin bound is dropped from the C# `where` clause, keeping `notnull` when the bound is
+non-null (`class Ranked<T : Comparable<T>>` renders `where T : notnull`), and each dropped bound
+is reported as `INFO_DROPPED_BOUND`; the declaration still binds. Mapping to `IComparable<T>` was
+rejected because no generated wrapper implements it, so every wrapper type argument would fail
+with CS0311 / CS0315 (spike). One helper, `cirBoundConstraint` (`cir/CirTypeMapping.kt`), serves the
+generic class and generic function spellers, and checks the builtin package before the
+interface/class split so `Comparable` and `Number` take one arm. The Kotlin half spells a bound's
+type arguments as `Any?` (`kotlin.Comparable<Any?>`, valid because `Comparable` is contravariant)
+in `forwardKotlinBoundSpelling`. The function route's two halves read one gate,
+`legacyGenericHasNonTrivialBound`, for whether primitive variants exist. The same helper writes the
+interface check as `declaration != null && declaration.classKind == ClassKind.INTERFACE`, which
+removes the compiler "Condition is always 'true'" warning in `cirTypeParameters` and its twin in
+`CirFunctionTranslator.kt`. `legacyBoundClassCsName`'s builtin fallback served only builtin classes
+and is deleted.
+
+Consequence for callers: with the bound gone, C# can pass a type argument Kotlin would reject,
+which fails at the call.
+
+Evidence. Verified: `Tier1BuiltinGenericBoundTest` six cells red before and green after;
+`:nuget-processor:test` 1568 passed, 0 failed; no "Condition is always" warning in the build log;
+full `scripts/verify.sh` green (Contract 3, Integration 3010, Leak 158, MultiPackage 9,
+SharedException 2, all six NativeAOT shapes); `Ranked<int>`, `Ranked<string>`, `Tally<int>`,
+`Tally<double>` and `Favourite<Treat>` run. Not covered on purpose: the star-projected and nested
+generic bound-argument arms of `forwardKotlinBoundSpelling`. No LeakTests row.
+
+Known limits, verified and tracked in ROADMAP: `T : Enum<T>` has no valid Kotlin type argument, so
+its generated Kotlin does not compile on both generic routes; a multi-bound parameter
+(`where T : Comparable<T>, T : Pet`) breaks the Kotlin half because `forwardOwnerTypeName` spells
+the owner by its first bound only; a builtin-bounded generic function exports only the object
+variant, so `Treats.Weigh<int>(4)` throws `NotSupportedException` and only a generated wrapper
+works as `T`.

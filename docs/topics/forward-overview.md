@@ -202,7 +202,8 @@ member, and a compiler plugin's synthesized surface such as kotlinx.serializatio
   first-class mapping, not an export-scope change, so it gets no `include(...)` suggestion, unlike
   `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` below.
 - **`INFO_*`**: the member still binds, under a documented assumption (for example, `out`/`in`
-  variance on a class type parameter is dropped, but the member still generates).
+  variance on a class type parameter is dropped, or a stdlib bound such as `Comparable<T>` is
+  dropped from the `where` clause as `INFO_DROPPED_BOUND`, but the member still generates).
 - **`ERROR_*`**: generation fails and `CNameExports.kt` (the Kotlin `@CName` export file) is never
   written, so `packNuget` never runs. Cases include two constructors, or two methods on one class,
   that render an identical C# signature

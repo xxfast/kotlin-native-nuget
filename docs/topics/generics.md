@@ -120,6 +120,22 @@ using var oreo = new Cat("Oreo", 9);
 using var box = new PetBox<Cat>(oreo);
 ```
 
+A bound declared in the Kotlin standard library (`Comparable<T>`, `Number`, `CharSequence`) has no
+C# equivalent, so it is dropped from the `where` clause and the build reports an
+`INFO_DROPPED_BOUND` note. A non-null bound keeps `where T : notnull`. C# can then pass a type
+argument Kotlin would reject, which fails at the call.
+
+```kotlin
+class Ranked<T : Comparable<T>>(val value: T) {
+  fun outranks(other: T): Boolean = value > other
+}
+```
+
+```C#
+using var oreo = new Ranked<int>(9);
+Assert.True(oreo.Outranks(4));   // public class Ranked<T> ... where T : notnull
+```
+
 ### A generic bound from another package {id="a-generic-bound-from-another-package"}
 
 When the bound is declared in a different Kotlin package than the generic class itself, the
@@ -365,6 +381,12 @@ publishing module itself.
 
 A type nested inside a generic class is not bound, in a dependency or otherwise. If your API returns
 one, the member is skipped with a named diagnostic, but the generic owner is still exported.
+
+A generic function bounded by a stdlib type (`fun <T : Number> weigh(value: T): T`) takes only a
+Kotlin-generated wrapper as `T`. `Treats.Weigh<int>(4)` compiles but throws `NotSupportedException`
+at run time; use a generic class (`Tally<int>` works) when the argument is an `int`, `string` or
+`double`. A bound written `T : Enum<T>` or with several bounds does not generate compilable Kotlin
+yet.
 
 <seealso>
     <category ref="related">
