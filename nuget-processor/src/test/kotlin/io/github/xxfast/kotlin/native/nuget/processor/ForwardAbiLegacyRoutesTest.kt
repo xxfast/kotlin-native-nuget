@@ -436,6 +436,7 @@ class ForwardAbiLegacyRoutesTest {
 
   private val perCallCallback: CirCallbackMethod = CirCallbackMethod(
     csMethodName = "OnTick",
+    csNativeName = "Native_OnTick",
     nativeEntryPoint = "job_idle_onTick",
     libraryName = "sample",
     nativeImportReturnType = "void",
@@ -450,6 +451,7 @@ class ForwardAbiLegacyRoutesTest {
 
   private val storedCallback: CirStoredCallbackMethod = CirStoredCallbackMethod(
     csMethodName = "AddTickListener",
+    csAddNativeName = "Native_AddTickListener",
     csRemoveNativeName = "Native_RemoveTickListener",
     subscribeEntryPoint = "job_idle_addTickListener",
     removeEntryPoint = "job_idle_removeTickListener",
@@ -463,6 +465,7 @@ class ForwardAbiLegacyRoutesTest {
 
   private val interfaceBridge: CirInterfaceBridgeMethod = CirInterfaceBridgeMethod(
     csMethodName = "AddListener",
+    csAddNativeName = "Native_AddListener",
     csRemoveNativeName = "Native_RemoveListener",
     subscribeEntryPoint = "job_idle_addListener",
     removeEntryPoint = "job_idle_removeListener",

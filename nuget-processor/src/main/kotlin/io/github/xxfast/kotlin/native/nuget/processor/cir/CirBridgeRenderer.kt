@@ -7,6 +7,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeWire
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpWire
 import io.github.xxfast.kotlin.native.nuget.processor.forward.delegateName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.delegateParamList
+import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
 /**
  * ADR-084 stage 1, the C# half of the bridge factory: `NugetBridge.HandleFor` (the fallback
@@ -196,7 +197,9 @@ private fun slotLambda(slot: ForwardBridgeSlot): String {
   }
 
   val arguments: String = slot.parameters.indices.joinToString(", ") { "value$it" }
-  val access: String = if (slot.isProperty) "impl.${slot.csName}" else "impl.${slot.csName}($arguments)"
+  // ADR-179: the slot keeps the unescaped declared name; the call site escapes it.
+  val member: String = toCSharpName(slot.csName)
+  val access: String = if (slot.isProperty) "impl.$member" else "impl.$member($arguments)"
 
   when (slot.result.wire) {
     ForwardBridgeWire.UNIT -> body.append("$access;")

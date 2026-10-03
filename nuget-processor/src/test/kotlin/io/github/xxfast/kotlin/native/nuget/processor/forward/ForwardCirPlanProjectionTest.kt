@@ -447,7 +447,8 @@ class ForwardCirPlanProjectionTest {
     ).ordinaryNativeImports().single { import -> import.name == "Native_Lock" }
 
     assertEquals("lock", plan.publicSignature.name)
-    assertEquals("@lock", method.name)
+    assertEquals("lock", method.name)
+    assertEquals("@lock", method.identifier)
     assertEquals("Native_Lock", import.name)
     assertEquals("counter_lock", import.entryPoint)
   }

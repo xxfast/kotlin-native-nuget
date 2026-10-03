@@ -198,7 +198,7 @@ private fun StringBuilder.renderValueClassMembers(cls: CirValueClass) {
   cls.properties.forEach { prop ->
     renderDllImport(cls.propertyNativeImport(prop))
     renderDoc(prop.doc, "        ", generated = prop.remarks)
-    appendLine("        public ${prop.type} ${prop.name} => ${prop.getter};")
+    appendLine("        public ${prop.type} ${prop.identifier} => ${prop.getter};")
     appendLine()
   }
 
@@ -207,9 +207,9 @@ private fun StringBuilder.renderValueClassMembers(cls: CirValueClass) {
     renderDoc(method.doc, "        ")
     val paramStr: String = method.parameters.joinToString(", ") { it.declaration }
     if (method.returnType == "void") {
-      appendLine("        public void ${method.name}($paramStr) => ${method.body};")
+      appendLine("        public void ${method.identifier}($paramStr) => ${method.body};")
     } else {
-      appendLine("        public ${method.returnType} ${method.name}($paramStr) => ${method.body};")
+      appendLine("        public ${method.returnType} ${method.identifier}($paramStr) => ${method.body};")
     }
     appendLine()
   }

@@ -82,7 +82,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isPubliclySpellabl
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toDiagnosticKind
-import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.droppedBaseChain
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticTypeName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ownsSentence
@@ -128,6 +127,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyValueClassRe
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnumRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
+import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
 /** Which half of issue #42 a dropped supertype is: both re-home their public members onto the
  *  owner, but they lose different relations, so they get different messages. */
@@ -1690,8 +1690,9 @@ internal fun flowMembers(
     // the same two places the plan projection puts it (ADR-090).
     val suffix: String = callableCatalog.overloadSuffix(method)
     val cname: String = toCName(methodName) + suffix
-    val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
-    val nativeStem: String = "Native_$csMethodName$suffix"
+    // ADR-179: the public name takes `@CSharpName`; the extern stem keeps the Kotlin name.
+    val csMethodName: String = method.csharpMemberName()
+    val nativeStem: String = "Native_${methodName.replaceFirstChar { it.uppercase() }}$suffix"
     val returnType = method.returnType?.resolve()?.expandAliases()
     val returnQualified: String? = returnType?.declaration?.qualifiedName?.asString()
     val isStateFlowMethod: Boolean = returnQualified in STATE_FLOW_TYPES
@@ -3504,7 +3505,7 @@ internal fun translateInterface(
   val plannedMethods: List<CirInterfaceMethod> = methodPlans.map { plan ->
     tracker.trackPlan(plan)
     CirInterfaceMethod(
-      name = plan.publicSignature.csharpName,
+      name = plan.publicSignature.name,
       returnType = plan.publicSignature.result.forwardPublicCsharpType(),
       // ADR-164: the same widened parameters (nullable form, `Optional<T>`, defaults) the
       // implementing class renders, so `IFoo` and its implementer declare one signature.
@@ -3741,8 +3742,8 @@ private fun emitInterfaceNameCollisions(
     methodPlans.forEach { plan ->
       val kotlinName: String = plan.invocation.member
         ?: plan.invocation.symbol.substringAfterLast('.')
-      spellings.record(plan.publicSignature.csharpName, KotlinSpelling("fun", kotlinName))
-      add(CsMemberName(plan.publicSignature.csharpName, CsMemberKind.METHOD))
+      spellings.record(plan.publicSignature.name, KotlinSpelling("fun", kotlinName))
+      add(CsMemberName(plan.publicSignature.name, CsMemberKind.METHOD))
     }
   }
   emitMemberNameCollisions(
@@ -3793,16 +3794,16 @@ private fun emitInheritedInterfaceNameCollisions(
   val inheritedPropertyNames: Map<String, ForwardPropertyPlan> =
     inheritedProperties.associateBy { it.publicName }
   val inheritedMethodNames: Map<String, ForwardCallablePlan> =
-    inheritedMethods.associateBy { it.publicSignature.csharpName }
+    inheritedMethods.associateBy { it.publicSignature.name }
   val methodCollisions: List<ForwardDiagnostic> = declaredMethods.mapNotNull { plan ->
     val property: ForwardPropertyPlan =
-      inheritedPropertyNames[plan.publicSignature.csharpName] ?: return@mapNotNull null
+      inheritedPropertyNames[plan.publicSignature.name] ?: return@mapNotNull null
     val kotlinName: String =
       plan.invocation.member ?: plan.invocation.symbol.substringAfterLast('.')
     ForwardDiagnostic(
       kind = ForwardDiagnosticKind.ERROR_CSHARP_NAME_COLLISION,
       symbol = iface,
-      declaration = "$interfaceName.${plan.publicSignature.csharpName}",
+      declaration = "$interfaceName.${plan.publicSignature.name}",
       reason = "the inherited interface property '${property.kotlinName}' already claims that C# " +
           "name, and a method of that name on $interfaceName hides it (CS0108)",
       hint = "rename the Kotlin function '$kotlinName' or the inherited property",
@@ -4223,6 +4224,8 @@ private fun translateCallbackMethod(
 ): CirCallbackMethod? {
   val methodName: String = method.simpleName.asString()
   val csMethodName: String = method.csharpMemberName()
+  // ADR-179: the extern keeps the Kotlin-derived stem; only the public member takes `@CSharpName`.
+  val csNativeName: String = "Native_${methodName.replaceFirstChar { it.uppercase() }}"
   val nativeEntryPoint: String = "${classPrefix}_$methodName"
 
   val lambdaParam = method.parameters.firstOrNull { param ->
@@ -4375,7 +4378,7 @@ private fun translateCallbackMethod(
   // C# wrapper body (inside try{})
   // ADR-102: the thunk address is a link-time constant and the ctx is the closure's own ADR-161
   // table key, both inlined at the call so the pair cannot drift apart.
-  val nativeCall: String = "Native_$csMethodName(_handle, NugetThunks.${delegateName}Ptr, " +
+  val nativeCall: String = "$csNativeName(_handle, NugetThunks.${delegateName}Ptr, " +
       "cbKey, out IntPtr error)"
   val wrapperBody: String = buildString {
     when {
@@ -4411,6 +4414,7 @@ private fun translateCallbackMethod(
 
   return CirCallbackMethod(
     csMethodName = csMethodName,
+    csNativeName = csNativeName,
     nativeEntryPoint = nativeEntryPoint,
     libraryName = libraryName,
     nativeImportReturnType = nativeImportReturnType,
@@ -4445,7 +4449,9 @@ private fun translateStoredCallbackMethod(
 ): CirStoredCallbackMethod? {
   val addMethodName: String = addMethod.simpleName.asString()
   val removeMethodName: String = removeMethod.simpleName.asString()
-  val csMethodName: String = addMethodName.replaceFirstChar { it.uppercase() }
+  val csMethodName: String = addMethod.csharpMemberName()
+  // ADR-179: the extern keeps the Kotlin-derived stem; only the public member takes `@CSharpName`.
+  val csAddNativeName: String = "Native_${addMethodName.replaceFirstChar { it.uppercase() }}"
   val csRemoveNativeName: String = "Native_${removeMethodName.replaceFirstChar { it.uppercase() }}"
 
   val lambdaParam = addMethod.parameters.firstOrNull { param ->
@@ -4520,6 +4526,7 @@ private fun translateStoredCallbackMethod(
 
   return CirStoredCallbackMethod(
     csMethodName = csMethodName,
+    csAddNativeName = csAddNativeName,
     csRemoveNativeName = csRemoveNativeName,
     subscribeEntryPoint = "${classPrefix}_$addMethodName",
     removeEntryPoint = "${classPrefix}_$removeMethodName",
@@ -4554,7 +4561,9 @@ private fun translateInterfaceBridgeMethod(
 ): CirInterfaceBridgeMethod? {
   val addMethodName: String = addMethod.simpleName.asString()
   val removeMethodName: String = removeMethod.simpleName.asString()
-  val csMethodName: String = addMethodName.replaceFirstChar { it.uppercase() }
+  val csMethodName: String = addMethod.csharpMemberName()
+  // ADR-179: the extern keeps the Kotlin-derived stem; only the public member takes `@CSharpName`.
+  val csAddNativeName: String = "Native_${addMethodName.replaceFirstChar { it.uppercase() }}"
   val csRemoveNativeName: String = "Native_${removeMethodName.replaceFirstChar { it.uppercase() }}"
 
   val ifaceParam = addMethod.parameters.firstOrNull { param ->
@@ -4654,7 +4663,7 @@ private fun translateInterfaceBridgeMethod(
         }
       }
       val callArgs: String = params.indices.joinToString(", ") { "arg$it" }
-      append("listener.$mCsName($callArgs);")
+      append("listener.${toCSharpName(mCsName)}($callArgs);")
     }
 
     CirInterfaceBridgeMethodEntry(
@@ -4668,6 +4677,7 @@ private fun translateInterfaceBridgeMethod(
 
   return CirInterfaceBridgeMethod(
     csMethodName = csMethodName,
+    csAddNativeName = csAddNativeName,
     csRemoveNativeName = csRemoveNativeName,
     subscribeEntryPoint = "${classPrefix}_$addMethodName",
     removeEntryPoint = "${classPrefix}_$removeMethodName",

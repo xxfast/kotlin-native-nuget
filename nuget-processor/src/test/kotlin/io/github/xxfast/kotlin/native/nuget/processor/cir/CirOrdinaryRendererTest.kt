@@ -119,24 +119,42 @@ class CirOrdinaryRendererTest {
   }
 
   @Test
-  fun `keyword-escaped method name without an extern name fails fast`() {
-    val cls: CirClass = escapedMethodClass(externName = null)
+  fun `a pre-escaped member name is refused at construction`() {
+    val error: IllegalArgumentException = assertFailsWith<IllegalArgumentException> {
+      CirMethod(name = "@lock", returnType = "void", parameters = emptyList(), body = "")
+    }
 
-    val fromImport: IllegalArgumentException =
-      assertFailsWith<IllegalArgumentException> { cls.ordinaryNativeImports() }
-    val fromRender: IllegalArgumentException =
-      assertFailsWith<IllegalArgumentException> { render(cls) }
-
-    assertContains(fromImport.message.orEmpty(), "@lock")
-    assertContains(fromRender.message.orEmpty(), "@lock")
+    assertContains(error.message.orEmpty(), "@lock")
+    assertFailsWith<IllegalArgumentException> {
+      CirProperty(
+        name = "@lock",
+        type = "int",
+        nativeReturnType = "int",
+        nativeName = "lock",
+        getter = "",
+      )
+    }
   }
 
   @Test
-  fun `escaped method name renders through the extern name a plan carried`() {
-    val cls: CirClass = escapedMethodClass(externName = "Native_Lock")
+  fun `keyword method name without an extern name escapes only the public member`() {
+    val rendered: String = render(keywordMethodClass(externName = null))
+
+    assertContains(rendered, "public string @lock()")
+    assertContains(
+      rendered,
+      "private static extern IntPtr Native_lock(NugetKotlinHandle handle, out IntPtr error);",
+    )
+    assertFalse(rendered.contains("Native_@"))
+  }
+
+  @Test
+  fun `keyword method name renders through the extern name a plan carried`() {
+    val cls: CirClass = keywordMethodClass(externName = "Native_Lock")
 
     val rendered: String = render(cls)
 
+    assertContains(rendered, "public string @lock()")
     assertContains(
       rendered,
       "private static extern IntPtr Native_Lock(NugetKotlinHandle handle, out IntPtr error);",
@@ -1232,7 +1250,7 @@ class CirOrdinaryRendererTest {
 
   // -- helpers ----------------------------------------------------------------
 
-  private fun escapedMethodClass(externName: String?): CirClass = CirClass(
+  private fun keywordMethodClass(externName: String?): CirClass = CirClass(
     name = "Patient",
     libraryName = "clinic",
     nativePrefix = "patient",
@@ -1240,7 +1258,7 @@ class CirOrdinaryRendererTest {
     properties = emptyList(),
     methods = listOf(
       CirMethod(
-        name = "@lock",
+        name = "lock",
         returnType = "string",
         nativeReturnType = "IntPtr",
         nativeName = "lock",

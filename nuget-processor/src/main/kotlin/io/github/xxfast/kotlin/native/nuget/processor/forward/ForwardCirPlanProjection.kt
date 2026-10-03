@@ -1,7 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
-import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDoc
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirConstructor
@@ -118,7 +117,7 @@ internal object ForwardCirPlanProjection {
       callArguments = nativeReceiverArg,
     )
     return CirProperty(
-      name = plan.publicSignature.csharpName,
+      name = plan.publicSignature.name,
       type = returnType,
       nativeReturnType = nativeReturnType,
       nativeName = propName,
@@ -159,7 +158,7 @@ internal object ForwardCirPlanProjection {
       null
     }
     return CirMethod(
-      name = plan.publicSignature.csharpName,
+      name = plan.publicSignature.name,
       returnType = returnType,
       nativeReturnType = nativeReturnType,
       nativeName = methodName,
@@ -306,7 +305,7 @@ internal object ForwardCirPlanProjection {
         hasSyncErrorOut = plan.errorSlot != null,
       ),
       CirMethod(
-        name = plan.publicSignature.csharpName,
+        name = plan.publicSignature.name,
         returnType = result.returnType,
         nativeReturnType = result.nativeReturnType,
         nativeName = nativeName,
@@ -362,7 +361,7 @@ internal object ForwardCirPlanProjection {
       null
     }
     return CirMethod(
-      name = plan.publicSignature.csharpName,
+      name = plan.publicSignature.name,
       returnType = result.returnType,
       nativeReturnType = result.nativeReturnType,
       nativeName = nativeName,
@@ -437,7 +436,7 @@ internal object ForwardCirPlanProjection {
       hasSyncErrorOut = plan.errorSlot != null,
     )
     val wrapper = CirMethod(
-      name = plan.publicSignature.csharpName,
+      name = plan.publicSignature.name,
       returnType = result.returnType,
       nativeReturnType = result.nativeReturnType,
       nativeName = nativeName,
@@ -1679,15 +1678,6 @@ internal fun durationLiftCs(ticks: String): String = "new global::System.TimeSpa
 /** True for `IFoo` and `IFoo?` alike: both cross as one handle argument. */
 private fun BridgeType.isInterfaceInput(): Boolean =
   this is BridgeType.Interface || (this is BridgeType.Nullable && type is BridgeType.Interface)
-
-/**
- * The C# spelling of a public member name. A plan always carries the unescaped Kotlin-derived
- * name (ADR-110 PascalCases every public member, and a PascalCased name is never a C# keyword),
- * so this is the identity today. It stays here rather than in the planner because escaping is a
- * render concern: the plan's name is also the stem of every `Native_...` extern and entry point,
- * where a verbatim `@` would be invalid.
- */
-internal val ForwardPublicSignature.csharpName: String get() = toCSharpName(name)
 
 /** The C# spelling of a public parameter, at both its declaration and every use site. */
 internal val ForwardPublicParameter.csharpName: String get() = name.csharpParameterName()

@@ -37,7 +37,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyHandleRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyValueClassRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnumRead
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
-import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
 private fun syncErrorArguments(parameters: String): String = if (parameters.isEmpty()) {
   "out IntPtr error"
@@ -98,7 +97,7 @@ internal fun translateFunction(
   // library- and package-qualified, so a `csName` read off it would rename the public C# method
   // (and the `${csName}_native` extern) every time the symbol scheme changes. The class route
   // already names its externs from member names; this is that rule, on the legacy top-level route.
-  val csName: String = toCSharpName(func.csharpMemberName())
+  val csName: String = func.csharpMemberName()
   val returnType = func.returnType?.resolve()?.expandAliases()
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
 
@@ -711,9 +710,9 @@ internal fun translateSuspendFunction(
   val suffix: String = callableCatalog.overloadSuffix(func)
   // ADR-163: library- and package-qualified; `_async` is appended by the entry points below.
   val cname: String = symbols.topLevel(func) + suffix
-  // ADR-110: escape after the case change, so `suspend fun lock()` renders `LockAsync`.
+  // ADR-110: the case change alone, so `suspend fun lock()` renders `LockAsync`; the renderer escapes.
   // ADR-163: from the declaration name, not from [cname] (see `translateFunction`).
-  val csName: String = toCSharpName(func.simpleName.asString().replaceFirstChar { it.uppercase() })
+  val csName: String = func.simpleName.asString().replaceFirstChar { it.uppercase() }
   // The public name stays `${csName}Async`: the overloads are one natural C# overload set.
   val nativeName: String = "${csName}${suffix}Async_native"
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
@@ -851,9 +850,9 @@ internal fun translateGenericFunction(
   context: NugetContext,
 ): List<CirMember> {
   val funcName: String = func.simpleName.asString()
-  // ADR-110: PascalCase, escaped after the case change; every DllImport on this route pins its
+  // ADR-110: PascalCase, unescaped (the renderer escapes); every DllImport on this route pins its
   // own explicit entry point.
-  val csName: String = toCSharpName(func.csharpMemberName())
+  val csName: String = func.csharpMemberName()
   val returnType = func.returnType?.resolve()?.expandAliases()
   val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
   val returnTypeName: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"

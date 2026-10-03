@@ -24,9 +24,9 @@ internal fun StringBuilder.renderInterface(iface: CirInterface) {
     renderDoc(prop.doc, "        ", generated = prop.remarks)
     val modifier: String = if (prop.isNew) "new " else ""
     if (prop.hasSetter) {
-      appendLine("        $modifier${prop.type} ${prop.name} { get; set; }")
+      appendLine("        $modifier${prop.type} ${prop.identifier} { get; set; }")
     } else {
-      appendLine("        $modifier${prop.type} ${prop.name} { get; }")
+      appendLine("        $modifier${prop.type} ${prop.identifier} { get; }")
     }
   }
 
@@ -44,7 +44,7 @@ internal fun StringBuilder.renderInterface(iface: CirInterface) {
     val paramStr: String =
       (method.parameters.map { it.declaration } + listOfNotNull(token)).joinToString(", ")
     val modifier: String = if (method.isNew) "new " else ""
-    appendLine("        $modifier${method.returnType} ${method.name}($paramStr);")
+    appendLine("        $modifier${method.returnType} ${method.identifier}($paramStr);")
   }
 
   // ADR-134: a type Kotlin declares inside the interface is declared inside the generated
@@ -336,20 +336,20 @@ internal fun StringBuilder.renderFlowPropertyNativeImports(
   require(prop.isFlow) { "Only a Flow/StateFlow property has collect and value native imports" }
   val collectEntryPoint = "${nativePrefix}_get_${prop.nativeName}_collect"
   appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$collectEntryPoint\")]")
-  appendLine("        private static extern IntPtr Native_Get${prop.name}Collect(NugetKotlinHandle handle, NugetKotlinHandle scopeHandle, IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);")
+  appendLine("        private static extern IntPtr Native_Get${prop.nativeStem}Collect(NugetKotlinHandle handle, NugetKotlinHandle scopeHandle, IntPtr onNext, IntPtr onComplete, IntPtr onError, IntPtr userData);")
   appendLine()
   if (prop.isStateFlow) {
     // ADR-065: synchronous `_value` sibling export -- handle only, no scope/callbacks/errorOut.
     val valueEntryPoint = "${nativePrefix}_get_${prop.nativeName}_value"
     appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$valueEntryPoint\")]")
-    appendLine("        private static extern IntPtr Native_Get${prop.name}Value(NugetKotlinHandle handle);")
+    appendLine("        private static extern IntPtr Native_Get${prop.nativeStem}Value(NugetKotlinHandle handle);")
     appendLine()
     if (prop.isNullableMember) {
       // ADR-067: nullable member -- sibling `_has_value` presence-probe export.
       val hasValueEntryPoint = "${nativePrefix}_get_${prop.nativeName}_has_value"
       appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$hasValueEntryPoint\")]")
       appendLine("        [return: MarshalAs(UnmanagedType.I1)]")
-      appendLine("        private static extern bool Native_Get${prop.name}HasValue(NugetKotlinHandle handle);")
+      appendLine("        private static extern bool Native_Get${prop.nativeStem}HasValue(NugetKotlinHandle handle);")
       appendLine()
     }
     if (prop.isMutableStateFlow) {
@@ -360,7 +360,7 @@ internal fun StringBuilder.renderFlowPropertyNativeImports(
       appendLine("        [DllImport(\"$libraryName\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"$setValueEntryPoint\")]")
       // ADR-098: a MutableStateFlow<Char> setter slot is a `char` slot like any other.
       val setValueParam: String = narrowParameterMarshal(prop.nativeSetterType, "value")
-      appendLine("        private static extern void Native_Set${prop.name}Value(NugetKotlinHandle handle, $setValueParam, out IntPtr error);")
+      appendLine("        private static extern void Native_Set${prop.nativeStem}Value(NugetKotlinHandle handle, $setValueParam, out IntPtr error);")
       appendLine()
     }
   }
@@ -462,9 +462,9 @@ internal fun StringBuilder.renderProperty(prop: CirProperty) {
       "Property ${prop.name} has explicit interface setters but no setter body"
     }
     prop.explicitSetterInterfaces.forEach { iface ->
-      appendLine("        ${prop.type} $iface.${prop.name}")
+      appendLine("        ${prop.type} $iface.${prop.identifier}")
       appendLine("        {")
-      appendLine("            get => ${prop.name};")
+      appendLine("            get => ${prop.identifier};")
       if (setter.contains('\n')) {
         appendLine("            set")
         appendLine("            {$setter")
@@ -487,7 +487,7 @@ internal fun StringBuilder.renderProperty(prop: CirProperty) {
   if (prop.isAbstract) {
     val override: String = if (prop.isOverride) "override " else ""
     val accessors: String = if (prop.setter != null) "{ get; set; }" else "{ get; }"
-    appendLine("        public abstract $override${prop.type} ${prop.name} $accessors")
+    appendLine("        public abstract $override${prop.type} ${prop.identifier} $accessors")
     appendLine()
     return
   }
@@ -554,7 +554,7 @@ internal fun StringBuilder.renderExtensionProperty(prop: CirExtensionProperty) {
   appendLine("        extension(${prop.receiverType} receiver)")
   appendLine("        {")
   renderDoc(prop.doc, "            ")
-  appendLine("            public ${prop.type} ${prop.name}")
+  appendLine("            public ${prop.type} ${prop.identifier}")
   appendLine("            {")
   appendLine("                get")
   appendLine("                {${prop.getter.indentNestedBody().indentNestedBody()}")
@@ -695,24 +695,24 @@ internal fun StringBuilder.renderMethod(method: CirMethod, className: String = "
     if (whereClause.isNotEmpty()) " $whereClause" else ""
 
   if (method.isAbstract) {
-    appendLine("        $visibility ${abstract}${method.returnType} ${method.name}$genericDecl($paramStr)$whereStr;")
+    appendLine("        $visibility ${abstract}${method.returnType} ${method.identifier}$genericDecl($paramStr)$whereStr;")
   } else {
     val isMultiLine: Boolean = method.body.contains('\n')
 
     if (isMultiLine) {
       if (method.returnType == "void") {
-        appendLine("        $visibility ${static}${override}void ${method.name}$genericDecl($paramStr)$whereStr")
+        appendLine("        $visibility ${static}${override}void ${method.identifier}$genericDecl($paramStr)$whereStr")
       } else {
-        appendLine("        $visibility $static$override${method.returnType} ${method.name}$genericDecl($paramStr)$whereStr")
+        appendLine("        $visibility $static$override${method.returnType} ${method.identifier}$genericDecl($paramStr)$whereStr")
       }
       appendLine("        {${method.body}")
       appendLine("        }")
     } else {
       if (method.returnType == "void") {
-        appendLine("        $visibility $static$override void ${method.name}$genericDecl($paramStr)$whereStr")
+        appendLine("        $visibility $static$override void ${method.identifier}$genericDecl($paramStr)$whereStr")
         appendLine("            => ${method.body};")
       } else {
-        appendLine("        $visibility $static$override${method.returnType} ${method.name}$genericDecl($paramStr)$whereStr")
+        appendLine("        $visibility $static$override${method.returnType} ${method.identifier}$genericDecl($paramStr)$whereStr")
         appendLine("            => ${method.body};")
       }
     }
@@ -872,12 +872,12 @@ internal fun StringBuilder.renderDispose(
 
 private fun StringBuilder.renderStoredCallbackMethod(method: CirStoredCallbackMethod) {
   appendLine("        [DllImport(\"${method.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${method.subscribeEntryPoint}\")]")
-  appendLine("        private static extern IntPtr Native_${method.csMethodName}(NugetKotlinHandle handle, IntPtr listenerPtr, IntPtr userData, out IntPtr error);")
+  appendLine("        private static extern IntPtr ${method.csAddNativeName}(NugetKotlinHandle handle, IntPtr listenerPtr, IntPtr userData, out IntPtr error);")
   appendLine()
   appendLine("        [DllImport(\"${method.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${method.removeEntryPoint}\")]")
   appendLine("        private static extern void ${method.csRemoveNativeName}(IntPtr handle, IntPtr subscriptionHandle);")
   appendLine()
-  appendLine("        public IDisposable ${method.csMethodName}(${method.csParamType} listener)")
+  appendLine("        public IDisposable ${method.identifier}(${method.csParamType} listener)")
   appendLine("        {")
   // Unconditional, whatever the Kotlin nullability: the pair never forwards the C# argument (the
   // export builds its own non-null bridge), so a null here would subscribe a live listener that
@@ -895,7 +895,7 @@ private fun StringBuilder.renderStoredCallbackMethod(method: CirStoredCallbackMe
   appendLine("            IntPtr cbKey = NugetThunks.RegisterCtx(nativeCallback);")
   // ADR-102: the AOT-compiled thunk address plus this delegate's own key as the echoed ctx.
   appendLine(
-    "            IntPtr sub = Native_${method.csMethodName}(_handle, " +
+    "            IntPtr sub = ${method.csAddNativeName}(_handle, " +
         "NugetThunks.${method.delegateName}Ptr, cbKey, out IntPtr error);"
   )
   // The un-registration on the failure path is also the fix for a pre-existing leak: the old code
@@ -928,7 +928,7 @@ private fun StringBuilder.renderInterfaceBridgeMethod(method: CirInterfaceBridge
     "        [DllImport(\"${method.libraryName}\", CallingConvention = CallingConvention.Cdecl, " +
         "EntryPoint = \"${method.subscribeEntryPoint}\")]"
   )
-  appendLine("        private static extern IntPtr Native_${method.csMethodName}($nativeAddParams);")
+  appendLine("        private static extern IntPtr ${method.csAddNativeName}($nativeAddParams);")
   appendLine()
 
   // DllImport for unsubscribe
@@ -942,7 +942,7 @@ private fun StringBuilder.renderInterfaceBridgeMethod(method: CirInterfaceBridge
   appendLine()
 
   // Public IDisposable method
-  appendLine("        public IDisposable ${method.csMethodName}(${method.interfaceCsName} listener)")
+  appendLine("        public IDisposable ${method.identifier}(${method.interfaceCsName} listener)")
   appendLine("        {")
   // Same guard as the lambda pair, ahead of the disposed check: the argument is named first.
   appendLine("            ArgumentNullException.ThrowIfNull(listener);")
@@ -970,7 +970,7 @@ private fun StringBuilder.renderInterfaceBridgeMethod(method: CirInterfaceBridge
       append(", NugetThunks.${method.entries[i].delegateName}Ptr, k$i")
     }
   }
-  appendLine("            IntPtr sub = Native_${method.csMethodName}($nativeCallArgs, out IntPtr error);")
+  appendLine("            IntPtr sub = ${method.csAddNativeName}($nativeCallArgs, out IntPtr error);")
 
   // Error check with key removal
   val freeHandles: String =
@@ -988,9 +988,9 @@ private fun StringBuilder.renderInterfaceBridgeMethod(method: CirInterfaceBridge
 private fun StringBuilder.renderCallbackMethod(method: CirCallbackMethod) {
   appendLine("        [DllImport(\"${method.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${method.nativeEntryPoint}\")]")
   narrowReturnMarshal(method.nativeImportReturnType)?.let { appendLine(it) }
-  appendLine("        private static extern ${method.nativeImportReturnType} Native_${method.csMethodName}(NugetKotlinHandle handle, IntPtr ${method.lambdaParamName}Ptr, IntPtr userData, out IntPtr error);")
+  appendLine("        private static extern ${method.nativeImportReturnType} ${method.csNativeName}(NugetKotlinHandle handle, IntPtr ${method.lambdaParamName}Ptr, IntPtr userData, out IntPtr error);")
   appendLine()
-  appendLine("        public ${method.csReturnType} ${method.csMethodName}(${method.csParamType} ${method.lambdaParamName})")
+  appendLine("        public ${method.csReturnType} ${method.identifier}(${method.csParamType} ${method.lambdaParamName})")
   appendLine("        {")
   // Boundary nullability part A2, now unconditional: ahead of `RegisterCtx`, which accepts null
   // happily and defers the failure to the managed callback body, where the null delegate is
