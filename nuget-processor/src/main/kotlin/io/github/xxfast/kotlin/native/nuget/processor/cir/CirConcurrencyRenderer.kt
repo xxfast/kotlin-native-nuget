@@ -258,6 +258,7 @@ internal data class CirAsyncLocals(
    * the XML-doc pass (`CirClassTranslator`), which tags it like any other parameter.
    */
   val cancellationToken: String = "cancellationToken",
+  val collectScope: String = "collectScope",
 ) {
   companion object {
     fun of(parameters: List<CirParameter>): CirAsyncLocals {
@@ -266,7 +267,7 @@ internal data class CirAsyncLocals(
       val cancellationToken: String = local("cancellationToken")
       return CirAsyncLocals(
         local("tcs"), local("callback"), local("callbackHandle"), local("job"), local("jobHandle"),
-        local("reg"), cancellationToken,
+        local("reg"), cancellationToken, local("collectScope"),
       )
     }
   }
@@ -298,12 +299,26 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
   // ADR-102: the thunk address plus the completion closure's own GCHandle as the echoed ctx.
   val callbackArgs: String =
     "NugetThunks.NugetAsyncCallbackPtr, GCHandle.ToIntPtr(${locals.callbackHandle})"
+  val acquiredFlow = method.acquiredFlowCollectNativeName != null
+  val flowNames = method.parameters.localScopeNames()
+  fun flowLocal(base: String): String = freshName(base, flowNames).also { flowNames += it }
+  val ownedFlow = flowLocal("flowHandle")
+  val next = flowLocal("flowOnNext")
+  val complete = flowLocal("flowOnComplete")
+  val error = flowLocal("flowOnError")
+  val data = flowLocal("flowUserData")
+  val acquiredRead = if (acquiredFlow) method.flowElementRead?.let { read ->
+    val replacements = Regex("\\bh[0-9]*\\b").findAll(read).map { it.value }.distinct()
+      .associateWith { flowLocal(it) }
+    Regex("\\bh[0-9]*\\b").replace(read) { replacements.getValue(it.value) }
+  } else null
+  val instanceScope = if (acquiredFlow) locals.collectScope else "GetOrCreateScope()"
   val nativeCallArgs: String = if (method.isStatic) {
     if (paramNames.isEmpty()) callbackArgs
     else "$paramNames, $callbackArgs"
   } else {
-    if (paramNames.isEmpty()) "_handle, GetOrCreateScope(), $callbackArgs"
-    else "_handle, GetOrCreateScope(), $paramNames, $callbackArgs"
+    if (paramNames.isEmpty()) "_handle, $instanceScope, $callbackArgs"
+    else "_handle, $instanceScope, $paramNames, $callbackArgs"
   }
 
   // ADR-068: `suspend fun` returning StateFlow<T> -- the awaited resultPtr IS the StateFlow
@@ -315,6 +330,25 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
 
   val resultExtraction: String = when {
     isUnit -> "t.SetResult(true);"
+    acquiredFlow -> buildString {
+      appendLine("var $ownedFlow = new NugetKotlinHandle(resultPtr);")
+      appendLine("                    try")
+      appendLine("                    {")
+      appendLine("                        t.SetResult(new ${method.asyncReturnType}(")
+      appendLine("                            ($next, $complete, $error, $data) =>")
+      appendLine("                            {")
+      appendLine("                                if ($ownedFlow.IsClosed || ${locals.collectScope}.IsClosed)")
+      appendLine("                                    throw new ObjectDisposedException(\"${method.asyncReturnType}\");")
+      appendLine("                                return ${method.acquiredFlowCollectNativeName}($ownedFlow, ${locals.collectScope}, $next, $complete, $error, $data);")
+      appendLine("                            },")
+      appendLine("                            ${acquiredRead ?: "null"}, $ownedFlow));")
+      appendLine("                    }")
+      appendLine("                    catch")
+      appendLine("                    {")
+      appendLine("                        $ownedFlow.Dispose();")
+      appendLine("                        throw;")
+      append("                    }")
+    }
     isStateFlowReturn -> buildString {
       // ADR-187: the flow handle is owned from here, and the lambdas capture that object and the
       // scope handle object, never raw pointers (see `renderHeldStateFlowMethod`).
@@ -370,6 +404,10 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
     appendLine("            if (_handle.IsInvalid)")
     appendLine("                throw new ObjectDisposedException(nameof($className));")
   }
+  if (acquiredFlow) {
+    val scope = if (method.isStatic) "NugetKotlinHandle.Null" else "GetOrCreateScope()"
+    appendLine("            NugetKotlinHandle ${locals.collectScope} = $scope;")
+  }
   val (tcs, callback, callbackHandle, job, jobHandle, reg) = locals
   appendLine("            var $tcs = new $tcsType(TaskCreationOptions.RunContinuationsAsynchronously);")
   appendLine("            NugetAsyncCallback $callback = null!;")
@@ -391,7 +429,19 @@ internal fun StringBuilder.renderAsyncMethod(method: CirMethod, className: Strin
       "$jobHandle = $nativeName($nativeCallArgs)",
       returns = false,
     )
-  if (scoped == null) {
+  if (acquiredFlow) {
+    appendLine("            IntPtr $jobHandle = IntPtr.Zero;")
+    appendLine("            try")
+    appendLine("            {")
+    if (scoped == null) appendLine("                $jobHandle = $nativeName($nativeCallArgs);")
+    else scoped.forEach { appendLine("    $it") }
+    appendLine("            }")
+    appendLine("            catch")
+    appendLine("            {")
+    appendLine("                if ($callbackHandle.IsAllocated) $callbackHandle.Free();")
+    appendLine("                throw;")
+    appendLine("            }")
+  } else if (scoped == null) {
     appendLine("            IntPtr $jobHandle = $nativeName($nativeCallArgs);")
   } else {
     // The scoped call assigns from inside its own block, so the local is declared outside it.

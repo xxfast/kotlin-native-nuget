@@ -1,5 +1,9 @@
 # ADR-068: `suspend fun` returning `StateFlow<T>` — keep the outer suspend as `Task<KotlinStateFlow<T>>`, not a collapsed sync return
 
+2026-10-03 amendment: the plain `Flow<T>` sibling now uses the same outer-`Task` composition, with
+`KotlinFlow<T>` as the acquired, disposable holder ([ADR-194](194-suspend-returning-flow.md)). This
+does not widen `StateFlow` element support.
+
 ## Status
 
 Accepted

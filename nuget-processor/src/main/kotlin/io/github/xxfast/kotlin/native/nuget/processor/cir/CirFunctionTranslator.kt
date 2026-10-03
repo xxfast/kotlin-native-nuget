@@ -729,15 +729,20 @@ internal fun translateSuspendFunction(
   // The Kotlin half is the plain top-level export (the awaited flow is already minted as a handle);
   // only the C# spelling and the completion differ, and those come from the class route's helper.
   val stateFlowElement: SuspendStateFlowElement? =
-    if (returnType?.declaration?.qualifiedName?.asString() in STATE_FLOW_TYPES) {
-      suspendStateFlowElement(returnType, classifier, context)
+    if (
+      returnType?.declaration?.qualifiedName?.asString() in STATE_FLOW_TYPES ||
+      returnType?.declaration?.qualifiedName?.asString() in FLOW_TYPES
+    ) {
+      suspendStateFlowElement(returnType, classifier, context, tracker)
     } else {
       null
     }
   if (stateFlowElement != null) {
     tracker.needsFlow = true
-    tracker.needsStateFlow = true
-    tracker.needsSuspendStateFlow = true
+    if (returnType?.declaration?.qualifiedName?.asString() in STATE_FLOW_TYPES) {
+      tracker.needsStateFlow = true
+      tracker.needsSuspendStateFlow = true
+    }
   }
 
   // Issue #108: a nullable Kotlin return has to reach C# as `Task<T?>`, otherwise a null result
@@ -800,6 +805,8 @@ internal fun translateSuspendFunction(
     isAsync = true,
     asyncReturnType = asyncReturnType,
     flowElementRead = stateFlowElement?.read,
+    acquiredFlowCollectNativeName =
+      if (asyncReturnType.startsWith("KotlinFlow<")) "${nativeName}_collect" else null,
     // ADR-119 / ADR-131: the top-level route's own copy of the class route's decision, exhaustive
     // for the same reason -- the two routes have to answer a new return shape identically.
     asyncResultRead = when (returnShape) {
@@ -831,7 +838,10 @@ internal fun translateSuspendFunction(
     },
   )
 
-  return listOf(nativeImport, asyncMethod)
+  val collector: CirDllImport? = asyncMethod.acquiredFlowCollectNativeName?.let { name ->
+    acquiredFlowCollectImport(libraryName, cname, name)
+  }
+  return listOf(nativeImport, asyncMethod) + listOfNotNull(collector)
 }
 
 internal fun translateGenericFunction(

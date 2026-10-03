@@ -165,6 +165,140 @@ public class LiveHandleTests
         }
     }
 
+    [Fact]
+    public async Task SuspendFlow_AcquireCollectDispose_AllOwnerRoutesReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using var cafe = new SuspendFlowCafe();
+            using var portions = await cafe.PortionsAsync();
+            var seen = new List<int>();
+            await foreach (int portion in portions) seen.Add(portion);
+            Assert.Equal(new[] { 17, 29, 43 }, seen);
+
+            using var companions = await cafe.CompanionsAsync();
+            await foreach (Cat? cat in companions) cat?.Dispose();
+            using var moods = await cafe.MoodsAsync();
+            await foreach (var batch in moods) Assert.NotEmpty(batch);
+            using var tags = await cafe.TagsAsync();
+            await foreach (var batch in tags) Assert.True(batch.Count <= 2);
+            using var markings = await cafe.MarkingsAsync();
+            await foreach (byte[]? marking in markings) Assert.True(marking is null || marking.Length <= 4);
+
+            using var top = await SuspendFlowSample.CafePortionsAsync();
+            int total = 0;
+            await foreach (int portion in top) total += portion;
+            Assert.Equal(154, total);
+
+            await using SuspendFlowNap nap = new SuspendFlowNap.Loaf("Oreo");
+            using var dreams = await nap.DreamsAsync();
+            await foreach (string dream in dreams) Assert.StartsWith("Oreo", dream);
+            using var purrs = await ((SuspendFlowNap.Loaf)nap).PurrsAsync();
+            await foreach (int purr in purrs) Assert.True(purr > 0);
+            await using ISuspendFlowMenu menu = SuspendFlowSample.HouseFlowMenu();
+            using var specials = await menu.SpecialsAsync();
+            await foreach (string special in specials) Assert.NotEmpty(special);
+        });
+    }
+
+    [Fact]
+    public async Task SuspendFlow_AcquisitionAndEmissionFaults_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using var cafe = new SuspendFlowCafe();
+            var acquisition = await Assert.ThrowsAnyAsync<Exception>(() => cafe.AcquisitionFaultAsync());
+            Assert.Contains("Oreo's acquisition failed", acquisition.Message);
+            using var flow = await cafe.EmissionFaultAsync();
+            var emission = await Assert.ThrowsAnyAsync<Exception>(async () =>
+            {
+                await foreach (int portion in flow) Assert.Equal(17, portion);
+            });
+            Assert.Contains("Mylo's emission failed", emission.Message);
+        });
+    }
+
+    private static async Task WaitForSuspendFlowAcquisition(SuspendFlowCafe cafe)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (!cafe.AcquisitionStarted) await Task.Delay(1, timeout.Token);
+    }
+
+    [Fact]
+    public async Task SuspendFlow_CanceledAndLateSuccessfulAcquisitions_ReturnToBaseline()
+    {
+        await AssertNoLeakAsync(async () =>
+        {
+            await using (var cafe = new SuspendFlowCafe())
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var pending = cafe.GatedAsync(cancellation.Token);
+                await WaitForSuspendFlowAcquisition(cafe);
+                cancellation.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+            }
+
+            await using (var cafe = new SuspendFlowCafe())
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var pending = cafe.StubbornAsync(cancellation.Token);
+                await WaitForSuspendFlowAcquisition(cafe);
+                cancellation.Cancel();
+                cafe.ReleaseAcquisition();
+                using var late = await pending;
+                int sum = 0;
+                await foreach (int portion in late) sum += portion;
+                Assert.Equal(46, sum);
+            }
+
+            var disposed = new SuspendFlowCafe();
+            using var release = SuspendFlowSample.CafeAcquisitionRelease(disposed);
+            var abandoned = disposed.StubbornAsync();
+            await WaitForSuspendFlowAcquisition(disposed);
+            disposed.Dispose();
+            release.Invoke();
+            using var holder = await abandoned.WaitAsync(TimeSpan.FromSeconds(10));
+            await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+            {
+                await foreach (int portion in holder) Assert.Fail("closed scope emitted a portion");
+            });
+        });
+    }
+
+    [Fact]
+    public async Task SuspendFlow_ImmediateAcquisitionAndCompletion_ThousandsReturnToBaseline()
+    {
+        await using var cafe = new SuspendFlowCafe();
+        using (var warm = await cafe.PortionsAsync())
+        {
+            await foreach (int portion in warm) Assert.True(portion > 0);
+        }
+
+        await AssertNoLeakAsync(async () =>
+        {
+            using var flow = await cafe.PortionsAsync();
+            int sum = 0;
+            await foreach (int portion in flow) sum += portion;
+            Assert.Equal(89, sum);
+        }, iterations: 5000);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task DropUndisposedSuspendFlow()
+    {
+        KotlinFlow<int> flow = await SuspendFlowSample.CafePortionsAsync();
+        int sum = 0;
+        await foreach (int portion in flow) sum += portion;
+        Assert.Equal(154, sum);
+        flow = null!;
+        // Let acquisition and collection continuations unwind before the caller forces GC.
+        await Task.Yield();
+    }
+
+    [Fact]
+    public async Task UndisposedSuspendFlowHolder_IsReleasedByTheGc() =>
+        await AssertReleasedByTheGcAsync("suspend-acquired Flow holders", DropUndisposedSuspendFlow);
+
     // Row 1. Class handle via using/Dispose: `cat_create` mints, `cat_dispose` releases.
     [Fact]
     public void ClassHandle_UsingDispose_ReturnsToBaseline()

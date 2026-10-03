@@ -1,5 +1,10 @@
 # ADR-026: Flow<T> mapping — cold streams → IAsyncEnumerable<T>
 
+2026-10-03 amendment: a `suspend fun` returning `Flow<T>` keeps asynchronous acquisition as
+`Task<KotlinFlow<T>>`; the returned holder owns its acquired Flow handle. See
+[ADR-194](194-suspend-returning-flow.md). This does not change the original plain-Flow mapping or
+deferred `SharedFlow` scope.
+
 ## Status
 
 Proposed

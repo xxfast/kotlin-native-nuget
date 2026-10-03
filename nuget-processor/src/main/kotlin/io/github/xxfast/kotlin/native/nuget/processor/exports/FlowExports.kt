@@ -455,7 +455,7 @@ private fun memberAccessor(receiver: String, memberNullable: Boolean): String =
 // ADR-123: a collection element is boxed per-element projected, so a value class leaves as its
 // underlying and an enum as its ordinal, exactly as the ordinary route's collection result does.
 // The two are exclusive: a nullable collection element is refused before either half sees it.
-private fun itemBoxExpr(
+internal fun itemBoxExpr(
   elementNullable: Boolean,
   collection: BridgeType.Collection?,
 ): String = when {

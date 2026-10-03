@@ -832,6 +832,8 @@ internal data class CirMethod(
   // and kin. Null leaves the shipped construction untouched, so a non-collection element still
   // reads through the constructors' default `NugetMarshal.FromHandle<T>`.
   val flowElementRead: String? = null,
+  /** ADR-194: collector keyed on the acquired Flow, with no acquisition parameters. */
+  val acquiredFlowCollectNativeName: String? = null,
   // The collect lambda's four parameters (`onNext, onComplete, onError, userData`), minted apart
   // from this method's own parameters (`ForwardLegacyNames`): a lambda parameter spelled like a
   // user parameter would shadow it, and the native call inside the lambda would pass the callback

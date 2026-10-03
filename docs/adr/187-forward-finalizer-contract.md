@@ -1,5 +1,9 @@
 # ADR-187: Forward, an undisposed generated wrapper releases its Kotlin handle through a `SafeHandle` when the .NET GC collects it
 
+2026-10-03 amendment: the acquired holder returned by a suspend `Flow` call also owns its Flow
+handle through `SafeHandle`; explicit `Dispose()` is prompt release and GC finalization is fallback
+([ADR-194](194-suspend-returning-flow.md)). The feature adds no cross-platform finalizer evidence.
+
 ## Status
 Accepted. Contract decided at the human gate on 2026-10-02; implemented on the same day. Corrected against the implementation and a spike when it moved to Accepted: the sketch's release call, the `Dispose()` shape, the Flow and StateFlow capture points, and the subscription token decision differ from the Proposed text.
 

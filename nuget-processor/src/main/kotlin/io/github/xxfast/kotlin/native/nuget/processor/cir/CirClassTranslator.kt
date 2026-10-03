@@ -1926,26 +1926,26 @@ internal fun suspendMembers(
   // summary; a bare `forwardKdoc()` here could never reach the expect half.
   expects: ExpectIndex = ExpectIndex(),
 ): List<CirMember> {
-  // ADR-068: a `suspend fun` returning StateFlow<T>/MutableStateFlow<T> is peeled into its own
-  // bucket BEFORE the plain-async path below claims it -- that path would otherwise resolve the
-  // return type's simple name "StateFlow" through KOTLIN_TO_CSHARP_PARAM (a miss) and emit an
-  // undefined-type `Task<StateFlow>`. A `suspend fun` returning a plain `Flow<T>` reaches neither
-  // bucket: `legacyReturnShape`'s final branch refuses it by name (it is a generic return that is
-  // not a supported collection), so both halves drop it and `NugetProcessor` reports it as a
-  // SKIPPED_UNSUPPORTED_RETURN. (The earlier wording here -- "stays on the legacy plain-async
-  // path" -- described a route it has never taken.)
+  // ADR-068/194: preserve asynchronous acquisition before exposing the acquired stream.
+  // Plain Flow uses typed per-member collection; StateFlow retains its existing shared helpers.
   val (stateFlowMethods, plainMethods) = suspendMethods.partition { method ->
     val returnQualified: String? = method.returnType?.resolve()?.expandAliases()
       ?.declaration?.qualifiedName?.asString()
-    returnQualified in STATE_FLOW_TYPES
+    returnQualified in STATE_FLOW_TYPES || returnQualified in FLOW_TYPES
   }
 
   if (plainMethods.isNotEmpty()) tracker.needsAsync = true
   if (stateFlowMethods.isNotEmpty()) {
     tracker.needsFlow = true
-    tracker.needsStateFlow = true
     tracker.needsAsync = true
-    tracker.needsSuspendStateFlow = true
+    val hasStateFlow: Boolean = stateFlowMethods.any { method ->
+      method.returnType?.resolve()?.expandAliases()?.declaration?.qualifiedName?.asString() in
+        STATE_FLOW_TYPES
+    }
+    if (hasStateFlow) {
+      tracker.needsStateFlow = true
+      tracker.needsSuspendStateFlow = true
+    }
   }
 
   val asyncMembers: List<CirMember> = plainMethods.flatMap { method ->
@@ -2105,7 +2105,7 @@ internal fun suspendMembers(
     val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
     val nativeStem: String = "Native_$csMethodName${suffix}Async"
     val element: SuspendStateFlowElement =
-      suspendStateFlowElement(method.returnType?.resolve(), classifier, context)
+      suspendStateFlowElement(method.returnType?.resolve(), classifier, context, tracker)
 
     // ADR-114: a collection parameter takes the public collection type with an IntPtr native
     // slot; every other parameter keeps mapParamType's shipped spelling.
@@ -2159,9 +2159,22 @@ internal fun suspendMembers(
       // The `read:` the awaited `KotlinStateFlow<T>` is constructed with (ADR-123's slot,
       // ADR-136's expression). Null for a class element, which keeps the ctor's default read.
       flowElementRead = element.read,
+      acquiredFlowCollectNativeName =
+        if (element.asyncReturnType.startsWith("KotlinFlow<")) "${nativeStem}Collect" else null,
     )
 
-    listOf(nativeImport, asyncMethod)
+    val collector: List<CirMember> = if (asyncMethod.acquiredFlowCollectNativeName != null) {
+      listOf(
+        acquiredFlowCollectImport(
+          libraryName,
+          "${prefix}_${cname}",
+          asyncMethod.acquiredFlowCollectNativeName,
+        ),
+      )
+    } else {
+      emptyList()
+    }
+    listOf(nativeImport, asyncMethod) + collector
   }
 
   return asyncMembers + suspendStateFlowMembers
@@ -2183,8 +2196,26 @@ internal fun suspendStateFlowElement(
   returnType: KSType?,
   classifier: ForwardBridgeTypeClassifier,
   context: NugetContext,
+  tracker: CollectionHelperTracker? = null,
 ): SuspendStateFlowElement {
   val element: KSType? = returnType?.expandAliases()?.arguments?.firstOrNull()?.type?.resolve()
+  if (returnType?.expandAliases()?.declaration?.qualifiedName?.asString() in FLOW_TYPES) {
+    val nullable = element?.isMarkedNullable == true
+    val collection = classifier.legacyFlowElementCollection(returnType)
+    if (collection != null) tracker?.trackCollection(collection)
+    val iface = classifier.legacyFlowElementInterface(element)
+    val bytes = classifier.legacyFlowElementShape(element) is ForwardLegacyFlowElementShape.Bytes
+    if (bytes && tracker != null) tracker.needsBytes = true
+    val cs = collection?.forwardPublicCsharpType()
+      ?: legacyBytesCsharpType(nullable).takeIf { bytes }
+      ?: iface?.let { it.csharpType + if (nullable) "?" else "" }
+      ?: qualifiedElementCsType(element, context, nullable)
+    val read = collection?.let { legacyFlowElementReadArgument(it) }
+      ?: iface?.let { legacyInterfaceElementReadArgument(it, nullable) }
+      ?: legacyBytesElementReadArgument(nullable).takeIf { bytes }
+    return SuspendStateFlowElement("KotlinFlow<$cs>", read)
+  }
+
   // v1 scope (ADR-068): nullable element/member is deferred; mirror ADR-065's plain (non-null)
   // shape only. The `false` passed to `legacyInterfaceElementReadArgument` below is safe rather
   // than optimistic: since 2026-09-20 `legacyReturnShape` REFUSES a nullable element on this
@@ -4760,6 +4791,7 @@ internal fun interfaceAsyncForwards(
           method.copy(
             explicitInterface = spelling,
             nativeName = method.nativeName.carried(),
+            acquiredFlowCollectNativeName = method.acquiredFlowCollectNativeName?.carried(),
             stateFlowValueNativeName = method.stateFlowValueNativeName.carried(),
             stateFlowHasValueNativeName = method.stateFlowHasValueNativeName.carried(),
             stateFlowSetValueNativeName = method.stateFlowSetValueNativeName.carried(),
@@ -4785,3 +4817,20 @@ private val DECLARING_PLACEMENTS: Set<ForwardInterfaceMemberPlacement> = setOf(
   ForwardInterfaceMemberPlacement.DECLARED,
   ForwardInterfaceMemberPlacement.DIAMOND_OVERRIDE,
 )
+
+internal fun acquiredFlowCollectImport(library: String, prefix: String, name: String): CirDllImport =
+  CirDllImport(
+    libraryName = library,
+    entryPoint = "${prefix}_collect",
+    returnType = "IntPtr",
+    name = name,
+    parameters = listOf(
+      CirParameter("flowHandle", KOTLIN_HANDLE),
+      CirParameter("scopeHandle", KOTLIN_HANDLE),
+      CirParameter("onNextPtr", "IntPtr"),
+      CirParameter("onCompletePtr", "IntPtr"),
+      CirParameter("onErrorPtr", "IntPtr"),
+      CirParameter("userData", "IntPtr"),
+    ),
+    visibility = CirVisibility.PRIVATE,
+  )
