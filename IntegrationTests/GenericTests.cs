@@ -98,6 +98,20 @@ public class GenericTests
     }
 
     [Fact]
+    public void Box_PlannedCallbackMember_CallsTheDelegateBack()
+    {
+        using var box = new Box<string>("Oreo");
+        int seen = 0;
+        int measured = box.Measure(length =>
+        {
+            seen = length;
+            return length * 10;
+        });
+        Assert.Equal(4, seen);
+        Assert.Equal(40, measured);
+    }
+
+    [Fact]
     public void Box_IsGenericType()
     {
         using var box = new Box<string>("test");

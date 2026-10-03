@@ -107,6 +107,12 @@ class ForwardSkippedCallableWarningTest {
         detail = "generic",
       ) to "it is a generic member of a sealed base class, which has no route yet (ADR-116)",
       ForwardCallableCatalogEntry.Skipped(
+        symbol = "com.example.Crate.load",
+        reason = ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE,
+        detail = "SUSPEND",
+      ) to "it is a `suspend` member of a generic class, and the route that binds that member " +
+          "kind cannot spell a generic receiver yet (ADR-147)",
+      ForwardCallableCatalogEntry.Skipped(
         symbol = "com.example.Api.rename",
         reason = ForwardPlanSkipReason.NULLABLE,
         position = ForwardSkipPosition.INPUT,
@@ -410,6 +416,10 @@ class ForwardSkippedCallableWarningTest {
         // bound), so what still lands here is a generic or callback member, or any async member of
         // a generic base (ADR-147).
         ForwardPlanSkipReason.SEALED_BASE_UNROUTED,
+        // ADR-147: the ordinary-class twin for a GENERIC owner. A suspend, Flow or legacy-callback
+        // member stays silent on an ordinary class because a legacy route re-emits it; no legacy
+        // route is keyed to a generic class, so the same member is a real drop there.
+        ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE,
         // ADR-162: the generator's own invariant failing on a callable. `droppedFromCSharp`, so the
         // catalog's drop-reporting path carries it, which is the only thing that reports it at all;
         // unlike every other entry here it maps to an ERROR_* kind and fails the build.

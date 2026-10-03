@@ -176,6 +176,12 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  author can move the member onto each arm, which does have those routes. */
   SEALED_BASE_UNROUTED(droppedFromCSharp = true),
 
+  /** ADR-147: a `suspend`, `Flow` or legacy-callback member of a GENERIC class. Every legacy route
+   *  spells the receiver as the bare owner name, which does not compile for `Crate<T>`, so the
+   *  deferral is a drop there. The deferral reason it was relabelled from rides in
+   *  [ForwardCallableCatalogEntry.Skipped.detail]. */
+  GENERIC_OWNER_LEGACY_ROUTE(droppedFromCSharp = true),
+
   /** ADR-064 amendment (2026-09-13): the ordinary-owner twin of [SEALED_SUBCLASS_UNROUTED]. The
    *  four legacy-route deferrals below ([GENERIC], [FLOW_PROTOCOL], [CALLBACK_PROTOCOL],
    *  [SUSPEND_CALLBACK_PROTOCOL]) are only deferrals at the handful of owner/position combinations
@@ -407,6 +413,21 @@ private val UNROUTED_CANDIDATE_REASONS: Set<ForwardPlanSkipReason> = setOf(
   ForwardPlanSkipReason.CALLBACK_PROTOCOL,
   ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL,
 )
+
+/**
+ * ADR-147: the deferrals a non-generic class leaves to a legacy route, all of which a generic owner
+ * drops. SUSPEND included: unlike [UNROUTED_CANDIDATE_REASONS], the suspend route is not keyed to a
+ * generic owner (`forwardSuspendRouteMethods` returns nothing for one).
+ */
+private val GENERIC_OWNER_LEGACY_REASONS: Set<ForwardPlanSkipReason> = setOf(
+  ForwardPlanSkipReason.SUSPEND,
+  ForwardPlanSkipReason.FLOW_PROTOCOL,
+  ForwardPlanSkipReason.CALLBACK_PROTOCOL,
+)
+
+/** Whether this member overrides a member an interface declares (ADR-174's forwarding case). */
+private fun KSFunctionDeclaration.overridesInterfaceMember(): Boolean =
+  (findOverridee()?.parentDeclaration as? KSClassDeclaration)?.classKind == ClassKind.INTERFACE
 
 /**
  * ADR-064 amendment (2026-09-13), shaped after ADR-116's sealed reclassification: turn a
@@ -1452,6 +1473,67 @@ internal class ForwardCallablePlanner(
 
         else -> false
       }
+    }.nameGenericOwnerLegacyRoutes(cls, methods)
+  }
+
+  /**
+   * ADR-147: a generic owner has no legacy route at all, because every one of them spells the
+   * receiver as the bare owner name (`asStableRef<Crate>()`), so the deferrals [classEntries]
+   * leaves silent ("the legacy route re-emits this") are drops on a generic class. Each is
+   * relabelled [ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE], with the reason it came from as
+   * the detail, unless something else already names it or binds it:
+   *  - a member `warnRefusedLegacyRouteMembers` names with its own refusal (a refused lambda shape,
+   *    an async member's refused parameter or return, a refused or opt-in-marked pair), which keeps
+   *    one member to one warning;
+   *  - an override of an interface member, which the interface binds (ADR-174 ruling 4) or names on
+   *    its own declaration;
+   *  - a member inherited from another declaration, named there.
+   */
+  private fun List<ForwardCallableCatalogEntry>.nameGenericOwnerLegacyRoutes(
+    cls: KSClassDeclaration,
+    methods: List<KSFunctionDeclaration>,
+  ): List<ForwardCallableCatalogEntry> {
+    if (cls.typeParameters.isEmpty()) return this
+    val markers: Set<String> = classifier.exportMarkers
+    // The pairs exactly as `warnRefusedLegacyRouteMembers` detects them, so "named there" means
+    // what that walk names: a lambda listener is a stored pair, never a subscription one.
+    val storedPairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
+      findStoredCallbackPairs(
+        methods
+          .filter { method -> method.hasLegacyLambdaParameter() }
+          .filter { method -> method.refusedLegacyLambdaShape() == null },
+      )
+    val bridgePairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
+      findInterfaceBridgePairs(methods.filterNot { method -> method.hasLegacyLambdaParameter() })
+    fun Pair<KSFunctionDeclaration, KSFunctionDeclaration>.isMarked(): Boolean =
+      toList().any { half -> half.optInMarker(markers) != null }
+    val namedPairMembers: Set<KSFunctionDeclaration> = buildSet {
+      storedPairs
+        .filter { pair -> legacyRefusedStoredCallbackPair(pair.first) != null || pair.isMarked() }
+        .forEach { pair -> addAll(pair.toList()) }
+      bridgePairs
+        .filter { pair ->
+          classifier.legacyRefusedInterfaceBridgePair(pair.first) != null || pair.isMarked()
+        }
+        .forEach { pair -> addAll(pair.toList()) }
+    }
+    fun KSFunctionDeclaration.isNamedElsewhere(): Boolean =
+      parentDeclaration != cls ||
+          refusedLegacyLambdaShape() != null ||
+          this in namedPairMembers ||
+          overridesInterfaceMember() ||
+          (isForwardLegacyAsyncRoute() &&
+              (classifier.legacyRefusedParameter(parameters) != null ||
+                  classifier.legacyRefusedReturn(this) != null))
+    return map { entry ->
+      if (entry !is ForwardCallableCatalogEntry.Skipped) return@map entry
+      if (entry.reason !in GENERIC_OWNER_LEGACY_REASONS) return@map entry
+      val method: KSFunctionDeclaration = entry.node as? KSFunctionDeclaration ?: return@map entry
+      if (method.isNamedElsewhere()) return@map entry
+      entry.copy(
+        reason = ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE,
+        detail = entry.reason.name,
+      )
     }
   }
 

@@ -207,9 +207,33 @@ private fun KSType.isBuiltinNonScalar(): Boolean {
  * ADR-147: whether this member belongs to ANY specialized legacy route rather than to the ADR-062
  * plan. Every one of them spells the receiver as the bare owner name, so a generic owner's member
  * is refused on both halves through this one predicate instead of three parallel tests.
+ *
+ * A per-call lambda member the plan owns (ADR-160, [hasPlannedCallbackParameter]) is NOT legacy:
+ * its export comes off the catalog with the `Crate<Any?>` receiver. An `add`/`remove` pair half
+ * (stored callback or interface-bridge subscription) IS legacy, even when its lambda would
+ * classify or it has no lambda at all, which is why the caller passes the owner's
+ * [pairMembers]: pair detection is structural and the plan never sees a pair.
  */
-internal fun KSFunctionDeclaration.isForwardLegacyRoute(): Boolean =
-  isForwardLegacyAsyncRoute() || hasLegacyLambdaParameter()
+internal fun KSFunctionDeclaration.isForwardLegacyRoute(
+  classifier: ForwardBridgeTypeClassifier,
+  pairMembers: Set<KSFunctionDeclaration>,
+): Boolean = isForwardLegacyAsyncRoute() ||
+    this in pairMembers ||
+    (hasLegacyLambdaParameter() && !hasPlannedCallbackParameter(classifier))
+
+/**
+ * The `add`/`remove` pair halves among [methods] for [isForwardLegacyRoute], detected as
+ * [addClassExports] detects them: a stored-callback pair over the lambda members, a subscription
+ * pair over the rest.
+ */
+internal fun forwardLegacyPairMembers(
+  methods: List<KSFunctionDeclaration>,
+): Set<KSFunctionDeclaration> {
+  val (lambdaMembers, otherMembers) = methods.partition { it.hasLegacyLambdaParameter() }
+  return (findStoredCallbackPairs(lambdaMembers) + findInterfaceBridgePairs(otherMembers))
+    .flatMap { pair -> pair.toList() }
+    .toSet()
+}
 
 /**
  * Generates @CName bridge exports for classes: dispose, planned constructors/properties/methods,
@@ -301,22 +325,23 @@ internal fun FileSpec.Builder.addClassExports(
     addFlowPropertyExports(prop, qualifiedName, prefix, classifier)
   }
 
-  val allRegularMethods: List<KSFunctionDeclaration> = cls.getAllFunctions()
+  val memberMethods: List<KSFunctionDeclaration> = cls.getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { method -> !method.isCompilerOwnedMember(cls) }
     .filter { !it.modifiers.contains(Modifier.SUSPEND) }
     .filter { method ->
       method.isForwardMemberOf(cls, superClass) && !method.modifiers.contains(Modifier.ABSTRACT)
     }
-    // ADR-147: every specialized legacy route spells the receiver as the bare owner name
-    // (`asStableRef<Crate>()`), which does not compile for a generic class. Refused on a generic
-    // owner, on BOTH halves, rather than emitting a member one half declares and the other does
-    // not (the ADR-055 contract would then fail the whole build).
-    .filter { method ->
-      cls.typeParameters.isEmpty() ||
-          !(method.hasLegacyFlowReturn() || method.hasLegacyLambdaParameter())
-    }
     .toList()
+  val legacyPairMembers: Set<KSFunctionDeclaration> = forwardLegacyPairMembers(memberMethods)
+  // ADR-147: every specialized legacy route spells the receiver as the bare owner name
+  // (`asStableRef<Crate>()`), which does not compile for a generic class. Refused on a generic
+  // owner, on BOTH halves (the same predicate the C# translator reads), rather than emitting a
+  // member one half declares and the other does not (the ADR-055 contract would then fail the
+  // whole build). The planner names each refused member (`nameGenericOwnerLegacyRoutes`).
+  val allRegularMethods: List<KSFunctionDeclaration> = memberMethods.filter { method ->
+    cls.typeParameters.isEmpty() || !method.isForwardLegacyRoute(classifier, legacyPairMembers)
+  }
 
   // ADR-065: StateFlow-returning methods route through the same `_collect` shape as plain-Flow
   // methods, plus a sibling synchronous `_value` export (see the flowMethods.forEach loop below).
