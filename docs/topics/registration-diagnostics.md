@@ -267,6 +267,12 @@ In a check, drop the wrapper in a method the JIT cannot inline, then loop `GC.Co
 `GC.WaitForPendingFinalizers()` until the count settles; it can take several rounds. These
 `LeakTests/LiveHandleTests.cs` rows pin it:
 
+The suspend-returning-Flow path is covered by `SuspendFlow_AcquireCollectDispose_AllOwnerRoutesReturnToBaseline`,
+`SuspendFlow_AcquisitionAndEmissionFaults_ReturnToBaseline`,
+`SuspendFlow_CanceledAndLateSuccessfulAcquisitions_ReturnToBaseline`, and
+`SuspendFlow_ImmediateAcquisitionAndCompletion_ThousandsReturnToBaseline`. The acquired holder's
+GC fallback is covered by `UndisposedSuspendFlowHolder_IsReleasedByTheGc`.
+
 | Row | Test | Pins |
 |---|---|---|
 | 16 | `UndisposedClassWrapper_IsReleasedByTheGc` | a class wrapper |
@@ -281,6 +287,7 @@ In a check, drop the wrapper in a method the JIT cannot inline, then loop `GC.Co
 | 16i | `DiscardedSubscription_KeepsDeliveringAfterTheGc_AndKeepsItsToken` | a discarded `AddX` subscription keeps delivering and keeps its token |
 | 16j | `UndisposedWrapperWithASuspendScope_IsReleasedByTheGc` | a wrapper that owns a suspend scope |
 | 16k | `DisposedWrappers_ThenFinalized_AreNotReleasedTwice` | no double release after `Dispose()` |
+| 16l | `UndisposedSuspendFlowHolder_IsReleasedByTheGc` | an acquired suspend-returning `Flow` holder |
 
 The subscription token is the exception: row 16i pins that nothing releases it until you dispose the
 subscription, so a discarded subscription holds one handle for the life of the process. The

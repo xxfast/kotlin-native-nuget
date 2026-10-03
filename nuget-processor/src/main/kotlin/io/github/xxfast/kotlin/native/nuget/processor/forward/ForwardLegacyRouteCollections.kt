@@ -628,6 +628,18 @@ internal fun ForwardBridgeTypeClassifier.legacyReturnShape(
 
   if (expanded.arguments.isEmpty()) return ForwardLegacyReturnShape.Plain
 
+  // ADR-194: an acquired plain Flow gets a typed per-member collector.
+  if (expanded.declaration.qualifiedName?.asString() in FLOW_TYPES) {
+    if (expanded.isMarkedNullable) {
+      return ForwardLegacyReturnShape.Refused(expanded.legacyDescription())
+    }
+    val element = expanded.arguments.firstOrNull()?.type?.resolve()?.expandAliases()
+    val shape = legacyFlowElementShape(element)
+    return if (shape is ForwardLegacyFlowElementShape.Refused) {
+      ForwardLegacyReturnShape.Refused(shape.description, shape.refusal)
+    } else ForwardLegacyReturnShape.Plain
+  }
+
   // ADR-068 peels a StateFlow return into its own bucket before the plain-async path sees it.
   // ADR-123: that bucket reads every element through the module-wide `nuget_stateflow_value`
   // export, which has no per-member projection seam, so a collection element cannot cross there

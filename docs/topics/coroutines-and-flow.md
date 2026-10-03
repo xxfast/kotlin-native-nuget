@@ -226,6 +226,35 @@ public Task<KotlinStateFlow<global::TestLibrary.Nested.Aviary.IKeeper>> KeeperRe
 A C#-implemented keeper booked earlier and read back through `.Value` is the same instance the
 caller passed in.
 
+## `suspend fun` returning `Flow<T>` {id="suspend-fun-returning-flow-t"}
+
+A suspend function that returns `Flow<T>` stays asynchronous: await it once to acquire a
+`KotlinFlow<T>`. Acquisition does not start collection; later enumerations use the same Flow object
+with its usual Kotlin Flow semantics.
+
+```kotlin
+class SuspendFlowCafe {
+  suspend fun portions(): Flow<Int> = flow {
+    emit(17)
+    emit(29)
+    emit(43)
+  }
+}
+```
+
+```C#
+await using var cafe = new SuspendFlowCafe();
+using KotlinFlow<int> portions = await cafe.PortionsAsync();
+await foreach (int portion in portions)
+    Console.WriteLine(portion);
+```
+
+Dispose the acquired `KotlinFlow<T>` when finished. `Dispose()` releases its holder and prevents new
+collections; a collection already in progress continues. On the owner, `Dispose()` cancels active
+work and `DisposeAsync()` drains it. The acquisition `CancellationToken` controls only acquisition;
+use `WithCancellation` or the enumerator token to cancel a collection. A top-level function has no
+owner, so dispose the holder and cancel collection through its enumerator or token.
+
 ## `suspend () -> R` lambdas
 
 ```kotlin
@@ -651,7 +680,6 @@ members.
   `MutableStateFlow<T>` are not exposed.
 - A nullable-element or nullable-member `MutableStateFlow` write, and a `suspend fun` returning
   `MutableStateFlow<T>`, are not supported.
-- A `suspend fun` returning `Flow<T>` has no binding, on a class or at top level.
 - `StateFlow<T>` or `Flow<T>` as a function parameter, or as a generic type argument, is not
   supported.
 - A nullable `Flow<T>?` (the whole stream absent, as opposed to a nullable *element* `Flow<T?>`,

@@ -17,6 +17,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyInvocation
 import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.TypeName
+import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
+import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
@@ -103,6 +106,7 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
   importIfDefaultPackage(func)
 
   addFunction(builder.build())
+  addAcquiredFlowCollectExport(func, cname, returnType, classifier)
 }
 
 /**
@@ -189,6 +193,7 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
       .addCode(body)
 
     addFunction(builder.build())
+    addAcquiredFlowCollectExport(method, "${prefix}_${cname}", returnType, classifier)
   }
 }
 
@@ -336,4 +341,42 @@ internal fun FunSpec.Builder.addLegacyScalarParameter(
   val enum: Boolean = shape is ForwardLegacyParameterShape.Enum ||
       (shape is ForwardLegacyParameterShape.NullableScalar && shape.type is BridgeType.Enum)
   return addParameter(name, (if (enum) INT else type).copy(nullable = nullable))
+}
+
+private fun FileSpec.Builder.addAcquiredFlowCollectExport(
+  method: KSFunctionDeclaration,
+  prefix: String,
+  returnType: KSType?,
+  classifier: ForwardBridgeTypeClassifier,
+) {
+  if (returnType?.declaration?.qualifiedName?.asString() !in FLOW_TYPES) return
+  val element: KSType = requireNotNull(returnType)
+    .arguments.firstOrNull()?.type?.resolve()?.expandAliases()
+    ?: error("Acquired Flow must declare an element type")
+  val type = ClassName("kotlinx.coroutines.flow", "Flow").parameterizedBy(
+    element.toBridgeTypeName(),
+  )
+  val collection: BridgeType.Collection? = classifier.legacyFlowElementCollection(returnType)
+  val boxed: String = itemBoxExpr(element.isMarkedNullable, collection)
+  val export: FunSpec = FunSpec.builder("export_${prefix}_collect")
+    .addAnnotation(cNameAnnotation("${prefix}_collect", ownedBy(method)))
+    .addParameter("flowHandle", cOpaquePointer)
+    .addParameter("scopeHandle", cOpaquePointer.copy(nullable = true))
+    .addParameter("onNextPtr", cOpaquePointer)
+    .addParameter("onCompletePtr", cOpaquePointer)
+    .addParameter("onErrorPtr", cOpaquePointer)
+    .addParameter("userData", cOpaquePointer)
+    .returns(cOpaquePointer)
+    .addCode("val flow = flowHandle.asStableRef<%T>().get()\n", type)
+    .addCode(
+      "val scope = scopeHandle?.asStableRef<CoroutineScope>()?.get() " +
+        "?: CoroutineScope(Dispatchers.Default)\n",
+    )
+    .addCode(
+      "return collectForCSharp(scope, onNextPtr, onCompletePtr, onErrorPtr, " +
+        "userData, ::nugetMappedType) { emit ->\n" +
+        "  flow.collect { value -> emit($boxed) }\n}\n",
+    )
+    .build()
+  addFunction(export)
 }
