@@ -235,6 +235,7 @@ class Tier1ExcludedDependencyTypeHintTest {
       "expected the admission-rule-4 sentence and remedy; got: $crossModule",
     )
   }
+
   private fun nestedValueScope(options: Map<String, String>, hint: String) {
     val dependency: File = Tier1DependencyLibrary.compile(
       """
@@ -270,10 +271,10 @@ class Tier1ExcludedDependencyTypeHintTest {
       assertFalse(warning.contains("move it to the top level"), warning)
       assertFalse(warning.contains("add include("), warning)
     }
-    assertTrue(result.kspWarnings.any {
-      it.contains("Desk.tag") &&
-          it.contains(ForwardDiagnosticKind.SKIPPED_UNEXPORTED_DEPENDENCY_TYPE.name)
-    }, "expected dependency-scope method kind: ${result.kspWarnings}")
+    val methodKind: String = ForwardDiagnosticKind.SKIPPED_UNEXPORTED_DEPENDENCY_TYPE.name
+    val methodRefused: Boolean = result.kspWarnings
+      .any { it.contains("Desk.tag") && it.contains(methodKind) }
+    assertTrue(methodRefused, "expected dependency-scope method kind: ${result.kspWarnings}")
     val csharp: String = result.generatedCSharp.withoutDocComments()
     assertFalse(csharp.contains("record struct Tag"), csharp)
     assertFalse(csharp.contains(" Tag("), csharp)
@@ -285,20 +286,25 @@ class Tier1ExcludedDependencyTypeHintTest {
 
   @Test
   fun `nested value class outside admission names additive owner remedy`() {
-    nestedValueScope(mapOf("nuget.rootPackage" to "tier1.labels"),
-      "add admit(\"dep.labels.Owner\")")
+    nestedValueScope(
+      options = mapOf("nuget.rootPackage" to "tier1.labels"),
+      hint = "add admit(\"dep.labels.Owner\")",
+    )
   }
 
   @Test
   fun `nested value class inherits explicit owner exclusion`() {
-    nestedValueScope(mapOf(
-      "nuget.includePackages" to "tier1.labels,dep.labels",
-      "nuget.excludePackages" to "dep.labels.Owner",
-    ), "exclude(\"dep.labels.Owner\")")
+    nestedValueScope(
+      options = mapOf(
+        "nuget.includePackages" to "tier1.labels,dep.labels",
+        "nuget.excludePackages" to "dep.labels.Owner",
+      ),
+      hint = "exclude(\"dep.labels.Owner\")",
+    )
   }
 
   @Test
   fun `nested value class names disabled cross module admission`() {
-    nestedValueScope(emptyMap(), "cross-module export is off")
+    nestedValueScope(options = emptyMap(), hint = "cross-module export is off")
   }
 }
