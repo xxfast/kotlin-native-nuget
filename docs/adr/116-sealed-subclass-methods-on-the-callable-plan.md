@@ -824,3 +824,35 @@ three arm cells and the six nested-type cells failed before the change and pass 
 class cells for the three callback kinds, previously untested, passed from the start; the full
 `:nuget-processor:test` run passed (1559 passed, 0 failed). The native pipeline was not run for this
 item.
+
+## Amendment (2026-10-03): the `SEALED_SUBCLASS_UNROUTED` hint no longer sends the author to an ordinary class
+
+The hint ended "move the member onto an ordinary class (which still has the legacy route this member
+kind needs)". It was written when `suspend`, `Flow` and callback members were still under the reason,
+and an ordinary class did carry those. What reaches `SEALED_SUBCLASS_UNROUTED` today is only a
+generic method (detail `GENERIC`) and a `suspend` lambda parameter (detail
+`SUSPEND_CALLBACK_PROTOCOL`), and an ordinary class has no route for either (see "What is, and is
+not, in this row"), so following the hint produced a second named skip. The older paragraph above
+that says the hint was reworded in the callback-pair change is still accurate for its time.
+
+Rule. The hint depends on the detail. For `GENERIC` and `SUSPEND_CALLBACK_PROTOCOL` it reuses the
+matching `UNROUTED_POSITION` hint: for a generic method, expose a non-generic wrapper or move the
+declaration to a top-level function; for a `suspend` lambda parameter, take or return a plain lambda
+or expose the `suspend` lambda as a property of an ordinary class. Any other detail keeps the
+"equivalent member in a shape the arm's routes carry" sentence. The warning sentence and the reason
+constant are unchanged. Routing either shape on an arm stays blocked until an ordinary class has a
+route for it, so the ROADMAP line is reworded, not closed.
+
+Not a producer: `TYPE_PARAMETER` is `droppedFromCSharp = false` but nothing produces it, so it never
+reaches this reason (the research guess that it could was wrong).
+
+Known and left as is: the sentence prints the raw constant name ("it is a
+`SUSPEND_CALLBACK_PROTOCOL` member of a sealed subclass").
+
+Evidence. **Verified by execution (processor only):** three tests were red before the change, each
+showing the old hint, and are green after: the corrected sentence test and a new hint-pinning test in
+`ForwardSkippedCallableWarningTest`, and `Tier1SealedArmResidualSkipTest` (an arm declaring
+`fun <T> pick(x: T): T`, `fun later(block: suspend (Int) -> String)` and a control member compiles
+clean; neither residual member is exported or declared, each is named exactly once with the new hint,
+and the control member still binds). The full `:nuget-processor:test` run passed (1564 passed, 0
+failed). The native pipeline was not run for this item; the assembled stack is verified as a whole.
