@@ -7484,6 +7484,16 @@ internal fun diagnosticLocation(packageId: String, diagnostic: RirDiagnostic): S
     "$packageId/${diagnostic.typeName}.${diagnostic.memberName}(${diagnostic.memberSignature})"
 }
 
+// Clears a generator task's output dir before it writes. Gradle does not clear a non-incremental
+// task's `@OutputDirectory` on re-run, so a file generated for a C# type since renamed or removed
+// from a bound namespace would otherwise survive next to the fresh output. Only for a dir the
+// calling task owns outright: nothing else may write into it.
+internal fun clearOutputDir(dir: File) {
+  val cleared: Boolean = !dir.exists() || dir.deleteRecursively()
+  check(cleared) { "Could not clear stale generated output in $dir" }
+  check(dir.mkdirs()) { "Could not create the generated output directory $dir" }
+}
+
 public abstract class NugetGenerateBindingsTask : DefaultTask() {
   @get:InputFile
   public abstract val reverseIrFile: RegularFileProperty
@@ -7539,6 +7549,7 @@ public abstract class NugetGenerateBindingsTask : DefaultTask() {
     )
 
     val outputDir: File = kotlinOutputDir.get().asFile
+    clearOutputDir(outputDir)
     files.forEach { generated ->
       val out: File = outputDir.resolve(generated.relativePath)
       out.parentFile.mkdirs()
