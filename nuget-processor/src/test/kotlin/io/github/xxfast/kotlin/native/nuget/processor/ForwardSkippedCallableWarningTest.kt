@@ -345,6 +345,8 @@ class ForwardSkippedCallableWarningTest {
         ForwardPlanSkipReason.RECEIVER_FAN_OUT,
         ForwardPlanSkipReason.SHADOWED_BY_MEMBER,
         ForwardPlanSkipReason.SHADOWED_BY_EXTENSION_FUNCTION,
+        // ADR-188 amendment: refused as a fatal collision, both twins absent from C#.
+        ForwardPlanSkipReason.NULLABLE_RECEIVER_TWIN,
         ForwardPlanSkipReason.OBJECT,
         ForwardPlanSkipReason.STRING,
         ForwardPlanSkipReason.UNSUPPORTED,

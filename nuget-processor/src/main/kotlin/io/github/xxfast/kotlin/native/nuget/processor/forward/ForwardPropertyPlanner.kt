@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getVisibility
+import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSNode
@@ -140,8 +141,9 @@ internal class ForwardPropertyPlanner(
   private val dropped: MutableList<ForwardDroppedProperty> = mutableListOf()
   private val droppedReceivers: MutableList<ForwardDroppedExtensionReceiver> = mutableListOf()
 
-  // ADR-188: (extension namespace, receiver declaration, C# name) -> Kotlin name of every exported
-  // extension function, set by [catalog] before its extension-property walk.
+  // ADR-188: (extension namespace, receiver declaration, C# name) -> the diagnostic spelling
+  // (`extension function `name``) of every exported extension function, set by [catalog] before
+  // its extension-property walk.
   private var extensionFunctionNames: Map<Triple<String, String, String>, String> = emptyMap()
 
   /** ADR-075: every collection property setter this planner declined to build because a
@@ -182,7 +184,7 @@ internal class ForwardPropertyPlanner(
         } else {
           function.csharpMemberName()
         }
-      Triple(namespace, receiver, name) to function.simpleName.asString()
+      Triple(namespace, receiver, name) to "extension function `${function.simpleName.asString()}`"
     }.toMap()
     enums.forEach { enum ->
       inOwner(enum.forwardDiagnosticOwner()) {
@@ -228,7 +230,42 @@ internal class ForwardPropertyPlanner(
     }
     // An extension property's holder is `{Receiver}Extensions`, which a dropped one may have been
     // the only member of, so it stays ownerless (see `warnDroppedForwardExtensionReceivers`).
-    extensions.forEach { prop -> inOwner(null) { extensionProperty(prop)?.let(::add) } }
+    val planned: List<Pair<KSPropertyDeclaration, ForwardPropertyPlan>> =
+      extensions.mapNotNull { prop ->
+        inOwner(null) { extensionProperty(prop) }?.let { plan -> prop to plan }
+      }
+    // ADR-188 amendment: `val Cat.x` beside `val Cat?.x` is legal Kotlin, but the plan symbol and
+    // the export are built from the receiver DECLARATION, so both plan as one symbol (and one C
+    // entry point), and C# cannot declare the pair either (CS0102). Refused after planning, so a
+    // twin that already dropped for its own reason (a fan-out `Mood?`, a shadowed `Cat`) leaves
+    // the survivor binding as before. Neither twin is a safe survivor, so both go, as one fatal
+    // record.
+    planned.groupBy { (_, plan) -> plan.symbol }.values.forEach { twins ->
+      if (twins.size == 1) {
+        add(twins.single().second)
+        return@forEach
+      }
+      val first: KSPropertyDeclaration = twins.first().first
+      droppedReceivers.add(
+        ForwardDroppedExtensionReceiver(
+          symbol = twins.first().second.symbol,
+          node = first,
+          receiverDescription = "",
+          reason = ForwardPlanSkipReason.NULLABLE_RECEIVER_TWIN,
+          detail = twins.joinToString(" and ") { (prop, _) -> "`${prop.kotlinSpelling()}`" },
+        ),
+      )
+    }
+  }
+
+  /** `val Cat?.x`, as the author wrote the declaration's head. */
+  private fun KSPropertyDeclaration.kotlinSpelling(): String {
+    val keyword: String = if (isMutable) "var" else "val"
+    val receiver: KSType? = extensionReceiver?.resolve()
+    val receiverName: String = (receiver?.declaration as? KSClassDeclaration)?.nestedCsName()
+      ?: receiver?.declaration?.simpleName?.asString().orEmpty()
+    val nullable: String = if (receiver?.isMarkedNullable == true) "?" else ""
+    return "$keyword $receiverName$nullable.${simpleName.asString()}"
   }
 
   /**
@@ -626,6 +663,65 @@ internal class ForwardPropertyPlanner(
     return "$owner.$name"
   }
 
+  /**
+   * ADR-188 amendment: the diagnostic spelling of a member FUNCTION of [receiver]'s own
+   * declaration whose C# name is [csharpName], or null. Unlike [shadowingMember] this is C#'s
+   * resolution, not Kotlin's (Kotlin keeps properties and functions apart), so a nullable receiver
+   * is no exemption: C# member lookup on `Cat?` still finds the method group.
+   *
+   * - An enum's member functions render as `Name(this Mood …)` in the same `{Enum}Extensions` class
+   *   as the extension property, whatever their arity (CS9339 with none, CS1061 with any). Selected
+   *   as the enum route selects them (`ForwardCallablePlanner.enumEntries`); a suspend or generic
+   *   one is a named drop there and never renders, so it is no clash.
+   * - A class, interface or value class member function is an instance method, and `cat.Name` is
+   *   then a method group (CS0428). A suspend one renders its `Async` spelling on the class suspend route.
+   */
+  private fun shadowingMemberFunction(
+    receiver: KSType,
+    receiverType: BridgeType,
+    csharpName: String,
+  ): String? {
+    // Only a receiver whose C# type this module generates: a collection or a bound C# interface
+    // receiver renders as a .NET type whose members are not the Kotlin declaration's.
+    val generated: BridgeType = (receiverType as? BridgeType.Nullable)?.type ?: receiverType
+    if (generated !is BridgeType.ObjectHandle && generated !is BridgeType.Interface &&
+      generated !is BridgeType.Enum && generated !is BridgeType.ValueClass
+    ) {
+      return null
+    }
+    val declaration: KSClassDeclaration = receiver.declaration as? KSClassDeclaration
+      ?: return null
+    val owner: String = declaration.nestedCsName()
+    return when (declaration.classKind) {
+      ClassKind.ENUM_CLASS -> declaration.declarations
+        .filterIsInstance<KSFunctionDeclaration>()
+        .filter { function -> function.getVisibility() == Visibility.PUBLIC }
+        .filter { function -> !function.isCompilerOwnedMember(declaration) }
+        .filter { function -> function.simpleName.asString() !in ENUM_SYNTHESIZED_FUNCTIONS }
+        .filter { function -> Modifier.SUSPEND !in function.modifiers }
+        .filter { function -> function.typeParameters.isEmpty() }
+        .firstOrNull { function -> function.csharpMemberName() == csharpName }
+        ?.let { function -> "enum member function `$owner.${function.simpleName.asString()}`" }
+
+      ClassKind.CLASS, ClassKind.INTERFACE -> declaration.getAllFunctions()
+        .filter { function -> function.getVisibility() == Visibility.PUBLIC }
+        .filter { function -> function.extensionReceiver == null }
+        .filter { function -> !function.isCompilerOwnedMember(declaration) }
+        .firstOrNull { function ->
+          val name: String =
+            if (Modifier.SUSPEND in function.modifiers) {
+              function.csharpAsyncMemberName().removePrefix("@")
+            } else {
+              function.csharpMemberName()
+            }
+          name == csharpName
+        }
+        ?.let { function -> "member function `$owner.${function.simpleName.asString()}`" }
+
+      else -> null
+    }
+  }
+
   private fun extensionProperty(prop: KSPropertyDeclaration): ForwardPropertyPlan? {
     val receiver: KSType = prop.extensionReceiver?.resolve()?.expandAliases() ?: return null
     // ADR-105 amendment: the extension *property* receiver gets the same sealed rewrite the
@@ -699,7 +795,7 @@ internal class ForwardPropertyPlanner(
     val namespace: String = classifier.extensionNamespaceOf(receiver.declaration, prop)
     val key: Triple<String, String, String> =
       Triple(namespace, receiverDeclaration.orEmpty(), csharpName)
-    extensionFunctionNames[key]?.let { function ->
+    (extensionFunctionNames[key] ?: shadowingMemberFunction(receiver, receiverType, csharpName))?.let { function ->
       droppedReceivers.add(
         ForwardDroppedExtensionReceiver(
           symbol = "${prop.packageName.asString()}.$receiverName.$name",

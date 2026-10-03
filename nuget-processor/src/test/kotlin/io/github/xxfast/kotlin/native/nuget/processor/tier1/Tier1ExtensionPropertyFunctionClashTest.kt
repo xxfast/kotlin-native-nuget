@@ -228,4 +228,112 @@ class Tier1ExtensionPropertyFunctionClashTest {
       "property must be skipped: ${result.generatedCSharp}",
     )
   }
+
+  /**
+   * ADR-188 amendment: a class INSTANCE method `X(int)` beside a C# 14 extension property `X` on
+   * that class makes `cat.X` a method group (CS0428), so the extension property is unreachable by
+   * member syntax. Kotlin itself resolves the pair (properties and functions are two namespaces),
+   * so the property is skipped with the ADR-188 warning naming the member function, which keeps
+   * the name.
+   */
+  @Test
+  fun `a class member function keeps the name over an extension property`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.extmemberfun
+
+      class Cat(val lives: Int) {
+        fun grooming(times: Int): Int = lives * times
+      }
+
+      val Cat.grooming: Int get() = lives
+      """.trimIndent(),
+    )
+
+    assertTrue(result.kspErrors.isEmpty(), "expected no KSP errors; kspErrors=${result.kspErrors}")
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val warning: List<String> = shadowWarnings(result)
+    assertEquals(1, warning.size, "kspWarnings=${result.kspWarnings}")
+    assertContains(warning.single(), "SKIPPED_UNSUPPORTED_PROPERTY")
+    assertContains(warning.single(), "the member function `Cat.grooming`")
+    assertContains(warning.single(), "CS0428")
+    assertFalse(warning.single().contains("extension function"), warning.single())
+
+    val getter = "library_tier1_extmemberfun__cat_get_grooming"
+    assertFalse(result.generated.contains(getter), "no property export; ${result.generated}")
+    assertFalse(result.generatedCSharp.contains(getter), "no property import")
+    assertFalse(
+      Regex("""public\s+int\s+Grooming\s*\{""").containsMatchIn(result.generatedCSharp),
+      "no extension property member; csharp=${result.generatedCSharp}",
+    )
+    assertContains(result.generatedCSharp, "public int Grooming(int times)")
+  }
+
+  /** The same rule for a value-class receiver, whose member functions are C# instance methods. */
+  @Test
+  fun `a value class member function keeps the name over an extension property`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.extvaluefun
+
+      @JvmInline
+      value class Lives(val count: Int) {
+        fun grooming(times: Int): Int = count * times
+      }
+
+      val Lives.grooming: Int get() = count
+      """.trimIndent(),
+    )
+
+    assertTrue(result.kspErrors.isEmpty(), "expected no KSP errors; kspErrors=${result.kspErrors}")
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val warning: List<String> = shadowWarnings(result)
+    assertEquals(1, warning.size, "kspWarnings=${result.kspWarnings}")
+    assertContains(warning.single(), "the member function `Lives.grooming`")
+
+    val getter = "library_tier1_extvaluefun__lives_get_grooming"
+    assertFalse(result.generated.contains(getter), "no property export; ${result.generated}")
+    assertFalse(result.generatedCSharp.contains(getter), "no property import")
+    assertFalse(
+      Regex("""public\s+int\s+Grooming\s*\{""").containsMatchIn(result.generatedCSharp),
+      "no extension property member; csharp=${result.generatedCSharp}",
+    )
+    assertTrue(
+      Regex("""public int Grooming\(int times\)""").containsMatchIn(result.generatedCSharp),
+      "the member function keeps the name; csharp=${result.generatedCSharp}",
+    )
+  }
+
+  /**
+   * Kotlin compiles `val Cat.x` beside `val Cat?.x` in one package and resolves them by static
+   * type. C# cannot hold both: `extension(Cat c) { int X }` beside `extension(Cat? c) { int X }`
+   * is CS0102 at the declaration, and neither is a safe survivor (dropping either changes the
+   * value one receiver type reads). Fatal, naming both declarations, rather than an unlocated
+   * internal failure blaming expect/actual.
+   */
+  @Test
+  fun `an extension property on a receiver and on its nullable twin is a fatal collision`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.extnullabletwin
+
+      class Cat(val lives: Int)
+
+      val Cat.x: Int get() = 1
+      val Cat?.x: Int get() = 2
+      """.trimIndent(),
+    )
+
+    val collisions: List<String> = result.kspErrors.filter {
+      it.contains("ERROR_CSHARP_SIGNATURE_COLLISION")
+    }
+    assertEquals(1, collisions.size, "expected one collision; kspErrors=${result.kspErrors}")
+    val message: String = collisions.single()
+    assertContains(message, "`val Cat.x`")
+    assertContains(message, "`val Cat?.x`")
+    assertFalse(
+      result.kspErrors.any { it.contains("ERROR_INTERNAL_GENERATOR_FAILURE") },
+      "no internal failure; kspErrors=${result.kspErrors}",
+    )
+  }
 }

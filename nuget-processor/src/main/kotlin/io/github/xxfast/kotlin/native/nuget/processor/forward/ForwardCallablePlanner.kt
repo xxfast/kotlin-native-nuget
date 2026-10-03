@@ -117,12 +117,20 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  member (`Owner.name`) rides in the detail slot. */
   SHADOWED_BY_MEMBER(droppedFromCSharp = true),
 
-  /** ADR-188: an extension property whose C# name and receiver declaration match an exported
-   *  extension function's (`val Cat.nameOrStray` beside `fun Cat?.nameOrStray()`). Both declare
-   *  in one C# 14 static class, but every `cat.NameOrStray` access is then ambiguous (CS9339), so
-   *  the property is skipped and the function keeps the name. Only the extension-property route
-   *  records it; the function's Kotlin name rides in the detail slot. */
+  /** ADR-188: an extension property whose C# name and receiver declaration match a method C#
+   *  resolves `receiver.Name` against: an exported extension function's (`val Cat.nameOrStray`
+   *  beside `fun Cat?.nameOrStray()`), an enum member function's (rendered beside it in
+   *  `{Enum}Extensions`), or a class member function's (an instance method). C# 14 then resolves
+   *  no `cat.NameOrStray` access (CS9339, CS1061 or CS0428), so the property is skipped and the
+   *  function keeps the name. Only the extension-property route records it; the function, spelled
+   *  with its kind (`extension function `nameOrStray``), rides in the detail slot. */
   SHADOWED_BY_EXTENSION_FUNCTION(droppedFromCSharp = true),
+
+  /** ADR-188 amendment: `val Cat.x` beside `val Cat?.x` in one package. Kotlin resolves the pair
+   *  by static type; C# cannot declare both (CS0102), both derive one plan symbol and one export,
+   *  and neither is a safe survivor, so the pair is refused as a fatal
+   *  `ERROR_CSHARP_SIGNATURE_COLLISION`. The two declarations ride in the detail slot. */
+  NULLABLE_RECEIVER_TWIN(droppedFromCSharp = true),
   OBJECT(droppedFromCSharp = true),
   STRING(droppedFromCSharp = true),
   UNSUPPORTED(droppedFromCSharp = true),
@@ -4972,4 +4980,4 @@ private fun KSNode?.declaredResultType(): KSType? = when (this) {
 }
 
 /** ADR-006 amendment: the functions the compiler writes on every `enum class`, none authored. */
-private val ENUM_SYNTHESIZED_FUNCTIONS: Set<String> = setOf("values", "valueOf")
+internal val ENUM_SYNTHESIZED_FUNCTIONS: Set<String> = setOf("values", "valueOf")

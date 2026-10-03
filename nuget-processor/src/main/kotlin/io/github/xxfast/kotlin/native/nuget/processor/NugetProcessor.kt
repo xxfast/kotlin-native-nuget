@@ -576,7 +576,13 @@ internal fun warnDroppedForwardExtensionReceivers(
       // drop happened: the identical Kotlin shape reports `SKIPPED_UNSUPPORTED_INPUT` on the
       // extension-function route and `SKIPPED_UNSUPPORTED_PROPERTY` here, reading one sentence.
       ForwardDiagnostic(
-        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+        // ADR-188 amendment: the nullable-receiver twin is the one refusal on this route that
+        // fails generation; it reads its ERROR kind off the reason.
+        kind = if (dropped.reason == ForwardPlanSkipReason.NULLABLE_RECEIVER_TWIN) {
+          dropped.reason.toDiagnosticKind()
+        } else {
+          ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY
+        },
         symbol = dropped.node,
         declaration = dropped.symbol,
         reason = dropped.reason.diagnosticReason(dropped.detail),
