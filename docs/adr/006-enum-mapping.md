@@ -129,8 +129,8 @@ rule; it shared the same broken expression before this amendment.
 | `snake_case` | `SnakeCase` | `SnakeCase` | no |
 | `HTTP_Status` | `HttpStatus` | `HttpStatus` | no |
 | `AB1C` | `Ab1c` | `Ab1c` | no |
-| `_1ST` (Tier 1 pinned) | `1st` (illegal C#, `CS1001`) | `_1st` | yes |
-| `_` / `__` (Tier 1 pinned) | empty name (illegal C#, `CS1001`) | `_` | yes |
+| `_1ST` (Tier 1 pinned, Native verified) | `1st` (illegal C#, `CS1001`) | `_1st` | yes |
+| `_` / `__` (Tier 1 pinned, Native verified) | empty name (illegal C#, `CS1001`) | `_` | yes |
 | `FOO_BAR` + `FooBar` in one enum (Tier 1 pinned) | `FooBar` + `Foobar` (silently distinct) | fatal `ERROR_CSHARP_NAME_COLLISION`, naming both | new error |
 | `FOO` + `Foo` in one enum (Tier 1 pinned) | duplicate `Foo` member, `CS0102` at the consumer's compile | same fatal error, at generation | new error replaces a worse one |
 
@@ -145,6 +145,16 @@ moves every already-published `SCREAMING_SNAKE_CASE` enum in the wild. `Ab1c` al
 rendered raw before this amendment (`CS1001` inside `Interop.cs` itself, with no diagnostic naming
 the cause): a converted name that ends up empty (`_`, `__`) becomes `_`; one that starts with a digit
 (`_1ST` converts to `1st`) takes a `_` prefix.
+
+**Kotlin/Native acceptance (verified).** Kotlin/Native accepts `_1ST`, `_` and `__` as entry names.
+A scratch Kotlin/Native compile and executable run exited 0, and the full `scripts/verify.sh` run is
+green with three enums (`DigitGuard`, `BareGuard`, `DoubleBareGuard`) declaring `_1ST`, `_` and `__`
+beside an `OK` control. Through the packaged pipeline the consumer sees `_1st`, `_` and `Ok`, and the
+native echo and original-Kotlin-name functions round-trip them. Two sharp edges: `_` and `__` both
+map to the C# member `_`, which is why each lives in its own enum, and Kotlin code that references a
+`_` or `__` entry needs backticks or an `entries` lookup by ordinal (an unescaped reference fails in
+the frontend). The earlier statement that acceptance was inferred from the shared K2 frontend is
+settled by this run.
 
 **Collisions are now fatal.** Two entries whose converted C# names are equal fail generation with
 `ERROR_CSHARP_NAME_COLLISION`, naming the enum and every colliding Kotlin entry, with the hint to
