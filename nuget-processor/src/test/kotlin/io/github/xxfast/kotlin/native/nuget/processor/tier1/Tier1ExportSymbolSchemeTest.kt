@@ -231,8 +231,8 @@ class Tier1ExportSymbolSchemeTest {
   /**
    * The check is about two DIFFERENT types under one C# name. Output that is merged on purpose must
    * not trip it: `{Receiver}Extensions` classes for an unexported receiver merged across packages,
-   * a sealed arm that is also an exported top-level class (one type reached twice), and `Box` beside
-   * `Box<T>`, which C# declares side by side by arity.
+   * a sealed arm that is also an exported top-level class (one type reached twice), and `Box`
+   * beside `Box<T>`, which C# declares side by side by arity.
    */
   @Test
   fun `merged extension classes, a type reached twice and distinct arities are no collision`() {

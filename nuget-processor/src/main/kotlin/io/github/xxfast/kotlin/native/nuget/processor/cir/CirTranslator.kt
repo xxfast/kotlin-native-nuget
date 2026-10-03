@@ -585,7 +585,8 @@ internal fun translate(
   (regularClasses + valueClasses + enums + objects + sealedClasses).forEach { decl ->
     recordTopLevelType(decl, decl.nestedCsName())
   }
-  sealedClasses.flatMap { it.getSealedSubclasses().toList() }
+  sealedClasses
+    .flatMap { it.getSealedSubclasses().toList() }
     .filter { !it.isEnumArm() }
     .forEach { sub -> recordTopLevelType(sub, sub.nestedCsName()) }
   interfaces.forEach { iface -> recordTopLevelType(iface, iface.nestedInterfaceCsName()) }

@@ -37,7 +37,8 @@ internal object Tier1CSharpCompile {
   ): Tier1CSharpBuild {
     val root: File = generateSequence(File(System.getProperty("user.dir")).canonicalFile) {
       it.parentFile
-    }.first { it.resolve("Kotlin.Native.Interop/Kotlin.Native.Interop.csproj").isFile }
+    }
+      .first { it.resolve("Kotlin.Native.Interop/Kotlin.Native.Interop.csproj").isFile }
     val contract: String = root.resolve("Kotlin.Native.Interop/Kotlin.Native.Interop.csproj")
       .path.replace('\\', '/')
     val directory: File = Files.createTempDirectory("nuget-tier1-csharp-").toFile()
@@ -73,7 +74,10 @@ internal object Tier1CSharpCompile {
         val lock: FileLock = channel.lock()
         try {
           val process: Process = ProcessBuilder("dotnet", "build", "Consumer.csproj", "--nologo")
-            .directory(directory).redirectErrorStream(true).redirectOutput(output).start()
+            .directory(directory)
+            .redirectErrorStream(true)
+            .redirectOutput(output)
+            .start()
           val finished: Boolean = process.waitFor(120, TimeUnit.SECONDS)
           if (!finished) process.destroyForcibly().waitFor()
           assertTrue(finished, "dotnet C# compilation timed out: ${output.readText()}")
