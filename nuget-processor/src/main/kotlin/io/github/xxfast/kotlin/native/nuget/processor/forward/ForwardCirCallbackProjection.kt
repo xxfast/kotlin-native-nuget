@@ -161,10 +161,9 @@ private fun BridgeType.callbackWireCsharpType(): String = when (this) {
  */
 private fun BridgeType.wireSuffix(): String = when (this) {
   BridgeType.Unit -> "Void"
-  is BridgeType.Primitive ->
-    if (kind == PrimitiveKind.BOOLEAN) "Bool" else kind.name.lowercase().replaceFirstChar {
-      it.uppercase()
-    }
+  // Kotlin's own simple name (`UInt`, not `Uint`), the spelling the legacy callback routes use, so
+  // a wire shared across routes dedupes to one delegate and one thunk.
+  is BridgeType.Primitive -> if (kind == PrimitiveKind.BOOLEAN) "Bool" else kind.simpleKotlinName()
 
   is BridgeType.Enum -> "Int"
   BridgeType.String -> "String"
