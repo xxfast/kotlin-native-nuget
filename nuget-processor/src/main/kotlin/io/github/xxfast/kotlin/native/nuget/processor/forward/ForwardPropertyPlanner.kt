@@ -674,7 +674,8 @@ internal class ForwardPropertyPlanner(
    *   as the enum route selects them (`ForwardCallablePlanner.enumEntries`); a suspend or generic
    *   one is a named drop there and never renders, so it is no clash.
    * - A class, interface or value class member function is an instance method, and `cat.Name` is
-   *   then a method group (CS0428). A suspend one renders its `Async` spelling on the class suspend route.
+   *   then a method group (CS0428). A suspend one renders its `Async` spelling on the class
+   *   suspend route.
    */
   private fun shadowingMemberFunction(
     receiver: KSType,
@@ -795,7 +796,9 @@ internal class ForwardPropertyPlanner(
     val namespace: String = classifier.extensionNamespaceOf(receiver.declaration, prop)
     val key: Triple<String, String, String> =
       Triple(namespace, receiverDeclaration.orEmpty(), csharpName)
-    (extensionFunctionNames[key] ?: shadowingMemberFunction(receiver, receiverType, csharpName))?.let { function ->
+    val shadowingFunction: String? =
+      extensionFunctionNames[key] ?: shadowingMemberFunction(receiver, receiverType, csharpName)
+    shadowingFunction?.let { function ->
       droppedReceivers.add(
         ForwardDroppedExtensionReceiver(
           symbol = "${prop.packageName.asString()}.$receiverName.$name",

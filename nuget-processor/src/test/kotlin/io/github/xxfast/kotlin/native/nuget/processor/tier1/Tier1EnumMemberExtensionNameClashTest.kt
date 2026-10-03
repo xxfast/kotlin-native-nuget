@@ -125,7 +125,10 @@ class Tier1EnumMemberExtensionNameClashTest {
     assertContains(warning, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name)
     assertContains(warning, "the enum member function `Coat.grooming`")
     assertContains(warning, "@CSharpName")
-    assertFalse(warning.contains("extension function"), "names the member, not an extension: $warning")
+    assertFalse(
+      warning.contains("extension function"),
+      "names the member, not an extension: $warning",
+    )
 
     // The property is gone from both halves; the member function keeps `Grooming`.
     val getter = "library_tier1_${packageName}__coat_get_grooming"
