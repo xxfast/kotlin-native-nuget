@@ -67,6 +67,19 @@ nuget {
 }
 ```
 
+To turn it on from CI without editing the build script, pass the Gradle property
+`nuget.strictCompileCheck`, on the command line or in `gradle.properties`. Quote the whole argument in
+PowerShell:
+
+```text
+./gradlew check '-Pnuget.strictCompileCheck=true'
+```
+
+The property accepts exactly `true` or `false`; any other value fails the build. A value set in the
+`publish {}` block always wins, so `strictCompileCheck = false` in the DSL keeps the check soft even
+when the property is `true`. To turn strict mode off again, set the DSL value to `false`, or unset the
+property if the DSL doesn't set it.
+
 Registered on every project with a `publish {}` block. `packNuget` depends on them only when `snapshot = true`:
 
 | Task | Description | Writes |
