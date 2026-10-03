@@ -12,6 +12,7 @@ import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.OutputFile
@@ -19,9 +20,7 @@ import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
-import org.gradle.process.ExecResult
 import org.gradle.work.DisableCachingByDefault
-import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.inject.Inject
 
@@ -35,6 +34,8 @@ public abstract class NugetRestoreTask : DefaultTask() {
   // ADR-184: the restore TFM, named in the failure hint.
   @get:Input public abstract val targetFramework: Property<String>
   @get:OutputFile public abstract val assetsFile: RegularFileProperty
+  @get:Input @get:Optional public abstract val dotnet: Property<String>
+  @get:Internal public abstract val dotnetSource: Property<String>
 
   // ADR-190: the staged feed and every directory source. A same-version rebuild changes the bytes
   // here and nothing else, so these are what re-run restore.
@@ -58,22 +59,22 @@ public abstract class NugetRestoreTask : DefaultTask() {
 
   @TaskAction
   public fun restore() {
-    val dotnet: String = requireDotnet("restore NuGet packages")
+    val dotnet: String = requireDotnet(
+      purpose = "restore NuGet packages",
+      configured = this.dotnet.orNull,
+      source = dotnetSource.orNull,
+    )
     val packages: File? = packagesDir.orNull?.asFile
     if (packages != null) evictLocalPackages(localFeeds.files, packages)
+    val command: List<String> = listOf(dotnet, "restore", csprojFile.get().asFile.absolutePath)
+    val result: ProcessOutcome =
+      retryTransientFeedFailures(logger::warn) { execOps.execCapturing(command) }
 
-    val stderr = ByteArrayOutputStream()
-    val result: ExecResult = execOps.exec { spec ->
-      spec.commandLine(dotnet, "restore", csprojFile.get().asFile.absolutePath)
-      spec.errorOutput = stderr
-      spec.isIgnoreExitValue = true
-    }
-
-    val exitCode: Int = result.exitValue
+    val exitCode: Int = result.exitCode
     if (exitCode != 0) {
       throw GradleException(
         "[nuget] dotnet restore failed (exit code $exitCode).\n" +
-          stderr.toString().trimEnd() + "\n\n" +
+          (result.stdout + result.stderr).trimEnd() + "\n\n" +
           "If this is a transient network error, re-run with --rerun-tasks. " +
           "If a package requires a higher .NET version than ${targetFramework.get()}, " +
           "raise nuget { targetFramework } or " +

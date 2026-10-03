@@ -236,6 +236,7 @@ public class NugetPlugin : Plugin<Project> {
         task.localFeeds.from(sharedDirs)
         task.localSources.set(localSources)
         task.packagesDir.set(packagesDir)
+        wireDotnet(project, task.dotnet, task.dotnetSource)
       }
 
     project.tasks.register(NugetTaskNames.IMPORT) { task ->
@@ -281,6 +282,7 @@ public class NugetPlugin : Plugin<Project> {
         )
         task.namespaceAliases.set(aliases)
         task.reverseIrFile.set(interopDir.map { it.file("reverse-ir.json") })
+        wireDotnet(project, task.dotnet, task.dotnetSource)
       }
 
     nugetImport.configure { task -> task.dependsOn(nugetExtractApi) }
@@ -617,6 +619,7 @@ public class NugetPlugin : Plugin<Project> {
         val interopDir: Provider<Directory> = project.layout.buildDirectory.dir("nuget-interop")
         val shared: Provider<List<String>> =
           project.provider { resolvedShared(extension.sources.get(), projectDir) }
+        wireDotnet(project, task.dotnet, task.dotnetSource)
         task.dependencySources.addAll(
           project.provider {
             val feedDir: File = interopDir.get().dir("feed").asFile

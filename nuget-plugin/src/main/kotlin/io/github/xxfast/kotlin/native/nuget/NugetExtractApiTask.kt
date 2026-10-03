@@ -9,6 +9,8 @@ import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
@@ -28,6 +30,8 @@ public abstract class NugetExtractApiTask : DefaultTask() {
   @get:Input public abstract val targetFramework: Property<String>
   @get:InputFile public abstract val assetsFile: RegularFileProperty
   @get:OutputFile public abstract val reverseIrFile: RegularFileProperty
+  @get:Input @get:Optional public abstract val dotnet: Property<String>
+  @get:Internal public abstract val dotnetSource: Property<String>
 
   @get:Inject public abstract val execOps: ExecOperations
 
@@ -51,7 +55,11 @@ public abstract class NugetExtractApiTask : DefaultTask() {
       }
     }
 
-    val dotnet: String = requireDotnet("extract the NuGet API surface")
+    val dotnet: String = requireDotnet(
+      purpose = "extract the NuGet API surface",
+      configured = this.dotnet.orNull,
+      source = dotnetSource.orNull,
+    )
 
     val toolDir: File = temporaryDir.resolve("metadata-reader")
     unpackMetadataReader(toolDir, javaClass.classLoader)

@@ -8,6 +8,17 @@
   Kotlin (`nuget { dependencies { dependency(...) { bind { ... } } } }`). Publishing needs no
   .NET SDK: `packNuget` writes the `.nupkg` itself.
 
+  If Gradle can't see `dotnet` on its `PATH` (an IDE-launched daemon, say), set `nuget.dotnet` to the
+  executable's absolute path in the root project's `local.properties`:
+
+  ```
+  nuget.dotnet=/usr/local/share/dotnet/dotnet
+  ```
+
+  A Gradle property of the same name (`-Pnuget.dotnet=...` or `gradle.properties`) also works;
+  `local.properties` wins. A path that is relative, missing or not executable fails the build
+  rather than falling back to `PATH`.
+
   <note>
     <p>
       If a .NET SDK is on <code>PATH</code>, <code>packNuget</code> also compiles the generated C#

@@ -10,6 +10,7 @@ import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -152,6 +153,9 @@ public abstract class NugetCompileInteropTask : DefaultTask() {
   @get:Internal
   public abstract val dotnetSearchPath: Property<String>
 
+  @get:Input @get:Optional public abstract val dotnet: Property<String>
+  @get:Internal public abstract val dotnetSource: Property<String>
+
   @get:Inject
   public abstract val execOps: ExecOperations
 
@@ -163,7 +167,11 @@ public abstract class NugetCompileInteropTask : DefaultTask() {
       return
     }
 
-    val dotnet: String? = findExecutable("dotnet", dotnetSearchPath.orNull ?: System.getenv("PATH"))
+    val dotnet: String? = resolveDotnet(
+      configured = this.dotnet.orNull,
+      source = dotnetSource.orNull,
+      searchPath = dotnetSearchPath.orNull ?: System.getenv("PATH"),
+    )
     if (dotnet == null) {
       logger.warn(
         "w: [nuget] dotnet is not on PATH, so the generated C# bindings were not compiled " +
