@@ -132,7 +132,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | `e.cause` | → | `InnerException` | The cause chain is preserved. | [Exceptions](exceptions.md) |
 | `IllegalArgumentException` etc., `kotlinx.io.IOException`, `NullPointerException` | → | `ArgumentException`, `IOException`, `NullReferenceException` etc. | Subclasses map too; `catch (KotlinException)` no longer catches them, filter `e is IKotlinException`. A null message reads the Kotlin type name. | [Exceptions](exceptions.md) |
 | `Throwable` / `Throwable?` property | → | `System.Exception?` | Reads as a constructed, unthrown exception rebuilt from the error envelope, so the type map and cause chain apply. Get-only, and a snapshot: each read allocates. | [Exceptions](exceptions.md) |
-| `Result<T>` return | → | `T`, failure thrown | An ordinary return unwraps with `getOrThrow()`, so a modelled failure is indistinguishable in C# from a thrown one. `Result<Unit>` is `void`; other positions skip, named. | [Exceptions](exceptions.md) |
+| `Result<T>` return | → | `T`, failure thrown, and `bool TryX(..., out T, out Exception?)` | `TryX` is false for a modelled failure and still throws for a thrown exception, so `runCatching` failures read as false. `Result<Unit>` is `void`; other positions skip, named. | [Exceptions](exceptions.md) |
 | property getter / setter throws | → | propagated |  | [Exceptions](exceptions.md) |
 | constructor / `init` throws | → | propagated | Primary, secondary, a data class `copy()`, and generic and value class constructors. | [Exceptions](exceptions.md) |
 

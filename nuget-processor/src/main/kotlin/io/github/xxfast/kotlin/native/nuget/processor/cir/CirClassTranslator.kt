@@ -1253,9 +1253,17 @@ internal fun translateClass(
       //
       // `sealedAsHandle()` is the call the planner makes, so an eligible sealed base spells its
       // handle here too: a bodiless declaration marshals nothing, only the spelling matters.
-      val returnBridge: BridgeType = methodReturnTypeResolved
+      val declaredReturn: BridgeType = methodReturnTypeResolved
         ?.let { classifier.classify(it).sealedAsHandle() }
         ?: BridgeType.Unit
+      // ADR-108: an abstract `Result<T>` member is declared at `T`, as the planner lowers the
+      // override that implements it; spelled as `Result` it named a C# type nothing declares
+      // (CS0246) and the override's `T` return did not match it.
+      val resultPayload: BridgeType? = (declaredReturn as? BridgeType.ValueClass)
+        ?.takeIf { type -> type.qualifiedName == "kotlin.Result" }
+        ?.typeArguments
+        ?.singleOrNull()
+      val returnBridge: BridgeType = resultPayload ?: declaredReturn
       val parameterBridges: List<BridgeType> = method.parameters
         .map { param -> classifier.classify(param.type.resolve().expandAliases()).sealedAsHandle() }
       // ADR-147: a `T` on this class's own generic carrier is a real C# name; one re-homed from a
@@ -1285,7 +1293,7 @@ internal fun translateClass(
         val paramType: String = parameterBridges[index].forwardPublicCsharpType()
         CirParameter((param.name?.asString() ?: "_").csharpParameterName(), paramType)
       }
-      CirMethod(
+      val abstractMethod = CirMethod(
         name = method.csharpMemberName(),
         returnType = returnType,
         parameters = methodParams,
@@ -1293,6 +1301,11 @@ internal fun translateClass(
         isAbstract = true,
         isOverride = method.overridesBaseClassMember(superClassDeclaration),
         isSyncErrorCheckEnabled = false,
+      )
+      // The override's own Try twin is `override`, so the abstract base declares one too.
+      if (resultPayload == null) return@mapNotNull abstractMethod
+      abstractMethod.copy(
+        tryOverload = ForwardCirPlanProjection.abstractResultTry(abstractMethod, resultPayload),
       )
     }
 
@@ -3515,9 +3528,15 @@ internal fun translateInterface(
 
   val methodPlans: List<ForwardCallablePlan> = callableCatalog.classMethods(qualified)
     .filter { plan -> declared(methodPlacements[plan.invocation.symbol]) }
+  // An `out` parameter is invariant in C#, so a variant `I<out T>` cannot declare a `Result` Try
+  // twin whose `out` value mentions `T` (CS1961); its implementing classes still declare theirs.
+  // A twin over any other payload is legal and kept.
+  val variantTokens: List<Regex> = typeParams
+    .filter { param -> param.variance != CirVariance.INVARIANT }
+    .map { param -> Regex("(?<![A-Za-z0-9_])${Regex.escape(param.name)}(?![A-Za-z0-9_])") }
   val plannedMethods: List<CirInterfaceMethod> = methodPlans.map { plan ->
     tracker.trackPlan(plan)
-    CirInterfaceMethod(
+    val method = CirInterfaceMethod(
       name = plan.publicSignature.name,
       returnType = plan.publicSignature.result.forwardPublicCsharpType(),
       // ADR-164: the same widened parameters (nullable form, `Optional<T>`, defaults) the
@@ -3526,6 +3545,11 @@ internal fun translateInterface(
       doc = plan.publicSignature.cirDoc(),
       isNew = methodPlacements[plan.invocation.symbol] ==
           ForwardInterfaceMemberPlacement.DIAMOND_OVERRIDE,
+    )
+    val variantValue: Boolean = variantTokens.any { token -> token in method.returnType }
+    method.copy(
+      tryOverload =
+        if (variantValue) null else ForwardCirPlanProjection.interfaceResultTry(plan, method),
     )
   }
 

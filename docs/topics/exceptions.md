@@ -211,9 +211,47 @@ string treat = service.Feed("Mylo");              // "Mylo got a treat"
 Assert.ThrowsAny<ArgumentException>(() => service.Feed("Oreo"));
 ```
 
-A C# caller cannot tell a modelled `Result.failure` apart from an unexpected exception: both surface
-as the same mapped `KotlinException` subtype, and there is no non-throwing `TryRun`-style overload.
+### Telling a failure from a thrown exception {id="result-try"}
 
-Only an ordinary return position is supported today. `Result<T>` at a property, parameter,
-value-class-own-member, or `suspend fun` position keeps its existing skip, as does a `Result<T>`
-whose payload has no return shape of its own (a sealed base, `Flow`).
+The throwing member cannot tell a modelled `Result.failure` apart from an exception the Kotlin body
+threw: both surface as the same mapped `KotlinException` subtype. For that, every such member also
+gets a `TryX` twin that follows the .NET Try pattern. It returns `false` for a `Result.failure`,
+hands back the mapped exception through `failure`, and still throws for an exception the body threw.
+A `Result<Unit>` twin has only `failure`.
+
+```kotlin
+fun weigh(catName: String): Result<Int> = when (catName) {
+  "Ghost" -> throw IllegalStateException("No such cat: Ghost")
+  "Oreo" -> Result.failure(IllegalArgumentException("Oreo will not get on the scale"))
+  else -> Result.success(4)
+}
+```
+
+```C#
+bool weighed = service.TryWeigh("Mylo", out int weight, out Exception? failure);   // true, 4, null
+weighed = service.TryWeigh("Oreo", out weight, out failure);   // false, 0, KotlinArgumentException
+service.TryWeigh("Ghost", out _, out _);                       // throws KotlinInvalidOperationException
+```
+
+The twin is generated on class, object, companion, top-level, extension, sealed, interface and
+abstract members, and overrides copy the modifier. On an interface it is a default interface method
+that calls the throwing member, so a C# class implementing the interface does not write it. Three
+things to know:
+
+- A `Result.failure` that Kotlin built with `runCatching` around a programming error returns `false`
+  too: `TryX` reports what the Kotlin function modelled.
+- If `TryX` would share a name with a property, constant or nested type of the same type, with the
+  type itself, with an extension property on the same receiver, or with a member the type inherits
+  from a base declared in your module, the twin is dropped with the warning
+  `SKIPPED_RESULT_TRY_COLLISION` and the throwing member stays. Rename one of them, or give one a
+  `@CSharpName`, to get `TryX` back. If one twin in an override chain is dropped, every twin in the
+  chain is dropped, with one warning each. A base from a dependency module cannot be checked, so
+  its twin is kept. An enum's member property is an extension method, so the twin stays beside it.
+- There is no twin on a `new` (covariant) sealed arm member, which inherits the base's, on an
+  interface member whose payload mentions a variant type parameter (`fun next(): Result<T>` on
+  `I<out T>`; implementing classes keep theirs), or on a `suspend fun`. None of these warns. The
+  twin carries no default parameter values and no XML doc.
+
+Only an ordinary return position is supported. `Result<T>` at a property, parameter, collection
+element, `Flow<Result<T>>`, value-class-own-member, or `suspend fun` position keeps its existing
+skip, as does a `Result<T>` whose payload has no return shape of its own (a sealed base, `Flow`).

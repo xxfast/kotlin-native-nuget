@@ -35,6 +35,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirRenderer
 import io.github.xxfast.kotlin.native.nuget.processor.cir.resolveDocLinks
 import io.github.xxfast.kotlin.native.nuget.processor.cir.withSkipRemarks
 import io.github.xxfast.kotlin.native.nuget.processor.cir.withoutEmptyStaticClasses
+import io.github.xxfast.kotlin.native.nuget.processor.cir.withoutCollidingResultTries
 import io.github.xxfast.kotlin.native.nuget.processor.cir.mapPackageToNamespace
 import io.github.xxfast.kotlin.native.nuget.processor.cir.NugetContext
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
@@ -2500,6 +2501,8 @@ internal class NugetProcessor(
     // amendment's whole objection. A file with nothing declared and nothing dropped still renders
     // no holder.
     val cirFile: CirFile = translated
+      // Before the remark pass reads the recorded diagnostics, so the drop is recorded with them.
+      .withoutCollidingResultTries(logger)
       .withSkipRemarks(ForwardDiagnosticSink.recorded()) { pkg ->
         mapPackageToNamespace(pkg, context.rootPackage, context.rootNamespace)
       }

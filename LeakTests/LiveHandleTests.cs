@@ -475,6 +475,38 @@ public class LiveHandleTests
         });
     }
 
+    // Row 1l. ADR-108's Try twin, false path: a modelled `Result.failure` mints an error handle
+    // that `TryAdopt` hands back as an exception instead of throwing it, and the success half mints
+    // the Cat the caller owns. Both have to come back. Oreo declines adoption fifty times; Mylo
+    // accepts and is let go again.
+    [Fact]
+    public void ResultTry_ModelledFailureAndSuccess_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var service = ResultSample.Service();
+            Assert.False(service.TryAdopt("Oreo", out Cat? none, out Exception? failure));
+            Assert.Null(none);
+            Assert.IsType<KotlinArgumentException>(failure);
+            Assert.True(service.TryAdopt("Mylo", out Cat? adopted, out _));
+            adopted!.Dispose();
+        });
+    }
+
+    // Row 1m. The fault-injection half of Row 1l: Ghost's body throws instead of returning a
+    // failure, so the Try rethrows the built exception. The error handle is released on that path
+    // too, or the count climbs by one per throw.
+    [Fact]
+    public void ResultTry_ThrownException_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var service = ResultSample.Service();
+            Assert.Throws<KotlinInvalidOperationException>(
+                () => service.TryWeigh("Ghost", out _, out _));
+        });
+    }
+
     // Row 1j. Row 1d one level down: an inner class owning an inner class
     // (`hearth_sunbather_paw_create(outer, toes, error)`). The borrowed receiver is itself an inner
     // handle, and the intermediate Sunbather is disposed BEFORE the Paw, so a release order that

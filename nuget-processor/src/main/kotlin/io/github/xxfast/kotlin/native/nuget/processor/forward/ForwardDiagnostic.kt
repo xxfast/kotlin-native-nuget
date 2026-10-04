@@ -405,6 +405,12 @@ internal enum class ForwardDiagnosticKind(
    *  is not the one generated. */
   INFO_FILE_CLASS_RENAMED(ForwardDiagnosticSeverity.INFO),
 
+  /** The non-throwing `TryX` twin of a `Result<T>`-returning member would share its C# name with
+   *  a property or constant of the same type, or with the type itself (CS0102, CS0542). Only the
+   *  twin is dropped: the throwing `X` still binds over the same export, so no `@CName` export is
+   *  left without its P/Invoke (ADR-055) and a library that built before still builds. */
+  SKIPPED_RESULT_TRY_COLLISION(ForwardDiagnosticSeverity.WARNING),
+
   /** ADR-109: an admitted dependency-module type whose package another forward publisher in the
    *  same Gradle build also exports. ADR-066 generates it into *this* module's package, as its own
    *  C# class over its own opaque handle, so a consumer referencing both NuGet packages sees two

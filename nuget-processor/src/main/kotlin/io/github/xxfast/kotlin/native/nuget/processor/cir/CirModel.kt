@@ -154,6 +154,11 @@ internal data class CirInterfaceMethod(
   // ADR-174: a `suspend` member, declared with the trailing `CancellationToken ... = default` the
   // class route's `Async` method takes, so an implementing class satisfies it.
   val isAsync: Boolean = false,
+  // A default interface method body (statements), or null for a signature-only member. Only the
+  // `Result<T>` Try twin has one, so a C# class implementing the interface keeps compiling.
+  val body: String? = null,
+  // The `Result<T>` member's non-throwing `TryX` twin, rendered right after it.
+  val tryOverload: CirInterfaceMethod? = null,
 ) {
   init {
     requireUnescaped(name)
@@ -939,6 +944,12 @@ internal data class CirMethod(
   // ADR-174: set on a generic implementer's forwarder, the interface spelling (`IFeed`) the member
   // is explicitly implemented for. The renderer drops the modifiers and the `= default` token.
   val explicitInterface: String? = null,
+  // The non-throwing `bool TryX(..., out T value, out Exception? failure)` twin of a `Result<T>`
+  // member, rendered right after it. It rides on this method rather than beside it in a member
+  // list because it shares this method's extern: a second CirMethod would mint a second
+  // `[DllImport]` through `methodNativeImport`. Its `override`/`virtual`/`abstract`/`static`
+  // modifiers are this method's at render time, since translators adjust those after projection.
+  val tryOverload: CirMethod? = null,
 ) : CirMember {
   init {
     requireUnescaped(name)
