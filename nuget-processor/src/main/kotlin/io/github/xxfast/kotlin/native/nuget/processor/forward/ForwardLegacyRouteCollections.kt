@@ -514,8 +514,17 @@ internal fun ForwardLegacyReturnShape.Enum.legacyEnumRead(handle: String): Strin
 
 /** ...and the completion's read: the handle constructor, null-guarded when nullable. */
 internal fun ForwardLegacyReturnShape.Handle.legacyHandleRead(handle: String): String =
-  if (nullable) "$handle == IntPtr.Zero ? null : new ${this.handle.csharpType}($handle, out _)"
-  else "new ${this.handle.csharpType}($handle, out _)"
+  if (nullable) {
+    "$handle == IntPtr.Zero ? null : new ${this.handle.constructedType()}($handle, out _)"
+  } else {
+    "new ${this.handle.constructedType()}($handle, out _)"
+  }
+
+/**
+ * The C# type a handle reconstruction `new`s: the public spelling, or an abstract sealed arm's
+ * backing wrapper ([BridgeType.ObjectHandle.constructType]), since `new` on the arm is CS0144.
+ */
+internal fun BridgeType.ObjectHandle.constructedType(): String = constructType ?: csharpType
 
 /** `NugetUnbox` reads the box and disposes it; a null result pointer is `null`, never unboxed. */
 internal fun ForwardLegacyReturnShape.ValueClass.legacyValueClassRead(handle: String): String =

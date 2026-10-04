@@ -1566,6 +1566,7 @@ internal class ForwardCallablePlanner(
     val owner: String = cls.qualifiedName?.asString() ?: className
     // ADR-147: null for an ordinary class, `io.pkg.Crate<Any?>` for a generic one.
     val ownerType: ForwardGenericOwner? = cls.forwardGenericOwner()
+    val hasBacking: Boolean = cls.hasAbstractBacking()
     // ADR-090: overload numbering, the scheme `valueClassMethodEntries` uses (itself ADR-034's
     // secondary-constructor scheme). Counted over the *declared plannable* members in
     // `getAllFunctions()` order — the counter increments before the structural check, so a
@@ -1592,8 +1593,12 @@ internal class ForwardCallablePlanner(
       // property route uses (`CirClassTranslator`), so both halves of a class agree.
       // ADR-101 amendment (2026-09-27): an inherited interface default on an open class too.
       val isVirtual: Boolean = !isOverride && method.isOpenForOverrideOn(cls)
+      // An abstract class with a backing wrapper plans its abstract members as call-through
+      // exports the wrapper overrides; any other class keeps the declaration-only abstract walk.
+      val isAbstract: Boolean = hasBacking && method.isAbstract
       val structuralReason: ForwardPlanSkipReason? = when {
-        method.modifiers.contains(Modifier.ABSTRACT) -> ForwardPlanSkipReason.ABSTRACT
+        method.modifiers.contains(Modifier.ABSTRACT) && !hasBacking ->
+          ForwardPlanSkipReason.ABSTRACT
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
         method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
         method in interfaceBridgeMethods || method in storedCallbackMethods -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
@@ -1620,6 +1625,7 @@ internal class ForwardCallablePlanner(
           node = method,
           defaults = declaredDefaults(method.parameters, memberDefaultFlags(method)),
           doc = method.forwardKdoc(expects).forParameters(method.parameters),
+          isAbstract = isAbstract,
         )
       }
     }
@@ -1875,8 +1881,10 @@ internal class ForwardCallablePlanner(
     val owner: String = subclass.qualifiedName?.asString() ?: return emptyList()
     // ADR-009 amendment (2026-09-11): only an `open` arm renders `public class`, so only an open
     // arm can carry `virtual`. On a final arm the member is effectively final in Kotlin anyway,
-    // and `virtual` inside a `public sealed class` is CS0549.
-    val isOpenArm: Boolean = subclass.modifiers.contains(Modifier.OPEN)
+    // and `virtual` inside a `public sealed class` is CS0549. An `abstract` arm renders
+    // `public abstract class` and is just as extensible.
+    val isOpenArm: Boolean = subclass.isForwardExtensible()
+    val hasBacking: Boolean = subclass.abstractBackingName() != null
     val prefix: String = "${sealed.nativePrefix(symbols)}_${subName.lowercase()}"
     val receiverType: BridgeType = BridgeType.ObjectHandle(owner)
     val keptBase: KSClassDeclaration? = sealed.forwardSuperClass(classifier.exportedObjectHandles)
@@ -1910,8 +1918,12 @@ internal class ForwardCallablePlanner(
       // With no kept base this is false, so every other arm keeps its shipped modifiers.
       val isOverride: Boolean = method.overridesKeptBaseOf(sealed, keptBase)
       val isVirtual: Boolean = !isOverride && isOpenArm && method.isOpenForOverrideOn(subclass)
+      // An abstract arm's abstract member is a call-through export its backing wrapper overrides;
+      // any other arm (a `sealed` one) still has no route for it.
+      val isAbstract: Boolean = hasBacking && method.isAbstract
       val structuralReason: ForwardPlanSkipReason? = when {
-        method.modifiers.contains(Modifier.ABSTRACT) -> ForwardPlanSkipReason.ABSTRACT
+        method.modifiers.contains(Modifier.ABSTRACT) && !hasBacking ->
+          ForwardPlanSkipReason.ABSTRACT
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
         method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
         method in interfaceBridgeMethods || method in storedCallbackMethods ->
@@ -1941,6 +1953,7 @@ internal class ForwardCallablePlanner(
           // arm overriding a base member renders the base's widened signature.
           defaults = declaredDefaults(method.parameters, memberDefaultFlags(method)),
           doc = method.forwardKdoc(expects).forParameters(method.parameters),
+          isAbstract = isAbstract,
         )
       }
     }
@@ -2923,11 +2936,12 @@ internal class ForwardCallablePlanner(
     defaults: ForwardDeclaredDefaults? = null,
     doc: ForwardKdoc? = null,
     extensionImportAlias: String? = null,
+    isAbstract: Boolean = false,
   ): ForwardCallableCatalogEntry = try {
     planOrSkipUnguarded(
       symbol, publicName, exportName, receiver, parameters, result, origin, target, ownerType,
       invocationReceiver, includeError, valueClassProperty, member, isOverride, isVirtual, node,
-      defaults, doc, extensionImportAlias,
+      defaults, doc, extensionImportAlias, isAbstract,
     )
   } catch (failure: Exception) {
     ForwardCallableCatalogEntry.Skipped(
@@ -2962,6 +2976,7 @@ internal class ForwardCallablePlanner(
     doc: ForwardKdoc? = null,
     // The alias an EXTENSION is imported and called under; see `ForwardInvocation`.
     extensionImportAlias: String? = null,
+    isAbstract: Boolean = false,
   ): ForwardCallableCatalogEntry {
     // ADR-115: the author's own signal, checked before any type is looked at -- nothing about the
     // declaration is unsupported, it is simply not part of the exported surface. One check for
@@ -3170,6 +3185,7 @@ internal class ForwardCallablePlanner(
         result = effectiveResult,
         isOverride = isOverride,
         isVirtual = isVirtual,
+        isAbstract = isAbstract,
         doc = doc.forPublic(publicParameters),
         dispatchMask = widening.dispatchMask,
         receiver = widening.receiver,

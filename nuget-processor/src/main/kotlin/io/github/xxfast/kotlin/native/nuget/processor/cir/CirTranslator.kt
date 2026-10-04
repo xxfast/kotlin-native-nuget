@@ -1244,7 +1244,11 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
     // ADR-147: an open generic wrapper registers nothing -- `typeof(Crate<>)` is not the
     // closed type an erased path asks for, and the entry would never match.
     is CirClass ->
-      if (hasInternalHandleConstructor && !isAbstract && typeParameters.isEmpty()) {
+      // An abstract class with a backing wrapper registers under its own name and constructs the
+      // wrapper; without one it is still not materialisable.
+      if (isAbstract && backingName != null) {
+        listOf(CirFactoryEntry("$path.$name", constructTypeName = "$path.$name.$backingName"))
+      } else if (hasInternalHandleConstructor && !isAbstract && typeParameters.isEmpty()) {
         listOf(CirFactoryEntry("$path.$name")) +
             // ADR-173: an ADR-040 backing wrapper also registers under its interface, so an
             // erased read at `T = IPet` (a Kotlin-backed pet the token probe missed) constructs
@@ -1266,7 +1270,12 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
             // `Namespace.Label`, not `Namespace.Shape.Label` -- the key has to be the name a
             // consumer's `typeof(...)` produces or the erased generic path misses it.
             val name: String = if (subclass.isNested) "$name.${subclass.name}" else subclass.name
-            CirFactoryEntry("$path.$name")
+            // An abstract arm registers under its own name and constructs its backing wrapper.
+            val backing: String? = subclass.backingName
+            CirFactoryEntry(
+              "$path.$name",
+              constructTypeName = if (backing != null) "$path.$name.$backing" else "$path.$name",
+            )
           }
 
     is CirEnum -> listOf(CirFactoryEntry("$path.$name", viaEnumOrdinal = true))

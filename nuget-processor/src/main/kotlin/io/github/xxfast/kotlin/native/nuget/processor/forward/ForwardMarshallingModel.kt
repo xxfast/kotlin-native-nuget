@@ -102,6 +102,12 @@ internal sealed interface BridgeType {
      * declaration's name for every lookup keyed on it.
      */
     val kotlinReadType: kotlin.String? = null,
+    /**
+     * The C# type a reconstruction `new`s, when it is not [csharpType]: an `abstract` sealed arm
+     * renders `public abstract class`, so its handle constructs the arm's nested backing wrapper
+     * (`global::Ns.Nap.Deep.Backing`) while every signature still spells the arm. Null otherwise.
+     */
+    val constructType: kotlin.String? = null,
   ) : BridgeType
 
   /**
@@ -668,6 +674,13 @@ internal data class ForwardPublicSignature(
    */
   val isOverride: Boolean = false,
   val isVirtual: Boolean = false,
+  /**
+   * A Kotlin abstract member (KSP `isAbstract`, so an inherited bodiless interface member too)
+   * planned on an abstract owner that has a backing wrapper (`abstractBackingName`). The export
+   * dispatches virtually; C# declares the member `abstract` on the owner and the backing wrapper
+   * overrides it with the call-through body.
+   */
+  val isAbstract: Boolean = false,
   /**
    * ADR-150: the author's KDoc, parsed once at planning time, with `@param` entries keyed by the
    * *bridge* parameter name and the omitted trailing parameters of a synthesized overload already

@@ -139,16 +139,14 @@ class Tier1SuspendOwnerAuditTest {
   }
 
   /**
-   * The sealed route declares no abstract member on an `abstract` or nested `sealed` arm, so the
-   * ABSTRACT deferral there used to be silent: it is a named SEALED_SUBCLASS_UNROUTED drop now.
+   * The sealed route declares no abstract member on a nested `sealed` arm, so the ABSTRACT deferral
+   * there used to be silent: it is a named SEALED_SUBCLASS_UNROUTED drop now. An `abstract` arm's
+   * abstract members have a route since the backing wrapper (the next test).
    */
   @Test
-  fun `an abstract member an abstract or sealed arm declares is named exactly once`() {
+  fun `an abstract member a sealed arm declares is named exactly once`() {
     listOf(
-      "tier1.suspendowners.Nap.Deep.depth" to "Depth",
       "tier1.suspendowners.Trip.Leg.miles" to "Miles",
-      // A lambda parameter: the arm's per-call lambda route does not declare an abstract one.
-      "tier1.suspendowners.Nap.Deep.onNap" to "OnNap",
     ).forEach { (member, csharp) ->
       val declared: Boolean = declarations().any { line ->
         Regex("\\babstract\\b.*\\b$csharp\\s*\\(").containsMatchIn(line)
@@ -162,6 +160,34 @@ class Tier1SuspendOwnerAuditTest {
         "$member is a sealed-arm drop; got=$matches",
       )
     }
+  }
+
+  /**
+   * An `abstract` arm's plain and lambda-parameter abstract members are declared `abstract` on the
+   * arm and overridden by the arm's backing wrapper over call-through exports, so they bind and are
+   * never named.
+   */
+  @Test
+  fun `an abstract arm's plain abstract members are declared and not named`() {
+    listOf(
+      "tier1.suspendowners.Nap.Deep.depth" to "public abstract int Depth();",
+      "tier1.suspendowners.Nap.Deep.onNap" to "public abstract void OnNap(Action<int> cb);",
+    ).forEach { (member, declaration) ->
+      assertTrue(
+        declarations().any { line -> declaration in line },
+        "$member is declared abstract on the C# arm",
+      )
+      assertEquals(
+        0, warningsNaming(member).size, "$member binds; kspWarnings=${result.kspWarnings}",
+      )
+    }
+    listOf("public override int Depth()", "public override void OnNap(Action<int> cb)")
+      .forEach { override ->
+        assertTrue(
+          declarations().any { line -> override in line },
+          "the arm's backing wrapper declares `$override`",
+        )
+      }
   }
 
   /**

@@ -1761,7 +1761,7 @@ internal object ForwardCirPlanProjection {
   ): String = if (viaDiscriminator) {
     "${csharpType()}.FromHandle($wireValue)"
   } else {
-    "new ${csharpType()}($wireValue, out _)"
+    "new ${constructType ?: csharpType()}($wireValue, out _)"
   }
 
   // ADR-114: the shared spelling, so the legacy Flow/suspend routes render a collection
