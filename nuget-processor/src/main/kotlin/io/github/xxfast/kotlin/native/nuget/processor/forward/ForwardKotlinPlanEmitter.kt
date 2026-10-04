@@ -853,13 +853,115 @@ private fun receiverExpression(plan: ForwardCallablePlan, receiver: ForwardAbiPa
  * ADR-147: the Kotlin type a receiver handle is read back as. `asStableRef` takes a *type*
  * argument, so a generic owner must be fully applied (`Crate<Any?>`, `Kennel<Pet>`): the bare
  * qualified name does not compile, and a star projection makes every `T`-typed parameter `Nothing`.
- * The planner stores that applied spelling; everything else keeps the bare qualified name.
+ * The planner stores that applied spelling; everything else keeps the bare qualified name. A
+ * multi-bound parameter has no erased argument and is star-projected here; [ownerCall] types the
+ * receiver of a member that takes a value of it.
  */
 private fun ForwardCallablePlan.ownerTypeName(): String =
-  invocation.ownerType ?: invocation.symbol.substringBeforeLast('.')
+  invocation.ownerType?.spelling ?: invocation.symbol.substringBeforeLast('.')
 
 /** ADR-147: the bound a `T` box is read back as, `Any` when the parameter is unconstrained. */
 private fun BridgeType.TypeParameter.stableRefTypeName(): String = boundQualifiedName ?: "Any"
+
+/**
+ * A `T` box's [read] (through its first bound), smart-cast to each of [additionalBounds], so a
+ * multi-bound `T` (`where T : Comparable<T>, T : Pet`) reads back as the intersection Kotlin
+ * infers from the casts; no single type names it. Unchanged for a single bound. A [nullable]
+ * read casts to each bound's nullable form, so null passes through. Every cast is checked, so an
+ * object that misses a bound C# could not see (a dropped builtin) fails at the call, inside the
+ * export's `try`, as ADR-015's 2026-10-03 amendment documents.
+ */
+internal fun forwardBoundedRead(
+  read: String,
+  additionalBounds: List<String>,
+  nullable: Boolean,
+): String {
+  if (additionalBounds.isEmpty()) return read
+  val mark: String = if (nullable) "?" else ""
+  val casts: String = additionalBounds.joinToString("") { bound -> "bounded as $bound$mark; " }
+  return "$read.let { bounded -> ${casts}bounded }"
+}
+
+/**
+ * ADR-147: [call] on the handle's receiver. A generic owner is read back fully applied, a
+ * multi-bound parameter star-projected ([ForwardGenericOwner.spelling]), which is all a member
+ * that takes no value of such a parameter needs.
+ *
+ * A member that does take one (`fun swap(next: T)`) cannot be called on `Arena<*>`, and no type
+ * argument spells the intersection. A local generic function re-states the owner's bounds and
+ * casts the receiver to the owner applied to its own `T`, inferred from a witness: the decoded
+ * argument itself, whose type is the intersection ([forwardBoundedRead]). The witness is only read
+ * for its type.
+ */
+private fun ownerCall(plan: ForwardCallablePlan, call: String): String {
+  val owner: ForwardGenericOwner = plan.invocation.ownerType
+    ?: return "handle.asStableRef<${plan.ownerTypeName()}>().get().$call"
+  val witnesses: List<Pair<ForwardGenericOwnerParameter, ForwardPublicParameter>> =
+    owner.typeParameters
+      .filter { typeParameter -> typeParameter.erased == null }
+      .mapNotNull { typeParameter ->
+        plan.publicSignature.parameters
+          .firstOrNull { parameter -> parameter.mentions(typeParameter) }
+          ?.let { parameter -> typeParameter to parameter }
+      }
+  if (witnesses.isEmpty()) return "handle.asStableRef<${owner.spelling}>().get().$call"
+
+  val typed: List<String> = witnesses.map { (typeParameter, _) -> typeParameter.kotlinName }
+  val applied: String = owner.typeParameters.joinToString(", ", "${owner.qualifiedName}<", ">") {
+    typeParameter ->
+    if (typeParameter.kotlinName in typed) typeParameter.kotlinName else typeParameter.erased ?: "*"
+  }
+  // A non-null `T`'s witness may still be a null `T?` argument (or an unset default), and a
+  // nullable-bounded `T` already admits null.
+  val parameters: String = witnesses.mapIndexed { index, (typeParameter, _) ->
+    "witness$index: ${typeParameter.kotlinName}" + if (typeParameter.nullableBound) "" else "?"
+  }.joinToString(", ")
+  val where: String = witnesses.flatMap { (typeParameter, _) ->
+    typeParameter.bounds.map { bound -> "${typeParameter.kotlinName} : $bound" }
+  }.joinToString(", ")
+  val values: String = witnesses.joinToString(", ") { (_, parameter) -> witnessValue(parameter) }
+  return buildString {
+    appendLine("run {")
+    appendLine("  @Suppress(\"UNCHECKED_CAST\")")
+    appendLine(
+      "  fun <${typed.joinToString(", ")}> nugetTypedOwner(owner: Any, $parameters): $applied " +
+          "where $where ="
+    )
+    appendLine("    owner as $applied")
+    appendLine("  nugetTypedOwner(handle.asStableRef<Any>().get(), $values).$call")
+    append("}")
+  }
+}
+
+/**
+ * The constructor's owner spelling: [ForwardGenericOwner.spelling], except that a multi-bound
+ * parameter is inferred from the arguments (`Kennel<_>`), or is `Nothing` when no parameter
+ * mentions it (`Shelf<Nothing>()`): `Nothing` is within every bound, and a constructor that takes
+ * no `T` makes no `T` value for it to type.
+ */
+private fun constructorTypeName(plan: ForwardCallablePlan, owner: ForwardGenericOwner): String {
+  if (owner.typeParameters.all { typeParameter -> typeParameter.erased != null }) {
+    return owner.spelling
+  }
+  return owner.typeParameters.joinToString(", ", "${owner.qualifiedName}<", ">") { typeParameter ->
+    val mentioned: Boolean =
+      plan.publicSignature.parameters.any { parameter -> parameter.mentions(typeParameter) }
+    typeParameter.erased ?: if (mentioned) "_" else "Nothing"
+  }
+}
+
+private fun ForwardPublicParameter.mentions(typeParameter: ForwardGenericOwnerParameter): Boolean =
+  (type.unwrapNullable() as? BridgeType.TypeParameter)?.kotlinName == typeParameter.kotlinName
+
+/**
+ * A witness's value: the parameter's own lowering, or the ADR-164 local an unset default leaves
+ * null, which the witness's `T?` admits.
+ */
+private fun witnessValue(parameter: ForwardPublicParameter): String = when {
+  parameter.default == null -> loweredArgument(parameter)
+  parameter.default?.encoding == ForwardDefaultEncoding.PRESENCE -> loweredArgument(parameter)
+  else -> parameter.defaultLocal
+}
 
 /**
  * ADR-163: a Kotlin package spelled as the receiver-free qualifier of a top-level call, with the
@@ -1039,9 +1141,7 @@ private fun invocationExpression(
   val functionName: String =
     plan.invocation.member ?: plan.invocation.symbol.substringAfterLast('.')
   return when (plan.invocation.origin) {
-    ForwardCallableOrigin.CLASS -> {
-      "handle.asStableRef<${plan.ownerTypeName()}>().get().$functionName($arguments)"
-    }
+    ForwardCallableOrigin.CLASS -> ownerCall(plan, "$functionName($arguments)")
 
     // ADR-006 amendment: an enum member is called exactly like an extension on the enum value,
     // which is also how Kotlin spells a member call, so per-entry `abstract fun` bodies dispatch.
@@ -1079,13 +1179,14 @@ private fun invocationExpression(
     // Kotlin accepts there. An inner class of a generic outer is deferred, so `ownerType` is never
     // the applied spelling on this arm.
     ForwardCallableOrigin.CONSTRUCTOR -> {
-      val target: String = plan.invocation.ownerType ?: requireNotNull(plan.invocation.target)
+      val owner: ForwardGenericOwner? = plan.invocation.ownerType
+      val target: String =
+        if (owner != null) constructorTypeName(plan, owner)
+        else requireNotNull(plan.invocation.target)
       if (receiver == null) "$target($arguments)"
       else "${receiverExpression(plan, receiver)}.${target.substringAfterLast('.')}($arguments)"
     }
-    ForwardCallableOrigin.COPY -> {
-      "handle.asStableRef<${plan.ownerTypeName()}>().get().copy($arguments)"
-    }
+    ForwardCallableOrigin.COPY -> ownerCall(plan, "copy($arguments)")
 
     // ADR-157, the branch finding 1 of the ADR's ledger said might not be needed: it is, and it is
     // one line. The box constructor's invocation is the identity on the lowered enum argument,
@@ -1290,8 +1391,10 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
     // ADR-147: the box holds whatever `T` was instantiated to, read back as the declared bound
     // (`Any` when the parameter is unconstrained), which is the type the member's `T` accepts
     // under the erased receiver spelling.
-    is BridgeType.TypeParameter ->
-      "${parameter.name}.asStableRef<${type.stableRefTypeName()}>().get()"
+    is BridgeType.TypeParameter -> forwardBoundedRead(
+      "${parameter.name}.asStableRef<${type.stableRefTypeName()}>().get()",
+      type.additionalBounds, nullable = false,
+    )
 
     // ADR-088: the reverse pipeline's own resolver. It frees the incoming transfer handle and
     // returns the ORIGINAL Kotlin object on a token-probe hit; otherwise it wraps the handle in
@@ -1329,8 +1432,10 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
         "${parameter.name}?.asStableRef<${inner.qualifiedName}>()?.get()"
 
       // ADR-083/147: a null `T?` arrives as the null pointer and stays Kotlin null.
-      is BridgeType.TypeParameter ->
-        "${parameter.name}?.asStableRef<${inner.stableRefTypeName()}>()?.get()"
+      is BridgeType.TypeParameter -> forwardBoundedRead(
+        "${parameter.name}?.asStableRef<${inner.stableRefTypeName()}>()?.get()",
+        inner.additionalBounds, nullable = true,
+      )
 
       // ADR-098 amendment (boundary nullability part C): `Char?` arrives as the same adjacent pair
       // and needs no conversion -- the by-value slot already IS a Kotlin `Char`.

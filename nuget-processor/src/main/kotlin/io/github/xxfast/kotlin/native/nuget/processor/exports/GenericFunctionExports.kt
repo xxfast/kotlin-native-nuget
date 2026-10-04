@@ -2,7 +2,8 @@ package io.github.xxfast.kotlin.native.nuget.processor.exports
 
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.abiSlotParameterName
-import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKotlinBoundSpelling
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardBoundSpellings
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardBoundedRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.hasNullableBound
 import io.github.xxfast.kotlin.native.nuget.processor.forward.importIfDefaultPackage
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinPackageReference
@@ -145,23 +146,23 @@ internal fun FileSpec.Builder.addGenericFunctionExports(
 
   val cname = "${symbolStem}_object"
 
-  val boundQualified: String? = func.typeParameters.firstOrNull()
-    ?.bounds?.toList()?.firstOrNull()?.let { bound ->
-      val resolved = bound.resolve()
-      val qn: String? = resolved.declaration.qualifiedName?.asString()
-      // A generic bound keeps its arguments: `asStableRef<kotlin.Comparable>()` names no type.
-      if (qn != null && qn != "kotlin.Any") resolved.forwardKotlinBoundSpelling() else null
-    }
+  // The class route's bound spellings: a generic bound keeps its arguments
+  // (`asStableRef<kotlin.Comparable>()` names no type), and a multi-bound `T` is read through its
+  // first bound and smart-cast to the rest, since no single type argument names the intersection.
+  val bounds: List<String> = func.typeParameters.firstOrNull()?.forwardBoundSpellings().orEmpty()
 
-  val refType: String = boundQualified ?: "Any"
+  val refType: String = bounds.firstOrNull() ?: "Any"
 
   // ADR-147 amendment, applied to this route: an unconstrained `T` (upper bound `Any?`) may be
   // null, so the object variant takes the null pointer for a null argument (ADR-083) and returns
   // it for a null result, instead of dereferencing it.
   val nullableBound: Boolean = func.typeParameters.firstOrNull()?.hasNullableBound() ?: true
   val argument: String =
-    if (nullableBound) "$paramName?.asStableRef<$refType>()?.get()"
-    else "$paramName.asStableRef<$refType>().get()"
+    if (nullableBound) {
+      forwardBoundedRead("$paramName?.asStableRef<$refType>()?.get()", bounds.drop(1), true)
+    } else {
+      forwardBoundedRead("$paramName.asStableRef<$refType>().get()", bounds.drop(1), false)
+    }
 
   if (returnsGenericClass) {
     addFunction(

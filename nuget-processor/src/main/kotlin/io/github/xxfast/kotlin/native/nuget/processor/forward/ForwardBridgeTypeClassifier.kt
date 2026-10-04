@@ -8,6 +8,7 @@ import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeArgument
 import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.Modifier
+import com.google.devtools.ksp.symbol.Variance
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
@@ -123,10 +124,12 @@ internal class ForwardBridgeTypeClassifier(
       val onGenericClass: Boolean =
         owner is KSClassDeclaration && owner.classKind == ClassKind.CLASS
       return if (onGenericClass) {
+        val bounds: List<String> = declaration.forwardBoundSpellings()
         val parameter = BridgeType.TypeParameter(
           name = (owner as KSClassDeclaration).forwardCsharpTypeParameterName(declaration),
-          boundQualifiedName = declaration.forwardBoundQualifiedName(),
+          boundQualifiedName = bounds.firstOrNull(),
           kotlinName = declaration.simpleName.asString(),
+          additionalBounds = bounds.drop(1),
         )
         // ADR-147 amendment: an unconstrained `T` has upper bound `Any?`, so a bare `T` is as
         // nullable as `T?` on the Kotlin half and crosses on the same null-pointer wire (ADR-083).
@@ -825,17 +828,50 @@ internal fun KSClassDeclaration.isValueClass(): Boolean =
 private const val RESULT_QUALIFIED_NAME: String = "kotlin.Result"
 
 /**
- * ADR-147: the first upper bound's Kotlin FQCN, or null when the parameter is unconstrained.
- * `kotlin.Any` is not a bound for this purpose: it is what an unconstrained parameter's implicit
- * `Any?` resolves to, and `asStableRef<Any>()` is already the unconstrained decode. A generic bound
- * carries its arguments ([forwardKotlinBoundSpelling]).
+ * ADR-147: every upper bound's Kotlin spelling as a concrete type argument
+ * ([forwardKotlinBoundSpelling]), empty when the parameter is unconstrained. `kotlin.Any` is not a
+ * bound for this purpose: it is what an unconstrained parameter's implicit `Any?` resolves to, and
+ * `asStableRef<Any>()` is already the unconstrained decode.
+ *
+ * The first entry is the one a `T` is read back as (`asStableRef<First>()`); a multi-bound
+ * parameter's value is then smart-cast to each of the rest. A generic bound goes first: the
+ * `asStableRef` read is the one place its arguments cost no unchecked cast.
  */
-internal fun KSTypeParameter.forwardBoundQualifiedName(): String? = bounds.toList()
-  .firstNotNullOfOrNull { bound ->
-    val resolved: KSType = bound.resolve()
+internal fun KSTypeParameter.forwardBoundSpellings(): List<String> = bounds.toList()
+  .map { bound -> bound.resolve() }
+  .filter { resolved ->
     val name: String? = resolved.declaration.qualifiedName?.asString()
-    if (name == null || name == "kotlin.Any") null else resolved.forwardKotlinBoundSpelling()
+    name != null && name != "kotlin.Any"
   }
+  .sortedBy { resolved -> resolved.arguments.isEmpty() }
+  .map { resolved -> resolved.forwardKotlinBoundSpelling() }
+
+/**
+ * A bound as its declaration wrote it, for a declaration that re-states it: type parameters keep
+ * their names (`kotlin.Comparable<T>`), projections and nullability are kept as written. Unlike
+ * [forwardKotlinBoundSpelling], which erases them to spell a concrete type argument.
+ */
+internal fun KSType.forwardKotlinDeclaredSpelling(): String {
+  val nullable: String = if (isMarkedNullable) "?" else ""
+  val declaration: KSDeclaration = declaration
+  if (declaration is KSTypeParameter) return declaration.name.asString() + nullable
+  val name: String = declaration.qualifiedName?.asString() ?: declaration.simpleName.asString()
+  if (arguments.isEmpty()) return name + nullable
+  val spelled: String = arguments.joinToString(", ") { argument ->
+    val argumentType: KSType? = argument.type?.resolve()
+    when {
+      argumentType == null || argument.variance == Variance.STAR -> "*"
+      argument.variance == Variance.CONTRAVARIANT ->
+        "in ${argumentType.forwardKotlinDeclaredSpelling()}"
+
+      argument.variance == Variance.COVARIANT ->
+        "out ${argumentType.forwardKotlinDeclaredSpelling()}"
+
+      else -> argumentType.forwardKotlinDeclaredSpelling()
+    }
+  }
+  return "$name<$spelled>$nullable"
+}
 
 /**
  * The Kotlin spelling of a type-parameter bound as a concrete type argument: its qualified name,
@@ -862,24 +898,46 @@ internal fun KSType.forwardKotlinBoundSpelling(): String {
 }
 
 /**
- * ADR-147: the fully applied Kotlin spelling of a generic owner (`io.pkg.Crate<Any?>`,
- * `io.pkg.Kennel<io.pkg.Pet>`), one erased argument per declared type parameter, or null for an
- * ordinary class. `asStableRef` takes a type argument, so the bare qualified name does not compile
- * for a generic owner and a star projection would type every `T` parameter as `Nothing`.
+ * ADR-147: a generic owner as the Kotlin half spells it, or null for an ordinary class. Each
+ * parameter erases to its bound (`io.pkg.Crate<Any?>`, `io.pkg.Kennel<io.pkg.Pet>`): `asStableRef`
+ * takes a type argument, so the bare qualified name does not compile for a generic owner, and a
+ * star projection would type every `T` parameter as `Nothing`.
+ *
+ * A multi-bound parameter (`where T : Comparable<T>, T : Pet`) has no erased argument: its first
+ * bound is not within the others. It keeps its declared bounds instead, so the emitter can type a
+ * receiver through a declaration that re-states them, and is star-projected everywhere else.
  */
-internal fun KSClassDeclaration.forwardOwnerTypeName(): String? {
+internal fun KSClassDeclaration.forwardGenericOwner(): ForwardGenericOwner? {
   if (typeParameters.isEmpty()) return null
   val owner: String = qualifiedName?.asString() ?: return null
-  // ADR-147 amendment: the erased argument carries the bound's nullability. An unconstrained
-  // parameter erases to `Any?`, so a bare `T` member substitutes to `Any?` and takes the nullable
-  // lowering and result body the classifier gives it; a `T : Any` erases to `Any` and keeps the
-  // non-null `retain`.
-  val arguments: String = typeParameters.joinToString(", ") { parameter ->
-    val bound: String = parameter.forwardBoundQualifiedName() ?: "Any"
-    if (parameter.hasNullableBound()) "$bound?" else bound
+  val parameters: List<ForwardGenericOwnerParameter> = typeParameters.map { parameter ->
+    val bounds: List<String> = parameter.forwardBoundSpellings()
+    val nullable: Boolean = parameter.hasNullableBound()
+    val multiBound: Boolean = bounds.size > 1
+    ForwardGenericOwnerParameter(
+      kotlinName = parameter.name.asString(),
+      // ADR-147 amendment: the erased argument carries the bound's nullability. An unconstrained
+      // parameter erases to `Any?`, so a bare `T` member substitutes to `Any?` and takes the
+      // nullable lowering and result body the classifier gives it; a `T : Any` erases to `Any`
+      // and keeps the non-null `retain`.
+      erased = if (multiBound) {
+        null
+      } else {
+        (bounds.firstOrNull() ?: "Any") + if (nullable) "?" else ""
+      },
+      bounds = if (multiBound) {
+        parameter.bounds.map { bound -> bound.resolve().forwardKotlinDeclaredSpelling() }.toList()
+      } else {
+        emptyList()
+      },
+      nullableBound = nullable,
+    )
   }
-  return "$owner<$arguments>"
+  return ForwardGenericOwner(owner, parameters)
 }
+
+/** The receiver spelling of [forwardGenericOwner], or null for an ordinary class. */
+internal fun KSClassDeclaration.forwardOwnerTypeName(): String? = forwardGenericOwner()?.spelling
 
 /**
  * ADR-147 amendment: Kotlin's rule for whether a bare `T` may hold null -- every upper bound is

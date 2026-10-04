@@ -350,12 +350,17 @@ internal sealed interface BridgeType {
    *   nullable than Kotlin's `Box<String>.value`.
    * @param kotlinName the name the author wrote, which diagnostics quote; differs from [name]
    *   only when the C# spelling was renamed around a member.
+   * @param additionalBounds the Kotlin spellings of every further non-`Any` upper bound
+   *   (`where T : Comparable<T>, T : Pet` carries `Pet` here). Non-empty means no single type
+   *   names the intersection: the decode smart-casts the [boundQualifiedName] read to each of
+   *   these, and the owner is no longer spelled by an erased argument (see [ForwardGenericOwner]).
    */
   data class TypeParameter(
     val name: kotlin.String,
     val boundQualifiedName: kotlin.String? = null,
     val nullableFromBound: kotlin.Boolean = false,
     val kotlinName: kotlin.String = name,
+    val additionalBounds: List<kotlin.String> = emptyList(),
   ) : BridgeType
 }
 
@@ -739,12 +744,12 @@ internal data class ForwardInvocation(
    */
   val unwrapsKotlinResult: Boolean = false,
   /**
-   * ADR-147: the fully applied Kotlin spelling of a generic owner (`io.pkg.Crate<Any?>`), used by
-   * the Kotlin emitter wherever it names the owner as a *type*: the receiver read
-   * (`handle.asStableRef<Crate<Any?>>()`) and the constructor call. Null for an ordinary class,
-   * where the bare qualified name off [symbol] (or [target]) is already a legal type.
+   * ADR-147: a generic owner, which the Kotlin emitter names wherever it spells the owner as a
+   * *type*: the receiver read (`handle.asStableRef<Crate<Any?>>()`) and the constructor call. Null
+   * for an ordinary class, where the bare qualified name off [symbol] (or [target]) is already a
+   * legal type.
    */
-  val ownerType: String? = null,
+  val ownerType: ForwardGenericOwner? = null,
   /**
    * The alias an [ForwardCallableOrigin.EXTENSION] callable is imported under and called through
    * (`receiver.nuget_ext_pkg__y()`), from [forwardExtensionImportAlias]. A plain `receiver.y()`
@@ -753,6 +758,43 @@ internal data class ForwardInvocation(
    * origin.
    */
   val extensionImportAlias: String? = null,
+)
+
+/**
+ * ADR-147: a generic class as the Kotlin half spells it, one [ForwardGenericOwnerParameter] per
+ * declared type parameter, in order.
+ */
+internal data class ForwardGenericOwner(
+  val qualifiedName: String,
+  val typeParameters: List<ForwardGenericOwnerParameter>,
+) {
+  /**
+   * The owner applied to each parameter's erased argument (`io.pkg.Crate<Any?>`,
+   * `io.pkg.Kennel<io.pkg.Pet>`), a multi-bound one star-projected (`io.pkg.Arena<*>`): no single
+   * type is within all of its bounds. Legal as a receiver for every member that takes no value of
+   * a star-projected parameter.
+   */
+  val spelling: String
+    get() = "$qualifiedName<${typeParameters.joinToString(", ") { it.erased ?: "*" }}>"
+}
+
+/**
+ * One type parameter of a [ForwardGenericOwner].
+ *
+ * @param kotlinName the declared name, which [BridgeType.TypeParameter.kotlinName] matches.
+ * @param erased the single type argument every instance is read back as: the bound with the
+ *   bound's nullability (`io.pkg.Pet`, `Any?` when unconstrained). Null for a multi-bound
+ *   parameter, which has no such argument.
+ * @param bounds a multi-bound parameter's upper bounds as declared, naming the owner's type
+ *   parameters as written (`kotlin.Comparable<T>`, `io.pkg.Pet?`), for a declaration that
+ *   re-states them. Empty for every other parameter.
+ * @param nullableBound true when every bound is nullable, so a bare `T` may hold null.
+ */
+internal data class ForwardGenericOwnerParameter(
+  val kotlinName: String,
+  val erased: String?,
+  val bounds: List<String>,
+  val nullableBound: Boolean,
 )
 
 internal data class ForwardResultConvention(
