@@ -960,6 +960,38 @@ public class LiveHandleTests
         });
     }
 
+    // ADR-015 amendment: a builtin T through the generic-function route's object variant
+    // (a builtin-bounded function, and a narrow builtin with no width variant on an unconstrained
+    // one). Two boxes per call: the argument's `Wrap<T>` box, disposed on `owned`, and the result
+    // box, which `FromHandle<T>` unwraps and must dispose: no wrapper holds it.
+    [Fact]
+    public void BuiltinGenericFunction_BoxedPrimitiveAndString_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            Assert.Equal(4, TestLibrary.Rankings.Treats.Weigh(4));
+            Assert.Equal("tuna", TestLibrary.Rankings.Treats.Favourite("tuna"));
+            Assert.Equal((short)7, Helpers.Identity<short>(7));
+        });
+    }
+
+    // The same crossings' fault path: a T outside the dropped bound fails the checked cast at the
+    // Kotlin read. The argument box was minted by `Wrap<T>` and must still be released in the
+    // `finally` when the call throws; the class route's constructor takes the same path, with no
+    // wrapper ever built to own a handle.
+    [Fact]
+    public void BuiltinGenericFunction_BoundCastFails_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            Assert.Throws<KotlinInvalidCastException>(() => TestLibrary.Rankings.Treats.Weigh(3u));
+            Assert.Throws<KotlinInvalidCastException>(
+                () => TestLibrary.Rankings.Treats.Portion("tuna"));
+            Assert.Throws<KotlinInvalidCastException>(
+                () => new TestLibrary.Rankings.Tally<uint>(3u));
+        });
+    }
+
     // Rows 6j-6n. ROADMAP line 51 (ADR-160 amendment): a top-level lambda RETURN with a value
     // parameter. Unlike Row 6g, the parameter bridge is not released when the call returns: the
     // returned lambda captures it, so it lives until the `KotlinFunc` is disposed AND Kotlin's GC

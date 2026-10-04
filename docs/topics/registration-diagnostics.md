@@ -258,6 +258,13 @@ constructor and `Value` read follow the module-local generic route.
 `DependencyGenericOwner_PrimitiveAndStringPayloadsReturnToBaseline` constructs, reads and disposes
 `Parcel<int>` and `Parcel<string>` and checks the count returns to baseline.
 
+A [builtin as `T` on a generic function](generics.md#generic-functions) mints two boxes per call:
+the argument's, which the call releases, and the result's, which the read releases as it unwraps
+it, so there is nothing for you to dispose. A `T` that fails the bound's check still releases the
+argument box. `LeakTests/LiveHandleTests.cs`'s
+`BuiltinGenericFunction_BoxedPrimitiveAndString_ReturnsToBaseline` and
+`BuiltinGenericFunction_BoundCastFails_ReturnsToBaseline` cover the success and failure paths.
+
 A [sealed base's own async members](interfaces-abstract-sealed.md#sealed-method-suspend-generated-c)
 add no new handle kind either: the scope handle moves from the arm to the base, and the count returns
 to baseline once the base-typed reference is disposed. `LeakTests/LiveHandleTests.cs` row 9l covers

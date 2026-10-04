@@ -163,7 +163,10 @@ class Tier1ReflectionFreeDispatchTest {
     // The Kotlin halves: `init` re-runs inside the box export, and both mint through NugetHandles.
     val kotlin: String = result.generated
     assertContains(kotlin, "NugetHandles.retain(tier1.reflectionfreeplain.ChartId(unboxed))")
-    assertContains(kotlin, "boxed.asStableRef<tier1.reflectionfreeplain.ChartId>().get().value")
+    assertContains(
+      kotlin,
+      "(boxed.asStableRef<Any>().get() as tier1.reflectionfreeplain.ChartId).value",
+    )
     assertFalse(kotlin.contains("StableRef.create("), "handles are minted only through NugetHandles")
   }
 }
