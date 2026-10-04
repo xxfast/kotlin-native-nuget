@@ -17,6 +17,10 @@ rootDir.parentFile.resolve("gradle.properties").inputStream().use(rootProperties
 group = requireNotNull(rootProperties.getProperty("group")) { "`group` missing from the root gradle.properties" }
 version = requireNotNull(rootProperties.getProperty("version")) { "`version` missing from the root gradle.properties" }
 
+// ADR-195: the Kotlin range a consumer may use, surfaced to the plugin by generateVersionConstant.
+val kotlinFloor: String = requireNotNull(rootProperties.getProperty("kotlinFloor")) { "`kotlinFloor` missing from the root gradle.properties" }
+val kotlinTested: String = requireNotNull(rootProperties.getProperty("kotlinTested")) { "`kotlinTested` missing from the root gradle.properties" }
+
 // This included build cannot read the version catalog. Keep aligned with kotlin("jvm") above.
 val kotlinNativeVersion = "2.4.10"
 
@@ -58,13 +62,15 @@ val hostCoroutinesKlib: Configuration by configurations.creating {
 }
 
 dependencies {
-  implementation(kotlin("gradle-plugin-api"))
-  implementation(kotlin("gradle-plugin"))
+  // ADR-195: compileOnly, so the consumer's own Kotlin Gradle plugin is the one that runs.
+  compileOnly(kotlin("gradle-plugin-api"))
+  compileOnly(kotlin("gradle-plugin"))
   implementation("com.google.devtools.ksp:symbol-processing-gradle-plugin:2.3.10")
   implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
 
   testImplementation(kotlin("test"))
   testImplementation(gradleTestKit())
+  testImplementation(kotlin("gradle-plugin"))
 
   if (kotlinNativeHost != null) {
     add(
@@ -88,6 +94,8 @@ val generateVersionConstant: TaskProvider<Task> = tasks.register("generateVersio
   val pluginVersion: String = version.toString()
   inputs.property("pluginVersion", pluginVersion)
   inputs.property("coroutinesVersion", coroutinesVersion)
+  inputs.property("kotlinFloor", kotlinFloor)
+  inputs.property("kotlinTested", kotlinTested)
   outputs.dir(outputDir)
 
   doLast {
@@ -104,6 +112,11 @@ val generateVersionConstant: TaskProvider<Task> = tasks.register("generateVersio
       // (this included build does not consume the root version catalog): if you bump
       // `coroutines` in gradle/libs.versions.toml, bump it here too.
       internal const val COROUTINES_VERSION: String = "$coroutinesVersion"
+
+      // ADR-195: from kotlinFloor and kotlinTested in the root gradle.properties.
+      internal const val KOTLIN_FLOOR: String = "$kotlinFloor"
+
+      internal const val KOTLIN_TESTED: String = "$kotlinTested"
       """.trimIndent() + "\n",
     )
   }
@@ -117,6 +130,19 @@ tasks.processResources {
     exclude("bin/**", "obj/**")
   }
 }
+
+// ADR-195: KGP is compileOnly, so TestKit builds (`withPluginClasspath()`) get it here, beside the plugin
+// under test, the same way a consumer that declares both plugins in one `plugins {}` block does.
+val testKitKotlin: Configuration by configurations.creating {
+  isCanBeConsumed = false
+  isCanBeResolved = true
+  description = "Kotlin Gradle plugin on the TestKit plugin-under-test classpath."
+  attributes.addAllLater(configurations.runtimeClasspath.get().attributes)
+}
+
+dependencies { testKitKotlin(kotlin("gradle-plugin")) }
+
+tasks.pluginUnderTestMetadata { pluginClasspath.from(testKitKotlin) }
 
 tasks.test {
   // The reverse dogfooding census restores nine real packages from nuget.org. A feed outage

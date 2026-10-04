@@ -201,9 +201,20 @@ jobs:
   # Consumes the plugin the way a real user does: by maven coordinate, from a separate Gradle
   # build. In this repo `NugetPlugin` always finds `:nuget-processor` as a project, so the
   # coordinate fallback it ships to consumers is otherwise never executed.
+  #
+  # ADR-195: one leg per end of the supported Kotlin range, and each leg proves two things. First
+  # the artifacts published on the repo's pinned compiler are consumable from that Kotlin (the
+  # smoke consumer links). Then the repo itself behaves on that Kotlin: test-library is rebuilt
+  # with it and the real dotnet tests run. Folded into one job per version to stay inside the
+  # free plan's 5 concurrent macOS jobs. The names resolve through kotlinFloor and kotlinTested in
+  # gradle.properties; never put a number here.
   smoke-test:
-    name: Consume plugin by coordinate
+    name: Kotlin ${{ matrix.kotlin }} (consume by coordinate, behaviour tests)
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        kotlin: [floor, tested]
     # Same reason as `test` above: not a job the weekly dogfood schedule should pay for.
     if: github.event_name == 'push' || github.event_name == 'pull_request'
 
@@ -220,14 +231,62 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Publish plugin and processor to a local maven repo
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      # No kotlinVersion override here: these are the artifacts a release ships, built on the pin.
+      # The link needs the runtime and annotations klibs too; the macosArm64 and metadata
+      # publications are all a macOS runner can and needs to build.
+      - name: Publish plugin, processor, runtime and annotations to a local maven repo
         run: >
           ./gradlew
           :nuget-processor:publishAllPublicationsToLocalTestRepository
+          :nuget-runtime:publishMacosArm64PublicationToLocalTestRepository
+          :nuget-runtime:publishKotlinMultiplatformPublicationToLocalTestRepository
+          :nuget-annotations:publishMacosArm64PublicationToLocalTestRepository
+          :nuget-annotations:publishKotlinMultiplatformPublicationToLocalTestRepository
           :nuget-plugin:publishAllPublicationsToLocalTestRepository
 
-      - name: Resolve the plugin and processor by coordinate
-        run: ./gradlew -p smoke-test verifyProcessorResolvesByCoordinate
+      - name: Resolve by coordinate and link at Kotlin ${{ matrix.kotlin }}
+        run: >
+          ./gradlew -p smoke-test
+          verifyProcessorResolvesByCoordinate
+          verifyRuntimeResolvesByCoordinate
+          linkDebugSharedMacosArm64
+          -Psmoke.kotlin=${{ matrix.kotlin }}
+
+      # From here on the root build itself runs on this leg's Kotlin (settings.gradle.kts). No
+      # coverage and no AOT publish: the `test` job owns those on the pinned version.
+      - name: Verify and pack shared compiled contract
+        run: |
+          dotnet test ContractTests
+          dotnet pack Kotlin.Native.Interop -c Release -o build/nuget
+
+      - name: Build both independent NuGet publishers at Kotlin ${{ matrix.kotlin }}
+        env:
+          ORG_GRADLE_PROJECT_kotlinVersion: ${{ matrix.kotlin }}
+        run: ./gradlew :test-library:packNuget :test-companion:packNuget
+
+      # The klib manifest records the compiler that built it; a silently ignored override fails here.
+      - name: Prove test-library was compiled at Kotlin ${{ matrix.kotlin }}
+        shell: bash
+        run: |
+          case "${{ matrix.kotlin }}" in
+            floor) key=kotlinFloor ;;
+            tested) key=kotlinTested ;;
+          esac
+          expected=$(grep "^$key=" gradle.properties | cut -d= -f2)
+          manifest=test-library/build/classes/kotlin/macosArm64/main/klib/test-library/default/manifest
+          actual=$(grep '^compiler_version=' "$manifest" | cut -d= -f2)
+          echo "test-library compiled by Kotlin $actual (expected $expected)"
+          test "$actual" = "$expected"
+
+      - name: Run dotnet tests
+        run: dotnet test IntegrationTests
+
+      - name: Run leak harness
+        run: dotnet test LeakTests
 
   # The reverse dogfooding census: the real plugin pipeline over nine pinned published NuGet
   # packages, compared against the committed goldens in nuget-plugin/src/test/resources/dogfood.

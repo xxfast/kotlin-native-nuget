@@ -2,7 +2,7 @@ import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.SharedLibrary
 
 plugins {
-  kotlin("multiplatform") version "2.4.10"
+  kotlin("multiplatform")
   id("io.github.xxfast.kotlin.native.nuget")
 }
 
