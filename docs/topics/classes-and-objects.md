@@ -96,6 +96,10 @@ oreo.Age = 3;
 Assert.Equal(36, oreo.AgeInMonths());
 ```
 
+A method typed as an `abstract` class returns an internal subclass that forwards to the Kotlin
+object; see
+[An abstract class as a return type](interfaces-abstract-sealed.md#an-abstract-class-as-a-return-type).
+
 ## A nullable class handle parameter {id="nullable-handle-parameter"}
 
 A parameter typed with a nullable exported class (`Foo?`), on a constructor, method, extension, or

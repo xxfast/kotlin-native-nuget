@@ -13,6 +13,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirSealedClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirStaticClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirEnum
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClass
+import io.github.xxfast.kotlin.native.nuget.processor.cir.backing
+import io.github.xxfast.kotlin.native.nuget.processor.cir.nativeImports
 import io.github.xxfast.kotlin.native.nuget.processor.cir.ordinaryNativeImports
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiDirection as PlanAbiDirection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiWireType
@@ -201,7 +203,8 @@ internal object ForwardAbiContract {
         is CirStaticClass -> declaration.members.filterIsInstance<CirDllImport>()
         is CirObject -> declaration.methods.filterIsInstance<CirDllImport>()
         is CirClass -> declaration.ordinaryNativeImports() +
-            declaration.companionMembers.filterIsInstance<CirDllImport>()
+            declaration.companionMembers.filterIsInstance<CirDllImport>() +
+            declaration.backing()?.nativeImports().orEmpty()
 
         is CirValueClass -> declaration.ordinaryNativeImports()
         // ADR-006 amendment: a top-level enum's member-property imports are projected plan nodes.
@@ -210,8 +213,10 @@ internal object ForwardAbiContract {
         // ADR-078 amendment (2026-09-11): a sealed arm's plan-derived imports are nodes like any
         // ordinary class's, so they are read here rather than scraped by `csharpLegacy`.
         is CirSealedClass -> declaration.ordinaryNativeImports() +
-            declaration.subclasses
-              .flatMap { subclass -> subclass.ordinaryNativeImports(declaration.libraryName) }
+            declaration.subclasses.flatMap { subclass ->
+              subclass.ordinaryNativeImports(declaration.libraryName) +
+                  subclass.backing(declaration)?.nativeImports().orEmpty()
+            }
 
         else -> emptyList()
       }

@@ -112,6 +112,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedSubclass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverride
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverrideOn
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardExtensible
+import io.github.xxfast.kotlin.native.nuget.processor.forward.abstractBackingName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.hasAbstractBacking
 import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesBaseClassMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesKeptBaseOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyMarshalledRead
@@ -983,6 +986,9 @@ internal fun translateClass(
       // body, no export, no `DllImport`. Without it the generated `Bird : IFeathered` is CS0535
       // and a consumer subclass's `override` is CS0115.
       if (prop.parentDeclaration != cls && prop.isAbstract()) {
+        // A backed class plans inherited abstract properties; one that did not plan has no
+        // override for the wrapper to give it (CS0534), so it stays off C# as on a subclass.
+        if (cls.hasAbstractBacking()) return@mapNotNull null
         return@mapNotNull inheritedAbstractProperty(
           prop, propName, name, prop.overridesBaseClassMember(superClassDeclaration),
           interfaceDeclarationCatalog, exportedTypes, classifier, context,
@@ -1239,16 +1245,21 @@ internal fun translateClass(
       nativePrefix = prefix,
       isOverride = plan.publicSignature.isOverride,
       isVirtual = plan.publicSignature.isVirtual,
-    )
+    ).let { method -> if (plan.publicSignature.isAbstract) method.asAbstract() else method }
   }
   val plannedMemberNames: Set<String> = plannedMethodPlans
     .mapNotNull { plan -> plan.invocation.member }
     .toSet()
+  val backingName: String? = cls.abstractBackingName()
 
   // Abstract declarations still need a C# abstract method for the public surface even though they
   // have no native export / plan (planner skips ABSTRACT), so they stay on the declaration walk.
+  // A class with a backing wrapper plans every abstract member instead, and one its plan refused
+  // stays off C# (a subclass's plan refuses the same signature), since the wrapper could not
+  // override a declaration-only member (CS0534).
   val abstractMethods: List<CirMethod> = normalMethods
     .filter { it !in interfaceBridgeExcluded }
+    .filter { backingName == null }
     .mapNotNull { method ->
       val methodName: String = method.simpleName.asString()
       if (methodName in plannedMemberNames) return@mapNotNull null
@@ -1460,6 +1471,15 @@ internal fun translateClass(
     cls, libraryName, classifier, tracker, callableCatalog, context, expects,
   )
 
+  // The wrapper overrides an abstract `DisposeAsync`: this class's own when it owns the scope,
+  // or an abstract (or sealed) owner's above it that nothing in between implemented.
+  val scopeOwnerIsThisClass: Boolean =
+    scopeOwner?.qualifiedName?.asString() == cls.qualifiedName?.asString()
+  val scopeOwnerIsAbstract: Boolean = scopeOwner?.modifiers?.contains(Modifier.ABSTRACT) == true
+  val scopeOwnerIsSealed: Boolean = scopeOwner?.isEligibleSealedType() == true
+  val backingOverridesDisposeAsync: Boolean =
+    scopeOwner != null && (scopeOwnerIsThisClass || scopeOwnerIsAbstract || scopeOwnerIsSealed)
+
   return CirClass(
     name = name,
     // ADR-147: empty for an ordinary class; `Crate<T>` fills it and renders as the carrier.
@@ -1493,6 +1513,8 @@ internal fun translateClass(
         (scopeOwner.modifiers.contains(Modifier.ABSTRACT) || scopeOwner.isEligibleSealedType()),
     remarks = listOfNotNull(remarks),
     doc = cls.forwardKdoc(expects)?.toCirDoc(),
+    backingName = backingName,
+    backingOverridesDisposeAsync = backingOverridesDisposeAsync,
   )
 }
 
@@ -2491,8 +2513,10 @@ internal fun translateSealedClass(
       val isNested: Boolean =
         subclass.parentDeclaration?.qualifiedName?.asString() == cls.qualifiedName?.asString()
       // ADR-009 amendment (2026-09-11): an `open` arm is extensible, which is what unlocks both
-      // `public class` in the renderer and `virtual` on its own open members below.
-      val isOpenArm: Boolean = subclass.modifiers.contains(Modifier.OPEN)
+      // `public class` in the renderer and `virtual` on its own open members below. An `abstract`
+      // arm is extensible too, and renders `public abstract class` over its backing wrapper.
+      val isOpenArm: Boolean = subclass.isForwardExtensible()
+      val backingName: String? = subclass.abstractBackingName()
 
       // ADR-101 amendment (2026-09-27): the arm lists its own exported interfaces after the sealed
       // base, by the ordinary class's rule, so `arm is IFoo` holds. Everything the sealed type
@@ -2527,6 +2551,9 @@ internal fun translateSealedClass(
               // final arm is effectively final in Kotlin (nothing can extend it), and `virtual`
               // inside a `public sealed class` is CS0549.
               isVirtual = isOpenArm && prop.isOpenForOverrideOn(subclass),
+              // An abstract arm declares its abstract property `abstract`, as an ordinary abstract
+              // class does, and its backing wrapper overrides it over the same export.
+              isAbstract = backingName != null && prop.isAbstract(),
               // ADR-168 on an arm (2026-09-27): an `override var` over the sealed base's `open val`
               // is get-only in public (CS0546), and the interface `var` it also implements takes
               // its setter as an explicit `IFoo.X` member, which the arm's base list now allows.
@@ -2625,6 +2652,9 @@ internal fun translateSealedClass(
         // keyword, because what C# needs is a base member with a matching shape: an arm can
         // override something the base's own plan declined, and then there is nothing to override.
         projected.againstSealedBase(baseMethods)
+          // An abstract arm's abstract member: declared `abstract` here, implemented by the backing
+          // wrapper below over the same export.
+          .let { method -> if (plan.publicSignature.isAbstract) method.asAbstract() else method }
       }
       // ADR-118: the arm's `suspend` members ride the legacy suspend route under the arm's own
       // export prefix, projected by the same `suspendMembers` an ordinary class calls, so the
@@ -2781,6 +2811,7 @@ internal fun translateSealedClass(
         isDataClass = isDataClass,
         isNested = isNested,
         isOpen = isOpenArm,
+        backingName = backingName,
         interfaces = armInterfaces,
         // ADR-134: the arm is an owner in its own right (`Purr.On.Trace`).
         nestedDeclarations = nestedOf(subclass),

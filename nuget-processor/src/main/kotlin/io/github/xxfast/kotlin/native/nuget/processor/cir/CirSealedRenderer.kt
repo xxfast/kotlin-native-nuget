@@ -119,8 +119,9 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
 
   // Every subclass, nested or sibling, in the Kotlin discriminator's own order. A sibling resolves
   // bare from inside the base because it lives in the same namespace.
+  // An abstract arm constructs its backing wrapper: `new` on the arm itself is CS0144.
   for ((index, subclass) in sealed.subclasses.withIndex()) {
-    appendLine("                $index => new ${subclass.name}(handle, out _),")
+    appendLine("                $index => new ${subclass.constructedName()}(handle, out _),")
   }
 
   appendLine("                _ => throw new InvalidOperationException(\"Unknown sealed class type\")")
@@ -154,8 +155,13 @@ private fun sealedSubclassBlock(
   val asyncDisposable: String = if (subclass.ownsScope) ", IAsyncDisposable" else ""
   // ADR-009 amendment (2026-09-11): an `open` arm drops `sealed`, so a Kotlin subclass of it (an
   // ordinary class, with the arm as its base) compiles and the arm's `open` members can be
-  // `virtual`. A final arm keeps its shipped `public sealed class` spelling byte for byte.
-  val sealedModifier: String = if (subclass.isOpen) "" else "sealed "
+  // `virtual`. A final arm keeps its shipped `public sealed class` spelling byte for byte. An
+  // `abstract` arm is extensible the same way, and C# must not instantiate it either.
+  val sealedModifier: String = when {
+    subclass.backingName != null -> "abstract "
+    subclass.isOpen -> ""
+    else -> "sealed "
+  }
   // ADR-111/ADR-116 amendment (2026-09-11): the base's own extern names. A nested arm sits inside
   // the base's braces, so those private statics are accessible to it, and an arm that overrides a
   // base member mints an extern of exactly the same name: CS0108 unless it says `new`. A sibling
@@ -256,10 +262,13 @@ private fun sealedSubclassBlock(
   subclass.methods.forEach { method ->
     append(
       buildString {
-        renderDllImport(
-          methodNativeImport(sealed.libraryName, subclass.nativePrefix, method)
-            .hiding(baseExternNames),
-        )
+        // An abstract member's extern is the backing wrapper's, which calls it.
+        if (!method.isAbstract) {
+          renderDllImport(
+            methodNativeImport(sealed.libraryName, subclass.nativePrefix, method)
+              .hiding(baseExternNames),
+          )
+        }
         // `renderMethod` already closes with its own blank separator line, unlike the property
         // renderer, so this loop adds none.
         renderMethod(method, subclass.name)
@@ -321,6 +330,10 @@ private fun sealedSubclassBlock(
     appendLine()
   }
 
+  // An abstract arm's backing wrapper makes the arm constructible from a handle. It overrides the
+  // arm's abstract members; everything else, both disposals included, is the arm's, inherited.
+  subclass.backing(sealed)?.let { backing -> append(backingClassBlock(backing).indentNestedBody()) }
+
   if (subclass.hasSuspendMethods) {
     // ADR-118: a suspending arm takes the ordinary class's dispose rule wholesale -- cancel and
     // dispose the scope before `Native_Dispose`, plus the `DisposeAsync` drain. Only a suspending
@@ -363,8 +376,55 @@ private fun sealedSubclassBlock(
   }
 }
 
+/**
+ * The C# type that materialises this arm from a handle, relative to the arm's own scope: the arm
+ * itself, or an abstract arm's nested backing wrapper (`Deep.Backing`).
+ */
+internal fun CirSealedSubclass.constructedName(): String =
+  if (backingName != null) "$name.$backingName" else name
+
+/** This abstract arm's backing wrapper, or null when the arm is not abstract. */
+internal fun CirSealedSubclass.backing(sealed: CirSealedClass): CirBacking? {
+  val name: String = backingName ?: return null
+  // A nested arm sits inside the base's braces, so the base's private externs are visible to the
+  // wrapper too; the arm's own always are.
+  val baseExterns: Set<String> =
+    if (isNested) sealed.ordinaryNativeImports().map { it.name }.toSet() else emptySet()
+  return CirBacking(
+    name = name,
+    ownerName = this.name,
+    libraryName = sealed.libraryName,
+    nativePrefix = nativePrefix,
+    // Derived from the arm's members as they stand, after the `Result` twin collision pass, so the
+    // wrapper overrides exactly the abstract members (and twins) the arm still declares.
+    properties = properties.backingOverrides(),
+    methods = methods.backingOverrides(),
+    inheritedExternNames = baseExterns + ordinaryNativeImports(sealed.libraryName).map { it.name },
+  )
+}
+
+/** A planned member declared `abstract` on its owner; the body stays for [backingOverrides]. */
+internal fun CirMethod.asAbstract(): CirMethod =
+  copy(isAbstract = true, isVirtual = false, isNew = false)
+
+/**
+ * The backing wrapper's half of an owner's abstract members: each abstract planned member again,
+ * as an `override` carrying the call-through body its plan already projected. The export
+ * dispatches virtually in Kotlin, so whichever subclass the handle holds answers.
+ */
+@JvmName("backingMethodOverrides")
+internal fun List<CirMethod>.backingOverrides(): List<CirMethod> = filter { it.isAbstract }
+  .map { method -> method.copy(isAbstract = false, isOverride = true, isVirtual = false) }
+
+@JvmName("backingPropertyOverrides")
+internal fun List<CirProperty>.backingOverrides(): List<CirProperty> =
+  filter { it.isAbstract && it.hasNativeImport }
+    .map { property ->
+      property.copy(isAbstract = false, isOverride = true, isVirtual = false, isNew = false)
+    }
+
 /** The same import, marked `new` when it hides one of [baseExternNames]. */
-private fun CirDllImport.hiding(baseExternNames: Set<String>): CirDllImport =
+internal fun CirDllImport.hiding(baseExternNames: Set<String>): CirDllImport =
   if (name in baseExternNames) copy(isNew = true) else this
 
 /**
@@ -437,6 +497,14 @@ private fun StringBuilder.renderSealedSubclassProperty(prop: CirProperty) {
       }
       appendLine("            }")
     }
+    return
+  }
+  // An abstract arm's abstract property: declaration-only, as `renderProperty` spells it one level
+  // up. Its externs stay on the arm, and the backing wrapper's override calls them.
+  if (prop.isAbstract) {
+    val override: String = if (prop.isOverride) "override " else ""
+    val accessors: String = if (prop.setter != null) "{ get; set; }" else "{ get; }"
+    appendLine("            public abstract $override${prop.type} ${prop.identifier} $accessors")
     return
   }
   val isMultiLineGetter: Boolean = prop.getter.contains('\n')

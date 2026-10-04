@@ -8,7 +8,7 @@ a C# `abstract class` whose subclasses share one inherited `_handle`, and `seale
 | Kotlin | C# | Notes |
 |---|---|---|
 | `interface` | `interface` (`I`-prefixed) | default methods delegate to Kotlin; a super-interface's members are inherited, not redeclared; `suspend`/`Flow`/`StateFlow` members are declared too, and the interface becomes `IAsyncDisposable` when it has one |
-| `abstract class` | `abstract class` | `_handle` inherited by every subclass |
+| `abstract class` | `abstract class` | `_handle` inherited by every subclass; a value typed as the class comes back as an internal subclass |
 | `sealed class` | `abstract class` | each subtype its own class, nested inside the base or declared beside it, reconstructed through a generated `FromHandle` |
 | eligible `sealed interface` (no type parameters; every subclass a `class`/`object` or `enum class`, no other superclass, no sub-interface, no second sealed-interface parent) | `abstract class` | same shape as `sealed class`; no C# interface is declared for it; an `enum class` arm binds as a boxed `{Enum}Arm` |
 | ineligible `sealed interface` | `interface` (`I`-prefixed) | stays on the ordinary interface route; every member typed with it is skipped |
@@ -750,6 +750,9 @@ cannot spell abstractly, or one whose own type has no C# declaration (a nested c
 is dropped from the generated class instead of rendered `abstract`, named on a build warning; an
 uncompilable abstract member would break every further subclass.
 
+An `abstract fun` returning `Flow<T>` on an abstract class fails the build ("Forward ABI missing
+Kotlin export"); declare the `Flow` on a concrete class instead.
+
 ### A class-typed abstract member {id="a-class-typed-abstract-member"}
 
 A parameter or return typed with another declared class renders fully qualified, never a bare name:
@@ -771,6 +774,37 @@ public abstract class Hauler : IDisposable, INugetHandle
 
 A type with no C# declaration at all, an unexported or nested-under-an-unexported-owner class, is
 dropped from the abstract declaration instead of spelled, named on a build warning.
+
+### An abstract class as a return type {id="an-abstract-class-as-a-return-type"}
+
+A function, property or list typed as an abstract class hands you that abstract type. C# cannot
+construct it, so the value is an internal subclass that forwards each abstract member to the
+Kotlin object. `is` against the concrete Kotlin subclass is false, but every member answers as that
+subclass, and you dispose it like any returned class:
+
+```kotlin
+abstract class Hibernator {
+  abstract val name: String
+  abstract fun snores(): Int
+  open fun describe(): String = "$name snores ${snores()} times"
+}
+
+class OreoHibernator : Hibernator() { /* name = "Oreo", snores() = 3 */ }
+
+class Den {
+  fun hibernator(): Hibernator = OreoHibernator()
+  val hibernators: List<Hibernator> get() = listOf(OreoHibernator(), OreoHibernator())
+}
+```
+
+```C#
+using Hibernator hibernator = den.Hibernator();
+hibernator.Describe();                         // "Oreo snores 3 times"
+bool concrete = hibernator is OreoHibernator;  // false
+```
+
+An abstract class that extends another abstract or sealed class gets no such subclass yet, so
+returning one fails the build (CS0144).
 
 ## Sealed classes and interfaces
 
@@ -1281,7 +1315,7 @@ declares nothing for it at all, not even `virtual`. An arm that overrides it any
 but its override renders as a plain `public` method rather than `override`, since there is nothing
 on the base to relate to.
 
-### Open arms and further nesting
+### Open and abstract arms, and further nesting {id="open-arms-and-further-nesting"}
 
 A sealed arm declared `open` renders `public class` instead of `public sealed class`, with its own
 `open` members `virtual`, so a further Kotlin subclass of it compiles. That further subclass takes
@@ -1290,6 +1324,35 @@ the ordinary class route, spelled through the arm's nested name (`Roost.HighPerc
 further subclass still reconstructs as the arm itself (`Roost.Perch`), never the deeper subclass.
 The underlying Kotlin object is correct and dispatch through the wrapper still reaches the
 subclass's own overrides, but a consumer cannot pattern-match past the arm.
+
+An `abstract` arm renders `public abstract class`, with its abstract members `abstract` and its
+`open` members `virtual`, so an exported Kotlin subclass of it compiles in C#. Like an open arm's
+subclass, that subclass comes back typed as the arm, through an internal subclass of the arm that
+forwards the abstract members to Kotlin, so `is Torpor.Dormant` holds, `is DeepTorpor` does not, and
+every member answers as the Kotlin `DeepTorpor`:
+
+```kotlin
+sealed class Torpor {
+  abstract class Dormant : Torpor() {
+    abstract fun depth(): Int
+    open fun label(): String = "deep"
+  }
+}
+
+class DeepTorpor(private val level: Int) : Torpor.Dormant() {
+  override fun depth(): Int = level
+  override fun label(): String = "deeper"
+}
+
+class Den { fun deepest(level: Int): Torpor = DeepTorpor(level) }
+```
+
+```C#
+using Torpor torpor = den.Deepest(3);
+var deep = (Torpor.Dormant)torpor;  // `torpor is DeepTorpor` is false
+deep.Depth();                       // 3
+deep.Label();                       // "deeper"
+```
 
 A sealed base, a sealed arm, and any `interface` owner can nest their own plain
 `class`/`object`/`interface`/`enum class`/`value class`, declared beside the owner's other members
@@ -1332,6 +1395,8 @@ generic sealed owner still cannot host a nested declaration.
   named skips.
 - A generic method or a `suspend` lambda parameter on a sealed arm has no binding, the same as on
   an ordinary class.
+- A sealed base that nests a `class Backing` beside an arm member `backing()` fails the build
+  (CS0108); rename one of them.
 
 <seealso>
     <category ref="related">

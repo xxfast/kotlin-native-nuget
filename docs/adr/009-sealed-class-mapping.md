@@ -193,7 +193,8 @@ same object and Kotlin dispatch stays virtual, so a call through it reaches `Hig
 only the static C# type is the arm. Widening the discriminator to non-direct subclasses would
 reopen this ADR's flat-ordinal shape and was rejected here.
 
-An `abstract` arm is still out of scope: `FromHandle`'s `new Perch(handle)` would be CS0144.
+An `abstract` arm was out of scope here (`FromHandle`'s `new Perch(handle)` would be CS0144); the
+2026-10-04 amendment below adds it.
 
 ### Amendment (2026-09-13): generalised to every nested declaration kind
 
@@ -221,3 +222,75 @@ subclass, so it never appears in the `switch`.
 - Discriminator adds one extra bridge call when receiving a sealed type
 - Subclass ordinals are determined by declaration order — reordering in Kotlin is a binary breaking change
 - Nested classes match Kotlin's scoping (`Observation.Alive` mirrors `Observation.Alive`)
+
+### Amendment (2026-10-04): an `abstract` arm renders `abstract`; abstract classes get a backing wrapper
+
+The 2026-09-11 amendment above left an `abstract` arm out of scope, and
+[ADR-064](064-forward-unsupported-declaration-diagnostics.md)'s 2026-10-03 amendment called its
+`public sealed class` rendering harmless because the arm has no constructor. Neither held. An
+exported Kotlin subclass of an abstract arm (`class DeepTorpor : Torpor.Dormant()`) failed the C#
+build with CS0509 (cannot derive from a sealed class) and then CS0115 on its overrides, and an
+abstract arm's `open` members were not `virtual` (CS0506).
+
+**Arm modifier.** An `abstract` arm renders `public abstract class`, an `open` arm `public class`,
+and a final arm `public sealed class`, unchanged. One predicate, `isForwardExtensible()` (`open` or
+`abstract`), now drives both the class modifier and the `virtual` gate on the arm's own `open`
+members, and is the same rule the ordinary class route uses. An abstract arm declares its
+`abstract` members (plain, lambda-parameter and property) `abstract` in C#.
+
+**Backing wrapper.** C# cannot construct an abstract class, and a Kotlin handle to any subclass of
+the arm, exported or not, still has to come back as the arm. Every site that reconstructs a value
+typed as the arm therefore constructs an `internal sealed class Backing : Arm` nested in it: the
+sealed discriminator's `FromHandle`, the `Factories` entry, a return, a property and a list element.
+The wrapper overrides each abstract member with a call-through export, so Kotlin's virtual dispatch
+picks the implementation, and inherits everything else, `Dispose` included. The name is `Backing`,
+or the first free `Backing_`-suffixed spelling when the arm's own name, one of its members, a type
+nested in the arm or a type nested in the sealed base already claims it (CS0102, CS0108, CS0542).
+Consumers never name it.
+
+A Kotlin `DeepTorpor` returned as `Torpor` or `Torpor.Dormant` therefore satisfies
+`is Torpor.Dormant`, not `is DeepTorpor`, and every member answers as the Kotlin object. That is the
+2026-09-11 behaviour for an `open` arm's subclass; the discriminator still reads direct arms only,
+and the flat-ordinal shape is unchanged.
+
+**Ordinary abstract classes.** Abstract-class mapping has no owning ADR
+([ADR-075](075-collection-property-getter-setter-independence.md) and
+[ADR-101](101-unexported-supertype-skip.md) touch it), so the rule is recorded here. A non-generic
+ordinary `abstract class` used as a return type, a property type or a list element rendered
+`new Animal(...)` (CS0144). It now constructs the same nested `Backing` wrapper, which also
+implements the abstract `Dispose()` and `DisposeAsync()` and the interface members the class leaves
+unimplemented. To give the wrapper something to call, `isForwardPlannableMemberOf` also plans an
+inherited interface member the class does not implement. A member the plan refuses is left out of
+C# instead of declared `abstract`, because the wrapper could not override it (CS0534). An ordinary
+abstract class qualifies only when no abstract or sealed class sits above it; a sealed arm always
+qualifies. A generic abstract class never does.
+
+**`Result` members.** An abstract class's or abstract arm's `Result`-returning member keeps its
+[ADR-195](195-result-try-overload.md) `TryX` twin: the owner declares an `abstract` twin and the
+wrapper overrides it. The wrapper builds its overrides from the owner's member list after the twin
+collision pass, so it overrides a twin exactly when the owner still declares it. Built before that
+pass, it overrode a twin the pass had dropped from an override chain, which fails with CS0115 (a
+cross-PR defect found on the assembled stack and fixed). Verified by
+`Tier1ResultTryInheritanceTest`, a cell in `Tier1AbstractClassBackingTest` that covers both owner
+kinds with a surviving and a dropped twin, and three `TryWeigh` tests in `AbstractBackingTests.cs`.
+
+**Verified.** `Tier1SealedAbstractArmTest` and `Tier1AbstractClassBackingTest` pin the arm
+modifiers, the wrapper and the compiling output. `Tier1SuspendOwnerAuditTest` moved two members
+from "named skip" to "declared abstract and overridden"
+([ADR-064](064-forward-unsupported-declaration-diagnostics.md)'s 2026-10-04 amendment). Fixture
+`test-library/.../torpor/TorporSample.kt` and `IntegrationTests/AbstractBackingTests.cs` (12 tests)
+run it through the native pipeline, and `LeakTests` row
+`AbstractBacking_BaseArmAndClassTypedReturns_ReturnToBaseline` pins the release.
+`:nuget-processor:test` 1678 passed, 0 failed; native pipeline IntegrationTests 3070, LeakTests
+168, 7 AOT shapes.
+
+**Known limits, verified, not fixed here.** A follow-up item of the same batch owns them.
+
+- An abstract class below another abstract or sealed class (`Puppy : Animal`) gets no wrapper, so
+  returning one still fails with CS0144.
+- `abstract fun ticks(): Flow<Int>` on an abstract class fails the build with "Forward ABI missing
+  Kotlin export ..._ticks_collect": the Kotlin export builder (`ClassExports.kt`) drops abstract
+  `Flow` members while C# still declares them.
+- An arm member `backing()` beside a `class Backing` nested in the sealed base fails with CS0108.
+- `Dog.OnPet` renders `override` against an owner that never declared it (CS0115) on an abstract
+  class without a wrapper.

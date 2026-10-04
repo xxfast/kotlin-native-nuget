@@ -320,6 +320,13 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
     overridesDisposeAsync = cls.overridesDisposeAsync,
   )
 
+  // An abstract class's backing wrapper, the type every handle that materialises as it constructs.
+  val backing: CirBacking? = cls.backing()
+  if (backing != null) {
+    appendLine()
+    append(backingClassBlock(backing).trimEnd()).appendLine()
+  }
+
   // ADR-133: nested declarations render last, inside this block, re-indented one level.
   renderNestedDeclarations(cls.nestedDeclarations)
 
@@ -676,7 +683,9 @@ private fun StringBuilder.renderMethodBody(method: CirMethod, className: String)
     return
   }
 
-  if (method.isSyncErrorCheckEnabled && !method.hasCustomBody) {
+  // A planned abstract member keeps its plan's error slot (its backing override needs it), but is
+  // declaration-only here, so it takes the abstract arm below.
+  if (method.isSyncErrorCheckEnabled && !method.hasCustomBody && !method.isAbstract) {
     renderSyncErrorCheckMethod(method, className)
     return
   }
