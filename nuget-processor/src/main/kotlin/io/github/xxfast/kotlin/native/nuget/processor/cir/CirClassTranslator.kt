@@ -794,22 +794,10 @@ internal fun KSClassDeclaration.cirTypeParameters(
   context: NugetContext,
 ): List<CirTypeParameter> = typeParameters.map { param ->
   val bounds: List<String> = param.bounds.toList().mapNotNull { bound ->
-    val resolved = bound.resolve()
-    val qualifiedName: String? = resolved.declaration.qualifiedName?.asString()
-    val declaration: KSClassDeclaration? = resolved.declaration as? KSClassDeclaration
-    val isInterface: Boolean = declaration?.classKind == ClassKind.INTERFACE
-
-    // ADR-147 amendment: a `T : Pet?` carries null on the Kotlin half, so its C# constraint says so
-    // too; a bare `where T : Pet` would make `Kennel<Pet?>` a CS8631 in a nullable context.
-    val nullable: String = if (resolved.isMarkedNullable) "?" else ""
-    when {
-      // ADR-147 amendment: `T : Any` is C#'s `where T : notnull`; the implicit `Any?` of an
-      // unconstrained parameter is no constraint at all.
-      qualifiedName == "kotlin.Any" -> if (resolved.isMarkedNullable) null else NOTNULL_CONSTRAINT
-      isInterface && declaration != null ->
-        declaration.legacyBoundInterfaceCsName(context) + nullable
-      else -> legacyBoundClassCsName(resolved, context) + nullable
-    }
+    cirBoundConstraint(
+      bound.resolve(), context, logger, this,
+      "${simpleName.asString()}<${param.name.asString()}>",
+    )
   }
 
   if (param.variance != Variance.INVARIANT) {

@@ -16,7 +16,7 @@
 - [012](012-lambda-function-type-mapping.md) — Opaque handle for Kotlin→C#; function pointer deferred to Phase 5; 2026-09-22 amendment: a nullable type argument is spelled (`KotlinAction<string?>`) and `null` crosses the returned-lambda boundary in both directions instead of erasing or crashing the host
 - [013](013-extension-property-mapping.md) — `GetXxx()`/`SetXxx()` extension methods for Kotlin extension properties (superseded in part by 188)
 - [014](014-value-class-mapping.md) — `readonly record struct` with unwrapped bridge for Kotlin value classes
-- [015](015-generic-type-constraint-mapping.md) — C# `where` clauses from Kotlin upper bounds; `CirTypeParameter` model
+- [015](015-generic-type-constraint-mapping.md) — C# `where` clauses from Kotlin upper bounds; `CirTypeParameter` model; stdlib bounds are dropped to `notnull` with `INFO_DROPPED_BOUND` (2026-10-03 amendment)
 - [016](016-generic-variance-mapping.md) — `out`/`in` variance on C# interfaces only; dropped on classes (C# restriction)
 - [017](017-inline-function-mapping.md) — Inline functions treated as regular functions; existing pipeline handles them
 - [018](018-type-alias-mapping.md) — Transparent expansion to underlying type; aliases erased (matches all interop targets)

@@ -12,6 +12,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberN
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericReturnRoute
+import io.github.xxfast.kotlin.native.nuget.processor.exports.legacyGenericHasNonTrivialBound
 import io.github.xxfast.kotlin.native.nuget.processor.exports.legacyGenericRouteParameterIndex
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticOwner
@@ -849,6 +850,7 @@ internal fun translateGenericFunction(
   libraryName: String,
   // ADR-133: as on the generic class route -- a bound on a nested interface needs the namespace.
   context: NugetContext,
+  logger: KSPLogger,
 ): List<CirMember> {
   val funcName: String = func.simpleName.asString()
   // ADR-110: PascalCase, unescaped (the renderer escapes); every DllImport on this route pins its
@@ -862,23 +864,8 @@ internal fun translateGenericFunction(
 
   val typeParamBounds: List<String> = func.typeParameters.firstOrNull()
     ?.bounds?.toList()?.mapNotNull { bound ->
-      val resolved = bound.resolve()
-      val qualifiedName: String? =
-        resolved.declaration.qualifiedName?.asString()
-      val declaration: KSClassDeclaration? = resolved.declaration as? KSClassDeclaration
-      val isInterface: Boolean = declaration?.classKind == ClassKind.INTERFACE
-      // ADR-147 amendment, as on the generic-class route: a nullable bound keeps its `?`.
-      val nullable: String = if (resolved.isMarkedNullable) "?" else ""
-
-      when {
-        // ADR-147 amendment: `T : Any` is C#'s `notnull`; the implicit `Any?` is no constraint.
-        qualifiedName == "kotlin.Any" -> if (resolved.isMarkedNullable) null else NOTNULL_CONSTRAINT
-        // ADR-133, amended 2026-09-14: every bound carries its owner chain and its namespace,
-        // nested or not. A bare bound only resolves in the bound's own namespace.
-        isInterface && declaration != null ->
-          declaration.legacyBoundInterfaceCsName(context) + nullable
-        else -> legacyBoundClassCsName(resolved, context) + nullable
-      }
+      // The generic-class route's speller, so the two cannot disagree on a bound.
+      cirBoundConstraint(bound.resolve(), context, logger, func, "$funcName<$typeParamName>")
     }
     // `notnull` must come first in a C# constraint list and adds nothing next to a class bound.
     ?.let { bounds -> if (bounds.size > 1) bounds - NOTNULL_CONSTRAINT else bounds }
@@ -914,8 +901,9 @@ internal fun translateGenericFunction(
   val result = mutableListOf<CirMember>()
 
   // `notnull` narrows nothing the primitive widths care about (`int`, `string` both satisfy it),
-  // so the width dispatch survives it; only a class or interface bound replaces it.
-  val isConstrained: Boolean = typeParamBounds.any { bound -> bound != NOTNULL_CONSTRAINT }
+  // so the width dispatch survives `T : Any`; any other bound replaces it. The Kotlin half's own
+  // gate, so a builtin bound dropped to `notnull` here does not import widths never exported.
+  val isConstrained: Boolean = func.legacyGenericHasNonTrivialBound()
 
   val primitiveTypes = listOf(
     "string" to "string",

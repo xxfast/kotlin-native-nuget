@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
@@ -16,6 +17,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyReceiver
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedInterface
@@ -354,19 +356,71 @@ internal fun KSClassDeclaration.legacyBoundInterfaceCsName(context: NugetContext
  * The class-bound twin of [legacyBoundInterfaceCsName] (`class CatCrate<T : Cat>` -> `where T :
  * global::TestLibrary.Cat.Cat`). Same defect, same rule: the bare simple name the generic routes
  * used to print resolves only inside the bound's own namespace, so a cross-package or nested
- * bound named nothing (CS0246, or CS0118 when a sibling namespace shares the simple name).
- *
- * A Kotlin builtin bound (`T : Comparable<T>`, `T : Number`) keeps the shipped simple name rather
- * than going through the user-type speller, which refuses a builtin package outright (ADR-123).
- * That spelling is its own pre-existing defect; this does not widen into it.
+ * bound named nothing (CS0246, or CS0118 when a sibling namespace shares the simple name). A
+ * builtin bound never reaches it: [cirBoundConstraint] drops it first.
  */
-internal fun legacyBoundClassCsName(type: KSType, context: NugetContext): String {
-  val declaration: KSDeclaration = type.expandAliases().declaration
-  val qualifiedName: String = declaration.qualifiedName?.asString() ?: ""
-  if (qualifiedName.startsWith("kotlin.") || qualifiedName.startsWith("kotlinx.")) {
-    return declaration.simpleName.asString()
+internal fun legacyBoundClassCsName(type: KSType, context: NugetContext): String =
+  qualifiedElementCsType(type, context)
+
+/**
+ * The C# `where` constraint for one Kotlin type-parameter bound, shared by the generic class
+ * (`cirTypeParameters`) and generic function (`translateGenericFunction`) routes; null means no
+ * constraint.
+ *
+ * A Kotlin builtin bound other than `Any` (`Comparable<T>`, `Number`, `CharSequence`, `Enum<T>`)
+ * has no C# spelling: `Number` is CS0246, `Kotlin.IComparable` under the root CS0234 (ADR-123),
+ * and `IComparable<T>` would lock out every generated wrapper, none of which implements it. It is
+ * dropped, keeping `notnull` when the bound is non-null, and reported as INFO_DROPPED_BOUND on
+ * [symbol] under [declaration]. The check runs before the interface/class split so an interface
+ * builtin (`Comparable`) and a class builtin (`Number`) take the same arm.
+ */
+internal fun cirBoundConstraint(
+  bound: KSType,
+  context: NugetContext,
+  logger: KSPLogger,
+  symbol: KSNode,
+  declaration: String,
+): String? {
+  val qualifiedName: String? = bound.declaration.qualifiedName?.asString()
+  // ADR-147 amendment: a `T : Pet?` carries null on the Kotlin half, so its C# constraint says so
+  // too; a bare `where T : Pet` would make `Kennel<Pet?>` a CS8631 in a nullable context.
+  val nullable: String = if (bound.isMarkedNullable) "?" else ""
+  val notNull: String? = if (bound.isMarkedNullable) null else NOTNULL_CONSTRAINT
+  // ADR-147 amendment: `T : Any` is C#'s `where T : notnull`; the implicit `Any?` of an
+  // unconstrained parameter is no constraint at all.
+  if (qualifiedName == "kotlin.Any") return notNull
+
+  // An alias to a builtin is the builtin; the interface arm below keeps reading the unexpanded
+  // declaration it always read.
+  val expanded: KSDeclaration = bound.expandAliases().declaration
+  val classDeclaration: KSClassDeclaration? = bound.declaration as? KSClassDeclaration
+  if (expanded.packageName.asString().isKotlinBuiltinPackage()) {
+    ForwardDiagnosticSink.emit(
+      listOf(
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.INFO_DROPPED_BOUND,
+          symbol = symbol,
+          declaration = declaration,
+          reason = "bound '${expanded.qualifiedName?.asString()}' on this type parameter is a " +
+              "Kotlin builtin with no C# equivalent and is dropped from the where clause",
+          hint = "the declaration still binds; a C# caller can pass a type argument Kotlin would " +
+              "reject, which fails at the call",
+          // Nothing generated loses a member: the declaration binds with a looser constraint.
+          owner = null,
+        ),
+      ),
+      logger,
+    )
+    return notNull
   }
-  return qualifiedElementCsType(type, context)
+
+  // ADR-133, amended 2026-09-14: every bound carries its owner chain and its namespace, nested or
+  // not. A bare bound only resolves in the bound's own namespace.
+  return when {
+    classDeclaration != null && classDeclaration.classKind == ClassKind.INTERFACE ->
+      classDeclaration.legacyBoundInterfaceCsName(context) + nullable
+    else -> legacyBoundClassCsName(bound, context) + nullable
+  }
 }
 
 /**

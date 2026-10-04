@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.exports
 
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.abiSlotParameterName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKotlinBoundSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.forward.hasNullableBound
 import io.github.xxfast.kotlin.native.nuget.processor.forward.importIfDefaultPackage
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinPackageReference
@@ -27,6 +28,17 @@ internal fun KSFunctionDeclaration.legacyGenericRouteParameterIndex(): Int {
     param.type.resolve().expandAliases().declaration.simpleName.asString() == typeParamName
   }
 }
+
+/**
+ * True when the first type parameter has a bound other than `Any`, which suppresses the primitive
+ * width variants on both halves. Read from the Kotlin bounds, never from the C# `where` clause: a
+ * dropped builtin bound (`T : Number` -> `where T : notnull`) still suppresses them, and the C#
+ * half deciding from its clause would import `_int` entry points the Kotlin half never exported.
+ */
+internal fun KSFunctionDeclaration.legacyGenericHasNonTrivialBound(): Boolean =
+  typeParameters.firstOrNull()?.bounds?.toList()?.any { bound ->
+    bound.resolve().declaration.qualifiedName?.asString() != "kotlin.Any"
+  } ?: false
 
 /** True when the legacy generic-function route emits for [this]; see the index above. */
 internal fun KSFunctionDeclaration.hasLegacyGenericFunctionRoute(): Boolean =
@@ -63,11 +75,7 @@ internal fun FileSpec.Builder.addGenericFunctionExports(
   val paramName: String =
     (func.parameters[paramIndex].name?.asString() ?: "value").abiSlotParameterName()
 
-  val hasNonTrivialBound: Boolean = func.typeParameters.firstOrNull()
-    ?.bounds?.toList()?.any { bound ->
-      val resolved = bound.resolve()
-      resolved.declaration.qualifiedName?.asString() != "kotlin.Any"
-    } ?: false
+  val hasNonTrivialBound: Boolean = func.legacyGenericHasNonTrivialBound()
 
   val returnsGenericClass: Boolean = returnDecl != typeParamName && returnDecl != "Unit"
 
@@ -141,7 +149,8 @@ internal fun FileSpec.Builder.addGenericFunctionExports(
     ?.bounds?.toList()?.firstOrNull()?.let { bound ->
       val resolved = bound.resolve()
       val qn: String? = resolved.declaration.qualifiedName?.asString()
-      if (qn != null && qn != "kotlin.Any") qn else null
+      // A generic bound keeps its arguments: `asStableRef<kotlin.Comparable>()` names no type.
+      if (qn != null && qn != "kotlin.Any") resolved.forwardKotlinBoundSpelling() else null
     }
 
   val refType: String = boundQualified ?: "Any"
