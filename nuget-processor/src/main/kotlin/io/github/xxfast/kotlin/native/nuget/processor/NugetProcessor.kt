@@ -2877,7 +2877,7 @@ internal class NugetProcessor(
           }
           builder.addForwardKotlinPlanExport(planned)
         } else {
-          builder.addFunctionExports(func, context.symbols)
+          builder.addFunctionExports(func, context.symbols, callableCatalog)
         }
       }
     }

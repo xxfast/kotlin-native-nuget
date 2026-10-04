@@ -14,6 +14,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberN
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericReturnRoute
+import io.github.xxfast.kotlin.native.nuget.processor.exports.isLegacyHasValueParameter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.legacyGenericHasNonTrivialBound
 import io.github.xxfast.kotlin.native.nuget.processor.exports.legacyGenericRouteParameterIndex
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
@@ -69,6 +70,8 @@ internal fun translateSpecializedFunction(
   logger: KSPLogger,
   // ADR-173: spells an exported interface type argument as `IFoo`.
   classifier: ForwardBridgeTypeClassifier,
+  // ADR-090: the planner's overload number for this function, read by node identity.
+  callableCatalog: ForwardCallablePlanCatalog,
 ): List<CirMember> {
   // ADR-064 amendment (2026-09-13): the route's gate is one hoisted predicate now, shared with the
   // Kotlin half and with the planner's unrouted-position reclassification — including its
@@ -77,6 +80,7 @@ internal fun translateSpecializedFunction(
   if (!func.hasLegacyGenericReturnRoute()) return emptyList()
   return translateFunction(
     func, libraryName, context, tracker, exportedTypes, logger, classifier,
+    callableCatalog.overloadSuffix(func),
   )
 }
 
@@ -88,9 +92,12 @@ internal fun translateFunction(
   exportedTypes: Set<String>,
   logger: KSPLogger,
   classifier: ForwardBridgeTypeClassifier,
+  overloadSuffix: String,
 ): List<CirMember> {
-  // ADR-163: library- and package-qualified, the same string `FunctionExports` mints.
-  val cname: String = context.symbols.topLevel(func)
+  // ADR-163: library- and package-qualified, the same string `FunctionExports` mints. The
+  // overload number goes on the entry point and the extern name alike (ADR-118): numbering the
+  // entry point alone leaves two same-wire overloads with one extern name (CS0111).
+  val cname: String = context.symbols.topLevel(func) + overloadSuffix
   // ADR-110: PascalCase like every other forward position. The keyword escape runs *after* the
   // case change, so `fun lock()` renders `Lock` rather than the verbatim `@lock` (no C# keyword is
   // capitalised). Every DllImport below pins `entryPoint = cname`, so the native symbol is
@@ -101,6 +108,7 @@ internal fun translateFunction(
   // (and the `${csName}_native` extern) every time the symbol scheme changes. The class route
   // already names its externs from member names; this is that rule, on the legacy top-level route.
   val csName: String = func.csharpMemberName()
+  val nativeName: String = "${csName}${overloadSuffix}_native"
   val returnType = func.returnType?.resolve()?.expandAliases()
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
 
@@ -122,14 +130,28 @@ internal fun translateFunction(
       // transparently, so no cast is needed at the call site.
       val isNullableString: Boolean = kotlinType == "String" && resolved.isMarkedNullable
       val paramType: String = if (isNullableString) "string?" else mapParamType(kotlinType)
+      // A nullable value type keeps its `?` publicly; its value slot stays the non-null type.
+      if (param.isLegacyHasValueParameter()) {
+        return@map CirParameter(name, type = "$paramType?", nativeType = paramType)
+      }
       return@map CirParameter(name, paramType)
     }
 
     val enumNamespace: String = mapPackageToNamespace(
       enumDecl.packageName.asString(), context.rootPackage, context.rootNamespace,
     )
+    val enumType: String = "global::$enumNamespace.$kotlinType"
+    val publicType: String = if (param.isLegacyHasValueParameter()) "$enumType?" else enumType
 
-    CirParameter(name, type = "global::$enumNamespace.$kotlinType", nativeType = "int")
+    CirParameter(name, type = publicType, nativeType = "int")
+  }
+  // ADR-062's nullable value encoding, the one the plan routes use for the same parameter types
+  // (`isLegacyHasValueParameter`): a `bool` has-value slot before the value slot on the extern,
+  // `x.HasValue, x.GetValueOrDefault()` at the call. Only the generic arm below is reachable.
+  val hasValueSlots: List<Boolean> = func.parameters.map { it.isLegacyHasValueParameter() }
+  val nativeParams: List<CirParameter> = params.zip(hasValueSlots).flatMap { (param, nullable) ->
+    if (!nullable) return@flatMap listOf(param)
+    listOf(CirParameter("${param.name.removePrefix("@")}HasValue", "bool"), param.copy(type = param.nativeType))
   }
 
   val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
@@ -176,7 +198,7 @@ internal fun translateFunction(
       libraryName = libraryName,
       entryPoint = cname,
       returnType = "IntPtr",
-      name = "${csName}_native",
+      name = nativeName,
       parameters = params,
       visibility = CirVisibility.PRIVATE,
       hasSyncErrorOut = true,
@@ -186,7 +208,7 @@ internal fun translateFunction(
     val body: String = buildString {
       appendLine()
       appendLine(
-        "            IntPtr listHandle = NugetErrorNative.Check(${csName}_native(${
+        "            IntPtr listHandle = NugetErrorNative.Check(${nativeName}(${
           syncErrorArguments(
             paramNames
           )
@@ -224,7 +246,7 @@ internal fun translateFunction(
       libraryName = libraryName,
       entryPoint = cname,
       returnType = "IntPtr",
-      name = "${csName}_native",
+      name = nativeName,
       parameters = params,
       visibility = CirVisibility.PRIVATE,
       hasSyncErrorOut = true,
@@ -234,7 +256,7 @@ internal fun translateFunction(
     val body: String = buildString {
       appendLine()
       appendLine(
-        "            IntPtr listHandle = NugetErrorNative.Check(${csName}_native(${
+        "            IntPtr listHandle = NugetErrorNative.Check(${nativeName}(${
           syncErrorArguments(
             paramNames
           )
@@ -276,7 +298,7 @@ internal fun translateFunction(
       libraryName = libraryName,
       entryPoint = cname,
       returnType = "IntPtr",
-      name = "${csName}_native",
+      name = nativeName,
       parameters = params,
       visibility = CirVisibility.PRIVATE,
       hasSyncErrorOut = true,
@@ -285,7 +307,7 @@ internal fun translateFunction(
     val paramNames: String = params.joinToString(", ") { it.name }
     val body: String = buildString {
       appendLine()
-      appendLine("            IntPtr mapHandle = NugetErrorNative.Check(${csName}_native(${syncErrorArguments(paramNames)}), error);")
+      appendLine("            IntPtr mapHandle = NugetErrorNative.Check(${nativeName}(${syncErrorArguments(paramNames)}), error);")
       appendLine("            int count = NugetMapNative.Count(mapHandle);")
       appendLine("            var result = new Dictionary<$csKeyType, $csValueType>(count);")
       appendLine("            for (int i = 0; i < count; i++)")
@@ -324,7 +346,7 @@ internal fun translateFunction(
       libraryName = libraryName,
       entryPoint = cname,
       returnType = "IntPtr",
-      name = "${csName}_native",
+      name = nativeName,
       parameters = params,
       visibility = CirVisibility.PRIVATE,
       hasSyncErrorOut = true,
@@ -333,7 +355,7 @@ internal fun translateFunction(
     val paramNames: String = params.joinToString(", ") { it.name }
     val body: String = buildString {
       appendLine()
-      appendLine("            IntPtr mapHandle = NugetErrorNative.Check(${csName}_native(${syncErrorArguments(paramNames)}), error);")
+      appendLine("            IntPtr mapHandle = NugetErrorNative.Check(${nativeName}(${syncErrorArguments(paramNames)}), error);")
       appendLine("            int count = NugetMapNative.Count(mapHandle);")
       appendLine("            var result = new Dictionary<$csKeyType, $csValueType>(count);")
       appendLine("            for (int i = 0; i < count; i++)")
@@ -368,7 +390,7 @@ internal fun translateFunction(
       libraryName = libraryName,
       entryPoint = cname,
       returnType = "IntPtr",
-      name = "${csName}_native",
+      name = nativeName,
       parameters = params,
       visibility = CirVisibility.PRIVATE,
       hasSyncErrorOut = true,
@@ -377,7 +399,7 @@ internal fun translateFunction(
     val paramNames: String = params.joinToString(", ") { it.name }
     val body: String = buildString {
       appendLine()
-      appendLine("            IntPtr setHandle = NugetErrorNative.Check(${csName}_native(${syncErrorArguments(paramNames)}), error);")
+      appendLine("            IntPtr setHandle = NugetErrorNative.Check(${nativeName}(${syncErrorArguments(paramNames)}), error);")
       appendLine("            int count = NugetSetNative.Count(setHandle);")
       appendLine("            var result = new HashSet<$csElementType>(count);")
       appendLine("            for (int i = 0; i < count; i++)")
@@ -410,7 +432,7 @@ internal fun translateFunction(
       libraryName = libraryName,
       entryPoint = cname,
       returnType = "IntPtr",
-      name = "${csName}_native",
+      name = nativeName,
       parameters = params,
       visibility = CirVisibility.PRIVATE,
     )
@@ -418,7 +440,7 @@ internal fun translateFunction(
     val paramNames: String = params.joinToString(", ") { it.name }
     val body: String = buildString {
       appendLine()
-      appendLine("            IntPtr setHandle = NugetErrorNative.Check(${csName}_native(${syncErrorArguments(paramNames)}), error);")
+      appendLine("            IntPtr setHandle = NugetErrorNative.Check(${nativeName}(${syncErrorArguments(paramNames)}), error);")
       appendLine("            int count = NugetSetNative.Count(setHandle);")
       appendLine("            var result = new HashSet<$csElementType>(count);")
       appendLine("            for (int i = 0; i < count; i++)")
@@ -499,22 +521,29 @@ internal fun translateFunction(
       libraryName = libraryName,
       entryPoint = cname,
       returnType = "IntPtr",
-      name = "${csName}_native",
-      parameters = params,
+      name = nativeName,
+      parameters = nativeParams,
       visibility = CirVisibility.PRIVATE,
       hasSyncErrorOut = true,
     )
 
     // An enum parameter crosses as its ordinal: the DllImport takes the `int` native type, so the
-    // hand-built call casts it down, the same expression `renderSyncErrorCheckMethod` uses.
-    val paramNames: String = params.joinToString(", ") { param ->
-      if (param.nativeType != param.type) "(${param.nativeType})${param.name}" else param.name
+    // hand-built call casts it down, the same expression `renderSyncErrorCheckMethod` uses. A
+    // nullable value parameter passes its has-value slot, then its value or the default.
+    val paramNames: String = params.zip(hasValueSlots).joinToString(", ") { (param, nullable) ->
+      val publicType: String = if (nullable) param.type.removeSuffix("?") else param.type
+      val cast: String = if (param.nativeType != publicType) "(${param.nativeType})" else ""
+      if (nullable) {
+        "${param.name}.HasValue, $cast${param.name}.GetValueOrDefault()"
+      } else {
+        "$cast${param.name}"
+      }
     }
     val nativeCallArgs: String =
       if (paramNames.isEmpty()) "out IntPtr error" else "$paramNames, out IntPtr error"
     val body: String = buildString {
       appendLine()
-      appendLine("            IntPtr nativeResult = ${csName}_native($nativeCallArgs);")
+      appendLine("            IntPtr nativeResult = ${nativeName}($nativeCallArgs);")
       appendLine("            if (error != IntPtr.Zero)")
       appendLine("            {")
       appendLine("                throw NugetErrorNative.BuildException(error);")
@@ -544,7 +573,7 @@ internal fun translateFunction(
       libraryName = libraryName,
       entryPoint = cname,
       returnType = "int",
-      name = "${csName}_native",
+      name = nativeName,
       parameters = params,
       visibility = CirVisibility.PRIVATE,
       hasSyncErrorOut = true,
@@ -556,7 +585,7 @@ internal fun translateFunction(
       name = csName,
       returnType = enumType,
       nativeReturnType = "int",
-      nativeName = "${csName}_native",
+      nativeName = nativeName,
       parameters = params,
       body = "",
       isStatic = true,
@@ -571,7 +600,7 @@ internal fun translateFunction(
       libraryName = libraryName,
       entryPoint = cname,
       returnType = "IntPtr",
-      name = "${csName}_native",
+      name = nativeName,
       parameters = params,
       visibility = CirVisibility.PRIVATE,
       hasSyncErrorOut = true,
@@ -583,9 +612,9 @@ internal fun translateFunction(
       name = csName,
       returnType = "string",
       nativeReturnType = "IntPtr",
-      nativeName = "${csName}_native",
+      nativeName = nativeName,
       parameters = params,
-      body = "Marshal.PtrToStringUTF8(${csName}_native($nativeCallArgs))!",
+      body = "Marshal.PtrToStringUTF8(${nativeName}($nativeCallArgs))!",
       isStatic = true,
       isSyncErrorCheckEnabled = true,
     )
@@ -625,7 +654,7 @@ internal fun translateFunction(
     libraryName = libraryName,
     entryPoint = cname,
     returnType = csReturnType,
-    name = "${csName}_native",
+    name = nativeName,
     parameters = params,
     visibility = CirVisibility.PRIVATE,
     hasSyncErrorOut = true,
@@ -637,9 +666,9 @@ internal fun translateFunction(
   val wrapper = CirMethod(
     name = csName,
     returnType = if (isVoidReturn) "void" else csReturnType,
-    nativeName = "${csName}_native",
+    nativeName = nativeName,
     parameters = params,
-    body = if (isVoidReturn) "${csName}_native($nativeCallArgs)" else "${csName}_native($nativeCallArgs)",
+    body = if (isVoidReturn) "${nativeName}($nativeCallArgs)" else "${nativeName}($nativeCallArgs)",
     isStatic = true,
     isSyncErrorCheckEnabled = true,
   )

@@ -9,8 +9,7 @@ import kotlin.test.assertTrue
  * `ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE`. The Kotlin export already took the ordinal and decoded
  * it; only the C# half's hand-built native call passed the enum uncast. It binds now, and the kind
  * is gone. The overload beside it is a planned one (`reaction(level: Int): Int`), which takes the
- * next overload suffix; two overloads that both take this legacy route collide on one entry point
- * whatever their parameter types, a separate gap.
+ * next overload suffix (`Tier1GenericReturnRouteParametersTest` covers two overloads on this route).
  *
  * The collection-return cells pin that the six collection arms that also raised the kind were
  * unreachable: a collection return is plan-owned, so each of these binds on the plan route.

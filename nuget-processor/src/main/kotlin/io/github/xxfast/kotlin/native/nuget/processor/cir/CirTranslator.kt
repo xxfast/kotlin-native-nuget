@@ -345,6 +345,7 @@ internal fun translate(
           exportedTypes + callableCatalog.boxedValueClasses,
           logger,
           classifier,
+          callableCatalog,
         )
       }
       recordStatic(

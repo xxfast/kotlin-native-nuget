@@ -133,6 +133,8 @@ internal fun FunSpec.Builder.addEnumAwareParameters(
     val name: String = param.name?.asString() ?: "_"
     val isEnum: Boolean = (resolved.declaration as? KSClassDeclaration)
       ?.classKind == ClassKind.ENUM_CLASS
+    // The plan routes' nullable value encoding: a has-value slot, then the non-null value slot.
+    if (param.isLegacyHasValueParameter()) addParameter("${name}HasValue", Boolean::class)
 
     if (isEnum) {
       addParameter(name, Int::class)
