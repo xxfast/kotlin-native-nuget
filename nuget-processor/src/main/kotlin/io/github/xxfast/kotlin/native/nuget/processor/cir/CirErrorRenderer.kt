@@ -232,7 +232,7 @@ internal fun StringBuilder.renderSyncErrorCheckMethod(method: CirMethod, classNa
   val isString: Boolean = method.returnType == "string"
   val nativeReturnType: String = method.nativeReturnType
 
-  appendLine("        $visibility ${static}${override}${method.returnType} ${method.name}($paramStr)")
+  appendLine("        $visibility ${static}${override}${method.returnType} ${method.identifier}($paramStr)")
   appendLine("        {")
 
   when {

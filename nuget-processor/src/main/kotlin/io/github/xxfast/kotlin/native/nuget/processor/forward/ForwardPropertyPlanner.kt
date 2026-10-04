@@ -175,7 +175,7 @@ internal class ForwardPropertyPlanner(
         ?.qualifiedName?.asString() ?: return@mapNotNull null
       val name: String =
         if (Modifier.SUSPEND in function.modifiers) {
-          function.csharpAsyncMemberName().removePrefix("@")
+          function.csharpAsyncMemberName()
         } else {
           function.csharpMemberName()
         }

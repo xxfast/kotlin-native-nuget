@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeInterfacePlan
+import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
 /**
  * ADR-150 amendment: one inline segment of doc prose. Text, never markup: `renderDoc` escapes each
@@ -133,7 +134,14 @@ internal data class CirInterfaceProperty(
   // ROADMAP line 28 x issue #249: a partial skip (ADR-075's refused setter) names the property it
   // left get-only, on `IFoo` exactly as on a class.
   val remarks: List<String> = emptyList(),
-)
+) {
+  init {
+    requireUnescaped(name)
+  }
+
+  /** The rendered C# identifier: [name], `@`-escaped when it is a keyword. */
+  val identifier: String get() = toCSharpName(name)
+}
 
 internal data class CirInterfaceMethod(
   val name: String,
@@ -146,7 +154,24 @@ internal data class CirInterfaceMethod(
   // ADR-174: a `suspend` member, declared with the trailing `CancellationToken ... = default` the
   // class route's `Async` method takes, so an implementing class satisfies it.
   val isAsync: Boolean = false,
-)
+) {
+  init {
+    requireUnescaped(name)
+  }
+
+  /** The rendered C# identifier: [name], `@`-escaped when it is a keyword. */
+  val identifier: String get() = toCSharpName(name)
+}
+
+/**
+ * ADR-179: a CIR public member name is always unescaped. It is also the stem of derived names
+ * (`Native_...` externs), so only a renderer escapes it, through each member type's `identifier`.
+ */
+internal fun requireUnescaped(name: String) {
+  require(!name.startsWith("@")) {
+    "C# member name $name is pre-escaped; CIR holds it unescaped and the renderer escapes it"
+  }
+}
 
 internal data class CirClass(
   val name: String,
@@ -735,13 +760,18 @@ internal data class CirInterfaceBridgeMethodEntry(
   val delegateName: String,       // "NugetObjectVoidCallback"
   val delegateParamList: String,  // "(IntPtr arg0Ptr, IntPtr _)"
   val callbackBody: String,       // C# inline body: "string arg0 = ...; listener.OnMeow(arg0);"
-)
+) {
+  init {
+    requireUnescaped(methodCsName)
+  }
+}
 
 // A class method that is the subscribe half of an interface-bridge pair (add*/subscribe*).
 // The paired parameter is a Kotlin interface type, not a lambda.
 // Generates an IDisposable factory method backed by two native exports with N function pointers.
 internal data class CirInterfaceBridgeMethod(
-  val csMethodName: String,        // "AddListener"
+  val csMethodName: String,        // "AddListener", or the add half's `@CSharpName`
+  val csAddNativeName: String,     // "Native_AddListener", always from the Kotlin name
   val csRemoveNativeName: String,  // "Native_RemoveListener"
   val subscribeEntryPoint: String, // "cateventsource_addListener"
   val removeEntryPoint: String,    // "cateventsource_removeListener"
@@ -749,12 +779,20 @@ internal data class CirInterfaceBridgeMethod(
   val interfaceCsName: String,     // "ICatEventListener"
   val className: String,           // "CatEventSource"
   val entries: List<CirInterfaceBridgeMethodEntry>,
-) : CirMember
+) : CirMember {
+  init {
+    requireUnescaped(csMethodName)
+  }
+
+  /** The rendered C# identifier: [csMethodName], `@`-escaped when it is a keyword. */
+  val identifier: String get() = toCSharpName(csMethodName)
+}
 
 // A class method that is the subscribe half of a stored-callback pair (add*/subscribe*).
 // Generates an IDisposable factory method backed by two native exports.
 internal data class CirStoredCallbackMethod(
-  val csMethodName: String,           // "AddMoodListener"
+  val csMethodName: String,           // "AddMoodListener", or the add half's `@CSharpName`
+  val csAddNativeName: String,        // "Native_AddMoodListener", always from the Kotlin name
   val csRemoveNativeName: String,     // "Native_RemoveMoodListener"
   val subscribeEntryPoint: String,    // "cat_addMoodListener"
   val removeEntryPoint: String,       // "cat_removeMoodListener"
@@ -765,11 +803,20 @@ internal data class CirStoredCallbackMethod(
   val nativeCallbackBody: String,     // body inside the nativeCallback lambda
   // "Cat": the owner the disposed-receiver check names; a sealed arm's own name, not its base's.
   val className: String,
-) : CirMember
+) : CirMember {
+  init {
+    requireUnescaped(csMethodName)
+  }
+
+  /** The rendered C# identifier: [csMethodName], `@`-escaped when it is a keyword. */
+  val identifier: String get() = toCSharpName(csMethodName)
+}
 
 // A class method that accepts a lambda parameter from C# (phase 7 reverse interop).
 internal data class CirCallbackMethod(
   val csMethodName: String,
+  // The private extern, always from the Kotlin name ("Native_Fetch").
+  val csNativeName: String,
   val nativeEntryPoint: String,
   val libraryName: String,
   val nativeImportReturnType: String,
@@ -780,7 +827,14 @@ internal data class CirCallbackMethod(
   val csParamType: String,
   val callbackBody: String,
   val wrapperBody: String,
-) : CirMember
+) : CirMember {
+  init {
+    requireUnescaped(csMethodName)
+  }
+
+  /** The rendered C# identifier: [csMethodName], `@`-escaped when it is a keyword. */
+  val identifier: String get() = toCSharpName(csMethodName)
+}
 
 internal data class CirMethod(
   val name: String,
@@ -885,26 +939,25 @@ internal data class CirMethod(
   // ADR-174: set on a generic implementer's forwarder, the interface spelling (`IFeed`) the member
   // is explicitly implemented for. The renderer drops the modifiers and the `= default` token.
   val explicitInterface: String? = null,
-) : CirMember
+) : CirMember {
+  init {
+    requireUnescaped(name)
+  }
+
+  /** The rendered C# identifier: [name], `@`-escaped when it is a keyword. */
+  val identifier: String get() = toCSharpName(name)
+}
 
 /**
  * ADR-090: the private `[DllImport]` extern's C# name. The numbered name a plan carried, else the
  * shipped `Native_$name`.
  *
  * The fallback serves hand-built CIR only: every production instance method comes from
- * `ForwardCirPlanProjection.classMethod`, which sets [CirMethod.externName]. A public name is a
- * rendered C# identifier and may be keyword-escaped (`@lock`), an extern identifier may not, so the
- * fallback refuses to derive from one rather than emit `Native_@lock` for the consumer to choke on.
+ * `ForwardCirPlanProjection.classMethod`, which sets [CirMethod.externName]. [CirMethod.name] is
+ * never escaped (ADR-179), so the fallback cannot emit `Native_@lock`.
  */
 internal val CirMethod.resolvedExternName: String
-  get() {
-    if (externName != null) return externName
-    require(!name.startsWith("@")) {
-      "Method $name has no extern name and its public name is C#-escaped; " +
-          "an extern identifier cannot be derived from it"
-    }
-    return "Native_$name"
-  }
+  get() = externName ?: "Native_$name"
 
 internal data class CirProperty(
   val name: String,
@@ -976,7 +1029,14 @@ internal data class CirProperty(
   val remarks: List<String> = emptyList(),
   // ADR-174: see [CirMethod.explicitInterface].
   val explicitInterface: String? = null,
-) : CirMember
+) : CirMember {
+  init {
+    requireUnescaped(name)
+  }
+
+  /** The rendered C# identifier: [name], `@`-escaped when it is a keyword. */
+  val identifier: String get() = toCSharpName(name)
+}
 
 /**
  * ADR-188: a Kotlin extension property, rendered as a C# 14 extension member inside its
@@ -1001,7 +1061,14 @@ internal data class CirExtensionProperty(
   val getter: String,
   val setter: String? = null,
   val doc: CirDoc? = null,
-) : CirMember
+) : CirMember {
+  init {
+    requireUnescaped(name)
+  }
+
+  /** The rendered C# identifier: [name], `@`-escaped when it is a keyword. */
+  val identifier: String get() = toCSharpName(name)
+}
 
 internal data class CirExtraNative(
   val entryPointSuffix: String,
@@ -1091,7 +1158,7 @@ internal fun CirMethod.memberHead(modifiers: String): String =
 
 /** ADR-174: `IFeed.FetchAsync` for an explicit implementation, the bare name otherwise. */
 internal val CirMethod.explicitName: String
-  get() = if (explicitInterface != null) "$explicitInterface.$name" else name
+  get() = if (explicitInterface != null) "$explicitInterface.$identifier" else identifier
 
 /** ADR-174: the [CirProperty] twin of [memberHead]. */
 internal fun CirProperty.memberHead(modifiers: String): String =
@@ -1099,4 +1166,13 @@ internal fun CirProperty.memberHead(modifiers: String): String =
 
 /** ADR-174: the [CirProperty] twin of [explicitName]. */
 internal val CirProperty.explicitName: String
-  get() = if (explicitInterface != null) "$explicitInterface.$name" else name
+  get() = if (explicitInterface != null) "$explicitInterface.$identifier" else identifier
+
+/**
+ * ADR-179: the stem of a legacy Flow/StateFlow property's private externs
+ * (`Native_Get${stem}Collect` and siblings), from the Kotlin name in [CirProperty.nativeName].
+ * Never from the public name: a `@CSharpName` renames the C# property, not the externs the
+ * getter body calls.
+ */
+internal val CirProperty.nativeStem: String
+  get() = nativeName.replaceFirstChar { it.uppercase() }

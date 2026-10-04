@@ -43,7 +43,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.PublishedScope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
-import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
 private fun syncErrorArguments(parameters: String): String = if (parameters.isEmpty()) {
   "out IntPtr error"
@@ -1311,8 +1310,8 @@ internal fun translateExtensionFunction(
   tracker: CollectionHelperTracker,
 ): List<CirMember> {
   val funcName: String = func.simpleName.asString()
-  val csName: String = func.declaredCSharpName()?.let(::toCSharpName)
-    ?: toCSharpName(toCName(funcName)).replaceFirstChar { it.uppercase() }
+  val csName: String = func.declaredCSharpName()
+    ?: toCName(funcName).replaceFirstChar { it.uppercase() }
   val receiverPrefix: String = receiverName.lowercase()
   val cname: String = "${receiverPrefix}_${toCName(funcName)}"
 

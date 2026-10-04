@@ -425,9 +425,9 @@ private fun StringBuilder.renderSealedSubclassProperty(prop: CirProperty) {
     }
     prop.explicitSetterInterfaces.forEach { iface ->
       appendLine()
-      appendLine("            ${prop.type} $iface.${prop.name}")
+      appendLine("            ${prop.type} $iface.${prop.identifier}")
       appendLine("            {")
-      appendLine("                get => ${prop.name};")
+      appendLine("                get => ${prop.identifier};")
       if (setter.contains('\n')) {
         appendLine("                set")
         appendLine("                {${setter.indentNestedBody()}")
@@ -454,11 +454,11 @@ private fun StringBuilder.renderSealedSubclassProperty(prop: CirProperty) {
     else -> ""
   }
   if (setter == null && !isMultiLineGetter) {
-    appendLine("            public $modifier${prop.type} ${prop.name} => ${prop.getter};")
+    appendLine("            public $modifier${prop.type} ${prop.identifier} => ${prop.getter};")
     return
   }
 
-  appendLine("            public $modifier${prop.type} ${prop.name}")
+  appendLine("            public $modifier${prop.type} ${prop.identifier}")
   appendLine("            {")
   if (isMultiLineGetter) {
     appendLine("                get")

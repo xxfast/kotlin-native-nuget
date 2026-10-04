@@ -90,12 +90,33 @@ public Task<string> ReadCollar(string prefix, CancellationToken cancellationToke
 
 - The name is used verbatim. A `suspend fun` gets no `Async` suffix unless you write it.
 - The name must be a C# identifier, or generation fails with `ERROR_CSHARP_NAME_INVALID`. A C#
-  keyword is allowed and is escaped with `@`.
+  keyword is allowed and is escaped with `@` on every member, so `@CSharpName("event")` is called
+  as `x.@event`.
+- It also applies to `Flow` and `StateFlow` properties and methods, and to the `addX` half of an
+  add/remove listener pair (the member you call). On the `removeX` half it does nothing, with no
+  warning: that half names no C# member.
 - An override inherits the name declared on the member it overrides. Repeating the same name is
   fine; a different one fails with `ERROR_CSHARP_NAME_OVERRIDE_MISMATCH`, so put the annotation on
   the root declaration.
 - If the declared name still collides with another member, you get `ERROR_CSHARP_NAME_COLLISION`
   again, with the annotation shown in the message.
+
+```kotlin
+class Lantern(@CSharpName("checked") var label: String) {
+  @CSharpName("event")
+  val updates: Flow<Int> = flowOf(1, 2, 3)
+
+  @CSharpName("namespace")
+  fun addSpark(listener: (Int) -> Unit) { /* ... */ }
+  fun removeSpark(listener: (Int) -> Unit) { /* ... */ }
+}
+```
+
+```C#
+public string @checked { get; set; }
+public KotlinFlow<int> @event { get; }
+public IDisposable @namespace(Action<int> listener)
+```
 
 Only the C# member changes. The Kotlin name and the native entry points stay as they were.
 The plugin adds the annotation's `nuget-annotations` dependency to `commonMainApi` for you (see

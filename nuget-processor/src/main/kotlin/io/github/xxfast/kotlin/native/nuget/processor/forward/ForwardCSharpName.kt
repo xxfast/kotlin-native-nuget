@@ -5,7 +5,6 @@ import com.google.devtools.ksp.processing.Resolver
 import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
-import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
 internal const val CSHARP_NAME_ANNOTATION: String =
   "io.github.xxfast.kotlin.native.nuget.annotations.CSharpName"
@@ -47,16 +46,18 @@ internal fun KSDeclaration.declaredCSharpName(): String? =
 
 /**
  * ADR-179: the member's C# name, unescaped: declared when present, else PascalCase. Unescaped
- * because plans must not carry a C#-escaped name (the renderer escapes); a CIR site that builds an
- * identifier itself wraps it in [toCSharpName].
+ * because plans and CIR member names must not carry a C#-escaped name: the name is also the stem
+ * of derived identifiers, and the renderer escapes it through each CIR member's `identifier`.
  */
 internal fun KSDeclaration.csharpMemberName(): String =
   declaredCSharpName() ?: simpleName.asString().replaceFirstChar { it.uppercase() }
 
-/** ADR-179: a `suspend` member's C# name: declared verbatim, else `<Pascal>Async`. */
-internal fun KSDeclaration.csharpAsyncMemberName(): String = toCSharpName(
-  declaredCSharpName() ?: (simpleName.asString().replaceFirstChar { it.uppercase() } + "Async"),
-)
+/**
+ * ADR-179: a `suspend` member's C# name, unescaped like [csharpMemberName]: declared verbatim,
+ * else `<Pascal>Async`.
+ */
+internal fun KSDeclaration.csharpAsyncMemberName(): String =
+  declaredCSharpName() ?: (simpleName.asString().replaceFirstChar { it.uppercase() } + "Async")
 
 /**
  * ADR-179: validates every `@CSharpName` in this round. An argument that is not a C# identifier is

@@ -166,8 +166,8 @@ internal fun KSDeclaration.csharpMemberName(): String      // declared, else Pas
 
 Amended during implementation (verified): `csharpMemberName()` returns the name **unescaped**. A
 forward plan refuses a C#-escaped public name at plan time (`Forward plan ... public signature name
-@event must not be C#-escaped at plan time`), and the renderer escapes; CIR sites that build an
-identifier themselves wrap the result in `toCSharpName`. Validation (rules 2 and 3 below) is one
+@event must not be C#-escaped at plan time`), and the renderer escapes (amended again 2026-10-03,
+see the end: every CIR member type escapes through an `identifier` accessor). Validation (rules 2 and 3 below) is one
 pass over `getSymbolsWithAnnotation` at the start of the round, not inside the helper.
 
 Semantics, each a cell in the Tier 1 test:
@@ -238,3 +238,53 @@ on an enum entry, on a constructor.
 4. `@OptionalExpectation` ObjCName resolution on actual-less targets under KSP (only matters for
    the rejected alternative).
 5. The Kotlin compiler's `INCOMPATIBLE_OBJC_NAME_OVERRIDE` posture (precedent for rule 3 only).
+
+## Amendment 2026-10-03: a keyword name is escaped on every member route
+
+Rules 2 and 5 already decided this (a keyword is escaped like every generated name; every member
+site goes through `csharpMemberName()`), but the code did not meet them. The `ROADMAP` item that
+found it said only the legacy routes were affected and that the planned route escaped correctly.
+That was wrong: every property route (planned class, `object`, companion, top-level, extension,
+enum member, abstract, interface) emitted a bare `public string event`, and the planned route's
+`ForwardPropertyPlan.publicName` had no escaped twin.
+
+Rule, as now implemented:
+
+- CIR public member names stay unescaped in the model. The CIR member types refuse a name starting
+  with `@` in an `init` check, and every renderer prints their `identifier` accessor, which applies
+  `toCSharpName`. A new member route cannot forget the escape without printing a bare name on
+  purpose.
+- Native extern stems are built from the Kotlin name (`nativeStem`), never from the public name, so
+  a declared or escaped name cannot make an extern declaration and its call site disagree.
+- Collision keys are unescaped on every route (see behaviour change c).
+
+Two defects on the same sites, fixed with it:
+
+1. `@CSharpName` was silently ignored on `Flow`/`StateFlow`-returning methods, the stored-callback
+   add (ADR-037) and the interface-bridge add (ADR-039); the sites recomputed PascalCase from the
+   Kotlin name. It is honoured now, and the interface-bridge thunk calls the listener member by
+   its declared name.
+2. Any `@CSharpName` on a class `Flow` property emitted a collect extern declared under the declared
+   name (`Native_GetStreamCollect`) and called under the Kotlin name (`Native_GetUpdatesCollect`).
+
+Pinned: `@CSharpName` on the `removeX` half of an add/remove pair names no C# member and is inert,
+with no warning.
+
+Behaviour changes a reviewer should know:
+
+- (a) Verified by the implementer, no fixture covers it: an unannotated extension `fun X.lock()` on
+  the legacy extension route (`CirTranslator.kt`) used to render `@lock(this X)` and now renders
+  `Lock(this X)`.
+- (b) The legacy callback-method extern now uses the Kotlin name.
+- (c) Collision keys are all unescaped.
+
+Evidence (verified): `Tier1CSharpNameKeywordTest` has 17 cells, 15 red before the change and all
+green after; the full `:nuget-processor:test` run passed 1562 tests with 0 failures; the full
+`scripts/verify.sh` run is green, where `KeywordMemberNamesTests` compiles and calls
+`lantern.@event`, `@lock`, `@namespace`, `@operator`, `@object`, `@fixed` and `@checked` against
+the `Lantern` fixture. No `LeakTests` row: the change adds no handle kind or marshalling path.
+
+Not verified: whether `renderLegacyMethodNativeImport` (`CirClassRenderer.kt`) can still build
+`Native_<public name>` for an async or `Flow` method in `cls.methods`; and no test pins a
+keyword-named method beside a same-named property now that collision keys are unescaped. Both are
+recorded in the `ROADMAP`.
