@@ -56,7 +56,8 @@ Pros: subclasses map; no new runtime dependency; the classpath question is answe
 classpath is known (the consumer's KSP run); more optional bases (Okio, ktor 2) are one row each;
 a required parameter turns every missed call site into a compile error instead of a silent
 stdlib-only fallback. Cons: touches every `buildError` emitter; the stdlib rows live in the runtime
-and the C# rows in the processor, so a parity test is needed; the runtime-owned routes and the reverse envelope get stdlib rows only.
+and the C# rows in the processor, so a parity test is needed; the runtime-owned routes and the reverse envelope got stdlib rows only (the forward
+runtime-owned routes: fixed by ADR-202).
 
 ### 2. `nuget-runtime` depends on kotlinx-io-core and owns every row
 
@@ -210,12 +211,13 @@ export feeding `Map`) is deferred with the shared `BuildMapped` (ROADMAP.md).
 ### Scope of the IO row
 
 The `kotlinx.io.IOException` row exists only where the module's own classifier does, that is on the
-generated forward call sites, including the forward suspend and Flow routes. Routes the runtime owns
-pass `::nugetStdlibMappedType` and get stdlib rows only, because the runtime cannot see the
-module's KSP lookup: `nuget_suspend_func{0..3}_invoke` (a Kotlin suspend lambda invoked from C#),
-`nuget_stateflow_collect`, and the reverse envelope. An `IOException` thrown on those routes
-arrives as `KotlinException`. Fixing it needs the module lookup to reach the runtime, by per-object
-capture or a per-library registration (ROADMAP.md).
+generated forward call sites, including the forward suspend and Flow routes. As shipped, routes the
+runtime owns passed `::nugetStdlibMappedType` and got stdlib rows only, because the runtime cannot
+see the module's KSP lookup: `nuget_suspend_func{0..3}_invoke` (a Kotlin suspend lambda invoked
+from C#), `nuget_stateflow_collect`, and the reverse envelope. An `IOException` thrown on those
+routes arrived as `KotlinException`. [ADR-202](202-runtime-route-exception-mapping.md) fixed this
+for the forward routes (see the 2026-10-05 amendment below); the reverse envelope still maps stdlib
+rows only.
 
 ### `@throws` name resolution
 
@@ -309,7 +311,23 @@ System.Runtime.CompilerServices.SwitchExpressionException base=System.InvalidOpe
 - **ADR-029 amended:** matching is by hierarchy, most specific first; three rows added
   (`kotlinx.io.IOException`, `NullPointerException`, `NoWhenBranchMatchedException`) plus the
   `CancellationException` row.
-- **Deferred:** hierarchy and IO rows on the reverse envelope and on the runtime-owned routes; `okio.IOException` and ktor 2's IOException rows;
+- **Deferred:** hierarchy and IO rows on the reverse envelope (the runtime-owned forward routes
+  followed in ADR-202); `okio.IOException` and ktor 2's IOException rows;
   finer rows (`EOFException -> EndOfStreamException`, `FileNotFoundException`,
   `IndexOutOfBoundsException`, `UninitializedPropertyAccessException`); a forward error trace; sharing
   `BuildMapped` with the reverse shim (ROADMAP.md:221).
+
+## Amendment 2026-10-05: the runtime-owned forward routes map module rows
+
+[ADR-202](202-runtime-route-exception-mapping.md) closes the "Scope of the IO row" gap on the
+forward side. A `kotlinx.io.IOException` thrown by a Kotlin suspend lambda invoked from C#
+(`nuget_suspend_func{0..3}_invoke`) or surfacing from collecting a held or awaited `StateFlow`
+(`nuget_stateflow_collect`) now arrives as `KotlinIOException : System.IO.IOException`, the same as
+on a generated route. This completes this ADR's behaviour change on those routes: a consumer who
+catches only `KotlinException` there no longer catches an `IOException`, a subclass of a mapped
+type or an NPE. Still stdlib rows only: the reverse envelope (the deferral above stands).
+
+Verified: a C# fact for the suspend-lambda route; runtime nativeTests that drive
+`nuget_suspend_func{0..3}_invoke` and `nuget_stateflow_collect` with a throwing body and read
+`NugetError.mappedType`. The `StateFlow` route has no C# end-to-end fact (inferred from the kotlinx.coroutines
+contract: a stock `StateFlow` never throws from `collect`), so that route is pinned at the runtime level only.
