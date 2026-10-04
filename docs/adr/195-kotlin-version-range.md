@@ -143,8 +143,10 @@ The `consumer` job in `.github/workflows/ci.yml` is a `[floor, tested]` matrix o
 
 1. Publishes the plugin, processor, runtime and annotations to the local repo on the repo's pinned compiler (no override), so the artifacts are the ones a release ships.
 2. Resolves by coordinate and links the smoke consumer at X (`verifyProcessorResolvesByCoordinate`, `verifyRuntimeResolvesByCoordinate`, `linkDebugSharedMacosArm64`, `-Psmoke.kotlin=<leg>`).
-3. With `ORG_GRADLE_PROJECT_kotlinVersion=<leg>`, runs `:test-library:packNuget :test-companion:packNuget`, then the real `IntegrationTests` and `LeakTests`.
-4. Fails unless the `test-library` klib manifest `compiler_version` equals X, so a silently ignored override cannot pass.
+3. Builds the fixtures as an outside consumer: `./gradlew -p fixture-consumer :test-library:packNuget :test-companion:packNuget -Pconsumer.kotlin=<leg>`, then the real `IntegrationTests` and `LeakTests`. `fixture-consumer/` is a second root over the same `test-library`, `test-companion` and `test-models` directories. In it the processor, runtime and annotations are not projects, so the plugin resolves them by coordinate from the local repo of step 1, and only the fixtures are compiled by X.
+4. Fails unless the `test-library` klib manifest `compiler_version` equals X and the published `nuget-runtime` klib's equals the repo's pin, so neither a silently ignored `consumer.kotlin` nor a runtime rebuilt on X can pass.
+
+Amended 2026-10-05: step 3 first ran the root build with `ORG_GRADLE_PROJECT_kotlinVersion=<leg>`, which rebuilt the processor and the runtime klib on X as well and so proved "this repo behaves on X", not what a consumer gets. The root `kotlinVersion` override in `settings.gradle.kts` is kept for local use; CI no longer sets it. Step 1 now also publishes the `mingwX64` klibs, because the fixtures pack a `mingwX64` library and a macOS host links it. On a pull request steps 3 and 4 run only when the diff can move them (the path filter in `ci.yml`); a push to `main` always runs them.
 
 No coverage and no NativeAOT run: the `bridge` job owns those on the pinned version. That is 5 macOS jobs per run, exactly the free plan's concurrency cap. `scripts/verify.sh` and `release.yml` keep running the pinned compiler.
 
@@ -156,7 +158,7 @@ No coverage and no NativeAOT run: the `bridge` job owns those on the pinned vers
 - The smoke version read was spiked with `--no-configuration-cache`. As built it uses `providers.gradleProperty("smoke.kotlin")`, and the configuration cache was on in every verification run and resolved it correctly. Verified.
 - Raising the repo's Kotlin pin to a new minor raises the floor. The guard test fails until `kotlinFloor` follows.
 - Deferred: a floor below 2.4.0 (Alternative 3 or 4); a suppression switch for the warning; a CI leg that asserts the below-floor error end to end.
-- Coverage gap: CI proves the repo behaves on X (the override rebuilds the runtime klib with X) and that pinned-compiler artifacts link from X, not the behaviour of pinned-compiler artifacts linked by X. Floor and tested legs run macOS only; Windows (`mingwX64`) was not exercised at either. The unrecognised-version branch has no end-to-end run. Tracked in the ROADMAP.
+- Coverage gap: floor and tested legs run macOS only; Windows (`mingwX64`) was not exercised at either. The unrecognised-version branch has no end-to-end run. Tracked in the ROADMAP.
 - Not addressed: whether Gradle 9.1 is a real floor. Verified by reading the published module metadata: it carries `org.gradle.jvm.version: 17` and no `org.gradle.plugin.api-version`, so nothing in the metadata rejects an older Gradle. Whether the plugin's code runs on Gradle 8 is not tested.
 
 ## Verification

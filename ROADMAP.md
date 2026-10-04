@@ -253,7 +253,7 @@ Fallout from [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) (reve
 - [ ] `nuget.dotnet` is ignored by `test-library/build.gradle.kts:106`, which runs a bare `"dotnet", "pack"` (fixture code, verified by grep); and its Gradle-property fallback and `local.properties` precedence have no unit test because `ProjectBuilder` cannot supply a Gradle property, the same limit as the `publishNuget` item above (proven only by real `-P` runs).
 - [ ] The plugin fails to apply when it is declared `apply false` in a root project and Kotlin Multiplatform is declared only in a child (`Could not generate a decorated class for type NugetPlugin`); moving `registerPublish` out of the plugin class fixes it, workaround: declare both plugins `apply false` in the root. Verified by execution ([details](docs/backlog/plugin-class-carries-kgp-types-in-signatures.md)).
 - [ ] Lower the Kotlin floor from 2.4.0 to 2.3: needs the runtime and annotations klibs at the 2.3 ABI, the `kotlin.uuid.Uuid` opt-in and an answer on Gradle 9.1 as a real floor; deferred by [ADR-195](docs/adr/195-kotlin-version-range.md) ([details](docs/backlog/lower-the-kotlin-floor-to-2-3.md)).
-- [ ] The Kotlin range CI proves "this repo behaves on X" and "pinned-compiler artifacts link from X", not the behaviour of pinned-compiler artifacts linked by X; floor and tested legs run on macOS only, and the unrecognised-version branch has no end-to-end run ([details](docs/backlog/kotlin-range-ci-coverage-gaps.md)).
+- [ ] The Kotlin range CI's floor and tested legs run on macOS only, and the unrecognised-version branch has no end-to-end run ([details](docs/backlog/kotlin-range-ci-coverage-gaps.md)).
 
 ## Performance & Resource Hygiene
 
