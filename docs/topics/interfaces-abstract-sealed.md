@@ -156,7 +156,7 @@ that implements it, Kotlin- or C#-side, must supply a setter:
 ```kotlin
 interface Tally {
   var count: Int
-  var lastSlip: Throwable?
+  var lastSlip: IllegalStateException?
 }
 ```
 
@@ -164,13 +164,15 @@ interface Tally {
 public interface ITally : IDisposable
 {
     int Count { get; set; }
-    Exception? LastSlip { get; } // ADR-107: C# cannot construct a Kotlin Throwable, stays read-only
+    Exception? LastSlip { get; } // no setter: narrower than RuntimeException
 }
 ```
 
-A setter that cannot plan for a type-level reason (`Throwable?` above) stays `{ get; }` on the
-interface too, named in the build log and on the member itself, whether or not any class ever
-implements the interface.
+A setter that cannot plan for a type-level reason stays `{ get; }` on the interface too, named in
+the build log and on the member itself, whether or not any class ever implements the interface.
+`IllegalStateException?` above is such a type: C# exceptions reach Kotlin as a `RuntimeException`,
+so a narrower declared type cannot hold one (see
+[Passing an exception to Kotlin](exceptions.md#passing-an-exception-to-kotlin)).
 
 One shape needs a second render, because it would otherwise fail to compile: a class that overrides
 both an exported base class's `open val` and an exported interface's `var` with a single Kotlin
@@ -183,7 +185,7 @@ open class Scoreboard { open val count: Int = 0 }
 
 class TrainingClicker : Scoreboard(), Tally {
   override var count: Int = 0
-  override var lastSlip: Throwable? = null
+  override var lastSlip: IllegalStateException? = null
 }
 ```
 
@@ -198,7 +200,7 @@ public class TrainingClicker : Scoreboard, ITally
         set { /* ... */ }
     }
 
-    public override global::System.Exception? LastSlip { get { /* ... */ } } // no explicit member: ADR-107 refused this setter entirely
+    public override global::System.Exception? LastSlip { get { /* ... */ } } // no explicit member: the setter is refused entirely
 }
 ```
 

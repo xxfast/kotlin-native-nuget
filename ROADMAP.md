@@ -54,7 +54,7 @@ Complete.
 Complete.
 
 ## Phase 5: Exception handling
-- [ ] Deferred by [ADR-107](docs/adr/107-throwable-property-mapping.md): `Throwable` at a method-return position or a parameter position, `List<Throwable>`, and a module-local non-exported `Throwable` subclass (e.g. `class MyError : Exception()` not in the export set), which the classifier's klib-origin-only supertype walk leaves classified as `Unsupported` rather than `Throwable`.
+- [ ] Deferred by [ADR-201](docs/adr/201-throwable-beyond-the-property-getter.md): `Throwable` on a bare `suspend` result or a bare `Flow`/`StateFlow` element, on a `suspend`/`Flow` parameter, in a lambda payload and in a C#-implemented interface slot, as a `List<Throwable>` input, a `Set` element or a `Map` key all skip named; and the input that did ship is lossy, since Kotlin receives a `NugetManagedException` (managed type name and message only, no cause chain), so a `KotlinException` passed back does not round-trip as the original object.
 - [ ] The reverse envelope (`nugetKotlinError`) still maps stdlib rows only, so a `kotlinx.io.IOException` thrown through it stays a bare `KotlinException`: the shim reads no `mappedType` (shared with the forward `BuildMapped` item under Tooling & Test Integrity), and a module classifier would need to reach that plugin-generated site. Left out of [ADR-202](docs/adr/202-runtime-route-exception-mapping.md), which maps the runtime-owned forward routes. There is still no forward-direction error trace (`NUGET_INTEROP_TRACE` is the ADR-054 reverse-registration trace only).
 
 ## Phase 6: Async support

@@ -905,16 +905,17 @@ explaining why. Since
 "Keeping" rather than the usual "Skipping" since the class itself is not skipped:
 
 ```
-[nuget:WARNING_NO_PUBLIC_CONSTRUCTOR] Keeping Issue56Failure: every public constructor is skipped
-    (<init>: NULLABLE), so the generated C# class has only its internal handle constructor and C#
-    cannot construct one. the type is kept because instances can still come from Kotlin factories
-    that return it (a top-level function, or a companion factory); expose one, or change the
-    constructor parameters to types the bridge can express
-    at Issue56Sample.kt:41
+[nuget:WARNING_NO_PUBLIC_CONSTRUCTOR] Keeping GroomingPlan: every public constructor is skipped
+    (<init>: OPT_IN_MARKER_TYPE, <init>_2: OPT_IN_MARKER_TYPE, <init>_3: OPT_IN_MARKER_TYPE), so the
+    generated C# class has only its internal handle constructor and C# cannot construct one. the
+    type is kept because instances can still come from Kotlin factories that return it (a top-level
+    function, or a companion factory); expose one, or change the constructor parameters to types
+    the bridge can express
+    at Issue128Sample.kt:40
 ```
 
 The warning still only reaches the library author's Gradle log and `NugetDiagnostics.json`; on its
-own, the 2026-09-07 amendment left a consumer opening `Issue56Failure` with no explanation anywhere
+own, the 2026-09-07 amendment left a consumer opening `GroomingPlan` with no explanation anywhere
 in the assembly or IntelliSense. ADR-064's 2026-09-10 amendment closes that: the same skipped-
 constructor detail the warning names is also emitted as an XML-escaped `/// <remarks>` doc comment
 directly above the class line, using consumer-facing wording rather than the diagnostic's
@@ -933,7 +934,7 @@ see [Interfaces, abstract classes, and sealed classes: Sealed classes and
 interfaces](interfaces-abstract-sealed.md#sealed-classes-and-interfaces). Not fired for an abstract
 class or the interface-return backing wrapper, neither of which is handle-less by accident. See
 [Classes and objects: No public constructor](classes-and-objects.md#no-public-constructor) for the
-full `Issue56Failure` shape.
+full `GroomingPlan` shape.
 
 ### A sealed type at a parameter position now binds {id="sealed-position-now-binds"}
 
