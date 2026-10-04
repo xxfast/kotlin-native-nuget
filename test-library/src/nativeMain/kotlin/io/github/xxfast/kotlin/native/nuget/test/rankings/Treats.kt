@@ -23,9 +23,21 @@ fun <T : Comparable<T>> favourite(value: T): T = value
 fun <T : Number> weigh(value: T): T = value
 
 /**
+ * A class-builtin-bounded function whose body uses the bound's API. A `T` outside the bound
+ * (`Portion<uint>`) is stopped by the checked cast at the read, before `toDouble()` dispatches.
+ */
+fun <T : Number> portion(value: T): T {
+  require(value.toDouble() >= 0.0) { "a portion cannot be negative" }
+  return value
+}
+
+/** The generic-function route with a builtin bound only `string` satisfies on the C# side. */
+fun <T : CharSequence> nickname(value: T): T = value
+
+/**
  * A generated wrapper that satisfies [favourite]'s bound. The function route crosses `T` as a
- * handle and materialises the result through a generated factory, so a C# scalar cannot be its
- * type argument; a wrapper can.
+ * handle either way: a builtin `T` (`int`, `string`) as a box it unwraps on the way back, a
+ * wrapper as its own handle.
  */
 class Treat(val name: String) : Comparable<Treat> {
   override fun compareTo(other: Treat): Int = name.compareTo(other.name)

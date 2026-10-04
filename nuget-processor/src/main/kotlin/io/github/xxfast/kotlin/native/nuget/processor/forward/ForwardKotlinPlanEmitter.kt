@@ -875,26 +875,35 @@ private fun receiverExpression(plan: ForwardCallablePlan, receiver: ForwardAbiPa
 private fun ForwardCallablePlan.ownerTypeName(): String =
   invocation.ownerType?.spelling ?: invocation.symbol.substringBeforeLast('.')
 
-/** ADR-147: the bound a `T` box is read back as, `Any` when the parameter is unconstrained. */
-private fun BridgeType.TypeParameter.stableRefTypeName(): String = boundQualifiedName ?: "Any"
+/** ADR-147: every bound a `T` box is cast to, first one first; empty when unconstrained. */
+private fun BridgeType.TypeParameter.bounds(): List<String> =
+  listOfNotNull(boundQualifiedName) + additionalBounds
 
 /**
- * A `T` box's [read] (through its first bound), smart-cast to each of [additionalBounds], so a
- * multi-bound `T` (`where T : Comparable<T>, T : Pet`) reads back as the intersection Kotlin
- * infers from the casts; no single type names it. Unchanged for a single bound. A [nullable]
- * read casts to each bound's nullable form, so null passes through. Every cast is checked, so an
- * object that misses a bound C# could not see (a dropped builtin) fails at the call, inside the
- * export's `try`, as ADR-015's 2026-10-03 amendment documents.
+ * The read of a `T` box at [pointer]: as `Any`, then cast to each of [bounds]. The cast is the
+ * bound check. `asStableRef<Bound>()` is a generic, unchecked cast in Kotlin/Native, so a `T`
+ * outside a bound C# cannot see (a dropped builtin: `Weigh<uint>` against `T : Number`) used to
+ * reach the body unchecked, where `value.toDouble()` dispatches on an object of the wrong class.
+ * An `as` to a class is checked (a generic bound checks its erased class, `Comparable<Any?>`
+ * checks `Comparable`), so it now fails here as a ClassCastException, inside the export's `try`,
+ * and reaches C# as the mapped exception.
+ *
+ * One bound is a single cast; several (`where T : Comparable<T>, T : Pet`) are smart casts on a
+ * local, which Kotlin types as the intersection no single type names. A [nullable] read casts to
+ * each bound's nullable form, so null passes through. Unconstrained, it is the plain `Any` read.
  */
-internal fun forwardBoundedRead(
-  read: String,
-  additionalBounds: List<String>,
-  nullable: Boolean,
-): String {
-  if (additionalBounds.isEmpty()) return read
+internal fun forwardBoundedRead(pointer: String, bounds: List<String>, nullable: Boolean): String {
+  val read: String =
+    if (nullable) "$pointer?.asStableRef<Any>()?.get()" else "$pointer.asStableRef<Any>().get()"
   val mark: String = if (nullable) "?" else ""
-  val casts: String = additionalBounds.joinToString("") { bound -> "bounded as $bound$mark; " }
-  return "$read.let { bounded -> ${casts}bounded }"
+  return when (bounds.size) {
+    0 -> read
+    1 -> "($read as ${bounds.single()}$mark)"
+    else -> {
+      val casts: String = bounds.joinToString("") { bound -> "bounded as $bound$mark; " }
+      "$read.let { bounded -> ${casts}bounded }"
+    }
+  }
 }
 
 /**
@@ -1432,11 +1441,9 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
 
     // ADR-147: the box holds whatever `T` was instantiated to, read back as the declared bound
     // (`Any` when the parameter is unconstrained), which is the type the member's `T` accepts
-    // under the erased receiver spelling.
-    is BridgeType.TypeParameter -> forwardBoundedRead(
-      "${parameter.name}.asStableRef<${type.stableRefTypeName()}>().get()",
-      type.additionalBounds, nullable = false,
-    )
+    // under the erased receiver spelling. ADR-015 amendment: through checked casts.
+    is BridgeType.TypeParameter ->
+      forwardBoundedRead(parameter.name, type.bounds(), nullable = false)
 
     // ADR-088: the reverse pipeline's own resolver. It frees the incoming transfer handle and
     // returns the ORIGINAL Kotlin object on a token-probe hit; otherwise it wraps the handle in
@@ -1474,10 +1481,8 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
         "${parameter.name}?.asStableRef<${inner.qualifiedName}>()?.get()"
 
       // ADR-083/147: a null `T?` arrives as the null pointer and stays Kotlin null.
-      is BridgeType.TypeParameter -> forwardBoundedRead(
-        "${parameter.name}?.asStableRef<${inner.stableRefTypeName()}>()?.get()",
-        inner.additionalBounds, nullable = true,
-      )
+      is BridgeType.TypeParameter ->
+        forwardBoundedRead(parameter.name, inner.bounds(), nullable = true)
 
       // ADR-098 amendment (boundary nullability part C): `Char?` arrives as the same adjacent pair
       // and needs no conversion -- the by-value slot already IS a Kotlin `Char`.

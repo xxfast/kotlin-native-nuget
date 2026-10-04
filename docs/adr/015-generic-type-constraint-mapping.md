@@ -149,8 +149,9 @@ removes the compiler "Condition is always 'true'" warning in `cirTypeParameters`
 `CirFunctionTranslator.kt`. `legacyBoundClassCsName`'s builtin fallback served only builtin classes
 and is deleted.
 
-Consequence for callers: with the bound gone, C# can pass a type argument Kotlin would reject,
-which fails at the call.
+Consequence for callers: with the bound gone, C# can pass a type argument Kotlin would reject.
+When this paragraph was written the Kotlin read did not check it (the 2026-10-04 builtin
+amendment below makes it fail at the call).
 
 Evidence. Verified: `Tier1BuiltinGenericBoundTest` six cells red before and green after;
 `:nuget-processor:test` 1568 passed, 0 failed; no "Condition is always" warning in the build log;
@@ -160,10 +161,10 @@ SharedException 2, all six NativeAOT shapes); `Ranked<int>`, `Ranked<string>`, `
 generic bound-argument arms of `forwardKotlinBoundSpelling`. No LeakTests row.
 
 Known limits, verified and tracked in ROADMAP: `T : Enum<T>` has no valid Kotlin type argument, so
-its generated Kotlin does not compile on both generic routes; a builtin-bounded generic function
-exports only the object variant, so `Treats.Weigh<int>(4)` throws `NotSupportedException` and only
-a generated wrapper works as `T`. The multi-bound limit this amendment first listed is fixed by the
-2026-10-04 amendment.
+its generated Kotlin does not compile on both generic routes. The multi-bound limit this amendment
+first listed is fixed by the 2026-10-04 multi-bound amendment. The builtin-bounded generic function
+limit it also listed (`Treats.Weigh<int>(4)` threw `NotSupportedException`) is fixed by the
+2026-10-04 builtin amendment.
 
 ## Amendment (2026-10-04): a multi-bound type parameter
 
@@ -175,19 +176,22 @@ clause and builtin bounds are dropped as above. Kotlin has no type for the inter
 bounds, so the generated Kotlin never names one.
 
 Rule, on the generic class route and the generic function route. A `T` value read from a handle is
-read as the first bound, then cast to each remaining bound
-(`.let { bounded -> bounded as Trainable; bounded }`), which Kotlin smart-casts to the whole
-intersection; a nullable bound keeps its `?` through the cast. A read of an existing instance uses
+read as the first bound (as `Any`, then cast to each bound, per the 2026-10-04 builtin amendment),
+then cast to each remaining bound (`.let { bounded -> bounded as Trainable; bounded }`), which
+Kotlin smart-casts to the whole intersection; a nullable bound keeps its `?` through the cast. A read of an existing instance uses
 `Owner<*>`. A member that takes a `T` gets its receiver from a local generic function that
 restates the owner's bounds (`fun <T> nugetTypedOwner(owner: Any, witness0: T?): Owner<T> where T :
 Pet, T : Trainable`), with the argument value as the witness, so Kotlin infers `T` as the
 intersection. A constructor is spelled `Owner<_>`, or `Owner<Nothing>` when no constructor
 parameter mentions `T`. A bound that names `T` itself (`T : Rival<T>` with `Rival<in T>`) is
 spelled through its erased form (`Rival<Any?>`), which is valid because the argument is
-contravariant. Single-bound parameters keep their old spelling.
+contravariant. Single-bound parameters kept their spelling here, and the builtin amendment below
+changes it to a checked cast.
 
 Consequence for callers: as with a dropped `Comparable` bound, C# can pass a type argument that
-satisfies the listed bounds but not a dropped one, which fails at the call.
+satisfies the listed bounds but not a dropped one, which fails at the call (verified for the
+erased class by the 2026-10-04 builtin amendment, which also casts every bound, not only the
+remaining ones, so the first bound is checked too).
 
 Separate fix in the same change. A generic data class's exported `equals`, `hashCode` and
 `toString` wrote `asStableRef<pkg.Box>()` with no type argument, which is not a type for a generic
@@ -203,9 +207,9 @@ NativeAOT shapes. `MultiBoundGenericTests` runs `Arena`, `Podium` (`Comparable<T
 `Hamper` (nullable bounds) and the `Rehearsals.Rehearse` and `Headline` functions against the
 native library, and pins the C# `where` clauses by reflection. No LeakTests row: the handle
 crossings are the ones `GenericClassMethod_ExportedClassTypeParameter_ReturnsToBaseline` and
-`GenericCtorNullableArg_NullArgument_ReturnsToBaseline` already cover. Inferred, not run: that a
-`T` argument missing a dropped `Comparable` bound fails at the call, which follows from the cast
-in the generated read.
+`GenericCtorNullableArg_NullArgument_ReturnsToBaseline` already cover. Inferred when written, since
+verified for the erased class: that a `T` argument missing a dropped `Comparable` bound fails at
+the call (see the 2026-10-04 builtin amendment).
 
 Known limits, verified and fixed by a later item together with `T : Enum<T>`: (1) an invariant
 self-referencing bound such as `T : Node<T>` still fails, because `Node<Any?>` is not a
@@ -215,3 +219,60 @@ without its type arguments (`where T : IRival` for the declared `IRival<in T>`, 
 bound or several; the spelling is in `cirBoundConstraint` and `legacyBoundInterfaceCsName`
 (`cir/CirTypeMapping.kt`), verified on the multi-bound shape (the Tier 1 cell asserts the
 Kotlin half only and pins the C# spelling, so a fix shows up as that cell going red).
+
+## Amendment (2026-10-04): builtins as `T` on a generic function, and checked bound reads
+
+A builtin (`int`, `string`, `short`, ...) works as `T` on a generic function, as it already did on a
+generic class. `Treats.Weigh<int>(4)` (`fun <T : Number> weigh(value: T): T`) compiled and threw
+`NotSupportedException`: the function route's object variant wrote the argument through
+`NugetMarshal.Wrap<T>`, which boxes a builtin, but read the result through `Materialize<T>`, which
+knows only the generated factories. The same defect hit an unconstrained function for a builtin
+with no C# width variant (`Identity<short>`; only `string`, `int`, `long`, `float`, `double` and
+`bool` have one).
+
+Rule 1, the read. The object variant returns `NugetMarshal.FromHandle<T>(result)`, the class
+route's reader: it unwraps and disposes a builtin box, then falls to the factory registry, and
+answers the null pointer with `default`. A wrapper as `T` still works, and the clause stays
+`where T : notnull` with `INFO_DROPPED_BOUND` unchanged. Which builtins work then follows the
+Kotlin bound: `T : Number` takes `sbyte`, `short`, `int`, `long`, `float`, `double`;
+`T : CharSequence` takes `string`; an unconstrained `T` takes every builtin, nullable included
+(`Identity<short?>`). Re-enabling the width variants for a builtin bound was rejected: the
+`_string` variant would emit `weigh(value: String)`, which does not satisfy `T : Number`.
+
+Rule 2, the bound check. Every bounded-`T` read used `asStableRef<Bound>().get()`, which is an
+unchecked generic cast in Kotlin/Native, so a `T` outside a bound C# cannot see (`Weigh<uint>`,
+`Weigh<string>`) reached the body: an identity function handed it back, and a body calling
+`toDouble()` dispatched on an object that is not a `Number`. Reads now go
+`asStableRef<Any>().get() as Bound` (`as Bound?` for a nullable `T`), a checked cast, inside the
+export's `try`. A wrong `T` fails there, before the body runs, as `ClassCastException`, which C#
+sees as `Kotlin.Native.Interop.KotlinInvalidCastException`; the boxed argument is still released
+by the call's `finally`. The rule applies on both routes: the function route
+(`exports/GenericFunctionExports.kt`), and the class and plan route through `forwardBoundedRead`
+(`forward/ForwardKotlinPlanEmitter.kt`) for constructor and member arguments, `copy` arguments and
+the typed-receiver witness; the first bound of a multi-bound `T`; and the value-class unbox export
+(ADR-171). A generic bound (`Comparable<Any?>`) checks its erased class (`Comparable`) and prints
+an unchecked-cast compiler warning in the generated `CNameExports.kt`; it is a warning only.
+Unconstrained `T` keeps the plain `Any` read. This is a behaviour change on the class route: a
+wrong `T` was an unchecked pass-through there (`new Tally<uint>(3u)` now throws at construction).
+
+This makes true two sentences that were not. The 2026-10-03 amendment's "a C# caller can pass a
+type argument Kotlin would reject, which fails at the call" described an unchecked read when it was
+written; it holds now on both routes. The 2026-10-04 multi-bound amendment's "a C# argument missing
+a dropped `Comparable` bound fails at the call", labelled inferred there, is verified for the
+erased class (`Comparable`).
+
+Evidence. Verified: `Tier1BuiltinGenericBoundTest` (the function body reads through
+`FromHandle<T>`, the reads are checked casts), `Tier1MultiBoundGenericTest`,
+`Tier1GenericNullableTypeArgumentTest`, `Tier1ReflectionFreeDispatchTest` and
+`Tier1WrapValueClassTest` updated to the checked spelling; `:nuget-processor:test` 1651 passed,
+0 failed; native pipeline Integration 3057, Leak 167, seven NativeAOT shapes.
+`BuiltinGenericBoundTests` runs `Weigh<int>`, `Weigh<double>`, `Favourite<string>`,
+`Nickname<string>` and `Favourite<Treat>`, and pins the rejections
+`Weigh_UInt_IsRejectedByKotlinAtTheRead`, `Weigh_String_IsRejectedByKotlinAtTheRead`,
+`Portion_UInt_IsRejectedBeforeTheBodyDispatches` and `Tally_UInt_IsRejectedAtConstruction`;
+`GenericFunctionTests` runs `Identity<short>` and `Identity<short?>`. LeakTests rows
+`BuiltinGenericFunction_BoxedPrimitiveAndString_ReturnsToBaseline` and
+`BuiltinGenericFunction_BoundCastFails_ReturnsToBaseline` cover the two boxes per call and the
+failure path. Inferred, not run: that the other unsigned builtins (`byte`, `ushort`, `ulong`) are
+rejected by `T : Number` as `uint` is, since Kotlin's unsigned types are not `Number`; only `uint`
+and `string` are pinned.

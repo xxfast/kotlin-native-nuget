@@ -8,8 +8,8 @@ import kotlin.test.assertTrue
  * A type parameter with several upper bounds (`where T : Comparable<T>, T : Pet`). No single
  * Kotlin type names the intersection, so the generated Kotlin can no longer spell the owner by
  * its first bound (`Kennel<kotlin.Comparable<Any?>>` is not within `Pet`, and a decoded
- * `Comparable<Any?>` is not a `Pet`). Instead a `T` value is decoded through its first bound and
- * smart-cast to the rest, which Kotlin types as the intersection; a receiver that takes such a
+ * `Comparable<Any?>` is not a `Pet`). Instead a `T` value is read as `Any` and cast, checked, to
+ * each bound in turn, which Kotlin types as the intersection; a receiver that takes such a
  * value is typed by a local generic function carrying the owner's own bounds, the inferred `T`
  * being that intersection; a receiver that takes none is star-projected; and a constructor lets
  * inference pick the argument (`Kennel<_>`), or `Nothing` when no parameter mentions it.
@@ -77,11 +77,12 @@ class Tier1MultiBoundGenericTest {
     )
     // A read takes no `T`, so the receiver is star-projected.
     assertContains(result.generated, "handle.asStableRef<tier1.multibound.Arena<*>>().get().value")
-    // A `T` is decoded through its first bound and smart-cast to the rest.
+    // A `T` is read as `Any` and cast, checked, to every bound; the smart casts type it as the
+    // intersection.
     assertContains(
       result.generated,
-      "next.asStableRef<tier1.multibound.Pet>().get()" +
-          ".let { bounded -> bounded as tier1.multibound.Trainable; bounded }",
+      "next.asStableRef<Any>().get().let { bounded -> bounded as tier1.multibound.Pet; " +
+          "bounded as tier1.multibound.Trainable; bounded }",
     )
     assertContains(
       result.generated,
@@ -93,8 +94,8 @@ class Tier1MultiBoundGenericTest {
     assertContains(result.generated, "tier1.multibound.Shelf<Nothing>()")
     assertContains(
       result.generated,
-      "tier1.multibound.drill(value.asStableRef<tier1.multibound.Pet>().get()" +
-          ".let { bounded -> bounded as tier1.multibound.Trainable; bounded })",
+      "tier1.multibound.drill(value.asStableRef<Any>().get().let { bounded -> " +
+          "bounded as tier1.multibound.Pet; bounded as tier1.multibound.Trainable; bounded })",
     )
   }
 
@@ -128,8 +129,8 @@ class Tier1MultiBoundGenericTest {
     )
     assertContains(
       result.generated,
-      "next.asStableRef<kotlin.Comparable<Any?>>().get()" +
-          ".let { bounded -> bounded as tier1.multibound.Pet; bounded }",
+      "next.asStableRef<Any>().get().let { bounded -> bounded as kotlin.Comparable<Any?>; " +
+          "bounded as tier1.multibound.Pet; bounded }",
     )
     assertContains(result.generated, "where T : kotlin.Comparable<T>, T : tier1.multibound.Pet")
   }
@@ -171,8 +172,8 @@ class Tier1MultiBoundGenericTest {
     )
     assertContains(
       result.generated,
-      "value.asStableRef<tier1.multibound.Rival<Any?>>().get()" +
-          ".let { bounded -> bounded as tier1.multibound.Pet; bounded }",
+      "value.asStableRef<Any>().get().let { bounded -> bounded as tier1.multibound.Rival<Any?>; " +
+          "bounded as tier1.multibound.Pet; bounded }",
     )
   }
 
@@ -207,8 +208,8 @@ class Tier1MultiBoundGenericTest {
     )
     assertContains(
       result.generated,
-      "next?.asStableRef<tier1.multibound.Pet>()?.get()" +
-          ".let { bounded -> bounded as tier1.multibound.Trainable?; bounded }",
+      "next?.asStableRef<Any>()?.get().let { bounded -> bounded as tier1.multibound.Pet?; " +
+          "bounded as tier1.multibound.Trainable?; bounded }",
     )
     assertContains(
       result.generated,
