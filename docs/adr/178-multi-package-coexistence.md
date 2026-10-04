@@ -113,11 +113,13 @@ Local verification packs/restores the contract before dependent packages and sup
 
 ### Native identity and supported assets
 
-The plugin derives the published SharedLibrary.baseName from the case-folded package id. The stem is `kn_` plus hex(UTF-8(invariant-lowercase(packageId))). For example, TestLibrary becomes `kn_746573746c696272617279`. Distinct package IDs remain distinct modulo NuGet identity casing.
+The plugin derives the published SharedLibrary.baseName from the case-folded package id. The stem is `kn_` plus invariant-lowercase(packageId) with each `.`, `-` and `_` written as `_`. For example, TestLibrary becomes `kn_testlibrary` and MobileEvidence.Kotlin becomes `kn_mobileevidence_kotlin`.
+
+**Amended 2026-10-05 ([#469](https://github.com/xxfast/kotlin-native-nuget/issues/469)), before 0.9.0 shipped.** The stem was first hex(UTF-8(invariant-lowercase(packageId))), which was unique for every id but unreadable in a crash dump, a `DllNotFoundException`, an allowlist or an exports table. The readable stem gives up one case: package ids that differ only in their separators (`Foo.Bar`, `Foo-Bar`, `Foo_Bar`) share a stem and would overwrite each other in one consumer. That was accepted as too rare to cost every package its name. The same amendment changed two behaviours: an explicit `baseName` that differs from the derived stem fails the build instead of being replaced silently, and packing takes the expected primary library by name from local link output, so a library left behind under an old `baseName` no longer fails the pack.
 
 Generated imports and packaged filenames agree in the verified Windows consumer fixture. The macOS CI lane is wired but was not run locally; Linux filenames remain outside current platform support.
 
-The v1 guarantee covers plugin-produced Kotlin primary binaries. Each local or prebuilt RID input must contain exactly the expected primary native library; unexpected native files fail packing. This excludes arbitrary auxiliary native dependency relocation.
+The v1 guarantee covers plugin-produced Kotlin primary binaries. Each prebuilt RID input must contain exactly the expected primary native library; unexpected native files fail packing. Local link output must contain the expected primary native library, and only that file is packed. This excludes arbitrary auxiliary native dependency relocation.
 
 Existing baseName/prebuilt assets must migrate consistently. Namespace validity and distinct package root namespaces remain prerequisites; this ADR does not implicitly close the separate namespace-validation item.
 

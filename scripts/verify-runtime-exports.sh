@@ -19,9 +19,9 @@ RUNTIME_SOURCE="nuget-runtime/src/nativeMain/kotlin/io/github/xxfast/kotlin/nati
 # The ADR-127 spike only ever ran on macosArm64; mingwX64 is the leg that can regress silently,
 # so the Windows binary is a first-class candidate here rather than something you pass by hand.
 CANDIDATES=(
-  "test-library/build/bin/macosArm64/releaseShared/libkn_746573746c696272617279.dylib"
-  "test-library/build/bin/mingwX64/releaseShared/kn_746573746c696272617279.dll"
-  "test-library/build/bin/linuxX64/releaseShared/libkn_746573746c696272617279.so"
+  "test-library/build/bin/macosArm64/releaseShared/libkn_testlibrary.dylib"
+  "test-library/build/bin/mingwX64/releaseShared/kn_testlibrary.dll"
+  "test-library/build/bin/linuxX64/releaseShared/libkn_testlibrary.so"
 )
 
 if [ ! -f "$RUNTIME_SOURCE" ]; then

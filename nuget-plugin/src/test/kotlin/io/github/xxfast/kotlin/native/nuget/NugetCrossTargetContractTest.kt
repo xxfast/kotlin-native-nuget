@@ -21,7 +21,7 @@ class NugetCrossTargetContractTest {
     val root = Files.createTempDirectory("contract-input").toFile()
     listOf("win-x64", "win-arm64").forEach { rid ->
       File(root, "$rid/native").mkdirs()
-      File(root, "$rid/native/kn_746573746c696272617279.dll").writeText("binary")
+      File(root, "$rid/native/kn_testlibrary.dll").writeText("binary")
       File(root, "$rid/ForwardAbi.json").writeText("""{"schemaVersion":1,"abi":["${if (rid == "win-x64") abi else "f(in int) -> int"}"]}""")
       File(root, "$rid/Interop.cs").writeText(if (rid == "win-x64") source else "public enum Mode { A = 0 }")
     }

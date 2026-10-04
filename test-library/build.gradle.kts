@@ -125,17 +125,13 @@ kotlin {
   }
   mingwX64 {
     binaries {
-      sharedLib {
-        baseName = "shared"
-      }
+      sharedLib()
     }
   }
 
   macosArm64 {
     binaries {
-      sharedLib {
-        baseName = "shared"
-      }
+      sharedLib()
     }
   }
 

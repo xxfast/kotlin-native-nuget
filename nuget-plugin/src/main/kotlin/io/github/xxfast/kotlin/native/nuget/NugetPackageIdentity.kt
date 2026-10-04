@@ -10,8 +10,8 @@ internal fun nativeLibraryStem(id: String): String {
     it in '0'..'9' || it == '.' || it == '-' || it == '_' }) {
     "[nuget] Invalid package id '$id': use 1-100 ASCII letters, digits, '.', '-' or '_'."
   }
-  val bytes = id.lowercase(Locale.ROOT).toByteArray(Charsets.UTF_8)
-  return "kn_" + bytes.joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+  // #469: readable, not injective. Ids differing only by separators share a stem (accepted).
+  return "kn_" + id.lowercase(Locale.ROOT).replace('.', '_').replace('-', '_')
 }
 
 internal fun nativeLibraryFile(id: String, rid: String): String {

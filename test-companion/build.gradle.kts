@@ -17,10 +17,10 @@ kotlin {
     optIn.add("io.github.xxfast.kotlin.native.nuget.annotations.ExperimentalNugetBindingApi")
   }
   mingwX64 {
-    binaries.sharedLib { baseName = "shared" }
+    binaries.sharedLib()
   }
   macosArm64 {
-    binaries.sharedLib { baseName = "shared" }
+    binaries.sharedLib()
   }
   // Never name `nativeMain` here: this fixture is the real build proving the reverse bindings
   // reach a `nativeMain` that only the default hierarchy creates (its sources import them).

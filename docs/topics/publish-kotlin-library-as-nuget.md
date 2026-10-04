@@ -36,7 +36,7 @@ pinned. Only configured targets in the [supported target table](prerequisites.md
 can link are added to the package this way; a RID built on another host can still be added via
 `prebuiltRuntimes`, see [One package for every platform](#one-package-for-every-platform) below.
 
-The plugin derives a unique native library name from `packageId`, so separate Kotlin-built packages can be loaded in one .NET project. Existing `baseName` settings and prebuilt files must use the derived name. Each local or prebuilt RID input must contain exactly that package’s expected primary native library; extra or mismatched native files fail packing.
+The plugin derives a unique native library name from `packageId`, so separate Kotlin-built packages can be loaded in one .NET project. `MobileEvidence.Kotlin` ships `kn_mobileevidence_kotlin.dll`: `kn_` plus the lowercased id, with `.`, `-` and `_` written as `_`. Leave `baseName` unset; a `baseName` that differs from the derived name fails the build. Prebuilt files must use the derived name, and each prebuilt RID input must contain exactly that package’s expected primary native library. Package ids that differ only in their separators share a native name and cannot be loaded together.
 
 <warning>
 <p>Applying a <b>second</b> Kotlin compiler plugin (for example, the Koin compiler plugin) to a
@@ -227,10 +227,10 @@ be rejected.
 
 ```
 MyCatLib.1.0.0.nupkg
-├── runtimes/osx-arm64/native/libkn_6d796361746c6962.dylib   (locally linked)
+├── runtimes/osx-arm64/native/libkn_mycatlib.dylib   (locally linked)
 ├── runtimes/osx-arm64/ForwardAbi.json
 ├── runtimes/osx-arm64/Interop.cs
-├── runtimes/win-x64/native/kn_6d796361746c6962.dll          (prebuilt)
+├── runtimes/win-x64/native/kn_mycatlib.dll          (prebuilt)
 ├── runtimes/win-x64/ForwardAbi.json
 ├── runtimes/win-x64/Interop.cs
 ├── contentFiles/cs/<tfm>/*.cs

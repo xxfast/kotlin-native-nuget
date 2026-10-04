@@ -161,7 +161,7 @@ class PackNugetTaskTest {
     File(csDir, "Interop.cs").writeText("// forward bindings\n")
 
     val nativeDir: File = Files.createTempDirectory("native-libs").toFile()
-    File(nativeDir, "kn_746573746c696272617279.dll").writeText("fake native binary")
+    File(nativeDir, "kn_testlibrary.dll").writeText("fake native binary")
 
     val outputDir: File = Files.createTempDirectory("pack-out").toFile()
     configureCommon(task, outputDir)
@@ -173,8 +173,8 @@ class PackNugetTaskTest {
 
     task.pack()
 
-    val copied = File(outputDir, "TestLibrary.1.0.0/runtimes/win-x64/native/kn_746573746c696272617279.dll")
-    assertTrue(copied.exists(), "kn_746573746c696272617279.dll must be copied into runtimes/win-x64/native/")
+    val copied = File(outputDir, "TestLibrary.1.0.0/runtimes/win-x64/native/kn_testlibrary.dll")
+    assertTrue(copied.exists(), "kn_testlibrary.dll must be copied into runtimes/win-x64/native/")
   }
 
   @Test
@@ -185,7 +185,7 @@ class PackNugetTaskTest {
     File(csDir, "Interop.cs").writeText("// forward bindings\n")
 
     val nativeDir: File = Files.createTempDirectory("native-libs").toFile()
-    File(nativeDir, "kn_746573746c696272617279.dll").writeText("fake native binary")
+    File(nativeDir, "kn_testlibrary.dll").writeText("fake native binary")
     File(nativeDir, "Sample.pdb").writeText("fake debug symbols")
     File(nativeDir, "Sample.xml").writeText("<doc></doc>")
 
@@ -200,7 +200,7 @@ class PackNugetTaskTest {
     task.pack()
 
     val nativeOutDir = File(outputDir, "TestLibrary.1.0.0/runtimes/win-x64/native")
-    assertTrue(File(nativeOutDir, "kn_746573746c696272617279.dll").exists())
+    assertTrue(File(nativeOutDir, "kn_testlibrary.dll").exists())
     assertFalse(File(nativeOutDir, "Sample.pdb").exists())
     assertFalse(File(nativeOutDir, "Sample.xml").exists())
   }
