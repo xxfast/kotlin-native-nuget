@@ -576,6 +576,10 @@ Gradle module the export set never admits.
     at Issue42Api.kt:15
 ```
 
+That sentence holds when every inherited member binds. When one has no route, the warning says
+"bound on `Issue42Api` directly except `member`, which no route carries and which is named by its
+own warning", and "nothing callable is lost" becomes "only the members named separately are lost".
+
 Unlike `SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`, the hint does not point at `include(...)`: the closure
 has no edge for supertypes, so admitting the dependency package changes nothing. The interface is
 dropped from the generated base list; the class's own members, and any defaulted member the
