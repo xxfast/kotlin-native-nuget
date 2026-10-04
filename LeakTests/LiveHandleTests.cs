@@ -22,6 +22,8 @@ using Issue297 = TestLibrary.Issue297;
 using Issue54 = TestLibrary.Issue54;
 using Issue122 = TestLibrary.Issue122;
 using Perchvar = TestLibrary.Perchvar;
+using Multibound = TestLibrary.Multibound;
+using Rankings = TestLibrary.Rankings;
 using TestLibrary.Kennel;
 using Lineage = TestLibrary.Lineage;
 using Torpor = TestLibrary.Torpor;
@@ -2453,6 +2455,68 @@ public class LiveHandleTests
         {
             Assert.ThrowsAny<Exception>(() => new Crate<Mood>((Mood)99));
             Assert.ThrowsAny<Exception>(() => Helpers.Identity((Mood)99));
+        });
+    }
+
+    // ADR-198: an enum under `T : Enum<T>` (`where T : struct, Enum`), class and function route.
+    // Every write mints one enum box through `Wrap<Medal>` (owned, disposed by the caller's
+    // `finally`); every `T` read back retains the entry once and the enum's `Factories` entry
+    // disposes it; a null `T?` crosses as the null pointer and mints nothing. The trampoline adds
+    // no handle of its own: it is a local function around the same body.
+    // Ledger per iteration: ctor box +1/-1, rosette +1, Outranks box +1/-1, Better box +1/-1 and
+    // result +1/-1, Claim(null) 0, Claim(Gold) box +1/-1 and result +1/-1, RequirePrize box +1/-1
+    // and result +1/-1, rosette dispose -1. Net zero.
+    [Fact]
+    public void EnumSelfBound_ClassAndFunctionRoute_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var oreo = new Rankings.Rosette<Rankings.Medal>(Rankings.Medal.Gold);
+            Assert.True(oreo.Outranks(Rankings.Medal.Silver));
+            Assert.Equal(Rankings.Medal.Gold, oreo.Better(Rankings.Medal.Silver));
+            Assert.Null(oreo.Claim(null));
+            Assert.Equal(Rankings.Medal.Gold, oreo.Claim(Rankings.Medal.Gold));
+            Assert.Equal(
+                Rankings.Medal.Silver,
+                Rankings.Medals.RequirePrize(Rankings.Medal.Silver));
+        });
+    }
+
+    // ADR-198 throw paths: a Kotlin `require` refusing Bronze inside the trampoline (the box was
+    // minted and must still be disposed by the caller's `finally`), and a foreign C# enum the
+    // constraint admits but `Wrap<T>` refuses before minting anything. Net zero; a positive delta
+    // is a box the throw stranded.
+    [Fact]
+    public void EnumSelfBound_ThrowPaths_ReturnToBaseline()
+    {
+        using var oreo = new Rankings.Rosette<Rankings.Medal>(Rankings.Medal.Gold);
+        AssertNoLeak(() =>
+        {
+            Assert.ThrowsAny<ArgumentException>(() =>
+                Rankings.Medals.RequirePrize(Rankings.Medal.Bronze));
+            Assert.ThrowsAny<NotSupportedException>(() =>
+                new Rankings.Rosette<DayOfWeek>(DayOfWeek.Friday));
+            Assert.ThrowsAny<NotSupportedException>(() =>
+                Rankings.Medals.RequirePrize(DayOfWeek.Friday));
+        });
+    }
+
+    // ADR-198: `T : Node<T>, T : Pet` through the same trampoline. A `Bead` is a Kotlin-backed
+    // wrapper, so writing one borrows its own handle and mints nothing; each `T` read back mints
+    // one wrapper the caller disposes.
+    // Ledger per iteration: chain +1, Attach result +1/-1, Lead result +1/-1, chain dispose -1.
+    [Fact]
+    public void InvariantRecursiveBound_ReturnsToBaseline()
+    {
+        using var oreo = new Multibound.Bead("Oreo");
+        using var mylo = new Multibound.Bead("Mylo");
+        AssertNoLeak(() =>
+        {
+            using var chain = new Multibound.Chain<Multibound.Bead>(oreo);
+            using Multibound.Bead linked = chain.Attach(mylo);
+            Assert.Equal("Oreo-Mylo", linked.Name);
+            using Multibound.Bead lead = Multibound.Chains.Lead(mylo);
+            Assert.Equal("Mylo", lead.Name);
         });
     }
 

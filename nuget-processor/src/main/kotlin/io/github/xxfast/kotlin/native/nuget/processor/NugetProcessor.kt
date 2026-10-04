@@ -58,6 +58,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmInterfac
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowProperties
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericFunctionRoute
+import io.github.xxfast.kotlin.native.nuget.processor.exports.isReifiedWithUnspellableBound
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addGenericFunctionExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceBridgeFactoryExport
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addInterfaceExports
@@ -176,6 +177,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.toDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.capturedTypeParameterOwners
 import io.github.xxfast.kotlin.native.nuget.processor.forward.shadowedCapturedTypeParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.capturedMultiBoundTypeParameter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.hasUnspellableBound
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
 
 // A `@kotlin.native.CName`-annotated function is already a C-ABI export by definition (its native
@@ -298,7 +300,16 @@ internal fun KSClassDeclaration.unsupportedNestedCandidateReason(): String? = wh
   }
   capturedMultiBoundTypeParameter() != null -> {
     val (owner: KSClassDeclaration, name: String) = capturedMultiBoundTypeParameter()!!
-    "it captures the multi-bound type parameter `$name` of " +
+    // ADR-198: a self-referencing bound (`T : Enum<T>`) has no erased type either.
+    val selfReferencing: Boolean =
+      owner.typeParameters.firstOrNull { it.name.asString() == name }?.hasUnspellableBound() == true
+    val kind: String =
+      if (selfReferencing) {
+        "self-referencing-bounded"
+      } else {
+        "multi-bound"
+      }
+    "it captures the $kind type parameter `$name` of " +
         "`${owner.qualifiedName?.asString() ?: owner.simpleName.asString()}`, which has no " +
         "single erased type to read the outer instance back as"
   }
@@ -513,6 +524,21 @@ internal fun warnUnroutedGenericFunctions(
     .map { function ->
       val declaration: String =
         "${function.packageName.asString()}.${function.simpleName.asString()}"
+      // ADR-198: the route's own gate refused it for its reified type parameter, not its shape.
+      if (function.isReifiedWithUnspellableBound()) {
+        return@map ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION,
+          symbol = function,
+          declaration = declaration,
+          reason = "its reified type parameter has a bound with no closed Kotlin spelling " +
+              "(such as `T : Enum<T>`), so no type the generated export can name is a legal " +
+              "reified argument",
+          hint = "declare the type parameter without `reified` (and the function without " +
+              "`inline` if nothing else needs it), or export a non-generic overload per type",
+          owner = function.forwardFileClassOwner(),
+          member = function.simpleName.asString(),
+        )
+      }
       ForwardDiagnostic(
         kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN,
         symbol = function,

@@ -868,7 +868,12 @@ private fun KSClassDeclaration.cirTypeParameter(
 ): CirTypeParameter {
   val constraints: List<String> = param.cirConstraints(
     context, logger, this, "${simpleName.asString()}<${param.name.asString()}>",
-  )
+  ) { name ->
+    // A bound's argument naming one of this class's parameters (`IRival<T>`) takes its C#
+    // spelling, which may have been renamed around a member (`A` -> `TA`).
+    typeParameters.firstOrNull { it.name.asString() == name }
+      ?.let { named -> forwardCsharpTypeParameterName(named) } ?: name
+  }
 
   if (reportVariance && param.variance != Variance.INVARIANT) {
     ForwardDiagnosticSink.emit(
@@ -902,13 +907,17 @@ internal fun KSTypeParameter.cirConstraints(
   logger: KSPLogger,
   symbol: KSNode,
   declaration: String,
+  // The C# spelling of a type parameter a bound's arguments name (`IRival<T>`); see
+  // [cirBoundConstraint].
+  typeParameterName: (String) -> String = { name -> name },
 ): List<String> {
   val bounds: List<String> = bounds.toList().mapNotNull { bound ->
-    cirBoundConstraint(bound.resolve(), context, logger, symbol, declaration)
+    cirBoundConstraint(bound.resolve(), context, logger, symbol, declaration, typeParameterName)
   }
   // `notnull` must come first in a C# constraint list and adds nothing next to a class bound, so
-  // it survives only as the sole constraint.
-  return if (bounds.size > 1) bounds - NOTNULL_CONSTRAINT else bounds
+  // it survives only as the sole constraint. ADR-198: `struct` must come first too (CS0449).
+  return (if (bounds.size > 1) bounds - NOTNULL_CONSTRAINT else bounds)
+    .sortedByDescending { constraint -> constraint == ENUM_CONSTRAINT }
 }
 
 /**

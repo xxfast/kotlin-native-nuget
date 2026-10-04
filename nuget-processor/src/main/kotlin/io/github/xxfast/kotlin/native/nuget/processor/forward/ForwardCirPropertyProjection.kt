@@ -412,7 +412,7 @@ internal object ForwardCirPropertyProjection {
         )
         // ADR-083/147: `FromHandle<T>` answers `default!` for the null pointer itself.
         is BridgeType.TypeParameter ->
-          append("            return NugetMarshal.FromHandle<${inner.name}>(nativeResult);")
+          append("            return NugetMarshal.FromHandle<${inner.nullableRead()}>(nativeResult);")
         // ADR-040: construct via the backing wrapper class, not the interface spelling.
         is BridgeType.Interface -> append(
           "            return nativeResult == IntPtr.Zero ? null : " +

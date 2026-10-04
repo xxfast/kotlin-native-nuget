@@ -4,16 +4,26 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.abiSlotParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardBoundSpellings
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardKotlinDeclaredSpelling
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardStarBoundSpellings
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isTrampolined
+import io.github.xxfast.kotlin.native.nuget.processor.forward.trampolined
+import io.github.xxfast.kotlin.native.nuget.processor.forward.castsToGenericBound
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardUncheckedCastSuppression
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardBoundedRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.hasNullableBound
 import io.github.xxfast.kotlin.native.nuget.processor.forward.importIfDefaultPackage
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinPackageReference
+import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.cir.isKotlinBuiltinPackage
 import kotlin.reflect.KClass
 
 /**
@@ -25,11 +35,36 @@ import kotlin.reflect.KClass
  * silent, which is the amendment.
  */
 internal fun KSFunctionDeclaration.legacyGenericRouteParameterIndex(): Int {
+  // ADR-198: refused on both halves, and named by `warnUnroutedGenericFunctions`.
+  if (isReifiedWithUnspellableBound()) return -1
   val typeParamName: String = typeParameters.firstOrNull()?.name?.asString() ?: "T"
+  // The two returns both halves spell: `T` itself, or a generated generic class over it
+  // (`Box<T>`). Anything else (`String`, `Unit`, a builtin `List<T>`) was read as a generic-class
+  // handle by the Kotlin half and as a `T` by the C# half, which the ABI contract stopped as an
+  // internal generator failure; it is refused here, on both halves, and named as its return.
+  val returned: KSDeclaration? = returnType?.resolve()?.expandAliases()?.declaration
+  val routedReturn: Boolean = when (returned) {
+    is KSTypeParameter -> returned.name.asString() == typeParamName
+    is KSClassDeclaration -> returned.typeParameters.isNotEmpty() &&
+        !returned.packageName.asString().isKotlinBuiltinPackage()
+    else -> false
+  }
+  if (!routedReturn) return -1
   return parameters.indexOfFirst { param ->
     param.type.resolve().expandAliases().declaration.simpleName.asString() == typeParamName
   }
 }
+
+/**
+ * ADR-198: a `reified` type parameter whose bound has no closed spelling (`inline fun <reified T :
+ * Enum<T>>`). The trampoline's `T` is not reified and neither is `Nothing`, so nothing the export
+ * can name is a legal reified argument; the language has no way to call it here.
+ */
+internal fun KSFunctionDeclaration.isReifiedWithUnspellableBound(): Boolean =
+  typeParameters
+    .firstOrNull()
+    ?.let { parameter -> parameter.isReified && parameter.isTrampolined() }
+    ?: false
 
 /**
  * True when the first type parameter has a bound other than `Any`, which suppresses the primitive
@@ -154,18 +189,38 @@ internal fun FileSpec.Builder.addGenericFunctionExports(
   // (`kotlin.Comparable` names no type), the box is cast, checked, to every bound (ADR-015
   // amendment: `Weigh<uint>` fails at the read, not in the body), and a multi-bound `T` is typed
   // as the intersection no single type argument names.
-  val bounds: List<String> = func.typeParameters.firstOrNull()?.forwardBoundSpellings().orEmpty()
+  val typeParameter: KSTypeParameter? = func.typeParameters.firstOrNull()
+  // ADR-198: a bound with no closed spelling is read inside the trampoline, checked against each
+  // bound's star-projected class and cast to the function's own `T`, which then infers the call.
+  val trampolined: Boolean = typeParameter?.isTrampolined() == true
+  val bounds: List<String> = when {
+    typeParameter == null -> emptyList()
+    trampolined -> typeParameter.forwardStarBoundSpellings()
+    else -> typeParameter.forwardBoundSpellings()
+  }
+  val trampoline: List<Pair<String, List<String>>> = listOfNotNull(
+    typeParameter?.takeIf { trampolined }?.let { parameter ->
+      parameter.name.asString() to
+          parameter.bounds.map { bound -> bound.resolve().forwardKotlinDeclaredSpelling() }.toList()
+    },
+  )
 
   // ADR-147 amendment, applied to this route: an unconstrained `T` (upper bound `Any?`) may be
   // null, so the object variant takes the null pointer for a null argument (ADR-083) and returns
   // it for a null result, instead of dereferencing it.
-  val nullableBound: Boolean = func.typeParameters.firstOrNull()?.hasNullableBound() ?: true
-  val argument: String = forwardBoundedRead(paramRef, bounds, nullableBound)
+  val nullableBound: Boolean = typeParameter?.hasNullableBound() ?: true
+  val argument: String = forwardBoundedRead(
+    paramRef, bounds, nullableBound, typeVariable = typeParamName.takeIf { trampolined },
+  )
+  // The checked read of a generic bound (`as kotlin.Comparable<Any?>`) warns; the trampoline
+  // suppresses its own casts on its local function.
+  val suppressUnchecked: Boolean = !trampolined && bounds.castsToGenericBound()
 
   if (returnsGenericClass) {
     addFunction(
       FunSpec.builder("export_$cname")
         .addAnnotation(cNameAnnotation(cname, ownedBy(func, "generic variant: object")))
+        .apply { if (suppressUnchecked) addAnnotation(forwardUncheckedCastSuppression) }
         .addParameter(paramName, cOpaquePointer.copy(nullable = nullableBound))
         .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
         .returns(cOpaquePointer.copy(nullable = true))
@@ -182,6 +237,7 @@ internal fun FileSpec.Builder.addGenericFunctionExports(
           append("}")
         }, nugetHandles, funcName, cOpaquePointerVar, nugetHandles)
         .build()
+        .trampolined(trampoline)
     )
   } else if (returnDecl == typeParamName) {
     val callArguments: Array<Any> =
@@ -189,6 +245,7 @@ internal fun FileSpec.Builder.addGenericFunctionExports(
     addFunction(
       FunSpec.builder("export_$cname")
         .addAnnotation(cNameAnnotation(cname, ownedBy(func, "generic variant: object")))
+        .apply { if (suppressUnchecked) addAnnotation(forwardUncheckedCastSuppression) }
         .addParameter(paramName, cOpaquePointer.copy(nullable = nullableBound))
         .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
         .returns(cOpaquePointer.copy(nullable = true))
@@ -209,6 +266,7 @@ internal fun FileSpec.Builder.addGenericFunctionExports(
           append("}")
         }, *callArguments, cOpaquePointerVar, nugetHandles)
         .build()
+        .trampolined(trampoline)
     )
   }
 }

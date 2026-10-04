@@ -123,7 +123,8 @@ hint stays the general remedy. No ROADMAP line tracks any of them.
 
 - Generic methods on an interface, an enum, a value class, and extension functions.
 - A `reified` type parameter, which the boxed call would instantiate at its erased bound.
-- A bound that is itself a type parameter, and an `Enum<T>` bound.
+- A bound that is itself a type parameter. (An `Enum<T>` bound was declined here and binds since
+  the 2026-10-04 amendment below.)
 - A lambda or `Flow` anywhere in the signature.
 - A generic member that is half of an add/remove pair.
 - `Result<List<T>>` and a `T` nested in another type (`List<T>`, `Box<T>`).
@@ -187,3 +188,15 @@ the Proposed draft's open question. Leak rows (`LeakTests/LiveHandleTests.cs`):
 `MemberGenericMethod_ThrowingMember_ReturnsToBaseline` and
 `MemberGenericMethod_BoundCastFails_ReturnsToBaseline`. Fixture:
 `test-library/.../membergeneric/Groomers.kt`.
+
+## Amendment (2026-10-04): an Enum or self-referencing bound binds
+
+[ADR-198](198-unspellable-bound-trampoline.md) lifts the refusal for a bound with no closed Kotlin
+spelling. A member function's own type parameter bounded by `Enum<T>` or by a self-referencing
+invariant type (`T : Node<T>`) binds on a class, an object and a sealed arm, through ADR-198's local
+generic trampoline: the C# method is `public static string Rank<T>(T medal) where T : struct,
+global::System.Enum`, and the Kotlin call names the trampoline's own `T` instead of an erased
+argument. A type parameter bounded by another type parameter is still refused, as are `reified`
+parameters (including `inline fun <reified T : Enum<T>>`), suspend members and `Flow` members on such
+an owner. **Verified** by `Tier1EnumSelfBoundInteractionTest` (class, object and sealed arm) and
+`EnumGenericRouteInteractionTests` against the native library.

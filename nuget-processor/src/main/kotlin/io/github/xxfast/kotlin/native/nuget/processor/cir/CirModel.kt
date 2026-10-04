@@ -578,6 +578,13 @@ internal enum class CirVariance { INVARIANT, COVARIANT, CONTRAVARIANT }
 /** ADR-147 amendment: C#'s spelling of a Kotlin `T : Any` bound. */
 internal const val NOTNULL_CONSTRAINT: String = "notnull"
 
+/**
+ * ADR-198: C#'s spelling of a Kotlin `T : Enum<T>` bound, one list entry because `struct` must lead
+ * the constraint list. `global::`, because a user type named `Enum` in an enclosing namespace
+ * shadows the `System` one a `using` directive imports.
+ */
+internal const val ENUM_CONSTRAINT: String = "struct, global::System.Enum"
+
 internal data class CirTypeParameter(
   val name: String,
   val bounds: List<String> = emptyList(),

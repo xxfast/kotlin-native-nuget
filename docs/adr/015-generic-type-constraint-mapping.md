@@ -1,7 +1,7 @@
 # ADR-015: Generic Type Constraint Mapping — C# `where` clauses from Kotlin upper bounds
 
 ## Status
-Proposed
+Accepted
 
 ## Context
 Kotlin generics support upper bounds: `class Container<T : Pet>`, `fun <T : Comparable<T>> sort(...)`. These are compile-time constraints on what types can be used as type arguments. The C bridge (Kotlin/Native) has no representation for these — all type parameters are erased to `void*`. However, the C# side has full generic constraints (`where T : IPet`), and omitting them makes the generated API less type-safe and less idiomatic for C# consumers.
@@ -75,6 +75,7 @@ The bridge layer (Kotlin CName exports) requires **no changes** — constraints 
 | Exported interface `Pet`                          | `IPet` (I-prefix per existing interface naming) |
 | Exported class `Animal`                           | `Animal`                                        |
 | `kotlin.Comparable<T>` and other stdlib bounds     | dropped (see 2026-10-03 amendment)              |
+| `kotlin.Enum<T>`                                  | `struct, global::System.Enum` (see 2026-10-04 amendment, ADR-198) |
 | Unrecognized / external                           | not shipped; see the 2026-10-03 amendment       |
 | Unconstrained (no bounds or only implicit `Any?`) | no `where` clause                               |
 
@@ -130,7 +131,9 @@ fun export_petbox_get_value(handle: COpaquePointer): COpaquePointer { ... }
 
 The table's `Comparable<T>` to `IComparable<T>` row and its "simple name with warning" row never
 shipped and are superseded. A bound declared in a Kotlin builtin package (`Comparable<T>`,
-`Number`, `CharSequence`, `Enum<T>`) used to produce C# and Kotlin that did not compile: the
+`Number`, `CharSequence`, `Enum<T>`; a non-null `Enum<T>` now binds as `struct, global::System.Enum`,
+see the 2026-10-04 amendment "a bound with no closed Kotlin spelling") used to produce C# and Kotlin
+that did not compile: the
 `where` clause named `global::...Kotlin.IComparable` or a bare `Number` (CS0234, CS0246, CS0701),
 and the generic function and class routes spelled `kotlin.Comparable` with no type arguments.
 
@@ -160,8 +163,9 @@ SharedException 2, all six NativeAOT shapes); `Ranked<int>`, `Ranked<string>`, `
 `Tally<double>` and `Favourite<Treat>` run. Not covered on purpose: the star-projected and nested
 generic bound-argument arms of `forwardKotlinBoundSpelling`. No LeakTests row.
 
-Known limits, verified and tracked in ROADMAP: `T : Enum<T>` has no valid Kotlin type argument, so
-its generated Kotlin does not compile on both generic routes. The multi-bound limit this amendment
+Known limits, verified: `T : Enum<T>` had no valid Kotlin type argument, so its generated Kotlin
+did not compile on both generic routes; the 2026-10-04 amendment "a bound with no closed Kotlin
+spelling" (ADR-198) closes it. The multi-bound limit this amendment
 first listed is fixed by the 2026-10-04 multi-bound amendment. The builtin-bounded generic function
 limit it also listed (`Treats.Weigh<int>(4)` threw `NotSupportedException`) is fixed by the
 2026-10-04 builtin amendment.
@@ -211,14 +215,11 @@ crossings are the ones `GenericClassMethod_ExportedClassTypeParameter_ReturnsToB
 verified for the erased class: that a `T` argument missing a dropped `Comparable` bound fails at
 the call (see the 2026-10-04 builtin amendment).
 
-Known limits, verified and fixed by a later item together with `T : Enum<T>`: (1) an invariant
-self-referencing bound such as `T : Node<T>` still fails, because `Node<Any?>` is not a
-`Node<Node<Any?>>`; it is the same problem as `T : Enum<T>` and is pinned by a known-limit cell in
-`Tier1MultiBoundGenericTest`. (2) A generic interface bound renders in the C# `where` clause
-without its type arguments (`where T : IRival` for the declared `IRival<in T>`, CS0305), single
-bound or several; the spelling is in `cirBoundConstraint` and `legacyBoundInterfaceCsName`
-(`cir/CirTypeMapping.kt`), verified on the multi-bound shape (the Tier 1 cell asserts the
-Kotlin half only and pins the C# spelling, so a fix shows up as that cell going red).
+Known limits, verified when written and closed by the 2026-10-04 amendment "a bound with no closed
+Kotlin spelling" (ADR-198): (1) an invariant self-referencing bound such as `T : Node<T>` failed,
+because `Node<Any?>` is not a `Node<Node<Any?>>`; it was the same problem as `T : Enum<T>`.
+(2) A generic interface bound rendered in the C# `where` clause without its type arguments
+(`where T : IRival` for the declared `IRival<in T>`, CS0305), single bound or several.
 
 ## Amendment (2026-10-04): builtins as `T` on a generic function, and checked bound reads
 
@@ -276,3 +277,30 @@ Evidence. Verified: `Tier1BuiltinGenericBoundTest` (the function body reads thro
 failure path. Inferred, not run: that the other unsigned builtins (`byte`, `ushort`, `ulong`) are
 rejected by `T : Number` as `uint` is, since Kotlin's unsigned types are not `Number`; only `uint`
 and `string` are pinned.
+
+## Amendment (2026-10-04): a bound with no closed Kotlin spelling
+
+[ADR-198](198-unspellable-bound-trampoline.md) closes the last known limits of the two amendments
+above. Decided there; the rules that touch this ADR's bound mapping:
+
+- A non-null `Enum<T>` bound maps to `where T : struct, global::System.Enum` (`struct` leads the
+  list; `global::` because a user type may be named `Enum`) and is no longer dropped. It rejects
+  `int`, `string`, wrappers and `Medal?` at compile time. A foreign C# enum satisfies it and throws a
+  catchable `NotSupportedException` at the call. A nullable `Enum<T>?` bound is still dropped with
+  `INFO_DROPPED_BOUND`, since no C# constraint is both a value type and nullable.
+- A bound that names its own type parameter outside a contravariant position (`Enum<T>`, an invariant
+  `Node<T>`) has no closed Kotlin spelling. The export reads its boxes inside a local generic
+  function `nugetTrampoline` that re-declares the bounds, casting each box to every bound's
+  star-projected class before `as T`, so the bound stays checked. Every other bound keeps the spelling
+  and checked read above.
+- A generic interface bound renders its type arguments in C# (`where T : IRival<T>`), single bound or
+  several, through the class's renamed C# type parameter. A bound C# cannot spell is dropped, named by
+  `INFO_DROPPED_BOUND`.
+- Exports whose read of a non-trampolined `T` casts to a generic bound carry a per-declaration
+  `@Suppress("UNCHECKED_CAST")`, so the build log no longer has the warning the builtin amendment
+  accepted.
+
+Evidence. Verified: `Tier1EnumSelfBoundTest`, `Tier1MultiBoundGenericTest` and
+`Tier1BuiltinGenericBoundTest`; native `EnumSelfBoundTests` runs `Rosette<Medal>`,
+`Medals.RequirePrize` and `Chain<Bead>` (`where T : INode<T>, IPet`). ADR-198 carries the full
+verification result.

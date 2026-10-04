@@ -397,5 +397,5 @@ the real entry, not an ordinal); two `LeakTests` rows,
 NativeAOT step is green. A Tier 1 cell compiles an enum with its own `fun box()` beside the
 generated export.
 
-Not covered: `T : Enum<T>` (a self-bound on an enum type parameter) is a separate item; this
-amendment supplies only the write route it needs.
+`T : Enum<T>` (a self-bound on an enum type parameter) is
+[ADR-198](198-unspellable-bound-trampoline.md); this amendment supplies the write route it needs.

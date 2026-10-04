@@ -133,13 +133,16 @@ class Tier1MultiBoundGenericTest {
           "bounded as tier1.multibound.Pet; bounded }",
     )
     assertContains(result.generated, "where T : kotlin.Comparable<T>, T : tier1.multibound.Pet")
+    assertTrue(
+      result.compileWarnings.none { it.contains("nchecked cast") },
+      "${result.compileWarnings}",
+    )
   }
 
   /**
-   * The bound names `T` itself; a contravariant one has an erased spelling within it. Kotlin half
-   * only: the C# half spells a generic interface bound without its arguments
-   * (`where T : IRival` for the declared `IRival<in T>`, CS0305), single-bound or not, a separate
-   * defect pinned here so a fix shows up as this cell going red.
+   * The bound names `T` itself; a contravariant one has an erased spelling within it. The C# half
+   * spells a generic interface bound with its arguments, single-bound or not; it used to drop them
+   * (`where T : IRival` for the declared `IRival<in T>`, CS0305).
    */
   @Test
   fun `a recursive bound beside a wrapper bound compiles on both routes`() {
@@ -154,7 +157,11 @@ class Tier1MultiBoundGenericTest {
         fun climb(next: T): T = if (next.beats(value)) next else value
       }
 
+      class Duel<T : Rival<T>>(val value: T)
+
       fun <T> champion(value: T): T where T : Rival<T>, T : Pet = value
+
+      fun <T : Rival<T>> referee(value: T): T = value
       """.trimIndent(),
       processorOptions = options,
     )
@@ -164,7 +171,32 @@ class Tier1MultiBoundGenericTest {
     assertContains(
       result.generatedCSharp,
       "public class Ladder<T> : IDisposable, INugetHandle where T : " +
-          "global::TestLibrary.Multibound.IRival, global::TestLibrary.Multibound.IPet",
+          "global::TestLibrary.Multibound.IRival<T>, global::TestLibrary.Multibound.IPet",
+    )
+    assertContains(
+      result.generatedCSharp,
+      "public class Duel<T> : IDisposable, INugetHandle where T : " +
+          "global::TestLibrary.Multibound.IRival<T>",
+    )
+    assertContains(
+      result.generatedCSharp,
+      "public static T Champion<T>(T value) where T : " +
+          "global::TestLibrary.Multibound.IRival<T>, global::TestLibrary.Multibound.IPet",
+    )
+    assertContains(
+      result.generatedCSharp,
+      "public static T Referee<T>(T value) where T : global::TestLibrary.Multibound.IRival<T>",
+    )
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using TestLibrary.Multibound;
+
+      public static class Probe
+      {
+          public static T Pick<T>(T value) where T : IRival<T>, IPet => Fixture.Champion(value);
+      }
+      """.trimIndent(),
     )
     assertContains(
       result.generated,
@@ -245,12 +277,13 @@ class Tier1MultiBoundGenericTest {
   }
 
   /**
-   * An invariant recursive bound (`T : Node<T>`) has no erased spelling within it, multi-bound or
-   * not: `Node<Any?>` is not a `Node<Node<Any?>>`. It is the same limit as `T : Enum<T>`
-   * (Tier1BuiltinGenericBoundTest), pinned here so a fix shows up as this cell going red.
+   * ADR-198: an invariant recursive bound (`T : Node<T>`) has no erased spelling within it,
+   * multi-bound or not: `Node<Any?>` is not a `Node<Node<Any?>>`. It is the `T : Enum<T>` case
+   * (Tier1EnumSelfBoundTest), and rides the same trampoline: each export that takes a `T`
+   * re-declares the bounds on a local generic function called at `Nothing`.
    */
   @Test
-  fun `an invariant recursive bound remains the known Enum-class limit`() {
+  fun `an invariant recursive bound compiles through the trampoline on both routes`() {
     val result = Tier1Harness.run(
       """
       package tier1.multibound
@@ -258,15 +291,69 @@ class Tier1MultiBoundGenericTest {
       interface Pet { val name: String }
       interface Node<T> { fun link(other: T): T }
 
-      class Chain<T>(val value: T) where T : Node<T>, T : Pet
+      class Chain<T>(val value: T) where T : Node<T>, T : Pet {
+        val label: String get() = value.name
+        fun attach(other: T): T = value.link(other)
+      }
+
+      class Link<T : Node<T>>(val value: T) {
+        fun attach(other: T): T = value.link(other)
+      }
+
+      fun <T> head(value: T): T where T : Node<T>, T : Pet = value
+
+      class Bead(override val name: String) : Node<Bead>, Pet {
+        override fun link(other: Bead): Bead = Bead(name + "-" + other.name)
+      }
       """.trimIndent(),
       processorOptions = options,
     )
 
-    assertTrue(result.kspSucceeded, "ksp: ${result.kspErrors}")
+    assertCompiles(result)
     assertTrue(
-      result.compileErrors.any { it.contains("Node") },
-      "expected the known invariant F-bound limit; got ${result.compileErrors}",
+      result.compileWarnings.none { it.contains("nchecked cast") },
+      "${result.compileWarnings}",
+    )
+    assertContains(result.generated, "where T : tier1.multibound.Node<T>, T : tier1.multibound.Pet")
+    assertContains(result.generated, "where T : tier1.multibound.Node<T> {")
+    assertContains(
+      result.generated,
+      "other.asStableRef<Any>().get().let { bounded -> bounded as tier1.multibound.Node<*>; " +
+          "bounded as tier1.multibound.Pet; bounded as T }",
+    )
+    assertContains(
+      result.generated,
+      "(handle.asStableRef<Any>().get() as tier1.multibound.Chain<T>)",
+    )
+    assertContains(result.generated, "handle.asStableRef<tier1.multibound.Chain<*>>().get().label")
+    assertContains(
+      result.generatedCSharp,
+      "public class Chain<T> : IDisposable, INugetHandle where T : " +
+          "global::TestLibrary.Multibound.INode<T>, global::TestLibrary.Multibound.IPet",
+    )
+    assertContains(
+      result.generatedCSharp,
+      "public class Link<T> : IDisposable, INugetHandle where T : " +
+          "global::TestLibrary.Multibound.INode<T>",
+    )
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using TestLibrary.Multibound;
+
+      public static class Probe
+      {
+          public static T Head<T>(T value) where T : INode<T>, IPet => Fixture.Head(value);
+
+          public static string Run()
+          {
+              using var oreo = new Bead("Oreo");
+              using var chain = new Chain<Bead>(oreo);
+              using Bead linked = chain.Attach(new Bead("Mylo"));
+              return linked.Name + chain.Label + Fixture.Head(oreo).Name;
+          }
+      }
+      """.trimIndent(),
     )
   }
 }

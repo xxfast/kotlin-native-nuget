@@ -63,9 +63,23 @@ internal fun KSFunctionDeclaration.forwardMethodTypeParameters(): List<ForwardMe
   typeParameters.map { parameter ->
     val bounds: List<String> = parameter.forwardBoundSpellings()
     val nullable: String = if (parameter.hasNullableBound()) "?" else ""
+    val kotlinName: String = parameter.simpleName.asString()
+    // ADR-198: no erased argument is within an unspellable bound; the call names the trampoline's
+    // own type variable instead, which re-declares the bounds.
+    if (parameter.hasUnspellableBound()) {
+      return@map ForwardMethodTypeParameter(
+        name = forwardCsharpMethodTypeParameterName(parameter),
+        kotlinName = kotlinName,
+        kotlinTypeArgument = kotlinName,
+        trampolineBounds =
+          parameter.bounds
+            .map { bound -> bound.resolve().forwardKotlinDeclaredSpelling() }
+            .toList(),
+      )
+    }
     ForwardMethodTypeParameter(
       name = forwardCsharpMethodTypeParameterName(parameter),
-      kotlinName = parameter.simpleName.asString(),
+      kotlinName = kotlinName,
       kotlinTypeArgument = if (bounds.size > 1) "_" else (bounds.firstOrNull() ?: "Any") + nullable,
     )
   }
@@ -81,7 +95,8 @@ internal fun KSFunctionDeclaration.forwardMethodTypeParameters(): List<ForwardMe
  *  - a `T` that shadows an owner's (C# reads that as CS0693, which a warnings-as-errors build
  *    fails on);
  *  - a `reified` `T`, which the boxed call would silently instantiate at its erased bound;
- *  - a bound that is itself a type parameter, or `Enum<T>`, which no erased argument satisfies;
+ *  - a bound that is itself a type parameter, which no erased argument satisfies (a bound with
+ *    no closed spelling, `Enum<T>`, `Node<T>`, routes through ADR-198's trampoline instead);
  *  - a multi-bound `T` no parameter mentions, since no type argument spells it and nothing infers
  *    it;
  *  - a `T` nested in another type (`List<T>`, `Box<T>`), and a lambda or `Flow` anywhere in the
@@ -116,9 +131,7 @@ internal fun KSFunctionDeclaration.forwardMemberGenericRefusal(): String? {
       if (resolved.declaration is KSTypeParameter) {
         return "its type parameter `$name` is bounded by another type parameter"
       }
-      if (resolved.declaration.qualifiedName?.asString() == "kotlin.Enum") {
-        return "its type parameter `$name` is bounded by `Enum`"
-      }
+      // ADR-198: an `Enum<T>` (or any other self-referencing) bound routes through the trampoline.
     }
   }
 

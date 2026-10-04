@@ -374,6 +374,18 @@ internal sealed interface BridgeType {
     val nullableFromBound: kotlin.Boolean = false,
     val kotlinName: kotlin.String = name,
     val additionalBounds: List<kotlin.String> = emptyList(),
+    /**
+     * ADR-198: the bound has no closed spelling, so a box is read inside the trampoline: checked
+     * against each bound's star-projected class ([boundQualifiedName], [additionalBounds] are those
+     * spellings here) and cast to [kotlinName].
+     */
+    val trampolined: kotlin.Boolean = false,
+    /**
+     * ADR-198: the C# parameter is `struct`-constrained (a `kotlin.Enum` bound), so its `T?` is
+     * `Nullable<T>`: a nullable position boxes and reads through `T?`, or a null result would read
+     * back as the enum's first entry.
+     */
+    val valueType: kotlin.Boolean = false,
   ) : BridgeType
 }
 
@@ -725,12 +737,16 @@ internal data class ForwardPublicSignature(
  * @param constraints the C# `where` constraints of a declaring (non-`override`) member, from
  *   ADR-015's bound mapping. Filled after planning by the C# half's bound speller, which needs
  *   the export context the planner does not hold.
+ * @param trampolineBounds ADR-198: the declared bounds (`kotlin.Enum<T>`) of a parameter whose
+ *   bound has no closed spelling, re-declared on the export's trampoline, where
+ *   [kotlinTypeArgument] is the trampoline's own type variable. Empty for every other parameter.
  */
 internal data class ForwardMethodTypeParameter(
   val name: String,
   val kotlinName: String,
   val kotlinTypeArgument: String,
   val constraints: List<String> = emptyList(),
+  val trampolineBounds: List<String> = emptyList(),
 )
 
 /** Symbol-level invocation information. Renderers decide syntax later. */
@@ -874,6 +890,12 @@ internal data class ForwardGenericOwnerParameter(
   val erased: String?,
   val bounds: List<String>,
   val nullableBound: Boolean,
+  /**
+   * ADR-198: a bound with no closed spelling (`T : Enum<T>`, `T : Node<T>`). An export that takes
+   * a value of it runs inside a local generic function re-declaring [bounds], called at `Nothing`;
+   * [erased] is null, so every other export reads the owner star-projected.
+   */
+  val trampolined: Boolean = false,
 )
 
 internal data class ForwardResultConvention(

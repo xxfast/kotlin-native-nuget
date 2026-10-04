@@ -128,12 +128,18 @@ internal class ForwardBridgeTypeClassifier(
       // ADR-197: a member function's own `T` crosses on the same boxed wire. The planner decides
       // which member shapes route (`forwardMemberGenericRefusal`); this only spells the kind.
       if (owner is KSFunctionDeclaration && owner.isForwardGenericMemberOwner()) {
-        val bounds: List<String> = declaration.forwardBoundSpellings()
+        // ADR-198: as a class's parameter, a bound with no closed spelling reads in the trampoline.
+        val trampolined: Boolean = declaration.hasUnspellableBound()
+        val bounds: List<String> =
+          if (trampolined) declaration.forwardStarBoundSpellings()
+          else declaration.forwardBoundSpellings()
         val parameter = BridgeType.TypeParameter(
           name = owner.forwardCsharpMethodTypeParameterName(declaration),
           boundQualifiedName = bounds.firstOrNull(),
           kotlinName = declaration.simpleName.asString(),
           additionalBounds = bounds.drop(1),
+          trampolined = trampolined,
+          valueType = declaration.hasEnumConstraint(),
         )
         return if (declaration.hasNullableBound()) {
           BridgeType.Nullable(parameter.copy(nullableFromBound = true))
@@ -142,12 +148,19 @@ internal class ForwardBridgeTypeClassifier(
         }
       }
       return if (onGenericClass) {
-        val bounds: List<String> = declaration.forwardBoundSpellings()
+        // ADR-198: a bound with no closed spelling is read inside the trampoline, checked against
+        // each bound's star-projected class and then cast to the trampoline's own `T`.
+        val trampolined: Boolean = declaration.isTrampolined()
+        val bounds: List<String> =
+          if (trampolined) declaration.forwardStarBoundSpellings()
+          else declaration.forwardBoundSpellings()
         val parameter = BridgeType.TypeParameter(
           name = (owner as KSClassDeclaration).forwardCsharpTypeParameterName(declaration),
           boundQualifiedName = bounds.firstOrNull(),
           kotlinName = declaration.simpleName.asString(),
           additionalBounds = bounds.drop(1),
+          trampolined = trampolined,
+          valueType = declaration.hasEnumConstraint(),
         )
         // ADR-147 amendment: an unconstrained `T` has upper bound `Any?`, so a bare `T` is as
         // nullable as `T?` on the Kotlin half and crosses on the same null-pointer wire (ADR-083).
@@ -872,6 +885,100 @@ internal fun KSTypeParameter.forwardBoundSpellings(): List<String> = bounds.toLi
   .map { resolved -> resolved.forwardKotlinBoundSpelling() }
 
 /**
+ * ADR-198: every non-`Any` bound as its star-projected class (`kotlin.Enum<*>`, `io.pkg.Pet`), the
+ * casts that check a trampolined `T` box. A star-projected cast is checked and unwarned; the
+ * cast to `T` that follows it carries the static type.
+ */
+internal fun KSTypeParameter.forwardStarBoundSpellings(): List<String> = bounds.toList()
+  .map { bound -> bound.resolve() }
+  .filter { resolved ->
+    val name: String? = resolved.declaration.qualifiedName?.asString()
+    name != null && name != "kotlin.Any"
+  }
+  .sortedBy { resolved -> resolved.arguments.isEmpty() }
+  .map { resolved ->
+    val name: String = resolved.declaration.qualifiedName?.asString()
+      ?: resolved.declaration.simpleName.asString()
+    if (resolved.arguments.isEmpty()) name
+    else "$name<${resolved.arguments.joinToString(", ") { "*" }}>"
+  }
+
+/**
+ * ADR-198: true when one of this parameter's bounds has no closed spelling, because it names the
+ * parameter itself somewhere other than a contravariant position (`T : Enum<T>`, `T : Node<T>`).
+ *
+ * The erased spelling replaces the parameter with `Any?`, which is within the bound only when every
+ * occurrence is contravariant: `Comparable<Any?>` is a `Comparable<Comparable<Any?>>` because
+ * `Comparable` is `in`, while `Enum<Any?>` is no `Enum<Enum<Any?>>`. A nested occurrence composes
+ * the variance of every argument it sits under (`Comparable<List<T>>` is still contravariant).
+ */
+internal fun KSTypeParameter.hasUnspellableBound(): Boolean = bounds.toList().any { bound ->
+  bound.resolve().namesOutsideContravariance(this, contravariant = false)
+}
+
+/** A type argument names [parameter] at a position whose composed variance is not `in`. */
+private fun KSType.namesOutsideContravariance(
+  parameter: KSTypeParameter,
+  contravariant: Boolean,
+): Boolean {
+  val declared: List<KSTypeParameter> =
+    (declaration as? KSClassDeclaration)?.typeParameters.orEmpty()
+  return arguments.withIndex().any { (index, argument) ->
+    val type: KSType = argument.type?.resolve() ?: return@any false
+    if (argument.variance == Variance.STAR) return@any false
+    val declaredVariance: Variance = declared.getOrNull(index)?.variance ?: Variance.INVARIANT
+    val variance: Variance =
+      if (argument.variance != Variance.INVARIANT) argument.variance else declaredVariance
+    // An invariant position is unspellable outright; `in` flips the polarity, `out` keeps it.
+    val composed: Boolean? = when (variance) {
+      Variance.CONTRAVARIANT -> !contravariant
+      Variance.COVARIANT -> contravariant
+      else -> null
+    }
+    val named: KSTypeParameter? = type.declaration as? KSTypeParameter
+    if (named != null && named.isSameParameter(parameter)) composed != true
+    else if (composed == null) type.mentionsParameter(parameter)
+    else type.namesOutsideContravariance(parameter, composed)
+  }
+}
+
+private fun KSType.mentionsParameter(parameter: KSTypeParameter): Boolean {
+  val named: KSTypeParameter? = declaration as? KSTypeParameter
+  if (named != null) return named.isSameParameter(parameter)
+  return arguments.any { argument ->
+    argument.type?.resolve()?.mentionsParameter(parameter) == true
+  }
+}
+
+private fun KSTypeParameter.isSameParameter(other: KSTypeParameter): Boolean =
+  name.asString() == other.name.asString() &&
+      parentDeclaration?.qualifiedName?.asString() ==
+      other.parentDeclaration?.qualifiedName?.asString()
+
+/**
+ * ADR-198: whether a `T` box is read inside the trampoline. Every parameter with an unspellable
+ * bound is; so is a multi-bound one on the same class, since the trampoline's casts to `T` and the
+ * witness-typed receiver of ADR-147's multi-bound read cannot meet in one call.
+ */
+internal fun KSTypeParameter.isTrampolined(): Boolean {
+  if (hasUnspellableBound()) return true
+  if (forwardBoundSpellings().size < 2) return false
+  val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return false
+  return owner.typeParameters.any { sibling -> sibling.hasUnspellableBound() }
+}
+
+/**
+ * ADR-198: a non-null `kotlin.Enum` bound, the one builtin bound C# spells as a constraint
+ * (`struct, global::System.Enum`). Under it a C# `T?` is `Nullable<T>`, so a nullable `T`
+ * position reads and boxes through `T?` rather than `T`.
+ */
+internal fun KSTypeParameter.hasEnumConstraint(): Boolean = bounds.toList().any { bound ->
+  val resolved: KSType = bound.resolve()
+  !resolved.isMarkedNullable &&
+      resolved.expandAliases().declaration.qualifiedName?.asString() == "kotlin.Enum"
+}
+
+/**
  * A bound as its declaration wrote it, for a declaration that re-states it: type parameters keep
  * their names (`kotlin.Comparable<T>`), projections and nullability are kept as written. Unlike
  * [forwardKotlinBoundSpelling], which erases them to spell a concrete type argument.
@@ -904,8 +1011,8 @@ internal fun KSType.forwardKotlinDeclaredSpelling(): String {
  * `kotlin.Comparable` of `T : Comparable<T>` is not a type, so `Sorted<kotlin.Comparable>` and
  * `asStableRef<kotlin.Comparable>()` did not compile. `kotlin.Comparable<Any?>` satisfies that
  * F-bound, nullable or not, because `Comparable` is contravariant (`Comparable<Any?>` is a
- * `Comparable<Comparable<Any?>?>`). An invariant F-bound (`T : Enum<T>`) has no such spelling; it
- * still renders, and still fails to compile, as a known limit.
+ * `Comparable<Comparable<Any?>?>`). An invariant F-bound (`T : Enum<T>`) has no such spelling;
+ * ADR-198 reads it through the trampoline instead ([hasUnspellableBound]).
  */
 internal fun KSType.forwardKotlinBoundSpelling(): String {
   val name: String = declaration.qualifiedName?.asString() ?: declaration.simpleName.asString()
@@ -987,7 +1094,10 @@ private fun KSClassDeclaration.forwardGenericOwnerParameters(): List<ForwardGene
   typeParameters.map { parameter ->
     val bounds: List<String> = parameter.forwardBoundSpellings()
     val nullable: Boolean = parameter.hasNullableBound()
-    val multiBound: Boolean = bounds.size > 1
+    // ADR-198: an unspellable bound has no erased argument either; it re-states its bounds on the
+    // trampoline instead.
+    val trampolined: Boolean = parameter.isTrampolined()
+    val multiBound: Boolean = bounds.size > 1 || trampolined
     ForwardGenericOwnerParameter(
       kotlinName = parameter.name.asString(),
       // ADR-147 amendment: the erased argument carries the bound's nullability. An unconstrained
@@ -1005,6 +1115,7 @@ private fun KSClassDeclaration.forwardGenericOwnerParameters(): List<ForwardGene
         emptyList()
       },
       nullableBound = nullable,
+      trampolined = trampolined,
     )
   }
 

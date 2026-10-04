@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.cir.ENUM_CONSTRAINT
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -13,7 +14,8 @@ import kotlin.test.assertTrue
  * `where T : Number` was CS0246, `where T : global::TestLibrary.Kotlin.IComparable` CS0234 (the
  * ADR-123 builtin-package defect on the interface speller), and only `where T : Enum` compiled, by
  * binding to `System.Enum`. The bound is dropped from the `where` clause (keeping `notnull` for a
- * non-null bound) and reported as INFO_DROPPED_BOUND; the declaration still binds.
+ * non-null bound) and reported as INFO_DROPPED_BOUND; the declaration still binds. ADR-198: except
+ * `Enum<T>`, which is a real constraint now (`where T : struct, global::System.Enum`).
  *
  * Tier 1 never compiles the C#, so these cells pin the `where` line; the test-library fixture and
  * `BuiltinGenericBoundTests` compile and run it.
@@ -34,7 +36,10 @@ class Tier1BuiltinGenericBoundTest {
   private fun assertNoBuiltinSpelling(result: Tier1Result) {
     val builtins: List<String> =
       listOf("Comparable", "Number", "CharSequence", "Enum", "Kotlin.")
-    val leaked: List<String> = whereLines(result).filter { line -> builtins.any(line::contains) }
+    // ADR-198: `Enum<T>` is the one builtin with a C# spelling, and it is only ever this one.
+    val leaked: List<String> = whereLines(result)
+      .map { line -> line.replace(ENUM_CONSTRAINT, "") }
+      .filter { line -> builtins.any(line::contains) }
     assertTrue(leaked.isEmpty(), "builtin bound leaked into a where clause: $leaked")
   }
 
@@ -66,6 +71,13 @@ class Tier1BuiltinGenericBoundTest {
     assertContains(result.generated, "(value_.asStableRef<Any>().get() as kotlin.Comparable<Any?>)")
     assertContains(result.generated, "(value.asStableRef<Any>().get() as kotlin.Comparable<Any?>)")
     assertFalse(result.generated.contains("asStableRef<kotlin.Comparable<Any?>>()"))
+    // The cast to the generic bound checks `Comparable` and leaves its argument unchecked; the
+    // export suppresses that warning itself, so a warnings-as-errors consumer still builds.
+    assertContains(result.generated, "@Suppress(\"UNCHECKED_CAST\")")
+    assertTrue(
+      result.compileWarnings.none { it.contains("nchecked cast") },
+      "${result.compileWarnings}",
+    )
 
     val notes: List<String> = droppedBounds(result)
     assertEquals(2, notes.size, "one note per dropped bound: $notes")
@@ -199,13 +211,13 @@ class Tier1BuiltinGenericBoundTest {
   }
 
   /**
-   * `where T : Enum` compiled in C# by accident, but the Kotlin half has no type argument that
-   * satisfies the invariant F-bound `T : Enum<T>` (`Enum<Any?>` is not an `Enum<Enum<Any?>>`),
-   * so the generated Kotlin does not compile on either route. The C# side follows the same drop
-   * rule; the Kotlin limit is pinned here so a fix shows up as this cell going red.
+   * ADR-198: the one builtin bound C# CAN spell, as a real constraint (`struct, global::System
+   * .Enum`), and the Kotlin half compiles through the trampoline (`Tier1EnumSelfBoundTest` pins its
+   * shape and the C# compile). It used to be dropped to `notnull` with a Kotlin half that did not
+   * compile, pinned here as a known limit.
    */
   @Test
-  fun `an Enum bound is dropped on the C# half and the Kotlin half remains a known limit`() {
+  fun `an Enum bound is a real constraint and both halves compile`() {
     val result = Tier1Harness.run(
       """
       package tier1.builtinbound
@@ -218,15 +230,15 @@ class Tier1BuiltinGenericBoundTest {
     )
 
     assertNoBuiltinSpelling(result)
+    assertTrue(result.compiledClean, "generated Kotlin: ${result.compileErrors}")
     assertContains(
       result.generatedCSharp,
-      "public class Ranked<T> : IDisposable, INugetHandle where T : notnull",
+      "public class Ranked<T> : IDisposable, INugetHandle where T : struct, global::System.Enum",
     )
-    assertContains(result.generatedCSharp, "public static T First<T>(T value) where T : notnull")
-    assertEquals(2, droppedBounds(result).size, "${droppedBounds(result)}")
-    assertTrue(
-      result.compileErrors.any { it.contains("Enum") },
-      "expected the known Enum<T> Kotlin-half limit; got ${result.compileErrors}",
+    assertContains(
+      result.generatedCSharp,
+      "public static T First<T>(T value) where T : struct, global::System.Enum",
     )
+    assertEquals(0, droppedBounds(result).size, "${droppedBounds(result)}")
   }
 }
