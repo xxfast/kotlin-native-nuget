@@ -1318,10 +1318,20 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     else -> "expose an equivalent member at a position the bridge carries"
   }
 
-  ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED ->
-    "move the member onto an ordinary class (which still has the legacy route this member kind " +
-        "needs), or expose an equivalent member on the sealed subclass in a shape the arm's " +
-        "routes do carry (a plain, per-call, non-generic one)"
+  // ADR-116: what still reaches this reason on an arm is a generic method and a `suspend` lambda
+  // parameter, and an ordinary class has no route for either. The old hint ("move the member onto
+  // an ordinary class, which still has the legacy route this member kind needs") sent the author
+  // to an owner that skips the same member again, so each detail borrows the position hint that
+  // names a shape that does bind. TYPE_PARAMETER has no producer, so it never gets here.
+  ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED -> when (detail) {
+    ForwardPlanSkipReason.GENERIC.name,
+    ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL.name,
+      -> ForwardPlanSkipReason.UNROUTED_POSITION.diagnosticHint(detail = detail)
+
+    else ->
+      "expose an equivalent member on the sealed subclass in a shape the arm's routes do carry " +
+          "(a plain, per-call, non-generic one)"
+  }
 
   // ADR-116 amendment (2026-09-11): a sealed base has one remedy an arm does not -- the arms
   // themselves, which do carry the suspend and flow routes (ADR-118/ADR-124).
