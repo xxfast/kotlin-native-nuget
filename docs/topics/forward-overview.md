@@ -90,7 +90,10 @@ The mapping has three cases
 | outside `rootPackage`, admitted by an explicit `include(...)` or `admit(...)` (`x.y.z`) | `<packageId>.X.Y.Z`, the **full** package PascalCased |
 
 With `rootPackage` unset, every package collapses to `<packageId>` regardless, since there is no
-prefix to strip or compare against. The full-package case reaches an admitted
+prefix to strip or compare against. Two exported types with the same name in different packages
+(`pkg.a.Mood` and `pkg.b.Mood`) would then be one C# name, so the build fails with
+`ERROR_CSHARP_SIGNATURE_COLLISION` naming both declarations; set `rootPackage` or rename one.
+The full-package case reaches an admitted
 dependency-module type the same way an in-root type does: `Billboards`, declared under
 `rootPackage`, returns a `Billboard` from `dev.other.admitted`, a package outside `rootPackage` that
 `test-library/build.gradle.kts` admits with `include("io.github.xxfast.kotlin.native.nuget.test",

@@ -568,6 +568,57 @@ internal fun translate(
     }
   }
 
+  // Two exported top-level types in different Kotlin packages that map to one C# namespace (always
+  // the case with `rootPackage` unset) and one C# name are CS0101 in the consumer's build. Keyed by
+  // qualified name so one type reached twice (a sealed arm that is also an exported class) is not a
+  // collision, and by arity because C# declares `Box` and `Box<T>` side by side.
+  val topLevelTypesByCsName:
+    MutableMap<Pair<String, String>, MutableMap<String, KSClassDeclaration>> = linkedMapOf()
+  fun recordTopLevelType(declaration: KSClassDeclaration, csName: String) {
+    if (declaration.isNestedDeclaration()) return
+    val qualifiedName: String = declaration.qualifiedName?.asString() ?: return
+    val namespace: String = namespaceOf(declaration.packageName.asString())
+    val arity: Int = declaration.typeParameters.size
+    val key: Pair<String, String> = namespace to if (arity == 0) csName else "$csName`$arity"
+    topLevelTypesByCsName.getOrPut(key) { sortedMapOf() }.putIfAbsent(qualifiedName, declaration)
+  }
+  (regularClasses + valueClasses + enums + objects + sealedClasses).forEach { decl ->
+    recordTopLevelType(decl, decl.nestedCsName())
+  }
+  sealedClasses
+    .flatMap { it.getSealedSubclasses().toList() }
+    .filter { !it.isEnumArm() }
+    .forEach { sub -> recordTopLevelType(sub, sub.nestedCsName()) }
+  interfaces.forEach { iface -> recordTopLevelType(iface, iface.nestedInterfaceCsName()) }
+  topLevelTypesByCsName.forEach { (key, declarations) ->
+    if (declarations.size < 2) return@forEach
+    val (namespace: String, arityKey: String) = key
+    val csName: String = arityKey.substringBefore('`')
+    val names: String = declarations.keys.joinToString(" and ") { "'$it'" }
+    val hint: String = if (context.rootPackage.isEmpty()) {
+      "set the NuGet publish rootPackage so each Kotlin package gets its own C# namespace, " +
+          "or rename one of the declarations"
+    } else {
+      "rename one of the declarations, or move it so its package maps to a different C# " +
+          "namespace under rootPackage '${context.rootPackage}'"
+    }
+    ForwardDiagnosticSink.emit(
+      listOf(
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION,
+          symbol = declarations.values.last(),
+          declaration = csName,
+          reason = "$names are both declared in C# as '$csName' in namespace '$namespace', " +
+              "which the consumer's build rejects as CS0101",
+          hint = hint,
+          // ERROR_*: the build fails before anything generated is read.
+          owner = null,
+        ),
+      ),
+      logger,
+    )
+  }
+
   interfaceBackingClasses.filter { !it.isNestedDeclaration() }.forEach { iface ->
     val namespace: String = namespaceOf(iface.packageName.asString())
     val backingName: String = iface.nestedCsName()
