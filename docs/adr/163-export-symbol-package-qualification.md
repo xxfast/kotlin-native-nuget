@@ -58,7 +58,8 @@ rootPackage>__<the name the declaration already had>`, always, on every route.**
   the **owner's** package. For a top-level or extension callable it is the **callable's own**
   package, matching ADR-095's `(package, name)` overload-counter scope, not the receiver's: two
   extensions of one name on one receiver, declared in two packages, must not converge on one counter
-  or one symbol.
+  or one symbol. An extension whose plain spelling a member of the same package already minted
+  takes the `ext` role word instead (see the 2026-10-04 amendment).
 
 ### One table, asked everywhere
 
@@ -114,7 +115,8 @@ there is no unqualified path left to bypass into.
 
 ### Residual collisions, and the diagnostic's rewording
 
-Package qualification does not close every collision, only the cross-package ones. Two shapes still
+Package qualification does not close every collision, only the cross-package ones (a member and an
+extension of one name in one package was a third shape, closed by the 2026-10-04 amendment). Two shapes still
 reach `ERROR_C_ENTRY_POINT_COLLISION`, both **inside one package and owner**:
 
 - A member whose name spells a generated role — the running example is `fun dispose()` against the
@@ -273,3 +275,37 @@ in the processor.
   not run for this item (`test-library`, `test-companion` and `smoke-test` all set `rootPackage`).
 - The Kitten, Mood, LoadState, Radio and Box cells now set `rootPackage` and compile their C# through
   the shared `Tier1CSharpCompile` helper, which fails rather than skips when `dotnet` is absent.
+
+## Amendment 2026-10-04: an extension takes an `_ext_` stem when its plain name is taken
+
+A member and an extension of one name on one receiver, declared in one package, derived the same
+symbol: the member's prefix is `<lib>_<pkg>__<owner chain>` and the extension's qualifier (its own
+package) plus receiver prefix spell the same string. That was the fatal
+`ERROR_C_ENTRY_POINT_COLLISION`, one of the "inside one package and owner" residuals above.
+
+**Rule.** `ForwardSymbolTable.extension` takes the set of entry points the non-extension routes
+already minted. When the plain spelling `<lib>_<pkg>__<owner chain>_<name>[_<n>]` is in that set, it
+returns `<lib>_<pkg>__<owner chain>_ext_<name>[_<n>]` instead. The set holds every export from a
+member, constructor, top-level function and a class or sealed-arm callback route (stored-callback
+and interface-bridge `add`/`remove` pairs, which mint `<owner>_<name>` outside the plan catalog).
+The check is per overload and per accessor, so `fun Lantern.shine()` beside member `shine()` becomes
+`lantern_ext_shine`, `fun Lantern.swing(arc: Long)` beside member `swing(arc: Int)` keeps
+`lantern_swing_2`, and `var Lantern?.wick` beside member `var wick` becomes `lantern_ext_get_wick`
+and `lantern_ext_set_wick`. The `ext` word sits in the slot `get_`/`set_` use. Extensions are
+planned after all member routes so object, companion, enum and value-class members are in the set.
+Suspend members (`_async`) and Flow members (`_collect`) already export a different stem and are not
+collisions.
+
+**Stability note (ADR-163 stability rules).** This is the on-collision renaming the Alternatives
+section rejects for package qualification, accepted here for one narrow case because the collision
+used to fail the build and nothing shipped under the plain name. The consequence is the one that
+section names: if a member that is skipped today becomes bridgeable later, the extension beside it
+moves from its plain symbol to `_ext_` at that point. The symbol is a private contract between the
+generated `CNameExports.kt` and `Interop.cs` that ship from one build, so only a hand-written
+`[DllImport]` would notice.
+
+**Residual.** A nested `Owner.Ext` with a member of the same name could meet the `ext` slot, and two
+inferred cases are not in the name set (a member function literally named `get_x` against an
+extension property `x`, and a member lambda-typed property's hand-written `<owner>_get_<name>`
+getter). ADR-117's diagnostic stays the backstop. ADR-132's 2026-10-04 amendment carries the
+consumer-visible behavior and the evidence.

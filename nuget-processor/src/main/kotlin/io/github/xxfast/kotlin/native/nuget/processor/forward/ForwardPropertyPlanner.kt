@@ -230,9 +230,14 @@ internal class ForwardPropertyPlanner(
     }
     // An extension property's holder is `{Receiver}Extensions`, which a dropped one may have been
     // the only member of, so it stays ownerless (see `warnDroppedForwardExtensionReceivers`).
+    // Every accessor a member, top-level or static route minted above, so an extension accessor
+    // that would spell one of them takes the `ext` role word instead (`ForwardSymbolTable`): an
+    // unshadowed `val Leash?.x` beside a member `Leash.x` in ONE package both derive `leash_get_x`.
+    val taken: Set<String> =
+      flatMap { plan -> plan.calls().map { call -> call.exportName } }.toSet()
     val planned: List<Pair<KSPropertyDeclaration, ForwardPropertyPlan>> =
       extensions.mapNotNull { prop ->
-        inOwner(null) { extensionProperty(prop) }?.let { plan -> prop to plan }
+        inOwner(null) { extensionProperty(prop, taken) }?.let { plan -> prop to plan }
       }
     // ADR-188 amendment: `val Cat.x` beside `val Cat?.x` is legal Kotlin, but the plan symbol and
     // the export are built from the receiver DECLARATION, so both plan as one symbol (and one C
@@ -723,7 +728,10 @@ internal class ForwardPropertyPlanner(
     }
   }
 
-  private fun extensionProperty(prop: KSPropertyDeclaration): ForwardPropertyPlan? {
+  private fun extensionProperty(
+    prop: KSPropertyDeclaration,
+    taken: Set<String> = emptySet(),
+  ): ForwardPropertyPlan? {
     val receiver: KSType = prop.extensionReceiver?.resolve()?.expandAliases() ?: return null
     // ADR-105 amendment: the extension *property* receiver gets the same sealed rewrite the
     // extension *function* receiver already gets (`ForwardCallablePlanner.extensionEntry`). An
@@ -815,8 +823,8 @@ internal class ForwardPropertyPlanner(
       position = ForwardPropertyPosition.EXTENSION,
       receiver = ForwardPropertyReceiver.Value(receiverType),
       prop = prop,
-      getExport = symbols.extension(prop, receiverPrefix, "get_${toCName(name)}"),
-      setExport = symbols.extension(prop, receiverPrefix, "set_${toCName(name)}"),
+      getExport = symbols.extension(prop, receiverPrefix, "get_${toCName(name)}", taken),
+      setExport = symbols.extension(prop, receiverPrefix, "set_${toCName(name)}", taken),
     )
   }
 
