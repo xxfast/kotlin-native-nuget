@@ -45,6 +45,9 @@ On top of that, we have some additional conventions that are specific to this re
 - Prefer using `if` statements over `when` statements with just two branches
 - When handling error states from `Result`, avoid using scoping functions (such as `.onFailure`) that introduce indentation. 
   - Instead, use explicit `if (result.isFailure)` checks with proper logging and error handling.
+- A Tier 1 cell that needs a collection component the bridge refuses must take it from
+  `Tier1UnwrappableWitness` (nuget-processor `tier1/`), not hard-code a type. Hard-coded gaps had
+  to move each time an ADR made a type wrappable.
 
 ## Stay In Scope
 

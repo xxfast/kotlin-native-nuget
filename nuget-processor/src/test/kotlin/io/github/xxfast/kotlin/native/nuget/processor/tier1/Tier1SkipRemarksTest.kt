@@ -16,10 +16,11 @@ import kotlin.test.assertTrue
  * true of something. The consumer-side twin is `IntegrationTests/XmlDocTests.cs`, which reads the
  * same text back out of a real `IntegrationTests.xml`.
  *
- * Every skipped shape here is stably unsupported: a `Map<String?, Int>` parameter (ADR-083 excludes
- * a nullable map key by name), a `Sequence` property (a stdlib type with no C# mapping), a
- * `List<List<String>?>` parameter (ADR-099's nullable nested component) and `var t: Throwable?`
- * (ADR-107 refuses the setter alone). None of them can quietly start binding.
+ * Every skipped shape in the shared fixture is stably unsupported: a `Map<String?, Int>` parameter
+ * (ADR-083 excludes a nullable map key by name), a `Sequence` property (a stdlib type with no C#
+ * mapping) and `var t: Throwable?` (ADR-107 refuses the setter alone). None of them can quietly
+ * start binding. The one cell that needs a COLLECTION skip in particular takes its component from
+ * [Tier1UnwrappableWitness].
  */
 class Tier1SkipRemarksTest {
 
@@ -66,7 +67,7 @@ class Tier1SkipRemarksTest {
 
     fun countStrips(): Int = 2
 
-    fun sortStrips(litters: List<List<String>?>): Int = litters.size
+    fun sortStrips(litters: Map<String?, Int>): Int = litters.size
   """.trimIndent()
 
   private fun run(): Tier1Result = Tier1Harness.run(fixture, fileName = "Post.kt")
@@ -469,11 +470,14 @@ class Tier1SkipRemarksTest {
    */
   @Test
   fun `a repeated diagnostic renders one paragraph and one remarks element`() {
+    val witness: Tier1UnwrappableCandidate = Tier1UnwrappableWitness.inputComponent
     val result = Tier1Harness.run(
       """
       package tier1.dedupe
 
-      fun sortStrips(litters: List<List<String>?>, limit: Int = 1): Int = litters.size + limit
+      ${witness.importLine}
+
+      fun sortStrips(litters: List<${witness.kotlin}>, limit: Int = 1): Int = litters.size + limit
       """.trimIndent(),
       fileName = "Sorter.kt",
     )

@@ -19,8 +19,8 @@ import kotlin.test.assertTrue
 class Tier1DeadImportTest {
 
   /**
-   * `List<List<String>?>` is an unsupported input (ADR-099's nullable nested component), so `sift`
-   * is skipped while `ping` is planned. Only `ping` may be imported.
+   * `Map<String?, Int>` is a permanently refused input (ADR-083: a .NET dictionary cannot hold a
+   * null key), so `sift` is skipped while `ping` is planned. Only `ping` may be imported.
    */
   @Test
   fun `skipped top-level function leaves no import behind`() {
@@ -28,7 +28,7 @@ class Tier1DeadImportTest {
       """
       package tier1.deadfun
 
-      fun sift(litters: List<List<String>?>): Int = litters.size
+      fun sift(litters: Map<String?, Int>): Int = litters.size
 
       fun ping(): Int = 1
       """.trimIndent(),
@@ -56,8 +56,8 @@ class Tier1DeadImportTest {
   /**
    * Same shape one declaration over: a top-level `val` whose type has no plan is skipped by
    * `addPropertyExports`, and the loop imported it anyway. A function type is the skip here:
-   * `List<List<String>?>` reads fine as a property (it plans as an opaque handle getter), so the
-   * function-fixture's unsupported *input* is not an unsupported property type.
+   * a property type is refused on different grounds than an input, so the function fixture's
+   * unsupported *input* is not reused as an unsupported property type.
    */
   @Test
   fun `skipped top-level property leaves no import behind`() {
@@ -94,7 +94,7 @@ class Tier1DeadImportTest {
       """
       package tier1.deadext
 
-      fun String.sift(litters: List<List<String>?>): Int = litters.size + length
+      fun String.sift(litters: Map<String?, Int>): Int = litters.size + length
 
       fun String.ping(): Int = length
       """.trimIndent(),

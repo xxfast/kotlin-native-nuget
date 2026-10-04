@@ -1,6 +1,9 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.CollectionKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticTypeName
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -23,25 +26,21 @@ class Tier1NamedSkipDiagnosticsTest {
    * ADR-073 closed the general `Map<String, String>` case (`CreateMap`/`nuget_map_put` now
    * exist), but the write side can only box a strict subset of component types
    * (`isWrappableComponent()`): a `nuget_wrap_*` primitive, an object handle, and
-   * (ADR-081/097) anything that projects to one of those per element. A *nested* collection value
-   * is outside that subset -- there is no wire for a collection inside a collection at all -- so
-   * it must still fire `SKIPPED_UNSUPPORTED_INPUT`.
-   *
-   * ADR-097 moved this cell off a `Mood` value and ADR-098 off a `Short` one: a bare enum rides
-   * the int-ordinal wire and every narrow primitive now has a `nuget_wrap_*` of its own, so
-   * neither demonstrates the skip any more. ADR-099 moved this cell off a plain nested collection:
-   * nesting is wrappable now (the inner handle is the component's wire value), so the remaining
-   * bridgeable-but-unwrappable component is a NULLABLE nested collection, which ADR-099 guards
-   * explicitly (its write projection has no null arm).
+   * (ADR-081/097/099) anything that projects to one of those per element. A bridgeable value
+   * outside that subset must still fire `SKIPPED_UNSUPPORTED_INPUT`. The value is
+   * [Tier1UnwrappableWitness.inputComponent], selected by that predicate rather than named here.
    */
   @Test
-  fun `class method with Map nested-collection value parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
+  fun `class method with Map unwrappable value parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
+    val witness: Tier1UnwrappableCandidate = Tier1UnwrappableWitness.inputComponent
     val result = Tier1Harness.run(
       """
       package tier1.skipmapinput
 
+      ${witness.importLine}
+
       class Patient(val name: String) {
-        fun setMoods(moods: Map<String, List<String>?>): Int = moods.size
+        fun setMoods(moods: Map<String, ${witness.kotlin}>): Int = moods.size
       }
       """.trimIndent()
     )
@@ -63,27 +62,28 @@ class Tier1NamedSkipDiagnosticsTest {
     // The value slot is the one that failed here (`String` keys box fine), so the hint names it
     // rather than the map, and never the other slot.
     assertTrue(
-      result.kspWarnings.any { it.contains("the value type Collection? cannot be written") },
+      result.kspWarnings.any {
+        it.contains("the value type ${witness.diagnosticName} cannot be written")
+      },
       "expected the hint to name the offending map value component; " +
           "kspWarnings=${result.kspWarnings}",
     )
   }
 
   /**
-   * ADR-073's sibling case for `Set`. ADR-098 minted `nuget_wrap_char`, so the `Char` element this
-   * cell used to carry binds now. ADR-099 moved this cell off a plain nested collection: nesting is
-   * wrappable now (the inner handle is the component's wire value), so the remaining
-   * bridgeable-but-unwrappable component is a NULLABLE nested collection, which ADR-099 guards
-   * explicitly (its write projection has no null arm).
+   * ADR-073's sibling case for `Set`, over the same [Tier1UnwrappableWitness.inputComponent].
    */
   @Test
-  fun `class method with Set nested-collection element parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
+  fun `class method with Set unwrappable element parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
+    val witness: Tier1UnwrappableCandidate = Tier1UnwrappableWitness.inputComponent
     val result = Tier1Harness.run(
       """
       package tier1.skipsetinput
 
+      ${witness.importLine}
+
       class Patient(val name: String) {
-        fun setInitials(initials: Set<List<String>?>): Int = initials.size
+        fun setInitials(initials: Set<${witness.kotlin}>): Int = initials.size
       }
       """.trimIndent()
     )
@@ -103,7 +103,9 @@ class Tier1NamedSkipDiagnosticsTest {
           "parameter; kspWarnings=${result.kspWarnings}",
     )
     assertTrue(
-      result.kspWarnings.any { it.contains("the element type Collection? cannot be written") },
+      result.kspWarnings.any {
+        it.contains("the element type ${witness.diagnosticName} cannot be written")
+      },
       "expected the hint to name the offending Set element component; " +
           "kspWarnings=${result.kspWarnings}",
     )
@@ -188,17 +190,20 @@ class Tier1NamedSkipDiagnosticsTest {
 
   /**
    * The third arm of the map wording: when neither slot is admitted, the hint names both rather
-   * than picking one. `String?` fails ADR-083's non-null key rule, and a nullable nested collection
-   * fails ADR-099's no-null-arm write projection.
+   * than picking one. `String?` fails ADR-083's non-null key rule, and the value is
+   * [Tier1UnwrappableWitness.inputComponent].
    */
   @Test
   fun `class method with Map unwrappable key and value names both components`() {
+    val witness: Tier1UnwrappableCandidate = Tier1UnwrappableWitness.inputComponent
     val result = Tier1Harness.run(
       """
       package tier1.skipmapbothinput
 
+      ${witness.importLine}
+
       class Patient(val name: String) {
-        fun setKeyedMoods(moods: Map<String?, List<String>?>): Int = moods.size
+        fun setKeyedMoods(moods: Map<String?, ${witness.kotlin}>): Int = moods.size
       }
       """.trimIndent()
     )
@@ -236,12 +241,15 @@ class Tier1NamedSkipDiagnosticsTest {
    */
   @Test
   fun `class method with unwrappable List element names the component, not Map or Set`() {
+    val witness: Tier1UnwrappableCandidate = Tier1UnwrappableWitness.inputComponent
     val result = Tier1Harness.run(
       """
       package tier1.skiplistinput
 
+      ${witness.importLine}
+
       class WardBoard {
-        fun logGrid(rows: List<List<String>?>): Int = rows.size
+        fun logGrid(rows: List<${witness.kotlin}>): Int = rows.size
       }
       """.trimIndent()
     )
@@ -260,7 +268,9 @@ class Tier1NamedSkipDiagnosticsTest {
           it.contains("WardBoard.logGrid")
     }
     assertTrue(
-      skip.contains("the element type Collection? cannot be written into a Kotlin collection"),
+      skip.contains(
+        "the element type ${witness.diagnosticName} cannot be written into a Kotlin collection",
+      ),
       "expected the hint to name the offending List element component; skip=$skip",
     )
     assertFalse(
@@ -270,20 +280,25 @@ class Tier1NamedSkipDiagnosticsTest {
   }
 
   /**
-   * ADR-073: an unwrappable `Set` element must still fire `SKIPPED_UNSUPPORTED_INPUT`. ADR-099
-   * moved this cell off a plain nested collection: nesting is wrappable now (the inner handle is
-   * the component's wire value), so the remaining bridgeable-but-unwrappable component is a
-   * NULLABLE nested collection, which ADR-099 guards explicitly (its write projection has no null
-   * arm).
+   * ADR-073: an unwrappable `Set` element must still fire `SKIPPED_UNSUPPORTED_INPUT`, one level
+   * down this time. The element is a `List` over [Tier1UnwrappableWitness.inputComponent], so the
+   * cell pins ADR-099's recursion: an unwrappable component anywhere under the element makes the
+   * element itself unwrappable, and the hint names the element the author wrote (`Collection`),
+   * not the leaf.
    */
   @Test
-  fun `class method with Set nested-collection-element parameter fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
+  fun `class method with Set element over an unwrappable component fires SKIPPED_UNSUPPORTED_INPUT and is omitted`() {
+    val witness: Tier1UnwrappableCandidate = Tier1UnwrappableWitness.inputComponent
+    val element: String = BridgeType.Collection(CollectionKind.LIST, element = witness.type)
+      .diagnosticTypeName()
     val result = Tier1Harness.run(
       """
       package tier1.skipsetnestedinput
 
+      ${witness.importLine}
+
       class Patient(val name: String) {
-        fun setTagGroups(groups: Set<List<String>?>): Int = groups.size
+        fun setTagGroups(groups: Set<List<${witness.kotlin}>>): Int = groups.size
       }
       """.trimIndent()
     )
@@ -303,7 +318,7 @@ class Tier1NamedSkipDiagnosticsTest {
           "parameter; kspWarnings=${result.kspWarnings}",
     )
     assertTrue(
-      result.kspWarnings.any { it.contains("the element type Collection? cannot be written") },
+      result.kspWarnings.any { it.contains("the element type $element cannot be written") },
       "expected the hint to name the offending Set element component; " +
           "kspWarnings=${result.kspWarnings}",
     )
