@@ -826,42 +826,6 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementCollection(
 }
 
 /**
- * ADR-123: [legacyCollectionKinds] for a `Flow`/`StateFlow` element. No declaration scan finds
- * these on its own: the `needs*Support` walks read a property's *type*, and that type is
- * `StateFlow`, not `Set`, so without this the generated C# calls `nuget_set_count` against a
- * native library that never exported it.
- */
-internal fun ForwardBridgeTypeClassifier.legacyFlowElementCollectionKinds(
-  type: KSType?,
-): Sequence<CollectionKind> =
-  legacyFlowElementCollection(type)?.nestedKinds() ?: emptySequence()
-
-/**
- * Every collection kind a member's parameters need native helper exports for, nested components
- * included. `Set<List<String>>` calls `nuget_list_create` one level down, so reading only the
- * outer kind would leave those exports unemitted and the failure would be an
- * `EntryPointNotFoundException` at first call rather than a build error (ADR-114 answer 4).
- */
-internal fun ForwardBridgeTypeClassifier.legacyCollectionKinds(
-  parameters: List<KSValueParameter>,
-): Sequence<CollectionKind> = sequence {
-  parameters.forEach { parameter ->
-    val shape = legacyParameterShape(parameter.type.resolve())
-    if (shape is ForwardLegacyParameterShape.Marshalled) yieldAll(shape.type.nestedKinds())
-  }
-}
-
-/** ADR-119: [legacyCollectionKinds] for a suspend member's return, `nuget_list_get` and kin. */
-internal fun ForwardBridgeTypeClassifier.legacyReturnCollectionKinds(
-  func: KSFunctionDeclaration,
-): Sequence<CollectionKind> {
-  if (!func.modifiers.contains(Modifier.SUSPEND)) return emptySequence()
-  val shape: ForwardLegacyReturnShape = legacyReturnShape(func.returnType?.resolve())
-  return if (shape is ForwardLegacyReturnShape.Marshalled) shape.type.nestedKinds()
-  else emptySequence()
-}
-
-/**
  * ADR-119: the C# expression reading a suspend member's awaited collection handle back into its
  * public type. `NugetMarshal.ReadList`/`ReadSet`/`ReadMap` are the same `nuget_list_*` /
  * `nuget_set_*` / `nuget_map_*` helpers the property route reads through, behind a `finally` that
@@ -972,15 +936,6 @@ internal fun legacyInterfaceElementReadArgument(
     "read: static h => h == IntPtr.Zero ? null : $read"
   } else {
     "read: static h => $read"
-  }
-}
-
-private fun BridgeType.Collection.nestedKinds(): Sequence<CollectionKind> = sequence {
-  yield(kind)
-  listOfNotNull(element, key, value).forEach { component ->
-    val unwrapped: BridgeType =
-      if (component is BridgeType.Nullable) component.type else component
-    if (unwrapped is BridgeType.Collection) yieldAll(unwrapped.nestedKinds())
   }
 }
 

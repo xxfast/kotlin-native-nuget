@@ -161,7 +161,8 @@ and `legacyReturnShape(type)`, applied to a `suspend` member's return only:
   (`Pair<String, Int>`, `List<String>?`) through the same `legacyDescription()` ADR-114 uses.
 
 `legacyRefusedReturn(func)` is the null-or-description form both halves filter on, and
-`legacyReturnCollectionKinds(func)` is the helper-gate contribution.
+`legacyReturnCollectionKinds(func)` was the helper-gate contribution (superseded by ADR-127,
+deleted 2026-10-03).
 
 ### Kotlin half (`exports/SuspendFunctionExports.kt`)
 

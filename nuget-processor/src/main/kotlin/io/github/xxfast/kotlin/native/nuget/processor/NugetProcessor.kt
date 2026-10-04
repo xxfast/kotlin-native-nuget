@@ -136,11 +136,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.calls
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isValueClass
-import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyCollectionKinds
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementInterface
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
-import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollectionKinds
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedFlowElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.LegacyRefusedInterfaceBridgePair
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedInterfaceBridgePair
@@ -153,7 +151,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyParam
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardSkipPosition
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipDetail
-import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyReturnCollectionKinds
 import io.github.xxfast.kotlin.native.nuget.processor.forward.optInMarker
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
