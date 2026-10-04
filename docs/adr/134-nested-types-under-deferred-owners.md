@@ -315,3 +315,24 @@ Deferred by this amendment, not fixed, and recorded as new Phase 4 ROADMAP items
 close it cannot be the full test above without re-breaking `kotlin.Result`; and
 `unsupportedNestedOwnerReason()` has no arm for a nested SEALED owner, so a value class nested under
 `Owner.NestedSealed` may still be declared under an owner that is itself never declared.
+
+## Amendment (2026-10-03): the dependency scope-refusal arm of the nested value-class gate is pinned
+
+Coverage only; no production change, no new handle route, no leak row. The gate's scope-refusal
+branch (a nested value class whose owner lives in a dependency module outside the export scope) had
+no fixture. It now has a real one: `:test-models` declares `dev.other.core.UnexportedLabelOwner` with
+a nested string `value class Tag`, and a small exported facade exposes a function and a property typed
+`Tag` beside a primitive control function.
+
+Verified: the manifest names the refused `dev.other.core.UnexportedLabelOwner.Tag` as
+`SKIPPED_UNEXPORTED_DEPENDENCY_TYPE` on the function and `SKIPPED_UNSUPPORTED_PROPERTY` on the
+property. Both messages carry the qualified child name and the additive
+`admit("dev.other.core.UnexportedLabelOwner")` remedy (or `exclude(...)` on the child), and neither
+offers a "move to top level" hint. The primitive control stays exported.
+`Tier1ExcludedDependencyTypeHintTest` passes 9 cells, including the nested value class under
+NOT_INCLUDED, OWNER exclusion propagation (excluding the owner refuses the child), and
+CROSS_MODULE_ADMISSION_DISABLED. Full verify: IntegrationTests 2976, LeakTests 156, all six AOT
+legs.
+
+Inferred, not separately run: the early direct refusal of an out-of-scope child and the owner-climb
+propagation share one scope kind, so the three cells exercise both without a dedicated fourth.

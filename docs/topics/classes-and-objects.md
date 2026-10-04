@@ -519,8 +519,11 @@ interfaces](interfaces-abstract-sealed.md#sealed-classes-and-interfaces) for the
   still-deferred owner (a generic or `enum class` owner) skips named too
   (`SKIPPED_UNSUPPORTED_TYPE`, reason `UNDECLARED_VALUE_CLASS`) instead of emitting an unusable
   struct name; move the value class to the top level of its file, or to an admitted owner, to
-  bridge it. An extension function or property on a nested type is not supported; declare the
-  extension on a top-level type instead.
+  bridge it. A nested `value class` whose owner sits in a dependency module outside the export
+  scope skips named too (`SKIPPED_UNEXPORTED_DEPENDENCY_TYPE`, or `SKIPPED_UNSUPPORTED_PROPERTY`
+  on a property); the message points at `admit("pkg.Owner")` for the owner. An extension function
+  or property on a nested type is not supported; declare the extension on a top-level type
+  instead.
 
 <seealso>
     <category ref="related">
