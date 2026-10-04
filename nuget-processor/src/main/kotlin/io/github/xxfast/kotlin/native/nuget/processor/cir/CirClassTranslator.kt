@@ -516,6 +516,7 @@ private fun inheritedAbstractProperty(
   prop: KSPropertyDeclaration,
   propName: String,
   name: String,
+  isOverride: Boolean,
   interfaceDeclarationCatalog: ForwardCallablePlanCatalog,
   exportedTypes: Set<String>,
   classifier: ForwardBridgeTypeClassifier,
@@ -541,6 +542,7 @@ private fun inheritedAbstractProperty(
     // `override` of a get-only abstract property that adds a setter is CS0546.
     setter = if (plan.setter != null) "" else null,
     isAbstract = true,
+    isOverride = isOverride,
     hasNativeImport = false,
   )
 }
@@ -968,7 +970,8 @@ internal fun translateClass(
       // and a consumer subclass's `override` is CS0115.
       if (prop.parentDeclaration != cls && prop.isAbstract()) {
         return@mapNotNull inheritedAbstractProperty(
-          prop, propName, name, interfaceDeclarationCatalog, exportedTypes, classifier, context,
+          prop, propName, name, prop.overridesBaseClassMember(superClassDeclaration),
+          interfaceDeclarationCatalog, exportedTypes, classifier, context,
           logger, cls.forwardDiagnosticOwner(),
         )
       }

@@ -589,9 +589,10 @@ overridable from C#, not only from a further Kotlin subclass).
 
 Deferred, not exercised: a dropped intermediate base whose abstract property
 re-declares one the *kept* exported base also declares abstract renders `abstract` without
-`override`, hiding the kept base's member (`CS0108` warning, compiles). Tracked on `ROADMAP.md`.
-The cross-module (klib) abstract base case this paragraph once also deferred is settled by the
-amendment at the end of this file.
+`override`, hiding the kept base's member (the redeclaration gap, closed by the 2026-10-03 amendment
+on redeclared abstract properties; its original "compiles with a `CS0108` warning" severity was wrong,
+see there). The cross-module (klib) abstract base case this paragraph once also deferred is settled by
+the 2026-10-03 klib amendment at the end of this file.
 
 ## 2026-09-26 amendment: setters narrower than public
 
@@ -726,3 +727,49 @@ implements none of them; the concrete `KlibWren : KlibNester()` overrides all th
 **Not covered, unchanged.** The interface-from-a-dependency-klib variant in the 2026-09-13 amendment's
 "Still open, Inferred" note is a separate case this fixture does not touch, and the `CS0108`
 redeclaration gap above is still open.
+
+## 2026-10-03 amendment: a redeclared abstract property is an override
+
+The 2026-09-19 amendment re-homes a dropped abstract base's property onto the exported subclass as
+`public abstract`. That is wrong when the dropped base is an intermediate that only **redeclares** a
+property an exported base further up already declares abstract (`RedefinedDinghy : RedefinedSkiff(dropped)
+: RedefinedVessel(kept)`, where `RedefinedSkiff` writes `abstract override val sail` and `abstract
+override var height`). The plain `abstract` opens a second slot beside the kept base's.
+
+**Severity correction.** The earlier note said this shape "compiles with a `CS0108` warning". For an
+abstract kept base it does not. A scratch .NET 10.0.9 hierarchy of the same shape reports `CS0533`
+(hides inherited abstract member) and `CS0114` on the redeclaring class, and `CS0534` on the concrete
+subclass for the kept abstract accessors, so a consumer's concrete `RedefinedRowboat` fails to build.
+(Verified by scratch compile.)
+
+**The rule.** `CirClassTranslator` passes the same `overridesBaseClassMember(superClassDeclaration)`
+predicate the planned-property branch already uses into `inheritedAbstractProperty`, and sets
+`CirProperty.isOverride` from it. The renderer already spelled an abstract override property, so it
+needed no change. A redeclaration renders `abstract override`; a property that is new on the dropped
+intermediate stays plain `abstract`:
+
+```C#
+public abstract class RedefinedDinghy : RedefinedVessel
+{
+    public abstract override string Sail { get; }
+    public abstract override int Height { get; set; }
+    public abstract string Rigging { get; }   // fresh on RedefinedSkiff, so not an override
+    public abstract override void Dispose();
+}
+```
+
+**`Dispose` under an exported base (separate bug, fixed with this item).** `CirClassRenderer.renderDispose`
+ignored whether the abstract class has an exported superclass, so `RedefinedDinghy` emitted `public
+abstract void Dispose()`, which hides the inherited one and fails the concrete subclass with
+`CS0533`/`CS0114`/`CS0534`. The abstract `Dispose` is now `abstract override` exactly when the class has an
+exported superclass; a root abstract class is unchanged. `DisposeAsync` is unaffected, since only the
+scope-owning class emits it. Side effect: an abstract class under an exported concrete `open` base now
+also renders `abstract override Dispose` instead of a hiding `abstract`.
+
+**Evidence.** Verified: full `verify.sh` green on this branch (Contract 3, Integration 2979, Leak 156,
+MultiPackage 9, SharedException 2, all six NativeAOT smoke cases); the real pipeline was red at
+`:test-library:nugetCompileInterop` before the `Dispose` fix; `Tier1AbstractUnexportedBasePropertyTest`
+(four cells, including the fresh-property control); a `CirOrdinaryRendererTest` regression red then green;
+the full JVM processor suite (1537 passed); `IntegrationTests/AbstractRedeclarationTests.cs` checks the
+accessors' base slot and `NewSlot` by reflection, the `Dispose` slot, and native dispatch. No new export,
+handle kind or release path, so no `LiveHandleTests` row.

@@ -1258,4 +1258,21 @@ class CirOrdinaryRendererTest {
         namespaces = listOf(CirNamespace(namespace, declarations.toList())),
       ),
     )
+
+  @Test
+  fun `abstract subclass disposal overrides the retained base slot`() {
+    val cls = CirClass(
+      name = "Dinghy",
+      libraryName = "fleet",
+      nativePrefix = "dinghy",
+      constructor = null,
+      properties = emptyList(),
+      methods = emptyList(),
+      isAbstract = true,
+      superClass = "Vessel",
+    )
+    val rendered: String = render(cls)
+    assertContains(rendered, "public abstract override void Dispose();")
+    assertFalse(rendered.contains("Native_Dispose"))
+  }
 }
