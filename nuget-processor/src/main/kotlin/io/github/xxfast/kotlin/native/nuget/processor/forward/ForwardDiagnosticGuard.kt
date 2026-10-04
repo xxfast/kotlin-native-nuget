@@ -56,8 +56,8 @@ internal fun internalFailureDetail(failure: Throwable): String =
  *
  * @param declaration the qualified Kotlin name, which is both what the author reads and what the
  *   `exclude(...)` line has to spell.
- * @param node the originating `KSNode`, so KSP attaches the source location. Null only for the
- *   whole-round guard and the renderer, which have no single declaration in hand.
+ * @param node the originating `KSNode`, so KSP attaches the source location. Null where no
+ *   single declaration is in hand; the whole-round catch uses [wholeRoundFailureDiagnostic].
  */
 internal fun internalFailureDiagnostic(
   declaration: String,
@@ -75,6 +75,19 @@ internal fun internalFailureDiagnostic(
   // for a `<remarks>` paragraph to land on.
   owner = null,
 )
+
+/**
+ * The diagnostic the whole-`process()` catch reports, for work no declaration owns (the closure,
+ * the post-passes, the one `render()` call, the file writes). Same kind and reason as
+ * [internalFailureDiagnostic], but no `exclude(...)` hint: there is no declaration to exclude, so
+ * the only thing the author can do is report it, and the message carries the cause.
+ */
+internal fun wholeRoundFailureDiagnostic(detail: String): ForwardDiagnostic =
+  internalFailureDiagnostic(declaration = "this Kotlin module", node = null, detail = detail).copy(
+    hint = "this is a bug in the bridge generator, not a mistake in your Kotlin, and no single " +
+        "declaration owns it, so there is nothing to exclude: report the failure with this " +
+        "whole message, which carries its cause",
+  )
 
 /**
  * Runs [block], containing any `Exception` it throws as one located

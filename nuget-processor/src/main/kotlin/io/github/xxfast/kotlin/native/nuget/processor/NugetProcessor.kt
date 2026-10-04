@@ -112,7 +112,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardGuardName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberGenericRefusal
 import io.github.xxfast.kotlin.native.nuget.processor.forward.guarded
 import io.github.xxfast.kotlin.native.nuget.processor.forward.internalFailureDetail
-import io.github.xxfast.kotlin.native.nuget.processor.forward.internalFailureDiagnostic
+import io.github.xxfast.kotlin.native.nuget.processor.forward.wholeRoundFailureDiagnostic
 import io.github.xxfast.kotlin.native.nuget.processor.forward.PackageScope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.matchesDeclaration
 import io.github.xxfast.kotlin.native.nuget.processor.forward.escalatedForStrictDependencyTypes
@@ -1244,13 +1244,7 @@ internal class NugetProcessor(
     processRound(resolver)
   } catch (failure: Exception) {
     ForwardDiagnosticSink.emit(
-      listOf(
-        internalFailureDiagnostic(
-          declaration = "this Kotlin module",
-          node = null,
-          detail = internalFailureDetail(failure),
-        ),
-      ),
+      listOf(wholeRoundFailureDiagnostic(detail = internalFailureDetail(failure))),
       logger,
     )
     emptyList()

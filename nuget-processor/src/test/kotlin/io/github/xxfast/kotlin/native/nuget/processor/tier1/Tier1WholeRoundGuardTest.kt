@@ -75,14 +75,20 @@ class Tier1WholeRoundGuardTest {
       "the whole-round catch reports the failure exactly once; kspErrors=${result.kspErrors}",
     )
     val failure: String = internalFailures.single()
-    assertTrue(
-      "this Kotlin module" in failure && "IOException: disk full writing Interop.cs" in failure,
-      "labelled with the module, not a declaration, and carrying the failure; failure=$failure",
+    // The whole line, pinned: labelled with the module rather than a declaration, carrying the
+    // failure's cause, with no source location (nothing owns it) and no `exclude(...)` advice,
+    // because there is no declaration the author could exclude to unblock the build.
+    assertEquals(
+      "[nuget:ERROR_INTERNAL_GENERATOR_FAILURE] " +
+          "${ForwardDiagnosticKind.ERROR_INTERNAL_GENERATOR_FAILURE.verb} this Kotlin module: " +
+          "the generator's own invariant failed while binding it " +
+          "(IOException: disk full writing Interop.cs). " +
+          "this is a bug in the bridge generator, not a mistake in your Kotlin, and no single " +
+          "declaration owns it, so there is nothing to exclude: report the failure with this " +
+          "whole message, which carries its cause",
+      failure,
     )
-    assertTrue(
-      "\n    at " !in failure,
-      "no declaration owns the failure, so there is no source location; failure=$failure",
-    )
+    assertTrue("exclude(" !in failure, "failure=$failure")
     assertEquals(
       listOf(failure),
       result.kspErrors,
