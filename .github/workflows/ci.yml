@@ -30,7 +30,7 @@ jobs:
     name: ${{ matrix.title }} (${{ matrix.os }})
     strategy:
       matrix:
-        os: [macos-latest, windows-latest]
+        host: [unix, windows]
         suite: [processor, plugin]
         include:
           - suite: processor
@@ -42,6 +42,19 @@ jobs:
             title: Reverse generator and plugin
             gradle: ./gradlew -p nuget-plugin koverXmlReport
             report: nuget-plugin/build/reports/kover/report.xml
+          - host: windows
+            os: windows-latest
+          # The processor's tests are JVM only (in-process KSP, generated text asserted as strings),
+          # so their unix leg runs on Ubuntu and leaves a macOS runner free. The free plan caps
+          # concurrent macOS jobs at 5 across the account, and two overlapping runs queue on it.
+          - host: unix
+            suite: processor
+            os: ubuntu-latest
+          # The plugin's tests are host-specific (they compile generated Kotlin with the host
+          # kotlinc-native and resolve host RIDs), so their unix leg stays on macOS.
+          - host: unix
+            suite: plugin
+            os: macos-latest
 
     runs-on: ${{ matrix.os }}
     # Same reason as `bridge` below: not a job the weekly census schedule should pay for.
@@ -67,10 +80,10 @@ jobs:
         run: ${{ matrix.gradle }}
 
       # Public repo works tokenless, but the token is wired for correctness and in case the
-      # repo ever goes private. Uploads run only on macos-latest: coverage paths are identical
+      # repo ever goes private. Uploads run only on the unix leg: coverage paths are identical
       # across the matrix and one upload per report keeps the Codecov flags unambiguous.
       - name: Upload Kotlin coverage to Codecov
-        if: always() && matrix.os == 'macos-latest'
+        if: always() && matrix.host == 'unix'
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
