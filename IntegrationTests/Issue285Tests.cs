@@ -165,4 +165,34 @@ public class Issue285Tests
         Assert.Equal(3, Issue285Limits.MaxRetries);
         Assert.Equal(7, Issue285Limits.MaxNaps);
     }
+
+    [Theory]
+    [InlineData(DigitGuard._1st, 0, "_1ST")]
+    [InlineData(DigitGuard.Ok, 1, "OK")]
+    public void DigitGuard_NativeOrdinalEchoAndOriginalName(DigitGuard value, int ordinal, string name)
+    {
+        Assert.Equal(ordinal, (int)value);
+        Assert.Equal(value, Issue285Sample.EchoDigitGuard(value));
+        Assert.Equal(name, Issue285Sample.DigitGuardKotlinName(value));
+    }
+
+    [Theory]
+    [InlineData(BareGuard._, 0, "_")]
+    [InlineData(BareGuard.Ok, 1, "OK")]
+    public void BareGuard_NativeOrdinalEchoAndOriginalName(BareGuard value, int ordinal, string name)
+    {
+        Assert.Equal(ordinal, (int)value);
+        Assert.Equal(value, Issue285Sample.EchoBareGuard(value));
+        Assert.Equal(name, Issue285Sample.BareGuardKotlinName(value));
+    }
+
+    [Theory]
+    [InlineData(DoubleBareGuard._, 0, "__")]
+    [InlineData(DoubleBareGuard.Ok, 1, "OK")]
+    public void DoubleBareGuard_NativeOrdinalEchoAndOriginalName(DoubleBareGuard value, int ordinal, string name)
+    {
+        Assert.Equal(ordinal, (int)value);
+        Assert.Equal(value, Issue285Sample.EchoDoubleBareGuard(value));
+        Assert.Equal(name, Issue285Sample.DoubleBareGuardKotlinName(value));
+    }
 }

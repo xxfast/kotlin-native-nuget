@@ -50,7 +50,6 @@ Complete.
 Complete.
 
 ## Phase 4: Rich type support
-- [ ] **Kotlin/Native's acceptance of the guarded enum entry names `_1ST`, `_`, `__` (ADR-006's 2026-09-22 amendment) is inferred from the shared K2 frontend, not run through Kotlin/Native or `packNuget`.** ([details](docs/backlog/kotlin-native-acceptance-of-guarded-enum-entry-names-unverified.md))
 - [ ] Inferred residuals from [ADR-064](docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s 2026-09-13 amendment: a default inherited from an unexported interface (the ADR-075 path) is named nowhere; `VALUE_CLASS` origin is not reclassified and `COMPANION` is reclassified but unmeasured. A spike alongside [ADR-133](docs/adr/133-nested-types.md)'s 2026-09-28 amendment found an interface's `companion object` members (`create`, `all`) produce no C# and no `kspWarnings`/`kspErrors` entry either; whether a diagnostic lands elsewhere (`NugetDiagnostics.json`) was not checked.
 - [ ] Inferred: `legacyBoundClassCsName`'s builtin-bound fallback (`T : Comparable<T>` keeps its simple name, `cir/CirTypeMapping.kt` ~:302) has no fixture either way. Discovered alongside ADR-133's 2026-09-14 amendment.
 - [ ] `csTypeArgument`'s nullable-suffix read (used by the returned-lambda route) is shared by every other type-argument caller — `KotlinFlow<T>`, `Task<T>`, a generic class's own type argument — so a nullable type argument now reaches those spellings too, with no fixture exercising any of them. Discovered alongside the boundary-nullability-gaps item.
