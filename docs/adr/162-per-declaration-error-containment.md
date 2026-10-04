@@ -253,7 +253,7 @@ fields are optional on read, so a `NugetDiagnostics.json` written by an older pr
 - **A Windows-only discrepancy in the number of `w: [ksp] ...` warning lines** on the console at
   default verbosity, found incidentally by the research spikes and not explained by anything in this
   ADR; recorded as its own new ROADMAP line for someone to spike separately.
-- **The `fun dispose()` collision's own location** is reported at the containing class, not the
+- **The `fun dispose()` collision's own location** (closed by the 2026-10-05 amendment below) was reported at the containing class, not the
   offending member: `emitCsharpSignatureCollisions` receives the container's `KSNode`, and giving it a
   per-member node would change the shared guard signature for every one of its producers (classes,
   sealed bases, sealed arms, objects, file classes, extensions). Recorded as its own new ROADMAP line.
@@ -262,4 +262,40 @@ fields are optional on read, so a `NugetDiagnostics.json` written by an older pr
   throw to manufacture one. Recorded as its own new ROADMAP line.
 
 No new handle kind and no new marshalling path are introduced anywhere in this ADR, so it adds no
+`LiveHandleTests.cs` row.
+
+## Amendment (2026-10-05): the `fun dispose()` collision is located at the member
+
+An authored `fun dispose()` that collides with the generated `Dispose()` now reports
+`ERROR_CSHARP_SIGNATURE_COLLISION` at the `dispose()` function's own `file:line`, not at the class
+header. This holds for an ordinary class, a sealed base, and a sealed arm. The message text is
+unchanged.
+
+**Rule.** A collision against a `HANDLE_RESERVED_SIGNATURES` entry is located at the member that
+claims the reserved signature. `emitCsharpSignatureCollisions` and `emitCsharpSignatureCollisionsOf`
+take an optional `symbolFor: (List<String>) -> KSNode?`, keyed by the collision's signature in the
+guard's own encoding and defaulting to the container's `symbol`. This is the `symbolFor` pattern
+`emitMemberNameCollisions` already uses. Only the three handle sites (class, sealed base, sealed
+arm) pass a lookup, `reservedMemberSymbol(container)`: the first zero-parameter function declared on
+that container whose rendered C# name is the reserved name, so a `@CSharpName("Dispose")` member is
+found as well as `dispose`. When no such function is declared on the container, for example because
+the member is inherited, the lookup returns the container, so the location degrades to the old
+behaviour instead of vanishing. The other call sites (objects, interfaces, file classes, extension
+groups) are source-compatible and unchanged.
+
+**Still at the container.** Ordinary two-member collisions (two constructors, two methods with one
+rendered signature) keep reporting at the container. `CirMethod` carries no declaration node, and a
+class site's method list is assembled from four sources (planned, companion, async, flow), so a
+signature to declaration map would need threading through each of them. The new `symbolFor`
+parameter is the hook a later item can use. The earlier Deferred scope bullet about the dispose
+location is closed by this amendment; the `CirMethod` node threading above remains deferred.
+
+**Evidence.** Verified: `Tier1EntryPointCollisionTest` asserts the located line for the class cell
+(`Closer.Dispose` at the `fun dispose()` line, not the `class` line) and for both sealed cells
+(`Feeding.Dispose` and `Feeding.Ready.Dispose`, each at its own `fun dispose()` line), using an
+`endsWith` check on the trailing `Fixture.kt:<line>` so a longer line number cannot match by
+prefix. Not covered by a cell: the `@CSharpName("Dispose")` match and the inherited-member fallback
+follow from the lookup's code only (inferred).
+
+As with the original change, no new handle kind or marshalling path is introduced, so there is no
 `LiveHandleTests.cs` row.
