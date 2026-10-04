@@ -477,10 +477,11 @@ member return's **OUT slot** is a blittable `out ushort`, written through a `USh
 (kotlinx.cinterop has no `CharVar`) and cast back to `char` on the C# side — not
 `[MarshalAs(UnmanagedType.U2)] out char`, and never a bare `out char`: a bare `out char` marshals as
 one ANSI byte under the default `CharSet` and silently narrows every non-ASCII character (`'é'` to
-U+FFFD, `'한'` to a truncated low byte), verified by spike on JIT. The `ushort` slot reuses the same
+U+FFFD, `'한'` to a truncated low byte), verified by spike on JIT (NativeAOT differs for Latin-1; see
+the 2026-10-03 amendment below). The `ushort` slot reuses the same
 `valueOutTransferType()` path the bare-nullable-enum route already uses for its `Primitive(INT)`
 transfer, so it needs no new marshalling arm, and it is blittable under NativeAOT by construction
-(unlike the `MarshalAs` alternative, which is unverified there).
+(the `MarshalAs` alternative is also correct there, per the 2026-10-03 amendment).
 
 The `NULLABLE` skip hint no longer recommends "a separate has-value/value pair", since that
 described the generator's own wire rather than anything an author could write; it now recommends
@@ -514,3 +515,51 @@ Evidence (**verified**): full `:nuget-processor:test` 1549 passed, 0 failed; ful
 `scripts/verify.sh` green on the branch (Contract 3, Integration 2997, Leak 158, MultiPackage 9,
 SharedException 2, all six NativeAOT shapes); Kover shows the `simpleKotlinName` arms for all six
 narrow kinds covered and both branches of the second call site covered.
+
+## Amendment (2026-10-03): the `Char` wire is measured under NativeAOT, and a test character must be above U+00FF {id="amendment-2026-10-03-char-wire-nativeaot"}
+
+The shipped wire is correct under NativeAOT as well as on the JIT: `out ushort` for the `Char?`
+out slot, and `[MarshalAs(UnmanagedType.U2)] char` with `[return: MarshalAs(UnmanagedType.U2)]` for
+by-value slots. No production change. The generator never emits a bare `char` or an `out char`, so
+the rejected shapes are recorded here and not as repository cells.
+
+**Measurement** (**verified**, SDK 10.0.301, win-x64, net10.0, one source built for JIT and for
+`PublishAot`; no Kotlin library involved, so this measures the .NET marshaller only). Out shapes
+P/Invoke `RtlMoveMemory` writing two raw bytes; by-value shapes P/Invoke `towupper` on characters
+with no upper-case form.
+
+| shape | JIT `'é'` | JIT `'한'` | AOT `'é'` | AOT `'한'` |
+|---|---|---|---|---|
+| `out ushort` (shipped) | U+00E9 | U+D55C | U+00E9 | U+D55C |
+| `[MarshalAs(U2)] out char` | U+00E9 | U+D55C | U+00E9 | U+D55C |
+| bare `out char` | U+FFFD | U+005C | U+00E9 | U+005C |
+| by-value `[MarshalAs(U2)] char` + `[return: U2]` (shipped) | U+00E9 | U+D55C | U+00E9 | U+D55C |
+| by-value `ushort` | U+00E9 | U+D55C | U+00E9 | U+D55C |
+| bare by-value `char` | U+FFFD | U+003F | U+00E9 | U+003F |
+
+`'A'` was correct in every row. A lone surrogate (U+D83D) behaved like `'한'`.
+
+- `[MarshalAs(UnmanagedType.U2)] out char` is accepted by ILC and correct on both runtimes. It is a
+  viable alternative, but `out ushort` needs no second out-parameter arm, so it stays.
+- A bare `char` is corrupt on both runtimes, differently. The JIT turns `'é'` into U+FFFD. NativeAOT
+  widens one byte, so Latin-1 reads back correctly and only characters above U+00FF are truncated.
+  The "U+FFFD" claim in the 2026-09-22 amendment is therefore JIT-specific, and a Latin-1-only test
+  would pass a bare `char` under NativeAOT.
+- **Inferred, not isolated:** the probe set `InvariantGlobalization=true`; whether that changes the
+  bare-`char` ANSI conversion under NativeAOT was not tested. It does not affect the attributed and
+  `ushort` shapes, which do no code-page conversion.
+
+**Coverage.** `AotSmokeTest` gains step `7/7 char-wire`, which round-trips the generated bindings
+through the real packaged library, so the attributes on every `char` slot are exercised under
+trimming and not only in the marshaller probe: `Tag.Initial` (`Char?` property: null, `'한'`, null),
+`Tag.Echo` (null and `'한'`), `Patient.Tag('한')` (by-value parameter), `Patient.Initial()`
+(by-value return), `Readings.Glyph` (`'Ω'`) and `Readings.Marks()` (`List<Char>`, the
+`nuget_wrap_char` element wire). Every non-null payload is above U+00FF on purpose. The pipeline's
+final line is now `== ALL 7 SHAPES PASS ==`.
+
+No LeakTests row: nothing new mints a handle.
+
+Evidence (**verified**): `PASS 7/7 char-wire` under a real `PublishAot` build; full
+`scripts/verify.sh` green on the branch (Contract 3, Integration 2999, Leak 158, MultiPackage 9,
+SharedException 2, all 7 NativeAOT shapes). Not covered: `osx-arm64` NativeAOT runs the same step
+only in CI, and Mono full-AOT (Mac Catalyst, iOS) `char` marshalling is measured by no lane.
