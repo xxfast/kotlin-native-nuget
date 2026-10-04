@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getConstructors
+import com.google.devtools.ksp.getDeclaredFunctions
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.isAbstract
 import com.google.devtools.ksp.processing.KSPLogger
@@ -1597,6 +1598,7 @@ internal fun translateClass(
     // ADR-162: every generated handle class renders `public void Dispose()` (CirClassRenderer), so
     // an authored zero-argument `dispose()` is CS0111 against it.
     reservedSignatures = HANDLE_RESERVED_SIGNATURES,
+    symbolFor = reservedMemberSymbol(cls),
   )
 
   // Phase 6: route data-class copy() through the shared plan when it is eligible (same symbol
@@ -2843,6 +2845,7 @@ internal fun translateSealedClass(
     cls,
     logger,
     HANDLE_RESERVED_SIGNATURES,
+    reservedMemberSymbol(cls),
   )
   // ADR-110 amendment (ROADMAP line 32): `abstract val area` beside `fun area(scale)` on the base.
   val baseNames: List<CsMemberName> =
@@ -3141,6 +3144,7 @@ internal fun translateSealedClass(
         subclass,
         logger,
         HANDLE_RESERVED_SIGNATURES,
+        reservedMemberSymbol(subclass),
       )
 
       // ADR-110 amendment (ROADMAP line 32): the arm is one C# type holding every route's members.
@@ -3329,18 +3333,39 @@ internal fun CirMethod.overridingTypeParameters(): List<CirTypeParameter> {
  */
 internal val HANDLE_RESERVED_SIGNATURES: Set<List<String>> = setOf(listOf("Dispose"))
 
+/**
+ * ADR-162: the location of an authored member that claims a [HANDLE_RESERVED_SIGNATURES] entry, so
+ * the diagnostic points at `fun dispose()` rather than at the class header. Matched on the
+ * rendered C# name, so a `@CSharpName("Dispose")` member is found too. Only zero-parameter
+ * signatures are reserved, so a parameterless declared function is the match. Falls back to
+ * [container] when the member is not declared on it (inherited, or a non-reserved signature).
+ */
+internal fun reservedMemberSymbol(container: KSClassDeclaration): (List<String>) -> KSNode? =
+  { signature ->
+    container.getDeclaredFunctions()
+      .firstOrNull { function ->
+        signature in HANDLE_RESERVED_SIGNATURES &&
+            signature.size == 1 &&
+            function.parameters.isEmpty() &&
+            function.csharpMemberName() == signature.first()
+      }
+      ?: container
+  }
+
 internal fun emitCsharpSignatureCollisions(
   methods: List<CirMethod>,
   container: String,
   symbol: KSNode?,
   logger: KSPLogger,
   reservedSignatures: Set<List<String>> = emptySet(),
+  symbolFor: (List<String>) -> KSNode? = { symbol },
 ) = emitCsharpSignatureCollisionsOf(
   methods.map { method -> method.name to method.parameters },
   container,
   symbol,
   logger,
   reservedSignatures,
+  symbolFor,
 )
 
 /**
@@ -3367,6 +3392,13 @@ internal fun emitCsharpSignatureCollisionsOf(
    * rendered parameter types.
    */
   reservedSignatures: Set<List<String>> = emptySet(),
+  /**
+   * The location of the member claiming a reserved signature, keyed by that signature in this
+   * function's encoding (the [emitMemberNameCollisions] `symbolFor` pattern). Defaults to the
+   * container's [symbol]; only the handle sites pass [reservedMemberSymbol]. Ordinary two-member
+   * collisions still report at [symbol]: `CirMethod` carries no node (ADR-162 Deferred scope).
+   */
+  symbolFor: (List<String>) -> KSNode? = { symbol },
 ) {
   val authored: List<List<String>> = methods
     .map { method ->
@@ -3387,7 +3419,7 @@ internal fun emitCsharpSignatureCollisionsOf(
         listOf(
           ForwardDiagnostic(
             kind = ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION,
-            symbol = symbol,
+            symbol = symbolFor(signature),
             declaration = "$container.${signature.first()}",
             reason = "it renders as " +
                 "`${signature.first()}(${signature.drop(1).joinToString(", ")})`" +

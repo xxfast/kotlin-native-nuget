@@ -66,6 +66,17 @@ class Tier1EntryPointCollisionTest {
       "expected a C# signature collision against the generated Dispose, located; " +
           "kspErrors=${result.kspErrors}",
     )
+    // Located at the offending `fun dispose()` (line 4), not at `class Closer {` (line 3).
+    // `endsWith`, because `contains("Fixture.kt:4")` would also match line 40 and up.
+    assertTrue(
+      result.kspErrors.any { message ->
+        message.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name) &&
+            message.contains("Closer.Dispose") &&
+            message.trimEnd().endsWith("Fixture.kt:4")
+      },
+      "expected the collision located at fun dispose() (line 4), not class Closer (line 3); " +
+          "kspErrors=${result.kspErrors}",
+    )
     assertTrue(
       result.kspErrors.none { message ->
         message.contains(ForwardDiagnosticKind.ERROR_C_ENTRY_POINT_COLLISION.name)
@@ -117,6 +128,26 @@ class Tier1EntryPointCollisionTest {
             message.contains("Feeding.Ready.Dispose")
       },
       "expected the arm's dispose to collide with the inherited Dispose; " +
+          "kspErrors=${result.kspErrors}",
+    )
+    // Each located at its own `fun dispose()`: the base's on line 4 (not `sealed class Feeding {`
+    // on line 3), the arm's on line 7 (not `data class Ready` on line 6).
+    assertTrue(
+      result.kspErrors.any { message ->
+        message.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name) &&
+            message.contains("Feeding.Dispose") &&
+            message.trimEnd().endsWith("Fixture.kt:4")
+      },
+      "expected the base collision located at its fun dispose() (line 4); " +
+          "kspErrors=${result.kspErrors}",
+    )
+    assertTrue(
+      result.kspErrors.any { message ->
+        message.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name) &&
+            message.contains("Feeding.Ready.Dispose") &&
+            message.trimEnd().endsWith("Fixture.kt:7")
+      },
+      "expected the arm collision located at its fun dispose() (line 7); " +
           "kspErrors=${result.kspErrors}",
     )
     assertTrue(
