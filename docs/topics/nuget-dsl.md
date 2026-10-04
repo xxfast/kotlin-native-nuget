@@ -336,7 +336,7 @@ its owner in the generated C#, exactly like a module-local nested type, once the
 chain first), and a declared nested type's own member types are walked too, so
 `Broadcast.Schedule.timetable(): Timetable` admits the top-level dependency type `Timetable` on the
 strength of a member declared two levels down. A dependency type nested under a still-deferred owner
-shape (an `enum class`, a generic `interface`, or a generic sealed base/arm) is refused
+shape (an `enum class` or a generic `interface`) is refused
 admission outright, the same as a module-local one under the same deferred shape; see
 [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects).
 

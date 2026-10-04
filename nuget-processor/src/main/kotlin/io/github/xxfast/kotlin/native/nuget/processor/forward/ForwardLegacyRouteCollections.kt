@@ -785,6 +785,16 @@ internal fun ForwardBridgeTypeClassifier.legacyFlowElementShape(
     )
   }
 
+  // ADR-199: a closed generic sealed element reads through its `Factories` entry, spelled by
+  // [legacyGenericSealedElement]; a use site C# cannot spell is refused by name.
+  if (expanded.isGenericSealedReference()) {
+    return if (legacyGenericSealedElement(expanded, nullable = false) != null) {
+      ForwardLegacyFlowElementShape.Plain
+    } else {
+      ForwardLegacyFlowElementShape.Refused(expanded.legacyDescription())
+    }
+  }
+
   if (expanded.arguments.isEmpty()) return ForwardLegacyFlowElementShape.Plain
 
   // ADR-119 amendment: the suspend return's ADR-105 rewrite, so `Flow<List<Shape>>` of an eligible
@@ -1577,4 +1587,29 @@ internal fun BridgeType.interfaceBridgeWire(): InterfaceBridgeWire = when (this)
   BridgeType.String, is BridgeType.ObjectHandle, is BridgeType.Interface ->
     InterfaceBridgeWire.HANDLE
   else -> error("ADR-039: the subscription pair gate admitted $this, which has no wire")
+}
+
+/**
+ * ADR-199: a generic sealed element's C# spelling (`global::Ns.Outcome<int>`), or null for any
+ * other element and for a generic sealed use site C# cannot spell. `qualifiedElementCsType`
+ * drops type arguments, so every legacy element speller asks this first.
+ */
+internal fun ForwardBridgeTypeClassifier.legacyGenericSealedElement(
+  type: KSType?,
+  nullable: Boolean,
+): String? {
+  val expanded: KSType = type?.expandAliases() ?: return null
+  if (!expanded.isGenericSealedReference()) return null
+  val handle: BridgeType.ObjectHandle = classify(expanded.makeNotNullable()).sealedAsHandle()
+    as? BridgeType.ObjectHandle ?: return null
+  return handle.csharpType + if (nullable) "?" else ""
+}
+
+/** ADR-199: a reference to a generic-route sealed type or one of its arms. */
+private fun KSType.isGenericSealedReference(): Boolean {
+  val declaration: KSClassDeclaration = declaration as? KSClassDeclaration ?: return false
+  // An ADR-157 enum arm is still the enum at an element position.
+  if (declaration.isEnumArm()) return false
+  return declaration.isGenericSealedType() ||
+      declaration.forwardArmSealedParent()?.isGenericSealedType() == true
 }

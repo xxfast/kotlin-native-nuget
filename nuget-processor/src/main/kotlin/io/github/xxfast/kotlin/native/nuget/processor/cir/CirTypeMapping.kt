@@ -13,6 +13,7 @@ import com.google.devtools.ksp.symbol.Variance
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.CollectionKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyGenericSealedElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnostic
@@ -631,7 +632,12 @@ internal fun csTypeArgument(
   if (declaration is KSTypeParameter) return CsTypeArgument.Named("$simpleName$suffix")
 
   if (declaration !is KSClassDeclaration) return CsTypeArgument.Unnameable(qualifiedName)
-  if (resolved.arguments.isNotEmpty()) return CsTypeArgument.Unnameable(qualifiedName)
+  // ADR-199: a closed generic sealed instantiation is read through its `Factories` entry.
+  if (resolved.arguments.isNotEmpty()) {
+    return classifier.legacyGenericSealedElement(resolved, nullable = suffix.isNotEmpty())
+      ?.let { spelled -> CsTypeArgument.Named(spelled) }
+      ?: CsTypeArgument.Unnameable(qualifiedName)
+  }
   if (qualifiedName !in exportedTypes) return CsTypeArgument.Unnameable(qualifiedName)
 
   // ADR-173: an exported interface is spelled as the projected interface (`IPet`), never its

@@ -945,8 +945,9 @@ assumption some other route re-emitted it, but no route ever did for a parameter
 [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)'s
 2026-09-07 amendment bridged the position itself, sharing the same `sealedAsHandle()` rewrite the
 property planner and the sealed-return route use. `SKIPPED_SEALED_POSITION` still fires, but only
-for a sealed type with no generated `FromHandle` discriminator at all: a sealed **interface**, or a
-sealed class outside the export scope. See
+for a sealed type with no generated `FromHandle` discriminator at all (a sealed **interface**, or a
+sealed class outside the export scope), or a generic sealed type with no C# spelling at the position
+([A generic sealed hierarchy](interfaces-abstract-sealed.md#generic-sealed-hierarchy)). See
 [Interfaces, abstract classes, and sealed classes: A sealed type at a parameter position](interfaces-abstract-sealed.md#a-sealed-type-at-a-parameter-position).
 
 ### Two declarations can't share one C entry point {id="entry-point-collision"}

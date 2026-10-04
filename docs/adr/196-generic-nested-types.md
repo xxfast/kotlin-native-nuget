@@ -219,3 +219,7 @@ owners. Leak rows in `LeakTests/LiveHandleTests.cs`: 1l
 Verified by spike (C# SDK 10.0.301, kotlinc-native 2.4.10): every constraint listed in Context,
 including the flattened `new Box.Seal<int>(box, 2)` over `outer.asStableRef<Box<Any>>().get().Seal(turns)`
 (`kn-b5/spike/generic-nested/flat/Program.cs`).
+
+## Amendment (2026-10-05): the generic sealed owner skip is deleted
+
+[ADR-199](199-generic-sealed-hierarchies.md) deletes the "generic sealed base or arm owner" skip: such a hierarchy binds, and a declaration beside its arms goes on the holder (`Outcome.Detail`).

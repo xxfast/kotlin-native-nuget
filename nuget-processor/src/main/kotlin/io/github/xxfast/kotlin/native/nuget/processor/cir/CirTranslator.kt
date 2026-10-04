@@ -4,6 +4,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import com.google.devtools.ksp.processing.KSPLogger
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isIntermediateGenericSealedArm
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredCSharpName
 import io.github.xxfast.kotlin.native.nuget.processor.sanitizeLibrarySegment
@@ -626,6 +627,10 @@ internal fun translate(
     .flatMap { it.getSealedSubclasses().toList() }
     .filter { !it.isEnumArm() }
     .forEach { sub -> recordTopLevelType(sub, sub.nestedCsName()) }
+  // ADR-199: a generic sealed type also declares its non-generic holder `Outcome`.
+  sealedClasses
+    .filter { sealed -> sealed.typeParameters.isNotEmpty() }
+    .forEach { sealed -> recordTopLevelType(sealed, sealed.nestedCsName(), arity = 0) }
   interfaces.forEach { iface -> recordTopLevelType(iface, iface.nestedInterfaceCsName()) }
   topLevelTypesByCsName.forEach { (key, declarations) ->
     if (declarations.size < 2) return@forEach
@@ -688,7 +693,8 @@ internal fun translate(
     )
   }
 
-  sealedClasses.forEach { sealed ->
+  // ADR-199: an intermediate sealed arm is translated by its parent, onto the parent's holder.
+  sealedClasses.filterNot { it.isIntermediateGenericSealedArm() }.forEach { sealed ->
     namespaces.addDeclaration(
       namespaceOf(sealed.packageName.asString()),
       translateSealedClass(
@@ -1001,7 +1007,13 @@ internal fun translate(
       includesBridge = bridgePlans.isNotEmpty(),
       // ADR-094: the walk happens here, before the helpers are prepended, because `namespaces`
       // already pairs every wrapper declaration with the namespace that names it.
-      factories = factoryEntries(namespaces),
+      factories = factoryEntries(namespaces) +
+          classifier.closedSealedInstantiations.map { (type, construct) ->
+            CirFactoryEntry(type, constructExpression = construct)
+          },
+      includesFactorySlot = namespaces.any { namespace ->
+        namespace.declarations.any { it is CirSealedClass && it.typeParameters.isNotEmpty() }
+      },
       boxers = valueClassNames(namespaces),
       enumBoxers = enumBoxers(namespaces),
     ),
@@ -1274,7 +1286,15 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
         emptyList()
       }
 
-    is CirSealedClass ->
+    // ADR-199: a generic base and a generic arm are open types; only a closed arm registers here,
+    // and every closed instantiation a position names registers from the classifier.
+    is CirSealedClass -> if (typeParameters.isNotEmpty()) {
+      (subclasses.filter { it.typeParameters.isEmpty() && !it.isIntermediate }
+        .map { arm ->
+          val name: String = if (arm.isNested) "$name.${arm.name}" else arm.name
+          CirFactoryEntry("$path.$name")
+        })
+    } else {
       listOf(CirFactoryEntry("$path.$name", viaFromHandle = true)) +
           subclasses.map { subclass ->
             // Issue #54: a sibling subclass is declared beside its base, so its wrapper name is
@@ -1288,6 +1308,7 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
               constructTypeName = if (backing != null) "$path.$name.$backing" else "$path.$name",
             )
           }
+    }
 
     is CirEnum -> listOf(CirFactoryEntry("$path.$name", viaEnumOrdinal = true))
 
@@ -1302,7 +1323,9 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
         subclasses.flatMap { arm ->
           val armPath: String = if (arm.isNested) "$path.$name.${arm.name}" else "$path.${arm.name}"
           arm.nestedDeclarations.flatMap { it.walk(armPath) }
-        }
+        } +
+        // ADR-199: an intermediate arm's own hierarchy sits on this holder.
+        intermediates.flatMap { it.walk("$path.$name") }
 
     else -> emptyList()
   }

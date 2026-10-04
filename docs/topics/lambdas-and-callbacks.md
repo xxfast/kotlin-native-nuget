@@ -465,7 +465,7 @@ class implements `Name` and `NameGet` as usual.
 
 The pair also refuses, named the same way on both halves, when `Watcher` itself has no C#
 declaration at all: nested under an owner that never gets its own nested declaration (an `enum
-class`, a generic `interface`, or a generic sealed owner; see [Classes and objects: Nested
+class` or a generic `interface`; see [Classes and objects: Nested
 types](classes-and-objects.md#nested-classes-and-objects)), or declared in a dependency module
 outside the plugin's export scope. Move the listener interface to the top level of its file, or
 into the exported scope, to bind the pair.

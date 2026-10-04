@@ -50,7 +50,8 @@ Complete.
 Complete.
 
 ## Phase 4: Rich type support
-- [ ] A generic sealed hierarchy (`sealed class Outcome<T>`) stays a named `SKIPPED_UNSUPPORTED_TYPE` on both halves ([ADR-009](docs/adr/009-sealed-class-mapping.md), 2026-10-04 amendment). Binding it needs a generic `FromHandle<T>` and `Factories` entry, a discriminator over `asStableRef<Outcome<*>>()`, arms spelled under a generic owner, and the classifier spelling `Outcome<int>` at positions, plus a C# shape for an arm that fixes the argument (`Err : Outcome<Nothing>`). Discovered alongside [ADR-196](docs/adr/196-generic-nested-types.md), 2026-10-04.
+
+Complete.
 
 ## Phase 5: Exception handling
 - [ ] `kspKotlinMingwX64` prints about 155 `w: [ksp] ... [nuget:*]` warning lines on Windows at default verbosity, which [ADR-100](docs/adr/100-forward-diagnostic-delivery.md) (measured on macOS) says cannot happen; unexplained whether the ADR-100 console re-emit is duplicating them in `packNuget`. ([details](docs/backlog/kspkotlinmingwx64-155-warning-lines-adr-100-says-cannot.md))
@@ -211,6 +212,7 @@ Fallout from [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) (reve
 - [ ] **`Tier1Result.compiledClean` ignores KSP errors, so four `Tier1NestedTypesTest` cells that intentionally expect a named KSP error read as passing on the Kotlin compile alone.** ([details](docs/backlog/tier1result-compiledclean-ignores-ksp-errors.md))
 - [ ] **Add an end-to-end `scripts/verify-incremental-regeneration.sh` backstop for KSP incremental correctness.** ([details](docs/backlog/add-end-end-scripts-verify-incremental-regeneration.md))
 - [ ] `scripts/verify-forward-diagnostics.sh`'s guard against `serializer` appearing in generated `Interop.cs` matches raw text, so any KDoc in `test-library` mentioning the word, even in prose, trips it; the guard should match the member spelling, not prose. Discovered alongside [ADR-150](docs/adr/150-kdoc-to-csharp-xml-docs.md).
+- [ ] **KDoc link keys are bare simple names, so `[Name]` can resolve to an unrelated type of that name in another package.** `docLinkIndex` in `cir/CirDocLinks.kt` keys by simple name across namespaces, and the generated `<see cref>` then points at the wrong type (verified in generated output). Discovered alongside [ADR-199](docs/adr/199-generic-sealed-hierarchies.md), whose fixture avoids it by naming a type `Spare` instead of `Odd`.
 - [ ] **`CirClass.hasInternalHandleConstructor` (`CirModel.kt:57`) is dead configurability.** It defaults to `true` and no production code path ever sets it to anything else; only two test call sites touch it. Not a bug, noticed while reading `CirClassTranslator.kt` for the reference-nullability constructor-collision fix. Worth either wiring a real caller or removing the parameter.
 - [ ] **KotlinPoet's `addCode(String)` parses `%` as a format placeholder even on the no-varargs overload.** ([details](docs/backlog/kotlinpoet-s-addcode-string-parses-format-placeholder.md))
 - [ ] **The stored-bridge survives-a-collection test proves only identity-token resolution, not a real member call through the stored bridge.** ([details](docs/backlog/stored-bridge-survives-collection-test-proves-only.md))

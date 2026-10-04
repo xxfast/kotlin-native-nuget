@@ -54,6 +54,13 @@ public class ContractTests
     }
 
     [Fact]
+    public void NothingMarkerIsSealedAndUninstantiable()
+    {
+        Assert.True(typeof(KotlinNothing).IsSealed);
+        Assert.Empty(typeof(KotlinNothing).GetConstructors());
+    }
+
+    [Fact]
     public void PresenceHasThreeDistinctStatesForReferenceAndNullableValueTypes()
     {
         KotlinOptional<string?> absent = KotlinOptional<string?>.None;

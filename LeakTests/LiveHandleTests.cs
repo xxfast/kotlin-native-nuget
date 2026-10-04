@@ -27,6 +27,7 @@ using Rankings = TestLibrary.Rankings;
 using TestLibrary.Kennel;
 using Lineage = TestLibrary.Lineage;
 using Torpor = TestLibrary.Torpor;
+using Outcomes = TestLibrary.Outcome;
 using Cubby = TestLibrary.Cubby;
 
 using Membergeneric = TestLibrary.Membergeneric;
@@ -250,6 +251,105 @@ public class LiveHandleTests
             using (Cubby.Alcove alcove = hutch.Alcove())
             {
                 Assert.Equal("Oreo: catnip mouse at 2", Cubby.CubbySample.Peek(alcove));
+            }
+        });
+    }
+
+    [Fact]
+    public void GenericSealed_ReturnsAndListElements_ReturnToBaseline()
+    {
+        // ADR-199: every closed generic sealed handle Kotlin hands back is reconstructed by
+        // `Outcome<T>.FromHandle` (a forwarding arm, a phantom arm, the abstract arm's backing
+        // wrapper, an invariant closed arm, an intermediate arm, a `KotlinNothing` arm) and must be
+        // released by that arm's Dispose. Reading an erased `T` (`Ok<int>.Value`) mints a box too.
+        AssertNoLeak(() =>
+        {
+            using (Outcomes.Outcome<int> oreo = Outcomes.OutcomeDesk.Fetch(3))
+            {
+                Assert.Equal(3, ((Outcomes.Outcome.Ok<int>)oreo).Value);
+            }
+            using (Outcomes.Outcome<int> mylo = Outcomes.OutcomeDesk.Fetch(0))
+            {
+                Assert.Equal("no 0", ((Outcomes.Outcome.Err<int>)mylo).Message);
+            }
+            using (Outcomes.Outcome<int> later = Outcomes.OutcomeDesk.Eventually())
+            {
+                Assert.Equal(3, ((Outcomes.Outcome.Pending<int>)later).Eta());
+            }
+            using (Outcomes.Cell<int> cell = Outcomes.OutcomeDesk.NumberCell())
+            {
+                Assert.Equal(4, ((Outcomes.Cell.IntCell)cell).Number);
+            }
+            using (Outcomes.Outcome<int> stall = Outcomes.OutcomeDesk.Stall())
+            {
+                Assert.Equal(15, ((Outcomes.Outcome.Lapse.Stall<int>)stall).Minutes);
+            }
+            using (Outcomes.Outcome.Err<KotlinNothing> boom = Outcomes.OutcomeDesk.Fail())
+            {
+                Assert.Equal("boom", boom.Message);
+            }
+            foreach (Outcomes.Outcome<int> dinner in Outcomes.OutcomeDesk.All())
+            {
+                using (dinner) Assert.NotEmpty(dinner.Label());
+            }
+        });
+    }
+
+    [Fact]
+    public void GenericSealed_CSharpBuiltArmsPassedBack_ReturnToBaseline()
+    {
+        // ADR-199: an arm the consumer constructs mints its handle in the C# constructor and lends
+        // it to Kotlin at a base, an arm-typed, a list and a permuted-arm parameter.
+        AssertNoLeak(() =>
+        {
+            using (var seven = new Outcomes.Outcome.Ok<int>(7))
+            {
+                Assert.Equal("ok 7", Outcomes.OutcomeDesk.Describe(seven));
+                Assert.Equal(7, Outcomes.OutcomeDesk.Unwrap(seven));
+            }
+            using (var mine = new Outcomes.Outcome.Err<int>("Mylo ate it"))
+            {
+                Assert.Equal("err Mylo ate it", Outcomes.OutcomeDesk.Describe(mine));
+            }
+            using (var nine = new Outcomes.Cell.IntCell(9))
+            {
+                Assert.Equal(9, Outcomes.OutcomeDesk.Peek(nine));
+            }
+            using (var last = new Outcomes.Cell.Spare.Last(2))
+            {
+                Assert.Equal(2, Outcomes.OutcomeDesk.Peek(last));
+            }
+            using (var one = new Outcomes.Outcome.Ok<int>(1))
+            using (var no = new Outcomes.Outcome.Err<int>("no"))
+            {
+                Assert.Equal(1, Outcomes.OutcomeDesk.OkCount(new List<Outcomes.Outcome<int>> { one, no }));
+            }
+            using (var flip = new Outcomes.Duel.Flip<string, int>(2, "Mylo"))
+            {
+                Assert.Equal("Mylo beat 2", Outcomes.OutcomeDesk.Referee(flip));
+            }
+        });
+    }
+
+    [Fact]
+    public void GenericSealed_ConsumerChosenErasedSlot_ReturnsToBaseline()
+    {
+        // ADR-199: an instantiation no Kotlin signature names is read back from an erased `T`
+        // through the `NugetFactory<T>` slot, once typed as the base and once as the arm. The
+        // reconstructed wrapper owns a second handle to the same Kotlin object.
+        AssertNoLeak(() =>
+        {
+            using (var treats = new Outcomes.Outcome.Ok<long>(9_000_000_000L))
+            using (var hamper = new Outcomes.Hamper<Outcomes.Outcome<long>>(treats))
+            using (Outcomes.Outcome<long> item = hamper.Item)
+            {
+                Assert.Equal(9_000_000_000L, ((Outcomes.Outcome.Ok<long>)item).Value);
+            }
+            using (var four = new Outcomes.Outcome.Ok<short>(4))
+            using (var pouch = new Outcomes.Hamper<Outcomes.Outcome.Ok<short>>(four))
+            using (Outcomes.Outcome.Ok<short> item = pouch.Item)
+            {
+                Assert.Equal((short)4, item.Value);
             }
         });
     }

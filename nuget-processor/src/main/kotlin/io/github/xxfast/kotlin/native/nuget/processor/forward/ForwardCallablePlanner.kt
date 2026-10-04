@@ -1018,6 +1018,8 @@ internal class ForwardCallablePlanner(
       sealedClasses.forEach { sealed ->
         sealed.getSealedSubclasses()
           .filter { sub -> sub.classKind == ClassKind.CLASS }
+          // A sealed intermediate arm is never instantiated; Kotlin rejects `Fault()` outright.
+          .filter { sub -> Modifier.SEALED !in sub.modifiers }
           .forEach { sub ->
             addAll(
               constructorEntries(
@@ -1860,6 +1862,8 @@ internal class ForwardCallablePlanner(
           },
           result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
+          // ADR-199: a generic base reads its receiver erased, as ADR-147's class route does.
+          ownerType = sealed.forwardGenericOwner(),
           member = name,
           isOverride = isOverride,
           isVirtual = isVirtual,
@@ -2000,6 +2004,8 @@ internal class ForwardCallablePlanner(
           },
           result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
           origin = ForwardCallableOrigin.CLASS,
+          // ADR-199: a generic arm reads its receiver erased, as ADR-147's class route does.
+          ownerType = subclass.forwardGenericOwner(),
           // The symbol carries the overload suffix; the Kotlin call site must not.
           member = name,
           isOverride = isOverride,
@@ -5215,11 +5221,17 @@ internal fun BridgeType.sealedTypeDetail(): String? {
 
     else -> unwrapped
   }
-  return (candidate as? BridgeType.SpecializedProtocol)
+  val protocol: BridgeType.SpecializedProtocol = (candidate as? BridgeType.SpecializedProtocol)
     ?.takeIf { protocol -> protocol.name.startsWith(SEALED_HELPER_PREFIX) }
-    ?.name
-    ?.removePrefix(SEALED_HELPER_PREFIX)
+    ?: return null
+  val name: String = protocol.name.removePrefix(SEALED_HELPER_PREFIX)
+  // ADR-199: a generic sealed reference refused at its use site carries the reason after the name.
+  return protocol.sealedRefusal?.let { why -> "$name$GENERIC_SEALED_REFUSAL_SEPARATOR$why" } ?: name
 }
+
+/** ADR-199: splits a SEALED_POSITION detail into the sealed type and its use-site refusal. */
+internal const val GENERIC_SEALED_REFUSAL_SEPARATOR: String = ": "
+
 
 internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
   BridgeType.Unit, is BridgeType.Primitive -> null

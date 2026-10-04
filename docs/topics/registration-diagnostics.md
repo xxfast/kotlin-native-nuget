@@ -161,6 +161,17 @@ A generic abstract class returned at a closed type, including the abstract class
 same single handle behind its internal subclass; `GenericAbstractBacking_ClosedReturnRoutes_ReturnToBaseline`
 pins both type arguments, a concrete generic subclass, a two-parameter class and the class below.
 
+A [generic sealed hierarchy](interfaces-abstract-sealed.md#generic-sealed-hierarchy) follows the same
+rule: each `Outcome<T>` Kotlin hands back, including a phantom arm, an intermediate arm and an
+abstract arm's internal subclass, owns one handle released by that arm's `Dispose`, and reading an
+erased `T` mints a box on top. An arm you construct in C# holds its handle from the constructor and
+lends it to Kotlin at a parameter. `LeakTests/LiveHandleTests.cs`'s
+`GenericSealed_ReturnsAndListElements_ReturnToBaseline` pins the returns and list elements,
+`GenericSealed_CSharpBuiltArmsPassedBack_ReturnToBaseline` the arms built in C#, and
+`GenericSealed_ConsumerChosenErasedSlot_ReturnsToBaseline` an instantiation no Kotlin signature
+names (`Hamper<Outcome<long>>`), read back through a second handle to the same Kotlin object that you
+dispose as well.
+
 A class-typed [enum member property](enums.md) getter counts here too: every read mints a fresh
 owned wrapper the caller must dispose, the same as any other class-typed property getter.
 `LeakTests/LiveHandleTests.cs` row 1h,

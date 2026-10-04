@@ -14,6 +14,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePla
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ENUM_ARM_VALUE_MEMBER
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardStarSpelling
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardOwnerTypeName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardPropertyPlanExports
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
@@ -47,12 +49,16 @@ internal fun FileSpec.Builder.addSealedClassExports(
       .addAnnotation(cNameAnnotation("${prefix}_get_type", ownedBy(sealed, "sealed discriminator")))
       .addParameter("handle", cOpaquePointer)
       .returns(Int::class)
-      .addStatement("val obj: %L = handle.asStableRef<%L>().get()", qualifiedName, qualifiedName)
+      // ADR-199: a generic base and arm read star-projected (`Outcome<*>`, `is Outcome.Ok<*>`).
+      .addStatement(
+        "val obj: %L = handle.asStableRef<%L>().get()",
+        sealed.forwardStarSpelling(), sealed.forwardStarSpelling(),
+      )
       .addStatement("return when (obj) {")
       .apply {
         for ((index, subclass) in subclasses.withIndex()) {
-          val subQualifiedName: String = subclass.qualifiedName?.asString() ?: continue
-          addStatement("    is %L -> %L", subQualifiedName, index)
+          if (subclass.qualifiedName == null) continue
+          addStatement("    is %L -> %L", subclass.forwardStarSpelling(), index)
         }
       }
       .addStatement("}")
@@ -148,7 +154,8 @@ internal fun FileSpec.Builder.addSealedClassExports(
       // planner declined is skipped, with a `SKIPPED_UNSUPPORTED_PROPERTY` diagnostic behind it.
       // A nullable lambda is refused (named by the planner), so the body has no null path.
       if (!prop.carriesLegacyLambdaProperty(ForwardLambdaPropertyCarrier.SEALED_ARM)) continue
-      val access: String = "handle.asStableRef<$subQualifiedName>().get().$propName"
+      val receiver: String = subclass.forwardOwnerTypeName() ?: subQualifiedName
+      val access: String = "handle.asStableRef<$receiver>().get().$propName"
       val body: String = handleBody(access, "errorOut")
       addFunction(
         sealedPropertyGetter(prop, subPrefix, propName)
@@ -176,7 +183,7 @@ internal fun FileSpec.Builder.addSealedClassExports(
           .returns(Boolean::class)
           .addStatement(
             "return handle.asStableRef<%L>().get() == other.asStableRef<%L>().get()",
-            subQualifiedName, subQualifiedName,
+            subclass.forwardStarSpelling(), subclass.forwardStarSpelling(),
           )
           .build()
       )
@@ -190,7 +197,7 @@ internal fun FileSpec.Builder.addSealedClassExports(
           .returns(Int::class)
           .addStatement(
             "return handle.asStableRef<%L>().get().hashCode()",
-            subQualifiedName,
+            subclass.forwardStarSpelling(),
           )
           .build()
       )
@@ -204,7 +211,7 @@ internal fun FileSpec.Builder.addSealedClassExports(
           .returns(String::class)
           .addStatement(
             "return handle.asStableRef<%L>().get().toString()",
-            subQualifiedName,
+            subclass.forwardStarSpelling(),
           )
           .build()
       )

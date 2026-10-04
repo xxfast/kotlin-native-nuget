@@ -380,3 +380,7 @@ renders no type parameters at all, so no arm reason is actionable until that is 
 
 There is no cap on how many arms are named. Truncating the list would reintroduce this bug in
 miniature.
+
+## Amendment (2026-10-05): a generic sealed interface binds
+
+[ADR-199](199-generic-sealed-hierarchies.md) lifts the non-generic requirement: an eligible generic `sealed interface` takes the generic sealed route (`Reply<T>` with its arms on the `Reply` holder).

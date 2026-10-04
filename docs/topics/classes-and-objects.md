@@ -532,8 +532,7 @@ using var infuser = new Teapot.Infuser<string, int>(teapot, 4);
 Still a named skip (`SKIPPED_NESTED_DECLARATION`): a class nested in an inner class
 of a generic owner, an inner class whose own type parameter reuses a captured name (`inner class
 Echo<T>` in `Teapot<T>`), an inner class of a multi-bound owner (`class Arena<T> where T :
-Comparable<T>, T : Pet`; its non-inner children still bind on the holder), and anything nested in a generic `interface`, a generic sealed base or arm,
-or an `enum class`. A member that returns an inner class of a generic owner is skipped named at that
+Comparable<T>, T : Pet`; its non-inner children still bind on the holder), and anything nested in a generic `interface` or an `enum class`. A member that returns an inner class of a generic owner is skipped named at that
 member. The hint for a skipped `inner class` is to drop `inner`, take the outer instance as a
 constructor parameter, and move it to the top level of its file.
 
@@ -602,7 +601,7 @@ interfaces](interfaces-abstract-sealed.md#sealed-classes-and-interfaces) for the
 - A nested type under an owner other than the shapes covered above stays a named
   `SKIPPED_NESTED_DECLARATION` skip, as is every descendant of a nested `sealed class` (it is not a
   declared owner). A member typed with a nested `value class` under a
-  still-deferred owner (an `enum class`, a generic `interface` or a generic sealed owner) skips named too
+  still-deferred owner (an `enum class` or a generic `interface`) skips named too
   (`SKIPPED_UNSUPPORTED_TYPE`, reason `UNDECLARED_VALUE_CLASS`) instead of emitting an unusable
   struct name; move the value class to the top level of its file, or to an admitted owner, to
   bridge it. A nested `value class` whose owner sits in a dependency module outside the export

@@ -945,14 +945,14 @@ class Tier1NestedTypesTest {
   }
 
   /**
-   * ADR-196's holder is for the class route. The sealed route (ADR-009) renders a generic base
-   * without its type parameters (`public abstract class Outcome`), so an inner child's flattened
-   * outer `Outcome<T>` would name nothing (CS0308, measured) and the holder would collide with the
-   * base. Its children stay a named skip, by their own arm, rather than being admitted by the
-   * generic class rule.
+   * ADR-199: a generic sealed base has the ADR-196 holder too (`Outcome`), which carries its arms,
+   * so a type Kotlin nests beside them is declared there (`Outcome.Note`), and an `inner class`
+   * capturing the base's `T` is flattened onto it (`Outcome.Mark<T>`) as ADR-196 C/D flattens one.
+   * A type nested in a generic arm sits on the arm's own holder (`Outcome.Some.Trace`, C7).
+   * Until ADR-199 both were a named skip, since the sealed route declared no generic base at all.
    */
   @Test
-  fun `a generic sealed owner's nested declarations stay a named skip`() {
+  fun `a generic sealed owner's nested declarations live on its holder`() {
     val result = Tier1Harness.run(
       """
       package tier1.genericsealed
@@ -961,36 +961,44 @@ class Tier1NestedTypesTest {
         class Note(val n: Int)
         inner class Mark(val m: Int)
         data object None : Outcome<Nothing>()
+        class Some<T>(val value: T) : Outcome<T>() {
+          class Trace(val t: Int)
+        }
       }
 
       class Oracle {
         fun name(): String = "Delphi"
+        fun note(): Outcome.Note = Outcome.Note(2)
+        fun trace(): Outcome.Some.Trace = Outcome.Some.Trace(4)
       }
       """.trimIndent(),
       fileName = "Outcome.kt",
     )
 
-    // The generic sealed base itself is a named skip now (`Tier1GenericSealedSkipTest`), so nothing
-    // reads `asStableRef<Outcome>()` any more and the module compiles; its children stay named.
-    // `Oracle` is there so the module still generates a file to look into.
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
-    listOf("Note", "Mark").forEach { name ->
-      val warning: String = assertNotNull(
-        result.kspWarnings.singleOrNull {
-          it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
-              it.contains("Skipping tier1.genericsealed.Outcome.$name:")
-        },
-        "expected Outcome.$name to skip named; warnings=${result.kspWarnings}",
-      )
-      assertContains(
-        warning,
-        "a generic sealed base or arm is declared without its type parameters",
-      )
-      assertFalse(
-        Regex("""\bclass $name\b""").containsMatchIn(result.generatedCSharp.withoutDocComments()),
-        "expected no declaration of $name",
-      )
-    }
+    assertTrue(
+      result.kspWarnings.none { warning ->
+        warning.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name)
+      },
+      "expected no nested skip; warnings=${result.kspWarnings}",
+    )
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using Interop;
+      public static class Consumer
+      {
+          public static int Run(Oracle oracle)
+          {
+              using var note = new Outcome.Note(3);
+              using Outcome.Note other = oracle.Note();
+              using Outcome.Some.Trace trace = oracle.Trace();
+              using var mine = new Outcome.Some.Trace(5);
+              return note.N + other.N + trace.T + mine.T;
+          }
+      }
+      """.trimIndent(),
+    )
   }
 
   @Test

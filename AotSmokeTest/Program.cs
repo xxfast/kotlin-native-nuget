@@ -6,7 +6,7 @@ namespace AotSmokeTest;
 /// <summary>
 /// ADR-102 proof-of-done lane. One step per forward callback shape - every one of them makes
 /// Kotlin call back into managed code, which today needs a runtime-built native-to-managed thunk.
-/// Under the JIT all seven pass (the same paths IntegrationTests covers); the question this app
+/// Under the JIT all eight pass (the same paths IntegrationTests covers); the question this app
 /// exists to answer is what happens with no JIT at all:
 ///
 ///     dotnet publish AotSmokeTest -r win-x64 -c Release -p:PublishAot=true
@@ -14,11 +14,16 @@ namespace AotSmokeTest;
 ///
 /// Every step is labelled and flushed BEFORE it runs, because an AOT failure in a native->managed
 /// frame can be process-fatal (ExecutionEngineException / FailFast) and unwind nothing: the last
-/// flushed label is then the per-shape evidence. Exit code 0 only if all seven report PASS.
+/// flushed label is then the per-shape evidence. Exit code 0 only if all eight report PASS.
 ///
 /// Step 7 is not a callback: it is the ADR-098 `Char` wire (by-value U2 and the `Char?`
 /// `out ushort` slot), on this lane because the .NET marshaller's `char` handling differs between
 /// the JIT and NativeAOT, so a JIT-only measurement does not cover a `PublishAot` consumer.
+///
+/// Step 8 is not a callback either: it is the ADR-199 `NugetFactory<T>` slot, a generic sealed
+/// instantiation only the consumer chose (`Hamper<Outcome<long>>`), read back through an erased
+/// `T`. The slot is a static field set by a generic static constructor, which ADR-199 only infers
+/// survives NativeAOT.
 ///
 /// Cast: Oreo (black with a white middle, drama king at dinner) and Mylo (brown and creamy, treat
 /// vacuum), plus Rex the C#-implemented dog, who exists only to be dispatched back into.
@@ -34,16 +39,17 @@ internal static class Program
         Console.Out.Flush();
 
         // Measure exact counters before callbacks can leave asynchronous cleaner work behind.
-        await Step("1/7 coexistence  (Oreo and Mylo have separate native runtimes)", CoexistenceStep);
-        await Step("2/7 flow          (Oreo narrates dinner)", FlowStep);
-        await Step("3/7 suspend       (greeting Oreo asynchronously)", SuspendStep);
-        await Step("4/7 percall-lambda(describing Oreo through a C# lambda)", PerCallLambdaStep);
-        await Step("5/7 stored-cb     (Mylo's mood listener)", StoredCallbackStep);
-        await Step("6/7 iface-bridge  (Rex the C# dog crosses into Kotlin)", InterfaceBridgeStep);
-        await Step("7/7 char-wire     (Mylo's Hangul name tag, by value and Char?)", CharWireStep);
+        await Step("1/8 coexistence  (Oreo and Mylo have separate native runtimes)", CoexistenceStep);
+        await Step("2/8 flow          (Oreo narrates dinner)", FlowStep);
+        await Step("3/8 suspend       (greeting Oreo asynchronously)", SuspendStep);
+        await Step("4/8 percall-lambda(describing Oreo through a C# lambda)", PerCallLambdaStep);
+        await Step("5/8 stored-cb     (Mylo's mood listener)", StoredCallbackStep);
+        await Step("6/8 iface-bridge  (Rex the C# dog crosses into Kotlin)", InterfaceBridgeStep);
+        await Step("7/8 char-wire     (Mylo's Hangul name tag, by value and Char?)", CharWireStep);
+        await Step("8/8 generic-sealed(Oreo's dinner in a consumer-chosen hamper slot)", GenericSealedSlotStep);
 
         Console.WriteLine(_failures == 0
-            ? "== ALL 7 SHAPES PASS =="
+            ? "== ALL 8 SHAPES PASS =="
             : $"== {_failures} SHAPE(S) FAILED ==");
         Console.Out.Flush();
         return _failures == 0 ? 0 : 1;
@@ -215,6 +221,38 @@ internal static class Program
         IReadOnlyList<char> marks = readings.Marks();
         Expect(marks.Count == 2 && marks[0] == 'é' && marks[1] == '日',
             $"Marks() is [{string.Join(", ", marks.Select(mark => Describe(mark)))}]");
+        return Task.CompletedTask;
+    }
+
+    // Shape 8: ADR-199's consumer-chosen instantiation at an erased slot. Outcome<string> has a
+    // Kotlin position (so it may hit a static Factories entry); Outcome<long> has none, so its
+    // read can only succeed through the NugetFactory<T> slot, and Outcome.Ok<short> only through
+    // the arm's own slot.
+    private static Task GenericSealedSlotStep()
+    {
+        using var dinner = new TestLibrary.Outcome.Outcome.Ok<string>("Oreo");
+        using var hamper = new TestLibrary.Outcome.Hamper<TestLibrary.Outcome.Outcome<string>>(dinner);
+        using (TestLibrary.Outcome.Outcome<string> item = hamper.Item)
+        {
+            Expect(item is TestLibrary.Outcome.Outcome.Ok<string> { Value: "Oreo" },
+                $"Hamper<Outcome<string>>.Item is {item.GetType().Name}");
+        }
+
+        using var treats = new TestLibrary.Outcome.Outcome.Ok<long>(9_000_000_000L);
+        using var stash = new TestLibrary.Outcome.Hamper<TestLibrary.Outcome.Outcome<long>>(treats);
+        using (TestLibrary.Outcome.Outcome<long> item = stash.Item)
+        {
+            Expect(item is TestLibrary.Outcome.Outcome.Ok<long> { Value: 9_000_000_000L },
+                $"Hamper<Outcome<long>>.Item is {item.GetType().Name}");
+        }
+
+        // Typed as the arm: only the arm's own slot can answer, not the base's.
+        using var four = new TestLibrary.Outcome.Outcome.Ok<short>(4);
+        using var pouch = new TestLibrary.Outcome.Hamper<TestLibrary.Outcome.Outcome.Ok<short>>(four);
+        using (TestLibrary.Outcome.Outcome.Ok<short> item = pouch.Item)
+        {
+            Expect(item.Value == 4, $"Hamper<Outcome.Ok<short>>.Item.Value is {item.Value}");
+        }
         return Task.CompletedTask;
     }
 
