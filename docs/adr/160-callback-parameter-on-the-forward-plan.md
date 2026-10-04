@@ -287,7 +287,9 @@ Refused by name, unchanged in kind:
 Fixed on the way, each a defect of the deleted branch: `fun moodSupplier(m: Mood): () -> Int` failed
 the build with `ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE` and now binds; `fun nullableSupplier(n: Int?):
 () -> Int` generated `int n` and dropped `null`, and now generates `int? n`; the enum-route error
-hint now lists a lambda among the return shapes that carry an enum parameter.
+hint now lists a lambda among the return shapes that carry an enum parameter. (That kind and its
+hint were removed 2026-10-05; see the [ADR-162](162-per-declaration-error-containment.md)
+enum-parameter amendment.)
 
 `LeakTests` rows 6j-6n measure the new ownership: a captured C#-implemented pet released by the
 ADR-084 cleaner, a captured Kotlin `Cat`, value-only parameters, Kotlin throwing before it makes the
