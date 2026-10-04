@@ -33,6 +33,10 @@ int count = CatRegistry.Count(); // 2
 Object methods are PascalCased and their returns marshalled exactly like class methods; see
 [Classes and objects](classes-and-objects.md).
 
+A `suspend` function on an `object` is not bound: the processor skips it with a
+`SKIPPED_UNSUPPORTED_COMBINATION` warning naming the member, so the C# `static class` omits it.
+Declare it at the top level or on a class instead.
+
 <note>
     <p>Naming an <code>object</code> member <code>All</code>, <code>Any</code>, <code>First</code>,
     or <code>Select</code> is legal Kotlin, but if that member ever fails to bind for an unrelated
@@ -145,6 +149,9 @@ There is no separate `Cat.Companion` class in the generated output.
 This applies to the companion of an ordinary class or an enum. The companion of an `interface`, a
 value class, or a sealed class or arm binds nothing: each of its members is skipped with a named
 warning, so move it to a top-level declaration or an `object`.
+
+A `suspend` member of a companion object is skipped the same way, with a named warning; move it to
+a top-level `suspend fun` or a class member.
 
 ## Method overloads {id="method-overloads"}
 

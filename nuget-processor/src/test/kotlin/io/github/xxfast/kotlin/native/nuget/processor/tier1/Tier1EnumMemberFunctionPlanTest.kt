@@ -140,7 +140,10 @@ class Tier1EnumMemberFunctionPlanTest {
         val skips: List<String> = warningsFor(symbol)
         assertEquals(1, skips.size, "$symbol kspWarnings=${result.kspWarnings}")
       }
-    assertContains(warningsFor("Mood.napAsync").single(), "on an enum or its companion,")
+    assertContains(
+      warningsFor("Mood.napAsync").single(),
+      "a companion object, a value class, an enum,",
+    )
     val cs: String = result.generatedCSharp
     listOf("NapAsync", "Tagged", "Ticks", "Wake")
       .forEach { name -> assertFalse(cs.contains(" $name("), "$name must not render") }

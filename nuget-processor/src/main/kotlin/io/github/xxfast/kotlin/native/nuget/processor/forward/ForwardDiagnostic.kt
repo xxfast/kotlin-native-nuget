@@ -745,7 +745,6 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   ForwardPlanSkipReason.GENERIC,
   ForwardPlanSkipReason.SUSPEND,
   ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL,
-  ForwardPlanSkipReason.TYPE_PARAMETER,
     -> error(
     "Forward diagnostic translation received a legacy-route deferral ($this); these are " +
         "droppedFromCSharp = false and must never reach warnDroppedForwardCallables",
@@ -901,10 +900,12 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
             "parameter or as a function return"
 
       // ROADMAP Phase 4 line 23 fold-in: the suspend route covers top-level functions and class,
-      // sealed-arm members, never an extension.
+      // sealed-arm members, never an extension. The ADR-064 audit amendment: one sentence for
+      // every owner the route skips, so it lists each of them.
       ForwardPlanSkipReason.SUSPEND.name ->
-        "a `suspend` function binds at the top level and on a class, but not as an extension, " +
-          "on an enum or its companion, or on a value class"
+        "a `suspend` function binds at the top level, on a class or sealed type, and on an " +
+          "interface a function returns, but not on an object, a companion object, a value " +
+          "class, an enum, an interface nothing returns, or as an extension"
 
       ForwardPlanSkipReason.GENERIC.name ->
         "a generic type binds at a top-level function return, and a generic function at a " +
@@ -1355,8 +1356,8 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
           "a property of an ordinary class"
 
     ForwardPlanSkipReason.SUSPEND.name ->
-      "declare it as a top-level `suspend fun` taking the receiver (or the enum value) as its " +
-          "first parameter, or as a `suspend` member of a class"
+      "declare it as a `suspend` member of a class (or of an interface a function returns), or " +
+          "as a top-level `suspend fun` taking the receiver, if it has one, as its first parameter"
 
     ForwardPlanSkipReason.GENERIC.name ->
       "expose a non-generic wrapper (`fun f(value: Int)` beside `fun <T> f(value: T)`), or move " +
