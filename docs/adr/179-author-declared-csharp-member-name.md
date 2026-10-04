@@ -333,3 +333,93 @@ Evidence, verified: full `:nuget-processor:test` run, 1698 tests, every cell of 
 processor cells compile both generated halves. No `LeakTests` row for this part: no handle kind or
 marshalling path changed (the member-less marker crossing added in the same change has its own,
 see the ADR-084 amendment of this date).
+
+Not verified: whether `renderLegacyMethodNativeImport` (`CirClassRenderer.kt`) can still build
+`Native_<public name>` for an async or `Flow` method in `cls.methods`; and no test pins a
+keyword-named method beside a same-named property now that collision keys are unescaped. Both are
+recorded in the `ROADMAP`.
+
+## Amendment 2026-10-04: a keyword binds, a name that is not an identifier needs `@CSharpName`
+
+Rules 2 and 5 assumed every Kotlin member name is an identifier. A name written in backticks is not
+always one, and the ROADMAP item that asked ("an extension whose name needs backticks would produce
+an invalid import alias") was real and wider than extensions. Two shapes, two outcomes.
+
+**A hard keyword (`in`, `object`, `when`, `class`)** binds with no author action. C# keeps the
+existing escape (`In()`, `@object`), and the generated Kotlin now backticks every call and every
+parameter reference (`obj.`in`()`, `pull(`in`)`). Before, the plan route and every legacy route
+(`suspend`, `Flow`, lambda parameter, stored callback, interface bridge, generic function) emitted
+the bare keyword, which does not parse. The C entry point is the keyword unchanged (`lamp_in`), so no
+symbol moves.
+
+**A name that is not an identifier (a space or a symbol: `tug hard`, `a+b`)** has no C# spelling and,
+under rule 5, no native stem. It is a named skip, reason `NON_IDENTIFIER_NAME`, kind
+`SKIPPED_UNSUPPORTED_COMBINATION` (`SKIPPED_UNSUPPORTED_PROPERTY` for a property), on every route:
+``its name `tug hard` is not an identifier, so neither a C# member nor a C entry point can be spelled
+from it``, with the hint to add `@CSharpName` or rename. One central pass in `NugetProcessor` emits
+the record once per declaration (top-level declarations and members of classes, objects and sealed
+hierarchies); the enum, value-class and companion planners name the same refusal themselves.
+
+**With `@CSharpName("TugHard")` it binds.** The C# name is the declared one, as rule 1 says, and the
+Kotlin side keeps the backticked name. The C# name is never derived from a non-identifier
+automatically: every C# name stays author-written or the PascalCased identifier. Three spellings
+derive from the Kotlin name, because the author did not write them:
+
+- The entry point: every `@CName` and `EntryPoint` goes through `asCSymbol()`, which replaces each
+  run of characters that are not letters, digits or `_` with one `_` (`leash_tug_hard`,
+  `leash_tug_hard_async`, `leash_get_trail_end_collect`). The identity for every name spelled from
+  identifiers, so no shipped symbol moves.
+- A parameter named with a space becomes `step_count` in the C# and in the native slot.
+- The extension import alias (ADR-132) encodes each other character as `_x` plus four hex digits
+  (`nuget_ext_..._tug_x0020hard`), so the call needs no backticks. A literal `_` is already `_u`,
+  so the alias stays injective.
+
+**Uniqueness is best effort.** `tug hard` and `tug_hard` on one owner clean to the same symbol and
+fail with `ERROR_C_ENTRY_POINT_COLLISION` naming both owners (ADR-117), the backstop ADR-163's
+2026-10-04 amendment records. Rule 4's `ERROR_CSHARP_NAME_COLLISION` does not apply: the C# names
+differ.
+
+Also fixed: the legacy `Flow` property route was the one class-member route that ignored
+`@CSharpName` for its extern stem. It now builds the stem from the cleaned Kotlin name, like the
+others.
+
+**Routes added later in the same batch.** Keyword names also bind on a generic function's checked
+bounded read, a lambda-typed property getter, a listener interface's members and `val` slots (on the
+add/remove pair and on the bridge factory, whose slot names are built from the cleaned name, such as
+`tug_hardPtr`), an abstract member overridden by a backing wrapper, a `Result` Try twin (an authored
+`value` or `failure` parameter shifts to `value_` or `failure_`), and a nested type on a generic
+owner's holder.
+
+A listener interface with a space-named member and no `@CSharpName` is refused: the bridge factory
+is not generated, and an add/remove pair is skipped with `its listener interface `BarkListener`
+declares `slack line`, whose name is not an identifier` and a hint to annotate the member or rename
+it (`ForwardLegacyRouteCollections.kt`). Inferred, not tested natively: such an interface still
+binds as a plain parameter through the handle route, but a C# implementation of it cannot be passed
+in, as for any interface the factory refuses.
+
+Also fixed on the assembled stack: the class-property extern matching compared the raw Kotlin name
+with the cleaned export, a C# compile error for a `@CSharpName`d space-named property on the plain
+class route.
+
+**Verified.** `Tier1BacktickedNameTest` (plan route, extension, top level) and
+`Tier1BacktickedNameRoutesTest` (legacy `suspend`, `Flow` method, property and sealed arm, lambda
+parameter, stored callback, interface bridge, generic function, companion, value class, enum and
+object members) pin the keyword, the named skip, the `@CSharpName` rescue and the collision; the
+routes cells compile both the generated Kotlin and the generated C#. `:nuget-processor:test` passes
+1667, 0 failed (1725, 0 on the assembled stack). Natively, `BacktickedNameTests` calls a keyword
+plan member with a keyword parameter (`lamp.In(@object: 3)`) and a keyword `suspend` member
+(`await lamp.IsAsync(@fun: "Oreo")`) through the real pipeline; the full `IntegrationTests` (3052;
+3091 on the assembled stack), `LeakTests` (165; 175) and the 7 AOT shapes pass. No `LeakTests` row:
+no handle kind or marshalling path is new.
+
+**Known limits.**
+
+1. Kotlin/Native cannot link a shared library with a **public member whose name contains a space**:
+   its own generated C API header declares `const char* (*burn down)(...)`. Verified by the fixture
+   attempt. The `@CSharpName` rescue for a space-named public member is therefore pinned in Tier 1
+   only and cannot run natively.
+2. Inferred from reading, not tested: a space-named member inherited from an unexported base class is
+   refused but not named, because the central pass names declared members only.
+
+Dead code noticed and left alone: `translateCompanionProperty` and `translateCompanionFunction` in
+`cir/CirClassTranslator.kt` have no callers.

@@ -19,6 +19,7 @@ import com.google.devtools.ksp.symbol.Variance
 import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
+import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLambdaPropertyCarrier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.carriesLegacyLambdaProperty
@@ -590,7 +591,7 @@ private fun inheritedAbstractProperty(
     name = plan.publicName,
     type = ForwardCirPropertyProjection.publicType(plan),
     nativeReturnType = "",
-    nativeName = propName,
+    nativeName = propName.asCSymbol(),
     getter = "",
     // `{ get; set; }` when the interface declares a `var`: an implementing subclass keeps its own
     // setter (ADR-075's `readOnlyOverrideeOwner` finds the interface member mutable), and an
@@ -1189,8 +1190,9 @@ internal fun translateClass(
       }
 
       val getter: String = when {
-        isLambdaType -> "new $lambdaCsType(Native_Get_$propName(_handle))"
-        isSuspendLambdaType -> "new $suspendLambdaCsType(Native_Get_$propName(_handle))"
+        isLambdaType -> "new $lambdaCsType(Native_Get_${propName.asCSymbol()}(_handle))"
+        isSuspendLambdaType ->
+          "new $suspendLambdaCsType(Native_Get_${propName.asCSymbol()}(_handle))"
         else -> error("unreachable specialized property getter")
       }
 
@@ -1199,7 +1201,7 @@ internal fun translateClass(
         type = type,
         nativeReturnType = nativeReturnType,
         nativeSetterType = nativeReturnType,
-        nativeName = propName,
+        nativeName = propName.asCSymbol(),
         getter = getter,
         setter = null,
         extraNatives = emptyList(),
@@ -1662,7 +1664,8 @@ internal fun flowProperty(
   nativeCarrier: String = "",
 ): CirProperty? {
   val propName: String = prop.simpleName.asString()
-  val csPropName: String = propName.replaceFirstChar { it.uppercase() }
+  // The extern stem (`CirProperty.nativeStem`), from the cleaned Kotlin name, never the public one.
+  val csPropName: String = propName.asCSymbol().replaceFirstChar { it.uppercase() }
   val propTypeResolved: KSType = prop.type.resolve().expandAliases()
   val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
   // ADR-065: StateFlow (and the read-only MutableStateFlow view) is checked BEFORE FLOW_TYPES
@@ -1827,7 +1830,7 @@ internal fun flowProperty(
     type = type,
     nativeReturnType = nativeReturnType,
     nativeSetterType = mutableStateFlowNativeSetterType,
-    nativeName = propName,
+    nativeName = propName.asCSymbol(),
     getter = getter,
     setter = null,
     extraNatives = emptyList(),
@@ -1885,7 +1888,8 @@ internal fun flowMembers(
     val cname: String = toCName(methodName) + suffix
     // ADR-179: the public name takes `@CSharpName`; the extern stem keeps the Kotlin name.
     val csMethodName: String = method.csharpMemberName()
-    val nativeStem: String = "Native_${methodName.replaceFirstChar { it.uppercase() }}$suffix"
+    val nativeStem: String =
+      "Native_${methodName.asCSymbol().replaceFirstChar { it.uppercase() }}$suffix"
     val returnType = method.returnType?.resolve()?.expandAliases()
     val returnQualified: String? = returnType?.declaration?.qualifiedName?.asString()
     val isStateFlowMethod: Boolean = returnQualified in STATE_FLOW_TYPES
@@ -2150,7 +2154,7 @@ internal fun suspendMembers(
     // ADR-118: the planner's overload number, on the C symbol and on the extern stem alike.
     val suffix: String = callableCatalog.overloadSuffix(method)
     val cname: String = toCName(methodName) + suffix
-    val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
+    val csMethodName: String = methodName.asCSymbol().replaceFirstChar { it.uppercase() }
     val nativeStem: String = "Native_$csMethodName${suffix}Async"
     val resolvedReturn: KSType? = method.returnType?.resolve()?.expandAliases()
     val methodReturn: String = resolvedReturn?.declaration?.simpleName?.asString() ?: "Unit"
@@ -2299,7 +2303,7 @@ internal fun suspendMembers(
     // regardless of which of these two buckets later claims it.
     val suffix: String = callableCatalog.overloadSuffix(method)
     val cname: String = toCName(methodName) + suffix
-    val csMethodName: String = methodName.replaceFirstChar { it.uppercase() }
+    val csMethodName: String = methodName.asCSymbol().replaceFirstChar { it.uppercase() }
     val nativeStem: String = "Native_$csMethodName${suffix}Async"
     val element: SuspendStateFlowElement =
       suspendStateFlowElement(method.returnType?.resolve(), classifier, context, tracker)
@@ -2746,8 +2750,8 @@ internal fun translateSealedClass(
             name = prop.csharpMemberName(),
             type = lambdaCsType,
             nativeReturnType = "IntPtr",
-            nativeName = propName,
-            getter = "new $lambdaCsType(Native_Get_$propName(_handle, out _))",
+            nativeName = propName.asCSymbol(),
+            getter = "new $lambdaCsType(Native_Get_${propName.asCSymbol()}(_handle, out _))",
             setter = null,
             hasSyncErrorOut = true,
           )
@@ -4483,7 +4487,8 @@ private fun translateCallbackMethod(
   val methodName: String = method.simpleName.asString()
   val csMethodName: String = method.csharpMemberName()
   // ADR-179: the extern keeps the Kotlin-derived stem; only the public member takes `@CSharpName`.
-  val csNativeName: String = "Native_${methodName.replaceFirstChar { it.uppercase() }}"
+  val csNativeName: String =
+    "Native_${methodName.asCSymbol().replaceFirstChar { it.uppercase() }}"
   val nativeEntryPoint: String = "${classPrefix}_$methodName"
 
   val lambdaParam = method.parameters.firstOrNull { param ->
@@ -4709,8 +4714,10 @@ private fun translateStoredCallbackMethod(
   val removeMethodName: String = removeMethod.simpleName.asString()
   val csMethodName: String = addMethod.csharpMemberName()
   // ADR-179: the extern keeps the Kotlin-derived stem; only the public member takes `@CSharpName`.
-  val csAddNativeName: String = "Native_${addMethodName.replaceFirstChar { it.uppercase() }}"
-  val csRemoveNativeName: String = "Native_${removeMethodName.replaceFirstChar { it.uppercase() }}"
+  val csAddNativeName: String =
+    "Native_${addMethodName.asCSymbol().replaceFirstChar { it.uppercase() }}"
+  val csRemoveNativeName: String =
+    "Native_${removeMethodName.asCSymbol().replaceFirstChar { it.uppercase() }}"
 
   val lambdaParam = addMethod.parameters.firstOrNull { param ->
     param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in LAMBDA_TYPES
@@ -4821,8 +4828,10 @@ private fun translateInterfaceBridgeMethod(
   val removeMethodName: String = removeMethod.simpleName.asString()
   val csMethodName: String = addMethod.csharpMemberName()
   // ADR-179: the extern keeps the Kotlin-derived stem; only the public member takes `@CSharpName`.
-  val csAddNativeName: String = "Native_${addMethodName.replaceFirstChar { it.uppercase() }}"
-  val csRemoveNativeName: String = "Native_${removeMethodName.replaceFirstChar { it.uppercase() }}"
+  val csAddNativeName: String =
+    "Native_${addMethodName.asCSymbol().replaceFirstChar { it.uppercase() }}"
+  val csRemoveNativeName: String =
+    "Native_${removeMethodName.asCSymbol().replaceFirstChar { it.uppercase() }}"
 
   val ifaceParam = addMethod.parameters.firstOrNull { param ->
     (param.type.resolve().expandAliases().declaration as? KSClassDeclaration)
@@ -4869,7 +4878,8 @@ private fun translateInterfaceBridgeMethod(
     }
 
   val methodEntries: List<CirInterfaceBridgeMethodEntry> = ifaceMethods.map { method ->
-    val mName: String = method.simpleName.asString()
+    // The slot stem (`onMeowPtr`, `tug_hardCb`), cleaned as the Kotlin half cleans it.
+    val mName: String = method.simpleName.asString().asCSymbol()
     val mCsName: String = method.csharpMemberName()
     val params = method.parameters.toList()
     val arity: Int = params.size

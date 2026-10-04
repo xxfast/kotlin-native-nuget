@@ -51,7 +51,6 @@ Complete.
 
 ## Phase 4: Rich type support
 - [ ] Extension PROPERTIES on a has-value fan-out receiver (`Int?`, `Enum?`, `Instant?`, `Duration?`, `ValueClass(Primitive|Enum)?`) still skip named `RECEIVER_FAN_OUT` (functions bind since [ADR-132](docs/adr/132-extension-receiver-shapes.md)'s 2026-10-03 amendment); land after `val Cat.x` beside `val Cat?.x` is a named error.
-- [ ] Unverified: an extension function whose Kotlin name needs backticks (spaces or symbols) would produce an invalid import alias in the generated Kotlin. Discovered alongside [ADR-132](docs/adr/132-extension-receiver-shapes.md)'s 2026-10-03 amendment.
 - [ ] `T : Enum<T>` generates Kotlin that does not compile on both generic routes: no Kotlin type argument satisfies the invariant bound; a Tier 1 cell pins the failure. Verified. Discovered alongside [ADR-015](docs/adr/015-generic-type-constraint-mapping.md)'s 2026-10-03 amendment.
 
 ## Phase 5: Exception handling

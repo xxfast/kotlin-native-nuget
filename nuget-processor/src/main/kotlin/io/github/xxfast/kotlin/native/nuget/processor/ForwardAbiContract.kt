@@ -384,7 +384,8 @@ internal object ForwardAbiContract {
   }
 
   private fun CirDllImport.toSignature(): ForwardAbiSignature? {
-    val name: String = entryPoint ?: return null
+    // Cleaned as the rendered `EntryPoint` is (`NugetProcessor`), the identity otherwise.
+    val name: String = entryPoint?.asCSymbol() ?: return null
     val parameters: MutableList<ForwardAbiSignatureParameter> = parameters.map { parameter ->
       // ADR-061's nullable-primitive out-parameter (`out int value`, etc.) is, at the C ABI
       // level, exactly the same shape as `out IntPtr error` below: a pointer to a memory slot the

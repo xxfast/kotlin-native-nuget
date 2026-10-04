@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -433,7 +434,7 @@ internal fun FileSpec.Builder.addClassExports(
           .returns(cOpaquePointer.copy(nullable = true))
           .addStatement(
             "return %T.retain(handle.asStableRef<%L>().get().%L)",
-            nugetHandles, qualifiedName, propName,
+            nugetHandles, qualifiedName, propName.kotlinIdentifier(),
           )
           .build()
       )

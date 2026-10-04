@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirExtensionProperty
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirExtraNative
@@ -180,7 +181,7 @@ internal object ForwardCirPropertyProjection {
       type = plan.type.csharpType(),
       nativeReturnType = directGetter.result.csharpWireType(),
       nativeSetterType = if (plan.setter != null) setterNativeType(plan.type) else directGetter.result.csharpWireType(),
-      nativeName = plan.kotlinName,
+      nativeName = plan.kotlinName.asCSymbol(),
       // ROADMAP:29: the bodies are baked at the method position's depth (the brace at column 8,
       // statements at 12), the extension-method depth (ADR-188's extension block moves them in two
       // levels itself). A property accessor's brace sits one level deeper (column 12, and 16
@@ -215,9 +216,9 @@ internal object ForwardCirPropertyProjection {
     if (plan.setter is ForwardPropertySetter.NullableDispatch) {
       add(
         CirExtraNative(
-          "set_${plan.kotlinName}_null",
+          "set_${plan.kotlinName.asCSymbol()}_null",
           "void",
-          "Native_Set_${plan.kotlinName}_null",
+          "Native_Set_${plan.kotlinName.asCSymbol()}_null",
           hasSyncErrorOut = true
         )
       )
@@ -556,11 +557,13 @@ internal object ForwardCirPropertyProjection {
 
   private fun nativeName(plan: ForwardPropertyPlan, call: ForwardNativeCall): String {
     if (plan.position == ForwardPropertyPosition.CLASS) {
+      // The export carries the cleaned name (`slack_line`), so the match and the extern do too.
+      val stem: String = plan.kotlinName.asCSymbol()
       return when {
-        call.exportName.contains("_get_${plan.kotlinName}_value") -> "Native_Get_${plan.kotlinName}_value"
-        call.exportName.contains("_get_${plan.kotlinName}") -> "Native_Get_${plan.kotlinName}"
-        call.exportName.contains("_set_${plan.kotlinName}_null") -> "Native_Set_${plan.kotlinName}_null"
-        else -> "Native_Set_${plan.kotlinName}"
+        call.exportName.contains("_get_${stem}_value") -> "Native_Get_${stem}_value"
+        call.exportName.contains("_get_$stem") -> "Native_Get_$stem"
+        call.exportName.contains("_set_${stem}_null") -> "Native_Set_${stem}_null"
+        else -> "Native_Set_$stem"
       }
     }
     return "Native_" + call.csharpStem.split('_').joinToString("") {

@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import io.github.xxfast.kotlin.native.nuget.processor.RESULT_FAILED_SLOT
+import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDoc
@@ -114,7 +115,7 @@ internal object ForwardCirPlanProjection {
       "Forward CIR value-class property projection received ${plan.invocation.origin}"
     }
     val nativeName: String = "Native_Get${plan.publicSignature.name}"
-    val propName: String = plan.invocation.symbol.substringAfterLast('.')
+    val propName: String = plan.invocation.symbol.substringAfterLast('.').asCSymbol()
     val (returnType, nativeReturnType, expression) = valueClassMemberExpression(
       plan = plan,
       nativeName = nativeName,
@@ -142,7 +143,7 @@ internal object ForwardCirPlanProjection {
     // name does not (the C# surface is one natural overload set). The `DllImport` name must follow
     // the *numbered* name, or two overloads that happen to share a wire shape would declare the
     // same extern twice (CS0111). Unsuffixed members render exactly as before.
-    val methodName: String = plan.invocation.symbol.substringAfterLast('.')
+    val methodName: String = plan.invocation.symbol.substringAfterLast('.').asCSymbol()
     val nativeName: String = "Native_${methodName.replaceFirstChar { it.uppercase() }}"
     val (returnType, nativeReturnType, expression) = valueClassMemberExpression(
       plan = plan,
@@ -357,7 +358,8 @@ internal object ForwardCirPlanProjection {
     // enum parameter both cross as `int`) would declare the same extern twice (CS0111). Unsuffixed
     // members render exactly as before.
     val externName: String =
-      "Native_" + plan.invocation.symbol.substringAfterLast('.').replaceFirstChar { it.uppercase() }
+      "Native_" + plan.invocation.symbol.substringAfterLast('.').asCSymbol()
+        .replaceFirstChar { it.uppercase() }
     val result: CirResultProjection = plan.resultProjection(
       nativeName = externName,
       parameters = plan.publicSignature.parameters,

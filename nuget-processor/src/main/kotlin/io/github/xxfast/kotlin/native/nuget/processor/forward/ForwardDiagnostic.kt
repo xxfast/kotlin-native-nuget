@@ -678,6 +678,9 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE,
   // ADR-064 amendment: and for a companion whose owner renders no statics.
   ForwardPlanSkipReason.COMPANION_NO_CARRIER,
+  // A backticked name with no `@CSharpName`: nothing about its types is unsupported, the
+  // declaration as named has no C# or C spelling.
+  ForwardPlanSkipReason.NON_IDENTIFIER_NAME,
     -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION
 
   // ADR-162: the one reason that maps to an ERROR_* kind by construction. It is not a "cannot
@@ -870,6 +873,10 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
     // ADR-115: the author's own signal, named as such.
     ForwardPlanSkipReason.OPT_IN_MARKER ->
       "it is marked with the opt-in marker `${detail ?: "an opt-in marker"}`"
+
+    ForwardPlanSkipReason.NON_IDENTIFIER_NAME ->
+      "its name `${detail ?: "its name"}` is not an identifier, so neither a C# member nor a " +
+          "C entry point can be spelled from it"
 
     // ADR-160 amendment: issue #111's sentence, moved onto the plan with the route it came from.
     ForwardPlanSkipReason.LAMBDA_TYPE_ARGUMENT ->
@@ -1510,6 +1517,11 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
         "return position (CS0722), so every member typed with it is skipped rather than emitted " +
         "as uncompilable C#; return a regular class, or call the object`s members directly"
   }
+
+  ForwardPlanSkipReason.NON_IDENTIFIER_NAME ->
+    "annotate it with @CSharpName(\"<a C# identifier>\") to choose its C# name (the C entry " +
+        "point is then derived with every other character replaced by `_`), or rename it to an " +
+        "identifier"
 
   // ADR-115: no `include(...)`, no move-to-top-level and no scope change can repair either of
   // these, so the hint names the only two things that can: remove the marker, or stop exposing the

@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.importIfDefaultPackage
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinPackageReference
@@ -115,7 +116,8 @@ internal fun FileSpec.Builder.addFunctionExports(
   // ADR-163: the call is fully qualified, so two same-named top-level functions in two packages
   // do not import to one ambiguous simple name in the generated file.
   val funcName: String =
-    kotlinPackageReference(func.packageName.asString()) + func.simpleName.asString()
+    kotlinPackageReference(func.packageName.asString()) +
+      func.simpleName.asString().kotlinIdentifier()
 
   if (!func.hasLegacyGenericReturnRoute()) {
     // Ordinary types without a plan are unsupported for emission — never fall through to

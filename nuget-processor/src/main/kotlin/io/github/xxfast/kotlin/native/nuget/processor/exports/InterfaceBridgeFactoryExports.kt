@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
 import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FileSpec
@@ -104,18 +105,20 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
 internal fun StringBuilder.appendSlotOverride(slot: ForwardBridgeSlot) {
   val call: String = invocation(slot)
   if (slot.isProperty) {
-    appendLine("    override val ${slot.name}: ${slot.result.kotlin}")
+    appendLine("    override val ${slot.name.kotlinIdentifier()}: ${slot.result.kotlin}")
     appendLine("      get() {")
     appendResultMarshalling(slot, call, "        ")
     appendLine("      }")
     return
   }
 
-  val params: String = slot.parameters.joinToString(", ") { "${it.name}: ${it.type.kotlin}" }
-  appendLine("    override fun ${slot.name}($params): ${slot.result.kotlin} {")
+  val params: String =
+    slot.parameters.joinToString(", ") { "${it.name.kotlinIdentifier()}: ${it.type.kotlin}" }
+  appendLine("    override fun ${slot.name.kotlinIdentifier()}($params): ${slot.result.kotlin} {")
   slot.parameters.forEachIndexed { index, parameter ->
     if (parameter.type.wire == ForwardBridgeWire.OBJECT) {
-      appendLine("      val arg${index}Ref = NugetHandles.retain(${parameter.name} as Any)")
+      val reference: String = parameter.name.kotlinIdentifier()
+      appendLine("      val arg${index}Ref = NugetHandles.retain($reference as Any)")
     }
   }
   appendResultMarshalling(slot, call, "      ")
@@ -127,9 +130,10 @@ private fun invocation(slot: ForwardBridgeSlot): String {
   val args: List<String> = slot.parameters.mapIndexed { index, parameter ->
     when (parameter.type.wire) {
       ForwardBridgeWire.OBJECT -> "arg${index}Ref"
-      ForwardBridgeWire.BOOLEAN -> "if (${parameter.name}) 1.toByte() else 0.toByte()"
-      ForwardBridgeWire.ENUM -> "${parameter.name}.ordinal"
-      else -> parameter.name
+      ForwardBridgeWire.BOOLEAN ->
+        "if (${parameter.name.kotlinIdentifier()}) 1.toByte() else 0.toByte()"
+      ForwardBridgeWire.ENUM -> "${parameter.name.kotlinIdentifier()}.ordinal"
+      else -> parameter.name.kotlinIdentifier()
     }
   }
   // ADR-161: the ADR-084 slot's invocation goes through the error channel, so a C# member that

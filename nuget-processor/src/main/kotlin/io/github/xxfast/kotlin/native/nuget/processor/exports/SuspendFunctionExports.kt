@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.forward.importIfDefaultPackage
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinPackageReference
@@ -72,7 +73,8 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
   // symbols. The Kotlin call below stays bare -- the suffix names the export, not the function.
   val cname: String = symbols.topLevel(func) + callableCatalog.overloadSuffix(func)
   val funcName: String =
-    kotlinPackageReference(func.packageName.asString()) + func.simpleName.asString()
+    kotlinPackageReference(func.packageName.asString()) +
+      func.simpleName.asString().kotlinIdentifier()
   val returnType = func.returnType?.resolve()?.expandAliases()
   val qualifiedReturn: String = returnType?.declaration?.qualifiedName?.asString() ?: "kotlin.Unit"
   val isUnit: Boolean = qualifiedReturn == "kotlin.Unit"
@@ -155,7 +157,9 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
     )
     val names: ForwardLegacyNames = legacyKotlinNames(method.parameters, paramShapes)
     val call: String =
-      names.legacyInvocation("${names.obj}.$methodName", method.legacyParameterNames())
+      names.legacyInvocation(
+        "${names.obj}.${methodName.kotlinIdentifier()}", method.legacyParameterNames(),
+      )
     val paramPrelude: String = names.legacyPrelude(method.legacyParameterNames())
     val boxed: String = legacyBoxedResult(classifier.legacyReturnShape(returnType))
 

@@ -204,7 +204,8 @@ internal fun KSClassDeclaration.forwardArmSealedParent(): KSClassDeclaration? = 
  */
 internal fun KSClassDeclaration.isForwardArmMember(member: KSDeclaration): Boolean {
   val sealed: KSClassDeclaration =
-    forwardArmSealedParent() ?: return member.parentDeclaration == this
+    forwardArmSealedParent()
+      ?: return member.parentDeclaration == this && member.hasBridgeableName()
   return member.isForwardMemberOf(this, sealed)
 }
 
@@ -340,10 +341,12 @@ internal fun KSClassDeclaration.droppedBaseChain(
 internal fun KSDeclaration.isForwardMemberOf(
   cls: KSClassDeclaration,
   superClass: KSClassDeclaration?,
-): Boolean = isDeclaredBy(cls) ||
+): Boolean = hasBridgeableName() && (
+  isDeclaredBy(cls) ||
     superClass == null ||
     isFromInterfaceBeside(superClass) ||
     isFromDroppedBase(cls, superClass)
+  )
 
 /**
  * [isForwardMemberOf] narrowed to the members a *plan* can be built for: an inherited interface
@@ -362,13 +365,15 @@ internal fun KSDeclaration.isForwardMemberOf(
 internal fun KSDeclaration.isForwardPlannableMemberOf(
   cls: KSClassDeclaration,
   superClass: KSClassDeclaration?,
-): Boolean = isDeclaredBy(cls) ||
+): Boolean = hasBridgeableName() && (
+  isDeclaredBy(cls) ||
     ((superClass == null ||
         isFromInterfaceBeside(superClass) ||
         isFromDroppedBase(cls, superClass)) &&
         // An owner with a backing wrapper does have something to dispatch to: the Kotlin object
         // behind the handle implements the member, and the wrapper must override it.
         (hasImplementation() || cls.hasAbstractBacking()))
+  )
 
 /**
  * ADR-101 amendment (2026-09-11): whether this member is inherited from an interface the class

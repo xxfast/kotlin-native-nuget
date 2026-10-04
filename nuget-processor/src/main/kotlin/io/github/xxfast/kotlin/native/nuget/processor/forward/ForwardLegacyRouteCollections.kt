@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
 import com.google.devtools.ksp.getVisibility
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.Visibility
@@ -1180,7 +1181,8 @@ internal fun ForwardLegacyNames.legacyInvocation(target: String, parameters: Lis
     ForwardDispatchArgument(
       label = parameter,
       defaulted = shapes[index].isLegacyDefaulted,
-      value = legacyArgument(index, parameter),
+      // The slot is declared through KotlinPoet, which backticks a keyword name; so is this.
+      value = legacyArgument(index, parameter.kotlinIdentifier()),
     )
   }
   val mask: String = mask ?: return "$target(${arguments.joinToString(", ") { it.value }})"
@@ -1200,13 +1202,14 @@ internal fun ForwardLegacyNames.legacyInvocation(target: String, parameters: Lis
  */
 internal fun ForwardLegacyNames.legacyPrelude(parameters: List<String>): String = buildString {
   parameters.forEachIndexed { index, parameter ->
-    shapes[index].legacyPrelude(parameter, loweredLocals[index])?.let { line -> appendLine(line) }
+    shapes[index].legacyPrelude(parameter.kotlinIdentifier(), loweredLocals[index])
+      ?.let { line -> appendLine(line) }
   }
   val mask: String = mask ?: return@buildString
   var bit = 0
   val terms: List<String> = parameters.mapIndexedNotNull { index, parameter ->
     if (!shapes[index].isLegacyDefaulted) return@mapIndexedNotNull null
-    "(if (${legacyPresence(index, parameter)}) ${1 shl bit++} else 0)"
+    "(if (${legacyPresence(index, parameter.kotlinIdentifier())}) ${1 shl bit++} else 0)"
   }
   appendLine("val $mask = ${terms.joinToString(" or ")}")
 }
@@ -1302,6 +1305,19 @@ internal fun ForwardBridgeTypeClassifier.legacyRefusedInterfaceBridgePair(
       reason = "its listener interface `$listenerName` declares `$repeated` more than once, and " +
           "this subscription route binds one callback slot per member name",
       hint = "give each listener member its own name (`onMeow()` / `onMeowTimes(times)`)",
+    )
+  }
+  // The bridge must override every listener member, and a backticked `tug hard` with no
+  // `@CSharpName` has no C# member a listener could implement.
+  val unnamed: KSDeclaration? = (listenerProperties(listener) + members)
+    .firstOrNull { member -> !member.hasBridgeableName() }
+  if (unnamed != null) {
+    return LegacyRefusedInterfaceBridgePair(
+      kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT,
+      reason = "its listener interface `$listenerName` declares " +
+          "`${unnamed.simpleName.asString()}`, whose name is not an identifier",
+      hint = "annotate that listener member with @CSharpName(\"<a C# identifier>\"), or rename " +
+          "it to an identifier",
     )
   }
   listenerProperties(listener)

@@ -385,10 +385,12 @@ private fun exportBuilder(
   return builder
 }
 
-private fun ForwardPropertyPlan.accessExpression(): String =
-  when (val receiver: ForwardPropertyReceiver = receiver) {
+private fun ForwardPropertyPlan.accessExpression(): String {
+  // Backticked where the declared name needs it: a hard keyword, or a space or symbol.
+  val name: String = kotlinName.kotlinIdentifier()
+  return when (val receiver: ForwardPropertyReceiver = receiver) {
     is ForwardPropertyReceiver.Handle ->
-      "handle.asStableRef<${receiver.owner}>().get().$kotlinName"
+      "handle.asStableRef<${receiver.owner}>().get().$name"
 
     // ADR-157: no member access after the cast. The box's `Value` IS the receiver -- an enum entry
     // has no property that answers with itself -- and the `Enum` result branch appends `.ordinal`.
@@ -402,12 +404,13 @@ private fun ForwardPropertyPlan.accessExpression(): String =
     // `.c` to the *safe-called* result, which is not the nullable extension's receiver.
     is ForwardPropertyReceiver.Value -> {
       val lowered: String = inputLowering(receiver.type, "receiver")
-      if (receiver.type is BridgeType.Nullable) "($lowered).$kotlinName" else "$lowered.$kotlinName"
+      if (receiver.type is BridgeType.Nullable) "($lowered).$name" else "$lowered.$name"
     }
 
     is ForwardPropertyReceiver.Static ->
-      receiver.owner?.let { "$it.$kotlinName" } ?: kotlinName
+      receiver.owner?.let { "$it.$name" } ?: name
   }
+}
 
 private fun ForwardPropertyPlan.valueExpression(): String = inputLowering(type, "value")
 

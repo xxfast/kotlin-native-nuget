@@ -162,6 +162,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.skipReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipDetail
 import io.github.xxfast.kotlin.native.nuget.processor.forward.optInMarker
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.hasBridgeableName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuspendRouteMethods
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSealedBaseAsyncMethods
@@ -1184,6 +1185,9 @@ private fun KSAnnotated.hasCNameAnnotation(): Boolean =
  */
 private data class CsharpBindings(val cir: CirFile, val rendered: String)
 
+/** A rendered `DllImport` entry point, whatever renderer printed it. */
+private val RENDERED_ENTRY_POINT: Regex = Regex("EntryPoint = \"([^\"]*)\"")
+
 internal class NugetProcessor(
   private val codeGenerator: CodeGenerator,
   logger: KSPLogger,
@@ -1302,8 +1306,10 @@ internal class NugetProcessor(
     fun isMarkedOptIn(declaration: KSDeclaration): Boolean =
       declaration.optInMarker(context.exportMarkers) != null
 
+    // A backticked top-level name with no `@CSharpName` (`fun \`tug hard\`()`) has no C# or C
+    // spelling, so it leaves the export set here, once, for every route; named below.
     fun isExportedAndUnmarked(declaration: KSDeclaration): Boolean =
-      isExported(declaration) && !isMarkedOptIn(declaration)
+      isExported(declaration) && !isMarkedOptIn(declaration) && declaration.hasBridgeableName()
 
     // ADR-154 §1: the additive `admit(...)` matcher — the exact by-package-or-by-qualified-name
     // rule `exclude` uses (issue #53), so one entry can name a single type or a whole package.
@@ -1356,6 +1362,15 @@ internal class NugetProcessor(
     // *public* sibling, and this filter is the same one the roots use.
     ForwardDeclaredTypeNames.reset(
       allDeclarations.asSequence().filterIsInstance<KSClassDeclaration>(),
+    )
+
+    ForwardDiagnosticSink.emit(
+      nonIdentifierNameDiagnostics(
+        topLevel = candidateDeclarations.filter { declaration ->
+          isExported(declaration) && !isMarkedOptIn(declaration)
+        },
+      ),
+      logger,
     )
 
     // ADR-115: named once, where the author wrote the marker. A marked *member* of an exported
@@ -2604,7 +2619,13 @@ internal class NugetProcessor(
     // ADR-150 amendment: the one place a KDoc `[link]` can be checked against the types this file
     // really declares, which is what keeps a CS1574 out of a consumer's build. Post-pass, so no
     // planner, projection or renderer signature knows about link resolution at all.
+    // Every `EntryPoint` through `asCSymbol`, the twin of `cNameAnnotation` on the Kotlin half:
+    // routes that compose a symbol from a `@CSharpName`d backticked name (`tug hard`) render it
+    // in a dozen places, and this is the one every one of them passes. The identity otherwise.
     val csharp: String = renderer.render(cirFile.resolveDocLinks())
+      .replace(RENDERED_ENTRY_POINT) { match ->
+        "EntryPoint = \"${match.groupValues[1].asCSymbol()}\""
+      }
 
     val file = codeGenerator.createNewFile(
       dependencies = deps,
@@ -2648,6 +2669,75 @@ internal class NugetProcessor(
    * top-level callables, whose call sites are bare). Read off the drafted text so a type no
    * export mentions leaves no dead import behind.
    */
+  /**
+   * One `NON_IDENTIFIER_NAME` record per declaration the shared filters refuse for its name
+   * (`hasBridgeableName`): an in-scope top-level declaration ([topLevel]), and a member of an
+   * in-scope class, object or sealed hierarchy, whose every route reads the class membership
+   * predicates. Enum, value-class and companion members are not walked here: their planner walks
+   * do not read those predicates and name the same refusal themselves (`planOrSkipUnguarded`,
+   * `ForwardPropertyPlanner.propertyPlan`). Declared members only, so an inherited member is named
+   * once, on the type that wrote it.
+   */
+  private fun nonIdentifierNameDiagnostics(
+    topLevel: List<KSDeclaration>,
+  ): List<ForwardDiagnostic> {
+    fun diagnostic(
+      declaration: KSDeclaration,
+      owner: ForwardDiagnosticOwner?,
+    ): ForwardDiagnostic {
+      val name: String = declaration.simpleName.asString()
+      val reason: ForwardPlanSkipReason = ForwardPlanSkipReason.NON_IDENTIFIER_NAME
+      return ForwardDiagnostic(
+        kind = if (declaration is KSPropertyDeclaration) {
+          ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY
+        } else {
+          reason.toDiagnosticKind()
+        },
+        symbol = declaration,
+        declaration = declaration.qualifiedName?.asString() ?: name,
+        reason = reason.diagnosticReason(name),
+        hint = reason.diagnosticHint(name),
+        owner = owner,
+        member = name,
+      )
+    }
+
+    fun KSClassDeclaration.walksMembership(): Boolean =
+      classKind != ClassKind.ENUM_CLASS && classKind != ClassKind.INTERFACE &&
+        !isCompanionObject && Modifier.VALUE !in modifiers && Modifier.INLINE !in modifiers
+
+    fun members(owner: KSClassDeclaration): List<ForwardDiagnostic> = buildList {
+      if (!owner.walksMembership()) return@buildList
+      owner.declarations
+        .filter { member -> member is KSFunctionDeclaration || member is KSPropertyDeclaration }
+        .filter { member -> member.getVisibility() == Visibility.PUBLIC }
+        .filterNot { member -> member.hasBridgeableName() }
+        .forEach { member -> add(diagnostic(member, owner.forwardDiagnosticOwner())) }
+      owner.declarations.filterIsInstance<KSClassDeclaration>()
+        .filter { nested -> nested.getVisibility() == Visibility.PUBLIC }
+        .forEach { nested -> addAll(members(nested)) }
+    }
+
+    return buildList {
+      topLevel.filterNot { declaration -> declaration.hasBridgeableName() }
+        .forEach { declaration ->
+          val owner: ForwardDiagnosticOwner? = when (declaration) {
+            is KSFunctionDeclaration ->
+              declaration.forwardFileClassOwner().takeIf { declaration.extensionReceiver == null }
+
+            is KSPropertyDeclaration ->
+              declaration.forwardFileClassOwner().takeIf { declaration.extensionReceiver == null }
+
+            else -> null
+          }
+          add(diagnostic(declaration, owner))
+        }
+      topLevel.filter { declaration -> declaration.hasBridgeableName() }
+        .filterIsInstance<KSClassDeclaration>()
+        .forEach { owner -> addAll(members(owner)) }
+    }
+  }
+
   private fun importReferencedRootPackageTypes(
     builder: FileSpec.Builder,
     rootPackageTypes: Set<String>,

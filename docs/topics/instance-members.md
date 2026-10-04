@@ -92,6 +92,18 @@ public Task<string> ReadCollar(string prefix, CancellationToken cancellationToke
 - The name must be a C# identifier, or generation fails with `ERROR_CSHARP_NAME_INVALID`. A C#
   keyword is allowed and is escaped with `@` on every member, so `@CSharpName("event")` is called
   as `x.@event`.
+- A Kotlin name written in backticks needs no annotation when it is a keyword:
+  `` fun `in`(`object`: Int) `` binds as `In(int @object)`, on every route, including a listener
+  interface and a `Result` `Try` twin (an authored `value` or `failure` parameter becomes `value_`
+  or `failure_`). A name with a space or symbol (`` fun `tug hard`() ``) has no C# spelling, so it
+  is skipped with a `SKIPPED_UNSUPPORTED_COMBINATION` warning (a property:
+  `SKIPPED_UNSUPPORTED_PROPERTY`) that names it. `@CSharpName("TugHard")` makes it bind; the native
+  entry point replaces each run of other characters with `_` (`tug_hard`). Two names that clean to
+  the same entry point, such as `` `tug hard` `` and `tug_hard`, fail with
+  `ERROR_C_ENTRY_POINT_COLLISION`. Kotlin/Native itself cannot link a library whose public member
+  is named with a space, so rename such a member in Kotlin rather than rely on the annotation. A
+  listener interface with a space-named member and no `@CSharpName` gets no bridge factory, and its
+  `addX`/`removeX` pair is skipped naming that member; name the member or rename it.
 - It also applies to `Flow` and `StateFlow` properties and methods, and to the `addX` half of an
   add/remove listener pair (the member you call). On the `removeX` half it does nothing, with no
   warning: that half names no C# member.

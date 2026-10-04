@@ -18,6 +18,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
+import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 
 /**
  * ADR-075: a mutable collection property whose declared type is a `Collection` (optionally
@@ -955,6 +956,18 @@ internal class ForwardPropertyPlanner(
       )
       return null
     }
+    // The callable route's gate (`planOrSkipUnguarded`): a backticked name that is no identifier
+    // has no C# spelling unless the author declares one with `@CSharpName`.
+    val declaredName: String = prop.simpleName.asString()
+    if (!declaredName.isPlainKotlinIdentifier() && prop.declaredCSharpName() == null) {
+      dropped.add(
+        ForwardDroppedProperty(
+          symbol, prop, typeDescription = "", reason = ForwardPlanSkipReason.NON_IDENTIFIER_NAME,
+          detail = declaredName, owner = ownerScope,
+        ),
+      )
+      return null
+    }
     val type: BridgeType = classifier.classify(typeOverride ?: prop.type.resolve()).sealedAsHandle()
     // ADR-075: getter eligibility never depended on mutability or on the collection facet — a
     // `Collection` (nullable or not) plans whenever the C# read can spell every component
@@ -1290,8 +1303,10 @@ internal class ForwardPropertyPlanner(
     receiver: ForwardPropertyReceiver,
     values: List<ForwardAbiParameter>,
   ): ForwardNativeCall = ForwardNativeCall(
-    exportName = exportName,
-    csharpStem = symbols.stem(exportName),
+    // Identity for an identifier-named property; a `@CSharpName`d backticked one cannot carry its
+    // space into the entry point.
+    exportName = exportName.asCSymbol(),
+    csharpStem = symbols.stem(exportName.asCSymbol()),
     result = result,
     parameters = receiver.parameters() + values + errorParameter(),
   )

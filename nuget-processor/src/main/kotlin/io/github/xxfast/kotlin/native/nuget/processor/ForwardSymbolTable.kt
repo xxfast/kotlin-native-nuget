@@ -97,8 +97,10 @@ internal class ForwardSymbolTable(
     taken: Set<String> = emptySet(),
   ): String {
     val stem: String = qualifier(declaration) + receiverPrefix
-    val plain: String = stem + "_" + member
-    return if (plain in taken) stem + "_ext_" + member else plain
+    // Compared in the form the plan exports (`asCSymbol`), so a `@CSharpName`d `tug hard` meets
+    // the member's `leash_tug_hard`. The identity for every identifier-named extension.
+    val plain: String = (stem + "_" + member).asCSymbol()
+    return if (plain in taken) (stem + "_ext_" + member).asCSymbol() else plain
   }
 
   /**

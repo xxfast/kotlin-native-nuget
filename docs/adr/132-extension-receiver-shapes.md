@@ -393,14 +393,15 @@ accepted the backticked aliased import in the real pipeline.
 **Inferred, not checked:** an alias behaves the same for `suspend`, `infix`, `operator` and generic
 extensions beyond the shapes above.
 
-**Known gaps found alongside, not fixed here (the first two are closed by 2026-10-04 amendments):**
+**Known gaps found alongside, not fixed here (all three are closed by 2026-10-04 amendments):**
 a member function and an extension function of the
 same name on one receiver declared in the same package claim one C entry point (verified,
 `ERROR_C_ENTRY_POINT_COLLISION`), so the alias then only reached an extension in another package. A class
 in the default package with an extension (`class Leash` plus `fun Leash.tug()`) generated
 `Unresolved reference 'Leash'` (verified; closed by the default-package amendment at the end
 of this file). An extension function whose
-name needs backticks is unverified and may produce an invalid alias.
+name needs backticks was unverified and could produce an invalid alias; it was real and is closed
+by the backticked-name amendment at the end of this file.
 
 ## Amendment (2026-10-03): has-value fan-out receivers bind on the extension-function route
 
@@ -509,3 +510,28 @@ right. ADR-163's 2026-10-04 default-package amendment records the rule. Verified
 `Tier1DefaultPackageExtensionTest` compiles the generated Kotlin with the harness's JVM compiler.
 Inferred: Kotlin/Native resolves the same import; no native fixture exists because every
 `test-library` declaration lives in a package.
+
+## Amendment (2026-10-04): a backticked extension name no longer breaks the import alias
+
+The 2026-10-03 aliased-import amendment left one gap unverified: an extension whose Kotlin name needs
+backticks. It was real, and wider than extensions: a keyword name emitted unparseable Kotlin on
+every member route, and a name with a space or symbol emitted an invalid alias, `@CName` and C#
+member. ADR-179's 2026-10-04 amendment carries the rule; this records what it does to the extension
+route.
+
+- A keyword-named extension (`fun Leash.in()`) imports and calls through the alias like any other,
+  and C# keeps its escape (`In`).
+- An extension named with a space or symbol and no `@CSharpName` is a named `NON_IDENTIFIER_NAME`
+  skip. With `@CSharpName("TugHard")` it binds.
+- The alias spells every character other than a letter, digit, `_` or `.` as `_x` plus four hex
+  digits: `tug hard` in `tier1.backticks.named` is
+  `nuget_ext_tier1__backticks__named__tug_x0020hard`. The call then needs no backticks and the
+  import still needs only one `import pkg.`tug hard` as alias`. Injectivity holds because a literal
+  `_` is always `_u`, so `_x` only comes from this arm.
+- The entry point is cleaned by `asCSymbol()` (ADR-163's 2026-10-04 amendment), so the extension is
+  `library_..._leash_ext_tug_hard` when a member already holds `leash_tug_hard`.
+
+Verified: `Tier1BacktickedNameTest` compiles the generated Kotlin and C# for a member and an extension
+both named `tug hard` (`@CSharpName("TugHard")`), asserting the alias above and the call
+`.get().nuget_ext_tier1__backticks__named__tug_x0020hard()`. Not verified natively: Kotlin/Native
+cannot link a public member named with a space, so the space-named case is Tier 1 only.

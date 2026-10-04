@@ -24,7 +24,28 @@ internal val CSHARP_RESERVED = setOf(
 
 internal fun toCName(name: String): String {
   if (name in C_RESERVED) return "${name}_"
-  return name
+  // A `@CSharpName`d backticked name (`tug hard`) cannot carry its space into a symbol segment.
+  return name.asCSymbol()
+}
+
+/**
+ * A whole entry point with every run of characters a symbol cannot carry replaced by one `_`: the
+ * space of a backticked `tug hard` that a `@CSharpName` let through. The identity for
+ * every symbol already spelled from identifiers, so no shipped entry point moves. Uniqueness is
+ * best-effort (`tug hard` and `tug_hard` meet), with ADR-117's collision diagnostic as the
+ * backstop.
+ */
+internal fun String.asCSymbol(): String = buildString {
+  var replacing = false
+  this@asCSymbol.forEach { char ->
+    if (char.isLetterOrDigit() || char == '_') {
+      append(char)
+      replacing = false
+    } else if (!replacing) {
+      append('_')
+      replacing = true
+    }
+  }
 }
 
 /** Every run of characters a C symbol segment cannot contain, once the name is lowercased. */
@@ -197,8 +218,11 @@ private val CSHARP_OWNED_NAMES: Set<String> =
  * Only *parameters* move. A property named `value` renders `Value` (PascalCase), which never meets
  * a generator identifier, and stays put.
  */
-internal fun String.bridgeParameterName(): String =
-  if (shadows(PLAN_OWNED_NAMES)) "${this}_" else this
+internal fun String.bridgeParameterName(): String {
+  // A backticked `step count` has no slot spelling of its own; the identity for an identifier.
+  val name: String = asCSymbol()
+  return if (name.shadows(PLAN_OWNED_NAMES)) "${name}_" else name
+}
 
 /**
  * The ABI slot names the ADR-055 contract check reads a direction off: a user parameter spelled
@@ -219,8 +243,11 @@ internal const val RESULT_FAILED_SLOT: String = "resultFailedOut"
  * Applied on both halves of that route (Kotlin export and C# translator) so the contract check
  * agrees.
  */
-internal fun String.abiSlotParameterName(): String =
-  if (shadows(ABI_SLOT_NAMES)) "${this}_" else this
+internal fun String.abiSlotParameterName(): String {
+  // As [bridgeParameterName]: a backticked `step count` has no slot spelling of its own.
+  val name: String = asCSymbol()
+  return if (name.shadows(ABI_SLOT_NAMES)) "${name}_" else name
+}
 
 /**
  * A generator identifier that is *derived* from a user parameter's name (`${name}HasValue`,
@@ -275,10 +302,14 @@ internal fun freshName(base: String, taken: Set<String>): String {
  * Deliberately not [toCSharpName]: that helper's `trimEnd('_')` exists for C-mangled *function*
  * names, and a parameter name is never C-mangled.
  */
-internal fun String.csharpParameterName(): String = when {
-  this in CSHARP_RESERVED -> "@$this"
-  shadows(CSHARP_OWNED_NAMES) -> "${this}_"
-  else -> this
+internal fun String.csharpParameterName(): String {
+  // A backticked `step count` is no C# identifier; the identity for every name that already is.
+  val name: String = asCSymbol()
+  return when {
+    name in CSHARP_RESERVED -> "@$name"
+    name.shadows(CSHARP_OWNED_NAMES) -> "${name}_"
+    else -> name
+  }
 }
 
 /**
