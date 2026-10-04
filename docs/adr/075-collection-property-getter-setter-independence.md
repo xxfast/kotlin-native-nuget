@@ -587,10 +587,11 @@ method exports are ordinary routes already covered in kind. Pinned by
 (the latter including a pure C# `PaperBeanbag : Lounger` subclass, proving the declaration is
 overridable from C#, not only from a further Kotlin subclass).
 
-Deferred, not exercised: a cross-module (klib) unexported abstract base is assumed to behave like the
-same-module case, no cell proves it; a dropped intermediate base whose abstract property
+Deferred, not exercised: a dropped intermediate base whose abstract property
 re-declares one the *kept* exported base also declares abstract renders `abstract` without
-`override`, hiding the kept base's member (`CS0108` warning, compiles). Both tracked on `ROADMAP.md`.
+`override`, hiding the kept base's member (`CS0108` warning, compiles). Tracked on `ROADMAP.md`.
+The cross-module (klib) abstract base case this paragraph once also deferred is settled by the
+amendment at the end of this file.
 
 ## 2026-09-26 amendment: setters narrower than public
 
@@ -697,3 +698,31 @@ path an ordinary class already had. [ADR-168](168-interface-var-explicit-setter.
 fallback does not apply here: a sealed arm's C# base list never names its own interfaces (a separate,
 open gap tracked on `ROADMAP.md`), so there is no `IFoo` to attach an explicit member to. Pinned by
 `Tier1InterfaceVarPropertyTest.kt`'s `tier1.ivarseal` cell.
+
+## 2026-10-03 amendment: unexported abstract base from a dependency klib (coverage only)
+
+The 2026-09-19 amendment's same-module fixture (`Cushion`) left one case inferred: that an unexported
+abstract base class read from a separate **klib**, rather than from source, plans its abstract
+properties the same way. A real fixture now settles it. No production change, no new handle route,
+no leak row.
+
+**Fixture.** `UnexportedAbstractRoost` (`test-models/.../dev/other/core/`, the plugin-free dependency
+module, outside the export root) declares `abstract val material: String`, `abstract var height: Int`
+and `abstract fun chirp(): String`. The exported `abstract class KlibNester : UnexportedAbstractRoost()`
+implements none of them; the concrete `KlibWren : KlibNester()` overrides all three
+(`test-library/.../test/klibabstract/`).
+
+**Verified** (full `scripts/verify.sh` green on the branch; generated `Interop.cs` read):
+- `KlibNester` is generated with no base class (`SKIPPED_UNEXPORTED_SUPERTYPE`, the dependency's base
+  has no C# type) and declares `public abstract string Material { get; }`,
+  `public abstract int Height { get; set; }` and `public abstract string Chirp();` itself. `KlibWren`
+  renders matching `override` members, so the klib route behaves like the same-module one.
+- `IntegrationTests/KlibAbstractPropertyTests.cs` covers reflection on the abstract accessors
+  (getter only on `Material`, getter and setter on `Height`), getter/setter/method dispatch through a
+  `KlibNester`-typed reference onto the Kotlin object, and a pure C# `KlibNester` subclass
+  (`base(IntPtr.Zero)`) that implements the members and uses only its own C# members, so it mints no
+  handle.
+
+**Not covered, unchanged.** The interface-from-a-dependency-klib variant in the 2026-09-13 amendment's
+"Still open, Inferred" note is a separate case this fixture does not touch, and the `CS0108`
+redeclaration gap above is still open.
