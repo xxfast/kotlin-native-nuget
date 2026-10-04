@@ -10,9 +10,12 @@ import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeSlot
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.InterfaceBridgeWire
 import io.github.xxfast.kotlin.native.nuget.processor.forward.interfaceBridgeWire
+import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinWire
+import io.github.xxfast.kotlin.native.nuget.processor.forward.listenerPropertySlots
 
 /**
  * ADR-039 amendment (2026-09-26): how [this] listener parameter crosses; see [interfaceBridgeWire].
@@ -40,7 +43,8 @@ private fun KSType.overrideSpelling(): String {
 /**
  * Generates two `@CName` exports for an interface-bridge pair:
  * - A subscribe export that creates an anonymous bridge object implementing the Kotlin interface,
- *   with one function pointer pair per interface method, registers the bridge with the Kotlin object,
+ *   with one function pointer pair per listener property getter (first, the ADR-084 slot) and per
+ *   interface method, registers the bridge with the Kotlin object,
  *   and returns an opaque unregister-closure handle.
  * - An unsubscribe export that invokes and disposes the closure handle.
  *
@@ -75,11 +79,23 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
     .filter { method -> !method.isCompilerOwnedMember(ifaceDecl) }
     .toList()
 
-  if (ifaceMethods.isEmpty()) return
+  // The anonymous `object : Listener` below must override every listener property too, or it does
+  // not compile; each crosses as its ADR-084 getter slot, ahead of the function slots.
+  val propertySlots: List<ForwardBridgeSlot> = classifier.listenerPropertySlots(ifaceDecl)
+
+  if (ifaceMethods.isEmpty() && propertySlots.isEmpty()) return
 
   val subscribeBody: String = buildString {
     appendLine("return try {")
     appendLine("  val obj = handle.asStableRef<$qualifiedClassName>().get()")
+
+    propertySlots.forEach { slot ->
+      val wire: String = slot.result.wire.kotlinWire()
+      appendLine(
+        "  val ${slot.slotPrefix}Fn = ${slot.slotPrefix}Ptr" +
+            ".reinterpret<CFunction<(COpaquePointer, COpaquePointer?) -> $wire>>()"
+      )
+    }
 
     // Reinterpret each method's function pointer
     ifaceMethods.forEach { method ->
@@ -105,6 +121,7 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
 
     // Build anonymous bridge object
     appendLine("  val bridge = object : $ifaceQualifiedName {")
+    propertySlots.forEach { slot -> appendSlotOverride(slot) }
     ifaceMethods.forEach { method ->
       val mName: String = method.simpleName.asString()
       val params = method.parameters.toList()
@@ -172,6 +189,10 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
     .addAnnotation(cNameAnnotation("${classPrefix}_$addMethodName", ownedBy(addMethod)))
     .addParameter("handle", cOpaquePointer)
 
+  propertySlots.forEach { slot ->
+    subscribeBuilder.addParameter("${slot.slotPrefix}Ptr", cOpaquePointer)
+    subscribeBuilder.addParameter("${slot.slotPrefix}Ctx", cOpaquePointer)
+  }
   ifaceMethods.forEach { method ->
     val mName: String = method.simpleName.asString()
     subscribeBuilder.addParameter("${mName}Ptr", cOpaquePointer)

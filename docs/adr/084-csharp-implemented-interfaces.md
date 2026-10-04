@@ -472,7 +472,8 @@ contract table.
 - The same route ignores interface properties entirely (`getAllFunctions` only), so a
   property-bearing subscription interface also produces non-compiling generated Kotlin, again
   with no diagnostic. Both should either be fixed by converging on this ADR's full-member slot
-  planner or be given ADR-064-style diagnostics.
+  planner or be given ADR-064-style diagnostics. (The non-`Unit` return was refused by name on
+  2026-09-26; the property gap was closed on 2026-10-04, see the last amendment below.)
 
 ### Amendment (2026-09-11): enum slots are spelled by the shared classifier
 
@@ -592,3 +593,16 @@ factory on both halves like any other enum member, spelling the slot
 enum, generic, inner or value-class owner, or a companion object, or dropped by a colliding name)
 plans no factory; that posture is now pinned with the enum nested under a generic owner instead of
 the collision fixture.
+
+## Amendment (2026-10-04): the ADR-039 subscription route reuses the getter slot for a listener `val`
+
+The second latent gap listed above (the ADR-039 route ignoring interface properties) is closed.
+The `add*/remove*` route now binds a listener `val` through this ADR's getter slot, not a second
+vocabulary: `ForwardInterfaceBridgePlanner.slotOf(property)` is `internal` and read by the
+subscription route, `appendSlotOverride` and the C# `slotBody` are shared, and the vocabulary is the
+one this ADR already fixed (`String`, `String?`, `Boolean`, `Int`, `Long`, `Float`, `Double`,
+non-null enum; no `var`, no inherited property, since the generated `IListener` declares only the
+listener's own members). The subscription route converges on the factory's slots for properties
+only; its function members keep their own flat `Void` delegates. A property outside the vocabulary,
+a `var` or an inherited one refuses the whole pair by name; see the ADR-039 amendment of the same
+date for the gate, the refusal kinds and the evidence.

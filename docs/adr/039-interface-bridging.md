@@ -627,7 +627,8 @@ parameter type (previously not mapped at all).
 - Interface methods with 2+ parameters — straightforward extension of the N-flat-params pattern but
   widens the tested matrix; deferred until arity-1 is proven.
 - Interface properties (getter/setter) — each property generates 1–2 function pointers; the
-  detection rule needs to be extended to cover property-bearing interfaces; deferred.
+  detection rule needs to be extended to cover property-bearing interfaces; deferred. A getter-only
+  `val` shipped on 2026-10-04 (see that amendment at the end); a `var` stays refused by name.
 - `suspend` interface methods — require composing with the coroutine bridge (ADR-019); deferred.
 - Interfaces with no paired `remove*` where Kotlin stores the object indefinitely — requires an
   explicit annotation (`@NugetInterfaceParam(lifetime = Stored)`) so the generator knows it cannot
@@ -658,3 +659,45 @@ completes.
 A listener reached from a separate klib dependency, outside its own export scope, is expected to
 take the same refusal (same `Unsupported` classification), but is untested; tracked on the
 ROADMAP.
+
+## Amendment (2026-10-04): a listener `val` crosses as its ADR-084 getter slot
+
+A listener interface that declared a property inside an `add*/remove*` pair used to fail the Kotlin
+compile of the generated `CNameExports.kt`: the route enumerated `getAllFunctions` only, so the
+anonymous `object : Listener` the subscribe export builds did not override the property. The
+deferred "interface properties" bullet above is now closed for the read-only case.
+
+The rule: each public `val` the listener itself declares crosses as the same getter slot
+[ADR-084](084-csharp-implemented-interfaces.md) gives it on the bridge factory
+(`ForwardInterfaceBridgePlanner.slotOf(property)`). The subscribe export takes one
+`<name>GetPtr`/`<name>GetCtx` pair per property, ahead of the function slots, and the Kotlin
+`object : Listener` overrides the property by calling that pointer and releasing the returned
+`String` handle after reading it, exactly as the factory's override does (`appendSlotOverride` is
+shared). The C# half builds the matching getter delegate from the same `slotBody` the factory uses,
+reading `listener.Name` on every call, so a Kotlin read sees the implementer's current value, not a
+snapshot taken at subscribe. A property's slot is carried exactly when the factory would carry it:
+`String`, `String?`, `Boolean`, `Int`, `Long`, `Float`, `Double`, or a non-null enum.
+
+The gate stays whole-pair. After the existing undeclared-listener and repeated-member arms,
+`legacyRefusedInterfaceBridgePair` now checks each listener property before the member arm and
+refuses the pair, named on both `add` and `remove`, when the property is:
+
+- inherited from a super-interface, or a `var` (the route reads through a getter only, with no
+  setter slot): `SKIPPED_UNSUPPORTED_INPUT`;
+- of any other type, such as a collection, a class, a nullable primitive or enum, or `Char`:
+  `SKIPPED_UNSUPPORTED_RETURN`.
+
+Each message carries the property signature and a hint (declare it `val` on the listener, or give
+the listener only supported types). The `val` fixture is `PurrBox.kt` in `test-library`, with one
+property for each of `String`, `String?`, `Int`, `Boolean` and an enum.
+
+Evidence, verified: `Tier1InterfaceBridgeListenerPropertyTest` compiles both halves (the generated
+Kotlin and the generated C#) and pins each refusal on both `add` and `remove`; against the native
+pipeline `IntegrationTests/ListenerPropertyTests.cs` reads every property live from Kotlin (3040
+`IntegrationTests` green), and `LeakTests` row 8j-val,
+`InterfaceBridge_ListenerStringProperty_ReturnsToBaseline`, returns to baseline (165 `LeakTests`
+green).
+
+Inferred, not fixed here: a listener declaring both `val name` and `fun nameGet()` would clash on a
+generated parameter name (`nameGetPtr`), and a member-less listener skips the Kotlin export while
+the C# `DllImport` is still generated. Both are scheduled for a later item.
