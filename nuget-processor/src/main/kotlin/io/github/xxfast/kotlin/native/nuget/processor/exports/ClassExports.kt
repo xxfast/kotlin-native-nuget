@@ -36,6 +36,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPl
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardPropertyPlanExports
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
+import io.github.xxfast.kotlin.native.nuget.processor.forward.optInMarker
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 
 /**
@@ -351,6 +352,11 @@ internal fun FileSpec.Builder.addClassExports(
     // ADR-037 amendment: a listener with a non-`Unit` result is refused after detection, so both
     // halves stay claimed by the pair and neither falls to the per-call route.
     if (legacyRefusedStoredCallbackPair(addMethod) != null) return@forEach
+    // ADR-115 / issue #121: a marked half takes its partner with it, as on a sealed arm.
+    // `warnRefusedLegacyRouteMembers` names both halves.
+    if (listOf(addMethod, removeMethod).any { it.optInMarker(classifier.exportMarkers) != null }) {
+      return@forEach
+    }
     addStoredCallbackExports(addMethod, removeMethod, qualifiedName, prefix)
   }
 
@@ -363,6 +369,9 @@ internal fun FileSpec.Builder.addClassExports(
     // planner's own CALLBACK_PROTOCOL skip, instead of failing the ADR-055 contract (a scalar
     // outer return) or emitting Kotlin that does not compile (a dropped non-lambda parameter).
     if (legacyRefusedCallbackMember(method) != null) return@forEach
+    // ADR-115 / issue #121: the planner already names a marked member SKIPPED_OPT_IN_MARKER, so
+    // this route must not export it anyway.
+    if (method.optInMarker(classifier.exportMarkers) != null) return@forEach
     addLambdaParamMethodExport(method, qualifiedName, prefix)
   }
 
@@ -373,6 +382,10 @@ internal fun FileSpec.Builder.addClassExports(
     // parameter or return the route cannot carry, is named by `warnRefusedLegacyRouteMembers` and
     // dropped here.
     if (classifier.legacyRefusedInterfaceBridgePair(addMethod) != null) return@forEach
+    // ADR-115 / issue #121: the stored pair's marker refusal, on the interface-bridge route.
+    if (listOf(addMethod, removeMethod).any { it.optInMarker(classifier.exportMarkers) != null }) {
+      return@forEach
+    }
     addInterfaceBridgeExports(addMethod, removeMethod, qualifiedName, prefix, classifier)
   }
 

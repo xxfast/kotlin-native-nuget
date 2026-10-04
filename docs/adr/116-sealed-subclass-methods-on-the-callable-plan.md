@@ -856,3 +856,28 @@ showing the old hint, and are green after: the corrected sentence test and a new
 clean; neither residual member is exported or declared, each is named exactly once with the new hint,
 and the control member still binds). The full `:nuget-processor:test` run passed (1564 passed, 0
 failed). The native pipeline was not run for this item; the assembled stack is verified as a whole.
+
+## Amendment (2026-10-03): a refused stored-callback or interface-bridge pair on an arm is named
+
+The second 2026-09-13 amendment bound the two pair kinds on arms but left a pair the arm's selector
+refuses unnamed. An opt-in-marked half (ADR-115) is the reachable refusal: the selector drops both
+halves after pair detection, and the planner's structural `CALLBACK_PROTOCOL` skip is suppressed for
+pair members before its own opt-in check runs, so nothing named either half.
+
+Rule: if either half of a stored-callback or interface-bridge pair on an arm carries an opt-in
+marker, whether it is `addX` or `removeX`, each half gets one `SKIPPED_OPT_IN_MARKER` warning
+(`nameMarkedPair` in `NugetProcessor.kt`). The reason says the `addX` / `removeX` "stored-callback"
+(or "subscription") pair is not bound and names the marked half and its marker. The unmarked partner
+is named too, because it is gone as well.
+
+Two claims in the ROADMAP item this closes were wrong. The opt-in half was not named anywhere
+before. An "unmarshallable-return half" is not a refusal: `addTick(...): Pair<String, Int>` binds as
+`IDisposable AddTick` and the Kotlin return is discarded, unchanged. A sealed base has no callback
+route, so all four halves already carry `SKIPPED_UNSUPPORTED_COMBINATION`, and an `object` has no
+pair detection (the planner names the marked half and the unmarked `removeX` binds as an ordinary
+method); both are pinned as already correct.
+
+Evidence, verified: `Tier1OptInCallbackPairTest` (arm cells red before, green after) and a full
+`:nuget-processor:test` run of 1552 passed, 0 failed. No packaged fixture has a marked add/remove
+member, so the native pipeline was not run for this item. The ordinary-class half of the same bug is
+recorded in [ADR-115](115-opt-in-marker-declarations.md)'s 2026-10-03 amendment.

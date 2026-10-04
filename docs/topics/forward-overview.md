@@ -688,6 +688,9 @@ instead, so the owning type still generates with everything else intact. A membe
 marked class carries its own reason, blaming the type rather than the member, since no
 `include(...)` change can ever bring a marked type into scope.
 
+A stored-callback or listener `addX`/`removeX` pair is dropped whole if either half is marked, on a
+class or a sealed arm. Each half gets its own warning, so the unmarked `removeX` is named as well.
+
 From `test-library/.../issue113/Issue113Sample.kt`:
 
 ```kotlin
