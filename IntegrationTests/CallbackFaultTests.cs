@@ -252,12 +252,12 @@ public class CallbackFaultTests
     [Fact]
     public async Task FlowItemMaterialisationFailure_FaultsTheStream_AndTheHostSurvives()
     {
-        Func<IntPtr, object> original = NugetMarshal.Factories[typeof(Tantrum)];
+        Func<NugetKotlinHandle, object> original = NugetMarshal.Factories[typeof(Tantrum)];
         int calls = 0;
         NugetMarshal.Factories[typeof(Tantrum)] = handle =>
         {
             calls++;
-            NugetMarshal.Dispose(handle);
+            handle.Dispose();
             throw new InvalidOperationException("Oreo hid under the sofa mid-tantrum");
         };
 

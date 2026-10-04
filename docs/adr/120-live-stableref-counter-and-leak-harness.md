@@ -288,7 +288,7 @@ is more machinery, so keep the dictionary mutable.
 wrapper it constructs (`new T(handle)`), so a factory that throws *without* disposing it leaks that
 box too (+2 per call). The test above disposes it explicitly to keep the assertion about the list
 handle alone; the implementing agent should confirm the +1 by reading the number before making the
-fix, and record it in the test's failure message.
+fix, and record it in the test's failure message. **Confirmed +1 and fixed; see Amendment 3.**
 
 ### Which families are strict and which are eventual
 
@@ -460,3 +460,35 @@ Both mint and release now go through a counted pair reached via an `expect`/`act
 `nugetKotlinError` already used. `LiveHandleTests.cs` rows 13-15 (ADR-158) are the first rows that
 can observe this half of the counter at all; no earlier row's baseline changes, since retain and
 release still net to zero when nothing leaks.
+
+## Amendment 3 (2026-10-03): a boxed element is owned before its wrapper factory runs
+
+Closes the "Inferred (not run)" claim in the red-case section. The element box a `FromHandle<T>`
+wrapper factory receives had no owner until the factory constructed a wrapper, so a factory that
+threw first leaked it. Reproduced before the fix: the real native counter moved by exactly +1
+(10 to 11) per throwing crossing once the factory stopped disposing the box itself, and the original
+exception reached the caller unchanged (**verified**, real native run).
+
+Mechanism (**verified**, generated output): `Materialize<T>` creates one `NugetKotlinHandle` before
+it calls a factory, `NugetMarshal.Factories` now holds `Func<NugetKotlinHandle, object>`, and a
+generated wrapper adopts that exact handle through an owner-taking constructor instead of creating a
+second one. Any exception disposes the handle once and rethrows. Enum and value-class factories
+consume the same handle and release it in `finally`. The sealed base and arm constructors and the
+sealed discriminator take the same handle. The raw `IntPtr` constructors remain and delegate to the
+owner-taking ones. A blanket raw-pointer catch-release was rejected because it would release twice
+when a factory fails after constructing a wrapper or after a value factory consumed its input
+(**verified** by a scratch spike with a counted fake handle, one release in every ordering).
+
+Tests: `ListReturn_ThrowingElementFactory_ReleasesTheListHandle` no longer disposes the box in the
+throwing factory and asserts the original exception instance with the whole path back to baseline.
+`ListReturn_ConstructThenThrowFactory_SavedWrapperDisposalReturnsToBaseline` throws after
+constructing a wrapper, keeps it and disposes it twice. The factory-injection seam in
+`LambdaReturn_ThrowingInterfaceFactory_ReleasesTheLambdaHandle`,
+`InterfaceListReturn_ThrowingElementFactory_DoesNotDisposeCSharpElement` and
+`CallbackFaultTests.FlowItemMaterialisationFailure_FaultsTheStream_AndTheHostSurvives` moved to the
+new factory type; a hand-written replacement factory now disposes the handle it is given.
+
+Evidence (**verified**, `scripts/verify.sh`): IntegrationTests 2974, LeakTests 157, MultiPackage 9,
+SharedException 2, Contract 3 and the six existing NativeAOT smoke cases passed. The fault scenario
+itself was not run under NativeAOT. Kover covered the new emitter lines except the sealed
+constructor forwarding branch for a retained superclass.

@@ -187,6 +187,12 @@ never disposed for you, even when a later element's factory throws. `LeakTests/L
 `InterfaceListEcho_CSharpElementResolved_ReturnsToBaseline` and
 `InterfaceListReturn_ThrowingElementFactory_DoesNotDisposeCSharpElement` cover them.
 
+A `List` of Kotlin class elements releases an element's handle even when materializing that element
+fails before any wrapper exists, and a wrapper that was constructed first still releases once however
+often you dispose it. `LeakTests/LiveHandleTests.cs`'s
+`ListReturn_ThrowingElementFactory_ReleasesTheListHandle` and
+`ListReturn_ConstructThenThrowFactory_SavedWrapperDisposalReturnsToBaseline` cover them.
+
 A top-level [`suspend fun` returning `StateFlow<T>`](coroutines-and-flow.md#suspend-fun-returning-stateflow-t)
 adds no new handle kind either: the awaited holder owns the flow's own handle and releases it on
 `Dispose`, each `.Value` and each collected emission mints one element handle the caller releases,

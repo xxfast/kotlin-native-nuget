@@ -82,7 +82,7 @@ class CirOrdinaryRendererTest {
     // reach the handle constructor; a root constructor assigns it, a derived one forwards it.
     assertContains(
       rendered,
-      "internal Patient(IntPtr handle, out NugetHandleTag tag)\n        {\n            tag = default;\n            _handle = new NugetKotlinHandle(handle);\n        }",
+      "internal Patient(NugetKotlinHandle handle, out NugetHandleTag tag)\n        {\n            tag = default;\n            _handle = handle;\n        }",
     )
     assertFalse(Regex("""internal Patient\(IntPtr handle\)\r?\n""").containsMatchIn(rendered))
     assertContains(rendered, "internal readonly struct NugetHandleTag")
@@ -288,7 +288,7 @@ class CirOrdinaryRendererTest {
     assertContains(rendered, "public Inpatient(string name) : base(IntPtr.Zero, out _)")
     assertContains(
       rendered,
-      "internal Inpatient(IntPtr handle, out NugetHandleTag tag) : base(handle, out tag)",
+      "internal Inpatient(NugetKotlinHandle handle, out NugetHandleTag tag) : base(handle, out tag)",
     )
     assertContains(rendered, "public override void Dispose()")
   }

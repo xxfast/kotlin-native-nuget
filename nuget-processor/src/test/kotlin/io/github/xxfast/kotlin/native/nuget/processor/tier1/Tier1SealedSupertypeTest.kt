@@ -181,7 +181,13 @@ class Tier1SealedSupertypeTest {
     val cs: String = result.generatedCSharp
     assertTrue("public abstract class Ottoman : Pouffe" in cs, cs)
     assertTrue(
-      "internal Ottoman(IntPtr handle, out NugetHandleTag tag) : base(handle, out tag)" in cs,
+      "internal Ottoman(IntPtr handle, out NugetHandleTag tag) : " +
+          "this(new NugetKotlinHandle(handle), out tag)" in cs,
+      cs,
+    )
+    assertTrue(
+      "internal Ottoman(NugetKotlinHandle handle, out NugetHandleTag tag) : " +
+          "base(handle, out tag)" in cs,
       cs,
     )
     assertTrue("public abstract override void Dispose();" in cs, cs)

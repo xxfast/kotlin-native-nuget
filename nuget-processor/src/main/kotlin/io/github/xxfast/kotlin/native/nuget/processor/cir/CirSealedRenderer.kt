@@ -28,19 +28,26 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   }
   appendLine("    public abstract class ${sealed.name} : ${baseList.joinToString(", ")}")
   appendLine("    {")
+  appendLine(
+    "        internal ${sealed.name}(IntPtr handle, out NugetHandleTag tag) : " +
+        "this(new NugetKotlinHandle(handle), out tag)",
+  )
+  appendLine("        {")
+  appendLine("        }")
+  appendLine()
   if (superClass == null) {
     appendLine("        internal NugetKotlinHandle _handle = NugetKotlinHandle.Null;")
     appendLine()
     appendLine("        IntPtr INugetHandle.Handle => _handle.DangerousGetHandle();")
     appendLine()
-    appendLine("        internal ${sealed.name}(IntPtr handle, out NugetHandleTag tag)")
+    appendLine("        internal ${sealed.name}(NugetKotlinHandle handle, out NugetHandleTag tag)")
     appendLine("        {")
     appendLine("            tag = default;")
-    appendLine("            _handle = new NugetKotlinHandle(handle);")
+    appendLine("            _handle = handle;")
     appendLine("        }")
   } else {
     appendLine(
-      "        internal ${sealed.name}(IntPtr handle, out NugetHandleTag tag) : " +
+      "        internal ${sealed.name}(NugetKotlinHandle handle, out NugetHandleTag tag) : " +
           "base(handle, out tag)",
     )
     appendLine("        {")
@@ -96,9 +103,16 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   }
 
   appendLine("        [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${sealed.nativePrefix}_get_type\")]")
-  appendLine("        private static extern int Native_GetType(IntPtr handle);")
+  appendLine("        private static extern int Native_GetType(NugetKotlinHandle handle);")
   appendLine()
   appendLine("        internal static ${sealed.name} FromHandle(IntPtr handle)")
+  appendLine("        {")
+  appendLine("            var owned = new NugetKotlinHandle(handle);")
+  appendLine("            try { return FromHandle(owned); }")
+  appendLine("            catch { owned.Dispose(); throw; }")
+  appendLine("        }")
+  appendLine()
+  appendLine("        internal static ${sealed.name} FromHandle(NugetKotlinHandle handle)")
   appendLine("        {")
   appendLine("            return Native_GetType(handle) switch")
   appendLine("            {")
@@ -165,6 +179,13 @@ private fun sealedSubclassBlock(
   }
   appendLine(
     "            internal ${subclass.name}(IntPtr handle, out NugetHandleTag tag) : " +
+        "this(new NugetKotlinHandle(handle), out tag)"
+  )
+  appendLine("            {")
+  appendLine("            }")
+  appendLine()
+  appendLine(
+    "            internal ${subclass.name}(NugetKotlinHandle handle, out NugetHandleTag tag) : " +
         "base(handle, out tag)"
   )
   appendLine("            {")

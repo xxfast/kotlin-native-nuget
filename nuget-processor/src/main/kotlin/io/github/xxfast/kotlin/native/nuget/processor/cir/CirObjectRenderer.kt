@@ -168,11 +168,17 @@ private fun StringBuilder.renderValueClassBoxing(cls: CirValueClass) {
   appendLine("        }")
   appendLine()
   appendLine("        internal static ${cls.name} NugetUnbox(IntPtr boxed)")
+  appendLine("            => NugetUnbox(new NugetKotlinHandle(boxed));")
+  appendLine()
+  appendLine("        internal static ${cls.name} NugetUnbox(NugetKotlinHandle boxed)")
   appendLine("        {")
   appendLine("            $wire nativeResult;")
   appendLine("            try")
   appendLine("            {")
-  appendLine("                nativeResult = ${boxing.unboxImport.name}(boxed, out IntPtr error);")
+  appendLine(
+    "                nativeResult = ${boxing.unboxImport.name}(" +
+        "boxed.DangerousGetHandle(), out IntPtr error);",
+  )
   appendLine("                if (error != IntPtr.Zero)")
   appendLine("                {")
   appendLine("                    throw NugetErrorNative.BuildException(error);")
@@ -180,7 +186,7 @@ private fun StringBuilder.renderValueClassBoxing(cls: CirValueClass) {
   appendLine("            }")
   appendLine("            finally")
   appendLine("            {")
-  appendLine("                NugetMarshal.Dispose(boxed);")
+  appendLine("                boxed.Dispose();")
   appendLine("            }")
   appendLine("            return ${boxing.unboxResult};")
   appendLine("        }")

@@ -65,7 +65,16 @@ class Tier1SealedSubclassConstructorTest {
     assertContains(cs, "IntPtr handle = Native_Create(minutes, out IntPtr error);")
     assertContains(cs, "EntryPoint = \"library_armctor__nap_deep_create\"")
     // The handle constructor stays, and stays internal: a consumer has no legitimate handle.
-    assertContains(cs, "internal Deep(IntPtr handle, out NugetHandleTag tag) : base(handle, out tag)")
+    assertContains(
+      cs,
+      "internal Deep(IntPtr handle, out NugetHandleTag tag) : " +
+        "this(new NugetKotlinHandle(handle), out tag)",
+    )
+    assertContains(
+      cs,
+      "internal Deep(NugetKotlinHandle handle, out NugetHandleTag tag) : " +
+        "base(handle, out tag)",
+    )
   }
 
   @Test
@@ -101,7 +110,16 @@ class Tier1SealedSubclassConstructorTest {
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
     val cs: String = result.generatedCSharp
 
-    assertContains(cs, "internal Zoomies(IntPtr handle, out NugetHandleTag tag) : base(handle, out tag)")
+    assertContains(
+      cs,
+      "internal Zoomies(IntPtr handle, out NugetHandleTag tag) : " +
+        "this(new NugetKotlinHandle(handle), out tag)",
+    )
+    assertContains(
+      cs,
+      "internal Zoomies(NugetKotlinHandle handle, out NugetHandleTag tag) : " +
+        "base(handle, out tag)",
+    )
     assertFalse(
       cs.contains("public Zoomies("),
       "an object arm has no public Kotlin constructor to export; generated=$cs",

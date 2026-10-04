@@ -887,10 +887,10 @@ public class LiveHandleTests
     [Fact]
     public void LambdaReturn_ThrowingInterfaceFactory_ReleasesTheLambdaHandle()
     {
-        Func<IntPtr, object> original = NugetMarshal.Factories[typeof(IPet)];
+        Func<NugetKotlinHandle, object> original = NugetMarshal.Factories[typeof(IPet)];
         NugetMarshal.Factories[typeof(IPet)] = handle =>
         {
-            NugetMarshal.Dispose(handle);
+            handle.Dispose();
             throw new InvalidOperationException("Mylo sat on the stray's paperwork");
         };
 
@@ -2025,29 +2025,17 @@ public class LiveHandleTests
         });
     }
 
-    /// <summary>
-    /// The red case. `NugetMarshal.Factories` is a mutable dictionary (ADR-120 documents that
-    /// mutability as a load-bearing test seam), so swapping the `TopStory` entry for a factory
-    /// that throws on its second call is a deterministic mid-loop throw inside the outer
-    /// returned-collection loop, with no fixture change.
-    ///
-    /// The replacement factory disposes the element box it was handed before throwing, so the
-    /// only handle left unreleased is the list's own: today the `listHandle` Dispose sits after
-    /// the loop, so the delta is expected to be exactly +1. This goes green with no edit once
-    /// the outer loop is routed through ADR-099's finally-guarded ReadList/ReadSet/ReadMap.
-    /// </summary>
+    // The second box has no wrapper when the factory fails. Materialization must release
+    // it as well as the first wrapper and the outer list, preserving the original exception.
     [Fact]
     public void ListReturn_ThrowingElementFactory_ReleasesTheListHandle()
     {
-        Func<IntPtr, object> original = NugetMarshal.Factories[typeof(TopStory)];
+        Func<NugetKotlinHandle, object> original = NugetMarshal.Factories[typeof(TopStory)];
+        var fault = new InvalidOperationException("Oreo swatted the archive off the desk");
         int calls = 0;
         NugetMarshal.Factories[typeof(TopStory)] = handle =>
         {
-            if (++calls == 2)
-            {
-                NugetMarshal.Dispose(handle);
-                throw new InvalidOperationException("Oreo swatted the archive off the desk");
-            }
+            if (++calls == 2) throw fault;
             return new TopStory(handle, out _);
         };
 
@@ -2055,23 +2043,64 @@ public class LiveHandleTests
         {
             Settle();
             long before = NugetMarshal.LiveHandles;
-
-            // The Newsroom handle is minted after `before` is read, so it has to be released
-            // before `after` is read. A method-scoped `using var` would still be alive at the
-            // assertion and would read as a +1 that is not a leak.
             using (Newsroom newsroom = new Newsroom())
             {
-                Assert.Throws<InvalidOperationException>(() => newsroom.Archive());
+                Assert.Same(fault, Assert.Throws<InvalidOperationException>(() => newsroom.Archive()));
             }
 
             Settle();
             long after = NugetMarshal.LiveHandles;
             Assert.True(
                 after == before,
-                $"expected {before} live handles after 1 throwing Archive() crossing, got {after} (delta {after - before}); the returned list's own handle is the one that leaks");
+                $"expected {before} live handles after 1 throwing Archive() crossing, got {after} (delta {after - before}); the second element box must be released before a wrapper exists");
         }
         finally
         {
+            NugetMarshal.Factories[typeof(TopStory)] = original;
+        }
+    }
+
+    // A factory can construct a wrapper before throwing. Disposing that saved wrapper must
+    // remain safe when materialization also cleans up the failed element's owning handle.
+    [Fact]
+    public void ListReturn_ConstructThenThrowFactory_SavedWrapperDisposalReturnsToBaseline()
+    {
+        Func<NugetKotlinHandle, object> original = NugetMarshal.Factories[typeof(TopStory)];
+        var fault = new InvalidOperationException("Mylo vetoed the headline after it was filed");
+        TopStory? saved = null;
+        int calls = 0;
+        NugetMarshal.Factories[typeof(TopStory)] = handle =>
+        {
+            var story = new TopStory(handle, out _);
+            if (++calls == 2)
+            {
+                saved = story;
+                throw fault;
+            }
+            return story;
+        };
+
+        try
+        {
+            Settle();
+            long before = NugetMarshal.LiveHandles;
+            using (Newsroom newsroom = new Newsroom())
+            {
+                Assert.Same(fault, Assert.Throws<InvalidOperationException>(() => newsroom.Archive()));
+            }
+
+            Assert.NotNull(saved);
+            saved.Dispose();
+            saved.Dispose();
+            Settle();
+            long after = NugetMarshal.LiveHandles;
+            Assert.True(
+                after == before,
+                $"expected {before} live handles after saved wrapper disposal, got {after} (delta {after - before})");
+        }
+        finally
+        {
+            saved?.Dispose();
             NugetMarshal.Factories[typeof(TopStory)] = original;
         }
     }
@@ -2146,13 +2175,13 @@ public class LiveHandleTests
     [Fact]
     public void InterfaceListReturn_ThrowingElementFactory_DoesNotDisposeCSharpElement()
     {
-        Func<IntPtr, object> original = NugetMarshal.Factories[typeof(IPet)];
+        Func<NugetKotlinHandle, object> original = NugetMarshal.Factories[typeof(IPet)];
         int calls = 0;
         NugetMarshal.Factories[typeof(IPet)] = handle =>
         {
             if (++calls == 2)
             {
-                NugetMarshal.Dispose(handle);
+                handle.Dispose();
                 throw new InvalidOperationException("Mylo knocked the foster roster off the fridge");
             }
             return new Pet(handle, out _);
