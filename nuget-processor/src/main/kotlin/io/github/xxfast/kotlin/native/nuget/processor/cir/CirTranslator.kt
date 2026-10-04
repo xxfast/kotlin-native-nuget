@@ -770,7 +770,7 @@ internal fun translate(
     val members: List<CirMember> = props.flatMap { prop ->
       val symbol: String =
         "${prop.packageName.asString()}.$receiverName.${prop.simpleName.asString()}"
-      val plan: ForwardPropertyPlan? = callableCatalog.propertyFor(symbol)
+      val plan: ForwardPropertyPlan? = callableCatalog.extensionPropertyFor(symbol)
       if (plan != null) {
         tracker.trackProperty(plan)
         ForwardCirPropertyProjection.extension(plan, context.libraryName)

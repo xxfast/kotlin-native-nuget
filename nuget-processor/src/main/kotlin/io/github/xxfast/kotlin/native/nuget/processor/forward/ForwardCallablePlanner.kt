@@ -21,6 +21,10 @@ import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmInterfaceBridgePairs
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmLambdaMethods
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmStoredCallbackPairs
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardClassLegacyMembers
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyFlowReturn
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericReturnRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyLambdaParameter
@@ -634,14 +638,29 @@ internal data class ForwardCallablePlanCatalog(
     (entry as? ForwardCallableCatalogEntry.Planned)?.plan
   }
 
-  fun propertyFor(symbol: String): ForwardPropertyPlan? {
+  fun propertyFor(symbol: String): ForwardPropertyPlan? = propertyFor(symbol, extension = false)
+
+  /**
+   * The EXTENSION property plan keyed [symbol], and never a member's. A class member `Leash.x` and
+   * an extension `val Leash.x` (or `val Leash?.x`) declared in the member's own package are both
+   * keyed `pkg.Leash.x`, so a lookup that did not split them by position would hand the member's
+   * plan to the extension route (a shadowed extension, dropped by name, then failed the C#
+   * projection's position check) or trip the duplicate invariant on a legal Kotlin pair.
+   */
+  fun extensionPropertyFor(symbol: String): ForwardPropertyPlan? =
+    propertyFor(symbol, extension = true)
+
+  private fun propertyFor(symbol: String, extension: Boolean): ForwardPropertyPlan? {
     // ADR-006 amendment: an ENUM_MEMBER plan is keyed `pkg.Mood.x`, which is also the key of a
     // (shadowed) extension `val Mood.x` in the same package. Enum member plans are never looked up
     // by symbol (both halves select them by position through `enumMembersOf`), so they are out of
     // this lookup's universe by position: it cannot return the member's plan to the extension
     // route, nor trip the duplicate invariant below on a legal Kotlin pair.
     val matches: List<ForwardPropertyPlan> = propertyPlans.filter { plan ->
-      plan.symbol == symbol && plan.position != ForwardPropertyPosition.ENUM_MEMBER
+      val isKeyedBySymbol: Boolean = plan.symbol == symbol
+      val isEnumMember: Boolean = plan.position == ForwardPropertyPosition.ENUM_MEMBER
+      val isExtension: Boolean = plan.position == ForwardPropertyPosition.EXTENSION
+      isKeyedBySymbol && !isEnumMember && isExtension == extension
     }
     // ADR-074: this invariant must be unreachable once the `allDeclarations` funnel filters
     // `isExpect` (an unfiltered expect/actual pair is what used to trip it). A fresh firing means
@@ -1003,13 +1022,6 @@ internal class ForwardCallablePlanner(
           .ownedBy(function.forwardFileClassOwner())
       }
       addAll(topLevel)
-      val extensionOccurrences: MutableMap<String, Int> = mutableMapOf()
-      val extensions: List<ForwardCallableCatalogEntry> = extensionFunctions.map { function ->
-        extensionEntry(
-          function, overloadSuffix(extensionOccurrences, function, function.extensionOwnerChain()),
-        )
-      }
-      addAll(extensions)
       objects.forEach { obj -> addAll(objectEntries(obj).ownedBy(obj.forwardDiagnosticOwner())) }
       // ADR-013 renders a companion's members as the owning class's statics, so the hole is on the
       // class -- which is what `forwardDiagnosticOwner()` returns for a companion.
@@ -1024,6 +1036,26 @@ internal class ForwardCallablePlanner(
       valueClasses.forEach { cls ->
         addAll(valueClassEntries(cls).ownedBy(cls.forwardDiagnosticOwner()))
       }
+      // Planned after every member route, so the entry points those routes minted are known: a
+      // member and an extension of one name on one receiver, declared in ONE package, derive the
+      // same `<lib>_<pkg>__<owner>_<name>` (the member's prefix and the extension's qualifier are
+      // then the same package), and only the extension moves to the marked spelling.
+      // The hand-written callback routes (a stored-callback or interface-bridge `add`/`remove`
+      // pair, a per-call lambda member the plan does not own) mint `<owner>_<name>` too, outside
+      // the catalog, so their entry points join through the same selectors their emitters read.
+      val taken: Set<String> = filterIsInstance<ForwardCallableCatalogEntry.Planned>()
+        .filter { entry -> entry.plan.invocation.origin != ForwardCallableOrigin.EXTENSION }
+        .flatMap { entry -> entry.plan.nativeExports.map { call -> call.exportName } }
+        .toSet() + legacyCallbackExports(classes, sealedClasses)
+      val extensionOccurrences: MutableMap<String, Int> = mutableMapOf()
+      val extensions: List<ForwardCallableCatalogEntry> = extensionFunctions.map { function ->
+        extensionEntry(
+          function,
+          overloadSuffix(extensionOccurrences, function, function.extensionOwnerChain()),
+          taken,
+        )
+      }
+      addAll(extensions)
       carrierless.forEach { companion -> addAll(companion.callables) }
     }
     val planner = ForwardPropertyPlanner(classifier, symbols, expects)
@@ -1037,6 +1069,35 @@ internal class ForwardCallablePlanner(
       planner.droppedProperties + carrierless.flatMap { companion -> companion.properties },
       planner.droppedExtensionReceivers,
     )
+  }
+
+  /**
+   * The `<owner>_<name>` entry points the hand-written callback routes export for [classes] and
+   * for the arms of [sealedClasses], read off the very selectors `addClassExports` and the
+   * sealed-arm loops in `NugetProcessor` emit from, under the same prefixes.
+   */
+  private fun legacyCallbackExports(
+    classes: List<KSClassDeclaration>,
+    sealedClasses: List<KSClassDeclaration>,
+  ): Set<String> = buildSet {
+    classes.forEach { cls ->
+      val superClass: KSClassDeclaration? =
+        cls.forwardSuperClass(classifier.exportedObjectHandles)
+      addAll(
+        cls.forwardClassLegacyMembers(classifier, superClass)
+          .callbackExportNames(cls.nativePrefix(symbols))
+      )
+    }
+    sealedClasses.forEach { sealed ->
+      val sealedPrefix: String = sealed.nativePrefix(symbols)
+      sealed.getSealedSubclasses().forEach { arm ->
+        val armPrefix = "${sealedPrefix}_${arm.simpleName.asString().lowercase()}"
+        val members: List<KSFunctionDeclaration> = arm.forwardArmLambdaMethods(classifier) +
+          arm.forwardArmStoredCallbackPairs(classifier).flatMap { pair -> pair.toList() } +
+          arm.forwardArmInterfaceBridgePairs(classifier).flatMap { pair -> pair.toList() }
+        members.forEach { member -> add("${armPrefix}_${member.simpleName.asString()}") }
+      }
+    }
   }
 
   /**
@@ -2461,6 +2522,8 @@ internal class ForwardCallablePlanner(
   private fun extensionEntry(
     function: KSFunctionDeclaration,
     suffix: String,
+    // The entry points every non-extension route minted; see [ForwardSymbolTable.extension].
+    taken: Set<String> = emptySet(),
   ): ForwardCallableCatalogEntry {
     // ADR-018: expanded once here, so every spelling taken off this receiver -- the entry-point
     // prefix below, the owner chain, the classified wire type -- comes from the same type the C#
@@ -2539,7 +2602,9 @@ internal class ForwardCallablePlanner(
       symbol = symbol,
       publicName = function.declaredCSharpName()
         ?: toCName(functionName).replaceFirstChar { it.uppercase() },
-      exportName = symbols.extension(function, receiverPrefix, "${toCName(functionName)}$suffix"),
+      exportName = symbols.extension(
+        function, receiverPrefix, "${toCName(functionName)}$suffix", taken,
+      ),
       // ADR-105 amendment: the receiver gets the same sealed rewrite scope (d) applies to every
       // declared parameter, here rather than in `planOrSkip`, because the extension route is the
       // only one that can hand it a protocol receiver (every other route builds a bare
