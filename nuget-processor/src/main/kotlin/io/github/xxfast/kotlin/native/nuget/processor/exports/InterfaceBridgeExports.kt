@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
+import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -102,7 +104,8 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
 
     // Reinterpret each method's function pointer
     ifaceMethods.forEach { method ->
-      val mName: String = method.simpleName.asString()
+      // The slot stem, cleaned the way the C# half spells it (`tug_hardPtr`).
+      val mName: String = method.simpleName.asString().asCSymbol()
       val params = method.parameters.toList()
 
       val cfuncArgs: String = buildString {
@@ -126,19 +129,21 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
     appendLine("  val bridge = object : $ifaceQualifiedName {")
     propertySlots.forEach { slot -> appendSlotOverride(slot) }
     ifaceMethods.forEach { method ->
-      val mName: String = method.simpleName.asString()
+      // The slot stem (`inFn`, `tug_hardPtr`) and, backticked where needed, the override's name.
+      val mName: String = method.simpleName.asString().asCSymbol()
+      val mCall: String = method.simpleName.asString().kotlinIdentifier()
       val params = method.parameters.toList()
 
       val paramDecl: String = params.joinToString(", ") { param ->
         val pName: String = param.name?.asString() ?: "_"
-        "$pName: ${param.type.resolve().expandAliases().overrideSpelling()}"
+        "${pName.kotlinIdentifier()}: ${param.type.resolve().expandAliases().overrideSpelling()}"
       }
 
-      appendLine("    override fun $mName($paramDecl) {")
+      appendLine("    override fun $mCall($paramDecl) {")
 
       // Marshal each param before invoking the function pointer
       params.forEachIndexed { i, param ->
-        val pName: String = param.name?.asString() ?: "arg$i"
+        val pName: String = (param.name?.asString() ?: "arg$i").kotlinIdentifier()
         when (param.wire(classifier)) {
           InterfaceBridgeWire.BOOL ->
             appendLine("      val arg${i}Val: Byte = if ($pName) 1.toByte() else 0.toByte()")
@@ -153,7 +158,7 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
 
       val invokeArgs: String = buildString {
         params.forEachIndexed { i, param ->
-          val pName: String = param.name?.asString() ?: "arg$i"
+          val pName: String = (param.name?.asString() ?: "arg$i").kotlinIdentifier()
           when (param.wire(classifier)) {
             InterfaceBridgeWire.BOOL, InterfaceBridgeWire.ORDINAL -> append("arg${i}Val, ")
             InterfaceBridgeWire.BY_VALUE -> append("$pName, ")
@@ -176,8 +181,9 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
     }
     appendLine("  }")
 
-    appendLine("  obj.$addMethodName(bridge)")
-    appendLine("  val unregister: () -> Unit = { obj.$removeMethodName(bridge) }")
+    appendLine("  obj.${addMethodName.kotlinIdentifier()}(bridge)")
+    val remove: String = removeMethodName.kotlinIdentifier()
+    appendLine("  val unregister: () -> Unit = { obj.$remove(bridge) }")
     appendLine("  NugetHandles.retain(unregister)")
     appendLine("} catch (e: Throwable) {")
     appendLine(
@@ -188,7 +194,8 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
     append("}")
   }
 
-  val subscribeBuilder: FunSpec.Builder = FunSpec.builder("export_${classPrefix}_$addMethodName")
+  val subscribeBuilder: FunSpec.Builder =
+    FunSpec.builder("export_${classPrefix}_${addMethodName.asCSymbol()}")
     .addAnnotation(cNameAnnotation("${classPrefix}_$addMethodName", ownedBy(addMethod)))
     .addParameter("handle", cOpaquePointer)
 
@@ -197,7 +204,8 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
     subscribeBuilder.addParameter("${slot.slotPrefix}Ctx", cOpaquePointer)
   }
   ifaceMethods.forEach { method ->
-    val mName: String = method.simpleName.asString()
+    // The slot stem, cleaned the way the C# half spells it (`tug_hardPtr`).
+    val mName: String = method.simpleName.asString().asCSymbol()
     subscribeBuilder.addParameter("${mName}Ptr", cOpaquePointer)
     subscribeBuilder.addParameter("${mName}Ctx", cOpaquePointer)
   }
@@ -216,7 +224,7 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
   }
 
   addFunction(
-    FunSpec.builder("export_${classPrefix}_$removeMethodName")
+    FunSpec.builder("export_${classPrefix}_${removeMethodName.asCSymbol()}")
       .addAnnotation(cNameAnnotation("${classPrefix}_$removeMethodName", ownedBy(removeMethod)))
       .addParameter("handle", cOpaquePointer)
       .addParameter("subscriptionHandle", cOpaquePointer)

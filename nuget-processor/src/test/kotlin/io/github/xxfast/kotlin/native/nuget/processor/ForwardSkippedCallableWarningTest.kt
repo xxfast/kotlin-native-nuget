@@ -421,6 +421,9 @@ class ForwardSkippedCallableWarningTest {
         // Real drops: no legacy route re-emits a marked declaration, by design.
         ForwardPlanSkipReason.OPT_IN_MARKER,
         ForwardPlanSkipReason.OPT_IN_MARKER_TYPE,
+        // A backticked name that is no identifier and carries no `@CSharpName`: no legacy route
+        // re-emits it, so it is absent from C# and warns.
+        ForwardPlanSkipReason.NON_IDENTIFIER_NAME,
         // ADR-116: a generic method or `suspend` lambda parameter of a sealed subclass (ADR-118/124
         // routed its suspend and Flow members). The reasons above that stay silent do so because a
         // legacy route re-emits them for an ordinary class; none is keyed to a sealed subclass, so

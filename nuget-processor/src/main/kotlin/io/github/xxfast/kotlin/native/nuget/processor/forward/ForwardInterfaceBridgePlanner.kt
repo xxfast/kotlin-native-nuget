@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import io.github.xxfast.kotlin.native.nuget.processor.CSHARP_RESERVED
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import com.google.devtools.ksp.getVisibility
@@ -80,7 +81,9 @@ internal data class ForwardBridgeSlot(
    * projections.
    */
   val slotPrefix: String =
-    (if (isProperty) "${name}Get" else "$name$overloadSuffix") + uniqueSuffix
+    // `asCSymbol`: a `@CSharpName`d backticked member (`tug hard`) slots as `tug_hardPtr`.
+    (if (isProperty) "${name.asCSymbol()}Get" else "${name.asCSymbol()}$overloadSuffix") +
+      uniqueSuffix
 }
 
 /**
@@ -217,6 +220,8 @@ internal object ForwardInterfaceBridgePlanner {
   ): ForwardBridgeSlot? {
     // `var` properties would need a second (setter) slot each: deferred by the ADR's scope.
     if (property.isMutable) return null
+    // A backticked `slack line` with no `@CSharpName` has no C# member to implement.
+    if (!property.hasBridgeableName()) return null
     val result: ForwardBridgeType =
       bridgeType(property.type.resolve().expandAliases(), classifier) ?: return null
     if (result.wire == ForwardBridgeWire.UNIT) return null
@@ -235,6 +240,7 @@ internal object ForwardInterfaceBridgePlanner {
     classifier: ForwardBridgeTypeClassifier,
   ): ForwardBridgeSlot? {
     if (function.modifiers.any { modifier -> modifier.name == "SUSPEND" }) return null
+    if (!function.hasBridgeableName()) return null
     if (function.typeParameters.isNotEmpty()) return null
     if (function.parameters.size > 2) return null
     val returnType: KSType = function.returnType?.resolve()?.expandAliases() ?: return null

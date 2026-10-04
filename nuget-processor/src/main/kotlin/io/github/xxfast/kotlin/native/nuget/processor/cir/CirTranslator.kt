@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import com.google.devtools.ksp.processing.KSPLogger
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
@@ -1591,7 +1592,8 @@ internal fun translateProperty(
   prop: KSPropertyDeclaration,
   libraryName: String,
 ): List<CirMember> {
-  val propName: String = prop.simpleName.asString()
+  // Extern names are spelled from the ABI segment, so a `@CSharpName`d backticked name compiles.
+  val propName: String = prop.simpleName.asString().asCSymbol()
   val cname: String = io.github.xxfast.kotlin.native.nuget.processor.toCName(propName)
   val propTypeResolved: KSType = prop.type.resolve().expandAliases()
   val propType: String = propTypeResolved.declaration.simpleName.asString()

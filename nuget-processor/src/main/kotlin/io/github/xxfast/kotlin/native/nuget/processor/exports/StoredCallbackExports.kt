@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
+import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
@@ -209,8 +211,9 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
     appendLine("  val bridge: $bridgeLambdaType = {$lambdaParamDecl")
     append(bridgeBodyLines)
     appendLine("  }")
-    appendLine("  obj.$addMethodName(bridge)")
-    appendLine("  val unregister: () -> Unit = { obj.$removeMethodName(bridge) }")
+    appendLine("  obj.${addMethodName.kotlinIdentifier()}(bridge)")
+    val remove: String = removeMethodName.kotlinIdentifier()
+    appendLine("  val unregister: () -> Unit = { obj.$remove(bridge) }")
     appendLine("  NugetHandles.retain(unregister)")
     appendLine("} catch (e: Throwable) {")
     appendLine(
@@ -222,7 +225,7 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
   }
 
   addFunction(
-    FunSpec.builder("export_${classPrefix}_$addMethodName")
+    FunSpec.builder("export_${classPrefix}_${addMethodName.asCSymbol()}")
       .addAnnotation(cNameAnnotation("${classPrefix}_$addMethodName", ownedBy(addMethod)))
       .addParameter("handle", cOpaquePointer)
       .addParameter("listenerPtr", cOpaquePointer)
@@ -240,7 +243,7 @@ internal fun FileSpec.Builder.addStoredCallbackExports(
   }
 
   addFunction(
-    FunSpec.builder("export_${classPrefix}_$removeMethodName")
+    FunSpec.builder("export_${classPrefix}_${removeMethodName.asCSymbol()}")
       .addAnnotation(cNameAnnotation("${classPrefix}_$removeMethodName", ownedBy(removeMethod)))
       .addParameter("handle", cOpaquePointer)
       .addParameter("subscriptionHandle", cOpaquePointer)

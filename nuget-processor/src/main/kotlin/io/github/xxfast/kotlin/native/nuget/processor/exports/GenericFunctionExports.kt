@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.abiSlotParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardBoundSpellings
@@ -58,7 +59,8 @@ internal fun FileSpec.Builder.addGenericFunctionExports(
   // also carries the `toCName` escape, which this route used to skip while its C# twin applied it.
   val symbolStem: String = symbols.topLevel(func)
   val funcName: String =
-    kotlinPackageReference(func.packageName.asString()) + func.simpleName.asString()
+    kotlinPackageReference(func.packageName.asString()) +
+      func.simpleName.asString().kotlinIdentifier()
   val returnType: KSType? = func.returnType?.resolve()?.expandAliases()
   val returnDecl: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
 
@@ -75,6 +77,8 @@ internal fun FileSpec.Builder.addGenericFunctionExports(
   // abiSlotParameterName.
   val paramName: String =
     (func.parameters[paramIndex].name?.asString() ?: "value").abiSlotParameterName()
+  // The body's reference to it: KotlinPoet backticks the declaration of a keyword name itself.
+  val paramRef: String = paramName.kotlinIdentifier()
 
   val hasNonTrivialBound: Boolean = func.legacyGenericHasNonTrivialBound()
 
@@ -116,7 +120,7 @@ internal fun FileSpec.Builder.addGenericFunctionExports(
             appendLine("  }")
             appendLine("  null")
             append("}")
-          }, nugetHandles, funcName, paramName, cOpaquePointerVar, nugetHandles)
+          }, nugetHandles, funcName, paramRef, cOpaquePointerVar, nugetHandles)
           .build()
       )
     } else if (returnDecl == typeParamName) {
@@ -138,7 +142,7 @@ internal fun FileSpec.Builder.addGenericFunctionExports(
             appendLine("  }")
             appendLine("  ${defaultValueFor(qualifiedKotlinType)}")
             append("}")
-          }, funcName, paramName, cOpaquePointerVar, nugetHandles)
+          }, funcName, paramRef, cOpaquePointerVar, nugetHandles)
           .build()
       )
     }
@@ -156,7 +160,7 @@ internal fun FileSpec.Builder.addGenericFunctionExports(
   // null, so the object variant takes the null pointer for a null argument (ADR-083) and returns
   // it for a null result, instead of dereferencing it.
   val nullableBound: Boolean = func.typeParameters.firstOrNull()?.hasNullableBound() ?: true
-  val argument: String = forwardBoundedRead(paramName, bounds, nullableBound)
+  val argument: String = forwardBoundedRead(paramRef, bounds, nullableBound)
 
   if (returnsGenericClass) {
     addFunction(

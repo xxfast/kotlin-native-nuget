@@ -35,6 +35,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.RESULT_FAILED_SLOT
 import io.github.xxfast.kotlin.native.nuget.processor.bridgeParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
+import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_EXCEPTION_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.KotlinExceptionMatch
@@ -308,6 +309,11 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    *  no export scope can admit a marked type) or [UNDECLARED_CLASS] (whose hint names nesting).
    *  Both render through the one `SKIPPED_OPT_IN_MARKER` kind. */
   OPT_IN_MARKER_TYPE(droppedFromCSharp = true),
+
+  /** A backticked Kotlin name that is no identifier (`tug hard`, `a+b`) and
+   *  carries no `@CSharpName` (ADR-179): neither the C# member nor the C entry point can be
+   *  spelled from it, and the generator does not invent a C# name. [detail] is the Kotlin name. */
+  NON_IDENTIFIER_NAME(droppedFromCSharp = true),
 }
 
 /**
@@ -3027,6 +3033,17 @@ internal class ForwardCallablePlanner(
         symbol, ForwardPlanSkipReason.OPT_IN_MARKER, node = node, detail = optInMarker,
       )
     }
+    // A backticked name that is no identifier has no C# spelling unless the author declares one.
+    // Constructors (`<init>`) and the generated box/copy routes name no declared member here.
+    val declaredName: String? = (node as? KSDeclaration)?.simpleName?.asString()
+      ?.takeIf { name -> name != "<init>" && origin in DECLARED_NAME_ORIGINS }
+    if (declaredName != null && !declaredName.isPlainKotlinIdentifier() &&
+      (node as KSDeclaration).declaredCSharpName() == null
+    ) {
+      return ForwardCallableCatalogEntry.Skipped(
+        symbol, ForwardPlanSkipReason.NON_IDENTIFIER_NAME, node = node, detail = declaredName,
+      )
+    }
     // ADR-105 scope (d): the sealed rewrite is applied to every declared PARAMETER here, once,
     // rather than at each catalog site's `classifier.classify(...)` call, so the plan's public
     // signature, its ABI parameters and its input eligibility check all see the same rewritten
@@ -3156,7 +3173,9 @@ internal class ForwardCallablePlanner(
         publicParameters.flatMap { parameter -> nativeInputParameters(parameter) } +
         resultShape.extraParameters + listOfNotNull(resultFailed, error)
     val nativeCall = ForwardNativeCall(
-      exportName = exportName,
+      // Identity for every identifier-named callable; a `@CSharpName`d backticked one (`tug hard`)
+      // reaches here and its C entry point cannot carry the space.
+      exportName = exportName.asCSymbol(),
       result = resultShape.wireType,
       parameters = nativeParameters,
     )
@@ -5355,6 +5374,17 @@ private enum class ForwardDefaultRole(val isWidened: Boolean) {
  * per-call GCHandle would be freed under it. ADR-164 reads the same set to keep a defaulted lambda
  * there dropped rather than widened.
  */
+/** The origins whose C# member and C entry point are spelled from the declaration's own name. */
+private val DECLARED_NAME_ORIGINS: Set<ForwardCallableOrigin> = setOf(
+  ForwardCallableOrigin.CLASS,
+  ForwardCallableOrigin.EXTENSION,
+  ForwardCallableOrigin.TOP_LEVEL,
+  ForwardCallableOrigin.OBJECT,
+  ForwardCallableOrigin.COMPANION,
+  ForwardCallableOrigin.ENUM_MEMBER,
+  ForwardCallableOrigin.VALUE_CLASS,
+)
+
 private val STORED_CALLBACK_ORIGINS: Set<ForwardCallableOrigin> = setOf(
   ForwardCallableOrigin.CONSTRUCTOR,
   ForwardCallableOrigin.COPY,

@@ -45,6 +45,18 @@ internal fun KSDeclaration.declaredCSharpName(): String? =
   overrideRoot().ownCSharpName() ?: ownCSharpName()
 
 /**
+ * Whether a C# member and a C entry point can be spelled for this declaration: its Kotlin name is
+ * an identifier (a hard keyword counts, it is backticked in the generated Kotlin and escaped in
+ * C#), or the author declared the C# name with `@CSharpName` (ADR-179), in which case the entry
+ * point is the Kotlin name through `asCSymbol`. A backticked `tug hard` with neither is refused on
+ * every route at the membership and export-scope filters, and named `NON_IDENTIFIER_NAME`.
+ */
+internal fun KSDeclaration.hasBridgeableName(): Boolean {
+  val name: String = simpleName.asString()
+  return name == "<init>" || name.isPlainKotlinIdentifier() || declaredCSharpName() != null
+}
+
+/**
  * ADR-179: the member's C# name, unescaped: declared when present, else PascalCase. Unescaped
  * because plans and CIR member names must not carry a C#-escaped name: the name is also the stem
  * of derived identifiers, and the renderer escapes it through each CIR member's `identifier`.

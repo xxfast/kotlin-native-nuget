@@ -303,7 +303,7 @@ internal fun FileSpec.Builder.addForwardValueClassPlanExport(plan: ForwardCallab
     loweredArgument(parameter)
   }
   val memberName: String =
-    plan.invocation.member ?: plan.invocation.symbol.substringAfterLast('.')
+    (plan.invocation.member ?: plan.invocation.symbol.substringAfterLast('.')).kotlinIdentifier()
   val invocation: String = when {
     isConstructor -> {
       val underlyingProp: String = requireNotNull(plan.invocation.receiver) {
@@ -1050,7 +1050,19 @@ internal fun FileSpec.Builder.importIfDefaultPackage(declaration: KSDeclaration)
  */
 internal fun forwardExtensionImportAlias(packageName: String, name: String): String {
   val qualified: String = if (packageName.isEmpty()) name else "$packageName.$name"
-  return "nuget_ext_" + qualified.replace("_", "_u").replace(".", "__")
+  // Any other character a plain identifier cannot carry (the space of a backticked `tug hard`)
+  // becomes `_x` and its four hex digits, so the alias needs no backticks at its call site. Still
+  // injective: a literal `_` is always `_u`, so `_x` only ever comes from this arm.
+  return "nuget_ext_" + buildString {
+    qualified.forEach { char ->
+      when {
+        char == '_' -> append("_u")
+        char == '.' -> append("__")
+        char.isLetterOrDigit() -> append(char)
+        else -> append("_x").append(char.code.toString(16).padStart(4, '0'))
+      }
+    }
+  }
 }
 
 /**
@@ -1174,7 +1186,17 @@ internal fun forwardMaskArms(
 }
 
 /** A Kotlin parameter name as a named-argument label, backticked when it is a hard keyword. */
-private fun String.kotlinIdentifier(): String = if (this in KOTLIN_HARD_KEYWORDS) "`$this`" else this
+/**
+ * A declared Kotlin name spelled so the generated file parses: backticked when it is a hard keyword
+ * (`in`) or carries a character an identifier cannot (`tug hard`), and bare otherwise, so every
+ * ordinary name is spelled exactly as before.
+ */
+internal fun String.kotlinIdentifier(): String =
+  if (this in KOTLIN_HARD_KEYWORDS || !isPlainKotlinIdentifier()) "`$this`" else this
+
+/** A name Kotlin accepts without backticks, keywords aside. */
+internal fun String.isPlainKotlinIdentifier(): Boolean =
+  isNotEmpty() && !first().isDigit() && all { char -> char.isLetterOrDigit() || char == '_' }
 
 private fun invocationExpression(
   plan: ForwardCallablePlan,
@@ -1184,7 +1206,7 @@ private fun invocationExpression(
   // ADR-090: an overload's symbol carries the `_2` suffix so catalog keys stay unique; the Kotlin
   // call site must say the declared name. `member` is null for every unnumbered callable.
   val declaredName: String =
-    plan.invocation.member ?: plan.invocation.symbol.substringAfterLast('.')
+    (plan.invocation.member ?: plan.invocation.symbol.substringAfterLast('.')).kotlinIdentifier()
   // ADR-197: a member's own type parameters are named at the call, so a `T` only the return
   // mentions (`fun <T> make(): T?`) resolves; `_` lets Kotlin infer a multi-bound one.
   val typeArguments: List<String> =
@@ -1450,36 +1472,43 @@ private fun defaultResult(type: BridgeType): String = when (type) {
   else -> error("Forward Kotlin plan emitter has no direct-value default for $type")
 }
 
+/**
+ * A reference to this parameter's export slot in the body. KotlinPoet backticks the declaration
+ * (`` `in`: Int ``) itself, so a keyword-named slot must be referenced backticked too.
+ */
+private val ForwardPublicParameter.ref: String
+  get() = name.kotlinIdentifier()
+
 /** The lowering expression that turns one native ABI value back into the Kotlin argument. */
 private fun loweredArgument(parameter: ForwardPublicParameter): String =
   when (val type: BridgeType = parameter.type) {
-    is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> parameter.name
+    is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> parameter.ref
     // ADR-106: parse the canonical text back into a Uuid. Spelled fully qualified so the generated
     // file needs no `import kotlin.uuid.Uuid`.
-    BridgeType.Uuid -> "kotlin.uuid.Uuid.parse(${parameter.name})"
-    is BridgeType.Enum -> "${type.qualifiedName}.entries[${parameter.name}]"
+    BridgeType.Uuid -> "kotlin.uuid.Uuid.parse(${parameter.ref})"
+    is BridgeType.Enum -> "${type.qualifiedName}.entries[${parameter.ref}]"
     // ADR-076: the wire value is a raw INT64 of ticks; convert it back to an Instant.
-    BridgeType.Instant -> "instantFromDotNetTicks(${parameter.name})"
+    BridgeType.Instant -> "instantFromDotNetTicks(${parameter.ref})"
     // ADR-103: the same, into a Duration.
-    BridgeType.Duration -> "durationFromDotNetTicks(${parameter.name})"
+    BridgeType.Duration -> "durationFromDotNetTicks(${parameter.ref})"
     is BridgeType.ObjectHandle ->
-      "${parameter.name}.asStableRef<${type.kotlinReadType ?: type.qualifiedName}>().get()"
+      "${parameter.ref}.asStableRef<${type.kotlinReadType ?: type.qualifiedName}>().get()"
 
     is BridgeType.Interface ->
-      "${parameter.name}.asStableRef<${type.qualifiedName}>().get()"
+      "${parameter.ref}.asStableRef<${type.qualifiedName}>().get()"
 
     // ADR-147: the box holds whatever `T` was instantiated to, read back as the declared bound
     // (`Any` when the parameter is unconstrained), which is the type the member's `T` accepts
     // under the erased receiver spelling. ADR-015 amendment: through checked casts.
     is BridgeType.TypeParameter ->
-      forwardBoundedRead(parameter.name, type.bounds(), nullable = false)
+      forwardBoundedRead(parameter.ref, type.bounds(), nullable = false)
 
     // ADR-088: the reverse pipeline's own resolver. It frees the incoming transfer handle and
     // returns the ORIGINAL Kotlin object on a token-probe hit; otherwise it wraps the handle in
     // the ADR-070 `{Iface}Handle`, whose cleaner owns it from here on.
-    is BridgeType.BoundInterface -> "${type.valueHelper()}(${parameter.name})"
+    is BridgeType.BoundInterface -> "${type.valueHelper()}(${parameter.ref})"
 
-    is BridgeType.Collection -> loweredCollectionExpression(parameter.name, type)
+    is BridgeType.Collection -> loweredCollectionExpression(parameter.ref, type)
 
     // ADR-160: the Kotlin argument is a real Kotlin lambda that calls back out through the thunk
     // address, so the whole lowering is one expression and the member is invoked exactly as the
@@ -1487,59 +1516,59 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
     // nothing per invocation, and it keeps the expression self-contained (a second callback
     // parameter on the same member cannot collide with this one's locals).
     is BridgeType.Callback -> loweredCallbackExpression(
-      parameter.name, type, parameter.callbackPtrSlot, parameter.callbackUserDataSlot,
+      parameter.ref, type, parameter.callbackPtrSlot, parameter.callbackUserDataSlot,
     )
 
     // ADR-151: the handle holds the Kotlin ByteArray `nuget_bytes_create` built from the caller's
     // buffer, so the lowering is the plain handle read an object parameter uses.
-    BridgeType.ByteArray -> "${parameter.name}.asStableRef<kotlin.ByteArray>().get()"
+    BridgeType.ByteArray -> "${parameter.ref}.asStableRef<kotlin.ByteArray>().get()"
 
     // ADR-077: re-wrap the underlying wire value (re-running the value class's own `init`), with
     // the underlying's own lowering composed inside the constructor call (sub-item 4).
     is BridgeType.ValueClass ->
-      "${type.qualifiedName}(${valueClassUnderlyingLowering(parameter.name, type.underlying)})"
+      "${type.qualifiedName}(${valueClassUnderlyingLowering(parameter.ref, type.underlying)})"
 
     is BridgeType.Nullable -> when (val inner: BridgeType = type.type) {
-      BridgeType.String -> parameter.name
+      BridgeType.String -> parameter.ref
       // ADR-106: a null incoming pointer stays null; only a real string is parsed.
-      BridgeType.Uuid -> "${parameter.name}?.let(kotlin.uuid.Uuid::parse)"
+      BridgeType.Uuid -> "${parameter.ref}?.let(kotlin.uuid.Uuid::parse)"
       is BridgeType.ObjectHandle ->
-        "${parameter.name}?.asStableRef<${inner.kotlinReadType ?: inner.qualifiedName}>()?.get()"
+        "${parameter.ref}?.asStableRef<${inner.kotlinReadType ?: inner.qualifiedName}>()?.get()"
 
       is BridgeType.Interface ->
-        "${parameter.name}?.asStableRef<${inner.qualifiedName}>()?.get()"
+        "${parameter.ref}?.asStableRef<${inner.qualifiedName}>()?.get()"
 
       // ADR-083/147: a null `T?` arrives as the null pointer and stays Kotlin null.
       is BridgeType.TypeParameter ->
-        forwardBoundedRead(parameter.name, inner.bounds(), nullable = true)
+        forwardBoundedRead(parameter.ref, inner.bounds(), nullable = true)
 
       // ADR-098 amendment (boundary nullability part C): `Char?` arrives as the same adjacent pair
       // and needs no conversion -- the by-value slot already IS a Kotlin `Char`.
       is BridgeType.Primitive, BridgeType.Char ->
-        "if (${parameter.hasValueSlot}) ${parameter.name} else null"
+        "if (${parameter.hasValueSlot}) ${parameter.ref} else null"
 
       // ADR-080: same HasValue guard, with the ordinal lookup the non-null enum branch uses.
       is BridgeType.Enum ->
-        "if (${parameter.hasValueSlot}) ${inner.qualifiedName}.entries[${parameter.name}] else null"
+        "if (${parameter.hasValueSlot}) ${inner.qualifiedName}.entries[${parameter.ref}] else null"
 
       // ADR-076: same HasValue-guard shape as the nullable Primitive case above, plus the same
       // TICKS_TO_INSTANT conversion the non-nullable Instant branch above uses.
       BridgeType.Instant ->
-        "if (${parameter.hasValueSlot}) instantFromDotNetTicks(${parameter.name}) else null"
+        "if (${parameter.hasValueSlot}) instantFromDotNetTicks(${parameter.ref}) else null"
 
       // ADR-103: the same, into a Duration.
       BridgeType.Duration ->
-        "if (${parameter.hasValueSlot}) durationFromDotNetTicks(${parameter.name}) else null"
+        "if (${parameter.hasValueSlot}) durationFromDotNetTicks(${parameter.ref}) else null"
 
       // ADR-075: a nullable collection *parameter* (e.g. a data class's `notes: List<String>?`
       // constructor parameter, mirroring `Visit.notes` as a property) is now planned when its
       // component is eligible (`ForwardCallablePlanner.inputSkipReason()`'s Nullable branch),
       // sharing the same `?.`-guarded lowering the property setter emitter uses.
       is BridgeType.Collection ->
-        loweredCollectionExpression(parameter.name, inner, nullable = true)
+        loweredCollectionExpression(parameter.ref, inner, nullable = true)
 
       // ADR-151: `IntPtr.Zero` arrives as a Kotlin null pointer and stays null.
-      BridgeType.ByteArray -> "${parameter.name}?.asStableRef<kotlin.ByteArray>()?.get()"
+      BridgeType.ByteArray -> "${parameter.ref}?.asStableRef<kotlin.ByteArray>()?.get()"
 
       // ADR-077 sub-items 3/4: `?.let` re-wraps only a non-null wire value, so a C# null arrives
       // as a genuine Kotlin null rather than a value class wrapping a default.
@@ -1547,11 +1576,11 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
       // guard is the `${name}HasValue` flag (the value slot's dead default is never re-wrapped).
       is BridgeType.ValueClass ->
         if (inner.underlying is BridgeType.Primitive || inner.underlying is BridgeType.Enum) {
-          val lowered: String = valueClassUnderlyingLowering(parameter.name, inner.underlying)
+          val lowered: String = valueClassUnderlyingLowering(parameter.ref, inner.underlying)
           "if (${parameter.hasValueSlot}) ${inner.qualifiedName}($lowered) else null"
         } else {
           val lowered: String = valueClassUnderlyingLowering("it", inner.underlying)
-          "${parameter.name}?.let { ${inner.qualifiedName}($lowered) }"
+          "${parameter.ref}?.let { ${inner.qualifiedName}($lowered) }"
         }
 
       else -> error("Forward Kotlin plan emitter has no argument lowering for nullable $inner")

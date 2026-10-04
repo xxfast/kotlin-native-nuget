@@ -192,7 +192,10 @@ member, and a compiler plugin's synthesized surface such as kotlinx.serializatio
 - **`SKIPPED_*`**: the member is warned about and omitted entirely from the generated C# API.
   Generation continues. This is the default for a construct the forward direction cannot express
   (an unsupported type, a `Map`/`Set` parameter, an unsupported generic/suspend combination, a
-  value-class member a supertype declares, whether inherited, delegated or overridden). A
+  value-class member a supertype declares, whether inherited, delegated or overridden, or a
+  backticked name with a space or symbol and no `@CSharpName`, reported as
+  `SKIPPED_UNSUPPORTED_COMBINATION`: "its name `tug hard` is not an identifier"; see
+  [Choosing the C# name](instance-members.md#choosing-the-csharp-name)). A
   `Sequence<T>` parameter or return is one of these: `kotlin.sequences.Sequence` is a named
   `Unsupported` stdlib type, so a callable using it at either position skips as
   `SKIPPED_UNSUPPORTED_TYPE` naming the callable, instead of vanishing from the generated API with

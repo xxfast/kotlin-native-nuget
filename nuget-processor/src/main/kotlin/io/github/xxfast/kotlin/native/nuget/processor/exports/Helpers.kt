@@ -14,6 +14,7 @@ import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.TypeName
 import com.squareup.kotlinpoet.ksp.toTypeName
+import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardExportOwnerTag
 
@@ -153,10 +154,14 @@ internal fun FunSpec.Builder.addEnumAwareParameters(
  * `ForwardExportOwners` can name the exact declaration behind a duplicate entry point on every
  * route, and so a future export site that forgets its owner does not compile. A KotlinPoet tag is
  * builder metadata and never renders, so `CNameExports.kt` is unchanged by it.
+ *
+ * Every symbol passes through `asCSymbol` here, the identity for one spelled from identifiers: a
+ * `@CSharpName`d backticked member (`tug hard`) reaches a route that composes its symbol from the
+ * raw name, and the C# half cleans the same way at its one `EntryPoint` renderer.
  */
 internal fun cNameAnnotation(value: String, owner: ForwardExportOwnerTag): AnnotationSpec =
   AnnotationSpec.builder(cNameAnnotation)
-    .addMember("%S", value)
+    .addMember("%S", value.asCSymbol())
     .tag(ForwardExportOwnerTag::class, owner)
     .build()
 

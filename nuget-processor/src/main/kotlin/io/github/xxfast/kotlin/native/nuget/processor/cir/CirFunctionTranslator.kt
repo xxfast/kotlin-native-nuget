@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
+import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -714,7 +715,7 @@ internal fun translateSuspendFunction(
   // ADR-110: the case change alone, so `suspend fun lock()` renders `LockAsync`;
   // the renderer escapes.
   // ADR-163: from the declaration name, not from [cname] (see `translateFunction`).
-  val csName: String = func.simpleName.asString().replaceFirstChar { it.uppercase() }
+  val csName: String = func.simpleName.asString().asCSymbol().replaceFirstChar { it.uppercase() }
   // The public name stays `${csName}Async`: the overloads are one natural C# overload set.
   val nativeName: String = "${csName}${suffix}Async_native"
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"

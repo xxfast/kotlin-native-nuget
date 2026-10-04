@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
+import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
@@ -145,7 +147,9 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
   prefix: String,
   classifier: ForwardBridgeTypeClassifier,
 ) {
-  val propName: String = prop.simpleName.asString()
+  val propName: String = prop.simpleName.asString().asCSymbol()
+  // The Kotlin spelling of the same name, backticked where it needs it (`in`, `tug hard`).
+  val propCall: String = prop.simpleName.asString().kotlinIdentifier()
   val propTypeResolved: KSType = prop.type.resolve().expandAliases()
   val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"
   // ADR-065: StateFlow (and the read-only MutableStateFlow view) is checked before/alongside
@@ -190,7 +194,7 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
       .returns(cOpaquePointer)
       .addCode(
         buildFlowCollectBody(
-          qualifiedName, propName, flowElementQualified, elementNullable, memberNullable,
+          qualifiedName, propCall, flowElementQualified, elementNullable, memberNullable,
           flowElementCollection,
         )
       )
@@ -213,7 +217,7 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
         )
         .addCode(
           buildStateFlowValuePropertyBody(
-            qualifiedName, propName, elementNullable, memberNullable, flowElementCollection,
+            qualifiedName, propCall, elementNullable, memberNullable, flowElementCollection,
           ),
         )
         .build()
@@ -227,7 +231,7 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
           .addAnnotation(cNameAnnotation("${prefix}_get_${propName}_has_value", ownedBy(prop)))
           .addParameter("handle", cOpaquePointer)
           .returns(Boolean::class)
-          .addCode(buildStateFlowHasValuePropertyBody(qualifiedName, propName))
+          .addCode(buildStateFlowHasValuePropertyBody(qualifiedName, propCall))
           .build()
       )
     }
@@ -248,7 +252,7 @@ internal fun FileSpec.Builder.addFlowPropertyExports(
           .addParameter("value", valueParamType)
           .addParameter("errorOut", cOpaquePointer.copy(nullable = true))
           .addCode(
-            buildStateFlowSetValuePropertyBody(qualifiedName, propName, assignment),
+            buildStateFlowSetValuePropertyBody(qualifiedName, propCall, assignment),
             cOpaquePointerVar, nugetHandles,
           )
           .build()
@@ -300,7 +304,9 @@ internal fun FileSpec.Builder.addFlowMethodExports(
 
   // The whole call on `names.obj`, positional or dispatched; every body below reads it as is.
   val call: String =
-    names.legacyInvocation("${names.obj}.$methodName", method.legacyParameterNames())
+    names.legacyInvocation(
+      "${names.obj}.${methodName.kotlinIdentifier()}", method.legacyParameterNames(),
+    )
   val paramPrelude: String = names.legacyPrelude(method.legacyParameterNames())
 
   fun FunSpec.Builder.addFlowParameters() {

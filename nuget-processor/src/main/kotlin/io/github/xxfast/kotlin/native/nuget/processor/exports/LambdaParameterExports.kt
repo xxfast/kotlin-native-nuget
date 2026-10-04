@@ -1,5 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.exports
 
+import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
+import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
@@ -30,6 +32,8 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
   classPrefix: String,
 ) {
   val methodName: String = method.simpleName.asString()
+  // The call-site spelling, backticked where the name needs it (`in`, `tug hard`).
+  val methodCall: String = methodName.kotlinIdentifier()
 
   val lambdaParam = method.parameters.firstOrNull { param ->
     param.type.resolve().expandAliases().declaration.qualifiedName?.asString() in LAMBDA_TYPES
@@ -161,7 +165,7 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
     when {
       isOuterRetUnit -> {
         appendLine("try {")
-        appendLine("  handle.asStableRef<$qualifiedClassName>().get().$methodName {$lambdaArgDecl")
+        appendLine("  handle.asStableRef<$qualifiedClassName>().get().$methodCall {$lambdaArgDecl")
         append(callbackBody)
         appendLine()
         appendLine("  }")
@@ -177,7 +181,7 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
       }
       isOuterRetList -> {
         appendLine("return try {")
-        appendLine("  val list = handle.asStableRef<$qualifiedClassName>().get().$methodName {$lambdaArgDecl")
+        appendLine("  val list = handle.asStableRef<$qualifiedClassName>().get().$methodCall {$lambdaArgDecl")
         append(callbackBody)
         appendLine()
         appendLine("  }")
@@ -196,7 +200,7 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
       else -> {
         // String or other object return
         appendLine("return try {")
-        appendLine("  handle.asStableRef<$qualifiedClassName>().get().$methodName {$lambdaArgDecl")
+        appendLine("  handle.asStableRef<$qualifiedClassName>().get().$methodCall {$lambdaArgDecl")
         append(callbackBody)
         appendLine()
         appendLine("  }")
@@ -215,7 +219,7 @@ internal fun FileSpec.Builder.addLambdaParamMethodExport(
   }
 
   val builder: FunSpec.Builder = FunSpec
-    .builder("export_${classPrefix}_$methodName")
+    .builder("export_${classPrefix}_${methodName.asCSymbol()}")
     .addAnnotation(cNameAnnotation("${classPrefix}_$methodName", ownedBy(method)))
     .addParameter("handle", cOpaquePointer)
     .addParameter("${lambdaParamName}Ptr", cOpaquePointer)

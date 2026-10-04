@@ -332,3 +332,23 @@ class, interface, nested class, typealias, extension function and property, and 
 compiles the generated Kotlin with the harness's JVM compiler, and `:nuget-processor:test` passes
 1660, 0 failed. Inferred: Kotlin/Native resolves the same import. It is not exercised, because
 every `test-library` fixture lives in a package.
+
+## Amendment 2026-10-04: entry points are cleaned to symbol characters, and the collision that follows
+
+A Kotlin name written in backticks can carry characters a C symbol cannot. A `@CSharpName`d member
+named `tug hard` (ADR-179's 2026-10-04 amendment) would have rendered `@CName("..._tug hard")`, which
+is invalid. Every `@CName` and every C# `EntryPoint` now passes through `asCSymbol()`: each run of
+characters that are not letters, digits or `_` becomes one `_`, so the entry point is
+`library_leash_tug_hard`, and `leash_tug_hard_async` and `leash_get_trail_end_collect` for the
+`suspend` and `Flow` routes. One place covers the plan routes and the legacy ones: the Kotlin export
+builder (`cNameAnnotation`) and the one C# `EntryPoint` renderer, and the symbol table compares
+extension stems in the same cleaned form, so the `_ext_` stem rule above still sees a member's
+`leash_tug_hard`. `asCSymbol()` is the identity for every symbol spelled from identifiers, so no
+shipped symbol moves.
+
+Consequence: cleaning is not injective. `tug hard` and `tug_hard` on one owner both become
+`leash_tug_hard` and fail with `ERROR_C_ENTRY_POINT_COLLISION`, naming both declarations as ADR-117
+does. That diagnostic is the backstop; no extra disambiguation is added for a name the author chose
+to spell that way. Verified: `Tier1BacktickedNameRoutesTest` pins the collision message, with both
+owners (`Leash.tug hard()` and `Leash.tug_hard()`) named. A name that is not an identifier and has no
+`@CSharpName` is never exported, so it never reaches this step.
