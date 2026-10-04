@@ -47,7 +47,8 @@ dependency type, reusing ADR-009's nested-block rendering.
 **Supported owner shapes:** a non-generic, non-`inner` `class` (root or admitted dependency, `open`/
 `abstract` included) and a non-generic `object`. **Deferred, still skipped named** (`SKIPPED_NESTED_DECLARATION`,
 now naming which shape defers it): an `inner class` owner (its constructor needs the outer instance),
-a generic owner (`Outer<T>.Nested` would itself be generic in C#), an `enum class` owner (no C#
+a generic `class` owner (declared since 2026-10-04 by [ADR-196](196-generic-nested-types.md): its nested types go on a
+non-generic holder, not `Outer<T>.Nested`), an `enum class` owner (no C#
 declaration block to nest into), an `interface` owner (declares no nested types in the generated C#),
 a sealed base or sealed arm owner (ADR-009 owns that block already), and a nested `value class`
 candidate (a separate numbering space, out of scope here) regardless of its owner.
@@ -206,7 +207,8 @@ shape (`Box<T>`, `enum class Season`, `interface Cage`, `inner class Guest` unde
 ### Pointer (2026-09-13): three more deferred owners are now admitted
 
 [ADR-134](134-nested-types-under-deferred-owners.md) narrows the deferred owner set above to exactly
-`enum class`, generic, and `inner class`: an `interface` owner (including an ADR-112 *ineligible*
+`enum class`, generic, and `inner class` (the generic `class` owner and the `inner class` are declared since; see
+[ADR-196](196-generic-nested-types.md) and [ADR-141](141-inner-class-outer-instance-constructor.md)): an `interface` owner (including an ADR-112 *ineligible*
 sealed interface), a sealed base or arm owner (including an ADR-112 *eligible* sealed interface), and
 a nested `value class` candidate under any admitted owner are all declared now. The interface `I`-prefix
 rule this ADR fixed to the last enclosing segment only is itself superseded: ADR-134 puts `I` on

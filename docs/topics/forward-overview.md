@@ -393,14 +393,15 @@ the file and line of the Kotlin declaration that was skipped, something the reve
 `RirDiagnostic` cannot carry, since it works from compiled metadata rather than source. See each
 forward page's own **Limitations** section for which named diagnostic fires where.
 
-A nested `class`, `object`, `interface`, `enum class`, or `value class` under a non-generic,
-non-`inner` `class` or `object` owner, an `interface` owner, or a sealed base/arm owner is declared as
-a real C# nested type, `Outer.Nested`, at any depth
+A nested `class`, `object`, `interface`, `enum class`, or `value class` under a `class` or `object`
+owner, an `interface` owner, or a sealed base/arm owner is declared as
+a real C# nested type, `Outer.Nested`, at any depth (under a generic class, on a non-generic
+holder beside it)
 ([ADR-133](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/133-nested-types.md),
 [ADR-134](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/134-nested-types-under-deferred-owners.md));
 see [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects). A nested
-declaration under a still-deferred owner shape (an `inner class`, a generic, or an `enum class`
-owner) still skips named, `SKIPPED_NESTED_DECLARATION` at the
+declaration under a still-deferred owner shape (an `enum class`, a generic `interface` or a generic
+sealed owner) still skips named, `SKIPPED_NESTED_DECLARATION` at the
 declaration, and a member typed with it skips `SKIPPED_UNSUPPORTED_TYPE` naming `UNDECLARED_CLASS`/
 `UNDECLARED_ENUM`/`UNDECLARED_INTERFACE` instead of being spelled as a dangling reference; see
 [Enums: Nested enums](enums.md#nested-enums-skip-named) and [Interfaces, abstract and sealed classes: Nested

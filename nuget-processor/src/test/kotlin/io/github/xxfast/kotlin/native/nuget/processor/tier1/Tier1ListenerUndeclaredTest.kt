@@ -51,12 +51,12 @@ class Tier1ListenerUndeclaredTest {
   }
 
   @Test
-  fun `a nullable listener nested under a generic owner skips the pair by name on both halves`() {
+  fun `a nullable listener under a generic interface owner skips the pair by name`() {
     Tier1Harness.run(
       """
       package tier1.listenernullable
 
-      class Box<T> {
+      interface Box<T> {
         interface Watcher { fun onTick() }
       }
 

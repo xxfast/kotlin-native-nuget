@@ -22,7 +22,7 @@ shape stays a *named* skip.
 
 Sealed base, sealed arm, and `interface` owners declare their children; a nested `value class` is
 declared as a nested `readonly record struct`. `enum class`, generic, and `inner class` owners keep
-the named skip. Pros: follows Kotlin scope for every shape C# has a block for; no new export shape,
+the named skip. (Generic class owners are declared since, see ADR-196.) Pros: follows Kotlin scope for every shape C# has a block for; no new export shape,
 handle kind, or closure edge. Cons: the `I`-prefix rule ADR-133 fixed to the last segment must become
 per-interface-segment, and three shapes remain skipped.
 
@@ -68,7 +68,7 @@ class owner always used.
 
 **Owner kinds that stay a named skip, permanently:** an `enum class` owner (**Verified**, C# spec
 §20.2/§20.4: `enum_body : '{' enum_member_declarations? '}'`, an enum body holds only named
-constants), a generic owner (**Verified**, §15.3.9.7: "Every type declaration contained within a
+constants), a generic owner (since declared on a non-generic holder, [ADR-196](196-generic-nested-types.md); **Verified**, §15.3.9.7: "Every type declaration contained within a
 generic class declaration is implicitly a generic type declaration ... the containing constructed
 type, including its type arguments, shall be named", so `Box<T>.Lid` would be one C# type per `T`
 where Kotlin has one), an `inner class` owner or candidate (C# has no inner classes; Alternative 3
@@ -198,8 +198,8 @@ gains a cell flipping `Tone.Helper` (a plain nested class under an **ineligible*
   **Verified** by the gate, not by a fixture predating this ADR: `unsupportedNestedOwnerReason()`
   skipped every interface owner before this ADR, so no previously-declared type had an interface as a
   non-last chain segment to reclassify.
-- `SKIPPED_NESTED_DECLARATION` survives for exactly: an `enum class` owner, a generic owner, an
-  `inner class` owner or candidate, a `value class` owner, and a nested sealed hierarchy candidate.
+- `SKIPPED_NESTED_DECLARATION` survives for exactly: an `enum class` owner, a generic owner (narrowed by ADR-196 to a generic
+  `interface` or sealed owner), an `inner class` owner or candidate (ADR-141 declares them), a `value class` owner, and a nested sealed hierarchy candidate.
   ROADMAP's Phase 4 line for the deferred-owner set closes; the `inner class` design (Alternative 3)
   becomes its own Phase 4 item.
 - Not closed here, and not claimed to be: the CS0542/CS0102 owner-scope collision arms under a sealed
@@ -356,3 +356,13 @@ Evidence:
 - Verified: the generated XML doc remarks intentionally name skipped types, so absence assertions
   inspect code declarations and signatures (excluding `///` lines) rather than the raw text.
 - Inferred, not probed: how a nested intermediate sealed arm behaves beyond the supported-arm control.
+
+## Amendment 2026-10-04: generic class and `inner class` owners are declared
+
+A generic `class` owner and an `inner class` owner are no longer a named skip. A generic class's
+nested declarations are declared on a non-generic static holder beside it, and an `inner class`
+owns its children with the outer instance first; see [ADR-196](196-generic-nested-types.md) and
+[ADR-141](141-inner-class-outer-instance-constructor.md). The Context, Decision and Consequences
+sentences above that list these owners as a permanent skip describe the decision as made on
+2026-09-13. Still skipped: an `enum class` owner, a generic `interface` owner, a generic sealed
+base or arm owner, a `value class` owner, and a nested sealed hierarchy candidate.

@@ -13,8 +13,19 @@ public class GenericDependencyOwnerTests
             type => type.FullName == "TestLibrary.Models.Parcel`1");
         Assert.Same(typeof(Parcel<>), owner);
         Assert.False(owner.IsNested);
+        // ADR-196: Lid lives on the non-generic holder beside Parcel<T>, never inside it.
         Assert.Null(owner.GetNestedType("Lid"));
-        Assert.Null(typeof(ParcelDesk).GetMethod("Lid"));
+        Assert.True(typeof(Parcel).IsAbstract && typeof(Parcel).IsSealed);
+    }
+
+    [Fact]
+    public void LidOfAGenericDependencyOwner_RoundTripsThroughTheDesk()
+    {
+        using var desk = new ParcelDesk();
+        using Parcel.Lid lid = desk.Lid();
+        Assert.Equal(3, lid.Number);
+        using var spare = new Parcel.Lid(5);
+        Assert.Equal(5, spare.Number);
     }
 
     [Fact]

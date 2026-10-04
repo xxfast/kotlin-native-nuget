@@ -1440,7 +1440,8 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "enum `$enumName` is not in the export set, so it is never declared as a C# enum and every " +
         "member typed with it is skipped rather than emitted as a dangling reference; if it is " +
         "nested, the SKIPPED_NESTED_DECLARATION warning on the declaration itself names which " +
-        "shape rule defers it (an `enum class`, generic or `inner` owner, for instance), so " +
+        "shape rule defers it (an `enum class`, generic `interface` or generic sealed owner, for " +
+        "instance), so " +
         "move it to the top level of its file, or, if it already is top level, bring its package " +
         "into the export scope"
   }
@@ -1455,8 +1456,9 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "interface `$interfaceName` is nested inside another declaration and no C# nested interface " +
         "is generated for it, so every member typed with it is skipped rather than emitted as a " +
         "dangling reference; the SKIPPED_NESTED_DECLARATION warning on the declaration itself " +
-        "names which shape rule defers it (a generic, `inner` or sealed nested type, or an owner " +
-        "that cannot carry one), or move it to the top level of its file"
+        "names which shape rule defers it (a sealed nested type, or an owner that cannot carry " +
+        "one, such as an `enum class` or a generic `interface`), or move it to the top level of " +
+        "its file"
   }
 
   // Names the class or object, for the reason above. Since ADR-133 a nested class or object IS
@@ -1469,8 +1471,9 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "`$className` is nested inside another declaration and no C# nested type is generated " +
         "for it, so every member typed with it is skipped rather than emitted as a dangling " +
         "reference; the SKIPPED_NESTED_DECLARATION warning on the declaration itself names which " +
-        "shape rule defers it (a generic, `inner`, `value` or sealed nested type, or an owner " +
-        "that cannot carry one), or move it to the top level of its file"
+        "shape rule defers it (a sealed nested type, an `inner class` whose type parameter " +
+        "shadows its owner's, or an owner that cannot carry one, such as an `enum class` or a " +
+        "generic `interface`), or move it to the top level of its file"
   }
 
   // Names the value class, and says record struct rather than nested type: a value class is the one
@@ -1482,7 +1485,8 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "value class `$valueClassName` is nested inside another declaration and no C# `readonly " +
         "record struct` is generated for it, so every member typed with it is skipped rather " +
         "than emitted as a dangling reference; the SKIPPED_NESTED_DECLARATION warning on the " +
-        "declaration itself names which shape rule defers it (a generic or `enum class` owner), " +
+        "declaration itself names which shape rule defers it (an `enum class`, generic " +
+        "`interface` or generic sealed owner), " +
         "or move it to the top level of its file"
   }
 

@@ -38,11 +38,11 @@ package io.github.xxfast.kotlin.native.nuget.test.nested
  *   under a sealed arm: the only two sealed cells Kotlin lets host one (an `object` arm and any
  *   interface reject `inner`). Each constructor takes its sealed owner as the outer, first.
  *
- * Deferred by ADR-134 and therefore absent here on purpose: an `enum class` owner
- * (`Season.Almanac`) and a generic owner (`Box<T>.Lid`). Those stay a named
- * `SKIPPED_NESTED_DECLARATION` permanently and live in `Tier1NestedTypesTest`'s `deferredSource`
- * only - a skip needs no consumer test. The other inner-class cells, inner-of-inner included, live
- * in `Inner.kt` beside this file.
+ * Deferred and therefore absent here on purpose: an `enum class` owner (`Season.Almanac`) and a
+ * generic `interface` owner (`Feed<T>.Entry`). Those stay a named `SKIPPED_NESTED_DECLARATION`
+ * and live in `Tier1NestedTypesTest`'s `deferredSource` only - a skip needs no consumer test. A
+ * generic class owner is declared since ADR-196, on a non-generic holder (`GenericNested.kt`). The
+ * other inner-class cells, inner-of-inner included, live in `Inner.kt` beside this file.
  *
  * Type names dodge the process-global C entry-point space (ADR-117): `Signal` would collide with
  * `platform`'s `expect sealed class Signal` (`signal_get_type`), `Crate` with `parcel`'s generic

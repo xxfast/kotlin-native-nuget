@@ -13,6 +13,7 @@ import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeArgument
+import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Variance
 import com.google.devtools.ksp.symbol.Visibility
@@ -96,6 +97,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.sealedAsHandle
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipDetail
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipReason
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardCsharpTypeParameterName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardTypeParametersInScope
+import io.github.xxfast.kotlin.native.nuget.processor.forward.capturedTypeParameterOwners
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardScopeOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardArmMemberProjectedByBase
@@ -798,7 +801,24 @@ internal fun forwardSuperInterfaceSpelling(
 internal fun KSClassDeclaration.cirTypeParameters(
   logger: KSPLogger,
   context: NugetContext,
-): List<CirTypeParameter> = typeParameters.map { param ->
+): List<CirTypeParameter> =
+  // ADR-196: an inner class of a generic owner is flattened onto the owner's holder, so the
+  // parameters it captures are declared first (`Tin.Tag<T, U>`), spelled and constrained as their
+  // own class spells them. Their variance note is the owner's own and is not repeated here.
+  capturedTypeParameterOwners().flatMap { owner ->
+    owner.typeParameters.map { param ->
+      owner.cirTypeParameter(param, logger, context, reportVariance = false)
+    }
+  } + typeParameters.map { param ->
+    cirTypeParameter(param, logger, context, reportVariance = true)
+  }
+
+private fun KSClassDeclaration.cirTypeParameter(
+  param: KSTypeParameter,
+  logger: KSPLogger,
+  context: NugetContext,
+  reportVariance: Boolean,
+): CirTypeParameter {
   val bounds: List<String> = param.bounds.toList().mapNotNull { bound ->
     cirBoundConstraint(
       bound.resolve(), context, logger, this,
@@ -806,7 +826,7 @@ internal fun KSClassDeclaration.cirTypeParameters(
     )
   }
 
-  if (param.variance != Variance.INVARIANT) {
+  if (reportVariance && param.variance != Variance.INVARIANT) {
     ForwardDiagnosticSink.emit(
       listOf(
         ForwardDiagnostic(
@@ -829,7 +849,7 @@ internal fun KSClassDeclaration.cirTypeParameters(
   // `notnull` must come first in a C# constraint list and adds nothing next to a class bound, so
   // it survives only as the sole constraint.
   val constraints: List<String> = if (bounds.size > 1) bounds - NOTNULL_CONSTRAINT else bounds
-  CirTypeParameter(forwardCsharpTypeParameterName(param), constraints)
+  return CirTypeParameter(forwardCsharpTypeParameterName(param), constraints)
 }
 
 internal fun translateClass(
@@ -985,7 +1005,7 @@ internal fun translateClass(
       // ADR-147: the C# half of the generic-owner refusal the Kotlin property loop makes. Every
       // legacy property arm below bakes `asStableRef<Crate>()` into its export, which does not
       // compile for a generic owner, so neither half emits one.
-      if (cls.typeParameters.isNotEmpty()) return@mapNotNull null
+      if (cls.forwardTypeParametersInScope().isNotEmpty()) return@mapNotNull null
 
       if (propTypeResolved.isForwardFlowType()) {
         return@mapNotNull flowProperty(prop, name, context, classifier, tracker)
@@ -1114,7 +1134,7 @@ internal fun translateClass(
       // ADR-147: the C# half of the same refusal the Kotlin export builders make for a generic
       // owner. A generic class's suspend / Flow / legacy-callback members are deferred, named; a
       // planned callback member is not legacy and comes off the catalog below (ADR-160).
-      if (cls.typeParameters.isNotEmpty() &&
+      if (cls.forwardTypeParametersInScope().isNotEmpty() &&
         method.isForwardLegacyRoute(classifier, legacyPairMembers)
       ) {
         return@filter false
@@ -1269,7 +1289,9 @@ internal fun translateClass(
       // ADR-147: a `T` on this class's own generic carrier is a real C# name; one re-homed from a
       // generic base onto a non-generic subclass is not.
       val typeParametersInScope: Set<String> =
-        cls.typeParameters.map { param -> cls.forwardCsharpTypeParameterName(param) }.toSet()
+        cls.forwardTypeParametersInScope()
+          .map { (owner, param) -> owner.forwardCsharpTypeParameterName(param) }
+          .toSet()
 
       if (!returnBridge.isPubliclySpellable(typeParametersInScope)) {
         emitAbstractMethodSkip(
@@ -1412,7 +1434,7 @@ internal fun translateClass(
       ).csMemberNames()
   val spellings: KotlinSpellings = KotlinSpellings.ofClass(cls)
   val classPhrase: String =
-    if (cls.typeParameters.isEmpty()) "class $name" else "generic class $name"
+    if (cls.forwardTypeParametersInScope().isEmpty()) "class $name" else "generic class $name"
   emitMemberNameCollisions(name, classPhrase, cls, renderedNames, spellings, logger)
   cls.qualifiedName?.asString()?.let { qualified ->
     memberRegistry?.register(

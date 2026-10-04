@@ -157,9 +157,10 @@ nested collection element (`List<List<Mood>>`) has no representation and is skip
 
 ## Nested enums {id="nested-enums-skip-named"}
 
-An `enum class` nested inside an admitted owner (a non-generic, non-`inner` `class`, `object`, or
-`interface`, at any depth; see [Classes and objects: Owners ADR-134
+An `enum class` nested inside an admitted owner (a `class`, `object`, or
+`interface`, at any depth, generic or not; see [Classes and objects: Owners ADR-134
 admits](classes-and-objects.md#nested-adr-134-owners)) is declared as a real nested C# `enum`,
+`Outer.Kind`; under a generic `Outer<T>` it sits on a non-generic holder beside it, still spelled
 `Outer.Kind`. Its extension methods are hoisted to a top-level class instead (`OuterKindExtensions`,
 named for the whole enclosing chain), because C# forbids an extension method inside a nested class
 (CS1109).
@@ -177,7 +178,7 @@ Name a property that holds the nested enum something other than the enum's own n
 not `mode`): PascalCasing a `mode` property to `Mode` would collide with the nested type `Mode`
 itself (CS0102).
 
-A nested enum under a still-deferred owner (an `inner class`, a generic, or another `enum class`;
+A nested enum under a still-deferred owner (another `enum class`, a generic `interface` or a generic sealed class;
 see [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects)) is not
 declared: the declaration itself is skipped with `SKIPPED_NESTED_DECLARATION`, and a parameter,
 return, or property typed with it is skipped with `SKIPPED_UNSUPPORTED_TYPE`/`SKIPPED_UNSUPPORTED_PROPERTY`

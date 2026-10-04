@@ -1294,8 +1294,9 @@ subclass's own overrides, but a consumer cannot pattern-match past the arm.
 A sealed base, a sealed arm, and any `interface` owner can nest their own plain
 `class`/`object`/`interface`/`enum class`/`value class`, declared beside the owner's other members
 (`Purr.Detail`, `Purr.On.Trace`, `Beam.Lens`); see
-[Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects). Only a
-generic class or an `enum class` owner still cannot host a nested declaration.
+[Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects). A generic
+class hosts them on a non-generic holder beside it. Only an `enum class`, a generic `interface` or a
+generic sealed owner still cannot host a nested declaration.
 
 ## Limitations {id="limitations"}
 

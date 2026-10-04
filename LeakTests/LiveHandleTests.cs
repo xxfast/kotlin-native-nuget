@@ -543,6 +543,71 @@ public class LiveHandleTests
         });
     }
 
+    // Row 1l. ADR-196: a generic class nested in a non-generic owner mints through
+    // `tote_purse_create` with a boxed `T` in, so both the box minted for the argument and the
+    // handle minted for the result have to come back. A `string` T needs conversion, an `int` T
+    // does not. Oreo fills the purse fifty times.
+    [Fact]
+    public void GenericNestedConstructor_UsingDispose_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var oreo = new Tote.Purse<string>("Oreo");
+            Assert.Equal("Mylo", oreo.Swap("Mylo"));
+            using var count = new Tote.Purse<int>(3);
+            Assert.Equal(3, count.Item);
+        });
+    }
+
+    // Row 1m. ADR-196: a class nested in a generic owner, on the non-generic holder. Constructed
+    // (`teapot_lid_create`) and read back from inside the generic owner (`teapot.LidAt`) and
+    // from outside it (`TeaShop.Spare`), then handed back in. Mylo lifts the lid fifty times.
+    [Fact]
+    public void HolderNestedConstructor_UsingDispose_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var lid = new Teapot.Lid(7);
+            using var teapot = new Teapot<int>(5);
+            using Teapot.Lid own = teapot.LidAt(1);
+            using Teapot.Lid spare = TeaShop.Spare();
+            Assert.Equal(7, TeaShop.NumberOf(lid));
+        });
+    }
+
+    // Row 1n. ADR-196, Row 1d's order: a generic inner class of a non-generic owner, the outer
+    // disposed BEFORE the inner. The outer is borrowed on the way in, so the count has to be flat
+    // whatever order the two handles are released in. Oreo hangs a charm fifty times.
+    [Fact]
+    public void GenericInnerConstructor_OuterDisposedFirst_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            var tote = new Tote("Oreo");
+            using var charm = new Tote.Charm<int>(tote, 7);
+            tote.Dispose();
+            Assert.Equal("Oreo:7", charm.Label());
+        });
+    }
+
+    // Row 1o. ADR-196: an inner class of a GENERIC owner, flattened onto the holder. Its outer is a
+    // `Teapot<T>` read back applied (`asStableRef<Teapot<Any?>>`), and `Peek` boxes the captured
+    // `T` out, so the borrowed outer, the inner's own handle and the returned box all have to come
+    // back. The outer goes first, as in Row 1n. Mylo strains the pot fifty times.
+    [Fact]
+    public void InnerOfGenericOwnerConstructor_OuterDisposedFirst_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            var teapot = new Teapot<string>("Oreo");
+            using var strainer = new Teapot.Strainer<string>(teapot, 2);
+            using var infuser = new Teapot.Infuser<string, int>(teapot, 4);
+            teapot.Dispose();
+            Assert.Equal("Oreo", strainer.Peek());
+            Assert.Equal("Oreo/4", infuser.Both());
+        });
+    }
+
     // Row 1f. ADR-157 (issue #236): the boxed enum arm's constructor, the one new mint path of the
     // feature. `new PatchArm(Patch.Socks)` mints a StableRef to a Kotlin enum *entry*, a permanent
     // singleton, so nothing about the Kotlin object's lifetime can hide a missed release: the count

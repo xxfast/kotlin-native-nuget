@@ -16,6 +16,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.isKotlinBuiltinPackage
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.LegacyRefusedInterfaceBridgePair
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinSpelling
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardTypeParametersInScope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStoredCallbackPair
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
@@ -279,7 +280,8 @@ internal fun KSClassDeclaration.forwardClassLegacyMembers(
   // member one half declares and the other does not (the ADR-055 contract would then fail the
   // whole build). The planner names each refused member (`nameGenericOwnerLegacyRoutes`).
   val allRegularMethods: List<KSFunctionDeclaration> = memberMethods.filter { method ->
-    cls.typeParameters.isEmpty() || !method.isForwardLegacyRoute(classifier, legacyPairMembers)
+    cls.forwardTypeParametersInScope().isEmpty() ||
+      !method.isForwardLegacyRoute(classifier, legacyPairMembers)
   }
 
   // ADR-065: StateFlow-returning methods route through the same `_collect` shape as plain-Flow
@@ -417,7 +419,7 @@ internal fun FileSpec.Builder.addClassExports(
     // (`asStableRef<Crate>()`), which does not compile for a generic class. Refused on a generic
     // owner, on BOTH halves, rather than emitting a member one half declares and the other does
     // not (the ADR-055 contract would then fail the whole build).
-    if (cls.typeParameters.isNotEmpty()) return@forEach
+    if (cls.forwardTypeParametersInScope().isNotEmpty()) return@forEach
     // Named specialized-protocol property adapters (lambda / suspend-lambda / Flow).
     val propTypeResolved: KSType = prop.type.resolve().expandAliases()
     val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"

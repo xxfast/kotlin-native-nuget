@@ -162,6 +162,15 @@ pins that at depth 2 with the intermediate outer disposed first, and row 1k,
 `InnerUnderSealedOwnerConstructor_UsingDispose_ReturnsToBaseline`, pins it with a sealed base and a
 sealed arm as the outer.
 
+A [generic nested class](classes-and-objects.md#nested-generic-owner) mints through the same
+boxed-`T` constructor as any generic class. Row 1l,
+`GenericNestedConstructor_UsingDispose_ReturnsToBaseline`, pins `Tote.Purse<T>`, row 1m,
+`HolderNestedConstructor_UsingDispose_ReturnsToBaseline`, a class on a generic owner's holder
+(`Teapot.Lid`) read back through `teapot.LidAt(...)`, row 1n,
+`GenericInnerConstructor_OuterDisposedFirst_ReturnsToBaseline`, a generic inner class with its outer
+disposed first, and row 1o, `InnerOfGenericOwnerConstructor_OuterDisposedFirst_ReturnsToBaseline`,
+the same for an inner class flattened onto a generic owner's holder.
+
 An [interface method overload](interfaces-abstract-sealed.md#method-overloads-on-an-interface) adds
 no new handle kind either: every numbered dispatch export or bridge slot a call reaches still
 borrows the one handle its route already mints (the returned interface's own handle, or the

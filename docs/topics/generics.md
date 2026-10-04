@@ -419,8 +419,11 @@ callback or listener pairs, or lambda members with a `Char` or `T` payload. Each
 named `SKIPPED_UNSUPPORTED_COMBINATION` diagnostic; move it onto a non-generic class that wraps the
 generic one.
 
-A type nested inside a generic class is not bound, in a dependency or otherwise. If your API returns
-one, the member is skipped with a named diagnostic, but the generic owner is still exported.
+A type nested inside a generic class is declared on a non-generic static class beside it:
+`Box<T> { class Lid }` gives `Box<int>` and a separate `Box.Lid`, never `Box<int>.Lid`. See
+[Classes and objects: Nested types and generic classes](classes-and-objects.md#nested-generic-owner).
+A member that returns an `inner class` of a generic owner is skipped with a named diagnostic, but
+the generic owner is still exported.
 
 These bounds do not generate compilable code yet: `T : Enum<T>`, a self-referencing bound on an
 invariant type (`T : Node<T>`), and a bound on a generic interface (`T : Rival<T>`), whose C#
