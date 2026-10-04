@@ -145,8 +145,9 @@ internal const val CSHARP_ERROR_SLOT: String = "error"
  * names a user parameter may not keep on *either* side of the bridge: the instance receiver slot
  * (`handle`), the extension/value-class receiver slot (`receiver`), the value-class receiver slot
  * of a non-reference underlying and the property setter's argument (`value`), the ADR-024
- * exception slot (`errorOut`), ADR-061's nullable-primitive out-slot (`valueOut`) and ADR-141's
- * inner-class constructor receiver (`outer`).
+ * exception slot (`errorOut`), ADR-061's nullable-primitive out-slot (`valueOut`), the
+ * `Result<T>` failure flag the C# `TryX` twin reads (`resultFailedOut`) and ADR-141's inner-class
+ * constructor receiver (`outer`).
  *
  * ADR-141 recorded a declared parameter named `outer` as an unguarded CS0100 hazard. It is guarded
  * after all, and by this set rather than by a rule of its own: the plan invariant below is that a
@@ -163,7 +164,7 @@ internal const val CSHARP_ERROR_SLOT: String = "error"
  * construction instead of reading back as user data in a projection.
  */
 internal val PLAN_OWNED_NAMES: Set<String> =
-  setOf("handle", "receiver", "value", "outer", "errorOut", "valueOut")
+  setOf("handle", "receiver", "value", "outer", "errorOut", "valueOut", RESULT_FAILED_SLOT)
 
 /**
  * The identifiers only the C# wrapper *body* declares: the ADR-024 exception slot, the local every
@@ -203,7 +204,14 @@ internal fun String.bridgeParameterName(): String =
  * The ABI slot names the ADR-055 contract check reads a direction off: a user parameter spelled
  * like one would read back as an `out` slot. A subset of [PLAN_OWNED_NAMES].
  */
-private val ABI_SLOT_NAMES: Set<String> = setOf("errorOut", "valueOut")
+private val ABI_SLOT_NAMES: Set<String> = setOf("errorOut", "valueOut", RESULT_FAILED_SLOT)
+
+/**
+ * The out slot a `Result<T>`-unwrapping export writes its `isFailure` into, read by the C# `TryX`
+ * twin. Spelled once because the plan, both projections and the ADR-055 contract check (which
+ * reads an out slot's direction off its name) all name it.
+ */
+internal const val RESULT_FAILED_SLOT: String = "resultFailedOut"
 
 /**
  * The legacy generic-function route's narrower [bridgeParameterName]: only the ABI slot names

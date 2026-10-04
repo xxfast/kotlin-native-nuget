@@ -2,33 +2,30 @@ package io.github.xxfast.kotlin.native.nuget.test.cat
 
 /**
  * Fixture for [#56](https://github.com/xxfast/kotlin-native-nuget/issues/56) part 1, designed in
- * ADR-108 (`docs/adr/108-result-return-mapping.md`) with the human decision **throw-on-failure
- * only** (no `TryRun` overload).
+ * ADR-108 (`docs/adr/108-result-return-mapping.md`): `Result<T>` at an ordinary return position
+ * binds as a throwing `T X()`, and beside it a non-throwing
+ * `bool TryX(..., out T value, out Exception? failure)` twin over the same export.
  *
- * `kotlin.Result` classifies as `BridgeType.ValueClass("kotlin.Result", underlying =
- * Nullable(Unsupported))`, and `valueClassResultShape` admits only String/Primitive/Enum/
- * ObjectHandle underlyings, so today both members below are dropped with
- * `[nuget:SKIPPED_UNSUPPORTED_TYPE] ... its VALUE_CLASS type combination is not supported` and
- * neither `Run` nor `Feed` exists on the generated `TestLibrary.Cat.Service`.
+ * The throwing member lowers `Result<T>` to `T` and appends `.getOrThrow()` inside the export's
+ * existing `try`, so a `Result.failure(e)` arrives in C# as the ADR-029-mapped exception, exactly
+ * as `throw e` would. The Try twin tells those two apart: the export writes a failure flag from the
+ * `Result` before unwrapping it, so `TryX` returns `false` (with the same mapped exception) for a
+ * modelled failure and still throws for an exception the Kotlin body threw.
  *
- * The feature must lower `Result<T>` to `T` at the return position and append `.getOrThrow()`
- * inside the export's existing `try`, so a `Result.failure(e)` is indistinguishable at the
- * boundary from `throw e` and arrives in C# as the ADR-029-mapped exception.
- *
- * The two seams this crosses, once each:
- * - [Service.run] — `Result<Unit>`, the issue's exact repro: the payload has no wire at all, so
- *   the export body is `errorHandlingUnitBody` and the C# signature must be `void Run()`, not
- *   `Unit Run()`. This is the cell that proves the rewrite happens *before* the
- *   `(call.result == VOID) == (publicSignature.result == Unit)` emitter guard.
- * - [Service.feed] — `Result<String>`, a payload with a real (pointer) wire and both outcomes:
- *   success returns the string through the ordinary String result shape, failure rides the
- *   errorOut slot that already ships.
+ * The seams this crosses, once each:
+ * - [Service.run] / [Service.scold] -- `Result<Unit>`: `void Run()`, and a Try with no `value`.
+ * - [Service.feed] -- `Result<String>`, a payload that needs a conversion (a UTF-8 pointer).
+ * - [Service.weigh] -- `Result<Int>`, a payload that needs none, and the one member whose body
+ *   THROWS (for Ghost) instead of returning a failure: the Try must rethrow it, never report it as
+ *   `false`.
+ * - [Service.lastVetVisitYear] -- `Result<Int?>`: a successful `null` is not a failure.
+ * - [Service.adopt] -- `Result<Cat>`, a handle payload.
  *
  * Deliberately absent, because ADR-108 defers them: `Result` at property or parameter position,
- * `Result<T>` where `T` has no return shape, value-class-own members, `suspend fun`, and any
- * `Try`-style pair projection.
+ * `Result<T>` where `T` has no return shape, value-class-own members and `suspend fun`.
  *
- * Mylo eats anything put in front of him. Oreo is on a diet and has opinions about that.
+ * Mylo eats anything put in front of him. Oreo is on a diet and has opinions about that. Ghost is
+ * not a cat anyone has ever weighed.
  */
 class Service {
   /** `Result<Unit>` -> `void Run()`. Always succeeds: the success half of the Unit payload. */
@@ -43,6 +40,31 @@ class Service {
   fun feed(catName: String): Result<String> =
     if (catName == "Oreo") Result.failure(IllegalArgumentException("Oreo is on a diet!"))
     else Result.success("$catName got a treat")
+
+  /**
+   * `Result<Int>` -> `int Weigh(string)`. Oreo refuses the scale (a modelled failure); Ghost is not
+   * a cat at all, and the body throws rather than returning a failure.
+   */
+  fun weigh(catName: String): Result<Int> = when (catName) {
+    "Ghost" -> throw IllegalStateException("No such cat: Ghost")
+    "Oreo" -> Result.failure(IllegalArgumentException("Oreo will not get on the scale"))
+    else -> Result.success(4)
+  }
+
+  /** `Result<Int?>`: nobody has taken Mylo to the vet yet (a successful null); Oreo hid. */
+  fun lastVetVisitYear(catName: String): Result<Int?> =
+    if (catName == "Oreo") Result.failure(IllegalStateException("Oreo hid under the bed"))
+    else Result.success(null)
+
+  /** `Result<Cat>`: a handle payload the caller owns. Oreo is not up for adoption. */
+  fun adopt(catName: String): Result<Cat> =
+    if (catName == "Oreo") Result.failure(IllegalArgumentException("Oreo stays home"))
+    else Result.success(Cat(catName))
+
+  /** `Result<Unit>` with a failure half: Oreo does not care. */
+  fun scold(catName: String): Result<Unit> =
+    if (catName == "Oreo") Result.failure(IllegalArgumentException("Oreo does not care"))
+    else Result.success(Unit)
 }
 
 /** The issue's factory. `Service` has a no-arg constructor too; both reach the same members. */

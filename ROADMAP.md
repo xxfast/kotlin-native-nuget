@@ -36,7 +36,7 @@ Complete.
 
 ### Deferred to 1.x
 
-Additive, so none of it forces a major; each stays in its phase below: `SharedFlow`, `Flow` as a parameter or type argument, the wider `MutableStateFlow` surface, `Result`'s `TryRun`, reverse exception fidelity, events, `ValueTask`, operators, indexers, arrays, generic interfaces, the crossing benchmark, the size gate, the leak-ladder rungs beyond what the disposal contract needs, `LibraryImport`, record classes.
+Additive, so none of it forces a major; each stays in its phase below: `SharedFlow`, `Flow` as a parameter or type argument, the wider `MutableStateFlow` surface, reverse exception fidelity, events, `ValueTask`, operators, indexers, arrays, generic interfaces, the crossing benchmark, the size gate, the leak-ladder rungs beyond what the disposal contract needs, `LibraryImport`, record classes.
 
 ## Phase 1: Basic bridging
 
@@ -52,7 +52,6 @@ Complete.
 ## Phase 4: Rich type support
 - [ ] Inferred from generated C#, renderer line not located: a Kotlin `abstract class Deep : Nap()` sealed arm renders as `public sealed class Deep : Nap`. Harmless today because the arm has no constructor, but the modifier is wrong. Discovered alongside [ADR-064](docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s 2026-10-03 amendment.
 - [ ] The `SKIPPED_UNEXPORTED_SUPERTYPE` text "its public members are bound on X directly" (`cir/CirClassTranslator.kt` ~181 and ~198) is partly false when an inherited member is unrouted and named separately by its own `SKIPPED_*` warning on the inheriting class. Verified in Tier 1. Discovered alongside [ADR-064](docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s 2026-10-03 amendment.
-- [ ] Deferred by [ADR-108](docs/adr/108-result-return-mapping.md): a non-throwing `bool TryRun(out T)` overload beside the throw-on-failure binding, so a C# caller can distinguish an expected `Result.failure` from an unexpected exception; `Result<T>` at a property, parameter, or collection-component position, and `Flow<Result<T>>`, all stay named skips.
 - [ ] Routing a generic method (`fun <T>`) or a `suspend` lambda parameter on a sealed arm is blocked until an *ordinary* class has a route for the same shape (a generic member function on a class; a `suspend` lambda parameter, tracked by the Phase 7 "`Flow<T>` / suspend lambda (`suspend (T) -> R`) as a function parameter" line); until then both stay a named `SKIPPED_UNSUPPORTED_COMBINATION` (`SEALED_SUBCLASS_UNROUTED`) skip whose hint (corrected 2026-10-03, see [ADR-116](docs/adr/116-sealed-subclass-methods-on-the-callable-plan.md)) says what binds instead.
 - [ ] Extension PROPERTIES on a has-value fan-out receiver (`Int?`, `Enum?`, `Instant?`, `Duration?`, `ValueClass(Primitive|Enum)?`) still skip named `RECEIVER_FAN_OUT` (functions bind since [ADR-132](docs/adr/132-extension-receiver-shapes.md)'s 2026-10-03 amendment); land after `val Cat.x` beside `val Cat?.x` is a named error.
 - [ ] Generic nested types (`class Outer { class Inner<T> }`) and nested types of a generic owner (`class Box<T> { class Lid }`, inner or not) stay a named `SKIPPED_NESTED_DECLARATION`. C# can express `Owner<T>.Nested`, so this is a deferred capability, not a language gap; only an `enum class` owner has no shape. See [ADR-141](docs/adr/141-inner-class-outer-instance-constructor.md)'s 2026-10-03 amendment.

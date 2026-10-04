@@ -295,6 +295,12 @@ for the exception and each cause. `LeakTests/LiveHandleTests.cs`'s
 `KotlinxIoIOException_Throws_ReturnsToBaseline` throws a `kotlinx.io.IOException` repeatedly and
 returns to baseline, so a mapped throw releases its error handle.
 
+A [`Result<T>` member's `TryX` twin](exceptions.md#result-try) mints the same one error handle per
+failing call, and hands the exception back instead of throwing it. `LeakTests/LiveHandleTests.cs`'s
+`ResultTry_ModelledFailureAndSuccess_ReturnToBaseline` covers a `false` return and a `true` return
+that owns a `Cat`, and `ResultTry_ThrownException_ReturnsToBaseline` covers a body that throws, so
+both exits release the error handle.
+
 ### Dropped wrappers are released by the GC
 
 A wrapper dropped without `Dispose()` returns `LiveHandles` to baseline once the .NET GC finalizes it

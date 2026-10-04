@@ -34,7 +34,7 @@ internal fun StringBuilder.renderInterface(iface: CirInterface) {
     appendLine()
   }
 
-  for (method in iface.methods) {
+  for (method in iface.methods.flatMap { listOfNotNull(it, it.tryOverload) }) {
     renderDoc(method.doc, "        ")
     // ADR-174: a `suspend` member ends in the class route's own `CancellationToken ... = default`,
     // minted the same way (`CirAsyncLocals`) so an implementing class's `Async` method matches.
@@ -44,7 +44,14 @@ internal fun StringBuilder.renderInterface(iface: CirInterface) {
     val paramStr: String =
       (method.parameters.map { it.declaration } + listOfNotNull(token)).joinToString(", ")
     val modifier: String = if (method.isNew) "new " else ""
-    appendLine("        $modifier${method.returnType} ${method.identifier}($paramStr);")
+    val body: String? = method.body
+    if (body == null) {
+      appendLine("        $modifier${method.returnType} ${method.identifier}($paramStr);")
+    } else {
+      appendLine("        $modifier${method.returnType} ${method.identifier}($paramStr)")
+      appendLine("        {$body")
+      appendLine("        }")
+    }
   }
 
   // ADR-134: a type Kotlin declares inside the interface is declared inside the generated
@@ -634,6 +641,26 @@ internal fun StringBuilder.renderDllImport(import: CirDllImport) {
 }
 
 internal fun StringBuilder.renderMethod(method: CirMethod, className: String = "") {
+  renderMethodBody(method, className)
+  // A `new` member hides a base member of a different return type; its twin's `out` differs too,
+  // so the twin would be an overload, not a hide, and `new` on it is CS0109. The base's own twin
+  // already reaches the same Kotlin override through the handle, so the arm renders none.
+  val twin: CirMethod = method.tryOverload ?: return
+  if (method.isNew) return
+  renderMethodBody(
+    twin.copy(
+      isStatic = method.isStatic,
+      isAbstract = method.isAbstract,
+      isOverride = method.isOverride,
+      isVirtual = method.isVirtual,
+      isExtension = method.isExtension,
+      visibility = method.visibility,
+    ),
+    className,
+  )
+}
+
+private fun StringBuilder.renderMethodBody(method: CirMethod, className: String) {
   // ADR-150: above the async/flow/sync-error dispatch, so all four branches carry the same doc.
   renderDoc(method.doc, "        ")
   // ADR-174: `nameof(Crate)` does not bind inside `Crate<T>` (CS0305); an explicit implementation

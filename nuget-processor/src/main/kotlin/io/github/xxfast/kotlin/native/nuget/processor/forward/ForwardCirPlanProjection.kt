@@ -1,9 +1,12 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.RESULT_FAILED_SLOT
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
+import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDoc
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirConstructor
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirInterfaceMethod
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMember
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMethod
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirParameter
@@ -294,6 +297,18 @@ internal object ForwardCirPlanProjection {
       nativeName = nativeName,
       parameters = plan.publicSignature.parameters,
     )
+    val method = CirMethod(
+      name = plan.publicSignature.name,
+      returnType = result.returnType,
+      nativeReturnType = result.nativeReturnType,
+      nativeName = nativeName,
+      parameters = publicParams.map { parameter -> parameter.copy(nativeType = parameter.type) },
+      body = result.body,
+      isStatic = true,
+      isSyncErrorCheckEnabled = !result.hasCustomBody && plan.errorSlot != null,
+      hasCustomBody = result.hasCustomBody,
+      doc = plan.publicSignature.cirDoc(),
+    )
     return listOf(
       CirDllImport(
         libraryName = libraryName,
@@ -304,17 +319,10 @@ internal object ForwardCirPlanProjection {
         visibility = CirVisibility.PRIVATE,
         hasSyncErrorOut = plan.errorSlot != null,
       ),
-      CirMethod(
-        name = plan.publicSignature.name,
-        returnType = result.returnType,
-        nativeReturnType = result.nativeReturnType,
-        nativeName = nativeName,
-        parameters = publicParams.map { parameter -> parameter.copy(nativeType = parameter.type) },
-        body = result.body,
-        isStatic = true,
-        isSyncErrorCheckEnabled = !result.hasCustomBody && plan.errorSlot != null,
-        hasCustomBody = result.hasCustomBody,
-        doc = plan.publicSignature.cirDoc(),
+      method.copy(
+        tryOverload = plan.resultTry(method) { names ->
+          plan.resultProjection(nativeName, plan.publicSignature.parameters, tryNames = names)
+        },
       ),
     )
   }
@@ -360,7 +368,7 @@ internal object ForwardCirPlanProjection {
     } else {
       null
     }
-    return CirMethod(
+    val method = CirMethod(
       name = plan.publicSignature.name,
       returnType = result.returnType,
       nativeReturnType = result.nativeReturnType,
@@ -379,6 +387,17 @@ internal object ForwardCirPlanProjection {
       hasCustomBody = result.hasCustomBody,
       nativeParameters = nativeParams,
       doc = plan.publicSignature.cirDoc(),
+    )
+    // The twin rides on the method rather than beside it in the member list, so the one extern
+    // this method's import is derived from stays the only one (a second CirMethod would mint a
+    // second `[DllImport]` through `methodNativeImport`).
+    return method.copy(
+      tryOverload = plan.resultTry(method) { names ->
+        plan.resultProjection(
+          externName, plan.publicSignature.parameters, receiverArgument = "_handle",
+          tryNames = names,
+        )
+      },
     )
   }
 
@@ -457,7 +476,110 @@ internal object ForwardCirPlanProjection {
       // has to be named here or a documented parameter beside it is CS1573.
       doc = plan.publicSignature.cirDoc(listOf(receiverParam.name)),
     )
-    return listOf(nativeImport, wrapper)
+    val tryOverload: CirMethod? = plan.resultTry(wrapper) { names ->
+      plan.resultProjection(
+        nativeName, listOf(receiverInput) + plan.publicSignature.parameters, tryNames = names,
+      )
+    }
+    return listOf(nativeImport, wrapper.copy(tryOverload = tryOverload))
+  }
+
+  /**
+   * The non-throwing `TryX` twin of [method], or null when the plan does not unwrap a `Result`
+   * (ADR-108). It shares [method]'s extern and its preludes, cleanups and call; only the error
+   * check and the exits differ ([CirTryNames]): a set error slot with the failure flag set returns
+   * `false` with the exception, one with the flag clear (the Kotlin body threw) still throws.
+   *
+   * Leading parameters lose their C# defaults: an `out` parameter after an optional one is
+   * CS1737. Inheritance modifiers are read off the parent at render time, because translators
+   * adjust those after projection.
+   */
+  private fun ForwardCallablePlan.resultTry(
+    method: CirMethod,
+    body: (CirTryNames) -> CirResultProjection,
+  ): CirMethod? {
+    if (!invocation.unwrapsKotlinResult || errorSlot == null) return null
+    val result: BridgeType = publicSignature.result
+    val leading: List<CirParameter> = method.parameters.map { it.copy(defaultValue = null) }
+    val names: CirTryNames =
+      CirTryNames.of(leading.map { it.name }, hasValue = result != BridgeType.Unit)
+    val projection: CirResultProjection = body(names)
+    return method.copy(
+      name = "Try${method.name}",
+      returnType = "bool",
+      parameters = leading + resultTryOutParameters(names, method.returnType, result),
+      body = projection.body,
+      isSyncErrorCheckEnabled = false,
+      hasCustomBody = true,
+      doc = null,
+      tryOverload = null,
+    )
+  }
+
+  /**
+   * The interface declaration's `TryX` twin, as a default interface method over the throwing
+   * member: an implementing Kotlin-backed class declares its own (which reads the failure flag),
+   * and a C#-implemented interface keeps compiling without one. There, nothing models a
+   * `Result.failure`, so any exception the C# implementation throws propagates, as on a thrown
+   * Kotlin exception.
+   */
+  fun interfaceResultTry(
+    plan: ForwardCallablePlan,
+    method: CirInterfaceMethod,
+  ): CirInterfaceMethod? {
+    if (!plan.invocation.unwrapsKotlinResult || plan.errorSlot == null) return null
+    val result: BridgeType = plan.publicSignature.result
+    val leading: List<CirParameter> = method.parameters.map { it.copy(defaultValue = null) }
+    val names: CirTryNames =
+      CirTryNames.of(leading.map { it.name }, hasValue = result != BridgeType.Unit)
+    val call = "${method.identifier}(${leading.joinToString(", ") { it.name }})"
+    val exit = CirBodyExit(names)
+    val statements: String =
+      if (names.value == null) "$call;\n            ${exit.completing()}" else exit.returning(call)
+    val body: String = "\n            $statements"
+    return method.copy(
+      name = "Try${method.name}",
+      returnType = "bool",
+      parameters = leading + resultTryOutParameters(names, method.returnType, result),
+      doc = null,
+      body = body,
+      tryOverload = null,
+    )
+  }
+
+  /**
+   * The abstract `TryX` twin of an abstract `Result<T>` member, which has no plan (the planner
+   * skips abstract members): [payload] is the unwrapped `T`, [method] the abstract declaration.
+   */
+  fun abstractResultTry(method: CirMethod, payload: BridgeType): CirMethod {
+    val names: CirTryNames =
+      CirTryNames.of(method.parameters.map { it.name }, hasValue = payload != BridgeType.Unit)
+    return method.copy(
+      name = "Try${method.name}",
+      returnType = "bool",
+      parameters = method.parameters + resultTryOutParameters(names, method.returnType, payload),
+      tryOverload = null,
+    )
+  }
+
+  /**
+   * The `out T value` (absent for `Unit`) and `out Exception? failure` a `TryX` twin ends with.
+   * `value` takes `[MaybeNullWhen(false)]` when [valueType] is a non-nullable reference (or an
+   * unconstrained `T`), so a caller's true arm reads it without a null check.
+   */
+  fun resultTryOutParameters(
+    names: CirTryNames,
+    valueType: String,
+    result: BridgeType,
+  ): List<CirParameter> = buildList {
+    val value: String? = names.value
+    if (value != null) {
+      val maybeNull: Boolean = result !is BridgeType.Nullable &&
+          (result.isCSharpReferenceType() || result is BridgeType.TypeParameter)
+      val attribute: String = if (maybeNull) "$MAYBE_NULL_WHEN_FALSE " else ""
+      add(CirParameter(value, "${attribute}out $valueType"))
+    }
+    add(CirParameter(names.failure, "$NOT_NULL_WHEN_FALSE out global::System.Exception?"))
   }
 
   /**
@@ -955,8 +1077,11 @@ internal object ForwardCirPlanProjection {
     parameters: List<ForwardPublicParameter>,
     receiverArgument: String? = null,
     forceCustomBody: Boolean = false,
+    // Set for the `TryX` twin's body: the error check and every exit take the Try spelling.
+    tryNames: CirTryNames? = null,
   ): CirResultProjection {
     val nativeCall: ForwardNativeCall = singleNativeImport()
+    val exit = CirBodyExit(tryNames)
     val prelude: List<ForwardCirHandleStep> =
       parameters.mapNotNull { parameter -> callbackNullGuard(parameter) } +
           parameters.mapNotNull { parameter -> parameter.optionalPrelude() } +
@@ -979,14 +1104,18 @@ internal object ForwardCirPlanProjection {
     val argumentList: List<String> =
       listOfNotNull(receiverArgument) + parameters.flatMap { parameter -> inputArguments(parameter) }
     val callArguments: String = (argumentList + nativeOutParameters(nativeCall) + "out IntPtr error").joinToString(", ")
-    val needsCustomParams: Boolean = forceCustomBody || parameters.any { parameter -> !parameter.isTrivialInput() }
+    // A `Result`-unwrapping export carries the failure flag, an out slot the generic pass-through
+    // renderer would not pass, so both of its C# members take a hand-built body.
+    val needsCustomParams: Boolean = forceCustomBody || invocation.unwrapsKotlinResult ||
+        parameters.any { parameter -> !parameter.isTrivialInput() }
     val result: BridgeType = publicSignature.result
     return when (result) {
       is BridgeType.ObjectHandle -> CirResultProjection(
         returnType = result.csharpType(),
         nativeReturnType = "IntPtr",
         body = checkedPointerBody(
-          nativeName, callArguments, "return ${result.handleReconstruction()};", prelude, cleanup,
+          nativeName, callArguments, exit.returning(result.handleReconstruction()), prelude,
+          cleanup, exit,
         ),
       )
 
@@ -998,9 +1127,10 @@ internal object ForwardCirPlanProjection {
         body = checkedPointerBody(
           nativeName,
           callArguments,
-          "return NugetMarshal.FromHandle<${result.name}>(nativeResult);",
+          exit.returning("NugetMarshal.FromHandle<${result.name}>(nativeResult)"),
           prelude,
           cleanup,
+          exit,
         ),
       )
 
@@ -1013,7 +1143,8 @@ internal object ForwardCirPlanProjection {
           returnType = lambdaType,
           nativeReturnType = "IntPtr",
           body = checkedPointerBody(
-            nativeName, callArguments, "return new $lambdaType(nativeResult);", prelude, cleanup,
+            nativeName, callArguments, exit.returning("new $lambdaType(nativeResult)"), prelude,
+            cleanup, exit,
           ),
         )
       }
@@ -1026,9 +1157,10 @@ internal object ForwardCirPlanProjection {
         body = checkedPointerBody(
           nativeName,
           callArguments,
-          "return ${interfaceReturnExpression(result.csharpType(), result.backingType)};",
+          exit.returning(interfaceReturnExpression(result.csharpType(), result.backingType)),
           prelude,
           cleanup,
+          exit,
         ),
       )
 
@@ -1042,23 +1174,26 @@ internal object ForwardCirPlanProjection {
         body = checkedPointerBody(
           nativeName,
           callArguments,
-          boundInterfaceReturnStatements(result.csharpType()),
+          boundInterfaceReturnStatements(result.csharpType(), exit),
           prelude,
           cleanup,
+          exit,
         ),
       )
 
       is BridgeType.Collection -> CirResultProjection(
         returnType = result.csharpType(),
         nativeReturnType = "IntPtr",
-        body = checkedCollectionBody(nativeName, callArguments, result, prelude, cleanup),
+        body = checkedCollectionBody(
+          nativeName, callArguments, result, prelude, cleanup, exit = exit,
+        ),
       )
 
       // ADR-151: one handle out, materialized (and disposed) by `NugetMarshal.ReadBytes`.
       BridgeType.ByteArray -> CirResultProjection(
         returnType = result.csharpType(),
         nativeReturnType = "IntPtr",
-        body = checkedBytesBody(nativeName, callArguments, prelude, cleanup),
+        body = checkedBytesBody(nativeName, callArguments, prelude, cleanup, exit = exit),
       )
 
       // ADR-014 (ordinary position, ADR-066's fixture gap): always a custom body, regardless of
@@ -1075,9 +1210,10 @@ internal object ForwardCirPlanProjection {
             nativeName,
             callArguments,
             wire,
-            "return ${valueClassReconstructionCs(result, "nativeResult")};",
+            exit.returning(valueClassReconstructionCs(result, "nativeResult")),
             prelude,
             cleanup,
+            exit,
           ),
         )
       }
@@ -1088,14 +1224,16 @@ internal object ForwardCirPlanProjection {
       BridgeType.Instant -> CirResultProjection(
         returnType = result.csharpType(),
         nativeReturnType = "long",
-        body = checkedTicksBody(nativeName, callArguments, ::instantLiftCs, prelude, cleanup),
+        body = checkedTicksBody(nativeName, callArguments, ::instantLiftCs, prelude, cleanup, exit),
       )
 
       // ADR-103: the same custom-body route, lifting the ticks into a TimeSpan.
       BridgeType.Duration -> CirResultProjection(
         returnType = result.csharpType(),
         nativeReturnType = "long",
-        body = checkedTicksBody(nativeName, callArguments, ::durationLiftCs, prelude, cleanup),
+        body = checkedTicksBody(
+          nativeName, callArguments, ::durationLiftCs, prelude, cleanup, exit,
+        ),
       )
 
       // ADR-106: the String result body with `Guid.Parse` composed onto the decoded text. Always a
@@ -1106,9 +1244,10 @@ internal object ForwardCirPlanProjection {
         body = checkedPointerBody(
           nativeName,
           callArguments,
-          "return global::System.Guid.Parse(Marshal.PtrToStringUTF8(nativeResult)!);",
+          exit.returning("global::System.Guid.Parse(Marshal.PtrToStringUTF8(nativeResult)!)"),
           prelude,
           cleanup,
+          exit,
         ),
       )
 
@@ -1119,9 +1258,10 @@ internal object ForwardCirPlanProjection {
           body = checkedPointerBody(
             nativeName,
             callArguments,
-            "return nativeResult == IntPtr.Zero ? null : ${type.handleReconstruction()};",
+            exit.returning("nativeResult == IntPtr.Zero ? null : ${type.handleReconstruction()}"),
             prelude,
             cleanup,
+            exit,
           ),
         )
 
@@ -1134,9 +1274,10 @@ internal object ForwardCirPlanProjection {
           body = checkedPointerBody(
             nativeName,
             callArguments,
-            "return NugetMarshal.FromHandle<${type.name}>(nativeResult);",
+            exit.returning("NugetMarshal.FromHandle<${type.name}>(nativeResult)"),
             prelude,
             cleanup,
+            exit,
           ),
         )
 
@@ -1146,14 +1287,13 @@ internal object ForwardCirPlanProjection {
           body = checkedPointerBody(
             nativeName,
             callArguments,
-            "return nativeResult == IntPtr.Zero ? null : ${
-              interfaceReturnExpression(
-                type.csharpType(),
-                type.backingType
-              )
-            };",
+            exit.returning(
+              "nativeResult == IntPtr.Zero ? null : " +
+                  interfaceReturnExpression(type.csharpType(), type.backingType),
+            ),
             prelude,
             cleanup,
+            exit,
           ),
         )
 
@@ -1161,7 +1301,8 @@ internal object ForwardCirPlanProjection {
           returnType = "string?",
           nativeReturnType = "IntPtr",
           body = checkedPointerBody(
-            nativeName, callArguments, "return Marshal.PtrToStringUTF8(nativeResult);", prelude, cleanup,
+            nativeName, callArguments, exit.returning("Marshal.PtrToStringUTF8(nativeResult)"),
+            prelude, cleanup, exit,
           ),
         )
 
@@ -1173,10 +1314,13 @@ internal object ForwardCirPlanProjection {
           body = checkedPointerBody(
             nativeName,
             callArguments,
-            "return nativeResult == IntPtr.Zero ? null : " +
-                "global::System.Guid.Parse(Marshal.PtrToStringUTF8(nativeResult)!);",
+            exit.returning(
+              "nativeResult == IntPtr.Zero ? null : " +
+                  "global::System.Guid.Parse(Marshal.PtrToStringUTF8(nativeResult)!)",
+            ),
             prelude,
             cleanup,
+            exit,
           ),
         )
 
@@ -1198,6 +1342,7 @@ internal object ForwardCirPlanProjection {
                 cleanup,
                 "hasValue ? ${valueClassReconstructionCs(type, "valueOut")} : " +
                     "(${type.csharpType}?)null",
+                exit,
               ),
             )
           } else {
@@ -1207,10 +1352,13 @@ internal object ForwardCirPlanProjection {
               body = checkedPointerBody(
                 nativeName,
                 callArguments,
-                "return nativeResult == IntPtr.Zero ? null : " +
-                    "${valueClassReconstructionCs(type, "nativeResult")};",
+                exit.returning(
+                  "nativeResult == IntPtr.Zero ? null : " +
+                      valueClassReconstructionCs(type, "nativeResult"),
+                ),
                 prelude,
                 cleanup,
+                exit,
               ),
             )
           }
@@ -1220,7 +1368,9 @@ internal object ForwardCirPlanProjection {
           CirResultProjection(
             returnType = "$valueType?",
             nativeReturnType = "bool",
-            body = checkedNullableValueBody(nativeName, callArguments, prelude, cleanup),
+            body = checkedNullableValueBody(
+              nativeName, callArguments, prelude, cleanup, exit = exit,
+            ),
           )
         }
 
@@ -1233,6 +1383,7 @@ internal object ForwardCirPlanProjection {
           body = checkedNullableValueBody(
             nativeName, callArguments, prelude, cleanup,
             "hasValue ? (${type.csharpType()})valueOut : (${type.csharpType()}?)null",
+            exit,
           ),
         )
 
@@ -1246,6 +1397,7 @@ internal object ForwardCirPlanProjection {
           body = checkedNullableValueBody(
             nativeName, callArguments, prelude, cleanup,
             "hasValue ? (char)valueOut : (char?)null",
+            exit,
           ),
         )
 
@@ -1256,7 +1408,7 @@ internal object ForwardCirPlanProjection {
           returnType = "${type.csharpType()}?",
           nativeReturnType = "bool",
           body = checkedNullableTicksValueBody(
-            nativeName, callArguments, type.csharpType(), ::instantLiftCs, prelude, cleanup,
+            nativeName, callArguments, type.csharpType(), ::instantLiftCs, prelude, cleanup, exit,
           ),
         )
 
@@ -1265,7 +1417,7 @@ internal object ForwardCirPlanProjection {
           returnType = "${type.csharpType()}?",
           nativeReturnType = "bool",
           body = checkedNullableTicksValueBody(
-            nativeName, callArguments, type.csharpType(), ::durationLiftCs, prelude, cleanup,
+            nativeName, callArguments, type.csharpType(), ::durationLiftCs, prelude, cleanup, exit,
           ),
         )
 
@@ -1276,7 +1428,7 @@ internal object ForwardCirPlanProjection {
           returnType = "${type.csharpType()}?",
           nativeReturnType = "IntPtr",
           body = checkedCollectionBody(
-            nativeName, callArguments, type, prelude, cleanup, nullable = true,
+            nativeName, callArguments, type, prelude, cleanup, nullable = true, exit = exit,
           ),
         )
 
@@ -1284,16 +1436,20 @@ internal object ForwardCirPlanProjection {
         BridgeType.ByteArray -> CirResultProjection(
           returnType = "${type.csharpType()}?",
           nativeReturnType = "IntPtr",
-          body = checkedBytesBody(nativeName, callArguments, prelude, cleanup, nullable = true),
+          body = checkedBytesBody(
+            nativeName, callArguments, prelude, cleanup, nullable = true, exit = exit,
+          ),
         )
 
         else -> directOrCustomResultProjection(
           result, nativeCall.result, needsCustomParams, nativeName, callArguments, prelude, cleanup,
+          exit,
         )
       }
 
       else -> directOrCustomResultProjection(
         result, nativeCall.result, needsCustomParams, nativeName, callArguments, prelude, cleanup,
+        exit,
       )
     }
   }
@@ -1306,13 +1462,14 @@ internal object ForwardCirPlanProjection {
     callArguments: String,
     prelude: List<ForwardCirHandleStep>,
     cleanup: List<String>,
+    exit: CirBodyExit,
   ): CirResultProjection = if (!needsCustomParams) {
     directResultProjection(result, wireType)
   } else {
     CirResultProjection(
       returnType = result.csharpType(),
       nativeReturnType = wireType.csharpType(),
-      body = directCustomBody(nativeName, callArguments, result, wireType, prelude, cleanup),
+      body = directCustomBody(nativeName, callArguments, result, wireType, prelude, cleanup, exit),
     )
   }
 
@@ -1360,12 +1517,13 @@ internal object ForwardCirPlanProjection {
     result: String,
     prelude: List<ForwardCirHandleStep> = emptyList(),
     cleanup: List<String> = emptyList(),
+    exit: CirBodyExit = CirBodyExit.THROWING,
   ): String = forwardCirHandleScope(
     prelude,
     cleanup,
     buildString {
       appendLine("            $wireCs nativeResult = $nativeName($arguments);")
-      appendErrorCheck()
+      appendErrorCheck(exit)
       append("            $result")
     },
   )
@@ -1376,20 +1534,36 @@ internal object ForwardCirPlanProjection {
     result: String,
     prelude: List<ForwardCirHandleStep> = emptyList(),
     cleanup: List<String> = emptyList(),
+    exit: CirBodyExit = CirBodyExit.THROWING,
   ): String = forwardCirHandleScope(
     prelude,
     cleanup,
     buildString {
       appendLine("            IntPtr nativeResult = $nativeName($arguments);")
-      appendErrorCheck()
+      appendErrorCheck(exit)
       append("            $result")
     },
   )
 
-  private fun StringBuilder.appendErrorCheck() {
+  private fun StringBuilder.appendErrorCheck(exit: CirBodyExit = CirBodyExit.THROWING) {
     appendLine("            if (error != IntPtr.Zero)")
     appendLine("            {")
-    appendLine("                throw NugetErrorNative.BuildException(error);")
+    val names: CirTryNames? = exit.names
+    if (names == null) {
+      appendLine("                throw NugetErrorNative.BuildException(error);")
+    } else {
+      // The flag tells a modelled `Result.failure` from an exception the Kotlin body threw; the
+      // export zeroes it on entry, so the thrown path reads `false` and still throws.
+      val exception: String = names.exception
+      appendLine(
+        "                global::System.Exception $exception = " +
+            "NugetErrorNative.BuildException(error);",
+      )
+      appendLine("                if (!$RESULT_FAILED_SLOT) throw $exception;")
+      names.value?.let { value -> appendLine("                $value = default;") }
+      appendLine("                ${names.failure} = $exception;")
+      appendLine("                return false;")
+    }
     appendLine("            }")
   }
 
@@ -1401,13 +1575,14 @@ internal object ForwardCirPlanProjection {
     prelude: List<ForwardCirHandleStep> = emptyList(),
     cleanup: List<String> = emptyList(),
     returnExpression: String = "hasValue ? valueOut : null",
+    exit: CirBodyExit = CirBodyExit.THROWING,
   ): String = forwardCirHandleScope(
     prelude,
     cleanup,
     buildString {
       appendLine("            bool hasValue = $nativeName($arguments);")
-      appendErrorCheck()
-      append("            return $returnExpression;")
+      appendErrorCheck(exit)
+      append("            ${exit.returning(returnExpression)}")
     },
   )
 
@@ -1423,13 +1598,14 @@ internal object ForwardCirPlanProjection {
     lift: (String) -> String,
     prelude: List<ForwardCirHandleStep> = emptyList(),
     cleanup: List<String> = emptyList(),
+    exit: CirBodyExit = CirBodyExit.THROWING,
   ): String = forwardCirHandleScope(
     prelude,
     cleanup,
     buildString {
       appendLine("            bool hasValue = $nativeName($arguments);")
-      appendErrorCheck()
-      append("            return hasValue ? ${lift("valueOut")} : ($csharpType?)null;")
+      appendErrorCheck(exit)
+      append("            ${exit.returning("hasValue ? ${lift("valueOut")} : ($csharpType?)null")}")
     },
   )
 
@@ -1443,13 +1619,14 @@ internal object ForwardCirPlanProjection {
     lift: (String) -> String,
     prelude: List<ForwardCirHandleStep> = emptyList(),
     cleanup: List<String> = emptyList(),
+    exit: CirBodyExit = CirBodyExit.THROWING,
   ): String = forwardCirHandleScope(
     prelude,
     cleanup,
     buildString {
       appendLine("            long nativeResult = $nativeName($arguments);")
-      appendErrorCheck()
-      append("            return ${lift("nativeResult")};")
+      appendErrorCheck(exit)
+      append("            ${exit.returning(lift("nativeResult"))}")
     },
   )
 
@@ -1462,16 +1639,29 @@ internal object ForwardCirPlanProjection {
     prelude: List<ForwardCirHandleStep> = emptyList(),
     cleanup: List<String> = emptyList(),
     nullable: Boolean = false,
+    exit: CirBodyExit = CirBodyExit.THROWING,
   ): String = forwardCirHandleScope(
     prelude,
     cleanup,
     buildString {
       appendLine("            IntPtr bytesHandle = $nativeName($arguments);")
-      appendErrorCheck()
-      if (nullable) appendLine("            if (bytesHandle == IntPtr.Zero) return null;")
-      append("            return NugetMarshal.ReadBytes(bytesHandle);")
+      appendErrorCheck(exit)
+      if (nullable) appendNullHandleExit("bytesHandle", exit)
+      append("            ${exit.returning("NugetMarshal.ReadBytes(bytesHandle)")}")
     },
   )
+
+  /** The ADR-075 null-handle guard, after the error check: a null handle is Kotlin `null`. */
+  private fun StringBuilder.appendNullHandleExit(handle: String, exit: CirBodyExit) {
+    if (exit.names == null) {
+      appendLine("            if ($handle == IntPtr.Zero) return null;")
+      return
+    }
+    appendLine("            if ($handle == IntPtr.Zero)")
+    appendLine("            {")
+    appendLine("                ${exit.returning("null").replace("\n    ", "\n        ")}")
+    appendLine("            }")
+  }
 
   private fun checkedCollectionBody(
     nativeName: String,
@@ -1480,10 +1670,11 @@ internal object ForwardCirPlanProjection {
     prelude: List<ForwardCirHandleStep> = emptyList(),
     cleanup: List<String> = emptyList(),
     nullable: Boolean = false,
+    exit: CirBodyExit = CirBodyExit.THROWING,
   ): String = forwardCirHandleScope(
     prelude,
     cleanup,
-    collectionMaterializingCore(nativeName, arguments, type, nullable),
+    collectionMaterializingCore(nativeName, arguments, type, nullable, exit),
   )
 
   /** The result-side read of a collection handle: the call, the error check, and the
@@ -1497,6 +1688,7 @@ internal object ForwardCirPlanProjection {
     arguments: String,
     type: BridgeType.Collection,
     nullable: Boolean,
+    exit: CirBodyExit,
   ): String {
     val handle: String = when (type.kind) {
       CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> "listHandle"
@@ -1505,12 +1697,12 @@ internal object ForwardCirPlanProjection {
     }
     return buildString {
       appendLine("            IntPtr $handle = $nativeName($arguments);")
-      appendErrorCheck()
+      appendErrorCheck(exit)
       // ADR-061 (2026-09-16 amendment): after the error check, so a throw is still reported as a
       // throw rather than silently read as a null result.
-      if (nullable) appendLine("            if ($handle == IntPtr.Zero) return null;")
+      if (nullable) appendNullHandleExit(handle, exit)
       val read: String = componentCollectionRead(handle, type, csharpType = { it.csharpType() })
-      append("            return $read;")
+      append("            ${exit.returning(read)}")
     }
   }
 
@@ -1526,6 +1718,7 @@ internal object ForwardCirPlanProjection {
     wireType: ForwardAbiWireType,
     prelude: List<ForwardCirHandleStep>,
     cleanup: List<String>,
+    exit: CirBodyExit = CirBodyExit.THROWING,
   ): String = forwardCirHandleScope(
     prelude,
     cleanup,
@@ -1535,14 +1728,16 @@ internal object ForwardCirPlanProjection {
       } else {
         appendLine("            ${wireType.csharpType()} nativeResult = $nativeName($arguments);")
       }
-      appendErrorCheck()
-      if (result is BridgeType.Enum) {
-        append("            return (${result.csharpType()})nativeResult;")
-      } else if (result == BridgeType.String) {
-        append("            return Marshal.PtrToStringUTF8(nativeResult)!;")
-      } else if (result != BridgeType.Unit) {
-        append("            return nativeResult;")
+      appendErrorCheck(exit)
+      val returned: String? = when {
+        result is BridgeType.Enum -> "(${result.csharpType()})nativeResult"
+        result == BridgeType.String -> "Marshal.PtrToStringUTF8(nativeResult)!"
+        result != BridgeType.Unit -> "nativeResult"
+        else -> null
       }
+      val exitStatement: String? =
+        if (returned != null) exit.returning(returned) else exit.completing()
+      if (exitStatement != null) append("            $exitStatement")
     },
   )
 
@@ -1663,11 +1858,58 @@ internal fun interfaceReturnExpression(
  * The indentation matches [checkedPointerBody]'s own 12-space statement column; only the first
  * line is placed by the caller.
  */
-private fun boundInterfaceReturnStatements(csharpType: String): String =
+private fun boundInterfaceReturnStatements(csharpType: String, exit: CirBodyExit): String =
   "GCHandle resultGcHandle = GCHandle.FromIntPtr(nativeResult);\n" +
       "            $csharpType resultValue = ($csharpType)resultGcHandle.Target!;\n" +
       "            resultGcHandle.Free();\n" +
-      "            return resultValue;"
+      "            ${exit.returning("resultValue")}"
+
+/**
+ * The C# names a `Result<T>` `TryX` twin adds: its `out T value` (null for `Result<Unit>`), its
+ * `out Exception? failure`, and the local holding the built exception. `value` and `failure` move
+ * off a user parameter of the same spelling with a trailing underscore, the rule `error` already
+ * takes; the local moves off all of them.
+ */
+internal data class CirTryNames(val value: String?, val failure: String, val exception: String) {
+  companion object {
+    fun of(parameters: List<String>, hasValue: Boolean): CirTryNames {
+      val taken: Set<String> = parameters.toSet()
+      val value: String? = if (hasValue) freshName("value", taken) else null
+      val failure: String = freshName("failure", taken + listOfNotNull(value))
+      val exception: String = freshName("exception", taken + listOfNotNull(value, failure))
+      return CirTryNames(value, failure, exception)
+    }
+  }
+}
+
+/**
+ * How a checked body leaves: the throwing member's `throw` / `return`, or, with [names], the
+ * `TryX` twin's `value = ...; failure = null; return true;`. Each statement after the first starts
+ * at the bodies' own 12-space column, so a caller places only the first.
+ */
+internal class CirBodyExit(val names: CirTryNames?) {
+  fun returning(expression: String): String {
+    val names: CirTryNames = names ?: return "return $expression;"
+    val value: String = requireNotNull(names.value) { "A Result<Unit> Try has no value to return" }
+    return "$value = $expression;\n            ${names.failure} = null;\n            return true;"
+  }
+
+  /** The exit of a `void` body: nothing for the throwing member, `failure = null; return true;`. */
+  fun completing(): String? {
+    val names: CirTryNames = names ?: return null
+    return "${names.failure} = null;\n            return true;"
+  }
+
+  companion object {
+    val THROWING: CirBodyExit = CirBodyExit(null)
+  }
+}
+
+/** The nullable-flow attributes of a `TryX` twin's out parameters, spelled without a `using`. */
+internal const val MAYBE_NULL_WHEN_FALSE: String =
+  "[global::System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)]"
+internal const val NOT_NULL_WHEN_FALSE: String =
+  "[global::System.Diagnostics.CodeAnalysis.NotNullWhen(false)]"
 
 /**
  * ADR-076: lift a wire expression of .NET ticks into the public `DateTimeOffset`. Always UTC, so
