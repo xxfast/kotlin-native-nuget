@@ -329,7 +329,7 @@ public void InnerClass_ConstructsWithTheOuterInstanceFirst()
 ADR-091 omitting constructors. `data inner class` rides the same plan plus the existing COPY route.
 
 **Deferred, still a named skip** (the inner-of-inner and sealed-owner items below are superseded by
-the 2026-10-03 amendment: both are bound):
+the 2026-10-03 amendment: both are bound; the generic ones by ADR-196):
 - An `inner class` as an **owner** (only another `inner class` can nest inside one: a non-inner
   nested class inside an inner class is `NESTED_CLASS_NOT_ALLOWED`, **inferred** from the compiler
   diagnostic, not spiked; if wrong, the child keeps skipping named through the owner arm, no
@@ -338,8 +338,9 @@ the 2026-10-03 amendment: both are bound):
 - An `inner class` under a sealed base or arm owner (Kotlin allows it; the receiver would be the
   abstract base handle, and the sealed route's constructor rendering is ADR-009's, not
   `renderConstructor`). Named skip with a reason naming the sealed owner.
-- A generic `inner class` (already deferred by the candidate gate's generic arm).
-- An inner class of a generic outer (already deferred by the owner gate's generic arm).
+- A generic `inner class` and an inner class of a generic outer (both bound since 2026-10-04, see
+  [ADR-196](196-generic-nested-types.md)): `new Host.GenInner<int>(host, 3)`, and `Box.Seal<T>(Box<T> outer, ...)` on
+  the owner's holder.
 
 ## Consequences
 
@@ -354,7 +355,8 @@ the 2026-10-03 amendment: both are bound):
   shipped renames, but a consumer's own library might.
 - `SKIPPED_NESTED_DECLARATION` survives for: an `enum class` owner, a generic owner, an `inner
   class` **owner** (inner-of-inner), an inner class under a sealed owner, a generic inner class, an
-  inner class of a generic outer, a `value class` owner, and a nested sealed hierarchy candidate.
+  inner class of a generic outer, a `value class` owner, and a nested sealed hierarchy candidate (as
+  of the amendment below and ADR-196, the generic ones are bound).
 - ROADMAP's Phase 4 inner-class line closed for the candidate half; the owner half (and the sealed-
   owner, generic-inner and generic-outer shapes above) is now its own ROADMAP line pointing back at
   this ADR's Scope section.
@@ -430,12 +432,14 @@ above that it stayed a named skip were wrong: both already generated
 being the sealed owner's handle. Kotlin permits `inner` there only for the base and a `class` arm;
 an `object` arm and any `interface` reject it (verified by the spike below).
 
-**A generic `inner class`, and an inner class of a generic outer, stay refused**, each a named
-`SKIPPED_NESTED_DECLARATION`, now pinned for the inner variants. They are not inner-class work:
-they are "generic nested types" and "nested types of a generic owner", inner or not. The earlier
-wording that generic owners "have no expressible C# shape" is wrong: C# spells it
-`Owner<T>.Nested`. Only an `enum class` owner has no shape. The refusal is a deferred capability,
-tracked on the ROADMAP.
+**A generic `inner class`, and an inner class of a generic outer, stayed refused** on 2026-10-03, each a
+named `SKIPPED_NESTED_DECLARATION`. They are not inner-class work: they are "generic nested types"
+and "nested types of a generic owner", inner or not. Both are bound since 2026-10-04 by
+[ADR-196](196-generic-nested-types.md): `new Host.GenInner<int>(host, 3)` for a generic inner class of a
+non-generic owner, and `new Box.Seal<T>(box, 2)` for an inner class of a generic owner, flattened
+onto the non-generic holder `Box` with the captured parameters first. The 2026-10-03 wording that
+"C# spells it `Owner<T>.Nested`" is not what shipped: a type nested in `Owner<T>` can hold no extern
+(CS7042), so ADR-196 uses the holder. The shapes that stay skipped are listed there.
 
 **Hint.** A skipped `inner class` used to be told to "move it to the top level of its file", which
 it cannot do because it reads `this@Outer`. Its hint now reads "drop `inner`, take the outer

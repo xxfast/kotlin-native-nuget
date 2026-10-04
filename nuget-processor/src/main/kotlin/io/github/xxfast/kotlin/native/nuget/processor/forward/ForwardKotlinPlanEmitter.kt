@@ -865,6 +865,24 @@ private fun receiverExpression(plan: ForwardCallablePlan, receiver: ForwardAbiPa
 }
 
 /**
+ * ADR-196: the last segment of a (possibly applied) Kotlin type spelling, type arguments included:
+ * `Tag<Any?>` of `pkg.Tin<Any?>.Tag<Any?>`, `Tagged<pkg.Pet>` of `pkg.Basket.Tagged<pkg.Pet>`. A
+ * plain `substringAfterLast('.')` would split inside a qualified type argument.
+ */
+private fun String.innerConstructorName(): String {
+  var depth = 0
+  var start = 0
+  forEachIndexed { index, char ->
+    when (char) {
+      '<' -> depth++
+      '>' -> depth--
+      '.' -> if (depth == 0) start = index + 1
+    }
+  }
+  return substring(start)
+}
+
+/**
  * ADR-147: the Kotlin type a receiver handle is read back as. `asStableRef` takes a *type*
  * argument, so a generic owner must be fully applied (`Crate<Any?>`, `Kennel<Pet>`): the bare
  * qualified name does not compile, and a star projection makes every `T`-typed parameter `Nothing`.
@@ -931,10 +949,11 @@ private fun ownerCall(plan: ForwardCallablePlan, call: String): String {
   if (witnesses.isEmpty()) return "handle.asStableRef<${owner.spelling}>().get().$call"
 
   val typed: List<String> = witnesses.map { (typeParameter, _) -> typeParameter.kotlinName }
-  val applied: String = owner.typeParameters.joinToString(", ", "${owner.qualifiedName}<", ">") {
-    typeParameter ->
-    if (typeParameter.kotlinName in typed) typeParameter.kotlinName else typeParameter.erased ?: "*"
-  }
+  val applied: String = owner.applied(
+    owner.typeParameters.joinToString(", ") { typeParameter ->
+      if (typeParameter.kotlinName in typed) typeParameter.kotlinName else typeParameter.erased ?: "*"
+    },
+  )
   // A non-null `T`'s witness may still be a null `T?` argument (or an unset default), and a
   // nullable-bounded `T` already admits null.
   val parameters: String = witnesses.mapIndexed { index, (typeParameter, _) ->
@@ -967,11 +986,13 @@ private fun constructorTypeName(plan: ForwardCallablePlan, owner: ForwardGeneric
   if (owner.typeParameters.all { typeParameter -> typeParameter.erased != null }) {
     return owner.spelling
   }
-  return owner.typeParameters.joinToString(", ", "${owner.qualifiedName}<", ">") { typeParameter ->
-    val mentioned: Boolean =
-      plan.publicSignature.parameters.any { parameter -> parameter.mentions(typeParameter) }
-    typeParameter.erased ?: if (mentioned) "_" else "Nothing"
-  }
+  return owner.applied(
+    owner.typeParameters.joinToString(", ") { typeParameter ->
+      val mentioned: Boolean =
+        plan.publicSignature.parameters.any { parameter -> parameter.mentions(typeParameter) }
+      typeParameter.erased ?: if (mentioned) "_" else "Nothing"
+    },
+  )
 }
 
 private fun ForwardPublicParameter.mentions(typeParameter: ForwardGenericOwnerParameter): Boolean =
@@ -1200,15 +1221,16 @@ private fun invocationExpression(
     // the caller gets back is the type `asStableRef<Crate<Any?>>()` reads.
     // ADR-141: an `inner class` constructor carries a receiver -- the outer instance -- so the call
     // is receiver-qualified and names the SIMPLE name (`outer...get().Guest(3)`), the only spelling
-    // Kotlin accepts there. An inner class of a generic outer is deferred, so `ownerType` is never
-    // the applied spelling on this arm.
+    // Kotlin accepts there. ADR-196: a generic inner class keeps its OWN erased arguments
+    // (`Tagged<Any?>`), while the ones it captures come from the outer read back as applied
+    // (`Tin<Any?>`), so only the last segment of the applied owner spelling is the call.
     ForwardCallableOrigin.CONSTRUCTOR -> {
       val owner: ForwardGenericOwner? = plan.invocation.ownerType
       val target: String =
         if (owner != null) constructorTypeName(plan, owner)
         else requireNotNull(plan.invocation.target)
       if (receiver == null) "$target($arguments)"
-      else "${receiverExpression(plan, receiver)}.${target.substringAfterLast('.')}($arguments)"
+      else "${receiverExpression(plan, receiver)}.${target.innerConstructorName()}($arguments)"
     }
     ForwardCallableOrigin.COPY -> ownerCall(plan, "copy($arguments)")
 
@@ -1434,7 +1456,7 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
     // ADR-103: the same, into a Duration.
     BridgeType.Duration -> "durationFromDotNetTicks(${parameter.name})"
     is BridgeType.ObjectHandle ->
-      "${parameter.name}.asStableRef<${type.qualifiedName}>().get()"
+      "${parameter.name}.asStableRef<${type.kotlinReadType ?: type.qualifiedName}>().get()"
 
     is BridgeType.Interface ->
       "${parameter.name}.asStableRef<${type.qualifiedName}>().get()"
@@ -1475,7 +1497,7 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
       // ADR-106: a null incoming pointer stays null; only a real string is parsed.
       BridgeType.Uuid -> "${parameter.name}?.let(kotlin.uuid.Uuid::parse)"
       is BridgeType.ObjectHandle ->
-        "${parameter.name}?.asStableRef<${inner.qualifiedName}>()?.get()"
+        "${parameter.name}?.asStableRef<${inner.kotlinReadType ?: inner.qualifiedName}>()?.get()"
 
       is BridgeType.Interface ->
         "${parameter.name}?.asStableRef<${inner.qualifiedName}>()?.get()"

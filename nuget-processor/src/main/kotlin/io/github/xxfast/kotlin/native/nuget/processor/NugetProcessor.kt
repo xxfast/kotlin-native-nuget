@@ -167,6 +167,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceHi
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ownsSentence
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
 import io.github.xxfast.kotlin.native.nuget.processor.forward.toDiagnosticKind
+import io.github.xxfast.kotlin.native.nuget.processor.forward.capturedTypeParameterOwners
+import io.github.xxfast.kotlin.native.nuget.processor.forward.shadowedCapturedTypeParameter
+import io.github.xxfast.kotlin.native.nuget.processor.forward.capturedMultiBoundTypeParameter
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nestedCsName
 
 // A `@kotlin.native.CName`-annotated function is already a C-ABI export by definition (its native
@@ -250,8 +253,21 @@ internal fun KSClassDeclaration.unsupportedNestedOwnerReason(): String? = when {
   classKind != ClassKind.CLASS && classKind != ClassKind.OBJECT &&
       classKind != ClassKind.INTERFACE ->
     "only a `class`, `object` or `interface` owner carries nested declarations"
-  typeParameters.isNotEmpty() ->
-    "a generic owner's nested type is itself generic in C# (`Owner<T>.Nested`)"
+  // ADR-196: a generic `class` owner's children live on a non-generic static holder beside it.
+  // An interface has no such holder (it would be a static class named like an interface), and
+  // the kind arm above admits INTERFACE, so this arm is what keeps `Feed<T> { class Entry }` out.
+  classKind == ClassKind.INTERFACE && typeParameters.isNotEmpty() ->
+    "a generic `interface` owner has no non-generic C# type to hold its nested declarations"
+  // ADR-196: the sealed route (ADR-009) declares a generic base or arm without its type
+  // parameters, so the holder rule does not apply to it and an inner child's `Outcome<T>` outer
+  // names a type nothing declares. Kept a named skip until that route settles generics.
+  typeParameters.isNotEmpty() && (modifiers.contains(Modifier.SEALED) || isSealedSubclass()) ->
+    "a generic sealed base or arm is declared without its type parameters in C#, so it has " +
+        "no holder for nested declarations"
+  // ADR-196: a captured inner class is the generic `Tin.Latch<T>` in C#, and a type nested in a
+  // generic C# class can hold no `[DllImport]` (CS7042). Kotlin lets it own only inner classes.
+  capturedTypeParameterOwners().isNotEmpty() ->
+    "an `inner class` that captures a generic owner's type parameters is itself generic in C#"
   // ADR-141: no `inner` arm. An inner class owns only inner classes (Kotlin: "'Class' is
   // prohibited here" for anything else), and each one's receiver is its immediately enclosing
   // inner instance, so inner-of-inner is the same constructor shape one level down.
@@ -265,8 +281,21 @@ internal fun KSClassDeclaration.unsupportedNestedOwnerReason(): String? = when {
 /** ADR-133: why this nested candidate itself is deferred, or null when it is declared. */
 internal fun KSClassDeclaration.unsupportedNestedCandidateReason(): String? = when {
   // ADR-141: no `inner` arm here any more -- an inner class IS declared, with the outer instance as
-  // its constructor's first parameter, at any depth.
-  typeParameters.isNotEmpty() -> "a generic nested type is deferred"
+  // its constructor's first parameter, at any depth. ADR-196: no generic arm either: a generic
+  // nested class is `Outer.Inner<T>`, and an inner class of a generic owner is flattened onto the
+  // owner's holder with the captured parameters first (`Tin.Tag<T, U>`), which C# cannot declare
+  // when one of its own parameters reuses a captured name (CS0692).
+  shadowedCapturedTypeParameter() != null -> {
+    val (owner: KSClassDeclaration, name: String) = shadowedCapturedTypeParameter()!!
+    "its type parameter `$name` shadows the captured type parameter of " +
+        "`${owner.qualifiedName?.asString() ?: owner.simpleName.asString()}`"
+  }
+  capturedMultiBoundTypeParameter() != null -> {
+    val (owner: KSClassDeclaration, name: String) = capturedMultiBoundTypeParameter()!!
+    "it captures the multi-bound type parameter `$name` of " +
+        "`${owner.qualifiedName?.asString() ?: owner.simpleName.asString()}`, which has no " +
+        "single erased type to read the outer instance back as"
+  }
   modifiers.contains(Modifier.SEALED) ->
     "a nested sealed hierarchy is deferred (its arms would have to nest twice)"
   else -> null
@@ -327,6 +356,12 @@ internal fun KSClassDeclaration.nestedOwnerScopeCollision(): NestedOwnerScopeCol
   if (segments.size >= 2 && segments[segments.size - 2] == segments.last()) {
     return NestedOwnerScopeCollision.OwnerName
   }
+  // ADR-196: a generic class owner's children are declared on its non-generic holder, which has no
+  // members, so a member of `Tin<T>` named like `Tin.Lid` shares no scope with it (no CS0102).
+  val ownerHasHolder: Boolean = owner.classKind == ClassKind.CLASS &&
+      owner.typeParameters.isNotEmpty() && !owner.modifiers.contains(Modifier.SEALED) &&
+      !owner.isSealedSubclass()
+  if (ownerHasHolder) return null
   // ADR-013 folds a companion's public members into the owner's C# class as statics (`const val`
   // included, see `CirClassTranslator`), so they share the one member-name scope the nested type is
   // declared in: `companion object { fun config(): Config }` beside `class Config` is CS0102 just

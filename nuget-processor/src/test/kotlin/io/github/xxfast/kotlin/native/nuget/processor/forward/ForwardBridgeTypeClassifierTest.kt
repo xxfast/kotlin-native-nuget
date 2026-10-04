@@ -224,7 +224,8 @@ class ForwardBridgeTypeClassifierTest {
 
   /**
    * The value-class twin of the enum gate above. A `value class` nested under an owner ADR-134
-   * still defers (a generic or `enum class` owner) is declared as no C# record struct at all, and
+   * still defers (an `enum class` or generic `interface` owner) is declared as no C# record struct
+   * at all, and
    * `valueClass()` used to spell it anyway (`Box.Seal`), leaving `Interop.cs` with a dangling
    * reference and the member with no diagnostic. A nested value class the renderer DOES declare
    * keeps its binding, which is what the membership set is for.

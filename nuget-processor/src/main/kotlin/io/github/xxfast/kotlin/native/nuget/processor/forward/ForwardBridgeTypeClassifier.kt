@@ -330,7 +330,9 @@ internal class ForwardBridgeTypeClassifier(
     if (classDeclaration.classKind == ClassKind.INTERFACE) {
       return interfaceType(classDeclaration, qualifiedName)
     }
-    if (classDeclaration.typeParameters.isNotEmpty()) {
+    // ADR-196: an inner class that captures a generic owner's `T` is the generic `Tin.Latch<T>` in
+    // C#, so a reference to it is a generic reference too, though it declares no parameter itself.
+    if (classDeclaration.forwardTypeParametersInScope().isNotEmpty()) {
       return BridgeType.SpecializedProtocol("generic declaration $qualifiedName")
     }
     val isClassOrObject: Boolean =
@@ -908,9 +910,58 @@ internal fun KSType.forwardKotlinBoundSpelling(): String {
  * receiver through a declaration that re-states them, and is star-projected everywhere else.
  */
 internal fun KSClassDeclaration.forwardGenericOwner(): ForwardGenericOwner? {
-  if (typeParameters.isEmpty()) return null
+  val captured: List<KSClassDeclaration> = capturedTypeParameterOwners()
+  if (typeParameters.isEmpty() && captured.isEmpty()) return null
   val owner: String = qualifiedName?.asString() ?: return null
-  val parameters: List<ForwardGenericOwnerParameter> = typeParameters.map { parameter ->
+  return ForwardGenericOwner(
+    qualifiedName = owner,
+    typeParameters = forwardGenericOwnerParameters(),
+    capturedEnclosing = if (captured.isEmpty()) null else capturedEnclosingSpelling(captured),
+  )
+}
+
+/**
+ * ADR-196: the enclosing chain of an `inner class` that captures [captured], with the erased
+ * arguments on every captured segment (`pkg.Tin<Any?>`, so the class reads `pkg.Tin<Any?>.Latch`).
+ * A non-inner segment above the captured run takes none: Kotlin rejects them there ("type
+ * arguments for outer class are redundant"). A multi-bound captured parameter would star-project
+ * here, but `NugetProcessor` refuses that shape before it is planned.
+ */
+private fun KSClassDeclaration.capturedEnclosingSpelling(
+  captured: List<KSClassDeclaration>,
+): String {
+  val chain: List<KSClassDeclaration> =
+    generateSequence(parentDeclaration as? KSClassDeclaration) {
+      it.parentDeclaration as? KSClassDeclaration
+    }.toList().asReversed()
+  val packagePrefix: String = packageName.asString().let { if (it.isEmpty()) "" else "$it." }
+  return packagePrefix + chain.joinToString(".") { segment ->
+    val name: String = segment.simpleName.asString()
+    if (segment in captured) {
+      val arguments: String = segment.forwardGenericOwnerParameters()
+        .joinToString(", ") { it.erased ?: "*" }
+      "$name<$arguments>"
+    } else {
+      name
+    }
+  }
+}
+
+/**
+ * ADR-196: the captured owner and the name of the first multi-bound parameter (`where T :
+ * Comparable<T>, T : Pet`) this `inner class` captures, or null. Such a parameter has no erased
+ * argument, so the inner class could only be read back star-projected (`Arena<*>.Lane`), where
+ * Kotlin forbids every member that takes a `T` ("star projection prohibits the use of").
+ */
+internal fun KSClassDeclaration.capturedMultiBoundTypeParameter(): Pair<KSClassDeclaration, String>? =
+  capturedTypeParameterOwners().firstNotNullOfOrNull { owner ->
+    owner.forwardGenericOwnerParameters()
+      .firstOrNull { parameter -> parameter.erased == null }
+      ?.let { parameter -> owner to parameter.kotlinName }
+  }
+
+private fun KSClassDeclaration.forwardGenericOwnerParameters(): List<ForwardGenericOwnerParameter> =
+  typeParameters.map { parameter ->
     val bounds: List<String> = parameter.forwardBoundSpellings()
     val nullable: Boolean = parameter.hasNullableBound()
     val multiBound: Boolean = bounds.size > 1
@@ -933,7 +984,47 @@ internal fun KSClassDeclaration.forwardGenericOwner(): ForwardGenericOwner? {
       nullableBound = nullable,
     )
   }
-  return ForwardGenericOwner(owner, parameters)
+
+/**
+ * ADR-196: the generic enclosing classes whose type parameters this `inner class` captures,
+ * outermost first. The walk climbs while the current declaration is `inner`, so a non-inner link
+ * ends it (`Tin<T> { class Shelf { inner class Hinge } }` captures nothing). Empty for every
+ * non-inner class and for an inner class of non-generic owners only.
+ */
+internal fun KSClassDeclaration.capturedTypeParameterOwners(): List<KSClassDeclaration> {
+  val owners: MutableList<KSClassDeclaration> = mutableListOf()
+  var current: KSClassDeclaration = this
+  while (Modifier.INNER in current.modifiers) {
+    val outer: KSClassDeclaration = current.parentDeclaration as? KSClassDeclaration ?: break
+    if (outer.typeParameters.isNotEmpty()) owners += outer
+    current = outer
+  }
+  return owners.asReversed()
+}
+
+/**
+ * ADR-196: every type parameter the C# declaration of this class declares, with the Kotlin class
+ * that declares each one: the captured ones first, outermost owner first, then its own. Equal to
+ * its own `typeParameters` for every class that captures nothing.
+ */
+internal fun KSClassDeclaration.forwardTypeParametersInScope():
+  List<Pair<KSClassDeclaration, KSTypeParameter>> =
+  capturedTypeParameterOwners().flatMap { owner -> owner.typeParameters.map { owner to it } } +
+      typeParameters.map { this to it }
+
+/**
+ * ADR-196: the captured owner and the name of the first of this class's own type parameters that
+ * reuses a captured one's name, or null. Kotlin allows the shadowing (`inner class Echo<T>` in
+ * `Tin<T>`); the flattened C# `Tin.Echo<T, T>` is CS0692.
+ */
+internal fun KSClassDeclaration.shadowedCapturedTypeParameter(): Pair<KSClassDeclaration, String>? {
+  val captured: List<KSClassDeclaration> = capturedTypeParameterOwners()
+  typeParameters.forEach { own ->
+    val name: String = own.simpleName.asString()
+    captured.firstOrNull { owner -> owner.typeParameters.any { it.simpleName.asString() == name } }
+      ?.let { owner -> return owner to name }
+  }
+  return null
 }
 
 /** The receiver spelling of [forwardGenericOwner], or null for an ordinary class. */

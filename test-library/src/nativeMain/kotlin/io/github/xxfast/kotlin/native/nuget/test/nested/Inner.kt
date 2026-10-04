@@ -42,9 +42,8 @@ package io.github.xxfast.kotlin.native.nuget.test.nested
  *   and [Hearth.Sunbather.Paw.trail] reads both `this@Hearth` and `this@Sunbather`, neither of
  *   which crosses the ABI: the chain above the receiver rides the Kotlin heap.
  *
- * An inner class under a sealed owner lives in `Deferred.kt` beside `Purr`. Refused, and therefore
- * absent here on purpose: a generic inner class and an inner class of a generic outer. Those stay
- * a named `SKIPPED_NESTED_DECLARATION` and live in the Tier 1 test.
+ * An inner class under a sealed owner lives in `Deferred.kt` beside `Purr`. A generic inner class
+ * and an inner class of a generic outer live in `GenericNested.kt` (ADR-196).
  *
  * Oreo (black with the white middle) holds the hearth for as long as it lasts; Mylo (brown and
  * creamy) waits for the velvet cushion beside it, which is also warm, but only second-best.

@@ -23,11 +23,11 @@ import kotlin.test.assertTrue
  * `interface` owner, a sealed base owner (a sealed class **or** an ADR-112 eligible sealed
  * interface), a sealed *arm* owner, and the nested `value class` candidate.
  *
- * [deferredSource] is the other half and is not a copy of the old skip test: ADR-134 keeps
- * `SKIPPED_NESTED_DECLARATION` permanently for a generic owner and an `enum class` owner, and a
- * generic nested candidate (an `inner` one included), so the named skip has to survive for those
- * and only those. A fix that declares everything nested passes every presence cell above and fails
- * here.
+ * [deferredSource] is the other half and is not a copy of the old skip test: ADR-196 keeps
+ * `SKIPPED_NESTED_DECLARATION` for an `enum class` owner and a generic `interface` owner, so the
+ * named skip has to survive for those. A fix that declares everything nested passes every presence
+ * cell above and fails here. [genericNestedSource] is ADR-196's admitted half: a generic nested
+ * class, and every declaration nested in a generic class owner, on a non-generic holder.
  *
  * [innerSource] is ADR-141's own half: an `inner class` is a declared C# nested type whose
  * constructor takes the outer instance first, at any depth (an inner class owning another inner
@@ -127,20 +127,21 @@ class Tier1NestedTypesTest {
     }
   """.trimIndent()
 
+  /**
+   * The owners ADR-196 still declines: an `enum class` (a C# enum has no body, and a holder would
+   * take the enum's own name) and a generic `interface` (a holder would be a static class with an
+   * interface-style name). The generic `class` owner moved to [genericNestedSource].
+   */
   private val deferredSource: String = """
     package tier1.nesteddeferred
 
-    class Box<T>(val item: T) {
-      class Lid(val tight: Boolean)
-
-      // The inner variant of `Lid`: it captures the outer's `T`, so it is refused by the generic
-      // owner arm, never declared under a non-generic `Box`.
-      inner class Latch(val turns: Int) {
-        fun peek(): T = item
-      }
+    interface Feed<T> {
+      class Entry(val id: Int)
 
       @JvmInline
       value class Seal(val stamped: Boolean)
+
+      fun next(): T
     }
 
     enum class Season {
@@ -154,15 +155,144 @@ class Tier1NestedTypesTest {
       value class Stamp(val code: Int)
     }
 
-    class Host(val name: String) {
-      // A generic `inner class` under a non-generic owner: refused by the generic candidate arm,
-      // the same arm a plain generic nested class takes.
-      inner class GenInner<T>(val item: T)
+    class Reader(val name: String) {
+      fun sealOf(): Feed.Seal = Feed.Seal(true)
+      fun codeOf(stamp: Season.Stamp): Int = stamp.code
+    }
+  """.trimIndent()
+
+  /**
+   * ADR-196: every generic nested shape. `Basket.Slot<T>` is a generic class under a non-generic
+   * owner and `Basket.Tagged<T>` its `inner` twin. Everything nested in the generic `Tin<T>` lands
+   * on a non-generic `public static class Tin` holder beside `Tin<T>`, which is the Kotlin scope
+   * spelled letter for letter: the non-inner children as themselves (`Tin.Lid`, `Tin.Pair<U>`),
+   * and the `inner` ones, which capture `T`, flattened onto the holder with the captured parameter
+   * first (`Tin.Latch<T>`, `Tin.Tag<T, U>`), constructed from a `Tin<T>` outer.
+   *
+   * `Latch.Bolt` (a child of a captured inner class) and `Echo<T>` (an inner class whose own `T`
+   * shadows the captured one) stay a named skip, and `latchAt` is a reference to a captured inner
+   * class, refused at the member position like any generic reference (ADR-147).
+   *
+   * `val lid` PascalCases onto the nested type's name: no CS0102, because the member lives on
+   * `Tin<T>` and the type on the holder.
+   */
+  private val genericNestedSource: String = """
+    package tier1.genericnested
+
+    class Basket(val owner: String) {
+      class Slot<T>(val item: T) {
+        fun swap(other: T): T = other
+        fun describe(): String = "slot:" + item
+
+        class Cap(val size: Int)
+      }
+
+      inner class Tagged<T>(val tag: T) {
+        fun label(): String = owner + ":" + tag
+      }
+
+      interface Picker<T> {
+        fun pick(): T
+      }
+
+      @JvmInline
+      value class Wrap<T>(val value: T)
     }
 
-    class Reader(val name: String) {
-      fun sealOf(): Box.Seal = Box.Seal(true)
-      fun codeOf(stamp: Season.Stamp): Int = stamp.code
+    class Tin<T>(val item: T) {
+      class Lid(val number: Int) {
+        fun describe(): String = "lid#" + number
+      }
+
+      object Defaults {
+        fun size(): Int = 3
+      }
+
+      enum class Kind { SMALL, LARGE }
+
+      interface Listener {
+        fun onOpen(): String
+      }
+
+      @JvmInline
+      value class Stamp(val code: Int)
+
+      class Pair<U>(val value: U) {
+        fun first(): U = value
+
+        class Knot(val k: Int)
+      }
+
+      class Shelf(val width: Int) {
+        inner class Hinge(val turns: Int) {
+          fun total(): Int = width + turns
+        }
+      }
+
+      inner class Latch(val turns: Int) {
+        fun peek(): T = item
+        fun twice(): Int = turns * 2
+
+        inner class Bolt(val n: Int)
+      }
+
+      inner class Tag<U>(val label: U) {
+        fun both(): String = "" + item + "/" + label
+      }
+
+      inner class Echo<T>(val again: T)
+
+      val lid: Int = 1
+
+      fun lidAt(number: Int): Lid = Lid(number)
+      fun kindOf(): Kind = Kind.LARGE
+      fun stampOf(): Stamp = Stamp(4)
+      fun latchAt(turns: Int): Latch = Latch(turns)
+    }
+
+    object TinShop {
+      fun spare(): Tin.Lid = Tin.Lid(9)
+      fun numberOf(lid: Tin.Lid): Int = lid.number
+    }
+  """.trimIndent()
+
+  /** Compiles [genericNestedSource]'s C# against a consumer that constructs every shape. */
+  private val genericNestedConsumer: String = """
+    using System;
+    using Interop;
+
+    public static class Consumer
+    {
+        public static string Run()
+        {
+            using var slot = new Basket.Slot<string>("Oreo");
+            string swapped = slot.Swap("Mylo");
+            using var count = new Basket.Slot<int>(3);
+            int item = count.Item;
+            using var cap = new Basket.Slot.Cap(4);
+            using var knot = new Tin.Pair.Knot(6);
+            using var basket = new Basket("Oreo");
+            using var tagged = new Basket.Tagged<int>(basket, 7);
+            using var lid = new Tin.Lid(7);
+            Tin.Kind kind = Tin.Kind.Large;
+            int size = Tin.Defaults.Size();
+            using var pair = new Tin.Pair<string>("Mylo");
+            using var tin = new Tin<int>(5);
+            int lidNumber = tin.Lid;
+            using Tin.Lid own = tin.LidAt(1);
+            using Tin.Lid spare = TinShop.Spare();
+            using var shelf = new Tin.Shelf(2);
+            using var hinge = new Tin.Shelf.Hinge(shelf, 3);
+            using Tin.Latch<int> latch = new Tin.Latch<int>(tin, 2);
+            int peek = latch.Peek();
+            using Tin.Tag<int, string> tag = new Tin.Tag<int, string>(tin, "x");
+            Tin.Stamp stamp = tin.StampOf();
+            Tin.Kind kindOf = tin.KindOf();
+            return swapped + item + tagged.Label() + lid.Describe() + kind + size + pair.First() +
+                lidNumber + own.Number + spare.Number + hinge.Total() + peek + latch.Twice() +
+                tag.Both() + stamp.Code + kindOf + TinShop.NumberOf(lid) + typeof(Tin.IListener) +
+                cap.Size + knot.K + typeof(Basket.IPicker<int>);
+        }
     }
   """.trimIndent()
 
@@ -432,20 +562,25 @@ class Tier1NestedTypesTest {
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     val warnings: List<String> = result.kspWarnings
       .filter { it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) }
-    listOf(
-      // generic owner: `Box<T>.Lid` is a generic nested type in C#, one per `T`
-      "tier1.nesteddeferred.Box.Lid",
-    ).forEach { declaration ->
-      assertTrue(
-        warnings.any { it.contains(declaration) },
-        "expected $declaration to still skip named; warnings=$warnings",
-      )
-    }
-    listOf("Lid").forEach { name ->
+    // ADR-196: a generic `interface` owner is declined by its own arm, with its own reason, and
+    // the non-inner remedy.
+    val entry: String = assertNotNull(
+      warnings.singleOrNull { it.contains("Skipping tier1.nesteddeferred.Feed.Entry:") },
+      "expected Feed.Entry to still skip named; warnings=$warnings",
+    )
+    assertContains(
+      entry,
+      "its enclosing declaration `tier1.nesteddeferred.Feed` cannot own one: a generic " +
+          "`interface` owner has no non-generic C# type to hold its nested declarations",
+    )
+    assertContains(entry, "move it to the top level of its file")
+    // `Entry` alone would match every `EntryPoint =`; the declaration and a reference are what
+    // must be absent.
+    listOf(Regex("""\bclass Entry\b"""), Regex("""\bFeed\.Entry\b""")).forEach { pattern ->
       assertFalse(
-        result.generatedCSharp.withoutDocComments().contains(name),
-        "expected no declaration of, or dangling reference to, $name; csharp=" +
-            "${result.generatedCSharp.lines().filter { it.contains(name) }}",
+        pattern.containsMatchIn(result.generatedCSharp.withoutDocComments()),
+        "expected no declaration of, or dangling reference to, Entry; csharp=" +
+            "${result.generatedCSharp.lines().filter { pattern.containsMatchIn(it) }}",
       )
     }
   }
@@ -492,21 +627,124 @@ class Tier1NestedTypesTest {
   }
 
   @Test
-  fun `both generic inner shapes skip named, with their reason and a followable hint`() {
-    val result = Tier1Harness.run(deferredSource, fileName = "Deferred.kt")
+  fun `a generic nested class is declared as Outer dot Inner of T, inner or not`() {
+    val result = Tier1Harness.run(genericNestedSource, fileName = "GenericNested.kt")
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val basket: String = blockBody(result.generatedCSharp, "public class Basket")
+    assertContains(basket, "public class Slot<T>")
+    assertContains(basket, "public class Tagged<T>")
+    // ADR-147's hoisted carrier lands in the non-generic owner, beside its class.
+    assertContains(basket, "internal static class SlotNative")
+    // A nested generic class owns its children through a holder nested beside it.
+    assertContains(blockBody(basket, "public static class Slot\n"), "public class Cap")
+    assertFalse(blockBody(basket, "public class Slot<T>").contains("class Cap"))
+    assertContains(
+      blockBody(basket, "public class Tagged<T>"),
+      "public Tagged(Basket outer, T tag)",
+    )
+    val kotlin: String = result.generated
+    assertContains(kotlin, "@CName(\"library_tier1_genericnested__basket_slot_create\")")
+    assertContains(kotlin, "tier1.genericnested.Basket.Slot<Any?>(")
+    assertContains(kotlin, "handle.asStableRef<tier1.genericnested.Basket.Slot<Any?>>()")
+    assertContains(
+      kotlin,
+      "outer.asStableRef<tier1.genericnested.Basket>().get().Tagged<Any?>(",
+    )
+    assertContains(kotlin, "handle.asStableRef<tier1.genericnested.Basket.Tagged<Any?>>()")
+  }
+
+  @Test
+  fun `a generic owner's nested declarations live on a non-generic holder beside it`() {
+    val result = Tier1Harness.run(genericNestedSource, fileName = "GenericNested.kt")
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val csharp: String = result.generatedCSharp
+    val holder: String = blockBody(csharp, "public static class Tin\n")
+    listOf(
+      "public class Lid",
+      "public static class Defaults",
+      "public enum Kind",
+      "public interface IListener",
+      "public readonly record struct Stamp",
+      "public class Pair<U>",
+      "public class Shelf",
+      "public class Latch<T>",
+      "public class Tag<T, U>",
+    ).forEach { declaration ->
+      assertContains(holder, declaration, message = "expected `$declaration` on the holder")
+    }
+    assertContains(blockBody(holder, "public class Shelf"), "public Hinge(Shelf outer, int turns)")
+    assertContains(blockBody(holder, "public static class Pair\n"), "public class Knot")
+    // The generic class itself declares no type: CS7042 forbids an extern anywhere inside it.
+    val generic: String = blockBody(csharp, "public class Tin<T>")
+    listOf("class Lid", "class Latch", "enum Kind", "class Pair").forEach { declaration ->
+      assertFalse(generic.contains(declaration), "expected no `$declaration` inside Tin<T>")
+    }
+    // The member named like a nested type is no collision: it lives on Tin<T>.
+    assertContains(generic, "public int Lid")
+    assertContains(generic, "public global::Interop.Tin.Lid LidAt(int number)")
+    assertContains(
+      blockBody(csharp, "public static class TinShop"),
+      "global::Interop.Tin.Lid Spare()",
+    )
+    assertFalse(
+      result.kspErrors.any {
+        it.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name)
+      },
+      "expected no false CS0102 for `val lid` beside `class Lid`; errors=${result.kspErrors}",
+    )
+    val kotlin: String = result.generated
+    assertContains(kotlin, "@CName(\"library_tier1_genericnested__tin_lid_create\")")
+    assertContains(kotlin, "handle.asStableRef<tier1.genericnested.Tin.Lid>()")
+    assertContains(kotlin, "handle.asStableRef<tier1.genericnested.Tin.Pair<Any?>>()")
+  }
+
+  @Test
+  fun `an inner class of a generic owner is flattened onto the holder, outer typed Tin of T`() {
+    val result = Tier1Harness.run(genericNestedSource, fileName = "GenericNested.kt")
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val holder: String = blockBody(result.generatedCSharp, "public static class Tin\n")
+    assertContains(
+      blockBody(holder, "public class Latch<T>"),
+      "public Latch(global::Interop.Tin<T> outer, int turns)",
+    )
+    assertContains(blockBody(holder, "public class Latch<T>"), "public T Peek()")
+    assertContains(
+      blockBody(holder, "public class Tag<T, U>"),
+      "public Tag(global::Interop.Tin<T> outer, U label)",
+    )
+    val kotlin: String = result.generated
+    assertContains(kotlin, "@CName(\"library_tier1_genericnested__tin_latch_create\")")
+    assertContains(
+      kotlin,
+      "outer.asStableRef<tier1.genericnested.Tin<Any?>>().get().Latch(turns)",
+    )
+    assertContains(kotlin, "handle.asStableRef<tier1.genericnested.Tin<Any?>.Latch>()")
+    assertContains(
+      kotlin,
+      "outer.asStableRef<tier1.genericnested.Tin<Any?>>().get().Tag<Any?>(",
+    )
+    assertContains(kotlin, "handle.asStableRef<tier1.genericnested.Tin<Any?>.Tag<Any?>>()")
+  }
+
+  @Test
+  fun `the generic nested shapes that stay declined skip named, with a followable hint`() {
+    val result = Tier1Harness.run(genericNestedSource, fileName = "GenericNested.kt")
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     val warnings: List<String> = result.kspWarnings
       .filter { it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) }
-    // An inner class cannot be moved to the top level as it stands (it reads `this@Outer`), so its
-    // remedy has to say what to do with the outer instance.
     val innerHint = "drop `inner`, take the outer instance as a constructor parameter, and move " +
         "it to the top level of its file"
     mapOf(
-      "Skipping tier1.nesteddeferred.Host.GenInner:" to "a generic nested type is deferred",
-      "Skipping tier1.nesteddeferred.Box.Latch:" to
-          "its enclosing declaration `tier1.nesteddeferred.Box` cannot own one: a generic " +
-          "owner's nested type is itself generic in C# (`Owner<T>.Nested`)",
+      "Skipping tier1.genericnested.Tin.Latch.Bolt:" to
+          "its enclosing declaration `tier1.genericnested.Tin.Latch` cannot own one: an `inner " +
+          "class` that captures a generic owner's type parameters is itself generic in C#",
+      "Skipping tier1.genericnested.Tin.Echo:" to
+          "its type parameter `T` shadows the captured type parameter of " +
+          "`tier1.genericnested.Tin`",
     ).forEach { (declaration, reason) ->
       val warning: String = assertNotNull(
         warnings.singleOrNull { it.contains(declaration) },
@@ -515,17 +753,261 @@ class Tier1NestedTypesTest {
       assertContains(warning, reason)
       assertContains(warning, innerHint)
     }
-    // The non-inner neighbour keeps its own hint: top-level is followable for it.
-    val lid: String = warnings.single { it.contains("Skipping tier1.nesteddeferred.Box.Lid:") }
-    assertFalse(lid.contains("drop `inner`"), lid)
-    assertContains(lid, "move it to the top level of its file")
-    listOf("GenInner", "Latch").forEach { name ->
+    // Nothing else in the fixture is skipped as a declaration.
+    assertTrue(
+      warnings.all { it.contains("Tin.Latch.Bolt") || it.contains("Tin.Echo") },
+      "expected only Bolt and Echo to skip; warnings=$warnings",
+    )
+    // A reference to a captured inner class is a generic reference (ADR-147), named, not spelled.
+    assertTrue(
+      result.kspWarnings.any {
+        it.contains("tier1.genericnested.Tin.latchAt") && it.contains("SKIPPED_")
+      },
+      "expected latchAt to skip named; warnings=${result.kspWarnings}",
+    )
+    // The dropped member's remark lands on `Tin<T>` alone: the holder shares its Kotlin path, but
+    // has no members of its own to have lost one.
+    assertTrue(
+      Regex("Not generated from Kotlin `[^`]*latchAt`")
+        .findAll(result.generatedCSharp)
+        .count() == 1,
+      "expected one latchAt remark; csharp=" +
+          "${result.generatedCSharp.lines().filter { it.contains("latchAt") }}",
+    )
+    val declarations: String = result.generatedCSharp.withoutDocComments()
+    listOf("Bolt", "Echo", "LatchAt").forEach { name ->
       assertFalse(
-        result.generatedCSharp.withoutDocComments().contains(name),
+        declarations.contains(name),
         "expected no declaration of, or dangling reference to, $name; csharp=" +
             "${result.generatedCSharp.lines().filter { it.contains(name) }}",
       )
     }
+  }
+
+  @Test
+  fun `every generic nested shape compiles and constructs in C#`() {
+    val result = Tier1Harness.run(genericNestedSource, fileName = "GenericNested.kt")
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    // A nested generic interface is declared like a top-level one; a nested generic value class is
+    // refused like a top-level one (its `T` underlying has no value-class wire), named either way.
+    assertContains(
+      blockBody(result.generatedCSharp, "public class Basket"),
+      "public interface IPicker<T>",
+    )
+    assertTrue(
+      result.kspWarnings.any {
+        it.contains(ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE.name) &&
+            it.contains("Skipping tier1.genericnested.Basket.Wrap:")
+      },
+      "expected Basket.Wrap to be refused named; warnings=${result.kspWarnings}",
+    )
+    assertFalse(Regex("""\bstruct Wrap\b""").containsMatchIn(result.generatedCSharp))
+    Tier1CSharpCompile.assertCompiles(result, genericNestedConsumer)
+  }
+
+  @Test
+  fun `a generic owner registers its holder's children as factory entries`() {
+    val result = Tier1Harness.run(genericNestedSource, fileName = "GenericNested.kt")
+
+    // ADR-176: an erased read of a holder child (`FromHandle<Tin.Lid>`) needs its `Factories` key,
+    // spelled through the holder, which is the name a consumer's `typeof(...)` produces.
+    assertContains(result.generatedCSharp, "[typeof(global::Interop.Tin.Lid)]")
+    assertContains(result.generatedCSharp, "[typeof(global::Interop.Tin.Shelf.Hinge)]")
+    // An open generic wrapper registers nothing (ADR-147), on the holder as anywhere else.
+    assertFalse(result.generatedCSharp.contains("typeof(global::Interop.Tin.Latch"))
+  }
+
+  /**
+   * ADR-196 dropped the generic CANDIDATE arm for every admitted owner kind, not only a class:
+   * a generic class under an `interface` owner hoists its ADR-147 `{Name}Native` carrier inside the
+   * `public interface ICage` block, and under an `object` owner inside the static class.
+   */
+  @Test
+  fun `a generic nested class under an interface or object owner compiles in C#`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.genericowners
+
+      interface Cage {
+        class Bar<T>(val gauge: T) {
+          fun gaugeOf(): T = gauge
+        }
+        fun name(): String
+      }
+
+      object Registry {
+        class Entry<T>(val id: T)
+      }
+      """.trimIndent(),
+      fileName = "Owners.kt",
+    )
+
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    assertContains(
+      blockBody(result.generatedCSharp, "public interface ICage"),
+      "public class Bar<T>",
+    )
+    assertContains(
+      blockBody(result.generatedCSharp, "public static class Registry"),
+      "public class Entry<T>",
+    )
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using Interop;
+      public static class Consumer
+      {
+          public static int Run()
+          {
+              using var bar = new ICage.Bar<int>(3);
+              using var entry = new Registry.Entry<string>("Oreo");
+              return bar.GaugeOf() + entry.Id.Length;
+          }
+      }
+      """.trimIndent(),
+    )
+  }
+
+  /**
+   * ADR-196 beside the multi-bound generic owner (`where T : Comparable<T>, T : Pet`), whose `T`
+   * has no erased argument and is read back star-projected (`Arena<*>`). Its non-inner `Gate`
+   * captures nothing, so it binds on the holder like any other. Its inner `Lane` captures `T`; read
+   * back as `Arena<*>.Lane`, Kotlin rejects `challenge(other: T)` ("star projection prohibits the
+   * use of"), so it is a named skip rather than a half-bound class.
+   */
+  @Test
+  fun `a multi-bound generic owner binds its nested class and names its inner class`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.genericarena
+
+      interface Pet {
+        fun name(): String
+      }
+
+      class Cat(val n: String) : Pet, Comparable<Cat> {
+        override fun name(): String = n
+        override fun compareTo(other: Cat): Int = n.compareTo(other.n)
+      }
+
+      class Arena<T>(val champion: T) where T : Comparable<T>, T : Pet {
+        class Gate(val width: Int) {
+          fun describe(): String = "gate#" + width
+        }
+
+        inner class Lane(val number: Int) {
+          fun leader(): T = champion
+          fun challenge(other: T): Boolean = other > champion
+        }
+
+        fun gateAt(width: Int): Gate = Gate(width)
+      }
+      """.trimIndent(),
+      fileName = "Arena.kt",
+    )
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    assertContains(
+      blockBody(result.generatedCSharp, "public static class Arena\n"),
+      "public class Gate",
+    )
+    assertContains(result.generated, "handle.asStableRef<tier1.genericarena.Arena.Gate>()")
+    val lane: String = assertNotNull(
+      result.kspWarnings.singleOrNull {
+        it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
+            it.contains("Skipping tier1.genericarena.Arena.Lane:")
+      },
+      "expected Arena.Lane to skip named; warnings=${result.kspWarnings}",
+    )
+    assertContains(
+      lane,
+      "it captures the multi-bound type parameter `T` of `tier1.genericarena.Arena`, which has " +
+          "no single erased type to read the outer instance back as",
+    )
+    assertFalse(Regex("""\bclass Lane\b""").containsMatchIn(result.generatedCSharp))
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using Interop;
+      public static class Consumer
+      {
+          public static string Run()
+          {
+              using var cat = new Cat("Oreo");
+              using var arena = new Arena<Cat>(cat);
+              using Arena.Gate own = arena.GateAt(2);
+              using var gate = new Arena.Gate(3);
+              return gate.Describe() + own.Width;
+          }
+      }
+      """.trimIndent(),
+    )
+  }
+
+  /**
+   * ADR-196's holder is for the class route. The sealed route (ADR-009) renders a generic base
+   * without its type parameters (`public abstract class Outcome`), so an inner child's flattened
+   * outer `Outcome<T>` would name nothing (CS0308, measured) and the holder would collide with the
+   * base. Its children stay a named skip, by their own arm, rather than being admitted by the
+   * generic class rule.
+   */
+  @Test
+  fun `a generic sealed owner's nested declarations stay a named skip`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.genericsealed
+
+      sealed class Outcome<T> {
+        class Note(val n: Int)
+        inner class Mark(val m: Int)
+        data object None : Outcome<Nothing>()
+      }
+      """.trimIndent(),
+      fileName = "Outcome.kt",
+    )
+
+    // Not `compiledClean`: a generic sealed base's own `outcome_get_type` export reads
+    // `asStableRef<Outcome>()` with no type argument, which does not compile whatever it nests.
+    // That is the sealed route's, not this cell's; what is pinned here is the named refusal.
+    listOf("Note", "Mark").forEach { name ->
+      val warning: String = assertNotNull(
+        result.kspWarnings.singleOrNull {
+          it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
+              it.contains("Skipping tier1.genericsealed.Outcome.$name:")
+        },
+        "expected Outcome.$name to skip named; warnings=${result.kspWarnings}",
+      )
+      assertContains(
+        warning,
+        "a generic sealed base or arm is declared without its type parameters",
+      )
+      assertFalse(
+        Regex("""\bclass $name\b""").containsMatchIn(result.generatedCSharp.withoutDocComments()),
+        "expected no declaration of $name",
+      )
+    }
+  }
+
+  @Test
+  fun `a type nested in a generic owner and named like it is a named CS0542 error`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.genericjar
+
+      class Jar<T>(val item: T) {
+        class Jar(val size: Int)
+      }
+      """.trimIndent(),
+      fileName = "Jar.kt",
+    )
+
+    assertTrue(
+      result.kspErrors.any {
+        it.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name) &&
+            it.contains("tier1.genericjar.Jar.Jar") && it.contains("CS0542")
+      },
+      "expected the holder-scoped CS0542 to be named; errors=${result.kspErrors}",
+    )
   }
 
   @Test
@@ -596,7 +1078,7 @@ class Tier1NestedTypesTest {
     // Its own cell, because it is red for a different reason from the other three: the ADR-064
     // 2026-09-11 amendment made an `enum class` a *candidate* but never an *owner*, so the
     // declaration walk does not descend into one and `Season.Almanac` is skipped SILENTLY today,
-    // where `Box.Lid` and `Cage.Bar` are both named. ADR-133 keeps the enum
+    // where `Feed.Entry` and `Cage.Bar` are both named. ADR-133 keeps the enum
     // owner in the deferred set and says the deferred set stays named, so the walk has to descend
     // into an enum owner for the diagnostic even though it never declares anything there. Worth
     // settling in the ADR rather than inheriting the silence.
@@ -619,7 +1101,7 @@ class Tier1NestedTypesTest {
    * The value-class twin of the two cells above, and the one shape that reached the *member*
    * position with no gate at all: `ForwardBridgeTypeClassifier.valueClass()` spelled
    * `nestedCsName()` unconditionally, so `Reader.sealOf()` was emitted as
-   * `global::Interop.Box.Seal SealOf()` against a `readonly record struct` nothing declares, and
+   * `global::Interop.Feed.Seal SealOf()` against a `readonly record struct` nothing declares, and
    * the consumer's `Interop.cs` could not compile (CS0426/CS0234). The declaration-level skip was
    * already correct; only the member was silent.
    */
@@ -629,7 +1111,7 @@ class Tier1NestedTypesTest {
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
     listOf(
-      "tier1.nesteddeferred.Box.Seal",
+      "tier1.nesteddeferred.Feed.Seal",
       "tier1.nesteddeferred.Season.Stamp",
     ).forEach { declaration ->
       assertTrue(
@@ -642,7 +1124,7 @@ class Tier1NestedTypesTest {
       )
     }
     listOf(
-      "tier1.nesteddeferred.Reader.sealOf" to "tier1.nesteddeferred.Box.Seal",
+      "tier1.nesteddeferred.Reader.sealOf" to "tier1.nesteddeferred.Feed.Seal",
       "tier1.nesteddeferred.Reader.codeOf" to "tier1.nesteddeferred.Season.Stamp",
     ).forEach { (member, declaration) ->
       assertTrue(

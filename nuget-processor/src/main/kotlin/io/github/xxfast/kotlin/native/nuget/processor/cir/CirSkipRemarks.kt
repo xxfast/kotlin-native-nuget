@@ -219,13 +219,23 @@ private fun CirDeclaration.withSkipRemarks(
   // `properties` slot, so ADR-075's partial skip needs the member-list spelling of the property
   // route here. Without it an `object { var lastError: Throwable? }` -- whose setter alone is
   // refused -- recorded a `Property`-owned skip that matched no branch and attached to nothing.
-  is CirObject -> copy(
-    remarks = remarks + skips.matching(path + name, forInterface = false).map { it.paragraph },
-    methods = methods.withMemberPropertyRemarks(skips.propertySkipsFor(path + name)),
-    nestedDeclarations = nestedDeclarations.map { nested ->
-      nested.withSkipRemarks(skips, path + name, holderSkips)
-    },
-  )
+  // ADR-196: a generic class's holder shares its Kotlin path (`["Tin"]`) with `Tin<T>`, which is
+  // where that path's skips belong; the holder only passes the path on to its children.
+  is CirObject -> if (isNestedTypeHolder) {
+    copy(
+      nestedDeclarations = nestedDeclarations.map { nested ->
+        nested.withSkipRemarks(skips, path + name, holderSkips)
+      },
+    )
+  } else {
+    copy(
+      remarks = remarks + skips.matching(path + name, forInterface = false).map { it.paragraph },
+      methods = methods.withMemberPropertyRemarks(skips.propertySkipsFor(path + name)),
+      nestedDeclarations = nestedDeclarations.map { nested ->
+        nested.withSkipRemarks(skips, path + name, holderSkips)
+      },
+    )
+  }
 
   is CirValueClass -> copy(
     remarks = remarks + skips.matching(path + name, forInterface = false).map { it.paragraph },

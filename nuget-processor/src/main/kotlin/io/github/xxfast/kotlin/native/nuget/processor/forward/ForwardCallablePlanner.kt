@@ -1677,7 +1677,7 @@ internal class ForwardCallablePlanner(
     cls: KSClassDeclaration,
     methods: List<KSFunctionDeclaration>,
   ): List<ForwardCallableCatalogEntry> {
-    if (cls.typeParameters.isEmpty()) return this
+    if (cls.forwardTypeParametersInScope().isEmpty()) return this
     val markers: Set<String> = classifier.exportMarkers
     // The pairs exactly as `warnRefusedLegacyRouteMembers` detects them, so "named there" means
     // what that walk names: a lambda listener is a stored pair, never a subscription one.
@@ -4196,9 +4196,27 @@ internal class ForwardCallablePlanner(
    */
   private fun innerConstructorReceiver(cls: KSClassDeclaration?): ForwardReceiver {
     if (cls == null || !cls.modifiers.contains(Modifier.INNER)) return ForwardReceiver.Static
-    val outer: String = (cls.parentDeclaration as? KSClassDeclaration)?.qualifiedName?.asString()
-      ?: return ForwardReceiver.Static
-    return ForwardReceiver.Handle(BridgeType.ObjectHandle(outer), name = "outer")
+    val outerDeclaration: KSClassDeclaration =
+      cls.parentDeclaration as? KSClassDeclaration ?: return ForwardReceiver.Static
+    val outer: String = outerDeclaration.qualifiedName?.asString() ?: return ForwardReceiver.Static
+    // ADR-196: a generic outer (the inner class is flattened onto its holder as `Tin.Latch<T>`) is
+    // read back applied (`asStableRef<pkg.Tin<Any?>>`) and typed `Tin<T>` in C#, spelled through
+    // `global::` because the bare `Tin` inside the holder is the holder itself. An outer that is
+    // itself a captured inner class never gets here: it cannot own one (`NugetProcessor`).
+    val applied: String? = outerDeclaration.forwardOwnerTypeName()
+    if (applied == null || outerDeclaration.typeParameters.isEmpty()) {
+      return ForwardReceiver.Handle(BridgeType.ObjectHandle(outer), name = "outer")
+    }
+    val arguments: String = outerDeclaration.typeParameters.joinToString(", ") { parameter ->
+      outerDeclaration.forwardCsharpTypeParameterName(parameter)
+    }
+    val namespace: String? = classifier.csharpNamespaceOf(outerDeclaration)
+    val name: String = "${outerDeclaration.nestedCsName()}<$arguments>"
+    val csharpType: String = if (namespace == null) name else "global::$namespace.$name"
+    return ForwardReceiver.Handle(
+      BridgeType.ObjectHandle(outer, csharpType = csharpType, kotlinReadType = applied),
+      name = "outer",
+    )
   }
 
   private fun receiverParameter(

@@ -547,6 +547,12 @@ internal data class CirObject(
   // ADR-064 amendment (issue #249): generated `<remarks>` prose, one paragraph per member the
   // bridge dropped from this declaration. Attached by `CirFile.withSkipRemarks` after translation.
   val remarks: List<String> = emptyList(),
+  /**
+   * ADR-196: this is no Kotlin `object` but the non-generic holder `Tin` a generic class `Tin<T>`
+   * declares its nested types on. It has no members of its own, so the generic class's dropped
+   * members are never named on it.
+   */
+  val isNestedTypeHolder: Boolean = false,
 ) : CirDeclaration
 
 internal enum class CirVariance { INVARIANT, COVARIANT, CONTRAVARIANT }
