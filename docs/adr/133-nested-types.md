@@ -489,10 +489,22 @@ the collision error (`ERROR_CSHARP_SIGNATURE_COLLISION`) and the deferral warnin
 - CS0542: "rename the nested declaration, or its owner, so the two names differ". No member is
   involved, so no "colliding member" and no PascalCasing remark.
 - CS0102: unchanged, "rename the nested declaration, or the colliding member, so the two names
-  differ after PascalCasing".
+  differ after PascalCasing" (reworded on 2026-10-04, see the last amendment).
 
 **Evidence.** Verified: three `Tier1NestedTypesTest` cells were red before and green after (a
 nested value class under a deferred owner, `Box.Seal` and `Season.Stamp`; the CS0542 case
 `Owner.Owner`; the value-class collision `Hamper.Weight`). Full `:nuget-processor:test`: 1545
 passed, 0 failed. Processor only: the native pipeline was not run for this item (the assembled
 stack is verified as a whole). No leak row: no handle route was added.
+
+## Amendment (2026-10-04): the member-name arm compares rendered C# names
+
+`nestedOwnerScopeCollision()` compared a nested type's name with the owner's and companion's members
+by their Kotlin simple names, first letter uppercased. It now compares the C# name each member
+renders (a `@CSharpName` name, or `{Name}Async` for a `suspend fun`), so a `@CSharpName` that takes
+the nested type's name fails the build, while a rename away from it, or a `suspend fun` that renders
+`{Name}Async`, no longer fails falsely. The CS0542 owner-name arm is unchanged. The rule, the
+evidence and the cells are in [ADR-179](179-author-declared-csharp-member-name.md)'s 2026-10-04
+amendment. The CS0102 hint now reads "rename the nested declaration, or the colliding member, or
+give the member a different `@CSharpName`, so the two C# names differ", since the compared names are
+the rendered ones.

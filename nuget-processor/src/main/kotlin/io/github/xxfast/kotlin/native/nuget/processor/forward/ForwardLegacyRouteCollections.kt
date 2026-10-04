@@ -1324,14 +1324,27 @@ private fun listenerProperties(listener: KSClassDeclaration): List<KSPropertyDec
  * listener `val` crosses as the same getter slot [ForwardInterfaceBridgePlanner] gives it when a
  * C# implementation is passed at a plain parameter. Only called for a pair the gate admitted, so
  * every property has a slot.
+ *
+ * Both halves name a listener function's pair after the function (`nameGetPtr` for
+ * `fun nameGet()`), so a getter slot whose prefix a function already holds moves to `_2`
+ * ([withUniqueSlotPrefixes]); the gate has already refused a repeated function name.
  */
 internal fun ForwardBridgeTypeClassifier.listenerPropertySlots(
   listener: KSClassDeclaration,
-): List<ForwardBridgeSlot> = listenerProperties(listener).map { property ->
-  requireNotNull(ForwardInterfaceBridgePlanner.slotOf(property, this)) {
-    "ADR-039: the subscription pair gate admitted `${property.simpleName.asString()}`, " +
-        "which has no getter slot"
-  }
+): List<ForwardBridgeSlot> {
+  val functionNames: Set<String> = listener.getAllFunctions()
+    .filter { method -> method.getVisibility() == Visibility.PUBLIC }
+    .filter { method -> !method.isCompilerOwnedMember(listener) }
+    .map { method -> method.simpleName.asString() }
+    .toSet()
+  return listenerProperties(listener)
+    .map { property ->
+      requireNotNull(ForwardInterfaceBridgePlanner.slotOf(property, this)) {
+        "ADR-039: the subscription pair gate admitted `${property.simpleName.asString()}`, " +
+            "which has no getter slot"
+      }
+    }
+    .withUniqueSlotPrefixes(functionNames)
 }
 
 /**

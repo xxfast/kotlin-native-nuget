@@ -148,6 +148,29 @@ class CirOrdinaryRendererTest {
     assertFalse(rendered.contains("Native_@"))
   }
 
+  /**
+   * ADR-179 amendment (2026-10-03): an async or Flow method's `[DllImport]` comes from its legacy
+   * route, beside it in `companionMembers`. Reaching `CirClass.methods` instead used to import
+   * `patient_Native_lock` under `Native_lock`, a symbol no export has; it now fails by name.
+   */
+  @Test
+  fun `an async or flow method in class methods fails by name rather than importing`() {
+    val plain: CirClass = keywordMethodClass(externName = null)
+    listOf(
+      plain.copy(
+        methods = plain.methods.map { method ->
+          method.copy(isAsync = true, asyncReturnType = "string")
+        },
+      ),
+      plain.copy(
+        methods = plain.methods.map { method -> method.copy(isFlow = true, flowElementType = "int") },
+      ),
+    ).forEach { cls ->
+      val failure: IllegalStateException = assertFailsWith { render(cls) }
+      assertContains(failure.message.orEmpty(), "Patient.lock")
+    }
+  }
+
   @Test
   fun `keyword method name renders through the extern name a plan carried`() {
     val cls: CirClass = keywordMethodClass(externName = "Native_Lock")

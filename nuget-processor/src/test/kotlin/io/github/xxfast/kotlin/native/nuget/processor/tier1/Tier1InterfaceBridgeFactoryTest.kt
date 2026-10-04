@@ -260,6 +260,62 @@ class Tier1InterfaceBridgeFactoryTest {
   }
 
   /**
+   * A member-less (marker) interface has no slots, and the planner used to read that as "out of
+   * scope": no factory, so a C# implementation passed at a plain parameter threw at `HandleOf`,
+   * while the ADR-039 add/remove pair accepts the same implementation. It plans an empty factory
+   * now: no slot pairs, the release pair and the token, and an empty `object : Marker`.
+   */
+  @Test
+  fun `a member-less interface gets a factory on both halves`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.bridgefactorymarker
+
+      interface Marker
+
+      class Kennel {
+        fun admit(marker: Marker): Marker = marker
+      }
+      """.trimIndent(),
+    )
+    assertTrue(result.kspSucceeded, "kspErrors=${result.kspErrors}")
+    assertTrue(result.compiledClean, "compileErrors=${result.compileErrors}")
+
+    val kotlin: String = result.generated
+    assertContains(kotlin, "@CName(\"library_tier1_bridgefactorymarker__marker_bridge_create\")")
+    assertContains(
+      kotlin,
+      "val bridge = object : tier1.bridgefactorymarker.Marker, NugetCSharpBridge {",
+    )
+
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "EntryPoint = \"library_tier1_bridgefactorymarker__marker_bridge_create\"")
+    assertContains(
+      cs,
+      "private static extern IntPtr Native_Create(IntPtr releasePtr, IntPtr releaseCtx, " +
+          "IntPtr token, out IntPtr error);",
+    )
+    assertFalse(cs.contains("passing a C#-implemented interface is not supported yet"), cs)
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using Interop;
+
+      public sealed class Tag : IMarker
+      {
+          public void Dispose() { }
+      }
+
+      public static class Probe
+      {
+          public static IMarker Admit(Kennel kennel) => kennel.Admit(new Tag());
+      }
+      """.trimIndent(),
+      allowUnsafe = true,
+    )
+  }
+
+  /**
    * ADR-084: an enum slot is spelled by the shared classifier. Since ADR-134 admitted interface
    * owners, an enum nested in the interface itself is declared in C# (`IKettle.Whistle`), so the
    * interface plans its factory like any other enum member. The member is `whistleState()`, not

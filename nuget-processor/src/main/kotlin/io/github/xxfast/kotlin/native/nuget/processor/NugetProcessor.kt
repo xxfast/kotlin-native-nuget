@@ -81,6 +81,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.COMPANION_OWNER_INTERFACE
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCarrierlessCompanion
 import io.github.xxfast.kotlin.native.nuget.processor.forward.carrierlessCompanionDrops
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.NUGET_BINDING_MARKER
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardValueClassUnderlying
 import io.github.xxfast.kotlin.native.nuget.processor.forward.validateCSharpNames
@@ -335,8 +337,8 @@ internal sealed interface NestedOwnerScopeCollision {
   data class Member(val name: String) : NestedOwnerScopeCollision {
     override val reason: String = "the member `$name` of the same C# type (CS0102)"
     override val hint: String =
-      "rename the nested declaration, or the colliding member, so the two names differ after " +
-          "PascalCasing"
+      "rename the nested declaration, or the colliding member, or give the member a different " +
+          "`@CSharpName`, so the two C# names differ"
   }
 }
 
@@ -375,20 +377,35 @@ internal fun KSClassDeclaration.nestedOwnerScopeCollision(): NestedOwnerScopeCol
   } else {
     companion.getAllProperties()
       .filter { it.getVisibility() == Visibility.PUBLIC }
-      .map { it.simpleName.asString() }
+      .map { it.nestedScopeMemberName() }
       .toList() +
         companion.getAllFunctions()
           .filter { it.getVisibility() == Visibility.PUBLIC }
-          .map { it.simpleName.asString() }
+          .map { it.nestedScopeMemberName() }
           .toList()
   }
   val memberNames: List<String> =
-    (owner.getAllProperties().map { it.simpleName.asString() }.toList() +
-        owner.getAllFunctions().map { it.simpleName.asString() }.toList() +
-        companionMemberNames)
-      .map { it.replaceFirstChar { c -> c.uppercase() } }
+    owner.getAllProperties().map { it.nestedScopeMemberName() }.toList() +
+        owner.getAllFunctions().map { it.nestedScopeMemberName() }.toList() +
+        companionMemberNames
   return if (name in memberNames) NestedOwnerScopeCollision.Member(name) else null
 }
+
+/**
+ * The C# member name a nested type's name is compared with (ADR-133 surface 6): the rendered one,
+ * so a `@CSharpName` that takes the nested type's name collides and one that renames away does not
+ * (ADR-179), and a `suspend fun` is compared as the `{Name}Async` it renders. Compared unescaped,
+ * like every collision key.
+ */
+private fun KSPropertyDeclaration.nestedScopeMemberName(): String =
+  if (modifiers.contains(Modifier.CONST)) {
+    simpleName.asString().replaceFirstChar { c -> c.uppercase() }
+  } else {
+    csharpMemberName()
+  }
+
+private fun KSFunctionDeclaration.nestedScopeMemberName(): String =
+  if (modifiers.contains(Modifier.SUSPEND)) csharpAsyncMemberName() else csharpMemberName()
 
 internal fun warnDroppedForwardCallables(
   catalog: ForwardCallablePlanCatalog,

@@ -698,6 +698,34 @@ pipeline `IntegrationTests/ListenerPropertyTests.cs` reads every property live f
 `InterfaceBridge_ListenerStringProperty_ReturnsToBaseline`, returns to baseline (165 `LeakTests`
 green).
 
-Inferred, not fixed here: a listener declaring both `val name` and `fun nameGet()` would clash on a
-generated parameter name (`nameGetPtr`), and a member-less listener skips the Kotlin export while
-the C# `DllImport` is still generated. Both are scheduled for a later item.
+Two residuals were left open here, both fixed the same day (see the last amendment below): a
+listener declaring both `val name` and `fun nameGet()` clashed on a generated parameter name
+(`nameGetPtr`), and a member-less listener skipped the Kotlin export while the C# `DllImport` was
+still generated.
+
+## Amendment (2026-10-04): slot names are unique, and a member-less listener binds
+
+Closes the two residuals the previous amendment listed as inferred. Both are now reproduced and
+fixed.
+
+**Unique slot names.** The subscription export names each callback pair after its member
+(`nameGetPtr`/`nameGetCtx` for `fun nameGet()`), and a listener `val name` takes the same prefix as
+its getter slot. A listener declaring both generated `nameGetPtr` twice, on the Kotlin export
+(`Conflicting declarations`) and on the C# `DllImport`. `listenerPropertySlots` now runs the property
+slots through `withUniqueSlotPrefixes` (`ForwardInterfaceBridgePlanner.kt`), with the listener's
+function names as the reserved set. The function keeps its name and the getter slot becomes
+`nameGet_2` on both halves. A listener whose slots do not clash generates exactly what it did.
+
+**A member-less listener binds.** `addInterfaceBridgeExports` returned early when the listener had
+no function and no property slots, so the Kotlin export was never written while the C# half still
+declared its import; the ADR-055 contract check then failed the build with
+`ERROR_INTERNAL_GENERATOR_FAILURE` ("missing Kotlin export"). The early return is gone. The export
+takes only the receiver and builds an empty `object : Listener`, which is the import the C# half
+already declared, so `AddX(new Quiet())` subscribes and `Dispose()` releases it.
+
+Evidence, verified: `Tier1InterfaceBridgeSlotNameTest` compiles both generated halves and a C#
+consumer for the `val name` plus `fun nameGet()` listener and for a member-less listener (it also
+asserts no skip warning for the pair), and `IntegrationTests/MarkerInterfaceTests.cs` subscribes and
+unsubscribes a C# member-less listener on the native pipeline. Full `:nuget-processor:test`: 1698
+passed; native pipeline `IntegrationTests` 3069, `LeakTests` 169, 7 AOT shapes. The slot-name
+clash is verified by the Tier 1 cell only, not on the native pipeline.

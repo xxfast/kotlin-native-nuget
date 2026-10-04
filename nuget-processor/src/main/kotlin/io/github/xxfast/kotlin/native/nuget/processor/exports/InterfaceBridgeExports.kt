@@ -83,7 +83,10 @@ internal fun FileSpec.Builder.addInterfaceBridgeExports(
   // not compile; each crosses as its ADR-084 getter slot, ahead of the function slots.
   val propertySlots: List<ForwardBridgeSlot> = classifier.listenerPropertySlots(ifaceDecl)
 
-  if (ifaceMethods.isEmpty() && propertySlots.isEmpty()) return
+  // A listener with no members still subscribes: the bridge is an empty `object : Listener`, and
+  // the export takes only the receiver, which is the import the C# half declares for it. Skipping
+  // it here left that import with no export, which the ADR-055 contract check reported as a
+  // generator failure. A plain parameter of a member-less interface type binds too.
 
   val subscribeBody: String = buildString {
     appendLine("return try {")

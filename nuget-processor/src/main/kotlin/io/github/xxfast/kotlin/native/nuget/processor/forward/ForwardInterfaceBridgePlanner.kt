@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.forward
 
+import io.github.xxfast.kotlin.native.nuget.processor.CSHARP_RESERVED
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.ClassKind
@@ -68,12 +69,57 @@ internal data class ForwardBridgeSlot(
    * export suffix.
    */
   val overloadSuffix: String = "",
+  /**
+   * `_$n` when another slot, or a name the route's own generated code declares, already holds this
+   * slot's prefix ([withUniqueSlotPrefixes]); `""` otherwise.
+   */
+  val uniqueSuffix: String = "",
 ) {
   /**
    * `nameGetPtr` / `speakPtr` / `speak_2Ptr`: the ABI parameter prefix, shared by both
    * projections.
    */
-  val slotPrefix: String = if (isProperty) "${name}Get" else "$name$overloadSuffix"
+  val slotPrefix: String =
+    (if (isProperty) "${name}Get" else "$name$overloadSuffix") + uniqueSuffix
+}
+
+/**
+ * The names the ADR-084 bridge factory's generated code declares beside its slot-derived ones: the
+ * release pair (`releasePtr`, `releaseCtx`, `releaseFn`) and the C# `Create` method's parameter and
+ * locals. The C# half declares each slot's delegate under the bare prefix, so a C# keyword is
+ * reserved too. A slot lambda's own locals (`result`, `value0`) may shadow a delegate, so they are
+ * not.
+ */
+internal val BRIDGE_FACTORY_FIXED_NAMES: Set<String> =
+  setOf("release", "token", "state", "impl", "error") + CSHARP_RESERVED
+
+/**
+ * [this] with every [ForwardBridgeSlot.slotPrefix] unique among the slots and absent from [fixed].
+ *
+ * `val name` and `fun nameGet()` both had the prefix `nameGet`, so the export declared `nameGetPtr`
+ * twice (a Kotlin `Conflicting declarations` error) and the C# import did the same. Function slots
+ * claim first, in order, then property slots, so on both routes it is the getter slot that moves
+ * (the ADR-039 pair's function slots are named by [fixed]). A later claimant takes the smallest
+ * `_2`, `_3`, ... that no slot and no fixed name holds. A shape with no clash keeps every prefix.
+ */
+internal fun List<ForwardBridgeSlot>.withUniqueSlotPrefixes(
+  fixed: Set<String>,
+): List<ForwardBridgeSlot> {
+  val reserved: Set<String> = fixed + map { slot -> slot.slotPrefix }
+  val claimed: MutableSet<String> = fixed.toMutableSet()
+  val unique: MutableList<ForwardBridgeSlot> = toMutableList()
+  indices.sortedBy { index -> if (this[index].isProperty) 1 else 0 }.forEach { index ->
+    val slot: ForwardBridgeSlot = this[index]
+    if (claimed.add(slot.slotPrefix)) return@forEach
+    val ordinal: Int = generateSequence(2) { n -> n + 1 }.first { n ->
+      val candidate: String = "${slot.slotPrefix}_$n"
+      candidate !in reserved && candidate !in claimed
+    }
+    val renamed: ForwardBridgeSlot = slot.copy(uniqueSuffix = "_$ordinal")
+    claimed.add(renamed.slotPrefix)
+    unique[index] = renamed
+  }
+  return unique
 }
 
 internal data class ForwardBridgeInterfacePlan(
@@ -134,7 +180,10 @@ internal object ForwardInterfaceBridgePlanner {
         val occurrence: Int = occurrences.merge(slot.name, 1, Int::plus)!!
         slots.add(if (occurrence == 1) slot else slot.copy(overloadSuffix = "_$occurrence"))
       }
-    if (slots.isEmpty()) return null
+    // A member-less (marker) interface plans with no slots: its factory carries only the release
+    // pair and the token, and the Kotlin bridge is an empty `object : Marker`. Reading "no slots"
+    // as out of scope left `HandleOf` throwing for a C# implementation at a plain parameter, while
+    // the ADR-039 add/remove pair accepts the same implementation.
 
     return ForwardBridgeInterfacePlan(
       declaration = iface,
@@ -153,7 +202,7 @@ internal object ForwardInterfaceBridgePlanner {
       // points stopped colliding and the build got far enough to emit both.
       stateClassName =
         "${symbols.csharpQualifier(iface)}${iface.nestedCsName().replace(".", "")}BridgeState",
-      slots = slots,
+      slots = slots.withUniqueSlotPrefixes(BRIDGE_FACTORY_FIXED_NAMES),
     )
   }
 

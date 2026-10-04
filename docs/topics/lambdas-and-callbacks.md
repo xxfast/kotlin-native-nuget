@@ -458,6 +458,11 @@ as `SKIPPED_UNSUPPORTED_INPUT`, and any other type (a collection, a nullable pri
 class) as `SKIPPED_UNSUPPORTED_RETURN`. To bind the pair, declare the property `val` on the
 listener, or pass the new value through a member function.
 
+A listener with no members at all (a marker interface) binds too: `AddX(new Quiet())` subscribes
+and the returned `IDisposable` unsubscribes, with nothing for Kotlin to call. A listener can also
+declare `val name` beside `fun nameGet()`. The generated plumbing keeps the two apart, and your C#
+class implements `Name` and `NameGet` as usual.
+
 The pair also refuses, named the same way on both halves, when `Watcher` itself has no C#
 declaration at all: nested under an owner that never gets its own nested declaration (an `enum
 class`, a generic `interface`, or a generic sealed owner; see [Classes and objects: Nested

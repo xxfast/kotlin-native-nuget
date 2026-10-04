@@ -418,11 +418,14 @@ Assert.Equal(5, aviary.HeightOf(perch));
 ```
 
 An `enum class` owner stays a named skip (`SKIPPED_NESTED_DECLARATION`); see
-[Inner classes](#inner-classes) for what an `inner class` declares. Kotlin allows a nested type named exactly like its owner, or like a PascalCased
-member of its owner (a companion's members included, since they fold into the owner's C# type as
-statics); C# does not, so that combination fails generation (`ERROR_CSHARP_SIGNATURE_COLLISION`)
-instead of emitting invalid C#. Avoid naming an accessor, or a companion function, the same as its
-nested return type (`fun perch(): Perch`); name it differently instead (`perchAt`).
+[Inner classes](#inner-classes) for what an `inner class` declares. Kotlin allows a nested type named exactly like its owner, or like a member of its owner
+(a companion's members included, since they fold into the owner's C# type as statics); C# does not,
+so that combination fails generation (`ERROR_CSHARP_SIGNATURE_COLLISION`) instead of emitting
+invalid C#. The member is compared by the name it has in C#: its PascalCased name, the name from
+`@CSharpName`, or `{Name}Async` for a `suspend fun`. So `@CSharpName("Perch") fun take()` beside
+`class Perch` fails, while `suspend fun perch()` or `@CSharpName("perch") fun perch()` beside it
+does not. Avoid naming an accessor, or a companion function, the same as its nested return type
+(`fun perch(): Perch`); name it differently instead (`perchAt`).
 
 ### Nested types and generic classes {id="nested-generic-owner"}
 
