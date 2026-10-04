@@ -560,6 +560,19 @@ internal fun warnDroppedForwardProperties(
         owner = dropped.owner,
         member = dropped.memberName,
       )
+    } else if (dropped.nullableFunctionType != null) {
+      // The owner binds this function type non-null, so its nullability is what has no route.
+      ForwardDiagnostic(
+        kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY,
+        symbol = dropped.node,
+        declaration = dropped.symbol,
+        reason = "its type is a nullable function type, which has no property route on this " +
+            "owner; only the non-null ${dropped.nullableFunctionType} binds here",
+        hint = "declare the property as the non-null ${dropped.nullableFunctionType}, with a " +
+            "no-op lambda in place of null",
+        owner = dropped.owner,
+        member = dropped.memberName,
+      )
     } else if (dropped.reason?.ownsSentence(dropped.detail) == true) {
       // ADR-064's 2026-09-11 amendment: the reason the property planner classified already has a
       // sentence and a remedy that agree with each other, and the shipped pair below contradicts

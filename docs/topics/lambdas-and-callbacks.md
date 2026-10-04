@@ -91,6 +91,25 @@ The lambda's type arguments follow the rules above. One Kotlin cannot have C# sp
 return (`suspend () -> Int`) and a lambda returned from a class, object or companion member are named
 skips too; expose a lambda property on the class instead.
 
+### Which lambda properties bind {id="which-lambda-properties-bind"}
+
+A lambda property binds on an ordinary class and on a sealed arm. A lambda declared on a sealed base
+binds on every arm, not on the base type. Every other owner names the property in a
+`SKIPPED_UNSUPPORTED_PROPERTY` warning and generates no C# member: an interface, an `object`, a
+companion, a top-level property and a generic class. A `suspend` lambda property binds on an
+ordinary class only; on a sealed arm or base, or an interface, it is named the same way.
+
+The binding is read-only and non-null:
+
+```kotlin
+var onPurr: (Int) -> Unit = {}
+val onWake: (() -> Unit)? = null
+```
+
+`OnPurr` is a get-only `KotlinAction<int>`, and its setter is named once as
+`SKIPPED_UNSUPPORTED_INPUT`. `onWake` is not generated at all: the warning says only the non-null
+form binds, so declare it non-null with a no-op lambda in place of `null`.
+
 ### A lambda's type arguments across a namespace boundary {id="type-arguments-across-a-namespace-boundary"}
 
 A lambda property's type arguments are qualified with their full namespace automatically, so a
@@ -103,7 +122,8 @@ public KotlinFunc<global::TestLibrary.Catcam.Lens.CamId, global::TestLibrary.Cat
 
 If a type argument has no C# spelling at all, for example a lambda returning `Flow<T>`, the
 property is dropped from the generated class instead of emitting code that won't compile. If a
-lambda-typed property you expect is missing, check for this rather than a build error naming it.
+lambda-typed property you expect is missing, check the build's warnings, and the owner and
+nullability rules above.
 
 ## C# → Kotlin: per-call lambda parameters
 

@@ -4,13 +4,12 @@ import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
-import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Visibility
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
-import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
-import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLambdaPropertyCarrier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.carriesLegacyLambdaProperty
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ENUM_ARM_VALUE_MEMBER
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
@@ -19,7 +18,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPl
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardPropertyPlanExports
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
 import io.github.xxfast.kotlin.native.nuget.processor.forward.handleBody
-import io.github.xxfast.kotlin.native.nuget.processor.forward.nullableHandleBody
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 
 /**
@@ -148,15 +146,10 @@ internal fun FileSpec.Builder.addSealedClassExports(
       // Residual legacy route: a lambda-typed property, which has no plan shape yet (the C# half
       // still spells its own `KotlinFunc<...>` arm in `translateSealedClass`). Everything else the
       // planner declined is skipped, with a `SKIPPED_UNSUPPORTED_PROPERTY` diagnostic behind it.
-      val propTypeResolved: KSType = prop.type.resolve().expandAliases()
-      val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
-      if (qualifiedTypeName !in LAMBDA_TYPES) continue
+      // A nullable lambda is refused (named by the planner), so the body has no null path.
+      if (!prop.carriesLegacyLambdaProperty(ForwardLambdaPropertyCarrier.SEALED_ARM)) continue
       val access: String = "handle.asStableRef<$subQualifiedName>().get().$propName"
-      val body: String = if (propTypeResolved.isMarkedNullable) {
-        nullableHandleBody(access, "errorOut")
-      } else {
-        handleBody(access, "errorOut")
-      }
+      val body: String = handleBody(access, "errorOut")
       addFunction(
         sealedPropertyGetter(prop, subPrefix, propName)
           .returns(cOpaquePointer.copy(nullable = true))

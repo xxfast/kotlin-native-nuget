@@ -386,3 +386,15 @@ named, see ADR-147's 2026-10-03 amendment. `(T) -> Unit` is declined in `isCallb
 Evidence, verified: `Tier1GenericOwnerLegacyRouteTest` (planned `Each` and `Count` bind) and the
 consumer test `Box_PlannedCallbackMember_CallsTheDelegateBack`. No `LeakTests` row: the payload is a
 scalar, so no handle is minted.
+
+## Amendment (2026-10-04): the property planner no longer treats a callback type as a `lambda` protocol
+
+Classifying an admissible `(Int) -> Unit` as `BridgeType.Callback` removed it from the `lambda `
+protocol prefix the property planner's quiet list matched, so a function-typed *property* the class
+and sealed-arm lambda-property routes still bind (the route the paragraph on stored positions
+above says is untouched) was reported as skipped while it was emitted. The property planner now
+asks the route itself, through one predicate shared with the emitters, rather than matching the
+protocol name, so `val onNapFor: (Int) -> Unit` binds as `KotlinAction<int>` with no warning. The
+classification here is unchanged; a function-typed property still takes no part in the plan. See
+[ADR-064's 2026-10-04 amendment](064-forward-unsupported-declaration-diagnostics.md) for the
+per-owner rule, including the read-only `var` and the refused nullable lambda property.

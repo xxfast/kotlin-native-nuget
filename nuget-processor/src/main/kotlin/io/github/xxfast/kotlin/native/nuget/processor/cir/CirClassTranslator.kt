@@ -20,6 +20,8 @@ import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.ExpectIndex
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLambdaPropertyCarrier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.carriesLegacyLambdaProperty
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
@@ -1053,6 +1055,12 @@ internal fun translateClass(
 
       if (propTypeResolved.isForwardFlowType()) {
         return@mapNotNull flowProperty(prop, name, context, classifier, tracker)
+      }
+
+      // The Kotlin half and the planner's skip report read the same predicate, so a lambda this
+      // declines (a nullable one) is named once and emitted by neither half.
+      if (!prop.carriesLegacyLambdaProperty(ForwardLambdaPropertyCarrier.CLASS)) {
+        return@mapNotNull null
       }
 
       val isLambdaType: Boolean = qualifiedTypeName in LAMBDA_TYPES
@@ -2627,8 +2635,9 @@ internal fun translateSealedClass(
           // hand-spelled in `SealedClassExports` too. It swallows the error slot (`out _`) until
           // lambda properties migrate for ordinary classes.
           val propTypeResolved: KSType = prop.type.resolve().expandAliases()
-          val qualifiedTypeName: String? = propTypeResolved.declaration.qualifiedName?.asString()
-          if (qualifiedTypeName !in LAMBDA_TYPES) return@mapNotNull null
+          if (!prop.carriesLegacyLambdaProperty(ForwardLambdaPropertyCarrier.SEALED_ARM)) {
+            return@mapNotNull null
+          }
           val lambdaArity: Int = propTypeResolved.arguments.size - 1
           tracker.lambdaArities.add(lambdaArity)
           // Issue #111, the sealed-subclass copy of the same rule as the ordinary-class arm.
