@@ -146,23 +146,17 @@ internal fun FileSpec.Builder.addGenericFunctionExports(
 
   val cname = "${symbolStem}_object"
 
-  // The class route's bound spellings: a generic bound keeps its arguments
-  // (`asStableRef<kotlin.Comparable>()` names no type), and a multi-bound `T` is read through its
-  // first bound and smart-cast to the rest, since no single type argument names the intersection.
+  // The class route's bound spellings and reader: a generic bound keeps its arguments
+  // (`kotlin.Comparable` names no type), the box is cast, checked, to every bound (ADR-015
+  // amendment: `Weigh<uint>` fails at the read, not in the body), and a multi-bound `T` is typed
+  // as the intersection no single type argument names.
   val bounds: List<String> = func.typeParameters.firstOrNull()?.forwardBoundSpellings().orEmpty()
-
-  val refType: String = bounds.firstOrNull() ?: "Any"
 
   // ADR-147 amendment, applied to this route: an unconstrained `T` (upper bound `Any?`) may be
   // null, so the object variant takes the null pointer for a null argument (ADR-083) and returns
   // it for a null result, instead of dereferencing it.
   val nullableBound: Boolean = func.typeParameters.firstOrNull()?.hasNullableBound() ?: true
-  val argument: String =
-    if (nullableBound) {
-      forwardBoundedRead("$paramName?.asStableRef<$refType>()?.get()", bounds.drop(1), true)
-    } else {
-      forwardBoundedRead("$paramName.asStableRef<$refType>().get()", bounds.drop(1), false)
-    }
+  val argument: String = forwardBoundedRead(paramName, bounds, nullableBound)
 
   if (returnsGenericClass) {
     addFunction(

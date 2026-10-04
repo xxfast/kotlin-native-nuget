@@ -115,10 +115,10 @@ class Tier1GenericNullableTypeArgumentTest {
     // null pointer (ADR-083) and disposes a minted handle on `owned`.
     assertContains(cs, "IntPtr handle = NugetMarshal.Wrap<T>(value!, out bool owned);")
     assertContains(cs, "if (owned) NugetMarshal.Dispose(handle);")
-    assertContains(
-      cs,
-      "return result == IntPtr.Zero ? default! : NugetMarshal.Materialize<T>(result);",
-    )
+    // ADR-015 amendment: the result reads through `FromHandle<T>`, whose first line answers the
+    // null pointer with `default!`, the null result this cell has always pinned.
+    assertContains(cs, "return NugetMarshal.FromHandle<T>(result);")
+    assertContains(cs, "if (handle == IntPtr.Zero) return default!;")
   }
 
   @Test
@@ -150,7 +150,7 @@ class Tier1GenericNullableTypeArgumentTest {
     // A type parameter not named `T` is spelled by its own name throughout the body.
     assertContains(cs, "public static V Echo<V>(V value)")
     assertContains(cs, "Type width = Nullable.GetUnderlyingType(typeof(V)) ?? typeof(V);")
-    assertContains(cs, "NugetMarshal.Materialize<V>(result)")
+    assertContains(cs, "NugetMarshal.FromHandle<V>(result)")
     assertFalse(cs.contains("Echo<V>(T value)"), "the body must not hard-code T; generated=$cs")
   }
 
@@ -193,7 +193,8 @@ class Tier1GenericNullableTypeArgumentTest {
     val kotlin: String = result.generated
     assertContains(
       kotlin,
-      "tier1.kennel.Kennel<tier1.kennel.Pet?>(pet?.asStableRef<tier1.kennel.Pet>()?.get())",
+      "tier1.kennel.Kennel<tier1.kennel.Pet?>(" +
+          "(pet?.asStableRef<Any>()?.get() as tier1.kennel.Pet?))",
     )
 
     val cs: String = result.generatedCSharp

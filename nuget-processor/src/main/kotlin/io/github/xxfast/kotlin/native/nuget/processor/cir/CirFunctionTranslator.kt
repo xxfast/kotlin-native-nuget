@@ -1009,8 +1009,9 @@ internal fun translateGenericFunction(
     }
 
     // ADR-094: the object argument answers INugetHandle (a miss is an InvalidCastException where it
-    // used to be a NullReferenceException), and the result comes back out of the generated factory
-    // registry rather than Activator.CreateInstance.
+    // used to be a NullReferenceException), and a wrapper result comes back out of the generated
+    // factory registry rather than Activator.CreateInstance (a builtin box is unwrapped first, see
+    // the return below).
     // ADR-147 amendment: a null argument crosses as the null pointer (ADR-083), and a null result
     // is the `default` of whatever `T` was instantiated to, never a factory lookup.
     // ADR-173: the object argument goes through the ONE erased write function, `Wrap<T>`, the
@@ -1038,7 +1039,12 @@ internal fun translateGenericFunction(
     if (returnsGenericClass) {
       appendLine("      return new ${returnTypeName}<$typeParamName>($resultLocal, out _);")
     } else {
-      appendLine("      return $resultLocal == IntPtr.Zero ? default! : NugetMarshal.Materialize<$typeParamName>($resultLocal);")
+      // ADR-015 amendment: the generic class route's reader. `Wrap<T>` above boxes a builtin `T`
+      // (`Weigh<int>`, and every builtin an unconstrained function has no width variant for, such
+      // as `Identity<short>`), and the object variant hands that box back. `FromHandle<T>` unwraps
+      // and disposes it before falling to the factory registry; `Materialize<T>` knew only the
+      // registry and threw NotSupportedException. The null pointer is `default`, as before.
+      appendLine("      return NugetMarshal.FromHandle<$typeParamName>($resultLocal);")
     }
   }
 

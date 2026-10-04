@@ -4,6 +4,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticK
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -60,7 +61,11 @@ class Tier1BuiltinGenericBoundTest {
     )
     assertContains(result.generatedCSharp, "public static T Pick<T>(T value) where T : notnull")
     assertContains(result.generated, "Sorted<kotlin.Comparable<Any?>>")
-    assertContains(result.generated, "asStableRef<kotlin.Comparable<Any?>>()")
+    // A checked cast: the box is read as `Any` and cast to the bound's class, so a `T` outside it
+    // fails here as a ClassCastException. `asStableRef<Bound>()` is a generic, unchecked cast.
+    assertContains(result.generated, "(value_.asStableRef<Any>().get() as kotlin.Comparable<Any?>)")
+    assertContains(result.generated, "(value.asStableRef<Any>().get() as kotlin.Comparable<Any?>)")
+    assertFalse(result.generated.contains("asStableRef<kotlin.Comparable<Any?>>()"))
 
     val notes: List<String> = droppedBounds(result)
     assertEquals(2, notes.size, "one note per dropped bound: $notes")
@@ -74,7 +79,9 @@ class Tier1BuiltinGenericBoundTest {
       """
       package tier1.builtinbound
 
-      class Counted<T : Number>(val value: T)
+      class Counted<T : Number>(val value: T) {
+        fun plus(other: T): Double = value.toDouble() + other.toDouble()
+      }
 
       fun <T : Number> twice(value: T): T = value
       """.trimIndent(),
@@ -83,12 +90,49 @@ class Tier1BuiltinGenericBoundTest {
 
     assertTrue(result.compiledClean, "generated Kotlin: ${result.compileErrors}")
     assertNoBuiltinSpelling(result)
+    // Every read of a bounded `T` is a checked cast to the bound (constructor, member argument,
+    // function argument), so a `Counted<uint>` fails as a ClassCastException at the read instead of
+    // dispatching `toDouble()` on an object that is not a Number.
+    assertContains(result.generated, "(value_.asStableRef<Any>().get() as kotlin.Number)")
+    assertContains(result.generated, "(other.asStableRef<Any>().get() as kotlin.Number)")
+    assertContains(result.generated, "(value.asStableRef<Any>().get() as kotlin.Number)")
+    assertFalse(result.generated.contains("asStableRef<kotlin.Number>()"))
     assertContains(
       result.generatedCSharp,
       "public class Counted<T> : IDisposable, INugetHandle where T : notnull",
     )
     assertContains(result.generatedCSharp, "public static T Twice<T>(T value) where T : notnull")
     assertEquals(2, droppedBounds(result).size, "${droppedBounds(result)}")
+    // A bounded function exports only the object variant, so a builtin `T` (`Twice<int>`) comes
+    // back as a box. It is read through the class route's reader, which unwraps builtin boxes;
+    // `Materialize<T>` knew only generated factories and threw NotSupportedException.
+    assertContains(result.generatedCSharp, "NugetMarshal.FromHandle<T>(result)")
+    assertFalse(
+      result.generatedCSharp.contains("NugetMarshal.Materialize<T>("),
+      "the function route still reads its result through Materialize<T>",
+    )
+  }
+
+  /**
+   * An unconstrained function has C# width variants for six builtins only (`string`, `int`,
+   * `long`, `float`, `double`, `bool`); every other builtin (`Identity<short>`) takes the object
+   * variant and its boxed result, the same read as a bounded function's.
+   */
+  @Test
+  fun `an unconstrained function reads a narrow builtin result through the builtin reader`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.builtinbound
+
+      fun <T> identity(value: T): T = value
+      """.trimIndent(),
+      processorOptions = options,
+    )
+
+    assertTrue(result.compiledClean, "generated Kotlin: ${result.compileErrors}")
+    assertFalse(result.generatedCSharp.contains("_short_native"), "a short width was imported")
+    assertContains(result.generatedCSharp, "NugetMarshal.FromHandle<T>(result)")
+    assertFalse(result.generatedCSharp.contains("NugetMarshal.Materialize<T>("))
   }
 
   @Test

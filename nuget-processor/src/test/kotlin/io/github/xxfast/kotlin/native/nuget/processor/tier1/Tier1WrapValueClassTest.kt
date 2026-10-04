@@ -58,7 +58,7 @@ class Tier1WrapValueClassTest {
     assertTrue(result.compiledClean, "expected the fixture to compile; got: ${result.compileErrors}")
     val kotlin: String = result.generated
     assertContains(kotlin, "NugetHandles.retain(tier1.wrap.ChartId(unboxed))")
-    assertContains(kotlin, "boxed.asStableRef<tier1.wrap.ChartRef>().get().patient")
+    assertContains(kotlin, "(boxed.asStableRef<Any>().get() as tier1.wrap.ChartRef).patient")
     // ADR-105: the sealed base crosses as its handle, and reads back through the discriminator.
     assertContains(
       kotlin,

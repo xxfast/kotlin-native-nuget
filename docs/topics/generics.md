@@ -123,7 +123,8 @@ using var box = new PetBox<Cat>(oreo);
 A bound declared in the Kotlin standard library (`Comparable<T>`, `Number`, `CharSequence`) has no
 C# equivalent, so it is dropped from the `where` clause and the build reports an
 `INFO_DROPPED_BOUND` note. A non-null bound keeps `where T : notnull`. C# can then pass a type
-argument Kotlin would reject, which fails at the call.
+argument Kotlin would reject, which Kotlin refuses when it reads the argument, before the function
+body or constructor runs. The call throws `KotlinInvalidCastException`.
 
 ```kotlin
 class Ranked<T : Comparable<T>>(val value: T) {
@@ -356,6 +357,20 @@ This row only binds for a **top-level** function with a `T`-typed direct paramet
 (`fun <T> f(value: T): T`). A generic function declared on a class, `object`, or interface, or a
 top-level one with no `T`-typed parameter (e.g. `fun <T> f(): List<T>`), is not generated.
 
+A C# builtin (`int`, `double`, `string`, `short`, ...) works as `T`, with a stdlib bound or none.
+A bound C# cannot name is dropped, so a type argument outside it compiles and throws
+`KotlinInvalidCastException` at the call:
+
+```kotlin
+fun <T : Number> weigh(value: T): T = value
+```
+
+```C#
+Assert.Equal(4, Treats.Weigh(4));
+Assert.Equal(2.5, Treats.Weigh(2.5));
+Assert.Throws<KotlinInvalidCastException>(() => Treats.Weigh(3u));   // uint is not a Kotlin Number
+```
+
 ## Type aliases
 
 A `typealias` erases to its underlying type; there is no separate alias type in the generated C#.
@@ -406,11 +421,6 @@ generic one.
 
 A type nested inside a generic class is not bound, in a dependency or otherwise. If your API returns
 one, the member is skipped with a named diagnostic, but the generic owner is still exported.
-
-A generic function bounded by a stdlib type (`fun <T : Number> weigh(value: T): T`) takes only a
-Kotlin-generated wrapper as `T`. `Treats.Weigh<int>(4)` compiles but throws `NotSupportedException`
-at run time; use a generic class (`Tally<int>` works) when the argument is an `int`, `string` or
-`double`.
 
 These bounds do not generate compilable code yet: `T : Enum<T>`, a self-referencing bound on an
 invariant type (`T : Node<T>`), and a bound on a generic interface (`T : Rival<T>`), whose C#
