@@ -116,8 +116,9 @@ shadow, and neither does a nullable receiver (`val Foo?.x`).
 
 An extension **function** shadowed by a member is kept, unlike a property. `FooExtensions.Y(foo)`
 runs the extension and `foo.Y()` runs the member, as Kotlin and C# each resolve the call. Declare the
-extension in a different package from the member: in the same package the two claim one C entry point
-and the build fails with `ERROR_C_ENTRY_POINT_COLLISION`.
+extension in the member's own package or in another one; both bind the same way. The exception is
+an enum receiver: an enum member and a same-package extension of the same name fail with
+`ERROR_CSHARP_SIGNATURE_COLLISION`, because both land in the enum's `Extensions` class. Rename one.
 
 An extension property is skipped, named `SHADOWED_BY_EXTENSION_FUNCTION` under
 `SKIPPED_UNSUPPORTED_PROPERTY`, when an extension function on the same receiver has the same C# name,

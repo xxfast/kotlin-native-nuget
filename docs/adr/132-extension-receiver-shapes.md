@@ -393,9 +393,10 @@ accepted the backticked aliased import in the real pipeline.
 **Inferred, not checked:** an alias behaves the same for `suspend`, `infix`, `operator` and generic
 extensions beyond the shapes above.
 
-**Known gaps found alongside, not fixed here:** a member function and an extension function of the
+**Known gaps found alongside, not fixed here (the first is closed by the 2026-10-04 amendment):**
+a member function and an extension function of the
 same name on one receiver declared in the same package claim one C entry point (verified,
-`ERROR_C_ENTRY_POINT_COLLISION`), so the alias only reaches an extension in another package. A class
+`ERROR_C_ENTRY_POINT_COLLISION`), so the alias then only reached an extension in another package. A class
 in the default package with an extension (`class Leash` plus `fun Leash.tug()`) is inferred to
 generate `Unresolved reference 'Leash'` (not checked against main). An extension function whose
 name needs backticks is unverified and may produce an invalid alias.
@@ -440,3 +441,53 @@ property route's receiver predicate does not admit `Char`.
 1552 passed, 0 failed; full `scripts/verify.sh` green (Contract 3, Integration 3006, Leak 158,
 MultiPackage 9, SharedException 2, all six NativeAOT shapes), including a run-time null-receiver
 fact in `IntegrationTests/ExtensionFunctionTests.cs`.
+
+## Amendment (2026-10-04): a member and a same-package extension of one name both bind
+
+Closes the first known gap of the 2026-10-03 aliased-import amendment. A member function and an
+extension function of one name on one receiver, declared in the SAME Kotlin package (`class Lantern
+{ fun shine() }` beside `fun Lantern.shine()`), both derived `<lib>_<pkg>__lantern_shine`, because
+the member's prefix and the extension's qualifier are the same package. That was the fatal
+`ERROR_C_ENTRY_POINT_COLLISION`, so the aliased import only reached an extension declared in another
+package. Both now bind, exactly as they already did across packages: C# `lantern.Shine()` is the
+member and `LanternExtensions.Shine(lantern)` is the extension.
+
+**Rule.** An extension's entry point becomes `<lib>_<pkg>__<owner chain>_ext_<name>[_<n>]` only
+when its plain spelling is already taken by an export from a member, a constructor, a top-level
+function, or a class or sealed-arm callback route (a stored-callback or interface-bridge
+`add`/`remove` pair, which mints `<owner>_<name>` outside the plan catalog). The check is per
+overload, so `fun Lantern.swing(arc: Int)` beside member `swing(arc: Int)` takes `lantern_ext_swing`
+while `fun Lantern.swing(arc: Long)` keeps `lantern_swing_2`, and every symbol that did not collide
+keeps its name. Extensions are planned after every member route, so object, companion, enum and
+value-class members are in the check.
+
+**Extension properties.** Accessors take the same marker per accessor, only when the plain name is
+taken. This applies to a nullable-receiver extension property beside a member property, which is
+never shadowed: `var Lantern?.wick` beside member `var wick` exports `lantern_ext_get_wick` and
+`lantern_ext_set_wick`. A non-null-receiver extension property beside a same-package member of the
+same name is still ADR-132's `SHADOWED_BY_MEMBER` named skip, as across packages: functions and
+properties differ on purpose (2026-10-03 amendment). What changed is that this same-package case no
+longer fails the generator with `ERROR_INTERNAL_GENERATOR_FAILURE (Expected extension property
+plan)`. A member plan and an extension plan share the key `pkg.Lantern.wick`, so the extension
+route could be handed the member's plan. `ForwardCallablePlanCatalog.extensionPropertyFor` now looks
+up by position and returns only an extension plan.
+
+**Not collisions.** A suspend member exports `_async` and a Flow member `_collect`, so a same-named
+extension keeps its plain name beside either. `object Kennel` with `fun Kennel.bark()` is still a
+named `SKIPPED_UNSUPPORTED_TYPE`. An enum member beside a same-package extension is still
+`ERROR_CSHARP_SIGNATURE_COLLISION`: both render into `{Enum}Extensions`, which is a C# limit.
+
+**Verified.** `Tier1SamePackageMemberExtensionTest` has 8 cells: a member and extension under
+distinct entry points, an unshadowed overload keeping its plain symbol, a value-class member, the C#
+surface, a legacy callback member, planned lambda/suspend/Flow members keeping their spellings, the
+shadowed property as a named skip rather than a crash, and the nullable-receiver property taking the
+marked accessors. `IntegrationTests/ShadowedExtensionFunctionTests.cs` reads `"member"` from
+`lantern.Shine()` and `"extension"` from `LanternExtensions.Shine(lantern)`, and covers the overload,
+stored-callback and nullable-property pairs. `:nuget-processor:test` 1643 passed, 0 failed; the native
+pipeline passed IntegrationTests 3040, LeakTests 164 and the 7 AOT shapes. No LeakTests row: no new
+handle route.
+
+**Inferred, not checked.** A member function literally named `get_x` beside an extension property
+`x` can still meet on `<owner>_get_x`, and a member lambda-typed property's hand-written
+`<owner>_get_<name>` getter is not in the name set the check reads. ADR-117 stays the backstop for
+both.

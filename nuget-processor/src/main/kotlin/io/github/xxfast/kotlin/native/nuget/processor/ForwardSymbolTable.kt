@@ -79,9 +79,27 @@ internal class ForwardSymbolTable(
    * receiver's, matching ADR-095's `(package, name)` overload-counter scope: two extensions of the
    * same name on one receiver, declared in two packages, must not converge. The owner chain is the
    * receiver's, unqualified, so `a.Mood.pounce` reads `<lib>_a__mood_get_pounce`.
+   *
+   * When that spelling is already in [taken] it takes the `ext` role word instead,
+   * `<lib>_<package>__<owner chain>_ext_<member>[_<n>]`, whenever a non-extension route already
+   * minted the plain spelling. Typically the receiver is declared in the extension's own package
+   * and exports a member of the same name and overload number (`class Leash { fun tug() }` beside
+   * `fun Leash.tug()`, or a member `val x` beside `val Leash?.x`, whose accessors become
+   * `leash_ext_get_x`): the member's prefix and the extension's qualifier are then the same
+   * package. Only on collision, so no symbol that was already distinct moves. The role-word slot
+   * is the one `get_` / `set_` use; a nested `Owner.Ext` with a member of the same name could
+   * still meet it, and ADR-117 stays the backstop for that residue.
    */
-  fun extension(declaration: KSDeclaration, receiverPrefix: String, member: String): String =
-    qualifier(declaration) + receiverPrefix + "_" + member
+  fun extension(
+    declaration: KSDeclaration,
+    receiverPrefix: String,
+    member: String,
+    taken: Set<String> = emptySet(),
+  ): String {
+    val stem: String = qualifier(declaration) + receiverPrefix
+    val plain: String = stem + "_" + member
+    return if (plain in taken) stem + "_ext_" + member else plain
+  }
 
   /**
    * The C#-identifier form of the same package qualification, for the few generated helper TYPE

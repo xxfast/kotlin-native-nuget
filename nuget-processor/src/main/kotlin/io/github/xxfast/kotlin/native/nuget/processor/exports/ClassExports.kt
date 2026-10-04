@@ -237,6 +237,123 @@ internal fun forwardLegacyPairMembers(
 }
 
 /**
+ * The members of an ordinary class that the hand-written routes export, after every refusal: what
+ * [addClassExports] emits, and what the planner reads to learn the entry points those routes take
+ * (a same-package extension of the same name must not spell one, see `ForwardSymbolTable`). One
+ * selector, so the two cannot disagree about which member exports.
+ */
+internal data class ForwardClassLegacyMembers(
+  val flowMethods: List<KSFunctionDeclaration>,
+  val storedCallbackPairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>>,
+  val perCallLambdaMethods: List<KSFunctionDeclaration>,
+  val interfaceBridgePairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>>,
+) {
+  /**
+   * The `<prefix>_<name>` entry points the three callback routes export. Unnumbered: none of them
+   * applies an overload suffix (an overloaded listener pair is refused upstream).
+   */
+  fun callbackExportNames(prefix: String): Set<String> =
+    (storedCallbackPairs.flatMap { pair -> pair.toList() } + perCallLambdaMethods +
+      interfaceBridgePairs.flatMap { pair -> pair.toList() })
+      .map { method -> "${prefix}_${method.simpleName.asString()}" }
+      .toSet()
+}
+
+internal fun KSClassDeclaration.forwardClassLegacyMembers(
+  classifier: ForwardBridgeTypeClassifier,
+  superClass: KSClassDeclaration?,
+): ForwardClassLegacyMembers {
+  val cls: KSClassDeclaration = this
+  val memberMethods: List<KSFunctionDeclaration> = cls.getAllFunctions()
+    .filter { it.getVisibility() == Visibility.PUBLIC }
+    .filter { method -> !method.isCompilerOwnedMember(cls) }
+    .filter { !it.modifiers.contains(Modifier.SUSPEND) }
+    .filter { method ->
+      method.isForwardMemberOf(cls, superClass) && !method.modifiers.contains(Modifier.ABSTRACT)
+    }
+    .toList()
+  val legacyPairMembers: Set<KSFunctionDeclaration> = forwardLegacyPairMembers(memberMethods)
+  // ADR-147: every specialized legacy route spells the receiver as the bare owner name
+  // (`asStableRef<Crate>()`), which does not compile for a generic class. Refused on a generic
+  // owner, on BOTH halves (the same predicate the C# translator reads), rather than emitting a
+  // member one half declares and the other does not (the ADR-055 contract would then fail the
+  // whole build). The planner names each refused member (`nameGenericOwnerLegacyRoutes`).
+  val allRegularMethods: List<KSFunctionDeclaration> = memberMethods.filter { method ->
+    cls.typeParameters.isEmpty() || !method.isForwardLegacyRoute(classifier, legacyPairMembers)
+  }
+
+  // ADR-065: StateFlow-returning methods route through the same `_collect` shape as plain-Flow
+  // methods, plus a sibling synchronous `_value` export (see the flowMethods.forEach loop).
+  val flowMethods: List<KSFunctionDeclaration> = allRegularMethods
+    .filter { method -> method.hasLegacyFlowReturn() }
+    // ADR-114: a generic parameter this route cannot marshal skips the member entirely rather
+    // than emitting non-compiling Kotlin. `NugetProcessor` names it in a SKIPPED_UNSUPPORTED_INPUT.
+    // ADR-123: likewise an element this route cannot marshal, named SKIPPED_UNSUPPORTED_RETURN.
+    .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
+    .filter { method -> classifier.legacyRefusedReturn(method) == null }
+
+  val allNonFlowMethods: List<KSFunctionDeclaration> = allRegularMethods
+    .filterNot { method -> method.hasLegacyFlowReturn() }
+    // Boundary nullability part A2: refused BEFORE the partition, so a nullable- or builtin-payload
+    // lambda member reaches neither the per-call route nor the stored pair detection (a pair whose
+    // halves both vanish is never found, so `removeRinger` cannot survive as a cancel for a
+    // subscription nobody can make) nor the ordinary `methods` list.
+    // `warnRefusedLegacyRouteMembers` names it.
+    .filterNot { method -> method.refusedLegacyLambdaShape() != null }
+
+  val (lambdaParamMethods, methods) = allNonFlowMethods.partition { method ->
+    method.hasLegacyLambdaParameter()
+  }
+
+  val detectedStoredPairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
+    findStoredCallbackPairs(lambdaParamMethods)
+  val storedPairMembers: Set<KSFunctionDeclaration> =
+    detectedStoredPairs.flatMap { pair -> pair.toList() }.toSet()
+
+  val storedCallbackPairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
+    detectedStoredPairs
+      // ADR-037 amendment: a listener with a non-`Unit` result is refused after detection, so both
+      // halves stay claimed by the pair and neither falls to the per-call route.
+      .filter { (addMethod, _) -> legacyRefusedStoredCallbackPair(addMethod) == null }
+      // ADR-115 / issue #121: a marked half takes its partner with it, as on a sealed arm.
+      // `warnRefusedLegacyRouteMembers` names both halves.
+      .filter { (addMethod, removeMethod) ->
+        listOf(addMethod, removeMethod).none { it.optInMarker(classifier.exportMarkers) != null }
+      }
+
+  val perCallLambdaMethods: List<KSFunctionDeclaration> = lambdaParamMethods
+    .filter { method -> method !in storedPairMembers }
+    // ADR-160: the plan owns this member's export (emitted off the catalog), so the hand-written
+    // route must not mint the same `@CName` a second time.
+    .filterNot { method -> method.hasPlannedCallbackParameter(classifier) }
+    // ADR-160 step 4: a member this route cannot marshal is dropped here and named by the
+    // planner's own CALLBACK_PROTOCOL skip, instead of failing the ADR-055 contract (a scalar
+    // outer return) or emitting Kotlin that does not compile (a dropped non-lambda parameter).
+    .filter { method -> legacyRefusedCallbackMember(method) == null }
+    // ADR-115 / issue #121: the planner already names a marked member SKIPPED_OPT_IN_MARKER, so
+    // this route must not export it anyway.
+    .filter { method -> method.optInMarker(classifier.exportMarkers) == null }
+
+  val interfaceBridgePairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
+    findInterfaceBridgePairs(methods)
+      // ADR-090 / ADR-039 amendments (2026-09-26): an overloaded listener member, or one whose
+      // parameter or return the route cannot carry, is named by `warnRefusedLegacyRouteMembers`
+      // and dropped here.
+      .filter { (addMethod, _) -> classifier.legacyRefusedInterfaceBridgePair(addMethod) == null }
+      // ADR-115 / issue #121: the stored pair's marker refusal, on the interface-bridge route.
+      .filter { (addMethod, removeMethod) ->
+        listOf(addMethod, removeMethod).none { it.optInMarker(classifier.exportMarkers) != null }
+      }
+
+  return ForwardClassLegacyMembers(
+    flowMethods = flowMethods,
+    storedCallbackPairs = storedCallbackPairs,
+    perCallLambdaMethods = perCallLambdaMethods,
+    interfaceBridgePairs = interfaceBridgePairs,
+  )
+}
+
+/**
  * Generates @CName bridge exports for classes: dispose, planned constructors/properties/methods,
  * and named specialized-protocol adapters (Flow, lambda, stored callback, interface bridge).
  * Ordinary synchronous members without a plan are skipped — no IntPtr/defaultValueFor fallthrough.
@@ -326,92 +443,15 @@ internal fun FileSpec.Builder.addClassExports(
     addFlowPropertyExports(prop, qualifiedName, prefix, classifier)
   }
 
-  val memberMethods: List<KSFunctionDeclaration> = cls.getAllFunctions()
-    .filter { it.getVisibility() == Visibility.PUBLIC }
-    .filter { method -> !method.isCompilerOwnedMember(cls) }
-    .filter { !it.modifiers.contains(Modifier.SUSPEND) }
-    .filter { method ->
-      method.isForwardMemberOf(cls, superClass) && !method.modifiers.contains(Modifier.ABSTRACT)
-    }
-    .toList()
-  val legacyPairMembers: Set<KSFunctionDeclaration> = forwardLegacyPairMembers(memberMethods)
-  // ADR-147: every specialized legacy route spells the receiver as the bare owner name
-  // (`asStableRef<Crate>()`), which does not compile for a generic class. Refused on a generic
-  // owner, on BOTH halves (the same predicate the C# translator reads), rather than emitting a
-  // member one half declares and the other does not (the ADR-055 contract would then fail the
-  // whole build). The planner names each refused member (`nameGenericOwnerLegacyRoutes`).
-  val allRegularMethods: List<KSFunctionDeclaration> = memberMethods.filter { method ->
-    cls.typeParameters.isEmpty() || !method.isForwardLegacyRoute(classifier, legacyPairMembers)
-  }
-
-  // ADR-065: StateFlow-returning methods route through the same `_collect` shape as plain-Flow
-  // methods, plus a sibling synchronous `_value` export (see the flowMethods.forEach loop below).
-  val flowMethods: List<KSFunctionDeclaration> = allRegularMethods
-    .filter { method -> method.hasLegacyFlowReturn() }
-    // ADR-114: a generic parameter this route cannot marshal skips the member entirely rather
-    // than emitting non-compiling Kotlin. `NugetProcessor` names it in a SKIPPED_UNSUPPORTED_INPUT.
-    // ADR-123: likewise an element this route cannot marshal, named SKIPPED_UNSUPPORTED_RETURN.
-    .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
-    .filter { method -> classifier.legacyRefusedReturn(method) == null }
-
-  val allNonFlowMethods: List<KSFunctionDeclaration> = allRegularMethods
-    .filterNot { method -> method.hasLegacyFlowReturn() }
-    // Boundary nullability part A2: refused BEFORE the partition, so a nullable- or builtin-payload
-    // lambda member reaches neither the per-call route nor the stored pair detection (a pair whose
-    // halves both vanish is never found, so `removeRinger` cannot survive as a cancel for a
-    // subscription nobody can make) nor the ordinary `methods` list.
-    // `warnRefusedLegacyRouteMembers` names it.
-    .filterNot { method -> method.refusedLegacyLambdaShape() != null }
-
-  val (lambdaParamMethods, methods) = allNonFlowMethods.partition { method ->
-    method.hasLegacyLambdaParameter()
-  }
-
-  val storedCallbackPairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
-    findStoredCallbackPairs(lambdaParamMethods)
-  val storedCallbackAddMethods: Set<KSFunctionDeclaration> = storedCallbackPairs
-    .map { it.first }.toSet()
-  val storedCallbackRemoveMethods: Set<KSFunctionDeclaration> = storedCallbackPairs
-    .map { it.second }.toSet()
-
-  storedCallbackPairs.forEach { (addMethod, removeMethod) ->
-    // ADR-037 amendment: a listener with a non-`Unit` result is refused after detection, so both
-    // halves stay claimed by the pair and neither falls to the per-call route.
-    if (legacyRefusedStoredCallbackPair(addMethod) != null) return@forEach
-    // ADR-115 / issue #121: a marked half takes its partner with it, as on a sealed arm.
-    // `warnRefusedLegacyRouteMembers` names both halves.
-    if (listOf(addMethod, removeMethod).any { it.optInMarker(classifier.exportMarkers) != null }) {
-      return@forEach
-    }
+  val legacy: ForwardClassLegacyMembers = cls.forwardClassLegacyMembers(classifier, superClass)
+  val flowMethods: List<KSFunctionDeclaration> = legacy.flowMethods
+  legacy.storedCallbackPairs.forEach { (addMethod, removeMethod) ->
     addStoredCallbackExports(addMethod, removeMethod, qualifiedName, prefix)
   }
-
-  lambdaParamMethods.forEach { method ->
-    if (method in storedCallbackAddMethods || method in storedCallbackRemoveMethods) return@forEach
-    // ADR-160: the plan owns this member's export (emitted off the catalog), so the hand-written
-    // route must not mint the same `@CName` a second time.
-    if (method.hasPlannedCallbackParameter(classifier)) return@forEach
-    // ADR-160 step 4: a member this route cannot marshal is dropped here and named by the
-    // planner's own CALLBACK_PROTOCOL skip, instead of failing the ADR-055 contract (a scalar
-    // outer return) or emitting Kotlin that does not compile (a dropped non-lambda parameter).
-    if (legacyRefusedCallbackMember(method) != null) return@forEach
-    // ADR-115 / issue #121: the planner already names a marked member SKIPPED_OPT_IN_MARKER, so
-    // this route must not export it anyway.
-    if (method.optInMarker(classifier.exportMarkers) != null) return@forEach
+  legacy.perCallLambdaMethods.forEach { method ->
     addLambdaParamMethodExport(method, qualifiedName, prefix)
   }
-
-  val interfaceBridgePairs: List<Pair<KSFunctionDeclaration, KSFunctionDeclaration>> =
-    findInterfaceBridgePairs(methods)
-  interfaceBridgePairs.forEach { (addMethod, removeMethod) ->
-    // ADR-090 / ADR-039 amendments (2026-09-26): an overloaded listener member, or one whose
-    // parameter or return the route cannot carry, is named by `warnRefusedLegacyRouteMembers` and
-    // dropped here.
-    if (classifier.legacyRefusedInterfaceBridgePair(addMethod) != null) return@forEach
-    // ADR-115 / issue #121: the stored pair's marker refusal, on the interface-bridge route.
-    if (listOf(addMethod, removeMethod).any { it.optInMarker(classifier.exportMarkers) != null }) {
-      return@forEach
-    }
+  legacy.interfaceBridgePairs.forEach { (addMethod, removeMethod) ->
     addInterfaceBridgeExports(addMethod, removeMethod, qualifiedName, prefix, classifier)
   }
 

@@ -28,7 +28,7 @@ internal fun FileSpec.Builder.addExtensionPropertyExports(
   val receiverSimpleName: String =
     (receiverType.declaration as? KSClassDeclaration)?.nestedCsName()
       ?: receiverType.declaration.simpleName.asString()
-  val planned: ForwardPropertyPlan? = callableCatalog.propertyFor(
+  val planned: ForwardPropertyPlan? = callableCatalog.extensionPropertyFor(
     "${prop.packageName.asString()}.$receiverSimpleName.$propName",
   )
   if (planned == null) return
