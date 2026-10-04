@@ -22,12 +22,16 @@ import java.io.File
  * `diagnosticWarnings(rir).forEach { logger.warn(it) }`), so both directions land at Gradle's WARN
  * level with the same `[nuget:...]` prefix.
  *
- * Two defects make this necessary, both measured: the processor's own `KSPLogger` output never
- * reaches the console (KSP runs it on a Worker API thread whose stdout Gradle drops, even KSP's own
- * startup line is absent at `--info`), and a normal `packNuget` does not run the KSP task at all
- * (`FROM-CACHE`, then `UP-TO-DATE`). The second is why the input is a *declared KSP output file*
- * rather than anything computed during the KSP task action: the file is restored on a cache hit and
- * present on an up-to-date run, so this task can speak on every build.
+ * A normal `packNuget` does not run the KSP task at all (`FROM-CACHE`, then `UP-TO-DATE`), which
+ * is why the input is a *declared KSP output file* rather than anything computed during the KSP
+ * task action: the file is restored on a cache hit and present on an up-to-date run, so this task
+ * can speak on every build.
+ *
+ * This task is the ONLY console copy of a non-fatal forward diagnostic. KSP's own `KSPLogger` does
+ * print `w: [ksp] ...` when the KSP task executes (ADR-100's runs showing otherwise replayed a
+ * quieter log level from the configuration cache), once per executed KSP target, so the processor
+ * sends `SKIPPED_*`/`WARNING_*`/`INFO_*` to `KSPLogger.logging`, which KSP prints only at
+ * `--debug`. `ERROR_*` stays on KSP's console: it aborts the round before this file is written.
  *
  * Never up-to-date on purpose: reporting that only happens when something else changed is exactly
  * the failure mode being fixed here.

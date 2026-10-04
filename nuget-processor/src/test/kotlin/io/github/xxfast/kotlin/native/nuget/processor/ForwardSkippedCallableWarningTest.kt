@@ -14,11 +14,14 @@ import kotlin.test.assertTrue
 class ForwardSkippedCallableWarningTest {
   private class RecordingLogger : KSPLogger {
     val warnings: MutableList<String> = mutableListOf()
-    override fun logging(message: String, symbol: KSNode?) = Unit
-    override fun info(message: String, symbol: KSNode?) = Unit
-    override fun warn(message: String, symbol: KSNode?) {
+    // The sink sends non-fatal diagnostics to `logging` so KSP's console stays quiet and
+    // nugetReportDiagnostics is the one copy; `warn` stays unrecorded so a revert fails here.
+    override fun logging(message: String, symbol: KSNode?) {
       warnings.add(message)
     }
+
+    override fun info(message: String, symbol: KSNode?) = Unit
+    override fun warn(message: String, symbol: KSNode?) = Unit
 
     override fun error(message: String, symbol: KSNode?) = Unit
     override fun exception(e: Throwable) = Unit

@@ -17,7 +17,13 @@ internal class RecordingKSPLogger : KSPLogger {
   val warnings: MutableList<String> = mutableListOf()
   val info: MutableList<String> = mutableListOf()
 
-  override fun logging(message: String, symbol: KSNode?) {}
+  // `ForwardDiagnosticSink` sends SKIPPED_*/WARNING_*/INFO_* diagnostics to `logging` (so KSP's
+  // console stays quiet and nugetReportDiagnostics is the one copy); they are this logger's
+  // `warnings`. Nothing else in the processor or KSP itself calls `logging`.
+  override fun logging(message: String, symbol: KSNode?) {
+    warnings += message
+  }
+
   override fun info(message: String, symbol: KSNode?) {
     info += message
   }
