@@ -4328,6 +4328,9 @@ internal fun translateEnum(
     entries = entries,
     extensionMembers = extensionMembers,
     doc = enum.forwardKdoc(expects)?.toCirDoc(),
+    boxImport = qualifiedName
+      ?.let { callableCatalog.enumBox(it) }
+      ?.let { plan -> ForwardCirPlanProjection.enumBox(plan, libraryName) },
   )
 }
 

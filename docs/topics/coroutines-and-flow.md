@@ -517,8 +517,8 @@ await foreach (Mood? mood in tracker.MoodSwings())
 ```
 
 The same holds for an enum dependency admitted with `admit(...)` and for a nested enum.
-[Generic classes](generics.md) instantiated at an enum read it back too (`Box<Mood>.Value`).
-Writing an enum into a generic slot (`new Box<Mood>(Mood.Calm)`) is not supported yet.
+[Generic classes](generics.md) instantiated at an enum read and write it too (`Box<Mood>.Value`,
+`new Box<Mood>(Mood.Calm)`).
 
 ## Settable `.Value` on `MutableStateFlow<T>`
 

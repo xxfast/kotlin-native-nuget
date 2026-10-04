@@ -174,8 +174,18 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
           "global::$boxer.NugetBox((global::$boxer)value),",
     )
   }
+  // ADR-094 (write side): an enum unboxes to itself, lowers to its ordinal, and crosses through
+  // its own box export; an out-of-range ordinal (`(Mood)99`) throws through the error slot.
+  helper.enumBoxers.forEach { boxer ->
+    val type: String = "global::${boxer.qualifiedTypeName}"
+    appendLine(
+      "            [typeof($type)] = static value => NugetErrorNative.Check(" +
+          "${boxer.boxImport.name}((int)($type)value, out IntPtr error), error),",
+    )
+  }
   appendLine("        };")
   appendLine()
+  helper.enumBoxers.forEach { boxer -> renderDllImport(boxer.boxImport) }
   appendLine("        internal static T Materialize<T>(IntPtr handle)")
   appendLine("        {")
   // ADR-171: `T = V?` is `Nullable<V>`, which never equals the `typeof(V)` key.

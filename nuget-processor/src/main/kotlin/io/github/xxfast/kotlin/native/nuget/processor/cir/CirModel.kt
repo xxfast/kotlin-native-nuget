@@ -361,6 +361,12 @@ internal data class CirEnum(
   // when it is `@suppress`ed, or when the doc came from a non-KOTLIN origin. `renderDoc` owns the
   // escaping, the same way `renderRemarks` does.
   val doc: CirDoc? = null,
+  /**
+   * ADR-094 (write side): the box import `NugetMarshal.Boxers` calls for this enum at an erased
+   * generic slot, or null when the planner planned none. Rendered in `NugetMarshal`, not in the
+   * `{Enum}Extensions` class, which exists only for an enum with members of its own.
+   */
+  val boxImport: CirDllImport? = null,
 ) : CirDeclaration
 
 internal data class CirSealedClass(
@@ -605,7 +611,19 @@ internal data class CirMarshalHelper(
   // with a box/unbox pair, as the same `global::`-free qualified name. `Wrap<T>` looks the value's
   // runtime type up here before its `INugetHandle` tail.
   val boxers: List<String> = emptyList(),
+  // ADR-094 (write side): one `Boxers` line per enum with a planned box, beside [boxers]. An enum
+  // cannot declare members, so its box extern is rendered here, in `NugetMarshal`, with the row.
+  val enumBoxers: List<CirEnumBoxer> = emptyList(),
 ) : CirDeclaration
+
+/**
+ * ADR-094 (write side): an enum's `Boxers` line. [qualifiedTypeName] is `global::`-free, as in
+ * [CirFactoryEntry]; [boxImport] is the plan-projected extern the row calls with the ordinal.
+ */
+internal data class CirEnumBoxer(
+  val qualifiedTypeName: String,
+  val boxImport: CirDllImport,
+)
 
 // ADR-094: a registry line. [qualifiedTypeName] is the `global::`-free fully qualified C# name
 // (`Clinic.ApiResult.Success`); the renderer adds the `global::` prefix, since the registry sits in

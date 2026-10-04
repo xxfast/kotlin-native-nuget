@@ -32,4 +32,6 @@ internal fun FileSpec.Builder.addEnumExports(
     .forEach { plan -> addForwardKotlinPlanExport(plan) }
   callableCatalog.enumCompanionProperties(qualifiedName)
     .forEach { plan -> addForwardPropertyPlanExports(plan) }
+  // ADR-094 (write side): the box `NugetMarshal.Boxers` calls for an enum at an erased slot.
+  callableCatalog.enumBox(qualifiedName)?.let { plan -> addForwardKotlinPlanExport(plan) }
 }

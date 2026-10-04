@@ -209,7 +209,9 @@ internal object ForwardAbiContract {
         is CirValueClass -> declaration.ordinaryNativeImports()
         // ADR-006 amendment: a top-level enum's member-property imports are projected plan nodes.
         // A nested enum's render at namespace level (ADR-133) and are read by `csharpLegacy`.
-        is CirEnum -> declaration.extensionMembers.filterIsInstance<CirDllImport>()
+        // ADR-094 (write side): its box import is a plan node too, rendered in `NugetMarshal`.
+        is CirEnum -> declaration.extensionMembers.filterIsInstance<CirDllImport>() +
+            listOfNotNull(declaration.boxImport)
         // ADR-078 amendment (2026-09-11): a sealed arm's plan-derived imports are nodes like any
         // ordinary class's, so they are read here rather than scraped by `csharpLegacy`.
         is CirSealedClass -> declaration.ordinaryNativeImports() +

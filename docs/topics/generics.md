@@ -16,6 +16,11 @@ using var box = new Box<Cat>(oreo);
 Cat cat = box.Value;
 ```
 
+An exported `enum class` works as the type argument too, nullable included (`new Box<Mood>(Mood.Calm)`,
+`Box<Mood?>`, `Helpers.Identity<Mood?>(null)`), on a generic class and on a generic method. Kotlin
+receives the real enum entry, not its ordinal. A value outside the enum's range (`(Mood)99`) throws
+a catchable `KotlinException` at the call.
+
 ## Type mappings
 
 | Kotlin | C# |
