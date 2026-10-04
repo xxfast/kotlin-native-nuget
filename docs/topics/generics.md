@@ -158,6 +158,50 @@ using var oreo = new Performer("Oreo", 3);        // Performer is both a Pet and
 using var arena = new Arena<Performer>(oreo);     // where T : IPet, ITrainable
 ```
 
+A bound on a generic interface keeps its type arguments in the `where` clause, so
+`class Chain<T> where T : Node<T>, T : Pet` over an invariant `Node<T>` is
+`where T : INode<T>, IPet`. A bound C# cannot spell (a use-site projection, or a collection argument) is
+dropped with `INFO_DROPPED_BOUND`, and a `T` outside it throws at the call.
+
+### An enum bound {id="an-enum-bound"}
+
+`T : Enum<T>` binds as `where T : struct, global::System.Enum`, on a generic class, a generic
+function and a member's own type parameter. Any exported enum is a valid type argument, and Kotlin
+runs the enum API (`name`, `ordinal`, `compareTo`) on the real entry:
+
+```kotlin
+class Rosette<T : Enum<T>>(val winner: T) {
+  val vacancy: T? = null
+  fun outranks(other: T): Boolean = winner > other
+  fun better(other: T): T = if (other > winner) other else winner
+}
+
+fun <T : Enum<T>> requirePrize(medal: T): T {
+  require(medal.ordinal > 0) { "${medal.name} is no prize" }
+  return medal
+}
+```
+
+```C#
+using var oreo = new Rosette<Medal>(Medal.Gold);
+Assert.True(oreo.Outranks(Medal.Silver));
+Assert.Equal(Medal.Gold, oreo.Better(Medal.Silver));
+Assert.Null(oreo.Vacancy);                                   // T? is Nullable<Medal>
+Assert.Equal(Medal.Silver, Medals.RequirePrize(Medal.Silver));
+Assert.ThrowsAny<ArgumentException>(() => Medals.RequirePrize(Medal.Bronze));   // BRONZE is no prize
+```
+
+- `Rosette<int>`, `Rosette<string>`, a wrapper and `Rosette<Medal?>` do not compile.
+- C# cannot say "an enum generated from Kotlin", so a .NET enum such as `DayOfWeek` compiles and
+  throws a catchable `NotSupportedException` at the call, before anything reaches Kotlin.
+- A `T` property is get-only, as on any generic class.
+- `inline fun <reified T : Enum<T>>` is skipped with a named `SKIPPED_UNSUPPORTED_COMBINATION`,
+  because the generated export cannot supply a reified argument. Drop `reified`, or export a
+  non-generic overload per enum. A `suspend` or `Flow` member of an enum-bound class is skipped as
+  on any generic class.
+- A nullable bound (`T : Enum<T>?`) is dropped from the `where` clause with `INFO_DROPPED_BOUND`.
+  `T : Pet, T : Enum<T>` binds, but no C# enum implements `IPet`, so nothing satisfies it.
+
 ### A generic bound from another package {id="a-generic-bound-from-another-package"}
 
 When the bound is declared in a different Kotlin package than the generic class itself, the
@@ -417,7 +461,8 @@ What differs from a generic class:
   object, and you dispose it as usual.
 - A bound is a `where` clause (`T : Any` is `where T : notnull`), and several bounds each list. A
   type argument outside a bound C# cannot name throws `KotlinInvalidCastException` before the body
-  runs.
+  runs. An `Enum<T>` bound is `where T : struct, global::System.Enum`
+  ([An enum bound](#an-enum-bound)).
 - A `Result<T>` return unwraps to `T` and gains its `Try` twin, as on any other member.
 - An `override` repeats no `where` clause, which C# forbids, and an override that spells `T?` says
   `where T : default`. Write your own C# override the same way.
@@ -426,7 +471,7 @@ What differs from a generic class:
 
 These stay a named skip, with the specific reason in the warning: a generic method on an interface,
 an `enum class`, a value class, or an extension function; a `reified` type parameter; a bound that
-is itself a type parameter, or `Enum<T>`; a `T` nested in another type (`List<T>`, `Result<List<T>>`);
+is itself a type parameter; a `T` nested in another type (`List<T>`, `Result<List<T>>`);
 a lambda or `Flow` anywhere in the signature; a multi-bound `T` that no parameter mentions; and a
 `T` that shadows a type parameter in scope (the owner's, or one an `inner` class captures). A
 generic method on an `inner` class or a type nested in a generic owner binds like any other.
@@ -491,10 +536,6 @@ A type nested inside a generic class is declared on a non-generic static class b
 [Classes and objects: Nested types and generic classes](classes-and-objects.md#nested-generic-owner).
 A member that returns an `inner class` of a generic owner is skipped with a named diagnostic, but
 the generic owner is still exported.
-
-These bounds do not generate compilable code yet: `T : Enum<T>`, a self-referencing bound on an
-invariant type (`T : Node<T>`), and a bound on a generic interface (`T : Rival<T>`), whose C#
-`where` clause drops the type arguments and fails with CS0305.
 
 <seealso>
     <category ref="related">

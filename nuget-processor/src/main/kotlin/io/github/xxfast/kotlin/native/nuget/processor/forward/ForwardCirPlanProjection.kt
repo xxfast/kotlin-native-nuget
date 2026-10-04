@@ -1041,7 +1041,13 @@ internal object ForwardCirPlanProjection {
       parameter.type.unwrapNullable() as? BridgeType.TypeParameter ?: return null
     val name: String = parameter.csharpName
     val local: String = parameter.csharpLocal
-    val wrap = "NugetMarshal.Wrap<${type.name}>($name!, out"
+    // ADR-198: under a `struct` constraint `T?` is `Nullable<T>`, which `Wrap<T>` cannot take; it
+    // boxes as itself, `Wrap<T?>` normalising to the underlying enum and answering null with null.
+    val wrap: String = if (type.valueType && parameter.type is BridgeType.Nullable) {
+      "NugetMarshal.Wrap<${type.name}?>($name, out"
+    } else {
+      "NugetMarshal.Wrap<${type.name}>($name!, out"
+    }
     return ForwardCirHandleStep(
       flat = "IntPtr ${local}Box = $wrap bool ${local}Owned);",
       declarations = listOf("IntPtr ${local}Box = IntPtr.Zero;", "bool ${local}Owned = false;"),
@@ -1335,7 +1341,7 @@ internal object ForwardCirPlanProjection {
           body = checkedPointerBody(
             nativeName,
             callArguments,
-            exit.returning("NugetMarshal.FromHandle<${type.name}>(nativeResult)"),
+            exit.returning("NugetMarshal.FromHandle<${type.nullableRead()}>(nativeResult)"),
             prelude,
             cleanup,
             exit,
@@ -2030,3 +2036,10 @@ internal fun ForwardPublicSignature.cirDoc(
  * the slots whose names are copied from the Kotlin parameter.
  */
 internal val ForwardAbiParameter.csharpName: String get() = name.csharpParameterName()
+
+/**
+ * ADR-198: the type argument a nullable `T` position reads back through. Under a `struct`
+ * constraint `T?` is `Nullable<T>`, and `FromHandle<T>` would answer the null pointer with
+ * `default(T)`, the enum's first entry, where Kotlin returned null.
+ */
+internal fun BridgeType.TypeParameter.nullableRead(): String = if (valueType) "$name?" else name

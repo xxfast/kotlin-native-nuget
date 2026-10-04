@@ -16,7 +16,7 @@
 - [012](012-lambda-function-type-mapping.md) — Opaque handle for Kotlin→C#; function pointer deferred to Phase 5; 2026-09-22 amendment: a nullable type argument is spelled (`KotlinAction<string?>`) and `null` crosses the returned-lambda boundary in both directions instead of erasing or crashing the host
 - [013](013-extension-property-mapping.md) — `GetXxx()`/`SetXxx()` extension methods for Kotlin extension properties (superseded in part by 188)
 - [014](014-value-class-mapping.md) — `readonly record struct` with unwrapped bridge for Kotlin value classes
-- [015](015-generic-type-constraint-mapping.md) — C# `where` clauses from Kotlin upper bounds; `CirTypeParameter` model; stdlib bounds are dropped to `notnull` with `INFO_DROPPED_BOUND` (2026-10-03 amendment)
+- [015](015-generic-type-constraint-mapping.md) — C# `where` clauses from Kotlin upper bounds; `CirTypeParameter` model; stdlib bounds are dropped to `notnull` with `INFO_DROPPED_BOUND` (2026-10-03 amendment); `Enum<T>` binds as `struct, Enum` (2026-10-04 amendment, ADR-198) (Accepted)
 - [016](016-generic-variance-mapping.md) — `out`/`in` variance on C# interfaces only; dropped on classes (C# restriction)
 - [017](017-inline-function-mapping.md) — Inline functions treated as regular functions; existing pipeline handles them
 - [018](018-type-alias-mapping.md) — Transparent expansion to underlying type; aliases erased (matches all interop targets)
@@ -189,6 +189,7 @@
 - [196](196-generic-nested-types.md): Forward, a generic nested class is `Outer.Inner<T>`, and everything nested in a generic class `Box<T>` lives on a non-generic `static class Box` holder beside it (Accepted): `Box.Lid`, `Box.Pair<U>`, and an `inner class` flattened with its captured parameters first (`new Box.Seal<T>(box, ...)`, `Box.Tag<T, U>`), because Kotlin rejects `Box<Any>.Lid` and C# allows no extern inside a type nested in a generic class (CS7042). Named skips stay for a generic `interface` or sealed owner, a child of a captured inner class, a shadowed or multi-bound captured parameter and an `enum class` owner. Verify green: 1677 processor, 3075 integration, 173 leak tests.
 
 - [197](197-method-type-parameters-on-the-callable-plan.md): Forward, a member function's own type parameter binds on the callable plan (Accepted): `fun <T>` on a class, object, companion, generic class, abstract class, sealed base or sealed arm is a C# generic method (`public T Echo<T>(T item)`, `where T : IFurry`, `T?`, multi-bound, `Result<T>` with its Try twin) on ADR-147's boxed-handle wire; the Kotlin call names its type arguments (`echo<Any?>`); an override prints no `where` (CS0460) and a `T?` override prints `where T : default`. Interface, enum, value class, extension, `reified`, nested `T` and lambda or `Flow` signatures stay named skips. The `suspend` lambda parameter half of the sealed-arm item is not built (Phase 7). Also fixes two Try-twin bugs on generic classes (a dropped `out`, a missing `[MaybeNullWhen(false)]`).
+- [198](198-unspellable-bound-trampoline.md): Forward, a bound with no closed Kotlin spelling binds through a local generic trampoline (Accepted): `T : Enum<T>` is `where T : struct, global::System.Enum` (rejects `int`, `string`, wrappers and `Medal?`; a foreign enum such as `DayOfWeek` throws `NotSupportedException` at the call) and an invariant self-referencing `T : Node<T>` round-trips, on a generic class, a generic function and a member function's own `T` (ADR-197's `Enum<T>` refusal is lifted); the Kotlin export reads each box through a star-projected cast of every bound before `as T`, inside a local `nugetTrampoline<Nothing>()`. Also renders a generic interface bound's type arguments (`where T : IRival<T>`), drops C#-unspellable bounds with `INFO_DROPPED_BOUND`, suppresses the unchecked-cast warning per export, and fixes `fun <T> describe(x: T): String` crashing generation (a return that is neither `T` nor a generic class over `T` is now refused on both halves, named). `reified` Enum-bound functions and suspend or `Flow` members on such an owner stay named skips.
 
 ## By mapping
 
@@ -245,8 +246,8 @@ the current decision.
 - a property declared on a `class<T>` → its own C# type: [147](147-generic-class-methods.md)
 - a type nested in a `class<T>`, or a generic class nested in a class → `Box.Lid` on a non-generic static `Box` · `Outer.Inner<T>`: [133](133-nested-types.md), [134](134-nested-types-under-deferred-owners.md), [141](141-inner-class-outer-instance-constructor.md), [196](196-generic-nested-types.md)
 - `fun <T> f(value: T): T` (top-level) → typed variants: [173](173-erased-generic-routes-carry-csharp-interface-identity.md)
-- `fun <T> f(value: T): T` (class, object, companion or sealed-class member) → generic method: [147](147-generic-class-methods.md), [197](197-method-type-parameters-on-the-callable-plan.md)
-- `<T : Bound>` constraint → `where T : ...`: [015](015-generic-type-constraint-mapping.md)
+- `fun <T> f(value: T): T` (class, object, companion or sealed-class member) → generic method: [147](147-generic-class-methods.md), [197](197-method-type-parameters-on-the-callable-plan.md), [198](198-unspellable-bound-trampoline.md)
+- `<T : Bound>` constraint → `where T : ...`: [015](015-generic-type-constraint-mapping.md), [198](198-unspellable-bound-trampoline.md)
 - `out T` / `in T` variance → `out T` / `in T`: [016](016-generic-variance-mapping.md)
 - `typealias` → C# alias / underlying: [018](018-type-alias-mapping.md)
 

@@ -898,7 +898,8 @@ What an arm still names as `SEALED_SUBCLASS_UNROUTED`:
   for it, so it is tracked on the Phase 7 "suspend lambda as a function parameter" ROADMAP line,
   which now says "including on sealed arms".
 - A generic shape the member route refuses on every owner (a `T` nested in a collection, a `reified`
-  or shadowing `T`, an `Enum<T>` bound, a lambda or `Flow` in the signature, half of an add/remove
+  or shadowing `T`, an `Enum<T>` bound (binds since ADR-198), a lambda or `Flow` in the signature,
+  half of an add/remove
   pair). Its detail is still `GENERIC` and it borrows the `UNROUTED_POSITION` generic hint, which now
   says to declare the member on a class, object, companion or sealed class with the type parameter
   appearing only as a bare `T` or `T?` parameter or return, instead of "move it to a top-level

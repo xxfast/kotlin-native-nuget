@@ -869,7 +869,9 @@ internal fun translateGenericFunction(
       cirBoundConstraint(bound.resolve(), context, logger, func, "$funcName<$typeParamName>")
     }
     // `notnull` must come first in a C# constraint list and adds nothing next to a class bound.
+    // ADR-198: `struct` must come first too (CS0449).
     ?.let { bounds -> if (bounds.size > 1) bounds - NOTNULL_CONSTRAINT else bounds }
+    ?.sortedByDescending { constraint -> constraint == ENUM_CONSTRAINT }
     ?: emptyList()
 
   // ADR-064 amendment (2026-09-13): the shared gate, so this half, the Kotlin half and the

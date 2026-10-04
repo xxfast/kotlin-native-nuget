@@ -406,7 +406,6 @@ class Tier1MemberGenericMethodTest {
       "tier1.membergeneric.Depot.nested" to "(here, its type parameter is nested in `",
       "tier1.membergeneric.Depot.lambda" to "(here, its signature carries a lambda or a Flow)",
       "tier1.membergeneric.Depot.kind" to "(here, its type parameter `T` is reified)",
-      "tier1.membergeneric.Depot.first" to "(here, its type parameter `T` is bounded by `Enum`)",
       "tier1.membergeneric.Depot.conjure" to
           "(here, its multi-bound type parameter `T` is mentioned by no parameter)",
       "tier1.membergeneric.Depot.narrow" to
@@ -432,7 +431,7 @@ class Tier1MemberGenericMethodTest {
       .map(String::trim)
       .filterNot { line -> line.startsWith("//") }
     listOf(
-      "Nested", "Lambda", "Kind", "First", "Conjure", "Narrow", "Gather", "Shadow", "Structural",
+      "Nested", "Lambda", "Kind", "Conjure", "Narrow", "Gather", "Shadow", "Structural",
       "Extended",
     )
       .forEach { member ->
@@ -445,6 +444,14 @@ class Tier1MemberGenericMethodTest {
     assertTrue(
       declarations.any { line -> line.contains("public int Ok()") },
       "expected the control member to bind",
+    )
+    // ADR-198: an `Enum<T>` bound is no longer a refusal; it binds through the trampoline
+    // (Tier1EnumSelfBoundInteractionTest covers it on a class, an object and a sealed arm).
+    assertTrue(
+      declarations.any { line ->
+        line.contains("public T First<T>(T item) where T : struct, global::System.Enum")
+      },
+      "expected Depot.First to bind; got ${declarations.filter { it.contains("First") }}",
     )
   }
 }

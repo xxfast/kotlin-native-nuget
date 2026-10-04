@@ -296,6 +296,15 @@ still releases the box. `LeakTests/LiveHandleTests.cs`'s
 `MemberGenericMethod_BoundCastFails_ReturnsToBaseline` cover the success, throwing and bound-failure
 paths.
 
+A [bound with no closed Kotlin spelling](generics.md#an-enum-bound) (`T : Enum<T>`, an invariant
+`T : Node<T>`) mints the handles of any other generic crossing: an enum argument is boxed per
+write and released by the call, a `T` result is released as it is read (an enum) or disposed by you
+(a wrapper), and a null `T?` mints nothing. A Kotlin throw inside the call, and a foreign C# enum the
+constraint admits but the call refuses, strand nothing. `LeakTests/LiveHandleTests.cs`'s
+`EnumSelfBound_ClassAndFunctionRoute_ReturnsToBaseline`,
+`EnumSelfBound_ThrowPaths_ReturnToBaseline` and `InvariantRecursiveBound_ReturnsToBaseline` cover
+the success, throw and wrapper paths.
+
 A [sealed base's own async members](interfaces-abstract-sealed.md#sealed-method-suspend-generated-c)
 add no new handle kind either: the scope handle moves from the arm to the base, and the count returns
 to baseline once the base-typed reference is disposed. `LeakTests/LiveHandleTests.cs` row 9l covers

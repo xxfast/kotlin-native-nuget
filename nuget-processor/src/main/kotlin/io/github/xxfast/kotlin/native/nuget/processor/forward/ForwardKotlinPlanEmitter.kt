@@ -4,8 +4,11 @@ import com.google.devtools.ksp.symbol.KSDeclaration
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.MemberName
+import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.ClassName
+import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.TypeName
+import com.squareup.kotlinpoet.UNIT
 import io.github.xxfast.kotlin.native.nuget.processor.exports.cNameAnnotation
 import io.github.xxfast.kotlin.native.nuget.processor.exports.cOpaquePointer
 import io.github.xxfast.kotlin.native.nuget.processor.exports.cOpaquePointerVar
@@ -190,7 +193,16 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
     else -> error("Forward Kotlin plan emitter has no Phase 4 result route for $result")
   }
 
-  addFunction(builder.build())
+  // ADR-198: an export that takes a value of an unspellably bounded type parameter.
+  if (plan.castsToGenericBound()) builder.addAnnotation(forwardUncheckedCastSuppression)
+  // ADR-197 + ADR-198: and a member function's own such parameter, wherever it appears.
+  val trampoline: List<Pair<String, List<String>>> =
+    plan.trampolineParameters()
+      .map { typeParameter -> typeParameter.kotlinName to typeParameter.bounds } +
+        plan.publicSignature.typeParameters
+          .filter { typeParameter -> typeParameter.trampolineBounds.isNotEmpty() }
+          .map { typeParameter -> typeParameter.kotlinName to typeParameter.trampolineBounds }
+  addFunction(builder.build().trampolined(trampoline))
   return this
 }
 
@@ -898,6 +910,78 @@ private fun BridgeType.TypeParameter.bounds(): List<String> =
   listOfNotNull(boundQualifiedName) + additionalBounds
 
 /**
+ * `@Suppress("UNCHECKED_CAST")` for an export whose checked bound read casts to a generic bound's
+ * erased spelling (`as kotlin.Comparable<Any?>`). The cast checks the bound's class at run time;
+ * only its arguments are unchecked, and the read's static type is consumed downstream (an
+ * argument, a witness, inference), so a star projection does not type-check there. Generated
+ * output carries no file-level suppression, so it is added per export, never to the whole file.
+ */
+internal val forwardUncheckedCastSuppression: AnnotationSpec =
+  AnnotationSpec.builder(ClassName("kotlin", "Suppress")).addMember("%S", "UNCHECKED_CAST").build()
+
+/** True when one of [bounds] (an erased bound spelling) is a generic type, so its cast warns. */
+internal fun List<String>.castsToGenericBound(): Boolean = any { bound -> '<' in bound }
+
+/** True when this plan reads a non-trampolined `T` through a generic bound's erased spelling. */
+private fun ForwardCallablePlan.castsToGenericBound(): Boolean =
+  publicSignature.parameters.any { parameter ->
+    val type: BridgeType.TypeParameter? =
+      parameter.type.unwrapNullable() as? BridgeType.TypeParameter
+    type != null && !type.trampolined && type.bounds().castsToGenericBound()
+  }
+
+/** ADR-198: the trampoline type variable a trampolined `T` box is cast to, else null. */
+private fun BridgeType.TypeParameter.typeVariable(): String? = kotlinName.takeIf { trampolined }
+
+/**
+ * ADR-198: the owner's trampolined type parameters this export takes a value of, in declaration
+ * order; empty for every export that keeps its ADR-147 shape. Only a value IN needs the
+ * trampoline: a result or a property read leaves the star-projected receiver to type it.
+ */
+private fun ForwardCallablePlan.trampolineParameters(): List<ForwardGenericOwnerParameter> =
+  invocation.ownerType?.typeParameters.orEmpty().filter { typeParameter ->
+    typeParameter.trampolined &&
+        publicSignature.parameters.any { parameter -> parameter.mentions(typeParameter) }
+  }
+
+/**
+ * ADR-198: [this] export re-shaped around a trampoline. The export cannot be generic, and no
+ * closed type argument is within an unspellable bound, so the whole body moves into a local
+ * function that re-declares each of [typeVariables] (name to declared bounds) and is called at
+ * `Nothing`. Inside it a `T` is a real type variable: the owner is cast to `Owner<T>` and every
+ * box to `T`, unchecked (hence the suppression, on the local function only) after the checked
+ * star-projected casts [forwardBoundedRead] emits.
+ *
+ * The local function returns the export's wire type, never `T`: called at `Nothing`, a `T`
+ * result would be typed `Nothing`. A local function rather than a private top-level one, as
+ * `nugetTypedOwner` is, so no second top-level name can collide with an export.
+ */
+internal fun FunSpec.trampolined(typeVariables: List<Pair<String, List<String>>>): FunSpec {
+  if (typeVariables.isEmpty()) return this
+  val names: String = typeVariables.joinToString(", ") { (name, _) -> name }
+  val where: String = typeVariables
+    .flatMap { (name, bounds) -> bounds.map { bound -> "$name : $bound" } }
+    .joinToString(", ")
+  val phantoms: String = typeVariables.joinToString(", ") { "Nothing" }
+  val returnsValue: Boolean = returnType != UNIT
+  // One literal, so no line wrap can fall inside the header; the return type fully qualified.
+  val header: String = "fun <$names> nugetTrampoline()" +
+      (if (returnsValue) ": $returnType" else "") +
+      (if (where.isEmpty()) "" else " where $where") + " {"
+  val call: String = "nugetTrampoline<$phantoms>()"
+  val code: CodeBlock = CodeBlock.builder()
+    .add("%L\n", "@Suppress(\"UNCHECKED_CAST\")")
+    .add("%L\n", header)
+    .indent()
+    .add(body)
+    .unindent()
+    .add("\n}\n")
+    .add("%L\n", if (returnsValue) "return $call" else call)
+    .build()
+  return toBuilder().clearBody().addCode(code).build()
+}
+
+/**
  * The read of a `T` box at [pointer]: as `Any`, then cast to each of [bounds]. The cast is the
  * bound check. `asStableRef<Bound>()` is a generic, unchecked cast in Kotlin/Native, so a `T`
  * outside a bound C# cannot see (a dropped builtin: `Weigh<uint>` against `T : Number`) used to
@@ -910,10 +994,21 @@ private fun BridgeType.TypeParameter.bounds(): List<String> =
  * local, which Kotlin types as the intersection no single type names. A [nullable] read casts to
  * each bound's nullable form, so null passes through. Unconstrained, it is the plain `Any` read.
  */
-internal fun forwardBoundedRead(pointer: String, bounds: List<String>, nullable: Boolean): String {
+internal fun forwardBoundedRead(
+  pointer: String,
+  bounds: List<String>,
+  nullable: Boolean,
+  // ADR-198: inside a trampoline, the type parameter the read is finally cast to; [bounds] are
+  // then the star-projected checks that run first.
+  typeVariable: String? = null,
+): String {
   val read: String =
     if (nullable) "$pointer?.asStableRef<Any>()?.get()" else "$pointer.asStableRef<Any>().get()"
   val mark: String = if (nullable) "?" else ""
+  if (typeVariable != null) {
+    val casts: String = bounds.joinToString("") { bound -> "bounded as $bound$mark; " }
+    return "$read.let { bounded -> ${casts}bounded as $typeVariable$mark }"
+  }
   return when (bounds.size) {
     0 -> read
     1 -> "($read as ${bounds.single()}$mark)"
@@ -938,6 +1033,18 @@ internal fun forwardBoundedRead(pointer: String, bounds: List<String>, nullable:
 private fun ownerCall(plan: ForwardCallablePlan, call: String): String {
   val owner: ForwardGenericOwner = plan.invocation.ownerType
     ?: return "handle.asStableRef<${plan.ownerTypeName()}>().get().$call"
+  // ADR-198: inside the trampoline the owner is applied to the trampoline's own type variables,
+  // through a cast (`asStableRef` is reified, and a type variable is not).
+  val trampoline: Set<String> = plan.trampolineParameters().map { it.kotlinName }.toSet()
+  if (trampoline.isNotEmpty()) {
+    val applied: String = owner.applied(
+      owner.typeParameters.joinToString(", ") { typeParameter ->
+        if (typeParameter.kotlinName in trampoline) typeParameter.kotlinName
+        else typeParameter.erased ?: "*"
+      },
+    )
+    return "(handle.asStableRef<Any>().get() as $applied).$call"
+  }
   val witnesses: List<Pair<ForwardGenericOwnerParameter, ForwardPublicParameter>> =
     owner.typeParameters
       .filter { typeParameter -> typeParameter.erased == null }
@@ -990,7 +1097,10 @@ private fun constructorTypeName(plan: ForwardCallablePlan, owner: ForwardGeneric
     owner.typeParameters.joinToString(", ") { typeParameter ->
       val mentioned: Boolean =
         plan.publicSignature.parameters.any { parameter -> parameter.mentions(typeParameter) }
-      typeParameter.erased ?: if (mentioned) "_" else "Nothing"
+      // ADR-198: a trampolined parameter is named by the trampoline's own type variable.
+      val variable: String? =
+        typeParameter.kotlinName.takeIf { typeParameter.trampolined && mentioned }
+      typeParameter.erased ?: variable ?: if (mentioned) "_" else "Nothing"
     },
   )
 }
@@ -1504,7 +1614,7 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
     // (`Any` when the parameter is unconstrained), which is the type the member's `T` accepts
     // under the erased receiver spelling. ADR-015 amendment: through checked casts.
     is BridgeType.TypeParameter ->
-      forwardBoundedRead(parameter.ref, type.bounds(), nullable = false)
+      forwardBoundedRead(parameter.ref, type.bounds(), nullable = false, type.typeVariable())
 
     // ADR-088: the reverse pipeline's own resolver. It frees the incoming transfer handle and
     // returns the ORIGINAL Kotlin object on a token-probe hit; otherwise it wraps the handle in
@@ -1543,7 +1653,7 @@ private fun loweredArgument(parameter: ForwardPublicParameter): String =
 
       // ADR-083/147: a null `T?` arrives as the null pointer and stays Kotlin null.
       is BridgeType.TypeParameter ->
-        forwardBoundedRead(parameter.ref, inner.bounds(), nullable = true)
+        forwardBoundedRead(parameter.ref, inner.bounds(), nullable = true, inner.typeVariable())
 
       // ADR-098 amendment (boundary nullability part C): `Char?` arrives as the same adjacent pair
       // and needs no conversion -- the by-value slot already IS a Kotlin `Char`.

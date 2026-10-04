@@ -155,6 +155,12 @@ This also makes a bare-enum collection **property** settable, not get-only; see
 nested collection element (`List<List<Mood>>`) has no representation and is skipped; see
 [Collections](collections.md).
 
+## As an enum-bounded type argument {id="enum-bound"}
+
+A Kotlin `T : Enum<T>` binds as `where T : struct, global::System.Enum`, so any generated enum
+is a valid type argument: `new Rosette<Medal>(Medal.Gold)`. See
+[Generics: An enum bound](generics.md#an-enum-bound).
+
 ## Nested enums {id="nested-enums-skip-named"}
 
 An `enum class` nested inside an admitted owner (a `class`, `object`, or

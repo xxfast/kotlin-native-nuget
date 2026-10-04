@@ -50,7 +50,7 @@ Complete.
 Complete.
 
 ## Phase 4: Rich type support
-- [ ] `T : Enum<T>` generates Kotlin that does not compile on both generic routes: no Kotlin type argument satisfies the invariant bound; a Tier 1 cell pins the failure. Verified. Discovered alongside [ADR-015](docs/adr/015-generic-type-constraint-mapping.md)'s 2026-10-03 amendment.
+- [ ] A function returning a GENERIC abstract class at a closed type (`fun stock(): Shelf<String>`) generates `new Shelf<string>(handle, out _)`, which is CS0144; a backing wrapper cannot nest in the generic class (CS7042: no extern in a type nested in a generic class), so it needs the non-generic holder. Verified; a known-limit cell in `Tier1EnumSelfBoundInteractionTest` pins it. Discovered alongside [ADR-198](docs/adr/198-unspellable-bound-trampoline.md), 2026-10-04.
 
 ## Phase 5: Exception handling
 - [ ] `kspKotlinMingwX64` prints about 155 `w: [ksp] ... [nuget:*]` warning lines on Windows at default verbosity, which [ADR-100](docs/adr/100-forward-diagnostic-delivery.md) (measured on macOS) says cannot happen; unexplained whether the ADR-100 console re-emit is duplicating them in `packNuget`. ([details](docs/backlog/kspkotlinmingwx64-155-warning-lines-adr-100-says-cannot.md))
