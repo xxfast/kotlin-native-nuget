@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-  # The reverse dogfooding census (the `dogfood` job) is the only thing these two add. It restores
+  # The reverse dogfooding census (the `reverse-census` job) is the only thing these two add. It restores
   # nine real published packages from nuget.org, so it runs on a schedule and on demand rather than
   # on every push, and it is never a required check.
   schedule:
@@ -19,27 +19,32 @@ concurrency:
 
 jobs:
   # The processor and plugin tests need no Kotlin/Native link and nothing below needs their
-  # output, so they run beside the `test` job rather than in front of it. These previously ran
+  # output, so they run beside the `bridge` job rather than in front of it. These previously ran
   # only in release.yml, on a tag, so a PR could break them and CI stayed green until release day.
   # One job per suite: the processor's tests alone are the longest thing in the workflow, so the
   # plugin's run beside them instead of after.
-  unit:
-    name: ${{ matrix.suite }} tests (${{ matrix.os }})
+  #
+  # Named by direction: the processor suite is the forward generator (Kotlin to C#), the plugin
+  # suite is the reverse generator (C# to Kotlin) together with the plugin's own task wiring.
+  generators:
+    name: ${{ matrix.title }} (${{ matrix.os }})
     strategy:
       matrix:
         os: [macos-latest, windows-latest]
         suite: [processor, plugin]
         include:
           - suite: processor
+            title: Forward generator
             gradle: ./gradlew :nuget-processor:koverXmlReport
             report: nuget-processor/build/reports/kover/report.xml
           # nuget-plugin is a composite includeBuild, so its task is addressed with -p nuget-plugin.
           - suite: plugin
+            title: Reverse generator and plugin
             gradle: ./gradlew -p nuget-plugin koverXmlReport
             report: nuget-plugin/build/reports/kover/report.xml
 
     runs-on: ${{ matrix.os }}
-    # Same reason as `test` below: not a job the weekly dogfood schedule should pay for.
+    # Same reason as `bridge` below: not a job the weekly census schedule should pay for.
     if: github.event_name == 'push' || github.event_name == 'pull_request'
 
     steps:
@@ -58,7 +63,7 @@ jobs:
           dotnet-version: 10.0.x
 
       # koverXmlReport runs the tests and writes the JaCoCo-compatible XML in one pass.
-      - name: Tests with coverage
+      - name: Unit tests with coverage
         run: ${{ matrix.gradle }}
 
       # Public repo works tokenless, but the token is wired for correctness and in case the
@@ -73,7 +78,12 @@ jobs:
           fail_ci_if_error: false
           files: ${{ matrix.report }}
 
-  test:
+  # The packed bridge, driven from C#. One serial chain per OS because every C# suite consumes the
+  # same packed test-library. Step names carry their stage: Runtime, Contract, Pack, Compile,
+  # Behaviour, Coexistence, AOT, Leaks. The leak harness is the slowest suite, so it runs last and
+  # a failure in a cheaper stage does not wait behind it.
+  bridge:
+    name: Bridge end to end (${{ matrix.os }})
     strategy:
       matrix:
         include:
@@ -87,7 +97,7 @@ jobs:
             aot_binary: ./AotSmokeTest/bin/Release/net10.0/win-x64/publish/AotSmokeTest.exe
 
     runs-on: ${{ matrix.os }}
-    # The weekly schedule and workflow_dispatch above exist only for the `dogfood` job, and a
+    # The weekly schedule and workflow_dispatch above exist only for the `reverse-census` job, and a
     # workflow-level trigger fires every job in the file. This matrix pays for two Kotlin/Native
     # links and two AOT publishes, so it stays on push and pull_request only.
     if: github.event_name == 'push' || github.event_name == 'pull_request'
@@ -109,22 +119,22 @@ jobs:
       # ADR-128: the `launchForCSharp` / `collectForCSharp` runtime helpers run in-process here, on
       # both legs, so a broken coroutine arm fails before the pack rather than inside a dotnet test.
       # The host's test task by name: `allTests` also links the three targets it cannot run.
-      - name: Runtime helper tests
+      - name: "Runtime: helper tests"
         run: ./gradlew :nuget-runtime:${{ matrix.runtime_test }}
 
-      - name: Verify and pack shared compiled contract
+      - name: "Contract: verify and pack the shared compiled contract"
         run: |
           dotnet test ContractTests
           dotnet pack Kotlin.Native.Interop -c Release -o build/nuget
 
-      - name: Verify mixed compatible contract dependency floors
+      - name: "Contract: mixed compatible dependency floors restore together"
         run: bash scripts/verify-contract-version-ranges.sh
         shell: bash
 
-      - name: Build both independent NuGet publishers
+      - name: "Pack: both independent NuGet publishers"
         run: ./gradlew :test-library:packNuget :test-companion:packNuget
 
-      - name: Forward diagnostics include the late publisher on cached builds
+      - name: "Pack: forward diagnostics include the late publisher on cached builds"
         run: scripts/verify-forward-diagnostics.sh
         shell: bash
 
@@ -133,46 +143,34 @@ jobs:
       # into a build failure instead of an `EntryPointNotFoundException` in the dotnet tests below.
       # Under Git Bash on the Windows runner `$HOME` is the user profile, so the script's
       # `~/.konan/dependencies/msys2-mingw-w64-x86_64-*/bin/nm.exe` glob resolves there too.
-      - name: Runtime exports present in the linked library
+      - name: "Pack: runtime exports present in the linked library"
         run: scripts/verify-runtime-exports.sh
         shell: bash
 
-      - name: Check generated bindings compile as a consumer (net10.0, warnings as errors)
+      - name: "Compile: generated bindings as a consumer (net10.0, warnings as errors)"
         run: dotnet build GeneratedBindingsCheck
 
-      - name: Build dotnet tests
+      - name: "Behaviour: build IntegrationTests"
         run: dotnet build IntegrationTests
 
-      - name: Check test output
+      - name: "Behaviour: list test output"
         if: runner.os == 'Windows'
         run: ls IntegrationTests/bin/Debug/net10.0/
         shell: bash
 
-      - name: Run dotnet tests with coverage
+      - name: "Behaviour: run IntegrationTests with coverage"
         run: >
           dotnet test IntegrationTests --no-build
           --collect:"XPlat Code Coverage"
           --results-directory IntegrationTests/TestResults
 
-      # ADR-120's live-handle counter is process-global, so the leak harness needs a test process
-      # of its own: sharing one with the other ~1550 tests let their cleaners move the count during
-      # a measurement window, which went red on Windows for rows that mint no handle at all.
-      - name: Build leak harness
-        run: dotnet build LeakTests
-
-      - name: Run leak harness with coverage
-        run: >
-          dotnet test LeakTests --no-build
-          --collect:"XPlat Code Coverage"
-          --results-directory LeakTests/TestResults
-
-      - name: Verify independent native runtimes with coverage
+      - name: "Coexistence: independent native runtimes with coverage"
         run: >
           dotnet test MultiPackageTests
           --collect:"XPlat Code Coverage"
           --results-directory MultiPackageTests/TestResults
 
-      - name: Verify shared exception identity across consumer assemblies
+      - name: "Coexistence: shared exception identity across consumer assemblies"
         run: dotnet test SharedExceptionTests
 
       # ADR-102: the forward callback surface (flow, suspend, per-call lambda, stored callback,
@@ -182,13 +180,25 @@ jobs:
       # too (ILC pre-generates delegate marshalling stubs) and must keep passing through them.
       # Runs in the default shell deliberately - under bash on Windows the ILC link step fails
       # to resolve vswhere.exe.
-      - name: Publish AOT smoke test (${{ matrix.aot_rid }})
+      - name: "AOT: publish smoke test (${{ matrix.aot_rid }})"
         run: dotnet publish AotSmokeTest -r ${{ matrix.aot_rid }} -c Release -p:PublishAot=true
 
-      - name: Run AOT smoke test (${{ matrix.aot_rid }})
+      - name: "AOT: run smoke test (${{ matrix.aot_rid }})"
         run: ${{ matrix.aot_binary }}
 
-      # Same upload rules as the Kotlin report in the `unit` job: tokenless works, macos-latest only.
+      # ADR-120's live-handle counter is process-global, so the leak harness needs a test process
+      # of its own: sharing one with the other ~1550 tests let their cleaners move the count during
+      # a measurement window, which went red on Windows for rows that mint no handle at all.
+      - name: "Leaks: build harness"
+        run: dotnet build LeakTests
+
+      - name: "Leaks: run harness with coverage"
+        run: >
+          dotnet test LeakTests --no-build
+          --collect:"XPlat Code Coverage"
+          --results-directory LeakTests/TestResults
+
+      # Same upload rules as the Kotlin report in the `generators` job: tokenless works, macos-latest only.
       - name: Upload C# coverage to Codecov
         if: always() && matrix.os == 'macos-latest'
         uses: codecov/codecov-action@v5
@@ -208,14 +218,19 @@ jobs:
   # with it and the real dotnet tests run. Folded into one job per version to stay inside the
   # free plan's 5 concurrent macOS jobs. The names resolve through kotlinFloor and kotlinTested in
   # gradle.properties; never put a number here.
-  smoke-test:
-    name: Kotlin ${{ matrix.kotlin }} (consume by coordinate, behaviour tests)
+  #
+  # Step names carry which of the two a step belongs to. `Published artifacts:` is the consumer's
+  # real shape (built on the pin, linked by this Kotlin). `Repo on Kotlin X:` is not: the override
+  # rebuilds the processor and the runtime klib on this Kotlin too
+  # (docs/backlog/kotlin-range-ci-coverage-gaps.md).
+  consumer:
+    name: Consumer on Kotlin ${{ matrix.kotlin }}
     runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
         kotlin: [floor, tested]
-    # Same reason as `test` above: not a job the weekly dogfood schedule should pay for.
+    # Same reason as `bridge` above: not a job the weekly census schedule should pay for.
     if: github.event_name == 'push' || github.event_name == 'pull_request'
 
     steps:
@@ -238,7 +253,7 @@ jobs:
       # No kotlinVersion override here: these are the artifacts a release ships, built on the pin.
       # The link needs the runtime and annotations klibs too; the macosArm64 and metadata
       # publications are all a macOS runner can and needs to build.
-      - name: Publish plugin, processor, runtime and annotations to a local maven repo
+      - name: "Published artifacts: publish plugin, processor, runtime and annotations to a local maven repo"
         run: >
           ./gradlew
           :nuget-processor:publishAllPublicationsToLocalTestRepository
@@ -248,7 +263,7 @@ jobs:
           :nuget-annotations:publishKotlinMultiplatformPublicationToLocalTestRepository
           :nuget-plugin:publishAllPublicationsToLocalTestRepository
 
-      - name: Resolve by coordinate and link at Kotlin ${{ matrix.kotlin }}
+      - name: "Published artifacts: resolve by coordinate and link at Kotlin ${{ matrix.kotlin }}"
         run: >
           ./gradlew -p smoke-test
           verifyProcessorResolvesByCoordinate
@@ -257,19 +272,19 @@ jobs:
           -Psmoke.kotlin=${{ matrix.kotlin }}
 
       # From here on the root build itself runs on this leg's Kotlin (settings.gradle.kts). No
-      # coverage and no AOT publish: the `test` job owns those on the pinned version.
-      - name: Verify and pack shared compiled contract
+      # coverage and no AOT publish: the `bridge` job owns those on the pinned version.
+      - name: "Repo on Kotlin ${{ matrix.kotlin }}: verify and pack shared compiled contract"
         run: |
           dotnet test ContractTests
           dotnet pack Kotlin.Native.Interop -c Release -o build/nuget
 
-      - name: Build both independent NuGet publishers at Kotlin ${{ matrix.kotlin }}
+      - name: "Repo on Kotlin ${{ matrix.kotlin }}: build both independent NuGet publishers"
         env:
           ORG_GRADLE_PROJECT_kotlinVersion: ${{ matrix.kotlin }}
         run: ./gradlew :test-library:packNuget :test-companion:packNuget
 
       # The klib manifest records the compiler that built it; a silently ignored override fails here.
-      - name: Prove test-library was compiled at Kotlin ${{ matrix.kotlin }}
+      - name: "Repo on Kotlin ${{ matrix.kotlin }}: prove test-library was compiled at it"
         shell: bash
         run: |
           case "${{ matrix.kotlin }}" in
@@ -282,10 +297,10 @@ jobs:
           echo "test-library compiled by Kotlin $actual (expected $expected)"
           test "$actual" = "$expected"
 
-      - name: Run dotnet tests
+      - name: "Repo on Kotlin ${{ matrix.kotlin }}: run IntegrationTests"
         run: dotnet test IntegrationTests
 
-      - name: Run leak harness
+      - name: "Repo on Kotlin ${{ matrix.kotlin }}: run leak harness"
         run: dotnet test LeakTests
 
   # The reverse dogfooding census: the real plugin pipeline over nine pinned published NuGet
@@ -294,7 +309,7 @@ jobs:
   # merge. On a pull request it only runs when the change touches something that can move a census
   # number; it always runs on the weekly schedule and on workflow_dispatch. No Kotlin/Native
   # toolchain is needed, so this is the cheapest runner class in the workflow.
-  dogfood:
+  reverse-census:
     name: Reverse census over real packages
     runs-on: ubuntu-latest
     # Pull requests (path-filtered in the first step below), the weekly schedule and on demand. NOT

@@ -23,10 +23,10 @@ if [ "$#" -gt 1 ]; then
 fi
 
 if [ "$RUN_PLUGIN" = true ]; then
-  echo "==> Gradle plugin tests (:nuget-plugin:test)"
+  echo "==> Reverse generator and plugin: unit tests (:nuget-plugin:test)"
   ./gradlew :nuget-plugin:test
 
-  echo "==> Publish plugin + processor + runtime to build/local-repo"
+  echo "==> Published artifacts: publish plugin, processor, runtime and annotations to build/local-repo"
   ./gradlew :nuget-processor:publishAllPublicationsToLocalTestRepository \
     :nuget-runtime:publishAllPublicationsToLocalTestRepository \
     :nuget-annotations:publishAllPublicationsToLocalTestRepository \
@@ -34,7 +34,7 @@ if [ "$RUN_PLUGIN" = true ]; then
 
   # Exercises the maven-coordinate fallback in NugetPlugin that this repo's own builds skip,
   # because here `findProject(":nuget-processor")` always resolves.
-  echo "==> Consume the plugin by coordinate (smoke-test)"
+  echo "==> Published artifacts: resolve by coordinate (smoke-test)"
   ./gradlew -p smoke-test verifyProcessorResolvesByCoordinate verifyRuntimeResolvesByCoordinate
 fi
 
@@ -60,7 +60,7 @@ rm -rf SharedExceptionTests/obj SharedExceptionTests/bin
 rm -rf FirstPublisherConsumer/obj FirstPublisherConsumer/bin
 rm -rf SecondPublisherConsumer/obj SecondPublisherConsumer/bin
 
-echo "==> Shared contract API tests and package"
+echo "==> Contract: shared contract API tests and package"
 dotnet test ContractTests
 dotnet pack Kotlin.Native.Interop -c Release -o build/nuget
 bash "$ROOT/scripts/verify-contract-version-ranges.sh"
@@ -76,55 +76,55 @@ case "$(uname -s)" in
   Linux) runtime_test=linuxX64Test ;;
   *) runtime_test=allTests ;;
 esac
-echo "==> Runtime helper tests (:nuget-runtime:$runtime_test)"
+echo "==> Runtime: helper tests (:nuget-runtime:$runtime_test)"
 ./gradlew ":nuget-runtime:$runtime_test"
 
-echo "==> Pack both independent Kotlin NuGet publishers"
+echo "==> Pack: both independent Kotlin NuGet publishers"
 ./gradlew :test-library:clean :test-companion:clean \
   :test-library:packNuget :test-companion:packNuget
 
 # ADR-127: the fixed `nuget_*` ABI now reaches the binary from the `nuget-runtime` klib through
 # the plugin's `export()`, not from a regenerated block. This is the check that the export really
 # happened, on the linked library rather than on generated text.
-echo "==> Runtime exports present in the linked library (scripts/verify-runtime-exports.sh)"
+echo "==> Pack: runtime exports present in the linked library (scripts/verify-runtime-exports.sh)"
 "$ROOT/scripts/verify-runtime-exports.sh"
 
 # ADR-100: forward diagnostics must reach the console on a fresh *and* an incremental packNuget.
 # Runs after the pack above, so both of its runs exercise the cached path this feature exists for.
-echo "==> Forward diagnostic delivery (scripts/verify-forward-diagnostics.sh)"
+echo "==> Pack: forward diagnostic delivery (scripts/verify-forward-diagnostics.sh)"
 "$ROOT/scripts/verify-forward-diagnostics.sh"
 
 # ADR-182 amendment: the reverse report the pack above wrote for test-library's bound dependency.
-echo "==> Reverse diagnostics report (verifyReverseDiagnostics)"
+echo "==> Pack: reverse diagnostics report (verifyReverseDiagnostics)"
 ./gradlew verifyReverseDiagnostics --console=plain -q
 
-echo "==> Check generated bindings compile as a consumer (net10.0, C# 14, warnings as errors)"
+echo "==> Compile: generated bindings as a consumer (net10.0, C# 14, warnings as errors)"
 dotnet build GeneratedBindingsCheck
 
 # ADR-150: the fixture's KDoc must reach the documentation XML a consumer's compiler emits, not
 # just the text of Interop.cs. One entry is enough here; IntegrationTests/XmlDocTests.cs asserts the
 # whole tag mapping.
-echo "==> Generated bindings carry XML doc comments (ADR-150)"
+echo "==> Compile: generated bindings carry XML doc comments (ADR-150)"
 grep -q '<member name="M:TestLibrary.Kdoc.BoardingDesk.Book(System.Int32,System.String)">' \
   GeneratedBindingsCheck/obj/Debug/net10.0/GeneratedBindingsCheck.xml
 
-echo "==> C# consumer tests (dotnet test in IntegrationTests)"
+echo "==> Behaviour: C# consumer tests (dotnet test in IntegrationTests)"
 cd "$ROOT/IntegrationTests"
 dotnet test
 
 # ADR-120's live-handle counter is process-global, so the leak harness runs in its own test
 # assembly: sharing a process with the rest of the suite let other tests' cleaners move the count
 # mid-measurement, which showed up as CI flakes on rows that mint no handle at all.
-echo "==> Leak harness (dotnet test in LeakTests)"
+echo "==> Leaks: harness (dotnet test in LeakTests)"
 cd "$ROOT/LeakTests"
 dotnet test
 
-echo "==> Independent native runtimes and shared contracts"
+echo "==> Coexistence: independent native runtimes and shared exception identity"
 cd "$ROOT"
 dotnet test MultiPackageTests
 dotnet test SharedExceptionTests
 
-echo "==> Execute NativeAOT with both publishers"
+echo "==> AOT: execute NativeAOT with both publishers"
 case "$(uname -s)" in
   MINGW* | MSYS*)
     powershell.exe -NoProfile -File "$ROOT/scripts/verify-aot.ps1"

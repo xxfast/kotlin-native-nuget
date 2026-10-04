@@ -139,14 +139,14 @@ The sentence under it changes to: the range is a floor (the build fails below it
 
 ### 5. CI matrix
 
-The `smoke-test` job in `.github/workflows/ci.yml` is a `[floor, tested]` matrix on `macos-latest`, one job per end of the range. It does not stop at a link. Each leg:
+The `consumer` job in `.github/workflows/ci.yml` is a `[floor, tested]` matrix on `macos-latest`, one job per end of the range. It does not stop at a link. Each leg:
 
 1. Publishes the plugin, processor, runtime and annotations to the local repo on the repo's pinned compiler (no override), so the artifacts are the ones a release ships.
 2. Resolves by coordinate and links the smoke consumer at X (`verifyProcessorResolvesByCoordinate`, `verifyRuntimeResolvesByCoordinate`, `linkDebugSharedMacosArm64`, `-Psmoke.kotlin=<leg>`).
 3. With `ORG_GRADLE_PROJECT_kotlinVersion=<leg>`, runs `:test-library:packNuget :test-companion:packNuget`, then the real `IntegrationTests` and `LeakTests`.
 4. Fails unless the `test-library` klib manifest `compiler_version` equals X, so a silently ignored override cannot pass.
 
-No coverage and no NativeAOT run: the `test` job owns those on the pinned version. That is 5 macOS jobs per run, exactly the free plan's concurrency cap. `scripts/verify.sh` and `release.yml` keep running the pinned compiler.
+No coverage and no NativeAOT run: the `bridge` job owns those on the pinned version. That is 5 macOS jobs per run, exactly the free plan's concurrency cap. `scripts/verify.sh` and `release.yml` keep running the pinned compiler.
 
 ## Consequences
 
