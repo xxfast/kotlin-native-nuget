@@ -660,6 +660,17 @@ internal data class ForwardPublicSignature(
    * callable is spelled that way (minted with the per-parameter names of [parameters]).
    */
   val dispatchMask: String = "mask",
+  /**
+   * ADR-132 amendment: the value receiver (an extension's or an enum member's `this`) as the
+   * public parameter both halves lower it from, with its DECLARED type and its minted
+   * [ForwardPublicParameter.hasValueSlot]. Null for a handle receiver and for a receiver-free
+   * callable.
+   *
+   * It cannot be read back off the RECEIVER slot: a has-value fan-out receiver (`Int?`, `Mood?`,
+   * `Instant?`, ...) crosses as the `hasValue` flag then the value, and the value slot carries the
+   * non-null inner type, so lowering from that slot compiles clean and drops the caller's `null`.
+   */
+  val receiver: ForwardPublicParameter? = null,
 )
 
 /** Symbol-level invocation information. Renderers decide syntax later. */
@@ -888,9 +899,22 @@ internal object ForwardCallablePlanValidator {
   private fun validateRoles(plan: ForwardCallablePlan, call: ForwardNativeCall) {
     val receivers: List<Int> = call.parameters.indices
       .filter { index -> call.parameters[index].role == ForwardAbiRole.RECEIVER }
-    require(receivers.size <= 1 && receivers.all { index -> index == 0 }) {
+    // ADR-132 amendment: a has-value fan-out receiver puts its flag first, so its RECEIVER slot is
+    // at index 1, and only when slot 0 is exactly that receiver's minted flag.
+    val receiver: ForwardPublicParameter? = plan.publicSignature.receiver
+    val flag: ForwardAbiParameter? = call.parameters.firstOrNull()
+    val flagged: Boolean = receiver != null && flag != null &&
+        flag.name == receiver.hasValueSlot && flag.role == ForwardAbiRole.USER &&
+        flag.wireType == ForwardAbiWireType.BOOLEAN && flag.direction == ForwardAbiDirection.IN
+    val receiverIndex: Int = if (flagged) 1 else 0
+    require(receivers.size <= 1 && receivers.all { index -> index == receiverIndex }) {
       "Forward plan ${plan.publicSignature.name} export ${call.exportName} must declare " +
-          "at most one receiver slot, first; got $receivers"
+          "at most one receiver slot, first or after its has-value flag; got $receivers"
+    }
+    require(receiver == null || receivers.map { index -> call.parameters[index].name } ==
+        listOf(receiver.name)) {
+      "Forward plan ${plan.publicSignature.name} export ${call.exportName} declares public " +
+          "receiver ${receiver?.name} but receiver slots $receivers"
     }
     val errors: List<Int> = call.parameters.indices
       .filter { index -> call.parameters[index].role == ForwardAbiRole.ERROR }

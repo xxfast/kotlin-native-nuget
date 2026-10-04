@@ -25,8 +25,8 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
   }
 
   val call: ForwardNativeCall = plan.nativeExports.single()
-  val receiver: ForwardAbiParameter? = call.parameters.firstOrNull()
-    ?.takeIf { parameter -> parameter.role == ForwardAbiRole.RECEIVER }
+  val receiver: ForwardAbiParameter? =
+    call.parameters.firstOrNull { parameter -> parameter.role == ForwardAbiRole.RECEIVER }
   val error: ForwardAbiParameter = requireNotNull(plan.errorSlot) {
     "Forward Kotlin plan ${plan.invocation.symbol} is missing its error slot"
   }
@@ -49,8 +49,10 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
       cNameAnnotation(call.exportName, ForwardExportOwnerTag(symbol = plan.invocation.symbol)),
     )
 
-  call.parameters.forEachIndexed { index, parameter ->
-    builder.addParameter(parameter.name, kotlinType(parameter, index == 0))
+  call.parameters.forEach { parameter ->
+    // ADR-132 amendment: by role, not index; a fan-out receiver's flag is slot 0.
+    val isReceiverSlot: Boolean = parameter.role == ForwardAbiRole.RECEIVER
+    builder.addParameter(parameter.name, kotlinType(parameter, isReceiverSlot))
   }
 
   // ADR-108: a `Result<T>` return was lowered to `T` by the planner; unwrap it here, inside the
@@ -833,14 +835,17 @@ private fun cVarType(kind: PrimitiveKind): ClassName = ClassName(
  * rather than a name passed through. The ADR-077 value-class and ADR-105 nullable-handle spellings
  * are unchanged — [loweredArgument] emits the same strings those arms did.
  */
-private fun receiverExpression(receiver: ForwardAbiParameter): String {
-  val lowered: String =
-    loweredArgument(ForwardPublicParameter(receiver.name, receiver.transfer.type))
-  // A conditional lowering (`if (receiverHasValue) Dosage(receiver) else null`) is not a postfix
+private fun receiverExpression(plan: ForwardCallablePlan, receiver: ForwardAbiParameter): String {
+  // ADR-132 amendment: lowered from the plan's public receiver, never from the RECEIVER slot. A
+  // has-value fan-out receiver's value slot carries the non-null inner type, so lowering off it
+  // spells a bare `receiver.f()` that compiles clean, never reads the flag, and hands Kotlin `0`
+  // (or the non-null twin overload) where the caller passed `null`.
+  val parameter: ForwardPublicParameter = plan.publicSignature.receiver
+    ?: ForwardPublicParameter(receiver.name, receiver.transfer.type)
+  val lowered: String = loweredArgument(parameter)
+  // A conditional lowering (`if (receiverHasValue) receiver else null`) is not a postfix
   // expression: unparenthesized, the member call would bind to the `else` branch. Every other
   // lowering is already postfix (a name, a call, or a safe-call chain) and is left byte-identical.
-  // Unreachable today — ADR-132's RECEIVER_FAN_OUT drops every receiver that lowers to this
-  // form — and kept deliberately, so that lifting that skip cannot silently mis-bind the call.
   return if (lowered.startsWith("if (")) "($lowered)" else lowered
 }
 
@@ -1041,7 +1046,7 @@ private fun invocationExpression(
     // ADR-006 amendment: an enum member is called exactly like an extension on the enum value,
     // which is also how Kotlin spells a member call, so per-entry `abstract fun` bodies dispatch.
     ForwardCallableOrigin.ENUM_MEMBER ->
-      "${receiverExpression(requireNotNull(receiver))}.$functionName($arguments)"
+      "${receiverExpression(plan, requireNotNull(receiver))}.$functionName($arguments)"
     // Called through the alias `addForwardExtensionImport` imports it under: the declared name
     // resolves to an applicable member of the same name first (exact, defaulted, vararg, generic,
     // `invoke` property, supertype parameter), which would silently run the member instead.
@@ -1049,7 +1054,7 @@ private fun invocationExpression(
       val alias: String = requireNotNull(plan.invocation.extensionImportAlias) {
         "Forward extension plan ${plan.invocation.symbol} carries no import alias"
       }
-      "${receiverExpression(requireNotNull(receiver))}.$alias($arguments)"
+      "${receiverExpression(plan, requireNotNull(receiver))}.$alias($arguments)"
     }
     // ADR-163: fully qualified, never imported by simple name. Two `rollCall()` in two packages
     // both become exported symbols now that the C name is package-qualified, and a bare call with
@@ -1076,7 +1081,7 @@ private fun invocationExpression(
     ForwardCallableOrigin.CONSTRUCTOR -> {
       val target: String = plan.invocation.ownerType ?: requireNotNull(plan.invocation.target)
       if (receiver == null) "$target($arguments)"
-      else "${receiverExpression(receiver)}.${target.substringAfterLast('.')}($arguments)"
+      else "${receiverExpression(plan, receiver)}.${target.substringAfterLast('.')}($arguments)"
     }
     ForwardCallableOrigin.COPY -> {
       "handle.asStableRef<${plan.ownerTypeName()}>().get().copy($arguments)"

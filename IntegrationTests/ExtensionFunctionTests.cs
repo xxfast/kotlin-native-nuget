@@ -158,4 +158,77 @@ public class ExtensionFunctionTests
     {
         Assert.Equal("grumpy cats of the world, unite", Mood.Grumpy.RallyCry());
     }
+
+    // ADR-132 amendment: a has-value fan-out receiver (`Int?`, `Mood?`, `Instant?`, `Duration?`, a
+    // value class over a primitive or an enum) binds as an extension on the matching
+    // `Nullable<T>`, and a C# `null` reaches Kotlin as a real `null`. As with `CatId?` above, the
+    // call site needs a `T?` receiver: `5.OrNoLives()` on a bare `int` is CS1929, because only the
+    // nullable overload is emitted.
+    [Fact]
+    public void NullableIntReceiver_OrNoLives_PassesNullThrough()
+    {
+        int? nine = 9;
+        int? none = null;
+        Assert.Equal(9, nine.OrNoLives());
+        Assert.Equal(0, none.OrNoLives());
+    }
+
+    // The ADR-095 overload pair: `fun Int.describeLives()` and `fun Int?.describeLives()`. A
+    // dropped has-value flag would call the non-null Kotlin overload on the filler and answer
+    // `lives:0` for the null receiver.
+    [Fact]
+    public void IntAndNullableIntReceivers_DescribeLives_PickTheMatchingOverload()
+    {
+        int? some = 7;
+        int? none = null;
+        Assert.Equal("lives:7", 7.DescribeLives());
+        Assert.Equal("lives?:7", some.DescribeLives());
+        Assert.Equal("lives?:null", none.DescribeLives());
+    }
+
+    [Fact]
+    public void NullableEnumReceiver_MoodOrShrug_PassesNullThrough()
+    {
+        Mood? sleepy = Mood.Sleepy;
+        Mood? none = null;
+        Assert.Equal("SLEEPY", sleepy.MoodOrShrug());
+        Assert.Equal("shrug", none.MoodOrShrug());
+    }
+
+    [Fact]
+    public void NullableInstantReceiver_LastSeenOrEpoch_PassesNullThrough()
+    {
+        // A non-UTC offset, so the receiver has to cross as UtcTicks (ADR-076).
+        DateTimeOffset? seen = new DateTimeOffset(2024, 1, 2, 3, 4, 5, TimeSpan.FromHours(10));
+        DateTimeOffset? none = null;
+        Assert.Equal(seen.Value.UtcDateTime, seen.LastSeenOrEpoch().UtcDateTime);
+        Assert.Equal(DateTimeOffset.UnixEpoch, none.LastSeenOrEpoch());
+    }
+
+    [Fact]
+    public void NullableDurationReceiver_NapOrNone_PassesNullThrough()
+    {
+        TimeSpan? nap = TimeSpan.FromMinutes(90);
+        TimeSpan? none = null;
+        Assert.Equal(TimeSpan.FromMinutes(90), nap.NapOrNone());
+        Assert.Equal(TimeSpan.Zero, none.NapOrNone());
+    }
+
+    [Fact]
+    public void NullablePrimitiveValueClassReceiver_NapsOrNone_PassesNullThrough()
+    {
+        NapCount? three = new NapCount(3);
+        NapCount? none = null;
+        Assert.Equal(3, three.NapsOrNone());
+        Assert.Equal(-1, none.NapsOrNone());
+    }
+
+    [Fact]
+    public void NullableEnumValueClassReceiver_RingMood_PassesNullThrough()
+    {
+        MoodRing? ring = new MoodRing(Mood.Grumpy);
+        MoodRing? none = null;
+        Assert.Equal("GRUMPY", ring.RingMood());
+        Assert.Equal("no ring", none.RingMood());
+    }
 }

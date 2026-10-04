@@ -48,9 +48,9 @@ receiver.transfer.type))`, parenthesised only when the lowering is an `if`/`else
   unmodified. `loweredArgument` produces one non-postfix form, the has-value fan-out's
   `if (receiverHasValue) Dosage(receiver) else null`, which would bind a trailing member call
   (`.orAnonymous()`) to the `else` branch if left bare; `receiverExpression` wraps it in parens
-  when the lowered string starts with `"if ("`. That branch is unreachable today (see the
-  `RECEIVER_FAN_OUT` skip below) and is kept deliberately, so that lifting the skip in the future
-  cannot silently mis-bind the call.
+  when the lowered string starts with `"if ("`. **Corrected (2026-10-03):** that branch was
+  unreachable when this was written; since the 2026-10-03 amendment below lifted the function-route
+  skip it is reachable and used by every has-value fan-out extension function receiver.
 
 ### 2. Add one arm per shape to both `when`s
 
@@ -128,7 +128,8 @@ anonymous Kotlin object (`strayPet()`, no generated wrapper class), a C#-impleme
 and the `CatId?` value/null pair. Tier 1 pins the two public signatures and the compile in
 `Tier1ReceiverShapesExtensionTest.kt`.
 
-**Named skip, not a crash: `RECEIVER_FAN_OUT`.** A has-value fan-out receiver (`Int?`-style
+**Named skip, not a crash: `RECEIVER_FAN_OUT`.** (**Superseded for extension functions,
+2026-10-03:** only extension properties still skip; see the amendment at the end of this file.) A has-value fan-out receiver (`Int?`-style
 `Nullable(Primitive)`, `Nullable(Enum)`, `Nullable(Instant)`, `Nullable(Duration)`, or
 `Nullable(ValueClass(Primitive|Enum))`) cannot take this path. Its wire is the ADR-079/080
 adjacent `${name}HasValue` + `$name` pair, and the plan model (`validateRoles`) allows exactly one
@@ -398,3 +399,44 @@ same name on one receiver declared in the same package claim one C entry point (
 in the default package with an extension (`class Leash` plus `fun Leash.tug()`) is inferred to
 generate `Unresolved reference 'Leash'` (not checked against main). An extension function whose
 name needs backticks is unverified and may produce an invalid alias.
+
+## Amendment (2026-10-03): has-value fan-out receivers bind on the extension-function route
+
+Judgement: an **amendment**, not a new ADR. It lifts the `RECEIVER_FAN_OUT` skip for extension
+**functions** only; extension **properties** on the same receivers keep the named skip.
+
+**Rule.** A Kotlin extension function whose receiver is `Int?`, `Char?`, an enum `?`, `Instant?`,
+`Duration?`, or a value class over a primitive or enum `?` binds as a C# extension method on the
+matching `Nullable<T>` (`this int?`, `this char?`, `this Mood?`, `this DateTimeOffset?`,
+`this TimeSpan?`), and a C# `null` reaches Kotlin as a real `null`. An `Int` and an `Int?` receiver
+of one name bind as two overloads. The extern is
+`(bool receiverHasValue, int receiver, out IntPtr error)`; no handle is minted, so there is no
+LeakTests row.
+
+**Mechanism.** The plan carries the receiver's nullable type and its has-value flag as a public
+receiver (`ForwardPublicSignature.receiver`). The flag name comes from the existing `freshName`
+pool, so no parameter name is reserved library-wide. `validateRoles` accepts the RECEIVER-role slot
+at index 1 only when slot 0 is that receiver's flag. The parenthesised `if (` branch of
+`receiverExpression` is now reachable (see the corrected sentence in decision 1).
+
+**Trap, confirmed red-first.** Relaxing only the role check compiles clean and silently drops the
+null: the export called the non-null receiver and never read the flag. Verified: six of the nine
+`Tier1ReceiverShapesExtensionTest` tests failed with the naive fix and all pass with the real one.
+
+**Accepted asymmetry** (same as the `CatId?` receiver, sub-decision (a)): the C# call site is
+nullable-only. Calling on a bare `int` is CS1929.
+
+**Separate fix in the same change.** The extension receiver's `CirParameter` used the default
+`isReferenceType = true`, so the C# collision check treated `this int?` like `this int` and an
+`Int` / `Int?` pair raised a false `ERROR_CSHARP_SIGNATURE_COLLISION`. **Inferred, not run:** a
+`CatId` / `CatId?` pair hit the same false collision before.
+
+**Not shipped.** Extension properties on these receivers keep the named `RECEIVER_FAN_OUT` skip: the
+property route has a separate one-slot receiver mechanism, and `val Int.x` beside `val Int?.x`
+would share one plan symbol. A bare `Char` receiver already bound on the function route; the
+property route's receiver predicate does not admit `Char`.
+
+**Evidence (verified).** Tier 1 `Tier1ReceiverShapesExtensionTest` 9 tests; `:nuget-processor:test`
+1552 passed, 0 failed; full `scripts/verify.sh` green (Contract 3, Integration 3006, Leak 158,
+MultiPackage 9, SharedException 2, all six NativeAOT shapes), including a run-time null-receiver
+fact in `IntegrationTests/ExtensionFunctionTests.cs`.

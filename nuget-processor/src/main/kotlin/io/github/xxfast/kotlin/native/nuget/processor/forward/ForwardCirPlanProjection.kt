@@ -392,20 +392,25 @@ internal object ForwardCirPlanProjection {
     receiverName: String? = null,
   ): List<CirMember> {
     val nativeCall: ForwardNativeCall = plan.singleNativeImport()
-    val receiver: ForwardAbiParameter = nativeCall.parameters.firstOrNull()
-      ?: error("Forward CIR plan ${plan.invocation.symbol} has no receiver")
-    require(receiver.role == ForwardAbiRole.RECEIVER) {
-      "Forward CIR extension plan ${plan.invocation.symbol} must begin with a receiver"
-    }
+    val receiver: ForwardAbiParameter =
+      nativeCall.parameters.firstOrNull { parameter -> parameter.role == ForwardAbiRole.RECEIVER }
+        ?: error("Forward CIR extension plan ${plan.invocation.symbol} has no receiver")
     val declared: List<CirParameter> = plan.publicParameters()
     val publicReceiverName: String = receiverName
       ?.takeIf { name -> declared.none { parameter -> parameter.name == name } }
       ?: receiver.name
-    val receiverType: String = receiver.transfer.type.csharpType()
+    // ADR-132 amendment: the public receiver comes off the plan, which keeps its declared
+    // (`int?`, `Mood?`, ...) type and minted flag; the value slot carries only the inner type.
+    val publicReceiver: ForwardPublicParameter = plan.publicSignature.receiver
+      ?: ForwardPublicParameter(receiver.name, receiver.transfer.type)
+    val receiverType: String = publicReceiver.type.csharpType()
     val receiverParam = CirParameter(
       publicReceiverName.csharpParameterName(),
       receiverType,
       receiver.wireType.csharpType(),
+      // ADR-034: `int?` is `Nullable<int>`, a distinct C# signature from `int`, so the ADR-095
+      // `Int` / `Int?` receiver twin must not be normalized into a collision.
+      isReferenceType = publicReceiver.type.isCSharpReferenceType(),
     )
     val publicParams: List<CirParameter> = listOf(receiverParam) + declared
     val nativeName: String = "Native_${plan.publicSignature.name}${plan.overloadSuffix()}"
@@ -420,7 +425,9 @@ internal object ForwardCirPlanProjection {
     // inside [resultProjection] covers the receiver too, so no `forceCustomBody` is needed here.
     // The three shapes the old `when` handled render byte-identically: `callArgument` emits the
     // same `receiver._handle`, value-class unwrap, and `receiver?._handle ?? IntPtr.Zero`.
-    val receiverInput = ForwardPublicParameter(publicReceiverName, receiver.transfer.type)
+    val receiverInput = ForwardPublicParameter(
+      publicReceiverName, publicReceiver.type, hasValueSlot = publicReceiver.hasValueSlot,
+    )
     val result: CirResultProjection = plan.resultProjection(
       nativeName = nativeName,
       parameters = listOf(receiverInput) + plan.publicSignature.parameters,

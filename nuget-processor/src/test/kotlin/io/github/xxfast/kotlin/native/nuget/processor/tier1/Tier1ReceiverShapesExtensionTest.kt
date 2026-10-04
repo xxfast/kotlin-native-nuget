@@ -12,8 +12,8 @@ import kotlin.test.assertTrue
  * `HandleOf(receiver, out receiverOwned)` on the C# side and a borrowed `StableRef` read on the
  * Kotlin side, with a `Dispose` in the `finally` when the handle was minted for a C#-implemented
  * pet — and a NULLABLE VALUE-CLASS receiver re-wraps ADR-077 sub-item 3's nullable underlying
- * wire. A has-value fan-out receiver is the one admitted shape that cannot take this path, and is
- * instead dropped as the named `RECEIVER_FAN_OUT` skip, pinned in the last test below.
+ * wire. A has-value fan-out receiver (`Int?`, `Mood?`, `Instant?`, ...) binds on the matching
+ * C# `Nullable<T>` and reads its flag slot, pinned in the tests after those.
  *
  * Only the compile and the two public signatures are pinned here; the exact re-wrap spelling on
  * the Kotlin side and the argument expression on the C# side are the implementer's to choose.
@@ -86,15 +86,17 @@ class Tier1ReceiverShapesExtensionTest {
   }
 
   /**
-   * ADR-132's control: the one admitted shape that is now a NAMED skip instead. A receiver whose
-   * wire is the ADR-079/080 adjacent `receiverHasValue` + `receiver` pair cannot be a plan — the
-   * model allows a single RECEIVER-role slot and it must come first, and `nativeInputParameters`
-   * marks only the value half of a fan-out with the caller's role, so such a plan fails
-   * `validateRoles` with an exception out of the processor rather than a diagnostic. The skip has
-   * to be a warning plus no export, never a crash and never a half-rendered one.
+   * ADR-132 amendment: a receiver whose wire is the ADR-079/080 adjacent `receiverHasValue` +
+   * `receiver` pair binds as a C# extension on the matching `Nullable<T>`. The plan carries the
+   * receiver's NULLABLE type and its minted flag slot as a public parameter, so the Kotlin export
+   * reads the flag: lowering off the value slot alone (which carries the non-null inner type) would
+   * compile clean and pass `0` where the caller passed `null`.
+   *
+   * The C# call site needs a `T?` receiver: `5.OrZero()` on a bare `int` is CS1929, the same
+   * nullable-only call site ADR-132 sub-decision (a) accepted for the `CatId?` receiver.
    */
   @Test
-  fun `a has-value fan-out receiver is a named skip, not a crash and not an export`() {
+  fun `a has-value fan-out receiver binds as an extension on the nullable struct`() {
     val result = Tier1Harness.run(
       """
       package tier1.receiverfanout
@@ -105,117 +107,163 @@ class Tier1ReceiverShapesExtensionTest {
 
     assertTrue(result.kspErrors.isEmpty(), "expected no KSP error; got: ${result.kspErrors}")
     assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
-    assertFalse(
-      result.generated.contains("orZero"),
-      "a fan-out receiver must not render an export at all",
-    )
-    assertFalse(
-      // Word-bounded, accessor prefixes included (the same shape at the property position renders
-      // `GetOrZero`): the marshal helper is declared even for a module that exports nothing
-      // (ADR-129 amendment), and it declares `HandleOfOrZero`, which a bare `contains` now matches.
-      Regex("\\b(Get|Set)?OrZero\\b").containsMatchIn(result.generatedCSharp),
-      "a fan-out receiver must not render a C# binding at all",
-    )
     assertTrue(
-      result.kspWarnings.any { warning -> warning.contains("orZero") },
-      "the drop must name itself; got: ${result.kspWarnings}",
+      result.kspWarnings.none { warning -> warning.contains("orZero") },
+      "a fan-out receiver must bind, not warn; got: ${result.kspWarnings}",
     )
+    val kotlin: String = requireNotNull(result.generated)
+    assertContains(kotlin, "receiverHasValue: Boolean")
+    assertContains(kotlin, "(if (receiverHasValue) receiver else null).")
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "public static int OrZero(this int? receiver)")
+    assertContains(cs, "receiver.HasValue, receiver.GetValueOrDefault()")
+    // No handle is minted on either side for a value-type receiver, so there is nothing to leak.
+    assertFalse(Regex("\\bHandleOf\\w*\\(receiver").containsMatchIn(cs))
   }
 
   /**
-   * ROADMAP Phase 4 / ADR-064 amendment: the fan-out drop owns its sentence and its hint under the
-   * shipped `SKIPPED_UNSUPPORTED_INPUT` kind. The generic pair it used to print named a reason
-   * constant (`its RECEIVER_FAN_OUT type combination is not supported`), never named the receiver
-   * type at all (an extension symbol does not carry its receiver), and sent the author to
-   * "supported parameter/return shapes" for a type that IS supported at a parameter. Pinned whole,
-   * both halves, because the remedy is the point of the message.
+   * Every has-value fan-out receiver kind: an `enum class` (its `int` ordinal), `Instant` and
+   * `Duration` (ticks), and value classes over a primitive and an enum. Each lowers through the
+   * same nullable parameter arm, so each reads the flag.
    */
   @Test
-  fun `a fan-out receiver names the receiver type, its shape, and both remedies`() {
-    val result = Tier1Harness.run(
-      """
-      package tier1.receiverfanoutmessage
-
-      fun Int?.orZero(): Int = this ?: 0
-      """.trimIndent(),
-    )
-
-    val warning: String = result.kspWarnings.single { it.contains("orZero") }
-    assertContains(
-      warning,
-      "[nuget:SKIPPED_UNSUPPORTED_INPUT] Skipping tier1.receiverfanoutmessage.orZero: " +
-          "its extension receiver `Int?` crosses the bridge as a has-value flag plus a value " +
-          "(two slots), and an extension receiver can carry only one (RECEIVER_FAN_OUT). " +
-          "`Int?` binds as an ordinary parameter, so declare a top-level function that takes it " +
-          "as a parameter instead of as the receiver; or declare the extension on the non-null " +
-          "receiver `Int`",
-    )
-    // The two strings the shipped generic pair printed, gone: the sentence blamed a reason
-    // constant and the hint blamed the parameter/return shapes.
-    assertFalse(
-      warning.contains("type combination is not supported"),
-      "the fan-out sentence must not fall back to the generic one; got: $warning",
-    )
-    assertFalse(
-      warning.contains("expose a bridgeable adapter"),
-      "the fan-out hint must not fall back to the generic one; got: $warning",
-    )
-  }
-
-  /**
-   * The non-primitive spellings of the same shape, proving the receiver name in both the sentence
-   * and the non-null clause is rendered from the receiver's own type rather than hardcoded: an
-   * `enum class` (its `int` ordinal wire has no spare null) and a value class over a primitive
-   * (ADR-079's re-wrapped underlying).
-   */
-  @Test
-  fun `a fan-out enum and value-class receiver each name themselves`() {
+  fun `every fan-out receiver kind binds on its nullable struct and reads the flag`() {
     val result = Tier1Harness.run(
       """
       package tier1.receiverfanoutkinds
+
+      import kotlin.time.Duration
+      import kotlin.time.ExperimentalTime
+      import kotlin.time.Instant
 
       enum class Mood { HAPPY, SAD }
 
       @JvmInline
       value class Dosage(val mg: Int)
 
+      @JvmInline
+      value class Tagged(val mood: Mood)
+
       fun Mood?.loud(): String = if (this == Mood.HAPPY) "!" else "."
 
-      fun Dosage?.orZero(): Int = this?.mg ?: 0
+      fun Dosage?.orNone(): Int = this?.mg ?: -1
+
+      fun Tagged?.moodName(): String = this?.mood?.name ?: "none"
+
+      fun Duration?.orNothing(): Duration = this ?: Duration.ZERO
+
+      @OptIn(ExperimentalTime::class)
+      fun Instant?.orEpoch(): Instant = this ?: Instant.fromEpochSeconds(0)
       """.trimIndent(),
     )
 
-    val mood: String = result.kspWarnings.single { it.contains("loud") }
-    assertContains(
-      mood,
-      "its extension receiver `Mood?` crosses the bridge as a has-value flag plus a value " +
-          "(two slots), and an extension receiver can carry only one (RECEIVER_FAN_OUT). " +
-          "`Mood?` binds as an ordinary parameter, so declare a top-level function that takes it " +
-          "as a parameter instead of as the receiver; or declare the extension on the non-null " +
-          "receiver `Mood`",
+    assertTrue(result.kspErrors.isEmpty(), "expected no KSP error; got: ${result.kspErrors}")
+    assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
+    assertTrue(
+      result.kspWarnings.isEmpty(),
+      "no fan-out receiver may warn; got: ${result.kspWarnings}",
     )
-
-    val dosage: String = result.kspWarnings.single { it.contains("orZero") }
+    val kotlin: String = requireNotNull(result.generated)
     assertContains(
-      dosage,
-      "its extension receiver `Dosage?` crosses the bridge as a has-value flag plus a value " +
-          "(two slots), and an extension receiver can carry only one (RECEIVER_FAN_OUT). " +
-          "`Dosage?` binds as an ordinary parameter, so declare a top-level function that takes " +
-          "it as a parameter instead of as the receiver; or declare the extension on the " +
-          "non-null receiver `Dosage`",
+      kotlin,
+      "(if (receiverHasValue) tier1.receiverfanoutkinds.Mood.entries[receiver]",
     )
+    assertContains(kotlin, "(if (receiverHasValue) tier1.receiverfanoutkinds.Dosage(receiver)")
+    assertContains(kotlin, "(if (receiverHasValue) durationFromDotNetTicks(receiver)")
+    assertContains(kotlin, "(if (receiverHasValue) instantFromDotNetTicks(receiver)")
+    val cs: String = result.generatedCSharp
+    listOf(
+      "string Loud\\(this [\\w.:]*Mood\\? receiver\\)",
+      "int OrNone\\(this [\\w.:]*Dosage\\? receiver\\)",
+      "string MoodName\\(this [\\w.:]*Tagged\\? receiver\\)",
+      "OrNothing\\(this [\\w.:]*TimeSpan\\? receiver\\)",
+      "OrEpoch\\(this [\\w.:]*DateTimeOffset\\? receiver\\)",
+    ).forEach { signature ->
+      assertTrue(Regex(signature).containsMatchIn(cs), "expected `$signature` in:\n$cs")
+    }
   }
 
   /**
-   * One declaration, one warning. ADR-096 synthesizes an omitting overload per trailing defaulted
-   * parameter, and a `Skipped` passes through `synthesized()` unchanged, so a fan-out receiver
-   * with a defaulted parameter used to report the drop once per overload (`...withDefault` and
-   * `...withDefault_2`) for a single thing the author wrote. The receiver is never truncated, so
-   * every omitting overload drops for the identical reason and only the declared entry is worth
-   * reporting.
+   * ADR-095: an `Int` and an `Int?` receiver of one name are two overloads, numbered `describe`
+   * and `describe_2`, and both bind into one C# extension class with different `this` types. The
+   * nullable one must call the nullable Kotlin overload with a real `null`: a bare
+   * `receiver.describe()` would statically resolve to the non-null twin.
    */
   @Test
-  fun `a fan-out receiver with a defaulted parameter warns once, not once per omitting overload`() {
+  fun `a non-null and a nullable receiver of one name bind as two overloads`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.receiverfanouttwin
+
+      fun Int.describe(): String = "nonnull:${'$'}this"
+
+      fun Int?.describe(): String = "nullable:${'$'}this"
+      """.trimIndent(),
+    )
+
+    assertTrue(result.kspErrors.isEmpty(), "expected no KSP error; got: ${result.kspErrors}")
+    assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
+    assertTrue(result.kspWarnings.isEmpty(), "expected no warning; got: ${result.kspWarnings}")
+    val kotlin: String = requireNotNull(result.generated)
+    assertContains(kotlin, "(if (receiverHasValue) receiver else null).")
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "public static string Describe(this int receiver)")
+    assertContains(cs, "public static string Describe(this int? receiver)")
+  }
+
+  /**
+   * The receiver's flag slot is minted through the same `freshName` pool as every parameter's, so
+   * a user parameter literally spelled `receiverHasValue` keeps its name and the generator's flag
+   * moves. Reserving the name would shift the user's parameter instead.
+   */
+  @Test
+  fun `a user parameter named like the receiver flag keeps its name`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.receiverfanoutflagname
+
+      fun Int?.bump(receiverHasValue: Boolean): Int = if (receiverHasValue) (this ?: 0) + 1 else 0
+      """.trimIndent(),
+    )
+
+    assertTrue(result.kspErrors.isEmpty(), "expected no KSP error; got: ${result.kspErrors}")
+    assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "Bump(this int? receiver, bool receiverHasValue)")
+    val kotlin: String = requireNotNull(result.generated)
+    assertContains(kotlin, "(if (receiverHasValue_) receiver else null).")
+  }
+
+  /**
+   * `Char?` fans out like the other value types (ADR-098 amendment part C) and follows the bare
+   * `Char` receiver on the function route: both bind, `Char?` on `char?`.
+   */
+  @Test
+  fun `a Char and a nullable Char receiver both bind`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.receiverfanoutchar
+
+      fun Char.shout(): String = uppercase()
+
+      fun Char?.orSpace(): Char = this ?: ' '
+      """.trimIndent(),
+    )
+
+    assertTrue(result.kspErrors.isEmpty(), "expected no KSP error; got: ${result.kspErrors}")
+    assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
+    assertTrue(result.kspWarnings.isEmpty(), "expected no warning; got: ${result.kspWarnings}")
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "Shout(this char receiver)")
+    assertContains(cs, "OrSpace(this char? receiver)")
+  }
+
+  /**
+   * ADR-096 synthesizes an omitting overload per trailing defaulted parameter; with a fan-out
+   * receiver each of them binds too, on the same two-slot receiver.
+   */
+  @Test
+  fun `a fan-out receiver with a defaulted parameter binds with its omitting overload`() {
     val result = Tier1Harness.run(
       """
       package tier1.receiverfanoutdefaults
@@ -224,15 +272,12 @@ class Tier1ReceiverShapesExtensionTest {
       """.trimIndent(),
     )
 
-    val warnings: List<String> = result.kspWarnings.filter { it.contains("withDefault") }
+    assertTrue(result.kspErrors.isEmpty(), "expected no KSP error; got: ${result.kspErrors}")
+    assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
     assertTrue(
-      warnings.size == 1,
-      "one declaration must print one warning; got ${warnings.size}: $warnings",
+      result.kspWarnings.none { warning -> warning.contains("withDefault") },
+      "a fan-out receiver must bind, not warn; got: ${result.kspWarnings}",
     )
-    assertContains(warnings.single(), "tier1.receiverfanoutdefaults.withDefault:")
-    assertFalse(
-      warnings.single().contains("withDefault_2"),
-      "the synthesized overload must not be reported as a declaration of its own; got: $warnings",
-    )
+    assertContains(result.generatedCSharp, "WithDefault(this int? receiver")
   }
 }

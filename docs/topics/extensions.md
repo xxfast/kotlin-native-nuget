@@ -80,14 +80,15 @@ TestLibrary.Reserved.StringExtensions.Tag("Oreo", "Mylo"); // a different packag
 | Bare enum | yes | yes |
 | `Collection` (`List`/`Map`/`Set`) | yes | yes |
 | Nullable `String`, nullable `Uuid` | yes | yes |
-| `Int?`, `Enum?`, `Instant?`, `Duration?`, or a nullable primitive/enum-underlying value class | no | no |
+| `Int?`, `Enum?`, `Instant?`, `Duration?`, or a nullable primitive/enum-underlying value class | yes | no |
 | Nullable collection, nullable bound C# interface | yes | no |
-| Generic type, unexported (non-stdlib, non-dependency) type, `ByteArray`, `Char` | no | no |
+| `Char`, `Char?` | yes | no |
+| Generic type, unexported (non-stdlib, non-dependency) type, `ByteArray` | no | no |
 
 A receiver in a "no" cell is dropped with a named diagnostic: `SKIPPED_UNSUPPORTED_INPUT` for a
-function, `SKIPPED_UNSUPPORTED_PROPERTY` for a property. The has-value fan-out shape (`Int?`,
-`Enum?`, `Instant?`, `Duration?`, or a nullable primitive/enum-underlying value class) prints the
-same reason and remedy under either kind, naming the receiver and both fixes:
+function, `SKIPPED_UNSUPPORTED_PROPERTY` for a property. An extension property on a has-value
+fan-out receiver (`Int?`, `Enum?`, `Instant?`, `Duration?`, or a nullable primitive/enum-underlying
+value class) prints a dedicated reason and remedy, naming the receiver and both fixes:
 
 ```
 its extension receiver `Int?` crosses the bridge as a has-value flag plus a value (two slots), and
@@ -161,8 +162,8 @@ same way they do everywhere else (see
 bound C# interface (see
 [The bridgeable subset](bridgeable-subset.md#exposing-a-c-interface-in-your-own-kotlin-api)) still
 works as a function *parameter*, just not as a receiver at either position. A has-value fan-out
-shape only works as a function *parameter*, never as a receiver at either position, because a
-receiver is exactly one ABI slot and a fan-out needs two (see the table above).
+shape binds as an extension function receiver but not as an extension property receiver (see the
+table above and [Nullable receivers](#nullable-receivers)).
 
 ### Nullable receivers
 
@@ -180,6 +181,27 @@ none.NameOrStray(); // "stray"
 ```
 
 An extension property on a nullable receiver (`val Cat?.x`) behaves the same way.
+
+A nullable value-type receiver (`Int?`, `Char?`, an enum, `Instant?`, `Duration?`, or a value class
+over a primitive or enum) binds as an extension method on the matching `Nullable<T>`, and a C#
+`null` reaches Kotlin as a real `null`. An `Int` and an `Int?` receiver of the same name become two
+overloads and each call picks its own:
+
+```kotlin
+fun Int?.orNoLives(): Int = this ?: 0
+fun Int.describeLives(): String = "lives:$this"
+fun Int?.describeLives(): String = "lives?:$this"
+```
+
+```C#
+public static int OrNoLives(this int? receiver)
+public static string MoodOrShrug(this Mood? receiver)
+public static DateTimeOffset LastSeenOrEpoch(this DateTimeOffset? receiver)
+```
+
+As with a nullable value class, the receiver is nullable only: calling `OrNoLives` on a bare `int`
+fails to compile (`CS1929`), so call it on an `int?` variable. Extension **properties** on these
+receivers are still skipped, as the table above shows.
 
 ### Interface receivers {id="interface-receivers"}
 
