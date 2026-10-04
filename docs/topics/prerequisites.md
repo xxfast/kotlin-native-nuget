@@ -42,13 +42,40 @@ tooling.
 
 ## Compatibility
 
-| kotlin-native-nuget | Kotlin   | KSP      | Gradle | JDK | .NET   |
-|----------------------|----------|----------|--------|-----|--------|
-| `0.2.0` – `0.8.0`    | `2.4.10` | `2.3.10` | `9.1`  | 17+ | `8.0`+ |
-| `0.1.0`              | `2.4.0`  | `2.3.9`  | `9.1`  | 17+ | `8.0`+ |
+| kotlin-native-nuget | Kotlin              | KSP (bundled) | Gradle | JDK | .NET   |
+|----------------------|---------------------|---------------|--------|-----|--------|
+| `0.9.0`              | `2.4.0` to `2.4.20` | `2.3.10`      | `9.1`  | 17+ | `8.0`+ |
+| `0.2.0` – `0.8.0`    | `2.4.10`            | `2.3.10`      | `9.1`  | 17+ | `8.0`+ |
+| `0.1.0`              | `2.4.0`             | `2.3.9`       | `9.1`  | 17+ | `8.0`+ |
 
-KSP is pinned to its Kotlin version, so bumping Kotlin without bumping the plugin is not
-supported.
+Releases up to `0.8.0` shipped one Kotlin Gradle plugin and silently upgraded yours to it. From
+`0.9.0` the plugin uses the Kotlin version you declare, from a floor up to the last tested release.
+
+- **Below `2.4.0`** the build fails at configuration time. The published `nuget-runtime` and
+  `nuget-annotations` libraries are built at klib ABI 2.4, which an older Kotlin/Native compiler
+  can't read.
+
+  ```
+  [nuget] Kotlin 2.3.21 is not supported. kotlin-native-nuget 0.9.0 needs Kotlin 2.4.0 or newer: its nuget-runtime and nuget-annotations klibs are built at klib ABI 2.4, which an older Kotlin/Native compiler cannot read. Update the Kotlin Gradle plugin to 2.4.0 or newer.
+  ```
+
+- **Above `2.4.20`** the build warns and continues:
+  `Kotlin 2.5.0 is newer than the last version kotlin-native-nuget 0.9.0 was tested with (2.4.20). It is expected to work. If it does not, update the plugin.`
+  Patch releases above `2.4.20` warn too. Only the leading `major.minor.patch` is compared, so
+  `2.4.0-RC2` counts as `2.4.0`.
+- **KSP** is applied by the plugin, so you don't choose a KSP version and it doesn't have to match
+  your Kotlin version.
+
+<note>
+  <p>
+    Declare this plugin and the Kotlin Multiplatform plugin in the same project's
+    <code>plugins {}</code> block. If the root project declares this plugin with
+    <code>apply false</code> and only a child project declares Kotlin Multiplatform, the build
+    fails with <code>Could not generate a decorated class for type NugetPlugin</code> before the
+    version check runs. Declare both plugins with <code>apply false</code> in the root project to
+    work around it.
+  </p>
+</note>
 
 ## Supported native targets
 
