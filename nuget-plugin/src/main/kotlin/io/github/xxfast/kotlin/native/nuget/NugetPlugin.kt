@@ -10,6 +10,7 @@ import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.TaskProvider
 import org.gradle.language.base.plugins.LifecycleBasePlugin
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
+import org.jetbrains.kotlin.gradle.plugin.KotlinBasePlugin
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.SharedLibrary
 import java.io.File
@@ -35,6 +36,19 @@ internal fun parseStrictCompileCheck(value: String): Boolean {
   throw GradleException(
     "[nuget] nuget.strictCompileCheck must be true or false, but was '$value'.",
   )
+}
+
+// ADR-195: runs before anything else touches KGP, so a consumer below the floor gets one sentence at
+// configuration time instead of a klib resolver error at compile time.
+private fun checkKotlinVersion(project: Project) {
+  val current: String = project.plugins.withType(KotlinBasePlugin::class.java).first().pluginVersion
+  val support: KotlinSupport = kotlinSupport(current, floor = KOTLIN_FLOOR, tested = KOTLIN_TESTED)
+  when (support) {
+    is KotlinSupport.BelowFloor -> throw GradleException(support.message)
+    is KotlinSupport.AboveTested -> project.logger.warn(support.message)
+    is KotlinSupport.Unrecognised -> project.logger.warn(support.message)
+    KotlinSupport.Supported -> Unit
+  }
 }
 
 // One supported native target as packNuget sees it: the shared library it would pack, and whether
@@ -100,6 +114,7 @@ public class NugetPlugin : Plugin<Project> {
     }
 
     project.pluginManager.withPlugin(KMP_PLUGIN) { _ ->
+      checkKotlinVersion(project)
       project.pluginManager.apply(KSP_PLUGIN)
 
       val kotlin: KotlinMultiplatformExtension =
