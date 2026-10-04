@@ -23,6 +23,7 @@ namespace IntegrationTests;
 // interface-typed, so the bound `Sanctuary` class currently generates with none of them. That
 // Kotlin compile failure fails `nugetGenerateBindings`/the native compile before this C# project
 // even builds, so every [Fact] below fails the same way: the whole test assembly fails to build.
+[Trait("Direction", "Reverse")]
 public class MenagerieRoundTripTests
 {
     [Fact]
@@ -438,6 +439,7 @@ public class MenagerieRoundTripTests
 // that can see *why* it was skipped is the extraction artifact itself: `reverse-ir.json`
 // (ADR-046), produced by `nugetExtractApi` before either generator runs. These tests read that
 // file directly rather than fake an assertion through a seam that cannot see the answer.
+[Trait("Direction", "Reverse")]
 public class MenagerieDiagnosticsTests
 {
     private static JsonElement TestDependencyDiagnostics()

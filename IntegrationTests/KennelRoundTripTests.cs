@@ -23,6 +23,7 @@ namespace IntegrationTests;
 // pair, and a Kotlin-implemented bound interface used after the await. A fixture trimmed to
 // `Task<int>` needs no marshalling anywhere and would go green while `End` was still wrong for
 // every other return shape.
+[Trait("Direction", "Reverse")]
 public class KennelRoundTripTests
 {
     // The already-completed rows run the reverse call this many times inside ONE Kotlin coroutine.

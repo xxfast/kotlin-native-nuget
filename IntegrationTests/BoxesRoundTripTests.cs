@@ -15,6 +15,7 @@ namespace IntegrationTests;
 //
 // These exercise the bridge at runtime, which is the only seam that proves the per-instantiation
 // witness dispatch, marshalling and registration actually work rather than merely compile.
+[Trait("Direction", "Reverse")]
 public class BoxesRoundTripTests
 {
     [Fact]
@@ -117,6 +118,7 @@ public class BoxesRoundTripTests
 // Expected absences and diagnostics: reverse-ir.json is the only seam that can see *why* a
 // member was skipped (a skipped member simply never appears in the generated Kotlin surface),
 // so these tests read the extraction artifact directly, mirroring MenagerieDiagnosticsTests.
+[Trait("Direction", "Reverse")]
 public class BoxesDiagnosticsTests
 {
     private static JsonElement TestDependencyAssembly()

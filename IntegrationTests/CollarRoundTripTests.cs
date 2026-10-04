@@ -22,6 +22,7 @@ namespace IntegrationTests;
 // These tests are EXPECTED TO FAIL (not even compile) until kotlin-dev adds
 // `test-library/.../structs/CollarSample.kt` and the reader/generator support Shape B. That is
 // the intended TDD failure mode — do not weaken these assertions to make them pass early.
+[Trait("Direction", "Reverse")]
 public class CollarRoundTripTests
 {
     // Shape B struct as a parameter (object-initializer reconstruction on the C# side),

@@ -14,6 +14,7 @@ namespace IntegrationTests;
 //       -> Kotlin test-library             HouseholdSample.kt
 //         -> (reverse bridge, ADR-050/051/053) test.household.{Cat,Toy,Household,StrayCat}
 //           -> real C# TestDependency NuGet  Test.Household.{Cat,Toy,Household,StrayCat}
+[Trait("Direction", "Reverse")]
 public class HouseholdRoundTripTests
 {
     [Fact]

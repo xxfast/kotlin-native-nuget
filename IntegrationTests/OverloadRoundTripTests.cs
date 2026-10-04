@@ -6,6 +6,7 @@ namespace IntegrationTests;
 /// ADR-057 outer-loop tests. The assertions sit at the C# consumer boundary and exercise the real
 /// route through TestLibrary's forward exports, Kotlin's reverse bindings, and TestDependency.
 /// </summary>
+[Trait("Direction", "Reverse")]
 public class OverloadRoundTripTests
 {
     [Fact]

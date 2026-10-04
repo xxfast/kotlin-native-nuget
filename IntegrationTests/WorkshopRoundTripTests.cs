@@ -26,6 +26,7 @@ namespace IntegrationTests;
 // EXPECTED TO FAIL as of this commit: neither generator knows what a delegate parameter is, so
 // `test.workshop.Workshop` is generated without the members `WorkshopSample.kt` calls and the
 // Kotlin half does not compile.
+[Trait("Direction", "Reverse")]
 public class WorkshopRoundTripTests
 {
     // Reverse throws arrive in Kotlin as `NugetManagedException(managedType, message)`, which the
