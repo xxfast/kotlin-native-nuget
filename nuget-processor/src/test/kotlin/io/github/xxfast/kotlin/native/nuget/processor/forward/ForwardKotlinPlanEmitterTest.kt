@@ -3,7 +3,9 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
 import com.squareup.kotlinpoet.FileSpec
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class ForwardKotlinPlanEmitterTest {
   @Test
@@ -270,7 +272,9 @@ class ForwardKotlinPlanEmitterTest {
       nativeImports = listOf(call),
       result = ForwardResultConvention(
         ForwardAbiWireType.INT32,
-        directTransfer("result", BridgeType.Primitive(PrimitiveKind.INT), ForwardFlow.OUT_OF_KOTLIN),
+        directTransfer(
+          "result", BridgeType.Primitive(PrimitiveKind.INT), ForwardFlow.OUT_OF_KOTLIN,
+        ),
       ),
       errorSlot = error,
       helperRequirements = setOf(
@@ -310,7 +314,9 @@ class ForwardKotlinPlanEmitterTest {
       nativeImports = listOf(call),
       result = ForwardResultConvention(
         ForwardAbiWireType.INT32,
-        directTransfer("result", BridgeType.Primitive(PrimitiveKind.INT), ForwardFlow.OUT_OF_KOTLIN),
+        directTransfer(
+          "result", BridgeType.Primitive(PrimitiveKind.INT), ForwardFlow.OUT_OF_KOTLIN,
+        ),
       ),
       errorSlot = null,
       helperRequirements = setOf(ForwardHelperRequirement.VALUE_CLASS),
@@ -393,6 +399,92 @@ class ForwardKotlinPlanEmitterTest {
 
     val source = render(plan)
     assertContains(source, "receiver.asStableRef<sample.Patient>().get().nuget_ext_sample__shout()")
+  }
+
+  /**
+   * ADR-108's Try twin: the export zeroes every out slot before the `try`, then writes the failure
+   * flag from the `Result` before `getOrThrow()`, so a thrown exception leaves the flag `false`.
+   */
+  @Test
+  fun `Result unwrapping export zeroes its out slots and writes the failure flag`() {
+    val error = errorParameter()
+    val handle = ForwardAbiParameter(
+      "handle",
+      ForwardAbiWireType.POINTER,
+      ForwardAbiDirection.IN,
+      ForwardTransfer(
+        "handle", BridgeType.ObjectHandle("sample.Scale"), ForwardFlow.INTO_KOTLIN,
+        ForwardPassing.VALUE, ForwardOwnership.BORROWED, ForwardConversion.HANDLE_TO_STABLE_REF,
+      ),
+      ForwardAbiRole.RECEIVER,
+    )
+    val failed = ForwardAbiParameter(
+      "resultFailedOut",
+      ForwardAbiWireType.POINTER,
+      ForwardAbiDirection.OUT,
+      ForwardTransfer(
+        "resultFailedOut", BridgeType.Primitive(PrimitiveKind.BOOLEAN), ForwardFlow.OUT_OF_KOTLIN,
+        ForwardPassing.OUT, ForwardOwnership.BORROWED, ForwardConversion.DIRECT,
+      ),
+      ForwardAbiRole.RESULT_FAILED_OUT,
+    )
+    val call = ForwardNativeCall(
+      "scale_weigh", ForwardAbiWireType.INT32, listOf(handle, failed, error),
+    )
+    val plan = ForwardCallablePlan(
+      invocation = ForwardInvocation("sample.Scale.weigh", unwrapsKotlinResult = true),
+      publicSignature = ForwardPublicSignature(
+        "Weigh", emptyList(), BridgeType.Primitive(PrimitiveKind.INT),
+      ),
+      evaluation = ForwardEvaluation.EXACTLY_ONCE,
+      nativeExports = listOf(call),
+      nativeImports = listOf(call),
+      result = ForwardResultConvention(
+        ForwardAbiWireType.INT32,
+        directTransfer(
+          "result", BridgeType.Primitive(PrimitiveKind.INT), ForwardFlow.OUT_OF_KOTLIN,
+        ),
+      ),
+      errorSlot = error,
+      helperRequirements = setOf(ForwardHelperRequirement.STABLE_REF),
+    ).validate()
+
+    val source: String = render(plan)
+
+    assertContains(source, "resultFailedOut: COpaquePointer?,\n  errorOut: COpaquePointer?,")
+    val zeroFlag: Int =
+      source.indexOf(
+        "if (resultFailedOut != null) " +
+            "resultFailedOut.reinterpret<BooleanVar>().pointed.value = false",
+      )
+    val zeroError: Int =
+      source.indexOf(
+        "if (errorOut != null) " +
+            "errorOut.reinterpret<COpaquePointerVar>().pointed.value = null",
+      )
+    val tryOpen: Int = source.indexOf("try {")
+    assertTrue(zeroFlag in 0 until tryOpen && zeroError in 0 until tryOpen, source)
+    assertContains(
+      source,
+      "handle.asStableRef<sample.Scale>().get().weigh().also { nugetResult -> " +
+          "if (resultFailedOut != null) " +
+          "resultFailedOut.reinterpret<kotlinx.cinterop.BooleanVar>()" +
+          ".pointed.value = nugetResult.isFailure }.getOrThrow()",
+    )
+  }
+
+  /** The validator pins the flag: present exactly when a `Result` is unwrapped, before errors. */
+  @Test
+  fun `Result unwrapping plan without the failure flag is rejected`() {
+    assertFailsWith<IllegalArgumentException> {
+      methodWithParams(
+        symbol = "sample.Scale.weigh",
+        export = "scale_weigh",
+        result = BridgeType.Primitive(PrimitiveKind.INT),
+        params = emptyList(),
+      ).let { plan -> plan.copy(invocation = plan.invocation.copy(unwrapsKotlinResult = true)) }
+        .validate()
+    }
   }
 
   private fun render(plan: ForwardCallablePlan): String {

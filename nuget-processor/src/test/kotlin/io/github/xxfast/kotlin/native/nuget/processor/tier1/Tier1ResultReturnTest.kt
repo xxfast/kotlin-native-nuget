@@ -39,8 +39,10 @@ class Tier1ResultReturnTest {
       "export_library_tier1_resultunit__service_run" in result.generated,
       "expected run to be exported; generated=${result.generated}",
     )
+    // The Try twin's failure flag is written from the `Result` between the call and the unwrap
+    // (`.run().also { ... }.getOrThrow()`), so the unwrap is asserted on the same invocation.
     assertTrue(
-      ".run().getOrThrow()" in result.generated,
+      Regex("""\.run\(\)\.also \{[^\n]*\}\.getOrThrow\(\)""") in result.generated.orEmpty(),
       "expected the invocation to unwrap the Result; generated=${result.generated}",
     )
     assertTrue(
@@ -67,7 +69,7 @@ class Tier1ResultReturnTest {
       "expected the generated export to compile; got: ${result.compileErrors}",
     )
     assertTrue(
-      ".feed(name).getOrThrow()" in result.generated,
+      Regex("""\.feed\(name\)\.also \{[^\n]*\}\.getOrThrow\(\)""") in result.generated.orEmpty(),
       "expected the invocation to unwrap the Result; generated=${result.generated}",
     )
     assertTrue(

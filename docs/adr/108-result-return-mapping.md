@@ -10,6 +10,12 @@ below states. `ForwardDiagnostic.kt`'s `ForwardPlanSkipReason.VALUE_CLASS` maps 
 parameter is not special-cased to the input kind. Still a named, `droppedFromCSharp = true` skip,
 which is the property this ADR relied on.
 
+**Alternative 2's deferred `Try` overload shipped** as [ADR-195](195-result-try-overload.md): beside
+the unchanged throwing `T F()`, a `bool TryF(..., out T value, out Exception? failure)` returns
+`false` for a modelled `Result.failure` and still throws for a thrown exception. "A C# caller cannot
+distinguish a modelled `Result.failure` from an unexpected throw" below holds for the throwing
+member only.
+
 ## Context
 
 GitHub #56 part 1: a class method `fun run(): Result<Unit>` is skipped with

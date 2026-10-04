@@ -475,8 +475,10 @@ internal object ForwardAbiContract {
         // but this projection deliberately stays name-based. It reads a rendered KotlinPoet
         // `FunSpec`, where the plan's parameter (and its role) is already gone, and it also covers
         // the legacy `exports/*` FunSpecs that never had a plan and spell `errorOut` by hand.
+        // The `Result<T>` failure flag (`RESULT_FAILED_SLOT`) is reserved the same way.
         val direction: ForwardAbiDirection = if (
-          parameter.name == "errorOut" || parameter.name == "valueOut"
+          parameter.name == "errorOut" || parameter.name == "valueOut" ||
+          parameter.name == RESULT_FAILED_SLOT
         ) {
           ForwardAbiDirection.OUT
         } else {

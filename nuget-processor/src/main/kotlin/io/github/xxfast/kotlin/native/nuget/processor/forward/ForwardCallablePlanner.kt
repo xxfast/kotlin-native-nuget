@@ -31,6 +31,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyLambdaPar
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
 import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedLegacyLambdaShape
 import io.github.xxfast.kotlin.native.nuget.processor.PLAN_OWNED_NAMES
+import io.github.xxfast.kotlin.native.nuget.processor.RESULT_FAILED_SLOT
 import io.github.xxfast.kotlin.native.nuget.processor.bridgeParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
@@ -3093,10 +3094,13 @@ internal class ForwardCallablePlanner(
     }
 
     val error: ForwardAbiParameter? = if (includeError) errorParameter() else null
+    // The C# `TryX` twin's flag: directly before the error slot, which must stay last.
+    val resultFailed: ForwardAbiParameter? =
+      if (unwrapsKotlinResult && error != null) resultFailedParameter() else null
     val nativeParameters: List<ForwardAbiParameter> =
       receiverParameter(receiver, widening.receiver) +
         publicParameters.flatMap { parameter -> nativeInputParameters(parameter) } +
-        resultShape.extraParameters + listOfNotNull(error)
+        resultShape.extraParameters + listOfNotNull(resultFailed, error)
     val nativeCall = ForwardNativeCall(
       exportName = exportName,
       result = resultShape.wireType,
@@ -3212,6 +3216,26 @@ internal class ForwardCallablePlanner(
       conversion = ForwardConversion.STABLE_REF_TO_HANDLE,
     ),
     role = ForwardAbiRole.ERROR,
+  )
+
+  /**
+   * The one-byte `Result` failure flag (ADR-108's Try twin). A POINTER wire, because that is what
+   * renders an OUT slot as `COpaquePointer?` in the export; the Boolean transfer is what gives the
+   * C# extern its `[MarshalAs(UnmanagedType.I1)]` (ADR-069).
+   */
+  private fun resultFailedParameter(): ForwardAbiParameter = ForwardAbiParameter(
+    name = RESULT_FAILED_SLOT,
+    wireType = ForwardAbiWireType.POINTER,
+    direction = ForwardAbiDirection.OUT,
+    transfer = ForwardTransfer(
+      subject = RESULT_FAILED_SLOT,
+      type = BridgeType.Primitive(PrimitiveKind.BOOLEAN),
+      flow = ForwardFlow.OUT_OF_KOTLIN,
+      passing = ForwardPassing.OUT,
+      ownership = ForwardOwnership.BORROWED,
+      conversion = ForwardConversion.DIRECT,
+    ),
+    role = ForwardAbiRole.RESULT_FAILED_OUT,
   )
 
   private fun valueParameter(

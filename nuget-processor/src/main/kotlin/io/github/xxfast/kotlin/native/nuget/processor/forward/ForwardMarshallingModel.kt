@@ -439,6 +439,13 @@ internal enum class ForwardAbiRole {
   /** ADR-061's nullable-primitive `valueOut` out-slot. */
   VALUE_OUT,
 
+  /**
+   * The `resultFailedOut` one-byte flag a `Result<T>`-unwrapping export (ADR-108) writes `true`
+   * into when the returned `Result` is a failure, directly before [ERROR]. It is what lets the C#
+   * `TryX` twin return `false` for a modelled failure and still throw for a thrown exception.
+   */
+  RESULT_FAILED_OUT,
+
   /** ADR-024's trailing `errorOut` exception slot. */
   ERROR,
 }
@@ -971,6 +978,29 @@ internal object ForwardCallablePlanValidator {
               "${parameter.name} must be OUT"
         }
       }
+    // The C# Try twin reads the flag only after the error slot is known set, and both projections
+    // thread it positionally, so it has exactly one place: an OUT pointer directly before the
+    // error slot, on an export that unwraps a `Result` and has an error slot to pair it with.
+    val failedFlags: List<Int> = call.parameters.indices
+      .filter { index -> call.parameters[index].role == ForwardAbiRole.RESULT_FAILED_OUT }
+    val expectsFlag: Boolean = plan.invocation.unwrapsKotlinResult && errors.isNotEmpty()
+    val expectedFlags: List<Int> =
+      if (expectsFlag) listOf(call.parameters.lastIndex - 1) else emptyList()
+    require(failedFlags == expectedFlags) {
+      "Forward plan ${plan.publicSignature.name} export ${call.exportName} must declare one " +
+          "result-failed slot directly before its error slot exactly when it unwraps a Result; " +
+          "got $failedFlags"
+    }
+    failedFlags.map { index -> call.parameters[index] }.forEach { parameter ->
+      require(
+        parameter.direction == ForwardAbiDirection.OUT &&
+            parameter.wireType == ForwardAbiWireType.POINTER &&
+            parameter.transfer.type == BridgeType.Primitive(PrimitiveKind.BOOLEAN)
+      ) {
+        "Forward plan ${plan.publicSignature.name} export ${call.exportName} result-failed slot " +
+            "${parameter.name} must be an OUT pointer to a Boolean"
+      }
+    }
   }
 
   private fun validateTransfer(plan: ForwardCallablePlan, transfer: ForwardTransfer) {

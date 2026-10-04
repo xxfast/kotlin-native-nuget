@@ -57,9 +57,24 @@ internal fun FileSpec.Builder.addForwardKotlinPlanExport(plan: ForwardCallablePl
 
   // ADR-108: a `Result<T>` return was lowered to `T` by the planner; unwrap it here, inside the
   // invocation string every result body drops into its existing `try`, so a `Result.failure(e)`
-  // takes exactly the path a thrown `e` takes.
-  val invocation: String = dispatchedInvocation(plan, receiver)
-    .let { call -> if (plan.invocation.unwrapsKotlinResult) "$call.getOrThrow()" else call }
+  // takes exactly the path a thrown `e` takes. The C# `TryX` twin tells the two apart through the
+  // failure flag, written from the `Result` itself before it is unwrapped. The invocation is
+  // spliced into a KotlinPoet format string, so the flag's var type is spelled in full here.
+  val resultFailed: ForwardAbiParameter? =
+    call.parameters.firstOrNull { parameter -> parameter.role == ForwardAbiRole.RESULT_FAILED_OUT }
+  val dispatched: String = dispatchedInvocation(plan, receiver)
+  val invocation: String = when {
+    resultFailed != null -> "$dispatched.also { nugetResult -> " +
+        "if (${resultFailed.name} != null) ${resultFailed.name}" +
+        ".reinterpret<kotlinx.cinterop.BooleanVar>().pointed.value = nugetResult.isFailure }" +
+        ".getOrThrow()"
+    plan.invocation.unwrapsKotlinResult -> "$dispatched.getOrThrow()"
+    else -> dispatched
+  }
+  // The thrown path never reaches the flag write above, and the C# twin reads the flag whenever the
+  // error slot is set, so it must not depend on what an unwritten one-byte `out bool` holds: every
+  // out slot of such an export is zeroed before the call.
+  if (resultFailed != null) builder.addOutSlotZeroing(call)
 
   when (val result: BridgeType = plan.publicSignature.result) {
     BridgeType.Unit -> builder.addCode(
@@ -1234,6 +1249,33 @@ private fun kotlinInputType(type: BridgeType, wireType: ForwardAbiWireType): Typ
   }
 
   else -> error("Forward Kotlin plan emitter has no input type for $type")
+}
+
+/**
+ * One statement per OUT slot of [call], writing its zero (`false`, `0`, `null`) through the
+ * pointer when the caller supplied one. Emitted ahead of the result body, so a slot the body never
+ * writes on some path still reads as a defined value.
+ */
+private fun FunSpec.Builder.addOutSlotZeroing(call: ForwardNativeCall) {
+  call.parameters
+    .filter { parameter -> parameter.direction == ForwardAbiDirection.OUT }
+    .forEach { parameter ->
+      val name: String = parameter.name
+      val type: BridgeType = parameter.transfer.type
+      when {
+        parameter.role == ForwardAbiRole.ERROR -> addStatement(
+          "if ($name != null) $name.reinterpret<%T>().pointed.value = null",
+          cOpaquePointerVar,
+        )
+
+        type is BridgeType.Primitive -> addStatement(
+          "if ($name != null) $name.reinterpret<%T>().pointed.value = ${defaultResult(type)}",
+          cVarType(type.kind),
+        )
+
+        else -> error("Forward Kotlin plan emitter has no zero for out slot $name of type $type")
+      }
+    }
 }
 
 private fun errorHandlingUnitBody(invocation: String, errorName: String): String = buildString {
