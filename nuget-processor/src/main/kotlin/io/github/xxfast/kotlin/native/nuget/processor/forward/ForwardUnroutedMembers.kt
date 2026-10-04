@@ -70,13 +70,12 @@ internal fun KSClassDeclaration.inheritedOutcomeOn(
   owner: KSClassDeclaration,
   keptBase: KSClassDeclaration? = null,
 ): ForwardInheritedOutcome {
-  val kept: Set<String> = keptBase
-    ?.let { base ->
-      (sequenceOf(base) + base.getAllSuperTypes().map { it.declaration })
-        .mapNotNull { it.qualifiedName?.asString() }
-        .toSet()
-    }
-    .orEmpty() + "kotlin.Any"
+  val keptOwners: Set<String> =
+    if (keptBase == null) emptySet()
+    else (sequenceOf(keptBase) + keptBase.getAllSuperTypes().map { it.declaration })
+      .mapNotNull { it.qualifiedName?.asString() }
+      .toSet()
+  val kept: Set<String> = keptOwners + "kotlin.Any"
   val members: List<KSDeclaration> = (getAllFunctions() + getAllProperties())
     .filter { member -> member.getVisibility() == Visibility.PUBLIC }
     .filter { member ->

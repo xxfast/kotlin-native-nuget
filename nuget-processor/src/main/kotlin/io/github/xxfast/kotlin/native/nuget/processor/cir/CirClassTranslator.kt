@@ -60,11 +60,14 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedLegacyLambd
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStoredCallbackPair
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInheritedOutcome
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceHierarchy
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncPlacement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceMemberPlacement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declared
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declaresLexically
+import io.github.xxfast.kotlin.native.nuget.processor.forward.inheritedOutcomeOn
+import io.github.xxfast.kotlin.native.nuget.processor.forward.inlineList
 import io.github.xxfast.kotlin.native.nuget.processor.forward.interfaceMethodSymbols
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
@@ -147,9 +150,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyHandleRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyValueClassRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnumRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInheritedOutcome
-import io.github.xxfast.kotlin.native.nuget.processor.forward.inheritedOutcomeOn
-import io.github.xxfast.kotlin.native.nuget.processor.forward.inlineList
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
@@ -197,13 +197,13 @@ private fun keepsSupertype(
     if (unrouted.isEmpty()) return "$possessive public members are $verb on $owner directly"
     val list: String = unrouted.inlineList()
     val one: Boolean = unrouted.size == 1
+    val named: String =
+      if (one) "is named by its own warning" else "are each named by their own warning"
     if (outcome.bound.isEmpty()) {
-      return "none of $possessive public members $verbNone on $owner: $list " +
-          if (one) "is named by its own warning" else "are each named by their own warning"
+      return "none of $possessive public members $verbNone on $owner: $list " + named
     }
     return "$possessive public members are $verb on $owner directly except $list, which no " +
-        "route carries and which " +
-        if (one) "is named by its own warning" else "are each named by their own warning"
+        "route carries and which " + named
   }
   val reason: String = when (kind) {
     // Interface super-interfaces: an INTERFACE owner re-homes the dropped super's members onto
