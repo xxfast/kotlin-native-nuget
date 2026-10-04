@@ -22,6 +22,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStore
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLambdaPropertyCarrier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.carriesLegacyLambdaProperty
+import io.github.xxfast.kotlin.native.nuget.processor.forward.reProjectsKeptBaseLambdaProperty
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedCallbackMember
@@ -34,6 +35,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedRetur
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardOwnerTypeName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
+import io.github.xxfast.kotlin.native.nuget.processor.forward.reProjectsKeptBaseMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPropertyPlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.addForwardKotlinPlanExport
@@ -271,9 +273,7 @@ internal fun KSClassDeclaration.forwardClassLegacyMembers(
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { method -> !method.isCompilerOwnedMember(cls) }
     .filter { !it.modifiers.contains(Modifier.SUSPEND) }
-    .filter { method ->
-      method.isForwardMemberOf(cls, superClass) && !method.modifiers.contains(Modifier.ABSTRACT)
-    }
+    .filter { method -> method.isForwardMemberOf(cls, superClass) }
     .toList()
   val legacyPairMembers: Set<KSFunctionDeclaration> = forwardLegacyPairMembers(memberMethods)
   // ADR-147: every specialized legacy route spells the receiver as the bare owner name
@@ -295,9 +295,14 @@ internal fun KSClassDeclaration.forwardClassLegacyMembers(
     // ADR-123: likewise an element this route cannot marshal, named SKIPPED_UNSUPPORTED_RETURN.
     .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
     .filter { method -> classifier.legacyRefusedReturn(method) == null }
+    // An abstract Flow member exports too: the C# owner declares it concrete over this
+    // `_collect` export, and `asStableRef<Owner>().get().ticks()` dispatches to whichever subclass
+    // the handle holds. A Kotlin override of it is not re-projected below the owner.
+    .filter { method -> !method.reProjectsKeptBaseMember(cls, superClass) }
 
   val allNonFlowMethods: List<KSFunctionDeclaration> = allRegularMethods
     .filterNot { method -> method.hasLegacyFlowReturn() }
+    .filterNot { method -> method.modifiers.contains(Modifier.ABSTRACT) }
     // Boundary nullability part A2: refused BEFORE the partition, so a nullable- or builtin-payload
     // lambda member reaches neither the per-call route nor the stored pair detection (a pair whose
     // halves both vanish is never found, so `removeRinger` cannot survive as a cancel for a
@@ -425,6 +430,8 @@ internal fun FileSpec.Builder.addClassExports(
     // Named specialized-protocol property adapters (lambda / suspend-lambda / Flow).
     val propTypeResolved: KSType = prop.type.resolve().expandAliases()
     // The planner's skip report reads the same predicate, so it names exactly what this declines.
+    // An override of a lambda property a kept base binds is reached through the base's getter.
+    if (prop.reProjectsKeptBaseLambdaProperty(cls, superClass)) return@forEach
     if (prop.carriesLegacyLambdaProperty(ForwardLambdaPropertyCarrier.CLASS)) {
       // CIR ships lambda property getters without errorOut (hasSyncErrorOut = false).
       addFunction(

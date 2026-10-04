@@ -240,9 +240,12 @@ class Tier1AbstractMethodTest {
       "Log(" in csharp,
       "expected the Throwable-typed parameter to drop the member; generatedCSharp:\n$csharp",
     )
-    assertTrue(
-      result.kspWarnings.any { "Crate.log" in it && "Throwable" in it },
-      "expected the parameter-position skip to name the member and the type; " +
+    // Named by the plan the owner still tries for its own abstract member (the refusal every
+    // subclass's override gets too), so exactly once.
+    assertEquals(
+      1,
+      result.kspWarnings.count { "Crate.log" in it && it.contains("Throwable", ignoreCase = true) },
+      "expected the parameter-position skip to name the member and the type once; " +
           "kspWarnings=${result.kspWarnings}",
     )
   }

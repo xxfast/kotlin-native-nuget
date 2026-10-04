@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
 import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.getDeclaredFunctions
 import com.google.devtools.ksp.getDeclaredProperties
+import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.isAbstract
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -14,6 +15,7 @@ import com.google.devtools.ksp.symbol.KSTypeArgument
 import com.google.devtools.ksp.symbol.KSTypeParameter
 import com.google.devtools.ksp.symbol.Modifier
 import com.google.devtools.ksp.symbol.Variance
+import com.google.devtools.ksp.symbol.Visibility
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 
 /**
@@ -233,6 +235,44 @@ internal object ForwardDeclaredTypeNames {
 
   fun declares(packageName: String, simpleName: String): Boolean =
     byPackage[packageName]?.contains(simpleName) == true
+}
+
+/**
+ * The C# member names declared by every public class of the round that derives from a given class,
+ * read by [abstractBackingName]. A subclass inherits its base's nested wrapper, so a subclass
+ * member named like it (`class Dog : Animal() { fun backing() }` beside `Animal.Backing`) hides it
+ * (CS0108). The base cannot see its subclasses from its own declaration, so the round's public
+ * classes are indexed once, by `NugetProcessor`, before anything asks for a wrapper name. Every
+ * public class counts, exported or not: a name avoided needlessly costs nothing, since consumers
+ * never name the wrapper.
+ */
+internal object ForwardSubclassMemberNames {
+  private val byBase: MutableMap<String, MutableSet<String>> = mutableMapOf()
+
+  fun reset(classes: Sequence<KSClassDeclaration>) {
+    byBase.clear()
+    fun KSClassDeclaration.withNested(): Sequence<KSClassDeclaration> = sequenceOf(this) +
+        this.declarations.filterIsInstance<KSClassDeclaration>()
+          .filter { nested -> nested.getVisibility() == Visibility.PUBLIC }
+          .flatMap { nested -> nested.withNested() }
+    classes.flatMap { declaration -> declaration.withNested() }.forEach { cls ->
+      val names: Set<String> = buildSet {
+        cls.declarations.filterIsInstance<KSFunctionDeclaration>().forEach { function ->
+          add(function.csharpMemberName())
+          if (Modifier.SUSPEND in function.modifiers) add(function.csharpAsyncMemberName())
+        }
+        cls.declarations.filterIsInstance<KSPropertyDeclaration>()
+          .forEach { property -> add(property.csharpMemberName()) }
+      }
+      if (names.isEmpty()) return@forEach
+      cls.getAllSuperTypes()
+        .mapNotNull { type -> (type.declaration as? KSClassDeclaration)?.qualifiedName?.asString() }
+        .forEach { base -> byBase.getOrPut(base) { mutableSetOf() }.addAll(names) }
+    }
+  }
+
+  fun of(base: KSClassDeclaration): Set<String> =
+    base.qualifiedName?.asString()?.let { qualified -> byBase[qualified] }.orEmpty()
 }
 
 /**
@@ -699,8 +739,8 @@ internal fun KSClassDeclaration.isForwardExtensible(): Boolean =
  * one level down.
  *
  * `Backing` unless the arm already claims that name in C#, through a type Kotlin nests in it
- * (ADR-134) or one of its members (CS0102 either way), a type nested in its sealed base (CS0108),
- * or as its own name (CS0542); then the first
+ * (ADR-134) or one of its members (CS0102 either way), a type nested in a base (CS0108), the
+ * wrapper of an abstract base above it (CS0108), or as its own name (CS0542); then the first
  * free `Backing_`-suffixed spelling. Consumers never name the wrapper, so any free name will do,
  * and deriving it from the declaration alone lets the classifier and the CIR translator agree.
  */
@@ -711,11 +751,17 @@ internal fun KSClassDeclaration.abstractBackingName(): String? {
     declarations.filterIsInstance<KSClassDeclaration>().forEach { add(it.simpleName.asString()) }
     // A type nested in a base class (the sealed base included) is inherited, and hiding it is
     // CS0108.
-    getAllSuperTypes()
+    val bases: List<KSClassDeclaration> = getAllSuperTypes()
       .map { type -> type.declaration }
       .filterIsInstance<KSClassDeclaration>()
+      .toList()
+    bases
       .flatMap { base -> base.declarations.filterIsInstance<KSClassDeclaration>() }
       .forEach { add(it.simpleName.asString()) }
+    // So is an abstract base's own wrapper (`Puppy : Animal` beside `Animal.Backing`).
+    bases.forEach { base -> base.abstractBackingName()?.let(::add) }
+    // And a subclass inherits this one, so its members must not hide it either.
+    addAll(ForwardSubclassMemberNames.of(this@abstractBackingName))
     getAllFunctions().forEach { add(it.csharpMemberName()) }
     getAllProperties().forEach { add(it.csharpMemberName()) }
   }
@@ -726,12 +772,15 @@ internal fun KSClassDeclaration.abstractBackingName(): String? {
  * Whether this class gets an [abstractBackingName] wrapper: a non-generic `abstract class`, either
  * an abstract sealed arm or an ordinary abstract class.
  *
- * An ordinary one qualifies only when no abstract class sits above it. Its wrapper overrides the
- * class's own abstract members and the interface members it leaves unimplemented, both planned on
- * the class itself as call-through exports; an abstract member an abstract *base* leaves open is
- * planned on that base instead, so this class's wrapper would have nothing to call (CS0534). Such a
- * class keeps the shipped shape. A sealed arm's base is abstract by definition, but projects its
- * own members as concrete call-throughs, so an arm has no such gap.
+ * Its wrapper overrides the class's own abstract members and the interface members it leaves
+ * unimplemented, both planned on the class itself as call-through exports, and the abstract
+ * members an abstract base above it leaves open (`Puppy : Animal`), over the call-through export
+ * that base planned (the base has a wrapper of its own, so it planned every one). A sealed base
+ * projects its own members as concrete call-throughs, so it leaves nothing open.
+ *
+ * A generic abstract base is the one ancestor that plans nothing for its abstract members (it has
+ * no wrapper; its C# declares them with no export behind them), so a class below one would have
+ * nothing to call for them (CS0534) and keeps the shipped shape.
  */
 internal fun KSClassDeclaration.hasAbstractBacking(): Boolean {
   if (Modifier.ABSTRACT !in modifiers || classKind != ClassKind.CLASS) return false
@@ -741,7 +790,27 @@ internal fun KSClassDeclaration.hasAbstractBacking(): Boolean {
     .map { type -> type.declaration }
     .filterIsInstance<KSClassDeclaration>()
     .none { base ->
-      base.classKind == ClassKind.CLASS &&
+      base.classKind == ClassKind.CLASS && base.typeParameters.isNotEmpty() &&
           (Modifier.ABSTRACT in base.modifiers || Modifier.SEALED in base.modifiers)
     }
+}
+
+/**
+ * The generic sealed hierarchies of this round, bases and arms by qualified name: the ones
+ * `NugetProcessor` skips whole (the sealed route declares a base and its arms only without type
+ * parameters). Read by the position hints, so a member typed with one points at that reason rather
+ * than at the export scope or the arm shapes, which an author could change without effect.
+ */
+internal object ForwardGenericSealedHierarchies {
+  private val names: MutableSet<String> = mutableSetOf()
+
+  fun reset(bases: List<KSClassDeclaration>) {
+    names.clear()
+    bases.forEach { base ->
+      base.qualifiedName?.asString()?.let(names::add)
+      base.getSealedSubclasses().forEach { arm -> arm.qualifiedName?.asString()?.let(names::add) }
+    }
+  }
+
+  operator fun contains(qualifiedName: String?): Boolean = qualifiedName in names
 }

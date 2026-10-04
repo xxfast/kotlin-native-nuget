@@ -254,12 +254,14 @@ class Tier1SealedSubclassPropertyPlanTest {
    */
   @Test
   fun `a lambda property on a sealed subclass stays on the legacy route`() {
+    // The property is not named like its arm: `class OnTap(val onTap: ...)` renders `OnTap.OnTap`,
+    // which C# rejects (CS0542) and is a named error now (`Tier1AbstractChainBackingTest`).
     val result = Tier1Harness.run(
       """
       package tier1.sealedlambda
 
       sealed class Handler {
-        class OnTap(val onTap: (Int) -> String) : Handler()
+        class OnTap(val action: (Int) -> String) : Handler()
       }
 
       fun handler(): Handler = Handler.OnTap { it.toString() }
@@ -269,14 +271,34 @@ class Tier1SealedSubclassPropertyPlanTest {
     assertContains(
       result.generatedCSharp,
       """
-      |            [DllImport("library", CallingConvention = CallingConvention.Cdecl, EntryPoint = "library_tier1_sealedlambda__handler_ontap_get_onTap")]
-      |            private static extern IntPtr Native_Get_onTap(NugetKotlinHandle handle, out IntPtr error);
+      |            [DllImport("library", CallingConvention = CallingConvention.Cdecl, EntryPoint = "library_tier1_sealedlambda__handler_ontap_get_action")]
+      |            private static extern IntPtr Native_Get_action(NugetKotlinHandle handle, out IntPtr error);
       """.trimMargin(),
     )
     assertContains(
       result.generatedCSharp,
-      "            public KotlinFunc<int, string> OnTap => new KotlinFunc<int, string>(Native_Get_onTap(_handle, out _));",
+      "            public KotlinFunc<int, string> Action => new KotlinFunc<int, string>(Native_Get_action(_handle, out _));",
     )
-    assertContains(result.generated, "@CName(\"library_tier1_sealedlambda__handler_ontap_get_onTap\")")
+    assertContains(result.generated, "@CName(\"library_tier1_sealedlambda__handler_ontap_get_action\")")
+    assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using Interop;
+
+      namespace Consumer
+      {
+          public static class Probe
+          {
+              public static string Run()
+              {
+                  using Handler handler = Fixture.Handler();
+                  using var action = ((Handler.OnTap)handler).Action;
+                  return action.Invoke(4);
+              }
+          }
+      }
+      """.trimIndent(),
+    )
   }
 }

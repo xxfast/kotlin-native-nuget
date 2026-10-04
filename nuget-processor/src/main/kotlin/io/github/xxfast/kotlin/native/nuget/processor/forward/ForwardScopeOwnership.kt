@@ -95,6 +95,7 @@ internal fun KSClassDeclaration.forwardClassFlowMethods(
     .filter { method -> classifier.legacyRefusedParameter(method.parameters) == null }
     .filter { method -> classifier.legacyRefusedReturn(method) == null }
     .filter { method -> method.isForwardMemberOf(this, superClass) }
+    .filter { method -> !method.reProjectsKeptBaseMember(this, superClass) }
     .toList()
 }
 
@@ -224,14 +225,19 @@ internal fun KSClassDeclaration.forwardArmMemberProjectedByBase(
  * C# `FillAsync` on the subclass is CS0108 for no gain.
  *
  * Kept only when the overridee sits on a *dropped* base (ADR-101): that base has no generated C#
- * class, so this class is the only carrier there is and the member must project here.
+ * class, so this class is the only carrier there is and the member must project here. The same
+ * holds for a generic base, which projects none of these members. The Flow route applies the same
+ * rule, an `abstract` overridee included: the base declares it concrete over its own export.
  */
-private fun KSFunctionDeclaration.reProjectsKeptBaseMember(
+internal fun KSFunctionDeclaration.reProjectsKeptBaseMember(
   cls: KSClassDeclaration,
   superClass: KSClassDeclaration?,
 ): Boolean {
   val overridee: KSClassDeclaration = (baseClassOverridee(superClass)?.parentDeclaration)
       as? KSClassDeclaration ?: return false
+  // A generic base projects no suspend or Flow member at all (ADR-147 refuses the legacy routes on
+  // a generic owner), so this class is the only carrier there is, as for a dropped base.
+  if (overridee.forwardTypeParametersInScope().isNotEmpty()) return false
   val qualified: String = overridee.qualifiedName?.asString() ?: return false
   return cls.droppedBaseChain(superClass).none { it.qualifiedName?.asString() == qualified }
 }

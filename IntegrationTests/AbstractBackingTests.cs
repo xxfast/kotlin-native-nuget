@@ -148,4 +148,74 @@ public class AbstractBackingTests
         // The wrapper implements the abstract `Dispose`; LeakTests proves the release.
         Assert.Null(Record.Exception(() => { hibernator.Dispose(); hibernator.Dispose(); }));
     }
+
+    [Fact]
+    public void AbstractClassBelowAbstractClass_ReturnedAsItself_CallsThrough()
+    {
+        using var den = new Den();
+        using Napper napper = den.Napper();
+
+        Assert.True(typeof(Napper).IsAbstract);
+        Assert.IsAssignableFrom<Hibernator>(napper);
+        // `Name` and `Weigh` are left open by `Hibernator` and answered over its exports.
+        Assert.Equal("Mylo", napper.Name);
+        Assert.Equal(1, napper.Snores());
+        Assert.Equal(2, napper.Dreams());
+        Assert.Equal("Mylo snores 1 times", napper.Describe());
+        Assert.Equal(6, napper.Weigh());
+        Assert.True(napper.TryWeigh(out int value, out Exception? failure));
+        Assert.Equal(6, value);
+        Assert.Null(failure);
+    }
+
+    [Fact]
+    public void OverriddenLambdaProperty_ReadThroughTheBase_DispatchesToTheOverride()
+    {
+        using var den = new Den();
+        using Napper napper = den.Napper();
+        using Hibernator oreo = den.Hibernator();
+
+        // One `OnWake`, declared on `Hibernator`; Kotlin's dispatch picks each subclass's lambda.
+        using var stretch = napper.OnWake;
+        using var wake = oreo.OnWake;
+        Assert.Equal("Mylo stretches", stretch.Invoke("Mylo"));
+        Assert.Equal("Oreo wakes", wake.Invoke("Oreo"));
+    }
+
+    [Fact]
+    public void SubclassMemberNamedLikeTheWrapper_Binds()
+    {
+        using var mylo = new MyloNapper();
+
+        Assert.Equal(5, mylo.Backing());
+        Assert.Equal(2, mylo.Dreams());
+    }
+
+    [Fact]
+    public async Task AbstractFlowMember_CollectsThroughTheWrapper()
+    {
+        using var den = new Den();
+        await using Napper napper = den.Napper();
+
+        var breaths = new List<int>();
+        await foreach (int breath in napper.Breaths()) breaths.Add(breath);
+
+        Assert.Equal(new[] { 4, 5, 6 }, breaths);
+    }
+
+    [Fact]
+    public void AbstractClassBelowAbstractArm_ReturnedAsItself_CallsThrough()
+    {
+        using var den = new Den();
+        using Slumber slumber = den.Slumber();
+
+        Assert.True(typeof(Slumber).IsAbstract);
+        Torpor.Dormant dormant = Assert.IsAssignableFrom<Torpor.Dormant>(slumber);
+        // The arm's abstract members, answered over the arm's exports.
+        Assert.Equal(7, dormant.Depth());
+        Assert.Equal("sighing", dormant.Mood);
+        Assert.Equal(70, dormant.Minutes());
+        Assert.Equal("deep", dormant.Label());
+        Assert.Equal(2, slumber.Sighs());
+    }
 }

@@ -260,6 +260,9 @@ internal data class CirClass(
   val backingName: String? = null,
   // Whether the wrapper must implement an abstract `DisposeAsync` (see `translateClass`).
   val backingOverridesDisposeAsync: Boolean = false,
+  // The abstract members this class inherits still unimplemented from abstract bases above it,
+  // grouped by the base whose call-through exports the wrapper calls (`translateClass`).
+  val backingInherited: List<CirBackingInherited> = emptyList(),
 ) : CirDeclaration
 
 internal data class CirValueClass(

@@ -1,5 +1,8 @@
 package io.github.xxfast.kotlin.native.nuget.test.torpor
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
+
 /**
  * Fixture for the abstract backing wrapper: C# never constructs an abstract class, so a handle that
  * materialises as one constructs the class's internal `Backing` wrapper instead, which overrides
@@ -14,6 +17,11 @@ package io.github.xxfast.kotlin.native.nuget.test.torpor
  *   `is Torpor.Dormant` holds, `is DeepTorpor` does not, and every member answers as [DeepTorpor].
  * - [Hibernator], an ordinary abstract class at a return position ([Den.hibernator]) and as a list
  *   element ([Den.hibernators]). Its return used to render `new Hibernator(...)`, CS0144.
+ * - [Napper], an abstract class below [Hibernator], and [Slumber], one below the abstract arm.
+ *   Each gets a wrapper of its own that also overrides the abstract members the base above leaves
+ *   open, over that base's exports. Returning one used to render `new Napper(...)`, CS0144.
+ * - [Napper.breaths], an abstract `Flow` member. Its Kotlin export used to be dropped while C#
+ *   still declared it, which failed the generator's ABI contract check.
  *
  * Oreo hibernates on the radiator from November to March. Mylo only claims to.
  */
@@ -61,6 +69,9 @@ abstract class Hibernator {
   abstract fun weigh(): Result<Int>
 
   open fun describe(): String = "$name snores ${snores()} times"
+
+  /** A lambda-typed property a subclass overrides; bound once, here, and dispatched by Kotlin. */
+  open val onWake: (String) -> String = { who -> "$who wakes" }
 }
 
 /** Oreo, who snores three times and then pretends she did not. */
@@ -72,8 +83,54 @@ class OreoHibernator : Hibernator() {
   override fun weigh(): Result<Int> = Result.success(4)
 }
 
+/** An abstract class below [Hibernator]; it leaves [name] and [weigh] open. */
+abstract class Napper : Hibernator() {
+  abstract fun dreams(): Int
+
+  /** Breaths per nap, abstract: the C# owner declares it over a call-through export. */
+  abstract fun breaths(): Flow<Int>
+
+  override fun snores(): Int = 1
+}
+
+/** Mylo, who naps between every walk. */
+class MyloNapper : Napper() {
+  override val name: String = "Mylo"
+
+  override fun dreams(): Int = 2
+
+  override fun breaths(): Flow<Int> = flowOf(4, 5, 6)
+
+  override fun weigh(): Result<Int> = Result.success(6)
+
+  override val onWake: (String) -> String = { who -> "$who stretches" }
+
+  /** Named like the wrapper the bases above nest, which therefore take other names. */
+  fun backing(): Int = 5
+}
+
+/** An abstract class below the abstract arm; it leaves the arm's abstract members open. */
+abstract class Slumber : Torpor.Dormant() {
+  abstract fun sighs(): Int
+}
+
+/** Oreo's slumber, deeper than torpor. */
+class DeepSlumber : Slumber() {
+  override fun depth(): Int = 7
+
+  override val mood: String = "sighing"
+
+  override fun weigh(): Result<Int> = Result.success(7)
+
+  override fun sighs(): Int = 2
+}
+
 /** Where everyone sleeps; hands each shape back through a base-typed position. */
 class Den {
+  fun napper(): Napper = MyloNapper()
+
+  fun slumber(): Slumber = DeepSlumber()
+
   fun deepest(level: Int): Torpor = DeepTorpor(level)
 
   fun deep(level: Int): Torpor.Dormant = DeepTorpor(level)

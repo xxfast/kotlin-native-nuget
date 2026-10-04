@@ -2,6 +2,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
 
 import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.processing.KSPLogger
+import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSNode
@@ -14,7 +15,12 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticS
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declaredCSharpName
+import io.github.xxfast.kotlin.native.nuget.processor.NESTED_DECLARATION_KINDS
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedInterface
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedSubclass
 import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
+import io.github.xxfast.kotlin.native.nuget.processor.nestedDeclarationDeferral
+import io.github.xxfast.kotlin.native.nuget.processor.nestedOwnerScopeCollision
 
 /**
  * ADR-110's CS0102 rule and its CS0108 extension, shared by every generated C# type that holds
@@ -228,6 +234,11 @@ internal class CsMemberRegistry {
     val keptBase: String?,
     val members: List<CsMemberName>,
     val spellings: KotlinSpellings,
+    /**
+     * The C# names of the types declared inside this one ([csNestedTypeNames]). A derived type
+     * inherits them, so a member it declares under one of these names hides the type (CS0108).
+     */
+    val nestedTypes: Set<String> = emptySet(),
   )
 
   private val entries: MutableMap<String, Entry> = linkedMapOf()
@@ -245,22 +256,99 @@ internal class CsMemberRegistry {
         .filterValues { group -> group.map { it.kind }.toSet().size > 1 }
         .keys
       val reported: MutableSet<String> = mutableSetOf()
+      // CS0542: a member named like the type that declares it (`class OnTap(val onTap: ...)`).
+      entry.members.firstOrNull { member -> member.name == entry.csName }?.let { member ->
+        reported.add(member.name)
+        emitOwnName(entry, member, logger)
+      }
       val visited: MutableSet<String> = mutableSetOf(entry.qualifiedName)
+      // Names a nearer ancestor already declares as a member: that ancestor hid the nested type
+      // first and is named for it, so this type's override of the member is not a second hide.
+      val nearerMembers: MutableSet<String> = mutableSetOf()
       var ancestor: Entry? = entry.keptBase?.let { entries[it] }
       while (ancestor != null && visited.add(ancestor.qualifiedName)) {
         val base: Entry = ancestor
         entry.members
           .filter { it.name !in ownMixed && it.name !in reported }
           .forEach { declared ->
+            // A member named like the type itself (an arm `OnTap` nested in the base, with
+            // `val onTap`) is C#'s CS0542, not a hide of an inherited type, and not this rule's.
+            val hidesNested: Boolean = declared.name in base.nestedTypes &&
+                declared.name !in nearerMembers && declared.name != entry.csName
+            if (hidesNested) {
+              reported.add(declared.name)
+              emitInheritedType(entry, base, declared, logger)
+              return@forEach
+            }
             val inherited: CsMemberName = base.members.firstOrNull { candidate ->
               candidate.name == declared.name && candidate.kind != declared.kind
             } ?: return@forEach
             reported.add(declared.name)
             emitInherited(entry, base, declared, inherited, logger)
           }
+        base.members.mapTo(nearerMembers) { it.name }
         ancestor = base.keptBase?.let { entries[it] }
       }
     }
+  }
+
+  /** The Kotlin spellings of [declared]'s kind on [this] type, or its bare C# name. */
+  private fun Entry.spelledAs(declared: CsMemberName): String = spellings[declared.name]
+    .filter { it.isFunction == (declared.kind == CsMemberKind.METHOD) }
+    .takeIf { it.isNotEmpty() }
+    ?.joinToString(" and ") { it.describe() }
+    ?: "'${declared.name}'"
+
+  /** A declared member named like its own declaring type, which C# forbids (CS0542). */
+  private fun emitOwnName(entry: Entry, declared: CsMemberName, logger: KSPLogger) {
+    val name: String = declared.name
+    val spelled: String = entry.spelledAs(declared)
+    ForwardDiagnosticSink.emit(
+      listOf(
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.ERROR_CSHARP_NAME_COLLISION,
+          symbol = entry.symbol,
+          declaration = "${entry.csName}.$name",
+          reason = "${entry.ownerPhrase} declares $spelled, which renders the C# name '$name', " +
+              "the name of the type that declares it, and C# cannot declare a member named like " +
+              "its enclosing type (CS0542)",
+          hint = "rename the member, or give it a different `@CSharpName` (ADR-179); a property " +
+              "and a function both render PascalCase in C# (ADR-110)",
+          owner = null,
+        ),
+      ),
+      logger,
+    )
+  }
+
+  /** A declared member named like a type nested in an ancestor, which it would hide (CS0108). */
+  private fun emitInheritedType(
+    entry: Entry,
+    base: Entry,
+    declared: CsMemberName,
+    logger: KSPLogger,
+  ) {
+    val name: String = declared.name
+    val spelled: String = entry.spelledAs(declared)
+    ForwardDiagnosticSink.emit(
+      listOf(
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.ERROR_CSHARP_NAME_COLLISION,
+          symbol = entry.symbol,
+          declaration = "${entry.csName}.$name",
+          reason = "${entry.ownerPhrase} declares $spelled, which renders the C# name '$name' " +
+              "of the type ${base.csName}.$name that it inherits from its base " +
+              "${base.ownerPhrase}; the member would hide that type, which C# reports as " +
+              "CS0108 and which fails `nugetCompileInterop` and every consumer build that " +
+              "treats warnings as errors",
+          hint = "rename the member on ${entry.csName} or the nested type on ${base.csName}; " +
+              "a C# type shares one member namespace with its base, nested types included " +
+              "(ADR-110)",
+          owner = null,
+        ),
+      ),
+      logger,
+    )
   }
 
   private fun emitInherited(
@@ -302,3 +390,27 @@ internal class CsMemberRegistry {
     )
   }
 }
+
+/**
+ * The C# names of the types declared inside this class-like declaration, for
+ * [CsMemberRegistry.Entry.nestedTypes]: the sealed arms nested in it and every public nested
+ * declaration ADR-133/134 declares (a deferred one, or one skipped for an owner-scope collision,
+ * declares nothing). A nested interface is `I<Name>`, except an ADR-112 eligible sealed interface,
+ * which renders as an abstract class under its own name. The generated backing wrapper is left
+ * out on purpose: a member hiding an internal type the author never wrote is not theirs to rename.
+ */
+internal fun KSClassDeclaration.csNestedTypeNames(): Set<String> = declarations
+  .filterIsInstance<KSClassDeclaration>()
+  .filter { nested -> nested.getVisibility() == Visibility.PUBLIC }
+  .filter { nested -> !nested.isCompanionObject && nested.classKind in NESTED_DECLARATION_KINDS }
+  .filter { nested ->
+    nested.isSealedSubclass() ||
+        (nested.nestedDeclarationDeferral() == null && nested.nestedOwnerScopeCollision() == null)
+  }
+  .map { nested ->
+    val name: String = nested.simpleName.asString()
+    val isInterface: Boolean =
+      nested.classKind == ClassKind.INTERFACE && !nested.isEligibleSealedInterface()
+    if (isInterface) "I$name" else name
+  }
+  .toSet()

@@ -200,6 +200,43 @@ public class LiveHandleTests
     }
 
     [Fact]
+    public void AbstractBacking_ClassesBelowAbstractBases_ReturnToBaseline()
+    {
+        // An abstract class below an abstract class, and one below the abstract arm, each
+        // materialise as their own wrapper, which overrides the base's open members over the base's
+        // exports and must release the handle on Dispose.
+        AssertNoLeak(() =>
+        {
+            using var den = new Torpor.Den();
+            using (Torpor.Napper napper = den.Napper())
+            {
+                Assert.Equal("Mylo", napper.Name);
+                Assert.Equal(2, napper.Dreams());
+            }
+            using (Torpor.Slumber slumber = den.Slumber())
+            {
+                Assert.Equal(7, slumber.Depth());
+                Assert.Equal(2, slumber.Sighs());
+            }
+        });
+    }
+
+    [Fact]
+    public async Task AbstractBacking_AbstractFlowMember_CollectedThroughWrapper_ReturnsToBaseline()
+    {
+        // The abstract `Flow` member collected through the member its owner declares, then the
+        // wrapper's scope drained by `DisposeAsync`.
+        await AssertNoLeakAsync(async () =>
+        {
+            using var den = new Torpor.Den();
+            await using Torpor.Napper napper = den.Napper();
+            var breaths = new List<int>();
+            await foreach (int breath in napper.Breaths()) breaths.Add(breath);
+            Assert.Equal(new[] { 4, 5, 6 }, breaths);
+        });
+    }
+
+    [Fact]
     public void DependencyGenericOwner_PrimitiveAndStringPayloadsReturnToBaseline()
     {
         AssertNoLeak(() =>

@@ -3,6 +3,7 @@ package io.github.xxfast.kotlin.native.nuget.processor.forward
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.Modifier
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
@@ -91,4 +92,34 @@ private fun ForwardLambdaPropertyCarrier.carries(qualifiedName: String?): Boolea
 
   ForwardLambdaPropertyCarrier.SEALED_ARM, ForwardLambdaPropertyCarrier.SEALED_BASE ->
     qualifiedName in LAMBDA_TYPES
+}
+
+/**
+ * Whether [this] lambda property overrides one a kept base class above [cls] already binds, so
+ * [cls] must not declare it again: the base's getter reads `asStableRef<Base>().get().onPet`, which
+ * Kotlin dispatches to this override, and a second `OnPet` on [cls] only hides the base's (CS0108,
+ * the route carries no `override`). The suspend and Flow routes' rule (`reProjectsKeptBaseMember`),
+ * on this route.
+ *
+ * Kept when the overridee's owner declares nothing in C#: a dropped (unexported) base, a generic
+ * one (the route refuses a generic owner, ADR-147), or one whose carrier declines the type (a
+ * nullable lambda, or a suspend lambda on a sealed type).
+ */
+internal fun KSPropertyDeclaration.reProjectsKeptBaseLambdaProperty(
+  cls: KSClassDeclaration,
+  superClass: KSClassDeclaration?,
+): Boolean {
+  val overridee: KSPropertyDeclaration =
+    baseClassOverridee(superClass) as? KSPropertyDeclaration ?: return false
+  val owner: KSClassDeclaration = overridee.parentDeclaration as? KSClassDeclaration ?: return false
+  val qualified: String = owner.qualifiedName?.asString() ?: return false
+  if (cls.droppedBaseChain(superClass).any { it.qualifiedName?.asString() == qualified }) {
+    return false
+  }
+  val carrier: ForwardLambdaPropertyCarrier = when {
+    Modifier.SEALED in owner.modifiers -> ForwardLambdaPropertyCarrier.SEALED_BASE
+    owner.isSealedSubclass() -> ForwardLambdaPropertyCarrier.SEALED_ARM
+    else -> owner.classLambdaPropertyCarrier()
+  }
+  return overridee.carriesLegacyLambdaProperty(carrier)
 }

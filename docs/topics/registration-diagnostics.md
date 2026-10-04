@@ -152,7 +152,11 @@ A value that comes back as an [abstract class or abstract sealed arm](interfaces
 mints one handle behind its internal subclass, released by the `Dispose` the subclass inherits (an
 arm) or implements (an ordinary abstract class), including each element of a returned list.
 `LeakTests/LiveHandleTests.cs`'s `AbstractBacking_BaseArmAndClassTypedReturns_ReturnToBaseline` pins
-a sealed-base return, an arm return, a class return and a list of class elements.
+a sealed-base return, an arm return, a class return and a list of class elements. An abstract class
+below another abstract class or the abstract arm mints the same single handle behind its own
+internal subclass; `AbstractBacking_ClassesBelowAbstractBases_ReturnToBaseline` pins both. An
+abstract `Flow` member collected through that subclass and then drained by `DisposeAsync` is pinned
+by `AbstractBacking_AbstractFlowMember_CollectedThroughWrapper_ReturnsToBaseline`.
 
 A class-typed [enum member property](enums.md) getter counts here too: every read mints a fresh
 owned wrapper the caller must dispose, the same as any other class-typed property getter.

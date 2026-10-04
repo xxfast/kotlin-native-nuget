@@ -962,13 +962,18 @@ class Tier1NestedTypesTest {
         inner class Mark(val m: Int)
         data object None : Outcome<Nothing>()
       }
+
+      class Oracle {
+        fun name(): String = "Delphi"
+      }
       """.trimIndent(),
       fileName = "Outcome.kt",
     )
 
-    // Not `compiledClean`: a generic sealed base's own `outcome_get_type` export reads
-    // `asStableRef<Outcome>()` with no type argument, which does not compile whatever it nests.
-    // That is the sealed route's, not this cell's; what is pinned here is the named refusal.
+    // The generic sealed base itself is a named skip now (`Tier1GenericSealedSkipTest`), so nothing
+    // reads `asStableRef<Outcome>()` any more and the module compiles; its children stay named.
+    // `Oracle` is there so the module still generates a file to look into.
+    assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
     listOf("Note", "Mark").forEach { name ->
       val warning: String = assertNotNull(
         result.kspWarnings.singleOrNull {
