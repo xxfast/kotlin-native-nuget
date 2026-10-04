@@ -229,8 +229,8 @@ class Tier1EnumSelfBoundInteractionTest {
 
   /**
    * An abstract enum-bound class and its concrete subclass: the abstract member takes a `T`, so its
-   * export rides the trampoline. The two do not combine further: the ADR-064 backing wrapper is
-   * for non-generic abstract classes only (see the known-limit cell below).
+   * export rides the trampoline. Returned at a closed type, it constructs the backing
+   * wrapper on the non-generic holder (see the generic-return cell below).
    */
   @Test
   fun `an abstract enum-bound class with a backing wrapper compiles`() {
@@ -272,35 +272,88 @@ class Tier1EnumSelfBoundInteractionTest {
   }
 
   /**
-   * Known limit, independent of ADR-198 and pinned so a fix shows up here: the abstract backing
-   * wrapper is for non-generic abstract classes only (`hasAbstractBacking`), so a function
-   * RETURNING a generic abstract class at a closed type (`Shelf<String>`, or `Trophy<Medal>`)
-   * reconstructs it with `new Shelf<string>(handle, out _)`, CS0144.
+   * A generic abstract class returned at a closed type (`Shelf<String>`, or the ADR-198 trampoline
+   * bound `Trophy<Medal>`) constructs the backing wrapper on the non-generic holder,
+   * `new Shelf.Backing<string>(handle, out _)`: C# cannot construct the abstract class (CS0144) and
+   * cannot nest the wrapper in the generic class either (CS7042). An abstract class below the
+   * generic base (`Nook`) gets the ordinary nested wrapper, overriding what the base leaves open.
    */
   @Test
-  fun `a generic abstract class at a return position still constructs the abstract type`() {
+  fun `a generic abstract class at a return position constructs the holder's wrapper`() {
     val result: Tier1Result = Tier1Harness.run(
       """
       package tier1.abstractreturn
 
+      enum class Medal { BRONZE, GOLD }
+
       abstract class Shelf<T>(val item: T) {
         abstract fun label(): String
+        abstract fun top(): T
+        abstract fun fits(other: T): Boolean
+        abstract val spare: T
       }
 
       class Plank(item: String) : Shelf<String>(item) {
         override fun label(): String = item
+        override fun top(): String = item
+        override fun fits(other: String): Boolean = other == item
+        override val spare: String = "offcut"
+      }
+
+      abstract class Nook : Shelf<String>("pine") {
+        abstract fun depth(): Int
+      }
+
+      class Cubby : Nook() {
+        override fun label(): String = "cubby"
+        override fun top(): String = "cap"
+        override fun fits(other: String): Boolean = other == "cap"
+        override val spare: String = "shim"
+        override fun depth(): Int = 2
+      }
+
+      abstract class Trophy<T : Enum<T>>(val prize: T) {
+        abstract fun engrave(other: T): String
+      }
+
+      class Cup(prize: Medal) : Trophy<Medal>(prize) {
+        override fun engrave(other: Medal): String = prize.name + ">" + other.name
       }
 
       fun stock(): Shelf<String> = Plank("oak")
+
+      fun nook(): Nook = Cubby()
+
+      fun award(): Trophy<Medal> = Cup(Medal.GOLD)
       """.trimIndent(),
       processorOptions = options,
     )
 
-    assertTrue(result.compiledClean, "generated Kotlin: ${result.compileErrors}")
-    val build: Tier1CSharpBuild =
-      Tier1CSharpCompile.compile(result, "public static class Probe { }")
-    assertFalse(build.succeeded, "the known limit compiled; flip this cell")
-    assertContains(build.log, "CS0144")
+    assertCleanKotlin(result)
+    assertContains(result.generatedCSharp, "Abstractreturn.Shelf.Backing<string>(nativeResult")
+    assertContains(
+      result.generatedCSharp,
+      "Abstractreturn.Trophy.Backing<global::TestLibrary.Abstractreturn.Medal>(nativeResult",
+    )
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using TestLibrary.Abstractreturn;
+
+      public static class Probe
+      {
+          public static string Run()
+          {
+              using Shelf<string> shelf = Fixture.Stock();
+              using Nook nook = Fixture.Nook();
+              using Trophy<Medal> trophy = Fixture.Award();
+              return shelf.Label() + shelf.Top() + nook.Depth() + nook.Top() +
+                  nook.Fits("cap") + nook.Spare + shelf.Fits("oak") + shelf.Spare +
+                  trophy.Engrave(Medal.Bronze);
+          }
+      }
+      """.trimIndent(),
+    )
   }
 
   /**

@@ -94,7 +94,7 @@ internal class CirRenderer {
     if (root) renderHandleHelpers()
 
     for (declaration in namespace.declarations) {
-      renderDeclaration(declaration)
+      renderDeclaration(declaration, held = namespace.declarations.heldBacking(declaration))
     }
 
     // ADR-133: an extension class cannot be nested (CS1109), so a NESTED enum's extensions are
@@ -144,7 +144,11 @@ private fun nestedEnumsOf(declaration: CirDeclaration): List<CirEnum> =
  * `renderNamespace` (CS1109); every other kind renders identically wherever it lives and is
  * re-indented by [renderNestedDeclarations].
  */
-internal fun StringBuilder.renderDeclaration(declaration: CirDeclaration, nested: Boolean = false) {
+internal fun StringBuilder.renderDeclaration(
+  declaration: CirDeclaration,
+  nested: Boolean = false,
+  held: CirBacking? = null,
+) {
   when (declaration) {
     is CirMarshalHelper -> renderMarshalHelper(declaration)
     is CirListHelper -> renderListHelper(declaration)
@@ -170,7 +174,7 @@ internal fun StringBuilder.renderDeclaration(declaration: CirDeclaration, nested
     is CirClass -> renderClass(declaration)
     is CirEnum -> renderEnum(declaration, nested = nested)
     is CirSealedClass -> renderSealedClass(declaration)
-    is CirObject -> renderObject(declaration)
+    is CirObject -> renderObject(declaration, held)
     is CirValueClass -> renderValueClass(declaration)
   }
 }
@@ -182,7 +186,8 @@ internal fun StringBuilder.renderDeclaration(declaration: CirDeclaration, nested
 internal fun StringBuilder.renderNestedDeclarations(declarations: List<CirDeclaration>) {
   declarations.forEach { declaration ->
     appendLine()
-    append(buildString { renderDeclaration(declaration, nested = true) }.indentNestedBody())
+    val held: CirBacking? = declarations.heldBacking(declaration)
+    append(buildString { renderDeclaration(declaration, nested = true, held) }.indentNestedBody())
   }
 }
 
@@ -217,4 +222,17 @@ private fun String.checkSpellableInCSharp(): String {
   }
 
   return this
+}
+
+/**
+ * The backing wrapper an ADR-196 holder carries for the generic abstract class of its name, read
+ * off the class beside it as it renders, so the wrapper overrides exactly what the class declares
+ * after every post-pass. Null for anything else.
+ */
+private fun List<CirDeclaration>.heldBacking(declaration: CirDeclaration): CirBacking? {
+  val holder: CirObject = declaration as? CirObject ?: return null
+  if (!holder.isNestedTypeHolder) return null
+  return filterIsInstance<CirClass>()
+    .firstOrNull { cls -> cls.name == holder.name && cls.typeParameters.isNotEmpty() }
+    ?.backing()
 }

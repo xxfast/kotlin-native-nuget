@@ -27,6 +27,7 @@ using Rankings = TestLibrary.Rankings;
 using TestLibrary.Kennel;
 using Lineage = TestLibrary.Lineage;
 using Torpor = TestLibrary.Torpor;
+using Cubby = TestLibrary.Cubby;
 
 using Membergeneric = TestLibrary.Membergeneric;
 using Litterbox = TestLibrary.Litterbox;
@@ -217,6 +218,38 @@ public class LiveHandleTests
             {
                 Assert.Equal(7, slumber.Depth());
                 Assert.Equal(2, slumber.Sighs());
+            }
+        });
+    }
+
+    [Fact]
+    public void GenericAbstractBacking_ClosedReturnRoutes_ReturnToBaseline()
+    {
+        // A generic abstract class returned at a closed type constructs the wrapper on the
+        // non-generic holder; each route (both type arguments, a concrete generic subclass, two
+        // parameters, the abstract class below, passed back in) must release it.
+        AssertNoLeak(() =>
+        {
+            using (Cubby.Trove<string> stock = Cubby.CubbySample.Stock())
+            {
+                Assert.Equal("tuna flake", stock.Pick());
+            }
+            using (Cubby.Trove<int> rations = Cubby.CubbySample.Rations())
+            {
+                Assert.Equal(6, rations.Pick());
+            }
+            using (Cubby.Trove<string> coffer = Cubby.CubbySample.Coffer())
+            {
+                Assert.Equal("ribbon", coffer.Pick());
+            }
+            using (Cubby.Reckoner<string, int> reckoner = Cubby.CubbySample.Reckoner())
+            {
+                Assert.Equal(6, reckoner.Count("dinner"));
+            }
+            using var hutch = new Cubby.Hutch();
+            using (Cubby.Alcove alcove = hutch.Alcove())
+            {
+                Assert.Equal("Oreo: catnip mouse at 2", Cubby.CubbySample.Peek(alcove));
             }
         });
     }

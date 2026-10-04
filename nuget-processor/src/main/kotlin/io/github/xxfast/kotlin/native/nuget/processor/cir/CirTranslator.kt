@@ -447,7 +447,8 @@ internal fun translate(
     if (translated.typeParameters.isEmpty()) {
       return listOf(translated.copy(nestedDeclarations = nested))
     }
-    if (nested.isEmpty()) return listOf(translated)
+    // A generic abstract class's backing wrapper is generic too, so it sits on the holder as well.
+    if (nested.isEmpty() && translated.backingName == null) return listOf(translated)
     val holder = CirObject(
       name = translated.name,
       libraryName = context.libraryName,
@@ -1254,8 +1255,9 @@ private fun factoryEntries(namespaces: List<CirNamespace>): List<CirFactoryEntry
     // closed type an erased path asks for, and the entry would never match.
     is CirClass ->
       // An abstract class with a backing wrapper registers under its own name and constructs the
-      // wrapper; without one it is still not materialisable.
-      if (isAbstract && backingName != null) {
+      // wrapper; without one it is still not materialisable. A generic one is an open type, like
+      // any generic wrapper below.
+      if (isAbstract && backingName != null && typeParameters.isEmpty()) {
         listOf(CirFactoryEntry("$path.$name", constructTypeName = "$path.$name.$backingName"))
       } else if (hasInternalHandleConstructor && !isAbstract && typeParameters.isEmpty()) {
         listOf(CirFactoryEntry("$path.$name")) +

@@ -816,8 +816,36 @@ bool concrete = hibernator is OreoHibernator;  // false
 
 An abstract class that extends another abstract class, or an abstract sealed arm, comes back the
 same way at any depth. A `Napper : Hibernator` returned as `Napper` answers `Name` and `Weigh()`,
-which `Hibernator` leaves open, as well as its own members. The one exception is a class below a
-*generic* abstract base: it gets no such subclass, so returning it fails the build (CS0144).
+which `Hibernator` leaves open, as well as its own members.
+
+A *generic* abstract class returned at a closed type comes back the same way, and so does an
+abstract class below one. Only a top-level function return binds a closed generic class today (see
+[Generics](generics.md#returning-an-instantiated-generic-class)); a property, parameter, list
+element or nullable of that type is a named skip:
+
+```kotlin
+abstract class Trove<T>(val first: T) {
+  abstract fun pick(): T
+  abstract val keeper: String
+}
+
+abstract class Alcove : Trove<String>("catnip") { abstract fun depth(): Int }
+
+class OreoTrove(first: String) : Trove<String>(first) { /* pick() = "$first flake" */ }
+
+fun stock(): Trove<String> = OreoTrove("tuna")
+class Hutch { fun alcove(): Alcove = OreoAlcove() }
+```
+
+```C#
+using Trove<string> trove = CubbySample.Stock();
+trove.Pick();                       // "tuna flake"
+bool concrete = trove is OreoTrove; // false
+
+using var hutch = new Hutch();
+using Alcove alcove = hutch.Alcove();
+((Trove<string>)alcove).Pick();    // "catnip mouse"
+```
 
 ## Sealed classes and interfaces
 
@@ -1418,9 +1446,6 @@ generic sealed owner still cannot host a nested declaration.
   arm. So is a member named like its own type (`OnTap.OnTap`, `Cat.cat`) on a class, a sealed base
   or an arm; rename one of them. A Kotlin `object` or interface member named like its own type is
   not checked, so it surfaces as a C# error in your build instead.
-- A generic abstract class has no internal subclass, nor has a class below one, so returning one
-  (`Crate<Int>`, or a class extending `Crate<T>`) fails the build (CS0144); make the base
-  non-generic.
 
 <seealso>
     <category ref="related">

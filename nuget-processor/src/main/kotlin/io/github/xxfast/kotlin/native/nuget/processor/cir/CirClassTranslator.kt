@@ -109,7 +109,10 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardCsharpTypeP
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardTypeParametersInScope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.capturedTypeParameterOwners
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberGenericRefusal
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInheritedSignatureKey
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSignatureKey
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isDeclaredBy
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardScopeOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardArmMemberProjectedByBase
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSealedBaseAsyncMethods
@@ -125,6 +128,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardArmSealedPa
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverride
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverrideOn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardExtensible
+import io.github.xxfast.kotlin.native.nuget.processor.forward.admits
 import io.github.xxfast.kotlin.native.nuget.processor.forward.abstractBackingName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.hasAbstractBacking
 import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesBaseClassMember
@@ -1712,11 +1716,21 @@ private fun KSClassDeclaration.backingInheritedOverrides(
   if (ancestors.isEmpty()) return emptyList()
   val planned: List<ForwardCallableCatalogEntry.Planned> =
     callableCatalog.entries.filterIsInstance<ForwardCallableCatalogEntry.Planned>()
+  // Below a generic base, `getAllFunctions()` hands back a member that mentions `T` substituted
+  // onto this class (`pick(): String`), a different node from the one the base planned, so it is
+  // matched to the base's plan by the base's wildcarded signature.
   fun methodPlan(owner: KSClassDeclaration, method: KSFunctionDeclaration): ForwardCallablePlan? {
     val qualified: String = owner.qualifiedName?.asString() ?: return null
-    return planned.firstOrNull { entry ->
-      entry.node === method && entry.plan.invocation.symbol.substringBeforeLast('.') == qualified
-    }?.plan
+    val key: List<String> = method.forwardSignatureKey()
+    val owned: List<ForwardCallableCatalogEntry.Planned> =
+      planned.filter { entry -> entry.plan.invocation.symbol.substringBeforeLast('.') == qualified }
+    val entry: ForwardCallableCatalogEntry.Planned? = owned.firstOrNull { it.node === method }
+      ?: owned.firstOrNull { candidate ->
+        val inherited: List<String?>? =
+          (candidate.node as? KSFunctionDeclaration)?.forwardInheritedSignatureKey()
+        inherited?.admits(key) == true
+      }
+    return entry?.plan
   }
   fun propertyPlan(owner: KSClassDeclaration, name: String): ForwardPropertyPlan? =
     owner.qualifiedName?.asString()
@@ -1725,7 +1739,7 @@ private fun KSClassDeclaration.backingInheritedOverrides(
   val methods: MutableMap<KSClassDeclaration, MutableList<CirMethod>> = linkedMapOf()
   cls.getAllFunctions()
     .filter { method -> method.getVisibility() == Visibility.PUBLIC }
-    .filter { method -> method.isAbstract && method.parentDeclaration != cls }
+    .filter { method -> method.isAbstract && !method.isDeclaredBy(cls) }
     .filter { method -> !method.isCompilerOwnedMember(cls) }
     .filter { method -> methodPlan(cls, method) == null }
     .forEach { method ->
@@ -1739,22 +1753,24 @@ private fun KSClassDeclaration.backingInheritedOverrides(
         plan, owner.backingExportPrefix(context),
         isOverride = plan.publicSignature.isOverride,
         isVirtual = plan.publicSignature.isVirtual,
-      ).asAbstract()
+      ).asAbstract().closedOver(cls.closedArgumentsOf(owner, classifier))
       methods.getOrPut(owner) { mutableListOf() }.addAll(listOf(declared).backingOverrides())
     }
 
   val properties: MutableMap<KSClassDeclaration, MutableList<CirProperty>> = linkedMapOf()
   cls.getAllProperties()
     .filter { property -> property.getVisibility() == Visibility.PUBLIC }
-    .filter { property -> property.isAbstract() && property.parentDeclaration != cls }
+    .filter { property -> property.isAbstract() && !property.isDeclaredBy(cls) }
     .filter { property -> propertyPlan(cls, property.simpleName.asString()) == null }
     .forEach { property ->
       val name: String = property.simpleName.asString()
       val owner: KSClassDeclaration =
         ancestors.firstOrNull { base -> propertyPlan(base, name) != null } ?: return@forEach
       val plan: ForwardPropertyPlan = propertyPlan(owner, name) ?: return@forEach
-      properties.getOrPut(owner) { mutableListOf() }
-        .add(ForwardCirPropertyProjection.classProperty(plan, isOverride = true))
+      properties.getOrPut(owner) { mutableListOf() }.add(
+        ForwardCirPropertyProjection.classProperty(plan, isOverride = true)
+          .closedOver(cls.closedArgumentsOf(owner, classifier)),
+      )
     }
 
   return ancestors
@@ -1768,6 +1784,63 @@ private fun KSClassDeclaration.backingInheritedOverrides(
         methods = methods[base].orEmpty(),
       )
     }
+}
+
+/**
+ * The C# spelling of each type argument this class closes a generic [base] over, keyed by the
+ * base's type parameter (`T` to `string` for `Alcove : Trove<String>`). Empty for a non-generic
+ * base. A base member's export carries `T` boxed whatever the argument, so an override restated
+ * at the closed type still reads it through `NugetMarshal.FromHandle<string>`.
+ */
+private fun KSClassDeclaration.closedArgumentsOf(
+  base: KSClassDeclaration,
+  classifier: ForwardBridgeTypeClassifier,
+): Map<String, String> {
+  if (base.typeParameters.isEmpty()) return emptyMap()
+  val supertype: KSType = checkNotNull(
+    getAllSuperTypes().firstOrNull { type ->
+      type.declaration.qualifiedName?.asString() == base.qualifiedName?.asString()
+    },
+  ) { "${qualifiedName?.asString()} does not derive from ${base.qualifiedName?.asString()}" }
+  return base.typeParameters.zip(supertype.arguments).associate { (parameter, argument) ->
+    val type: KSType = checkNotNull(argument.type?.resolve()) {
+      "${qualifiedName?.asString()} closes ${base.qualifiedName?.asString()} over a star " +
+          "projection, which has no C# spelling"
+    }
+    parameter.name.asString() to classifier.classify(type).forwardPublicCsharpType()
+  }
+}
+
+/** A type parameter's name as a C# type, never a member access (`.T`) or a longer identifier. */
+private fun typeParameterName(name: String): Regex = Regex("""(?<![\w.])${Regex.escape(name)}\b""")
+
+private fun String.closedOver(arguments: Map<String, String>): String =
+  arguments.entries.fold(this) { text, (name, spelling) ->
+    typeParameterName(name).replace(text) { spelling }
+  }
+
+/** A generic base's abstract member restated at the closed type arguments of a class below it. */
+private fun CirMethod.closedOver(arguments: Map<String, String>): CirMethod {
+  if (arguments.isEmpty()) return this
+  return copy(
+    returnType = returnType.closedOver(arguments),
+    parameters = parameters.map { parameter ->
+      parameter.copy(
+        type = parameter.type.closedOver(arguments),
+        nativeType = parameter.nativeType.closedOver(arguments),
+      )
+    },
+    body = body.closedOver(arguments),
+  )
+}
+
+private fun CirProperty.closedOver(arguments: Map<String, String>): CirProperty {
+  if (arguments.isEmpty()) return this
+  return copy(
+    type = type.closedOver(arguments),
+    getter = getter.closedOver(arguments),
+    setter = setter?.closedOver(arguments),
+  )
 }
 
 /**

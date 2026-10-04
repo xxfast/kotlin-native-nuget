@@ -263,8 +263,8 @@ unimplemented. To give the wrapper something to call, `isForwardPlannableMemberO
 inherited interface member the class does not implement. A member the plan refuses is left out of
 C# instead of declared `abstract`, because the wrapper could not override it (CS0534). This
 amendment first gave a wrapper only to an abstract class with no abstract or sealed class above it;
-the amendment below lifts that, so every non-generic abstract class qualifies at any depth. A
-generic abstract class never does, and neither does a class below one.
+the amendment below lifts that, so every non-generic abstract class qualifies at any depth, and
+the 2026-10-05 amendment extends it to generic abstract classes.
 
 **`Result` members.** An abstract class's or abstract arm's `Result`-returning member keeps its
 [ADR-195](195-result-try-overload.md) `TryX` twin: the owner declares an `abstract` twin and the
@@ -305,10 +305,9 @@ instead of `new Puppy(...)` (CS0144). Below an abstract base the wrapper also ov
 the chain above leaves open (`name` and `weigh` below `Hibernator`), over the export of the base
 that declared it. Its name is `Backing`, or the first free underscore-suffixed spelling when a base
 above it already carries a `Backing`: a nested `Backing` there would hide the base's (CS0108).
-Two known limits stay. A class below a **generic** abstract base keeps the old shape, with no
-wrapper. A **generic** abstract class returned at a closed type (`Crate<Int>`) is still CS0144,
-tracked by a ROADMAP line another PR of this stack added (discovered alongside ADR-198), so none is
-added here.
+Two limits stayed here, both closed by the 2026-10-05 amendment below: a class below a
+**generic** abstract base had no wrapper, and a **generic** abstract class returned at a closed type
+(`Crate<Int>`) was CS0144.
 
 **Abstract `Flow` member.** The Kotlin export builder now exports an abstract `Flow` member, so the
 owner declares `Flow` members over its own export (`Napper.Breaths()` calls
@@ -378,3 +377,37 @@ comes from compiler probes on the pre-fix code, not from a failing cell. Fixture
 `AbstractBacking_AbstractFlowMember_CollectedThroughWrapper_ReturnsToBaseline` pin the release.
 Verified on the assembled stack: `:nuget-processor:test` 1755 passed, 0 failed; native pipeline
 IntegrationTests 3119, LeakTests 180, 7 AOT shapes.
+
+### Amendment (2026-10-05): a generic abstract class gets a generic backing wrapper on its holder
+
+A function returning a generic abstract class at a closed type (`fun stock(): Trove<String>`)
+generated `new Trove<string>(handle, out _)`, which is CS0144. The 2026-10-04 amendments left it,
+and a class below a generic abstract base, as known limits. Both now bind.
+
+**The wrapper sits on the non-generic holder.** C# cannot nest a wrapper in the generic class
+(CS7042: no extern in a type nested in a generic class), so `internal sealed class Backing<T> :
+Trove<T>` is declared on the static, non-generic `Trove` holder that [ADR-196](196-generic-nested-types.md)
+introduced for nested declarations. The holder is now emitted for every generic abstract class, not
+only one that hosts a nested type. The wrapper's externs hoist onto the holder the way a generic
+class hoists its own, and it imports its own property externs. A return constructs
+`new Trove.Backing<string>(handle, out _)`, so `Trove<string>`, `Trove<int>` and a concrete generic
+subclass returned as the base all answer through Kotlin's virtual dispatch. The `Factories` map
+skips a generic abstract class, as it does every generic wrapper: it is an open type, so no entry
+could match.
+
+**An abstract class below a generic abstract base** (`abstract class Alcove : Trove<String>`) gets
+the ordinary nested wrapper. Its wrapper restates each member that mentions `T` at the closed type
+(`string Pick()` over `T Pick()`). KSP hands those members back already substituted onto the
+subclass, so `CirClassTranslator` matches them to the base's plan by a wildcarded signature rather
+than by identity.
+
+**Still a named skip, unchanged.** A closed generic class reference binds only at a top-level
+function return. A property, a parameter, a list element, a nullable return and a class-member
+return typed `Trove<String>` are each a named skip whose reason is the generic type, not the abstract
+class.
+
+**Verified.** The Tier 1 cell in `Tier1EnumSelfBoundInteractionTest` that pinned the limit now
+compiles the output. Fixture `test-library/.../cubby/CubbySample.kt` (`Trove`, `Alcove`,
+`Reckoner`), `IntegrationTests/GenericAbstractBackingTests.cs` (7 tests) and `LeakTests` row
+`GenericAbstractBacking_ClosedReturnRoutes_ReturnToBaseline`. `:nuget-processor:test` 1770 passed,
+0 failed; native pipeline IntegrationTests 3146, LeakTests 186, 7 AOT shapes.

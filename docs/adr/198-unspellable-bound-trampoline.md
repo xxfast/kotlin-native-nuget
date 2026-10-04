@@ -186,4 +186,5 @@ Fixtures: `test-library/.../rankings/Medals.kt` (`Rosette`, `requirePrize`, `Jud
 Found and not fixed: a function returning a generic abstract class at a closed type
 (`fun stock(): Shelf<String>`) generates `new Shelf<string>(handle, out _)` (CS0144). A backing
 wrapper cannot nest in the generic class (CS7042), so it needs the non-generic holder. Pinned by a
-known-limit cell in `Tier1EnumSelfBoundInteractionTest`; tracked in ROADMAP Phase 4.
+known-limit cell in `Tier1EnumSelfBoundInteractionTest`. Fixed 2026-10-05; see the
+[ADR-009](009-sealed-class-mapping.md) amendment of that date.

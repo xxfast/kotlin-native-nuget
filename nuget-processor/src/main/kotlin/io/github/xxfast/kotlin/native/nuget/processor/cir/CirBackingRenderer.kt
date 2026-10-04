@@ -18,7 +18,16 @@ internal data class CirBacking(
   val dispose: CirBackingDispose? = null,
   /** Overrides of abstract members declared on abstract bases above the owner. */
   val inherited: List<CirBackingInherited> = emptyList(),
-)
+  /**
+   * A generic owner's type parameters. Its wrapper is generic too (`Backing<T> : Trove<T>`) and is
+   * held by the ADR-196 non-generic holder `Trove`, since no extern may sit inside a generic type
+   * (CS7042): the owner's privates are out of its reach, so it imports every member it overrides
+   * itself, and its externs are hoisted onto the holder.
+   */
+  val typeParameters: List<CirTypeParameter> = emptyList(),
+) {
+  val isHeld: Boolean get() = typeParameters.isNotEmpty()
+}
 
 /**
  * The abstract members an abstract class inherits from one abstract base above it and leaves
@@ -50,7 +59,19 @@ internal data class CirBackingDispose(
  */
 internal fun backingClassBlock(backing: CirBacking): String = buildString {
   val name: String = backing.name
-  appendLine("        internal sealed class $name : ${backing.ownerName}")
+  val arguments: String = if (backing.isHeld) {
+    backing.typeParameters.joinToString(", ", prefix = "<", postfix = ">") { it.name }
+  } else {
+    ""
+  }
+  val constraints: String = backing.typeParameters
+    .filter { parameter -> parameter.bounds.isNotEmpty() }
+    .joinToString("") { parameter ->
+      " where ${parameter.name} : ${parameter.bounds.joinToString(", ")}"
+    }
+  appendLine(
+    "        internal sealed class $name$arguments : ${backing.ownerName}$arguments$constraints",
+  )
   appendLine("        {")
   appendLine(
     "            internal $name(IntPtr handle, out NugetHandleTag tag) : base(handle, out tag)",
@@ -66,7 +87,14 @@ internal fun backingClassBlock(backing: CirBacking): String = buildString {
   appendLine("            }")
   appendLine()
   val members: String = buildString {
-    backing.properties.forEach { property -> renderProperty(property) }
+    backing.properties.forEach { property ->
+      // A nested wrapper reads the owner's private property externs; a held one cannot.
+      if (backing.isHeld) {
+        propertyNativeImports(backing.libraryName, backing.nativePrefix, property)
+          .forEach { nativeImport -> renderDllImport(nativeImport) }
+      }
+      renderProperty(property)
+    }
     backing.methods.forEach { method ->
       renderDllImport(
         methodNativeImport(backing.libraryName, backing.nativePrefix, method)
@@ -124,13 +152,18 @@ internal fun CirClass.backing(): CirBacking? {
     // the wrapper overrides exactly the abstract members (and twins) the class still declares.
     properties = properties.backingOverrides(),
     methods = methods.backingOverrides(),
-    // The wrapper is nested in the class, so the class's private externs are visible to it.
-    inheritedExternNames = ordinaryNativeImports().map { it.name }.toSet(),
+    // A wrapper nested in the class sees the class's private externs; a held one does not.
+    inheritedExternNames = if (typeParameters.isEmpty()) {
+      ordinaryNativeImports().map { it.name }.toSet()
+    } else {
+      emptySet()
+    },
     dispose = CirBackingDispose(
       hasSuspendMethods = hasSuspendMethods,
       overridesDisposeAsync = backingOverridesDisposeAsync,
     ),
     inherited = backingInherited,
+    typeParameters = typeParameters,
   )
 }
 

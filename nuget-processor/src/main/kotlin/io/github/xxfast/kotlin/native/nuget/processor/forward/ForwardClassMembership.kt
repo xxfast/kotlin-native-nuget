@@ -565,7 +565,7 @@ internal fun KSDeclaration.overridesBaseClassMember(superClass: KSClassDeclarati
  * substituted member must never match the declared list. Properties stay name-keyed: Kotlin
  * properties cannot overload, so for them the name *is* the signature.
  */
-private fun KSDeclaration.isDeclaredBy(cls: KSClassDeclaration): Boolean {
+internal fun KSDeclaration.isDeclaredBy(cls: KSClassDeclaration): Boolean {
   if (parentDeclaration != cls) return false
   return when (this) {
     is KSPropertyDeclaration -> {
@@ -769,8 +769,8 @@ internal fun KSClassDeclaration.abstractBackingName(): String? {
 }
 
 /**
- * Whether this class gets an [abstractBackingName] wrapper: a non-generic `abstract class`, either
- * an abstract sealed arm or an ordinary abstract class.
+ * Whether this class gets an [abstractBackingName] wrapper: any `abstract class`, an abstract
+ * sealed arm or an ordinary abstract class, generic or not, at any depth.
  *
  * Its wrapper overrides the class's own abstract members and the interface members it leaves
  * unimplemented, both planned on the class itself as call-through exports, and the abstract
@@ -778,22 +778,13 @@ internal fun KSClassDeclaration.abstractBackingName(): String? {
  * that base planned (the base has a wrapper of its own, so it planned every one). A sealed base
  * projects its own members as concrete call-throughs, so it leaves nothing open.
  *
- * A generic abstract base is the one ancestor that plans nothing for its abstract members (it has
- * no wrapper; its C# declares them with no export behind them), so a class below one would have
- * nothing to call for them (CS0534) and keeps the shipped shape.
+ * A generic abstract class's wrapper is generic too (`Trove.Backing<T> : Trove<T>`) and sits on
+ * the ADR-196 non-generic holder, since nothing with an extern may nest in a generic type
+ * (CS7042). A class below a generic abstract base (`Alcove : Trove<String>`) overrides what the
+ * base leaves open over the base's exports, at its closed type arguments.
  */
-internal fun KSClassDeclaration.hasAbstractBacking(): Boolean {
-  if (Modifier.ABSTRACT !in modifiers || classKind != ClassKind.CLASS) return false
-  if (typeParameters.isNotEmpty()) return false
-  if (isSealedSubclass()) return true
-  return getAllSuperTypes()
-    .map { type -> type.declaration }
-    .filterIsInstance<KSClassDeclaration>()
-    .none { base ->
-      base.classKind == ClassKind.CLASS && base.typeParameters.isNotEmpty() &&
-          (Modifier.ABSTRACT in base.modifiers || Modifier.SEALED in base.modifiers)
-    }
-}
+internal fun KSClassDeclaration.hasAbstractBacking(): Boolean =
+  Modifier.ABSTRACT in modifiers && classKind == ClassKind.CLASS
 
 /**
  * The generic sealed hierarchies of this round, bases and arms by qualified name: the ones
