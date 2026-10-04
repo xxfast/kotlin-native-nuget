@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -67,6 +68,51 @@ class Tier1NullableLambdaPayloadTest {
           member in warning && "a callback parameter can carry" in warning
         },
         "expected a named callback-payload skip for `$member`; got: ${result.kspWarnings}",
+      )
+    }
+  }
+
+  /**
+   * A member both callback gates refuse (its lambda shape, and its outer return or extra
+   * parameter) used to be named twice: once by the planner's generic CALLBACK_PROTOCOL wording and
+   * once by the class walk's specific one, and the C# remark kept the generic one. The walk owns
+   * the name, so exactly one warning survives and it says which type failed.
+   */
+  @Test
+  fun `a member both callback gates refuse is named once, with the specific reason`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.nullablelambdaonce
+
+      class Quiz {
+        fun ask(cb: (Int) -> String?): String? = cb(1)
+
+        fun askPlain(cb: (Int) -> String?): String = cb(1) ?: ""
+
+        fun mixed(x: Int, cb: (Int?) -> Unit) = cb(x)
+      }
+      """.trimIndent(),
+    )
+
+    assertTrue(result.compiledClean, "expected compilable Kotlin; got: ${result.compileErrors}")
+    listOf("ask", "askPlain", "mixed").forEach { member ->
+      val named: List<String> = result.kspWarnings.filter { warning -> "Quiz.$member:" in warning }
+      assertEquals(1, named.size, "expected `$member` named exactly once; got: $named")
+      assertTrue(
+        "a lambda carrying the nullable type" in named.single(),
+        "expected the specific nullable-lambda reason for `$member`; got: $named",
+      )
+    }
+
+    val cs: String = result.generatedCSharp
+    listOf("ask", "mixed").forEach { member ->
+      assertTrue(
+        "Not generated from Kotlin `$member`: a callback parameter can carry" in cs,
+        "expected the C# remark to carry the specific reason for `$member`; cs=$cs",
+      )
+      assertFalse(
+        "Not generated from Kotlin `$member`: a lambda parameter binds" in cs,
+        "the generic planner wording must not reach the remark for `$member`; cs=$cs",
       )
     }
   }
