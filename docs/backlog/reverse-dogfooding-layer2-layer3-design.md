@@ -8,7 +8,7 @@
 ## Layer 2: reverse end to end, standalone `dogfood/` build
 
 Mirrors `smoke-test/`: its own `settings.gradle.kts`, consumes the plugin by coordinate from
-`build/local-repo` (reuses the smoke-test job's publish step, so it also proves the by-coordinate path
+`build/local-repo` (reuses the `consumer` job's publish step, so it also proves the by-coordinate path
 with a real `bind {}`), binds two packages (`NuGet.Versioning`, `Humanizer.Core`), has one Kotlin
 function per package that calls the bound API, runs `packNuget`, and a `DogfoodTests` xunit project
 calls those Kotlin functions from a .NET host. That is one smoke round trip per package: C# host to
@@ -56,7 +56,7 @@ kermit first, then ktor's `LogLevel` and `Url`; datetime, serialization-json and
 
 ## Alternatives rejected
 
-- Put real packages in `test-library`'s `nuget { dependencies { } }`: every PR's required `test` job
+- Put real packages in `test-library`'s `nuget { dependencies { } }`: every PR's required `bridge` job
   would then depend on more of nuget.org and on third-party surfaces the change did not touch;
   `MimeMapping` is enough there.
 - Run either layer inside `verify.sh`: feed flake in the local gate, and minutes added to a script

@@ -6,7 +6,7 @@
 # `*.census.json` goldens.
 #
 # This is NOT part of scripts/verify.sh on purpose: it reaches nuget.org, and a feed outage must not
-# turn the local gate or a PR red. See the `dogfood` job in .github/workflows/ci.yml.
+# turn the local gate or a PR red. See the `reverse-census` job in .github/workflows/ci.yml.
 #
 #   scripts/verify-dogfood.sh            check the goldens
 #   scripts/verify-dogfood.sh --update    rewrite the goldens and SUMMARY.md, then review the diff
