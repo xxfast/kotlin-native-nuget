@@ -20,6 +20,7 @@ import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.TypeName
 import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
@@ -92,6 +93,7 @@ internal fun FileSpec.Builder.addSuspendFunctionExports(
 
   val body: String = buildSuspendFunctionBody(
     call, paramPrelude, isUnit, isNullable, boxed, names,
+    installsMappedType = qualifiedReturn in STATE_FLOW_TYPES,
   )
 
   val builder: FunSpec.Builder = FunSpec.builder("export_${cname}_async")
@@ -165,6 +167,7 @@ internal fun FileSpec.Builder.addSuspendClassMethodExports(
 
     val body: String = buildSuspendMethodBody(
       qualifiedName, call, paramPrelude, isUnit, isNullable, boxed, names,
+      installsMappedType = qualifiedReturn in STATE_FLOW_TYPES,
     )
 
     val builder: FunSpec.Builder = FunSpec.builder("export_${prefix}_${cname}_async")
@@ -209,7 +212,9 @@ private fun buildSuspendFunctionBody(
   isNullable: Boolean,
   boxed: String,
   names: ForwardLegacyNames,
+  installsMappedType: Boolean,
 ): String = buildString {
+  appendMappedTypeInstall(installsMappedType)
   // ADR-128: the launch shape -- `reinterpret`, `launch(start = CoroutineStart.ATOMIC)` and the
   // three callback arms -- belongs to the runtime's `launchForCSharp`. This route still owns its
   // ad-hoc scope (the top-level route has no C#-owned scope to launch on), the call, and the mint:
@@ -240,7 +245,9 @@ private fun buildSuspendMethodBody(
   isNullable: Boolean,
   boxed: String,
   names: ForwardLegacyNames,
+  installsMappedType: Boolean,
 ): String = buildString {
+  appendMappedTypeInstall(installsMappedType)
   appendLine("val ${names.obj} = handle.asStableRef<$qualifiedName>().get()")
   // ADR-128: same helper as the top-level route, launched on the C#-owned scope this route has
   // always used (the one `nuget_scope_cancel` cancels). ADR-114/ADR-122's prelude locals stay
@@ -260,6 +267,16 @@ private fun buildSuspendMethodBody(
     appendLine("  resultRef")
   }
   append("}")
+}
+
+/**
+ * ADR-202: an awaited `StateFlow` is read through the runtime-owned `nuget_stateflow_collect`, so
+ * the export installs the module classifier before it launches, on the caller's thread. Every
+ * other result (a plain `Flow` included, which collects through its own generated `_collect`)
+ * never reaches a runtime-owned route.
+ */
+private fun StringBuilder.appendMappedTypeInstall(installsMappedType: Boolean) {
+  if (installsMappedType) appendLine(INSTALL_MODULE_MAPPED_TYPE)
 }
 
 /**

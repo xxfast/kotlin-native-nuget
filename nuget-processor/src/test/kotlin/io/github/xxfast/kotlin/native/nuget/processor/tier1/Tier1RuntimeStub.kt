@@ -59,6 +59,10 @@ internal object Tier1RuntimeStub {
     @NugetRuntimeApi
     fun nugetStdlibMappedType(t: Throwable): String? = TODO()
 
+    // ADR-202: the install the generated mint sites of the runtime-owned routes call.
+    @NugetRuntimeApi
+    fun nugetInstallMappedType(classifier: (Throwable) -> String?) {}
+
     // ADR-161: the forward callback error channel. Generated code names both of these, so a
     // signature drift here would compile a generated call that the real runtime rejects.
     class NugetManagedException(
