@@ -448,7 +448,7 @@ Named explicitly, because nobody re-checks these after this document.
 - Deferred, unchanged: nested-collection components (`ROADMAP.md:137`), `Map<String?, Int>` returns
   (`:135`), the `Wrap<T>` per-element box leak (`:144`), and the two ADR-097 coverage gaps (`:138`),
   one of which this ADR narrows further, since `isWrappableComponent()` now admits every
-  `PrimitiveKind`.
+  `PrimitiveKind`. Both gaps are closed by the 2026-10-03 amendment below.
 - Deferred deliberately: **lone surrogates**. A `Char` holding an unpaired surrogate does not
   round-trip (**Verified** by spike: `'\uD83D'` alone came back as U+D806 U+DC2D through
   `tag`'s returned string). That is a Kotlin/Native string-encoding question on the return leg, not
@@ -487,3 +487,30 @@ described the generator's own wire rather than anything an author could write; i
 exposing a non-nullable wrapper or splitting the member into a has-value/value pair of methods.
 
 See [Primitives and strings: Char](../topics/primitives-and-strings.md#char).
+
+## Amendment (2026-10-03): the two ADR-097 coverage gaps are closed, with a corrected premise {id="amendment-2026-10-03-adr-097-coverage-gaps"}
+
+The "Deferred, unchanged" bullet above carried [ADR-097](097-enum-collection-components.md)'s two
+coverage gaps forward. Both are closed by tests only, with no production change.
+
+**Gap (a), the `!isBridgeableComponent()` skip arm, was already covered.** A collection parameter
+whose component fails `isBridgeableComponent()` skips with a named diagnostic, and existing asserted
+cells drive it: `Tier1NamedSkipDiagnosticsTest` (`Map<String?, Int>` parameter),
+`Tier1ByteArrayComponentTest` (`Set<ByteArray>` parameter) and `Tier1SkipMeansAbsentTest`
+(`List<Instant>` parameter). The `?: UNSUPPORTED` tail on that line is unreachable and stays.
+
+**Gap (b) had its premise reversed.** The six narrow kinds are not less reachable at a collection
+component position: this ADR re-admitted all of them there. The real hole was `UShort`, which no
+fixture reached. It is now covered by `Tier1NarrowPrimitiveComponentTest` (four tests, exercising
+both `simpleKotlinName` call sites) and by a run-time round trip,
+`Readings.pulses(beats: List<UShort>)` with the xunit
+`Readings_Pulses_ListOfUShortParameter_RoundTripsEveryElement`, which sends `{0, 32768,
+ushort.MaxValue}` so a signed 16-bit wire would show as negative values.
+
+No LeakTests row: primitive components are boxed and disposed inside the existing fill loop, so
+there is no new handle route.
+
+Evidence (**verified**): full `:nuget-processor:test` 1549 passed, 0 failed; full
+`scripts/verify.sh` green on the branch (Contract 3, Integration 2997, Leak 158, MultiPackage 9,
+SharedException 2, all six NativeAOT shapes); Kover shows the `simpleKotlinName` arms for all six
+narrow kinds covered and both branches of the second call site covered.

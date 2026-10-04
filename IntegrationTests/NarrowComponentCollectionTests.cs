@@ -68,6 +68,19 @@ public class NarrowComponentCollectionTests
     }
 
     [Fact]
+    public void Readings_Pulses_ListOfUShortParameter_RoundTripsEveryElement()
+    {
+        using var readings = new Readings();
+
+        // Unsigned 16-bit at a List position, the one narrow kind no other cell reaches. 32768 is
+        // the first value above short.MaxValue, so a signed-short wire turns it into -32768, and
+        // ushort.MaxValue would come back as -1.
+        string pulses = readings.Pulses(new ushort[] { 0, 32768, ushort.MaxValue });
+
+        Assert.Equal("0,32768,65535", pulses);
+    }
+
+    [Fact]
     public void Readings_Weigh_SetOfULongParameter_RoundTripsEveryElement()
     {
         using var readings = new Readings();
