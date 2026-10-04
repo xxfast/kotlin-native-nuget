@@ -112,7 +112,7 @@ generic `Throwable` subclass, so a generic exception class cannot reach the walk
   by reference, the `ByteArray` precedent for the same two slots);
 - a `List<Throwable>` input and a `Throwable` extension receiver;
 - a bare `suspend fun f(): Throwable?` and a bare `Flow<Throwable>`/`StateFlow<Throwable>`, a
-  `suspend`/`Flow` parameter, a value class's own `Throwable?` result, a value class over
+  `suspend`/`Flow` parameter, a value class over
   `Throwable`, a lambda payload or result, a C#-implemented interface slot, an opt-in-marked
   exception, and an actual-typealias target.
 
@@ -123,11 +123,21 @@ A bare `Flow<Throwable>` crashed the processor, and a bare `suspend fun f(): Thr
 at the legacy shape classifier. This predates the item and was reachable once ADR-107 added the
 type.
 
+A nullable result on a value class's own method or getter (`String?`, `Int?` or `Throwable?`) crashed
+the processor (`ERROR_INTERNAL_GENERATOR_FAILURE`), because the value-class member ABI has no error
+slot and the nullable result arms need one. It is now a named `SKIPPED_UNSUPPORTED_RETURN` on both
+halves and the class's other members still bind. This is general, not specific to `Throwable`; a
+non-null `Throwable` result on a value class's member binds. Binding the nullable result is a
+ROADMAP Phase 4 item. Verified by `Tier1ValueClassNullableResultTest`.
+
 ### Diagnostics
 
-`THROWABLE` stays a drop with no legacy route. Its hint now says a C# exception reaches Kotlin as a
+`THROWABLE` stays a drop with no legacy route. Its hint says a C# exception reaches Kotlin as a
 `NugetManagedException`, so an input binds only when declared `Throwable`, `Exception` or
-`RuntimeException`, never as a receiver or inside a collection.
+`RuntimeException`, never as a receiver or inside a collection. The reason line names the declared
+type: "its parameter `x` is declared `IllegalStateException`, which cannot hold the
+`NugetManagedException` a C# exception arrives as", and for a receiver "its extension receiver is
+declared `Throwable`, and a Kotlin throwable binds as a value, never as a receiver".
 
 ## Consequences
 

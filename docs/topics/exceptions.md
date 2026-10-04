@@ -285,7 +285,7 @@ names it:
   `suspend fun f(): List<Throwable>` and `Flow<List<Throwable>>` do bind
 - a `suspend` or `Flow` parameter, a lambda payload, and a C#-implemented interface member typed
   `Throwable`
-- a value class over `Throwable`, and a value class's own `Throwable?` result
+- a value class over `Throwable`
 
 ## Result return values
 
