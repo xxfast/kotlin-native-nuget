@@ -1,4 +1,4 @@
-# ADR-100: Forward diagnostic delivery: a tracked KSP output file re-emitted by a Gradle task, because the KSP console channel is invisible and skipped on cached builds
+# ADR-100: Forward diagnostic delivery: a tracked KSP output file re-emitted by a Gradle task, because the KSP console channel is unreliable and skipped on cached builds
 
 ## Status
 
@@ -39,9 +39,13 @@ and why it was skipped. Not "the diagnostic is computed". Not "a unit test can o
 | `[ksp]` | **0** |
 | `nuget:SKIPPED` | **0** |
 
-KSP's own startup line being absent at `--info` is what settles it. Nothing about our processor's
-classification, our severity choice, or our message format can explain a missing line we do not
-emit. **The entire KSP stdout channel is invisible in this build.**
+KSP's own startup line being absent at `--info` showed that nothing about our processor's
+classification, severity or message format explains the missing lines. The conclusion first drawn
+from it, that the KSP stdout channel never reaches the console, was wrong: S1 and S2 replayed a
+log level that a quieter run had stored in the configuration cache (see the
+[2026-10-05 amendment](#amendment-2026-10-05-the-ksp-console-channel-works-it-printed-every-warning-twice)).
+What S1 to S3 do establish is that this channel is unreliable: it is silent on cached builds and
+its verbosity is not the current run's.
 
 **S3**, `./gradlew :test-library:packNuget --console=plain`, twice:
 
@@ -52,11 +56,12 @@ emit. **The entire KSP stdout channel is invisible in this build.**
 
 So there are **two independent defects**, and the contract needs both fixed:
 
-1. **The KSP transport does not reach the console even when the task runs** (S1, S2).
+1. **The KSP transport was silent in S1 and S2 even though the task ran** (a cached log level, see
+   the 2026-10-05 amendment), and its verbosity is not the current run's.
 2. **A normal `packNuget` does not run the task at all** (S3), so any transport that only speaks
    during the task action is silent on every incremental build, which is most builds.
 
-### Why the transport is invisible (Verified by source reading, KSP 2.3.10 + Gradle 9.1.0)
+### How the KSP transport works (Verified by source reading, KSP 2.3.10 + Gradle 9.1.0)
 
 Read from the artifacts this build actually resolves, in `~/.gradle/caches` and
 `~/.gradle/wrapper/dists`:
@@ -76,14 +81,14 @@ Read from the artifacts this build actually resolves, in `~/.gradle/caches` and
   (**Verified**, `javap` on `gradle-logging-api-9.1.0.jar` from this repo's own wrapper dist), so at
   the default console level `loglevel = 2` and `2 <= 3` holds.
 
-On paper the warning prints. It does not. The mechanism gap is `System.out.println` from a Worker
-API thread: [gradle/gradle#21395](https://github.com/gradle/gradle/issues/21395) (open, unresolved)
-documents that output produced from async/worker threads inside a task is not attributed to the
-task's logging context, and Gradle's own answer in that thread is "use the task logger API, not
-`println`". **Inferred** (the issue reports mis-attribution; S2 shows total absence in this build, so
-the exact Gradle-side disposal path is unconfirmed). The precise mechanism does not change the
-decision: what S1/S2 establish by execution is that no message we hand to `KSPLogger` arrives, and
-that is enough.
+On paper the warning prints, and it does whenever the configuration-cache entry in use was stored at
+a normal log level. S1 and S2 did not print because the cached `loglevel` was a quieter run's. This
+section first blamed `System.out.println` from a Worker API thread
+([gradle/gradle#21395](https://github.com/gradle/gradle/issues/21395)); that theory was not needed
+and is withdrawn (see the 2026-10-05 amendment: worker-thread stdout reaches the console under the
+executing task's header). The decision below stands without it, because a console channel whose
+level is baked into a cache entry, and which is silent on `FROM-CACHE`/`UP-TO-DATE` builds, cannot
+carry the contract.
 
 ### Why the reverse direction works, and what that tells us
 
@@ -128,10 +133,10 @@ in the existing `[nuget:...]` house style.
 
 Adjust severity, message shape, or ask consumers for `--info`.
 
-**This is not a weaker option, it is a dead one.** S2 shows KSP's *own* `loaded provider(s)` line is
-absent at `--info`. There is no level at which our message appears, because the channel itself does
-not arrive. No formatting or severity change can fix a stream nobody reads. It also does nothing
-about defect 2.
+**This is not a weaker option, it is a dead one.** KSP's console level is fixed by whichever run
+stored the configuration-cache entry, so no severity or format choice makes a message appear on a
+given run (S2 showed KSP's *own* `loaded provider(s)` line absent at `--info` for that reason; see
+the 2026-10-05 amendment). It also does nothing about defect 2.
 
 ### 3. Escalate `SKIPPED_*` to `ERROR_*`
 
@@ -165,8 +170,9 @@ severity, no change to any `ForwardDiagnosticKind`, no ABI surface change.
 
 ### 1. The processor writes `NugetDiagnostics.json`
 
-`ForwardDiagnosticSink.emit(...)` keeps calling `KSPLogger` exactly as it does today (harmless, and
-it is what the Tier 1 harness observes), and additionally accumulates every emitted diagnostic. At
+`ForwardDiagnosticSink.emit(...)` keeps calling `KSPLogger` (it is what the Tier 1 harness
+observes; as of the 2026-10-05 amendment a non-fatal diagnostic goes to `logging`, not `warn`), and
+additionally accumulates every emitted diagnostic. At
 the end of `process()`, alongside `cNameExports.writeTo(...)`, the processor writes the accumulated
 list through:
 
@@ -266,8 +272,9 @@ run *this* task. The verification script in the next section is what promotes it
   glance during implementation to confirm nothing globs the directory wholesale.
 - Every `SKIPPED_*` stays a `WARNING`. `scripts/verify.sh` stays green with `logSpans` skipped and
   now also *noisy*, which is the point.
-- The `KSPLogger` calls stay. They are free, they are what the Tier 1 tests observe, and they will
-  start working the day the Gradle/KSP worker-output gap closes upstream.
+- The `KSPLogger` calls stay, because the Tier 1 tests observe them. (This bullet first said they
+  would start working once an upstream worker-output gap closed; they already worked, which is why
+  the 2026-10-05 amendment demotes them to `logging`.)
 
 ### How this is tested, and why the obvious test is not enough
 
@@ -372,3 +379,60 @@ on its own console line — the kotlinc/KSP shape a build window linkifies — w
 prefixes that same location, so a leading location inside `format()` would print it twice there. Both
 fields are optional on read, so a `NugetDiagnostics.json` written by a pre-ADR-162 processor still
 parses.
+
+## Amendment (2026-10-05): the KSP console channel works, it printed every warning twice
+
+**Rule.** `ForwardDiagnosticSink.emit` sends `WARNING` and `INFO` diagnostics to
+`KSPLogger.logging` (KSP prints those only at `--debug`), not to `warn`. `ERROR` stays on
+`logger.error`. The `nugetReportDiagnostics` re-emit is unchanged and is now the one console copy:
+every `SKIPPED_*`/`WARNING_*`/`INFO_*` diagnostic prints exactly once per `packNuget`, for any number
+of KSP targets, whether the KSP task ran or was `UP-TO-DATE`/`FROM-CACHE`.
+`scripts/verify-forward-diagnostics.sh` asserts exactly one copy of a known declaration,
+including a run that forces every cached KSP task to execute.
+
+**What was wrong.** "S1/S2" above reported that nothing handed to `KSPLogger` reaches the console.
+That was a configuration-cache artefact, not a property of KSP, Windows or macOS. KSP computes its
+log level at configuration time (`LogLevel.entries.first { project.logger.isEnabled(it) }`,
+`KspAATask.kt:359-362`) and stores it in the task configuration, so a configuration-cache hit
+replays the level of the run that *stored* the entry. The cache is not keyed on `--info` or `-q`.
+
+**Evidence, Windows 11, Gradle 9.1.0, KSP 2.3.10, `--no-daemon --console=plain`.**
+
+- Verified: with the KSP task executing, `packNuget` printed each forward diagnostic twice: 217
+  `w: [ksp] ... [nuget:*]` lines from KSP plus the same 217 from the re-emit (the two sets are
+  identical apart from the prefix). With the KSP task `UP-TO-DATE`, only the 217 re-emit lines.
+- Verified, macOS CI (main, `Bridge end to end (macos-latest)`): 204 `w: [ksp]` lines from
+  `kspKotlinMacosArm64`, the same 204 from `kspKotlinMingwX64` (cross-compiled there), and 204 from
+  the re-emit, so one declaration printed 3 times. The re-emit reads only the first target but
+  depends on every enabled target's KSP task, so the KSP channel multiplies per target (1 + N).
+- Verified: a configuration-cache hit reuses the stored level. A bare `kspKotlinMingwX64 --info` run
+  that hit an entry from a default-verbosity run executed the task and showed no `loaded provider`
+  line while the warnings were on the console, which is S2's table. An entry stored at `-q` made a
+  later default-verbosity run execute the task and print zero `[ksp]` lines, which is S1's table.
+  With `--no-configuration-cache` the `loaded provider` line appears.
+- Verified: worker-thread `System.out` reaches the console under the executing task's header on
+  Windows and macOS. The gradle/gradle#21395 attribution theory above is not needed to explain
+  anything measured.
+- Inferred: the original macOS S1/S2 runs hit a configuration-cache entry stored by a quieter run.
+  That machine's cache state cannot be recovered; this is the only mechanism found that reproduces
+  both tables.
+- Not the cause, verified or by source: platform, KSP version (2.3.10 before and after this ADR),
+  Gradle version, `--console=plain`. No `ksp.useKSP2` or compiler-execution-strategy toggle is set.
+
+**Why `logging` and a kept re-emit.** Dropping the re-emit instead would leave one copy per KSP
+target and none when KSP is up to date, which is the common case. Skipping the re-emit "when KSP
+ran" would need another task's execution state at execution time and still leave the per-target
+multiplication. `logger.info` would duplicate at `--info`. `ERROR_*` keeps `logger.error` because
+an error aborts the round before `NugetDiagnostics.json` is written, so the console is its only
+channel (ADR-162).
+
+**Consumer-visible consequences.**
+
+- `ksp { allWarningsAsErrors = true }` used to fail the build on any skipped declaration, because
+  KSP escalates `warn`. It no longer does: a skip is not a `warn` call. Nothing in `docs/` promised
+  the old behaviour. The intended knob remains the deferred opt-in `failOnSkippedDeclarations`.
+- A compile, link or KSP task run on its own (no `packNuget`) now prints nothing for skipped
+  declarations, because `nugetReportDiagnostics` is a dependency of `packNuget` only. To see them,
+  run `./gradlew nugetReportDiagnostics`, read `NugetDiagnostics.json` under
+  `build/generated/ksp/<target>/<target>Main/resources/`, or run with `--debug` on a fresh
+  configuration-cache entry (`--info` does not show them).
