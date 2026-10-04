@@ -371,7 +371,7 @@ eligible sealed interface with no `I` prefix (`Beam.Beam` is still CS0542) while
 interface-owner false positive.
 
 Three gaps this reconciliation left open, tracked on ROADMAP Phase 4 (discovered alongside this
-ADR): whether every collision-skipped nested type is consistently re-gated at a member typed with
+ADR; the first is closed by "Amendment (2026-10-03)" below): whether every collision-skipped nested type is consistently re-gated at a member typed with
 it, a nested `ICage.Cage` shadowing the namespace-level ADR-040 wrapper `Cage` inside `ICage`'s own
 body, and two cosmetic gaps in `nestedDeclarationKind()`/the CS0542 hint text.
 
@@ -437,3 +437,37 @@ row: nothing new is minted, this is a spelling fix on an existing route.
 
 Tests: six Tier 1 cells in `Tier1NestedTypesTest.kt` (CS0542, sealed-base member, sealed-arm
 member, value-class candidate, companion member, and the interface-owner not-an-error case).
+
+## Amendment (2026-10-03): members typed with a collision-refused nested type are re-gated at every owner shape
+
+The 2026-09-19 amendment left one gap open: whether a member typed with a nested type refused for
+an owner-scope collision is routed to a named skip at every owner shape, not just under an
+`interface` owner. It is. No production change was needed; the fatal
+`ERROR_CSHARP_SIGNATURE_COLLISION` policy is unchanged and is still reported separately from the
+skips.
+
+**Verified.** Three Tier 1 cells in `Tier1NestedTypesTest.kt` cover a plain `class` owner, an
+`object` owner, and a sealed base with an arm that each own a colliding nested class. Each asserts:
+the fatal collision is reported for every refused type; the refused type is not declared; every
+dependent member has a named `SKIPPED_` diagnostic that names the refused type, with no C#
+signature and no native export; and the unaffected `Reader.control` survives. The dependent
+members are the external `Reader`'s return, parameter and property positions, plus the owner's own
+positions (the owner's property, and the sealed base's and arm's own method, parameter and property
+positions).
+
+**Verified, by compiling fresh output.** Tier 1 does not compile C#, so each cell also builds the
+run's freshly generated `Interop.cs` plus a metadata-only C# resource
+(`nuget-processor/src/test/resources/csharp/NestedCollisionConsumer.cs`) in an isolated temp
+project (net10.0, C# 14, nullable, warnings as errors). The project takes a source
+`ProjectReference` to `Kotlin.Native.Interop.csproj`, never a stale DLL or NuGet cache. Generator
+output is written before the fatal KSP diagnostic, which is what makes this compile possible.
+Collision fixtures must not be added to the packaged test library, because packaging fails on
+them by design.
+
+**Results.** `Tier1NestedTypesTest`: 36 passed, including the three compilation cells. Full JVM
+`:nuget-processor:test`: 1538 passed, 0 failed. This item's own full `scripts/verify.sh` was not
+run (no production change, no packaged fixture); the assembled stack is verified as a whole.
+There is no new runtime route and no leak row: refused types and callables mint no handles.
+
+**Inferred, not covered.** Other candidate kinds (enum, interface, value class) rely on the same
+shared gate but were not given their own matrix cells.

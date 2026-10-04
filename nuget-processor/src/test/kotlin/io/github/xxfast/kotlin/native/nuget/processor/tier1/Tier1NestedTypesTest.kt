@@ -1,6 +1,9 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
+import java.io.File
+import java.nio.file.Files
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertFalse
@@ -1428,5 +1431,174 @@ class Tier1NestedTypesTest {
       "expected the top-level wrapper's base list to stay bare; csharp=" +
           "${csharp.lines().filter { it.contains("class Marker") }}",
     )
+  }
+
+  private fun compileCollisionConsumer(result: Tier1Result, shape: String) {
+    // Build the actual output of this KSP run; a DLL or restored cache cannot prove this cell.
+    val root: File = generateSequence(File(System.getProperty("user.dir")).canonicalFile) {
+      it.parentFile
+    }.first { it.resolve("Kotlin.Native.Interop/Kotlin.Native.Interop.csproj").isFile }
+    val directory: File = Files.createTempDirectory("nuget-collision-consumer-").toFile()
+    try {
+      directory.resolve("Interop.cs").writeText(result.generatedCSharp)
+      val consumer: String = requireNotNull(
+        javaClass.getResource("/csharp/NestedCollisionConsumer.cs"),
+      ) { "missing compile-only collision consumer resource" }.readText()
+      directory.resolve("Consumer.cs").writeText(consumer)
+      val contract: String = root.resolve("Kotlin.Native.Interop/Kotlin.Native.Interop.csproj")
+        .path.replace('\\', '/')
+      directory.resolve("Consumer.csproj").writeText(
+        """
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <LangVersion>14</LangVersion>
+            <Nullable>enable</Nullable>
+            <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+            <DefineConstants>$shape</DefineConstants>
+          </PropertyGroup>
+          <ItemGroup><ProjectReference Include="$contract" /></ItemGroup>
+        </Project>
+        """.trimIndent(),
+      )
+      directory.resolve("NuGet.Config").writeText(
+        "<configuration><packageSources><clear /></packageSources></configuration>",
+      )
+      val output: File = directory.resolve("build.log")
+      val process: Process = ProcessBuilder("dotnet", "build", "Consumer.csproj", "--nologo")
+        .directory(directory).redirectErrorStream(true).redirectOutput(output).start()
+      val finished: Boolean = process.waitFor(120, TimeUnit.SECONDS)
+      if (!finished) process.destroyForcibly().waitFor()
+      assertTrue(finished, "dotnet collision consumer compilation timed out: ${output.readText()}")
+      assertTrue(process.exitValue() == 0,
+        "fresh generated C# must compile (requires dotnet SDK 10): ${output.readText()}")
+    } finally {
+      directory.deleteRecursively()
+    }
+  }
+
+  private fun assertCollisionMatrix(
+    result: Tier1Result,
+    collisions: List<String>,
+    members: List<String>,
+    shape: String,
+  ) {
+    assertTrue(result.kspErrors.any {
+      it.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name)
+    }, "expected fatal KSP failure, independent of generated-output compile: ${result.kspErrors}")
+    collisions.forEach { collision ->
+      assertTrue((result.kspErrors + result.kspWarnings).any {
+        it.contains(ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION.name) &&
+            it.contains(collision)
+      }, "expected fatal collision for $collision: ${result.kspErrors} ${result.kspWarnings}")
+      val name: String = collision.substringAfterLast('.')
+      assertFalse(result.generatedCSharp.withoutDocComments().contains("class $name"),
+        "refused $collision must not be declared: ${result.generatedCSharp}")
+    }
+    members.forEach { member ->
+      assertTrue((result.kspErrors + result.kspWarnings).any {
+        it.contains(member) && it.contains("SKIPPED_") &&
+            collisions.any { collision -> it.contains(collision) }
+      }, "expected named dependent-member skip for $member: ${result.kspWarnings}")
+      val csharpName: String = member.substringAfterLast('.').replaceFirstChar { it.uppercase() }
+      assertFalse(Regex("(?m)^\\s*public\\s+(?:static\\s+)?[^\\r\\n]*\\b$csharpName\\b")
+        .containsMatchIn(result.generatedCSharp.withoutDocComments()),
+        "refused member $member must have no C# signature: ${result.generatedCSharp}")
+      val method: String = member.substringAfterLast('.')
+      val owner: String = member.substringBeforeLast('.').substringAfterLast('.')
+      assertFalse(result.generated.contains("${owner.lowercase()}_${method.lowercase()}("),
+        "refused callable $member must have no export: ${result.generated}")
+      assertFalse(result.generated.contains("${owner.lowercase()}_get_${method.lowercase()}("),
+        "refused property $member must have no export: ${result.generated}")
+    }
+    assertContains(result.generated, "reader_control")
+    assertContains(result.generatedCSharp.withoutDocComments(), "public int Control(")
+    compileCollisionConsumer(result, shape)
+  }
+
+  @Test
+  fun `collision class owner regates every dependent position and CSharp compiles`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.nestedcollision
+      class Owner {
+        class Config(val level: Int)
+        val config: Config = Config(1)
+        val label: String = "Oreo"
+      }
+      class Reader {
+        fun readConfig(): Owner.Config = Owner.Config(2)
+        fun takeConfig(value: Owner.Config): Int = value.level
+        val configProperty: Owner.Config get() = Owner.Config(3)
+        fun control(): Int = 7
+      }
+      """.trimIndent(),
+      fileName = "Collision.kt",
+    )
+    assertCollisionMatrix(result, listOf("tier1.nestedcollision.Owner.Config"),
+      listOf("Owner.config", "Reader.readConfig", "Reader.takeConfig", "Reader.configProperty"),
+      "CLASS_OWNER")
+  }
+
+  @Test
+  fun `collision object owner regates every dependent position and CSharp compiles`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.objectcollision
+      object Owner {
+        class Config(val level: Int)
+        val config: Config = Config(1)
+        val label: String = "Mylo"
+      }
+      class Reader {
+        fun readConfig(): Owner.Config = Owner.Config(2)
+        fun takeConfig(value: Owner.Config): Int = value.level
+        val configProperty: Owner.Config get() = Owner.Config(3)
+        fun control(): Int = 7
+      }
+      """.trimIndent(),
+      fileName = "Collision.kt",
+    )
+    assertCollisionMatrix(result, listOf("tier1.objectcollision.Owner.Config"),
+      listOf("Owner.config", "Reader.readConfig", "Reader.takeConfig", "Reader.configProperty"),
+      "OBJECT_OWNER")
+  }
+
+  @Test
+  fun `collision sealed base and arm regate every dependent position and CSharp compiles`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.sealedcollision
+      sealed class Purr {
+        class Detail(val text: String)
+        data class On(val level: Int) : Purr() {
+          class Trace(val at: Int)
+          fun trace(): Trace = Trace(level)
+          fun takeTrace(value: Trace): Int = value.at
+          val traceProperty: Trace get() = Trace(level)
+        }
+        data object Off : Purr()
+        fun detail(): Detail = Detail("Oreo")
+        fun takeDetail(value: Detail): String = value.text
+        val detailProperty: Detail get() = Detail("Mylo")
+      }
+      class Reader {
+        fun readDetail(): Purr.Detail = Purr.Detail("Oreo")
+        fun takeDetail(value: Purr.Detail): String = value.text
+        val detailProperty: Purr.Detail get() = Purr.Detail("Mylo")
+        fun readTrace(): Purr.On.Trace = Purr.On.Trace(1)
+        fun takeTrace(value: Purr.On.Trace): Int = value.at
+        val traceProperty: Purr.On.Trace get() = Purr.On.Trace(2)
+        fun control(): Int = 7
+      }
+      """.trimIndent(),
+      fileName = "Collision.kt",
+    )
+    assertCollisionMatrix(result,
+      listOf("tier1.sealedcollision.Purr.Detail", "tier1.sealedcollision.Purr.On.Trace"),
+      listOf("Purr.detail", "Purr.takeDetail", "Purr.detailProperty",
+        "On.trace", "On.takeTrace", "On.traceProperty", "Reader.readDetail", "Reader.takeDetail",
+        "Reader.detailProperty", "Reader.readTrace", "Reader.takeTrace", "Reader.traceProperty"),
+      "SEALED_OWNER")
   }
 }
