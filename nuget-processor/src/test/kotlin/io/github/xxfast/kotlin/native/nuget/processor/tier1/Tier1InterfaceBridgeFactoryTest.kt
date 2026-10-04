@@ -313,13 +313,14 @@ class Tier1InterfaceBridgeFactoryTest {
 
   @Test
   fun `an interface with an undeclared enum member gets no factory on either half`() {
-    // ADR-133 still defers a type nested under a generic owner (it would be `Box<T>.Mood` in C#),
-    // so `Box.Mood` has no C# declaration and the whole interface plans to null.
+    // ADR-196 still defers a type nested under a generic INTERFACE owner (a generic class owner
+    // now declares it on a holder), so `Box.Mood` has no C# declaration and the whole interface
+    // plans to null.
     val result = Tier1Harness.run(
       """
       package tier1.bridgefactorymood
 
-      class Box<T> {
+      interface Box<T> {
         enum class Mood { CALM, CROSS }
       }
 

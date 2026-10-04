@@ -95,6 +95,13 @@ internal sealed interface BridgeType {
      * the ordinary ADR-073 write path.
      */
     val viaDiscriminator: kotlin.Boolean = false,
+    /**
+     * ADR-196: the Kotlin type the handle is read back as, when it is not the bare
+     * [qualifiedName]. Set only for the outer of an `inner class` flattened off a generic owner,
+     * whose `asStableRef` needs the applied spelling (`pkg.Tin<Any?>`); [qualifiedName] stays the
+     * declaration's name for every lookup keyed on it.
+     */
+    val kotlinReadType: kotlin.String? = null,
   ) : BridgeType
 
   /**
@@ -774,7 +781,23 @@ internal data class ForwardInvocation(
 internal data class ForwardGenericOwner(
   val qualifiedName: String,
   val typeParameters: List<ForwardGenericOwnerParameter>,
+  /**
+   * ADR-196: for an `inner class` that captures a generic enclosing class's parameters, the
+   * enclosing chain applied to the captured parameters' erased arguments (`io.pkg.Tin<Any?>`).
+   * The class is then spelled as a member type of it (`io.pkg.Tin<Any?>.Latch`); [typeParameters]
+   * stay the class's OWN parameters, possibly none. Null for every class that captures nothing.
+   */
+  val capturedEnclosing: String? = null,
 ) {
+  /** The class's name before its own type arguments: qualified, or a member type of [capturedEnclosing]. */
+  val base: String
+    get() = capturedEnclosing?.let { "$it.${qualifiedName.substringAfterLast('.')}" }
+      ?: qualifiedName
+
+  /** [base] applied to [arguments], or bare when the class declares no parameter of its own. */
+  fun applied(arguments: String): String =
+    if (typeParameters.isEmpty()) base else "$base<$arguments>"
+
   /**
    * The owner applied to each parameter's erased argument (`io.pkg.Crate<Any?>`,
    * `io.pkg.Kennel<io.pkg.Pet>`), a multi-bound one star-projected (`io.pkg.Arena<*>`): no single
@@ -782,7 +805,7 @@ internal data class ForwardGenericOwner(
    * a star-projected parameter.
    */
   val spelling: String
-    get() = "$qualifiedName<${typeParameters.joinToString(", ") { it.erased ?: "*" }}>"
+    get() = applied(typeParameters.joinToString(", ") { it.erased ?: "*" })
 }
 
 /**

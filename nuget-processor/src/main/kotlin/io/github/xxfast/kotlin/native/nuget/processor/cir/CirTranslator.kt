@@ -435,14 +435,36 @@ internal fun translate(
     (declaration.parentDeclaration as? KSClassDeclaration)?.qualifiedName?.asString() ==
         owner.qualifiedName?.asString()
 
+  // ADR-196: a class and the nested declarations it owns, as the C# declarations they become. A
+  // non-generic class carries them in its own block. A generic `Tin<T>` cannot (CS7042: no extern
+  // anywhere inside a generic type), and Kotlin's own scope for them is the bare `Tin.`, so they go
+  // on a non-generic `public static class Tin` beside it, emitted only when there is a child.
+  fun withNestedDeclarations(
+    translated: CirClass,
+    nested: List<CirDeclaration>,
+  ): List<CirDeclaration> {
+    if (translated.typeParameters.isEmpty()) {
+      return listOf(translated.copy(nestedDeclarations = nested))
+    }
+    if (nested.isEmpty()) return listOf(translated)
+    val holder = CirObject(
+      name = translated.name,
+      libraryName = context.libraryName,
+      nativePrefix = translated.nativePrefix,
+      methods = emptyList(),
+      nestedDeclarations = nested,
+      isNestedTypeHolder = true,
+    )
+    return listOf(holder, translated)
+  }
+
   fun translateNestedOf(owner: KSClassDeclaration): List<CirDeclaration> = buildList {
     regularClasses.filter { isOwnedBy(owner, it) }.forEach { cls ->
-      add(
-        translateClass(
-          cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
-          classifier, interfaceDeclarationCatalog, expects, memberRegistry,
-        ).copy(nestedDeclarations = translateNestedOf(cls)),
+      val translated: CirClass = translateClass(
+        cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
+        classifier, interfaceDeclarationCatalog, expects, memberRegistry,
       )
+      addAll(withNestedDeclarations(translated, translateNestedOf(cls)))
     }
     enums.filter { isOwnedBy(owner, it) }.forEach { enum ->
       add(translateEnum(
@@ -494,13 +516,16 @@ internal fun translate(
   // keeps going, so the author gets the whole list in one build. The round still fails at the
   // fatal-diagnostic gate, so nothing half-translated ships.
   regularClasses.filter { !it.isNestedDeclaration() }.forEach { cls ->
-    val declaration: CirDeclaration = guarded(cls.forwardGuardName(), cls, logger) {
-      translateClass(
+    val declarations: List<CirDeclaration> = guarded(cls.forwardGuardName(), cls, logger) {
+      val translated: CirClass = translateClass(
         cls, context.libraryName, tracker, exportedTypes, logger, callableCatalog, context,
         classifier, interfaceDeclarationCatalog, expects, memberRegistry,
-      ).copy(nestedDeclarations = translateNestedOf(cls))
+      )
+      withNestedDeclarations(translated, translateNestedOf(cls))
     } ?: return@forEach
-    namespaces.addDeclaration(namespaceOf(cls.packageName.asString()), declaration)
+    declarations.forEach { declaration ->
+      namespaces.addDeclaration(namespaceOf(cls.packageName.asString()), declaration)
+    }
   }
 
   // ADR-134: a nested value class is declared by the owner walk above and nowhere else; a
@@ -573,17 +598,28 @@ internal fun translate(
   // collision, and by arity because C# declares `Box` and `Box<T>` side by side.
   val topLevelTypesByCsName:
     MutableMap<Pair<String, String>, MutableMap<String, KSClassDeclaration>> = linkedMapOf()
-  fun recordTopLevelType(declaration: KSClassDeclaration, csName: String) {
+  fun recordTopLevelType(
+    declaration: KSClassDeclaration,
+    csName: String,
+    arity: Int = declaration.typeParameters.size,
+  ) {
     if (declaration.isNestedDeclaration()) return
     val qualifiedName: String = declaration.qualifiedName?.asString() ?: return
     val namespace: String = namespaceOf(declaration.packageName.asString())
-    val arity: Int = declaration.typeParameters.size
     val key: Pair<String, String> = namespace to if (arity == 0) csName else "$csName`$arity"
     topLevelTypesByCsName.getOrPut(key) { sortedMapOf() }.putIfAbsent(qualifiedName, declaration)
   }
   (regularClasses + valueClasses + enums + objects + sealedClasses).forEach { decl ->
     recordTopLevelType(decl, decl.nestedCsName())
   }
+  // ADR-196: a generic class with a declared nested type also declares the non-generic holder
+  // `Tin`, which is a `Tin` of arity 0 for CS0101 purposes.
+  val declaredNested: List<KSClassDeclaration> =
+    regularClasses + valueClasses + enums + objects + interfaces
+  regularClasses
+    .filter { cls -> cls.typeParameters.isNotEmpty() }
+    .filter { cls -> declaredNested.any { nested -> isOwnedBy(cls, nested) } }
+    .forEach { cls -> recordTopLevelType(cls, cls.nestedCsName(), arity = 0) }
   sealedClasses
     .flatMap { it.getSealedSubclasses().toList() }
     .filter { !it.isEnumArm() }

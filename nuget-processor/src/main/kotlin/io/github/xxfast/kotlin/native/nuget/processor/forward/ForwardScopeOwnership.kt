@@ -60,7 +60,7 @@ internal fun KSClassDeclaration.forwardSuspendRouteMethods(
 ): List<KSFunctionDeclaration> {
   // ADR-147: the suspend route spells `asStableRef<Crate>()`, which does not compile for a generic
   // owner. Refused there on both halves, so a generic class projects no scope-using member either.
-  if (typeParameters.isNotEmpty()) return emptyList()
+  if (forwardTypeParametersInScope().isNotEmpty()) return emptyList()
   return getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { it.modifiers.contains(Modifier.SUSPEND) }
@@ -86,7 +86,7 @@ internal fun KSClassDeclaration.forwardClassFlowMethods(
   classifier: ForwardBridgeTypeClassifier,
   superClass: KSClassDeclaration?,
 ): List<KSFunctionDeclaration> {
-  if (typeParameters.isNotEmpty()) return emptyList()
+  if (forwardTypeParametersInScope().isNotEmpty()) return emptyList()
   return getAllFunctions()
     .filter { it.getVisibility() == Visibility.PUBLIC }
     .filter { !it.modifiers.contains(Modifier.SUSPEND) }
@@ -106,7 +106,7 @@ internal fun KSClassDeclaration.forwardClassFlowProperties(
   // ADR-174: the generic-owner guard its two siblings above always had. The C# property half
   // refuses a generic owner (`CirClassTranslator`'s flow-property branch), so without it `Crate<T>`
   // owned a scope for a StateFlow property it never projected (ADR-159's rule, broken).
-  .filter { typeParameters.isEmpty() }
+  .filter { forwardTypeParametersInScope().isEmpty() }
   .filter { it.getVisibility() == Visibility.PUBLIC }
   .filter { prop -> prop.type.resolve().expandAliases().isForwardFlowType() }
   .filter { prop -> !prop.isOptInRefused(classifier.exportMarkers) }
@@ -305,7 +305,7 @@ internal fun KSClassDeclaration.forwardInterfaceDeclaresScopeMember(
 internal fun KSClassDeclaration.forwardAsyncInterfaceForwards(
   classifier: ForwardBridgeTypeClassifier,
 ): List<KSClassDeclaration> {
-  if (typeParameters.isEmpty()) return emptyList()
+  if (forwardTypeParametersInScope().isEmpty()) return emptyList()
   return getAllSuperTypes()
     .mapNotNull { it.declaration as? KSClassDeclaration }
     .filter { iface -> ForwardAsyncInterfaces.carries(iface) }

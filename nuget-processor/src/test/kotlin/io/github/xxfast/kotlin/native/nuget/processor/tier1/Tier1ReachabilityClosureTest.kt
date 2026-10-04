@@ -549,20 +549,45 @@ class Tier1ReachabilityClosureTest {
     )
     assertTrue(result.generatedCSharp.contains("public class Parcel<T>"), result.generatedCSharp)
     assertTrue(result.generatedCSharp.contains("class ParcelNative"), result.generatedCSharp)
-    assertFalse(result.generatedCSharp.withoutDocComments().contains("Lid"), result.generatedCSharp)
-    assertFalse(result.generated.contains("desk_lid"), result.generated)
-    val skip: String = requireNotNull(result.kspWarnings.firstOrNull {
-      it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
-          it.contains("dep.parcel.Parcel.Lid")
-    }) { "expected a named Lid declaration refusal: ${result.kspWarnings}" }
-    assertTrue(skip.contains("generic"), skip)
-    assertTrue(result.kspWarnings.any { it.contains("Desk.lid") && it.contains("SKIPPED_") },
-      "expected the refused return to be named: ${result.kspWarnings}")
+    // ADR-196: the dependency owner's nested class is declared on the non-generic holder beside
+    // `Parcel<T>`, and the member that reached it binds.
+    assertTrue(
+      result.generatedCSharp.contains("public static class Parcel\n"),
+      result.generatedCSharp,
+    )
+    assertTrue(result.generatedCSharp.contains("public class Lid"), result.generatedCSharp)
+    assertTrue(
+      result.generatedCSharp.contains("public global::Interop.Parcel.Lid Lid()"),
+      result.generatedCSharp,
+    )
+    assertTrue(result.generated.contains("desk_lid"), result.generated)
+    assertTrue(result.generated.contains("parcel_lid_create"), result.generated)
+    assertFalse(
+      result.kspWarnings.any {
+        it.contains("SKIPPED_") && (it.contains("dep.parcel.Parcel.Lid") || it.contains("Desk.lid"))
+      },
+      "expected neither the nested class nor the member to skip: ${result.kspWarnings}",
+    )
     val admission: String = result.kspWarnings.first {
       it.contains(ForwardDiagnosticKind.INFO_EXPORTED_FROM_DEPENDENCY.name)
     }
     assertTrue(admission.contains("dep.parcel.Parcel"), admission)
-    assertFalse(admission.contains("dep.parcel.Parcel.Lid"), admission)
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using Interop;
+      public static class Consumer
+      {
+          public static int Run()
+          {
+              using var desk = new Desk();
+              using Parcel.Lid lid = desk.Lid();
+              using var parcel = new Parcel<string>("Oreo");
+              return lid.Number + parcel.Value.Length;
+          }
+      }
+      """.trimIndent(),
+    )
   }
 
 }

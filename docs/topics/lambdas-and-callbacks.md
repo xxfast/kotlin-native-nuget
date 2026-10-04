@@ -440,7 +440,7 @@ listener, or pass the new value through a member function.
 
 The pair also refuses, named the same way on both halves, when `Watcher` itself has no C#
 declaration at all: nested under an owner that never gets its own nested declaration (an `enum
-class`, a generic class, an `inner class`, or a `value class`; see [Classes and objects: Nested
+class`, a generic `interface`, or a generic sealed owner; see [Classes and objects: Nested
 types](classes-and-objects.md#nested-classes-and-objects)), or declared in a dependency module
 outside the plugin's export scope. Move the listener interface to the top level of its file, or
 into the exported scope, to bind the pair.
