@@ -1398,8 +1398,9 @@ generic sealed owner still cannot host a nested declaration.
   instead; see [Sealed classes and interfaces](#sealed-classes-and-interfaces).
 - A generic sealed base does not bind its own `suspend`, `Flow` or `StateFlow` members; they are
   named skips.
-- A generic method or a `suspend` lambda parameter on a sealed arm has no binding, the same as on
-  an ordinary class.
+- A `suspend` lambda parameter (`suspend (T) -> R`) on a sealed arm has no binding, the same as on
+  an ordinary class. A generic method on an arm or a sealed base binds as a C# generic method; see
+  [Generic methods on a class](generics.md#generic-methods).
 - A sealed base that nests a `class Backing` beside an arm member `backing()` fails the build
   (CS0108); rename one of them.
 

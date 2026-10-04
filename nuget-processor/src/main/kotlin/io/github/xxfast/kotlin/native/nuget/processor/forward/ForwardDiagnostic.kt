@@ -913,10 +913,13 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
           "interface a function returns, but not on an object, a companion object, a value " +
           "class, an enum, an interface nothing returns, or as an extension"
 
+      // ADR-197: a member's own type parameter binds too now, on the owners and at the positions
+      // the boxed wire reaches, so the sentence names those rather than "top-level only".
       ForwardPlanSkipReason.GENERIC.name ->
-        "a generic type binds at a top-level function return, and a generic function at a " +
-            "top-level function with a parameter of its own type parameter, but not at this " +
-            "position"
+        "a generic type binds at a top-level function return, and a function's own type " +
+            "parameter at a top-level function with a parameter of it and on a class, object, " +
+            "companion or sealed-class member as a bare `T` or `T?` parameter or return, but not " +
+            "at this position"
 
       else -> "no bridge route carries it at this position"
     }
@@ -1365,9 +1368,14 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
       "declare it as a `suspend` member of a class (or of an interface a function returns), or " +
           "as a top-level `suspend fun` taking the receiver, if it has one, as its first parameter"
 
+    // ADR-197: the member route is the closer remedy for most authors, and its limits are named,
+    // so a shape it refuses (an interface, an extension, a nested `T`) is not sent back to it.
     ForwardPlanSkipReason.GENERIC.name ->
-      "expose a non-generic wrapper (`fun f(value: Int)` beside `fun <T> f(value: T)`), or move " +
-          "the declaration to a top-level function with a parameter of its own type parameter"
+      "expose a non-generic wrapper (`fun f(value: Int)` beside `fun <T> f(value: T)`), or " +
+          "declare it as a class, object, companion or sealed-class member whose own type " +
+          "parameters appear only as a bare `T` or `T?` parameter or return (not on an " +
+          "interface, enum or value class, not as an extension, and not reified, shadowing or " +
+          "Enum-bounded)"
 
     else -> "expose an equivalent member at a position the bridge carries"
   }
@@ -1377,6 +1385,8 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // an ordinary class, which still has the legacy route this member kind needs") sent the author
   // to an owner that skips the same member again, so each detail borrows the position hint that
   // names a shape that does bind. TYPE_PARAMETER has no producer, so it never gets here.
+  // ADR-197: a generic method binds on an arm now, so GENERIC reaches here only for a shape the
+  // member route refuses on every owner, which the borrowed hint names.
   ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED -> when (detail) {
     ForwardPlanSkipReason.GENERIC.name,
     ForwardPlanSkipReason.SUSPEND_CALLBACK_PROTOCOL.name,

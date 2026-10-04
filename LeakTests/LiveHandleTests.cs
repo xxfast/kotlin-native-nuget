@@ -25,6 +25,8 @@ using Perchvar = TestLibrary.Perchvar;
 using TestLibrary.Kennel;
 using Lineage = TestLibrary.Lineage;
 using Torpor = TestLibrary.Torpor;
+
+using Membergeneric = TestLibrary.Membergeneric;
 using Litterbox = TestLibrary.Litterbox;
 using TestLibrary.Listenerprops;
 using TestLibrary.Lounge;
@@ -2273,6 +2275,71 @@ public class LiveHandleTests
             using var crate = new Crate<string?>(null);
             Assert.Equal("null:null", crate.Describe(null));
             Assert.Null(crate.Pick(null));
+        });
+    }
+
+    // Row 10b. ADR-197: a member function's own `T`, on the same boxed wire as Row 10, on every
+    // owner it routes on. A builtin `T` mints one `Wrap<T>` box per argument, which the C#
+    // `finally` disposes, and one retain per `T` return, which `FromHandle<T>` unwraps and
+    // disposes; a wrapper `T` mints nothing on the way in and one retain on the way out, released
+    // by the returned wrapper's own `using`.
+    // Ledger per iteration: groomer +1/-1, Echo(4) box +1/-1 and retain +1/-1, Echo(oreo)
+    // retain +1/-1, Salon.Echo(7) box and retain, fetch +1/-1 with Pick(7) box and retain,
+    // basket +1/-1 (its `string` box +1/-1) with Swap(3) box and retain. Net zero.
+    [Fact]
+    public void MemberGenericMethod_BoxedTypeParameter_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var groomer = new Membergeneric.Groomer();
+            using var oreo = new Membergeneric.Tabby("Oreo", 3);
+            Assert.Equal(4, groomer.Echo(4));
+            Assert.Equal("x", groomer.Echo("x"));
+            using (Membergeneric.Tabby echoed = groomer.Echo(oreo))
+            {
+                Assert.Equal("Oreo", echoed.Name);
+            }
+            Assert.Equal(7, Membergeneric.Salon.Echo(7));
+            using var fetch = new Membergeneric.Chore.Fetch("ball");
+            Assert.Equal(7, fetch.Pick(7));
+            using var basket = new Membergeneric.Basket<string>("yarn");
+            Assert.Equal(3, basket.Swap(3));
+        });
+    }
+
+    // Row 10c. ADR-197 fault injection: Mylo refuses to be brushed after the `T` box crossed, so
+    // the Kotlin export throws with the argument live and no result minted. The C# `finally`
+    // still disposes the box, and the error handle is released when the exception is built.
+    // Ledger per iteration: groomer +1/-1, Refuse(4) box +1/-1, error +1/-1. Net zero.
+    [Fact]
+    public void MemberGenericMethod_ThrowingMember_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var groomer = new Membergeneric.Groomer();
+            Assert.ThrowsAny<Exception>(() => groomer.Refuse(4));
+        });
+    }
+
+    // Row 10d. ADR-197 with ADR-015's checked read: a T outside a dropped builtin bound fails the
+    // cast at the Kotlin read of a member's own T, on a class, an object, a generic class and a
+    // sealed arm. Each `Wrap<T>` box was minted before the call and must still be disposed in the
+    // `finally`; a wrapper argument (Oreo, at `Comparable`) mints nothing and must not be
+    // released. Ledger per iteration: groomer, basket and fetch +1/-1 each, one box +1/-1 per
+    // builtin argument, the error handle +1/-1 per throw. Net zero.
+    [Fact]
+    public void MemberGenericMethod_BoundCastFails_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var groomer = new Membergeneric.Groomer();
+            Assert.Throws<KotlinInvalidCastException>(() => groomer.Portion(3u));
+            Assert.Throws<KotlinInvalidCastException>(() => Membergeneric.Salon.Weigh("tuna"));
+            using var basket = new Membergeneric.Basket<string>("yarn");
+            Assert.Throws<KotlinInvalidCastException>(() => basket.Measure(3u));
+            using var fetch = new Membergeneric.Chore.Fetch("ball");
+            using var oreo = new Membergeneric.Tabby("Oreo", 3);
+            Assert.Throws<KotlinInvalidCastException>(() => fetch.Best(oreo, oreo));
         });
     }
 

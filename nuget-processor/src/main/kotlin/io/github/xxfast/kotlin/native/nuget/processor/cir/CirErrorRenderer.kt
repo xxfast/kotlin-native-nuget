@@ -232,7 +232,13 @@ internal fun StringBuilder.renderSyncErrorCheckMethod(method: CirMethod, classNa
   val isString: Boolean = method.returnType == "string"
   val nativeReturnType: String = method.nativeReturnType
 
-  appendLine("        $visibility ${static}${override}${method.returnType} ${method.identifier}($paramStr)")
+  // ADR-197: a member's own type parameters, when it declares any.
+  val generic: String = method.typeParameterList()
+  val where: String = method.whereClauses()
+  appendLine(
+    "        $visibility ${static}${override}${method.returnType} " +
+        "${method.identifier}$generic($paramStr)$where"
+  )
   appendLine("        {")
 
   when {

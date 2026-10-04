@@ -62,8 +62,9 @@ class Tier1UnroutedPositionsTest {
     Cell(member, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION)
 
   /**
-   * The 26 individually-named silent cells (ADR-160 took three of the original 29 out: the object,
-   * top-level and extension per-call lambda parameters all bind off the plan now). The three
+   * The 24 individually-named silent cells (ADR-160 took three of the original 29 out: the object,
+   * top-level and extension per-call lambda parameters all bind off the plan now, and ADR-197 two
+   * more: the class and object structural own-`<T>` members). The three
    * `Dock` secondary constructors are the 30th to 32nd: they all render the one symbol
    * `Dock.<init>`, so they are counted rather than matched one by one ([constructorCells]).
    */
@@ -77,9 +78,6 @@ class Tier1UnroutedPositionsTest {
     // row 21a/21b: a generic *type* (`Box<Int>`) at either position on a class.
     returns("tier1.unrouted.Depot.genericReturnOnClass"),
     input("tier1.unrouted.Depot.genericParamOnClass"),
-    // row 17 / extra cell X2: structural own-`<T>` on an ordinary class. Only the top-level
-    // structural route exists (`GenericFunctionExports.kt`), so this is a combination skip.
-    structural("tier1.unrouted.Depot.structuralOnClass"),
     // extra cell X1: `SUSPEND_CALLBACK_PROTOCOL` — a `suspend` lambda parameter. Fully silent
     // today even on the one owner the ordinary lambda route does serve.
     input("tier1.unrouted.Depot.suspendCallbackParamOnClass"),
@@ -99,7 +97,6 @@ class Tier1UnroutedPositionsTest {
     returns("tier1.unrouted.DepotRegistry.callbackReturnOnObject"),
     returns("tier1.unrouted.DepotRegistry.genericReturnOnObject"),
     input("tier1.unrouted.DepotRegistry.genericParamOnObject"),
-    structural("tier1.unrouted.DepotRegistry.structuralOnObject"),
 
     // --- interface-default owner (`Manifest`) -------------------------------------------------
     // `flowParamOnInterface` is not a row of its own in the observed matrix, but it is measured:
@@ -343,7 +340,6 @@ class Tier1UnroutedPositionsTest {
       "CallbackReturnOnClass(",
       "GenericReturnOnClass(",
       "GenericParamOnClass(",
-      "StructuralOnClass(",
       "SuspendCallbackParamOnClass(",
       "FlowElementOnClass(",
       "CallbackElementOnClass(",
@@ -353,7 +349,6 @@ class Tier1UnroutedPositionsTest {
       "CallbackReturnOnObject(",
       "GenericReturnOnObject(",
       "GenericParamOnObject(",
-      "StructuralOnObject(",
       "FlowParamOnInterface(",
       "GenericReturnOnInterface(",
       "StructuralOnInterface(",
@@ -617,8 +612,8 @@ class Tier1UnroutedPositionsTest {
     input("tier1.residuals.Shelf.feedHidden"),
     structural("tier1.residuals.Rack.tally"),
     input("tier1.residuals.Rack.feedHidden"),
-    // (a) inherited from an unexported base class.
-    structural("tier1.residuals.Ledge.weigh"),
+    // (a) inherited from an unexported base class. Its `fun <T> weigh` binds since ADR-197 (a class
+    // member re-homed onto the exported subclass), asserted in the control test.
     input("tier1.residuals.Ledge.drainBase"),
     // (a) on a generic owner: an override of an unexported interface's `suspend` member.
     structural("tier1.residuals.Crate.pace"),
@@ -629,8 +624,8 @@ class Tier1UnroutedPositionsTest {
     returns("tier1.residuals.Tag.tagTicker"),
     structural("tier1.residuals.Tag.tagSettle"),
     input("tier1.residuals.Tag.tagOn"),
-    // (c) class companion members (already named before this cell existed; coverage only).
-    structural("tier1.residuals.Den.Companion.denPick"),
+    // (c) class companion members (already named before this cell existed; coverage only). Its
+    // `fun <T> denPick` binds since ADR-197, asserted in the control test.
     input("tier1.residuals.Den.Companion.denFeed"),
     returns("tier1.residuals.Den.Companion.denTicker"),
     // (d) interface companion members, a function, a `val` and a `const val`.
@@ -690,9 +685,17 @@ class Tier1UnroutedPositionsTest {
           "`$member` binds on Shelf and on Rack through the class legacy route",
         )
       }
+    // ADR-197: a class member's and a class companion member's own type parameter bind.
+    listOf("public int Weigh<T>(T item)", "public static int DenPick<T>(T item)").forEach {
+      member ->
+      assertTrue(
+        declarations.any { line -> line.contains(member) },
+        "`$member` binds since ADR-197; got=${declarations.filter { it.contains("<T>") }}",
+      )
+    }
     listOf(
       "okShelf", "okHidden", "okBase", "okTag", "okDenCompanion", "greet", "hiddenTicks",
-      "onHidden",
+      "onHidden", "weigh", "denPick",
     ).forEach { name ->
       assertTrue(
         result.kspWarnings.none { warning -> warning.contains(".$name") },
@@ -707,8 +710,8 @@ class Tier1UnroutedPositionsTest {
     val declarations: List<String> = result.csharpDeclarations()
 
     listOf(
-      "Tally", "FeedHidden", "Weigh", "DrainBase", "TagPick", "TagFeed", "TagTicker",
-      "TagSettle", "TagOn", "DenPick", "DenFeed", "DenTicker", "Summon", "TagBlank", "Hire",
+      "Tally", "FeedHidden", "DrainBase", "TagPick", "TagFeed", "TagTicker",
+      "TagSettle", "TagOn", "DenFeed", "DenTicker", "Summon", "TagBlank", "Hire",
       "HireCook",
     ).forEach { member ->
       val leaks: List<String> = declarations.filter { line ->
@@ -722,6 +725,35 @@ class Tier1UnroutedPositionsTest {
         Regex("\\b(int|var)\\s+$member\\b").containsMatchIn(line)
       }
       assertTrue(leaks.isEmpty(), "$member is skipped, so no C# may declare it; got=$leaks")
+    }
+  }
+
+  /**
+   * ADR-197: the two structural own-`<T>` cells this matrix lost when a member function's own type
+   * parameter moved onto the ADR-062 plan. Asserted positively, as the ADR-160 cells above are, so
+   * the row cannot quietly go back to refusing them.
+   */
+  @Test
+  fun `the class and object structural generic members bind off the plan`() {
+    val result: Tier1Result = run()
+
+    listOf(
+      "public T StructuralOnClass<T>(T value_)",
+      "public static T StructuralOnObject<T>(T value_)",
+    ).forEach { member ->
+      assertTrue(
+        result.generatedCSharp.contains(member),
+        "ADR-197 binds this position now; expected `$member`",
+      )
+    }
+    listOf(
+      "tier1.unrouted.Depot.structuralOnClass",
+      "tier1.unrouted.DepotRegistry.structuralOnObject",
+    ).forEach { symbol ->
+      assertFalse(
+        result.kspWarnings.any { warning -> warning.contains(symbol) },
+        "$symbol binds, so it must not be named as a skip; kspWarnings=${result.kspWarnings}",
+      )
     }
   }
 }

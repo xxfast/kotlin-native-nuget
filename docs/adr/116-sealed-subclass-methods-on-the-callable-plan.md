@@ -841,7 +841,8 @@ declaration to a top-level function; for a `suspend` lambda parameter, take or r
 or expose the `suspend` lambda as a property of an ordinary class. Any other detail keeps the
 "equivalent member in a shape the arm's routes carry" sentence. The warning sentence and the reason
 constant are unchanged. Routing either shape on an arm stays blocked until an ordinary class has a
-route for it, so the ROADMAP line is reworded, not closed.
+route for it, so the ROADMAP line is reworded, not closed. (For a generic method this stopped being
+true on 2026-10-04: see the last amendment, ADR-197.)
 
 Not a producer: `TYPE_PARAMETER` is `droppedFromCSharp = false` but nothing produces it, so it never
 reaches this reason (the research guess that it could was wrong).
@@ -881,3 +882,27 @@ Evidence, verified: `Tier1OptInCallbackPairTest` (arm cells red before, green af
 `:nuget-processor:test` run of 1552 passed, 0 failed. No packaged fixture has a marked add/remove
 member, so the native pipeline was not run for this item. The ordinary-class half of the same bug is
 recorded in [ADR-115](115-opt-in-marker-declarations.md)'s 2026-10-03 amendment.
+
+## Amendment (2026-10-04): a generic method binds on an arm (ADR-197)
+
+The 2026-10-03 hint amendment above left two residuals on an arm, a generic method and a `suspend`
+lambda parameter, and said routing either stays blocked until an ordinary class has a route for it.
+[ADR-197](197-method-type-parameters-on-the-callable-plan.md) routes a member function's own type
+parameter on the ADR-062 plan for every class-like owner, the arm included, so the generic half is
+closed: `class Fetch : Errand() { fun <T> pick(x: T): T }` binds as `public T Pick<T>(T x)`, an arm's
+override of a generic base member renders `override` with no `where` clause, and neither is named.
+
+What an arm still names as `SEALED_SUBCLASS_UNROUTED`:
+
+- A `suspend` lambda parameter (detail `SUSPEND_CALLBACK_PROTOCOL`), unchanged. No owner has a route
+  for it, so it is tracked on the Phase 7 "suspend lambda as a function parameter" ROADMAP line,
+  which now says "including on sealed arms".
+- A generic shape the member route refuses on every owner (a `T` nested in a collection, a `reified`
+  or shadowing `T`, an `Enum<T>` bound, a lambda or `Flow` in the signature, half of an add/remove
+  pair). Its detail is still `GENERIC` and it borrows the `UNROUTED_POSITION` generic hint, which now
+  says to declare the member on a class, object, companion or sealed class with the type parameter
+  appearing only as a bare `T` or `T?` parameter or return, instead of "move it to a top-level
+  function".
+
+Evidence, verified: `Tier1SealedArmResidualSkipTest` pins `pick` as bound and a `sort(values:
+List<T>)` member as named once; the native pipeline round-trips `Chore.Fetch.Pick(7)`.

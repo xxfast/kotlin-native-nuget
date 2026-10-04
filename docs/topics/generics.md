@@ -247,7 +247,8 @@ functions](#generic-functions) below.
 property getter, optionally nullable. It is refused, named, everywhere else: nested in a
 collection or lambda (`List<T>`, `(T) -> Unit`, `Flow<T>`), a `var` property's setter
 (`var item: T` renders a get-only `T Item`), a `suspend fun`, a `Flow`/`StateFlow` member, a
-stored-callback member, and the method's own type parameter (`fun <R> map(f: (T) -> R): R`). A
+stored-callback member, and a method's own type parameter when its signature carries a lambda
+(`fun <R> map(f: (T) -> R): R`; a plain `fun <U> swap(next: U): U` [binds](#generic-methods)). A
 type parameter declared on an `interface` rather than a `class` is unaffected by this and keeps
 its own, unrelated named refusal.
 
@@ -353,9 +354,9 @@ Assert.Same(rex, Helpers.AdoptPet<IPet>(rex));       // fun <T : Pet> adoptPet(p
 Assert.Same(rex, PetRelayKt.RelayPet<IPet>(rex));    // fun <T> relayPet(value: T): T, unconstrained
 ```
 
-This row only binds for a **top-level** function with a `T`-typed direct parameter
-(`fun <T> f(value: T): T`). A generic function declared on a class, `object`, or interface, or a
-top-level one with no `T`-typed parameter (e.g. `fun <T> f(): List<T>`), is not generated.
+A **top-level** function binds only with a `T`-typed direct parameter (`fun <T> f(value: T): T`);
+one with no such parameter (e.g. `fun <T> f(): List<T>`) is not generated. A generic function
+declared inside a class or `object` is a different shape, covered [below](#generic-methods).
 
 A C# builtin (`int`, `double`, `string`, `short`, ...) works as `T`, with a stdlib bound or none.
 A bound C# cannot name is dropped, so a type argument outside it compiles and throws
@@ -369,6 +370,67 @@ fun <T : Number> weigh(value: T): T = value
 Assert.Equal(4, Treats.Weigh(4));
 Assert.Equal(2.5, Treats.Weigh(2.5));
 Assert.Throws<KotlinInvalidCastException>(() => Treats.Weigh(3u));   // uint is not a Kotlin Number
+```
+
+### Generic methods on a class {id="generic-methods"}
+
+A member function's own type parameter becomes a C# generic method, with the constraint and with
+inference at the call site. This works on a class, a companion, an `object`, a generic class, an
+abstract class, a sealed base and a sealed arm:
+
+```kotlin
+class Groomer {
+  fun <T> echo(item: T): T = item
+  fun <T : Furry> adopt(pet: T): T = pet
+  fun <T> nothing(): T? = null
+  fun <T> wrap(item: T): Result<T> = Result.success(item)
+
+  companion object { fun <T> first(item: T): T = item }
+}
+
+sealed class Chore {
+  class Fetch(val toy: String) : Chore() { fun <T> pick(item: T): T = item }
+}
+```
+
+```C#
+using var groomer = new Groomer();
+Assert.Equal(4, groomer.Echo(4));
+Assert.Equal("x", groomer.Echo("x"));
+using Tabby same = groomer.Adopt(oreo);                  // where T : IFurry
+Assert.Null(groomer.Nothing<string>());                  // a T only the return mentions is explicit
+Assert.True(groomer.TryWrap(7, out int value, out Exception? failure));
+Assert.Equal(7, Groomer.First(7));
+using var fetch = new Chore.Fetch("ball");
+Assert.Equal(7, fetch.Pick(7));
+```
+
+What differs from a generic class:
+
+- Every `T` crosses as a boxed handle, so a builtin type argument (`int`, `string`, `double`) works
+  and there is nothing for you to dispose. A wrapper type argument comes back as the same Kotlin
+  object, and you dispose it as usual.
+- A bound is a `where` clause (`T : Any` is `where T : notnull`), and several bounds each list. A
+  type argument outside a bound C# cannot name throws `KotlinInvalidCastException` before the body
+  runs.
+- A `Result<T>` return unwraps to `T` and gains its `Try` twin, as on any other member.
+- An `override` repeats no `where` clause, which C# forbids, and an override that spells `T?` says
+  `where T : default`. Write your own C# override the same way.
+- A type parameter named like its member or its owner (`fun <Hold> hold`) is renamed with a `T`
+  prefix (`THold`).
+
+These stay a named skip, with the specific reason in the warning: a generic method on an interface,
+an `enum class`, a value class, or an extension function; a `reified` type parameter; a bound that
+is itself a type parameter, or `Enum<T>`; a `T` nested in another type (`List<T>`, `Result<List<T>>`);
+a lambda or `Flow` anywhere in the signature; a multi-bound `T` that no parameter mentions; and a
+`T` that shadows a type parameter in scope (the owner's, or one an `inner` class captures). A
+generic method on an `inner` class or a type nested in a generic owner binds like any other.
+Expose a non-generic wrapper for any of the refused shapes. The warning
+ends its reason with the shape it refused:
+
+```
+... but not at this position (here, its type parameter `T` is reified). expose a non-generic
+    wrapper (`fun f(value: Int)` beside `fun <T> f(value: T)`), or declare it as a class, object, ...
 ```
 
 ## Type aliases

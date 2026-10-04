@@ -34,7 +34,7 @@ class Depot {
   /** row 21: GENERIC, generic-declaration parameter on a class method. Predicted NONE. */
   fun genericParamOnClass(box: Box<Int>): Int = box.value
 
-  /** row 17 / extra observation: structural GENERIC (own `<T>`) on an ordinary class. */
+  /** row 17 / extra observation: own `<T>` on an ordinary class; binds since ADR-197. */
   fun <T> structuralOnClass(value: T): T = value
 
   /** extra observation: SUSPEND_CALLBACK_PROTOCOL, suspend lambda parameter on a class method. */
@@ -85,6 +85,7 @@ object DepotRegistry {
 
   fun genericParamOnObject(box: Box<Int>): Int = box.value
 
+  /** Own `<T>` on an object; binds since ADR-197. */
   fun <T> structuralOnObject(value: T): T = value
 }
 

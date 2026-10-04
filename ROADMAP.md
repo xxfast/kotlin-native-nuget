@@ -50,7 +50,6 @@ Complete.
 Complete.
 
 ## Phase 4: Rich type support
-- [ ] Routing a generic method (`fun <T>`) or a `suspend` lambda parameter on a sealed arm is blocked until an *ordinary* class has a route for the same shape (a generic member function on a class; a `suspend` lambda parameter, tracked by the Phase 7 "`Flow<T>` / suspend lambda (`suspend (T) -> R`) as a function parameter" line); until then both stay a named `SKIPPED_UNSUPPORTED_COMBINATION` (`SEALED_SUBCLASS_UNROUTED`) skip whose hint (corrected 2026-10-03, see [ADR-116](docs/adr/116-sealed-subclass-methods-on-the-callable-plan.md)) says what binds instead.
 - [ ] Extension PROPERTIES on a has-value fan-out receiver (`Int?`, `Enum?`, `Instant?`, `Duration?`, `ValueClass(Primitive|Enum)?`) still skip named `RECEIVER_FAN_OUT` (functions bind since [ADR-132](docs/adr/132-extension-receiver-shapes.md)'s 2026-10-03 amendment); land after `val Cat.x` beside `val Cat?.x` is a named error.
 - [ ] Inferred, not checked against main: a class in the default package with an extension (`class Leash` plus `fun Leash.tug()`) generates Kotlin with `Unresolved reference 'Leash'`. Discovered alongside [ADR-132](docs/adr/132-extension-receiver-shapes.md)'s 2026-10-03 amendment.
 - [ ] Unverified: an extension function whose Kotlin name needs backticks (spaces or symbols) would produce an invalid import alias in the generated Kotlin. Discovered alongside [ADR-132](docs/adr/132-extension-receiver-shapes.md)'s 2026-10-03 amendment.
@@ -89,7 +88,7 @@ Complete.
 - [ ] A collection element on ADR-068's `suspend fun` returning `StateFlow<T>` is refused, not bound, since `nuget_stateflow_collect`/`nuget_stateflow_value` are emitted once per module keyed on an already-obtained handle and box `value as Any` generically, with no per-member seam to hang a projection on the way the property and method routes now have. Giving that route its own per-member export pair would fix it but multiplies a module-wide pair by every suspend-StateFlow member for a shape no issue has asked for. Verified by reading, split out of [ADR-123](docs/adr/123-collection-elements-on-the-flow-routes.md) Alternative 5.
 
 ## Phase 7: Bidirectional support (C# → Kotlin)
-- [ ] `Flow<T>` / suspend lambda (`suspend (T) -> R`) as a function parameter
+- [ ] `Flow<T>` / suspend lambda (`suspend (T) -> R`) as a function parameter, including on sealed arms
 - [ ] **The `add*/remove*` subscription route silently mis-handles two member shapes it doesn't restrict for.** ([details](docs/backlog/add-remove-subscription-route-silently-mis-handles.md))
 - [ ] **The same route's object/string parameter marshalling disposes the argument `StableRef` up to three times.** ([details](docs/backlog/same-route-s-object-string-parameter-marshalling.md))
 - [ ] Fold the reverse template's internal `NugetManagedException` onto the runtime class over the ADR-130 expect/actual seam ([details](docs/backlog/fold-reverse-managed-exception-onto-runtime-class.md))

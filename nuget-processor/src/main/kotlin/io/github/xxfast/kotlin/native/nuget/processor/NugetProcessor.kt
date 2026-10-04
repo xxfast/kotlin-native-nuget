@@ -29,6 +29,7 @@ import com.squareup.kotlinpoet.ksp.writeTo
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
 import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_EXCEPTION_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.KotlinExceptionRow
+import io.github.xxfast.kotlin.native.nuget.processor.cir.withMethodTypeParameterConstraints
 import io.github.xxfast.kotlin.native.nuget.processor.exports.nugetMappedTypeFunction
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativePrefix
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirRenderer
@@ -107,6 +108,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardPlanSkipRea
 import io.github.xxfast.kotlin.native.nuget.processor.forward.diagnosticHint
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticSink
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardGuardName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberGenericRefusal
 import io.github.xxfast.kotlin.native.nuget.processor.forward.guarded
 import io.github.xxfast.kotlin.native.nuget.processor.forward.internalFailureDetail
 import io.github.xxfast.kotlin.native.nuget.processor.forward.internalFailureDiagnostic
@@ -428,7 +430,7 @@ internal fun warnDroppedForwardCallables(
       // a sixth special case here.
       reason = dropped.reason.diagnosticReason(
         dropped.detail, dropped.parameter, returnType = dropped.returnType,
-      ),
+      ) + dropped.memberGenericRefusalClause(),
       hint = dropped.reason.diagnosticHint(
         dropped.detail, dropped.parameter, excludeEntries, returnType = dropped.returnType,
       ),
@@ -439,6 +441,23 @@ internal fun warnDroppedForwardCallables(
     )
   }
   ForwardDiagnosticSink.emit(diagnostics + cappedDefaultDiagnostics(catalog), logger)
+}
+
+/**
+ * ADR-197: the specific shape rule a structural `GENERIC` drop broke (`(here, its type parameter
+ * is nested in `List<T>`)`), read off the declaration, so the sentence says which rule and the
+ * hint stays the general remedy. Empty for every other drop, a type-based GENERIC one included
+ * (a member with no type parameters of its own has no refusal).
+ */
+private fun ForwardCallableCatalogEntry.Skipped.memberGenericRefusalClause(): String {
+  if (detail != ForwardPlanSkipReason.GENERIC.name) return ""
+  val routed: Set<ForwardPlanSkipReason> = setOf(
+    ForwardPlanSkipReason.UNROUTED_POSITION,
+    ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,
+  )
+  if (reason !in routed) return ""
+  val refusal: String = (node as? KSFunctionDeclaration)?.forwardMemberGenericRefusal() ?: return ""
+  return " (here, $refusal)"
 }
 
 /**
@@ -1986,7 +2005,7 @@ internal class NugetProcessor(
     val ordinaryCatalog: ForwardCallablePlanCatalog = forwardPlanner.catalog(
       classes, topLevelCatalogFunctions, extensionFunctions, objects, properties,
       extensionProperties, valueClasses, sealedClasses, enums,
-    )
+    ).withMethodTypeParameterConstraints(context, logger)
 
     // ADR-040 sub-decision C.1 (reachability-driven): a Kotlin interface gets a concrete backing
     // class + `foo_*` dispatch exports only when it actually appears in a planned *position*

@@ -359,7 +359,7 @@ the bare receiver spelling, `asStableRef<LabelledCrate>()`.
   `TypeParameter`; the getter reads the boxed handle back through the same
   `NugetMarshal.FromHandle<T>` the getter has always used, the setter refused separately (below).
   `isSupportedReceiver()` is `false` (an extension over a bare `T` is not a generic-class member;
-  refused as today). Own type parameters on a method keep `ForwardPlanSkipReason.GENERIC`
+  refused as today). Own type parameters on a method kept `ForwardPlanSkipReason.GENERIC` (routed since the 2026-10-04 ADR-197 amendment)
   (`:916`, verified). Receiver: the planner stores the fully applied Kotlin spelling of the owner,
   `io.pkg.Crate<Any>` (one erased, non-null argument per declared class type parameter, or the
   first upper bound's qualified name when the parameter is bounded), on
@@ -451,6 +451,7 @@ directly under one `Nullable`. Concretely, in v1:
   members and ADR-114 stored callbacks. One `if` each, at the hand-off.
 - Own type parameters on the method (`fun <R> map(f: (T) -> R): R`): refused,
   `ForwardPlanSkipReason.GENERIC`, exactly as on an ordinary class today (verified `:916`).
+  Superseded by the 2026-10-04 amendment (ADR-197): a class-like member's own `T` now binds.
 - Multiple class type parameters (`Pairing<A, B>`): admitted; `TypeParameter(name)` is by name
   and the receiver spelling applies one erased, non-null argument per parameter
   (`Pairing<Any, Any>`). Today's `typeParams.first()` limit in the template disappears with the
@@ -640,7 +641,7 @@ Expected ledger per iteration: `nuget_wrap_int` +1 / dispose -1 (ctor), `crate_c
 - Deferred by name: `T` nested in collections / lambdas / `Flow` / value classes; `suspend`,
   `Flow` and stored-callback members of a generic class (refused named, one `if` each);
   generic subclasses (ADR-101, ROADMAP); generic instantiations at a position
-  (`Crate<Cat>` as a parameter); own method type parameters.
+  (`Crate<Cat>` as a parameter); own method type parameters (bound by ADR-197, 2026-10-04).
 
 ## Amendment (2026-09-27): a bare `T` carries null
 
@@ -751,3 +752,19 @@ MultiPackage 9, SharedException 2, all six NativeAOT shapes). The first run fail
 `KennelRoundTripTests.Barks_CollectorCancelledMidStep...`, unrelated to this change. Inferred, not
 verified: a generic class overriding a `suspend` member of a non-exported interface stays silent,
 hidden by the interface-override exemption; the ADR-064 residuals item owns that area.
+
+## Amendment (2026-10-04): a member's own type parameter binds (ADR-197)
+
+The admission rule above refused "own type parameters on the method" (`fun <R> map(...)`) with the
+named `GENERIC` skip. [ADR-197](197-method-type-parameters-on-the-callable-plan.md) lifts that for a
+member of a class, object, companion, sealed base or sealed arm: the method's own `T` is a
+`BridgeType.TypeParameter` on the same boxed-handle wire as the class's, so
+`class Basket<T> { fun <U> swap(next: U): U }` binds as `public U Swap<U>(U next)` on `Basket<T>`.
+The classifier admits it where `parentDeclaration` is such a member function; the planner carries the
+type parameters on the public signature and the Kotlin call names them (`swap<Any?>(...)`).
+
+Still refused, named: an interface, enum, value class or extension owner, and a `T` nested in another
+type, as before. A method `T` that shadows the class's `T` is also refused (C# CS0693).
+
+Evidence, verified: `Tier1MemberGenericMethodTest` and `MemberGenericMethodTests.GenericClass_...`
+(`Basket<string>.Swap(3)` returns 3, `Describe(2)` returns `"yarn&2"`).

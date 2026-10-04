@@ -70,6 +70,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isOptInRefused
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallableCatalogEntry
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardMethodTypeParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ENUM_ARM_VALUE_MEMBER
 import io.github.xxfast.kotlin.native.nuget.processor.forward.enumArmName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
@@ -98,9 +99,11 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.escalatedForStrict
 import io.github.xxfast.kotlin.native.nuget.processor.forward.sealedAsHandle
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipDetail
 import io.github.xxfast.kotlin.native.nuget.processor.forward.skipReason
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardCsharpMethodTypeParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardCsharpTypeParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardTypeParametersInScope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.capturedTypeParameterOwners
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardMemberGenericRefusal
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardPublicCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardScopeOwner
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardArmMemberProjectedByBase
@@ -862,12 +865,9 @@ private fun KSClassDeclaration.cirTypeParameter(
   context: NugetContext,
   reportVariance: Boolean,
 ): CirTypeParameter {
-  val bounds: List<String> = param.bounds.toList().mapNotNull { bound ->
-    cirBoundConstraint(
-      bound.resolve(), context, logger, this,
-      "${simpleName.asString()}<${param.name.asString()}>",
-    )
-  }
+  val constraints: List<String> = param.cirConstraints(
+    context, logger, this, "${simpleName.asString()}<${param.name.asString()}>",
+  )
 
   if (reportVariance && param.variance != Variance.INVARIANT) {
     ForwardDiagnosticSink.emit(
@@ -889,11 +889,60 @@ private fun KSClassDeclaration.cirTypeParameter(
     )
   }
 
-  // `notnull` must come first in a C# constraint list and adds nothing next to a class bound, so
-  // it survives only as the sole constraint.
-  val constraints: List<String> = if (bounds.size > 1) bounds - NOTNULL_CONSTRAINT else bounds
   return CirTypeParameter(forwardCsharpTypeParameterName(param), constraints)
 }
+
+/**
+ * ADR-015: this type parameter's C# `where` constraints, one per exportable bound, reported under
+ * [declaration] on [symbol] when a builtin bound is dropped (ADR-015's 2026-10-03 amendment).
+ */
+internal fun KSTypeParameter.cirConstraints(
+  context: NugetContext,
+  logger: KSPLogger,
+  symbol: KSNode,
+  declaration: String,
+): List<String> {
+  val bounds: List<String> = bounds.toList().mapNotNull { bound ->
+    cirBoundConstraint(bound.resolve(), context, logger, symbol, declaration)
+  }
+  // `notnull` must come first in a C# constraint list and adds nothing next to a class bound, so
+  // it survives only as the sole constraint.
+  return if (bounds.size > 1) bounds - NOTNULL_CONSTRAINT else bounds
+}
+
+/**
+ * ADR-197: fills each planned member's own type parameters with their C# constraints. The planner
+ * holds no export context and runs twice (so a dropped-bound INFO reported there would be
+ * reported twice); a planned entry keeps its declaration, so the constraints are spelled here,
+ * once, before either half projects the plan.
+ */
+internal fun ForwardCallablePlanCatalog.withMethodTypeParameterConstraints(
+  context: NugetContext,
+  logger: KSPLogger,
+): ForwardCallablePlanCatalog = copy(
+  entries = entries.map { entry ->
+    if (entry !is ForwardCallableCatalogEntry.Planned) return@map entry
+    val declared: List<ForwardMethodTypeParameter> = entry.plan.publicSignature.typeParameters
+    val function: KSFunctionDeclaration = entry.node as? KSFunctionDeclaration
+      ?: return@map entry
+    if (declared.isEmpty()) return@map entry
+    val owner: String = function.parentDeclaration?.simpleName?.asString()?.let { "$it." }.orEmpty()
+    val spelled: List<ForwardMethodTypeParameter> =
+      declared.zip(function.typeParameters) { parameter, typeParameter ->
+        parameter.copy(
+          constraints = typeParameter.cirConstraints(
+            context, logger, function,
+            "$owner${function.simpleName.asString()}<${typeParameter.name.asString()}>",
+          ),
+        )
+      }
+    entry.copy(
+      plan = entry.plan.copy(
+        publicSignature = entry.plan.publicSignature.copy(typeParameters = spelled),
+      ),
+    )
+  },
+)
 
 internal fun translateClass(
   cls: KSClassDeclaration,
@@ -1345,10 +1394,37 @@ internal fun translateClass(
         .map { param -> classifier.classify(param.type.resolve().expandAliases()).sealedAsHandle() }
       // ADR-147: a `T` on this class's own generic carrier is a real C# name; one re-homed from a
       // generic base onto a non-generic subclass is not.
+      // ADR-197: so is the member's own `T`, in a shape its overrides route (they plan as
+      // `override`, which needs this declaration); any other shape keeps the skip below.
+      val ownTypeParameters: List<CirTypeParameter> =
+        if (method.typeParameters.isEmpty() || method.forwardMemberGenericRefusal() != null) {
+          emptyList()
+        } else {
+          val owner: String = method.parentDeclaration?.simpleName?.asString() ?: name
+          val isOverride: Boolean = method.overridesBaseClassMember(superClassDeclaration)
+          method.typeParameters.map { parameter ->
+            val csharpName: String = method.forwardCsharpMethodTypeParameterName(parameter)
+            // The two rules `ForwardCirPlanProjection` applies to a planned override.
+            val spelledNullable: Boolean = (parameterBridges + returnBridge).any { bridge ->
+              val inner: BridgeType? = (bridge as? BridgeType.Nullable)?.type
+              inner is BridgeType.TypeParameter && inner.name == csharpName &&
+                  !inner.nullableFromBound
+            }
+            val constraints: List<String> = when {
+              !isOverride -> parameter.cirConstraints(
+                context, logger, method,
+                "$owner.$methodName<${parameter.name.asString()}>",
+              )
+              spelledNullable -> listOf("default")
+              else -> emptyList()
+            }
+            CirTypeParameter(csharpName, constraints)
+          }
+        }
       val typeParametersInScope: Set<String> =
         cls.forwardTypeParametersInScope()
           .map { (owner, param) -> owner.forwardCsharpTypeParameterName(param) }
-          .toSet()
+          .toSet() + ownTypeParameters.map { parameter -> parameter.name }
 
       if (!returnBridge.isPubliclySpellable(typeParametersInScope)) {
         emitAbstractMethodSkip(
@@ -1379,6 +1455,7 @@ internal fun translateClass(
         body = "",
         isAbstract = true,
         isOverride = method.overridesBaseClassMember(superClassDeclaration),
+        typeParameters = ownTypeParameters,
         isSyncErrorCheckEnabled = false,
       )
       // The override's own Try twin is `override`, so the abstract base declares one too.
@@ -2909,12 +2986,56 @@ private fun CirProperty.againstSealedBase(baseProperties: List<CirProperty>): Ci
  * leaving the modifier off is the CS0108 warning `GeneratedBindingsCheck` compiles as an error).
  */
 private fun CirMethod.againstSealedBase(baseMethods: List<CirMethod>): CirMethod {
-  val parameterTypes: List<String> = parameters.map { it.type }
+  val parameterTypes: List<String> = positionalParameterTypes()
   val onBase: CirMethod = baseMethods.firstOrNull { candidate ->
-    candidate.name == name && candidate.parameters.map { it.type } == parameterTypes
+    // ADR-197: a method's generic arity is part of its C# signature, and its own type parameters
+    // match by position, not by name: `override fun <U> carry(item: U): U` overrides the base's
+    // `fun <T> carry(item: T): T`, which C# allows under the arm's own names.
+    candidate.name == name && candidate.typeParameters.size == typeParameters.size &&
+        candidate.positionalParameterTypes() == parameterTypes &&
+        // An override base restates no constraints, so only a declaring one is compared.
+        (candidate.isOverride || candidate.positionalConstraints() == positionalConstraints())
   } ?: return this
-  if (onBase.returnType == returnType) return copy(isOverride = true, isVirtual = false)
+  if (onBase.positional(onBase.returnType) == positional(returnType)) {
+    return copy(
+      isOverride = true,
+      isVirtual = false,
+      typeParameters = overridingTypeParameters(),
+    )
+  }
   return copy(isNew = true, isOverride = false, isVirtual = false)
+}
+
+/**
+ * ADR-197: an overriding method's own type parameters, by the rule a planned `override` follows
+ * (`ForwardCirPlanProjection`): no restated constraint (CS0460), and `where T : default` for a
+ * `T` the signature spells `T?` (CS0115 otherwise). Read off the rendered C# types, where an
+ * admitted member's `T` only ever appears bare or as `T?`.
+ */
+private fun CirMethod.positionalParameterTypes(): List<String> =
+  parameters.map { parameter -> positional(parameter.type) }
+
+/** The declared constraints, positional; an arm's are compared before the override drops them. */
+private fun CirMethod.positionalConstraints(): List<List<String>> =
+  typeParameters.map { parameter -> parameter.bounds.map { bound -> positional(bound) } }
+
+/**
+ * ADR-197: [type] with each of this method's own type parameters replaced by its position
+ * (`U?` on `Carry<U>` reads `!!0?`), so two declarations that name them differently compare equal.
+ * Unchanged for a method that declares none.
+ */
+private fun CirMethod.positional(type: String): String =
+  typeParameters.foldIndexed(type) { index, spelled, parameter ->
+    val token: Regex = Regex("(?<![A-Za-z0-9_])${Regex.escape(parameter.name)}(?![A-Za-z0-9_])")
+    spelled.replace(token, "!!$index")
+  }
+
+internal fun CirMethod.overridingTypeParameters(): List<CirTypeParameter> {
+  val spelled: List<String> = parameters.map { parameter -> parameter.type } + returnType
+  return typeParameters.map { parameter ->
+    val nullable: Boolean = spelled.any { type -> type == "${parameter.name}?" }
+    CirTypeParameter(parameter.name, if (nullable) listOf("default") else emptyList())
+  }
 }
 
 /**

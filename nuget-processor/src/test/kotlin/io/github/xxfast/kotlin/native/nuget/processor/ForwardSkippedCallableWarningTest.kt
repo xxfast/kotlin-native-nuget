@@ -154,6 +154,8 @@ class ForwardSkippedCallableWarningTest {
   // `suspend` lambda parameter, and an ordinary class has no route for either. The hint used to
   // send the author there ("which still has the legacy route this member kind needs"), where the
   // same member is skipped again; each detail now names a shape that does bind.
+  // ADR-197: a generic method binds on an arm now; GENERIC reaches here only for a shape the member
+  // route refuses (a nested `T`), and the hint names the shape that binds.
   @Test
   fun `a sealed arm residual hints at a shape that binds, not at an ordinary class`() {
     val expected: List<Pair<ForwardCallableCatalogEntry.Skipped, String>> = listOf(
@@ -162,7 +164,8 @@ class ForwardSkippedCallableWarningTest {
         reason = ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,
         detail = ForwardPlanSkipReason.GENERIC.name,
       ) to "expose a non-generic wrapper (`fun f(value: Int)` beside `fun <T> f(value: T)`), or " +
-          "move the declaration to a top-level function with a parameter of its own type parameter",
+          "declare it as a class, object, companion or sealed-class member whose own type " +
+          "parameters appear only as a bare `T` or `T?` parameter or return",
       ForwardCallableCatalogEntry.Skipped(
         symbol = "com.example.Shape.Circle.later",
         reason = ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,

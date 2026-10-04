@@ -45,8 +45,8 @@ class Tier1SealedArmLambdaTest {
       data class Running(val progress: Int) : Job() {
         fun relabel(transform: (String) -> String): String = transform("running-${'$'}progress")
 
-        // No arm route at all, and none is claimed by this change: still named.
-        fun <T> pick(value: T): T = value
+        // ADR-197: a bare `T` binds on an arm now; a `T` nested in a collection is still unrouted.
+        fun <T> pick(values: List<T>): Int = values.size
       }
 
       // The Action cell: a (String) -> Unit parameter and a Unit outer return, on a data object
@@ -135,7 +135,7 @@ class Tier1SealedArmLambdaTest {
 
   /**
    * The diagnostic pair. A per-call callback member on an arm is routed now and must not be named
-   * a drop; a generic one has no arm route and must keep saying so.
+   * a drop; a generic one in a shape no owner routes (ADR-197) must keep saying so.
    */
   @Test
   fun `a lambda-parameter arm member is no longer named unrouted while a generic one still is`() {

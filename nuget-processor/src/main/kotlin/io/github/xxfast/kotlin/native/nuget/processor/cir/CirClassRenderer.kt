@@ -148,14 +148,19 @@ private fun hoistDllImports(body: String, nativeClass: String): HoistedDllImport
 }
 
 /** `out IntPtr error, [MarshalAs(UnmanagedType.U2)] char c` -> `out error, c`. */
+private val LEADING_ATTRIBUTES = Regex("""^(\[[^\]]*]\s*)+""")
+
 private fun forwardedArguments(parameters: String): String {
   if (parameters.isBlank()) return ""
   return parameters.split(',').joinToString(", ") { parameter ->
     val trimmed: String = parameter.trim()
     val name: String = trimmed.substringAfterLast(' ')
+    // A marshalling attribute comes first (`[MarshalAs(UnmanagedType.I1)] out bool failed`, an
+    // ADR-108 `Result` export's failure flag), and the modifier after it still has to be passed.
+    val unattributed: String = trimmed.replace(LEADING_ATTRIBUTES, "")
     val modifier: String = when {
-      trimmed.startsWith("out ") -> "out "
-      trimmed.startsWith("ref ") -> "ref "
+      unattributed.startsWith("out ") -> "out "
+      unattributed.startsWith("ref ") -> "ref "
       else -> ""
     }
     "$modifier$name"
@@ -652,6 +657,9 @@ internal fun StringBuilder.renderMethod(method: CirMethod, className: String = "
       isVirtual = method.isVirtual,
       isExtension = method.isExtension,
       visibility = method.visibility,
+      // ADR-197: the twin declares the member's own type parameters exactly as it does, override
+      // rule included.
+      typeParameters = method.typeParameters,
     ),
     className,
   )
@@ -704,21 +712,15 @@ private fun StringBuilder.renderMethodBody(method: CirMethod, className: String)
       genericTypeToken.containsMatchIn(method.returnType) ||
       method.parameters.any { genericTypeToken.containsMatchIn(it.type) }
 
-  val genericDecl: String = if (hasGenericType && method.isStatic) {
-    val names: String = if (method.typeParameters.isNotEmpty()) {
-      method.typeParameters.joinToString(", ") { it.name }
-    } else "T"
-    "<$names>"
-  } else ""
+  // ADR-197: an instance method declares its own type parameters too (a member `fun <T>`); the
+  // bare-`T` token fallback stays what it was, a static-only legacy spelling.
+  val genericDecl: String = when {
+    method.typeParameters.isNotEmpty() -> method.typeParameterList()
+    hasGenericType && method.isStatic -> "<T>"
+    else -> ""
+  }
 
-  val whereClause: String = method.typeParameters
-    .filter { it.bounds.isNotEmpty() }
-    .joinToString(" ") { param ->
-      "where ${param.name} : ${param.bounds.joinToString(", ")}"
-    }
-
-  val whereStr: String =
-    if (whereClause.isNotEmpty()) " $whereClause" else ""
+  val whereStr: String = method.whereClauses()
 
   if (method.isAbstract) {
     appendLine("        $visibility ${abstract}${method.returnType} ${method.identifier}$genericDecl($paramStr)$whereStr;")
@@ -746,6 +748,17 @@ private fun StringBuilder.renderMethodBody(method: CirMethod, className: String)
 
   appendLine()
 }
+
+/** The method's own `<T, U>` list, empty when it declares none. */
+internal fun CirMethod.typeParameterList(): String =
+  if (typeParameters.isEmpty()) "" else typeParameters.joinToString(", ", "<", ">") { it.name }
+
+/** Each of the method's own constrained type parameters as ` where T : ...`, in order. */
+internal fun CirMethod.whereClauses(): String = typeParameters
+  .filter { parameter -> parameter.bounds.isNotEmpty() }
+  .joinToString("") { parameter ->
+    " where ${parameter.name} : ${parameter.bounds.joinToString(", ")}"
+  }
 
 internal fun StringBuilder.renderDataClassMethods(cls: CirClass) {
   cls.dataClassNativeImports().forEach { nativeImport -> renderDllImport(nativeImport) }

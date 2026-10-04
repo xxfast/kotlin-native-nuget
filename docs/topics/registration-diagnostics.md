@@ -280,6 +280,15 @@ argument box. `LeakTests/LiveHandleTests.cs`'s
 `BuiltinGenericFunction_BoxedPrimitiveAndString_ReturnsToBaseline` and
 `BuiltinGenericFunction_BoundCastFails_ReturnsToBaseline` cover the success and failure paths.
 
+A [generic method on a class](generics.md#generic-methods) mints the same boxes: one per builtin
+argument, which the call releases, and one per `T` result, which the read releases as it unwraps
+it. A member that throws, or a `T` that fails its bound's check, after the argument box crossed
+still releases the box. `LeakTests/LiveHandleTests.cs`'s
+`MemberGenericMethod_BoxedTypeParameter_ReturnsToBaseline`,
+`MemberGenericMethod_ThrowingMember_ReturnsToBaseline` and
+`MemberGenericMethod_BoundCastFails_ReturnsToBaseline` cover the success, throwing and bound-failure
+paths.
+
 A [sealed base's own async members](interfaces-abstract-sealed.md#sealed-method-suspend-generated-c)
 add no new handle kind either: the scope handle moves from the arm to the base, and the count returns
 to baseline once the base-typed reference is disposed. `LeakTests/LiveHandleTests.cs` row 9l covers

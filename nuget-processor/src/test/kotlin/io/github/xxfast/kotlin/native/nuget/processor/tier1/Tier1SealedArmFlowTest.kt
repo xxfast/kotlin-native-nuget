@@ -179,7 +179,8 @@ class Tier1SealedArmFlowTest {
 
   /**
    * The diagnostic pair that keeps this change from silently closing issue #129's siblings: a
-   * `FLOW_PROTOCOL` arm member is routed now and must not be named a drop, while a `GENERIC` one
+   * `FLOW_PROTOCOL` arm member is routed now and must not be named a drop, while a `GENERIC` one in
+   * a shape no owner routes (ADR-197: a `T` nested in a collection)
    * has no arm route and must keep saying so.
    */
   @Test
@@ -194,7 +195,8 @@ class Tier1SealedArmFlowTest {
       sealed class Node {
         data class Live(val id: String) : Node() {
           fun ticks(): Flow<String> = flow { emit(id) }
-          fun <T> pick(value: T): T = value
+          // ADR-197: a bare `T` binds on an arm now; a nested `T` is still unrouted.
+          fun <T> pick(values: List<T>): Int = values.size
         }
       }
       """.trimIndent(),

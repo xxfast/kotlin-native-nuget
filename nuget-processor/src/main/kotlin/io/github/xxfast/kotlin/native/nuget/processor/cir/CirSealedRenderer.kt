@@ -414,7 +414,16 @@ internal fun CirMethod.asAbstract(): CirMethod =
  */
 @JvmName("backingMethodOverrides")
 internal fun List<CirMethod>.backingOverrides(): List<CirMethod> = filter { it.isAbstract }
-  .map { method -> method.copy(isAbstract = false, isOverride = true, isVirtual = false) }
+  .map { method ->
+    method.copy(
+      isAbstract = false,
+      isOverride = true,
+      isVirtual = false,
+      // ADR-197: a generic member's override restates no constraint (CS0460), and says
+      // `where T : default` for a `T?` (CS0115).
+      typeParameters = method.overridingTypeParameters(),
+    )
+  }
 
 @JvmName("backingPropertyOverrides")
 internal fun List<CirProperty>.backingOverrides(): List<CirProperty> =

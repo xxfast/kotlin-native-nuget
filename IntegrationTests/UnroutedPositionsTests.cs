@@ -6,10 +6,12 @@ namespace IntegrationTests;
 
 /// <summary>
 /// ADR-064 amendment (unrouted positions). <c>Flow</c>, a lambda, a <c>suspend</c> lambda and a
-/// generic declaration each have a legacy route at <em>some</em> owner/position, and nowhere else:
-/// research H measured every combination (<c>research/H-observed-matrix.md</c>) and found most of
-/// them vanish from both halves of the bridge with no diagnostic at all. The fix names every silent
-/// one; the Kotlin fixture is
+/// generic declaration each bind at <em>some</em> owner/positions and nowhere else: research H
+/// measured every combination (<c>research/H-observed-matrix.md</c>) and found most of them vanish
+/// from both halves of the bridge with no diagnostic at all. The fix names every silent one. Since
+/// ADR-160 a per-call lambda parameter binds off the plan on every ordinary owner, and since
+/// ADR-197 so does a class or object member's own type parameter (<c>fun &lt;T&gt;</c>); both
+/// are asserted present below rather than absent. The Kotlin fixture is
 /// <c>test-library/.../test/unrouted/UnroutedPositionsSample.kt</c> plus
 /// <c>UnroutedTopLevelFlow.kt</c>.
 ///
@@ -89,7 +91,6 @@ public class UnroutedPositionsTests
             "CallbackReturnOnClass",
             "GenericReturnOnClass",
             "GenericParamOnClass",
-            "StructuralOnClass",
             "SuspendCallbackParamOnClass",
             "FlowElementOnClass",
             "CallbackElementOnClass",
@@ -117,8 +118,7 @@ public class UnroutedPositionsTests
             // is asserted present below instead of absent here.
             "CallbackReturnOnObject",
             "GenericReturnOnObject",
-            "GenericParamOnObject",
-            "StructuralOnObject");
+            "GenericParamOnObject");
 
         // ADR-160: the object position's per-call lambda parameter is the one cell this matrix row
         // lost. Asserted positively so the row cannot silently go back to refusing it.
@@ -246,6 +246,20 @@ public class UnroutedPositionsTests
         using KotlinFunc<string, string> echo = UnroutedPositionsSample.CallbackReturnOnTopLevel();
 
         Assert.Equal("Oreo", echo.Invoke("Oreo"));
+    }
+
+    /// <summary>
+    /// ADR-197: the class and object structural own-<c>&lt;T&gt;</c> cells left this matrix when a
+    /// member function's own type parameter moved onto the ADR-062 plan. Asserted by calling them,
+    /// so the row cannot quietly go back to refusing them.
+    /// </summary>
+    [Fact]
+    public void ClassAndObjectStructuralGenericsBind()
+    {
+        using var depot = new Depot();
+        Assert.Equal("Oreo", depot.StructuralOnClass("Oreo"));
+        Assert.Equal(7, depot.StructuralOnClass(7));
+        Assert.Equal(9, DepotRegistry.StructuralOnObject(9));
     }
 
     [Fact]
