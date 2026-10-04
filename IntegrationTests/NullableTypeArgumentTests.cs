@@ -29,6 +29,27 @@ public class NullableTypeArgumentTests
         Assert.Equal(5, afterBreakfast.Value);
     }
 
+    // A Kotlin function returning `Box<Int?>` hands back a `Box<int?>`: Oreo's unknown nap count
+    // reads null, not 0, and the counted one reads 5.
+    [Fact]
+    public void ReturnedBox_NullableInt_NullAndValueRoundTrip()
+    {
+        using Box<int?> unknown = CatMoodTrackerKt.UnknownNaps();
+        using Box<int?> counted = CatMoodTrackerKt.CountedNaps();
+        Assert.Null(unknown.Value);
+        Assert.Equal(5, counted.Value);
+    }
+
+    // The reference-type twin: a stray with no name yet, then Mylo.
+    [Fact]
+    public void ReturnedBox_NullableString_NullAndValueRoundTrip()
+    {
+        using Box<string?> unnamed = CatMoodTrackerKt.UnnamedStray();
+        using Box<string?> named = CatMoodTrackerKt.NamedStray();
+        Assert.Null(unnamed.Value);
+        Assert.Equal("Mylo", named.Value);
+    }
+
     // The cat carrier, with no cat in it: both of them hid under the bed.
     [Fact]
     public void Box_NullableCat_NullRoundTrips()

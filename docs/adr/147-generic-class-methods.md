@@ -696,3 +696,26 @@ no box (`Wrap<T>` returns `owned = false` for null) and a null return retains no
 `note`/`keeper`, `IntegrationTests/GenericClassConcretePropertyTests.cs`, the `LeakTests` row
 `GenericClassConcreteProperty_KeeperRead_ReturnsToBaseline`, and a `Tier1NullableGenericPropertyTest`
 cell.
+
+## Amendment (2026-10-03): nullable type arguments on the other `csTypeArgument` callers
+
+**Rule.** A nullable type argument keeps its `?` wherever the processor spells a constructed
+generic or a lambda type. The callers of `csTypeArgument` are the ordinary-class lambda property
+(sync and suspend), the sealed-subclass lambda property, and a top-level function that returns a
+constructed generic class. `KotlinFlow<T>` and `Task<T>` do not go through it. A function
+returning `Crate<Int?>` renders `Crate<int?>`, and a lambda property typed `(Int?) -> String`
+renders `KotlinFunc<int?, string>`, so null reads back as null rather than `0` or an empty string.
+
+**Type parameters.** `fun <T> f(item: T): Crate<T?>` binds through `translateGenericFunction`
+and renders `Crate<T>`: the `?` written at the return is not carried into C#, so the caller's
+choice of `T` decides whether null can be held. `fun <T> f(): Crate<T?>` (no parameter to infer
+from) is skipped with `SKIPPED_UNSUPPORTED_RETURN`. Both are pinned as they stand, not changed.
+
+**Evidence.** Verified: `Tier1GenericReturnTypeArgumentTest` (`Crate<int?>`, `Crate<string?>`,
+`Crate<Mood?>`, `Crate<Snapshot?>`, and the two type-parameter shapes above),
+`Tier1NullableLambdaTypeArgumentTest` (`KotlinFunc<int?, string>`, `KotlinAction<Toy?>` and
+siblings), and `IntegrationTests/NullableTypeArgumentTests.cs` (null and non-null round trips on
+`unknownNaps`, `countedNaps`, `unnamedStray`, `namedStray`). Full processor tests and
+`scripts/verify.sh` green. No new `LeakTests` row: `CatMoodTrackerKt.SulkBox()` already measures a
+returned generic-class handle. Inferred, not run: no shape was found that reaches the
+type-parameter branch of `csTypeArgument`, which may be dead code.

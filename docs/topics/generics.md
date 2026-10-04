@@ -379,6 +379,9 @@ A generic class declared in a dependency module is exported like a module-local 
 type arguments on a dependency generic class are not checked; if one fails, declare the class in the
 publishing module itself.
 
+A `T?` written at a generic function's return (`fun <T> f(item: T): Crate<T?>`) is spelled `T` in
+C#, so the type argument you choose decides whether `null` can be held.
+
 A type nested inside a generic class is not bound, in a dependency or otherwise. If your API returns
 one, the member is skipped with a named diagnostic, but the generic owner is still exported.
 

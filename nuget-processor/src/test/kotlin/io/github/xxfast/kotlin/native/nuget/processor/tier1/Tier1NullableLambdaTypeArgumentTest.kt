@@ -129,4 +129,67 @@ class Tier1NullableLambdaTypeArgumentTest {
       "the box must be disposed after the native call returns, never inside the continuation",
     )
   }
+
+  /**
+   * The SYNC lambda property on an ordinary class and the lambda property on a sealed subclass
+   * both spell their type arguments through `csTypeArgument` too, each from its own call site, so
+   * each carries the `?` or neither does. Primitive, string, class and enum arguments, with a
+   * non-null control on each route.
+   */
+  @Test
+  fun `a sync class lambda property and a sealed-arm lambda property carry nullability`() {
+    val result = Tier1Harness.run(
+      """
+      package tier1.nullablelambdaproperty
+
+      enum class Mood { CALM, GRUMPY }
+
+      class Toy(val name: String)
+
+      class Feeder(val catName: String) {
+        val onFeed: (Int?) -> String = { grams -> "${'$'}catName ate ${'$'}grams" }
+
+        val onName: (String?) -> String? = { name -> name }
+
+        val onToy: (Toy?) -> Unit = { }
+
+        val onMood: (Mood?) -> String = { mood -> "${'$'}mood" }
+
+        val onPlain: (Int) -> String = { grams -> "${'$'}grams" }
+      }
+
+      sealed class Job {
+        class Napping(val hours: Int) : Job() {
+          val onTick: (String?) -> Unit = { }
+
+          val onWake: (Int?) -> Toy? = { hours -> hours?.let { Toy("ball") } }
+
+          val onPlain: (String) -> Unit = { }
+        }
+      }
+      """.trimIndent(),
+    )
+
+    assertTrue(
+      result.compiledClean,
+      "expected the lambda properties to bind; got: ${result.compileErrors}",
+    )
+
+    val cs: String = result.generatedCSharp
+    listOf(
+      "KotlinFunc<int?, string> OnFeed",
+      "KotlinFunc<string?, string?> OnName",
+      "KotlinAction<global::Interop.Toy?> OnToy",
+      "KotlinFunc<global::Interop.Mood?, string> OnMood",
+      "KotlinFunc<int, string> OnPlain",
+      "KotlinAction<string?> OnTick",
+      "KotlinFunc<int?, global::Interop.Toy?> OnWake",
+      "KotlinAction<string> OnPlain",
+    ).forEach { spelled ->
+      assertTrue(spelled in cs, "expected `$spelled`; got: ${lambdaLines(cs)}")
+    }
+  }
+
+  private fun lambdaLines(cs: String): List<String> =
+    cs.lines().filter { "KotlinFunc<" in it || "KotlinAction<" in it }.map { it.trim() }
 }
