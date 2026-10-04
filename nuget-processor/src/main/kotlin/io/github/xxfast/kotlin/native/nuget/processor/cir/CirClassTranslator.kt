@@ -138,6 +138,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyHandleRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyValueClassRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnumRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInheritedOutcome
+import io.github.xxfast.kotlin.native.nuget.processor.forward.inheritedOutcomeOn
+import io.github.xxfast.kotlin.native.nuget.processor.forward.inlineList
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
@@ -175,21 +178,39 @@ private fun keepsSupertype(
   val simpleName: String = supertype.simpleName.asString()
   val supertypeName: String = qualified ?: simpleName
   val packageName: String = supertype.packageName.asString()
+  // The real per-member outcome, read off the planned catalog: a re-homed member no route carries
+  // is named by its own `SKIPPED_*` warning on [cls], so "bound on X directly" must not claim it.
+  // All bound keeps the shipped sentences to the byte.
+  val outcome: ForwardInheritedOutcome = supertype.inheritedOutcomeOn(cls, keptBase)
+  // "its public members are bound on X directly", or the clause naming the members that are not.
+  fun membersOn(owner: String, possessive: String, verb: String, verbNone: String): String {
+    val unrouted: List<String> = outcome.unrouted
+    if (unrouted.isEmpty()) return "$possessive public members are $verb on $owner directly"
+    val list: String = unrouted.inlineList()
+    val one: Boolean = unrouted.size == 1
+    if (outcome.bound.isEmpty()) {
+      return "none of $possessive public members $verbNone on $owner: $list " +
+          if (one) "is named by its own warning" else "are each named by their own warning"
+    }
+    return "$possessive public members are $verb on $owner directly except $list, which no " +
+        "route carries and which " +
+        if (one) "is named by its own warning" else "are each named by their own warning"
+  }
   val reason: String = when (kind) {
     // Interface super-interfaces: an INTERFACE owner re-homes the dropped super's members onto
     // `I$name` itself (the ADR-101 mirror), so a C# implementer still owes and gets them.
     SupertypeKind.SUPER_INTERFACE ->
       "super-interface '$supertypeName' is not in the export set, so it has no generated C# " +
-          "interface; I$name is generated without it and its public members are declared on " +
-          "I$name directly"
+          "interface; I$name is generated without it and " +
+          membersOn("I$name", "its", "declared", "are declared")
 
     // ADR-101 amendment (2026-09-27): the old text said the interface "carries no members the C#
     // side could call", which was never true of a defaulted member and is plainly false on a
     // sealed base, which re-homes the interface's abstract members as well.
     SupertypeKind.INTERFACE ->
       "supertype '$supertypeName' is not in the export set, so it has no generated C# " +
-          "interface; $name is generated without it and its public members are bound on " +
-          "$name directly"
+          "interface; $name is generated without it and " +
+          membersOn(name, "its", "bound", "bind")
 
     // ADR-101 amendment (2026-09-11): "no base at all" is only true when the whole declared
     // chain is unexported. With `Dinghy : Skiff : Vessel` the walk keeps `Vessel`, so the middle
@@ -199,36 +220,53 @@ private fun keepsSupertype(
       // The single-drop clause is unchanged to the byte ("the base's", not the dropped base's
       // name): it is quoted in ADR-101 and `forward-overview.md`, and only the chain case is new.
       val placement: String = if (keptBase == null) {
-        "$name is generated with no base at all and the base's"
+        "$name is generated with no base at all and"
       } else {
         "$name is generated extending ${keptBase.simpleName.asString()}, the nearest exported " +
-            "base, and $simpleName's"
+            "base, and"
       }
+      val possessive: String = if (keptBase == null) "the base's" else "$simpleName's"
       "base class '$supertypeName' is not in the export set, so it has no generated C# class; " +
-          "$placement public members are bound on $name directly"
+          "$placement ${membersOn(name, possessive, "bound", "bind")}"
     }
   }
+  // "nothing callable is lost" is only true when every re-homed member binds.
+  val nothingLost: Boolean = outcome.unrouted.isEmpty()
   val hint: String = when (kind) {
     SupertypeKind.SUPER_INTERFACE ->
-      "nothing callable is lost ($simpleName's members are declared on I$name), but C# sees " +
-          "no $simpleName type, so `is`/`as` against it is gone; note that include(\"...\") " +
-          "does not help here — the export reachability closure never walks supertypes"
+      if (nothingLost) {
+        "nothing callable is lost ($simpleName's members are declared on I$name), but C# sees " +
+            "no $simpleName type, so `is`/`as` against it is gone; "
+      } else {
+        "only the members named separately are lost, but C# also sees no $simpleName type, " +
+            "so `is`/`as` against it is gone; "
+      } + "note that include(\"...\") does not help here — the export reachability closure " +
+          "never walks supertypes"
 
     SupertypeKind.INTERFACE ->
-      "nothing callable is lost ($simpleName's implemented members export as members of " +
-          "$name), but C# sees no $simpleName type, so `is`/`as` against it is gone; note that " +
-          "include(\"...\") does not help here — the export reachability closure never walks " +
-          "supertypes"
+      if (nothingLost) {
+        "nothing callable is lost ($simpleName's implemented members export as members of " +
+            "$name), but C# sees no $simpleName type, so `is`/`as` against it is gone; "
+      } else {
+        "only the members named separately are lost, but C# also sees no $simpleName type, " +
+            "so `is`/`as` against it is gone; "
+      } + "note that include(\"...\") does not help here — the export reachability closure " +
+          "never walks supertypes"
 
     // ADR-101's 2026-09-11 amendment: which of the two clauses is true here is decided by
     // `containingFile`, the same cross-module signal the reachability closure keys on
     // (`ForwardReachabilityClosure.kt`), so the author is told the one fix that works for
     // *their* base instead of both halves of a hedge.
     SupertypeKind.BASE_CLASS -> {
-      val lost: String =
+      val lost: String = if (nothingLost) {
         "nothing callable is lost ($simpleName's public members export as members of " +
             "$name), but C# sees no $simpleName type and no inheritance relation, so `is`/`as` " +
             "against it and any other subclass's shared base are gone; "
+      } else {
+        "only the members named separately are lost, but C# also sees no $simpleName type and " +
+            "no inheritance relation, so `is`/`as` against it and any other subclass's shared " +
+            "base are gone; "
+      }
       if (supertype.containingFile == null) {
         lost + "$simpleName is declared in a dependency, and include(\"$packageName\") alone " +
             "will not admit it: the export reachability closure never walks supertypes, so it " +

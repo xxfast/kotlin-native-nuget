@@ -2004,9 +2004,9 @@ one existing warning (`curlup.Curl.area`), whose sentence now ends "...or on a v
 overload suffix on a named member; private-companion filtering; a generic class that inherits (not
 overrides) a `suspend` default. The native pipeline was not run for this item.
 
-**Found, not fixed.** The `SKIPPED_UNEXPORTED_SUPERTYPE` text "its public members are bound on X
-directly" (`cir/CirClassTranslator.kt`) is partly false when an inherited member is unrouted and
-named separately. Recorded in `ROADMAP.md`.
+**Found, fixed 2026-10-04.** The `SKIPPED_UNEXPORTED_SUPERTYPE` text "its public members are bound
+on X directly" (`cir/CirClassTranslator.kt`) was partly false when an inherited member is unrouted
+and named separately. See the 2026-10-04 amendment on the unexported-supertype warning below.
 
 ## Amendment (2026-10-03): the `ABSTRACT`, `SUSPEND` and `TYPE_PARAMETER` audit
 
@@ -2079,3 +2079,50 @@ own refusal still names the member.
 nested `sealed` arm (`Trip.Leg.miles`), and a new test pins the two abstract-arm members declared
 `abstract`, overridden by the wrapper and named by no warning. `:nuget-processor:test`: 1645
 passed, 0 failed.
+
+## Amendment (2026-10-04): `SKIPPED_UNEXPORTED_SUPERTYPE` says which inherited members bind
+
+The warning for a skipped unexported supertype said "its public members are bound on X directly" and
+"nothing callable is lost" whether or not every inherited member bound. That is false for a member
+the planner drops, which is named by its own `SKIPPED_*` warning on the inheriting class. The
+2026-10-03 amendment on the inferred residuals recorded it as found, not fixed.
+
+**Rule.** The sentence reads the per-member outcome off the planned catalogs
+(`ForwardUnroutedMembers`,
+filled once per KSP round before any class is translated). It counts the callables and properties
+the planner dropped, by Kotlin name; members of a kept exported base, and `Any`'s, are not counted.
+
+- Every inherited member binds: the sentence and hint are byte-identical to before.
+- Some do not: "... are bound on `Nester` directly except `lining`, which no route carries and which
+  is named by its own warning" (plural: "are each named by their own warning").
+- None bind: "none of its public members bind on X: `a` and `b` are each named by their own
+  warning".
+- The hint's "nothing callable is lost" becomes "only the members named separately are lost" in
+  both non-all-bound cases. The `is`/`as` clause and the `include(...)` note are unchanged.
+
+The three supertype kinds (base class, interface, super-interface) and the base-chain variant share
+this code. The super-interface variant keeps its own verb ("declared on `IX`" instead of "bound").
+
+The packaged fixture `Nester : Nesting` is the one entry that changed:
+
+```
+before: ... Nester is generated without it and its public members are bound on Nester directly.
+        nothing callable is lost (Nesting's implemented members export as members of Nester), ...
+after:  ... Nester is generated without it and its public members are bound on Nester directly
+        except `lining`, which no route carries and which is named by its own warning. only the
+        members named separately are lost, but C# also sees no Nesting type, ...
+```
+
+The text appears only in `NugetDiagnostics.json` and the build console. No generated C# changes.
+
+**Known limit.** A member refused by the older suspend, `Flow` or callback routes rather than
+dropped by the planner is not counted, so a sentence for such an owner can still say "bound" about
+it. Inferred from the implementation, not measured. The interface-owner variant ("declared on `IX`
+directly") has no dedicated cell, and an overloaded name counts as unrouted when any overload is
+dropped (inferred from reading the code).
+
+**Verified.** `Tier1UnexportedSupertypeOutcomeTest` pins four cells, each asserting the warning
+appears once: all bound, some unrouted (`tally` and `feedMixed`, which also appear as their own
+warnings), none bound (`pick` and `drain`), and a base class with one unrouted member.
+`:nuget-processor:test` 1682 passed, 0 failed. Native pipeline: IntegrationTests 3070, LeakTests
+168, 7 AOT shapes. No `LeakTests` row: the change is diagnostic text only.

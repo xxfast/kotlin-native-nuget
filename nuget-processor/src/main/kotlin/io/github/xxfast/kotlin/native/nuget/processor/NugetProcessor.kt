@@ -129,6 +129,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceSu
 import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsForwardFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDeclaredTypeNames
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardUnroutedMembers
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardArmMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedSubclass
@@ -2306,6 +2307,9 @@ internal class NugetProcessor(
     // ADR-064 amendment (2026-09-13): the structural generic functions, which never reach the
     // planner (see the function's own KDoc).
     warnUnroutedGenericFunctions(genericFunctions, logger)
+    // The per-owner drops `SKIPPED_UNEXPORTED_SUPERTYPE` reads, so it names the inherited members
+    // that do not bind rather than claiming they all do. Before any class is translated.
+    ForwardUnroutedMembers.reset(listOf(callableCatalog, interfaceDeclarationCatalog))
     // ADR-064 amendment (2026-09-13): an interface's own declared members are planned onto
     // `callableCatalog` only when the interface is REACHABLE (ADR-040), so an unrouted member of
     // an interface that is merely implemented would be named nowhere -- and `classEntries`
