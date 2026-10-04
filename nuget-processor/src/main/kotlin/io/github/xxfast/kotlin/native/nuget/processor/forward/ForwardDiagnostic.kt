@@ -653,6 +653,10 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   // ADR-188: the same route, the same kind.
   ForwardPlanSkipReason.SHADOWED_BY_EXTENSION_FUNCTION ->
     ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY
+  // ADR-188 amendment: not a skip the author can live with. C# cannot declare the pair (CS0102)
+  // and neither twin is a safe survivor, so it is ADR-034's collision.
+  ForwardPlanSkipReason.NULLABLE_RECEIVER_TWIN ->
+    ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION
   ForwardPlanSkipReason.NULLABLE ->
     if (position == ForwardSkipPosition.INPUT) ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_INPUT
     else ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_RETURN
@@ -1018,11 +1022,20 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
           "the extension is unreachable by call syntax ($name)"
 
     // ADR-188: C#'s own resolution, not Kotlin's. Both members declare; only the access is broken.
+    // The detail names the function with its kind (an extension function, an enum member function
+    // rendered beside it in `{Enum}Extensions`, or a class member function), and the error codes
+    // cover all three: CS9339 for a zero-parameter extension method, CS1061 once it takes a
+    // parameter, CS0428 for an instance method.
     ForwardPlanSkipReason.SHADOWED_BY_EXTENSION_FUNCTION ->
-      "the extension function ${detail?.let { "`$it`" } ?: "of the same name"} on the same " +
-          "receiver renders the same C# name, and a C# 14 extension property beside a same-named " +
-          "extension method makes every access to either ambiguous (CS9339), so the function " +
-          "keeps the name ($name)"
+      "the ${detail ?: "function of the same name"} on the same receiver renders the same C# " +
+          "name, and beside a same-named method a C# 14 extension property is unreachable by " +
+          "member access (CS9339, CS1061 or CS0428), so the function keeps the name ($name)"
+
+    // ADR-188 amendment: the two declarations ride in the detail.
+    ForwardPlanSkipReason.NULLABLE_RECEIVER_TWIN ->
+      "${detail ?: "it and its nullable-receiver twin"} both render one C# 14 extension property " +
+          "in one class, and C# cannot declare a member twice (CS0102); neither is a safe " +
+          "survivor, because dropping either would change the value one receiver type reads ($name)"
 
     // Issue #131 names the parameter at an input position; the ADR-064 2026-09-29 amendment names
     // the declared type at a return. With neither, the shipped generic sentence stands.
@@ -1488,6 +1501,12 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   ForwardPlanSkipReason.SHADOWED_BY_EXTENSION_FUNCTION ->
     "to keep both, give the property (or the function) its own C# name with " +
         "`@CSharpName(\"...\")`; or rename one of them in Kotlin"
+
+  // ADR-188 amendment: `@CSharpName` cannot separate the twins, because both still derive one
+  // plan symbol and one C entry point from the Kotlin name.
+  ForwardPlanSkipReason.NULLABLE_RECEIVER_TWIN ->
+    "rename one of them in Kotlin (`@CSharpName` cannot separate them: both derive one C entry " +
+        "point from the Kotlin name)"
 
   // ROADMAP Phase 4 (ADR-151 amendment): since a `ByteArray` binds as a `List` element and as a
   // `Map` VALUE, the only shapes that still reach this reason are the two DECLINED equality slots,

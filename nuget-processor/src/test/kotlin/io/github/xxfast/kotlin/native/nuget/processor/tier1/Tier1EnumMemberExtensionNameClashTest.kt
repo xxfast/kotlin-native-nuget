@@ -2,6 +2,9 @@ package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
+import kotlin.test.assertContains
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -87,5 +90,68 @@ class Tier1EnumMemberExtensionNameClashTest {
       Regex(Regex.escape("EntryPoint = \"$entryPoint\"")).findAll(result.generatedCSharp).count() == 1,
       "expected the member's single C# import; csharp=${result.generatedCSharp}",
     )
+  }
+
+  /**
+   * ADR-188 amendment: an enum member FUNCTION renders `Grooming(this Coat …)` in the same
+   * `CoatExtensions` class the extension property `val Coat.grooming` renders `Grooming` into.
+   * C# 14 then resolves neither by member syntax: CS9339 on the property access for a
+   * zero-parameter method, CS1061 on both forms once the method takes a parameter. So the clash
+   * is by name, whatever the arity: the property is skipped with the ADR-188 warning naming the
+   * enum member function, and the function keeps the name.
+   */
+  private fun assertEnumMemberFunctionKeepsTheName(packageName: String, function: String) {
+    val result = Tier1Harness.run(
+      """
+      package tier1.$packageName
+
+      enum class Coat {
+        TUXEDO, TABBY;
+
+        $function
+      }
+
+      val Coat.grooming: Int get() = ordinal + 10
+      """.trimIndent(),
+    )
+
+    assertTrue(result.kspErrors.isEmpty(), "expected no KSP errors; kspErrors=${result.kspErrors}")
+    assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    val shadowed: List<String> = result.kspWarnings.filter {
+      it.contains("SHADOWED_BY_EXTENSION_FUNCTION")
+    }
+    assertEquals(1, shadowed.size, "expected one clash warning; kspWarnings=${result.kspWarnings}")
+    val warning: String = shadowed.single()
+    assertContains(warning, ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_PROPERTY.name)
+    assertContains(warning, "the enum member function `Coat.grooming`")
+    assertContains(warning, "@CSharpName")
+    assertFalse(
+      warning.contains("extension function"),
+      "names the member, not an extension: $warning",
+    )
+
+    // The property is gone from both halves; the member function keeps `Grooming`.
+    val getter = "library_tier1_${packageName}__coat_get_grooming"
+    assertFalse(result.generated.contains(getter), "no property export; ${result.generated}")
+    assertFalse(result.generatedCSharp.contains(getter), "no property import")
+    assertFalse(
+      Regex("""public\s+int\s+Grooming\s*\{""").containsMatchIn(result.generatedCSharp),
+      "no extension property member; csharp=${result.generatedCSharp}",
+    )
+    assertTrue(
+      Regex("""public static int Grooming\(this global::[\w.]+\.Coat coat""")
+        .containsMatchIn(result.generatedCSharp),
+      "the member function keeps the name; csharp=${result.generatedCSharp}",
+    )
+  }
+
+  @Test
+  fun `an enum member function with no parameters keeps the name over an extension property`() {
+    assertEnumMemberFunctionKeepsTheName("enumclash3", "fun grooming(): Int = ordinal")
+  }
+
+  @Test
+  fun `an enum member function with a parameter keeps the name over an extension property`() {
+    assertEnumMemberFunctionKeepsTheName("enumclash4", "fun grooming(times: Int): Int = times")
   }
 }

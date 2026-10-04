@@ -135,6 +135,13 @@ cat.HomeLabel(); // "Oreo's basket"
 cat.HomeTag;     // "Oreo's tag"
 ```
 
+The same skip applies when the receiver's own enum, class or value class declares a member function
+with that C# name, at any arity (`fun grooming(times: Int)` beside `val Cat.grooming`), because a
+member method makes `cat.Grooming` unreachable as a property. The property is skipped with the
+warning and the member function keeps the name; `@CSharpName` on the property keeps both. Before
+this rule an enum member function without parameters was a build error and the other cases shipped C#
+that failed to compile.
+
 The clash is per generated C# extension class. On an exported receiver such as `Cat`, extensions
 from every package merge into one `CatExtensions`, so the skip applies across packages. On an
 unexported receiver such as `String`, each package gets its own `StringExtensions`, so a property
@@ -143,6 +150,10 @@ namespaces gets CS9339 on the property syntax; call `A.StringExtensions.get_Tag(
 
 Two extension properties with the same C# name on the same receiver are a build error
 (`ERROR_CSHARP_SIGNATURE_COLLISION`); rename one with `@CSharpName`.
+
+`val Cat.x` beside `val Cat?.x` compiles in Kotlin but is also a build error with
+`ERROR_CSHARP_SIGNATURE_COLLISION`, because C# cannot declare both. `@CSharpName` does not separate
+them; rename one of them in Kotlin.
 
 `Instant`, `Duration`, and `Uuid` map to `DateTimeOffset`, `TimeSpan`, and `Guid` at a receiver the
 same way they do everywhere else (see
