@@ -136,6 +136,22 @@ using var oreo = new Ranked<int>(9);
 Assert.True(oreo.Outranks(4));   // public class Ranked<T> ... where T : notnull
 ```
 
+A parameter with several bounds lists every exportable one in the `where` clause, on a class and on
+a function alike. The stdlib bounds are dropped as above, so `where T : Comparable<T>, T : Pet`
+renders `where T : IPet`.
+
+```kotlin
+class Arena<T>(val champion: T) where T : Pet, T : Trainable {
+  fun challenge(challenger: T): T =
+    if (challenger.tricks > champion.tricks) challenger else champion
+}
+```
+
+```C#
+using var oreo = new Performer("Oreo", 3);        // Performer is both a Pet and a Trainable
+using var arena = new Arena<Performer>(oreo);     // where T : IPet, ITrainable
+```
+
 ### A generic bound from another package {id="a-generic-bound-from-another-package"}
 
 When the bound is declared in a different Kotlin package than the generic class itself, the
@@ -394,8 +410,11 @@ one, the member is skipped with a named diagnostic, but the generic owner is sti
 A generic function bounded by a stdlib type (`fun <T : Number> weigh(value: T): T`) takes only a
 Kotlin-generated wrapper as `T`. `Treats.Weigh<int>(4)` compiles but throws `NotSupportedException`
 at run time; use a generic class (`Tally<int>` works) when the argument is an `int`, `string` or
-`double`. A bound written `T : Enum<T>` or with several bounds does not generate compilable Kotlin
-yet.
+`double`.
+
+These bounds do not generate compilable code yet: `T : Enum<T>`, a self-referencing bound on an
+invariant type (`T : Node<T>`), and a bound on a generic interface (`T : Rival<T>`), whose C#
+`where` clause drops the type arguments and fails with CS0305.
 
 <seealso>
     <category ref="related">

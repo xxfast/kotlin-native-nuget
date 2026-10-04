@@ -1503,7 +1503,7 @@ internal class ForwardCallablePlanner(
 
     val owner: String = cls.qualifiedName?.asString() ?: className
     // ADR-147: null for an ordinary class, `io.pkg.Crate<Any?>` for a generic one.
-    val ownerType: String? = cls.forwardOwnerTypeName()
+    val ownerType: ForwardGenericOwner? = cls.forwardGenericOwner()
     // ADR-090: overload numbering, the scheme `valueClassMethodEntries` uses (itself ADR-034's
     // secondary-constructor scheme). Counted over the *declared plannable* members in
     // `getAllFunctions()` order — the counter increments before the structural check, so a
@@ -2029,7 +2029,7 @@ internal class ForwardCallablePlanner(
             },
             result = result,
             origin = ForwardCallableOrigin.COPY,
-            ownerType = cls.forwardOwnerTypeName(),
+            ownerType = cls.forwardGenericOwner(),
             node = primary,
             // ADR-164: every `copy` parameter defaults to the receiver's own value, so every one
             // widens and unset means "keep".
@@ -2158,7 +2158,7 @@ internal class ForwardCallablePlanner(
       target = owner,
       // ADR-147: `Crate<Any?>(item)`, so the constructed instance is the type the receiver read
       // back and every `T`-typed constructor parameter accepts its decoded box.
-      ownerType = cls?.forwardOwnerTypeName(),
+      ownerType = cls?.forwardGenericOwner(),
       node = constructor,
       defaults = declaredDefaults(constructor.parameters, flags, marked),
       // ADR-150 amendment: a primary constructor carries no `docString` of its own, so its
@@ -2846,7 +2846,7 @@ internal class ForwardCallablePlanner(
     result: BridgeType,
     origin: ForwardCallableOrigin,
     target: String? = null,
-    ownerType: String? = null,
+    ownerType: ForwardGenericOwner? = null,
     invocationReceiver: String? = null,
     includeError: Boolean = true,
     valueClassProperty: Boolean = false,
@@ -2882,7 +2882,7 @@ internal class ForwardCallablePlanner(
     origin: ForwardCallableOrigin,
     target: String? = null,
     // ADR-147: the applied Kotlin spelling of a generic owner, null for an ordinary class.
-    ownerType: String? = null,
+    ownerType: ForwardGenericOwner? = null,
     invocationReceiver: String? = null,
     includeError: Boolean = true,
     valueClassProperty: Boolean = false,
