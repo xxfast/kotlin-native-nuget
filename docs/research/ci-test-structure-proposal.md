@@ -10,8 +10,9 @@ before the leak harness. Keep the jobs parallel and keep today's pull request co
 
 - **Done in the first pass:** job ids, display names, step prefixes and the leak harness moved to
   last in the bridge job. Matching headings in `scripts/verify.sh`. No coverage change.
-- **Not done, separate decisions:** any reduction of the Kotlin range legs, the Windows processor
-  leg, or a direction split of `IntegrationTests`.
+- **Later passes, one pull request each:** the forward generator on Ubuntu, a path filter on the
+  `Repo on Kotlin X:` stage, a direction split of `IntegrationTests`, and the outside-consumer
+  fixture. Each is described where it applies below.
 - **No staging:** gating jobs behind each other only saves compute on red runs, and the last 40
   CI runs had none.
 
@@ -232,9 +233,31 @@ the tables above; none is measured as a change.
 
 | Lever | Saves per run | What it costs |
 |---|---|---|
-| Run `Repo on Kotlin X:` only on `main` or behind a path filter, keeping `Published artifacts:` on every pull request | About 31 to 34 runner-minutes, 25% | A range behaviour break is found later. A path filter needs a dependency audit first: processor, annotations, runtime, plugin, build configuration, fixtures, and the scripts and workflow that run the job |
+| Run `Repo on Kotlin X:` on a pull request only behind a path filter, keeping `Published artifacts:` on every pull request (done in the third pass, see below) | About 31 to 34 runner-minutes, 25%, on a pull request the filter skips | A range behaviour break from a processor or fixture change is found on `main`, after merge |
 | Drop `LeakTests` from the range legs | About 10.6 runner-minutes, 8 to 9% | Assumes leaks do not vary by Kotlin patch version. Not shown either way |
 | Run the Windows processor leg only on `main` | About 18 runner-minutes, 13 to 15% | A Windows-only generator regression is found after merge |
+
+### The `Repo on Kotlin X:` path filter
+
+On a pull request the stage runs only when the diff touches one of these. A push to `main` always
+runs it, and a diff that cannot be computed runs it.
+
+| Path | Why it can move range behaviour |
+|---|---|
+| `gradle.properties`, `gradle/`, `settings.gradle.kts`, `build.gradle.kts`, any `*/build.gradle.kts` or `*/settings.gradle.kts` | Version pins, `kotlinFloor`, `kotlinTested`, the `kotlinVersion` override, target and dependency declarations |
+| `nuget-plugin/` | Calls the consumer's KGP, generates the reverse Kotlin |
+| `nuget-runtime/`, `nuget-annotations/` | The klibs whose ABI sets the floor |
+| `smoke-test/` | The by-coordinate consumer and its Kotlin selection |
+| `.github/workflows/ci.yml` | The job itself |
+
+Deliberately not in the filter: `nuget-processor/`, `test-library/`, `test-companion/`,
+`test-models/` and the C# projects. They can still break at one end of the range, for example
+generated Kotlin that only the floor compiler rejects. Most pull requests touch exactly these, so
+including them would make the filter run almost always and save nothing. The trade is explicit:
+such a break passes its pull request and goes red on the push to `main`.
+
+This is a coverage reduction, not an equivalent filter. It is worth revisiting when the range
+first spans a Kotlin minor, where a compiler difference is far more likely than across patches.
 
 Not levers:
 
