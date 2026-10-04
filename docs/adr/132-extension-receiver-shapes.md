@@ -338,7 +338,7 @@ not a new receiver shape and does not change the table above; it is a gate on to
 inherited via `getAllProperties()`) for a same-named, non-private, non-protected, non-extension
 candidate. Finding one drops the extension with a new `SHADOWED_BY_MEMBER` reason, reported under
 `SKIPPED_UNSUPPORTED_PROPERTY`: "the member property `Foo.x` shadows it: Kotlin resolves
-`receiver.x` to the member, so the extension is unreachable by call syntax", with a suggested fix to
+`receiver.x` to the member, so the extension is unreachable by plain call syntax", with a suggested fix to
 rename the extension or expose a top-level function instead. A private or protected member is not
 visible from the generated file and is not a candidate; a member *extension* property is not a
 candidate either, since plain `receiver.x` never resolves to one. A nullable receiver (`val
@@ -350,8 +350,51 @@ inherited shadowing member, a private member (does not shadow), and a nullable r
 shadow) all render as expected; the member keeps its own export and the shadowed extension exports
 on neither half.
 
-**Known gap, not fixed here:** the extension **function** twin has the same defect
-(`fun Foo.y()` beside member `Foo.y()` renders `receiver.y()`, which also resolves to the member) and
-still exports today. Closing it needs overload applicability matching (arity, parameter types after
-alias expansion, defaults, varargs, generics), not a name-only check, so it is a separate ROADMAP
-item, pinned as a known-wrong control in the same Tier 1 test.
+**Known gap, closed by the 2026-10-03 amendment:** the extension **function** twin had the same
+defect (`fun Foo.y()` beside member `Foo.y()` rendered `receiver.y()`, which also resolves to the
+member). Detecting it would need overload applicability matching, not a name-only check, so the
+amendment keeps the extension and calls it through an aliased import instead.
+
+## Amendment (2026-10-03): an extension function shadowed by a member is kept and called through an aliased import
+
+Closes the known gap of the 2026-09-28 amendment. An extension function whose receiver has an
+applicable member of the same name (`fun Lantern.glow()` in another package beside member
+`Lantern.glow()`) used to be exported with the body `receiver.glow()`, which Kotlin resolves to the
+member, so C# `LanternExtensions.Glow(lantern)` silently returned the member's result. The wording
+"unreachable by plain call syntax" in the 2026-09-28 amendment is true of `receiver.glow()` only: an
+aliased import (`import pkg.glow as alias`) is ordinary call syntax and reaches the extension.
+
+The rule: every extension function is imported under an alias and called through it. The alias is
+`nuget_ext_` plus the qualified name with `_` written `_u` and `.` written `__`, so it is injective
+across packages. One `import pkg.`name` as alias` covers every overload of `name` in that package,
+and the name is backticked in the import. The generated body is
+`receiver.asStableRef<Lantern>().get().nuget_ext_..._lamplight__ext__glow()`. An enum member shares
+the extension call shape but is a real member call and keeps its plain name.
+
+The extension is kept, not skipped. A name-only skip, which is exact for properties (no overloads),
+would drop valid extensions such as `fun Foo.w(a: Long)` beside member `w(a: Int)`, where the member
+is not applicable and the extension already wins. Extension functions and properties therefore
+differ on purpose: a function is kept and correct, a shadowed property is still a named skip. C# and
+Kotlin each keep their own resolution: `lantern.Glow()` is the member and
+`LanternExtensions.Glow(lantern)` is the extension.
+
+A side effect: two same-named extension functions on one receiver from two packages used to be
+imported by simple name into one generated file, which failed to compile with an overload
+resolution ambiguity. Distinct aliases remove it.
+
+**Verified:** `Tier1ShadowedExtensionFunctionTest` failed before (the generated Kotlin did not
+compile) and passes after, covering the exact, member-default, vararg, generic, supertype-parameter
+and `invoke`-property shadows, the `w(a: Long)` control, an overload pair, the default package and
+two packages sharing one extension name. `ShadowedExtensionFunctionTests` reads the value from C#
+(`"extension"` from `LanternExtensions.Glow`, `"member"` from `lantern.Glow()`). Kotlin/Native
+accepted the backticked aliased import in the real pipeline.
+
+**Inferred, not checked:** an alias behaves the same for `suspend`, `infix`, `operator` and generic
+extensions beyond the shapes above.
+
+**Known gaps found alongside, not fixed here:** a member function and an extension function of the
+same name on one receiver declared in the same package claim one C entry point (verified,
+`ERROR_C_ENTRY_POINT_COLLISION`), so the alias only reaches an extension in another package. A class
+in the default package with an extension (`class Leash` plus `fun Leash.tug()`) is inferred to
+generate `Unresolved reference 'Leash'` (not checked against main). An extension function whose
+name needs backticks is unverified and may produce an invalid alias.

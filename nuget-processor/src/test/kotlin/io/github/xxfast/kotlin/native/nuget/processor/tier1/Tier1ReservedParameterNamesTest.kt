@@ -169,7 +169,7 @@ class Tier1ReservedParameterNamesTest {
     )
     assertContains(result.generatedCSharp, "Native_Tag(receiver, receiver_, out IntPtr error);")
     assertContains(result.generated, "  `receiver`: String,\n  receiver_: String,\n  errorOut:")
-    assertContains(result.generated, "receiver.tag(receiver_)")
+    assertContains(result.generated, "receiver.nuget_ext_tier1__reserved__tag(receiver_)")
   }
 
   /**

@@ -101,7 +101,12 @@ class ForwardDeclarationRoutingMatrixTest {
             ForwardAbiRole.RECEIVER,
           ),
         ),
-        invocation = ForwardInvocation("sample.route", origin = origin),
+        invocation = ForwardInvocation(
+          "sample.route",
+          origin = origin,
+          extensionImportAlias = forwardExtensionImportAlias("sample", "route")
+            .takeIf { origin == ForwardCallableOrigin.EXTENSION },
+        ),
         publicParams = emptyList(),
       )
 

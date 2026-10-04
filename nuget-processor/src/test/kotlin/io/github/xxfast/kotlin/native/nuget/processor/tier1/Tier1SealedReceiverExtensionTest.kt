@@ -55,7 +55,8 @@ class Tier1SealedReceiverExtensionTest {
     )
     assertTrue(
       result.generated.contains(
-        "receiver.asStableRef<tier1.sealedreceiver.Shape>().get().describe()",
+        "receiver.asStableRef<tier1.sealedreceiver.Shape>().get()" +
+          ".nuget_ext_tier1__sealedreceiver__describe()",
       ),
       "expected the export to read the receiver back through its StableRef; " +
           "generated=${result.generated}",

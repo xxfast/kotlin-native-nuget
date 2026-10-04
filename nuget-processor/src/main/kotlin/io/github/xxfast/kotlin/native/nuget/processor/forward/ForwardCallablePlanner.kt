@@ -2346,6 +2346,8 @@ internal class ForwardCallablePlanner(
       // off its `expect`, matched with the receiver as part of the signature.
       defaults = declaredDefaults(function.parameters, expectDefaultFlags(function)),
       doc = function.forwardKdoc(expects).forParameters(function.parameters),
+      extensionImportAlias =
+        forwardExtensionImportAlias(function.packageName.asString(), functionName),
     )
       // ADR-064 amendment (2026-09-13): no legacy route is keyed to an extension for any of these
       // reasons (measured cells 6a/6b/13c/18c/22c; `translateExtensionFunction` has no caller at
@@ -2627,11 +2629,12 @@ internal class ForwardCallablePlanner(
     node: KSNode? = null,
     defaults: ForwardDeclaredDefaults? = null,
     doc: ForwardKdoc? = null,
+    extensionImportAlias: String? = null,
   ): ForwardCallableCatalogEntry = try {
     planOrSkipUnguarded(
       symbol, publicName, exportName, receiver, parameters, result, origin, target, ownerType,
       invocationReceiver, includeError, valueClassProperty, member, isOverride, isVirtual, node,
-      defaults, doc,
+      defaults, doc, extensionImportAlias,
     )
   } catch (failure: Exception) {
     ForwardCallableCatalogEntry.Skipped(
@@ -2664,6 +2667,8 @@ internal class ForwardCallablePlanner(
     defaults: ForwardDeclaredDefaults? = null,
     // ADR-150: the author's KDoc, already keyed by the bridge parameter names in [parameters].
     doc: ForwardKdoc? = null,
+    // The alias an EXTENSION is imported and called under; see `ForwardInvocation`.
+    extensionImportAlias: String? = null,
   ): ForwardCallableCatalogEntry {
     // ADR-115: the author's own signal, checked before any type is looked at -- nothing about the
     // declaration is unsupported, it is simply not part of the exported surface. One check for
@@ -2859,6 +2864,7 @@ internal class ForwardCallablePlanner(
         member = member,
         unwrapsKotlinResult = unwrapsKotlinResult,
         ownerType = ownerType,
+        extensionImportAlias = extensionImportAlias,
       ),
       publicSignature = ForwardPublicSignature(
         name = publicName,
