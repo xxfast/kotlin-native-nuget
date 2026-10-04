@@ -77,6 +77,9 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.addSuspendFunction
 import io.github.xxfast.kotlin.native.nuget.processor.exports.addValueClassExports
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedDeclaration
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.COMPANION_OWNER_INTERFACE
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCarrierlessCompanion
+import io.github.xxfast.kotlin.native.nuget.processor.forward.carrierlessCompanionDrops
 import io.github.xxfast.kotlin.native.nuget.processor.forward.NUGET_BINDING_MARKER
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardValueClassUnderlying
 import io.github.xxfast.kotlin.native.nuget.processor.forward.validateCSharpNames
@@ -2218,6 +2221,12 @@ internal class NugetProcessor(
     // class implements concretely would be warned about on every build.
     val supertypePropertyPlanner =
       ForwardPropertyPlanner(forwardClassifier, context.symbols, expects)
+    // ADR-064 amendment: an interface's `companion object` has no C# carrier (the generated
+    // `IFoo` declares no statics), and the nested-declaration walk skips companions on ADR-013's
+    // premise that they fold into the owner, which is untrue here. Each member is named once.
+    val interfaceCompanions: List<ForwardCarrierlessCompanion> = interfaces.map { iface ->
+      iface.carrierlessCompanionDrops(COMPANION_OWNER_INTERFACE)
+    }
     val interfaceDeclarationCatalog = ForwardCallablePlanCatalog(
       // Issue #249: the interface is the C# owner of whatever `IFoo` loses.
       // ADR-162: guarded per interface, same reasoning as the reachable loops above.
@@ -2225,7 +2234,7 @@ internal class NugetProcessor(
         guarded(iface.forwardGuardName(), iface, logger) {
           declarationPlanner.interfaceEntries(iface).ownedBy(iface.forwardDiagnosticOwner())
         }.orEmpty()
-      },
+      } + interfaceCompanions.flatMap { companion -> companion.callables },
       propertyPlans = interfaces.flatMap { iface ->
         guarded(iface.forwardGuardName(), iface, logger) {
           declarationPropertyPlanner.interfaceProperties(iface)
@@ -2238,7 +2247,8 @@ internal class NugetProcessor(
       // `docs/backlog/interface-own-dropped-member-diagnosed-nowhere.md`: this planner's own drop
       // channel was built and thrown away, so an interface property `IFoo` silently lost was
       // named in no channel at all.
-      droppedProperties = declarationPropertyPlanner.droppedProperties,
+      droppedProperties = declarationPropertyPlanner.droppedProperties +
+          interfaceCompanions.flatMap { companion -> companion.properties },
       // ROADMAP line 28: the setter half of the same hole. `IFoo` now renders `{ get; set; }` off
       // this catalog, so a refused setter on a merely-implemented interface has to be named here.
       droppedPropertySetters = declarationPropertyPlanner.droppedPropertySetters,

@@ -278,6 +278,13 @@ A `const val` in an `enum class`'s `companion object` skips this same way, namin
 skips under the standard kinds (`SKIPPED_UNSUPPORTED_COMBINATION` for a `suspend` one), naming the
 enum; see [Enums: Functions and companion members](enums.md#enum-functions).
 
+Two more places drop a member without any other sign, so each is named too. Members of an
+`interface`'s `companion object` (functions, `val` and `const val`) are not bound, because the
+generated C# interface has no statics; each is skipped by name. The companion of a value class or
+a sealed class or arm is skipped the same way. A member that an exported class inherits from an
+unexported interface or base class, and that no route binds (a generic function, say), is named
+once per inheriting class, not on the hidden declaration.
+
 A collection property is skipped the same way when one of its components (the element, or a map
 key or value) has no C# spelling. A sealed **class** component no longer falls into this bucket:
 since [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)
