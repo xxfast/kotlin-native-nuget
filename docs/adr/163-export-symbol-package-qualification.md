@@ -309,3 +309,26 @@ inferred cases are not in the name set (a member function literally named `get_x
 extension property `x`, and a member lambda-typed property's hand-written `<owner>_get_<name>`
 getter). ADR-117's diagnostic stays the backstop. ADR-132's 2026-10-04 amendment carries the
 consumer-visible behavior and the evidence.
+
+## Amendment 2026-10-04: a declaration with no package is a first-class case
+
+A library may declare types with no `package` line. The rule above already covered the symbol: a
+default-package declaration has an empty package segment, so `class Leash` with `fun Leash.tug()`
+in library `Library` exports `library_leash_tug`, with no `__` and no empty segment, the same
+omission a `rootPackage`-level declaration gets. That part was always right.
+
+What was missing is the generated Kotlin, not the symbol. The qualified name of a default-package
+type is the bare simple name, every route spells types by qualified name, and `CNameExports.kt`
+sits in its own package, so each reference was `Unresolved reference 'Leash'`. The fix is one step,
+`importReferencedRootPackageTypes`, run after the file is drafted. It adds `import Leash` for each
+default-package class, object, interface, value class, nested-class owner and typealias that the
+draft mentions, and leaves unreferenced ones without an import. Reading the finished text instead
+of asking each emitter to import keeps every current and future route covered by one place.
+Top-level default-package callables keep their own `importIfDefaultPackage`, since their call
+sites are bare. Nothing about symbol minting changed, so no existing symbol moves.
+
+Verified: `Tier1DefaultPackageExtensionTest` (class, object, data class, sealed interface, value
+class, interface, nested class, typealias, extension function and property, and the shadowed pair)
+compiles the generated Kotlin with the harness's JVM compiler, and `:nuget-processor:test` passes
+1660, 0 failed. Inferred: Kotlin/Native resolves the same import. It is not exercised, because
+every `test-library` fixture lives in a package.
