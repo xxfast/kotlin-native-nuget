@@ -14,6 +14,14 @@ pluginManagement {
     "`version` missing from the root gradle.properties"
   }
 
+  // ADR-195: `-Psmoke.kotlin=floor|tested|<literal>` picks the consumer's Kotlin, so CI can link this
+  // consumer at both ends of the supported range. Absent means `tested`.
+  val kotlinVersion: String = when (val requested: String = providers.gradleProperty("smoke.kotlin").getOrElse("tested")) {
+    "floor" -> requireNotNull(rootProperties.getProperty("kotlinFloor")) { "`kotlinFloor` missing from the root gradle.properties" }
+    "tested" -> requireNotNull(rootProperties.getProperty("kotlinTested")) { "`kotlinTested` missing from the root gradle.properties" }
+    else -> requested
+  }
+
   repositories {
     maven { url = uri(settingsDir.parentFile.resolve("build/local-repo")) }
     gradlePluginPortal()
@@ -22,6 +30,7 @@ pluginManagement {
 
   plugins {
     id("io.github.xxfast.kotlin.native.nuget") version pluginVersion
+    kotlin("multiplatform") version kotlinVersion
   }
 }
 
