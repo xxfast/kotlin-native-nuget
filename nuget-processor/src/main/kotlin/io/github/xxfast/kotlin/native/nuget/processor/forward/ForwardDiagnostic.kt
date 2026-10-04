@@ -821,7 +821,8 @@ internal fun ForwardPlanSkipReason.ownsSentence(detail: String?): Boolean =
  *   arms, which name the offending type, and by [ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED],
  *   where it carries the member kind ("suspend", "Flow", ...).
  * @param parameter the same slot [diagnosticHint] documents; read here only by
- *   [ForwardPlanSkipReason.NULLABLE], and only when the offending input is a named parameter.
+ *   [ForwardPlanSkipReason.NULLABLE] and (ADR-201) [ForwardPlanSkipReason.THROWABLE], and only
+ *   when the offending input is a named parameter.
  * @param returnType the same slot [diagnosticHint] documents; read only by
  *   [ForwardPlanSkipReason.NULLABLE] when [parameter] is null.
  */
@@ -1049,6 +1050,18 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
           "nullable spelling as one type, so it cannot declare the member twice (CS0102); " +
           "neither is a safe survivor, because dropping either would change the value one " +
           "receiver type reads ($name)"
+
+    // ADR-201: an input refused for its declared throwable type names that type, never the reason
+    // constant. Only the callable input route fills the detail, so any other THROWABLE skip (a
+    // `Set` element, a `Map` key) keeps the generic sentence.
+    ForwardPlanSkipReason.THROWABLE -> when {
+      detail == null -> generic
+      parameter != null ->
+        "its parameter `$parameter` is declared `$detail`, which cannot hold the " +
+            "`NugetManagedException` a C# exception arrives as"
+      else -> "its extension receiver is declared `$detail`, and a Kotlin throwable binds as a " +
+          "value, never as a receiver"
+    }
 
     // Issue #131 names the parameter at an input position; the ADR-064 2026-09-29 amendment names
     // the declared type at a return. With neither, the shipped generic sentence stands.

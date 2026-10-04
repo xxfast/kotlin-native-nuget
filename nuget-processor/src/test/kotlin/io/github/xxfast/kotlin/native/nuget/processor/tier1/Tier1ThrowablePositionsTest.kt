@@ -226,6 +226,14 @@ class Tier1ThrowablePositionsTest {
       "expected a named skip for strict whose hint names the bindable declarations; " +
           "kspWarnings=${result.kspWarnings}",
     )
+    // The reason line names the declared type, not the `THROWABLE` reason constant.
+    val strict: String = result.kspWarnings.single { it.contains("MishapLog.strict") }
+    assertContains(
+      strict,
+      "is declared `IllegalStateException`, which cannot hold the `NugetManagedException` a C# " +
+          "exception arrives as",
+    )
+    assertFalse("THROWABLE type combination" in strict, "expected no reason constant; got: $strict")
     Tier1CSharpCompile.assertCompiles(
       result,
       """
@@ -359,6 +367,12 @@ class Tier1ThrowablePositionsTest {
         "expected a named skip for $member; kspWarnings=${result.kspWarnings}",
       )
     }
+    assertTrue(
+      result.kspWarnings.any {
+        it.contains("describe") && it.contains("its extension receiver is declared `Throwable`")
+      },
+      "expected the receiver skip to name the declared type; kspWarnings=${result.kspWarnings}",
+    )
   }
 
   /**

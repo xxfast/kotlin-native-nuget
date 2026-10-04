@@ -3198,7 +3198,10 @@ internal class ForwardCallablePlanner(
           ?: ineligibleType.undeclaredTypeDetail()
           ?: ineligibleType.sealedTypeDetail()
           ?: ineligibleType.collectionComponentDetail()
-          ?: ineligibleType.unsupportedTypeDetail(),
+          ?: ineligibleType.unsupportedTypeDetail()
+          // ADR-201: the declared throwable's simple name, for THROWABLE's reason line.
+          ?: (ineligibleType.unwrapNullable() as? BridgeType.Throwable)
+            ?.kotlinType?.substringAfterLast('.'),
         position = ForwardSkipPosition.INPUT,
         parameter = ineligible.first,
       )
@@ -3226,14 +3229,19 @@ internal class ForwardCallablePlanner(
       }
     val unwrapsKotlinResult: Boolean = effectiveResult !== plannedResult
 
-    // ADR-201: a value class's own member keeps the ADR-014 no-errorOut ABI, and the value-class
-    // emitter's nullable result arm requires an error slot, so `Throwable?` there is a named skip
-    // rather than a processor crash. The non-null `Throwable` binds.
-    if (origin == ForwardCallableOrigin.VALUE_CLASS &&
-      (effectiveResult as? BridgeType.Nullable)?.type is BridgeType.Throwable
+    // A value class's own member and getter keep the ADR-014 no-errorOut ABI, and neither half of
+    // that route has a nullable result arm (the Kotlin emitter's needs an error slot, the C# one is
+    // a single expression). Every nullable result there used to reach the emitter's `require` and
+    // fail the whole KSP run; it is a named return skip instead, so the value class's other
+    // members still bind. A value-class constructor carries an error slot, so `value class
+    // X(val s: String?)` keeps its nullable underlying result.
+    if (origin == ForwardCallableOrigin.VALUE_CLASS && !includeError &&
+      effectiveResult is BridgeType.Nullable
     ) {
       return ForwardCallableCatalogEntry.Skipped(
-        symbol, ForwardPlanSkipReason.THROWABLE, node = node,
+        symbol, ForwardPlanSkipReason.NULLABLE, node = node,
+        position = ForwardSkipPosition.RETURN,
+        returnType = node.declaredResultType()?.kotlinSpelling(),
       )
     }
 
