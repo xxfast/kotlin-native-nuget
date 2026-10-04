@@ -283,6 +283,48 @@ class Tier1CallbackParameterPlanTest {
   }
 
   /**
+   * An interface reachable ONLY as a per-call callback payload. C# reads the payload with
+   * `NugetMarshal.FromHandle<IVisitor>(a0)`, which materialises through
+   * `Factories[typeof(IVisitor)]`
+   * and throws `NotSupportedException` on a miss. The key exists only for a reachable interface, so
+   * the reachability walk has to see inside a `BridgeType.Callback`, exactly as ADR-176 made it see
+   * inside a collection component. `Visitor` appears nowhere else in the module.
+   */
+  @Test
+  fun `an interface reachable only as a callback payload gets its wrapper factory and bridge`() {
+    val result: Tier1Result = Tier1Harness.run(
+      """
+      package io.pkg
+
+      interface Visitor { val badge: String }
+
+      private class Guest(override val badge: String) : Visitor
+
+      class Turnstile {
+        fun eachVisitor(listener: (Visitor) -> Unit) {
+          listener(Guest("a"))
+          listener(Guest("b"))
+        }
+      }
+      """.trimIndent()
+    )
+    assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
+    val interop: String = result.generatedCSharp
+    listOf(
+      "public void EachVisitor(Action<global::Interop.IVisitor> listener)",
+      "NugetMarshal.FromHandle<global::Interop.IVisitor>(a0)",
+      "public sealed class Visitor : IVisitor",
+      "[typeof(global::Interop.IVisitor)] = static handle => new global::Interop.Visitor(handle, out _)",
+    ).forEach { expected ->
+      assertTrue(interop.contains(expected), "expected `$expected` in:\n$interop")
+    }
+    assertTrue(
+      Regex("""declared == typeof\([\w.:]*IVisitor\)""").containsMatchIn(interop),
+      "expected the NugetBridge.HandleFor arm for IVisitor in:\n$interop",
+    )
+  }
+
+  /**
    * The other half of the gate: a payload shape the plan's callback lowering does not implement
    * (`Char`, which has no by-value crossing convention on any callback route and is not a legal
    * `[UnmanagedCallersOnly]` signature type) is NOT planned, and the hand-written route it stays on

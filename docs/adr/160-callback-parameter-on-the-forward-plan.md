@@ -177,9 +177,9 @@ consumer cannot get `int total = metronome.CountTicks(...)` back at all.
   a collection; a callback at a **result** position (returning a lambda, as opposed to taking one);
   a callback parameter on a constructor, a data class's `copy()`, an enum-arm box constructor, or a
   value-class member.
-- No fixture exercises an unsigned-primitive or interface-typed callback payload on the plan; ten of
-  forty-four branches in `forward/ForwardCirCallbackProjection.kt` are cold. Tracked on the
-  ROADMAP.
+- Unsigned-primitive and interface-typed callback payloads had no fixture when this ADR shipped; the
+  interface half hid a reachability defect. Both are now covered (see the "interface and unsigned payload
+  coverage" amendment).
 - The plan's delegate segment used to spell unsigned kinds `Uint`/`Ulong`; it now spells `UInt`/`ULong`
   like every other lambda route (see the 2026-10-03 amendment).
 - A planned callback member on a generic class is untested.
@@ -308,3 +308,34 @@ Evidence:
 - Inferred: the shared thunk works at run time on an unsigned wire. No fixture runs it; `Int`
   already shares a thunk the same way.
 - No `LeakTests` row: the change adds no handle route.
+
+## Amendment 2026-10-03: interface and unsigned payload coverage
+
+A Kotlin interface that C# reaches only as the payload of a per-call lambda parameter, for example
+`fun eachDrummer(listener: (Drummer) -> Unit)` where `Drummer` appears nowhere else, was missing
+from the reachable set. The method was emitted, but the interface's backing wrapper class and its
+`NugetMarshal.Factories` entry were not, so the generated thunk's `FromHandle<IDrummer>` had nothing
+to materialise through.
+
+Rule: `componentInterfaceQualifiedNames()` (`NugetProcessor.kt`) has a `BridgeType.Callback` arm
+that walks the callback's parameters, so an interface payload is reachable like an interface
+returned or passed directly. Such an interface binds fully (backing wrapper, factory entry, bridge
+arm) and the C# lambda receives a working `IDrummer` that it owns and disposes (ADR-036).
+
+Unsigned payloads (`UInt`, `ULong` in and out, `UByte`, `UShort`) needed no code change. The fixture
+`Bandstand` hands over values above the signed range of each width, which a signed misread of the
+wire would corrupt, and `IntegrationTests` asserts the exact values.
+
+Evidence:
+
+- Verified: a Tier 1 test failed before the fix (`FromHandle<global::Interop.IVisitor>(a0)` with no
+  `Visitor : IVisitor` wrapper) and passes after (wrapper, factory entry and bridge arm present).
+- Verified: `:nuget-processor:test` passes (1547 tests), and `scripts/verify.sh` is green (Contract,
+  Integration, Leak, MultiPackage, SharedException, and all six NativeAOT shapes).
+- Verified: `LeakTests` row 13-iface,
+  `CallbackMemberInterfacePayload_EachInvocation_ReturnsToBaseline`, returns to baseline over 5000
+  invocations on the success path.
+- Inferred: before the fix, the first invocation threw `NotSupportedException` from
+  `Materialize<T>` inside the thunk. The native pipeline was not run before the fix.
+- Not measured: whether the payload handle leaks when `Materialize<T>` throws; only the success
+  path has a row.

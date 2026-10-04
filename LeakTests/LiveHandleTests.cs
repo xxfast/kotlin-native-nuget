@@ -2633,6 +2633,24 @@ public class LiveHandleTests
         }, iterations: 5000);
     }
 
+    // Row 13-iface. ADR-160: an INTERFACE payload on the same per-call route. Kotlin retains one
+    // handle per invocation for the `Drummer` it hands over, and C# materialises it through the
+    // `IDrummer` factory into a backing wrapper the consumer disposes (`using (d)`, the ADR-036
+    // ownership row 13 restates). A wrapper that does not release on Dispose, or a thunk that
+    // retains twice, leaks two handles per call. Thousands of iterations for the reason row 13
+    // gives. Oreo and Mylo take the stand five thousand times each.
+    [Fact]
+    public void CallbackMemberInterfacePayload_EachInvocation_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var bandstand = new Bandstand();
+            int played = 0;
+            bandstand.EachDrummer(d => { using (d) { played += d.Name.Length; } });
+            Assert.Equal(8, played);
+        }, iterations: 5000);
+    }
+
     // Row 14. ADR-161, the throwing-callback paths. Fault injection on the pattern of row 8's
     // `ListReturn_ThrowingElementFactory_ReleasesTheListHandle`, except the throw comes from the
     // consumer's own callback rather than a swapped factory, so no `NugetMarshal.Factories` entry

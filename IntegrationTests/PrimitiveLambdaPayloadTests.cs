@@ -82,4 +82,31 @@ public class PrimitiveLambdaPayloadTests
         metronome.OnTick(tick => total += tick);
         Assert.Equal(15, total);
     }
+
+    /// <summary>
+    /// ADR-160: unsigned payloads, and an unsigned lambda return, on the plan route. Every value
+    /// sits above the signed range of its width, so a wire that reads <c>uint</c> as <c>int</c>
+    /// anywhere (payload, lambda return or member return) fails here rather than round-tripping
+    /// a small value through a sign misread unharmed.
+    /// </summary>
+    [Fact]
+    public void Bandstand_UnsignedPayloads_CrossAboveTheSignedRange()
+    {
+        using var bandstand = new Bandstand();
+        uint count = 0;
+        byte small = 0;
+        ushort medium = 0;
+        ulong handed = 0;
+
+        bandstand.EachCount(value => count = value);
+        bandstand.EachByte(value => small = value);
+        bandstand.EachShort(value => medium = value);
+        ulong total = bandstand.SumBig(value => { handed = value; return value; });
+
+        Assert.Equal(4_000_000_000u, count);
+        Assert.Equal(byte.MaxValue, small);
+        Assert.Equal(ushort.MaxValue, medium);
+        Assert.Equal(ulong.MaxValue - 1, handed);
+        Assert.Equal(ulong.MaxValue, total);
+    }
 }

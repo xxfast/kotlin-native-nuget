@@ -271,6 +271,11 @@ Rows 6j to 6n of `LeakTests/LiveHandleTests.cs` cover a captured C#-implemented 
 Kotlin `Cat`, value-only parameters, Kotlin throwing before it makes the lambda, and a throwing
 `IPet` factory on the returned lambda, and all return to baseline.
 
+A Kotlin interface handed to a per-call lambda parameter adds one handle per invocation, released
+when the callback disposes the payload. `LeakTests/LiveHandleTests.cs` row 13-iface,
+`CallbackMemberInterfacePayload_EachInvocation_ReturnsToBaseline`, runs 5000 invocations and
+returns to baseline.
+
 An exception thrown from Kotlin allocates one error handle per call, and the
 [exception mapping](exceptions.md#catching-a-specific-exception-type) reads a mapped type from it
 for the exception and each cause. `LeakTests/LiveHandleTests.cs`'s
