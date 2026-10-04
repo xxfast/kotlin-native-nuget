@@ -9,6 +9,7 @@ import com.google.devtools.ksp.symbol.KSType
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
 import io.github.xxfast.kotlin.native.nuget.processor.abiSlotParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.abstractBackingName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.freshName
@@ -527,6 +528,10 @@ internal fun translateFunction(
       requireNotNull(returnDecl).packageName.asString(), context.rootPackage, context.rootNamespace,
     )
     val qualifiedReturn: String = "global::$returnNamespace.$kotlinReturnType<$typeArgs>"
+    // A generic abstract class constructs its wrapper on the ADR-196 holder (CS0144 otherwise).
+    val constructed: String = returnDecl.abstractBackingName()
+      ?.let { backing -> "global::$returnNamespace.$kotlinReturnType.$backing<$typeArgs>" }
+      ?: qualifiedReturn
 
     val nativeImport = CirDllImport(
       libraryName = libraryName,
@@ -548,7 +553,7 @@ internal fun translateFunction(
       appendLine("            {")
       appendLine("                throw NugetErrorNative.BuildException(error);")
       appendLine("            }")
-      append("            return new $qualifiedReturn(nativeResult, out _);")
+      append("            return new $constructed(nativeResult, out _);")
     }
 
     val wrapper = CirMethod(

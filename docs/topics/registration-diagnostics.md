@@ -157,6 +157,9 @@ below another abstract class or the abstract arm mints the same single handle be
 internal subclass; `AbstractBacking_ClassesBelowAbstractBases_ReturnToBaseline` pins both. An
 abstract `Flow` member collected through that subclass and then drained by `DisposeAsync` is pinned
 by `AbstractBacking_AbstractFlowMember_CollectedThroughWrapper_ReturnsToBaseline`.
+A generic abstract class returned at a closed type, including the abstract class below one, mints the
+same single handle behind its internal subclass; `GenericAbstractBacking_ClosedReturnRoutes_ReturnToBaseline`
+pins both type arguments, a concrete generic subclass, a two-parameter class and the class below.
 
 A class-typed [enum member property](enums.md) getter counts here too: every read mints a fresh
 owned wrapper the caller must dispose, the same as any other class-typed property getter.

@@ -1,11 +1,19 @@
 package io.github.xxfast.kotlin.native.nuget.processor.cir
 
-internal fun StringBuilder.renderObject(obj: CirObject) {
+internal fun StringBuilder.renderObject(obj: CirObject, held: CirBacking? = null) {
   renderDoc(obj.doc, generated = obj.remarks)
   appendLine("    public static class ${obj.name}")
   appendLine("    {")
 
   obj.methods.forEach { method -> renderMember(method) }
+  // A generic abstract class's wrapper (`Trove.Backing<T>`). It is generic, so its externs move
+  // onto this non-generic holder (CS7042), the move `renderClass` makes for the class itself.
+  if (held != null) {
+    val hoisted: HoistedDllImports = hoistDllImports(backingClassBlock(held), obj.name)
+    hoisted.imports.forEach { import -> append(import) }
+    appendLine()
+    append(hoisted.body.trimEnd()).appendLine()
+  }
   // ADR-133: an `object` owner nests its declarations exactly as a class owner does.
   renderNestedDeclarations(obj.nestedDeclarations)
   // Every member renderer ends with a separating blank line, which leaves one dangling before the

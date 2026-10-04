@@ -105,13 +105,13 @@ internal fun StringBuilder.renderClass(cls: CirClass) {
 /**
  * The externs lifted out of a generic class's body, and the body with forwarders in their place.
  */
-private class HoistedDllImports(val body: String, val imports: List<String>)
+internal class HoistedDllImports(val body: String, val imports: List<String>)
 
 private val DLL_IMPORT_ATTRIBUTE = Regex("""^\s*\[DllImport\(""")
 private val EXTERN_DECLARATION =
   Regex("""^(\s*)(?:private|internal|public) (?:new )?static extern (\S+) (\w+)\((.*)\);$""")
 
-private fun hoistDllImports(body: String, nativeClass: String): HoistedDllImports {
+internal fun hoistDllImports(body: String, nativeClass: String): HoistedDllImports {
   val lines: List<String> = body.lines()
   val kept: MutableList<String> = mutableListOf()
   val imports: MutableList<String> = mutableListOf()
@@ -328,8 +328,9 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
   )
 
   // An abstract class's backing wrapper, the type every handle that materialises as it constructs.
+  // A generic class's wrapper is generic too, and its ADR-196 holder renders it (CS7042).
   val backing: CirBacking? = cls.backing()
-  if (backing != null) {
+  if (backing != null && !backing.isHeld) {
     appendLine()
     append(backingClassBlock(backing).trimEnd()).appendLine()
   }

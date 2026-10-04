@@ -351,6 +351,9 @@ Crate<int> crate = Crates.CrateOfInt();
 Crate<Snapshot> snapshotCrate = Crates.CrateOfSnapshot(); // qualified: Crate<global::...Snapshot>
 ```
 
+A generic `abstract class` returns the same way. The value is an internal subclass that forwards to the
+Kotlin object, as described in [An abstract class as a return type](interfaces-abstract-sealed.md#an-abstract-class-as-a-return-type).
+
 If the type argument is something this route can't spell — a collection, another generic class,
 `Flow`, a lambda, `Any`, or `ByteArray` — or the outer type is itself not an exported generic class
 (`Pair<Int, Int>`), the function is skipped instead of generating C# that fails to compile:
