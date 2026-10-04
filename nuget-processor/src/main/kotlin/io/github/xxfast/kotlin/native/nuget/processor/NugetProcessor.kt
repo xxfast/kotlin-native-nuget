@@ -2422,6 +2422,11 @@ internal class NugetProcessor(
       KOTLIN_EXCEPTION_TYPES.filter { row ->
         row.optional && expects.classByName(row.kotlinType) != null
       },
+      candidateDeclarations
+        .filter { declaration -> declaration is KSClassDeclaration || declaration is KSTypeAlias }
+        .filter { declaration -> declaration.packageName.asString().isEmpty() }
+        .map { declaration -> declaration.simpleName.asString() }
+        .toSet(),
     )
     val bindings: CsharpBindings = generateCSharpBindings(
       functions, genericFunctions, extensionFunctions, extensionProperties,
@@ -2633,6 +2638,29 @@ internal class NugetProcessor(
     )
   }
 
+  /**
+   * ROADMAP Phase 4: a type declared in the DEFAULT package has the qualified name `Leash`, and
+   * every route spells a type by its qualified name (`asStableRef<Leash>()`, `Leash()`,
+   * `Mood.entries`). The generated file lives in its own package, so without an import each of
+   * those is an `Unresolved reference`. Kotlin can import a root-package declaration by its simple
+   * name, so one import per root-package type the finished file mentions covers every route at
+   * once, instead of each emitter remembering to (`importIfDefaultPackage` does the same for the
+   * top-level callables, whose call sites are bare). Read off the drafted text so a type no
+   * export mentions leaves no dead import behind.
+   */
+  private fun importReferencedRootPackageTypes(
+    builder: FileSpec.Builder,
+    rootPackageTypes: Set<String>,
+  ) {
+    if (rootPackageTypes.isEmpty()) return
+    val draft: List<String> = builder.build().toString().lines()
+      .filterNot { line -> line.startsWith("import ") }
+    rootPackageTypes.sorted().forEach { name ->
+      val reference = Regex("(?<![\\w.`])${Regex.escape(name)}(?![\\w`])")
+      if (draft.any { line -> reference.containsMatchIn(line) }) builder.addImport("", name)
+    }
+  }
+
   private fun generateCNameWrappers(
     functions: List<KSFunctionDeclaration>,
     genericFunctions: List<KSFunctionDeclaration>,
@@ -2656,6 +2684,9 @@ internal class NugetProcessor(
     forwardClassifier: ForwardBridgeTypeClassifier,
     // ADR-177: the optional mapping rows (kotlinx-io) whose class KSP resolved on the classpath.
     presentOptionalExceptionRows: List<KotlinExceptionRow>,
+    // ROADMAP Phase 4: the simple names of the DEFAULT-package class-like declarations (and
+    // typealiases) in this module, which the generated file can only reference through an import.
+    rootPackageTypes: Set<String>,
   ): FileSpec {
     val builder: FileSpec.Builder = FileSpec
       .builder("io.github.xxfast.kotlin.native.nuget.generated", "CNameExports")
@@ -3227,6 +3258,7 @@ internal class NugetProcessor(
 
     // ADR-127: `nuget_stateflow_collect` / `nuget_stateflow_value` moved to the runtime klib.
 
+    importReferencedRootPackageTypes(builder, rootPackageTypes)
     return builder.build()
   }
 

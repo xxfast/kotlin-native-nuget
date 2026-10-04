@@ -393,12 +393,13 @@ accepted the backticked aliased import in the real pipeline.
 **Inferred, not checked:** an alias behaves the same for `suspend`, `infix`, `operator` and generic
 extensions beyond the shapes above.
 
-**Known gaps found alongside, not fixed here (the first is closed by the 2026-10-04 amendment):**
+**Known gaps found alongside, not fixed here (the first two are closed by 2026-10-04 amendments):**
 a member function and an extension function of the
 same name on one receiver declared in the same package claim one C entry point (verified,
 `ERROR_C_ENTRY_POINT_COLLISION`), so the alias then only reached an extension in another package. A class
-in the default package with an extension (`class Leash` plus `fun Leash.tug()`) is inferred to
-generate `Unresolved reference 'Leash'` (not checked against main). An extension function whose
+in the default package with an extension (`class Leash` plus `fun Leash.tug()`) generated
+`Unresolved reference 'Leash'` (verified; closed by the default-package amendment at the end
+of this file). An extension function whose
 name needs backticks is unverified and may produce an invalid alias.
 
 ## Amendment (2026-10-03): has-value fan-out receivers bind on the extension-function route
@@ -491,3 +492,20 @@ handle route.
 `x` can still meet on `<owner>_get_x`, and a member lambda-typed property's hand-written
 `<owner>_get_<name>` getter is not in the name set the check reads. ADR-117 stays the backstop for
 both.
+
+## Amendment (2026-10-04): a type in the default package is imported into the generated file
+
+Closes the second known gap of the 2026-10-03 aliased-import amendment, which was wider than it
+read: not only an extension, but every reference the generated `CNameExports.kt` makes to a type
+declared with no `package` line was `Unresolved reference`. Each route spells a type by its
+qualified name (`asStableRef<Leash>()`, `Leash()`, `Gait.entries`), and in the default package that
+name is the bare `Leash`, which the generated file (its own package) cannot see without an import.
+The fixture hit it in a class, an extension function, an extension property, the shadowed
+member and extension pair, a nullable-receiver property and a top-level function taking the class.
+`NugetProcessor` now adds `import Leash` for each default-package class, object, interface and
+typealias the drafted file mentions, and none for one no export mentions. The entry-point prefix
+(`library_leash_tug`, no empty package segment) and the aliased extension import were already
+right. ADR-163's 2026-10-04 default-package amendment records the rule. Verified:
+`Tier1DefaultPackageExtensionTest` compiles the generated Kotlin with the harness's JVM compiler.
+Inferred: Kotlin/Native resolves the same import; no native fixture exists because every
+`test-library` declaration lives in a package.
