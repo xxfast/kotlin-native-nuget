@@ -43,11 +43,13 @@ elsewhere in the repo. If a generated file does not compile, `packNuget` fails w
 own output (so does `check`), for example:
 
 ```
-[nuget] The generated C# bindings do not compile (dotnet build exit code 1). This is a generator
-defect: the package would fail in every consumer's build. Compiler output:
+[nuget] The generated C# compile check failed for net10.0 (dotnet build exit code 1). Restore or
+compiler output:
 .../Interop.cs(29579,59): error CS0101: The namespace 'TestLibrary' already contains a definition for 'Cat'
 Build FAILED.
 ```
+
+The check compiles one project for every framework from your `targetFramework` up to the major version of the installed .NET SDK, and logs the set (for example `net10.0, net11.0 (SDK 11.0.100)`). C# that breaks only on a newer framework fails the build, even though the package still targets just the one `targetFramework`. A newer SDK than the one you test with is not covered, and the task always re-runs so that installing a newer SDK widens the check.
 
 When `dotnet` is not found (on `PATH`, or at `nuget.dotnet` if you set it; see [Prerequisites](prerequisites.md)) or can't run, the task logs a warning and
 skips the check, so publishing a Kotlin/Native library still needs no .NET SDK. A `nuget.dotnet` that

@@ -80,10 +80,81 @@ class NugetCompileInteropTaskTest {
   private fun tempDir(name: String): File = Files.createTempDirectory(name).toFile()
 
   @Test
+  fun `the framework sweep follows the selected SDK and includes the floor`() {
+    assertEquals(listOf("net10.0"), compileTargetFrameworks("net10.0", "10.0.301"))
+    assertEquals(
+      listOf("net10.0", "net11.0", "net12.0"),
+      compileTargetFrameworks("net10.0", "12.0.100"),
+    )
+    assertEquals(listOf("net11.0", "net12.0"), compileTargetFrameworks("net11.0", "12.0.100"))
+    assertEquals(
+      listOf("net10.0", "net11.0"),
+      compileTargetFrameworks("net10.0", "11.0.100-preview.1"),
+    )
+    assertEquals(listOf("net10.0"), compileTargetFrameworks("net10.0", "9.0.100"))
+    assertFailsWith<GradleException> { compileTargetFrameworks("net10.0", "unrecognized SDK") }
+    assertFailsWith<GradleException> { compileTargetFrameworks("net10", "10.0.100") }
+  }
+
+  @Test
+  fun `renders every selected framework without changing the package floor`() {
+    val csproj: String = generateCheckCsproj(
+      emptyList(), emptyMap(), emptyList(), targetFrameworks = listOf("net10.0", "net11.0"),
+    )
+    assertContains(csproj, "<TargetFrameworks>net10.0;net11.0</TargetFrameworks>")
+    assertFalse(csproj.contains("<TargetFramework>"))
+  }
+
+  @Test
+  fun `valid bindings compile on the floor and higher frameworks`() {
+    Assumptions.assumeTrue(findExecutable("dotnet") != null, "requires the .NET SDK")
+    val sources: File = tempDir("compile-interop-matrix-src")
+    File(sources, "Interop.cs").writeText("public class Sample { }")
+    val out: File = tempDir("compile-interop-matrix-out")
+    val task: NugetCompileInteropTask = compileTask()
+    task.generatedCsDirs.from(sources)
+    task.projectDir.set(out)
+    task.dependencyVersions.set(emptyMap())
+    task.dependencySources.set(localContractSources())
+    task.targetFramework.set("net9.0")
+
+    task.compile()
+
+    assertTrue(File(out, "bin/Debug/net9.0/interop-check.dll").exists())
+    assertTrue(File(out, "bin/Debug/net10.0/interop-check.dll").exists())
+    assertFalse(task.outputs.upToDateSpec.isSatisfiedBy(task))
+  }
+
+  @Test
+  fun `a defect only on a higher framework fails the check`() {
+    Assumptions.assumeTrue(findExecutable("dotnet") != null, "requires the .NET SDK")
+    val sources: File = tempDir("compile-interop-higher-src")
+    File(sources, "Interop.cs").writeText(
+      """
+      public class Sample { }
+      #if NET10_0
+      #error HIGHER_TFM_DETECTED
+      #endif
+      """.trimIndent(),
+    )
+    val task: NugetCompileInteropTask = compileTask()
+    task.generatedCsDirs.from(sources)
+    task.projectDir.set(tempDir("compile-interop-higher-out"))
+    task.dependencyVersions.set(emptyMap())
+    task.dependencySources.set(localContractSources())
+    // Internal probe floor: the public DSL still requires net10.0 or higher.
+    task.targetFramework.set("net9.0")
+
+    val failure: GradleException = assertFailsWith<GradleException> { task.compile() }
+    assertContains(failure.message.orEmpty(), "HIGHER_TFM_DETECTED")
+    assertContains(failure.message.orEmpty(), "net10.0")
+  }
+
+  @Test
   fun `renders the GeneratedBindingsCheck property set plus AllowUnsafeBlocks`() {
     val csproj: String = generateCheckCsproj(emptyList(), emptyMap(), emptyList(), "net11.0")
 
-    assertContains(csproj, "<TargetFramework>net11.0</TargetFramework>")
+    assertContains(csproj, "<TargetFrameworks>net11.0</TargetFrameworks>")
     assertContains(csproj, "<LangVersion>14.0</LangVersion>")
     assertContains(csproj, "<Nullable>enable</Nullable>")
     assertContains(csproj, "<TreatWarningsAsErrors>true</TreatWarningsAsErrors>")
