@@ -30,6 +30,7 @@ namespace IntegrationTests;
 // struct classification (reader) and recursive abiArgs/structConstruction (generators) ADR-059
 // specifies. That is the intended TDD failure mode — do not weaken these assertions to make them
 // pass early.
+[Trait("Direction", "Reverse")]
 public class NestedStructRoundTripTests
 {
     // Nested struct in (Litter: 8 leaves — Mother{Tag,Active,Grade,Mood}, Basket{Width,Height},

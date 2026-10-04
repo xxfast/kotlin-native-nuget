@@ -483,6 +483,7 @@ public class BidirectionalTests
         public string? Nickname { get; set; }
     }
 
+    [Trait("Direction", "Reverse")]
     [Fact]
     public void Farm_Adopt_StoresTheCSharpImplementedResident_SameInstanceBack()
     {
@@ -496,6 +497,7 @@ public class BidirectionalTests
         Assert.Same(goat, farm.Resident());
     }
 
+    [Trait("Direction", "Reverse")]
     [Fact]
     public void Farm_ResidentLegs_DispatchesIntoTheCSharpImplementedResident()
     {
@@ -509,6 +511,7 @@ public class BidirectionalTests
         Assert.Equal(4, farm.ResidentLegs());
     }
 
+    [Trait("Direction", "Reverse")]
     [Fact]
     public void Farm_Resident_ComposesWithTheBoundReverseApi()
     {

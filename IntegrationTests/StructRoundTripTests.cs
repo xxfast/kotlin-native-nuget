@@ -27,6 +27,7 @@ namespace IntegrationTests;
 //
 // The trailing tests cover ADR-056 deferred scope (struct methods + computed properties): members
 // on Point/Profile themselves, not Geometry/Cattery2. They fail until kotlin-dev lands binding.
+[Trait("Direction", "Reverse")]
 public class StructRoundTripTests
 {
     [Fact]

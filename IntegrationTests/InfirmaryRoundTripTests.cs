@@ -34,6 +34,7 @@ namespace IntegrationTests;
 // SCOPE, per ADR-104's gate decisions: Fork B carries the managed type NAME and the MESSAGE only.
 // A mapped Kotlin exception type, a .NET stack trace, and an InnerException/cause chain are three
 // separate deferred Phase 11 items and are deliberately NOT asserted anywhere here.
+[Trait("Direction", "Reverse")]
 public class InfirmaryRoundTripTests
 {
     // Every throwing sample surfaces "kotlinType|managedType|message" from the Kotlin catch site.

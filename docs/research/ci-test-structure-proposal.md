@@ -90,7 +90,7 @@ last.
 2. `Contract:` `ContractTests`, pack, version ranges
 3. `Pack:` both publishers (307s), forward diagnostics, runtime exports
 4. `Compile:` `GeneratedBindingsCheck`
-5. `Behaviour:` `IntegrationTests`, unfiltered, with coverage (42s)
+5. `Behaviour:` `IntegrationTests` with coverage (42s), as a forward run and a reverse run
 6. `Coexistence:` `MultiPackageTests`, `SharedExceptionTests`
 7. `AOT:` publish and run (about 80s)
 8. `Leaks:` `LeakTests` (355s)
@@ -120,21 +120,37 @@ coordinate. Any change to when this job runs has to keep that stage on pull requ
 `ContractTests`, the runtime tests, `LeakTests`, `MultiPackageTests`, `SharedExceptionTests`, AOT
 and the consumer job test the shared bridge or the packaging. They keep purpose names.
 
-### Splitting `IntegrationTests` by direction (deferred)
+### Splitting `IntegrationTests` by direction (done in the fourth pass)
 
-The first pass keeps one unfiltered `Behaviour:` run. A forward and reverse split needs a semantic
-classification first, because names and dependency references do not classify the suite:
+The `Behaviour:` stage is two runs of the one suite, split on an xunit trait:
 
-- `ReverseLambdaTests` exercises callbacks through the forward-generated API (`TestLibrary.Cat`).
-- `MimeRoundTripTests` exercises reverse NuGet consumption and never references `TestDependency`.
+- `Behaviour: forward` runs `--filter "Direction!=Reverse"`.
+- `Behaviour: reverse` runs `--filter "Direction=Reverse"`.
 
-Before a split replaces the unfiltered run:
+Direction is defined by the binding pipeline under test. A test is reverse when what it asserts
+crosses a Kotlin binding generated from a NuGet dependency (`TestDependency`, `MimeMapping`), or
+reads the reverse reader's output for one. Everything else is forward, including callbacks passed
+from C# into a forward-generated API.
 
-1. Define direction by the binding pipeline under test, and decide where mixed classes go.
-2. Prove the filtered sets cover every discovered test, with any overlap intentional.
-3. Keep coverage collection on both runs.
+- **Tagged:** 18 classes carry `[Trait("Direction", "Reverse")]`. Two mixed classes carry it on
+  the method: 3 tests in `BidirectionalTests`, 1 in `ExtensionPropertyTests`.
+- **Not tagged, despite the name:** `ReverseLambdaTests` (callbacks through `TestLibrary.Cat`).
+- **Tagged, despite no `TestDependency` reference:** `MimeRoundTripTests`.
+- **Judgement call:** `MenagerieDiagnosticsTests` and `BoxesDiagnosticsTests` mostly read
+  `reverse-ir.json` and make no round trip. They test the reverse pipeline, so they are reverse.
 
-Folders with namespaces, or xunit traits, are both workable once that exists.
+The two filters are complements, so every test runs in exactly one of them and a new, untagged
+test lands in forward. Measured on 2026-10-05 after a clean `scripts/verify.sh`: unfiltered 3139,
+forward 2907, reverse 232, and 2907 + 232 = 3139. Both runs collect coverage into the same
+results directory.
+
+Traits, not folders: a move of all 247 files would conflict with every feature branch in flight,
+and a folder split gives no such partition guarantee. `scripts/verify.sh` and the `consumer` job
+keep one unfiltered run.
+
+The classification was done by reading (the Kotlin files that import a bound package, then the C#
+tests that use them). Not every multi-line Kotlin function body was read, so "every test in a
+reverse class touches the binding" is inferred from each facade file's imports.
 
 ## Measured cost
 
@@ -293,7 +309,6 @@ This is the highest-value follow-up. Its implementation cost and runtime are unk
    queue, not fail, since the cap is on concurrency. The cost of a split is scheduling plus
    duplicated setup, publication and artifact transfer, none of it measured.
 2. Whether to take any of the compute savings above.
-3. Whether to classify `IntegrationTests` by direction.
 4. Rename `smoke-test/` to `consumer/`. Not proposed: it touches `verify.sh`, `release.yml`, docs
    and ADRs.
 
@@ -301,7 +316,6 @@ This is the highest-value follow-up. Its implementation cost and runtime are unk
 
 - The workflow passes `actionlint`. It has not run on GitHub yet; the pull request run is the
   first real execution of the renamed jobs and the reordered bridge.
-- The reverse share of `IntegrationTests` is unknown. The 247 files were not classified.
 - The Ubuntu `compile` gate and the Ubuntu generator legs assume the processor and plugin build
   and pass on Linux. Not run.
 - Timings are from 2 to 3 runs each. Cancelled runs are not counted, and `cancel-in-progress` is

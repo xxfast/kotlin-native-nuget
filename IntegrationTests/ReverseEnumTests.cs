@@ -3,6 +3,7 @@ using TestLibrary.Test.Enums;
 
 namespace IntegrationTests;
 
+[Trait("Direction", "Reverse")]
 public class ReverseEnumTests
 {
     [Fact]

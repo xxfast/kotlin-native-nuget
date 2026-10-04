@@ -30,6 +30,7 @@ namespace IntegrationTests;
 //     null for Mylo, so `FindNickname_Mylo_ReturnsNull` fails at the assertion, not at compile.
 // This file stays red until the kotlin-dev implements the ADR-053 metadata reader and
 // generator changes.
+[Trait("Direction", "Reverse")]
 public class NullabilityRoundTripTests
 {
     [Fact]

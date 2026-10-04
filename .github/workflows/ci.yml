@@ -171,9 +171,21 @@ jobs:
         run: ls IntegrationTests/bin/Debug/net10.0/
         shell: bash
 
-      - name: "Behaviour: run IntegrationTests with coverage"
+      # One suite, two runs, split on the `Direction` trait. A test is reverse when what it asserts
+      # crosses a binding generated from a NuGet dependency (`[Trait("Direction", "Reverse")]` on
+      # the class or the method); everything untagged is forward. The two filters are complements,
+      # so every test runs in exactly one of them and a new, untagged test lands in forward.
+      - name: "Behaviour: forward, Kotlin exported to C# (IntegrationTests with coverage)"
         run: >
           dotnet test IntegrationTests --no-build
+          --filter "Direction!=Reverse"
+          --collect:"XPlat Code Coverage"
+          --results-directory IntegrationTests/TestResults
+
+      - name: "Behaviour: reverse, NuGet consumed from Kotlin (IntegrationTests with coverage)"
+        run: >
+          dotnet test IntegrationTests --no-build
+          --filter "Direction=Reverse"
           --collect:"XPlat Code Coverage"
           --results-directory IntegrationTests/TestResults
 

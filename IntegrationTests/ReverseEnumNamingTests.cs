@@ -6,6 +6,7 @@ namespace IntegrationTests;
 // ADR-006 2026-10-02 amendment: the C# enum Test.Enums.VetTriage (members OK, HTTPTimeout, IOError,
 // Win32NT) binds in Kotlin as OK, HTTP_TIMEOUT, IO_ERROR, WIN32_NT. The Kotlin sample names every
 // entry, so it compiling is the naming check; this round trip is the ordinal check for every member.
+[Trait("Direction", "Reverse")]
 public class ReverseEnumNamingTests
 {
     [Theory]

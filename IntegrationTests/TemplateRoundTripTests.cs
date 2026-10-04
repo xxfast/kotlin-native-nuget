@@ -16,6 +16,7 @@ namespace IntegrationTests;
 // Expected red state: `Greetings` does not exist in the generated Interop.cs yet — the
 // Kotlin `Greetings.kt` and the bind{} wiring for TestDependency have not been added.
 // This file will fail to compile until the kotlin-dev implements that work.
+[Trait("Direction", "Reverse")]
 public class TemplateRoundTripTests
 {
     [Fact]

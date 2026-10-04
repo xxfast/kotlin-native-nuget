@@ -29,6 +29,7 @@ namespace IntegrationTests;
 // plugin's NugetExtractApiIntegrationTest, against the real reader), so the assertion available
 // here is the negative one every other skipped reverse member relies on: RosterSample.kt never
 // names them, and the rest of `Roster` still binds, which every row below is.
+[Trait("Direction", "Reverse")]
 public class RosterRoundTripTests
 {
     // `string` elements: one StringToCoTaskMemUTF8 slot each, read and freed per element by the

@@ -4,6 +4,7 @@ namespace IntegrationTests;
 
 // Oreo emailed his vet a data.json file and his glamour shot logo.png.
 // Round trip: C# -> Kotlin test-library -> real MimeMapping NuGet package -> back to C#.
+[Trait("Direction", "Reverse")]
 public class MimeRoundTripTests
 {
     [Fact]

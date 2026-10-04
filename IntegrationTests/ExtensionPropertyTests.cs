@@ -337,6 +337,7 @@ public class ExtensionPropertyTests
         public string? Nickname { get; set; }
     }
 
+    [Trait("Direction", "Reverse")]
     [Fact]
     public void BoundInterfaceReceiver_FeedingNote_DispatchesBackIntoTheCSharpGoat()
     {
