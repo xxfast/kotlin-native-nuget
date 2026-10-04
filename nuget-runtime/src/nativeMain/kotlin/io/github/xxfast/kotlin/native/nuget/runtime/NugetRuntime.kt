@@ -567,6 +567,8 @@ public data class NugetError(
  * ADR-177: [mappedType] is required, with no default, so a call site that has not been converted
  * to the per-module classifier fails to compile instead of silently losing its optional rows.
  * A null Kotlin message becomes the concrete type name rather than a generic placeholder.
+ * ADR-200: each node's trace is its own [nugetTrimFrames] frames with no `Caused by:` section;
+ * the cause crosses as [NugetError.cause].
  */
 @NugetRuntimeApi
 public fun buildError(e: Throwable, mappedType: (Throwable) -> String?): NugetError {
@@ -578,11 +580,46 @@ public fun buildError(e: Throwable, mappedType: (Throwable) -> String?): NugetEr
       type = type,
       mappedType = mappedType(t),
       message = t.message ?: type,
-      stackTrace = t.stackTraceToString(),
+      stackTrace = buildString {
+        append(t.toString())
+        for (frame in nugetTrimFrames(t.getStackTrace())) {
+          append("\n    at ").append(frame.trimEnd())
+        }
+      },
       cause = t.cause?.let(::build),
     )
   }
   return build(e)!!
+}
+
+/** ADR-200: a `kn_<hex>_...` module export or a `nuget_...` runtime export, `_` on Mach-O. */
+private val NUGET_EXPORT_FRAME: Regex = Regex("""\s_?(kn_[0-9a-f]+_|nuget_)\S* \+ \d+""")
+
+private val FRAME_SYMBOL_OFFSET: Regex = Regex("""\s(\S+) \+ (\d+)(?=\s|\(|$)""")
+
+/** ADR-200: no function body is 1 MiB; mingwX64 host frames show offsets of 22 million and up. */
+private const val HOST_FRAME_MIN_OFFSET: Long = 1L shl 20
+
+private fun isHostFrame(frame: String): Boolean {
+  val match: MatchResult = FRAME_SYMBOL_OFFSET.find(frame) ?: return false
+  val symbol: String = match.groupValues[1]
+  val offset: Long? = match.groupValues[2].toLongOrNull()
+  return symbol == "0x0" || offset == null || offset >= HOST_FRAME_MIN_OFFSET
+}
+
+/**
+ * ADR-200: the Kotlin frames of one `Throwable.getStackTrace()`. Keeps frames up to and including
+ * the first export frame, and always stops before the first frame that is unsymbolized (`0x0`) or
+ * carries an implausible offset, which is how the host's CLR and OS frames print on mingwX64. A
+ * worker-thread trace has no export frame, so only the second cut applies. A trace the rule would
+ * empty is returned unchanged: under-trimming is the safe failure.
+ */
+internal fun nugetTrimFrames(frames: Array<String>): List<String> {
+  val anchor: Int = frames.indexOfFirst { frame -> NUGET_EXPORT_FRAME.containsMatchIn(frame) }
+  val bound: Int = if (anchor >= 0) anchor + 1 else frames.size
+  val firstHost: Int = (0 until bound).firstOrNull { index -> isHostFrame(frames[index]) } ?: bound
+  val kept: List<String> = frames.take(firstHost)
+  return kept.ifEmpty { frames.toList() }
 }
 
 /**
