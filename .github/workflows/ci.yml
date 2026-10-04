@@ -248,6 +248,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The path filter below diffs against the merge base, which needs more than one commit.
+          fetch-depth: 0
 
       # Deliberately the lowest JVM a Gradle 9 consumer can be on. This build's own daemon runs on
       # 21 (gradle/gradle-daemon-jvm.properties), so resolving the plugin here on 17 is what proves
@@ -284,20 +287,53 @@ jobs:
           linkDebugSharedMacosArm64
           -Psmoke.kotlin=${{ matrix.kotlin }}
 
+      # `Published artifacts:` above runs on every pull request: it is the only place CI resolves
+      # the tooling by coordinate. `Repo on Kotlin X:` below is the expensive half (a second pack,
+      # the C# suites and the leak harness, 12 to 18 minutes a leg), so on a pull request it runs
+      # only when the change touches what decides which Kotlin builds what: the version pins and
+      # build files, the plugin, the runtime and annotations klibs, the smoke consumer and this
+      # workflow. A push to main always runs it, so a processor or fixture change that only one end
+      # of the range rejects is caught there, after merge. That is a deliberate coverage trade.
+      - name: "Repo on Kotlin ${{ matrix.kotlin }}: decide whether this change can move range behaviour"
+        id: range
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base="origin/${{ github.base_ref }}"
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" || true
+          # A diff that cannot be computed runs the stage: skipping is the unsafe default.
+          if ! changed=$(git diff --name-only "$base"...HEAD); then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed files:"
+          echo "$changed"
+          if echo "$changed" | grep -Eq '^(gradle\.properties|settings\.gradle\.kts|build\.gradle\.kts|gradle/|[^/]+/build\.gradle\.kts|[^/]+/settings\.gradle\.kts|nuget-plugin/|nuget-runtime/|nuget-annotations/|smoke-test/|\.github/workflows/ci\.yml)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # From here on the root build itself runs on this leg's Kotlin (settings.gradle.kts). No
       # coverage and no AOT publish: the `bridge` job owns those on the pinned version.
       - name: "Repo on Kotlin ${{ matrix.kotlin }}: verify and pack shared compiled contract"
+        if: steps.range.outputs.run == 'true'
         run: |
           dotnet test ContractTests
           dotnet pack Kotlin.Native.Interop -c Release -o build/nuget
 
       - name: "Repo on Kotlin ${{ matrix.kotlin }}: build both independent NuGet publishers"
+        if: steps.range.outputs.run == 'true'
         env:
           ORG_GRADLE_PROJECT_kotlinVersion: ${{ matrix.kotlin }}
         run: ./gradlew :test-library:packNuget :test-companion:packNuget
 
       # The klib manifest records the compiler that built it; a silently ignored override fails here.
       - name: "Repo on Kotlin ${{ matrix.kotlin }}: prove test-library was compiled at it"
+        if: steps.range.outputs.run == 'true'
         shell: bash
         run: |
           case "${{ matrix.kotlin }}" in
@@ -311,9 +347,11 @@ jobs:
           test "$actual" = "$expected"
 
       - name: "Repo on Kotlin ${{ matrix.kotlin }}: run IntegrationTests"
+        if: steps.range.outputs.run == 'true'
         run: dotnet test IntegrationTests
 
       - name: "Repo on Kotlin ${{ matrix.kotlin }}: run leak harness"
+        if: steps.range.outputs.run == 'true'
         run: dotnet test LeakTests
 
   # The reverse dogfooding census: the real plugin pipeline over nine pinned published NuGet
