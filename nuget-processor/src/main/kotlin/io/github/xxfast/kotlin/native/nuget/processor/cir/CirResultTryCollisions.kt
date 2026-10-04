@@ -396,6 +396,11 @@ private fun CirDeclaration.withoutTries(
 
     is CirClass -> copy(
       methods = methods.map { it.withoutTry(path, dropped) },
+      // The wrapper's overrides of a base's abstract members follow the base's own twins: a twin
+      // dropped there is not overridden here (CS0115, or CS0505 against a member of its name).
+      backingInherited = backingInherited.map { base ->
+        base.copy(methods = base.methods.map { it.withoutTry(base.ownerPath, dropped) })
+      },
       companionMembers = companionMembers.withoutMemberTries(path, dropped),
       nestedDeclarations = nestedDeclarations.nested(path),
     )

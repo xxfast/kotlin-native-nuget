@@ -149,7 +149,8 @@ member and companion arm only for a non-sealed generic `class` owner, because th
   with an interface-style name.
 - A generic sealed base or arm owner: "a generic sealed base or arm is declared without its type
   parameters in C#, so it has no holder for nested declarations". The sealed route (ADR-009) renders
-  the base without `<T>`.
+  the base without `<T>`. Since the 2026-10-04 amendment to ADR-009 the whole generic sealed
+  hierarchy is a named skip, so this reason now names a declaration that is not declared at all.
 - A child of a captured inner class (`Box<T> { inner class Seal { inner class Bolt } }`): "an
   `inner class` that captures a generic owner's type parameters is itself generic in C#". A type
   nested in a generic C# class can hold no extern (CS7042).
@@ -174,11 +175,14 @@ instance as a constructor parameter, and move the class to the top level of its 
 owner-kind skips (generic `interface`, generic sealed, `enum class`) say to move it to the top level
 of its file.
 
-**Known limits outside this decision.** Two bugs in the generic sealed route predate this ADR, were
-found while testing the generic sealed owner, and are not fixed here. A generic sealed base emits
-`asStableRef<Outcome>()` with no type argument (`exports/SealedClassExports.kt:52`), so the generated
-Kotlin does not compile. A generic sealed arm `Ok<T>` renders its constructor as `Ok(T v)` inside a
-non-generic C# class (CS0246). Both are verified.
+**Known limits outside this decision, since closed.** Two bugs in the generic sealed route
+predated this ADR and were found while testing the generic sealed owner. A generic sealed base
+emitted `asStableRef<Outcome>()` with no type argument (`exports/SealedClassExports.kt:52`), so the
+generated Kotlin did not compile. A generic sealed arm `Ok<T>` rendered its constructor as `Ok(T v)`
+inside a non-generic C# class (CS0246). Both were verified. A generic sealed hierarchy is now a
+named skip on both halves, reported once as `SKIPPED_UNSUPPORTED_TYPE` with its arms listed, so
+neither bug can be reached; binding it is a ROADMAP item, not a fix. See the 2026-10-04 amendment
+to [ADR-009](009-sealed-class-mapping.md).
 
 ## Consequences
 

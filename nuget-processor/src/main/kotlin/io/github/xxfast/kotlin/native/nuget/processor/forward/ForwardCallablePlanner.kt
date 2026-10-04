@@ -28,6 +28,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardClassLegacy
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyFlowReturn
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyGenericReturnRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasLegacyLambdaParameter
+import io.github.xxfast.kotlin.native.nuget.processor.exports.hasPlannedCallbackParameter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMember
 import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedLegacyLambdaShape
 import io.github.xxfast.kotlin.native.nuget.processor.PLAN_OWNED_NAMES
@@ -1641,29 +1642,43 @@ internal class ForwardCallablePlanner(
         method in interfaceBridgeMethods || method in storedCallbackMethods -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
         else -> null
       }
+      fun plan(): ForwardCallableCatalogEntry = planOrSkip(
+        symbol = symbol,
+        publicName = method.csharpMemberName(),
+        exportName = "${prefix}_$name$suffix",
+        receiver = ForwardReceiver.Handle(receiverType),
+        parameters = method.parameters.map { parameter ->
+          parameter.bridgeName() to classifier.classify(parameter.type.resolve())
+        },
+        result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
+        origin = ForwardCallableOrigin.CLASS,
+        ownerType = ownerType,
+        // The symbol carries the overload suffix; the Kotlin call site must not.
+        member = name,
+        isOverride = isOverride,
+        isVirtual = isVirtual,
+        node = method,
+        defaults = declaredDefaults(method.parameters, memberDefaultFlags(method)),
+        doc = method.forwardKdoc(expects).forParameters(method.parameters),
+        isAbstract = isAbstract,
+      ).withMethodTypeParameters(method)
+      // An abstract member of an owner with no wrapper (a generic one) is declared `abstract` in
+      // C# with no export, by `CirClassTranslator`'s abstract walk, and every Kotlin subclass's
+      // plan overrides it. The declaration must not promise what those plans refuse (a lambda
+      // return: CS0534 on the subclass), so the plan is still tried, and its refusal replaces the
+      // ABSTRACT skip. The walk then leaves the member off the owner, as every subclass leaves it
+      // off, and the refusal names it.
+      val walkDeclares: Boolean = structuralReason == ForwardPlanSkipReason.ABSTRACT &&
+          !method.hasLegacyFlowReturn() &&
+          (!method.hasLegacyLambdaParameter() || method.hasPlannedCallbackParameter(classifier))
+      if (walkDeclares) {
+        val probe: ForwardCallableCatalogEntry = plan()
+        if (probe is ForwardCallableCatalogEntry.Skipped) return probe
+      }
       return if (structuralReason != null) {
         ForwardCallableCatalogEntry.Skipped(symbol, structuralReason, node = method)
       } else {
-        planOrSkip(
-          symbol = symbol,
-          publicName = method.csharpMemberName(),
-          exportName = "${prefix}_$name$suffix",
-          receiver = ForwardReceiver.Handle(receiverType),
-          parameters = method.parameters.map { parameter ->
-            parameter.bridgeName() to classifier.classify(parameter.type.resolve())
-          },
-          result = method.returnType?.resolve()?.let(classifier::classify) ?: BridgeType.Unit,
-          origin = ForwardCallableOrigin.CLASS,
-          ownerType = ownerType,
-          // The symbol carries the overload suffix; the Kotlin call site must not.
-          member = name,
-          isOverride = isOverride,
-          isVirtual = isVirtual,
-          node = method,
-          defaults = declaredDefaults(method.parameters, memberDefaultFlags(method)),
-          doc = method.forwardKdoc(expects).forParameters(method.parameters),
-          isAbstract = isAbstract,
-        ).withMethodTypeParameters(method)
+        plan()
       }
     }
     return methods.map { method -> entryFor(method) }.nameUnroutedPositions { skipped ->

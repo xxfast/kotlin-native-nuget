@@ -50,6 +50,7 @@ Complete.
 Complete.
 
 ## Phase 4: Rich type support
+- [ ] A generic sealed hierarchy (`sealed class Outcome<T>`) stays a named `SKIPPED_UNSUPPORTED_TYPE` on both halves ([ADR-009](docs/adr/009-sealed-class-mapping.md), 2026-10-04 amendment). Binding it needs a generic `FromHandle<T>` and `Factories` entry, a discriminator over `asStableRef<Outcome<*>>()`, arms spelled under a generic owner, and the classifier spelling `Outcome<int>` at positions, plus a C# shape for an arm that fixes the argument (`Err : Outcome<Nothing>`). Discovered alongside [ADR-196](docs/adr/196-generic-nested-types.md), 2026-10-04.
 - [ ] A function returning a GENERIC abstract class at a closed type (`fun stock(): Shelf<String>`) generates `new Shelf<string>(handle, out _)`, which is CS0144; a backing wrapper cannot nest in the generic class (CS7042: no extern in a type nested in a generic class), so it needs the non-generic holder. Verified; a known-limit cell in `Tier1EnumSelfBoundInteractionTest` pins it. Discovered alongside [ADR-198](docs/adr/198-unspellable-bound-trampoline.md), 2026-10-04.
 
 ## Phase 5: Exception handling

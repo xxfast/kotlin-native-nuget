@@ -724,6 +724,7 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   ForwardPlanSkipReason.UNDECLARED_INTERFACE,
     // The nested class/object twin of the two above, in the same bucket for the same reason.
   ForwardPlanSkipReason.UNDECLARED_CLASS,
+  ForwardPlanSkipReason.UNSUPPORTED,
     // ADR-134: and the nested `value class` twin, whose record struct the same owner walk declares.
   ForwardPlanSkipReason.UNDECLARED_VALUE_CLASS,
     // ADR-133: the object-position drop shares the bucket -- one unsupported type at every
@@ -1126,6 +1127,22 @@ private fun genericOwnerMemberKind(detail: String?): String = when (detail) {
 }
 
 /**
+ * The position skips a member typed with a generic sealed hierarchy takes: the base as a sealed
+ * position, an arm as an undeclared or unsupported class. No such reason's own hint applies (export
+ * scope, arm shapes, nesting rules), since the hierarchy has no route at all.
+ */
+private val GENERIC_SEALED_HINTED: Set<ForwardPlanSkipReason> = setOf(
+  ForwardPlanSkipReason.SEALED_POSITION,
+  ForwardPlanSkipReason.UNDECLARED_CLASS,
+  ForwardPlanSkipReason.UNSUPPORTED,
+)
+
+private fun genericSealedHint(name: String?): String =
+  "`$name` belongs to a generic sealed hierarchy, which is not declared in C# at all (the " +
+      "SKIPPED_UNSUPPORTED_TYPE warning on the sealed class says why); declare the hierarchy " +
+      "without type parameters, or type this member with a non-sealed class or interface"
+
+/**
  * ADR-064: an actionable per-reason hint, kept alongside the mapping above it documents.
  *
  * @param detail ADR-066: the unexported dependency type's qualified name
@@ -1157,7 +1174,9 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
    *  a package derived from the type name. Empty keeps the derived-package wording. */
   excludeEntries: List<String> = emptyList(),
   returnType: String? = null,
-): String = when (this) {
+): String = if (detail in ForwardGenericSealedHierarchies && this in GENERIC_SEALED_HINTED) {
+  genericSealedHint(detail)
+} else when (this) {
   // ADR-162: the author did nothing wrong, so the hint says so and names the one line that unblocks
   // their build while the bug is fixed upstream. The declaration name is not in hand here (the hint
   // takes only the detail slots), so the `exclude(...)` line is spelled generically; the

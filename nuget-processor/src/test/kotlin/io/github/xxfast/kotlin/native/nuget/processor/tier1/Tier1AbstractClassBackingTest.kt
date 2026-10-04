@@ -107,16 +107,18 @@ class Tier1AbstractClassBackingTest {
   }
 
   @Test
-  fun `an abstract class below an abstract base keeps the shipped shape`() {
+  fun `an abstract class below an abstract base gets a wrapper over the base's exports`() {
     val cs: String = result.generatedCSharp
 
-    // `Puppy` inherits `Animal`'s open abstract members, which are planned on `Animal`; a wrapper
-    // of its own would have nothing to call for them, so it gets none.
+    // `Puppy` inherits `Animal`'s open abstract members, which are planned on `Animal`; its own
+    // wrapper (named past the inherited `Animal.Backing`) overrides them over `Animal`'s exports.
     assertContains(cs, "public abstract class Puppy : Animal")
-    assertFalse(
-      cs.contains("internal sealed class Backing : Puppy"),
-      "an abstract class below an abstract base has no wrapper; generated=$cs",
-    )
+    val backing: String = cs.substringAfter("internal sealed class Backing_ : Puppy")
+      .substringBefore("public override void Dispose()")
+    assertContains(backing, "public override int Legs()")
+    assertContains(backing, "EntryPoint = \"library_abstractpet__animal_legs\"")
+    assertContains(backing, "public override int Wings")
+    assertContains(backing, "EntryPoint = \"library_abstractpet__animal_get_wings\"")
   }
 
   /**

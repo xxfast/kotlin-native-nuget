@@ -23,6 +23,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.asCSymbol
 import io.github.xxfast.kotlin.native.nuget.processor.csharpParameterName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLambdaPropertyCarrier
 import io.github.xxfast.kotlin.native.nuget.processor.forward.carriesLegacyLambdaProperty
+import io.github.xxfast.kotlin.native.nuget.processor.forward.reProjectsKeptBaseLambdaProperty
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpAsyncMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpMemberName
 import io.github.xxfast.kotlin.native.nuget.processor.kotlinConstantToPascalCase
@@ -59,11 +60,14 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedLegacyLambd
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStoredCallbackPair
 import io.github.xxfast.kotlin.native.nuget.processor.forward.BridgeType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeClassifier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInheritedOutcome
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceHierarchy
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardAsyncPlacement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInterfaceMemberPlacement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declared
 import io.github.xxfast.kotlin.native.nuget.processor.forward.declaresLexically
+import io.github.xxfast.kotlin.native.nuget.processor.forward.inheritedOutcomeOn
+import io.github.xxfast.kotlin.native.nuget.processor.forward.inlineList
 import io.github.xxfast.kotlin.native.nuget.processor.forward.interfaceMethodSymbols
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyReturnShape
@@ -112,10 +116,12 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSealedBaseA
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSealedBaseFlowProperties
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuspendRouteMethods
+import io.github.xxfast.kotlin.native.nuget.processor.forward.reProjectsKeptBaseMember
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSupertypeNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedSubclass
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardArmSealedParent
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverride
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverrideOn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardExtensible
@@ -144,9 +150,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyHandleRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyValueClassRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyEnumRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.planFor
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardInheritedOutcome
-import io.github.xxfast.kotlin.native.nuget.processor.forward.inheritedOutcomeOn
-import io.github.xxfast.kotlin.native.nuget.processor.forward.inlineList
 import io.github.xxfast.kotlin.native.nuget.processor.toCName
 import io.github.xxfast.kotlin.native.nuget.processor.toCSharpName
 
@@ -194,13 +197,13 @@ private fun keepsSupertype(
     if (unrouted.isEmpty()) return "$possessive public members are $verb on $owner directly"
     val list: String = unrouted.inlineList()
     val one: Boolean = unrouted.size == 1
+    val named: String =
+      if (one) "is named by its own warning" else "are each named by their own warning"
     if (outcome.bound.isEmpty()) {
-      return "none of $possessive public members $verbNone on $owner: $list " +
-          if (one) "is named by its own warning" else "are each named by their own warning"
+      return "none of $possessive public members $verbNone on $owner: $list " + named
     }
     return "$possessive public members are $verb on $owner directly except $list, which no " +
-        "route carries and which " +
-        if (one) "is named by its own warning" else "are each named by their own warning"
+        "route carries and which " + named
   }
   val reason: String = when (kind) {
     // Interface super-interfaces: an INTERFACE owner re-homes the dropped super's members onto
@@ -1121,6 +1124,11 @@ internal fun translateClass(
       if (!prop.carriesLegacyLambdaProperty(ForwardLambdaPropertyCarrier.CLASS)) {
         return@mapNotNull null
       }
+      // A kept base already declares it, over a getter Kotlin dispatches to this override; a
+      // second declaration here only hides it (CS0108). The Kotlin half reads the same rule.
+      if (prop.reProjectsKeptBaseLambdaProperty(cls, superClassDeclaration)) {
+        return@mapNotNull null
+      }
 
       val isLambdaType: Boolean = qualifiedTypeName in LAMBDA_TYPES
       val lambdaArity: Int = if (isLambdaType) propTypeResolved.arguments.size - 1 else -1
@@ -1264,11 +1272,16 @@ internal fun translateClass(
   val regularMethods: List<KSFunctionDeclaration> = filteredMethods
     .filterNot { it.modifiers.contains(Modifier.SUSPEND) }
 
-  val (flowMethods, nonFlowMethods) = regularMethods.partition { method ->
+  val (allFlowMethods, nonFlowMethods) = regularMethods.partition { method ->
     val returnQualified: String? = method.returnType?.resolve()?.expandAliases()
       ?.declaration?.qualifiedName?.asString()
     returnQualified in FLOW_TYPES || returnQualified in STATE_FLOW_TYPES
   }
+  // The Kotlin half's rule (`forwardClassLegacyMembers`): a kept base's Flow member, abstract or
+  // open, is declared once on that base over an export that dispatches virtually, so an override
+  // here would only hide it (CS0108).
+  val flowMethods: List<KSFunctionDeclaration> = allFlowMethods
+    .filterNot { method -> method.reProjectsKeptBaseMember(cls, superClassDeclaration) }
 
   // Boundary nullability part A2: the C# twin of the Kotlin half's refusal, applied at the same
   // point (before the partition) so the two halves cannot disagree about which members exist. A
@@ -1363,9 +1376,24 @@ internal fun translateClass(
   // A class with a backing wrapper plans every abstract member instead, and one its plan refused
   // stays off C# (a subclass's plan refuses the same signature), since the wrapper could not
   // override a declaration-only member (CS0534).
-  val abstractMethods: List<CirMethod> = normalMethods
+  // The planner's verdict on this class's own abstract members (`classEntries`): it still tries
+  // the plan, and a refusal there is a refusal of every subclass's override, so the walk must not
+  // declare what nothing can implement (CS0534).
+  val ownerSymbol: String = cls.qualifiedName?.asString() ?: name
+  val refusedAbstract: Set<KSNode> = callableCatalog.entries
+    .filterIsInstance<ForwardCallableCatalogEntry.Skipped>()
+    .filter { entry -> entry.reason != ForwardPlanSkipReason.ABSTRACT }
+    .filter { entry -> entry.symbol.substringBeforeLast('.') == ownerSymbol }
+    .mapNotNull { entry -> entry.node }
+    .toSet()
+  // A per-call lambda member the plan owns (ADR-160) is declared here too: neither callback route
+  // declares an abstract one, yet every subclass's planned override says `override` (CS0115).
+  val plannedCallbackAbstracts: List<KSFunctionDeclaration> = lambdaParamMethods
+    .filter { method -> method.isAbstract && method.hasPlannedCallbackParameter(classifier) }
+  val abstractMethods: List<CirMethod> = (normalMethods + plannedCallbackAbstracts)
     .filter { it !in interfaceBridgeExcluded }
     .filter { backingName == null }
+    .filter { method -> method !in refusedAbstract }
     .mapNotNull { method ->
       val methodName: String = method.simpleName.asString()
       if (methodName in plannedMemberNames) return@mapNotNull null
@@ -1591,6 +1619,7 @@ internal fun translateClass(
         keptBase = superClassDeclaration?.qualifiedName?.asString(),
         members = renderedNames,
         spellings = spellings,
+        nestedTypes = cls.csNestedTypeNames(),
       ),
     )
   }
@@ -1649,7 +1678,109 @@ internal fun translateClass(
     doc = cls.forwardKdoc(expects)?.toCirDoc(),
     backingName = backingName,
     backingOverridesDisposeAsync = backingOverridesDisposeAsync,
+    backingInherited = if (backingName == null) {
+      emptyList()
+    } else {
+      cls.backingInheritedOverrides(
+        superClassDeclaration, exportedTypes, callableCatalog, classifier, context,
+      )
+    },
   )
+}
+
+/**
+ * The abstract members [this] inherits from the abstract bases above it and leaves unimplemented,
+ * as the overrides its backing wrapper needs (`Puppy : Animal` leaving `Animal.legs()` open). C#
+ * does not redeclare them on this class, so they are not in its own member list.
+ *
+ * Each is found on the NEAREST kept base that planned it: that base has a wrapper too
+ * (`hasAbstractBacking`), so it planned the member as a call-through export and declared it
+ * `abstract`, and that export dispatches virtually in Kotlin. A member this class planned itself
+ * (one re-homed from a dropped base) is already in its own list, and one no base planned (a
+ * refused signature) is declared by none of them, so there is nothing to override.
+ */
+private fun KSClassDeclaration.backingInheritedOverrides(
+  superClass: KSClassDeclaration?,
+  exportedTypes: Set<String>,
+  callableCatalog: ForwardCallablePlanCatalog,
+  classifier: ForwardBridgeTypeClassifier,
+  context: NugetContext,
+): List<CirBackingInherited> {
+  val cls: KSClassDeclaration = this
+  val ancestors: List<KSClassDeclaration> =
+    generateSequence(superClass) { base -> base.forwardSuperClass(exportedTypes) }.toList()
+  if (ancestors.isEmpty()) return emptyList()
+  val planned: List<ForwardCallableCatalogEntry.Planned> =
+    callableCatalog.entries.filterIsInstance<ForwardCallableCatalogEntry.Planned>()
+  fun methodPlan(owner: KSClassDeclaration, method: KSFunctionDeclaration): ForwardCallablePlan? {
+    val qualified: String = owner.qualifiedName?.asString() ?: return null
+    return planned.firstOrNull { entry ->
+      entry.node === method && entry.plan.invocation.symbol.substringBeforeLast('.') == qualified
+    }?.plan
+  }
+  fun propertyPlan(owner: KSClassDeclaration, name: String): ForwardPropertyPlan? =
+    owner.qualifiedName?.asString()
+      ?.let { qualified -> callableCatalog.propertyFor("$qualified.$name") }
+
+  val methods: MutableMap<KSClassDeclaration, MutableList<CirMethod>> = linkedMapOf()
+  cls.getAllFunctions()
+    .filter { method -> method.getVisibility() == Visibility.PUBLIC }
+    .filter { method -> method.isAbstract && method.parentDeclaration != cls }
+    .filter { method -> !method.isCompilerOwnedMember(cls) }
+    .filter { method -> methodPlan(cls, method) == null }
+    .forEach { method ->
+      val owner: KSClassDeclaration =
+        ancestors.firstOrNull { base -> methodPlan(base, method) != null } ?: return@forEach
+      val plan: ForwardCallablePlan = methodPlan(owner, method) ?: return@forEach
+      if (!plan.publicSignature.isAbstract) return@forEach
+      // Projected as the base declares it, then through the base wrapper's own override rule, so
+      // a generic member restates its type parameters exactly as `Base.Backing` does (ADR-197).
+      val declared: CirMethod = ForwardCirPlanProjection.classMethod(
+        plan, owner.backingExportPrefix(context),
+        isOverride = plan.publicSignature.isOverride,
+        isVirtual = plan.publicSignature.isVirtual,
+      ).asAbstract()
+      methods.getOrPut(owner) { mutableListOf() }.addAll(listOf(declared).backingOverrides())
+    }
+
+  val properties: MutableMap<KSClassDeclaration, MutableList<CirProperty>> = linkedMapOf()
+  cls.getAllProperties()
+    .filter { property -> property.getVisibility() == Visibility.PUBLIC }
+    .filter { property -> property.isAbstract() && property.parentDeclaration != cls }
+    .filter { property -> propertyPlan(cls, property.simpleName.asString()) == null }
+    .forEach { property ->
+      val name: String = property.simpleName.asString()
+      val owner: KSClassDeclaration =
+        ancestors.firstOrNull { base -> propertyPlan(base, name) != null } ?: return@forEach
+      val plan: ForwardPropertyPlan = propertyPlan(owner, name) ?: return@forEach
+      properties.getOrPut(owner) { mutableListOf() }
+        .add(ForwardCirPropertyProjection.classProperty(plan, isOverride = true))
+    }
+
+  return ancestors
+    .filter { base -> base in methods || base in properties }
+    .map { base ->
+      CirBackingInherited(
+        ownerPath = listOfNotNull(classifier.csharpNamespaceOf(base), base.nestedCsName())
+          .joinToString("."),
+        nativePrefix = base.backingExportPrefix(context),
+        properties = properties[base].orEmpty(),
+        methods = methods[base].orEmpty(),
+      )
+    }
+}
+
+/**
+ * The prefix a base's planned member exports sit under: a sealed arm's is its sealed base's
+ * prefix plus the arm name (the sealed route's own spelling), anything else's its symbol prefix.
+ */
+private fun KSClassDeclaration.backingExportPrefix(context: NugetContext): String {
+  val sealed: KSClassDeclaration? = if (isSealedSubclass()) forwardArmSealedParent() else null
+  return if (sealed != null) {
+    "${sealed.nativePrefix(context.symbols)}_${simpleName.asString().lowercase()}"
+  } else {
+    nativePrefix(context.symbols)
+  }
 }
 
 /**
@@ -2619,6 +2750,7 @@ internal fun translateSealedClass(
       CsMemberRegistry.Entry(
         qualified, name, "sealed class $name", cls,
         keptBase = superClassDeclaration?.qualifiedName?.asString(), baseNames, baseSpellings,
+        nestedTypes = cls.csNestedTypeNames(),
       ),
     )
   }
@@ -2917,7 +3049,7 @@ internal fun translateSealedClass(
         memberRegistry?.register(
           CsMemberRegistry.Entry(
             qualified, subName, "sealed arm $subName", subclass, keptBase = qualifiedName,
-            armNames, armSpellings,
+            armNames, armSpellings, nestedTypes = subclass.csNestedTypeNames(),
           ),
         )
       }

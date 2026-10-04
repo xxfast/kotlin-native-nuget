@@ -261,9 +261,10 @@ ordinary `abstract class` used as a return type, a property type or a list eleme
 implements the abstract `Dispose()` and `DisposeAsync()` and the interface members the class leaves
 unimplemented. To give the wrapper something to call, `isForwardPlannableMemberOf` also plans an
 inherited interface member the class does not implement. A member the plan refuses is left out of
-C# instead of declared `abstract`, because the wrapper could not override it (CS0534). An ordinary
-abstract class qualifies only when no abstract or sealed class sits above it; a sealed arm always
-qualifies. A generic abstract class never does.
+C# instead of declared `abstract`, because the wrapper could not override it (CS0534). This
+amendment first gave a wrapper only to an abstract class with no abstract or sealed class above it;
+the amendment below lifts that, so every non-generic abstract class qualifies at any depth. A
+generic abstract class never does, and neither does a class below one.
 
 **`Result` members.** An abstract class's or abstract arm's `Result`-returning member keeps its
 [ADR-195](195-result-try-overload.md) `TryX` twin: the owner declares an `abstract` twin and the
@@ -284,13 +285,96 @@ run it through the native pipeline, and `LeakTests` row
 `:nuget-processor:test` 1678 passed, 0 failed; native pipeline IntegrationTests 3070, LeakTests
 168, 7 AOT shapes.
 
-**Known limits, verified, not fixed here.** A follow-up item of the same batch owns them.
+**Known limits, verified when found, fixed by the amendment below.** Four bugs were recorded here
+as left for a follow-up item of the same batch:
 
-- An abstract class below another abstract or sealed class (`Puppy : Animal`) gets no wrapper, so
-  returning one still fails with CS0144.
-- `abstract fun ticks(): Flow<Int>` on an abstract class fails the build with "Forward ABI missing
-  Kotlin export ..._ticks_collect": the Kotlin export builder (`ClassExports.kt`) drops abstract
-  `Flow` members while C# still declares them.
-- An arm member `backing()` beside a `class Backing` nested in the sealed base fails with CS0108.
-- `Dog.OnPet` renders `override` against an owner that never declared it (CS0115) on an abstract
+- An abstract class below another abstract or sealed class (`Puppy : Animal`) got no wrapper, so
+  returning one failed with CS0144.
+- `abstract fun ticks(): Flow<Int>` on an abstract class failed the build with "Forward ABI missing
+  Kotlin export ..._ticks_collect": the Kotlin export builder (`ClassExports.kt`) dropped abstract
+  `Flow` members while C# still declared them.
+- An arm member `backing()` beside a `class Backing` nested in the sealed base failed with CS0108.
+- `Dog.OnPet` rendered `override` against an owner that never declared it (CS0115) on an abstract
   class without a wrapper.
+
+### Amendment (2026-10-04): the four limits are closed, and generic sealed hierarchies are a named skip
+
+**Wrapper at any depth.** Every non-generic abstract class gets a backing wrapper, whatever sits
+above it, so `abstract class Puppy : Animal()` returned as `Puppy` constructs its own wrapper
+instead of `new Puppy(...)` (CS0144). Below an abstract base the wrapper also overrides each member
+the chain above leaves open (`name` and `weigh` below `Hibernator`), over the export of the base
+that declared it. Its name is `Backing`, or the first free underscore-suffixed spelling when a base
+above it already carries a `Backing`: a nested `Backing` there would hide the base's (CS0108).
+Two known limits stay. A class below a **generic** abstract base keeps the old shape, with no
+wrapper. A **generic** abstract class returned at a closed type (`Crate<Int>`) is still CS0144,
+tracked by a ROADMAP line another PR of this stack added (discovered alongside ADR-198), so none is
+added here.
+
+**Abstract `Flow` member.** The Kotlin export builder now exports an abstract `Flow` member, so the
+owner declares `Flow` members over its own export (`Napper.Breaths()` calls
+`..._napper_breaths_collect`) and the wrapper needs no override of it. `abstract suspend` already
+worked. An `override` of an `open` `Flow` member no longer hides the base's declaration (CS0108),
+and a subclass of a generic base no longer loses its `suspend` and `Flow` overrides silently
+(`reProjectsKeptBaseMember`).
+
+**Generic abstract owner.** A generic abstract class declares a lambda-parameter member that its
+subclasses' plans override, and omits one every plan refuses, so the CS0115 and CS0534 pair no
+longer arises on it.
+
+**A member named like a nested type, or like its own type, is a named error.** An arm member whose
+C# name equals a type nested in the sealed base (`Den.Burrow.Backing()` beside `class Backing`) or
+another arm's name is now `ERROR_CSHARP_NAME_COLLISION` at the arm, once, naming the member and the
+type it would hide, the same ADR-110 rule that covers every other CS0102 and CS0108 clash. It used
+to surface only as CS0108 in the consumer's build. A member named like its own enclosing type
+(`OnTap.OnTap`, `Cat.cat`; CS0542) is named as a collision too, for classes, sealed bases and arms.
+The generated wrapper is left out of the check on purpose: it is internal and renamed instead.
+Known limit (inferred, not run): a Kotlin `object` or interface member named like its own type is
+not checked.
+
+**A subclass member cannot hide the base's wrapper.** `abstractBackingName` steps past the member
+names of every public subclass (index `ForwardSubclassMemberNames`), so with `MyloNapper.backing()`
+the `Hibernator` wrapper becomes `Backing_`, and `Napper`'s, one level down, `Backing__`. Names are
+spelled from the first free `Backing` plus underscores, whatever the base, a member or a subclass
+claims.
+
+**An overridden lambda-typed property is declared once.** A subclass that overrides a lambda-typed
+property (`override val onWake: (String) -> String`) is not re-declared in C# when the base already
+carries it: the base's getter reaches the override through Kotlin dispatch, so
+`napper.OnWake.Invoke("Mylo")` answers `"Mylo stretches"` with one `OnWake` on `Hibernator`. The
+shared rule `reProjectsKeptBaseLambdaProperty` is read by both halves (`CirClassTranslator` and
+`ClassExports`) and covers abstract, `open` and generic bases. The subclass still binds the property
+itself when the base is generic, drops it, or its carrier declines the type.
+
+**Through a deeper wrapper.** Generic abstract members follow the override rule of
+[ADR-197](197-method-type-parameters-on-the-callable-plan.md) (`public override T? Spare<T>(T? item)
+where T : default`), keyword-named parameters are escaped, and `Result` twins hold: the Try-twin
+pass matches the base by its full C# path.
+
+**Generic sealed hierarchies are a named skip.** `sealed class Outcome<T>` with `Ok<T>` and
+`Err : Outcome<Nothing>` generated Kotlin that did not compile (`asStableRef<Outcome>()` with no
+type argument) and a non-generic C# arm holding `Ok(T v)` (CS0246). It is now declined on both
+halves before anything is generated. The base is reported once as `SKIPPED_UNSUPPORTED_TYPE`,
+listing its arms; each member typed with the hierarchy is `SKIPPED_SEALED_POSITION` on its own
+owner (index `ForwardGenericSealedHierarchies`), and its hint says "`<type>` belongs to a generic
+sealed hierarchy, which is not declared in C# at all (the SKIPPED_UNSUPPORTED_TYPE warning on the
+sealed class says why); declare the hierarchy without type parameters, or type this member with a
+non-sealed class or interface". Nested declarations stay `SKIPPED_NESTED_DECLARATION`. Neither the
+base, an arm, nor a declaration nested in either is declared in C#. Binding it is feature-sized,
+not a fix: `Err : Outcome<Nothing>` has no honest C# shape, and it needs a generic `FromHandle<T>`
+and `Factories` entry, a discriminator over `asStableRef<Outcome<*>>()`, arms spelled under a
+generic owner, and a classifier that spells `Outcome<int>` at positions. One ROADMAP line records
+it.
+
+**Verified.** `Tier1AbstractChainBackingTest` compiles both halves for each chain, the abstract
+`Flow` member, the nested-type collision, the generic abstract owner, the wrapper name and the
+lambda-property override; `Tier1GenericSealedSkipTest` pins the skip and a consumer build that
+compiles beside it. The Tier 1 cells for the wrapper-name, lambda-property and own-type follow-ups
+were written after the fixes; the red evidence for the wrapper-hiding and lambda-override cases
+comes from compiler probes on the pre-fix code, not from a failing cell. Fixture `TorporSample.kt`
+(`Napper`, `Slumber`) and `AbstractBackingTests.cs` run it through the native pipeline, including
+`OverriddenLambdaProperty_ReadThroughTheBase_DispatchesToTheOverride` and
+`SubclassMemberNamedLikeTheWrapper_Binds`, and `LeakTests` rows
+`AbstractBacking_ClassesBelowAbstractBases_ReturnToBaseline` and
+`AbstractBacking_AbstractFlowMember_CollectedThroughWrapper_ReturnsToBaseline` pin the release.
+Verified on the assembled stack: `:nuget-processor:test` 1755 passed, 0 failed; native pipeline
+IntegrationTests 3119, LeakTests 180, 7 AOT shapes.

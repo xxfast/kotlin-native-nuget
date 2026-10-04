@@ -7,6 +7,7 @@ import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.TypeName
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDllImport
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirClass
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirDeclaration
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirFile
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirObject
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirSealedClass
@@ -14,6 +15,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirStaticClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirEnum
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClass
 import io.github.xxfast.kotlin.native.nuget.processor.cir.backing
+import io.github.xxfast.kotlin.native.nuget.processor.cir.inheritedNativeImports
 import io.github.xxfast.kotlin.native.nuget.processor.cir.nativeImports
 import io.github.xxfast.kotlin.native.nuget.processor.cir.ordinaryNativeImports
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAbiDirection as PlanAbiDirection
@@ -196,9 +198,26 @@ internal object ForwardAbiContract {
     return collisions
   }
 
-  fun csharp(file: CirFile): List<ForwardAbiSignature> = file.namespaces
-    .flatMap { namespace -> namespace.declarations }
-    .flatMap { declaration ->
+  fun csharp(file: CirFile): List<ForwardAbiSignature> {
+    val declarations: List<CirDeclaration> = file.namespaces.flatMap { it.declarations }
+    val signatures: List<ForwardAbiSignature> = csharpImports(declarations)
+    // A backing wrapper's override of a member an abstract base above its owner leaves open calls
+    // that base's export again. It must import it exactly as the base's own wrapper does.
+    declarations.filterIsInstance<CirClass>()
+      .flatMap { cls -> cls.backing()?.inheritedNativeImports().orEmpty() }
+      .mapNotNull { import -> import.toSignature() }
+      .forEach { inherited ->
+        require(inherited in signatures) {
+          "Forward ABI inherited backing import $inherited matches no import of its base; " +
+              "imports of ${inherited.exportName}: " +
+              signatures.filter { it.exportName == inherited.exportName }
+        }
+      }
+    return signatures
+  }
+
+  private fun csharpImports(declarations: List<CirDeclaration>): List<ForwardAbiSignature> =
+    declarations.flatMap { declaration ->
       when (declaration) {
         is CirStaticClass -> declaration.members.filterIsInstance<CirDllImport>()
         is CirObject -> declaration.methods.filterIsInstance<CirDllImport>()

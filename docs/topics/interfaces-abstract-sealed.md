@@ -675,6 +675,10 @@ Bed bed = new Hammock();
 bed.Occupant = "Oreo"; // dispatches through Hammock's own override
 ```
 
+A lambda-typed property a subclass overrides is declared once, on the base that carries it:
+reading `napper.OnWake` through the subclass runs the subclass's lambda through Kotlin dispatch,
+and the subclass declares no second `OnWake`. A subclass of a generic base declares it itself.
+
 ### A base class's own `abstract fun` {id="a-base-class-s-own-abstract-fun"}
 
 An exported base class's own **unimplemented** `abstract val`/`abstract var`/`abstract fun`, one
@@ -755,8 +759,10 @@ cannot spell abstractly, or one whose own type has no C# declaration (a nested c
 is dropped from the generated class instead of rendered `abstract`, named on a build warning; an
 uncompilable abstract member would break every further subclass.
 
-An `abstract fun` returning `Flow<T>` on an abstract class fails the build ("Forward ABI missing
-Kotlin export"); declare the `Flow` on a concrete class instead.
+An `abstract fun` returning `Flow<T>` binds like any other `Flow` member: the abstract class
+declares it, so `await foreach` works on a value typed as the class, and the Kotlin subclass's
+override supplies the items. Dispose the value with `await using` to drain it, as for any
+[Flow member](coroutines-and-flow.md).
 
 ### A class-typed abstract member {id="a-class-typed-abstract-member"}
 
@@ -808,8 +814,10 @@ hibernator.Describe();                         // "Oreo snores 3 times"
 bool concrete = hibernator is OreoHibernator;  // false
 ```
 
-An abstract class that extends another abstract or sealed class gets no such subclass yet, so
-returning one fails the build (CS0144).
+An abstract class that extends another abstract class, or an abstract sealed arm, comes back the
+same way at any depth. A `Napper : Hibernator` returned as `Napper` answers `Name` and `Weigh()`,
+which `Hibernator` leaves open, as well as its own members. The one exception is a class below a
+*generic* abstract base: it gets no such subclass, so returning it fails the build (CS0144).
 
 ## Sealed classes and interfaces
 
@@ -1252,7 +1260,7 @@ arm and uses the base's scope, so `await using` on the base reference drains it 
 moves to the base. C# source keeps compiling, since `loaf.AreaAsync()` now resolves to the inherited
 `Shape.AreaAsync`. A consumer compiled against an earlier package must be rebuilt.
 
-A generic sealed base does not bind its own async members.
+A generic sealed base is not bound at all; see [Limitations](#limitations).
 
 #### A `suspend fun` returning the sealed base {id="sealed-method-suspend-base-generated-c"}
 
@@ -1396,13 +1404,23 @@ generic sealed owner still cannot host a nested declaration.
   obtain the arm from a factory or from the base's `FromHandle` discriminator instead. A
   `class`-kind arm with bridgeable constructor parameters exports a real public constructor
   instead; see [Sealed classes and interfaces](#sealed-classes-and-interfaces).
-- A generic sealed base does not bind its own `suspend`, `Flow` or `StateFlow` members; they are
-  named skips.
+- A generic sealed hierarchy (`sealed class Outcome<T>`) is not bound. The base is one named
+  `SKIPPED_UNSUPPORTED_TYPE` listing its arms, every function or property typed with it or an arm
+  is a named skip whose hint says it belongs to a generic sealed hierarchy, and the rest of the
+  owner binds as usual. Declare the hierarchy without type
+  parameters (an arm can hold a generic value as a property of a concrete type), or use a
+  non-sealed generic class.
 - A `suspend` lambda parameter (`suspend (T) -> R`) on a sealed arm has no binding, the same as on
   an ordinary class. A generic method on an arm or a sealed base binds as a C# generic method; see
   [Generic methods on a class](generics.md#generic-methods).
-- A sealed base that nests a `class Backing` beside an arm member `backing()` fails the build
-  (CS0108); rename one of them.
+- A member whose C# name equals a type nested in the sealed base, or another arm's name
+  (`backing()` beside a nested `class Backing`), is a named `ERROR_CSHARP_NAME_COLLISION` at the
+  arm. So is a member named like its own type (`OnTap.OnTap`, `Cat.cat`) on a class, a sealed base
+  or an arm; rename one of them. A Kotlin `object` or interface member named like its own type is
+  not checked, so it surfaces as a C# error in your build instead.
+- A generic abstract class has no internal subclass, nor has a class below one, so returning one
+  (`Crate<Int>`, or a class extending `Crate<T>`) fails the build (CS0144); make the base
+  non-generic.
 
 <seealso>
     <category ref="related">
