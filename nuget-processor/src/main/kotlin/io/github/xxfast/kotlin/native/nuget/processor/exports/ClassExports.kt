@@ -19,7 +19,8 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinSpelling
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardTypeParametersInScope
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStoredCallbackPair
 import io.github.xxfast.kotlin.native.nuget.processor.cir.STATE_FLOW_TYPES
-import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLambdaPropertyCarrier
+import io.github.xxfast.kotlin.native.nuget.processor.forward.carriesLegacyLambdaProperty
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardLegacyAsyncRoute
 import io.github.xxfast.kotlin.native.nuget.processor.cir.expandAliases
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedCallbackMember
@@ -422,9 +423,8 @@ internal fun FileSpec.Builder.addClassExports(
     if (cls.forwardTypeParametersInScope().isNotEmpty()) return@forEach
     // Named specialized-protocol property adapters (lambda / suspend-lambda / Flow).
     val propTypeResolved: KSType = prop.type.resolve().expandAliases()
-    val propType: String = propTypeResolved.declaration.qualifiedName?.asString() ?: "Any"
-    val isLambdaProperty: Boolean = propType in LAMBDA_TYPES || propType in SUSPEND_LAMBDA_TYPES
-    if (isLambdaProperty) {
+    // The planner's skip report reads the same predicate, so it names exactly what this declines.
+    if (prop.carriesLegacyLambdaProperty(ForwardLambdaPropertyCarrier.CLASS)) {
       // CIR ships lambda property getters without errorOut (hasSyncErrorOut = false).
       addFunction(
         FunSpec.builder("export_${prefix}_get_$propName")

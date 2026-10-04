@@ -212,7 +212,7 @@ a **skip + named diagnostic**; the one collision row is **fatal**.
 | **`Map`/`Set` (and mutable) as method *parameters*** (ROADMAP line 78, no `CreateMap`/`CreateSet` helper) | **No** (v1) | **skip + `SKIPPED_UNSUPPORTED_INPUT`** | planner `inputSkipReason()` = `COLLECTION` |
 | **A nullable type with no wire at the position it is written** (ROADMAP line 79, ADR-061 deferred width) | **No** (v1) | **skip + `SKIPPED_UNSUPPORTED_RETURN`** at a return, **`SKIPPED_UNSUPPORTED_INPUT`** at a parameter (amended 2026-09-09, issue #131) | planner `NULLABLE` + `ForwardSkipPosition` |
 | **`Char` at positions ADR-062 did not close**, and other `Unsupported` types (`Sequence`, local/anonymous, non-exported handle, bare type parameter) | **No** | **skip + `SKIPPED_UNSUPPORTED_TYPE`** | classifier `Unsupported` |
-| **A property whose type `ForwardPropertyPlanner.isPlannable` rejects** (added later, no ADR: this completes the position naming below) | **No** | **skip + `SKIPPED_UNSUPPORTED_PROPERTY`** | `ForwardPropertyPlanner.recordDropped`, excluding lambda/suspend-lambda/`Flow`/`StateFlow`, which still bind via a legacy route |
+| **A property whose type `ForwardPropertyPlanner.isPlannable` rejects** (added later, no ADR: this completes the position naming below) | **No** | **skip + `SKIPPED_UNSUPPORTED_PROPERTY`** | `ForwardPropertyPlanner.recordDropped`, excluding `Flow`/`StateFlow` and the lambda properties an owner's lambda route binds (corrected 2026-10-04, see the amendment of that date), which still bind via a legacy route |
 | **An extension property whose *receiver* type is unsupported** (added later, no ADR: closes this ADR's position coverage) | **No** | **skip + `SKIPPED_UNSUPPORTED_PROPERTY`** | `ForwardPropertyPlanner.extensionProperty`, naming the receiver's classified type; no legacy route re-emits by receiver, so no exclusion is needed |
 | **Variance (`out`/`in`) on a class type parameter** | Partially, dropped, member still binds | **`INFO_DROPPED_VARIANCE`** (note, not skip) | `CirClassTranslator.kt:561` |
 | **Two constructors that collapse to one C# signature** (cell 21, ADR-034) | **No, and ambiguous** | **`ERROR_CSHARP_SIGNATURE_COLLISION`, fatal** | `CirClassTranslator.kt:92` / `CirFunctionTranslator.kt:89` |
@@ -252,9 +252,10 @@ original table left unnamed. `SKIPPED_UNSUPPORTED_INPUT` covers a parameter and
 `SKIPPED_UNSUPPORTED_RETURN` a return, but a property `ForwardPropertyPlanner.isPlannable` rejected
 still vanished with no diagnostic at all (tracked on `ROADMAP.md`). `ForwardPropertyPlanner` now
 records every property it declines to plan and routes it through the same `ForwardDiagnosticSink`,
-except a lambda/suspend-lambda/`Flow`/`StateFlow`-typed property (nullable or not), which is
-unplannable by design and still bound by `CirClassTranslator`'s legacy adapters, so naming it would
-be a false positive.
+except a `Flow`/`StateFlow`-typed property (nullable or not), which is unplannable by design and
+still bound by `CirClassTranslator`'s legacy adapters, so naming it would be a false positive. The
+lambda half of that exception was keyed to the wrong thing and is replaced by a per-owner rule, see
+the 2026-10-04 amendment.
 
 **Later addition, same sink:** the position table above still had one gap after
 `SKIPPED_UNSUPPORTED_PROPERTY` landed: an extension property whose *receiver* type is unsupported
@@ -1378,7 +1379,7 @@ with a `Sequence` in its signature was neither planned nor legacy-routed. It dis
 generated C# with no diagnostic of any kind.
 
 The property half was never silent: `ForwardPropertyPlanner.recordDropped` is silent only for the
-lambda/flow legacy protocols, so `cat.Cat.unsupported` always fired `SKIPPED_UNSUPPORTED_PROPERTY`.
+lambda/flow legacy protocols (the lambda half superseded 2026-10-04), so `cat.Cat.unsupported` always fired `SKIPPED_UNSUPPORTED_PROPERTY`.
 Only its wording changes here.
 
 ### Decision
@@ -2126,3 +2127,55 @@ appears once: all bound, some unrouted (`tally` and `feedMixed`, which also appe
 warnings), none bound (`pick` and `drain`), and a base class with one unrouted member.
 `:nuget-processor:test` 1682 passed, 0 failed. Native pipeline: IntegrationTests 3070, LeakTests
 168, 7 AOT shapes. No `LeakTests` row: the change is diagnostic text only.
+
+**Found, not fixed.** A Kotlin `abstract class Deep : Nap()` sealed arm renders as
+`public sealed class Deep : Nap`; inferred from generated C#, renderer line not located. Harmless
+while the arm has no constructor. Recorded in `ROADMAP.md`.
+
+## Amendment (2026-10-04): a lambda-typed property is bound or named once, per owner
+
+A lambda-typed property was both emitted and reported by `SKIPPED_UNSUPPORTED_PROPERTY` as skipped,
+and in two other places it was neither. Two causes. Since
+[ADR-160](160-callback-parameter-on-the-forward-plan.md) a `(Int) -> Unit` classifies as
+`BridgeType.Callback`, not a `lambda` protocol type, so the planner no longer recognised as
+legacy-routed a property the class and sealed-arm lambda routes still emit. And its quiet list was keyed on the shared `CLASS` position, which an ordinary class, a sealed base,
+a sealed arm and an interface all plan under, though only some of them have a lambda route.
+
+**Rule.** One predicate, `carriesLegacyLambdaProperty(carrier)` in
+`forward/ForwardLegacyLambdaProperty.kt`, answers "does this owner's lambda-property route bind this
+property". The planner's skip decision and all four emitter checks (`ClassExports`,
+`CirClassTranslator`'s class loop, `SealedClassExports`, `translateSealedClass`'s arm loop) read it,
+so the report and the emission cannot disagree. The owner is a `ForwardLambdaPropertyCarrier`
+(`CLASS`, `SEALED_ARM`, `SEALED_BASE`, `NONE`) the planner passes in, since its own position cannot
+tell them apart. A carried property is silent; every other lambda property is named once.
+
+| Owner and shape | Result |
+|---|---|
+| class `(Int) -> Unit`, `val`, `var`, `@CSharpName`-renamed | bound, no warning (was bound and warned) |
+| sealed arm `(Int) -> Unit` | bound, no warning (was bound and warned) |
+| lambda declared on a sealed base | bound on every arm, not on the base type; the base no longer warns |
+| a `var` lambda property | binds get-only; its setter is named once as `SKIPPED_UNSUPPORTED_INPUT` ("its setter is not generated because a function-type property binds read-only ..."), as ADR-107 does for `Throwable?` |
+| a nullable lambda property, any owner | refused with one warning whose hint says only the non-null form binds |
+| sealed arm or base `suspend` lambda, interface `suspend` lambda, interface `(Char) -> Unit` | one warning (was silently dropped) |
+| interface `(Int) -> Unit`, companion, object, top level, generic class | one warning, unchanged |
+
+A nullable lambda property never bound correctly. On a class the generated Kotlin getter passed the
+nullable value to `NugetHandles.retain(Any)`, which does not compile; on a sealed arm it rendered a
+non-null `KotlinAction<int>` over a possibly-zero handle. It is now refused on both halves. The
+warning names the nullability, not the type: "its type is a nullable function type, which has no
+property route on this owner; only the non-null `(Int) -> Unit` binds here", hint "declare the
+property as the non-null `(Int) -> Unit`, with a no-op lambda in place of null". A generic class has
+no route (ADR-147: the route spells `asStableRef<Owner>()`), so it keeps its existing sentence. A
+sealed-interface enum arm runs no arm loop, but its own override is an enum member property, which
+the enum's planner already names, so every arm either binds the property or names it.
+
+**Verified.** Tier 1 `Tier1LambdaPropertyReportTest`, measured before and after the change, pins
+every owner and shape above to either "emitted, no warning" or "absent, one warning", plus a
+get-only check for the three `var` cases and the absence of a Kotlin export or `DllImport` for a
+refused nullable. `:nuget-processor:test`: 1648 passed, 0 failed. The native pipeline was run
+for the first half of the change, which alters skip remarks and `NugetDiagnostics.json` for existing
+fixtures: IntegrationTests 3040, LeakTests 165, seven AOT shapes.
+
+**Inferred, not covered.** A lambda declared on a sealed base works at runtime on an arm: its getter
+has the same shape as an arm-declared one, but no fixture calls it. No `LeakTests` row, because no
+new handle route is added.
