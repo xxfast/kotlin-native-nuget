@@ -96,7 +96,12 @@ internal fun FileSpec.Builder.addInterfaceBridgeFactoryExport(plan: ForwardBridg
   addFunction(builder.build())
 }
 
-private fun StringBuilder.appendSlotOverride(slot: ForwardBridgeSlot) {
+/**
+ * One slot's `override`, forwarding to `${slotPrefix}Fn` with `${slotPrefix}Ctx`. Also the ADR-039
+ * subscription route's listener-property override, so a listener `val` reads and releases its
+ * result exactly as it does here.
+ */
+internal fun StringBuilder.appendSlotOverride(slot: ForwardBridgeSlot) {
   val call: String = invocation(slot)
   if (slot.isProperty) {
     appendLine("    override val ${slot.name}: ${slot.result.kotlin}")

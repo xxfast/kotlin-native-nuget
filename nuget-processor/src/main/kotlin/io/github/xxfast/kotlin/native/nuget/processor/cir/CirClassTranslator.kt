@@ -34,7 +34,11 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedCallb
 import io.github.xxfast.kotlin.native.nuget.processor.forward.optInMarker
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedInterfaceBridgePair
 import io.github.xxfast.kotlin.native.nuget.processor.forward.InterfaceBridgeWire
+import io.github.xxfast.kotlin.native.nuget.processor.forward.csharpWire
+import io.github.xxfast.kotlin.native.nuget.processor.forward.delegateName
+import io.github.xxfast.kotlin.native.nuget.processor.forward.delegateParamList
 import io.github.xxfast.kotlin.native.nuget.processor.forward.interfaceBridgeWire
+import io.github.xxfast.kotlin.native.nuget.processor.forward.listenerPropertySlots
 import io.github.xxfast.kotlin.native.nuget.processor.exports.hasPlannedCallbackParameter
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findInterfaceBridgePairs
 import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardArmFlowMethods
@@ -4598,7 +4602,28 @@ private fun translateInterfaceBridgeMethod(
 
   tracker.needsSubscription = true
 
-  val entries: List<CirInterfaceBridgeMethodEntry> = ifaceMethods.map { method ->
+  // A listener property crosses as its ADR-084 getter slot, ahead of the function slots, read off
+  // the same list the Kotlin half's parameters come from.
+  val propertyEntries: List<CirInterfaceBridgeMethodEntry> =
+    classifier.listenerPropertySlots(ifaceDecl).map { slot ->
+      val delegate = CirCallbackDelegate(
+        slot.delegateName(),
+        slot.delegateParamList(),
+        slot.result.wire.csharpWire(),
+      )
+      if (tracker.callbackDelegates.none { it.name == delegate.name }) {
+        tracker.callbackDelegates.add(delegate)
+      }
+      CirInterfaceBridgeMethodEntry(
+        methodCsName = slot.csName,
+        methodKtName = slot.slotPrefix,
+        delegateName = delegate.name,
+        delegateParamList = "(IntPtr _)",
+        callbackBody = slotBody(slot, "listener"),
+      )
+    }
+
+  val methodEntries: List<CirInterfaceBridgeMethodEntry> = ifaceMethods.map { method ->
     val mName: String = method.simpleName.asString()
     val mCsName: String = method.csharpMemberName()
     val params = method.parameters.toList()
@@ -4693,7 +4718,7 @@ private fun translateInterfaceBridgeMethod(
     libraryName = libraryName,
     interfaceCsName = interfaceCsName,
     className = className,
-    entries = entries,
+    entries = propertyEntries + methodEntries,
   )
 }
 

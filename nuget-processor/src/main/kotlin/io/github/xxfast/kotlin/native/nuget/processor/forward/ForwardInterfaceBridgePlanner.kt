@@ -157,7 +157,12 @@ internal object ForwardInterfaceBridgePlanner {
     )
   }
 
-  private fun slotOf(
+  /**
+   * The getter slot for [property], or null when it falls outside the slot vocabulary. Also read by
+   * the ADR-039 `add*`/`remove*` subscription route ([listenerPropertySlots]), so a listener `val`
+   * crosses there exactly as it does on this factory.
+   */
+  internal fun slotOf(
     property: KSPropertyDeclaration,
     classifier: ForwardBridgeTypeClassifier,
   ): ForwardBridgeSlot? {

@@ -24,6 +24,7 @@ using Perchvar = TestLibrary.Perchvar;
 using TestLibrary.Kennel;
 using Lineage = TestLibrary.Lineage;
 using Litterbox = TestLibrary.Litterbox;
+using TestLibrary.Listenerprops;
 using TestLibrary.Lounge;
 using TestLibrary.Metronome;
 using TestLibrary.Models;
@@ -1732,6 +1733,33 @@ public class LiveHandleTests
             using IDisposable sub = source.AddListener(listener);
             source.Trigger();
             Assert.Equal(1, listener.Meows);
+        });
+    }
+
+    // Row 8j-val. The same interface-bridge route, the other direction: a listener `val` read from
+    // Kotlin. Each `name` read is one getter-slot crossing whose `String` result C# mints
+    // (`NugetMarshal.WrapString`) and Kotlin releases after reading, the ADR-084 bridge factory's
+    // ownership. `ReadNames(5)` is five crossings per iteration; a getter whose result Kotlin
+    // forgot to release shows up as +250 over the 50 below.
+    private sealed class ProbePurrListener : IPurrListener
+    {
+        public string Name => "Oreo";
+        public string? Nickname => null;
+        public int Lives => 9;
+        public bool Sleepy => false;
+        public PurrMood Temper => PurrMood.Calm;
+        public void OnPurr(int volume) { }
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void InterfaceBridge_ListenerStringProperty_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var box = new PurrBox();
+            using IDisposable sub = box.AddPurrListener(new ProbePurrListener());
+            Assert.Equal(20, box.ReadNames(5));
         });
     }
 
