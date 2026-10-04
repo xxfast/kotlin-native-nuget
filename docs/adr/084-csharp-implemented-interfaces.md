@@ -606,3 +606,36 @@ listener's own members). The subscription route converges on the factory's slots
 only; its function members keep their own flat `Void` delegates. A property outside the vocabulary,
 a `var` or an inherited one refuses the whole pair by name; see the ADR-039 amendment of the same
 date for the gate, the refusal kinds and the evidence.
+
+## Amendment (2026-10-04): slot prefixes are unique, and a member-less interface gets a factory
+
+**Rule.** A slot's ABI prefix (`nameGetPtr`, `speakPtr`, `speak_2Ptr`) must be unique among the
+interface's slots and must not equal a name the generated code declares beside them. Before this
+change `val name` and `fun nameGet()` shared the prefix `nameGet` (both halves declared
+`nameGetPtr` twice), and a slot spelled like a C# keyword (`lock`), like a generated local (`token`,
+`state`, `impl`, `error`) or like the release pair (`release`) failed one of the two compiles.
+`withUniqueSlotPrefixes` (`ForwardInterfaceBridgePlanner.kt`) now gives the later claimant a `_2`,
+`_3`, ... suffix, carried on `ForwardBridgeSlot.uniqueSuffix` so the Kotlin and C# projections read
+one name. Function slots claim first, then property slots, so the getter slot is the one that moves.
+The reserved names are `BRIDGE_FACTORY_FIXED_NAMES`: `release`, `token`, `state`, `impl`, `error`
+and every C# keyword. A slot lambda's own locals (`result`, `value0`) are not reserved, since C# 8
+lets them shadow the delegate. A slot that clashes with nothing keeps its name. The ADR-039
+subscription pair uses the same helper for its listener `val` slots; see the ADR-039 amendment of
+this date.
+
+**A member-less interface gets a factory.** An interface with no members used to be treated as out
+of scope, so no factory was generated and a C# implementation passed at a plain parameter threw at
+`HandleOf`, while the ADR-039 add/remove pair accepted the same implementation. The planner now
+plans an empty factory: no slot pairs, the release pair and the token, and an empty
+`object : Marker, NugetCSharpBridge`. Every member-less interface reachable from C# gets a
+`_bridge_create` export and a bridge-state class, and the implementation comes back across
+`Unclip()` as the same C# instance (the `TryResolveCSharp` path every bridge uses).
+
+Evidence, verified: `Tier1InterfaceBridgeSlotNameTest` (a `val` and a function that share a prefix;
+the keyword and generated-name slots) and the member-less cell in `Tier1InterfaceBridgeFactoryTest`
+compile both generated halves and a C# consumer. `IntegrationTests/MarkerInterfaceTests.cs` runs the
+`CharmBracelet.kt` fixture through the native pipeline: a C# `ICharm` is clipped at a plain
+parameter and returned as the same instance, and subscribed and unsubscribed on the add/remove
+pair. `LeakTests` row 8j-marker, `InterfaceBridge_CSharpMarkerInterface_ReturnsToBaseline`, returns
+to baseline. Full `:nuget-processor:test`: 1698 passed; native pipeline `IntegrationTests` 3069,
+`LeakTests` 169, 7 AOT shapes.

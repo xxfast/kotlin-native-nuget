@@ -280,13 +280,15 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
   }
 
   for (method in cls.methods) {
-    if (!method.isAbstract) {
-      if (method.isAsync || method.isFlow) {
-        renderLegacyMethodNativeImport(cls, method)
-      } else {
-        renderDllImport(cls.methodNativeImport(method))
-      }
+    // ADR-179 amendment (2026-10-03): an async or Flow method rides `companionMembers` beside the
+    // `[DllImport]` its legacy route built from the Kotlin `@CName` (`suspendMembers`,
+    // `flowMembers`). The arm that used to import one from here spelled its extern from the public
+    // name and its entry point from the extern, a shape no export has, so it fails by name instead.
+    check(!method.isAsync && !method.isFlow) {
+      "${cls.name}.${method.name}: an async or Flow method is carried by companionMembers with " +
+          "its own [DllImport], never by CirClass.methods"
     }
+    if (!method.isAbstract) renderDllImport(cls.methodNativeImport(method))
     renderMethod(method, cls.name)
   }
 
@@ -416,18 +418,6 @@ internal fun StringBuilder.renderConstructorMember(
 ) {
   renderDllImport(constructorNativeImport(libraryName, nativePrefix, ctor))
   renderConstructor(className, ctor, hasSuperClass)
-}
-
-private fun StringBuilder.renderLegacyMethodNativeImport(cls: CirClass, method: CirMethod) {
-  val nativeParamList: MutableList<String> = (listOf("NugetKotlinHandle handle") +
-      method.parameters.map { narrowParameterMarshal(it.nativeType, it.name) }).toMutableList()
-  nativeParamList.addAll(method.extraNativeParams)
-  if (method.isSyncErrorCheckEnabled) nativeParamList.add("out IntPtr error")
-  val nativeParams: String = nativeParamList.joinToString(", ")
-  appendLine("        [DllImport(\"${cls.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${cls.nativePrefix}_${method.nativeName}\")]")
-  narrowReturnMarshal(method.nativeReturnType)?.let { appendLine(it) }
-  appendLine("        private static extern ${method.nativeReturnType} Native_${method.name}($nativeParams);")
-  appendLine()
 }
 
 internal fun StringBuilder.renderConstructor(

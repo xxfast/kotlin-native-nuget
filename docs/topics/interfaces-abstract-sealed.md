@@ -373,7 +373,12 @@ Only a limited set of member shapes can cross this bridge: `val` getters, and me
 returning `Unit`, a primitive, `Boolean`, an enum, or `String`/`String?`. An interface with a `var`
 property, an object- or collection-typed member, a `suspend` member, or a generic member has **no
 bridge at all**: passing an implementation of it throws `NotSupportedException`, naming the C#
-type, the first time it crosses, not at build time.
+type, the first time it crosses, not at build time. A marker interface with no members bridges too:
+Kotlin receives an empty object that implements it, and handing it back to C# returns your
+original instance. (Before, passing one threw.)
+
+A member whose C# name clashes with a generated one (`token`, `state`, `error`, `release`, or a C#
+keyword such as `lock`) is handled for you; implement the member under its usual name.
 
 #### Lifetime and identity {id="lifetime-and-identity"}
 

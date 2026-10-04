@@ -311,6 +311,11 @@ dispose: a `String` it returns is released by Kotlin after each read.
 `InterfaceBridge_ListenerStringProperty_ReturnsToBaseline`, reads one repeatedly and returns to
 baseline.
 
+A C# class implementing a member-less Kotlin interface crosses at a plain parameter through a
+bridge with no callback slots, and comes back as the same instance. `LeakTests/LiveHandleTests.cs`
+row 8j-marker, `InterfaceBridge_CSharpMarkerInterface_ReturnsToBaseline`, passes one repeatedly and
+returns to baseline.
+
 An exception thrown from Kotlin allocates one error handle per call, and the
 [exception mapping](exceptions.md#catching-a-specific-exception-type) reads a mapped type from it
 for the exception and each cause. `LeakTests/LiveHandleTests.cs`'s

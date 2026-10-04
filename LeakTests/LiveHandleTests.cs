@@ -4,6 +4,7 @@ using Test.Menagerie;
 using TestLibrary;
 using TestLibrary.Admission;
 using TestLibrary.Cat;
+using TestLibrary.Charms;
 using Catfeed = TestLibrary.Catfeed;
 using Curlup = TestLibrary.Curlup;
 using TestLibrary.Dev.Other.Bytype;
@@ -1917,6 +1918,30 @@ public class LiveHandleTests
             using var box = new PurrBox();
             using IDisposable sub = box.AddPurrListener(new ProbePurrListener());
             Assert.Equal(20, box.ReadNames(5));
+        });
+    }
+
+    // Row 8j-marker. A C#-implemented member-less interface: at a plain parameter it crosses
+    // through an ADR-084 bridge factory with no slots (one transfer handle per crossing, disposed
+    // after the call), comes back resolved to the same instance (the returned handle is disposed by
+    // the token probe), and rides the ADR-039 pair with no callback slots (one retained unregister
+    // closure, released on Dispose).
+    private sealed class ProbeCharm : ICharm
+    {
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void InterfaceBridge_CSharpMarkerInterface_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var bracelet = new CharmBracelet();
+            using var charm = new ProbeCharm();
+            bracelet.Clip(charm);
+            Assert.Same(charm, bracelet.Unclip());
+            using IDisposable worn = bracelet.AddCharm(charm);
+            Assert.Equal(1, bracelet.WornCount());
         });
     }
 

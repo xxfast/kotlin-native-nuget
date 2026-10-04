@@ -284,7 +284,52 @@ green after; the full `:nuget-processor:test` run passed 1562 tests with 0 failu
 `lantern.@event`, `@lock`, `@namespace`, `@operator`, `@object`, `@fixed` and `@checked` against
 the `Lantern` fixture. No `LeakTests` row: the change adds no handle kind or marshalling path.
 
-Not verified: whether `renderLegacyMethodNativeImport` (`CirClassRenderer.kt`) can still build
-`Native_<public name>` for an async or `Flow` method in `cls.methods`; and no test pins a
-keyword-named method beside a same-named property now that collision keys are unescaped. Both are
-recorded in the `ROADMAP`.
+Two claims were left unverified here: whether `renderLegacyMethodNativeImport`
+(`CirClassRenderer.kt`) could still build `Native_<public name>` for an async or `Flow` method in
+`cls.methods`, and whether a keyword-named method beside a same-named property is pinned now that
+collision keys are unescaped. Both are settled by the 2026-10-04 amendment below.
+
+## Amendment 2026-10-04: the two unverified claims are settled
+
+Both claims are now pinned by cells in `Tier1KeywordMemberCollisionTest` and
+`CirOrdinaryRendererTest`, and one of them exposed a defect.
+
+**A keyword-named method beside a same-named property is never wrong.** Five cells pin it. A declared
+`@CSharpName("lock")` on both a property and a method, a plain `val lock` beside `fun lock()`, and
+the declared `suspend` and `Flow` method forms each fail with `ERROR_CSHARP_NAME_COLLISION` naming
+both members and the annotation. A `@CSharpName("lock")` method beside a `val lock` (which renders
+`Lock`) compiles, as `Lock` and `@lock()`. Verified.
+
+**A method beside a nested type was wrong three ways.** `nestedOwnerScopeCollision`
+(`NugetProcessor.kt`, ADR-133 surface 6) compared the Kotlin simple name with its first letter
+uppercased, so it ignored both a declared name and the `Async` suffix:
+
+- `@CSharpName("Lock") fun take()` beside `class Lock` produced no error, then CS0102 in the
+  consumer;
+- `@CSharpName("lock") fun lock()` beside `class Lock` raised `ERROR_CSHARP_SIGNATURE_COLLISION`
+  although C# declares `@lock()` and `Lock` as two names;
+- `suspend fun lock()` beside `class Lock` raised it too, although it renders `LockAsync`.
+
+The check now compares the rendered C# member name of each owner and companion member:
+`csharpMemberName()`, `csharpAsyncMemberName()` for a `suspend fun`, and the PascalCased Kotlin name
+for a `const val`. Keys stay unescaped, like every collision key. Behaviour change a reviewer should
+know: a `@CSharpName` that takes a nested type's name now fails the build, and a rename away from
+it no longer fails falsely. Verified by four cells: the missed collision, the plain `lock` against
+`Lock` collision, and the two false positives, which now compile and declare `class Lock`.
+
+**`renderLegacyMethodNativeImport` was dead.** Not reproducible: an async or `Flow` method never
+reaches `CirClass.methods`. It rides `companionMembers`, beside a `[DllImport]` its legacy route
+builds from the Kotlin `@CName` (`suspendMembers`, `flowMembers`), and `CirClass.methods` holds only
+ordinary and abstract methods. Two cells (a renamed or keyword `suspend` method and its `Flow` twin,
+over keyword, declared and plain names, `StateFlow` and `MutableStateFlow` included) assert that
+every `EntryPoint` in the C# is a Kotlin `@CName` and that the C# compiles. The function is deleted.
+`renderClassDeclaration` now has a `check` that fails, naming the class and method, if an async or
+`Flow` method ever reaches `CirClass.methods`; a `CirOrdinaryRendererTest` cell pins it. This
+closes a second `ROADMAP` line as well, the one noting that the function derived
+`Native_${method.name}` (ADR-090's 2026-09-10 amendment), together with its `docs/backlog` file: the
+function is gone and every suspend and `Flow` `EntryPoint` is a Kotlin `@CName`.
+
+Evidence, verified: full `:nuget-processor:test` run, 1698 tests, every cell of this item green. The
+processor cells compile both generated halves. No `LeakTests` row for this part: no handle kind or
+marshalling path changed (the member-less marker crossing added in the same change has its own,
+see the ADR-084 amendment of this date).
