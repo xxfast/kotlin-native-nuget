@@ -283,6 +283,12 @@ when the callback disposes the payload. `LeakTests/LiveHandleTests.cs` row 13-if
 `CallbackMemberInterfacePayload_EachInvocation_ReturnsToBaseline`, runs 5000 invocations and
 returns to baseline.
 
+A [listener `val`](lambdas-and-callbacks.md#a-listener-val) read by Kotlin adds no handle you
+dispose: a `String` it returns is released by Kotlin after each read.
+`LeakTests/LiveHandleTests.cs` row 8j-val,
+`InterfaceBridge_ListenerStringProperty_ReturnsToBaseline`, reads one repeatedly and returns to
+baseline.
+
 An exception thrown from Kotlin allocates one error handle per call, and the
 [exception mapping](exceptions.md#catching-a-specific-exception-type) reads a mapped type from it
 for the exception and each cause. `LeakTests/LiveHandleTests.cs`'s

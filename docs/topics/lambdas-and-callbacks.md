@@ -395,8 +395,48 @@ member that needs one into a separate listener
 
 Neither `AddWatcher` nor any wire for `onBatch` is generated; nothing else in `Kennel` is affected.
 The same warning names a non-`Unit` return, as `SKIPPED_UNSUPPORTED_RETURN`, and a member inherited
-from a super-interface. A listener interface that declares a property, rather than only methods,
-still fails the build with no diagnostic pointing at the cause; keep the listener method-only.
+from a super-interface.
+
+### A listener `val` {id="a-listener-val"}
+
+A listener interface can declare `val` properties beside its methods. Your implementation supplies
+each one, and Kotlin reads it from your object every time it uses the property, so a change you
+make after subscribing is seen on the next read:
+
+```kotlin
+interface PurrListener {
+  val name: String
+  val sleepy: Boolean
+  fun onPurr(volume: Int)
+}
+
+class PurrBox {
+  fun addPurrListener(listener: PurrListener) { /* ... */ }
+  fun removePurrListener(listener: PurrListener) { /* ... */ }
+  fun purr(volume: Int) = listeners.filter { !it.sleepy }.forEach { it.onPurr(volume) }
+}
+```
+
+```C#
+private sealed class Purrer(string name, bool sleepy) : IPurrListener
+{
+    public string Name => name;
+    public bool Sleepy => sleepy;
+    public void OnPurr(int volume) { /* ... */ }
+    public void Dispose() { }
+}
+
+using var box = new PurrBox();
+using IDisposable sub = box.AddPurrListener(new Purrer("Oreo", sleepy: false));
+box.Purr(3); // Kotlin reads Sleepy, then calls OnPurr(3)
+```
+
+A property binds when it is a `val` declared on the listener itself, typed `String`, `String?`,
+`Boolean`, `Int`, `Long`, `Float`, `Double`, or a non-null enum. Any other property refuses the
+whole pair, named on both `add` and `remove`: a `var` or a property inherited from a super-interface
+as `SKIPPED_UNSUPPORTED_INPUT`, and any other type (a collection, a nullable primitive, `Char`, a
+class) as `SKIPPED_UNSUPPORTED_RETURN`. To bind the pair, declare the property `val` on the
+listener, or pass the new value through a member function.
 
 The pair also refuses, named the same way on both halves, when `Watcher` itself has no C#
 declaration at all: nested under an owner that never gets its own nested declaration (an `enum

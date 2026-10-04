@@ -176,7 +176,15 @@ private fun slotLambda(slot: ForwardBridgeSlot): String {
   } else {
     "(${(slot.parameters.indices.map { "arg$it" } + "_").joinToString(", ")})"
   }
+  return "$parameters => { ${slotBody(slot, "impl")} }"
+}
 
+/**
+ * The statements of one slot's delegate body, calling the member on [receiver]. Also the ADR-039
+ * subscription route's listener-property body (receiver `listener`), so a listener `val` returns
+ * its value across exactly as it does on the bridge factory.
+ */
+internal fun slotBody(slot: ForwardBridgeSlot, receiver: String): String {
   val body: StringBuilder = StringBuilder()
   slot.parameters.forEachIndexed { index, parameter ->
     when (parameter.type.wire) {
@@ -199,7 +207,8 @@ private fun slotLambda(slot: ForwardBridgeSlot): String {
   val arguments: String = slot.parameters.indices.joinToString(", ") { "value$it" }
   // ADR-179: the slot keeps the unescaped declared name; the call site escapes it.
   val member: String = toCSharpName(slot.csName)
-  val access: String = if (slot.isProperty) "impl.$member" else "impl.$member($arguments)"
+  val access: String =
+    if (slot.isProperty) "$receiver.$member" else "$receiver.$member($arguments)"
 
   when (slot.result.wire) {
     ForwardBridgeWire.UNIT -> body.append("$access;")
@@ -217,7 +226,7 @@ private fun slotLambda(slot: ForwardBridgeSlot): String {
     else -> body.append("return $access;")
   }
 
-  return "$parameters => { $body }"
+  return body.toString()
 }
 
 /**
