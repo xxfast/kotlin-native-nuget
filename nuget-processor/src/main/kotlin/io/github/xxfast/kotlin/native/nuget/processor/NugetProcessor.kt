@@ -1212,6 +1212,10 @@ internal class NugetProcessor(
   private val codeGenerator: CodeGenerator,
   logger: KSPLogger,
   private val context: NugetContext,
+  // ADR-162: runs first inside every Kotlin-half per-declaration guard in `generateCNameWrappers`.
+  // A no-op in every real build; a test passes one that throws for a named declaration, which is
+  // the only way to reach the guards' failure arm without planting a throw in the generator.
+  private val declarationStep: (KSDeclaration) -> Unit = {},
 ) : SymbolProcessor {
 
   private var processed = false
@@ -2849,10 +2853,12 @@ internal class NugetProcessor(
     // legal shape reaches is reported against that declaration's own source location and the loop
     // keeps going, so every offending declaration of the round is named in ONE build. The round
     // still stops at the fatal-diagnostic gate before this FileSpec is written, so a half-built
-    // export set never ships.
-    fun guardDeclaration(declaration: KSDeclaration, block: () -> Unit) {
-      guarded(declaration.forwardGuardName(), declaration, logger, block)
-    }
+    // export set never ships. `declarationStep` runs inside the guard, never ahead of it.
+    fun <T> guardDeclaration(declaration: KSDeclaration, block: () -> T): T? =
+      guarded(declaration.forwardGuardName(), declaration, logger) {
+        declarationStep(declaration)
+        block()
+      }
 
     functions.forEach { func ->
       guardDeclaration(func) {
@@ -2922,7 +2928,7 @@ internal class NugetProcessor(
     // `{Iface}BridgeState` is projected from (see `ForwardInterfaceBridgePlanner`).
     val bridgePlans: List<ForwardBridgeInterfacePlan> =
       reachableInterfaces.mapNotNull { iface ->
-        guarded(iface.forwardGuardName(), iface, logger) {
+        guardDeclaration(iface) {
           ForwardInterfaceBridgePlanner.plan(iface, forwardClassifier, context.symbols)
         }
       }
