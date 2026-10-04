@@ -29,7 +29,7 @@ kotlin.IllegalArgumentException: must be positive
 - **Release builds:** frames may show only addresses or mangled symbols, depending on strip settings. `kotlin.native.binary.stripDebugInfoMode` controls stripping on release. If the binary is stripped the trace is still returned but frames are address-only.
 - **API reference:** https://kotlinlang.org/api/latest/jvm/stdlib/kotlin/stack-trace-to-string.html
 
-There is no separate `Throwable.getStackTrace()` array on Kotlin/Native (that API is JVM-only). `stackTraceToString()` is the cross-platform single call that works everywhere.
+`Throwable.getStackTrace()` does exist on Kotlin/Native (behind `@ExperimentalNativeApi`); [ADR-200](200-stacktrace-host-frame-trim.md) uses it to trim host frames. `stackTraceToString()` is the cross-platform single call that works everywhere.
 
 ### How other Kotlin interop targets handle stack traces
 

@@ -131,7 +131,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | Kotlin | ⇄ | C# | Notes | Docs |
 |---|:-:|---|---|---|
 | thrown exception | ⇄ | `KotlinException` | → shared identity; mapped types keep BCL bases · ← throws surface as `NugetManagedException`; .NET type mapping, stack and causes are not built | [Exceptions](exceptions.md) · [The bridgeable subset](bridgeable-subset.md) |
-| stack trace | → | `KotlinStackTrace` property |  | [Exceptions](exceptions.md) |
+| stack trace | → | `KotlinStackTrace` property | Kotlin frames only, host frames trimmed; a cause arrives only as `InnerException`, not as a `Caused by:` section. | [Exceptions](exceptions.md) |
 | `e.cause` | → | `InnerException` | The cause chain is preserved. | [Exceptions](exceptions.md) |
 | `IllegalArgumentException` etc., `kotlinx.io.IOException`, `NullPointerException` | → | `ArgumentException`, `IOException`, `NullReferenceException` etc. | Subclasses map too; `catch (KotlinException)` no longer catches them, filter `e is IKotlinException`. A null message reads the Kotlin type name. | [Exceptions](exceptions.md) |
 | `Throwable` / `Throwable?` property | → | `System.Exception?` | Reads as a constructed, unthrown exception rebuilt from the error envelope, so the type map and cause chain apply. Get-only, and a snapshot: each read allocates. | [Exceptions](exceptions.md) |
