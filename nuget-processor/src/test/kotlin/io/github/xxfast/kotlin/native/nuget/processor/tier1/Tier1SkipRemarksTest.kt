@@ -18,9 +18,9 @@ import kotlin.test.assertTrue
  *
  * Every skipped shape in the shared fixture is stably unsupported: a `Map<String?, Int>` parameter
  * (ADR-083 excludes a nullable map key by name), a `Sequence` property (a stdlib type with no C#
- * mapping) and `var t: Throwable?` (ADR-107 refuses the setter alone). None of them can quietly
- * start binding. The one cell that needs a COLLECTION skip in particular takes its component from
- * [Tier1UnwrappableWitness].
+ * mapping) and `var t: IllegalStateException?` (ADR-201 refuses the setter alone). None of them
+ * can quietly start binding. The one cell that needs a COLLECTION skip in particular takes its
+ * component from [Tier1UnwrappableWitness].
  */
 class Tier1SkipRemarksTest {
 
@@ -32,7 +32,7 @@ class Tier1SkipRemarksTest {
       val height: Int = 40
       val weave: Sequence<String> get() = sequenceOf("sisal")
       fun rankPerches(scores: Map<String?, Int>): Int = scores.size
-      var lastTumble: Throwable? = null
+      var lastTumble: IllegalStateException? = null
     }
 
     object Bin {
@@ -369,9 +369,10 @@ class Tier1SkipRemarksTest {
    * early, and after it the record is `Property`-owned and had no branch to attach to -- an
    * object's statics live in `CirObject.methods`, not in a `properties` slot.
    *
-   * ADR-107 refuses a `Throwable` setter (C# cannot mint a typed Kotlin throwable), so the property
-   * survives read-only and the paragraph belongs on the C# PROPERTY, never on the static class:
-   * naming it there would report a member as absent that a consumer can still read.
+   * ADR-201 refuses a setter declared narrower than `RuntimeException` (C# hands Kotlin a
+   * `NugetManagedException`, which it cannot hold), so the property survives read-only and the
+   * paragraph belongs on the C# PROPERTY, never on the static class: naming it there would report
+   * a member as absent that a consumer can still read.
    */
   @Test
   fun `a dropped object setter is named on the surviving static property, not on the object`() {
@@ -380,7 +381,7 @@ class Tier1SkipRemarksTest {
       package tier1.objectsetter
 
       object Ledger {
-        var lastError: Throwable? = null
+        var lastError: IllegalStateException? = null
       }
       """.trimIndent(),
       fileName = "Ledger.kt",

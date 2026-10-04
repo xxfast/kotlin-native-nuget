@@ -370,7 +370,7 @@ internal object ForwardCirPropertyProjection {
 
       // ADR-107: the error envelope's pointer. ONE call, deliberately: the export mints a
       // StableRef per invocation, so a second call would build a second envelope and leak it.
-      BridgeType.Throwable -> appendLine("            IntPtr nativeResult = $native($callArgs);")
+      is BridgeType.Throwable -> appendLine("            IntPtr nativeResult = $native($callArgs);")
 
       // ADR-106: the hex-dash text pointer, exactly the String getter's wire.
       BridgeType.Uuid -> appendLine("            IntPtr nativeResult = $native($callArgs);")
@@ -401,7 +401,7 @@ internal object ForwardCirPropertyProjection {
         )
         // ADR-107: a null Throwable property ships the null pointer, as every pointer-wired
         // nullable getter does; a non-null one rebuilds the exception from the envelope.
-        BridgeType.Throwable -> append(
+        is BridgeType.Throwable -> append(
           "            return nativeResult == IntPtr.Zero ? null : " +
               "NugetErrorNative.BuildException(nativeResult);",
         )
@@ -452,7 +452,7 @@ internal object ForwardCirPropertyProjection {
 
       // ADR-107: BuildException reads the envelope through the nuget_error_* exports, disposes it,
       // and RETURNS the exception rather than throwing it -- the same object a catch would see.
-      BridgeType.Throwable ->
+      is BridgeType.Throwable ->
         append("            return NugetErrorNative.BuildException(nativeResult);")
 
       is BridgeType.ObjectHandle -> append("            return ${value.handleReconstruction()};")
@@ -591,7 +591,9 @@ internal object ForwardCirPropertyProjection {
   private fun setterNativeType(type: BridgeType): String = when (val value = type.unwrapNullable()) {
     // ADR-106: a Uuid setter crosses as text, so the DllImport parameter is `string` -- NOT the
     // getter's IntPtr wire, and `string?` when nullable for the same CS8604 reason as String.
-    BridgeType.String, BridgeType.Uuid -> if (type is BridgeType.Nullable) "string?" else "string"
+    // ADR-201: a Throwable setter crosses as the managed exception text, on the same wire.
+    BridgeType.String, BridgeType.Uuid, is BridgeType.Throwable ->
+      if (type is BridgeType.Nullable) "string?" else "string"
     is BridgeType.Enum -> "int"
     // ADR-187: a wrapper value is passed as its owned handle, which the call keeps alive.
     is BridgeType.ObjectHandle -> KOTLIN_HANDLE
@@ -732,6 +734,10 @@ internal object ForwardCirPropertyProjection {
         "$name.ToString()"
       }
 
+      // ADR-201: the type name and message, the callable route's join; a C# null is the null text.
+      is BridgeType.Throwable ->
+        managedExceptionTextCs(name, nullable = this is BridgeType.Nullable && !nonNull)
+
       is BridgeType.ObjectHandle ->
         if (this is BridgeType.Nullable) "$name?._handle ?? NugetKotlinHandle.Null"
         else "$name._handle"
@@ -785,7 +791,7 @@ internal object ForwardCirPropertyProjection {
     // ADR-103: the same, an INT64 of TimeSpan ticks.
     BridgeType.Instant, BridgeType.Duration -> ForwardAbiWireType.INT64
     // ADR-107: the error-envelope pointer, matching ForwardPropertyPlanner.wireType().
-    BridgeType.Throwable -> ForwardAbiWireType.POINTER
+    is BridgeType.Throwable -> ForwardAbiWireType.POINTER
     // ADR-088: the transfer GCHandle pointer, matching ForwardPropertyPlanner.wireType().
     is BridgeType.BoundInterface -> ForwardAbiWireType.POINTER
     // ADR-106: the getter's pointer-to-text wire (the setter's STRING slot is declared from the
@@ -819,7 +825,7 @@ internal object ForwardCirPropertyProjection {
     BridgeType.Duration -> "global::System.TimeSpan"
     // ADR-107: the public C# type is System.Exception; the value is always an IKotlinException
     // (KotlinException or one of the ADR-029 mapped subclasses), never a bare Exception.
-    BridgeType.Throwable -> "global::System.Exception"
+    is BridgeType.Throwable -> "global::System.Exception"
     // ADR-106: System.Guid, a value type, so `Uuid?` renders `Guid?` (Nullable<Guid>).
     BridgeType.Uuid -> "global::System.Guid"
     is BridgeType.Enum -> this.csharpType

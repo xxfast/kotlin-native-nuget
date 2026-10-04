@@ -695,7 +695,7 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   ForwardPlanSkipReason.HANDLE,
   ForwardPlanSkipReason.INSTANT,
   ForwardPlanSkipReason.DURATION,
-    // ADR-107: a genuine drop (v1 binds Throwable only at a property getter), so the same
+    // ADR-107 / ADR-201: a genuine drop (a narrower input, a Set element or Map key), so the same
     // "type combination is not supported" bucket the other ordinary types use.
   ForwardPlanSkipReason.THROWABLE,
     // ADR-106: defensive, like INSTANT/DURATION.
@@ -1540,6 +1540,17 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "rename one of them in Kotlin (`@CSharpName` cannot separate them: both derive one C entry " +
         "point from the Kotlin name)"
 
+  // ADR-201: the reason line names the type; the hint says which declarations do bind, and why a
+  // narrower one cannot: C# hands Kotlin a `NugetManagedException`, a `RuntimeException`.
+  ForwardPlanSkipReason.THROWABLE ->
+    "a C# exception reaches Kotlin as a `NugetManagedException` (a `RuntimeException` carrying " +
+        "the managed type name and message), so a Throwable parameter or setter binds only when " +
+        "declared `Throwable`, `Exception` or `RuntimeException`, and never as an extension " +
+        "receiver or inside a collection; " +
+        "a Throwable cannot be a `Set` element or a `Map` key either, since each crossing builds " +
+        "a fresh `System.Exception` that compares by reference. a Throwable binds at a return, " +
+        "a getter, a `List` element and a `Map` value"
+
   // ROADMAP Phase 4 (ADR-151 amendment): since a `ByteArray` binds as a `List` element and as a
   // `Map` VALUE, the only shapes that still reach this reason are the two DECLINED equality slots,
   // so the hint says WHY rather than sending the author to write an adapter that would behave
@@ -1600,7 +1611,7 @@ internal fun BridgeType.diagnosticTypeName(): String = when (this) {
   BridgeType.String -> "String"
   BridgeType.Instant -> "Instant"
   BridgeType.Duration -> "Duration"
-  BridgeType.Throwable -> "Throwable"
+  is BridgeType.Throwable -> "Throwable"
   BridgeType.Uuid -> "Uuid"
   BridgeType.ByteArray -> "ByteArray"
   is BridgeType.Primitive -> kind.name.lowercase().replaceFirstChar { it.uppercase() }

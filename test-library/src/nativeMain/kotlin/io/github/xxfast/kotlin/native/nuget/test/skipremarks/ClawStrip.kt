@@ -41,8 +41,9 @@ package io.github.xxfast.kotlin.native.nuget.test.skipremarks
  *   (`SKIPPED_UNSUPPORTED_INPUT`),
  * - `List<List<String>?>` at a parameter position -- ADR-099's nullable nested component, the same
  *   shape the `husk` fixtures use (`SKIPPED_UNSUPPORTED_INPUT`),
- * - `var t: Throwable?` -- ADR-107: C# cannot construct a Kotlin `Throwable`, so the setter alone
- *   is refused and the getter survives.
+ * - `var t: IllegalStateException?` -- ADR-201: C# hands Kotlin a `NugetManagedException`, which
+ *   a type narrower than `RuntimeException` cannot hold, so the setter alone is refused and the
+ *   getter survives.
  *
  * Deliberately NOT used: `ByteArray` in collections, extension-property receivers, `object`
  * properties and nullable `Flow` elements, all of which sibling roadmap items are making
@@ -78,12 +79,12 @@ class ClawStrip(val name: String) {
   fun rankPerches(scores: Map<String?, Int>): Int = scores.size
 
   /**
-   * The ADR-075 PARTIAL case: the setter is refused (`SKIPPED_UNSUPPORTED_INPUT`, "C# cannot
-   * construct a Kotlin Throwable"), the getter binds, so the member survives read-only and the
-   * remark belongs on the C# property `LastTumble` itself -- the one per-member remark in the
-   * feature.
+   * The ADR-075 PARTIAL case: the setter is refused (`SKIPPED_UNSUPPORTED_INPUT`, ADR-201: C# hands
+   * Kotlin a `NugetManagedException`, which it cannot hold), the getter binds, so the member
+   * survives read-only and the remark belongs on the C# property `LastTumble` itself -- the one
+   * per-member remark in the feature.
    */
-  var lastTumble: Throwable? = null
+  var lastTumble: IllegalStateException? = null
 
   /**
    * Part B, the RETURN position of a nullable map key (`SKIPPED_UNSUPPORTED_INPUT`'s missing twin).

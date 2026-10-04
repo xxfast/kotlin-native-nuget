@@ -39,14 +39,30 @@ internal sealed interface BridgeType {
   data object Duration : BridgeType
 
   /**
-   * ADR-107: `kotlin.Throwable` and its stdlib subtypes, at a **property getter** position only.
-   * Wires as the `POINTER` to the very same `StableRef<NugetError>` envelope a *thrown* exception
-   * writes into `errorOut`, so C# reconstructs it with `NugetErrorNative.BuildException` and the
-   * ADR-028 cause chain and ADR-029 type mapping come for free; the public C# type is
-   * `System.Exception`. A sealed variant, not an [ObjectHandle] with a flag, so the compiler
+   * ADR-107 / ADR-201: `kotlin.Throwable` and every unexported subtype of it. Out of Kotlin
+   * (a getter, a sync result, a collection component) it wires as the `POINTER` to the very same
+   * `StableRef<NugetError>` envelope a *thrown* exception writes into `errorOut`, so C#
+   * reconstructs it with `NugetErrorNative.BuildException` and the ADR-028 cause chain and
+   * ADR-029 type mapping come for free; the public C# type is `System.Exception`. Into Kotlin
+   * (a parameter, a setter) it wires as one `STRING`, `"{FullName}: {Message}"`, and Kotlin
+   * receives an ADR-161 `NugetManagedException`, which only a [acceptsManagedException]
+   * declaration can hold. A sealed variant, not an [ObjectHandle] with a flag, so the compiler
    * enumerates every `when` that has to decide about it.
+   *
+   * @param kotlinType the alias-expanded qualified name of the declared type: `kotlin.Exception`
+   *   on Native, `java.lang.Exception` where the stdlib aliases it (the JVM Tier 1 harness).
    */
-  data object Throwable : BridgeType
+  data class Throwable(val kotlinType: kotlin.String) : BridgeType {
+    /** ADR-201: whether a `NugetManagedException` (a `RuntimeException`) is assignable to it. */
+    val acceptsManagedException: Boolean get() = kotlinType in MANAGED_EXCEPTION_SUPERTYPES
+
+    private companion object {
+      val MANAGED_EXCEPTION_SUPERTYPES: Set<kotlin.String> = setOf(
+        "kotlin.Throwable", "kotlin.Exception", "kotlin.RuntimeException",
+        "java.lang.Throwable", "java.lang.Exception", "java.lang.RuntimeException",
+      )
+    }
+  }
 
   /**
    * ADR-106: `kotlin.uuid.Uuid`. Wires exactly as [String] does -- the RFC 9562 lowercase hex-dash
@@ -518,6 +534,13 @@ internal enum class ForwardConversion {
 
   /** ADR-106: an RFC 9562 hex-dash `String` -> Kotlin `Uuid`, into Kotlin. */
   STRING_TO_UUID,
+
+  /**
+   * ADR-201: a C# exception's `"{FullName}: {Message}"` string -> a Kotlin
+   * `NugetManagedException`, into Kotlin. Out of Kotlin a `Throwable` is the ADR-107 envelope,
+   * which is [STABLE_REF_TO_HANDLE].
+   */
+  STRING_TO_MANAGED_EXCEPTION,
 
   /** ADR-088: an incoming transfer GCHandle -> the Kotlin value, via `nuget{Iface}Value`. */
   GC_HANDLE_TO_BOUND_VALUE,
@@ -1143,7 +1166,7 @@ internal object ForwardCallablePlanValidator {
     when (type) {
       BridgeType.Unit, BridgeType.Char, BridgeType.String, BridgeType.Instant, BridgeType.Duration,
         // ADR-107: valid in a plan, at the property-getter position the property planner admits.
-      BridgeType.Throwable,
+      is BridgeType.Throwable,
         // ADR-106: valid at every ordinary position, over the String wire.
       BridgeType.Uuid,
         // ADR-151: valid at every ordinary position, over the collection handle wire.
@@ -1274,6 +1297,13 @@ internal object ForwardCallablePlanValidator {
       ForwardConversion.UUID_TO_STRING
     }
 
+    // ADR-107 / ADR-201: the envelope handle out, the managed-exception text in.
+    is BridgeType.Throwable -> if (flow == ForwardFlow.INTO_KOTLIN) {
+      ForwardConversion.STRING_TO_MANAGED_EXCEPTION
+    } else {
+      ForwardConversion.STABLE_REF_TO_HANDLE
+    }
+
     else -> null
   }
 
@@ -1331,6 +1361,9 @@ internal fun ForwardConversion.helper(): ForwardHelperRequirement = when (this) 
   ForwardConversion.GC_HANDLE_TO_BOUND_VALUE,
   ForwardConversion.BOUND_VALUE_TO_GC_HANDLE,
     -> ForwardHelperRequirement.BOUND_INTERFACE
+
+  // ADR-201: the ADR-161 runtime type, which every module already links.
+  ForwardConversion.STRING_TO_MANAGED_EXCEPTION -> ForwardHelperRequirement.ERROR_TRANSFER
 
   ForwardConversion.DIRECT -> error("Direct conversion does not require a helper")
 }

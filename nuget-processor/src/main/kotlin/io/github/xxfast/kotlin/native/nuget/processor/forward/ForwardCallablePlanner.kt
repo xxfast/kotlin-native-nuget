@@ -103,10 +103,11 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
    */
   NULLABLE_MAP_KEY(droppedFromCSharp = true),
 
-  /** ADR-107: `kotlin.Throwable` binds at a **property getter** and nowhere else in v1, so a
-   *  callable carrying one (a method return, a parameter, a constructor argument) is a genuine
-   *  drop with no legacy route -- named here rather than folded into HANDLE, whose hint would
-   *  point at the object-handle export set. */
+  /** ADR-107 / ADR-201: a `Throwable` position that does not bind: an input whose declared type
+   *  is narrower than `RuntimeException` (C# can only hand Kotlin a `NugetManagedException`), a
+   *  `Set` element or `Map` key, and a bare suspend/Flow result. A genuine drop with no legacy
+   *  route -- named here rather than folded into HANDLE, whose hint would point at the
+   *  object-handle export set. */
   THROWABLE(droppedFromCSharp = true),
   NULLABLE(droppedFromCSharp = true),
 
@@ -3175,12 +3176,22 @@ internal class ForwardCallablePlanner(
       )
     }
     val inputTypes: List<BridgeType> = namedInputs.map { it.second }
+    // ADR-201: a `Throwable` RECEIVER (the null-named input) stays deferred even though the same
+    // type binds as a parameter: `fun Throwable.describe()` would otherwise become a C# extension
+    // method on every `System.Exception`, whose receiver Kotlin sees only as a
+    // `NugetManagedException`.
+    fun skipReasonOf(name: String?, type: BridgeType): ForwardPlanSkipReason? =
+      if (name == null && type.unwrapNullable() is BridgeType.Throwable) {
+        ForwardPlanSkipReason.THROWABLE
+      } else {
+        type.inputSkipReason()
+      }
     val ineligible: Pair<String?, BridgeType>? = namedInputs
-      .firstOrNull { (_, type) -> type.inputSkipReason() != null }
+      .firstOrNull { (name, type) -> skipReasonOf(name, type) != null }
     if (ineligible != null) {
       val ineligibleType: BridgeType = ineligible.second
       return ForwardCallableCatalogEntry.Skipped(
-        symbol, requireNotNull(ineligibleType.inputSkipReason()), node = node,
+        symbol, requireNotNull(skipReasonOf(ineligible.first, ineligibleType)), node = node,
         detail = ineligibleType.optInMarkerDetail()
           ?: ineligibleType.actualTypeAliasTargetDetail()
           ?: ineligibleType.unexportedDependencyDetail()
@@ -3214,6 +3225,17 @@ internal class ForwardCallablePlanner(
         plannedResult
       }
     val unwrapsKotlinResult: Boolean = effectiveResult !== plannedResult
+
+    // ADR-201: a value class's own member keeps the ADR-014 no-errorOut ABI, and the value-class
+    // emitter's nullable result arm requires an error slot, so `Throwable?` there is a named skip
+    // rather than a processor crash. The non-null `Throwable` binds.
+    if (origin == ForwardCallableOrigin.VALUE_CLASS &&
+      (effectiveResult as? BridgeType.Nullable)?.type is BridgeType.Throwable
+    ) {
+      return ForwardCallableCatalogEntry.Skipped(
+        symbol, ForwardPlanSkipReason.THROWABLE, node = node,
+      )
+    }
 
     val resultShape: ForwardResultShape? = effectiveResult.shapeOrNull()
     if (resultShape == null) {
@@ -3303,6 +3325,10 @@ internal class ForwardCallablePlanner(
       // the requirement is recorded only so the validator's conversion/helper pairing check holds.
       if (inputTypes.any { type -> type.unwrapNullable() is BridgeType.BoundInterface }) {
         add(ForwardHelperRequirement.BOUND_INTERFACE)
+      }
+      // ADR-201: the pairing for a `Throwable` input's STRING_TO_MANAGED_EXCEPTION.
+      if (inputTypes.any { type -> type.unwrapNullable() is BridgeType.Throwable }) {
+        add(ForwardHelperRequirement.ERROR_TRANSFER)
       }
     }
     val plan = ForwardCallablePlan(
@@ -3458,6 +3484,21 @@ internal class ForwardCallablePlanner(
       )
     )
 
+    // ADR-201: the managed exception's `"{FullName}: {Message}"` text; the Kotlin export splits it
+    // at the first ": " (a CLR full name never contains one) into a `NugetManagedException`.
+    is BridgeType.Throwable -> listOf(
+      ForwardAbiParameter(
+        name = name,
+        wireType = ForwardAbiWireType.STRING,
+        direction = ForwardAbiDirection.IN,
+        transfer = ForwardTransfer(
+          name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+          ForwardOwnership.BORROWED, ForwardConversion.STRING_TO_MANAGED_EXCEPTION,
+        ),
+        role = role,
+      )
+    )
+
     // ADR-106: the wire value is the RFC 9562 hex-dash text; the Kotlin export parses it back with
     // `Uuid.parse` before use, the STRING_TO_UUID step.
     BridgeType.Uuid -> listOf(
@@ -3588,6 +3629,20 @@ internal class ForwardCallablePlanner(
           transfer = ForwardTransfer(
             name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
             ForwardOwnership.BORROWED, ForwardConversion.STRING_TO_UTF8,
+          ),
+          role = role,
+        )
+      )
+
+      // ADR-201: `Exception?` rides the String wire's null pointer, like `Uuid?`.
+      is BridgeType.Throwable -> listOf(
+        ForwardAbiParameter(
+          name = name,
+          wireType = ForwardAbiWireType.STRING,
+          direction = ForwardAbiDirection.IN,
+          transfer = ForwardTransfer(
+            name, type, ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE,
+            ForwardOwnership.BORROWED, ForwardConversion.STRING_TO_MANAGED_EXCEPTION,
           ),
           role = role,
         )
@@ -3918,6 +3973,9 @@ internal class ForwardCallablePlanner(
     // feature's fixture flushed out, predating ADR-066 but only reachable once it exists).
     // ADR-151: one materialized handle, read back by `NugetMarshal.ReadBytes`, which disposes it.
     BridgeType.ByteArray -> handleResultShape(this, ForwardHelperRequirement.BYTES)
+    // ADR-201: the ADR-107 envelope, minted by the same `NugetHandles.retain`; C# reads it back
+    // with `NugetErrorNative.BuildException`, which disposes it.
+    is BridgeType.Throwable -> handleResultShape(this, ForwardHelperRequirement.STABLE_REF)
 
     is BridgeType.Collection -> if (isBridgeableComponent()) {
       handleResultShape(this, ForwardHelperRequirement.COLLECTION)
@@ -3969,6 +4027,9 @@ internal class ForwardCallablePlanner(
     // ADR-151: `ByteArray?` out is the null pointer, then the handle.
     BridgeType.ByteArray ->
       handleResultShape(BridgeType.Nullable(type), ForwardHelperRequirement.BYTES)
+    // ADR-201: `Throwable?` out is the null pointer, then the envelope.
+    is BridgeType.Throwable ->
+      handleResultShape(BridgeType.Nullable(type), ForwardHelperRequirement.STABLE_REF)
 
     is BridgeType.Collection -> if (type.isBridgeableComponent()) {
       handleResultShape(BridgeType.Nullable(type), ForwardHelperRequirement.COLLECTION)
@@ -4428,6 +4489,11 @@ internal class ForwardCallablePlanner(
     // ADR-151: admitted at every parameter position; the handle is minted and disposed by C#.
     BridgeType.ByteArray -> null
 
+    // ADR-201: one `"{FullName}: {Message}"` string Kotlin turns into a `NugetManagedException`,
+    // which only a declared `Throwable`/`Exception`/`RuntimeException` can hold.
+    is BridgeType.Throwable ->
+      if (acceptsManagedException) null else ForwardPlanSkipReason.THROWABLE
+
     is BridgeType.Collection -> collectionInputSkipReason()
 
     // ADR-077: a value class crosses as its underlying wire value, so an ordinary parameter is
@@ -4461,6 +4527,10 @@ internal class ForwardCallablePlanner(
 
       // ADR-151: `byte[]?` rides `IntPtr.Zero`, exactly as a nullable collection does.
       BridgeType.ByteArray -> null
+
+      // ADR-201: a C# null rides the null string pointer.
+      is BridgeType.Throwable ->
+        if (inner.acceptsManagedException) null else ForwardPlanSkipReason.THROWABLE
 
       is BridgeType.Collection -> inner.collectionInputSkipReason()
       // ADR-077 sub-items 3/4: null rides the null pointer for the pointer-wired underlyings
@@ -4593,7 +4663,7 @@ internal class ForwardCallablePlanner(
     // ADR-107: the error-envelope pointer. Unreachable from a callable plan today (no shape and
     // no input arm admits a Throwable), but it is the wire the property route uses, so naming it
     // here keeps the two planners' answers identical rather than erroring on a live type.
-    BridgeType.Throwable -> ForwardAbiWireType.POINTER
+    is BridgeType.Throwable -> ForwardAbiWireType.POINTER
     // ADR-106: the hex-dash text wire, the same STRING slot a String input takes; a Uuid *result*
     // overrides this with the POINTER shape in shapeOrNull, exactly as String does.
     BridgeType.Uuid -> ForwardAbiWireType.STRING
@@ -4717,9 +4787,12 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   // collection component.
   is BridgeType.Interface -> true
 
-  // ADR-107: `List<Throwable>` is explicitly deferred -- the component would have to be boxed by
-  // `nuget_wrap_*`, which has no envelope arm -- so it skips named, issue #52's rule.
-  BridgeType.Throwable -> false
+  // ADR-201: a `Throwable` component is boxed as its own ADR-107 envelope (Kotlin projects each
+  // element through `buildError`), and C# rebuilds each with `NugetErrorNative.BuildException`.
+  // Read positions only: [isWrappableComponent] keeps refusing it, so a `List<Throwable>` input
+  // still skips. The `Set` element and `Map` KEY slots stay refused: see
+  // [declinesThrowableComponent].
+  is BridgeType.Throwable -> true
 
   // ADR-160: a callback is a parameter-position type only; a `List<(Int) -> Unit>` has no wire at
   // all, so the member skips named rather than half-binding.
@@ -4740,14 +4813,19 @@ internal fun BridgeType.isBridgeableComponent(): Boolean = when (this) {
   // KEY slots stay refused: see [declinesByteArrayComponent].
   BridgeType.ByteArray -> true
 
-  is BridgeType.ValueClass -> underlying.isBridgeableComponent()
+  // ADR-201: a value class over `Throwable` stays deferred. Its per-element projection boxes the
+  // underlying itself, never the envelope, so it is refused here rather than read as a handle.
+  is BridgeType.ValueClass ->
+    underlying !is BridgeType.Throwable && underlying.isBridgeableComponent()
   is BridgeType.Nullable -> type !is BridgeType.Nullable && type != BridgeType.Unit &&
       type.isBridgeableComponent()
 
   // ADR-083 amendment (boundary nullability part B): a nullable map KEY fails here too, which is
   // what carries the rule to the result, property-read and NESTED positions -- this function
   // recurses, so `List<Map<String?, Int>>` is covered by the same one consult.
-  is BridgeType.Collection -> if (declinesByteArrayComponent() || declinesNullableMapKey()) {
+  is BridgeType.Collection -> if (
+    declinesByteArrayComponent() || declinesThrowableComponent() || declinesNullableMapKey()
+  ) {
     false
   } else {
     val isMap: Boolean = kind == CollectionKind.MAP || kind == CollectionKind.MUTABLE_MAP
@@ -4810,6 +4888,20 @@ internal fun BridgeType.Collection.declinesByteArrayComponent(): Boolean = when 
 
   CollectionKind.SET, CollectionKind.MUTABLE_SET ->
     element?.unwrapNullable() == BridgeType.ByteArray
+
+  CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> false
+}
+
+/**
+ * ADR-201: the two component slots a `Throwable` must never occupy, the same equality slots
+ * [declinesByteArrayComponent] refuses. Each crossing builds a fresh envelope and a fresh C#
+ * exception, and `System.Exception` compares by reference, so a C# `IReadOnlySet<Exception>` or
+ * dictionary key could never be looked up. A `List` element and a `Map` VALUE bind.
+ */
+internal fun BridgeType.Collection.declinesThrowableComponent(): Boolean = when (kind) {
+  CollectionKind.MAP, CollectionKind.MUTABLE_MAP -> key?.unwrapNullable() is BridgeType.Throwable
+  CollectionKind.SET, CollectionKind.MUTABLE_SET ->
+    element?.unwrapNullable() is BridgeType.Throwable
 
   CollectionKind.LIST, CollectionKind.MUTABLE_LIST -> false
 }
@@ -5250,9 +5342,9 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
   BridgeType.Instant -> ForwardPlanSkipReason.INSTANT
   // ADR-103: defensive only, in the same way.
   BridgeType.Duration -> ForwardPlanSkipReason.DURATION
-  // ADR-107: genuinely reached -- shapeOrNull has no Throwable branch, because a method return
-  // typed Throwable is explicitly deferred (only the property getter binds in v1).
-  BridgeType.Throwable -> ForwardPlanSkipReason.THROWABLE
+  // ADR-201: defensive at a result (shapeOrNull always has a Throwable branch); reached for real
+  // from a narrower declared input type and from a nested position that does not bind.
+  is BridgeType.Throwable -> ForwardPlanSkipReason.THROWABLE
   // ADR-106: defensive only, like Instant/Duration -- Uuid always has a return shape.
   BridgeType.Uuid -> ForwardPlanSkipReason.UUID
   // ADR-151: reached for real from the deferred nesting case (`List<ByteArray>`); defensive at
@@ -5289,6 +5381,8 @@ internal fun BridgeType.skipReason(): ForwardPlanSkipReason? = when (this) {
     // would find nothing and fall back to whichever slot is first. Named here instead, so the
     // author reads "BYTE_ARRAY" and gets the identity-versus-copy hint.
     declinesByteArrayComponent() -> ForwardPlanSkipReason.BYTE_ARRAY
+    // ADR-201: the same declined equality slots for a `Throwable`, named for the same reason.
+    declinesThrowableComponent() -> ForwardPlanSkipReason.THROWABLE
     // ADR-083 amendment (boundary nullability part B): named here for the same reason BYTE_ARRAY
     // is. `Nullable(String)` is a perfectly good component on its own, so the failing-component
     // search below would find nothing and fall back to whichever slot is first, reporting NULLABLE

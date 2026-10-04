@@ -128,6 +128,8 @@ private fun componentReadExpression(
   // own `finally`. Decided BEFORE `componentWireCsharpType` below, which would otherwise hand this
   // handle to `FromHandle<IntPtr>` -- a spelling that compiles and throws at the first element.
   if (component == BridgeType.ByteArray) return "NugetMarshal.ReadBytes($handle)"
+  // ADR-201: the box IS the element's ADR-107 envelope, and `BuildException` disposes it.
+  if (component is BridgeType.Throwable) return "NugetErrorNative.BuildException($handle)"
   val wireType: String = componentWireCsharpType(component, csharpType)
   val raw: String = "NugetMarshal.FromHandle<$wireType>($handle)"
   // ADR-097: a bare enum crossed as its int ordinal, so the cast back to the C# enum is the whole
@@ -240,6 +242,8 @@ internal fun BridgeType.componentEnum(): BridgeType.Enum? = when (this) {
  *  when something *inside* it does: the Kotlin side boxes the inner container object as-is. */
 internal fun BridgeType.componentNeedsProjection(): Boolean = when {
   componentValueClass() != null || componentEnum() != null -> true
+  // ADR-201: a Throwable crosses as its envelope, never as itself.
+  unwrapNullable() is BridgeType.Throwable -> true
   this is BridgeType.Collection -> element?.componentNeedsProjection() == true ||
       key?.componentNeedsProjection() == true || value?.componentNeedsProjection() == true
 

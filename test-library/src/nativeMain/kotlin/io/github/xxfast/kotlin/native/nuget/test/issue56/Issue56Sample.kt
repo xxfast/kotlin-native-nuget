@@ -21,20 +21,17 @@ package io.github.xxfast.kotlin.native.nuget.test.issue56
  * - [Issue56Failure.fatal] — **non-null** getter, which ADR-107 spells as a non-nullable
  *   `global::System.Exception`; carries an `IllegalStateException` so the mapped subtype differs
  *   from `error`'s and a shared-arm bug cannot pass,
- * - [Issue56Failure.lastError] — a `var`, which ADR-107 binds **get-only** (C# cannot mint a typed
- *   Kotlin `Throwable`); the C# cell asserts the setter is absent,
+ * - [Issue56Failure.lastError] — a `var`, which ADR-107 bound get-only and ADR-201 makes writable
+ *   (the setter receives a `NugetManagedException`),
  * - [Issue56LoadState.Failure.error] — the same property on a **sealed subclass**. ADR-107 §Scope records
  *   (verified) that this renders through the legacy ADR-009 path in `SealedClassExports.kt` /
  *   `CirClassTranslator.kt`, which never consults `ForwardPropertyPlanner`, so it is a second,
  *   separate arm. The human decision put it in scope.
  *
- * The **constructor is expected not to bind**: `Issue56Failure(String, Throwable?, Throwable)` has
- * `Throwable` parameters, which ADR-107 leaves out of scope entirely, so `<init>` and `copy` keep
- * their existing input skip and C# must reach these values through the Kotlin factories below.
- * That is by design, not a gap in this fixture.
- *
- * Deliberately absent, because ADR-107 defers them: `Throwable` at a **method return**, as a
- * parameter, or as a collection component (`List<Throwable>`).
+ * ADR-201 supersedes ADR-107 decision 4: the constructor `Issue56Failure(String, Throwable?,
+ * Throwable)` and `copy` now bind, taking any `System.Exception`. The getter cells still read
+ * values built by the Kotlin factories below, so they observe real Kotlin exceptions. The other
+ * ADR-201 positions (return, `List` element, parameter) live in the `mishaps` fixture.
  *
  * Oreo raids the treat jar; Mylo just knocks the water bowl over.
  */
@@ -44,8 +41,8 @@ data class Issue56Failure(
   val fatal: Throwable,
 ) {
   /**
-   * A `var Throwable?`. Binds get-only: reading it must work, writing it must not exist in the
-   * generated C# surface.
+   * A `var Throwable?`. Reads as the envelope; ADR-201 binds the setter too, which receives a
+   * `NugetManagedException` built from the C# exception's type name and message.
    */
   var lastError: Throwable? = error
 }

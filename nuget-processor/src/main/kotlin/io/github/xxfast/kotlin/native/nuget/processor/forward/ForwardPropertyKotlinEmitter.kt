@@ -128,7 +128,7 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
       // ADR-107: the nullable Throwable getter ships the same envelope a thrown exception writes
       // into errorOut, in the result slot; a null property value ships the null pointer, exactly
       // as a nullable ObjectHandle getter does.
-      BridgeType.Throwable -> {
+      is BridgeType.Throwable -> {
         builder.returns(cOpaquePointer.copy(nullable = true))
         builder.addCode(
           nullableHandleBody("$access?.let { buildError(it, ::nugetMappedType) }", "errorOut"),
@@ -173,7 +173,7 @@ private fun FileSpec.Builder.addGetter(plan: ForwardPropertyPlan, call: ForwardN
     }
 
     // ADR-107: non-null Throwable. Same envelope, unconditionally built.
-    BridgeType.Throwable -> {
+    is BridgeType.Throwable -> {
       builder.returns(cOpaquePointer.copy(nullable = true))
       builder.addCode(
         handleBody("buildError($access, ::nugetMappedType)", "errorOut"),
@@ -442,6 +442,8 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> name
     // ADR-106: a null wire value stays null; only real text is parsed.
     BridgeType.Uuid -> "$name?.let(kotlin.uuid.Uuid::parse)"
+    // ADR-201: the callable parameter's lowering, so the two input routes cannot drift.
+    is BridgeType.Throwable -> managedExceptionLowering(name, nullable = true)
     is BridgeType.ObjectHandle ->
       "$name?.asStableRef<${inner.kotlinReadType ?: inner.qualifiedName}>()?.get()"
     is BridgeType.Interface -> "$name?.asStableRef<${inner.qualifiedName}>()?.get()"
@@ -477,6 +479,8 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
   is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> name
   // ADR-106: parse the canonical text back; spelled fully qualified so no import is needed.
   BridgeType.Uuid -> "kotlin.uuid.Uuid.parse($name)"
+  // ADR-201: the managed exception text, as a `NugetManagedException`.
+  is BridgeType.Throwable -> managedExceptionLowering(name, nullable = false)
   is BridgeType.Enum -> "${type.qualifiedName}.entries[$name]"
   BridgeType.Instant -> "instantFromDotNetTicks($name)"
   BridgeType.Duration -> "durationFromDotNetTicks($name)"
@@ -506,7 +510,8 @@ private fun kotlinInputType(type: BridgeType): TypeName = when (type) {
   is BridgeType.Primitive -> kotlinType(type)
   BridgeType.Char -> kotlinType("Char")
   // ADR-106: a Uuid setter's wire value is its text form.
-  BridgeType.String, BridgeType.Uuid -> kotlinType("String")
+  // ADR-201: and so is a Throwable setter's, `"{FullName}: {Message}"`.
+  BridgeType.String, BridgeType.Uuid, is BridgeType.Throwable -> kotlinType("String")
   is BridgeType.Enum -> kotlinType("Int")
   BridgeType.Instant, BridgeType.Duration -> kotlinType("Long")
   // ADR-014: the underlying is what actually crosses the wire, both for an extension property's

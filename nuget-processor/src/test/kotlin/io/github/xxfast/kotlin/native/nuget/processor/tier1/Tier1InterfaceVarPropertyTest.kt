@@ -10,7 +10,8 @@ import kotlin.test.assertTrue
  * ROADMAP line 28: a `var` on an exported interface renders `{ get; set; }` on the generated
  * `IFoo` (ADR-113's declaration route used to leave every interface property get-only).
  *
- * - ADR-075 independence on `IFoo`: a refused setter (`Throwable?`, ADR-107) stays `{ get; }`,
+ * - ADR-075 independence on `IFoo`: a refused setter (`IllegalStateException?`, ADR-201) stays
+ *   `{ get; }`,
  *   named in the build log and in a `<remarks>` on the member, reachable or not.
  * - ADR-147 carve-out: a `var item: T` keeps `T Item { get; }`.
  * - Case D: `class TrainingClicker : Scoreboard(), Tally` overrides a base `open val` and an
@@ -28,7 +29,7 @@ class Tier1InterfaceVarPropertyTest {
       var label: String
       var toy: Pompom?
       var names: List<String>
-      var lastSlip: Throwable?
+      var lastSlip: IllegalStateException?
     }
 
     class Pompom(val colour: String)
@@ -38,7 +39,7 @@ class Tier1InterfaceVarPropertyTest {
       open val label: String = "scoreboard"
       open val toy: Pompom? = null
       open val names: List<String> = emptyList()
-      open val lastSlip: Throwable? = null
+      open val lastSlip: IllegalStateException? = null
     }
 
     class TrainingClicker : Scoreboard(), Tally {
@@ -46,7 +47,7 @@ class Tier1InterfaceVarPropertyTest {
       override var label: String = "clicker"
       override var toy: Pompom? = null
       override var names: List<String> = listOf("Mylo")
-      override var lastSlip: Throwable? = null
+      override var lastSlip: IllegalStateException? = null
 
       fun asTally(): Tally = this
     }
@@ -56,7 +57,7 @@ class Tier1InterfaceVarPropertyTest {
       override var label: String = "abacus"
       override var toy: Pompom? = null
       override var names: List<String> = listOf("Oreo")
-      override var lastSlip: Throwable? = null
+      override var lastSlip: IllegalStateException? = null
     }
 
     interface Holder<T> {
@@ -64,7 +65,7 @@ class Tier1InterfaceVarPropertyTest {
     }
 
     interface Lonely {
-      var err: Throwable?
+      var err: IllegalStateException?
       var level: Int
     }
   """.trimIndent()
@@ -140,7 +141,8 @@ class Tier1InterfaceVarPropertyTest {
     }
     // The public property carries no setter: only the explicit member's `set` exists per name.
     assertEquals(4, Regex("""\n\s+set\b""").findAll(clicker).count(), clicker)
-    // The refused `Throwable?` setter gets no explicit member: `ITally.LastSlip` is get-only.
+    // The refused `IllegalStateException?` setter gets no explicit member: `ITally.LastSlip` is
+    // get-only.
     assertFalse(clicker.contains("ITally.LastSlip"), clicker)
     // The nullable handle setter marshals the value's handle, the value setter passes `value`.
     assertContains(clicker, "Native_Set_count(_handle, value, out IntPtr error)")
@@ -332,7 +334,7 @@ class Tier1InterfaceVarPropertyTest {
 
       interface Base {
         var level: Int
-        var err: Throwable?
+        var err: IllegalStateException?
       }
 
       interface Derived : Base {
@@ -341,7 +343,7 @@ class Tier1InterfaceVarPropertyTest {
 
       class Impl : Derived {
         override var level: Int = 0
-        override var err: Throwable? = null
+        override var err: IllegalStateException? = null
         override fun ping(): Int = level
       }
 
