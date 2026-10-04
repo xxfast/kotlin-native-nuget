@@ -180,8 +180,8 @@ consumer cannot get `int total = metronome.CountTicks(...)` back at all.
 - No fixture exercises an unsigned-primitive or interface-typed callback payload on the plan; ten of
   forty-four branches in `forward/ForwardCirCallbackProjection.kt` are cold. Tracked on the
   ROADMAP.
-- The plan's delegate segment spelling (`Uint`, `Ulong`) does not match the interface-bridge route's
-  own unsigned spelling (`UInt`, `ULong`); cosmetic, tracked on the ROADMAP.
+- The plan's delegate segment used to spell unsigned kinds `Uint`/`Ulong`; it now spells `UInt`/`ULong`
+  like every other lambda route (see the 2026-10-03 amendment).
 - A planned callback member on a generic class is untested.
 
 ## Prior art
@@ -285,3 +285,26 @@ hint now lists a lambda among the return shapes that carry an enum parameter.
 ADR-084 cleaner, a captured Kotlin `Cat`, value-only parameters, Kotlin throwing before it makes the
 lambda, and a throwing `IPet` factory on the returned lambda. One branch stays cold: a value-class
 type argument on this route has no fixture.
+
+## Amendment 2026-10-03: unsigned delegate segments use the Kotlin spelling
+
+The plan names its internal delegate with `UByte`, `UShort`, `UInt` and `ULong` segments, for
+example `NugetUIntVoidCallback`, instead of `Ubyte`, `Ushort`, `Uint` and `Ulong`. The plan now
+reuses `simpleKotlinName()`, the speller the Kotlin half already uses for the callback's wire type,
+so the plan and every other lambda route mint the same name for the same wire.
+
+Only `internal` names change: the generated delegate and the `NugetThunks` members. The public C#
+signature (`Action<uint>` and so on), the C export names and the wire are unchanged. A module that
+mixes the plan route with a legacy lambda route on an unsigned payload now shares one delegate and
+one thunk per wire instead of declaring two, as it already did for `Int`.
+
+Evidence:
+
+- Verified: a Tier 1 test with both routes in one module and all four unsigned kinds failed before
+  the change (two delegates for one wire) and passes after (one declaration, one thunk pointer, the
+  generated Kotlin compiles).
+- Verified: `:nuget-processor:test` passes (1546 tests), and `scripts/verify.sh` is green, including
+  all six NativeAOT shapes.
+- Inferred: the shared thunk works at run time on an unsigned wire. No fixture runs it; `Int`
+  already shares a thunk the same way.
+- No `LeakTests` row: the change adds no handle route.

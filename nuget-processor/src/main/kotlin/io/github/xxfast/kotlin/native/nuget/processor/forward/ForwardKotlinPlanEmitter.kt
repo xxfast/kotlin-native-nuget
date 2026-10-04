@@ -586,7 +586,7 @@ private fun componentRaising(name: String, type: BridgeType, depth: Int = 0): St
       if (valueClass.underlying is BridgeType.Enum) "$dot" + "ordinal" else ""
 }
 
-private fun PrimitiveKind.simpleKotlinName(): String = when (this) {
+internal fun PrimitiveKind.simpleKotlinName(): String = when (this) {
   PrimitiveKind.BOOLEAN -> "Boolean"
   PrimitiveKind.BYTE -> "Byte"
   PrimitiveKind.UBYTE -> "UByte"

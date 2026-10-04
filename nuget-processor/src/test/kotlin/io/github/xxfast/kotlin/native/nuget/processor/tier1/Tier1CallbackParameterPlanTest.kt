@@ -1,5 +1,6 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -216,6 +217,68 @@ class Tier1CallbackParameterPlanTest {
     assertTrue(
       interop.contains("public KotlinFunc<int, global::Interop.Bell> Make =>"),
       "...including one whose lambda returns an exported object; got:\n$interop",
+    )
+  }
+
+  /**
+   * The plan's delegate name segment for an unsigned primitive is Kotlin's own simple name
+   * (`UInt`, `ULong`, `UByte`, `UShort`), the spelling every legacy callback route already uses.
+   * Delegates dedupe by name, so a module carrying the same unsigned wire on the plan route and on
+   * the interface-bridge subscription route declares ONE delegate and ONE thunk for it, and the
+   * generated Kotlin still compiles.
+   */
+  @Test
+  fun `an unsigned callback segment is spelled like every other route and shares one delegate`() {
+    val result: Tier1Result = Tier1Harness.run(
+      """
+      package io.pkg
+
+      interface Watcher {
+        fun onUInt(u: UInt)
+      }
+
+      class Meter(private val beats: Int) {
+        private val watchers = mutableListOf<Watcher>()
+        fun addWatcher(w: Watcher) { watchers.add(w) }
+        fun removeWatcher(w: Watcher) { watchers.remove(w) }
+
+        fun eachReading(listener: (UInt) -> Unit): Int {
+          repeat(beats) { listener(it.toUInt()) }
+          return beats
+        }
+
+        fun total(weigh: (ULong) -> ULong): ULong = weigh(beats.toULong())
+        fun eachByte(listener: (UByte) -> Unit) = listener(beats.toUByte())
+        fun eachShort(listener: (UShort) -> Unit) = listener(beats.toUShort())
+      }
+      """.trimIndent()
+    )
+    assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
+    val interop: String = result.generatedCSharp
+    listOf(
+      "internal delegate void NugetUIntVoidCallback(",
+      "internal delegate ulong NugetULongULongCallback(ulong a0, IntPtr ctx);",
+      "internal delegate void NugetUByteVoidCallback(byte a0, IntPtr ctx);",
+      "internal delegate void NugetUShortVoidCallback(ushort a0, IntPtr ctx);",
+      "public int EachReading(Action<uint> listener)",
+      "NugetThunks.NugetUIntVoidCallbackPtr",
+    ).forEach { expected ->
+      assertTrue(interop.contains(expected), "expected `$expected` in:\n$interop")
+    }
+    assertFalse(
+      Regex("Nuget(Uint|Ulong|Ubyte|Ushort)").containsMatchIn(interop),
+      "an unsigned segment must use the Kotlin simple name in:\n$interop",
+    )
+    // The plan route and the subscription route share one declaration and one thunk.
+    assertEquals(
+      1,
+      Regex("delegate void NugetUIntVoidCallback\\(").findAll(interop).count(),
+      "expected one shared delegate declaration in:\n$interop",
+    )
+    assertEquals(
+      1,
+      Regex("IntPtr NugetUIntVoidCallbackPtr =>").findAll(interop).count(),
+      "expected one shared thunk pointer in:\n$interop",
     )
   }
 
