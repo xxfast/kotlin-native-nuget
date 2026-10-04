@@ -28,6 +28,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardBridgeTypeC
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlan
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedParameter
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedReturn
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardOwnerTypeName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSuperClass
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardMemberOf
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
@@ -426,6 +427,9 @@ internal fun FileSpec.Builder.addClassExports(
   }
 
   if (cls.modifiers.contains(Modifier.DATA)) {
+    // ADR-147: a generic data class is read back applied (`Box<Any?>`), as its members are; the
+    // bare qualified name is not a type there. None of the three takes a `T`.
+    val ownerType: String = cls.forwardOwnerTypeName() ?: qualifiedName
     addFunction(
       FunSpec.builder("export_${prefix}_equals")
         .addAnnotation(cNameAnnotation("${prefix}_equals", ownedBy(cls, "data-class equals")))
@@ -434,7 +438,7 @@ internal fun FileSpec.Builder.addClassExports(
         .returns(Boolean::class)
         .addStatement(
           "return handle.asStableRef<%L>().get() == other.asStableRef<%L>().get()",
-          qualifiedName, qualifiedName,
+          ownerType, ownerType,
         )
         .build()
     )
@@ -446,7 +450,7 @@ internal fun FileSpec.Builder.addClassExports(
         .returns(Int::class)
         .addStatement(
           "return handle.asStableRef<%L>().get().hashCode()",
-          qualifiedName,
+          ownerType,
         )
         .build()
     )
@@ -458,7 +462,7 @@ internal fun FileSpec.Builder.addClassExports(
         .returns(String::class)
         .addStatement(
           "return handle.asStableRef<%L>().get().toString()",
-          qualifiedName,
+          ownerType,
         )
         .build()
     )
