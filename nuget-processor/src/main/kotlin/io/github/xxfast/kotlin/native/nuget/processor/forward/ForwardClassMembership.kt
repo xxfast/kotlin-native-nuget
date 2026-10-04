@@ -365,7 +365,10 @@ internal fun KSDeclaration.isForwardPlannableMemberOf(
 ): Boolean = isDeclaredBy(cls) ||
     ((superClass == null ||
         isFromInterfaceBeside(superClass) ||
-        isFromDroppedBase(cls, superClass)) && hasImplementation())
+        isFromDroppedBase(cls, superClass)) &&
+        // An owner with a backing wrapper does have something to dispatch to: the Kotlin object
+        // behind the handle implements the member, and the wrapper must override it.
+        (hasImplementation() || cls.hasAbstractBacking()))
 
 /**
  * ADR-101 amendment (2026-09-11): whether this member is inherited from an interface the class
@@ -671,7 +674,69 @@ internal fun KSDeclaration.isOpenForOverrideOn(owner: KSClassDeclaration): Boole
   if (modifiers.isOpenForOverride()) return true
   val fromInterface: Boolean =
     (parentDeclaration as? KSClassDeclaration)?.classKind == ClassKind.INTERFACE
-  val isExtensible: Boolean =
-    Modifier.OPEN in owner.modifiers || Modifier.ABSTRACT in owner.modifiers
-  return fromInterface && isExtensible && hasImplementation()
+  return fromInterface && owner.isForwardExtensible() && hasImplementation()
+}
+
+/**
+ * Whether a Kotlin subclass of this class can exist: it is `open` or `abstract`. The C# twin must
+ * then not be `sealed` (CS0509 on the subclass) and its overridable members must be `virtual`
+ * (CS0506 on the subclass's `override`). Read by the ordinary member rule above and by the sealed
+ * route's arm modifiers, so an `abstract` arm is as extensible as an `open` one.
+ */
+internal fun KSClassDeclaration.isForwardExtensible(): Boolean =
+  Modifier.OPEN in modifiers || Modifier.ABSTRACT in modifiers
+
+/**
+ * The C# name of the internal concrete wrapper nested in an `abstract` sealed arm, or null for any
+ * other class. C# cannot instantiate the abstract arm, yet a Kotlin handle to any subclass of it
+ * (exported or not) must still materialise as the arm, so the discriminator, the erased-generic
+ * factory and an arm-typed return construct this wrapper instead: the ADR-040 backing-class shape,
+ * one level down.
+ *
+ * `Backing` unless the arm already claims that name in C#, through a type Kotlin nests in it
+ * (ADR-134) or one of its members (CS0102 either way), a type nested in its sealed base (CS0108),
+ * or as its own name (CS0542); then the first
+ * free `Backing_`-suffixed spelling. Consumers never name the wrapper, so any free name will do,
+ * and deriving it from the declaration alone lets the classifier and the CIR translator agree.
+ */
+internal fun KSClassDeclaration.abstractBackingName(): String? {
+  if (!hasAbstractBacking()) return null
+  val taken: Set<String> = buildSet {
+    add(simpleName.asString())
+    declarations.filterIsInstance<KSClassDeclaration>().forEach { add(it.simpleName.asString()) }
+    // A type nested in a base class (the sealed base included) is inherited, and hiding it is
+    // CS0108.
+    getAllSuperTypes()
+      .map { type -> type.declaration }
+      .filterIsInstance<KSClassDeclaration>()
+      .flatMap { base -> base.declarations.filterIsInstance<KSClassDeclaration>() }
+      .forEach { add(it.simpleName.asString()) }
+    getAllFunctions().forEach { add(it.csharpMemberName()) }
+    getAllProperties().forEach { add(it.csharpMemberName()) }
+  }
+  return generateSequence("Backing") { name -> "${name}_" }.first { name -> name !in taken }
+}
+
+/**
+ * Whether this class gets an [abstractBackingName] wrapper: a non-generic `abstract class`, either
+ * an abstract sealed arm or an ordinary abstract class.
+ *
+ * An ordinary one qualifies only when no abstract class sits above it. Its wrapper overrides the
+ * class's own abstract members and the interface members it leaves unimplemented, both planned on
+ * the class itself as call-through exports; an abstract member an abstract *base* leaves open is
+ * planned on that base instead, so this class's wrapper would have nothing to call (CS0534). Such a
+ * class keeps the shipped shape. A sealed arm's base is abstract by definition, but projects its
+ * own members as concrete call-throughs, so an arm has no such gap.
+ */
+internal fun KSClassDeclaration.hasAbstractBacking(): Boolean {
+  if (Modifier.ABSTRACT !in modifiers || classKind != ClassKind.CLASS) return false
+  if (typeParameters.isNotEmpty()) return false
+  if (isSealedSubclass()) return true
+  return getAllSuperTypes()
+    .map { type -> type.declaration }
+    .filterIsInstance<KSClassDeclaration>()
+    .none { base ->
+      base.classKind == ClassKind.CLASS &&
+          (Modifier.ABSTRACT in base.modifiers || Modifier.SEALED in base.modifiers)
+    }
 }

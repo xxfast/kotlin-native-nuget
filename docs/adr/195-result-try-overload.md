@@ -164,7 +164,10 @@ had excluded:
   the throwing member, so it is reachable through the interface type and a C# implementer does not
   have to write it. A Kotlin class implementing the interface member keeps its own twin.
 - **Abstract members.** An abstract `fun f(): Result<T>` has no plan; the base declares an abstract
-  `TryF` beside the abstract `F`, and the override's twin is `override`.
+  `TryF` beside the abstract `F`, and the override's twin is `override`. The nested `Backing`
+  wrapper of an abstract class or abstract sealed arm
+  ([ADR-009](009-sealed-class-mapping.md)'s 2026-10-04 amendment) builds its overrides after the
+  collision pass below, so it overrides a twin exactly when the owner still declares it.
 - **Overrides.** The twin copies `override`, `virtual`, `abstract` and `static` from the throwing
   member at render time.
 

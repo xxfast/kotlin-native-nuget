@@ -148,6 +148,12 @@ the arm is the only release, whether you read it through the base type or as a c
 (`SealedSiblingArm_RepeatedReadsOfOneHolder_ReturnsToBaseline`) and 1c-arm
 (`SealedArm_ConcreteArmReturn_ReturnsToBaseline`) pin it.
 
+A value that comes back as an [abstract class or abstract sealed arm](interfaces-abstract-sealed.md#an-abstract-class-as-a-return-type)
+mints one handle behind its internal subclass, released by the `Dispose` the subclass inherits (an
+arm) or implements (an ordinary abstract class), including each element of a returned list.
+`LeakTests/LiveHandleTests.cs`'s `AbstractBacking_BaseArmAndClassTypedReturns_ReturnToBaseline` pins
+a sealed-base return, an arm return, a class return and a list of class elements.
+
 A class-typed [enum member property](enums.md) getter counts here too: every read mints a fresh
 owned wrapper the caller must dispose, the same as any other class-typed property getter.
 `LeakTests/LiveHandleTests.cs` row 1h,

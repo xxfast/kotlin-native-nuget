@@ -2027,10 +2027,11 @@ extension and enum owners):
 A `suspend` member of a value class, of a generic class and of a generic interface was already named
 by earlier work and is now pinned to exactly one warning. A sealed interface's arms bind it.
 
-`ABSTRACT` on a sealed arm: a plain or lambda-parameter `abstract fun` declared on an `abstract` or
-nested `sealed` arm is named with the sealed-subclass sentence. `abstract suspend fun` and
-`abstract fun f(): Flow<Int>` on such an arm stay silent, because the arm's suspend and Flow routes
-declare them (`abstractOnAsyncRoute`); naming them would be a false positive.
+`ABSTRACT` on a sealed arm: a plain or lambda-parameter `abstract fun` declared on a nested
+`sealed` arm is named with the sealed-subclass sentence (an `abstract` arm declares it since the
+2026-10-04 amendment). `abstract suspend fun` and `abstract fun f(): Flow<Int>` on an arm
+stay silent, because the arm's suspend and Flow routes declare them (`abstractOnAsyncRoute`);
+naming them would be a false positive.
 
 `TYPE_PARAMETER` had no producer anywhere and is deleted. A type parameter at a position it cannot
 bind already reports `UNSUPPORTED`.
@@ -2048,6 +2049,33 @@ member `Curl.area`. The abstract-arm silence was measured before the change.
 
 **Inferred, not covered.** The native pipeline was not run for this item.
 
-**Found, not fixed.** A Kotlin `abstract class Deep : Nap()` sealed arm renders as
-`public sealed class Deep : Nap`; inferred from generated C#, renderer line not located. Harmless
-while the arm has no constructor. Recorded in `ROADMAP.md`.
+**Found, fixed 2026-10-04, not harmless.** A Kotlin `abstract class Deep : Nap()` sealed arm rendered
+as `public sealed class Deep : Nap`, and an exported subclass of it failed the C# build. See the
+2026-10-04 amendment below.
+
+## Amendment (2026-10-04): an abstract arm's abstract members move from named skip to declared
+
+The 2026-10-03 amendment above named every plain or lambda-parameter `abstract fun` on an
+`abstract` or nested `sealed` arm, because the sealed route declared no abstract member there. It
+also recorded the arm's `public sealed class` rendering as harmless. Both are now stale for an
+`abstract` arm: the arm renders `public abstract class` and a nested backing wrapper overrides its
+abstract members over call-through exports ([ADR-009](009-sealed-class-mapping.md)'s 2026-10-04
+amendment).
+
+**Rule.** The two audit entries on the abstract arm (`Nap.Deep.depth` and the lambda-parameter
+`Nap.Deep.onNap`) are no longer `SEALED_SUBCLASS_UNROUTED` drops. They bind: `public abstract int
+Depth();` and `public abstract void OnNap(Action<int> cb);` on the arm, `public override` on its
+wrapper, and no warning names either. A nested `sealed` arm is unchanged: `Trip.Leg.miles` is still
+named exactly once and absent from the C#. Abstract `suspend` and `Flow` members on an arm stay
+silent for the same reason as before.
+
+The same change adds a related omission for an ordinary abstract class that has a backing wrapper.
+Its abstract members are all planned, so a member the plan refuses is left out of C# instead of
+declared `abstract`. The wrapper could not override a declaration the plan never exported (CS0534),
+and a subclass's plan refuses the same signature. Inferred, not separately measured: the planner's
+own refusal still names the member.
+
+**Verified.** `Tier1SuspendOwnerAuditTest`: the test for abstract and sealed arms is narrowed to the
+nested `sealed` arm (`Trip.Leg.miles`), and a new test pins the two abstract-arm members declared
+`abstract`, overridden by the wrapper and named by no warning. `:nuget-processor:test`: 1645
+passed, 0 failed.

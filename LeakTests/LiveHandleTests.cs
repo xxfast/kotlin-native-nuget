@@ -23,6 +23,7 @@ using Issue122 = TestLibrary.Issue122;
 using Perchvar = TestLibrary.Perchvar;
 using TestLibrary.Kennel;
 using Lineage = TestLibrary.Lineage;
+using Torpor = TestLibrary.Torpor;
 using Litterbox = TestLibrary.Litterbox;
 using TestLibrary.Listenerprops;
 using TestLibrary.Lounge;
@@ -164,6 +165,33 @@ public class LiveHandleTests
             Assert.Fail(
                 $"expected {before} live handles after {iterations} crossings, got {after} (delta {after - before}) on attempt {attempt}");
         }
+    }
+
+    [Fact]
+    public void AbstractBacking_BaseArmAndClassTypedReturns_ReturnToBaseline()
+    {
+        // Every handle that materialises as an abstract class constructs its backing wrapper; the
+        // wrapper's inherited (arm) or implemented (ordinary class) Dispose has to release it.
+        AssertNoLeak(() =>
+        {
+            using var den = new Torpor.Den();
+            using (Torpor.Torpor torpor = den.Deepest(3))
+            {
+                Assert.Equal(3, ((Torpor.Torpor.Dormant)torpor).Depth());
+            }
+            using (Torpor.Torpor.Dormant deep = den.Deep(4))
+            {
+                Assert.Equal("dreaming", deep.Mood);
+            }
+            using (Torpor.Hibernator hibernator = den.Hibernator())
+            {
+                Assert.Equal("Oreo", hibernator.Name);
+            }
+            foreach (Torpor.Hibernator hibernator in den.Hibernators)
+            {
+                using (hibernator) Assert.Equal(3, hibernator.Snores());
+            }
+        });
     }
 
     [Fact]

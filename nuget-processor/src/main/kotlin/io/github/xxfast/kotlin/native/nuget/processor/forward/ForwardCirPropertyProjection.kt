@@ -464,7 +464,7 @@ internal object ForwardCirPropertyProjection {
   ): String = if (viaDiscriminator) {
     "${csharpType()}.FromHandle($wireValue)"
   } else {
-    "new ${csharpType()}($wireValue, out _)"
+    "new ${constructType ?: csharpType()}($wireValue, out _)"
   }
 
   /**

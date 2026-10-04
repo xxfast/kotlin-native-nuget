@@ -255,6 +255,11 @@ internal data class CirClass(
   // rendered inside its block exactly as ADR-009 renders a sealed arm. Empty for a declaration
   // with no nested declarations, which keeps every construction site intact.
   val nestedDeclarations: List<CirDeclaration> = emptyList(),
+  // The internal concrete wrapper nested in an abstract class (`abstractBackingName`), or null.
+  // C# cannot instantiate the class, so every handle that materialises as it constructs this.
+  val backingName: String? = null,
+  // Whether the wrapper must implement an abstract `DisposeAsync` (see `translateClass`).
+  val backingOverridesDisposeAsync: Boolean = false,
 ) : CirDeclaration
 
 internal data class CirValueClass(
@@ -518,6 +523,13 @@ internal data class CirSealedSubclass(
    * subclass and CS0549 on every `virtual` member the arm needs. A final arm is unchanged.
    */
   val isOpen: Boolean = false,
+  /**
+   * Set only for an `abstract` arm: the name of the internal concrete wrapper nested in it
+   * (`abstractBackingName`). The arm renders `public abstract class`, and everything that
+   * materialises the arm from a handle constructs this wrapper instead, since `new` on the
+   * abstract arm is CS0144.
+   */
+  val backingName: String? = null,
   /**
    * ADR-101 amendment (2026-09-27): the exported interfaces the arm lists after its sealed base,
    * spelled for C#, so `arm is IFoo` holds. Built by the ordinary class's interface rule: one the

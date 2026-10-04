@@ -36,9 +36,12 @@ internal fun CirSealedSubclass.ordinaryNativeImports(libraryName: String): List<
       .filterNot { property -> property.usesLegacyNativeImport() }
       .forEach { property -> addAll(propertyNativeImports(libraryName, nativePrefix, property)) }
 
-    // No `isAbstract`/`isAsync`/`isFlow` filter: an arm's `methods` holds only plain members by
-    // construction, and `methodNativeImport` `require`s exactly that.
-    methods.forEach { method -> add(methodNativeImport(libraryName, nativePrefix, method)) }
+    // No `isAsync`/`isFlow` filter: an arm's `methods` holds only plain members by construction,
+    // and `methodNativeImport` `require`s exactly that. An abstract arm's abstract member has no
+    // extern of its own; its backing wrapper's ([CirBacking.nativeImports]) calls the export.
+    methods
+      .filterNot { method -> method.isAbstract }
+      .forEach { method -> add(methodNativeImport(libraryName, nativePrefix, method)) }
 
     addAll((asyncMembers + flowMembers).filterIsInstance<CirDllImport>())
   }

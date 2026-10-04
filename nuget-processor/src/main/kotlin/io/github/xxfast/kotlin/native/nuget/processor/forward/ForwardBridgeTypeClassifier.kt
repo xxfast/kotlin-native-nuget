@@ -407,7 +407,12 @@ internal class ForwardBridgeTypeClassifier(
         isObjectPosition = true,
       )
     }
-    return BridgeType.ObjectHandle(qualifiedName, csharpType = csharpTypeNameFor(classDeclaration))
+    val csharpType: String = csharpTypeNameFor(classDeclaration)
+    return BridgeType.ObjectHandle(
+      qualifiedName,
+      csharpType = csharpType,
+      constructType = classDeclaration.abstractBackingName()?.let { "$csharpType.$it" },
+    )
   }
 
   /**
