@@ -267,6 +267,13 @@ returns to baseline with nothing for you to dispose. `LeakTests/LiveHandleTests.
 `ValueClassFlowElement_ValueReadsAndEmissions_ReturnToBaseline` cover the enum `.Value` loop, the enum
 emission loop and the value-class element on the same two routes.
 
+An [enum written into a generic slot](generics.md) (`new Crate<Mood>(Mood.Grumpy)`,
+`Helpers.Identity(Mood.Sleepy)`) mints one handle over the Kotlin entry per write and releases it
+when the call returns, so nothing is left for you to dispose. An out-of-range value (`(Mood)99`)
+throws before any handle is minted. `LeakTests/LiveHandleTests.cs`'s
+`EnumErasedWrite_GenericClassAndFunction_ReturnsToBaseline` and
+`EnumErasedWrite_OutOfRangeOrdinalThrows_ReturnsToBaseline` cover both.
+
 A [generic class from a dependency module](generics.md#limitations) adds no new handle kind: its
 constructor and `Value` read follow the module-local generic route.
 `LeakTests/LiveHandleTests.cs`'s

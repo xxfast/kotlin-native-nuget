@@ -1272,6 +1272,9 @@ private fun invocationExpression(
     // ADR-171: the same identity, for a value class's box/unbox pair.
     ForwardCallableOrigin.VALUE_CLASS_BOX -> arguments
 
+    // ADR-094 (write side): the same identity, on the enum's lowered ordinal.
+    ForwardCallableOrigin.ENUM_BOX -> arguments
+
     ForwardCallableOrigin.VALUE_CLASS ->
       error("VALUE_CLASS plans use addForwardValueClassPlanExport, not invocationExpression")
   }

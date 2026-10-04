@@ -2423,6 +2423,39 @@ public class LiveHandleTests
         });
     }
 
+    // ADR-094 (write side): an enum at the generic-class and generic-function `T`. An enum has no
+    // handle of its own, so `Wrap<Mood>` mints one over the Kotlin entry through the enum's box
+    // export with `owned = true`, and the caller's `finally` disposes it. Every read back (the
+    // `.Value` getter, `Identity`'s result) retains the entry once and the enum's `Factories`
+    // entry reads the ordinal and disposes it.
+    // Ledger per iteration: ctor box +1/-1, box_create +1, getter +1/-1, Describe box +1/-1,
+    // Identity box +1/-1 and result +1/-1, null Identity 0, box_dispose -1. Net zero.
+    [Fact]
+    public void EnumErasedWrite_GenericClassAndFunction_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var crate = new Crate<Mood>(Mood.Grumpy);
+            Assert.Equal(Mood.Grumpy, crate.Item);
+            Assert.Equal("SLEEPY:GRUMPY", crate.Describe(Mood.Sleepy));
+            Assert.Equal(Mood.Sleepy, Helpers.Identity(Mood.Sleepy));
+            Assert.Null(Helpers.Identity<Mood?>(null));
+        });
+    }
+
+    // ADR-094 (write side): an out-of-range ordinal fails inside the box export (`entries[99]`),
+    // before anything is minted and before `box_create` is reached. Net zero; a positive delta
+    // means the error path minted a handle, or the caller disposed one it never received.
+    [Fact]
+    public void EnumErasedWrite_OutOfRangeOrdinalThrows_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            Assert.ThrowsAny<Exception>(() => new Crate<Mood>((Mood)99));
+            Assert.ThrowsAny<Exception>(() => Helpers.Identity((Mood)99));
+        });
+    }
+
     // The second box has no wrapper when the factory fails. Materialization must release
     // it as well as the first wrapper and the outer list, preserving the original exception.
     [Fact]

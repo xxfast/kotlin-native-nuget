@@ -353,9 +353,49 @@ through `FromHandle<T>`/`Materialize<T>`. `E?` resolves through `Materialize<T>`
 ordinals on the Kotlin side and never reaches this entry. The sentence "Enums, objects ... register
 nothing" in `factoryEntries`' KDoc loses "Enums".
 
-Not covered: the erased write of an enum (`new Box<Mood>(Mood.Calm)`) and the `MutableStateFlow<E>`
-setter (ADR-071's deferral) stay open.
+Not covered: the `MutableStateFlow<E>` setter (ADR-071's deferral) stays open. The erased write of
+an enum (`new Box<Mood>(Mood.Calm)`), first listed here as having no route, is the
+2026-10-04 amendment below.
 
 ## Later change
 
 ADR-178 supersedes the global helper placement described here: generated helpers, including INugetHandle, are now package-local so two generated packages can compile in one consumer. The generic-dispatch registry behavior remains as recorded above.
+
+## Amendment (2026-10-04): an enum is written into an erased slot
+
+The 2026-09-29 amendment closed the read of an enum at an erased slot and left the write open:
+`Wrap<T>` had no enum branch and `Boxers` was filled from value classes only, so
+`new Box<Mood>(Mood.Calm)` compiled and threw at the first argument. Both are now routed.
+
+**Rule.** Every exported enum gets a per-enum Kotlin export `<enum>_box_entry` (one `Int` ordinal
+parameter plus the error slot) that retains `entries[ordinal]` and returns the handle, and one
+`NugetMarshal.Boxers` row keyed on `typeof(E)` that calls it with `(int)value` through
+`NugetErrorNative.Check`. The extern is rendered in `NugetMarshal` beside the row, because an enum
+cannot declare members and its `{Enum}Extensions` class exists only for an enum with members of its
+own. `Wrap<T>` consults `Boxers` by the value's runtime type, so `Box<Mood>`, `Box<Mood?>` (a boxed
+`Nullable<Mood>` carries the enum's own runtime type), `Crate<object>` holding a `Mood`, a generic
+class member taking `T`, and a generic function (`Helpers.Identity<Mood>`) all reach it. This is the
+write twin of the read side's `Factories` entry and uses no reflection, so it is AOT-safe.
+
+**Name.** The export is `_box_entry`, not ADR-171's value-class `_box`. An enum member is exported
+as `<enum>_<name>`, so an enum declaring its own `fun box()` would mint the same `<enum>_box`
+symbol and fail a library that built before. A Tier 1 cell pins the name.
+
+**Out of range.** `Mood.entries[99]` throws inside the export's error slot before any handle is
+minted, so `(Mood)99` surfaces as a catchable `KotlinException` and the route keeps answering.
+
+**Implementation.** The planner plans the box as origin `ENUM_BOX` (`ForwardCallablePlanner`,
+`enumBoxEntries`), silent when refused as the value-class pair is, since it is surface no author
+wrote. The extern is projected from the plan (`ForwardCirPlanProjection.enumBox`) into
+`CirEnum.boxImport`, and `CirMarshalHelper.enumBoxers` (`CirEnumBoxer`) renders the row.
+
+**Evidence.** Verified: `Tier1EnumErasedWriteTest`, and `IntegrationTests/EnumErasedWriteTests.cs`
+on the native pipeline (a `Crate<Mood>.Describe` answering `SLEEPY:GRUMPY` proves Kotlin received
+the real entry, not an ordinal); two `LeakTests` rows,
+`EnumErasedWrite_GenericClassAndFunction_ReturnsToBaseline` and
+`EnumErasedWrite_OutOfRangeOrdinalThrows_ReturnsToBaseline`, return to baseline; the seven-shape
+NativeAOT step is green. A Tier 1 cell compiles an enum with its own `fun box()` beside the
+generated export.
+
+Not covered: `T : Enum<T>` (a self-bound on an enum type parameter) is a separate item; this
+amendment supplies only the write route it needs.

@@ -109,6 +109,27 @@ internal object ForwardCirPlanProjection {
     )
   }
 
+  /**
+   * ADR-094 (write side): an enum's box extern, off its plan so the `DllImport` carries exactly
+   * the wire the Kotlin export declares (the ordinal as `int`, the error slot). Named after its
+   * entry point, which is unique by construction, because every enum's row shares `NugetMarshal`.
+   */
+  fun enumBox(plan: ForwardCallablePlan, libraryName: String): CirDllImport {
+    require(plan.invocation.origin == ForwardCallableOrigin.ENUM_BOX) {
+      "Forward CIR enum box projection received ${plan.invocation.origin}"
+    }
+    val call: ForwardNativeCall = plan.singleNativeImport()
+    return CirDllImport(
+      libraryName = libraryName,
+      entryPoint = call.exportName,
+      returnType = "IntPtr",
+      name = call.exportName,
+      parameters = plan.nativeInCirParameters(call.parameters),
+      visibility = CirVisibility.PRIVATE,
+      hasSyncErrorOut = plan.errorSlot != null,
+    )
+  }
+
   /** Value-class computed property getter — no errorOut (shipped ABI). */
   fun valueClassProperty(plan: ForwardCallablePlan, nativeReceiverArg: String): CirProperty {
     require(plan.invocation.origin == ForwardCallableOrigin.VALUE_CLASS) {

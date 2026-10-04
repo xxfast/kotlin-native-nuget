@@ -809,6 +809,12 @@ internal data class ForwardCallablePlanCatalog(
         plan.invocation.symbol.substringBeforeLast('.') == owner
   }
 
+  /** ADR-094 (write side): the box of enum [owner], or null when none was planned. */
+  fun enumBox(owner: String): ForwardCallablePlan? = plans.firstOrNull { plan ->
+    plan.invocation.origin == ForwardCallableOrigin.ENUM_BOX &&
+        plan.invocation.symbol.substringBeforeLast('.') == owner
+  }
+
   /** ADR-006 amendment: the planned companion `val`/`var`s of enum [owner], in planning order. */
   fun enumCompanionProperties(owner: String): List<ForwardPropertyPlan> =
     propertyPlans.filter { plan ->
@@ -1053,6 +1059,7 @@ internal class ForwardCallablePlanner(
       enums.forEach { enum ->
         addAll(enumEntries(enum).ownedBy(enum.forwardDiagnosticOwner()))
         addAll(companionEntries(enum).ownedBy(enum.forwardDiagnosticOwner()))
+        addAll(enumBoxEntries(enum).ownedBy(enum.forwardDiagnosticOwner()))
       }
       valueClasses.forEach { cls ->
         addAll(valueClassEntries(cls).ownedBy(cls.forwardDiagnosticOwner()))
@@ -2384,6 +2391,35 @@ internal class ForwardCallablePlanner(
     // measured, cells 3a/13a/18a/22a, so every deferral here is a drop, with no exemption. The
     // audit amendment: SUSPEND included (the suspend route walks classes, never an object).
     return members.map { member -> entryFor(member).namedSuspend() }.nameUnroutedPositions()
+  }
+
+  /**
+   * ADR-094 (write side): the enum's box, the export `NugetMarshal.Boxers` calls when an enum is
+   * written into an erased generic slot. One parameter, the ordinal; one result, an owned handle
+   * over the entry it names (`Mood.entries[entry]`), so an out-of-range ordinal (`(Mood)99`)
+   * throws inside the error slot.
+   *
+   * `_box_entry`, not ADR-171's `_box`: an enum member is exported as `<enum>_<name>`, so `_box`
+   * would collide with an enum's own `fun box()` and fail a library that built before. Silent when
+   * refused, as the value-class pair is: it is generated surface no author wrote.
+   */
+  private fun enumBoxEntries(enum: KSClassDeclaration): List<ForwardCallableCatalogEntry> {
+    val owner: String = enum.qualifiedName?.asString() ?: return emptyList()
+    val type: BridgeType = classifier.classify(enum.asStarProjectedType())
+    if (type !is BridgeType.Enum) return emptyList()
+    val entry: ForwardCallableCatalogEntry = planOrSkip(
+      symbol = "$owner.<box>",
+      publicName = "NugetBox",
+      exportName = "${enum.nativePrefix(symbols)}_box_entry",
+      receiver = ForwardReceiver.Static,
+      // Not `value`: that is a PLAN_OWNED_NAME (the setter slot).
+      parameters = listOf("entry" to type),
+      result = BridgeType.TypeParameter("T"),
+      origin = ForwardCallableOrigin.ENUM_BOX,
+      target = owner,
+      node = enum,
+    )
+    return if (entry is ForwardCallableCatalogEntry.Planned) listOf(entry) else emptyList()
   }
 
   /**

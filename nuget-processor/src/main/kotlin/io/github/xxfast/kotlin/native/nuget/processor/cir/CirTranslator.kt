@@ -1002,6 +1002,7 @@ internal fun translate(
       // already pairs every wrapper declaration with the namespace that names it.
       factories = factoryEntries(namespaces),
       boxers = valueClassNames(namespaces),
+      enumBoxers = enumBoxers(namespaces),
     ),
   )
   if (bridgePlans.isNotEmpty()) helpers.add(CirBridgeHelper(context.libraryName, bridgePlans))
@@ -1335,6 +1336,30 @@ private fun valueClassNames(namespaces: List<CirNamespace>): List<String> {
   return namespaces
     .flatMap { namespace -> namespace.declarations.flatMap { it.walk(namespace.name) } }
     .distinct()
+}
+
+/**
+ * ADR-094 (write side): every enum with a planned box, root or nested, keyed on the name a
+ * consumer's `typeof(...)` produces, the same walk as [valueClassNames]. Its `Factories` twin is
+ * the enum's `viaEnumOrdinal` entry in [factoryEntries].
+ */
+private fun enumBoxers(namespaces: List<CirNamespace>): List<CirEnumBoxer> {
+  fun CirDeclaration.walk(path: String): List<CirEnumBoxer> = when (this) {
+    is CirEnum -> listOfNotNull(boxImport?.let { import -> CirEnumBoxer("$path.$name", import) })
+    is CirClass -> nestedDeclarations.flatMap { it.walk("$path.$name") }
+    is CirInterface -> nestedDeclarations.flatMap { it.walk("$path.$name") }
+    is CirObject -> nestedDeclarations.flatMap { it.walk("$path.$name") }
+    is CirSealedClass -> nestedDeclarations.flatMap { it.walk("$path.$name") } +
+        subclasses.flatMap { arm ->
+          val armPath: String = if (arm.isNested) "$path.$name.${arm.name}" else "$path.${arm.name}"
+          arm.nestedDeclarations.flatMap { it.walk(armPath) }
+        }
+
+    else -> emptyList()
+  }
+  return namespaces
+    .flatMap { namespace -> namespace.declarations.flatMap { it.walk(namespace.name) } }
+    .distinctBy { boxer -> boxer.qualifiedTypeName }
 }
 
 private fun MutableList<CirNamespace>.addDeclaration(namespace: String, declaration: CirDeclaration) {

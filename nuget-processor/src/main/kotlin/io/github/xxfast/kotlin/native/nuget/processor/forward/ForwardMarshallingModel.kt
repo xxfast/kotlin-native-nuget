@@ -774,6 +774,14 @@ internal enum class ForwardCallableOrigin {
    * its underlying through the ordinary value-class result emission.
    */
   VALUE_CLASS_BOX,
+
+  /**
+   * ADR-094 (write side): an exported enum's box, the erased-generic crossing of an enum
+   * (`new Box<Mood>(Mood.Calm)`, `Echo<Mood>(...)`). The identity on the lowered ordinal, like
+   * [ENUM_ARM_BOX]: `Mood.entries[entry]` retained as an opaque [BridgeType.TypeParameter]
+   * handle. The read back needs no twin: `Factories` already reads any enum by its ordinal.
+   */
+  ENUM_BOX,
 }
 
 internal data class ForwardInvocation(
