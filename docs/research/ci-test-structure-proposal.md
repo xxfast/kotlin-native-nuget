@@ -11,7 +11,7 @@ before the leak harness. Keep the jobs parallel and keep today's pull request co
 - **Done in the first pass:** job ids, display names, step prefixes and the leak harness moved to
   last in the bridge job. Matching headings in `scripts/verify.sh`. No coverage change.
 - **Later passes, one pull request each:** the forward generator on Ubuntu, a path filter on the
-  `Repo on Kotlin X:` stage, a direction split of `IntegrationTests`, and the outside-consumer
+  `Consumer behaviour:` stage, a direction split of `IntegrationTests`, and the outside-consumer
   fixture. Each is described where it applies below.
 - **No staging:** gating jobs behind each other only saves compute on red runs, and the last 40
   CI runs had none.
@@ -104,16 +104,13 @@ last that host problem cannot stop the leak harness from running.
 
 ### Stages inside `consumer`
 
-- `Published artifacts:` publish on the pin, resolve by coordinate, link at Kotlin X.
-- `Repo on Kotlin X:` repack `test-library`, prove the compiler version, run `IntegrationTests`
-  and `LeakTests`.
+- `Published artifacts:` publish on the pin, resolve by coordinate, link the smoke consumer at
+  Kotlin X.
+- `Consumer behaviour:` build the fixtures as an outside consumer at Kotlin X, prove which
+  compiler built what, run `IntegrationTests` and `LeakTests`.
 
-The second prefix is deliberately honest. That half does not test a consumer yet. Once
-`test-library` is built as an outside consumer of the pinned artifacts, it becomes
-`Published artifacts:` too.
-
-`Published artifacts:` is the only place CI resolves the plugin, processor and runtime by maven
-coordinate. Any change to when this job runs has to keep that stage on pull requests.
+Until the fifth pass the second stage was named `Repo on Kotlin X:`, deliberately: it rebuilt the
+tooling on X and did not test a consumer. See [the outside-consumer fixture](#the-outside-consumer-fixture).
 
 ### Where direction does not apply
 
@@ -200,7 +197,7 @@ Inside a range leg (four legs measured across the two runs):
 | Stage | Steps | Per leg |
 |---|---|---|
 | `Published artifacts:` | Publish 173 to 357s, resolve and link 69 to 138s | 4 to 8 minutes |
-| `Repo on Kotlin X:` | Pack 390 to 710s, `IntegrationTests` 39 to 61s, `LeakTests` 316 to 321s | 12 to 18 minutes |
+| `Consumer behaviour:` (measured as `Repo on Kotlin X:`, the root rebuilt on X) | Pack 390 to 710s, `IntegrationTests` 39 to 61s, `LeakTests` 316 to 321s | 12 to 18 minutes |
 
 Inside the macOS bridge job, two steps dominate: the pack (307s) and `LeakTests` (355s).
 `IntegrationTests` takes 42s. Source: run 37199729997 on `main`.
@@ -249,11 +246,11 @@ the tables above; none is measured as a change.
 
 | Lever | Saves per run | What it costs |
 |---|---|---|
-| Run `Repo on Kotlin X:` on a pull request only behind a path filter, keeping `Published artifacts:` on every pull request (done in the third pass, see below) | About 31 to 34 runner-minutes, 25%, on a pull request the filter skips | A range behaviour break from a processor or fixture change is found on `main`, after merge |
+| Run `Consumer behaviour:` on a pull request only behind a path filter, keeping `Published artifacts:` on every pull request (done in the third pass, see below) | About 31 to 34 runner-minutes, 25%, on a pull request the filter skips | A range behaviour break from a processor or fixture change is found on `main`, after merge |
 | Drop `LeakTests` from the range legs | About 10.6 runner-minutes, 8 to 9% | Assumes leaks do not vary by Kotlin patch version. Not shown either way |
 | Run the Windows processor leg only on `main` | About 18 runner-minutes, 13 to 15% | A Windows-only generator regression is found after merge |
 
-### The `Repo on Kotlin X:` path filter
+### The `Consumer behaviour:` path filter
 
 On a pull request the stage runs only when the diff touches one of these. A push to `main` always
 runs it, and a diff that cannot be computed runs it.
@@ -263,7 +260,7 @@ runs it, and a diff that cannot be computed runs it.
 | `gradle.properties`, `gradle/`, `settings.gradle.kts`, `build.gradle.kts`, any `*/build.gradle.kts` or `*/settings.gradle.kts` | Version pins, `kotlinFloor`, `kotlinTested`, the `kotlinVersion` override, target and dependency declarations |
 | `nuget-plugin/` | Calls the consumer's KGP, generates the reverse Kotlin |
 | `nuget-runtime/`, `nuget-annotations/` | The klibs whose ABI sets the floor |
-| `smoke-test/` | The by-coordinate consumer and its Kotlin selection |
+| `smoke-test/`, `fixture-consumer/` | The by-coordinate consumers and their Kotlin selection |
 | `.github/workflows/ci.yml` | The job itself |
 
 Deliberately not in the filter: `nuget-processor/`, `test-library/`, `test-companion/`,
@@ -298,10 +295,36 @@ not need shortens the wait when branches are pushed together.
 
 ## The outside-consumer fixture
 
-The fix for the wrong-shape half is the backlog gap: build `test-library` as an outside consumer
-of the pinned artifacts, so the behaviour suites run against what a consumer gets on Kotlin X.
-This is the highest-value follow-up. Its implementation cost and runtime are unknown: how much of
-`test-library`'s build assumes it sits in the root build was not read.
+Done in the fifth pass. `fixture-consumer/` is a second Gradle root over the same `test-library`,
+`test-companion` and `test-models` directories, with no copy of the fixtures.
+
+- **Why it tests the right shape.** In the repo's root the processor, runtime and annotations are
+  projects, so the fixtures compile against whatever the build's Kotlin produced. In
+  `fixture-consumer/` they are not projects, so `NugetPlugin` takes its maven-coordinate fallback
+  and resolves them from `build/local-repo`, published on the pin. Only the fixtures are compiled
+  by `-Pconsumer.kotlin=floor|tested`.
+- **What it took.** Three new files (about 100 lines), five `rootProject` paths in the two fixture
+  scripts repointed at the repo directory, and the `mingwX64` klibs added to the publish step,
+  because the fixtures pack a `mingwX64` library and a macOS host links it.
+- **What it proves in CI.** A manifest check fails unless `test-library` was compiled by X and
+  the published `nuget-runtime` klib by the pin.
+- **Outputs are in the same place.** Both roots write `test-library/build` and
+  `build/FixtureVersions.props`, so the C# suites need no change. Locally, clean the fixtures when
+  switching roots.
+
+Verified by execution on 2026-10-05, macOS, pin 2.4.10:
+
+| Fixtures compiled by | Runtime klib compiled by | `IntegrationTests` | `LeakTests` |
+|---|---|---|---|
+| 2.4.20 (tested), outside root | 2.4.10 | 3139 passed | 185 passed |
+| 2.4.0 (floor), outside root | 2.4.10 | 3139 passed | 185 passed |
+| 2.4.10 (pin), repo root, `scripts/verify.sh --plugin` | 2.4.10 | 3139 passed | 185 passed |
+
+Cost: the pack took 3 minutes locally at tested, against the same two publishers. CI cost is
+unmeasured until this pull request's own run. Windows is still not exercised at either end.
+
+The root `kotlinVersion` override in `settings.gradle.kts` is no longer used by CI. It is kept
+for building the whole repo on another Kotlin locally.
 
 ## Open decisions
 

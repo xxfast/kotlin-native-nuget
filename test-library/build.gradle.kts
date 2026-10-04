@@ -158,11 +158,16 @@ kotlin {
   }
 }
 
+// The repo directory, taken from this project's own location and not from `rootProject`: these
+// scripts are built from the repo root and from `fixture-consumer/`, a second root over the same
+// project directories, and the files below live in the repo either way.
+val repoDir: File = projectDir.parentFile
+
 val fixtureVersionFile: Provider<RegularFile> = layout.buildDirectory.file("fixture-version.txt")
 val fixturePackageVersion: Provider<String> = providers.fileContents(fixtureVersionFile)
   .asText
   .map { it.trim() }
-val fixtureVersionsFile = rootProject.file("build/FixtureVersions.props")
+val fixtureVersionsFile = repoDir.resolve("build/FixtureVersions.props")
 
 val prepareFixtureFeeds by tasks.registering(PrepareFixtureFeeds::class) {
   group = "nuget"
@@ -175,7 +180,7 @@ val prepareFixtureFeeds by tasks.registering(PrepareFixtureFeeds::class) {
 }
 
 tasks.withType<NugetCompileInteropTask>().configureEach {
-  dependencySources.add(rootProject.layout.buildDirectory.dir("nuget").get().asFile.absolutePath)
+  dependencySources.add(repoDir.resolve("build/nuget").absolutePath)
 }
 
 val writeFixtureVersion by tasks.registering(WriteFixtureVersion::class) {
@@ -200,7 +205,7 @@ val writeFixtureVersions by tasks.registering(WriteFixtureVersions::class) {
 val packTestDependency by tasks.registering(PackTestDependency::class) {
   group = "nuget"
   description = "Packs TestDependency.nupkg into build/nuget so dotnet restore can find it"
-  csprojFile.set(rootProject.file("TestDependency/TestDependency.csproj"))
+  csprojFile.set(repoDir.resolve("TestDependency/TestDependency.csproj"))
   fixtureVersion.set(fixturePackageVersion)
   outputDir.set(layout.buildDirectory.dir("nuget"))
   dependsOn(writeFixtureVersion)

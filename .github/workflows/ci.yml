@@ -237,17 +237,18 @@ jobs:
   # build. In this repo `NugetPlugin` always finds `:nuget-processor` as a project, so the
   # coordinate fallback it ships to consumers is otherwise never executed.
   #
-  # ADR-195: one leg per end of the supported Kotlin range, and each leg proves two things. First
-  # the artifacts published on the repo's pinned compiler are consumable from that Kotlin (the
-  # smoke consumer links). Then the repo itself behaves on that Kotlin: test-library is rebuilt
-  # with it and the real dotnet tests run. Folded into one job per version to stay inside the
-  # free plan's 5 concurrent macOS jobs. The names resolve through kotlinFloor and kotlinTested in
-  # gradle.properties; never put a number here.
+  # ADR-195: one leg per end of the supported Kotlin range, and each leg proves two things about
+  # the artifacts published on the repo's pinned compiler. First they are consumable from that
+  # Kotlin (the smoke consumer resolves and links them). Then they behave: `fixture-consumer/`
+  # builds test-library and test-companion against them with that Kotlin, and the real dotnet
+  # tests run. Folded into one job per version to stay inside the free plan's 5 concurrent macOS
+  # jobs. The names resolve through kotlinFloor and kotlinTested in gradle.properties; never put a
+  # number here.
   #
-  # Step names carry which of the two a step belongs to. `Published artifacts:` is the consumer's
-  # real shape (built on the pin, linked by this Kotlin). `Repo on Kotlin X:` is not: the override
-  # rebuilds the processor and the runtime klib on this Kotlin too
-  # (docs/backlog/kotlin-range-ci-coverage-gaps.md).
+  # Step names carry which of the two a step belongs to: `Published artifacts:` and
+  # `Consumer behaviour:`. Neither rebuilds the tooling on this leg's Kotlin. That is the point: a
+  # consumer gets the plugin, processor and klibs as released, and only their own code is compiled
+  # by their Kotlin.
   consumer:
     name: Consumer on Kotlin ${{ matrix.kotlin }}
     runs-on: macos-latest
@@ -279,15 +280,18 @@ jobs:
           dotnet-version: 10.0.x
 
       # No kotlinVersion override here: these are the artifacts a release ships, built on the pin.
-      # The link needs the runtime and annotations klibs too; the macosArm64 and metadata
-      # publications are all a macOS runner can and needs to build.
+      # The link needs the runtime and annotations klibs too. The smoke consumer targets macosArm64
+      # only, but the fixtures pack a mingwX64 library as well and a macOS host links it, so both
+      # targets' publications go up beside the metadata one.
       - name: "Published artifacts: publish plugin, processor, runtime and annotations to a local maven repo"
         run: >
           ./gradlew
           :nuget-processor:publishAllPublicationsToLocalTestRepository
           :nuget-runtime:publishMacosArm64PublicationToLocalTestRepository
+          :nuget-runtime:publishMingwX64PublicationToLocalTestRepository
           :nuget-runtime:publishKotlinMultiplatformPublicationToLocalTestRepository
           :nuget-annotations:publishMacosArm64PublicationToLocalTestRepository
+          :nuget-annotations:publishMingwX64PublicationToLocalTestRepository
           :nuget-annotations:publishKotlinMultiplatformPublicationToLocalTestRepository
           :nuget-plugin:publishAllPublicationsToLocalTestRepository
 
@@ -300,13 +304,13 @@ jobs:
           -Psmoke.kotlin=${{ matrix.kotlin }}
 
       # `Published artifacts:` above runs on every pull request: it is the only place CI resolves
-      # the tooling by coordinate. `Repo on Kotlin X:` below is the expensive half (a second pack,
+      # the tooling by coordinate. `Consumer behaviour:` below is the expensive half (a second pack,
       # the C# suites and the leak harness, 12 to 18 minutes a leg), so on a pull request it runs
       # only when the change touches what decides which Kotlin builds what: the version pins and
-      # build files, the plugin, the runtime and annotations klibs, the smoke consumer and this
-      # workflow. A push to main always runs it, so a processor or fixture change that only one end
+      # build files, the plugin, the runtime and annotations klibs, the smoke consumer, the fixture consumer
+      # root and this workflow. A push to main always runs it, so a processor or fixture change that only one end
       # of the range rejects is caught there, after merge. That is a deliberate coverage trade.
-      - name: "Repo on Kotlin ${{ matrix.kotlin }}: decide whether this change can move range behaviour"
+      - name: "Consumer behaviour: decide whether this change can move it"
         id: range
         shell: bash
         run: |
@@ -323,28 +327,37 @@ jobs:
           fi
           echo "changed files:"
           echo "$changed"
-          if echo "$changed" | grep -Eq '^(gradle\.properties|settings\.gradle\.kts|build\.gradle\.kts|gradle/|[^/]+/build\.gradle\.kts|[^/]+/settings\.gradle\.kts|nuget-plugin/|nuget-runtime/|nuget-annotations/|smoke-test/|\.github/workflows/ci\.yml)'; then
+          if echo "$changed" | grep -Eq '^(gradle\.properties|settings\.gradle\.kts|build\.gradle\.kts|gradle/|[^/]+/build\.gradle\.kts|[^/]+/settings\.gradle\.kts|nuget-plugin/|nuget-runtime/|nuget-annotations/|smoke-test/|fixture-consumer/|\.github/workflows/ci\.yml)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # From here on the root build itself runs on this leg's Kotlin (settings.gradle.kts). No
-      # coverage and no AOT publish: the `bridge` job owns those on the pinned version.
-      - name: "Repo on Kotlin ${{ matrix.kotlin }}: verify and pack shared compiled contract"
+      # No coverage and no AOT publish: the `bridge` job owns those on the pinned version.
+      - name: "Consumer behaviour: verify and pack shared compiled contract"
         if: steps.range.outputs.run == 'true'
         run: |
           dotnet test ContractTests
           dotnet pack Kotlin.Native.Interop -c Release -o build/nuget
 
-      - name: "Repo on Kotlin ${{ matrix.kotlin }}: build both independent NuGet publishers"
+      # `fixture-consumer/` is a second root over the same fixture project directories. In it the
+      # processor, runtime and annotations are not projects, so the plugin resolves them by
+      # coordinate from the local repo published above, and only the fixtures are compiled by this
+      # leg's Kotlin. The packages land where the root build puts them, so the suites below need
+      # no change.
+      - name: "Consumer behaviour: build the fixtures as an outside consumer at Kotlin ${{ matrix.kotlin }}"
         if: steps.range.outputs.run == 'true'
-        env:
-          ORG_GRADLE_PROJECT_kotlinVersion: ${{ matrix.kotlin }}
-        run: ./gradlew :test-library:packNuget :test-companion:packNuget
+        run: >
+          ./gradlew -p fixture-consumer
+          :test-library:packNuget
+          :test-companion:packNuget
+          -Pconsumer.kotlin=${{ matrix.kotlin }}
 
-      # The klib manifest records the compiler that built it; a silently ignored override fails here.
-      - name: "Repo on Kotlin ${{ matrix.kotlin }}: prove test-library was compiled at it"
+      # The klib manifest records the compiler that built it. Two checks, because the shape under
+      # test is two compilers: the fixture by this leg's Kotlin (a silently ignored
+      # `consumer.kotlin` fails here), and the published runtime by the repo's pin (a runtime
+      # rebuilt on this leg's Kotlin would be the old, wrong shape).
+      - name: "Consumer behaviour: prove the fixture and the runtime came from different compilers"
         if: steps.range.outputs.run == 'true'
         shell: bash
         run: |
@@ -358,11 +371,18 @@ jobs:
           echo "test-library compiled by Kotlin $actual (expected $expected)"
           test "$actual" = "$expected"
 
-      - name: "Repo on Kotlin ${{ matrix.kotlin }}: run IntegrationTests"
+          version=$(grep '^version=' gradle.properties | cut -d= -f2)
+          pin=$(grep '^kotlin = ' gradle/libs.versions.toml | cut -d'"' -f2)
+          klib="build/local-repo/io/github/xxfast/nuget-runtime-macosarm64/$version/nuget-runtime-macosarm64-$version.klib"
+          runtime=$(unzip -p "$klib" default/manifest | grep '^compiler_version=' | cut -d= -f2)
+          echo "nuget-runtime $version compiled by Kotlin $runtime (expected the pin, $pin)"
+          test "$runtime" = "$pin"
+
+      - name: "Consumer behaviour: run IntegrationTests"
         if: steps.range.outputs.run == 'true'
         run: dotnet test IntegrationTests
 
-      - name: "Repo on Kotlin ${{ matrix.kotlin }}: run leak harness"
+      - name: "Consumer behaviour: run leak harness"
         if: steps.range.outputs.run == 'true'
         run: dotnet test LeakTests
 

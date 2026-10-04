@@ -31,12 +31,17 @@ kotlin {
   }
 }
 
+// The repo directory, taken from this project's own location and not from `rootProject`: these
+// scripts are built from the repo root and from `fixture-consumer/`, a second root over the same
+// project directories, and the files below live in the repo either way.
+val repoDir: File = projectDir.parentFile
+
 val fixtureVersion = providers.fileContents(
   project(":test-library").layout.buildDirectory.file("fixture-version.txt"),
 ).asText.map { it.trim() }
 
 tasks.withType<NugetCompileInteropTask>().configureEach {
-  dependencySources.add(rootProject.layout.buildDirectory.dir("nuget").get().asFile.absolutePath)
+  dependencySources.add(repoDir.resolve("build/nuget").absolutePath)
 }
 
 afterEvaluate {

@@ -174,3 +174,10 @@ The reverse bridge is observable as of [ADR-054](docs/adr/054-reverse-bridge-reg
 ## Completed Agent Threads May Still Consume Slots
 
 - In the 2026-10-03 runtime, completed research threads remained listed and subsequent role spawns failed with `agent thread limit reached`; no close/delete-agent tool was exposed. Reuse a completed agent with `followup_task`, providing the new role brief and explicit file ownership, when its model meets the role's requirements. Report a model constraint instead of silently substituting a different model. This is an observed runtime limitation, not a claim about every agent runtime.
+
+## The Fixture Consumer Root Shares the Fixtures' Build Directories
+
+- `fixture-consumer/` is a second Gradle root over the same `test-library`, `test-companion` and `test-models` directories ([ADR-195](docs/adr/195-kotlin-version-range.md)). It has no processor, runtime or annotations project, so the plugin resolves them by coordinate from `build/local-repo`, and only the fixtures are compiled by `-Pconsumer.kotlin=floor|tested`.
+- It needs `build/local-repo` published first. Without it the build fails at plugin resolution, which reads like a broken plugin and is not. `scripts/verify.sh --plugin` publishes everything it needs.
+- Both roots write `test-library/build`, `test-companion/build` and `build/FixtureVersions.props`. When switching roots locally, put `:test-library:clean :test-companion:clean` in the same invocation, or the next C# run tests a library the other root built.
+- A fixture build script must not reach repo files through `rootProject` (`rootProject.file(...)`, `rootProject.layout`): under the second root that is `fixture-consumer/`. Use the script's `repoDir`.
