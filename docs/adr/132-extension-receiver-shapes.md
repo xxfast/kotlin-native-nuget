@@ -117,7 +117,8 @@ parameter position already ships, with no receiver-specific code:
 - Of these, only `Nullable(String)`, `Nullable(Uuid)`, and `Nullable(Collection)` are admitted
   nullable forms that route the same way (also no fixture). `Nullable(Enum)`, `Nullable(Instant)`,
   and `Nullable(Duration)` are **not** among the routed shapes: each is a has-value fan-out and
-  hits the named `RECEIVER_FAN_OUT` skip below instead.
+  hits the named `RECEIVER_FAN_OUT` skip below instead. (**Superseded:** functions since
+  2026-10-03, properties since 2026-10-04; see the amendments at the end of this file.)
 
 **Fixture** (bare `Interface` and `Nullable(ValueClass(String))` only): `fun Pet.describe(): String`
 and `fun CatId?.orAnonymous(): String` in `test-library/.../cat/CatExtensions.kt`. `describe()`
@@ -128,8 +129,9 @@ anonymous Kotlin object (`strayPet()`, no generated wrapper class), a C#-impleme
 and the `CatId?` value/null pair. Tier 1 pins the two public signatures and the compile in
 `Tier1ReceiverShapesExtensionTest.kt`.
 
-**Named skip, not a crash: `RECEIVER_FAN_OUT`.** (**Superseded for extension functions,
-2026-10-03:** only extension properties still skip; see the amendment at the end of this file.) A has-value fan-out receiver (`Int?`-style
+**Named skip, not a crash: `RECEIVER_FAN_OUT`.** (**Superseded, 2026-10-03 for extension
+functions and 2026-10-04 for extension properties:** nothing skips any more and the reason no longer
+exists; see the amendments at the end of this file.) A has-value fan-out receiver (`Int?`-style
 `Nullable(Primitive)`, `Nullable(Enum)`, `Nullable(Instant)`, `Nullable(Duration)`, or
 `Nullable(ValueClass(Primitive|Enum))`) cannot take this path. Its wire is the ADR-079/080
 adjacent `${name}HasValue` + `$name` pair, and the plan model (`validateRoles`) allows exactly one
@@ -188,7 +190,8 @@ either side, so it gets no row.
   pass unmodified).
 - The `CatId?`-only CS1929 asymmetry (dotnet build probe, 2026-09-13).
 - The `RECEIVER_FAN_OUT` skip fires as a named warning with no export and no C# binding
-  (`fun Int?.orZero()` Tier 1 control).
+  (`fun Int?.orZero()` Tier 1 control). (Historical: the skip is gone, see the 2026-10-03 and
+  2026-10-04 amendments.)
 
 **Inferred, not verified by a fixture or a build:**
 - `Nullable(Interface)`, `Nullable(ValueClass(ObjectHandle))`, `Enum` (**amended 2026-09-20**:
@@ -234,7 +237,8 @@ nullable interface, String, primitive, or value class receiver, or expose a top-
 function instead". A has-value fan-out receiver (`Int?`-style) is refused the same way the
 function-receiver route refuses it: the property route mints exactly one slot per receiver and a
 fan-out needs two. **Amended 2026-09-20** (below): this narrowing is lifted, and folded into the
-same change, a `Collection` receiver and a bound C# interface receiver also bind.
+same change, a `Collection` receiver and a bound C# interface receiver also bind. **Amended
+2026-10-04:** a has-value fan-out receiver binds on the property route too.
 
 **Fixture-verified:** `val Pet.summary`, `val Cat?.nameOrStray`
 (`test-library/.../cat/CatExtensions.kt`), and a receiver-only interface, `val Sitter.address`
@@ -297,7 +301,8 @@ callable route and the property route, closing the gap between them at the recei
 - A has-value fan-out receiver (`Int?`, `Mood?`, `Instant?`, `Duration?`, or a nullable value class
   over a `Primitive`/`Enum` underlying) stays refused: the property route mints exactly one ABI
   slot per receiver, and admitting these would silently drop the null rather than fail loudly. Own
-  ROADMAP line; `RECEIVER_FAN_OUT` unchanged. **Dated pointer (2026-09-20):** the reason's rendered
+  ROADMAP line; `RECEIVER_FAN_OUT` unchanged. **Superseded 2026-10-04:** these receivers bind on
+  the property route (see the amendment at the end of this file). **Dated pointer (2026-09-20):** the reason's rendered
   sentence and hint are not unchanged, only the admission decision is; both routes now name the
   receiver and offer the parameter/non-null-receiver remedies, see [ADR-064](064-forward-unsupported-declaration-diagnostics.md)'s
   same-dated amendment.
@@ -308,7 +313,8 @@ callable route and the property route, closing the gap between them at the recei
 - `Nullable(BoundInterface)` stays refused, and this **is** parity: ADR-088 refuses a nullable
   bound interface at every position, not only here.
 - `ByteArray` and `Char` receivers stay refused; neither is in this ADR's own function-receiver
-  set either.
+  set either. (**Amended 2026-10-04:** `Char` and `Char?` bind on the property route. `ByteArray`
+  stays refused.)
 
 **Leak harness.** `LeakTests/LiveHandleTests.cs` gained three rows: 6i,
 `CollectionReceiverExtensionProperty_ReleasesTheListHandle` (the C# prelude *builds* a Kotlin list
@@ -406,7 +412,8 @@ by the backticked-name amendment at the end of this file.
 ## Amendment (2026-10-03): has-value fan-out receivers bind on the extension-function route
 
 Judgement: an **amendment**, not a new ADR. It lifts the `RECEIVER_FAN_OUT` skip for extension
-**functions** only; extension **properties** on the same receivers keep the named skip.
+**functions** only; extension **properties** on the same receivers kept the named skip until the
+2026-10-04 amendment below.
 
 **Rule.** A Kotlin extension function whose receiver is `Int?`, `Char?`, an enum `?`, `Instant?`,
 `Duration?`, or a value class over a primitive or enum `?` binds as a C# extension method on the
@@ -434,10 +441,10 @@ nullable-only. Calling on a bare `int` is CS1929.
 `Int` / `Int?` pair raised a false `ERROR_CSHARP_SIGNATURE_COLLISION`. **Inferred, not run:** a
 `CatId` / `CatId?` pair hit the same false collision before.
 
-**Not shipped.** Extension properties on these receivers keep the named `RECEIVER_FAN_OUT` skip: the
-property route has a separate one-slot receiver mechanism, and `val Int.x` beside `val Int?.x`
-would share one plan symbol. A bare `Char` receiver already bound on the function route; the
-property route's receiver predicate does not admit `Char`.
+**Not shipped here (closed by the 2026-10-04 amendment).** Extension properties on these receivers
+kept the named `RECEIVER_FAN_OUT` skip: the property route has a separate one-slot receiver
+mechanism, and `val Int.x` beside `val Int?.x` would share one plan symbol. A bare `Char` receiver
+already bound on the function route; the property route's receiver predicate did not admit `Char`.
 
 **Evidence (verified).** Tier 1 `Tier1ReceiverShapesExtensionTest` 9 tests; `:nuget-processor:test`
 1552 passed, 0 failed; full `scripts/verify.sh` green (Contract 3, Integration 3006, Leak 158,
@@ -535,3 +542,94 @@ Verified: `Tier1BacktickedNameTest` compiles the generated Kotlin and C# for a m
 both named `tug hard` (`@CSharpName("TugHard")`), asserting the alias above and the call
 `.get().nuget_ext_tier1__backticks__named__tug_x0020hard()`. Not verified natively: Kotlin/Native
 cannot link a public member named with a space, so the space-named case is Tier 1 only.
+
+**Residuals, closed 2026-10-04 (see the amendment below).** This amendment listed two inferred
+cases: a member function literally named `get_x` beside an extension property `x`, and a member
+lambda-typed property's hand-written `<owner>_get_<name>` getter. Both are real collisions and are
+now in the name set the check reads. ADR-117 stays the backstop for any other.
+
+## Amendment (2026-10-04): has-value fan-out receivers bind on the extension-property route
+
+Judgement: an **amendment**, not a new ADR. The wire, the C# shape and the nullable-only call site
+were decided for the function route (2026-10-03 amendment) and for extension blocks (ADR-188); this
+carries them to properties. It retires `RECEIVER_FAN_OUT`, which no route emits any more.
+
+**Rule.** A `val` or `var` extension property whose receiver is `Int?`, `Char?`, an enum `?`,
+`Instant?`, `Duration?`, or a value class over a primitive or enum `?` binds as a C# 14
+`extension(T? receiver)` property on the matching `Nullable<T>` (`int?`, `char?`, `Mood?`,
+`DateTimeOffset?`, `TimeSpan?`, the value-class struct), and a C# `null` reaches Kotlin as a real
+`null`. A bare `Char` receiver binds too (the old receiver predicate did not admit it). The extern
+mirrors the function route:
+`([MarshalAs(UnmanagedType.I1)] bool receiverHasValue, <value> receiver, out IntPtr error)`, with
+the setter adding `value`. A `Char` receiver crosses as `[MarshalAs(UnmanagedType.U2)] char`
+(verified with `'Ж'`, which one ANSI byte could not carry). The flag is read in Kotlin
+(`(if (receiverHasValue) receiver else null).x`) and the C# side passes
+`receiver.HasValue, receiver.GetValueOrDefault()`: a cast such as `(int)receiver` would throw for a
+null enum before reaching Kotlin. The flag is declared once per extern, whichever accessor it
+belongs to. No handle is minted, so there is no LeakTests row.
+
+**Setters bind.** `var Int?.livesNote` exports `get` and `set`, both carrying the flag. The setter
+cannot mutate the receiver (a value); it runs the Kotlin setter with the receiver as a key, as
+`var Uuid.nickname` already does. C# needs a variable on the left of the assignment (CS0131 on an
+rvalue).
+
+**Accepted asymmetry** (same as the function route and the `CatId?` receiver): the C# call site is
+nullable-only. Reading the `int?` property on a bare `int` is CS1929.
+
+**Trap, as on the function route.** Admitting the receiver in the planner alone compiles the Kotlin
+half clean and never reads the flag, so a null silently reads as the non-null twin on the value
+slot's default (`0`, the first enum entry). Every fixture getter answers a null receiver with
+something the default would not produce.
+
+**Twins.** A value-type receiver and its nullable form are two receivers to C#: `extension(int)`
+and `extension(int?)` declare one property name side by side with no CS0102, and `7.Label` and
+`some.Label` each resolve to their own. This holds for every C# value-type receiver (`int`, `char`,
+an enum, `DateTimeOffset`, `TimeSpan`, `Guid`, a value-class `record struct`), whether the nullable
+form is a has-value fan-out or rides one in-band null (`Uuid?`), and for properties and functions
+alike. So `val Int.x` beside `val Int?.x` and `val Uuid.chipOwner` beside `val Uuid?.chipOwner` bind
+both, as `fun Int.x()` beside `fun Int?.x()` already did. The nullable twin's plan symbol carries
+`?` and its accessors take the `_ext_` marker of the 2026-10-04 same-package amendment
+(`int_get_livesLabel` beside `int_ext_get_livesLabel`, `uuid_get_chipOwner` beside
+`uuid_ext_get_chipOwner`; verified in the generated output).
+
+`NULLABLE_RECEIVER_TWIN` stays a fatal `ERROR_CSHARP_SIGNATURE_COLLISION` only for a reference-type
+receiver (`Cat` beside `Cat?`), where C# does reject the pair (ADR-188's 2026-10-03 amendment). Its
+sentence now says so: "for a reference-type receiver C# reads the receiver and its nullable
+spelling as one type, so it cannot declare the member twice (CS0102)". A function and a property of
+one name follow the same split. When their value-type receivers differ in nullability, both bind
+(`fun Int.label()` beside `val Int?.label`); the same nullability is still refused as
+`SHADOWED_BY_EXTENSION_FUNCTION`, because `x.Label` would be ambiguous (CS9339).
+
+**`RECEIVER_FAN_OUT` is removed** (the enum value, its sentence and its hint). A receiver the
+property route still cannot lower (a raw generic `Box<Int>`, a type parameter, a `ByteArray`, a
+nullable collection or bound interface) reads the generic receiver sentence, whose hint now lists
+the nullable shapes that bind.
+
+The earlier research expectation that this pair built before the change was wrong. When both twins
+planned they shared one plan symbol and the catalog was looked up by that symbol, so one plan was
+rendered twice and the build died with a fatal `ERROR_CSHARP_SIGNATURE_COLLISION`.
+`ForwardCallablePlanCatalog.extensionPropertyFor(prop)` now looks the plan up by declaration.
+
+**Residuals of the same-package amendment, closed.** That amendment named two inferred collisions
+and did not fix them: a member function literally named `get_x` beside an extension property `x`
+(`<owner>_get_x`), and a member lambda-typed property's hand-written `<owner>_get_<name>` getter.
+Both collided (`ERROR_C_ENTRY_POINT_COLLISION`). Both are now in the taken-name set the extension
+property accessors check, so the accessor takes the `_ext_` marker: `leash_get_x` beside
+`leash_ext_get_x`. The lambda-property set is built from the same predicate the class and sealed
+emitters use for that getter, so the two cannot drift.
+
+**Verified.** Tier 1 `Tier1ReceiverShapesExtensionPropertyTest` (a fan-out receiver reads the flag,
+a non-null and a nullable twin both bind, a non-fan-out struct twin (`Uuid`) binds, a function and
+a property of differing nullability both bind, a `var` carries the pair on all four exports, `Char`
+and `Char?` on the two-byte wire, every receiver kind converting off `GetValueOrDefault()`);
+`Tier1ExtensionPropertyFunctionClashTest` pins that the reference twin message names CS0102 for a
+reference-type receiver only; a C# compile of the function twin pair in
+`Tier1ReceiverShapesExtensionTest`; and two cells in `Tier1SamePackageMemberExtensionTest` for the
+residuals. `IntegrationTests/ExtensionPropertyTests.cs` reads each receiver kind with `null` and a
+value, the twin pairs, the `var`, the UTC-vs-wall-clock `DateTimeOffset`, and `'Ж'`.
+`:nuget-processor:test` 1730 passed, 0 failed; the native pipeline passed IntegrationTests 3112,
+LeakTests 178 and the 7 AOT shapes. No LeakTests row: Tier 1 asserts no `HandleOf*(receiver` for
+these receivers.
+
+**Inferred, not checked.** Each value-type twin other than `Int` and `Uuid` (`Char`, an enum,
+`Instant`, `Duration`, a value class) rides the same rule and has no twin cell of its own.

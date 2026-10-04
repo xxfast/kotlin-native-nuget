@@ -656,11 +656,9 @@ internal fun warnDroppedForwardExtensionReceivers(
   val diagnostics: List<ForwardDiagnostic> = catalog.droppedExtensionReceivers.map { dropped ->
     if (dropped.reason?.ownsSentence(dropped.detail) == true) {
       // ADR-064 amendment (2026-09-20): exactly the shape `warnDroppedForwardProperties` already
-      // uses for a classified property drop. The planner named the refusal
-      // (`RECEIVER_FAN_OUT`), that reason owns a sentence and a remedy that agree with each other,
-      // and the shipped pair below contradicts both: it lists "primitive" and "nullable class" as
-      // supported without explaining `Int?`, and its "top-level getter function" remedy hides the
-      // simpler one (take the value as an ordinary parameter).
+      // uses for a classified property drop. The planner named the refusal (a shadowing member or
+      // extension function, a nullable-receiver twin), that reason owns a sentence and a remedy
+      // that agree with each other, and the generic receiver pair below would contradict both.
       //
       // The KIND stays this route's position kind, per ADR-064's rule that a kind names WHERE the
       // drop happened: the identical Kotlin shape reports `SKIPPED_UNSUPPORTED_INPUT` on the
@@ -689,16 +687,16 @@ internal fun warnDroppedForwardExtensionReceivers(
         reason = "its extension receiver type ${dropped.receiverDescription} is not a supported " +
             "extension-property receiver",
         // ADR-132 (2026-09-20): the list tracks `ForwardPropertyPlanner.isSupportedReceiver`, which
-        // now reaches extension-function receiver parity. What is left out is the has-value fan-out
-        // class (`Int?`, `Mood?`, `Instant?`, a nullable value class over a primitive or enum
-        // underlying): a receiver is exactly one ABI slot and those need two. That class no longer
-        // reaches this hint at all -- it takes the named branch above -- so what lands here is a
-        // receiver this route has no lowering for at any width (a raw generic `Box<Int>`, a type
-        // parameter, a `Char`).
+        // reaches extension-function receiver parity. ADR-132 amendment (2026-10-04): the has-value
+        // fan-out class (`Int?`, `Mood?`, `Instant?`, `Duration?`, `Char?`, a nullable value class
+        // over a primitive or enum underlying) and a bare `Char` bind too now, so what lands here
+        // is a receiver this route has no lowering for at any width (a raw generic `Box<Int>`, a
+        // type parameter, a `ByteArray`).
         hint = "declare the property on a class, interface, nullable class, nullable interface, " +
-            "String, nullable String, primitive, enum, Uuid, nullable Uuid, Instant, Duration, " +
-            "collection, bound C# interface, value class, or nullable value class over a String " +
-            "or class underlying receiver, or expose a top-level getter function instead",
+            "String, nullable String, primitive, nullable primitive, Char, nullable Char, enum, " +
+            "nullable enum, Uuid, nullable Uuid, Instant, nullable Instant, Duration, nullable " +
+            "Duration, collection, bound C# interface, value class, or nullable value class " +
+            "receiver, or expose a top-level getter function instead",
         // Issue #249: no owner. The C# hole would be on the `{Receiver}Extensions` static class,
         // which may never be generated at all, so there is nothing to attach a paragraph to.
         owner = null,

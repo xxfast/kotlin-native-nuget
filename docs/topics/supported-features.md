@@ -77,7 +77,7 @@ Primitive types follow the standard [Kotlin/Native C interop mappings](https://k
 | top-level property | → | static property | get and set, including nullable. | [Top-level declarations](top-level-declarations.md) |
 | `const val` | → | `const` | Value is the compiler's evaluated constant, so an expression or a dependency const binds; hex/underscore literal spelling isn't kept. | [Top-level declarations](top-level-declarations.md) |
 | extension function | → | static method | A real C# extension method. The receiver may be a class, `String`, a primitive, enum, value class, interface or sealed base; `Int?` binds as `this int?`, so a bare `int` call is CS1929. | [Extensions](extensions.md) |
-| extension property | → | C# 14 `extension` property (`cat.IsKitten`) | Receivers as for a function, plus a collection; `Char` and has-value (`Int?`) skip, named. A shadowing member or same-named extension function skips it, named; needs C# 14. | [Extensions](extensions.md) |
+| extension property | → | C# 14 `extension` property (`cat.IsKitten`) | Receivers as for a function, plus a collection; `Int?` binds as `extension(int? receiver)`, so a bare `int` is CS1929. A shadowing member or same-named extension function skips it, named. | [Extensions](extensions.md) |
 
 ## Generics
 

@@ -374,8 +374,15 @@ private fun exportBuilder(
     .addAnnotation(cNameAnnotation(call.exportName, owner))
   when (receiver) {
     is ForwardPropertyReceiver.Handle -> builder.addParameter("handle", cOpaquePointer)
-    is ForwardPropertyReceiver.Value ->
-      builder.addParameter("receiver", kotlinInputType(receiver.type))
+    // ADR-132 amendment (2026-10-04): a fan-out receiver is the flag, then the value typed off the
+    // INNER type. `kotlinInputType` of the nullable type would be `Int?`, which Kotlin/Native
+    // exports as a boxed pointer rather than the `int` the C# import passes.
+    is ForwardPropertyReceiver.Value -> when (val inner: BridgeType? = receiver.fanOutInner()) {
+      null -> builder.addParameter("receiver", kotlinInputType(receiver.type))
+      else -> builder
+        .addParameter(RECEIVER_HAS_VALUE, kotlinType("Boolean"))
+        .addParameter("receiver", kotlinInputType(inner))
+    }
 
     is ForwardPropertyReceiver.Static -> Unit
     // ADR-157: the box reads through the base handle, the same single slot a Handle receiver has.
@@ -402,9 +409,19 @@ private fun ForwardPropertyPlan.accessExpression(): String {
     // value-class receiver is reconstructed from its underlying (ADR-014/075) before the property
     // access. The nullable handle receiver's `?.` chain is parenthesised, because `a?.b().c` binds
     // `.c` to the *safe-called* result, which is not the nullable extension's receiver.
+    // ADR-132 amendment (2026-10-04): a fan-out receiver reads its flag. `inputLowering`'s nullable
+    // arms for these shapes lower the value unconditionally (they were written for the
+    // `NullableDispatch` setter value, non-null by construction), so the flag picks between that
+    // and a real `null`. Without it the null twin compiles clean and reads the value slot's `0`.
     is ForwardPropertyReceiver.Value -> {
       val lowered: String = inputLowering(receiver.type, "receiver")
-      if (receiver.type is BridgeType.Nullable) "($lowered).$name" else "$lowered.$name"
+      when {
+        receiver.fanOutInner() != null ->
+          "(if ($RECEIVER_HAS_VALUE) $lowered else null).$name"
+
+        receiver.type is BridgeType.Nullable -> "($lowered).$name"
+        else -> "$lowered.$name"
+      }
     }
 
     is ForwardPropertyReceiver.Static ->

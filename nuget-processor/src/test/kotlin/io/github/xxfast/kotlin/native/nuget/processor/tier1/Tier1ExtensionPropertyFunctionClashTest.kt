@@ -331,6 +331,12 @@ class Tier1ExtensionPropertyFunctionClashTest {
     val message: String = collisions.single()
     assertContains(message, "`val Cat.x`")
     assertContains(message, "`val Cat?.x`")
+    // Precise about WHY: the CS0102 is a reference-type fact. A value-type twin binds both.
+    assertContains(
+      message,
+      "for a reference-type receiver C# reads the receiver and its nullable spelling as one " +
+          "type, so it cannot declare the member twice (CS0102)",
+    )
     assertFalse(
       result.kspErrors.any { it.contains("ERROR_INTERNAL_GENERATOR_FAILURE") },
       "no internal failure; kspErrors=${result.kspErrors}",

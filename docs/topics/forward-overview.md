@@ -372,18 +372,12 @@ the receiver rather than the property's own (usually fine) type:
 [nuget:SKIPPED_UNSUPPORTED_PROPERTY] Skipping tier1.skipreceiver.Box.label: its extension receiver
     type generic declaration tier1.skipreceiver.Box is not a supported extension-property receiver.
     declare the property on a class, interface, nullable class, nullable interface, String,
-    nullable String, primitive, enum, Uuid, nullable Uuid, Instant, Duration, collection, bound C#
-    interface, value class, or nullable value class over a String or class underlying receiver, or
-    expose a top-level getter function instead
+    nullable String, primitive, nullable primitive, Char, nullable Char, enum, nullable enum, Uuid,
+    nullable Uuid, Instant, nullable Instant, Duration, nullable Duration, collection, bound C#
+    interface, value class, or nullable value class receiver, or expose a top-level getter function
+    instead
     at <file>:<line>
 ```
-
-A **has-value fan-out** extension property receiver (`Int?`, `Enum?`, `Instant?`, `Duration?`, or a
-nullable primitive/enum-underlying value class) is a distinct refusal from `Box<Int>` above: it
-reads the `RECEIVER_FAN_OUT` reason's own sentence instead (`SKIPPED_UNSUPPORTED_PROPERTY`). The same
-receiver on an extension function binds; see
-[Extensions: Supported receivers](extensions.md#supported-receivers) for the message and the two
-remedies.
 
 The message names the declaration, the reason, an actionable hint, and, when KSP can resolve it,
 the file and line of the Kotlin declaration that was skipped, something the reverse direction's

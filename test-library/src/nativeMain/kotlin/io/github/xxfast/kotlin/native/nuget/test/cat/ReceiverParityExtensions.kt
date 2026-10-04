@@ -37,11 +37,10 @@ import test.menagerie.IFeedable
  *  - [longestName] and [feedingNote] are the two receivers that **mint a handle** for the crossing
  *    (a Kotlin list StableRef, and a GCHandle over the C#-side object), so both get a leak row.
  *
- * Refused on purpose at the PROPERTY position, and deliberately NOT declared as properties here:
- * `Int?`, `Mood?`, `Instant?`, `Duration?` and a nullable value class over a primitive or enum
- * underlying. Each fans out to an adjacent `HasValue` slot, and the property route's receiver slot
- * is exactly one. The extension-FUNCTION route binds them (ADR-132 amendment): see the has-value
- * fan-out section at the bottom of this file.
+ * The has-value fan-out receivers (`Int?`, `Mood?`, `Instant?`, `Duration?`, `Char?` and a
+ * nullable value class over a primitive or enum underlying) fan out to an adjacent `HasValue`
+ * slot. The extension-FUNCTION route binds them (ADR-132 amendment), and since the 2026-10-04
+ * amendment the PROPERTY route does too, on the same wire: see the two sections at the bottom.
  *
  * Oreo files his paperwork; Mylo naps through his.
  */
@@ -175,3 +174,57 @@ fun NapCount?.napsOrNone(): Int = this?.naps ?: -1
 
 /** `MoodRing?` receiver, over an enum underlying: no ring, no reading. */
 fun MoodRing?.ringMood(): String = this?.mood?.name ?: "no ring"
+
+// ---- has-value fan-out receivers (extension PROPERTIES) ------------------------------------
+//
+// ADR-132 amendment (2026-10-04): the same receivers at the property position, on the same
+// `receiverHasValue` + value wire. Every getter tells a null receiver apart from the value slot's
+// default (`0`, the first entry, the epoch), so a dropped flag reads as the wrong answer, never
+// as a coincidentally right one.
+
+/** No conversion: the `Int` rides as is. A null cat has no lives on file, not zero. */
+val Int?.livesOrNone: String get() = this?.toString() ?: "none"
+
+/** The twin pair: the non-null half. */
+val Int.livesLabel: String get() = "lives:$this"
+
+/** The nullable half: a null crossing must reach this one with a real `null`, not `0`. */
+val Int?.livesLabel: String get() = "lives?:$this"
+
+private val livesNotes: MutableMap<Int?, String> = mutableMapOf()
+
+/** The `var`: the setter export carries the receiver pair too, the null key included. */
+var Int?.livesNote: String
+  get() = livesNotes[this] ?: "unwritten"
+  set(value) {
+    livesNotes[this] = value
+  }
+
+/** Converting ordinal: `HAPPY` is ordinal 0, the value a dropped flag would read. */
+val Mood?.moodLabel: String get() = this?.name ?: "shrug"
+
+/** Converting 64-bit, `UtcTicks` on the C# side: -1 when Mylo was never seen at the flap. */
+val Instant?.seenEpochDay: Long get() = this?.let { it.epochSeconds.floorDiv(86_400L) } ?: -1L
+
+/** `Duration?`: -1 when no nap was logged, not the zero-length nap. */
+val Duration?.napMinutesOrNone: Long get() = this?.inWholeMinutes ?: -1L
+
+/** Value class over a primitive: -1 when nobody counted, not zero naps. */
+val NapCount?.napsOrUncounted: Int get() = this?.naps ?: -1
+
+/** Value class over an enum: no ring is not a `HAPPY` ring. */
+val MoodRing?.ringLabel: String get() = this?.mood?.name ?: "no ring"
+
+/** `Char?` over the two-byte wire: a paw print with a non-Latin initial, or none at all. */
+val Char?.pawPrint: String get() = this?.let { "$it-paw" } ?: "no paw"
+
+/**
+ * The struct twin pair that is NOT a fan-out: `Uuid` and `Uuid?` (`Guid` / `Guid?`) both ride one
+ * string slot, the null in-band, and C# still declares `extension(Guid)` beside
+ * `extension(Guid?)`. Each body answers differently, so a call reaching the wrong twin shows.
+ */
+val Uuid.chipOwner: String get() = "chip:${toString().substringBefore('-')}"
+
+/** The nullable half: reached only through a `Guid?`, with a real `null` when there is no chip. */
+val Uuid?.chipOwner: String
+  get() = if (this == null) "chip?:none" else "chip?:${toString().substringBefore('-')}"

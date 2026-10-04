@@ -1,10 +1,9 @@
 # Extensions
 
 An extension function renders as a genuine C# extension method (`this` parameter). An extension
-property renders as an ordinary static method with a `Get` prefix, since C# has no extension-property
-syntax: call it like a method, not like a property. Both are grouped by receiver into a
-`{Receiver}Extensions` static class, alongside any other top-level declarations
-(see [Top-level declarations](top-level-declarations.md)).
+property renders as a C# 14 extension property, so it reads (and, for a `var`, writes) like a
+property. Both are grouped by receiver into a `{Receiver}Extensions` static class, alongside any
+other top-level declarations (see [Top-level declarations](top-level-declarations.md)).
 
 From `test-library/src/nativeMain/kotlin/.../cat/CatExtensions.kt` and `StringExtensions.kt`:
 
@@ -80,23 +79,13 @@ TestLibrary.Reserved.StringExtensions.Tag("Oreo", "Mylo"); // a different packag
 | Bare enum | yes | yes |
 | `Collection` (`List`/`Map`/`Set`) | yes | yes |
 | Nullable `String`, nullable `Uuid` | yes | yes |
-| `Int?`, `Enum?`, `Instant?`, `Duration?`, or a nullable primitive/enum-underlying value class | yes | no |
+| `Int?`, `Enum?`, `Instant?`, `Duration?`, or a nullable primitive/enum-underlying value class | yes | yes |
+| `Char`, `Char?` | yes | yes |
 | Nullable collection, nullable bound C# interface | yes | no |
-| `Char`, `Char?` | yes | no |
 | Generic type, unexported (non-stdlib, non-dependency) type, `ByteArray` | no | no |
 
 A receiver in a "no" cell is dropped with a named diagnostic: `SKIPPED_UNSUPPORTED_INPUT` for a
-function, `SKIPPED_UNSUPPORTED_PROPERTY` for a property. An extension property on a has-value
-fan-out receiver (`Int?`, `Enum?`, `Instant?`, `Duration?`, or a nullable primitive/enum-underlying
-value class) prints a dedicated reason and remedy, naming the receiver and both fixes:
-
-```
-its extension receiver `Int?` crosses the bridge as a has-value flag plus a value (two slots), and
-an extension receiver can carry only one (RECEIVER_FAN_OUT). `Int?` binds as an ordinary parameter,
-so declare a top-level function that takes it as a parameter instead of as the receiver; or declare
-the extension on the non-null receiver `Int`
-```
-
+function, `SKIPPED_UNSUPPORTED_PROPERTY` for a property
 (see [Publishing Kotlin to C#: Diagnostics](forward-overview.md#diagnostics)).
 An extension property typed `Flow`, `StateFlow`, or a lambda is skipped the same way, even on an
 otherwise-supported receiver.
@@ -154,17 +143,21 @@ Two extension properties with the same C# name on the same receiver are a build 
 (`ERROR_CSHARP_SIGNATURE_COLLISION`); rename one with `@CSharpName`.
 
 `val Cat.x` beside `val Cat?.x` compiles in Kotlin but is also a build error with
-`ERROR_CSHARP_SIGNATURE_COLLISION`, because C# cannot declare both. `@CSharpName` does not separate
-them; rename one of them in Kotlin.
+`ERROR_CSHARP_SIGNATURE_COLLISION`, because C# reads `Cat` and `Cat?` as one receiver type and
+cannot declare both. `@CSharpName` does not separate them; rename one of them in Kotlin. A
+value-type receiver is different: `int` and `int?` are two receivers to C#, so `val Int.x` beside
+`val Int?.x` binds both. The same goes for `Char`, an enum, `Instant`, `Duration`, `Uuid` and a
+value class. A property and a function of one name also bind when their value-type receivers
+differ in nullability (`fun Int.label()` beside `val Int?.label`); the same nullability is still
+`SHADOWED_BY_EXTENSION_FUNCTION`.
 
 `Instant`, `Duration`, and `Uuid` map to `DateTimeOffset`, `TimeSpan`, and `Guid` at a receiver the
 same way they do everywhere else (see
 [Primitives and strings](primitives-and-strings.md#instant)). A nullable collection or a nullable
 bound C# interface (see
 [The bridgeable subset](bridgeable-subset.md#exposing-a-c-interface-in-your-own-kotlin-api)) still
-works as a function *parameter*, just not as a receiver at either position. A has-value fan-out
-shape binds as an extension function receiver but not as an extension property receiver (see the
-table above and [Nullable receivers](#nullable-receivers)).
+works as a function *parameter*, just not as a receiver at either position. A has-value shape such
+as `Int?` binds as a receiver at both (see [Nullable receivers](#nullable-receivers)).
 
 ### Nullable receivers
 
@@ -201,8 +194,28 @@ public static DateTimeOffset LastSeenOrEpoch(this DateTimeOffset? receiver)
 ```
 
 As with a nullable value class, the receiver is nullable only: calling `OrNoLives` on a bare `int`
-fails to compile (`CS1929`), so call it on an `int?` variable. Extension **properties** on these
-receivers are still skipped, as the table above shows.
+fails to compile (`CS1929`), so call it on an `int?` variable.
+
+Extension properties on these receivers bind the same way, as C# 14 `extension(int? receiver)`
+blocks, and a `var` gets its setter:
+
+```kotlin
+val Int?.livesOrNone: String get() = this?.toString() ?: "none"
+
+val Int.livesLabel: String get() = "lives:$this"
+val Int?.livesLabel: String get() = "lives?:$this"
+```
+
+```C#
+int? none = null;
+none.LivesOrNone;  // "none"
+7.LivesLabel;      // "lives:7"
+none.LivesLabel;   // "lives?:null"
+```
+
+A property declared only on `Int?` is read on an `int?` variable; a bare `int` is `CS1929`. A setter
+needs a variable on the left (`none.LivesNote = "x"`), since C# rejects an assignment through an
+rvalue.
 
 ### Interface receivers {id="interface-receivers"}
 

@@ -304,10 +304,11 @@ moves from its plain symbol to `_ext_` at that point. The symbol is a private co
 generated `CNameExports.kt` and `Interop.cs` that ship from one build, so only a hand-written
 `[DllImport]` would notice.
 
-**Residual.** A nested `Owner.Ext` with a member of the same name could meet the `ext` slot, and two
-inferred cases are not in the name set (a member function literally named `get_x` against an
+**Residual.** A nested `Owner.Ext` with a member of the same name could meet the `ext` slot.
+ADR-117's diagnostic stays the backstop. Two further cases were inferred here and are closed by
+ADR-132's 2026-10-04 fan-out amendment: a member function literally named `get_x` against an
 extension property `x`, and a member lambda-typed property's hand-written `<owner>_get_<name>`
-getter). ADR-117's diagnostic stays the backstop. ADR-132's 2026-10-04 amendment carries the
+getter. Both collided and are now in the name set. ADR-132's 2026-10-04 amendments carry the
 consumer-visible behavior and the evidence.
 
 ## Amendment 2026-10-04: a declaration with no package is a first-class case

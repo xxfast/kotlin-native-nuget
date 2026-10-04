@@ -55,6 +55,63 @@ internal fun KSClassDeclaration.enumReceiverName(): String =
 /** ADR-157: the catalog-key and Kotlin-side member name of a boxed enum arm's `Value`. */
 internal const val ENUM_ARM_VALUE_MEMBER: String = "value"
 
+/**
+ * ADR-079: the inner type of a nullable that needs the out-of-band has-value channel (ADR-002's
+ * `LegacyTwoCall` getter / `NullableDispatch` setter), or `null` when this type does not. A bare
+ * primitive, an [BridgeType.Instant] (ADR-076) and a Primitive/Enum-underlying value class all
+ * qualify: none of their wires has a spare null.
+ *
+ * ADR-132 amendment (2026-10-04): the same set at an extension property's RECEIVER, where it is
+ * the two-slot [RECEIVER_HAS_VALUE] + value pair. One predicate for the planner and both
+ * renderers, so they cannot disagree about which receivers carry the flag.
+ */
+internal fun BridgeType.hasValueFanOutInner(): BridgeType? {
+  if (this !is BridgeType.Nullable) return null
+  return when (type) {
+    // ADR-080: a bare enum wires as its `int` ordinal, which has no spare null either.
+    // ADR-098 amendment (boundary nullability part C): `Char` wires as CHAR16 (`unsigned short`),
+    // which has no spare null either -- U+0000 is a legitimate character. It is its own
+    // `BridgeType` rather than a `PrimitiveKind`, which is the only reason it was not already in
+    // this set; before this arm existed the getter planned `Direct` and the Kotlin emitter threw
+    // out of `KotlinSymbolProcessing.execute`, aborting generation for the whole module.
+    is BridgeType.Primitive, BridgeType.Char, BridgeType.Instant, BridgeType.Duration,
+    is BridgeType.Enum -> type
+    is BridgeType.ValueClass ->
+      if (type.underlying is BridgeType.Primitive || type.underlying is BridgeType.Enum) type
+      else null
+
+    else -> null
+  }
+}
+
+/**
+ * ADR-132 amendment (2026-10-04): the has-value flag slot in front of a fan-out extension property
+ * receiver, the name the extension-FUNCTION route mints for its `receiver` too.
+ */
+internal const val RECEIVER_HAS_VALUE: String = "receiverHasValue"
+
+/**
+ * ADR-132 amendment (2026-10-04): a nullable extension receiver whose C# spelling is a
+ * `Nullable<T>` over a VALUE type (`int?`, `char?`, an enum, `DateTimeOffset?`, `TimeSpan?`,
+ * `Guid?`, a value class's `record struct`). C# tells `T` from `T?` for such a receiver, so it
+ * declares an `extension(T)` member beside an `extension(T?)` one, and member lookup never
+ * confuses them (no implicit nullable conversion applies to an extension receiver). For a
+ * REFERENCE type `T?` is an annotation on `T`, one type to C#. Superset of [hasValueFanOutInner]:
+ * a `Guid?` or a nullable value class over a `String` rides its null in-band and is still a struct.
+ */
+internal fun BridgeType.isNullableValueTypeReceiver(): Boolean {
+  if (this !is BridgeType.Nullable) return false
+  return when (type) {
+    is BridgeType.Primitive, BridgeType.Char, is BridgeType.Enum, BridgeType.Instant,
+    BridgeType.Duration, BridgeType.Uuid, is BridgeType.ValueClass -> true
+
+    else -> false
+  }
+}
+
+/** The inner type a fan-out [ForwardPropertyReceiver.Value] carries in its value slot, or null. */
+internal fun ForwardPropertyReceiver.Value.fanOutInner(): BridgeType? = type.hasValueFanOutInner()
+
 internal sealed interface ForwardPropertyReceiver {
   data class Handle(val owner: String) : ForwardPropertyReceiver
   data class Value(val type: BridgeType) : ForwardPropertyReceiver

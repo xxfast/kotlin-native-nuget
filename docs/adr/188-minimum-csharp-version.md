@@ -46,7 +46,7 @@ Decided at the gate (2026-10-02):
 - `GetXxx()`/`SetXxx()` are removed outright, with no `[Obsolete]` release.
 - ADR-006's static enum members are not in scope.
 - The floor only rises in a major release.
-- An extension property that shares its C# name with an extension function on the same receiver declaration (`val Cat?.nameOrStray` beside `fun Cat?.nameOrStray()`) is skipped, and the function keeps the name. Both declare in one static class, but C# 14 makes every `cat.NameOrStray` access ambiguous (CS9339). The skip is named `SHADOWED_BY_EXTENSION_FUNCTION`, reported under `SKIPPED_UNSUPPORTED_PROPERTY` as `SHADOWED_BY_MEMBER` is. Its hint names `@CSharpName` (ADR-179), which keeps both; the generator never invents the second name (ADR-110). The match is on the receiver declaration (nullability ignored) and on the C# name, so a `@CSharpName` on either side separates them.
+- An extension property that shares its C# name with an extension function on the same receiver declaration (`val Cat?.nameOrStray` beside `fun Cat?.nameOrStray()`) is skipped, and the function keeps the name. Both declare in one static class, but C# 14 makes every `cat.NameOrStray` access ambiguous (CS9339). The skip is named `SHADOWED_BY_EXTENSION_FUNCTION`, reported under `SKIPPED_UNSUPPORTED_PROPERTY` as `SHADOWED_BY_MEMBER` is. Its hint names `@CSharpName` (ADR-179), which keeps both; the generator never invents the second name (ADR-110). The match is on the receiver declaration and on the C# name, so a `@CSharpName` on either side separates them. Nullability is ignored for a reference-type receiver only; for a value-type receiver `fun Int.label()` beside `val Int?.label` does not clash, since C# sees `int` and `int?` as two receivers (ADR-132 amendment 2026-10-04).
 
 Shape:
 
@@ -108,6 +108,8 @@ Two legal Kotlin pairs were unverified. Both are now handled.
   uniform with the extension-function rule. The `NugetDiagnostics.json` detail for the code now carries
   the kind ("extension function `tag`") instead of the bare name.
 - `val Cat.x` beside `val Cat?.x`. Kotlin compiles the pair; C# rejects it at declaration (CS0102).
+  This holds for a reference-type receiver only: a value-type pair (`val Int.x` beside `val Int?.x`)
+  binds both (ADR-132 amendment 2026-10-04), and the sentences below describe the reference case.
   The plan symbol and the C entry point derive from the receiver declaration with nullability
   dropped, so both planned as one symbol and generation died with `ERROR_INTERNAL_GENERATOR_FAILURE`
   blaming expect/actual, reported twice. It is now a fatal `ERROR_CSHARP_SIGNATURE_COLLISION`

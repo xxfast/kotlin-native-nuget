@@ -263,16 +263,6 @@ class ForwardSkippedCallableWarningTest {
         symbol = "com.example.Api.provide",
         reason = ForwardPlanSkipReason.UNIMPLEMENTABLE_BOUND_INTERFACE,
       ) to "it returns a bound C# interface that Kotlin cannot implement",
-      // ADR-064 amendment (2026-09-20): the twelfth, a receiver whose SHAPE is what failed. The
-      // type is bridgeable at a parameter, so the generic sentence this table's own `assertFalse`
-      // rejects was wrong on both counts.
-      ForwardCallableCatalogEntry.Skipped(
-        symbol = "com.example.orZero",
-        reason = ForwardPlanSkipReason.RECEIVER_FAN_OUT,
-        detail = "Int?",
-        position = ForwardSkipPosition.INPUT,
-      ) to "its extension receiver `Int?` crosses the bridge as a has-value flag plus a value " +
-          "(two slots), and an extension receiver can carry only one (RECEIVER_FAN_OUT)",
       // ADR-064 amendment: an owner kind, not a type. The interface reads its own sentence,
       // because its C# twin is an `interface`, which is given no statics at all.
       ForwardCallableCatalogEntry.Skipped(
@@ -362,10 +352,6 @@ class ForwardSkippedCallableWarningTest {
         // `where TKey : notnull`, so binding it could only produce a file that does not compile.
         ForwardPlanSkipReason.NULLABLE_MAP_KEY,
         ForwardPlanSkipReason.NULLABLE,
-        // ADR-132: an extension receiver whose wire is the ADR-079/080 `HasValue` + value pair.
-        // Every other admitted receiver shape lowers like a parameter now; this one cannot be
-        // expressed as a single first RECEIVER-role slot, and no legacy route re-emits it.
-        ForwardPlanSkipReason.RECEIVER_FAN_OUT,
         ForwardPlanSkipReason.SHADOWED_BY_MEMBER,
         ForwardPlanSkipReason.SHADOWED_BY_EXTENSION_FUNCTION,
         // ADR-188 amendment: refused as a fatal collision, both twins absent from C#.
