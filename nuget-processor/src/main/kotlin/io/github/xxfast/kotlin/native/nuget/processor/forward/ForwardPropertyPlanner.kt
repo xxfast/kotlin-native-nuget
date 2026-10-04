@@ -377,7 +377,7 @@ internal class ForwardPropertyPlanner(
         propertyPlan(
           symbol = "$owner.${prop.simpleName.asString()}",
           position = ForwardPropertyPosition.CLASS,
-          receiver = ForwardPropertyReceiver.Handle(owner),
+          receiver = ForwardPropertyReceiver.Handle(sealed.forwardOwnerTypeName() ?: owner),
           prop = prop,
           getExport = "${prefix}_get_${prop.simpleName.asString()}",
           setExport = "${prefix}_set_${prop.simpleName.asString()}",
@@ -419,7 +419,7 @@ internal class ForwardPropertyPlanner(
         propertyPlan(
           symbol = "$owner.${prop.simpleName.asString()}",
           position = ForwardPropertyPosition.CLASS,
-          receiver = ForwardPropertyReceiver.Handle(owner),
+          receiver = ForwardPropertyReceiver.Handle(subclass.forwardOwnerTypeName() ?: owner),
           prop = prop,
           getExport = "${prefix}_get_${prop.simpleName.asString()}",
           setExport = "${prefix}_set_${prop.simpleName.asString()}",
@@ -455,7 +455,9 @@ internal class ForwardPropertyPlanner(
     prefix: String,
     owner: String,
   ): List<ForwardPropertyPlan> {
-    val base: String = sealed.qualifiedName?.asString() ?: return emptyList()
+    if (sealed.qualifiedName == null) return emptyList()
+    // ADR-199: a generic base reads star-projected (`Reply<*>`).
+    val base: String = sealed.forwardStarSpelling()
     val type: BridgeType = classifier.classify(subclass.asStarProjectedType())
     if (type !is BridgeType.Enum) return emptyList()
     val receiver = ForwardPropertyReceiver.EnumArm(base, owner)

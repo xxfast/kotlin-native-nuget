@@ -63,7 +63,6 @@ internal fun KSClassDeclaration.declaredSuperClass(): KSClassDeclaration? = supe
  */
 internal fun KSClassDeclaration.sealedInterfaceIneligibility(): String? {
   if (!isSealedInterface()) return null
-  if (typeParameters.isNotEmpty()) return "it has type parameters"
   val reasons: List<String> = getSealedSubclasses().mapNotNull { it.armIneligibility() }.toList()
   return reasons.takeIf { it.isNotEmpty() }?.joinToString("; ")
 }
@@ -786,22 +785,3 @@ internal fun KSClassDeclaration.abstractBackingName(): String? {
 internal fun KSClassDeclaration.hasAbstractBacking(): Boolean =
   Modifier.ABSTRACT in modifiers && classKind == ClassKind.CLASS
 
-/**
- * The generic sealed hierarchies of this round, bases and arms by qualified name: the ones
- * `NugetProcessor` skips whole (the sealed route declares a base and its arms only without type
- * parameters). Read by the position hints, so a member typed with one points at that reason rather
- * than at the export scope or the arm shapes, which an author could change without effect.
- */
-internal object ForwardGenericSealedHierarchies {
-  private val names: MutableSet<String> = mutableSetOf()
-
-  fun reset(bases: List<KSClassDeclaration>) {
-    names.clear()
-    bases.forEach { base ->
-      base.qualifiedName?.asString()?.let(names::add)
-      base.getSealedSubclasses().forEach { arm -> arm.qualifiedName?.asString()?.let(names::add) }
-    }
-  }
-
-  operator fun contains(qualifiedName: String?): Boolean = qualifiedName in names
-}

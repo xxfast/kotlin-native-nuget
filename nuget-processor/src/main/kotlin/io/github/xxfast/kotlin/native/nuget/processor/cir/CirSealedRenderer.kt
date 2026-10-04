@@ -13,6 +13,32 @@ package io.github.xxfast.kotlin.native.nuget.processor.cir
  * C# types.
  */
 internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
+  if (sealed.typeParameters.isNotEmpty()) {
+    renderGenericSealedClass(sealed)
+    return
+  }
+  renderSealedBase(sealed)
+
+  sealed.subclasses.filterNot { it.isNested }.forEach { subclass ->
+    appendLine()
+    append(sealedSubclassBlock(sealed, subclass).outdentToNamespaceLevel())
+  }
+}
+
+/**
+ * The sealed base's own block. ADR-199: a generic base (`Outcome<T>`) renders no arm and no nested
+ * declaration here (they sit on the holder), and its discriminator constructs each arm at `T`.
+ */
+internal fun StringBuilder.renderSealedBase(sealed: CirSealedClass) {
+  val generic: Boolean = sealed.typeParameters.isNotEmpty()
+  val typeArguments: String = if (generic) {
+    sealed.typeParameters.joinToString(", ", prefix = "<", postfix = ">") { it.name }
+  } else {
+    ""
+  }
+  val constraints: String = sealed.typeParameters
+    .filter { it.bounds.isNotEmpty() }
+    .joinToString("") { param -> " where ${param.name} : ${param.bounds.joinToString(", ")}" }
   renderDoc(sealed.doc, generated = sealed.remarks)
   // ADR-101 amendment (2026-09-27): the ordinary class's base-list rule (ADR-094). With a kept
   // exported base, that base declares `_handle`, implements `INugetHandle` and carries
@@ -26,7 +52,10 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   } else {
     sealed.interfaces + listOf("IDisposable") + asyncDisposable + listOf("INugetHandle")
   }
-  appendLine("    public abstract class ${sealed.name} : ${baseList.joinToString(", ")}")
+  appendLine(
+    "    public abstract class ${sealed.name}$typeArguments : ${baseList.joinToString(", ")}" +
+        constraints,
+  )
   appendLine("    {")
   appendLine(
     "        internal ${sealed.name}(IntPtr handle, out NugetHandleTag tag) : " +
@@ -91,13 +120,13 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   // ordinary class's `companionMembers` go through, at the depth a class member sits at.
   (sealed.asyncMembers + sealed.flowMembers).forEach { member -> renderMember(member, sealed.name) }
 
-  for (subclass in sealed.subclasses.filter { it.isNested }) {
+  sealed.subclasses.filter { it.isNested && !generic }.forEach { subclass ->
     append(sealedSubclassBlock(sealed, subclass))
   }
 
   // ADR-134: types Kotlin declares inside the sealed base, rendered after the arm blocks and
   // before the discriminator, at the depth an arm block sits at.
-  if (sealed.nestedDeclarations.isNotEmpty()) {
+  if (sealed.nestedDeclarations.isNotEmpty() && !generic) {
     renderNestedDeclarations(sealed.nestedDeclarations)
     appendLine()
   }
@@ -105,14 +134,32 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   appendLine("        [DllImport(\"${sealed.libraryName}\", CallingConvention = CallingConvention.Cdecl, EntryPoint = \"${sealed.nativePrefix}_get_type\")]")
   appendLine("        private static extern int Native_GetType(NugetKotlinHandle handle);")
   appendLine()
-  appendLine("        internal static ${sealed.name} FromHandle(IntPtr handle)")
+  // ADR-199: the `NugetFactory<T>` slot, set once per instantiation, so an erased read of an
+  // instantiation no Kotlin signature names (`Crate<Outcome<long>>`) still finds its factory.
+  if (generic) {
+    appendLine("        static ${sealed.name}()")
+    appendLine("        {")
+    appendLine(
+      "            NugetFactory<${sealed.name}$typeArguments>.Create = " +
+          "static handle => FromHandle(handle);",
+    )
+    appendLine("        }")
+    appendLine()
+  }
+  // An intermediate arm's discriminator hides its generic parent's (CS0108 otherwise).
+  val isIntermediate: Boolean = sealed.scopedName != sealed.name
+  val hides: String = if (isIntermediate && superClass != null) "new " else ""
+  appendLine("        internal static $hides${sealed.name}$typeArguments FromHandle(IntPtr handle)")
   appendLine("        {")
   appendLine("            var owned = new NugetKotlinHandle(handle);")
   appendLine("            try { return FromHandle(owned); }")
   appendLine("            catch { owned.Dispose(); throw; }")
   appendLine("        }")
   appendLine()
-  appendLine("        internal static ${sealed.name} FromHandle(NugetKotlinHandle handle)")
+  appendLine(
+    "        internal static $hides${sealed.name}$typeArguments " +
+        "FromHandle(NugetKotlinHandle handle)",
+  )
   appendLine("        {")
   appendLine("            return Native_GetType(handle) switch")
   appendLine("            {")
@@ -121,7 +168,9 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   // bare from inside the base because it lives in the same namespace.
   // An abstract arm constructs its backing wrapper: `new` on the arm itself is CS0144.
   for ((index, subclass) in sealed.subclasses.withIndex()) {
-    appendLine("                $index => new ${subclass.constructedName()}(handle, out _),")
+    val constructed: String =
+      subclass.fromHandle ?: "new ${subclass.constructedName()}(handle, out _)"
+    appendLine("                $index => $constructed,")
   }
 
   appendLine("                _ => throw new InvalidOperationException(\"Unknown sealed class type\")")
@@ -136,15 +185,10 @@ internal fun StringBuilder.renderSealedClass(sealed: CirSealedClass) {
   // own `Native_Dispose` (ADR-159's `Brusher` shape).
   if (sealed.ownsScope) appendLine("        public abstract ValueTask DisposeAsync();")
   appendLine("    }")
-
-  for (subclass in sealed.subclasses.filterNot { it.isNested }) {
-    appendLine()
-    append(sealedSubclassBlock(sealed, subclass).outdentToNamespaceLevel())
-  }
 }
 
 /** One subclass, rendered at the nesting depth of a class declared inside its sealed base. */
-private fun sealedSubclassBlock(
+internal fun sealedSubclassBlock(
   sealed: CirSealedClass,
   subclass: CirSealedSubclass,
 ): String = buildString {
@@ -166,8 +210,22 @@ private fun sealedSubclassBlock(
   // the base's braces, so those private statics are accessible to it, and an arm that overrides a
   // base member mints an extern of exactly the same name: CS0108 unless it says `new`. A sibling
   // arm sees none of them, where `new` would be CS0109 instead, so both are keyed off `isNested`.
+  // ADR-199: a generic base's arms sit on its holder, outside the base's braces.
+  val generic: Boolean = sealed.typeParameters.isNotEmpty()
   val baseExternNames: Set<String> =
-    if (subclass.isNested) sealed.ordinaryNativeImports().map { it.name }.toSet() else emptySet()
+    if (subclass.isNested && !generic) {
+      sealed.ordinaryNativeImports().map { it.name }.toSet()
+    } else {
+      emptySet()
+    }
+  val armArguments: String = if (subclass.typeParameters.isEmpty()) {
+    ""
+  } else {
+    subclass.typeParameters.joinToString(", ", prefix = "<", postfix = ">") { it.name }
+  }
+  val armConstraints: String = subclass.typeParameters
+    .filter { it.bounds.isNotEmpty() }
+    .joinToString("") { param -> " where ${param.name} : ${param.bounds.joinToString(", ")}" }
   // ADR-148: the arm's own `<remarks>`, the twin of `WARNING_NO_PUBLIC_CONSTRUCTOR`, rendered at
   // the arm's declaration depth exactly as `renderClass` renders an ordinary class's.
   renderDoc(subclass.doc, "        ", generated = subclass.remarks)
@@ -175,8 +233,8 @@ private fun sealedSubclassBlock(
   // the sealed base and the runtime interface.
   val interfaces: String = subclass.interfaces.joinToString("") { iface -> ", $iface" }
   appendLine(
-    "        public ${sealedModifier}class ${subclass.name} : " +
-        "${sealed.name}$interfaces$asyncDisposable"
+    "        public ${sealedModifier}class ${subclass.name}$armArguments : " +
+        "${subclass.baseType ?: sealed.name}$interfaces$asyncDisposable$armConstraints"
   )
   appendLine("        {")
   if (subclass.ownsScope) {
@@ -197,6 +255,17 @@ private fun sealedSubclassBlock(
   appendLine("            {")
   appendLine("            }")
   appendLine()
+  // ADR-199: a generic arm fills its own `NugetFactory<T>` slot, as the generic base does.
+  subclass.selfFactory?.let { factory ->
+    appendLine("            static ${subclass.name}()")
+    appendLine("            {")
+    appendLine(
+      "                NugetFactory<${subclass.name}$armArguments>.Create = " +
+          "static handle => $factory;",
+    )
+    appendLine("            }")
+    appendLine()
+  }
   // ADR-148: the arm's public constructors, through the same `renderConstructorMember` an
   // ordinary class's go through, re-indented one level like every other member of an arm.
   // `hasSuperClass = true`: the handle field is the sealed base's `internal IntPtr _handle`, which
@@ -303,7 +372,9 @@ private fun sealedSubclassBlock(
   // singleton compare equal: every read mints a fresh wrapper, so reference equality never held,
   // and a constant `ToString()` literal could disagree with Kotlin's own.
   if (subclass.isDataClass) {
-    renderSealedSubclassDataMethods(sealed.libraryName, subclass.nativePrefix, sealed.name, subclass.name)
+    renderSealedSubclassDataMethods(
+      sealed.libraryName, subclass.nativePrefix, sealed.name, "${subclass.name}$armArguments",
+    )
   }
 
   // ADR-157: managed value equality over `Value`, so a box compares like the data arms beside it.
@@ -312,7 +383,9 @@ private fun sealedSubclassBlock(
   // means true, and `Value` is already an `int` on this side of the wire.
   if (subclass.boxedEnumType != null) {
     appendLine("            public override bool Equals(object? obj)")
-    appendLine("                => obj is ${subclass.name} other && other.Value == Value;")
+    appendLine(
+      "                => obj is ${subclass.name}$armArguments other && other.Value == Value;",
+    )
     appendLine()
     appendLine("            public override int GetHashCode() => Value.GetHashCode();")
     appendLine()
@@ -323,7 +396,8 @@ private fun sealedSubclassBlock(
   // ADR-134: types Kotlin declares inside the arm. `renderNestedDeclarations` already renders one
   // level in (a class member's depth); the arm's own members are re-indented once more, so these
   // take the same extra level.
-  if (subclass.nestedDeclarations.isNotEmpty()) {
+  // ADR-199: a generic arm's nested declarations sit on the arm's own holder (`Outcome.Ok.Trace`).
+  if (subclass.nestedDeclarations.isNotEmpty() && subclass.typeParameters.isEmpty()) {
     append(
       buildString { renderNestedDeclarations(subclass.nestedDeclarations) }.indentNestedBody(),
     )
@@ -332,7 +406,9 @@ private fun sealedSubclassBlock(
 
   // An abstract arm's backing wrapper makes the arm constructible from a handle. It overrides the
   // arm's abstract members; everything else, both disposals included, is the arm's, inherited.
-  subclass.backing(sealed)?.let { backing -> append(backingClassBlock(backing).indentNestedBody()) }
+  // ADR-199: a generic arm's wrapper is generic too, and sits on the arm's own holder (C7).
+  subclass.backing(sealed)?.takeIf { !it.isHeld }
+    ?.let { backing -> append(backingClassBlock(backing).indentNestedBody()) }
 
   if (subclass.hasSuspendMethods) {
     // ADR-118: a suspending arm takes the ordinary class's dispose rule wholesale -- cancel and
@@ -388,6 +464,19 @@ internal fun CirSealedSubclass.backing(sealed: CirSealedClass): CirBacking? {
   val name: String = backingName ?: return null
   // A nested arm sits inside the base's braces, so the base's private externs are visible to the
   // wrapper too; the arm's own always are.
+  // ADR-199: a generic arm's wrapper sits on the arm's holder and sees none of the arm's externs.
+  if (typeParameters.isNotEmpty()) {
+    return CirBacking(
+      name = name,
+      ownerName = "${sealed.scopedName}.${this.name}",
+      libraryName = sealed.libraryName,
+      nativePrefix = nativePrefix,
+      properties = properties.backingOverrides(),
+      methods = methods.backingOverrides(),
+      inheritedExternNames = emptySet(),
+      typeParameters = typeParameters,
+    )
+  }
   val baseExterns: Set<String> =
     if (isNested) sealed.ordinaryNativeImports().map { it.name }.toSet() else emptySet()
   return CirBacking(
@@ -441,7 +530,7 @@ internal fun CirDllImport.hiding(baseExternNames: Set<String>): CirDllImport =
  * the depth every other namespace-level declaration renders at, so the member bodies baked at the
  * ordinary-class indentation land right again.
  */
-private fun String.outdentToNamespaceLevel(): String =
+internal fun String.outdentToNamespaceLevel(): String =
   lines().joinToString("\n") { line -> line.removePrefix("    ") }
 
 internal fun StringBuilder.renderSealedSubclassDataMethods(

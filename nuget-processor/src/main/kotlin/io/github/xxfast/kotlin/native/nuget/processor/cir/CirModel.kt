@@ -432,6 +432,22 @@ internal data class CirSealedClass(
   // ADR-064 amendment (issue #249): generated `<remarks>` prose, one paragraph per member the
   // bridge dropped from this declaration. Attached by `CirFile.withSkipRemarks` after translation.
   val remarks: List<String> = emptyList(),
+  /**
+   * ADR-199: a generic sealed type's own parameters. Non-empty renders the generic route: the
+   * base `Outcome<T>`, its arms and [nestedDeclarations] on the non-generic holder `Outcome`, and
+   * every extern hoisted out of a generic type (CS7042).
+   */
+  val typeParameters: List<CirTypeParameter> = emptyList(),
+  /**
+   * ADR-199: the intermediate sealed arms of a generic hierarchy (`Outcome.Fault<T>`), each a
+   * generic sealed hierarchy of its own rendered on this one's holder, with [superClass] this base.
+   */
+  val intermediates: List<CirSealedClass> = emptyList(),
+  /**
+   * ADR-199: this type's C# name as its holder's parent sees it (`Outcome.Fault`), which is what
+   * an arm nested below it spells its base with. Equal to [name] at the top level.
+   */
+  val scopedName: String = name,
 ) : CirDeclaration
 
 internal data class CirSealedSubclass(
@@ -554,6 +570,24 @@ internal data class CirSealedSubclass(
   val nestedDeclarations: List<CirDeclaration> = emptyList(),
   // ADR-150: the author's KDoc, as plain text in tag slots; `renderDoc` owns the escaping.
   val doc: CirDoc? = null,
+  /** ADR-199: the C# arm's type parameters by the arm rule (`Err<T>` for `Outcome<Nothing>`). */
+  val typeParameters: List<CirTypeParameter> = emptyList(),
+  /** ADR-199: the C# base the arm derives from, when the sealed base is generic (`Outcome<T>`). */
+  val baseType: String? = null,
+  /**
+   * ADR-199: what the generic base's `FromHandle` evaluates for this arm, with `handle` in scope:
+   * `new Outcome.Ok<T>(handle, out _)`, a cast through `object` for an arm that closes an
+   * invariant parameter, or an intermediate arm's own `FromHandle`. Null on the ADR-009 route.
+   */
+  val fromHandle: String? = null,
+  /** ADR-199: an intermediate arm, declared by its own [CirSealedClass.intermediates] entry. */
+  val isIntermediate: Boolean = false,
+  /**
+   * ADR-199: what a generic arm's static constructor stores in its `NugetFactory<T>` slot, with
+   * `handle` in scope (`new Outcome.Ok<T>(handle, out _)`), so an erased read of an arm
+   * instantiation only the consumer chose still materialises. Null for a closed arm.
+   */
+  val selfFactory: String? = null,
 )
 
 internal data class CirObject(
@@ -624,6 +658,11 @@ internal data class CirMarshalHelper(
   // ADR-094 (write side): one `Boxers` line per enum with a planned box, beside [boxers]. An enum
   // cannot declare members, so its box extern is rendered here, in `NugetMarshal`, with the row.
   val enumBoxers: List<CirEnumBoxer> = emptyList(),
+  /**
+   * ADR-199: a generic sealed hierarchy exists, so `NugetFactory<T>` is declared beside
+   * `NugetMarshal` and `Materialize<T>` reads it after a `Factories` miss.
+   */
+  val includesFactorySlot: Boolean = false,
 ) : CirDeclaration
 
 /**
@@ -655,6 +694,8 @@ internal data class CirFactoryEntry(
   // ADR-173: the type the entry constructs, when it differs from the `typeof` key. An exported
   // interface registers under `typeof(IPet)` and constructs its ADR-040 backing class `Pet`.
   val constructTypeName: String = qualifiedTypeName,
+  /** ADR-199: the whole factory body over `handle`, for a closed generic sealed instantiation. */
+  val constructExpression: String? = null,
 )
 
 // ADR-084: the C#-implemented-interface bridge layer -- `NugetBridge`, `NugetBridgeState`, and one

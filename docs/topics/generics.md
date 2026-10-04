@@ -26,6 +26,7 @@ a catchable `KotlinException` at the call.
 | Kotlin | C# |
 |---|---|
 | `class<T>` | `class<T>` |
+| `sealed class<T>` | a generic `abstract class`, arms on a non-generic holder (`Outcome.Ok<T>`) |
 | `<T : Bound>` | `where T : Bound` |
 | `out T` / `in T` on an interface | `out T` / `in T` |
 | `fun <T> f(value: T): T` (top-level) | a generic method |
@@ -373,6 +374,10 @@ fun pairOf(): Pair<Int, Int> = 1 to 2                  // skipped: Pair isn't de
 A **nullable** generic-class return (`fun f(): Crate<Int>?`) is refused the same way, named, even
 when the non-null form (`Crate<Int>`) would bind fine; return the non-null form, or wrap it in your
 own non-generic class if `null` needs to be expressible.
+
+A generic **sealed** hierarchy is the exception: `Outcome<Int>` binds at a parameter, property, member
+return and `List` element too. See
+[A generic sealed hierarchy](interfaces-abstract-sealed.md#generic-sealed-hierarchy).
 
 ## Generic functions
 

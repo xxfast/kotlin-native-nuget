@@ -475,7 +475,7 @@ private fun elementKotlinTypeName(type: BridgeType): String = when (type) {
   BridgeType.String -> "kotlin.String"
   BridgeType.Char -> "kotlin.Char"
   is BridgeType.Primitive -> "kotlin.${type.kind.simpleKotlinName()}"
-  is BridgeType.ObjectHandle -> type.qualifiedName
+  is BridgeType.ObjectHandle -> type.kotlinReadType ?: type.qualifiedName
   is BridgeType.Enum -> type.qualifiedName
   // ADR-176: the box holds the Kotlin object itself (a Kotlin-backed instance, or the ADR-084
   // bridge object `nuget_list_add` dereferenced from a C# transfer handle).
@@ -1799,7 +1799,8 @@ private fun loweredCallbackExpression(
 internal fun valueClassUnderlyingLowering(name: String, underlying: BridgeType): String =
   when (underlying) {
     is BridgeType.Enum -> "${underlying.qualifiedName}.entries[$name]"
-    is BridgeType.ObjectHandle -> "$name.asStableRef<${underlying.qualifiedName}>().get()"
+    is BridgeType.ObjectHandle ->
+      "$name.asStableRef<${underlying.kotlinReadType ?: underlying.qualifiedName}>().get()"
     else -> name
   }
 

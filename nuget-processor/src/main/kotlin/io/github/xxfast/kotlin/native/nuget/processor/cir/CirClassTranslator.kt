@@ -129,6 +129,11 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverride
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isOpenForOverrideOn
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardExtensible
 import io.github.xxfast.kotlin.native.nuget.processor.forward.admits
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardSealedArmShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardSealedBaseArgument
+import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardSealedArmShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isGenericSealedType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.isIntermediateGenericSealedArm
 import io.github.xxfast.kotlin.native.nuget.processor.forward.abstractBackingName
 import io.github.xxfast.kotlin.native.nuget.processor.forward.hasAbstractBacking
 import io.github.xxfast.kotlin.native.nuget.processor.forward.overridesBaseClassMember
@@ -137,6 +142,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyMarshalledRe
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyDiscriminatedRead
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyFlowElementCollection
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardLegacyFlowElementShape
+import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyGenericSealedElement
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesCsharpType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesElementReadArgument
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyBytesRead
@@ -1941,7 +1947,8 @@ internal fun flowProperty(
     // ADR-066: qualified, not by simple name: an admitted dependency-module element type is
     // not guaranteed to share this class's own namespace.
     isFlowType || isStateFlowType ->
-      qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
+      classifier.legacyGenericSealedElement(flowElementTypeResolved, isNullableElement)
+        ?: qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
 
     else -> null
   }
@@ -2143,6 +2150,7 @@ internal fun flowMembers(
     val flowCsElementType: String = flowElementCollection?.forwardPublicCsharpType()
       ?: legacyBytesCsharpType(isNullableElement).takeIf { flowElementBytes }
       ?: flowElementInterface?.let { it.csharpType + if (isNullableElement) "?" else "" }
+      ?: classifier.legacyGenericSealedElement(flowElementTypeResolved, isNullableElement)
       ?: qualifiedElementCsType(flowElementTypeResolved, context, isNullableElement)
     val flowElementRead: String? = flowElementCollection
       ?.let { collection -> legacyFlowElementReadArgument(collection) }
@@ -2623,6 +2631,7 @@ internal fun suspendStateFlowElement(
     val cs = collection?.forwardPublicCsharpType()
       ?: legacyBytesCsharpType(nullable).takeIf { bytes }
       ?: iface?.let { it.csharpType + if (nullable) "?" else "" }
+      ?: classifier.legacyGenericSealedElement(element, nullable)
       ?: qualifiedElementCsType(element, context, nullable)
     val read = collection?.let { legacyFlowElementReadArgument(it) }
       ?: iface?.let { legacyInterfaceElementReadArgument(it, nullable) }
@@ -2643,6 +2652,7 @@ internal fun suspendStateFlowElement(
   // route takes. A class element keeps `qualifiedElementCsType` byte for byte.
   val elementInterface: BridgeType.Interface? = classifier.legacyFlowElementInterface(element)
   val csElementType: String = elementInterface?.csharpType
+    ?: classifier.legacyGenericSealedElement(element, nullable = false)
     ?: qualifiedElementCsType(element, context)
   return SuspendStateFlowElement(
     asyncReturnType = "KotlinStateFlow<$csElementType>",
@@ -2716,6 +2726,8 @@ internal fun translateSealedClass(
   // ADR-110 amendment (ROADMAP line 32): the base and each arm record their rendered names here
   // for the inherited CS0108 post-pass.
   memberRegistry: CsMemberRegistry? = null,
+  // ADR-199: an intermediate arm's parent's C# type parameters, which its phantoms restate.
+  parentTypeParameters: List<CirTypeParameter> = emptyList(),
 ): CirSealedClass {
   val libraryName: String = context.libraryName
   val name: String = cls.simpleName.asString()
@@ -2727,8 +2739,28 @@ internal fun translateSealedClass(
   // `SKIPPED_UNEXPORTED_SUPERTYPE`, and both planners re-home its public members onto the base
   // (`ForwardClassMembership.isForwardMemberOf`), the only C# carrier it has.
   val superClassDeclaration: KSClassDeclaration? = cls.forwardSuperClass(exportedTypes)
-  val (superClass: String?, interfaces: List<String>) =
-    forwardBaseList(cls, name, superClassDeclaration, exportedTypes, classifier, logger)
+  // ADR-199: an intermediate arm of a generic hierarchy derives from its parent by the arm rule
+  // (`Outcome<T>` for `Lapse : Outcome<Nothing>`), which the ordinary base spelling cannot spell.
+  val parentShape: ForwardSealedArmShape? = cls.forwardArmSealedParent()
+    ?.takeIf { parent -> parent.isGenericSealedType() }
+    ?.let { parent -> cls.forwardSealedArmShape(parent) }
+  val (keptSuperClass: String?, interfaces: List<String>) = forwardBaseList(
+    cls, name, superClassDeclaration.takeIf { parentShape == null }, exportedTypes, classifier,
+    logger,
+  )
+  val superClass: String? = if (parentShape != null) {
+    sealedBaseSpelling(checkNotNull(cls.forwardArmSealedParent()), parentShape, classifier)
+  } else {
+    keptSuperClass
+  }
+  // ADR-199: a generic sealed type renders `Outcome<T>`; an intermediate arm's parameters are the
+  // arm rule's against its parent (`Lapse<T>`), possibly none (`Cell.Odd : Cell<int>`).
+  val baseTypeParameters: List<CirTypeParameter> = when {
+    parentShape != null ->
+      cls.armCirTypeParameters(parentShape, parentTypeParameters, logger, context)
+    cls.isGenericSealedType() -> cls.cirTypeParameters(logger, context)
+    else -> emptyList()
+  }
 
   // ADR-111/ADR-116 amendment (2026-09-11): the base's members, off base-keyed plans and the same
   // projections an ordinary class uses. Always `virtual`, never `abstract`: the export dispatches
@@ -2839,7 +2871,7 @@ internal fun translateSealedClass(
       if (subclass.isEnumArm()) {
         return@map enumArmSubclass(
           cls, subclass, subPrefix, callableCatalog, tracker, context, expects,
-        ).let { box ->
+        ).genericArmOf(cls, subclass, baseTypeParameters, classifier, logger, context).let { box ->
           // ADR-175: the box owns no member, but it inherits the base's async ones, so it takes the
           // base-owned scope's cleanup and the `DisposeAsync` body like every other arm.
           if (baseScopeOwner == null) box
@@ -3084,6 +3116,8 @@ internal fun translateSealedClass(
       // the build log and in the arm's own `<remarks>`, instead of dropping silently.
       val armNoPublicConstructor: Boolean = subclass.classKind == ClassKind.CLASS &&
           !subclass.modifiers.contains(Modifier.ABSTRACT) &&
+          // A sealed intermediate arm is never constructed, in Kotlin or in C#.
+          !subclass.modifiers.contains(Modifier.SEALED) &&
           armConstructors.isEmpty() &&
           subclass.hasPublicConstructor()
       val armRemarks: String? = if (armNoPublicConstructor) {
@@ -3157,11 +3191,29 @@ internal fun translateSealedClass(
         interfaces = armInterfaces,
         // ADR-134: the arm is an owner in its own right (`Purr.On.Trace`).
         nestedDeclarations = nestedOf(subclass),
-      )
+      ).genericArmOf(cls, subclass, baseTypeParameters, classifier, logger, context)
     }
     .toList()
 
+  // ADR-199: an intermediate sealed arm is a generic sealed hierarchy of its own, on this holder.
+  val intermediates: List<CirSealedClass> = if (baseTypeParameters.isEmpty()) {
+    emptyList()
+  } else {
+    cls.getSealedSubclasses()
+      .filter { arm -> arm.isIntermediateGenericSealedArm() }
+      .map { arm ->
+        translateSealedClass(
+          arm, context, tracker, callableCatalog, classifier, exportedTypes, logger, nestedOf,
+          expects, memberRegistry, parentTypeParameters = baseTypeParameters,
+        )
+      }
+      .toList()
+  }
+
   return CirSealedClass(
+    typeParameters = baseTypeParameters,
+    intermediates = intermediates,
+    scopedName = cls.nestedCsName(),
     doc = cls.forwardKdoc(expects)?.toCirDoc(),
     name = name,
     libraryName = libraryName,
@@ -5353,3 +5405,114 @@ internal fun acquiredFlowCollectImport(library: String, prefix: String, name: St
     ),
     visibility = CirVisibility.PRIVATE,
   )
+
+/**
+ * ADR-199: this arm's generic shape against its generic sealed [base], by the arm rule: its own C#
+ * parameter list (an own parameter it forwards, or a phantom for a fixed variant argument), the
+ * base it derives from (`Outcome<T>`, `Cell<int>`), and what the base's `FromHandle` evaluates for
+ * it. Unchanged for a non-generic base.
+ */
+private fun CirSealedSubclass.genericArmOf(
+  base: KSClassDeclaration,
+  arm: KSClassDeclaration,
+  baseTypeParameters: List<CirTypeParameter>,
+  classifier: ForwardBridgeTypeClassifier,
+  logger: KSPLogger,
+  context: NugetContext,
+): CirSealedSubclass {
+  if (baseTypeParameters.isEmpty()) return this
+  // The holder of `Outcome` is also called `Outcome`, so an arm of that name is CS0542 on it.
+  if (isNested && name == base.simpleName.asString()) {
+    ForwardDiagnosticSink.emit(
+      listOf(
+        ForwardDiagnostic(
+          kind = ForwardDiagnosticKind.ERROR_CSHARP_NAME_COLLISION,
+          symbol = arm.takeIf { it.containingFile != null },
+          declaration = arm.qualifiedName?.asString() ?: name,
+          reason = "the generic sealed arm `$name` is declared on its base's non-generic holder " +
+              "`${base.simpleName.asString()}`, and a type named like its enclosing type is CS0542",
+          hint = "rename the arm",
+          // ERROR_*: the build fails before anything generated is read.
+          owner = null,
+        ),
+      ),
+      logger,
+    )
+  }
+  val armCsName: String = if (isNested) "${base.nestedCsName()}.$name" else name
+  val baseArguments: String = baseTypeParameters.joinToString(", ") { it.name }
+  val shape: ForwardSealedArmShape = arm.forwardSealedArmShape(base) ?: return this
+  val parameters: List<CirTypeParameter> =
+    arm.armCirTypeParameters(shape, baseTypeParameters, logger, context)
+  val spelledBase: String = sealedBaseSpelling(base, shape, classifier)
+  // The base's `FromHandle` instantiates the arm at the base's own parameters.
+  val atBase: String = if (parameters.isEmpty()) {
+    ""
+  } else {
+    shape.parameters.joinToString(", ", "<", ">") { baseTypeParameters[it.baseIndex].name }
+  }
+  val self: String = "${base.nestedCsName()}<$baseArguments>"
+  fun throughBase(expression: String): String =
+    if (shape.isClosed) "($self)(object)$expression" else expression
+  // An intermediate arm is declared by its own hierarchy, which discriminates it.
+  if (arm.isIntermediateGenericSealedArm()) {
+    return copy(
+      isIntermediate = true,
+      fromHandle = throughBase("$armCsName$atBase.FromHandle(handle)"),
+    )
+  }
+  val constructed: String =
+    if (backingName != null) "$armCsName.$backingName$atBase" else "$armCsName$atBase"
+  val fromHandle: String = throughBase("new $constructed(handle, out _)")
+  val ownArguments: String = if (parameters.isEmpty()) {
+    ""
+  } else {
+    parameters.joinToString(", ", "<", ">") { it.name }
+  }
+  val ownConstructed: String =
+    if (backingName != null) "$armCsName.$backingName$ownArguments" else "$armCsName$ownArguments"
+  return copy(
+    typeParameters = parameters,
+    baseType = spelledBase,
+    fromHandle = fromHandle,
+    selfFactory = "new $ownConstructed(handle, out _)".takeIf { parameters.isNotEmpty() },
+  )
+}
+
+/**
+ * ADR-199: the C# type parameters of an arm, by its [shape]: an own parameter as the arm's class
+ * route spells and constrains it, a phantom as the base parameter it stands in for.
+ */
+private fun KSClassDeclaration.armCirTypeParameters(
+  shape: ForwardSealedArmShape,
+  baseTypeParameters: List<CirTypeParameter>,
+  logger: KSPLogger,
+  context: NugetContext,
+): List<CirTypeParameter> {
+  val declared: List<CirTypeParameter> = cirTypeParameters(logger, context)
+  return shape.parameters.map { slot ->
+    val ownParameter: KSTypeParameter? = slot.own
+    if (ownParameter != null) {
+      declared.first { it.name == forwardCsharpTypeParameterName(ownParameter) }
+    } else {
+      baseTypeParameters[slot.baseIndex].copy(name = slot.csharpName)
+    }
+  }
+}
+
+/** ADR-199: the C# base an arm of [base] derives from (`Outcome<T>`, `Cell<int>`, `Cell.Odd`). */
+private fun sealedBaseSpelling(
+  base: KSClassDeclaration,
+  shape: ForwardSealedArmShape,
+  classifier: ForwardBridgeTypeClassifier,
+): String {
+  if (shape.baseArguments.isEmpty()) return base.nestedCsName()
+  val spelled: String = shape.baseArguments.joinToString(", ") { argument ->
+    when (argument) {
+      is ForwardSealedBaseArgument.Listed -> argument.parameter.csharpName
+      is ForwardSealedBaseArgument.Closed ->
+        classifier.classify(argument.type).sealedAsHandle().forwardPublicCsharpType()
+    }
+  }
+  return "${base.nestedCsName()}<$spelled>"
+}

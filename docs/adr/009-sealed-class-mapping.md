@@ -411,3 +411,7 @@ compiles the output. Fixture `test-library/.../cubby/CubbySample.kt` (`Trove`, `
 `Reckoner`), `IntegrationTests/GenericAbstractBackingTests.cs` (7 tests) and `LeakTests` row
 `GenericAbstractBacking_ClosedReturnRoutes_ReturnToBaseline`. `:nuget-processor:test` 1770 passed,
 0 failed; native pipeline IntegrationTests 3146, LeakTests 186, 7 AOT shapes.
+
+### Amendment (2026-10-05): generic sealed hierarchies now bind
+
+[ADR-199](199-generic-sealed-hierarchies.md) supersedes the 2026-10-04 "generic sealed hierarchies are a named skip" amendment: `sealed class Outcome<out T>` binds as `Outcome<T>` with its arms on the non-generic holder (`Outcome.Ok<T>`).

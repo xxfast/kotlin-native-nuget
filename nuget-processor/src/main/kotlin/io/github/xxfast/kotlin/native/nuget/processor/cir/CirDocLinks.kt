@@ -69,8 +69,11 @@ private fun CirDeclaration.indexInto(
       val armPrefix: List<String> = if (arm.isNested) path else prefix
       val armPath: List<String> = armPrefix + arm.name
       val cref: String = "global::$namespace.${armPath.joinToString(".")}"
-      entries += arm.name to cref
-      if (armPath.size > 1) entries += armPath.joinToString(".") to cref
+      // ADR-199: a generic arm has no bare cref spelling either, but its holder's children do.
+      if (arm.typeParameters.isEmpty()) {
+        entries += arm.name to cref
+        if (armPath.size > 1) entries += armPath.joinToString(".") to cref
+      }
       for (nested in arm.nestedDeclarations) nested.indexInto(entries, namespace, armPath)
     }
   }
@@ -95,7 +98,8 @@ private fun CirDeclaration.docLinkName(): String? = when (this) {
 private fun CirDeclaration.docLinkChildren(): List<CirDeclaration> = when (this) {
   is CirInterface -> nestedDeclarations
   is CirClass -> nestedDeclarations
-  is CirSealedClass -> nestedDeclarations
+  // ADR-199: an intermediate arm's hierarchy sits on the generic base's holder.
+  is CirSealedClass -> nestedDeclarations + intermediates
   is CirObject -> nestedDeclarations
   else -> emptyList()
 }
@@ -104,6 +108,7 @@ private fun CirDeclaration.docLinkChildren(): List<CirDeclaration> = when (this)
 private fun CirDeclaration.isGenericDeclaration(): Boolean = when (this) {
   is CirInterface -> typeParameters.isNotEmpty()
   is CirClass -> typeParameters.isNotEmpty()
+  is CirSealedClass -> typeParameters.isNotEmpty()
   else -> false
 }
 
@@ -156,6 +161,7 @@ private fun CirDeclaration.resolveDocLinks(index: Map<String, String>): CirDecla
       asyncMembers = asyncMembers.map { it.resolveDocLinks(index) },
       flowMembers = flowMembers.map { it.resolveDocLinks(index) },
       nestedDeclarations = nestedDeclarations.map { it.resolveDocLinks(index) },
+      intermediates = intermediates.map { it.resolveDocLinks(index) as CirSealedClass },
       doc = doc.resolve(index),
     )
 

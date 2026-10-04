@@ -1006,7 +1006,14 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
     // ADR-112 left one shape here: a sealed type with no generated discriminator, which is what
     // the hint below says too.
     ForwardPlanSkipReason.SEALED_POSITION ->
-      "its sealed type ${detail?.let { "`$it` " } ?: ""}has no generated C# discriminator"
+      if (detail?.contains(GENERIC_SEALED_REFUSAL_SEPARATOR) == true) {
+        // ADR-199: the generic sealed type is declared; this use site has no C# spelling.
+        val (sealedName: String, why: String) =
+          detail.split(GENERIC_SEALED_REFUSAL_SEPARATOR, limit = 2)
+        "its generic sealed type `$sealedName` has no C# spelling here: $why"
+      } else {
+        "its sealed type ${detail?.let { "`$it` " } ?: ""}has no generated C# discriminator"
+      }
 
     // ADR-088: both are about the position, not the type. A bound C# interface is bridgeable,
     // just not here (nullable, property, collection component, receiver), and an
@@ -1127,22 +1134,6 @@ private fun genericOwnerMemberKind(detail: String?): String = when (detail) {
 }
 
 /**
- * The position skips a member typed with a generic sealed hierarchy takes: the base as a sealed
- * position, an arm as an undeclared or unsupported class. No such reason's own hint applies (export
- * scope, arm shapes, nesting rules), since the hierarchy has no route at all.
- */
-private val GENERIC_SEALED_HINTED: Set<ForwardPlanSkipReason> = setOf(
-  ForwardPlanSkipReason.SEALED_POSITION,
-  ForwardPlanSkipReason.UNDECLARED_CLASS,
-  ForwardPlanSkipReason.UNSUPPORTED,
-)
-
-private fun genericSealedHint(name: String?): String =
-  "`$name` belongs to a generic sealed hierarchy, which is not declared in C# at all (the " +
-      "SKIPPED_UNSUPPORTED_TYPE warning on the sealed class says why); declare the hierarchy " +
-      "without type parameters, or type this member with a non-sealed class or interface"
-
-/**
  * ADR-064: an actionable per-reason hint, kept alongside the mapping above it documents.
  *
  * @param detail ADR-066: the unexported dependency type's qualified name
@@ -1174,9 +1165,7 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
    *  a package derived from the type name. Empty keeps the derived-package wording. */
   excludeEntries: List<String> = emptyList(),
   returnType: String? = null,
-): String = if (detail in ForwardGenericSealedHierarchies && this in GENERIC_SEALED_HINTED) {
-  genericSealedHint(detail)
-} else when (this) {
+): String = when (this) {
   // ADR-162: the author did nothing wrong, so the hint says so and names the one line that unblocks
   // their build while the bug is fixed upstream. The declaration name is not in hand here (the hint
   // takes only the detail slots), so the `exclude(...)` line is spelled generically; the
@@ -1430,7 +1419,14 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
   // generated ADR-009 discriminator (an INELIGIBLE sealed interface, or a sealed type outside the
   // export scope), which C# has no way to reconstruct. `SKIPPED_INELIGIBLE_SEALED_INTERFACE` says
   // why an ineligible one has none.
-  ForwardPlanSkipReason.SEALED_POSITION -> {
+  ForwardPlanSkipReason.SEALED_POSITION -> if (
+    detail?.contains(GENERIC_SEALED_REFUSAL_SEPARATOR) == true
+  ) {
+    // ADR-199: each refusal is a C# language gap, not a deferral, so the remedy is the Kotlin type.
+    "type the member with a closed instantiation C# can spell: a concrete argument the erased " +
+        "wire reads (a primitive, string, exported class, interface or enum, or another closed " +
+        "generic sealed type), no `*` or `out`/`in` projection, and no `Nothing` under a bound"
+  } else {
     val sealedName: String = detail ?: "the sealed type"
     "sealed type `$sealedName` has no generated discriminator, so C# cannot reconstruct it: only " +
         "an eligible sealed type inside the export scope gets one (ADR-009, ADR-112), and that " +
@@ -1448,8 +1444,7 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "enum `$enumName` is not in the export set, so it is never declared as a C# enum and every " +
         "member typed with it is skipped rather than emitted as a dangling reference; if it is " +
         "nested, the SKIPPED_NESTED_DECLARATION warning on the declaration itself names which " +
-        "shape rule defers it (an `enum class`, generic `interface` or generic sealed owner, for " +
-        "instance), so " +
+        "shape rule defers it (an `enum class` or generic `interface` owner, for instance), so " +
         "move it to the top level of its file, or, if it already is top level, bring its package " +
         "into the export scope"
   }
@@ -1493,8 +1488,8 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     "value class `$valueClassName` is nested inside another declaration and no C# `readonly " +
         "record struct` is generated for it, so every member typed with it is skipped rather " +
         "than emitted as a dangling reference; the SKIPPED_NESTED_DECLARATION warning on the " +
-        "declaration itself names which shape rule defers it (an `enum class`, generic " +
-        "`interface` or generic sealed owner), " +
+        "declaration itself names which shape rule defers it (an `enum class` or generic " +
+        "`interface` owner), " +
         "or move it to the top level of its file"
   }
 

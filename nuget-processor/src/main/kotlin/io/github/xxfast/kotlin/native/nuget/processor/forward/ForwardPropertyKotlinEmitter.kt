@@ -442,7 +442,8 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
     is BridgeType.Primitive, BridgeType.Char, BridgeType.String -> name
     // ADR-106: a null wire value stays null; only real text is parsed.
     BridgeType.Uuid -> "$name?.let(kotlin.uuid.Uuid::parse)"
-    is BridgeType.ObjectHandle -> "$name?.asStableRef<${inner.qualifiedName}>()?.get()"
+    is BridgeType.ObjectHandle ->
+      "$name?.asStableRef<${inner.kotlinReadType ?: inner.qualifiedName}>()?.get()"
     is BridgeType.Interface -> "$name?.asStableRef<${inner.qualifiedName}>()?.get()"
     // ADR-076: the wire value is a raw INT64 of ticks; convert it back to an Instant.
     BridgeType.Instant -> "instantFromDotNetTicks($name)"
@@ -479,7 +480,8 @@ private fun inputLowering(type: BridgeType, name: String): String = when (type) 
   is BridgeType.Enum -> "${type.qualifiedName}.entries[$name]"
   BridgeType.Instant -> "instantFromDotNetTicks($name)"
   BridgeType.Duration -> "durationFromDotNetTicks($name)"
-  is BridgeType.ObjectHandle -> "$name.asStableRef<${type.qualifiedName}>().get()"
+  is BridgeType.ObjectHandle ->
+    "$name.asStableRef<${type.kotlinReadType ?: type.qualifiedName}>().get()"
   is BridgeType.Interface -> "$name.asStableRef<${type.qualifiedName}>().get()"
   // ADR-088 / ADR-132 (2026-09-20): a bound C# interface receiver is read back through the reverse
   // pipeline's own `nuget{Iface}Value`, the SAME helper the callable route's bound-interface

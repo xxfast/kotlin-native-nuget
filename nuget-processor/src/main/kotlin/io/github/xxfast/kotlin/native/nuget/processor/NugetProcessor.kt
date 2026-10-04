@@ -126,6 +126,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardReachabilit
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isArmOfIneligibleSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEligibleSealedType
+import io.github.xxfast.kotlin.native.nuget.processor.forward.intermediateGenericSealedArms
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isSealedInterface
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardAsyncInterfaces
 import io.github.xxfast.kotlin.native.nuget.processor.forward.forwardInterfaceFlowProperties
@@ -135,7 +136,6 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsForwardFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDeclaredTypeNames
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardSubclassMemberNames
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardGenericSealedHierarchies
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardUnroutedMembers
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isEnumArm
 import io.github.xxfast.kotlin.native.nuget.processor.forward.isForwardArmMember
@@ -268,12 +268,6 @@ internal fun KSClassDeclaration.unsupportedNestedOwnerReason(): String? = when {
   // the kind arm above admits INTERFACE, so this arm is what keeps `Feed<T> { class Entry }` out.
   classKind == ClassKind.INTERFACE && typeParameters.isNotEmpty() ->
     "a generic `interface` owner has no non-generic C# type to hold its nested declarations"
-  // ADR-196: the sealed route (ADR-009) declares a generic base or arm without its type
-  // parameters, so the holder rule does not apply to it and an inner child's `Outcome<T>` outer
-  // names a type nothing declares. Kept a named skip until that route settles generics.
-  typeParameters.isNotEmpty() && (modifiers.contains(Modifier.SEALED) || isSealedSubclass()) ->
-    "a generic sealed base or arm is declared without its type parameters in C#, so it has " +
-        "no holder for nested declarations"
   // ADR-196: a captured inner class is the generic `Tin.Latch<T>` in C#, and a type nested in a
   // generic C# class can hold no `[DllImport]` (CS7042). Kotlin lets it own only inner classes.
   capturedTypeParameterOwners().isNotEmpty() ->
@@ -377,9 +371,9 @@ internal fun KSClassDeclaration.nestedOwnerScopeCollision(): NestedOwnerScopeCol
   }
   // ADR-196: a generic class owner's children are declared on its non-generic holder, which has no
   // members, so a member of `Tin<T>` named like `Tin.Lid` shares no scope with it (no CS0102).
-  val ownerHasHolder: Boolean = owner.classKind == ClassKind.CLASS &&
-      owner.typeParameters.isNotEmpty() && !owner.modifiers.contains(Modifier.SEALED) &&
-      !owner.isSealedSubclass()
+  // ADR-199: a generic sealed base or arm has one too, carrying its arms and nothing else.
+  val ownerHasHolder: Boolean = owner.typeParameters.isNotEmpty() &&
+      (owner.classKind == ClassKind.CLASS || owner.isEligibleSealedType())
   if (ownerHasHolder) return null
   // ADR-013 folds a companion's public members into the owner's C# class as statics (`const val`
   // included, see `CirClassTranslator`), so they share the one member-name scope the nested type is
@@ -1756,37 +1750,14 @@ internal class NugetProcessor(
       rootClasses + dependenciesIn(ForwardReachabilityBucket.CLASS)
     val declaredValueClasses: List<KSClassDeclaration> =
       rootValueClasses + dependenciesIn(ForwardReachabilityBucket.VALUE_CLASS)
-    // A generic sealed class is not declared at all, the refused value class's rule below: the
-    // sealed route spells the base and every arm by its bare name (`asStableRef<Outcome>()`, a
-    // non-generic `Outcome` holding `Ok(T v)`), and an arm need not share the base's type argument
-    // (`Err : Outcome<Nothing>`), so there is no honest C# hierarchy to declare. Named here, once;
-    // its arms stay off the ordinary class route (`isSealedSubclass`), and every member typed with
-    // it skips on its own owner as an undeclared type.
-    val (genericSealedClasses: List<KSClassDeclaration>, sealedClasses: List<KSClassDeclaration>) =
+    // ADR-199: a generic sealed class is declared like any other, on the ADR-009 route, with its
+    // arms on the ADR-196 non-generic holder.
+    // An intermediate sealed arm of a generic hierarchy (`sealed class Fault<T> : Outcome<T>()`)
+    // is a generic sealed hierarchy of its own, declared on its parent's holder, so it is planned,
+    // exported and discriminated like any other.
+    val sealedClasses: List<KSClassDeclaration> =
       (rootSealedClasses + dependenciesIn(ForwardReachabilityBucket.SEALED_CLASS))
-        .partition { sealed -> sealed.typeParameters.isNotEmpty() }
-    ForwardGenericSealedHierarchies.reset(genericSealedClasses)
-    ForwardDiagnosticSink.emit(
-      genericSealedClasses.map { sealed ->
-        val name: String = sealed.qualifiedName?.asString() ?: sealed.simpleName.asString()
-        val arms: String = sealed.getSealedSubclasses()
-          .joinToString(", ") { arm -> "`${arm.simpleName.asString()}`" }
-          .ifEmpty { "none" }
-        ForwardDiagnostic(
-          kind = ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_TYPE,
-          symbol = sealed.takeIf { it.containingFile != null },
-          declaration = name,
-          reason = "sealed class `$name` has type parameters, and the sealed-class route " +
-              "declares a base and its arms only without them, so neither it nor its arms " +
-              "($arms) nor the declarations nested in it are declared in C#",
-          hint = "declare the hierarchy without type parameters (an arm can still hold a " +
-              "generic value as a property of a concrete type), or bind a non-sealed generic " +
-              "class or interface in its place",
-          owner = null,
-        )
-      },
-      logger,
-    )
+        .flatMap { sealed -> listOf(sealed) + sealed.intermediateGenericSealedArms() }
     val declaredObjects: List<KSClassDeclaration> =
       rootObjects + dependenciesIn(ForwardReachabilityBucket.OBJECT)
     val declaredEnums: List<KSClassDeclaration> =
@@ -1803,10 +1774,7 @@ internal class NugetProcessor(
     // a companion object (ADR-013 folds it into its owner's statics), and an arm of an ineligible
     // sealed interface (ADR-112 warns once for the whole hierarchy).
     val nestedCandidates: List<KSClassDeclaration> =
-      // A skipped generic sealed base is an owner here only so its children are named: every one
-      // of them is deferred (`nestedDeclarationDeferral`), so none is declared.
-      (declaredClasses + declaredValueClasses + sealedClasses + genericSealedClasses +
-          declaredObjects +
+      (declaredClasses + declaredValueClasses + sealedClasses + declaredObjects +
           declaredInterfaces + declaredEnums)
         .flatMap { owner -> owner.nestedClassDeclarations() }
         .filter { it.getVisibility() == Visibility.PUBLIC }

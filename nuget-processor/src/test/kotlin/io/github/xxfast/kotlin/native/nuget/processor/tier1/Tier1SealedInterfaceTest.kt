@@ -17,8 +17,9 @@ import kotlin.test.assertTrue
  * `SKIPPED_UNSUPPORTED_PROPERTY`). The C# type existed and could never be obtained, implemented or
  * passed.
  *
- * An **eligible** sealed interface (no type parameters, every subclass a nested class or object
- * with no other superclass, no sub-interfaces) now takes the ADR-009 sealed-class route verbatim:
+ * An **eligible** sealed interface (every subclass a nested class or object with no other
+ * superclass, no sub-interfaces; ADR-199 admits type parameters) now takes the ADR-009
+ * sealed-class route verbatim:
  * `public abstract class Pulse` with nested `sealed` subclasses and a `FromHandle` discriminator,
  * and every ADR-105 position binds through it. No `IPulse` may survive anywhere, since the ADR-040
  * backing wrapper behind it would collide with the abstract class by name (CS0101).
@@ -215,9 +216,10 @@ class Tier1SealedInterfaceTest {
   }
 
   /**
-   * The two structural disqualifying reasons, each of which the position-level `SEALED_POSITION`
-   * skip can only report as "no discriminator". One fixture, because they are independent
-   * hierarchies and the harness cost is per run.
+   * The structural disqualifying reason, which the position-level `SEALED_POSITION` skip can only
+   * report as "no discriminator". One fixture, because the hierarchies are independent and the
+   * harness cost is per run. `Boxed` used to be the generic reason; ADR-199 admits it, so it stays
+   * as a positive control.
    *
    * `Loose`/`Astray` used to be the third reason ("subclass `Astray` is declared outside the sealed
    * interface"). ADR-125 admits it, so it stays here as the positive control for the reason that
@@ -252,10 +254,10 @@ class Tier1SealedInterfaceTest {
       },
     ) { "expected an ineligibility warning for $name; kspWarnings=${result.kspWarnings}" }
 
-    val generic: String = reason("Boxed")
+    // ADR-199: a generic sealed interface is eligible now, and takes the generic sealed route.
     assertTrue(
-      generic.contains("it has type parameters"),
-      "expected the generic reason; got: $generic",
+      result.kspWarnings.none { it.contains("`tier1.sealedinterface.ineligible.Boxed`") },
+      "expected the generic sealed interface to bind; kspWarnings=${result.kspWarnings}",
     )
     val subInterface: String = reason("Split")
     assertTrue(

@@ -153,6 +153,7 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
     // ADR-171: a value class is a record struct with no handle constructor; its `NugetUnbox` reads
     // the boxed Kotlin value back and disposes the handle.
     val construct: String = when {
+      entry.constructExpression != null -> entry.constructExpression
       entry.viaFromHandle -> "global::${entry.constructTypeName}.FromHandle(handle)"
       entry.viaNugetUnbox -> "global::${entry.constructTypeName}.NugetUnbox(handle)"
       entry.viaEnumOrdinal -> "(global::${entry.constructTypeName})UnwrapEnumOrdinal(handle)"
@@ -205,6 +206,12 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
     "                if (Factories.TryGetValue(key, out " +
         "Func<NugetKotlinHandle, object>? factory)) return (T)factory(owned);",
   )
+  // ADR-199: an instantiation only the consumer chose (`Crate<Outcome<long>>`) has no static
+  // entry; its generated static constructor filled this slot the first time it was used.
+  if (helper.includesFactorySlot) {
+    appendLine("                Func<NugetKotlinHandle, object>? slot = NugetFactory<T>.Create;")
+    appendLine("                if (slot != null) return (T)slot(owned);")
+  }
   appendLine(
     "                throw new NotSupportedException($\"No generated factory materialises " +
         "{typeof(T)} from a Kotlin handle\");",
@@ -704,6 +711,15 @@ internal fun StringBuilder.renderMarshalHelper(helper: CirMarshalHelper) {
   appendLine("            TryResolveCSharp<object>(handle, out original);")
   appendLine("    }")
   appendLine()
+  if (helper.includesFactorySlot) {
+    // ADR-199: one slot per closed type, set by the static constructor of a generic sealed base
+    // or arm. No reflection, so it holds under trimming and NativeAOT as `Factories` does.
+    appendLine("    internal static class NugetFactory<T>")
+    appendLine("    {")
+    appendLine("        internal static Func<NugetKotlinHandle, object>? Create;")
+    appendLine("    }")
+    appendLine()
+  }
 }
 
 /**

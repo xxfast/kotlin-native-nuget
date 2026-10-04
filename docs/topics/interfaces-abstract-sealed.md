@@ -9,8 +9,8 @@ a C# `abstract class` whose subclasses share one inherited `_handle`, and `seale
 |---|---|---|
 | `interface` | `interface` (`I`-prefixed) | default methods delegate to Kotlin; a super-interface's members are inherited, not redeclared; `suspend`/`Flow`/`StateFlow` members are declared too, and the interface becomes `IAsyncDisposable` when it has one |
 | `abstract class` | `abstract class` | `_handle` inherited by every subclass; a value typed as the class comes back as an internal subclass |
-| `sealed class` | `abstract class` | each subtype its own class, nested inside the base or declared beside it, reconstructed through a generated `FromHandle` |
-| eligible `sealed interface` (no type parameters; every subclass a `class`/`object` or `enum class`, no other superclass, no sub-interface, no second sealed-interface parent) | `abstract class` | same shape as `sealed class`; no C# interface is declared for it; an `enum class` arm binds as a boxed `{Enum}Arm` |
+| `sealed class` | `abstract class` | each subtype its own class, nested inside the base or declared beside it, reconstructed through a generated `FromHandle`; a generic `sealed class` binds as `Outcome<T>` with arms on a non-generic `Outcome` holder (`Outcome.Ok<T>`) |
+| eligible `sealed interface` (every subclass a `class`/`object` or `enum class`, no other superclass, no sub-interface, no second sealed-interface parent) | `abstract class` | same shape as `sealed class`; no C# interface is declared for it; an `enum class` arm binds as a boxed `{Enum}Arm` |
 | ineligible `sealed interface` | `interface` (`I`-prefixed) | stays on the ordinary interface route; every member typed with it is skipped |
 
 ## Interfaces
@@ -821,7 +821,8 @@ which `Hibernator` leaves open, as well as its own members.
 A *generic* abstract class returned at a closed type comes back the same way, and so does an
 abstract class below one. Only a top-level function return binds a closed generic class today (see
 [Generics](generics.md#returning-an-instantiated-generic-class)); a property, parameter, list
-element or nullable of that type is a named skip:
+element or nullable of that type is a named skip (a [generic sealed hierarchy](#generic-sealed-hierarchy)
+is the exception):
 
 ```kotlin
 abstract class Trove<T>(val first: T) {
@@ -1051,9 +1052,8 @@ A `data class`/`data object` arm gets `Equals`/`GetHashCode`/`ToString` the same
 
 ### Sealed interfaces {id="sealed-interfaces"}
 
-A `sealed interface` maps the same way exactly when it is **eligible**: no type parameters, and
-every subclass is a `class`/`object` or `enum class`, nested in the interface or declared beside it,
-with no other superclass, no sub-interface, and no second sealed-interface parent. An eligible
+A `sealed interface` maps the same way exactly when it is **eligible**: every subclass is a `class`/`object` or `enum class`, nested in the interface or
+declared beside it, with no other superclass, no sub-interface, and no second sealed-interface parent. An eligible
 sealed interface renders as an `abstract class`, exactly like `sealed class` above; no `IFoo`
 interface is ever declared for it:
 
@@ -1288,7 +1288,7 @@ arm and uses the base's scope, so `await using` on the base reference drains it 
 moves to the base. C# source keeps compiling, since `loaf.AreaAsync()` now resolves to the inherited
 `Shape.AreaAsync`. A consumer compiled against an earlier package must be rebuilt.
 
-A generic sealed base is not bound at all; see [Limitations](#limitations).
+A generic sealed base or arm skips its `suspend` members, like any generic class; see [A generic sealed hierarchy](#generic-sealed-hierarchy).
 
 #### A `suspend fun` returning the sealed base {id="sealed-method-suspend-base-generated-c"}
 
@@ -1399,8 +1399,97 @@ A sealed base, a sealed arm, and any `interface` owner can nest their own plain
 `class`/`object`/`interface`/`enum class`/`value class`, declared beside the owner's other members
 (`Purr.Detail`, `Purr.On.Trace`, `Beam.Lens`); see
 [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects). A generic
-class hosts them on a non-generic holder beside it. Only an `enum class`, a generic `interface` or a
-generic sealed owner still cannot host a nested declaration.
+class hosts them on a non-generic holder beside it. Only an `enum class` or a generic `interface` still cannot host a nested declaration.
+
+### A generic sealed hierarchy {id="generic-sealed-hierarchy"}
+
+A `sealed class` (or an eligible `sealed interface`) with a type parameter binds as a generic
+`abstract class`. Its arms are declared on a non-generic static class of the same name, so Kotlin's
+`Outcome.Ok<Int>` is `Outcome.Ok<int>` in C#:
+
+```kotlin
+sealed class Outcome<out T> {
+  data class Ok<T>(val value: T) : Outcome<T>()
+  data class Err(val message: String) : Outcome<Nothing>()
+  data object Loading : Outcome<Nothing>()
+  open fun label(): String = "outcome"
+}
+
+object OutcomeDesk {
+  fun fetch(id: Int): Outcome<Int> = if (id > 0) Outcome.Ok(id) else Outcome.Err("no $id")
+  fun describe(outcome: Outcome<Int>): String { /* ... */ }
+}
+```
+
+```C#
+using Outcome<int> outcome = OutcomeDesk.Fetch(3);
+
+string text = outcome switch
+{
+    Outcome.Ok<int> ok => $"ok {ok.Value}",
+    Outcome.Err<int> err => err.Message,
+    Outcome.Loading<int> => "loading",
+    _ => outcome.Label(),
+};
+
+using var mine = new Outcome.Err<int>("Mylo ate it");
+string described = OutcomeDesk.Describe(mine);  // "err Mylo ate it"
+```
+
+`Err` fixes the base's argument to `Nothing`, which C# cannot express, so it is generic in C# too.
+Its type parameter is a placeholder: choose it to match the `Outcome<T>` you hold or need
+(`Err<int>` is an `Outcome<int>`, `Err<string>` an `Outcome<string>`). They are two C# types over
+one Kotlin class. A `data object` arm such as `Loading<T>` is only ever received; it has no public
+constructor. Arms you build in C# can be passed anywhere Kotlin wants the base.
+
+The same rule decides every arm:
+
+- An arm that forwards the base's parameter (`Ok<T> : Outcome<T>`) is generic over it. An arm that
+  permutes or renames parameters lists them in the base's order: `Flip<X, Y> : Duel<Y, X>` is
+  `Duel.Flip<Y, X>`.
+- An arm that fixes a **covariant** (`out`) parameter gets a placeholder parameter, as `Err` does.
+- Under an **invariant** parameter, an arm that closes the argument keeps Kotlin's exact shape:
+  `class IntCell : Cell<Int>()` is `Cell.IntCell : Cell<int>`, with no placeholder.
+- An intermediate `sealed` arm is abstract and has its own arms, and it follows the same rule:
+  `sealed class Lapse : Outcome<Nothing>()` is `Outcome.Lapse<T>` with `Outcome.Lapse.Stall<T>`,
+  while `sealed class Spare : Cell<Int>()` stays `Cell.Spare` with `Cell.Spare.Last`.
+- An arm restates the base's constraints, so a base with `T : Dozer` gives `Claimed<T> where T : IDozer`.
+- A type declared beside the arms (`Outcome.Detail`) lives on the `Outcome` holder, and an arm
+  declared beside the base in the same file is declared at namespace level, as for any sealed class.
+- An arm cannot be named like its base (`Outcome.Outcome`): the build fails with
+  `ERROR_CSHARP_NAME_COLLISION`, so rename the arm.
+
+A position typed as an arm that fixes `Nothing` (`fun fail(): Outcome.Err`) is
+`Outcome.Err<KotlinNothing>`. `KotlinNothing` comes from `Kotlin.Native.Interop`; it can never be
+instantiated.
+
+A closed instantiation (`Outcome<Int>`, `Outcome<String>?`) binds as a parameter, return, property,
+constructor parameter or `List` element, as a `Flow` element returned from a class method, and in a
+returned lambda (`KotlinFunc<Outcome<int>, Outcome<int>>`). The argument can be a primitive,
+`String`, an exported class, object, interface or enum, or a type parameter of the declaring class
+(`Hamper<T>.Wrap(): Outcome<T>`). A `Hamper<Outcome<long>>` you pick yourself works too, once you
+hold an `Outcome<long>` to put in it.
+
+A consumer cannot convert between instantiations: an `Outcome.Err<KotlinNothing>` is not an
+`Outcome<int>`. This is C# invariance, the same rule that stops a `List<string>` becoming a
+`List<object>`. Build the `Err<int>` instead.
+
+These are skipped with a named `SKIPPED_SEALED_POSITION` warning. The member is absent and the rest
+of its owner still binds:
+
+- A use-site projection (`Outcome<*>`): C# has no projection of a generic class.
+- An argument the bridge cannot read through an erased slot (`Outcome<List<Int>>`, a lambda or a
+  `Flow` as the argument).
+- `Nothing` under a constraint the marker fails: `Blanket.Folded` is `Blanket<Nothing>` where C#
+  restates `T : IDozer`, and `KotlinNothing` does not implement `IDozer`.
+
+An arm that declares a parameter its base never sees (`class Both<T, U>(...) : Outcome<T>()`) is
+declared without it (`Outcome.Both<T>`), since C# cannot recover `U` from an `Outcome<T>`. Its
+constructor and every member that names `U` are skipped, so you receive a `Both` from Kotlin but
+cannot construct one.
+
+A `suspend`, `Flow`, or stored-callback member declared on a generic sealed base or arm is skipped,
+like the same member on any [generic class](generics.md#limitations).
 
 ## Limitations {id="limitations"}
 
@@ -1432,12 +1521,9 @@ generic sealed owner still cannot host a nested declaration.
   obtain the arm from a factory or from the base's `FromHandle` discriminator instead. A
   `class`-kind arm with bridgeable constructor parameters exports a real public constructor
   instead; see [Sealed classes and interfaces](#sealed-classes-and-interfaces).
-- A generic sealed hierarchy (`sealed class Outcome<T>`) is not bound. The base is one named
-  `SKIPPED_UNSUPPORTED_TYPE` listing its arms, every function or property typed with it or an arm
-  is a named skip whose hint says it belongs to a generic sealed hierarchy, and the rest of the
-  owner binds as usual. Declare the hierarchy without type
-  parameters (an arm can hold a generic value as a property of a concrete type), or use a
-  non-sealed generic class.
+- A generic sealed hierarchy skips a few uses, named: a use-site projection (`Outcome<*>`), an
+  argument the bridge cannot read, `Nothing` under a constraint, and an arm parameter the base never
+  sees. See [A generic sealed hierarchy](#generic-sealed-hierarchy).
 - A `suspend` lambda parameter (`suspend (T) -> R`) on a sealed arm has no binding, the same as on
   an ordinary class. A generic method on an arm or a sealed base binds as a C# generic method; see
   [Generic methods on a class](generics.md#generic-methods).

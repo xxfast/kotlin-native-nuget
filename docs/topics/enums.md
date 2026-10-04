@@ -184,7 +184,7 @@ Name a property that holds the nested enum something other than the enum's own n
 not `mode`): PascalCasing a `mode` property to `Mode` would collide with the nested type `Mode`
 itself (CS0102).
 
-A nested enum under a still-deferred owner (another `enum class`, a generic `interface` or a generic sealed class;
+A nested enum under a still-deferred owner (another `enum class` or a generic `interface`;
 see [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects)) is not
 declared: the declaration itself is skipped with `SKIPPED_NESTED_DECLARATION`, and a parameter,
 return, or property typed with it is skipped with `SKIPPED_UNSUPPORTED_TYPE`/`SKIPPED_UNSUPPORTED_PROPERTY`

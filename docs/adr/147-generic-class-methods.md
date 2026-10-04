@@ -768,3 +768,7 @@ type, as before. A method `T` that shadows the class's `T` is also refused (C# C
 
 Evidence, verified: `Tier1MemberGenericMethodTest` and `MemberGenericMethodTests.GenericClass_...`
 (`Basket<string>.Swap(3)` returns 3, `Describe(2)` returns `"yarn&2"`).
+
+## Amendment (2026-10-05): a closed generic sealed reference binds at member positions
+
+[ADR-199](199-generic-sealed-hierarchies.md) lets a closed instantiation of a generic sealed hierarchy (`Outcome<Int>`) bind at member positions that were `SpecializedProtocol("generic declaration")` here; `suspend`, `Flow` and stored-callback members declared on a generic sealed base or arm keep this ADR's generic-owner skip.

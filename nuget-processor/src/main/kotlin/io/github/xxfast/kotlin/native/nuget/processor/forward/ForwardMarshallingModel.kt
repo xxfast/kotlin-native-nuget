@@ -259,6 +259,12 @@ internal sealed interface BridgeType {
   data class SpecializedProtocol(
     val name: kotlin.String,
     val sealedHandle: ObjectHandle? = null,
+    /**
+     * ADR-199: why a generic sealed reference has no spelling at this use site (a projection, an
+     * argument the erased wire cannot read, `KotlinNothing` under a bound), named by the
+     * `SKIPPED_SEALED_POSITION` it skips with. Null for every other protocol.
+     */
+    val sealedRefusal: kotlin.String? = null,
   ) : BridgeType
 
   /** A planning bug: raw KSP types must not leak beyond classification. */
