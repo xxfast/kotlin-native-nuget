@@ -150,8 +150,25 @@ Both runs are on `kotlin-version-range` before the rebase, read from the GitHub 
 job's `completedAt - startedAt`.
 
 The gap between the longest job and the elapsed time is queueing: the macOS jobs do not all start
-at once. Why they queue was not established. The free plan allows 5 concurrent macOS jobs across
-the account, so other runs may be competing.
+at once. The cause is overlapping runs. The free plan allows 5 concurrent macOS jobs across the
+account, one run with #442 uses all 5, and a second run created seconds later has to wait.
+
+Start delay of the slowest macOS job, from the GitHub Actions API on 2026-10-04:
+
+| Run | Created (UTC) | Another run created within | Slowest macOS start |
+|---|---|---|---|
+| 37186675031 | 07:43:50 | 25 seconds (37186696282) | 11.6 minutes |
+| 37190764052 | 09:00:42 | 2 seconds (37190761712) | 3.8 minutes |
+| 37189686701 | 08:40:32 | none, but the two 08:31 runs were still going | 6.7 minutes |
+| 37189219653 | 08:31:49 | 3 seconds (37189216664) | 5.1 minutes |
+| 37201749825 | 12:20:14 | none | 8 seconds |
+| 37199729997 | 11:44:04 | none | 10 seconds |
+| 37191918176 | 09:22:00 | none | 8 seconds |
+
+A run on its own starts every job within 10 seconds, and Windows and Ubuntu jobs never waited more
+than 18 seconds in any of these. So queueing is a cost of pushing several branches at once (a
+stack, or parallel lanes), not of a single pull request. Verified by reading the job timestamps;
+that the cap is what holds the jobs is inferred from the pattern.
 
 | Part of the run | Legs | Runner-minutes | Share |
 |---|---|---|---|
@@ -227,9 +244,18 @@ Not levers:
 - **Moving the whole `consumer` job to `main`.** It would also drop the only by-coordinate check
   from pull requests.
 
-Unexplored: the generator suites are JVM tests. Running their macOS legs on Ubuntu would free
-macOS slots and might cut queueing. Whether they pass on Linux was not checked, and the Kotlin
-coverage upload comes from the macOS leg today.
+### Fewer macOS jobs per run
+
+Since queueing comes from overlapping runs meeting the 5 job macOS cap, every macOS job a run does
+not need shortens the wait when branches are pushed together.
+
+- **Forward generator on Ubuntu (done in the second pass).** The processor's tests are JVM only:
+  in-process KSP, generated text asserted as strings, no Kotlin/Native link. Their unix leg moves
+  from `macos-latest` to `ubuntu-latest`, so a run uses 4 macOS jobs, not 5. The Windows leg and the
+  coverage upload stay. Trade-off: the processor suite no longer runs on a macOS host in CI. It
+  still runs there locally, and the macOS `bridge` leg runs the real processor end to end.
+- **Reverse generator and plugin stays on macOS.** Those tests are host-specific: they compile
+  generated Kotlin with the host `kotlinc-native` and resolve host RIDs.
 
 ## The outside-consumer fixture
 
