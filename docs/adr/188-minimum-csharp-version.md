@@ -69,3 +69,24 @@ public static class CatExtensions
 - The documented disambiguated form is the lowered static accessor: `CatExtensions.get_IsKitten(cat)` and `CatExtensions.set_Label(cat, value)` (`Extensions.get_X(receiver)` / `set_X(receiver, value)`), which a consumer calls when two imported namespaces both declare `X` for the same receiver. `IntegrationTests/ExtensionNamespaceTests.cs` pins it.
 - An extension property and an extension function of one C# name on one receiver no longer both reach C#: the property is the one skipped (`SHADOWED_BY_EXTENSION_FUNCTION`). Under ADR-013 they coexisted as `GetX()` and `X()`.
 - The Kotlin exports and the `DllImport` set are unchanged (`{receiver}_get_{name}` / `_set_{name}`, `Native_*GetX`): only the public C# member changes, so the ADR-055 contract check needs nothing new.
+
+## Amendment 2026-10-03: the property/function clash is per C# extension class
+
+The `SHADOWED_BY_EXTENSION_FUNCTION` skip is keyed on `(extension namespace, receiver declaration, C# name)`,
+not on `(receiver declaration, C# name)`. The namespace comes from the rule the translator uses to place an
+extension (`extensionNamespace`, shared with the planner): the receiver's package when the receiver is
+exported, the declaring package otherwise. This corrects the Decision bullet above, which reads as if the
+match ignored packages.
+
+- Exported receiver (`Cat`): extensions from every package merge into one `CatExtensions`, so the skip
+  stays, across packages too.
+- Unexported receiver (`String`): each package gets its own `StringExtensions`, so `val String.tag` in
+  one package and `fun String.tag()` in another both bind. A consumer file that imports both namespaces
+  gets CS9339 on the property member syntax only and uses `get_Tag`, the escape documented above.
+- Same package: still skipped, named once.
+
+Evidence. Verified: `Tier1ExtensionPropertyFunctionClashTest` has six cells (the unexported two-package
+cell failed before and passes after, the two controls are unchanged); `:nuget-processor:test` passed
+(1553); `scripts/verify.sh` is green, where one xunit file imports each namespace and calls the property
+or the function. The research spike with SDK 10 showed that importing both namespaces gives CS9339 on
+`"x".Tag` only. No LeakTests row, since `String` crosses without a handle.

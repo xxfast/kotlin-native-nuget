@@ -683,11 +683,7 @@ internal fun translate(
   // ADR-126 whichever extension KSP saw first dragged every same-receiver extension in the library
   // into its package's namespace.
   fun extensionNamespace(receiver: KSDeclaration, declaring: KSDeclaration): String =
-    if ((receiver.qualifiedName?.asString() ?: "") in exportedTypes) {
-      namespaceOf(receiver.packageName.asString())
-    } else {
-      namespaceOf(declaring.packageName.asString())
-    }
+    extensionNamespace(receiver, declaring, exportedTypes, ::namespaceOf)
 
   // ADR-133 amendment: an extension receiver keys on its whole enclosing chain (`Aviary.Perch`),
   // which is both the class-name stem and -- spelled identically by `ForwardPropertyPlanner` --
@@ -1145,6 +1141,25 @@ internal fun translate(
  */
 internal fun CirFile.withoutEmptyStaticClasses(): CirFile =
   copy(namespaces = namespaces.withoutEmptyStaticClasses())
+
+/**
+ * ADR-126: the C# namespace an extension's `{Receiver}Extensions` class lands in. An exported
+ * receiver ([exportedTypes] holds its qualified name) homes it on the receiver's own package; an
+ * unexported one (`String`, primitives, any stdlib type) on the package [declaring] the extension.
+ * The one rule both the translator's grouping and ADR-188's clash refusal in
+ * `ForwardPropertyPlanner` read, so the planner refuses exactly the pairs that share a class.
+ */
+internal fun extensionNamespace(
+  receiver: KSDeclaration,
+  declaring: KSDeclaration,
+  exportedTypes: Set<String>,
+  namespaceOf: (String) -> String,
+): String =
+  if ((receiver.qualifiedName?.asString() ?: "") in exportedTypes) {
+    namespaceOf(receiver.packageName.asString())
+  } else {
+    namespaceOf(declaring.packageName.asString())
+  }
 
 private fun List<CirNamespace>.withoutEmptyStaticClasses(): List<CirNamespace> = this
   .map { namespace ->
