@@ -194,10 +194,12 @@ internal val NESTED_DECLARATION_KINDS: Set<ClassKind> = setOf(
   ClassKind.ENUM_CLASS,
 )
 
-private fun KSClassDeclaration.nestedDeclarationKind(): String = when (classKind) {
-  ClassKind.ENUM_CLASS -> "enum class"
-  ClassKind.OBJECT -> "object"
-  ClassKind.INTERFACE -> "interface"
+private fun KSClassDeclaration.nestedDeclarationKind(): String = when {
+  // A `value class` is ClassKind.CLASS, so it is tested before the kind dispatch.
+  isValueClass() -> "value class"
+  classKind == ClassKind.ENUM_CLASS -> "enum class"
+  classKind == ClassKind.OBJECT -> "object"
+  classKind == ClassKind.INTERFACE -> "interface"
   else -> "class"
 }
 
@@ -287,12 +289,35 @@ internal fun KSClassDeclaration.nestedDeclarationDeferral(): String? {
 }
 
 /**
- * ADR-133 surface 6: the C# member name of the owner this nested type's name collides with, or
- * null. C# forbids a member and a nested type sharing a name in the same declaring type (CS0102),
- * and forbids a nested type named like its owner (CS0542); Kotlin permits both, so
- * `class Config` beside `val config: Config` would otherwise generate uncompilable C#.
+ * ADR-133 surface 6: what a nested type's name collides with in its owner, as the reason fragment
+ * naming the other party and the remedy that fits it. The hint is per arm because only CS0102 has
+ * a colliding member to rename; on CS0542 the other party is the owner type itself.
  */
-internal fun KSClassDeclaration.nestedOwnerScopeCollision(): String? {
+internal sealed interface NestedOwnerScopeCollision {
+  val reason: String
+  val hint: String
+
+  data object OwnerName : NestedOwnerScopeCollision {
+    override val reason: String = "its owner's own name (CS0542)"
+    override val hint: String =
+      "rename the nested declaration, or its owner, so the two names differ"
+  }
+
+  data class Member(val name: String) : NestedOwnerScopeCollision {
+    override val reason: String = "the member `$name` of the same C# type (CS0102)"
+    override val hint: String =
+      "rename the nested declaration, or the colliding member, so the two names differ after " +
+          "PascalCasing"
+  }
+}
+
+/**
+ * ADR-133 surface 6: the owner-scope name this nested type collides with, or null. C# forbids a
+ * member and a nested type sharing a name in the same declaring type (CS0102), and forbids a
+ * nested type named like its owner (CS0542); Kotlin permits both, so `class Config` beside
+ * `val config: Config` would otherwise generate uncompilable C#.
+ */
+internal fun KSClassDeclaration.nestedOwnerScopeCollision(): NestedOwnerScopeCollision? {
   val owner: KSClassDeclaration = parentDeclaration as? KSClassDeclaration ?: return null
   val name: String = simpleName.asString()
   // CS0542 compares the C# names, not the Kotlin ones: ADR-134 declares an `interface` owner's
@@ -301,7 +326,7 @@ internal fun KSClassDeclaration.nestedOwnerScopeCollision(): String? {
   // no `I` (issue #54), so `Beam.Beam` is still the error this arm exists for.
   val segments: List<String> = nestedCsName().split('.')
   if (segments.size >= 2 && segments[segments.size - 2] == segments.last()) {
-    return "its owner's own name (CS0542)"
+    return NestedOwnerScopeCollision.OwnerName
   }
   // ADR-013 folds a companion's public members into the owner's C# class as statics (`const val`
   // included, see `CirClassTranslator`), so they share the one member-name scope the nested type is
@@ -327,7 +352,7 @@ internal fun KSClassDeclaration.nestedOwnerScopeCollision(): String? {
         owner.getAllFunctions().map { it.simpleName.asString() }.toList() +
         companionMemberNames)
       .map { it.replaceFirstChar { c -> c.uppercase() } }
-  return if (name in memberNames) "the member `$name` of the same C# type (CS0102)" else null
+  return if (name in memberNames) NestedOwnerScopeCollision.Member(name) else null
 }
 
 internal fun warnDroppedForwardCallables(
@@ -1588,10 +1613,11 @@ internal class NugetProcessor(
     // (CS0102), and it permits a nested type named like its owner, which C# rejects too (CS0542).
     // Fatal and skipped, never emitted: the alternative is C# the consumer cannot compile, with no
     // KSP message naming the Kotlin shape that caused it.
-    val nestedCollisions: Map<String, String> = nestedCandidates
+    val nestedCollisions: Map<String, NestedOwnerScopeCollision> = nestedCandidates
       .filter { it.nestedDeclarationDeferral() == null }
       .mapNotNull { nested ->
-        val collision: String = nested.nestedOwnerScopeCollision() ?: return@mapNotNull null
+        val collision: NestedOwnerScopeCollision =
+          nested.nestedOwnerScopeCollision() ?: return@mapNotNull null
         (nested.qualifiedName?.asString() ?: nested.simpleName.asString()) to collision
       }
       .toMap()
@@ -1605,15 +1631,14 @@ internal class NugetProcessor(
       .filter { (it.qualifiedName?.asString() ?: it.simpleName.asString()) in nestedCollisions }
       .map { nested ->
         val name: String = nested.qualifiedName?.asString() ?: nested.simpleName.asString()
+        val collision: NestedOwnerScopeCollision = nestedCollisions.getValue(name)
         ForwardDiagnostic(
           kind = ForwardDiagnosticKind.ERROR_CSHARP_SIGNATURE_COLLISION,
           symbol = nested.takeIf { it.containingFile != null },
           declaration = name,
           reason = "nested ${nested.nestedDeclarationKind()} `$name` is declared in C# as " +
-              "`${nested.nestedCsName()}`, whose name collides with " +
-              "${nestedCollisions.getValue(name)}",
-          hint = "rename the nested declaration, or the colliding member, so the two names " +
-              "differ after PascalCasing",
+              "`${nested.nestedCsName()}`, whose name collides with ${collision.reason}",
+          hint = collision.hint,
           // ERROR_*: the build fails, so no consumer ever reads a generated file for it.
           owner = null,
         )

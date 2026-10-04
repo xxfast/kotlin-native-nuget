@@ -511,9 +511,10 @@ class Tier1NestedTypesTest {
       assertTrue(
         result.kspWarnings.any {
           it.contains(ForwardDiagnosticKind.SKIPPED_NESTED_DECLARATION.name) &&
-              it.contains(declaration)
+              it.contains("nested value class `$declaration`")
         },
-        "expected $declaration to skip named at the declaration; warnings=${result.kspWarnings}",
+        "expected $declaration to skip named as a nested value class at the declaration; " +
+            "warnings=${result.kspWarnings}",
       )
     }
     listOf(
@@ -608,6 +609,15 @@ class Tier1NestedTypesTest {
       },
       "expected the owner-name collision to be diagnosed by name; " +
           "kspErrors=${result.kspErrors} kspWarnings=${result.kspWarnings}",
+    )
+    // There is no colliding member on this arm: the other party is the owner type itself.
+    val message: String = (result.kspErrors + result.kspWarnings)
+      .single { it.contains("tier1.ownername.Owner.Owner") }
+    assertContains(message, "CS0542")
+    assertContains(message, "rename the nested declaration, or its owner, so the two names differ")
+    assertFalse(
+      message.contains("colliding member"),
+      "expected the CS0542 hint not to name a colliding member; message=$message",
     )
     // The outer declaration survives: only the child is skipped.
     assertContains(result.generatedCSharp, "public class Owner")
@@ -715,6 +725,16 @@ class Tier1NestedTypesTest {
             it.contains("tier1.valuecollision.Hamper.Weight")
       },
       "expected the value class's owner-scope collision to be diagnosed by name; " +
+          "kspErrors=${result.kspErrors} kspWarnings=${result.kspWarnings}",
+    )
+    // The kind word reads "value class", not "class", and the CS0102 arm keeps the member remedy:
+    // a colliding member really exists here.
+    assertTrue(
+      (result.kspErrors + result.kspWarnings).any {
+        it.contains("nested value class `tier1.valuecollision.Hamper.Weight`") &&
+            it.contains("or the colliding member")
+      },
+      "expected the collision to name a nested value class and the colliding member; " +
           "kspErrors=${result.kspErrors} kspWarnings=${result.kspWarnings}",
     )
     assertFalse(
