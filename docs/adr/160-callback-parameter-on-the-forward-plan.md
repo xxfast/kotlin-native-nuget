@@ -169,8 +169,8 @@ consumer cannot get `int total = metronome.CountTicks(...)` back at all.
   each call (ADR-036's `using (c)` pattern, restated). A consumer lambda that skips that `using`
   leaks one handle per invocation, the same residual ADR-036 already names for every callback
   payload: a generated wrapper has `Dispose()` and no finalizer.
-- `isForwardLegacyRoute()` (`exports/ClassExports.kt:82`) still reports any lambda-parameter member
-  as legacy regardless of whether the plan actually owns it. Tracked on the ROADMAP.
+- Superseded 2026-10-03 (see the amendment): `isForwardLegacyRoute()` reported any lambda-parameter member
+  as legacy regardless of whether the plan owned it; it no longer does.
 - Deliberately still refused by name, on both halves: `Char` on either the payload or the lambda-
   result axis (no by-value crossing convention and not a legal `[UnmanagedCallersOnly]` signature
   type); an object or enum lambda **result** (releasing a box the C# wrapper still owns is an
@@ -184,6 +184,13 @@ consumer cannot get `int total = metronome.CountTicks(...)` back at all.
 - The plan's delegate segment used to spell unsigned kinds `Uint`/`Ulong`; it now spells `UInt`/`ULong`
   like every other lambda route (see the 2026-10-03 amendment).
 - A planned callback member on a generic class is untested.
+
+- No fixture exercises an unsigned-primitive or interface-typed callback payload on the plan; ten of
+  forty-four branches in `forward/ForwardCirCallbackProjection.kt` are cold. Tracked on the
+  ROADMAP.
+- The plan's delegate segment spelling (`Uint`, `Ulong`) does not match the interface-bridge route's
+  own unsigned spelling (`UInt`, `ULong`); cosmetic, tracked on the ROADMAP.
+- A planned callback member on a generic class binds and runs since the 2026-10-03 amendment.
 
 ## Prior art
 
@@ -362,3 +369,20 @@ Evidence, verified: the Tier 1 test `a member both callback gates refuse is name
 specific reason` failed before the change and passes after it; `:nuget-processor:test` passed
 (1546 tests, 0 failed). Inferred: the native pipeline was not run for this item, and nothing new is
 generated, so no `LeakTests` row applies.
+
+## Amendment (2026-10-03): the legacy-route predicate defers to the plan
+
+`isForwardLegacyRoute()` no longer reports a lambda-parameter member the plan owns: it is now
+"async, or an add/remove pair half, or a lambda member the plan does not own", and the Kotlin and
+C# halves both call that one predicate (the Kotlin half had an inline copy). The two consequence
+bullets above about the predicate and the untested generic case are closed by this.
+
+A per-call lambda member the plan owns now binds on a generic class (ADR-147) and runs: `Box<T>`'s
+`fun measure(scale: (Int) -> Int)` is called from C# as `box.Measure(n => n * 10)`. A lambda member
+the plan does not own (`(Char) -> Unit`, `(T) -> Unit`) stays unbound on a generic owner and is now
+named, see ADR-147's 2026-10-03 amendment. `(T) -> Unit` is declined in `isCallbackPayload`'s
+`else -> false` arm for a `BridgeType.TypeParameter`.
+
+Evidence, verified: `Tier1GenericOwnerLegacyRouteTest` (planned `Each` and `Count` bind) and the
+consumer test `Box_PlannedCallbackMember_CallsTheDelegateBack`. No `LeakTests` row: the payload is a
+scalar, so no handle is minted.

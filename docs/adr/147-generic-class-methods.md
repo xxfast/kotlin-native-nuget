@@ -633,7 +633,7 @@ Expected ledger per iteration: `nuget_wrap_int` +1 / dispose -1 (ctor), `crate_c
   `cls.typeParameters.isNotEmpty()` guard ahead of the Flow/lambda property arms
   (`CirClassTranslator.kt:702-705`): every legacy route bakes the bare owner name
   (`asStableRef<Crate>()`) into its export, which does not compile for a generic owner, so neither
-  half emits one rather than emitting non-compiling C#.
+  half emits one rather than emitting non-compiling C#. **Corrected 2026-10-03:** until then this held only for a member with its own refusal; the rest vanished unnamed (see the 2026-10-03 amendment).
 - The constructor parameter is now named after the Kotlin property it initializes (`item`, from
   `Crate<T>(val item: T)`) instead of the legacy template's hardcoded `value`; the property getter
   gained the ADR-032 `out IntPtr error` channel the legacy generic getter did not have.
@@ -719,3 +719,35 @@ siblings), and `IntegrationTests/NullableTypeArgumentTests.cs` (null and non-nul
 `scripts/verify.sh` green. No new `LeakTests` row: `CatMoodTrackerKt.SulkBox()` already measures a
 returned generic-class handle. Inferred, not run: no shape was found that reaches the
 type-parameter branch of `csTypeArgument`, which may be dead code.
+
+## Amendment (2026-10-03): every legacy-route member of a generic class is named
+
+The consequence bullet above, "refused named on both halves", did not hold for a generic owner. A
+member the legacy route would carry on a non-generic class vanished from both artifacts with no
+warning: a carriable stored add/remove pair, a `Flow<Int>` method, a `suspend fun`, a `(Char) -> Unit`
+lambda member, and a `(T) -> Unit` lambda member (verified by a research spike). Only a member that
+already had its own refusal was named.
+
+Each such member is now named exactly once as `SKIPPED_UNSUPPORTED_COMBINATION` with the reason
+`GENERIC_OWNER_LEGACY_ROUTE` (sentence and hint in `forward/ForwardDiagnostic.kt`): the member kind
+cannot be bound on a generic class yet, and the hint is to move it onto a non-generic class, for
+example a wrapper holding this one. A member with its own refusal message keeps it and is still named
+once. An ordinary per-call lambda member the ADR-160 plan owns binds (see ADR-160's 2026-10-03
+amendment). `isForwardLegacyRoute()` is one predicate used by both halves.
+
+Also fixed: an interface-listener add/remove pair (`addPurr(listener: Purr)`) on a generic class
+slipped past the old filter. The Kotlin half generated `asStableRef<Crate>()`, which does not compile,
+while the C# half emitted nothing, so the ABI contract check could not catch it. It is now dropped and
+named like the rest.
+
+Corrections to the investigation: `suspend` was silent because `SUSPEND` is missing from
+`UNROUTED_CANDIDATE_REASONS`, not because `classEntries` exempts it; `(T) -> Unit` is declined in
+`isCallbackPayload`'s `else -> false` arm for a `BridgeType.TypeParameter`.
+
+Evidence, verified: `Tier1GenericOwnerLegacyRouteTest` (members named 0 times before and exactly once
+after; the listener-pair cell); `:nuget-processor:test` 1555 passed, 0 failed; module line coverage
+91.1%; `scripts/verify.sh` green on its second run (Contract 3, Integration 2997, Leak 158,
+MultiPackage 9, SharedException 2, all six NativeAOT shapes). The first run failed only the known-flaky
+`KennelRoundTripTests.Barks_CollectorCancelledMidStep...`, unrelated to this change. Inferred, not
+verified: a generic class overriding a `suspend` member of a non-exported interface stays silent,
+hidden by the interface-override exemption; the ADR-064 residuals item owns that area.

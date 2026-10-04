@@ -45,6 +45,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.exports.isCompilerOwnedMem
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardFlowType
 import io.github.xxfast.kotlin.native.nuget.processor.exports.returnsHeldMutableStateFlow
 import io.github.xxfast.kotlin.native.nuget.processor.exports.findStoredCallbackPairs
+import io.github.xxfast.kotlin.native.nuget.processor.exports.forwardLegacyPairMembers
 import io.github.xxfast.kotlin.native.nuget.processor.exports.isForwardLegacyRoute
 import io.github.xxfast.kotlin.native.nuget.processor.exports.refusedLegacyLambdaShape
 import io.github.xxfast.kotlin.native.nuget.processor.forward.legacyRefusedStoredCallbackPair
@@ -1082,6 +1083,14 @@ internal fun translateClass(
     }.toList()
 
   val allMethods = cls.getAllFunctions().toList()
+  // ADR-147: the pair halves the shared legacy-route predicate needs (pairs are structural).
+  val legacyPairMembers: Set<KSFunctionDeclaration> = forwardLegacyPairMembers(
+    allMethods
+      .filter { it.getVisibility() == Visibility.PUBLIC }
+      .filter { method -> !method.isCompilerOwnedMember(cls) }
+      .filter { method -> !method.modifiers.contains(Modifier.SUSPEND) }
+      .filter { method -> method.isForwardMemberOf(cls, superClassDeclaration) },
+  )
 
   val filteredMethods: List<KSFunctionDeclaration> = allMethods
     .filter { it.getVisibility() == Visibility.PUBLIC }
@@ -1099,8 +1108,13 @@ internal fun translateClass(
       if (classifier.legacyRefusedReturn(method) != null) return@filter false
 
       // ADR-147: the C# half of the same refusal the Kotlin export builders make for a generic
-      // owner. A generic class's suspend / Flow / lambda-parameter members are deferred, named.
-      if (cls.typeParameters.isNotEmpty() && method.isForwardLegacyRoute()) return@filter false
+      // owner. A generic class's suspend / Flow / legacy-callback members are deferred, named; a
+      // planned callback member is not legacy and comes off the catalog below (ADR-160).
+      if (cls.typeParameters.isNotEmpty() &&
+        method.isForwardLegacyRoute(classifier, legacyPairMembers)
+      ) {
+        return@filter false
+      }
 
       method.isForwardMemberOf(cls, superClassDeclaration)
     }

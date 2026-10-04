@@ -668,6 +668,8 @@ internal fun ForwardPlanSkipReason.toDiagnosticKind(
   ForwardPlanSkipReason.SEALED_SUBCLASS_UNROUTED,
   // ADR-116 amendment (2026-09-11): the base-declared twin, same kind for the same reason.
   ForwardPlanSkipReason.SEALED_BASE_UNROUTED,
+  // ADR-147: the same absence for a generic owner, which no legacy route is keyed to either.
+  ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE,
     -> ForwardDiagnosticKind.SKIPPED_UNSUPPORTED_COMBINATION
 
   // ADR-162: the one reason that maps to an ERROR_* kind by construction. It is not a "cannot
@@ -927,6 +929,11 @@ internal fun ForwardPlanSkipReason.diagnosticReason(
       "it is a ${detail ?: "specialized"} member of a sealed base class, which has no route yet " +
           "(ADR-116)"
 
+    // ADR-147: names the owner, not a type: the member binds unchanged on a non-generic class.
+    ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE ->
+      "it is a ${genericOwnerMemberKind(detail)} member of a generic class, and the route that " +
+          "binds that member kind cannot spell a generic receiver yet (ADR-147)"
+
     // ADR-064's 2026-09-11 amendment: scope, position and nesting drops. None of these is about
     // an unsupported type combination, and each contradicted the hint printed beside it. The
     // reason constant is kept only in the three UNDECLARED_* sentences below, whose kind is the
@@ -1101,6 +1108,14 @@ private fun String.dependencyAdmitName(): String {
   val firstTypeIndex: Int =
     segments.indexOfFirst { segment -> segment.firstOrNull()?.isUpperCase() == true }
   return if (firstTypeIndex < 0) this else segments.take(firstTypeIndex + 1).joinToString(".")
+}
+
+/** ADR-147: the member kind a [ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE] detail names. */
+private fun genericOwnerMemberKind(detail: String?): String = when (detail) {
+  ForwardPlanSkipReason.SUSPEND.name -> "`suspend`"
+  ForwardPlanSkipReason.FLOW_PROTOCOL.name -> "Flow-returning"
+  ForwardPlanSkipReason.CALLBACK_PROTOCOL.name -> "callback"
+  else -> "specialized"
 }
 
 /**
@@ -1358,6 +1373,10 @@ internal fun ForwardPlanSkipReason.diagnosticHint(
     // what is left unrouted on it is the callback and generic-member shapes.
     "declare the member on each arm of the sealed class instead (the arms carry the callback " +
         "routes the base does not), or move it onto an ordinary class"
+
+  ForwardPlanSkipReason.GENERIC_OWNER_LEGACY_ROUTE ->
+    "move the member onto a non-generic class (for example a wrapper that holds this one), " +
+        "which keeps the route this member kind needs"
 
   // Issue #57: the old hint ("declare the member directly on the value class") was already true
   // of an explicit `override`, which skips by the same rule (ADR-082: an override *is* the

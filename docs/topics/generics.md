@@ -382,6 +382,12 @@ publishing module itself.
 A `T?` written at a generic function's return (`fun <T> f(item: T): Crate<T?>`) is spelled `T` in
 C#, so the type argument you choose decides whether `null` can be held.
 
+A generic class binds its ordinary members, including a member that takes a lambda
+(`box.Measure(n => n * 10)`). It does not bind `suspend` members, `Flow`-returning members, stored
+callback or listener pairs, or lambda members with a `Char` or `T` payload. Each is skipped with a
+named `SKIPPED_UNSUPPORTED_COMBINATION` diagnostic; move it onto a non-generic class that wraps the
+generic one.
+
 A type nested inside a generic class is not bound, in a dependency or otherwise. If your API returns
 one, the member is skipped with a named diagnostic, but the generic owner is still exported.
 
