@@ -99,11 +99,9 @@ internal data class ForwardDroppedExtensionReceiver(
   val receiverDescription: String,
   /**
    * ADR-064 amendment (2026-09-20): the planner's own classification of *why* the receiver was
-   * refused, when it has a name the diagnostic can read a sentence and a hint off
-   * ([ForwardPlanSkipReason.RECEIVER_FAN_OUT], the one shape this route shares verbatim with the
-   * extension-FUNCTION route). Null for every other refused receiver, which keeps the shipped
-   * "not a supported extension-property receiver" pair: that wording is right for a receiver with
-   * no wire at all, and wrong for one whose wire is simply two slots wide.
+   * refused, when it has a name the diagnostic can read a sentence and a hint off (a shadowing
+   * member or extension function, a nullable-receiver twin). Null for a receiver with no wire at
+   * all, which keeps the shipped "not a supported extension-property receiver" pair.
    */
   val reason: ForwardPlanSkipReason? = null,
   /** The detail [reason]'s sentence and hint read: the rendered receiver type (`Int?`). Same slot
@@ -176,12 +174,20 @@ internal class ForwardPropertyPlanner(
     // ADR-188: the exported extension functions, read only to refuse an extension property that
     // shares its C# name and receiver with one of them (C# 14 member lookup is ambiguous, CS9339).
     extensionFunctions: List<KSFunctionDeclaration> = emptyList(),
+    // Every C entry point the callable catalog minted (its plans and the hand-written callback
+    // routes), which an extension property accessor must not spell again.
+    callableExports: Set<String> = emptySet(),
   ): List<ForwardPropertyPlan> = buildList {
     extensionFunctionNames = extensionFunctions.mapNotNull { function ->
-      val receiverDeclaration: KSDeclaration = function.extensionReceiver?.resolve()
-        ?.expandAliases()?.declaration ?: return@mapNotNull null
-      val receiver: String = receiverDeclaration.qualifiedName?.asString()
+      val receiverType: KSType = function.extensionReceiver?.resolve()?.expandAliases()
         ?: return@mapNotNull null
+      val receiverDeclaration: KSDeclaration = receiverType.declaration
+      // ADR-132 amendment (2026-10-04): a nullable VALUE-type receiver keys apart from its non-null
+      // spelling, because C# member lookup tells `int` from `int?` (see [receiverKey]).
+      val receiver: String = receiverKey(
+        receiverDeclaration.qualifiedName?.asString() ?: return@mapNotNull null,
+        classifier.classify(receiverType).sealedAsHandle(),
+      )
       val namespace: String = classifier.extensionNamespaceOf(receiverDeclaration, function)
       val name: String =
         if (Modifier.SUSPEND in function.modifiers) {
@@ -238,18 +244,42 @@ internal class ForwardPropertyPlanner(
     // Every accessor a member, top-level or static route minted above, so an extension accessor
     // that would spell one of them takes the `ext` role word instead (`ForwardSymbolTable`): an
     // unshadowed `val Leash?.x` beside a member `Leash.x` in ONE package both derive `leash_get_x`.
-    val taken: Set<String> =
-      flatMap { plan -> plan.calls().map { call -> call.exportName } }.toSet()
+    // Plus every entry point the callable catalog minted ([callableExports]: a member function
+    // spelled `get_x` derives the same `leash_get_x`) and the hand-written getter of every member
+    // lambda property (`leash_get_onTap`), which no plan owns.
+    val taken: Set<String> = flatMap { plan -> plan.calls().map { call -> call.exportName } }
+      .toSet() + callableExports + legacyLambdaPropertyGetters(classes, sealed)
+    // ADR-132 amendment (2026-10-04): a nullable VALUE-type receiver (`val Int?.x`,
+    // `val Uuid?.x`) plans after every other extension property, against their accessors too, so
+    // beside a non-null twin it is the one that takes the `ext` role word, whichever of the two the
+    // author declared first.
+    val (nullableValues: List<KSPropertyDeclaration>, others: List<KSPropertyDeclaration>) =
+      extensions.partition { prop -> prop.hasNullableValueReceiver() }
+    val plannedOthers: Map<KSPropertyDeclaration, ForwardPropertyPlan> = others
+      .mapNotNull { prop ->
+        inOwner(null) { extensionProperty(prop, taken) }?.let { plan -> prop to plan }
+      }
+      .toMap()
+    val othersTaken: Set<String> = taken + plannedOthers.values
+      .flatMap { plan -> plan.calls().map { call -> call.exportName } }
+    val plannedNullableValues: Map<KSPropertyDeclaration, ForwardPropertyPlan> = nullableValues
+      .mapNotNull { prop ->
+        inOwner(null) { extensionProperty(prop, othersTaken) }?.let { plan -> prop to plan }
+      }
+      .toMap()
     val planned: List<Pair<KSPropertyDeclaration, ForwardPropertyPlan>> =
       extensions.mapNotNull { prop ->
-        inOwner(null) { extensionProperty(prop, taken) }?.let { plan -> prop to plan }
+        (plannedOthers[prop] ?: plannedNullableValues[prop])?.let { plan -> prop to plan }
       }
     // ADR-188 amendment: `val Cat.x` beside `val Cat?.x` is legal Kotlin, but the plan symbol and
     // the export are built from the receiver DECLARATION, so both plan as one symbol (and one C
-    // entry point), and C# cannot declare the pair either (CS0102). Refused after planning, so a
-    // twin that already dropped for its own reason (a fan-out `Mood?`, a shadowed `Cat`) leaves
-    // the survivor binding as before. Neither twin is a safe survivor, so both go, as one fatal
-    // record.
+    // entry point), and for a reference receiver C# cannot declare the pair either (CS0102).
+    // Refused after planning, so a twin that already dropped for its own reason (a shadowed `Cat`)
+    // leaves the survivor binding as before. Neither twin is a safe survivor, so both go, as one
+    // fatal record. A value-type
+    // twin (`val Int.x` beside `val Int?.x`, `val Uuid.x` beside `val Uuid?.x`) never groups here:
+    // the nullable one keys `pkg.Int?.x` ([extensionPropertySymbol]), and C# declares
+    // `extension(int)` beside `extension(int?)`.
     planned.groupBy { (_, plan) -> plan.symbol }.values.forEach { twins ->
       if (twins.size == 1) {
         add(twins.single().second)
@@ -265,6 +295,50 @@ internal class ForwardPropertyPlanner(
           detail = twins.joinToString(" and ") { (prop, _) -> "`${prop.kotlinSpelling()}`" },
         ),
       )
+    }
+  }
+
+  /**
+   * The receiver half of the ADR-188 property/function clash key: the receiver declaration, with a
+   * `?` for a nullable C# VALUE type ([isNullableValueTypeReceiver]) and nullability-blind for a
+   * reference type, matching what C# member lookup can and cannot tell apart.
+   */
+  private fun receiverKey(declaration: String, receiverType: BridgeType): String =
+    if (receiverType.isNullableValueTypeReceiver()) "$declaration?" else declaration
+
+  /** Whether this extension property's receiver is a nullable C# value type (`Int?`, `Uuid?`). */
+  private fun KSPropertyDeclaration.hasNullableValueReceiver(): Boolean {
+    val receiver: KSType = extensionReceiver?.resolve()?.expandAliases() ?: return false
+    return classifier.classify(receiver).sealedAsHandle().isNullableValueTypeReceiver()
+  }
+
+  /**
+   * The `<owner>_get_<name>` entry point the hand-written legacy getter of every member lambda
+   * property exports, on a class (`addClassExports`) and on a sealed arm (`addSealedClassExports`).
+   * No plan owns it, so neither planner's name set held it. Inherited properties are walked too,
+   * as the emitters walk them.
+   */
+  private fun legacyLambdaPropertyGetters(
+    classes: List<KSClassDeclaration>,
+    sealed: List<KSClassDeclaration>,
+  ): Set<String> = buildSet {
+    // The emitters' own rule (`carriesLegacyLambdaProperty`), so this set names exactly the getters
+    // `ClassExports` and `SealedClassExports` emit and no parallel predicate can drift from them.
+    fun addFrom(owner: KSClassDeclaration, prefix: String, carrier: ForwardLambdaPropertyCarrier) {
+      owner.getAllProperties()
+        .filter { prop -> prop.getVisibility() == Visibility.PUBLIC }
+        .filter { prop -> prop.carriesLegacyLambdaProperty(carrier) }
+        .forEach { prop -> add("${prefix}_get_${prop.simpleName.asString()}") }
+    }
+    classes.forEach { cls ->
+      addFrom(cls, cls.nativePrefix(symbols), cls.classLambdaPropertyCarrier())
+    }
+    sealed.forEach { base ->
+      base.getSealedSubclasses().forEach { arm ->
+        val prefix: String =
+          "${base.nativePrefix(symbols)}_${arm.simpleName.asString().lowercase()}"
+        addFrom(arm, prefix, ForwardLambdaPropertyCarrier.SEALED_ARM)
+      }
     }
   }
 
@@ -748,15 +822,20 @@ internal class ForwardPropertyPlanner(
     // protocol and drops below exactly as before.
     val receiverType: BridgeType = classifier.classify(receiver).sealedAsHandle()
     val supportedReceiver: Boolean = receiverType.isSupportedReceiver()
-    // ADR-133 amendment: the receiver spelled with its enclosing chain (`Aviary.Perch`), both in
-    // the plan symbol and -- lowercased and `_`-joined by `nativePrefix()` -- in the entry point.
-    // The symbol is spelled a second time in `CirTranslator` to look this plan back up, so the two
-    // MUST move together: a mismatch makes the extension property vanish from `Interop.cs` with no
-    // diagnostic at all (the lookup falls through to `emptyList()`). Both are byte-identical to the
-    // bare simple name for a top-level receiver, and both fall back to it for a receiver whose
-    // declaration is not a class.
-    val receiverName: String = (receiver.declaration as? KSClassDeclaration)?.nestedCsName()
-      ?: receiver.declaration.simpleName.asString()
+    // ADR-133 amendment: the receiver spelled with its enclosing chain (`Aviary.Perch`), in the
+    // plan symbol and -- lowercased and `_`-joined by `nativePrefix()` -- in the entry point. The
+    // symbol is spelled once, by [extensionPropertySymbol]; both renderers look the plan back up
+    // through `ForwardCallablePlanCatalog.extensionPropertyFor(prop)`, which reads the same
+    // function, so the spellings cannot drift (a mismatch used to make the property vanish from
+    // `Interop.cs` with no diagnostic at all).
+    // ADR-132 amendment (2026-10-04): a nullable VALUE-type receiver keys `pkg.Int?.x`, so
+    // `val Int.x` beside `val Int?.x` (or `Uuid` beside `Uuid?`) plans as two symbols and both
+    // bind, as the function route's `fun Int.f()` / `fun Int?.f()` pair does. A reference twin
+    // (`Cat` / `Cat?`) still shares one symbol and stays the fatal `NULLABLE_RECEIVER_TWIN` (C#
+    // cannot declare it, CS0102).
+    val nullableValueReceiver: Boolean =
+      supportedReceiver && receiverType.isNullableValueTypeReceiver()
+    val symbol: String = extensionPropertySymbol(prop, nullableValueReceiver)
     // ADR-163: the receiver chain UNQUALIFIED. The package part of an extension symbol is the
     // extension's own package, supplied by `symbols.extension` below.
     val receiverPrefix: String = (receiver.declaration as? KSClassDeclaration)
@@ -766,19 +845,15 @@ internal class ForwardPropertyPlanner(
     // ADR-064's position coverage: the receiver is the last position that used to vanish silently.
     // Nothing legacy-routes an extension property by receiver, so unlike `recordDropped` there is
     // no re-emission to exclude here.
+    // ADR-132 amendment (2026-10-04): no has-value fan-out receiver reaches this refusal any more
+    // (`isSupportedReceiver` admits every one), so every refused receiver reads this route's own
+    // receiver sentence.
     if (!supportedReceiver) {
-      // ADR-064 amendment (2026-09-20): the fan-out half of the refusal is named, so it reads the
-      // extension-FUNCTION route's sentence and hint instead of this route's generic receiver
-      // pair. Asked through the same predicate `isSupportedReceiver`'s `Nullable` arm refuses on,
-      // so the two cannot disagree about which receivers are fan-outs.
-      val fanOut: Boolean = receiverType.hasValueFanOutInner() != null
       droppedReceivers.add(
         ForwardDroppedExtensionReceiver(
-          symbol = "${prop.packageName.asString()}.$receiverName.$name",
+          symbol = symbol,
           node = prop,
           receiverDescription = receiverType.diagnosticTypeName(),
-          reason = if (fanOut) ForwardPlanSkipReason.RECEIVER_FAN_OUT else null,
-          detail = if (fanOut) receiverType.diagnosticTypeName() else null,
         ),
       )
       return null
@@ -790,7 +865,7 @@ internal class ForwardPropertyPlanner(
     shadowingMember(receiver, name)?.let { member ->
       droppedReceivers.add(
         ForwardDroppedExtensionReceiver(
-          symbol = "${prop.packageName.asString()}.$receiverName.$name",
+          symbol = symbol,
           node = prop,
           receiverDescription = receiverType.diagnosticTypeName(),
           reason = ForwardPlanSkipReason.SHADOWED_BY_MEMBER,
@@ -807,17 +882,23 @@ internal class ForwardPropertyPlanner(
     // on either side (ADR-179) is what separates them. Never a rename (ADR-110). Keyed on the
     // ADR-126 namespace too: an unexported receiver's pair in two packages renders two classes in
     // two namespaces, and a consumer importing either one sees no ambiguity, so both bind.
-    val receiverDeclaration: String? = receiver.declaration.qualifiedName?.asString()
+    // ADR-132 amendment (2026-10-04): and on the receiver's nullability for a VALUE type only, so
+    // `fun Int.x()` beside `val Int?.x` binds both (`7.X()` and `none.X` each find one member: no
+    // implicit nullable conversion applies to an extension receiver), while `fun Cat?.x()` beside
+    // `val Cat.x` still meets, `Cat?` being `Cat` to C#.
+    val receiverDeclaration: String = receiverKey(
+      receiver.declaration.qualifiedName?.asString().orEmpty(), receiverType,
+    )
     val csharpName: String = prop.csharpMemberName()
     val namespace: String = classifier.extensionNamespaceOf(receiver.declaration, prop)
     val key: Triple<String, String, String> =
-      Triple(namespace, receiverDeclaration.orEmpty(), csharpName)
+      Triple(namespace, receiverDeclaration, csharpName)
     val shadowingFunction: String? =
       extensionFunctionNames[key] ?: shadowingMemberFunction(receiver, receiverType, csharpName)
     shadowingFunction?.let { function ->
       droppedReceivers.add(
         ForwardDroppedExtensionReceiver(
-          symbol = "${prop.packageName.asString()}.$receiverName.$name",
+          symbol = symbol,
           node = prop,
           receiverDescription = receiverType.diagnosticTypeName(),
           reason = ForwardPlanSkipReason.SHADOWED_BY_EXTENSION_FUNCTION,
@@ -827,7 +908,7 @@ internal class ForwardPropertyPlanner(
       return null
     }
     return propertyPlan(
-      symbol = "${prop.packageName.asString()}.$receiverName.$name",
+      symbol = symbol,
       position = ForwardPropertyPosition.EXTENSION,
       receiver = ForwardPropertyReceiver.Value(receiverType),
       prop = prop,
@@ -852,16 +933,12 @@ internal class ForwardPropertyPlanner(
    * StableRef built for the crossing) and `BoundInterface` (ADR-088's transfer GCHandle) all bind
    * here now, through the same lowering pair the setter value uses.
    *
-   * What stays a named `SKIPPED_UNSUPPORTED_PROPERTY` through `droppedReceivers`, and why: every
-   * has-value fan-out shape (`Nullable(Primitive)`, `Nullable(Enum)`, `Nullable(Instant)`,
-   * `Nullable(Duration)`, and a nullable value class over a `Primitive`/`Enum` underlying) needs a
-   * second adjacent slot for the has-value flag, and a receiver is exactly one slot (one
-   * `valueParameter`) -- admitting them would mint one slot and silently lose the null.
-   *
-   * ADR-064 amendment (2026-09-20): that fan-out half keeps this kind but no longer reads this
-   * route's generic receiver hint. It is recorded as [ForwardPlanSkipReason.RECEIVER_FAN_OUT] and
-   * reads the extension-FUNCTION route's sentence and hint, which name the receiver type, blame
-   * the two-slot SHAPE rather than the type, and offer the parameter remedy.
+   * ADR-132 amendment (2026-10-04): every has-value fan-out shape (`Nullable(Primitive)`,
+   * `Nullable(Char)`, `Nullable(Enum)`, `Nullable(Instant)`, `Nullable(Duration)`, and a nullable
+   * value class over a `Primitive`/`Enum` underlying) binds too, on the extension-FUNCTION route's
+   * two-slot wire: `ForwardPropertyReceiver.parameters()` mints the `receiverHasValue` flag in
+   * front of the value, and both renderers read it. They used to be a named skip, because a
+   * receiver was exactly one slot and admitting them here alone silently lost the null.
    */
   private fun BridgeType.isSupportedReceiver(): Boolean = when (this) {
     // ADR-160: a callback binds at a parameter position; an extension ON a function type is not a
@@ -887,19 +964,19 @@ internal class ForwardPropertyPlanner(
     is BridgeType.Collection -> isSetterEligible()
 
     // ADR-132 amendment: the nullable spellings whose wire has a spare null to ride -- a null
-    // string pointer for `String?`/`Uuid?`/`ValueClass(String)?`, `IntPtr.Zero` for a handle. A
-    // `Primitive`/`Enum`-underlying value class is deliberately NOT here: that is the fan-out
-    // class, and `inputLowering`'s nullable value-class arm re-wraps it unconditionally (correct
-    // for the `NullableDispatch` setter value, which is non-null by construction; a silent loss of
-    // null at a receiver).
+    // string pointer for `String?`/`Uuid?`/`ValueClass(String)?`, `IntPtr.Zero` for a handle.
+    // ADR-132 amendment (2026-10-04): and every has-value fan-out shape, whose receiver is the
+    // two-slot `receiverHasValue` + value pair (`parameters()` below). Both emitters lower it off
+    // that flag; admitting it here alone would read the value slot only and lose the null.
     is BridgeType.Nullable -> when (val inner: BridgeType = type) {
       is BridgeType.ObjectHandle, is BridgeType.Interface, BridgeType.String,
       BridgeType.Uuid -> true
 
       is BridgeType.ValueClass ->
-        inner.underlying is BridgeType.String || inner.underlying is BridgeType.ObjectHandle
+        inner.underlying is BridgeType.String || inner.underlying is BridgeType.ObjectHandle ||
+            hasValueFanOutInner() != null
 
-      else -> false
+      else -> hasValueFanOutInner() != null
     }
 
     // ADR-075: a value class crosses the bridge as its own underlying value (ADR-014), the same
@@ -912,12 +989,15 @@ internal class ForwardPropertyPlanner(
       underlying is BridgeType.String || underlying is BridgeType.Primitive ||
           underlying is BridgeType.Enum || underlying is BridgeType.ObjectHandle
 
+    // ADR-132 amendment (2026-10-04): a `Char` receiver rides the by-value CHAR16 slot a `Char`
+    // setter value already uses, as the function route's `Char` receiver does.
+    BridgeType.Char -> true
+
     // ADR-147: an extension property over a bare `T` receiver is not a generic-class member and
     // has no carrier to hang off; refused as it is today.
     // ADR-151: a `ByteArray` receiver is still refused -- it is not in the ADR-132 function-route
     // receiver set either, so admitting it here would be a new position, not parity.
-    BridgeType.ByteArray,
-    BridgeType.Char, BridgeType.Unit, BridgeType.Throwable,
+    BridgeType.ByteArray, BridgeType.Unit, BridgeType.Throwable,
     is BridgeType.SpecializedProtocol, is BridgeType.RawKSType, is BridgeType.Unsupported,
     is BridgeType.TypeParameter, is BridgeType.RawCollection -> false
   }
@@ -1323,9 +1403,25 @@ internal class ForwardPropertyPlanner(
       ),
     )
 
-    is ForwardPropertyReceiver.Value -> listOf(
-      valueParameter(type, "receiver", ForwardAbiRole.RECEIVER),
-    )
+    // ADR-132 amendment (2026-10-04): a has-value fan-out receiver is the extension-FUNCTION
+    // route's adjacent pair, the flag first. The value slot carries the INNER type, so the export
+    // takes a by-value `Int` rather than a boxed `Int?`. The fixed flag name is safe here: a
+    // property export has no user parameter it could meet, only `receiver`, `value`, `errorOut`.
+    is ForwardPropertyReceiver.Value -> when (val inner: BridgeType? = type.hasValueFanOutInner()) {
+      null -> listOf(valueParameter(type, "receiver", ForwardAbiRole.RECEIVER))
+      else -> listOf(
+        ForwardAbiParameter(
+          RECEIVER_HAS_VALUE, ForwardAbiWireType.BOOLEAN, ForwardAbiDirection.IN,
+          ForwardTransfer(
+            RECEIVER_HAS_VALUE, BridgeType.Primitive(PrimitiveKind.BOOLEAN),
+            ForwardFlow.INTO_KOTLIN, ForwardPassing.VALUE, ForwardOwnership.BORROWED,
+            ForwardConversion.DIRECT,
+          ),
+        ),
+        valueParameter(inner, "receiver", ForwardAbiRole.RECEIVER),
+      )
+    }
+
     is ForwardPropertyReceiver.Static -> emptyList()
 
     // ADR-157: the same borrowed handle slot a [Handle] receiver carries, typed as the sealed
@@ -1477,31 +1573,6 @@ internal class ForwardPropertyPlanner(
     is BridgeType.TypeParameter -> false
     BridgeType.Unit, is BridgeType.BoundInterface, is BridgeType.SpecializedProtocol,
     is BridgeType.RawCollection, is BridgeType.RawKSType, is BridgeType.Unsupported -> false
-  }
-
-  /**
-   * ADR-079: the inner type of a nullable that needs the out-of-band has-value channel (ADR-002's
-   * `LegacyTwoCall` getter / `NullableDispatch` setter), or `null` when this type does not. A bare
-   * primitive, an [BridgeType.Instant] (ADR-076) and a Primitive/Enum-underlying value class all
-   * qualify: none of their wires has a spare null.
-   */
-  private fun BridgeType.hasValueFanOutInner(): BridgeType? {
-    if (this !is BridgeType.Nullable) return null
-    return when (type) {
-      // ADR-080: a bare enum wires as its `int` ordinal, which has no spare null either.
-      // ADR-098 amendment (boundary nullability part C): `Char` wires as CHAR16 (`unsigned short`),
-      // which has no spare null either -- U+0000 is a legitimate character. It is its own
-      // `BridgeType` rather than a `PrimitiveKind`, which is the only reason it was not already in
-      // this set; before this arm existed the getter planned `Direct` and the Kotlin emitter threw
-      // out of `KotlinSymbolProcessing.execute`, aborting generation for the whole module.
-      is BridgeType.Primitive, BridgeType.Char, BridgeType.Instant, BridgeType.Duration,
-      is BridgeType.Enum -> type
-      is BridgeType.ValueClass ->
-        if (type.underlying is BridgeType.Primitive || type.underlying is BridgeType.Enum) type
-        else null
-
-      else -> null
-    }
   }
 
   private fun BridgeType.unwrapNullable(): BridgeType = if (this is BridgeType.Nullable) type else this
@@ -1716,4 +1787,30 @@ private fun KSPropertyDeclaration.hasPublicSetter(): Boolean {
   return Modifier.PRIVATE !in modifiers &&
       Modifier.PROTECTED !in modifiers &&
       Modifier.INTERNAL !in modifiers
+}
+
+/**
+ * The plan symbol of the extension property [prop], `pkg.Receiver.name`: the extension's own
+ * package, then the receiver with its enclosing chain (ADR-133 amendment, `pkg.Aviary.Perch.x`),
+ * falling back to the bare simple name for a receiver whose declaration is not a class.
+ *
+ * ADR-132 amendment (2026-10-04): a nullable VALUE-type receiver ([nullableValueReceiver],
+ * [isNullableValueTypeReceiver]) spells its nullability, `pkg.Int?.x`, so it never shares a symbol
+ * with a `val Int.x` twin. Every other receiver stays nullability-blind, which is what keeps
+ * `val Cat.x` beside `val Cat?.x` one symbol and therefore the fatal `NULLABLE_RECEIVER_TWIN`.
+ *
+ * The ONE spelling: the planner keys the plan with it, and both renderers find the plan again
+ * through [ForwardCallablePlanCatalog.extensionPropertyFor], which reads this function too.
+ */
+internal fun extensionPropertySymbol(
+  prop: KSPropertyDeclaration,
+  nullableValueReceiver: Boolean,
+): String {
+  val receiver: KSType = requireNotNull(prop.extensionReceiver) {
+    "Forward extension property symbol requested for a non-extension ${prop.simpleName.asString()}"
+  }.resolve().expandAliases()
+  val receiverName: String = (receiver.declaration as? KSClassDeclaration)?.nestedCsName()
+    ?: receiver.declaration.simpleName.asString()
+  val nullable: String = if (nullableValueReceiver) "?" else ""
+  return "${prop.packageName.asString()}.$receiverName$nullable.${prop.simpleName.asString()}"
 }

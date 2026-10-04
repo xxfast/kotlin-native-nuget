@@ -90,11 +90,25 @@ internal object ForwardCirPropertyProjection {
     // *value* rides, so it goes through the same three functions. An interface receiver mints an
     // ADR-084 transfer handle here and has to dispose it afterwards, which is why both accessors
     // get a handle scope rather than just an argument string.
-    val receiverArgument: String = receiver.type.inputArgument("receiver")
+    // ADR-132 amendment (2026-10-04): a has-value fan-out receiver passes the flag, then the INNER
+    // value off `GetValueOrDefault()`, exactly as the function route does. The shared spelling
+    // would cast the `Nullable<T>` itself (`(int)receiver`), which throws
+    // `InvalidOperationException` for a null `Mood?` before Kotlin is ever reached.
+    val fanOutInner: BridgeType? = receiver.fanOutInner()
+    val receiverArgument: String = when (fanOutInner) {
+      null -> receiver.type.inputArgument("receiver")
+      else -> "receiver.HasValue, " + fanOutInner.inputArgument("receiver.GetValueOrDefault()")
+    }
     val receiverStep: ForwardCirHandleStep? = receiver.type.handleStep("receiver")
     val receiverCleanup: String? = receiver.type.handleCleanup("receiver")
+    // The flag is a USER-role slot, which `nativeImport` would otherwise also append after the
+    // receiver list: it is spelled here, once, in front of the value.
+    val receiverParameters: List<CirParameter> = listOfNotNull(
+      fanOutInner?.let { CirParameter(RECEIVER_HAS_VALUE, "bool") },
+      CirParameter("receiver", nativeReceiver),
+    )
     val imports: List<CirMember> = plan.calls().map { call ->
-      nativeImport(call, libraryName, listOf(CirParameter("receiver", nativeReceiver)), plan)
+      nativeImport(call, libraryName, receiverParameters, plan)
     }
     // ADR-188: a C# 14 extension property in an `extension(Receiver receiver)` block, superseding
     // ADR-013's `GetX(this R)`/`SetX(this R, value)` pair. The block parameter is `receiver`, the
@@ -235,6 +249,9 @@ internal object ForwardCirPropertyProjection {
       .filter { parameter ->
         parameter.role == ForwardAbiRole.USER || parameter.role == ForwardAbiRole.SETTER_VALUE
       }
+      // ADR-132 amendment (2026-10-04): a fan-out receiver's flag is a receiver slot the caller
+      // already spelled in [receiver]; listing it again would declare it twice (CS0100).
+      .filter { parameter -> receiver.none { spelled -> spelled.name == parameter.name } }
       .map { parameter ->
         val type: String =
           if (parameter.role == ForwardAbiRole.SETTER_VALUE) setterNativeType(plan.type)

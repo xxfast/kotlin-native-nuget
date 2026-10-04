@@ -1631,8 +1631,10 @@ keeps the generic sentence.
 
 > **Dated pointer (2026-10-03):** the extension-**function** route no longer emits
 > `RECEIVER_FAN_OUT`: a has-value fan-out function receiver now binds (see the 2026-10-03
-> amendment in [ADR-132](132-extension-receiver-shapes.md)). Everything below still holds for the
-> extension-**property** route, which keeps the named skip, its sentence and its hint.
+> amendment in [ADR-132](132-extension-receiver-shapes.md)). **Dated pointer (2026-10-04):** the
+> extension-**property** route binds them too, so `RECEIVER_FAN_OUT` is removed and no route emits
+> the sentence or hint below; they stay as the record of what the reason said (see the 2026-10-04
+> amendment in [ADR-132](132-extension-receiver-shapes.md)).
 
 Judgement: an **amendment**, not a new ADR. This closes the ROADMAP Phase 4 item "`RECEIVER_FAN_OUT`
 renders through the `SKIPPED_UNSUPPORTED_INPUT` sentence, ... the wrong remedy for `Int?`". It adds

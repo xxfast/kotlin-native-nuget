@@ -343,4 +343,113 @@ public class ExtensionPropertyTests
         IFeedable nibbles = new Goat();
         Assert.Equal("Nibbles the C#-side goat needs 4 bowls", nibbles.FeedingNote);
     }
+
+    // ---- ADR-132 amendment (2026-10-04): has-value fan-out receivers at the PROPERTY position
+    //
+    // Fixtures: the "has-value fan-out receivers (extension PROPERTIES)" section of
+    // test-library/.../cat/ReceiverParityExtensions.kt. Each getter answers a null receiver with
+    // something other than what the value slot's default would read, so a dropped has-value flag
+    // fails here as a wrong value rather than passing by coincidence.
+
+    [Fact]
+    public void NullableIntReceiver_LivesOrNone_PassesNullThrough()
+    {
+        int? nine = 9;
+        int? none = null;
+        Assert.Equal("9", nine.LivesOrNone);
+        Assert.Equal("none", none.LivesOrNone);
+    }
+
+    // The twin pair: `val Int.livesLabel` beside `val Int?.livesLabel`, each reached by its own
+    // receiver type. "lives:0" for the null one would mean the flag was dropped.
+    [Fact]
+    public void IntAndNullableIntReceiverTwins_LivesLabel_EachReachTheirOwn()
+    {
+        int? none = null;
+        int? seven = 7;
+        Assert.Equal("lives:7", 7.LivesLabel);
+        Assert.Equal("lives?:null", none.LivesLabel);
+        Assert.Equal("lives?:7", seven.LivesLabel);
+    }
+
+    // The `var`: the setter carries the receiver pair, so a null key and a real key stay apart.
+    [Fact]
+    public void NullableIntReceiver_LivesNote_SetThenRead_KeepsNullAndValueApart()
+    {
+        int? none = null;
+        int? oreo = 41;
+        none.LivesNote = "nobody home";
+        oreo.LivesNote = "Oreo";
+        Assert.Equal("nobody home", none.LivesNote);
+        Assert.Equal("Oreo", oreo.LivesNote);
+    }
+
+    // `HAPPY` is ordinal 0: a null that lost its flag would read "HAPPY" here, and a null cast
+    // straight to `int` would throw before reaching Kotlin at all.
+    [Fact]
+    public void NullableEnumReceiver_MoodLabel_PassesNullThrough()
+    {
+        TestLibrary.Cat.Mood? none = null;
+        TestLibrary.Cat.Mood? grumpy = TestLibrary.Cat.Mood.Grumpy;
+        Assert.Equal("shrug", none.MoodLabel);
+        Assert.Equal("GRUMPY", grumpy.MoodLabel);
+    }
+
+    // 05:00 on 2 January 2024 at +10:00 is still 1 January in UTC: day 19723. Day 19724 would mean
+    // the wall-clock ticks crossed instead of `UtcTicks`.
+    [Fact]
+    public void NullableInstantReceiver_SeenEpochDay_PassesNullThrough()
+    {
+        DateTimeOffset? never = null;
+        DateTimeOffset? melbourne = new DateTimeOffset(2024, 1, 2, 5, 0, 0, TimeSpan.FromHours(10));
+        Assert.Equal(-1L, never.SeenEpochDay);
+        Assert.Equal(19723L, melbourne.SeenEpochDay);
+    }
+
+    [Fact]
+    public void NullableDurationReceiver_NapMinutesOrNone_PassesNullThrough()
+    {
+        TimeSpan? noNap = null;
+        TimeSpan? nap = TimeSpan.FromMinutes(90);
+        Assert.Equal(-1L, noNap.NapMinutesOrNone);
+        Assert.Equal(90L, nap.NapMinutesOrNone);
+    }
+
+    [Fact]
+    public void NullableValueClassReceivers_PassNullThrough()
+    {
+        NapCount? uncounted = null;
+        NapCount? four = new NapCount(4);
+        Assert.Equal(-1, uncounted.NapsOrUncounted);
+        Assert.Equal(4, four.NapsOrUncounted);
+
+        MoodRing? noRing = null;
+        MoodRing? sleepy = new MoodRing(TestLibrary.Cat.Mood.Sleepy);
+        Assert.Equal("no ring", noRing.RingLabel);
+        Assert.Equal("SLEEPY", sleepy.RingLabel);
+    }
+
+    // The struct twin that is not a fan-out: `Guid` and `Guid?` each reach their own Kotlin body,
+    // and the `Guid?` one gets a real `null`.
+    [Fact]
+    public void GuidAndNullableGuidReceiverTwins_ChipOwner_EachReachTheirOwn()
+    {
+        Guid chip = Guid.Parse("123e4567-e89b-12d3-a456-426614174000");
+        Guid? sameChip = chip;
+        Guid? none = null;
+        Assert.Equal("chip:123e4567", chip.ChipOwner);
+        Assert.Equal("chip?:123e4567", sameChip.ChipOwner);
+        Assert.Equal("chip?:none", none.ChipOwner);
+    }
+
+    // A non-Latin initial: one ANSI byte could not carry it, so this also proves the receiver
+    // crosses on the two-byte U2 wire.
+    [Fact]
+    public void NullableCharReceiver_PawPrint_PassesNullThrough()
+    {
+        char? none = null;
+        char? zhuk = 'Ж';
+        Assert.Equal("no paw", none.PawPrint);
+        Assert.Equal("Ж-paw", zhuk.PawPrint);
+    }
 }

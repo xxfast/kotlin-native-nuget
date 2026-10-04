@@ -293,4 +293,54 @@ class Tier1SamePackageMemberExtensionTest {
     assertContains(result.generated, "@CName(\"${owner}leash_set_z\")")
     assertFalse(result.generated.contains("leash_ext_set_z"), "an untaken setter must not move")
   }
+
+  /**
+   * A member FUNCTION spelled like a property accessor (`get_x`) mints `<owner>_get_x` on the
+   * callable route, the very spelling a same-package `val Leash?.x` derives for its getter. The
+   * callable route's entry points are in the extension property's taken set, so the accessor moves.
+   */
+  @Test
+  fun `a member function named like an accessor moves the extension property accessor`() {
+    val result: Tier1Result = Tier1Harness.run(
+      """
+      package tier1.samepackage.accessorfunction
+
+      class Leash {
+        fun get_x(): Int = 1
+      }
+
+      val Leash?.x: String get() = "extension"
+      """.trimIndent(),
+    )
+
+    assertNoCollision(result)
+    val owner: String = "library_tier1_samepackage_accessorfunction__"
+    assertContains(result.generated, "@CName(\"${owner}leash_get_x\")")
+    assertContains(result.generated, "@CName(\"${owner}leash_ext_get_x\")")
+  }
+
+  /**
+   * A member lambda-typed property's getter is the hand-written legacy export `<owner>_get_<name>`,
+   * outside both name sets the planners built, so a same-package `val Leash?.onTap` derived the
+   * same entry point. It joins the extension property's taken set, so the accessor moves.
+   */
+  @Test
+  fun `a member lambda property moves a same-package extension property accessor`() {
+    val result: Tier1Result = Tier1Harness.run(
+      """
+      package tier1.samepackage.lambdaprop
+
+      class Leash {
+        val onTap: () -> Unit = {}
+      }
+
+      val Leash?.onTap: String get() = "extension"
+      """.trimIndent(),
+    )
+
+    assertNoCollision(result)
+    val owner: String = "library_tier1_samepackage_lambdaprop__"
+    assertContains(result.generated, "@CName(\"${owner}leash_get_onTap\")")
+    assertContains(result.generated, "@CName(\"${owner}leash_ext_get_onTap\")")
+  }
 }

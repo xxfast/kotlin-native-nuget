@@ -209,6 +209,78 @@ class Tier1ReceiverShapesExtensionTest {
     val cs: String = result.generatedCSharp
     assertContains(cs, "public static string Describe(this int receiver)")
     assertContains(cs, "public static string Describe(this int? receiver)")
+    // The pin the extension-PROPERTY twin mirrors: C# declares both overloads in one class, and a
+    // `T?` variable and a bare `T` each resolve to their own.
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using Interop;
+      public static class Consumer
+      {
+          public static string Run()
+          {
+              int? none = null;
+              int? some = 5;
+              return 7.Describe() + none.Describe() + some.Describe();
+          }
+      }
+      """.trimIndent(),
+    )
+  }
+
+  /**
+   * The same pair over a struct receiver that is NOT a fan-out: `Uuid` / `Uuid?` (`Guid` /
+   * `Guid?`) and a value class over a `String` / its nullable twin (a `record struct`). Both null
+   * in-band on one slot, and both are two C# overloads all the same.
+   */
+  @Test
+  fun `a non-fan-out struct receiver and its nullable twin bind as two overloads`() {
+    val result: Tier1Result = Tier1Harness.run(
+      """
+      package tier1.receiverstructtwin
+
+      import kotlin.uuid.Uuid
+
+      @JvmInline
+      value class CatId(val id: String)
+
+      fun Uuid.tag(): String = "chip"
+
+      // The Tier 1 harness compiles on the JVM, where the pair erases to one signature.
+      @JvmName("tagOrNull")
+      fun Uuid?.tag(): String = if (this == null) "no chip" else "chip?"
+
+      fun CatId.badge(): String = id
+
+      @JvmName("badgeOrNull")
+      fun CatId?.badge(): String = this?.id ?: "stray"
+      """.trimIndent(),
+    )
+
+    assertTrue(result.kspErrors.isEmpty(), "expected no KSP error; got: ${result.kspErrors}")
+    assertTrue(result.compiledClean, "expected a clean compile; got: ${result.compileErrors}")
+    assertTrue(result.kspWarnings.isEmpty(), "expected no warning; got: ${result.kspWarnings}")
+    val cs: String = result.generatedCSharp
+    assertContains(cs, "Tag(this global::System.Guid receiver)")
+    assertContains(cs, "Tag(this global::System.Guid? receiver)")
+    assertContains(cs, "Badge(this global::Interop.CatId receiver)")
+    assertContains(cs, "Badge(this global::Interop.CatId? receiver)")
+    Tier1CSharpCompile.assertCompiles(
+      result,
+      """
+      using Interop;
+      public static class Consumer
+      {
+          public static string Run()
+          {
+              global::System.Guid? none = null;
+              CatId? stray = null;
+              return global::System.Guid.NewGuid().Tag() + none.Tag() +
+                  new CatId("Oreo").Badge() + stray.Badge();
+          }
+      }
+      """.trimIndent(),
+    )
   }
 
   /**

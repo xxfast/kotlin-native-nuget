@@ -805,9 +805,7 @@ internal fun translate(
     val className: String = "${receiverName.replace(".", "")}Extensions"
 
     val members: List<CirMember> = props.flatMap { prop ->
-      val symbol: String =
-        "${prop.packageName.asString()}.$receiverName.${prop.simpleName.asString()}"
-      val plan: ForwardPropertyPlan? = callableCatalog.extensionPropertyFor(symbol)
+      val plan: ForwardPropertyPlan? = callableCatalog.extensionPropertyFor(prop)
       if (plan != null) {
         tracker.trackProperty(plan)
         ForwardCirPropertyProjection.extension(plan, context.libraryName)
@@ -851,12 +849,21 @@ internal fun translate(
     // group above already checked the functions, and the planner refused function/property pairs.
     // Keyed on the receiver DECLARATION, not its rendered C# spelling: two same-named enums in two
     // packages may render one spelling here and are still two receivers.
+    // ADR-132 amendment (2026-10-04): plus the receiver's nullability. `extension(int)` and
+    // `extension(int?)` are two receivers to C#; the only nullable/non-null pair that reaches here
+    // is a value-type one, because the planner refuses a reference twin (`NULLABLE_RECEIVER_TWIN`).
     val propertySignatures: List<CirMethod> = extensionClassMethods[key].orEmpty()
       .filter { spelled -> spelled.node is KSPropertyDeclaration }
       .map { spelled ->
-        val declaration: String = (spelled.node as KSPropertyDeclaration).extensionReceiver
-          ?.resolve()?.declaration?.qualifiedName?.asString().orEmpty()
-        spelled.method.copy(parameters = listOf(CirParameter("receiver", declaration)))
+        val receiver: KSType? =
+          (spelled.node as KSPropertyDeclaration).extensionReceiver?.resolve()
+        val declaration: String = receiver?.declaration?.qualifiedName?.asString().orEmpty() +
+          if (receiver?.expandAliases()?.isMarkedNullable == true) "?" else ""
+        // Not a reference type: the collision check strips a reference receiver's `?`, which is
+        // exactly the distinction this key carries.
+        spelled.method.copy(
+          parameters = listOf(CirParameter("receiver", declaration, isReferenceType = false)),
+        )
       }
     if (propertySignatures.isNotEmpty()) {
       emitCsharpSignatureCollisions(

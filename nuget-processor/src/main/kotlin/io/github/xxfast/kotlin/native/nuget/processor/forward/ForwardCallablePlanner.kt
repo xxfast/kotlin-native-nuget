@@ -109,13 +109,6 @@ internal enum class ForwardPlanSkipReason(val droppedFromCSharp: Boolean) {
   THROWABLE(droppedFromCSharp = true),
   NULLABLE(droppedFromCSharp = true),
 
-  /** ADR-132: an extension PROPERTY receiver whose wire is the ADR-079/080 adjacent `HasValue` +
-   *  value PAIR (`val Int?.x`, `val Dosage?.x`): the property plan's receiver is exactly one slot.
-   *  Only the extension-property route records it; the extension-FUNCTION route binds the same
-   *  receivers since the ADR-132 amendment, carrying the pair as
-   *  `ForwardPublicSignature.receiver`. */
-  RECEIVER_FAN_OUT(droppedFromCSharp = true),
-
   /** An extension property shadowed by a member property of the same name on its receiver type
    *  (declared or inherited). Kotlin call syntax always resolves `receiver.name` to the member, so
    *  the generated `receiver.name` body would read the member and the C# extension would silently
@@ -645,29 +638,16 @@ internal data class ForwardCallablePlanCatalog(
     (entry as? ForwardCallableCatalogEntry.Planned)?.plan
   }
 
-  fun propertyFor(symbol: String): ForwardPropertyPlan? = propertyFor(symbol, extension = false)
-
-  /**
-   * The EXTENSION property plan keyed [symbol], and never a member's. A class member `Leash.x` and
-   * an extension `val Leash.x` (or `val Leash?.x`) declared in the member's own package are both
-   * keyed `pkg.Leash.x`, so a lookup that did not split them by position would hand the member's
-   * plan to the extension route (a shadowed extension, dropped by name, then failed the C#
-   * projection's position check) or trip the duplicate invariant on a legal Kotlin pair.
-   */
-  fun extensionPropertyFor(symbol: String): ForwardPropertyPlan? =
-    propertyFor(symbol, extension = true)
-
-  private fun propertyFor(symbol: String, extension: Boolean): ForwardPropertyPlan? {
+  fun propertyFor(symbol: String): ForwardPropertyPlan? {
     // ADR-006 amendment: an ENUM_MEMBER plan is keyed `pkg.Mood.x`, which is also the key of a
     // (shadowed) extension `val Mood.x` in the same package. Enum member plans are never looked up
     // by symbol (both halves select them by position through `enumMembersOf`), so they are out of
     // this lookup's universe by position: it cannot return the member's plan to the extension
-    // route, nor trip the duplicate invariant below on a legal Kotlin pair.
+    // route, nor trip the duplicate invariant below on a legal Kotlin pair. Extension plans are
+    // looked up by declaration ([extensionPropertyFor]), so they are out of it too.
     val matches: List<ForwardPropertyPlan> = propertyPlans.filter { plan ->
-      val isKeyedBySymbol: Boolean = plan.symbol == symbol
-      val isEnumMember: Boolean = plan.position == ForwardPropertyPosition.ENUM_MEMBER
-      val isExtension: Boolean = plan.position == ForwardPropertyPosition.EXTENSION
-      isKeyedBySymbol && !isEnumMember && isExtension == extension
+      plan.symbol == symbol && plan.position != ForwardPropertyPosition.ENUM_MEMBER &&
+          plan.position != ForwardPropertyPosition.EXTENSION
     }
     // ADR-074: this invariant must be unreachable once the `allDeclarations` funnel filters
     // `isExpect` (an unfiltered expect/actual pair is what used to trip it). A fresh firing means
@@ -675,6 +655,40 @@ internal data class ForwardCallablePlanCatalog(
     require(matches.size <= 1) {
       "Forward property catalog has duplicate plans for $symbol; two declarations share one " +
           "qualified name (an unfiltered expect/actual pair is the usual cause)"
+    }
+    return matches.singleOrNull()
+  }
+
+  /**
+   * The EXTENSION property plan of [prop], and never a member's. A class member `Leash.x` and an
+   * extension `val Leash.x` (or `val Leash?.x`) declared in the member's own package are both keyed
+   * `pkg.Leash.x`, so a lookup that did not split them by position would hand the member's plan to
+   * the extension route (a shadowed extension, dropped by name, then failed the C# projection's
+   * position check) or trip the duplicate invariant on a legal Kotlin pair.
+   *
+   * ADR-132 amendment (2026-10-04): keyed on the declaration rather than on a symbol string each
+   * renderer re-spells, and split by the receiver's nullability. A nullable value-type
+   * `val Int?.x` keys `pkg.Int?.x` ([extensionPropertySymbol]); a renderer cannot classify, so it
+   * asks for both spellings and the nullability decides. That split is also what stops a DROPPED `val Int?.x`
+   * from being handed its planned `val Int.x` twin's plan, which rendered the twin twice (a fatal
+   * C# signature collision on a pair that should have built).
+   */
+  fun extensionPropertyFor(prop: KSPropertyDeclaration): ForwardPropertyPlan? {
+    val nullable: Boolean =
+      prop.extensionReceiver?.resolve()?.expandAliases()?.isMarkedNullable == true
+    val symbols: Set<String> = setOf(
+      extensionPropertySymbol(prop, nullableValueReceiver = false),
+      extensionPropertySymbol(prop, nullableValueReceiver = true),
+    )
+    val matches: List<ForwardPropertyPlan> = propertyPlans.filter { plan ->
+      val receiver: ForwardPropertyReceiver.Value? = plan.receiver as? ForwardPropertyReceiver.Value
+      plan.position == ForwardPropertyPosition.EXTENSION && plan.symbol in symbols &&
+          (receiver?.type is BridgeType.Nullable) == nullable
+    }
+    require(matches.size <= 1) {
+      "Forward property catalog has duplicate extension plans for ${symbols.first()}; two " +
+          "declarations share one qualified name (an unfiltered expect/actual pair is the usual " +
+          "cause)"
     }
     return matches.singleOrNull()
   }
@@ -1066,9 +1080,17 @@ internal class ForwardCallablePlanner(
       carrierless.forEach { companion -> addAll(companion.callables) }
     }
     val planner = ForwardPropertyPlanner(classifier, symbols, expects)
+    // Every entry point the callable catalog minted, the extension functions' included: an
+    // extension property accessor that would spell one (a member `fun get_x()` beside a
+    // same-package `val Leash?.x`) moves to the `ext` role word instead of colliding with it.
+    val callableExports: Set<String> = entries
+      .filterIsInstance<ForwardCallableCatalogEntry.Planned>()
+      .flatMap { entry -> entry.plan.nativeExports.map { call -> call.exportName } }
+      .toSet() + legacyCallbackExports(classes, sealedClasses)
     val propertyPlans: List<ForwardPropertyPlan> = planner.catalog(
       classes, properties, extensionProperties, sealedClasses, objects, enums,
       extensionFunctions = extensionFunctions,
+      callableExports = callableExports,
     )
     return ForwardCallablePlanCatalog(
       entries.map { entry -> entry.withLegacyDefaults() },
