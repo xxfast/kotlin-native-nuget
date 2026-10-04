@@ -370,6 +370,79 @@ public class LiveHandleTests
         });
     }
 
+    // Row 1c-read. The read half of Row 1c: a sealed arm handed OUT through the base
+    // discriminator. `Observation.FromHandle` takes the one handle Kotlin minted, reads the type
+    // and gives that same handle to the arm wrapper, so the arm's `Dispose` is the only release.
+    // Mylo's box is opened once per arm kind per read: `PeekBox` is the object arm
+    // (`Superposition`, a process-wide `data object`, so its Kotlin lifetime can never hide a
+    // missed release and the count is the only signal), `OpenBox("Mylo")` the class arm (`Dead`,
+    // chosen over `Alive` so no `Cat` handle rides along). Each read mints a fresh handle, so a
+    // release owed per read and not per wrapper type shows up at three times the crossing rate.
+    [Fact]
+    public void SealedArm_ReadThroughTheBaseDiscriminator_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            for (int read = 0; read < 3; read++)
+            {
+                using Observation unknown = ObservationKt.PeekBox();
+                Assert.IsType<Observation.Superposition>(unknown);
+                using Observation dead = ObservationKt.OpenBox("Mylo");
+                Assert.Equal("The cat was not Mylo", Assert.IsType<Observation.Dead>(dead).Cause);
+            }
+        });
+    }
+
+    // Row 1c-sibling. ADR-125's sibling arms: `Ping` and `Silence` are top-level types implementing
+    // the sealed interface `Transmission`, discriminated by `Transmission.FromHandle`. One radio
+    // is read repeatedly, through both the method (`Latest`) and the property (`Current`), first
+    // while Mylo transmits `Silence` (object arm) and then after Oreo's `Ping` is tuned in (class
+    // arm). Every read is its own handle on the same Kotlin value, so each must come back alone.
+    // The `Ping` C# built is disposed straight after the setter, which only borrows it.
+    [Fact]
+    public void SealedSiblingArm_RepeatedReadsOfOneHolder_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var radio = new Issue54.Radio();
+            for (int read = 0; read < 3; read++)
+            {
+                using Issue54.Transmission heard = radio.Latest();
+                Assert.IsType<Issue54.Silence>(heard);
+                using Issue54.Transmission current = radio.Current;
+                Assert.IsType<Issue54.Silence>(current);
+            }
+
+            using (var chirp = new Issue54.Ping(60, "Oreo")) radio.Current = chirp;
+            for (int read = 0; read < 3; read++)
+            {
+                using Issue54.Transmission heard = radio.Latest();
+                Assert.Equal("Oreo", Assert.IsType<Issue54.Ping>(heard).Label);
+                using Issue54.Transmission current = radio.Current;
+                Assert.Equal(60, Assert.IsType<Issue54.Ping>(current).Ms);
+            }
+        });
+    }
+
+    // Row 1c-arm. The concrete-arm return, which skips the discriminator altogether: a member
+    // typed as the arm itself renders `new Job.Running(nativeResult, out _)`, so the arm wrapper
+    // owns the handle from its own constructor. Isolated here from the callback pairs (Rows 8g,
+    // 8k, 8l) that also take these arms, so a failure names this route alone. Oreo is the class arm
+    // (`Running`), Mylo the object arm (`Idle`). No suspend member is touched, so neither arm ever
+    // creates its lazy scope and the synchronous `Dispose` is the complete release.
+    [Fact]
+    public void SealedArm_ConcreteArmReturn_ReturnsToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var factory = new JobFactory();
+            using Job.Running oreo = factory.Running(40);
+            Assert.Equal(40, oreo.Progress);
+            using Job.Idle mylo = factory.Idle();
+            Assert.Equal("job", mylo.Kind);
+        });
+    }
+
     // Row 1d. ADR-141: an `inner class` constructor, the new forward route. Unlike Row 1a it takes
     // a borrowed outer handle in and mints a fresh one out (`hearth_sunbather_create(outer,
     // minutes, error)`), so the borrowed receiver must not be retained a second time on the way
