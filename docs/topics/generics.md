@@ -358,9 +358,13 @@ Erasure applies to an extension's receiver too, including a nested-type alias
 
 ## Limitations
 
-A generic class declared in a dependency module and reachable through the
-[export closure](nuget-dsl.md) has never been exercised across a module boundary; if you hit this,
-declare the generic class in the publishing module itself instead.
+A generic class declared in a dependency module is exported like a module-local one once the
+[export closure](nuget-dsl.md) reaches it, with `Int` and `String` type arguments checked. Other
+type arguments on a dependency generic class are not checked; if one fails, declare the class in the
+publishing module itself.
+
+A type nested inside a generic class is not bound, in a dependency or otherwise. If your API returns
+one, the member is skipped with a named diagnostic, but the generic owner is still exported.
 
 <seealso>
     <category ref="related">

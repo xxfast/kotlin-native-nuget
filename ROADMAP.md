@@ -50,7 +50,6 @@ Complete.
 Complete.
 
 ## Phase 4: Rich type support
-- [ ] Inferred: a generic dependency owner reached only through its nested type (`class Box<T> { class Lid }` in a klib) takes `addGenericClassExports` on a klib-read class, a route ADR-066 records as never exercised cross-module; no cell proves the output compiles. Discovered alongside [ADR-066](docs/adr/066-forward-export-reachability-closure.md)'s 2026-09-14 amendment.
 - [ ] Also uncovered by [ADR-134](docs/adr/134-nested-types-under-deferred-owners.md): the scope-refusal dependency arm inside the nested gate has no fixture.
 - [ ] Inferred, unverified: `unsupportedNestedOwnerReason()` (`NugetProcessor.kt`) has no arm for a nested SEALED owner, so a value class under `Owner.NestedSealed` may be declared under an owner that is never declared. Discovered alongside [ADR-134](docs/adr/134-nested-types-under-deferred-owners.md).
 - [ ] Inferred: a CROSS-MODULE (klib) unexported abstract base is assumed to behave like the same-module one when its abstract property reaches an exported subclass; no cell proves it. Discovered alongside [ADR-075](docs/adr/075-collection-property-getter-setter-independence.md)'s 2026-09-19 amendment.

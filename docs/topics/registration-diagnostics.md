@@ -239,6 +239,12 @@ returns to baseline with nothing for you to dispose. `LeakTests/LiveHandleTests.
 `ValueClassFlowElement_ValueReadsAndEmissions_ReturnToBaseline` cover the enum `.Value` loop, the enum
 emission loop and the value-class element on the same two routes.
 
+A [generic class from a dependency module](generics.md#limitations) adds no new handle kind: its
+constructor and `Value` read follow the module-local generic route.
+`LeakTests/LiveHandleTests.cs`'s
+`DependencyGenericOwner_PrimitiveAndStringPayloadsReturnToBaseline` constructs, reads and disposes
+`Parcel<int>` and `Parcel<string>` and checks the count returns to baseline.
+
 A [sealed base's own async members](interfaces-abstract-sealed.md#sealed-method-suspend-generated-c)
 add no new handle kind either: the scope handle moves from the arm to the base, and the count returns
 to baseline once the base-typed reference is disposed. `LeakTests/LiveHandleTests.cs` row 9l covers

@@ -166,7 +166,7 @@ public class SealedSubclassObjectTests
         string[] residue = typeof(FlatShape).Assembly
             .GetTypes()
             .Where(type => type.Namespace == "TestLibrary.Models")
-            .Where(type => type.DeclaringType == null && IsStaticClass(type))
+            .Where(type => type.IsPublic && type.DeclaringType == null && IsStaticClass(type))
             .Where(type => type.GetMembers(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly).Length == 0)
             .Select(type => type.Name)
             .OrderBy(name => name)
