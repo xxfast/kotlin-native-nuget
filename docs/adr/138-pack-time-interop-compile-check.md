@@ -545,4 +545,26 @@ away, without a decision gate. They are open to change before 1.0.0.
 
 Verified by unit tests and a real run for the missing-`dotnet` path. The unusable-SDK path is proven
 by unit test only, not by a real build. Left on the ROADMAP: no Gradle property switch, and the
-missing-`dotnet` reason does not name the `nuget.dotnet` override.
+missing-`dotnet` reason does not name the `nuget.dotnet` override. Both were closed by the next amendment.
+
+## Amendment (2026-10-03): Gradle property convention and SDK hint
+
+The Gradle property `nuget.strictCompileCheck` is the lazy convention for
+`publish { strictCompileCheck }`, so a CI can pass `-Pnuget.strictCompileCheck=true` (or set it in
+`gradle.properties`) without editing the build script. It is read through
+`providers.gradleProperty` and the default stays `false`.
+
+- Parser: exactly `true` or `false`. Any other value (`tru`, `TRUE`, `1`) fails with a `[nuget]`
+  `GradleException` naming the property, so a mistyped CI switch cannot silently disable the check.
+- Precedence: an explicit value in the `publish {}` DSL wins over the property in both directions.
+  Because the property is only a convention, a malformed value is never read when the DSL sets the
+  value explicitly.
+- Messages: the missing-`dotnet` reason now also says to set `nuget.dotnet` in `local.properties`.
+  The strict failure text points at the DSL setting, or at unsetting the Gradle property when the DSL
+  does not set it. It does not promise that `-P...=false` overrides an explicit DSL `true`.
+
+Verified: focused plugin tests, including real Gradle TestKit runs for `-P` true, the default,
+DSL-over-property precedence in both directions, a typo rejected by name, and configuration-cache
+reuse; parser rejection tests. Inferred from Gradle's documentation, not exercised here:
+`gradle.properties` and `ORG_GRADLE_PROJECT_nuget.strictCompileCheck` resolve through the same
+provider. Verified: the full `verify.sh --plugin` run is green (plugin suite, Integration 2974, Leak 156, MultiPackage 9, SharedException 2, all 6 NativeAOT smoke cases).

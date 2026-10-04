@@ -198,7 +198,8 @@ public abstract class NugetCompileInteropTask : DefaultTask() {
         "dotnet is not on PATH, so the generated C# bindings were not compiled " +
           "before packing. A binding that does not compile will only surface in a consumer's " +
           "build. Install the .NET SDK 10.0 or later from https://dot.net/download " +
-          "to check at pack."
+          "to check at pack, or set $DOTNET_KEY in local.properties to the dotnet executable's " +
+          "absolute path."
       )
       return
     }
@@ -295,8 +296,10 @@ public abstract class NugetCompileInteropTask : DefaultTask() {
     }
 
     throw GradleException(
-      "[nuget] $reason\nThis fails the build because nuget { publish { strictCompileCheck } } " +
-        "is on; turn it off to skip the check with a warning instead."
+      "[nuget] $reason\nThis fails the build because strictCompileCheck is on. Set " +
+        "nuget { publish { strictCompileCheck = false } }, or unset the " +
+        "nuget.strictCompileCheck Gradle property when the DSL does not set it, to skip " +
+        "the check with a warning instead."
     )
   }
 }

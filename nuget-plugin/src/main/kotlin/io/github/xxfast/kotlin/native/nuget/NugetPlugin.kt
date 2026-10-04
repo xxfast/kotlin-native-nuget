@@ -1,6 +1,7 @@
 package io.github.xxfast.kotlin.native.nuget
 
 import io.github.xxfast.kotlin.native.nuget.rir.deriveResolvedVersions
+import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.file.Directory
@@ -28,6 +29,14 @@ internal val KONAN_TO_RID = mapOf(
 private const val KMP_PLUGIN: String = "org.jetbrains.kotlin.multiplatform"
 private const val KSP_PLUGIN: String = "com.google.devtools.ksp"
 
+internal fun parseStrictCompileCheck(value: String): Boolean {
+  if (value == "true") return true
+  if (value == "false") return false
+  throw GradleException(
+    "[nuget] nuget.strictCompileCheck must be true or false, but was '$value'.",
+  )
+}
+
 // One supported native target as packNuget sees it: the shared library it would pack, and whether
 // this host can link it.
 private class LocalLibrary(
@@ -45,6 +54,10 @@ public class NugetPlugin : Plugin<Project> {
   override fun apply(project: Project) {
     val extension: NugetExtension =
       project.extensions.create("nuget", NugetExtension::class.java)
+    extension.publish.strictCompileCheck.convention(
+      project.providers.gradleProperty("nuget.strictCompileCheck")
+        .map(::parseStrictCompileCheck).orElse(false),
+    )
 
     // ADR-178: run before either the reverse name provider or forward KSP args read baseName.
     // ADR-180: the one `afterEvaluate` that stays. KGP's `NativeBinary.baseName` is a plain

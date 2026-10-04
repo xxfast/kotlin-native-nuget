@@ -491,6 +491,8 @@ class NugetCompileInteropTaskTest {
     val failure: GradleException = assertFailsWith<GradleException> { task.compile() }
 
     assertContains(failure.message.orEmpty(), "dot.net/download")
+    assertContains(failure.message.orEmpty(), "nuget.dotnet")
+    assertContains(failure.message.orEmpty(), "local.properties")
     assertContains(failure.message.orEmpty(), "strictCompileCheck")
   }
 

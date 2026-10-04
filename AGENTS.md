@@ -161,3 +161,12 @@ The reverse bridge is observable as of [ADR-054](docs/adr/054-reverse-bridge-reg
 ## Benchmark Finalization Requires jq
 
 - The benchmark finalize wrapper needs `jq` and a real Bash shell. On Windows use Git Bash; the WindowsApps `bash` may be a WSL stub. If capture/finalize cannot run, report it as blocked and never invent metrics or figures.
+
+## PowerShell Native Command Arguments and Exit Status
+
+- Quote a complete dotted Gradle property argument, for example `'-Pnuget.strictCompileCheck=true'`. An unquoted argument was split by PowerShell and Gradle attempted to select task `.strictCompileCheck=true` (verified 2026-10-03).
+- Windows PowerShell 5.1 can report `$?` as false after redirecting native stderr with `2>&1`, even when `$LASTEXITCODE` is zero. A scratch Bash command emitting a warning and exiting zero reproduced this. Capture the native exit code immediately and explicitly `exit $LASTEXITCODE` when logging a verification command, so warnings do not become a false tool failure.
+
+## Completed Agent Threads May Still Consume Slots
+
+- In the 2026-10-03 runtime, completed research threads remained listed and subsequent role spawns failed with `agent thread limit reached`; no close/delete-agent tool was exposed. Reuse a completed agent with `followup_task`, providing the new role brief and explicit file ownership, when its model meets the role's requirements. Report a model constraint instead of silently substituting a different model. This is an observed runtime limitation, not a claim about every agent runtime.
