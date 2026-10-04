@@ -236,7 +236,7 @@ private fun KSClassDeclaration.enclosingClassChain(): List<KSClassDeclaration> =
 /**
  * ADR-133: why this declaration cannot OWN a C# nested type, or null when it can.
  *
- * v1 declares children under a non-generic, non-inner `class` or `object` (root or admitted
+ * v1 declares children under a non-generic `class` or `object` (root or admitted
  * dependency) at any depth. Every other shape keeps ADR-064's named skip, with this text as the
  * reason, so a deferred nested declaration still says why instead of vanishing.
  */
@@ -251,11 +251,9 @@ internal fun KSClassDeclaration.unsupportedNestedOwnerReason(): String? = when {
     "only a `class`, `object` or `interface` owner carries nested declarations"
   typeParameters.isNotEmpty() ->
     "a generic owner's nested type is itself generic in C# (`Owner<T>.Nested`)"
-  // ADR-141: an inner class is declared now, but its OWN nested types are not. Only another
-  // `inner class` can nest inside one (a plain nested class there is NESTED_CLASS_NOT_ALLOWED), and
-  // the receiver for that child would be the inner instance, one level up from this ADR's.
-  modifiers.contains(Modifier.INNER) ->
-    "an `inner class` owner's own nested types are deferred"
+  // ADR-141: no `inner` arm. An inner class owns only inner classes (Kotlin: "'Class' is
+  // prohibited here" for anything else), and each one's receiver is its immediately enclosing
+  // inner instance, so inner-of-inner is the same constructor shape one level down.
   isValueClass() -> "a `value class` owner has no nested-type slot"
   isCompanionObject -> "a companion object is folded into its owner's statics (ADR-013)"
   parentDeclaration is KSClassDeclaration && !isSealedSubclass() ->
@@ -266,7 +264,7 @@ internal fun KSClassDeclaration.unsupportedNestedOwnerReason(): String? = when {
 /** ADR-133: why this nested candidate itself is deferred, or null when it is declared. */
 internal fun KSClassDeclaration.unsupportedNestedCandidateReason(): String? = when {
   // ADR-141: no `inner` arm here any more -- an inner class IS declared, with the outer instance as
-  // its constructor's first parameter. The owner arm above still defers an inner-of-inner.
+  // its constructor's first parameter, at any depth.
   typeParameters.isNotEmpty() -> "a generic nested type is deferred"
   modifiers.contains(Modifier.SEALED) ->
     "a nested sealed hierarchy is deferred (its arms would have to nest twice)"
@@ -1662,7 +1660,14 @@ internal class NugetProcessor(
           declaration = name,
           reason = "nested ${nested.nestedDeclarationKind()} `$name` is not declared in C#: " +
               "${nested.nestedDeclarationDeferral()}",
-          hint = "move it to the top level of its file",
+          // An `inner class` reads `this@Outer`, so moving it as it stands does not compile; its
+          // remedy has to say where the outer instance goes instead.
+          hint = if (Modifier.INNER in nested.modifiers) {
+            "drop `inner`, take the outer instance as a constructor parameter, and move it to " +
+                "the top level of its file"
+          } else {
+            "move it to the top level of its file"
+          },
           // A whole-declaration skip (ADR-133 defers the nested TYPE, not a member of one): the
           // owner would be the enclosing type, and the memo's deferred list keeps it there until
           // a fixture asks for it.

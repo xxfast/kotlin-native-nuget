@@ -41,7 +41,8 @@ declaration block for. Two arms of the nesting gate still name `inner`
 ADR-134's Alternative 3 recorded the shape (`new Host.Guest(host, 3)` / `host_guest_create(outer,
 visits)`) and deferred it to this ADR because it is a constructor-plan question, not a nesting one.
 ROADMAP Phase 4 carries it as the last `inner` item; `enum class` and generic owners are out of
-scope here (C# has no expressible shape for either, ADR-134).
+scope here (an `enum class` has no C# nested slot; a generic owner does, `Owner<T>.Nested`, but
+that is generic-nested-type work, see the 2026-10-03 amendment).
 
 What an `inner class` is, at the boundary: a Kotlin inner class instance carries a reference to its
 outer instance (**inferred from the language docs**, [Nested and inner classes](https://kotlinlang.org/docs/nested-classes.html):
@@ -327,7 +328,8 @@ public void InnerClass_ConstructsWithTheOuterInstanceFirst()
 (`Aviary.Middle` may own an inner class if `Middle` is itself admitted). Primary, secondary and
 ADR-091 omitting constructors. `data inner class` rides the same plan plus the existing COPY route.
 
-**Deferred, still a named skip:**
+**Deferred, still a named skip** (the inner-of-inner and sealed-owner items below are superseded by
+the 2026-10-03 amendment: both are bound):
 - An `inner class` as an **owner** (only another `inner class` can nest inside one: a non-inner
   nested class inside an inner class is `NESTED_CLASS_NOT_ALLOWED`, **inferred** from the compiler
   diagnostic, not spiked; if wrong, the child keeps skipping named through the owner arm, no
@@ -400,11 +402,56 @@ The claims below were inferred at proposal time and are now verified, each by th
 
 ## Inferred claims (not run; each fails loud, none silently wrong)
 
-1. `NESTED_CLASS_NOT_ALLOWED` inside an inner class (Scope). Still not spiked; harmless either way,
-   since the owner arm keeps deferring a non-inner class nested inside an inner class regardless of
-   which Kotlin diagnostic would fire on a hand-written attempt.
+1. `NESTED_CLASS_NOT_ALLOWED` inside an inner class (Scope). Verified by the 2026-10-03 amendment's
+   spike; the diagnostic text is `'Class' is prohibited here.`.
 2. The JVM's outer-first constructor parameter and ObjC export's header spelling for the trailing
    slot: prior-art colour only, nothing in the decision depends on them.
 
 No spike was run for these two: neither is a metadata or marshalling claim whose failure would be
 silent.
+
+## Amendment 2026-10-03: inner-of-inner is bound, a sealed owner already was, generic shapes stay refused
+
+Four shapes the Scope section deferred were re-examined. Two are bound, two stay a named skip.
+
+**Inner-of-inner is bound.** The `Modifier.INNER` arm of `unsupportedNestedOwnerReason()` is
+deleted. An `inner class` owns only inner classes (Kotlin rejects anything else with
+`'Class' is prohibited here.`), and each child's receiver is its nearest enclosing inner instance,
+so the constructor is the same shape one level down, with that instance first:
+`new Hearth.Sunbather.Paw(sunbather, 2)` over `hearth_sunbather_paw_create(outer, toes, error)`,
+Kotlin body `outer.asStableRef<Hearth.Sunbather>().get().Paw(toes)`. No planner, emitter or renderer
+change. A member reading `this@Hearth` and `this@Sunbather` needs nothing at the ABI: the chain
+above the receiver rides the Kotlin heap. Disposing an intermediate outer before the inner is safe
+at depth 2 for the same reason it is at depth 1.
+
+**An inner class under a sealed base or arm was never skipped.** The Scope and Consequences claims
+above that it stayed a named skip were wrong: both already generated
+(`new Purr.Whisker(purr, 1)` under the base, `new Purr.On.Echo(on, 5)` under an arm), the receiver
+being the sealed owner's handle. Kotlin permits `inner` there only for the base and a `class` arm;
+an `object` arm and any `interface` reject it (verified by the spike below).
+
+**A generic `inner class`, and an inner class of a generic outer, stay refused**, each a named
+`SKIPPED_NESTED_DECLARATION`, now pinned for the inner variants. They are not inner-class work:
+they are "generic nested types" and "nested types of a generic owner", inner or not. The earlier
+wording that generic owners "have no expressible C# shape" is wrong: C# spells it
+`Owner<T>.Nested`. Only an `enum class` owner has no shape. The refusal is a deferred capability,
+tracked on the ROADMAP.
+
+**Hint.** A skipped `inner class` used to be told to "move it to the top level of its file", which
+it cannot do because it reads `this@Outer`. Its hint now reads "drop `inner`, take the outer
+instance as a constructor parameter, and move it to the top level of its file". This also applies
+to an `inner class` inside an `enum class`, whose reason is unchanged.
+
+**Evidence.**
+- Verified, spike with kotlinc-native 2.4.10: `inner` is rejected inside an `object` and inside an
+  `interface`; an inner class can contain only inner classes.
+- Verified, `Tier1NestedTypesTest` (40 cells, three red before, all green after) and the full
+  `:nuget-processor:test` run (1548 passed, 0 failed).
+- Verified, `IntegrationTests/InnerClassTests.cs` and leak rows 1j
+  (`InnerOfInnerConstructor_IntermediateOuterDisposedFirst_ReturnsToBaseline`) and 1k
+  (`InnerUnderSealedOwnerConstructor_UsingDispose_ReturnsToBaseline`) in
+  `LeakTests/LiveHandleTests.cs`; full `scripts/verify.sh` green.
+- Fixtures: `Hearth.Sunbather.Paw` (`nested/Inner.kt`), `Purr.Whisker` and `Purr.On.Echo`
+  (`nested/Deferred.kt`).
+- Inferred, not tested: an inner-of-inner from a dependency klib ([ADR-066](066-forward-export-reachability-closure.md)
+  admission) behaves the same.

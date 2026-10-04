@@ -34,11 +34,15 @@ package io.github.xxfast.kotlin.native.nuget.test.nested
  * `nestedOwnerScopeCollision()` diagnoses as `ERROR_CSHARP_SIGNATURE_COLLISION` and which would
  * skip the nested declaration this file exists to pin. Same rule as `Aviary.perchAt`.
  *
+ * - [Purr.Whisker] and [Purr.On.Echo] are an ADR-141 `inner class` under the sealed base and
+ *   under a sealed arm: the only two sealed cells Kotlin lets host one (an `object` arm and any
+ *   interface reject `inner`). Each constructor takes its sealed owner as the outer, first.
+ *
  * Deferred by ADR-134 and therefore absent here on purpose: an `enum class` owner
- * (`Season.Almanac`), a generic owner (`Box<T>.Lid`) and, per ADR-141, an `inner class` **owner**
- * (an inner class nested inside another one). Those stay a named `SKIPPED_NESTED_DECLARATION`
- * permanently and live in `Tier1NestedTypesTest`'s `deferredSource` only - a skip needs no consumer
- * test. The inner class itself is declared as of ADR-141 and lives in `Inner.kt` beside this file.
+ * (`Season.Almanac`) and a generic owner (`Box<T>.Lid`). Those stay a named
+ * `SKIPPED_NESTED_DECLARATION` permanently and live in `Tier1NestedTypesTest`'s `deferredSource`
+ * only - a skip needs no consumer test. The other inner-class cells, inner-of-inner included, live
+ * in `Inner.kt` beside this file.
  *
  * Type names dodge the process-global C entry-point space (ADR-117): `Signal` would collide with
  * `platform`'s `expect sealed class Signal` (`signal_get_type`), `Crate` with `parcel`'s generic
@@ -83,12 +87,31 @@ sealed class Purr {
     fun describe(): String = "detail:$text"
   }
 
+  /**
+   * ADR-141 `inner class` under the sealed **base**: `public Whisker(Purr outer, int n)`, so any
+   * arm, the object one included, can be the outer. [describe] reads which arm it got.
+   */
+  inner class Whisker(val n: Int) {
+    fun describe(): String = when (val purr: Purr = this@Purr) {
+      is On -> "whisker#$n at level ${purr.level}"
+      Off -> "whisker#$n asleep"
+    }
+  }
+
   /** The payload arm, and itself an owner. */
   data class On(val level: Int) : Purr() {
 
     /** Nested class under a sealed **arm**: `purr_on_trace_create`, three prefix segments. */
     class Trace(val at: Int) {
       fun describe(): String = "trace@$at"
+    }
+
+    /**
+     * ADR-141 `inner class` under a sealed **arm**: `public Echo(On outer, int at)`, reading the
+     * arm's own `level` through `this@On`.
+     */
+    inner class Echo(val at: Int) {
+      fun both(): Int = level + at
     }
 
     /** Return position on the arm. */

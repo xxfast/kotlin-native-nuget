@@ -382,7 +382,7 @@ that type's own Kotlin package rather than the exporting module's. See
 ## Nested types {id="nested-classes-and-objects"}
 
 A public `class`, `object`, `interface`, or `enum class`, at any depth, declared inside a
-non-generic, non-`inner` `class` or `object`, an `interface`, or a sealed base/arm, becomes a real
+non-generic `class` or `object`, an `interface`, or a sealed base/arm, becomes a real
 C# nested type, `Outer.Nested`.
 
 | Kotlin nested kind | C# shape |
@@ -412,10 +412,9 @@ Assert.Equal("perch@5", perch.Describe());
 Assert.Equal(5, aviary.HeightOf(perch));
 ```
 
-An `inner class`'s **own** nested types (inner-of-inner), a generic owner, and an `enum class`
-owner have no C# equivalent for a nested slot and stay a named skip
+A generic owner, a generic nested type, and an `enum class` owner stay a named skip
 (`SKIPPED_NESTED_DECLARATION`); see [Inner classes](#inner-classes) for what an `inner class`
-itself declares. Kotlin allows a nested type named exactly like its owner, or like a PascalCased
+declares. Kotlin allows a nested type named exactly like its owner, or like a PascalCased
 member of its owner (a companion's members included, since they fold into the owner's C# type as
 statics); C# does not, so that combination fails generation (`ERROR_CSHARP_SIGNATURE_COLLISION`)
 instead of emitting invalid C#. Avoid naming an accessor, or a companion function, the same as its
@@ -423,7 +422,7 @@ nested return type (`fun perch(): Perch`); name it differently instead (`perchAt
 
 ### `inner class`: the constructor takes the outer instance first {id="inner-classes"}
 
-A public Kotlin `inner class` declared directly inside an admitted, non-generic, non-`inner` class
+A public Kotlin `inner class` declared directly inside an admitted, non-generic class
 becomes a nested C# type too, with one difference from a plain nested class: its constructor's
 first parameter is the outer instance, named `outer`.
 
@@ -448,9 +447,17 @@ generated C# signature and the Kotlin export instead (the same shift `value` alr
 property setter); a member reading `this@Hearth` needs nothing added at the ABI, since the
 reference lives entirely on the Kotlin heap.
 
-An `inner class` as an owner of its own nested types (inner-of-inner), an `inner class` under a
-sealed owner, a generic `inner class`, and an inner class of a generic outer stay a named skip
-(`SKIPPED_NESTED_DECLARATION`).
+An inner class may itself own inner classes, and so on, each taking its nearest outer instance
+first, and an inner class under a sealed base or arm works the same way:
+
+```C#
+using var sunbather = new Hearth.Sunbather(hearth, 3);
+using var paw = new Hearth.Sunbather.Paw(sunbather, 2);
+```
+
+A generic `inner class` and an inner class of a generic outer stay a named skip
+(`SKIPPED_NESTED_DECLARATION`). The hint for a skipped `inner class` is to drop `inner`, take the
+outer instance as a constructor parameter, and move it to the top level of its file.
 
 A `@Serializable` class exports the same as any other class. kotlinx.serialization's
 compiler-generated `$serializer` nested object is never declared in C#, since `$` isn't a legal C#

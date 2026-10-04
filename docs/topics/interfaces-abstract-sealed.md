@@ -623,12 +623,11 @@ implementation on every implementer, so it stays off the derived interface entir
 
 ### Nested interfaces {id="nested-interfaces-skip-named"}
 
-An interface nested inside a non-generic, non-`inner` `class` or `object` is declared as a real
+An interface nested inside a non-generic `class` or `object` is declared as a real
 nested C# interface, `Outer.IListener`, with its return-position wrapper nested beside it
 (`Outer.Listener`); see [Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects).
-A nested interface under a still-deferred owner shape, an `inner class`, a generic class, or an
-`enum class`, has no C# spelling: it is skipped, and any member typed with it is skipped too, each
-named on a build warning rather than silently dropped.
+A nested interface under a generic class or an `enum class` is skipped, and any member typed with
+it is skipped too, each named on a build warning rather than silently dropped.
 
 ## Abstract classes
 
@@ -1291,8 +1290,8 @@ subclass's own overrides, but a consumer cannot pattern-match past the arm.
 A sealed base, a sealed arm, and any `interface` owner can nest their own plain
 `class`/`object`/`interface`/`enum class`/`value class`, declared beside the owner's other members
 (`Purr.Detail`, `Purr.On.Trace`, `Beam.Lens`); see
-[Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects). Only an
-`inner class`, a generic class, or an `enum class` owner still cannot host a nested declaration.
+[Classes and objects: Nested types](classes-and-objects.md#nested-classes-and-objects). Only a
+generic class or an `enum class` owner still cannot host a nested declaration.
 
 ## Limitations {id="limitations"}
 

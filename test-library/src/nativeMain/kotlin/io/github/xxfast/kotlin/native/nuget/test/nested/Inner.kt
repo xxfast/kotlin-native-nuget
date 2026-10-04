@@ -36,9 +36,15 @@ package io.github.xxfast.kotlin.native.nuget.test.nested
  * would be safe: `outer` is in `PLAN_OWNED_NAMES`, so a user parameter of that name renders
  * `outer_` the way `value` does (`Tier1ReservedParameterNamesTest`).
  *
- * Deferred by ADR-141 and therefore absent here on purpose: an `inner class` **owner**
- * (inner-of-inner), an inner class under a sealed owner, a generic inner class, and an inner class
- * of a generic outer. Those stay a named `SKIPPED_NESTED_DECLARATION` and live in the Tier 1 test.
+ * - [Hearth.Sunbather.Paw] is the **inner-of-inner**: an inner class owning its own inner class.
+ *   Its constructor's outer is the immediately enclosing [Hearth.Sunbather]
+ *   (`new Hearth.Sunbather.Paw(sunbather, 2)`, `hearth_sunbather_paw_create(outer, toes, error)`),
+ *   and [Hearth.Sunbather.Paw.trail] reads both `this@Hearth` and `this@Sunbather`, neither of
+ *   which crosses the ABI: the chain above the receiver rides the Kotlin heap.
+ *
+ * An inner class under a sealed owner lives in `Deferred.kt` beside `Purr`. Refused, and therefore
+ * absent here on purpose: a generic inner class and an inner class of a generic outer. Those stay
+ * a named `SKIPPED_NESTED_DECLARATION` and live in the Tier 1 test.
  *
  * Oreo (black with the white middle) holds the hearth for as long as it lasts; Mylo (brown and
  * creamy) waits for the velvet cushion beside it, which is also warm, but only second-best.
@@ -60,6 +66,22 @@ class Hearth(val room: String) {
     val basking: String get() = "${this@Hearth.room} warms Oreo for $minutes min"
 
     fun describe(): String = "sunbather@$minutes"
+
+    /**
+     * The inner-of-inner: `public Paw(Sunbather outer, int toes)`, Kotlin body
+     * `outer.asStableRef<Hearth.Sunbather>().get().Paw(toes)`.
+     */
+    inner class Paw(val toes: Int) {
+
+      /** Reads both enclosing instances, two levels up and one level up. */
+      fun trail(): String = "${this@Hearth.room}/${this@Sunbather.minutes}/$toes"
+    }
+
+    /** Return position for the inner-of-inner. */
+    fun pawAt(toes: Int): Paw = Paw(toes)
+
+    /** Parameter position for the inner-of-inner. */
+    fun toesOf(paw: Paw): Int = paw.toes
   }
 
   /** The converted-parameter inner: `public Cushion(Hearth outer, string fabric)`. */

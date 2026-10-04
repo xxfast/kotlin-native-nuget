@@ -149,6 +149,12 @@ of one such member returning to baseline. Row 1i,
 `EnumMemberFunctionClassTypedReturn_UsingDispose_ReturnsToBaseline`, pins the same for a class-typed
 enum member function return.
 
+An [inner class](classes-and-objects.md#inner-classes) constructor borrows its outer handle and mints
+one of its own. Row 1j, `InnerOfInnerConstructor_IntermediateOuterDisposedFirst_ReturnsToBaseline`,
+pins that at depth 2 with the intermediate outer disposed first, and row 1k,
+`InnerUnderSealedOwnerConstructor_UsingDispose_ReturnsToBaseline`, pins it with a sealed base and a
+sealed arm as the outer.
+
 An [interface method overload](interfaces-abstract-sealed.md#method-overloads-on-an-interface) adds
 no new handle kind either: every numbered dispatch export or bridge slot a call reaches still
 borrows the one handle its route already mints (the returned interface's own handle, or the
