@@ -105,7 +105,8 @@ internal fun translateFunction(
   val kotlinReturnType: String = returnType?.declaration?.simpleName?.asString() ?: "Unit"
 
   // Enums cross the C ABI as their ordinal Int (ADR-006), so the public C# param keeps the enum
-  // type while the DllImport takes an int. renderSyncErrorCheckMethod casts at the call site.
+  // type while the DllImport takes an int. Every native call site casts it down: the generic arm
+  // below by hand, the others through renderSyncErrorCheckMethod.
   val params: List<CirParameter> = func.parameters.map { param ->
     val resolved: KSType = param.type.resolve().expandAliases()
     val kotlinType: String = resolved.declaration.simpleName.asString()
@@ -129,37 +130,6 @@ internal fun translateFunction(
     )
 
     CirParameter(name, type = "global::$enumNamespace.$kotlinType", nativeType = "int")
-  }
-
-  val hasEnumParams: Boolean = params.any { it.nativeType != it.type }
-
-  // Only the return shapes that render through renderSyncErrorCheckMethod (enum, String,
-  // primitive, Unit) cast an enum param down to its ordinal at the native call site. The others
-  // hand-build their native call and would silently emit a bridge that does not compile.
-  fun enumParamsUnsupported(returnShape: String): List<CirMember> {
-    // ADR-162 (ROADMAP line 236): the last fatal forward diagnostic outside ForwardDiagnosticKind.
-    // Same severity, same node, same `emptyList()`, and now the same `[nuget:KIND]` tag as every
-    // other build failure this processor raises, so a consumer can grep for it by kind.
-    ForwardDiagnosticSink.emit(
-      listOf(
-        ForwardDiagnostic(
-          kind = ForwardDiagnosticKind.ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE,
-          symbol = func,
-          declaration = func.qualifiedName?.asString() ?: func.simpleName.asString(),
-          reason = "it takes an enum parameter and returns a $returnShape, a return shape whose " +
-              "bridge hand-builds its native call and so never casts the enum down to its ordinal",
-          // ADR-160 amendment: only the generic-return arm still raises this, and every non-generic
-          // return is plan-owned and carries an enum parameter, a lambda return included.
-          hint = "take the enum's ordinal as an Int, or return a non-generic type (an enum, a " +
-              "String, a primitive, Unit, an exported class or a lambda), which are the return " +
-              "shapes that carry an enum parameter",
-          // ERROR_*: the round returns before anything generated is read.
-          owner = null,
-        ),
-      ),
-      logger,
-    )
-    return emptyList()
   }
 
   val returnDecl: KSClassDeclaration? = returnType?.declaration as? KSClassDeclaration
@@ -196,7 +166,6 @@ internal fun translateFunction(
   }
 
   if (isListReturnType) {
-    if (hasEnumParams) return enumParamsUnsupported("List")
 
     tracker.needsList = true
     val elementType = returnType.arguments.firstOrNull()?.type?.resolve()
@@ -245,7 +214,6 @@ internal fun translateFunction(
   }
 
   if (isMutableListReturnType) {
-    if (hasEnumParams) return enumParamsUnsupported("MutableList")
 
     tracker.needsList = true
     val elementType = returnType.arguments.firstOrNull()?.type?.resolve()
@@ -294,7 +262,6 @@ internal fun translateFunction(
   }
 
   if (isMapReturnType) {
-    if (hasEnumParams) return enumParamsUnsupported("Map")
 
     tracker.needsMap = true
     val keyType = returnType.arguments.getOrNull(0)?.type?.resolve()
@@ -343,7 +310,6 @@ internal fun translateFunction(
   }
 
   if (isMutableMapReturnType) {
-    if (hasEnumParams) return enumParamsUnsupported("MutableMap")
 
     tracker.needsMap = true
     val keyType = returnType.arguments.getOrNull(0)?.type?.resolve()
@@ -392,7 +358,6 @@ internal fun translateFunction(
   }
 
   if (isSetReturnType) {
-    if (hasEnumParams) return enumParamsUnsupported("Set")
 
     tracker.needsSet = true
     val elementType = returnType.arguments.firstOrNull()?.type?.resolve()
@@ -435,7 +400,6 @@ internal fun translateFunction(
   }
 
   if (isMutableSetReturnType) {
-    if (hasEnumParams) return enumParamsUnsupported("MutableSet")
 
     tracker.needsSet = true
     val elementType = returnType.arguments.firstOrNull()?.type?.resolve()
@@ -480,8 +444,6 @@ internal fun translateFunction(
       returnType.arguments.isNotEmpty()
 
   if (isGenericReturnType) {
-    if (hasEnumParams) return enumParamsUnsupported("generic")
-
     // Issue #111's rule on this route: a type C# cannot name makes the whole function unspellable,
     // so it is skipped named rather than rendered for the consumer's compiler to reject. First the
     // outer type (`Pair<Int, Int>` rendered `global::Interop.Kotlin.Pair<int, int>`, CS0234), then
@@ -543,7 +505,11 @@ internal fun translateFunction(
       hasSyncErrorOut = true,
     )
 
-    val paramNames: String = params.joinToString(", ") { it.name }
+    // An enum parameter crosses as its ordinal: the DllImport takes the `int` native type, so the
+    // hand-built call casts it down, the same expression `renderSyncErrorCheckMethod` uses.
+    val paramNames: String = params.joinToString(", ") { param ->
+      if (param.nativeType != param.type) "(${param.nativeType})${param.name}" else param.name
+    }
     val nativeCallArgs: String =
       if (paramNames.isEmpty()) "out IntPtr error" else "$paramNames, out IntPtr error"
     val body: String = buildString {

@@ -51,7 +51,7 @@ fun catSupplier(cat: Cat): () -> Cat = { cat }
 // A collection parameter: Mylo's treat portions, summed when the supplier is asked.
 fun listSupplier(xs: List<Int>): () -> Int = { xs.sum() }
 
-// Side finding A: an enum parameter. Today ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE fails the build.
+// Side finding A: an enum parameter, which the plan carries as its ordinal.
 fun moodSupplier(m: Mood): () -> Int = { m.ordinal }
 
 // Side finding B: a nullable primitive parameter. Today C# declares `int n` and drops the null;

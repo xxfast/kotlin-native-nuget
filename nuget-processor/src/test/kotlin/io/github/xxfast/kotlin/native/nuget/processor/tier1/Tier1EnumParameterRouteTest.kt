@@ -1,30 +1,25 @@
 package io.github.xxfast.kotlin.native.nuget.processor.tier1
 
-import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
 /**
- * ADR-162 (ROADMAP line 236): the last fatal forward diagnostic that lived outside
- * `ForwardDiagnosticKind`, now inside it.
+ * An enum parameter on a top-level function that returns a generic class at a closed type
+ * (`fun reaction(mood: Mood): Crate<Int>`) used to fail the whole build with
+ * `ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE`. The Kotlin export already took the ordinal and decoded
+ * it; only the C# half's hand-built native call passed the enum uncast. It binds now, and the kind
+ * is gone. The overload beside it is a planned one (`reaction(level: Int): Int`), which takes the
+ * next overload suffix; two overloads that both take this legacy route collide on one entry point
+ * whatever their parameter types, a separate gap.
  *
- * `enumParamsUnsupported` in `CirFunctionTranslator` was a bare `logger.error` with no
- * `[nuget:KIND]` tag, so it was the one build failure from this processor a consumer could not
- * grep for by kind. Behaviour is unchanged on purpose (same node, same severity, the translator
- * still returns no members); the cell exists to pin that the label is there and that the round
- * still fails before the Kotlin export file is written.
- *
- * Deliberately in-process only, never in `test-library/`: the correct outcome is a failed build,
- * which would break `packNuget`.
+ * The collection-return cells pin that the six collection arms that also raised the kind were
+ * unreachable: a collection return is plan-owned, so each of these binds on the plan route.
  */
 class Tier1EnumParameterRouteTest {
 
-  // ADR-160 amendment: the lambda-return twin of this cell binds now (a top-level lambda return is
-  // plan-owned and the plan carries an enum parameter), so the pin moved to the generic-return arm,
-  // the one live shape that still raises this kind.
   @Test
-  fun `an enum parameter on a generic-returning top-level function fails by kind`() {
-    val result = Tier1Harness.run(
+  fun `an enum parameter on a generic-returning top-level function binds beside its overload`() {
+    val result: Tier1Result = Tier1Harness.run(
       """
       package tier1.enumparam
 
@@ -33,32 +28,72 @@ class Tier1EnumParameterRouteTest {
       class Crate<T>(val item: T)
 
       fun reaction(mood: Mood): Crate<Int> = Crate(mood.ordinal)
+
+      fun reaction(level: Int): Int = level
+
+      fun standoff(oreo: Mood, mylo: Mood): Crate<Int> = Crate(oreo.ordinal * 10 + mylo.ordinal)
       """.trimIndent(),
     )
 
+    assertTrue(result.kspErrors.isEmpty(), "kspErrors=${result.kspErrors}")
+    assertTrue(result.compileErrors.isEmpty(), "compileErrors=${result.compileErrors}")
+    val cs: String = result.generatedCSharp
     assertTrue(
-      result.kspErrors.any { message ->
-        message.contains(ForwardDiagnosticKind.ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE.name) &&
-            message.contains("tier1.enumparam.reaction") &&
-            message.contains("Fixture.kt:")
-      },
-      "expected the enum-parameter route failure by kind, located at the function; " +
-          "kspErrors=${result.kspErrors}",
-    )
-    // ADR-160 amendment: the hint names the lambda return among the shapes that carry an enum.
-    assertTrue(
-      result.kspErrors.any { message ->
-        message.contains(
-          "an exported class or a lambda), which are the return shapes that carry an enum " +
-              "parameter",
-        )
-      },
-      "expected the hint to list a lambda return; kspErrors=${result.kspErrors}",
+      Regex("""Reaction_native\(\(int\)mood, out IntPtr error\)""").containsMatchIn(cs),
+      "expected the enum cast down to its ordinal at the native call; cs=$cs",
     )
     assertTrue(
-      result.generatedFiles.keys.none { name -> name.endsWith("CNameExports.kt") },
-      "a fatal diagnostic must fail the round before the Kotlin export file is written; " +
-          "generatedFiles=${result.generatedFiles.keys}",
+      Regex("""Standoff_native\(\(int\)oreo, \(int\)mylo, out IntPtr error\)""")
+        .containsMatchIn(cs),
+      "expected both enum parameters cast at the native call; cs=$cs",
     )
+    assertTrue(
+      Regex("""public static \S*Crate<int> Reaction\(\S*Mood mood\)""").containsMatchIn(cs),
+      "expected the public method to keep the C# enum; cs=$cs",
+    )
+    assertTrue(
+      Regex("""public static int Reaction\(int level\)""").containsMatchIn(cs),
+      "expected the planned Int overload to keep binding; cs=$cs",
+    )
+    val kotlin: String = result.generated
+    assertTrue(
+      "tier1.enumparam.Mood.entries.getOrNull(mood)" in kotlin,
+      "expected the Kotlin export to decode the ordinal; generated=$kotlin",
+    )
+  }
+
+  @Test
+  fun `an enum parameter on a collection-returning top-level function binds on the plan`() {
+    val result: Tier1Result = Tier1Harness.run(
+      """
+      package tier1.enumparam
+
+      enum class Mood { Purr, Hiss }
+
+      fun moodList(mood: Mood): List<Int> = listOf(mood.ordinal)
+
+      fun moodMutableList(mood: Mood): MutableList<Int> = mutableListOf(mood.ordinal)
+
+      fun moodMap(mood: Mood): Map<String, Int> = mapOf(mood.name to mood.ordinal)
+
+      fun moodMutableMap(mood: Mood): MutableMap<String, Int> = mutableMapOf(mood.name to 1)
+
+      fun moodSet(mood: Mood): Set<Int> = setOf(mood.ordinal)
+
+      fun moodMutableSet(mood: Mood): MutableSet<Int> = mutableSetOf(mood.ordinal)
+      """.trimIndent(),
+    )
+
+    assertTrue(result.kspErrors.isEmpty(), "kspErrors=${result.kspErrors}")
+    assertTrue(result.compileErrors.isEmpty(), "compileErrors=${result.compileErrors}")
+    val cs: String = result.generatedCSharp
+    for (method in listOf(
+      "MoodList", "MoodMutableList", "MoodMap", "MoodMutableMap", "MoodSet", "MoodMutableSet",
+    )) {
+      assertTrue(
+        Regex("""public static [^\n(]+ $method\(\S*Mood mood\)""").containsMatchIn(cs),
+        "expected $method to bind with its C# enum parameter; cs=$cs",
+      )
+    }
   }
 }
