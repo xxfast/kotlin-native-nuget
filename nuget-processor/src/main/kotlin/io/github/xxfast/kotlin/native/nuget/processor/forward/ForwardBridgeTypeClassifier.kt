@@ -4,6 +4,7 @@ import com.google.devtools.ksp.getAllSuperTypes
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSDeclaration
+import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.KSTypeArgument
 import com.google.devtools.ksp.symbol.KSTypeParameter
@@ -117,12 +118,29 @@ internal class ForwardBridgeTypeClassifier(
     val declaration = type.declaration
     // ADR-147: a *class's* type parameter is a first-class kind now, carrying its declared bound
     // so both halves can spell the boxed wire. Scoped to a class deliberately: an interface's own
-    // type parameter (issue #112) and a function's own keep the named legacy refusal, because
-    // neither route spells an applied receiver and both have their own open questions.
+    // type parameter (issue #112) and a top-level or extension function's own keep the named
+    // legacy refusal, because neither route spells an applied receiver and both have their own
+    // open questions. A class-like member function's own is admitted below (ADR-197).
     if (declaration is KSTypeParameter) {
       val owner: KSDeclaration? = declaration.parentDeclaration
       val onGenericClass: Boolean =
         owner is KSClassDeclaration && owner.classKind == ClassKind.CLASS
+      // ADR-197: a member function's own `T` crosses on the same boxed wire. The planner decides
+      // which member shapes route (`forwardMemberGenericRefusal`); this only spells the kind.
+      if (owner is KSFunctionDeclaration && owner.isForwardGenericMemberOwner()) {
+        val bounds: List<String> = declaration.forwardBoundSpellings()
+        val parameter = BridgeType.TypeParameter(
+          name = owner.forwardCsharpMethodTypeParameterName(declaration),
+          boundQualifiedName = bounds.firstOrNull(),
+          kotlinName = declaration.simpleName.asString(),
+          additionalBounds = bounds.drop(1),
+        )
+        return if (declaration.hasNullableBound()) {
+          BridgeType.Nullable(parameter.copy(nullableFromBound = true))
+        } else {
+          parameter
+        }
+      }
       return if (onGenericClass) {
         val bounds: List<String> = declaration.forwardBoundSpellings()
         val parameter = BridgeType.TypeParameter(

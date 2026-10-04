@@ -703,6 +703,34 @@ internal data class ForwardPublicSignature(
    * non-null inner type, so lowering from that slot compiles clean and drops the caller's `null`.
    */
   val receiver: ForwardPublicParameter? = null,
+  /**
+   * ADR-197: the callable's own type parameters, in declaration order (`fun <T, U> pair(...)`).
+   * Empty for every callable that declares none, and for every owner but a class, object,
+   * companion, sealed base and sealed arm member. The C# half declares them on the member, the
+   * Kotlin half names each one's [ForwardMethodTypeParameter.kotlinTypeArgument] at the call.
+   */
+  val typeParameters: List<ForwardMethodTypeParameter> = emptyList(),
+)
+
+/**
+ * ADR-197: one of a member function's own type parameters. Every position it appears at crosses on
+ * ADR-147's boxed-handle wire as a [BridgeType.TypeParameter] of the same [name].
+ *
+ * @param name the C# spelling, which the [BridgeType.TypeParameter]s of the signature carry.
+ * @param kotlinName the declared name.
+ * @param kotlinTypeArgument the explicit type argument the Kotlin call passes: the erased bound
+ *   with the bound's nullability (`Any?` when unconstrained), the type each `T` box is read back
+ *   as. `_` for a multi-bound parameter, which no single type spells; Kotlin infers it from the
+ *   smart-cast argument that mentions it.
+ * @param constraints the C# `where` constraints of a declaring (non-`override`) member, from
+ *   ADR-015's bound mapping. Filled after planning by the C# half's bound speller, which needs
+ *   the export context the planner does not hold.
+ */
+internal data class ForwardMethodTypeParameter(
+  val name: String,
+  val kotlinName: String,
+  val kotlinTypeArgument: String,
+  val constraints: List<String> = emptyList(),
 )
 
 /** Symbol-level invocation information. Renderers decide syntax later. */

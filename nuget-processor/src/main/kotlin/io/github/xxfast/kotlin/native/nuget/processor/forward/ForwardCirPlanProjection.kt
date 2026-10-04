@@ -11,6 +11,7 @@ import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMember
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirMethod
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirParameter
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirProperty
+import io.github.xxfast.kotlin.native.nuget.processor.cir.CirTypeParameter
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClassBoxing
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirValueClassConstructor
 import io.github.xxfast.kotlin.native.nuget.processor.cir.CirVisibility
@@ -305,6 +306,7 @@ internal object ForwardCirPlanProjection {
       parameters = publicParams.map { parameter -> parameter.copy(nativeType = parameter.type) },
       body = result.body,
       isStatic = true,
+      typeParameters = plan.cirTypeParameters(isOverride = false),
       isSyncErrorCheckEnabled = !result.hasCustomBody && plan.errorSlot != null,
       hasCustomBody = result.hasCustomBody,
       doc = plan.publicSignature.cirDoc(),
@@ -378,6 +380,7 @@ internal object ForwardCirPlanProjection {
       body = result.body,
       isOverride = isOverride,
       isVirtual = isVirtual,
+      typeParameters = plan.cirTypeParameters(isOverride),
       // Unlike static/extension (which hand-build their own CirDllImport), the DllImport here is
       // derived generically by CirClass.methodNativeImport from this CirMethod, and its trailing
       // `out IntPtr error` must be present whether or not the *body* is hand-written, so this is
@@ -574,12 +577,47 @@ internal object ForwardCirPlanProjection {
   ): List<CirParameter> = buildList {
     val value: String? = names.value
     if (value != null) {
-      val maybeNull: Boolean = result !is BridgeType.Nullable &&
+      // A nullable-bounded bare `T` is spelled `T` but may hold null like `T?` (ADR-147
+      // amendment), so its failure path's `default` needs the attribute too (CS8601 otherwise).
+      val nullableInner: BridgeType? = (result as? BridgeType.Nullable)?.type
+      val bareNullableBound: Boolean =
+        nullableInner is BridgeType.TypeParameter && nullableInner.nullableFromBound
+      val maybeNull: Boolean = bareNullableBound || result !is BridgeType.Nullable &&
           (result.isCSharpReferenceType() || result is BridgeType.TypeParameter)
       val attribute: String = if (maybeNull) "$MAYBE_NULL_WHEN_FALSE " else ""
       add(CirParameter(value, "${attribute}out $valueType"))
     }
     add(CirParameter(names.failure, "$NOT_NULL_WHEN_FALSE out global::System.Exception?"))
+  }
+
+  /**
+   * ADR-197: the member's own type parameters as C# declares them. A declaring member carries
+   * ADR-015's constraints. An `override` restates none (CS0460: they are inherited), except that
+   * a type parameter it spells `T?` says `where T : default`, without which C# reads `T?` in an
+   * override as `Nullable<T>` (CS0115, CS0453).
+   */
+  private fun ForwardCallablePlan.cirTypeParameters(isOverride: Boolean): List<CirTypeParameter> =
+    publicSignature.typeParameters.map { parameter ->
+      val constraints: List<String> = when {
+        !isOverride -> parameter.constraints
+        spellsNullable(parameter.name) -> listOf("default")
+        else -> emptyList()
+      }
+      CirTypeParameter(parameter.name, constraints)
+    }
+
+  /** Whether any public position of this plan spells the type parameter [name] as `T?`. */
+  private fun ForwardCallablePlan.spellsNullable(name: String): Boolean {
+    fun BridgeType.spells(): Boolean = when (this) {
+      is BridgeType.Nullable -> {
+        val inner: BridgeType = type
+        (inner is BridgeType.TypeParameter && inner.name == name && !inner.nullableFromBound) ||
+            inner.spells()
+      }
+      else -> false
+    }
+    return publicSignature.parameters.any { parameter -> parameter.type.spells() } ||
+        publicSignature.result.spells()
   }
 
   /**

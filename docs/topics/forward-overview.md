@@ -339,18 +339,12 @@ used to vanish from both the Kotlin and C# output with no diagnostic at all. Sin
     at UnroutedPositionsSample.kt:21
 ```
 
-A callable's own type parameter (a class or `object` method declared `fun <T> f(value: T): T`, as
-opposed to a *top-level* generic function) is one of these positions too, and skips
-`SKIPPED_UNSUPPORTED_COMBINATION` naming the structural mismatch rather than the position:
-
-```
-[nuget:SKIPPED_UNSUPPORTED_COMBINATION] Skipping Depot.structuralOnClass: a generic type binds at a
-    top-level function return, and a generic function at a top-level function with a parameter of
-    its own type parameter, but not at this position. expose a non-generic wrapper (`fun f(value:
-    Int)` beside `fun <T> f(value: T)`), or move the declaration to a top-level function with a
-    parameter of its own type parameter
-    at UnroutedPositionsSample.kt:36
-```
+A callable's own type parameter is one of these positions too, and skips
+`SKIPPED_UNSUPPORTED_COMBINATION` naming the structural mismatch rather than the position. A class,
+`object`, companion or sealed-class member declared `fun <T> f(value: T): T` binds (see
+[Generic methods on a class](generics.md#generic-methods)); the skip is left for a generic method
+on an interface, enum, value class or extension, and for a signature the route cannot carry, such
+as a `T` nested in a collection. The warning names which shape was refused.
 
 A top-level `fun f(): Flow<T>` used to be worse than silent: it passed the generic-return route's
 own gate on both halves, so the Kotlin side exported a handle and the C# side rendered a return type

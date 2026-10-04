@@ -1600,7 +1600,9 @@ internal class ForwardCallablePlanner(
         method.modifiers.contains(Modifier.ABSTRACT) && !hasBacking ->
           ForwardPlanSkipReason.ABSTRACT
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
-        method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
+        // ADR-197: a routed generic member plans; every other shape keeps the structural skip.
+        method.isUnroutedGeneric(interfaceBridgeMethods + storedCallbackMethods) ->
+          ForwardPlanSkipReason.GENERIC
         method in interfaceBridgeMethods || method in storedCallbackMethods -> ForwardPlanSkipReason.CALLBACK_PROTOCOL
         else -> null
       }
@@ -1626,7 +1628,7 @@ internal class ForwardCallablePlanner(
           defaults = declaredDefaults(method.parameters, memberDefaultFlags(method)),
           doc = method.forwardKdoc(expects).forParameters(method.parameters),
           isAbstract = isAbstract,
-        )
+        ).withMethodTypeParameters(method)
       }
     }
     return methods.map { method -> entryFor(method) }.nameUnroutedPositions { skipped ->
@@ -1787,7 +1789,9 @@ internal class ForwardCallablePlanner(
       val isVirtual: Boolean = !isOverride && (isOverridable || isInterfaceMember)
       val structuralReason: ForwardPlanSkipReason? = when {
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
-        method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
+        // ADR-197: a routed generic member plans; every other shape keeps the structural skip.
+        method.isUnroutedGeneric(interfaceBridgeMethods + storedCallbackMethods) ->
+          ForwardPlanSkipReason.GENERIC
         method in interfaceBridgeMethods || method in storedCallbackMethods ->
           ForwardPlanSkipReason.CALLBACK_PROTOCOL
 
@@ -1813,7 +1817,7 @@ internal class ForwardCallablePlanner(
           // ADR-164: the base is the carrier of the widened signature every overriding arm shares.
           defaults = declaredDefaults(method.parameters, memberDefaultFlags(method)),
           doc = method.forwardKdoc(expects).forParameters(method.parameters),
-        )
+        ).withMethodTypeParameters(method)
       }
     }
 
@@ -1925,7 +1929,9 @@ internal class ForwardCallablePlanner(
         method.modifiers.contains(Modifier.ABSTRACT) && !hasBacking ->
           ForwardPlanSkipReason.ABSTRACT
         method.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
-        method.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
+        // ADR-197: a routed generic member plans on the arm as it does on an ordinary class.
+        method.isUnroutedGeneric(interfaceBridgeMethods + storedCallbackMethods) ->
+          ForwardPlanSkipReason.GENERIC
         method in interfaceBridgeMethods || method in storedCallbackMethods ->
           ForwardPlanSkipReason.CALLBACK_PROTOCOL
 
@@ -1954,7 +1960,7 @@ internal class ForwardCallablePlanner(
           defaults = declaredDefaults(method.parameters, memberDefaultFlags(method)),
           doc = method.forwardKdoc(expects).forParameters(method.parameters),
           isAbstract = isAbstract,
-        )
+        ).withMethodTypeParameters(method)
       }
     }
 
@@ -1990,8 +1996,8 @@ internal class ForwardCallablePlanner(
             // (ADR-039) add/remove **pairs**, which take the identical `CALLBACK_PROTOCOL`
             // constant from the structural check above, are keyed to the arm as well, so the
             // origin split that kept a pair named is gone and the exemption is by reason like the
-            // other three. What is left named on an arm is GENERIC and SUSPEND_CALLBACK_PROTOCOL,
-            // neither of which any route emits for any owner.
+            // other three. What is left named on an arm is SUSPEND_CALLBACK_PROTOCOL and a GENERIC
+            // shape the ADR-197 member route refuses, which no route emits for any owner.
             entry.reason != ForwardPlanSkipReason.CALLBACK_PROTOCOL
       if (!isUnrouted) return@map entry
 
@@ -2475,9 +2481,16 @@ internal class ForwardCallablePlanner(
     // ADR-164: per-parameter "has a default", positionally, from the route's own flag reader.
     defaults: List<Boolean>,
   ): ForwardCallableCatalogEntry {
+    // ADR-197: an object or companion member's own type parameters route on the plan; a top-level
+    // function's stay on the legacy generic-function route.
+    val routesGeneric: Boolean = origin == ForwardCallableOrigin.OBJECT ||
+        origin == ForwardCallableOrigin.COMPANION
     val structuralReason: ForwardPlanSkipReason? = when {
       function.modifiers.contains(Modifier.SUSPEND) -> ForwardPlanSkipReason.SUSPEND
-      function.typeParameters.isNotEmpty() -> ForwardPlanSkipReason.GENERIC
+      function.typeParameters.isNotEmpty() &&
+          (!routesGeneric || function.forwardMemberGenericRefusal() != null) ->
+        ForwardPlanSkipReason.GENERIC
+
       else -> null
     }
     if (structuralReason != null) {
@@ -2517,6 +2530,31 @@ internal class ForwardCallablePlanner(
       node = function,
       defaults = declaredDefaults,
       doc = function.forwardKdoc(expects).forParameters(function.parameters),
+    ).withMethodTypeParameters(function)
+  }
+
+  /**
+   * ADR-197: whether this member declares its own type parameters in a shape the plan does not
+   * route ([forwardMemberGenericRefusal]), or as half of an add/remove pair, whose legacy routes
+   * are keyed to non-generic members. Checked ahead of the pair's own `CALLBACK_PROTOCOL`, as the
+   * structural `GENERIC` skip always was.
+   */
+  private fun KSFunctionDeclaration.isUnroutedGeneric(
+    pairMembers: Set<KSFunctionDeclaration>,
+  ): Boolean = typeParameters.isNotEmpty() &&
+      (forwardMemberGenericRefusal() != null || this in pairMembers)
+
+  /** ADR-197: stamps [method]'s own type parameters onto a planned entry's public signature. */
+  private fun ForwardCallableCatalogEntry.withMethodTypeParameters(
+    method: KSFunctionDeclaration,
+  ): ForwardCallableCatalogEntry {
+    if (this !is ForwardCallableCatalogEntry.Planned) return this
+    if (method.typeParameters.isEmpty()) return this
+    val signature: ForwardPublicSignature = plan.publicSignature
+    return copy(
+      plan = plan.copy(
+        publicSignature = signature.copy(typeParameters = method.forwardMethodTypeParameters()),
+      ),
     )
   }
 
@@ -2594,11 +2632,12 @@ internal class ForwardCallablePlanner(
     }
     if (structuralReason != null) {
       // The structural half of the same amendment: `fun <T> Depot.tagged(value: T)` has no route
-      // either (the generic-function route takes top-level functions only), so its GENERIC
-      // deferral is named here too. SUSPEND is not a candidate on any other owner (the suspend
-      // route is keyed to every one of them), but it is here: no route emits a suspend EXTENSION
-      // at all (ROADMAP Phase 4 line 23 fold-in, verified silent by the memo's spike), so it is
-      // named directly rather than through the candidate set the other owners share.
+      // either (the generic-function route takes top-level functions, and ADR-197 class-like
+      // members, never an extension), so its GENERIC deferral is named here too. SUSPEND is not a
+      // candidate on any other owner (the suspend route is keyed to every one of them), but it is
+      // here: no route emits a suspend EXTENSION at all (ROADMAP Phase 4 line 23 fold-in, verified
+      // silent by the memo's spike), so it is named directly rather than through the candidate
+      // set the other owners share.
       if (structuralReason == ForwardPlanSkipReason.SUSPEND) {
         return ForwardCallableCatalogEntry.Skipped(
           symbol, ForwardPlanSkipReason.UNROUTED_POSITION, node = function,

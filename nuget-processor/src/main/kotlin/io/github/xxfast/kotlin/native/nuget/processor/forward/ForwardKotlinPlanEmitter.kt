@@ -1183,8 +1183,15 @@ private fun invocationExpression(
 ): String {
   // ADR-090: an overload's symbol carries the `_2` suffix so catalog keys stay unique; the Kotlin
   // call site must say the declared name. `member` is null for every unnumbered callable.
-  val functionName: String =
+  val declaredName: String =
     plan.invocation.member ?: plan.invocation.symbol.substringAfterLast('.')
+  // ADR-197: a member's own type parameters are named at the call, so a `T` only the return
+  // mentions (`fun <T> make(): T?`) resolves; `_` lets Kotlin infer a multi-bound one.
+  val typeArguments: List<String> =
+    plan.publicSignature.typeParameters.map { parameter -> parameter.kotlinTypeArgument }
+  val functionName: String =
+    if (typeArguments.isEmpty()) declaredName
+    else declaredName + typeArguments.joinToString(", ", "<", ">")
   return when (plan.invocation.origin) {
     ForwardCallableOrigin.CLASS -> ownerCall(plan, "$functionName($arguments)")
 

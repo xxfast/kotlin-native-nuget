@@ -8,10 +8,11 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * ADR-116: the two member shapes a sealed arm still drops as `SEALED_SUBCLASS_UNROUTED`, end to
- * end. A generic method (`fun <T>`) and a `suspend` lambda parameter have no route on an ordinary
- * class either, so the arm has nothing to key to; what it owes the author is one named warning per
- * member, with a hint that can be followed.
+ * ADR-116: the member shape a sealed arm still drops as `SEALED_SUBCLASS_UNROUTED`, end to end. A
+ * `suspend` lambda parameter has no route on an ordinary class either, so the arm has nothing to
+ * key to; what it owes the author is one named warning per member, with a hint that can be
+ * followed. A generic method (`fun <T>`) was the other residual until ADR-197 routed it on the
+ * plan for every class-like owner, the arm included; it is pinned here as binding.
  *
  * The hint used to read "move the member onto an ordinary class (which still has the legacy route
  * this member kind needs)", which sent the author to an owner that skips the same member again.
@@ -31,8 +32,11 @@ class Tier1SealedArmResidualSkipTest {
 
     sealed class Errand {
       class Fetch(val item: String) : Errand() {
-        // The generic residual: structural GENERIC on the arm.
+        // The former generic residual: ADR-197 routes it on the plan.
         fun <T> pick(x: T): T = x
+
+        // A generic shape the member route refuses on every owner: a `T` nested in a collection.
+        fun <T> sort(values: List<T>): Int = values.size
 
         // The suspend-lambda residual: SUSPEND_CALLBACK_PROTOCOL from the parameter.
         fun later(block: suspend (Int) -> String): Int = item.length
@@ -67,14 +71,14 @@ class Tier1SealedArmResidualSkipTest {
   fun `the residual members are absent from both halves while the control binds`() {
     val result = run()
 
-    val leakedKotlin: List<String> = listOf("errand_fetch_pick", "errand_fetch_later")
+    val leakedKotlin: List<String> = listOf("errand_fetch_sort", "errand_fetch_later")
       .filter { name -> Regex("@CName\\(\"[^\"]*__${name}\"\\)").containsMatchIn(result.generated) }
     assertTrue(leakedKotlin.isEmpty(), "expected no Kotlin export; got: $leakedKotlin")
 
     val declarations: List<String> = result.generatedCSharp.lines()
       .map(String::trim)
       .filterNot { line -> line.startsWith("//") }
-    val leakedCSharp: List<String> = listOf("Pick", "Later").filter { member ->
+    val leakedCSharp: List<String> = listOf("Sort", "Later").filter { member ->
       declarations.any { line -> Regex("\\b$member\\s*[<(]").containsMatchIn(line) }
     }
     assertTrue(leakedCSharp.isEmpty(), "expected no C# member; got: $leakedCSharp")
@@ -86,12 +90,38 @@ class Tier1SealedArmResidualSkipTest {
     )
   }
 
+  /** ADR-197: the former residual binds on both halves and is named nowhere. */
   @Test
-  fun `the generic method is named once with a hint that binds`() {
+  fun `the generic method binds on the arm`() {
+    val result = run()
+
+    assertTrue(
+      Regex("@CName\\(\"[^\"]*__errand_fetch_pick\"\\)").containsMatchIn(result.generated),
+      "expected the arm's generic method to export",
+    )
+    assertTrue(
+      result.generatedCSharp.contains("public T Pick<T>(T x)"),
+      "expected the arm to declare `public T Pick<T>(T x)`; got: " +
+          "${result.generatedCSharp.lines().filter { it.contains("Pick") }}",
+    )
+    assertTrue(
+      result.kspWarnings.none { warning -> warning.contains("Errand.Fetch.pick") },
+      "a member that binds must not be named as a skip; got: ${result.kspWarnings}",
+    )
+  }
+
+  @Test
+  fun `a refused generic shape is named once with a hint that binds`() {
     assertNamedOnce(
-      member = "Errand.Fetch.pick",
+      member = "Errand.Fetch.sort",
       detail = ForwardPlanSkipReason.GENERIC,
       hint = "expose a non-generic wrapper",
+    )
+    // ADR-197: the sentence names the rule the shape broke; the hint stays general.
+    val warning: String = run().kspWarnings.single { it.contains("Errand.Fetch.sort") }
+    assertTrue(
+      warning.contains("(here, its type parameter is nested in `"),
+      "expected the specific refusal; got: $warning",
     )
   }
 
