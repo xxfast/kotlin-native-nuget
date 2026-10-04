@@ -160,8 +160,58 @@ SharedException 2, all six NativeAOT shapes); `Ranked<int>`, `Ranked<string>`, `
 generic bound-argument arms of `forwardKotlinBoundSpelling`. No LeakTests row.
 
 Known limits, verified and tracked in ROADMAP: `T : Enum<T>` has no valid Kotlin type argument, so
-its generated Kotlin does not compile on both generic routes; a multi-bound parameter
-(`where T : Comparable<T>, T : Pet`) breaks the Kotlin half because `forwardOwnerTypeName` spells
-the owner by its first bound only; a builtin-bounded generic function exports only the object
-variant, so `Treats.Weigh<int>(4)` throws `NotSupportedException` and only a generated wrapper
-works as `T`.
+its generated Kotlin does not compile on both generic routes; a builtin-bounded generic function
+exports only the object variant, so `Treats.Weigh<int>(4)` throws `NotSupportedException` and only
+a generated wrapper works as `T`. The multi-bound limit this amendment first listed is fixed by the
+2026-10-04 amendment.
+
+## Amendment (2026-10-04): a multi-bound type parameter
+
+A type parameter with several upper bounds (`where T : Comparable<T>, T : Pet`) generated Kotlin
+that did not compile on both generic routes: the owner and every `T` value were spelled by the
+first bound only (`Kennel<kotlin.Comparable<Any?>>`), which a `Pet` instance does not satisfy. The
+C# half was already correct and is unchanged: every exportable bound is listed in the `where`
+clause and builtin bounds are dropped as above. Kotlin has no type for the intersection of the
+bounds, so the generated Kotlin never names one.
+
+Rule, on the generic class route and the generic function route. A `T` value read from a handle is
+read as the first bound, then cast to each remaining bound
+(`.let { bounded -> bounded as Trainable; bounded }`), which Kotlin smart-casts to the whole
+intersection; a nullable bound keeps its `?` through the cast. A read of an existing instance uses
+`Owner<*>`. A member that takes a `T` gets its receiver from a local generic function that
+restates the owner's bounds (`fun <T> nugetTypedOwner(owner: Any, witness0: T?): Owner<T> where T :
+Pet, T : Trainable`), with the argument value as the witness, so Kotlin infers `T` as the
+intersection. A constructor is spelled `Owner<_>`, or `Owner<Nothing>` when no constructor
+parameter mentions `T`. A bound that names `T` itself (`T : Rival<T>` with `Rival<in T>`) is
+spelled through its erased form (`Rival<Any?>`), which is valid because the argument is
+contravariant. Single-bound parameters keep their old spelling.
+
+Consequence for callers: as with a dropped `Comparable` bound, C# can pass a type argument that
+satisfies the listed bounds but not a dropped one, which fails at the call.
+
+Separate fix in the same change. A generic data class's exported `equals`, `hashCode` and
+`toString` wrote `asStableRef<pkg.Box>()` with no type argument, which is not a type for a generic
+class, so the generated Kotlin did not compile for any generic data class. They now read the
+owner through `forwardOwnerTypeName` like every other member (`Box<Any?>`, `Pen<Pet>`). No
+fixture has a generic data class; this is covered at Tier 1 only (`Tier1GenericDataClassTest`).
+
+Evidence. Verified: `Tier1MultiBoundGenericTest` covers two interface bounds, `Comparable<T>` plus
+an interface, nullable bounds, contravariant self-referencing bounds and a second type parameter,
+each compiling the generated Kotlin on both routes; `Tier1BuiltinGenericBoundTest` still green;
+`:nuget-processor:test` 1642 passed, 0 failed; native pipeline Integration 3042, Leak 164, seven
+NativeAOT shapes. `MultiBoundGenericTests` runs `Arena`, `Podium` (`Comparable<T>` plus `Pet`) and
+`Hamper` (nullable bounds) and the `Rehearsals.Rehearse` and `Headline` functions against the
+native library, and pins the C# `where` clauses by reflection. No LeakTests row: the handle
+crossings are the ones `GenericClassMethod_ExportedClassTypeParameter_ReturnsToBaseline` and
+`GenericCtorNullableArg_NullArgument_ReturnsToBaseline` already cover. Inferred, not run: that a
+`T` argument missing a dropped `Comparable` bound fails at the call, which follows from the cast
+in the generated read.
+
+Known limits, verified and fixed by a later item together with `T : Enum<T>`: (1) an invariant
+self-referencing bound such as `T : Node<T>` still fails, because `Node<Any?>` is not a
+`Node<Node<Any?>>`; it is the same problem as `T : Enum<T>` and is pinned by a known-limit cell in
+`Tier1MultiBoundGenericTest`. (2) A generic interface bound renders in the C# `where` clause
+without its type arguments (`where T : IRival` for the declared `IRival<in T>`, CS0305), single
+bound or several; the spelling is in `cirBoundConstraint` and `legacyBoundInterfaceCsName`
+(`cir/CirTypeMapping.kt`), verified on the multi-bound shape (the Tier 1 cell asserts the
+Kotlin half only and pins the C# spelling, so a fix shows up as that cell going red).

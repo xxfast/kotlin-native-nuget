@@ -142,8 +142,10 @@ class Tier1BuiltinGenericBoundTest {
       processorOptions = options,
     )
 
-    // C# half only: the Kotlin half spells a multi-bound owner by its first bound
-    // (`Kennel<kotlin.Comparable<Any?>>`), which misses `Pet`; an intersection has no name.
+    // The Kotlin half used to spell the owner by its first bound
+    // (`Kennel<kotlin.Comparable<Any?>>`), which misses `Pet`; Tier1MultiBoundGenericTest pins
+    // how it is spelled now.
+    assertTrue(result.compiledClean, "generated Kotlin: ${result.compileErrors}")
     assertContains(
       result.generatedCSharp,
       "public class Kennel<T> : IDisposable, INugetHandle " +
