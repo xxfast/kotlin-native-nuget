@@ -533,16 +533,16 @@ internal fun ForwardDiagnostic.format(): String {
  * `KSNode` so KSP/Gradle can render the message at the author's own Kotlin source.
  */
 internal object ForwardDiagnosticSink {
-  // ADR-100: every non-fatal diagnostic, in emission order, for `NugetDiagnostics.json`.
+  // ADR-100: every non-fatal diagnostic, in emission order, for `NugetDiagnostics.json`, which
+  // `nugetReportDiagnostics` re-emits through Gradle's own logger on every `packNuget`.
   //
-  // Corrected 2026-09-21 (ADR-162, verified by spike on `:test-library:kspKotlinMingwX64`, Windows,
-  // Gradle 9.1.0, `--console=plain`): these KSPLogger lines DO reach the console, as
-  // `e:`/`w: [ksp] <path>:<line>: <message>`, and every failure of a round is printed, not only the
-  // first. This comment used to claim they reach no console at all. What ADR-100 measured remains
-  // true of the task-level gap it was written for: `packNuget` usually does not run the KSP task
-  // (FROM-CACHE, then UP-TO-DATE), so on most builds nothing is emitted here to see and the file is
-  // still what a consumer gets. Synchronized because KSP runs the processor on a Worker API thread
-  // and two targets' rounds can share one daemon; the processor resets before each round.
+  // KSPLogger output DOES reach the console (`e:`/`w: [ksp] <path>:<line>: <message>`) whenever
+  // the KSP task executes, on Windows and macOS alike. ADR-100's "it never arrives" runs were a
+  // configuration-cache artefact: KSP reads the log level at configuration time, and a cache hit
+  // replays the level of whichever run stored the entry (a `-q` one prints nothing). So a
+  // warning sent to `logger.warn` printed once per executed KSP target and once more from the
+  // re-emit. Synchronized because KSP runs the processor on a Worker API thread and two targets'
+  // rounds can share one daemon; the processor resets before each round.
   private val recorded: MutableList<ForwardDiagnosticRecord> =
     Collections.synchronizedList(mutableListOf())
 
@@ -551,12 +551,15 @@ internal object ForwardDiagnosticSink {
       val message: String = diagnostic.format()
       when (diagnostic.kind.severity) {
         // An ERROR_* already fails this KSP round before any output is written, so recording it
-        // would produce a file nobody reads (see ADR-100 "Deferred: ERROR_* visibility").
+        // would produce a file nobody reads, and KSP's console line is its only channel (ADR-162).
         ForwardDiagnosticSeverity.ERROR -> logger.error(message, diagnostic.symbol)
         ForwardDiagnosticSeverity.WARNING,
         ForwardDiagnosticSeverity.INFO,
           -> {
-          logger.warn(message, diagnostic.symbol)
+          // `logging`, not `warn`: KSP prints it only at `--debug`, so the re-emit stays the one
+          // console copy however many KSP targets run. Side effect: KSP's `allWarningsAsErrors`
+          // no longer fails the build on a skip; it only ever escalated `warn`.
+          logger.logging(message, diagnostic.symbol)
           recorded += ForwardDiagnosticRecord(
             severity = diagnostic.kind.severity,
             kind = diagnostic.kind,

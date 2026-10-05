@@ -1082,14 +1082,21 @@ repository's own fixture, KSP task `UP-TO-DATE`:
     at /Users/xxfast/Developer/XXFAST/KMP/kotlin-native-nuget/test-library/src/nativeMain/kotlin/io/github/xxfast/kotlin/native/nuget/test/cat/Cat.kt:46
 ```
 
-<note>
-<p>Before ADR-100, this exact set of six diagnostics was computed correctly but reached nobody: the
-KSP stdout channel never surfaced in the Gradle console (a Worker API stdout-attribution gap), and
-even when it did, a normal, unchanged <code>packNuget</code> reports the KSP task
-<code>FROM-CACHE</code> then <code>UP-TO-DATE</code> on consecutive runs, so a transport that only
-speaks during a task action was silent on every build after the first. Nothing about which
-declarations are skipped, or their severity, changed; only delivery did.</p>
-</note>
+Each skipped-declaration, warning and info diagnostic prints exactly once per `packNuget`, however
+many Kotlin targets are enabled. The `kspKotlin{Target}` task itself stays quiet about them (KSP
+shows them only at `--debug`), because a normal, unchanged `packNuget` reports that task
+`FROM-CACHE` then `UP-TO-DATE`, so a message printed during its action would be missing on every
+build after the first.
+
+Two consequences for the library author:
+
+- Compiling, linking or running KSP on its own, without `packNuget`, prints nothing for skipped
+  declarations. Run `./gradlew nugetReportDiagnostics` to print them, or open
+  `NugetDiagnostics.json` under `build/generated/ksp/<target>/<target>Main/resources/`.
+  `--info` does not show them; `--debug` does, on a fresh configuration-cache entry.
+- `ksp { allWarningsAsErrors = true }` does not turn a skipped declaration into a build failure.
+  Only a fatal `ERROR_*` diagnostic fails the build, and it prints on the KSP task's own console
+  line.
 
 ### Skipped declarations show up on the generated type {id="skipped-declarations-show-up-on-the-generated-type"}
 

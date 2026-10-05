@@ -251,8 +251,9 @@ fields are optional on read, so a `NugetDiagnostics.json` written by an older pr
   (ADR-100's own deferred item), both of which the additive `file`/`line` JSON fields prepare for
   without committing to either.
 - **A Windows-only discrepancy in the number of `w: [ksp] ...` warning lines** on the console at
-  default verbosity, found incidentally by the research spikes and not explained by anything in this
-  ADR; recorded as its own new ROADMAP line for someone to spike separately.
+  default verbosity, found incidentally by the research spikes. Explained by
+  [ADR-100's 2026-10-05 amendment](100-forward-diagnostic-delivery.md#amendment-2026-10-05-the-ksp-console-channel-works-it-printed-every-warning-twice):
+  not Windows-specific, and the lines were duplicates of the re-emit, now fixed.
 - **The `fun dispose()` collision's own location** (closed by the 2026-10-05 amendment below) was reported at the containing class, not the
   offending member: `emitCsharpSignatureCollisions` receives the container's `KSNode`, and giving it a
   per-member node would change the shared guard signature for every one of its producers (classes,

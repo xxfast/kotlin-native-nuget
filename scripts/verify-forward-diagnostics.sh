@@ -28,8 +28,9 @@ FORWARD_SKIP='\[nuget:SKIPPED_[A-Z0-9_]+\] Skipping [a-z][A-Za-z0-9_]*(\.[A-Za-z
 run() {
   local label="$1"
   local log="$2"
+  shift 2
   echo "==> $label: pack both publishers with --console=plain --no-configuration-cache"
-  ./gradlew :test-library:packNuget :test-companion:packNuget --console=plain --no-configuration-cache >"$log" 2>&1 || {
+  ./gradlew :test-library:packNuget :test-companion:packNuget "$@" --console=plain --no-configuration-cache >"$log" 2>&1 || {
     echo "FAIL: the build itself failed; see $log" >&2
     tail -40 "$log" >&2
     exit 1
@@ -47,6 +48,18 @@ run() {
     echo "FAIL ($label): console has a [nuget:SKIPPED_ marker but does not name $DECLARATION." >&2
     echo "If that declaration stopped being skipped, pick another product-scope skip from" >&2
     echo "test-library/build/generated/ksp/*/*/resources/NugetDiagnostics.json and update this script." >&2
+    exit 1
+  fi
+
+  # Exactly one copy, whether KSP ran or not and however many KSP targets ran. KSP's own
+  # `w: [ksp]` line used to repeat every forward warning once per executed KSP target, on top of
+  # nugetReportDiagnostics' re-emit; the processor now logs non-fatal diagnostics below KSP's
+  # console level, so the re-emit is the only copy.
+  local copies
+  copies="$(grep -cE "\\[nuget:SKIPPED_[A-Z0-9_]+\\] Skipping ${DECLARATION//./\\.}:" "$log" || true)"
+  if [ "$copies" != 1 ]; then
+    echo "FAIL ($label): $DECLARATION is reported $copies times on the console, expected exactly 1." >&2
+    grep -nE "\\[nuget:SKIPPED_[A-Z0-9_]+\\] Skipping ${DECLARATION//./\\.}:" "$log" >&2 || true
     exit 1
   fi
 
@@ -116,6 +129,27 @@ for module in test-library test-companion; do
   fi
 done
 echo "==> confirmed: both publishers delivered warnings while KSP was cached"
+
+# The other half of "exactly once": force every KSP task run 2 found cached to execute (`--rerun`
+# on each, never `--rerun-tasks`, which would also relink), so KSP's own console channel is live.
+# On macOS that is two targets per module (the host and the cross-compiled mingwX64).
+forced=()
+while IFS= read -r task; do
+  forced+=("$task" --rerun)
+done < <(grep -oE "^> Task :(test-library|test-companion):kspKotlin[A-Za-z0-9]+ (UP-TO-DATE|FROM-CACHE)$" \
+  "$LOG_DIR/run2.log" | cut -d' ' -f3)
+if [ "${#forced[@]}" = 0 ]; then
+  echo "FAIL: run 2 listed no cached kspKotlin task to force." >&2
+  exit 1
+fi
+
+run "run 3 (KSP forced to execute)" "$LOG_DIR/run3.log" "${forced[@]}"
+
+if ! grep -E "^> Task :test-library:kspKotlin[^ ]+$" "$LOG_DIR/run3.log" >/dev/null; then
+  echo "FAIL: run 3 did not execute KSP for test-library; the exactly-once check proved nothing." >&2
+  exit 1
+fi
+echo "==> confirmed: each forward diagnostic printed once while KSP executed"
 
 # Inspect outputs from the real builds above, never pre-existing package-cache copies. The task
 # lives in the root build.gradle.kts, depends on nothing and only reads files, so KSP stays put.
