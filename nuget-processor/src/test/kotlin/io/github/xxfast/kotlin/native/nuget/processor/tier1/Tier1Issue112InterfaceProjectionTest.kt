@@ -224,6 +224,9 @@ class Tier1Issue112InterfaceProjectionTest {
     assertContains(error, "property")
     assertContains(error, "CS0102")
     assertContains(error, "rename the Kotlin function 'tag'")
+    // Issue #464: the hint names the annotation that resolves it without a Kotlin rename.
+    assertContains(error, "rename the Kotlin function 'tag' or the property it collides with, or give it a different `@CSharpName`")
+    assertFalse("dependency module" in error, "a same-module interface needs no dependency clause; $error")
   }
 
   /**

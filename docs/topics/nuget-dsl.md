@@ -85,6 +85,24 @@ Applying the plugin adds `nuget-annotations`, which carries `@CSharpName`, to yo
 targets all resolve it; you add nothing yourself. See
 [Choosing the C# name](instance-members.md#choosing-the-csharp-name).
 
+Only the module that applies the plugin gets the dependency. To annotate a declaration in a
+dependency module that doesn't apply it, which the
+[cross-module export closure](#cross-module-export-closure) can still bridge, add it to that module
+yourself:
+
+```kotlin
+// build.gradle.kts of the dependency module
+kotlin {
+  sourceSets.commonMain.dependencies {
+    api("io.github.xxfast:nuget-annotations:<version>")
+  }
+}
+```
+
+Use the same `<version>` as the plugin, as in [Getting started](getting-started.md). `api` matches
+what the plugin does: a module that compiles against the dependency's klib must resolve the
+annotation class.
+
 ## `publish { }`
 
 Configures `NugetPublishConfig`. The five string settings have no default. Nothing in the DSL

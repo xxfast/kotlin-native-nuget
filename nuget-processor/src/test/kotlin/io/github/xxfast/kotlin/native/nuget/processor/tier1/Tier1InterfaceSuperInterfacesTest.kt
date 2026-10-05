@@ -307,6 +307,8 @@ class Tier1InterfaceSuperInterfacesTest {
     }
     assertTrue(errors.any { it.contains("IPet.Tag") }, "expected IPet.Tag named; got $errors")
     assertTrue(errors.any { it.contains("IBall.Label") }, "expected IBall.Label named; got $errors")
+    // Issue #464: both directions offer the annotation as the alternative to a rename.
+    assertTrue(errors.all { it.contains("or give it a different `@CSharpName`") }, "expected the @CSharpName remedy; got $errors")
   }
 
   /** ADR-113's carve-out renders `T Peek()` on `IHolder<T>`, so no drop may be reported for it. */

@@ -1150,14 +1150,23 @@ internal fun translate(
                 "that C# name, and C# cannot declare a property and a method with one name (CS0102)"
           }
         },
+        // Top-level declarations are always this module's own: the closure admits only types.
         hint = { collision ->
           val function: String? = collision.methods.firstOrNull()?.name
           if (function == null) {
-            "rename one of them; a top-level property and a `const val` both render PascalCase " +
-                "in C# (ADR-110)"
+            csharpNameRemedy(
+              rename = "rename one of them",
+              spellings = collision.spellings,
+              target = "one",
+              detail = "a top-level property and a `const val` both render PascalCase in C# " +
+                  "(ADR-110)",
+            )
           } else {
-            "rename the Kotlin function '$function'; a top-level function renders PascalCase in " +
-                "C# (ADR-110)"
+            csharpNameRemedy(
+              rename = "rename the Kotlin function '$function'",
+              spellings = collision.spellings,
+              detail = "a top-level function renders PascalCase in C# (ADR-110)",
+            )
           }
         },
       )
