@@ -367,6 +367,25 @@ Two task options:
 Consumers then reference `MyCatLib` with the same normal `PackageReference` shown above and restore
 it from the published feed. They do not need the `mycatlib-local` entry in their `NuGet.Config`.
 
+### The shared contract package {id="shared-contract"}
+
+Every package the plugin builds depends on `Xxfast.Kotlin.Native.Interop`, a small assembly holding
+`KotlinException`, the mapped exception types and `KotlinOptional<T>` (see
+[Exceptions](exceptions.md)). It is released with the plugin, at the plugin's version: a package
+built by plugin `0.9.0` declares it as `[0.9.0,1.0.0)`.
+
+Consumers do not reference it. NuGet restores it from nuget.org alongside your package, so a
+consumer whose `NuGet.Config` lists nuget.org needs nothing extra.
+
+A consumer that restores only from a private or offline feed must find it there too. Mirror
+`Xxfast.Kotlin.Native.Interop` into that feed, at the plugin version your package was built with or
+a newer one below the next major. It is published to
+[nuget.org](https://www.nuget.org/packages/Xxfast.Kotlin.Native.Interop) and mirrored to GitHub
+Packages at `https://nuget.pkg.github.com/xxfast/index.json`, which needs a token even to read.
+
+The pre-pack compile check in `packNuget` restores it as well, from nuget.org and any feed declared
+with [`sources(...)`](declaring-dependencies.md#shared-feeds).
+
 <note>
 <p>A repository needs a <code>NuGet.Config</code>-based credential provider or interactive sign-in
 (for example Azure Artifacts without a PAT)? <code>publishNuget</code> does not support that; fall

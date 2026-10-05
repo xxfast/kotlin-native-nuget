@@ -47,7 +47,7 @@ cache="${NUGET_PACKAGES:-$HOME/.nuget/packages}"
 if [ -d "$cache" ]; then
   cache="$(cd "$cache" && pwd)"
   test -n "$cache" && test "$cache" != /
-  rm -rf "$cache/kotlin.native.interop"
+  rm -rf "$cache/xxfast.kotlin.native.interop"
 fi
 
 # Consumer projects resolve the new exact fixture version on the next restore, so their existing

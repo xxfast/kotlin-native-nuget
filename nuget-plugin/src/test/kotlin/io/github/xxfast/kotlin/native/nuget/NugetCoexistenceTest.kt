@@ -84,7 +84,7 @@ class NugetCoexistenceTest {
   @Test
   fun `hermetic compile references compatible contract major and retains exact managed dependencies`() {
     val csproj = generateCheckCsproj(emptyList(), mapOf("Dependency" to "4.0.0"), listOf("local-feed"))
-    assertContains(csproj, "<PackageReference Include=\"Kotlin.Native.Interop\" Version=\"[1.0.0,2.0.0)\" />")
+    assertContains(csproj, "<PackageReference Include=\"$INTEROP_CONTRACT_ID\" Version=\"$INTEROP_CONTRACT_RANGE\" />")
     assertContains(csproj, "<PackageReference Include=\"Dependency\" Version=\"[4.0.0]\" />")
     assertContains(csproj, "local-feed")
   }
@@ -118,7 +118,7 @@ class NugetCoexistenceTest {
     val (task, output) = pack()
     task.pack()
     assertContains(File(output, "TestLibrary.1.0.0/TestLibrary.nuspec").readText(),
-      "<dependency id=\"Kotlin.Native.Interop\" version=\"[1.0.0,2.0.0)\" />")
+      "<dependency id=\"$INTEROP_CONTRACT_ID\" version=\"$INTEROP_CONTRACT_RANGE\" />")
   }
 
   @Test

@@ -198,7 +198,7 @@ class NugetCompileInteropTaskTest {
     val csproj: String = generateCheckCsproj(emptyList(), emptyMap(), emptyList())
 
     assertFalse(csproj.contains("RestoreSources"), "no bound package means no extra feed")
-    assertContains(csproj, "<PackageReference Include=\"Kotlin.Native.Interop\" Version=\"[1.0.0,2.0.0)\" />")
+    assertContains(csproj, "<PackageReference Include=\"$INTEROP_CONTRACT_ID\" Version=\"$INTEROP_CONTRACT_RANGE\" />")
   }
 
   @Test

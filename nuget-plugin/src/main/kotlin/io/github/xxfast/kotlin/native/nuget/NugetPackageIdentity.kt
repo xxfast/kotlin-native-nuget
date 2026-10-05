@@ -2,8 +2,18 @@ package io.github.xxfast.kotlin.native.nuget
 
 import java.util.Locale
 
-internal const val INTEROP_CONTRACT_ID: String = "Kotlin.Native.Interop"
-internal const val INTEROP_CONTRACT_RANGE: String = "[1.0.0,2.0.0)"
+internal const val INTEROP_CONTRACT_ID: String = "Xxfast.Kotlin.Native.Interop"
+
+// ADR-178: the contract releases in lockstep with the plugin. The floor is this plugin's version and
+// the ceiling its next major, so packages built by different plugin versions coalesce on one contract.
+internal val INTEROP_CONTRACT_RANGE: String = contractRange(PLUGIN_VERSION)
+
+internal fun contractRange(version: String): String {
+  val major: Int = requireNotNull(version.substringBefore('.').toIntOrNull()) {
+    "[nuget] Cannot derive the contract range from version '$version'."
+  }
+  return "[$version,${major + 1}.0.0)"
+}
 
 internal fun nativeLibraryStem(id: String): String {
   require(id.length in 1..100 && id.all { it in 'a'..'z' || it in 'A'..'Z' ||

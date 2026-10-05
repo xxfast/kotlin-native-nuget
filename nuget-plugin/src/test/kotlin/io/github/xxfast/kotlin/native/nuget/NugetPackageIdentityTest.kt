@@ -50,7 +50,15 @@ class NugetPackageIdentityTest {
 
   @Test
   fun `contract dependency is unique and bounded regardless of dependency id casing`() {
-    assertEquals(mapOf("Managed" to "[4.0.0]", "Kotlin.Native.Interop" to "[1.0.0,2.0.0)"),
-      dependencyRanges(mapOf("Managed" to "4.0.0", "kotlin.native.interop" to "1.0.0")))
+    assertEquals(mapOf("Managed" to "[4.0.0]", INTEROP_CONTRACT_ID to INTEROP_CONTRACT_RANGE),
+      dependencyRanges(mapOf("Managed" to "4.0.0", "xxfast.kotlin.native.interop" to "1.0.0")))
+  }
+
+  @Test
+  fun `contract range runs from the plugin version to its next major`() {
+    assertEquals("[0.9.0,1.0.0)", contractRange("0.9.0"))
+    assertEquals("[0.10.0-alpha01,1.0.0)", contractRange("0.10.0-alpha01"))
+    assertEquals("[1.2.3,2.0.0)", contractRange("1.2.3"))
+    assertFailsWith<IllegalArgumentException> { contractRange("x.1.0") }
   }
 }

@@ -105,11 +105,11 @@ factory EditorBrowsable=Never; mapped sealed=True
 
 ### Delivery and compatibility
 
-Shipped as the `Kotlin.Native.Interop` NuGet dependency, independently versioned at 1.0.0 with compatible-major range **[1.0.0,2.0.0)**. Each generator records its minimum contract version; keep the API compatible throughout a contract major.
+Shipped as the `Xxfast.Kotlin.Native.Interop` NuGet dependency, versioned in lockstep with the plugin. Each generator declares the range from its own version to its next major (plugin 0.9.0 emits **[0.9.0,1.0.0)**); keep the API compatible throughout a major. See the 2026-10-05 amendment below.
 
 The full consumer verification resolves both publishers against the compatible range. Application-forced overrides can interact with NuGet's direct-dependency rules; do not promise an unconditional hard restore failure for all overrides.
 
-Local verification packs/restores the contract before dependent packages and supplies its feed to the hermetic pre-pack compiler. Publish it before dependent generated packages; production consumers use nuget.org or a private-feed mirror. Package-id availability/reservation is not verified.
+Local verification packs/restores the contract before dependent packages and supplies its feed to the hermetic pre-pack compiler. Publish it before dependent generated packages; production consumers use nuget.org or a private-feed mirror.
 
 ### Native identity and supported assets
 
@@ -155,7 +155,7 @@ The two-publisher fixture does not close ADR-109's Provider timing assumption: i
 ## Consequences
 
 - Breaking in 0.9.0: exception namespace move; shared presence type namespace/name; KotlinException constructor closure; published native filename identity and stricter prebuilt/extra-file rules.
-- Contract is additive within a compatible major and independently versioned/published.
+- Contract is additive within a compatible major and published with every plugin release, at the plugin's version.
 - ADR-094 global-helper choice is superseded. ADR-109's object-transfer remedy remains; its Provider timing assumption stays open because the fixture has no dedicated later-publisher assertion.
 - Deferred: cross-library wrapper transfer, shared Flow/Func bases, compiled binding mode/full twin, namespace validation and general native dependency relocation.
 
@@ -165,3 +165,16 @@ The two-publisher fixture does not close ADR-109's Provider timing assumption: i
 2. Names/defaults: Kotlin.Native.Interop, KotlinOptional<T>, NugetReverse dependency suffix, independent compatible-major contract version; sibling presence rename/base constructor closure shipped with dedicated coverage.
 
 **Accepted and shipped 2026-09-30:** the compiled `Kotlin.Native.Interop` contract (compatible range `[1.0.0,2.0.0)`), package-local wrappers and handle state, package-derived native names, strict native-asset validation, and `KotlinOptional<T>` rename/base-constructor closure are covered by the two-publisher consumer fixture. Mapped exceptions retain their BCL inheritance and public constructors. Both native runtimes independently allocate, read and dispose their own handles. The separate ADR-109 Provider timing assertion remains open. Windows verification passed; the macOS CI lane is wired but not run locally, and Linux support remains separate work.
+
+## Amendment 2026-10-05: package id and lockstep version
+
+Decided before the first publish, so nothing shipped under the earlier id or version.
+
+- **Package id is `Xxfast.Kotlin.Native.Interop`.** A bare `Kotlin.` prefix reads as an official JetBrains package and cannot be reserved by this project. The owner-first id follows `Xamarin.Kotlin.StdLib` and mirrors the Maven group `io.github.xxfast`. The assembly name and the C# namespace stay `Kotlin.Native.Interop`, so generated code and consumer `using` and `catch` sites are unchanged.
+- **The contract version is the plugin version.** `Kotlin.Native.Interop.csproj` reads `version` from the root `gradle.properties`, and every release publishes the contract at that version, to nuget.org and to GitHub Packages. One version covers both ecosystems, and a contract change can no longer be skipped as a duplicate of an already published version.
+- **The dependency range is `[<plugin version>,<next major>)`** (`contractRange` in `NugetPackageIdentity.kt`). The floor differs per plugin release, which is the "differing minimum versions coalesce" case above, not the exact-pin case that fails `NU1107`.
+- **Release order.** `release.yml` pushes the contract first and waits until nuget.org lists that exact version before it publishes anything to Maven Central or the Plugin Portal.
+
+**Verified:** on 2026-10-05 the id was unclaimed on nuget.org (flat-container 404) and no package existed under the `Xxfast.` prefix. `scripts/verify-contract-version-ranges.sh` restores two publishers with differing floors under one ceiling onto a single contract; its versions are illustrative, not the release version.
+
+**Inferred, not run:** the nuget.org Trusted Publishing login and the GitHub Packages push in `release.yml` first execute on the 0.9.0 tag. A package built by a 0.x plugin (`[0.x,1.0.0)`) and one built by a 1.x plugin (`[1.x,2.0.0)`) have disjoint ranges and are expected to fail restore together; that pair was not restored.

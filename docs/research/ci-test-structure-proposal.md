@@ -28,7 +28,7 @@ end, and scripts prove things only a real build can show.
 | Kotlin unit | `:nuget-runtime` native tests (6 files) | Runtime helpers that ship in the klib |
 | C# end to end | `IntegrationTests` (247 files) | Behaviour of the packed `test-library` from C#, forward and reverse |
 | C# end to end | `LeakTests` | Handle counts and GC collectability, in its own process |
-| C# end to end | `ContractTests` | The shared `Kotlin.Native.Interop` contract package |
+| C# end to end | `ContractTests` | The shared `Xxfast.Kotlin.Native.Interop` contract package |
 | C# end to end | `MultiPackageTests` | Two independent publishers coexist in one process |
 | C# end to end | `SharedExceptionTests` | Exception identity is shared across consumer assemblies |
 | C# end to end | `GeneratedBindingsCheck` | Generated bindings compile as a consumer, warnings as errors |

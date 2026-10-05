@@ -16,7 +16,8 @@ plugins {
 
 The plugin id on the
 [Gradle Plugin Portal](https://plugins.gradle.org/plugin/io.github.xxfast.kotlin.native.nuget) is
-`io.github.xxfast.kotlin.native.nuget`.
+`io.github.xxfast.kotlin.native.nuget`. The same artifacts are on Maven Central under
+`io.github.xxfast`.
 
 ## 2. Declare native targets
 

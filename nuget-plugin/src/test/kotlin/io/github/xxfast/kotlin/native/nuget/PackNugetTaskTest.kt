@@ -150,7 +150,7 @@ class PackNugetTaskTest {
     task.pack()
 
     val nuspec: String = File(outputDir, "TestLibrary.1.0.0/TestLibrary.nuspec").readText()
-    assertContains(nuspec, "<dependency id=\"Kotlin.Native.Interop\" version=\"[1.0.0,2.0.0)\" />")
+    assertContains(nuspec, "<dependency id=\"$INTEROP_CONTRACT_ID\" version=\"$INTEROP_CONTRACT_RANGE\" />")
   }
 
   @Test

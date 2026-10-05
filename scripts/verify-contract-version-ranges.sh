@@ -2,6 +2,11 @@
 set -euo pipefail
 
 # Actual NuGet restore proves publishers with differing compatible contract floors can coexist.
+#
+# The versions below (1.0.0, 1.0.1, ceiling 2.0.0) are illustrative. They are not the release version
+# and must not be bumped with it: `-p:PackageVersion` overrides the version the contract csproj reads
+# from gradle.properties, and the result holds for any two floors under one ceiling. The range a
+# real package declares comes from `contractRange` in NugetPackageIdentity.kt.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
@@ -22,7 +27,7 @@ for publisher in First Second; do
   cat > "$scratch/$publisher/$publisher.csproj" <<EOF
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><TargetFramework>net8.0</TargetFramework><PackageId>ContractFloor.$publisher</PackageId></PropertyGroup>
-  <ItemGroup><PackageReference Include="Kotlin.Native.Interop" Version="[$floor,2.0.0)" /></ItemGroup>
+  <ItemGroup><PackageReference Include="Xxfast.Kotlin.Native.Interop" Version="[$floor,2.0.0)" /></ItemGroup>
 </Project>
 EOF
   dotnet restore "$scratch/$publisher" --configfile "$scratch/NuGet.Config" \
@@ -40,8 +45,8 @@ cat > "$scratch/App/App.csproj" <<EOF
 </Project>
 EOF
 dotnet restore "$scratch/App" --configfile "$scratch/NuGet.Config" --packages "$scratch/packages"
-grep -q '"Kotlin.Native.Interop/1.0.1"' "$scratch/App/obj/project.assets.json"
-if grep -q '"Kotlin.Native.Interop/1.0.0"' "$scratch/App/obj/project.assets.json"; then
+grep -q '"Xxfast.Kotlin.Native.Interop/1.0.1"' "$scratch/App/obj/project.assets.json"
+if grep -q '"Xxfast.Kotlin.Native.Interop/1.0.0"' "$scratch/App/obj/project.assets.json"; then
   echo 'FAIL: restore retained the older contract alongside the common resolution' >&2
   exit 1
 fi
