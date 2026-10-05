@@ -307,6 +307,16 @@ publishing {
       name = "localTest"
       url = uri(rootDir.parentFile.resolve("build/local-repo"))
     }
+
+    // Mirrors the Maven Central artifacts. The credentials exist only in the release workflow.
+    maven {
+      name = "GitHubPackages"
+      url = uri("https://maven.pkg.github.com/xxfast/kotlin-native-nuget")
+      credentials {
+        username = providers.environmentVariable("GITHUB_ACTOR").orNull
+        password = providers.environmentVariable("GITHUB_TOKEN").orNull
+      }
+    }
   }
 }
 

@@ -13,14 +13,15 @@ on:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+'
       - '[0-9]+.[0-9]+.[0-9]+-*'
-  # Rehearsal: publishes only the shared NuGet contract, at the prerelease version typed here, and
-  # skips Maven Central and the Plugin Portal. It proves the nuget.org Trusted Publishing policy
-  # and the GitHub Packages push without a tag. nuget.org never deletes a version, so the
-  # rehearsal contract stays there for good; unlist it afterwards.
+  # Rehearsal: publishes the shared NuGet contract and the GitHub Packages Maven mirror at the
+  # prerelease version typed here, and skips Maven Central and the Plugin Portal. It proves the
+  # nuget.org Trusted Publishing policy and both GitHub Packages pushes without a tag. nuget.org
+  # never deletes a version, so the rehearsal contract stays there for good; unlist it afterwards.
+  # The GitHub Packages versions can be deleted.
   workflow_dispatch:
     inputs:
       version:
-        description: Prerelease contract version to publish, e.g. 0.9.0-rehearsal.1
+        description: Prerelease version to publish, e.g. 0.9.0-rehearsal.1
         required: true
         type: string
 
@@ -236,3 +237,64 @@ jobs:
         env:
           GRADLE_PUBLISH_KEY: ${{ secrets.GRADLE_PUBLISH_KEY }}
           GRADLE_PUBLISH_SECRET: ${{ secrets.GRADLE_PUBLISH_SECRET }}
+
+  # A mirror of the Maven Central artifacts, beside the contract's GitHub Packages copy. It goes
+  # last because it is only a mirror: by here the release is already out. A rehearsal runs it
+  # straight after the contract, with the Portal skipped.
+  #
+  # One leg per module, in parallel: GitHub Packages takes about a minute per publication, and one
+  # job for all of them ran 43 minutes. A leg that fails does not cancel the others, and can be
+  # retried alone. GitHub Packages refuses to overwrite a version, so delete what the failed leg
+  # did upload before retrying it.
+  github-packages:
+    name: GitHub Packages (${{ matrix.module }})
+    needs: [verify, contract, plugin-portal]
+    if: >-
+      ${{ !cancelled() && needs.contract.result == 'success' &&
+      (needs.plugin-portal.result == 'success' ||
+      (github.event_name == 'workflow_dispatch' && needs.plugin-portal.result == 'skipped')) }}
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [nuget-processor, nuget-runtime, nuget-annotations, nuget-plugin]
+
+    permissions:
+      contents: read
+      packages: write
+
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      # Both builds read the version from this file, and `nuget-plugin` reads nothing else. The
+      # edit lives only in this job's checkout.
+      - name: Use the rehearsal version
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          perl -pi -e 's/^version=.*/version=$ENV{VERSION}/' gradle.properties
+          grep '^version=' gradle.properties
+
+      - name: Publish to GitHub Packages
+        run: >
+          ./gradlew --no-configuration-cache
+          :${{ matrix.module }}:publishAllPublicationsToGitHubPackagesRepository
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_KEY_SECRET }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_KEY_PASSWORD }}
