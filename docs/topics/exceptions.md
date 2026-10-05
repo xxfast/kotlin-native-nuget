@@ -80,9 +80,32 @@ type, for a <code>NullPointerException</code>, a <code>CancellationException</co
 </warning>
 
 The `IOException` row exists only in a library that has `kotlinx-io` on its compile classpath, for
-example through Ktor. A `suspend` function's `IOException` maps like any other, but two routes see
-the standard-library rows only, so an `IOException` there stays a `KotlinException`: a Kotlin
-`suspend` lambda invoked from C#, and a `StateFlow` collect.
+example through Ktor. It applies on every route. That includes a Kotlin `suspend` lambda you invoke
+from C# and a `StateFlow` you collect, held or awaited: an `IOException` thrown there arrives as
+`KotlinIOException` like any other.
+
+```kotlin
+class CatFeeder(val catName: String) {
+  val onSplitBag: suspend () -> String = {
+    delay(10.milliseconds)
+    if (catName == "Oreo") throw IOException("the bag split mid-pour")
+    "$catName's bowl is full"
+  }
+}
+```
+
+```C#
+using var feeder = new CatFeeder("Oreo");
+using var onSplitBag = feeder.OnSplitBag;
+try
+{
+    await onSplitBag.InvokeAsync();
+}
+catch (KotlinIOException ex)
+{
+    Console.WriteLine(ex.Message);   // "the bag split mid-pour"
+}
+```
 
 ## Exception messages
 

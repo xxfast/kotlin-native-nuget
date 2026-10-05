@@ -194,6 +194,8 @@ internal val NUGET_RUNTIME_MEMBERS: List<String> = listOf(
   "buildError",
   // ADR-177: the stdlib rows every generated `nugetMappedType` falls back to.
   "nugetStdlibMappedType",
+  // ADR-202: the module classifier's install into the runtime-owned routes.
+  "nugetInstallMappedType",
   // ADR-161: the forward callback error channel's Kotlin half.
   "nugetCallbackCall",
   "NugetCSharpBridge",

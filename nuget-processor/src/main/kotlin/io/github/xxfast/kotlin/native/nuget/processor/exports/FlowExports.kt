@@ -652,6 +652,8 @@ private fun buildStateFlowAcquireMethodBody(
   paramPrelude: String,
   obj: String,
 ): String = buildString {
+  // ADR-202: the held flow is read through the runtime-owned `nuget_stateflow_collect`.
+  appendLine(INSTALL_MODULE_MAPPED_TYPE)
   appendLine("val $obj = handle.asStableRef<$qualifiedName>().get()")
   append(paramPrelude)
   append("return NugetHandles.retain($call as Any)")

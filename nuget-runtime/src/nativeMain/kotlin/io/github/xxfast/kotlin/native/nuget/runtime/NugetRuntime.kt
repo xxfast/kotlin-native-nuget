@@ -8,6 +8,7 @@
 package io.github.xxfast.kotlin.native.nuget.runtime
 
 import kotlin.concurrent.AtomicLong
+import kotlin.concurrent.AtomicReference
 import kotlin.coroutines.SuspendFunction0
 import kotlin.coroutines.SuspendFunction1
 import kotlin.coroutines.SuspendFunction2
@@ -393,7 +394,7 @@ public fun export_nuget_suspend_func0_invoke(
     CoroutineScope(Dispatchers.Default),
     callbackPtr,
     userData,
-    ::nugetStdlibMappedType,
+    ::nugetRuntimeMappedType,
   ) {
     val result = fn.invoke()
     // Boundary nullability part A1: a null result rides the same null pointer `Unit` already does,
@@ -421,7 +422,7 @@ public fun export_nuget_suspend_func1_invoke(
     CoroutineScope(Dispatchers.Default),
     callbackPtr,
     userData,
-    ::nugetStdlibMappedType,
+    ::nugetRuntimeMappedType,
   ) {
     val result = fn.invoke(param0)
     // Boundary nullability part A1: a null result rides the same null pointer `Unit` already does,
@@ -449,7 +450,7 @@ public fun export_nuget_suspend_func2_invoke(
     CoroutineScope(Dispatchers.Default),
     callbackPtr,
     userData,
-    ::nugetStdlibMappedType,
+    ::nugetRuntimeMappedType,
   ) {
     val result = fn.invoke(param0, param1)
     // Boundary nullability part A1: a null result rides the same null pointer `Unit` already does,
@@ -479,7 +480,7 @@ public fun export_nuget_suspend_func3_invoke(
     CoroutineScope(Dispatchers.Default),
     callbackPtr,
     userData,
-    ::nugetStdlibMappedType,
+    ::nugetRuntimeMappedType,
   ) {
     val result = fn.invoke(param0, param1, param2)
     // Boundary nullability part A1: a null result rides the same null pointer `Unit` already does,
@@ -644,6 +645,35 @@ public fun nugetStdlibMappedType(t: Throwable): String? = when {
   t::class.qualifiedName == "kotlin.NoWhenBranchMatchedException" ->
     "kotlin.NoWhenBranchMatchedException"
   else -> null
+}
+
+/**
+ * ADR-202: the classifier this library's generated module installed, or null until it installs
+ * one. One per linked library by construction: each Kotlin library statically links its own copy
+ * of this runtime (ADR-127, ADR-178), so two libraries in one process never share it.
+ */
+internal val nugetModuleMappedType: AtomicReference<((Throwable) -> String?)?> =
+  AtomicReference(null)
+
+/**
+ * ADR-202: installs the generated module's `nugetMappedType`, so the runtime-owned routes
+ * (`nuget_suspend_func{0..3}_invoke`, `nuget_stateflow_collect`) classify with the module's
+ * optional rows too. Idempotent. The generated code calls it, synchronously, in every export that
+ * hands C# a handle one of those routes can later be invoked on, so it has always run first.
+ */
+@NugetRuntimeApi
+public fun nugetInstallMappedType(classifier: (Throwable) -> String?) {
+  nugetModuleMappedType.value = classifier
+}
+
+/**
+ * ADR-202: what the runtime-owned routes classify with: the installed module classifier, or the
+ * stdlib rows alone when nothing has been installed.
+ */
+@NugetRuntimeApi
+public fun nugetRuntimeMappedType(t: Throwable): String? {
+  val installed: ((Throwable) -> String?)? = nugetModuleMappedType.value
+  return if (installed != null) installed(t) else nugetStdlibMappedType(t)
 }
 
 private tailrec fun NugetError.at(index: Int): NugetError =
@@ -895,7 +925,7 @@ public fun export_nuget_stateflow_collect(
     onCompletePtr,
     onErrorPtr,
     userData,
-    ::nugetStdlibMappedType,
+    ::nugetRuntimeMappedType,
   ) { emit ->
     flow.collect { value -> emit(NugetHandles.retain(value as Any)) }
   }

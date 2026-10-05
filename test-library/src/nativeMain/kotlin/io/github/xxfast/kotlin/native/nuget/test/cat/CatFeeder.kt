@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.io.IOException
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -36,6 +37,14 @@ class CatFeeder(val catName: String) {
 
   val onLogMeal: suspend (String, String) -> Unit = { _, _ ->
     delay(50.milliseconds)
+  }
+
+  // ADR-202: a module-mapped row thrown through the runtime-owned `nuget_suspend_func0_invoke`
+  // route. Oreo knocks the bag over; Mylo's bowl fills.
+  val onSplitBag: suspend () -> String = {
+    delay(10.milliseconds)
+    if (catName == "Oreo") throw IOException("the bag split mid-pour")
+    "$catName's bowl is full"
   }
 
   val mealAnnouncements: Flow<String> = flow {

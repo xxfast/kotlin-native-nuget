@@ -13,6 +13,7 @@ import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.KOTLIN_TO_CSHARP_PARAM
 import io.github.xxfast.kotlin.native.nuget.processor.cir.LAMBDA_TYPES
+import io.github.xxfast.kotlin.native.nuget.processor.cir.SUSPEND_LAMBDA_TYPES
 import io.github.xxfast.kotlin.native.nuget.processor.cir.isKotlinBuiltinPackage
 import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardDiagnosticKind
 import io.github.xxfast.kotlin.native.nuget.processor.forward.LegacyRefusedInterfaceBridgePair
@@ -433,12 +434,16 @@ internal fun FileSpec.Builder.addClassExports(
     // An override of a lambda property a kept base binds is reached through the base's getter.
     if (prop.reProjectsKeptBaseLambdaProperty(cls, superClass)) return@forEach
     if (prop.carriesLegacyLambdaProperty(ForwardLambdaPropertyCarrier.CLASS)) {
+      // ADR-202: a suspend lambda is invoked through the runtime-owned `nuget_suspend_func*`.
+      val isSuspendLambda: Boolean =
+        propTypeResolved.declaration.qualifiedName?.asString() in SUSPEND_LAMBDA_TYPES
       // CIR ships lambda property getters without errorOut (hasSyncErrorOut = false).
       addFunction(
         FunSpec.builder("export_${prefix}_get_$propName")
           .addAnnotation(cNameAnnotation("${prefix}_get_$propName", ownedBy(prop)))
           .addParameter("handle", cOpaquePointer)
           .returns(cOpaquePointer.copy(nullable = true))
+          .apply { if (isSuspendLambda) addStatement(INSTALL_MODULE_MAPPED_TYPE) }
           .addStatement(
             "return %T.retain(handle.asStableRef<%L>().get().%L)",
             nugetHandles, qualifiedName, propName.kotlinIdentifier(),
