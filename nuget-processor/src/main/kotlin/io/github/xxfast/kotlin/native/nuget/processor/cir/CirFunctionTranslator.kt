@@ -762,6 +762,9 @@ internal fun translateSuspendFunction(
     // ADR-040: the class route's own line -- the projected interface, not the backing wrapper
     // `nestedCsName()` would spell below. `strayPetLater()` is `Task<IPet>`, ADR-040's own example.
     returnShape is ForwardLegacyReturnShape.Interface -> returnShape.declaredCsharpType()
+    // ADR-204: `I<Name>`, which `nestedCsName()` below cannot spell.
+    returnShape is ForwardLegacyReturnShape.Discriminated && returnShape.isInterface ->
+      returnShape.declaredCsharpType()
     // ROADMAP Phase 4 line 23: `global::`-qualified, so a dependency type in another namespace
     // resolves; a value class is the record struct `NugetUnbox` returns.
     returnShape is ForwardLegacyReturnShape.Handle -> returnShape.declaredCsharpType()

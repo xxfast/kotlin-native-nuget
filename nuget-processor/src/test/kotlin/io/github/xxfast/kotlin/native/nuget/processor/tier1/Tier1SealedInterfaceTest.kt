@@ -551,29 +551,35 @@ class Tier1SealedInterfaceTest {
     }
   """.trimIndent()
 
+  /**
+   * ADR-112 still refuses both (the shared arm cannot extend two abstract classes), but ADR-204
+   * admits both over their declared arm: `Both` is declared once, by the ordinary class route, and
+   * implements each interface's internal `_handle` explicitly. Still no sealed arm class, so the
+   * CS0101 this cell guards stays impossible.
+   */
   @Test
-  fun `an arm implementing two sealed interfaces makes both ineligible`() {
+  fun `an arm implementing two sealed interfaces binds both over the one declared arm`() {
     val result = Tier1Harness.run(sharedArm)
+    val csharp: String = result.generatedCSharp
 
     assertTrue(result.compiledClean, "expected no broken source; got: ${result.compileErrors}")
+    assertTrue(
+      result.kspWarnings.none {
+        it.contains(ForwardDiagnosticKind.SKIPPED_INELIGIBLE_SEALED_INTERFACE.name)
+      },
+      "expected both interfaces admitted over their declared arm; " +
+          "kspWarnings=${result.kspWarnings}",
+    )
     listOf("Left", "Right").forEach { name ->
-      val diagnostic: String = requireNotNull(
-        result.kspWarnings.firstOrNull {
-          it.contains(ForwardDiagnosticKind.SKIPPED_INELIGIBLE_SEALED_INTERFACE.name) &&
-              it.contains("`tier1.sealedinterface.sharedarm.$name`")
-        },
-      ) { "expected an ineligibility warning for $name; kspWarnings=${result.kspWarnings}" }
-      assertTrue(
-        diagnostic.contains("subclass `Both`") &&
-            diagnostic.contains("more than one sealed interface"),
-        "expected the shared-arm reason; got: $diagnostic",
-      )
+      assertContains(csharp, "public interface I$name : IDisposable")
+      assertContains(csharp, "NugetKotlinHandle I$name._handle => _handle;")
     }
     assertEquals(
-      0,
-      result.generatedCSharp.occurrencesOf("public sealed class Both"),
-      "expected no arm declaration for a shared arm; generatedCSharp=" +
-          "${result.generatedCSharp.lines().filter { it.contains("Both") }}",
+      1,
+      csharp.lines().filterNot { it.trimStart().startsWith("///") }
+        .count { Regex("""\bclass Both\b""").containsMatchIn(it) },
+      "expected exactly one declaration of the shared arm; generatedCSharp=" +
+          "${csharp.lines().filter { it.contains("Both") }}",
     )
   }
 

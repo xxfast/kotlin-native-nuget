@@ -20,6 +20,7 @@ using TestLibrary.Issue236;
 using TestLibrary.Issue365;
 using Issue297 = TestLibrary.Issue297;
 using Issue54 = TestLibrary.Issue54;
+using Issue463 = TestLibrary.Issue463;
 using Issue122 = TestLibrary.Issue122;
 using Perchvar = TestLibrary.Perchvar;
 using Multibound = TestLibrary.Multibound;
@@ -645,6 +646,61 @@ public class LiveHandleTests
             Assert.Equal(40, oreo.Progress);
             using Job.Idle mylo = factory.Idle();
             Assert.Equal("job", mylo.Kind);
+        });
+    }
+
+    // Row 1c-iface. ADR-204 (issue #463): a sealed interface over arms that already have a C# class
+    // base, the RETURN half. `IConnectableDevice.FromHandle` takes the one handle Kotlin minted,
+    // reads the type through the interface's own `get_type` export, and hands that same handle to
+    // the arm's `(NugetKotlinHandle, out _)` constructor, so the arm's `Dispose` is the only
+    // release. Every admitted arm kind crosses once per iteration: the data-class arm (`Preferred`),
+    // the dual arm (`DeviceAt(1)`), the `data object` arm (`DeviceAt(2)`), the plain-superclass arm
+    // through the second interface (`ChargerAt(0)`), and the `List` component, whose list ref the
+    // read releases and whose element refs the test disposes. A discriminator that minted a second
+    // handle to read the type shows here at five times the crossing rate.
+    [Fact]
+    public void SealedInterfaceOverDeclaredArms_Returns_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using Issue463.IConnectableDevice oreo = Issue463.Devices.Preferred();
+            Assert.IsType<Issue463.NearbyDevice>(oreo);
+            using Issue463.IConnectableDevice mylo = Issue463.Devices.DeviceAt(1);
+            Assert.IsType<Issue463.RemoteDevice>(mylo);
+            using Issue463.IConnectableDevice saved = Issue463.Devices.DeviceAt(2);
+            Assert.IsType<Issue463.SavedDevice>(saved);
+            using Issue463.IChargeable laser = Issue463.Devices.ChargerAt(0);
+            Assert.IsType<Issue463.LaserPointer>(laser);
+
+            IReadOnlyList<Issue463.IConnectableDevice> all = Issue463.Devices.Connectable();
+            Assert.Equal(3, all.Count);
+            foreach (Issue463.IConnectableDevice device in all) device.Dispose();
+        });
+    }
+
+    // Row 1c-iface-in. The PARAMETER half of Row 1c-iface: C#-built arms are lowered through the
+    // interface's `_handle` (borrowed, never retained a second time), and the value Kotlin hands
+    // back is a fresh handle the test owns. Mylo's tracker is the dual arm, so it crosses both
+    // interfaces' parameters in one iteration; Oreo's tag crosses the constructor parameter and
+    // comes back out through the `var` setter and getter.
+    [Fact]
+    public void SealedInterfaceOverDeclaredArms_Parameters_ReturnToBaseline()
+    {
+        AssertNoLeak(() =>
+        {
+            using var oreo = new Issue463.NearbyDevice("desk", "aa:bb");
+            using var mylo = new Issue463.RemoteDevice(host: "attic", battery: 80);
+
+            using (Issue463.EvidenceDevice connected = Issue463.Devices.Connect(mylo))
+            {
+                Assert.IsType<Issue463.RemoteDevice>(connected);
+            }
+            Assert.Equal("remote 80", Issue463.Devices.Charge(mylo));
+
+            using var dock = new Issue463.CollarDock(oreo);
+            dock.Current = mylo;
+            using Issue463.IConnectableDevice current = dock.Current;
+            Assert.IsType<Issue463.RemoteDevice>(current);
         });
     }
 
@@ -3903,6 +3959,29 @@ public class LiveHandleTests
 
         await AssertNoLeakAsync(
             async () => Assert.Equal(6, await oreo.AreaAsync()),
+            iterations: 5000);
+    }
+
+    // Row 9-iface. ADR-204 on the suspend route: `scanLater` returns the sealed INTERFACE and has no
+    // suspension point, so the completion can beat the P/Invoke that started it (Row 9b's window),
+    // and it must still hand its one result handle to `IConnectableDevice.FromHandle`, which gives
+    // it to the arm. The parameter half crosses in the same iteration (`connectLater` borrows the
+    // C#-built tracker's handle on the async route). Top-level, so there is no receiver scope to
+    // hoist or warm, on the `Suspend_NoSuspensionPoint_...` precedent.
+    //
+    // Mylo's tracker is found in the attic five thousand times.
+    [Fact]
+    public async Task SealedInterfaceOverDeclaredArms_Suspend_TightLoop_ReturnsToBaseline()
+    {
+        using var mylo = new Issue463.RemoteDevice(host: "attic", battery: 80);
+
+        await AssertNoLeakAsync(
+            async () =>
+            {
+                using Issue463.IConnectableDevice found = await Issue463.Devices.ScanLaterAsync(1);
+                Assert.IsType<Issue463.RemoteDevice>(found);
+                Assert.Equal("connected remote://attic", await Issue463.Devices.ConnectLaterAsync(mylo));
+            },
             iterations: 5000);
     }
 

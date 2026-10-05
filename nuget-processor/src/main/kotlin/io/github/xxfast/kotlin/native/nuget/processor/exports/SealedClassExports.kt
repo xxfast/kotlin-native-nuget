@@ -44,26 +44,7 @@ internal fun FileSpec.Builder.addSealedClassExports(
 
   val subclasses: List<KSClassDeclaration> = sealed.getSealedSubclasses().toList()
 
-  addFunction(
-    FunSpec.builder("export_${prefix}_get_type")
-      .addAnnotation(cNameAnnotation("${prefix}_get_type", ownedBy(sealed, "sealed discriminator")))
-      .addParameter("handle", cOpaquePointer)
-      .returns(Int::class)
-      // ADR-199: a generic base and arm read star-projected (`Outcome<*>`, `is Outcome.Ok<*>`).
-      .addStatement(
-        "val obj: %L = handle.asStableRef<%L>().get()",
-        sealed.forwardStarSpelling(), sealed.forwardStarSpelling(),
-      )
-      .addStatement("return when (obj) {")
-      .apply {
-        for ((index, subclass) in subclasses.withIndex()) {
-          if (subclass.qualifiedName == null) continue
-          addStatement("    is %L -> %L", subclass.forwardStarSpelling(), index)
-        }
-      }
-      .addStatement("}")
-      .build()
-  )
+  addSealedDiscriminatorExport(sealed, prefix, subclasses)
 
   // ADR-111/ADR-116 amendment (2026-09-11): the base's own declared members, off the same catalog
   // and the same two emitters an ordinary class uses. The receiver is the base type, so the
@@ -217,6 +198,38 @@ internal fun FileSpec.Builder.addSealedClassExports(
       )
     }
   }
+}
+
+/**
+ * The `<prefix>_get_type` discriminator: an ordered `when` of `is` tests over [arms], answering
+ * each arm's index. Shared by a sealed type (ADR-009) and a sealed interface over its declared arms
+ * (ADR-204), whose C# `FromHandle` switches on the same indices.
+ */
+internal fun FileSpec.Builder.addSealedDiscriminatorExport(
+  owner: KSClassDeclaration,
+  prefix: String,
+  arms: List<KSClassDeclaration>,
+) {
+  addFunction(
+    FunSpec.builder("export_${prefix}_get_type")
+      .addAnnotation(cNameAnnotation("${prefix}_get_type", ownedBy(owner, "sealed discriminator")))
+      .addParameter("handle", cOpaquePointer)
+      .returns(Int::class)
+      // ADR-199: a generic base and arm read star-projected (`Outcome<*>`, `is Outcome.Ok<*>`).
+      .addStatement(
+        "val obj: %L = handle.asStableRef<%L>().get()",
+        owner.forwardStarSpelling(), owner.forwardStarSpelling(),
+      )
+      .addStatement("return when (obj) {")
+      .apply {
+        arms.forEachIndexed { index, arm ->
+          if (arm.qualifiedName == null) return@forEachIndexed
+          addStatement("    is %L -> %L", arm.forwardStarSpelling(), index)
+        }
+      }
+      .addStatement("}")
+      .build()
+  )
 }
 
 /**

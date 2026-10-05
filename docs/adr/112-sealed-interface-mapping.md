@@ -145,7 +145,10 @@ exist.
   `ForwardBridgeTypeClassifier.kt:200` already routes a generic interface to the "generic
   declaration" legacy protocol.
 - *A subclass with another superclass* (`class Circle : Base(), Shape`): the C# nested subclass
-  can only extend the abstract `Shape`; a second base is unrepresentable.
+  can only extend the abstract `Shape`; a second base is unrepresentable. (**Superseded in part,
+  2026-10-05:** [ADR-204](204-sealed-interface-over-declared-arms.md) binds such an interface as
+  `I<Name>` with a discriminator when every arm is a constructible class; it is still not an
+  abstract class.)
 - *A sub-interface* (`sealed interface Shape { interface Round : Shape }`): the discriminator is
   a flat `when` over `getSealedSubclasses()`; a sub-interface has no single C# class to construct.
 - *A top-level subclass*: excluded from v1 for the same reason ADR-009 originally required

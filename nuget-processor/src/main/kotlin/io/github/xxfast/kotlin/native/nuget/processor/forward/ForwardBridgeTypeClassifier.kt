@@ -364,6 +364,25 @@ internal class ForwardBridgeTypeClassifier(
       if (discriminated && (classDeclaration.isGenericSealedType() || genericArm)) {
         return genericSealedReference(type, classDeclaration, qualifiedName)
       }
+      // ADR-204: an ineligible sealed interface whose arms are all declared handle classes keeps
+      // its `I<Name>` spelling and reconstructs through the interface's own `FromHandle`.
+      val overArms: Boolean = !discriminated &&
+          classDeclaration.isSealedInterfaceOverDeclaredArms(context.exportedObjectHandles)
+      val interfaceSpelling: String? = if (overArms) {
+        (interfaceType(classDeclaration, qualifiedName) as? BridgeType.Interface)?.csharpType
+      } else {
+        null
+      }
+      if (interfaceSpelling != null) {
+        return BridgeType.SpecializedProtocol(
+          "$SEALED_HELPER_PREFIX$qualifiedName",
+          sealedHandle = BridgeType.ObjectHandle(
+            qualifiedName,
+            csharpType = interfaceSpelling,
+            viaDiscriminator = true,
+          ),
+        )
+      }
       return BridgeType.SpecializedProtocol(
         "$SEALED_HELPER_PREFIX$qualifiedName",
         sealedHandle = if (discriminated) {

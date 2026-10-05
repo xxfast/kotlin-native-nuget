@@ -238,6 +238,12 @@ arm as a boxed handle-backed arm instead of refusing it, so the example above an
 be enums" clause no longer apply; the disqualifying reasons that remain are a second superclass, a
 second sealed-interface parent, or a sub-interface arm.
 
+**Superseded in part (2026-10-05).** [ADR-204](204-sealed-interface-over-declared-arms.md) binds a
+sealed interface that fails those rules, an arm with a superclass or a second sealed-interface
+parent included, as `I<Name>` with a discriminator when every arm is a constructible class. It is
+still not an abstract class, and the `Both : Left, Right` shape this ADR refused now binds as
+`ILeft`/`IRight`.
+
 ## Consequences
 
 - A sibling-armed sealed interface binds at every ADR-105 position, and the cascade onto every

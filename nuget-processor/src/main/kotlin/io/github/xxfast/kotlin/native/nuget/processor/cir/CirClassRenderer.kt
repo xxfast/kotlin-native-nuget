@@ -54,12 +54,57 @@ internal fun StringBuilder.renderInterface(iface: CirInterface) {
     }
   }
 
+  iface.discriminator?.let { discriminator ->
+    renderInterfaceDiscriminator(iface.name, discriminator)
+  }
+
   // ADR-134: a type Kotlin declares inside the interface is declared inside the generated
   // `public interface I<Name>` block (C# spec 19.4.1 admits a type_declaration there).
   renderNestedDeclarations(iface.nestedDeclarations)
 
   appendLine("    }")
   appendLine()
+}
+
+/**
+ * ADR-204: the members a sealed interface over its declared arms carries. `_handle` is `internal`,
+ * so an implementer outside the hierarchy is CS0535 unless it writes the member on purpose; each
+ * arm implements it explicitly over its own handle. `FromHandle` is the ADR-009 discriminator's own
+ * pair, switching to each arm's existing `(NugetKotlinHandle, out _)` constructor, so the one
+ * handle Kotlin minted is owned by exactly one arm wrapper.
+ */
+private fun StringBuilder.renderInterfaceDiscriminator(
+  name: String,
+  discriminator: CirInterfaceDiscriminator,
+) {
+  appendLine()
+  appendLine("        internal NugetKotlinHandle _handle { get; }")
+  appendLine()
+  appendLine(
+    "        [DllImport(\"${discriminator.libraryName}\", CallingConvention = " +
+        "CallingConvention.Cdecl, EntryPoint = \"${discriminator.nativePrefix}_get_type\")]",
+  )
+  appendLine("        private static extern int Native_GetType(NugetKotlinHandle handle);")
+  appendLine()
+  appendLine("        internal static $name FromHandle(IntPtr handle)")
+  appendLine("        {")
+  appendLine("            var owned = new NugetKotlinHandle(handle);")
+  appendLine("            try { return FromHandle(owned); }")
+  appendLine("            catch { owned.Dispose(); throw; }")
+  appendLine("        }")
+  appendLine()
+  appendLine("        internal static $name FromHandle(NugetKotlinHandle handle)")
+  appendLine("        {")
+  appendLine("            return Native_GetType(handle) switch")
+  appendLine("            {")
+  discriminator.arms.forEachIndexed { index, arm ->
+    appendLine("                $index => new $arm(handle, out _),")
+  }
+  appendLine(
+    "                _ => throw new InvalidOperationException(\"Unknown sealed interface type\")",
+  )
+  appendLine("            };")
+  appendLine("        }")
 }
 
 internal fun StringBuilder.renderStaticClass(cls: CirStaticClass) {
@@ -263,6 +308,12 @@ private fun StringBuilder.renderClassDeclaration(cls: CirClass) {
       appendLine("            _handle = handle;")
       appendLine("        }")
     }
+    appendLine()
+  }
+
+  // ADR-204: this class is an arm of a sealed interface over declared arms.
+  cls.handleInterfaces.forEach { iface ->
+    appendLine("        NugetKotlinHandle $iface._handle => _handle;")
     appendLine()
   }
 

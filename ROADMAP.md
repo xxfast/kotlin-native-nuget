@@ -248,6 +248,8 @@ Fallout from [ADR-053](docs/adr/053-nullable-reference-types-in-kotlin.md) (reve
 - [ ] The plugin fails to apply when it is declared `apply false` in a root project and Kotlin Multiplatform is declared only in a child (`Could not generate a decorated class for type NugetPlugin`); moving `registerPublish` out of the plugin class fixes it, workaround: declare both plugins `apply false` in the root. Verified by execution ([details](docs/backlog/plugin-class-carries-kgp-types-in-signatures.md)).
 - [ ] Lower the Kotlin floor from 2.4.0 to 2.3: needs the runtime and annotations klibs at the 2.3 ABI, the `kotlin.uuid.Uuid` opt-in and an answer on Gradle 9.1 as a real floor; deferred by [ADR-195](docs/adr/195-kotlin-version-range.md) ([details](docs/backlog/lower-the-kotlin-floor-to-2-3.md)).
 - [ ] The Kotlin range CI's floor and tested legs run on macOS only, and the unrecognised-version branch has no end-to-end run ([details](docs/backlog/kotlin-range-ci-coverage-gaps.md)).
+- [ ] A top-level `suspend fun`'s skip is named by its bare member in `NugetDiagnostics.json` (`"declaration": "scanLater"`), without the package: `NugetProcessor.kt` ~1180 calls `nameRefused(func, func.simpleName.asString(), ...)`. Verified by run; found with [ADR-204](docs/adr/204-sealed-interface-over-declared-arms.md), where a test had to key on the file instead.
+- [ ] A refused sealed type at a `suspend` return or `Flow` item is reported as "but not the generic type `X`" although `X` is not generic: wording only, from `refusedReturn` in `warnRefusedLegacyRouteMembers` (`NugetProcessor.kt` ~859). Verified in Tier 1 output; found with [ADR-204](docs/adr/204-sealed-interface-over-declared-arms.md).
 
 ## Performance & Resource Hygiene
 

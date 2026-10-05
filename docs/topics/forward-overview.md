@@ -298,8 +298,9 @@ key or value) has no C# spelling. A sealed **class** component no longer falls i
 since [ADR-105](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/105-sealed-property-position.md)
 it binds, materialised through the ADR-009 `FromHandle` discriminator (see
 [Sealed types as property types](interfaces-abstract-sealed.md#sealed-types-as-property-types)). A
-sealed **interface** component still has no C# spelling to bind against, because only a sealed
-*class* gets a `FromHandle` discriminator, so it still skips. Since
+sealed **interface** component binds when the interface is eligible or its arms extend a class (see
+[A sealed interface whose arms extend a class](interfaces-abstract-sealed.md#sealed-interface-over-arms));
+one with an arm no route can construct has no discriminator to bind against, so it still skips. Since
 [ADR-064](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/064-forward-unsupported-declaration-diagnostics.md)'s
 2026-09-11 amendment the message comes from the element's own `SEALED_POSITION` reason, naming the
 sealed interface itself rather than the outer collection shape:
@@ -311,7 +312,9 @@ sealed interface itself rather than the outer collection shape:
     reconstruct it: only an eligible sealed type inside the export scope gets one (ADR-009,
     ADR-112), and that binds at every position (ADR-105); export it from an included package, make
     every subclass a class or object (in the sealed type or beside it) with no other superclass and
-    no second sealed interface (ADR-125), or accept a concrete subclass
+    no second sealed interface (ADR-125), make every subclass of a sealed interface an exported,
+    non-abstract, non-generic class none of which extends another (ADR-204), or accept a concrete
+    subclass
 ```
 
 `SKIPPED_UNSUPPORTED_PROPERTY` never fires for a property whose type is a lambda, suspend lambda,
