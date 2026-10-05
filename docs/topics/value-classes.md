@@ -86,9 +86,29 @@ patient.BackupChart = null;
 patient.TransferTo(null); // "no transfer" -- Kotlin sees a genuine null, not ChartId("")
 ```
 
-A method or getter declared on the value class itself cannot return a nullable (`String?`, `Int?`,
-`Throwable?`): that one member is skipped with `SKIPPED_UNSUPPORTED_RETURN` and the rest of the
-class still binds. Return a non-null value from the member instead.
+A method or getter declared on the value class itself can return a nullable too: `String?`,
+`Int?`, an enum, an object, a `List` and `Throwable?` all bind, with `null` coming through as
+`null`. Object results are owned by you like any other returned object, so dispose them.
+
+```kotlin
+value class CollarTag(val name: String) {
+  val nickname: String? get() = name.takeIf { it.isNotEmpty() }?.let { "$it the brave" }
+  fun letters(): Int? = name.length.takeIf { it > 0 }
+  fun bell(): Bell? = name.takeIf { it.isNotEmpty() }?.let { Bell("$it-ding") }
+}
+```
+
+```C#
+var mylo = new CollarTag("Mylo");
+var blank = new CollarTag("");
+
+string? nickname = mylo.Nickname;   // "Mylo the brave"
+int? none = blank.Letters();        // null
+using Bell? bell = mylo.Bell();     // "Mylo-ding" tone; blank.Bell() is null
+```
+
+A value class's own members have no error slot, so an exception thrown inside one of them is not
+caught and rethrown in C# the way it is on other members. Do not let these members throw.
 
 ### Primitive- and enum-underlying nullables {id="nullable-over-primitive-and-enum-underlyings"}
 

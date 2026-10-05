@@ -71,8 +71,8 @@ no identity, exactly as ADR-107.
 
 Binds at: a member, top-level, class-extension, object, companion, sealed-arm, enum-member,
 generic-class and interface result; a `Result<Throwable>` with its `Try` twin; a value-class
-non-null member and getter; a nullable result; a `List` element (nullable included); a `Map`
-value; a `List`/`Map` property getter; and the `suspend`/`Flow` results `suspend fun f():
+member and getter, nullable or not (nullable amended 2026-10-05, below); a `List` element
+(nullable included); a `Map` value; a `List`/`Map` property getter; and the `suspend`/`Flow` results `suspend fun f():
 List<Throwable>` and `Flow<List<Throwable>>`.
 
 ### Into Kotlin
@@ -125,10 +125,10 @@ type.
 
 A nullable result on a value class's own method or getter (`String?`, `Int?` or `Throwable?`) crashed
 the processor (`ERROR_INTERNAL_GENERATOR_FAILURE`), because the value-class member ABI has no error
-slot and the nullable result arms need one. It is now a named `SKIPPED_UNSUPPORTED_RETURN` on both
-halves and the class's other members still bind. This is general, not specific to `Throwable`; a
-non-null `Throwable` result on a value class's member binds. Binding the nullable result is a
-ROADMAP Phase 4 item. Verified by `Tier1ValueClassNullableResultTest`.
+slot and the nullable result arms need one. It was first made a named `SKIPPED_UNSUPPORTED_RETURN`
+on both halves, with the class's other members still binding; that skip is replaced by a binding
+(see the 2026-10-05 amendment below). This was general, not specific to `Throwable`; a non-null
+`Throwable` result on a value class's member binds. Verified by `Tier1ValueClassNullableResultTest`.
 
 ### Diagnostics
 
@@ -168,3 +168,40 @@ declared `Throwable`, and a Kotlin throwable binds as a value, never as a receiv
 carries the declared type as a data class; and no `CirClassTranslator` abstract-method gate was
 needed, because the existing refused-abstract filter already keeps an unbound override out of the
 wrapper (verified by compiling the generated C# both ways).
+
+## Amendment, 2026-10-05: a nullable result on a value class's own member now binds
+
+The "Fixed alongside" skip for a nullable result on a value class's own method or getter
+(`SKIPPED_UNSUPPORTED_RETURN`) is replaced by a binding. Nothing in that family stays skipped and
+the planner's skip guard is removed.
+
+**Rule.** A value class's own method or getter returns the nullable C# type, null included, for
+`String`, primitives (`Boolean` too), enums, `Char`, `Duration`/`Instant`, `Uuid`, exported objects,
+interfaces, `List`, `ByteArray`, `Throwable` (the ADR-107 envelope, `System.Exception?`) and value
+classes over a pointer or primitive underlying. The non-null twins of these bind too.
+
+**Mechanism.** These members keep the ADR-014 no-error-slot ABI, so a binding cannot use the
+`errorOut` arms. The Kotlin half renders one shared body skeleton: `return try { ... } catch` where
+a slot exists and `return run { ... }` where it does not. On the C# side `valueClassMemberExpression`
+handles each nullable family, a value-type result (`Int?`, enum, `Boolean`) uses an extra `valueOut`
+out slot on the `DllImport` and a `bool` result, and where the native result must be held in a
+local the renderer emits a block body in place of an expression. Existing error-slot output is
+unchanged.
+
+**Defects fixed on the same path.** Non-null object, `List` and `ByteArray` results on a
+value-class member generated C# that returned the raw native handle and did not compile. The Kotlin
+half crashed on non-null interface, `Instant`/`Duration`, `Uuid` and value-class results.
+Value-class members were not registered with the collection-helper tracker, so a `List` result
+gave CS0246 on `IReadOnlyList<>`.
+
+**Constraint kept.** A Kotlin throw from one of these members is still not caught on this route,
+since there is no error slot (ADR-014).
+
+**Not checked.** A `T?` result on a generic value class's own member.
+
+**Verified (executed)**: `:nuget-processor:test` 1806 passed (`Tier1ValueClassNullableResultTest`),
+native pipeline `IntegrationTests` 3216 passed (`ValueClassNullableResultTests`), `LeakTests` 197.
+Leak rows (`LeakTests/LiveHandleTests.cs`): `ValueClassMemberObjectResult_NullAndNonNull_ReturnsToBaseline`,
+`ValueClassMemberListResult_NullAndNonNull_ReturnsToBaseline` and
+`ValueClassMemberThrowableResult_NullAndNonNull_ReturnsToBaseline`; no throw-path row, for the
+constraint above. Fixture: `test-library/.../test/collartag/CollarTagSample.kt`.

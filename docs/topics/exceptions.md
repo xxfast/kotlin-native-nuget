@@ -209,8 +209,9 @@ that throws while Kotlin is calling it, is a separate channel; see
 A `Throwable`, `Throwable?` or stdlib subtype that Kotlin returns reads in C# as a plain, unthrown
 `Exception` (or `Exception?`), built with the same type mapping and cause chain a thrown exception
 gets. It is something you inspect, not something you catch. This applies to a return from any
-exported type or a top-level function, a property getter, a `List` element (nullable
-included) and a `Map` value. A `Result<Throwable>` return binds too, with its `TryX` twin.
+exported type (a value class's own member included) or a top-level function, a property getter,
+a `List` element (nullable included) and a `Map` value. A `Result<Throwable>` return binds too,
+with its `TryX` twin.
 
 ```kotlin
 class MishapLog {
