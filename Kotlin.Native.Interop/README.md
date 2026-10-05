@@ -2,7 +2,7 @@
 
 ![kotlin-native-nuget](https://raw.githubusercontent.com/xxfast/kotlin-native-nuget/main/Kotlin.Native.Interop/icon.png)
 
-[![Stability](https://kotl.in/badges/experimental.svg)](https://kotlinlang.org/docs/components-stability.html#stability-of-subcomponents)
+[![Stability](https://kotl.in/badges/alpha.svg)](https://kotlinlang.org/docs/components-stability.html#stability-of-subcomponents)
 [![CI](https://github.com/xxfast/kotlin-native-nuget/actions/workflows/ci.yml/badge.svg)](https://github.com/xxfast/kotlin-native-nuget/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/xxfast/kotlin-native-nuget/graph/badge.svg?token=PEDQUEBEV8)](https://codecov.io/gh/xxfast/kotlin-native-nuget)
 [![NuGet](https://img.shields.io/nuget/v/Xxfast.Kotlin.Native.Interop)](https://www.nuget.org/packages/Xxfast.Kotlin.Native.Interop)

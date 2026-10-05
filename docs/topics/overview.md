@@ -6,7 +6,7 @@
 package boundary.
 
 <warning>
-<p><code>0.x</code> is experimental. Anything can change between plugin versions.</p>
+<p><code>0.x</code> is Alpha, in <a href="https://kotlinlang.org/docs/components-stability.html">Kotlin's stability terms</a>: the forward direction (Kotlin to C#) is here to stay but has not reached its final shape. A release can still break you, and its release notes say how to migrate. The reverse direction (C# to Kotlin) stays experimental.</p>
 <p>The generated bindings are the public API of your NuGet package. Your consumers see your
 version, never the plugin's. A plugin upgrade that changes how Kotlin renders into C# breaks them
 at your version, not the plugin's.</p>

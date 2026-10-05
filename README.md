@@ -1,7 +1,7 @@
 # kotlin-native-nuget
 <img src="docs/icon.svg" height="240" align="right"/> 
 
-[![Stability](https://kotl.in/badges/experimental.svg)](https://kotlinlang.org/docs/components-stability.html#stability-of-subcomponents)
+[![Stability](https://kotl.in/badges/alpha.svg)](https://kotlinlang.org/docs/components-stability.html#stability-of-subcomponents)
 [![CI](https://github.com/xxfast/kotlin-native-nuget/actions/workflows/ci.yml/badge.svg)](https://github.com/xxfast/kotlin-native-nuget/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/xxfast/kotlin-native-nuget/graph/badge.svg?token=PEDQUEBEV8)](https://codecov.io/gh/xxfast/kotlin-native-nuget)
 
@@ -17,7 +17,7 @@ Read the announcement: [Bring your KMP library to NuGet](https://medium.com/proa
 
 ## Stability
 
-`0.x` and experimental. Anything can change between versions.
+Alpha, in [Kotlin's stability terms](https://kotlinlang.org/docs/components-stability.html): the forward direction (Kotlin to C#) is here to stay but has not reached its final shape. A `0.x` release can still break you, and its release notes say how to migrate. The reverse direction (C# to Kotlin) stays experimental, behind `@ExperimentalNugetBindingApi`.
 
 The generated bindings are the public API of **your** NuGet package. Your consumers see your version, never the plugin's. A plugin upgrade that changes how Kotlin renders into C# breaks them at your version, not ours.
 
