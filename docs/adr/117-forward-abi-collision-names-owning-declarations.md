@@ -539,7 +539,6 @@ renderers, never reproduced by a fixture; it now is, and both the base and arm c
 in the same round, which is ADR-162's own containment claim.
 
 The `fun-dispose-crashes-ksp-raw-stack-trace.md` backlog file is deleted with this amendment; its
-residual is closed. `docs/backlog/fun-dispose-collision-located-at-class-not-member.md` records the
-one thing this amendment does *not* fix: the collision is still located at the containing class (or
-arm), not the offending member, because `emitCsharpSignatureCollisions` receives the container's
-`KSNode`.
+residual is closed. This amendment left one thing unfixed: the collision was still located at the
+containing class (or arm), not the offending member, because `emitCsharpSignatureCollisions`
+received the container's `KSNode`. ADR-162's 2026-10-05 amendment locates it at the member.

@@ -1015,7 +1015,7 @@ A method literally named `dispose` is a **different** kind, not this one: every 
 declares `public void Dispose()` for free, so `fun dispose()` collides with that reserved signature
 during generation, and reports `ERROR_CSHARP_SIGNATURE_COLLISION`, the same kind and CS0111 wording
 [Classes and objects](classes-and-objects.md) uses for two same-signature constructors or methods,
-naming the method and "generated Dispose" as the two owners
+naming the method and "generated Dispose" as the two owners, located at the `dispose()` function
 ([ADR-162](https://github.com/xxfast/kotlin-native-nuget/blob/main/docs/adr/162-per-declaration-error-containment.md)).
 It fires earlier than the entry-point check on this page, so it never reaches
 `ERROR_C_ENTRY_POINT_COLLISION` at all; a sealed base's own `dispose()`, and a sealed arm's own

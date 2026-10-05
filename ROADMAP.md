@@ -55,7 +55,6 @@ Complete.
 
 ## Phase 5: Exception handling
 - [ ] `kspKotlinMingwX64` prints about 155 `w: [ksp] ... [nuget:*]` warning lines on Windows at default verbosity, which [ADR-100](docs/adr/100-forward-diagnostic-delivery.md) (measured on macOS) says cannot happen; unexplained whether the ADR-100 console re-emit is duplicating them in `packNuget`. ([details](docs/backlog/kspkotlinmingwx64-155-warning-lines-adr-100-says-cannot.md))
-- [ ] The `fun dispose()` [ADR-162](docs/adr/162-per-declaration-error-containment.md) signature-collision diagnostic is located at the containing class, not the offending member. ([details](docs/backlog/fun-dispose-collision-located-at-class-not-member.md))
 - [ ] `ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE` could downgrade to a `SKIPPED_*`, since the function is simply absent and nothing depends on it ([ADR-162](docs/adr/162-per-declaration-error-containment.md) Q5). ([details](docs/backlog/enum-parameter-route-fatal-could-downgrade-to-skip.md))
 - [ ] The failure arm of the [ADR-162](docs/adr/162-per-declaration-error-containment.md) Kotlin-half guards, and the whole-round catch, have no test: no legal Kotlin shape reaches either, and a shipped test may not inject a throw. ([details](docs/backlog/guard-failure-arm-and-whole-round-catch-have-no-test.md))
 - [ ] **The propagated `KotlinException.KotlinStackTrace` carries dozens of host-process frames below the `@CName` entry point, unsymbolizable and actively misleading.** ([details](docs/backlog/kotlinstacktrace-host-process-frames.md))
