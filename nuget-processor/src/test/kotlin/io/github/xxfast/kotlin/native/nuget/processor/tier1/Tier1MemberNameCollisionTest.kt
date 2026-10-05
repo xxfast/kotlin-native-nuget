@@ -304,6 +304,8 @@ class Tier1MemberNameCollisionTest {
     val error: String = result.collision("Limits.MaxRetries")
     assertContains(error, "MAX_RETRIES")
     assertContains(error, "maxRetries")
+    // A `const val` keeps its PascalCase name whatever it is annotated with, so no remedy names it.
+    assertTrue("a different `@CSharpName`" !in error, "two consts cannot be renamed in C#; $error")
   }
 
   @Test
@@ -318,7 +320,8 @@ class Tier1MemberNameCollisionTest {
       fileName = "Caps.kt",
     )
 
-    result.collision("Caps.Limit")
+    val error: String = result.collision("Caps.Limit")
+    assertContains(error, "or give one a different `@CSharpName`")
   }
 
   // ---- Rule 2: a declared member hiding an inherited member of the other kind (CS0108) ----
@@ -361,6 +364,8 @@ class Tier1MemberNameCollisionTest {
     val error: String = result.collision("Derived.Tag")
     assertContains(error, "Base")
     assertContains(error, "CS0108")
+    assertContains(error, "or give it a different `@CSharpName`")
+    assertTrue("dependency module" !in error, "both classes are this module's; $error")
   }
 
   @Test
@@ -420,6 +425,7 @@ class Tier1MemberNameCollisionTest {
     val error: String = result.collision("Jar.Count")
     assertContains(error, "object Jar declares")
     assertContains(error, "CS0102")
+    assertContains(error, "or give one a different `@CSharpName`")
   }
 
   @Test

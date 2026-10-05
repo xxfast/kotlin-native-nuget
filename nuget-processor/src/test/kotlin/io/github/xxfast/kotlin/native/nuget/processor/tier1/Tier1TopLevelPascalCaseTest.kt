@@ -71,6 +71,7 @@ class Tier1TopLevelPascalCaseTest {
     assertContains(error, "property")
     assertContains(error, "CS0102")
     assertContains(error, "rename the Kotlin function 'name'")
+    assertContains(error, "or give it a different `@CSharpName`")
   }
 
   /**

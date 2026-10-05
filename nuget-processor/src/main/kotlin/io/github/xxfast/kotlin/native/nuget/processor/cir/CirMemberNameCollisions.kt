@@ -4,6 +4,7 @@ import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.processing.KSPLogger
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSNode
 import com.google.devtools.ksp.symbol.KSPropertyDeclaration
@@ -74,6 +75,8 @@ internal data class KotlinSpelling(
   val onCompanion: Boolean = false,
   /** ADR-179: the author's `@CSharpName`, so a declared name that still collides names it. */
   val declared: String? = null,
+  /** Issue #464: the type declaring this member, when it was read from a dependency's klib. */
+  val dependency: String? = null,
 ) {
   val isFunction: Boolean get() = keyword == "fun"
 
@@ -107,13 +110,25 @@ internal class KotlinSpellings {
     val keyword: String = if (prop.isMutable) "var" else "val"
     record(
       prop.csharpMemberName(),
-      KotlinSpelling(keyword, name, onCompanion, prop.declaredCSharpName()),
+      KotlinSpelling(
+        keyword,
+        name,
+        onCompanion,
+        prop.declaredCSharpName(),
+        prop.parentDeclaration?.dependencyName(),
+      ),
     )
   }
 
   fun recordFunction(function: KSFunctionDeclaration, onCompanion: Boolean = false) {
     val name: String = function.simpleName.asString()
-    val spelling = KotlinSpelling("fun", name, onCompanion, function.declaredCSharpName())
+    val spelling = KotlinSpelling(
+      "fun",
+      name,
+      onCompanion,
+      function.declaredCSharpName(),
+      function.parentDeclaration?.dependencyName(),
+    )
     record(function.csharpMemberName(), spelling)
     // The suspend route renders `{Name}Async`, or the declared name verbatim (ADR-179).
     if (function.modifiers.contains(Modifier.SUSPEND)) {
@@ -176,7 +191,7 @@ internal fun emitMemberNameCollisions(
   spellings: KotlinSpellings,
   logger: KSPLogger,
   reason: (CsNameCollision) -> String = { collision -> defaultReason(ownerPhrase, collision) },
-  hint: (CsNameCollision) -> String = { defaultHint(ownerPhrase) },
+  hint: (CsNameCollision) -> String = { collision -> defaultHint(ownerPhrase, collision) },
   // A merged type (the top-level file class) has a different declaration behind each name.
   symbolFor: (String) -> KSNode? = { symbol },
 ) {
@@ -215,10 +230,49 @@ private fun defaultReason(ownerPhrase: String, collision: CsNameCollision): Stri
       "one type (CS0102)"
 }
 
-private fun defaultHint(ownerPhrase: String): String =
-  "rename one of them on $ownerPhrase, or give one a different `@CSharpName`; a property, a " +
-      "`const val` and a function all render PascalCase in C#, and a companion's members land " +
-      "on the same C# type (ADR-110)"
+private fun defaultHint(ownerPhrase: String, collision: CsNameCollision): String =
+  csharpNameRemedy(
+    rename = "rename one of them on $ownerPhrase",
+    spellings = collision.spellings,
+    target = "one",
+    detail = "a property, a `const val` and a function all render PascalCase in C#, and a " +
+        "companion's members land on the same C# type (ADR-110)",
+  )
+
+/**
+ * Issue #464: a collision hint's [rename], then ADR-179's `@CSharpName` as the alternative, then
+ * [detail]. The alternative is left out when every colliding declaration is a `const val`, whose C#
+ * name ignores the annotation. A declaration that could carry it but was read from a klib (the
+ * ADR-066 cross-module signal, `containingFile == null`) lives in a dependency module, which does
+ * not get `nuget-annotations` from the plugin, so its type is named (a klib carries no module name).
+ */
+internal fun csharpNameRemedy(
+  rename: String,
+  spellings: List<KotlinSpelling>,
+  target: String = "it",
+  detail: String? = null,
+): String {
+  val tail: String = if (detail == null) "" else "; $detail"
+  val annotatable: List<KotlinSpelling> = spellings.filter { it.keyword != "const val" }
+  // No recorded spelling means only a bare C# name, which is still a member the annotation names.
+  if (spellings.isNotEmpty() && annotatable.isEmpty()) return "$rename$tail"
+  val remedy: String = "$rename, or give $target a different `@CSharpName` (ADR-179)$tail"
+  val owners: List<String> = annotatable.mapNotNull { it.dependency }.distinct()
+  if (owners.isEmpty()) return remedy
+  val declared: String = if (owners.size == 1) {
+    "${owners.single()} is declared in a dependency module, which needs"
+  } else {
+    "${owners.joinToString(" and ")} are declared in dependency modules, which each need"
+  }
+  return "$remedy; $declared `io.github.xxfast:nuget-annotations` on its own `commonMain` to use " +
+      "the annotation (the plugin adds it only to the module that applies it)"
+}
+
+/** Issue #464: this declaration's qualified name when it was read from a klib, else null. */
+internal fun KSDeclaration.dependencyName(): String? {
+  if (containingFile != null) return null
+  return qualifiedName?.asString() ?: simpleName.asString()
+}
 
 /**
  * Rule 2 (CS0108) runs after every class has translated, because a base can translate after its
@@ -292,9 +346,12 @@ internal class CsMemberRegistry {
     }
   }
 
+  /** The Kotlin spellings of [member]'s kind on [this] type. */
+  private fun Entry.spellingsOf(member: CsMemberName): List<KotlinSpelling> =
+    spellings[member.name].filter { it.isFunction == (member.kind == CsMemberKind.METHOD) }
+
   /** The Kotlin spellings of [declared]'s kind on [this] type, or its bare C# name. */
-  private fun Entry.spelledAs(declared: CsMemberName): String = spellings[declared.name]
-    .filter { it.isFunction == (declared.kind == CsMemberKind.METHOD) }
+  private fun Entry.spelledAs(declared: CsMemberName): String = spellingsOf(declared)
     .takeIf { it.isNotEmpty() }
     ?.joinToString(" and ") { it.describe() }
     ?: "'${declared.name}'"
@@ -312,8 +369,11 @@ internal class CsMemberRegistry {
           reason = "${entry.ownerPhrase} declares $spelled, which renders the C# name '$name', " +
               "the name of the type that declares it, and C# cannot declare a member named like " +
               "its enclosing type (CS0542)",
-          hint = "rename the member, or give it a different `@CSharpName` (ADR-179); a property " +
-              "and a function both render PascalCase in C# (ADR-110)",
+          hint = csharpNameRemedy(
+            rename = "rename the member",
+            spellings = entry.spellingsOf(declared),
+            detail = "a property and a function both render PascalCase in C# (ADR-110)",
+          ),
           owner = null,
         ),
       ),
@@ -341,9 +401,14 @@ internal class CsMemberRegistry {
               "${base.ownerPhrase}; the member would hide that type, which C# reports as " +
               "CS0108 and which fails `nugetCompileInterop` and every consumer build that " +
               "treats warnings as errors",
-          hint = "rename the member on ${entry.csName} or the nested type on ${base.csName}; " +
-              "a C# type shares one member namespace with its base, nested types included " +
-              "(ADR-110)",
+          hint = csharpNameRemedy(
+            rename = "rename the member on ${entry.csName} or the nested type on ${base.csName}",
+            // Only the member can carry the annotation; a nested type keeps its name (ADR-179).
+            spellings = entry.spellingsOf(declared),
+            target = "the member",
+            detail = "a C# type shares one member namespace with its base, nested types " +
+                "included (ADR-110)",
+          ),
           owner = null,
         ),
       ),
@@ -380,9 +445,12 @@ internal class CsMemberRegistry {
               "renders the C# name '$name' that its base ${base.ownerPhrase} already gives to " +
               "${spelled(base, inherited.kind)}; $consequence, which fails `nugetCompileInterop` " +
               "and every consumer build that treats warnings as errors",
-          hint = "rename the member on ${entry.csName} or on ${base.csName}; a C# type shares " +
-              "one member namespace with its base, where only methods may reuse a name " +
-              "(ADR-110)",
+          hint = csharpNameRemedy(
+            rename = "rename the member on ${entry.csName} or on ${base.csName}",
+            spellings = entry.spellingsOf(declared) + base.spellingsOf(inherited),
+            detail = "a C# type shares one member namespace with its base, where only methods " +
+                "may reuse a name (ADR-110)",
+          ),
           owner = null,
         ),
       ),

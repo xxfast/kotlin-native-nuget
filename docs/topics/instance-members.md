@@ -132,7 +132,8 @@ public IDisposable @namespace(Action<int> listener)
 
 Only the C# member changes. The Kotlin name and the native entry points stay as they were.
 The plugin adds the annotation's `nuget-annotations` dependency to `commonMainApi` for you (see
-[the plugin DSL](nuget-dsl.md#annotations-dependency)).
+[the plugin DSL](nuget-dsl.md#annotations-dependency)). A dependency module that doesn't apply the
+plugin must declare it itself to annotate its own members; see the same section.
 
 ## Name collisions with the wrapper itself
 

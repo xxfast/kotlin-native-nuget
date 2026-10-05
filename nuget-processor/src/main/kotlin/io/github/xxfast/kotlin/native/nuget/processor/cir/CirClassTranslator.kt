@@ -3594,6 +3594,8 @@ internal fun translateObject(
   // The Kotlin spelling behind each rendered C# member name, so the CS0102 guard below can name
   // the two declarations the author has to choose between rather than only the C# name they share.
   val kotlinSpellings = KotlinSpellings()
+  // Issue #464: an object read from a dependency's klib, named by the collision hint.
+  val dependency: String? = obj.dependencyName()
 
   val methods: List<CirMember> = callableCatalog
     .objectMethods(obj.qualifiedName?.asString() ?: name)
@@ -3603,7 +3605,9 @@ internal fun translateObject(
       val kotlinName: String = planned.invocation.member
         ?: planned.invocation.symbol.substringAfterLast('.')
       members.filterIsInstance<CirMethod>()
-        .forEach { kotlinSpellings.record(it.name, KotlinSpelling("fun", kotlinName)) }
+        .forEach {
+          kotlinSpellings.record(it.name, KotlinSpelling("fun", kotlinName, dependency = dependency))
+        }
       members
     }
 
@@ -3634,7 +3638,10 @@ internal fun translateObject(
       if (planned != null) {
         tracker.trackProperty(planned)
         val keyword: String = if (planned.setter != null) "var" else "val"
-        kotlinSpellings.record(planned.publicName, KotlinSpelling(keyword, planned.kotlinName))
+        kotlinSpellings.record(
+          planned.publicName,
+          KotlinSpelling(keyword, planned.kotlinName, dependency = dependency),
+        )
         ForwardCirPropertyProjection.staticProperty(planned, libraryName)
       } else {
         emptyList()
@@ -3754,9 +3761,13 @@ private fun emitObjectNameCollisions(
           "'${collision.name}', and C# cannot declare $what with one name on the static class " +
           "an object becomes (CS0102)"
     },
-    hint = {
-      "rename one of them on object $objectName; a property, a `const val` and a function all " +
-          "render PascalCase in C# (ADR-110)"
+    hint = { collision ->
+      csharpNameRemedy(
+        rename = "rename one of them on object $objectName",
+        spellings = collision.spellings,
+        target = "one",
+        detail = "a property, a `const val` and a function all render PascalCase in C# (ADR-110)",
+      )
     },
   )
 }
@@ -4101,7 +4112,9 @@ internal fun translateInterface(
   val methods: List<CirInterfaceMethod> =
     plannedMethods + typeParameterMethods(iface, typeParamNames, plannedMethods)
 
-  emitInterfaceNameCollisions(interfaceName, iface, propertyPlans, methodPlans, logger)
+  val declarations: Map<String, KSDeclaration> = iface.interfaceMethodSymbols().toMap() +
+      iface.getAllProperties().associateBy { prop -> "$qualified.${prop.simpleName.asString()}" }
+  emitInterfaceNameCollisions(interfaceName, iface, propertyPlans, methodPlans, declarations, logger)
   // Interface super-interfaces: the same CS0102-family guard across the base list. A declared
   // method named like an INHERITED property (or the reverse) hides it, CS0108, which the
   // warnings-as-errors consumer build turns into a break.
@@ -4115,6 +4128,7 @@ internal fun translateInterface(
       .filterNot { plan -> declared(propertyPlacements[plan.symbol]) },
     inheritedMethods = callableCatalog.classMethods(qualified)
       .filterNot { plan -> declared(methodPlacements[plan.invocation.symbol]) },
+    declarations = declarations,
     logger = logger,
   )
   // ADR-090 amendment (2026-09-26): the same ADR-034 guard every other container runs. Here, not on
@@ -4313,18 +4327,23 @@ private fun emitInterfaceNameCollisions(
   iface: KSClassDeclaration,
   propertyPlans: List<ForwardPropertyPlan>,
   methodPlans: List<ForwardCallablePlan>,
+  // Issue #464: the declaring member behind each plan symbol, for the `@CSharpName` remedy.
+  declarations: Map<String, KSDeclaration>,
   logger: KSPLogger,
 ) {
   val spellings = KotlinSpellings()
   val members: List<CsMemberName> = buildList {
     propertyPlans.forEach { plan ->
-      spellings.record(plan.publicName, KotlinSpelling("val", plan.kotlinName))
+      val dependency: String? = declarations[plan.symbol]?.parentDeclaration?.dependencyName()
+      spellings.record(plan.publicName, KotlinSpelling("val", plan.kotlinName, dependency = dependency))
       add(CsMemberName(plan.publicName, CsMemberKind.VALUE))
     }
     methodPlans.forEach { plan ->
       val kotlinName: String = plan.invocation.member
         ?: plan.invocation.symbol.substringAfterLast('.')
-      spellings.record(plan.publicSignature.name, KotlinSpelling("fun", kotlinName))
+      val dependency: String? =
+        declarations[plan.invocation.symbol]?.parentDeclaration?.dependencyName()
+      spellings.record(plan.publicSignature.name, KotlinSpelling("fun", kotlinName, dependency = dependency))
       add(CsMemberName(plan.publicSignature.name, CsMemberKind.METHOD))
     }
   }
@@ -4348,11 +4367,13 @@ private fun emitInterfaceNameCollisions(
     },
     hint = { collision ->
       val function: String? = collision.methods.firstOrNull()?.name
-      if (function == null) {
+      val rename: String = if (function == null) {
         "rename one of the properties on $interfaceName"
       } else {
         "rename the Kotlin function '$function' or the property it collides with"
       }
+      val target: String = if (function == null) "one" else "it"
+      csharpNameRemedy(rename, collision.spellings, target)
     },
   )
 }
@@ -4371,8 +4392,11 @@ private fun emitInheritedInterfaceNameCollisions(
   declaredMethods: List<ForwardCallablePlan>,
   inheritedProperties: List<ForwardPropertyPlan>,
   inheritedMethods: List<ForwardCallablePlan>,
+  declarations: Map<String, KSDeclaration>,
   logger: KSPLogger,
 ) {
+  fun dependency(symbol: String): String? =
+    declarations[symbol]?.parentDeclaration?.dependencyName()
   val inheritedPropertyNames: Map<String, ForwardPropertyPlan> =
     inheritedProperties.associateBy { it.publicName }
   val inheritedMethodNames: Map<String, ForwardCallablePlan> =
@@ -4388,7 +4412,13 @@ private fun emitInheritedInterfaceNameCollisions(
       declaration = "$interfaceName.${plan.publicSignature.name}",
       reason = "the inherited interface property '${property.kotlinName}' already claims that C# " +
           "name, and a method of that name on $interfaceName hides it (CS0108)",
-      hint = "rename the Kotlin function '$kotlinName' or the inherited property",
+      hint = csharpNameRemedy(
+        rename = "rename the Kotlin function '$kotlinName' or the inherited property",
+        spellings = listOf(
+          KotlinSpelling("fun", kotlinName, dependency = dependency(plan.invocation.symbol)),
+          KotlinSpelling("val", property.kotlinName, dependency = dependency(property.symbol)),
+        ),
+      ),
       owner = null,
     )
   }
@@ -4403,7 +4433,13 @@ private fun emitInheritedInterfaceNameCollisions(
       declaration = "$interfaceName.${plan.publicName}",
       reason = "the inherited interface function '$kotlinName' already claims that C# name, and " +
           "a property of that name on $interfaceName hides it (CS0108)",
-      hint = "rename the Kotlin property '${plan.kotlinName}' or the inherited function",
+      hint = csharpNameRemedy(
+        rename = "rename the Kotlin property '${plan.kotlinName}' or the inherited function",
+        spellings = listOf(
+          KotlinSpelling("val", plan.kotlinName, dependency = dependency(plan.symbol)),
+          KotlinSpelling("fun", kotlinName, dependency = dependency(method.invocation.symbol)),
+        ),
+      ),
       owner = null,
     )
   }

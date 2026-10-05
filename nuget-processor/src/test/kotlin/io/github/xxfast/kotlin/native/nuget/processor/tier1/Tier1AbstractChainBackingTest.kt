@@ -236,6 +236,7 @@ class Tier1AbstractChainBackingTest {
     assertContains(collisions.single(), "Burrow.Backing")
     assertContains(collisions.single(), "Den.Backing")
     assertContains(collisions.single(), "CS0108")
+    assertContains(collisions.single(), "or give the member a different `@CSharpName`")
   }
 
   @Test
