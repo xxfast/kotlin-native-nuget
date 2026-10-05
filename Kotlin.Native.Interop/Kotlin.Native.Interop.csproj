@@ -3,8 +3,11 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <PackageId>Kotlin.Native.Interop</PackageId>
-    <Version>1.0.0</Version>
+    <!-- The id carries the owner prefix; the assembly and namespace stay Kotlin.Native.Interop. -->
+    <PackageId>Xxfast.Kotlin.Native.Interop</PackageId>
+    <!-- Released in lockstep with the plugin: the root gradle.properties is the one source of truth. -->
+    <GradleProperties>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../gradle.properties'))</GradleProperties>
+    <Version>$([System.Text.RegularExpressions.Regex]::Match($(GradleProperties), '(?m)^version=([^\r\n]+)').Groups.get_Item(1).Value.Trim())</Version>
     <Authors>xxfast</Authors>
     <Description>Shared exception and presence contracts for Kotlin/Native NuGet bindings.</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
@@ -12,4 +15,7 @@
     <IsTrimmable>true</IsTrimmable>
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
+  <Target Name="RequireVersion" BeforeTargets="Build;Pack">
+    <Error Condition="'$(Version)' == ''" Text="`version` missing from the root gradle.properties" />
+  </Target>
 </Project>

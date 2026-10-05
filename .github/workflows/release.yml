@@ -18,6 +18,10 @@ jobs:
 
     permissions:
       contents: read
+      # nuget.org Trusted Publishing exchanges this job's OIDC token for a short-lived key.
+      id-token: write
+      # The contract is mirrored to GitHub Packages.
+      packages: write
 
     steps:
       - uses: actions/checkout@v4
@@ -61,23 +65,59 @@ jobs:
           ./gradlew -p smoke-test verifyProcessorResolvesByCoordinate verifyRuntimeResolvesByCoordinate \
             verifyAnnotationsPluginResolvesByCoordinate
 
+      # The contract goes first and must be listed before anything else is published: every
+      # generated package depends on `Xxfast.Kotlin.Native.Interop` from this version up, so a plugin
+      # release without it does not restore for any C# consumer. It is versioned in lockstep with
+      # the plugin (its csproj reads gradle.properties), so each release pushes a new version.
+      # `--skip-duplicate` only lets a failed run be retried after the push already went through.
+      - name: Verify and pack the shared NuGet contract
+        run: |
+          dotnet test ContractTests
+          dotnet pack Kotlin.Native.Interop -c Release -o build/nuget
+
+      # Trusted Publishing: the nuget.org policy names this repository and this workflow file, so
+      # renaming `release.yml` breaks publishing until the policy is updated. The key is
+      # short-lived, so this step stays directly before the push.
+      - name: Log in to nuget.org
+        id: nuget
+        uses: NuGet/login@v1
+        with:
+          user: xxfast
+
+      - name: Publish the shared NuGet contract
+        run: |
+          dotnet nuget push build/nuget/Xxfast.Kotlin.Native.Interop.*.nupkg \
+            --source https://api.nuget.org/v3/index.json \
+            --api-key "$NUGET_API_KEY" --skip-duplicate
+          dotnet nuget push build/nuget/Xxfast.Kotlin.Native.Interop.*.nupkg \
+            --source https://nuget.pkg.github.com/xxfast/index.json \
+            --api-key "$GITHUB_TOKEN" --skip-duplicate
+        env:
+          NUGET_API_KEY: ${{ steps.nuget.outputs.NUGET_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # nuget.org accepts a push and validates it afterwards. Wait until this exact version can be
+      # restored, so the irreversible steps below never run against a contract that failed validation.
+      - name: Wait for nuget.org to list the contract
+        run: |
+          version="$(grep '^version=' gradle.properties | cut -d= -f2)"
+          url="https://api.nuget.org/v3-flatcontainer/xxfast.kotlin.native.interop/$version/xxfast.kotlin.native.interop.nuspec"
+          for attempt in $(seq 1 60); do
+            if curl --silent --fail --output /dev/null "$url"; then
+              echo "Xxfast.Kotlin.Native.Interop $version is listed"
+              exit 0
+            fi
+            echo "Not listed yet ($attempt/60)"
+            sleep 30
+          done
+          echo "::error::Xxfast.Kotlin.Native.Interop $version was not listed on nuget.org within 30 minutes"
+          exit 1
+
       # No automaticRelease: every deployment waits for a manual "Publish" at central.sonatype.com.
       # `nuget-plugin` is an included build, so it is a separate Central deployment from
       # `nuget-processor` and `nuget-runtime`, and needs its own approval. The runtime ships here
       # too (ADR-127): the plugin resolves `io.github.xxfast:nuget-runtime:<version>` by coordinate
       # in every consumer, so a release without it does not resolve outside this repository.
-      # The independently versioned contract must resolve before any generated package needs it.
-      # Reusing a contract major across plugin releases is intentional; NuGet versions are immutable.
-      - name: Verify and publish the shared NuGet contract
-        run: |
-          dotnet test ContractTests
-          dotnet pack Kotlin.Native.Interop -c Release -o build/nuget
-          dotnet nuget push build/nuget/Kotlin.Native.Interop.*.nupkg \
-            --source https://api.nuget.org/v3/index.json \
-            --api-key "$NUGET_API_KEY" --skip-duplicate
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
-
       - name: Publish to Maven Central
         run: >
           ./gradlew --no-configuration-cache

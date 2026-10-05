@@ -4,7 +4,7 @@ A Kotlin function, property accessor, or constructor that throws crosses the bri
 exception instead of aborting the process. Nothing needs to be written differently in the exported
 Kotlin to get this: it applies uniformly to every generated call shape.
 
-The exception types come from the shared `Kotlin.Native.Interop` package. If your .NET project references multiple Kotlin-built packages, an unmapped failure from either can be caught as `KotlinException`; mapped failures keep their usual .NET base type and implement `IKotlinException`.
+The exception types come from the shared `Xxfast.Kotlin.Native.Interop` package, under the `Kotlin.Native.Interop` namespace. If your .NET project references multiple Kotlin-built packages, an unmapped failure from either can be caught as `KotlinException`; mapped failures keep their usual .NET base type and implement `IKotlinException`.
 
 ```kotlin
 fun checkOreoWeight(grams: Int): String {
