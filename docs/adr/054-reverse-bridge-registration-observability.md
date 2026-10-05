@@ -717,3 +717,7 @@ are recorded here (and in the Decision section above) so no implementer treats t
    `DOTNET_HOST_TRACE` / `DOTNET_HOST_TRACEFILE`.
 
 Implemented and verified; status flipped to `Accepted` above.
+
+## Pointer 2026-10-05: error lines
+
+The forward `[nuget:interop] error ...` line is an amendment to [ADR-129](129-nuget-runtime-version-export.md), because the forward `Interop.cs` helper that writes it is that ADR's. The reverse shim's twin `[nuget:shim] error ...` line, written by `NugetKotlinErrors.Build` behind the flag this ADR caches, is recorded in [ADR-203](203-reverse-envelope-shared-exception-mapper.md).

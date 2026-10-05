@@ -117,8 +117,40 @@ expected, so a stale native library shows up here even when the C# shim compiled
 library predates that export, the line instead reads
 `[nuget:interop] runtime version unavailable from <library>: <ExceptionType>: <message>`.
 
-There is no per-call trace: every diagnostic on this page is registration-granularity, checked once
-per bound type at process start, not on the bridge-call path.
+There is no trace of successful calls: apart from the exception line below, every diagnostic on
+this page is registration-granularity, checked once per bound type at process start, not on the
+bridge-call path.
+
+## Tracing exceptions {id="tracing-exceptions"}
+
+With the same two variables, each Kotlin exception that crosses the bridge into C# writes one line,
+where it becomes a .NET exception. It names the C# member, the Kotlin class, the .NET type it
+became and the mapping row that decided it, so a `KotlinException` you expected to be a
+`KotlinIOException` shows up as `(row none)`:
+
+```
+[nuget:interop] error Rake: io.github.xxfast.kotlin.native.nuget.test.cat.LitterBoxJammedException -> KotlinIOException (row kotlinx.io.IOException): Oreo buried the rake
+```
+
+The variables are read when an error occurs, so a successful call pays nothing and you can switch
+tracing on or off from the environment of a running test. Newlines in the message become spaces.
+
+- A call made inside a generated helper or lambda reports the enclosing generated method, not
+  your member.
+- A `Throwable` that Kotlin returns rather than throws, and a `Result` failure returned through a
+  `TryX` twin, also print an `error` line when tracing is on, although your call does not throw.
+- A managed exception that went to Kotlin and was rethrown back to you prints the same format with
+  its original .NET type.
+
+When C# calls a Kotlin implementation of a C# interface and Kotlin throws, the reverse shim writes
+the matching line with the `[nuget:shim]` prefix and no member name:
+
+```
+[nuget:shim] error <kotlinType> -> <type> (row <row>): <message>
+```
+
+Unlike the `[nuget:interop]` line, the `[nuget:shim]` line honours the variables as they were when
+the process started.
 
 ## Checking for a handle leak
 

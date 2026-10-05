@@ -20,10 +20,10 @@ questions", forced by an actually-false Inferred claim, not a preference:
   `packageId`) threaded through `NugetPlugin.kt` into `NugetGenerateShimsTask`, so
   `TestLibrary.KotlinInvalidOperationException` etc. resolve across the namespace boundary.
 - One direct consequence, not itself wrong but worth naming: `NugetKotlinErrors.Map`
-  (`NugetRuntimeRegistration.cs`) duplicates the forward `BuildMapped` switch's nine rows verbatim,
-  because `BuildMapped` is `private` (`CirErrorRenderer.kt:59`) and the reverse side cannot call it.
-  Tracked as its own cheap follow-up in [ROADMAP.md](ROADMAP.md) Tooling & Test Integrity (expose a
-  public forward exception factory).
+  (`NugetRuntimeRegistration.cs`) duplicated the forward `BuildMapped` switch's nine rows verbatim,
+  because `BuildMapped` was `private`. Resolved by
+  [ADR-203](203-reverse-envelope-shared-exception-mapper.md): both directions now call the shared
+  `KotlinException.CreateMapped`.
 
 Everything else in the Decision and Mechanism claims ledger below shipped as designed, including the
 one deliberately-retained boundary: propagation is catchable only when C# calls a bridge member
@@ -366,3 +366,12 @@ Inferred (not verified; fails loudly at build time, not silently, if wrong):
 1. Dummy-return values for wire types other than `Int` and pointers (byte `0` for `bool`, etc.)
    are safe because the C# member checks `errOut` first; composition of shipped pieces, not
    spiked per type.
+
+## Pointer 2026-10-05: reverse-slot exceptions map the same way
+
+[ADR-203](203-reverse-envelope-shared-exception-mapper.md) moved the Kotlin-to-.NET exception switch
+into the shared `Kotlin.Native.Interop.KotlinException.CreateMapped`. `NugetKotlinErrors.Map` is
+deleted, and a Kotlin slot that throws now reaches C# as the mapped type the module's own classifier
+matched (hierarchy matching, `NullPointerException`, `CancellationException` and
+`kotlinx.io.IOException` included), not a bare `KotlinException` for everything outside eight exact
+names. The "duplicated, not shared" note in the Consequences no longer holds.

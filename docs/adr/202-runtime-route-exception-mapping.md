@@ -59,8 +59,8 @@ A plain `Flow` needs nothing: its generated `_collect` already passes the module
 
 Routes covered: `nuget_suspend_func{0..3}_invoke` and `nuget_stateflow_collect`. Not covered:
 
-- the reverse envelope (`nugetKotlinError`), which keeps stdlib rows and is out of scope here; the
-  shim does not read `mappedType` anyway (ADR-177, "Reverse envelope");
+- the reverse envelope (`nugetKotlinError`), out of scope here and done in
+  [ADR-203](203-reverse-envelope-shared-exception-mapper.md);
 - `nuget_stateflow_value` and `nuget_func{0..3}_invoke`, which have no error slot;
 - a handle transferred from one library to another, which would classify with the receiving
   library's rows (ADR-178 already defers cross-library wrapper transfer).
@@ -104,7 +104,7 @@ alternative 2.
   decided here.
 - One extra statement runs in each export listed above. No new export, handle or `LeakTests` row:
   the existing suspend-lambda row covers the path.
-- The reverse envelope still maps stdlib rows only.
+- The reverse envelope was left out of this ADR; ADR-203 maps it too.
 
 ## Evidence
 
@@ -129,3 +129,10 @@ Inferred, not verified:
 - The `StateFlow` route is pinned by the runtime nativeTest and the Tier 1 text only. There is no C#
   end-to-end fact: a stock `StateFlow` is inferred not to throw from `collect`, and a contrived
   library-authored `StateFlow` fixture was declined.
+
+## Pointer 2026-10-05: the reverse envelope is done
+
+[ADR-203](203-reverse-envelope-shared-exception-mapper.md) closes the exclusion above: the reverse
+envelope (`nugetKotlinError`) classifies with the module's own `nugetMappedType`, so a Kotlin slot
+that throws `kotlinx.io.IOException` reaches C# as `KotlinIOException`. It does not use
+`nugetRuntimeMappedType`, because a reverse slot can throw before any install in this ADR has run.

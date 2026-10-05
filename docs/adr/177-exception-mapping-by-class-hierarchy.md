@@ -199,14 +199,14 @@ as `NUGET_RUNTIME_EXPORTS`. The ADR-150 `@throws T` cref walks `T`'s KSP superty
 
 ### Reverse envelope
 
-As shipped, the plugin-generated `nugetKotlinError(t)` passes `::nugetStdlibMappedType`, so the
-envelope's `NugetError.mappedType` is populated, but the shim's `NugetKotlinErrors.Map` is
-**unchanged**: no `nuget_kotlin_error_cause_mapped_type` export was added, and `Map` still switches
-on the concrete `kotlinType` with its original exact-name table. A reverse-side subclass of a
-mapped type, `NullPointerException`, and the IO family therefore still arrive as `KotlinException`
-there. What the reverse envelope does inherit is the null-message rule: a Kotlin exception with no
-message now reads its Kotlin type name, not `Kotlin error`. The original design (a mapped-type
-export feeding `Map`) is deferred with the shared `BuildMapped` (ROADMAP.md).
+As first shipped, the plugin-generated `nugetKotlinError(t)` passed `::nugetStdlibMappedType`, but
+the shim's `NugetKotlinErrors.Map` was **unchanged**: no `nuget_kotlin_error_cause_mapped_type`
+export, and `Map` switched on the concrete `kotlinType` with its original exact-name table, so a
+reverse-side subclass of a mapped type, `NullPointerException`, and the IO family arrived as
+`KotlinException`. [ADR-203](203-reverse-envelope-shared-exception-mapper.md) carries out the
+original design (see the 2026-10-05 pointer at the end): the reverse envelope maps like a forward
+call. What the reverse envelope always inherited is the null-message rule: a Kotlin exception with
+no message reads its Kotlin type name, not `Kotlin error`.
 
 ### Scope of the IO row
 
@@ -216,8 +216,7 @@ runtime owns passed `::nugetStdlibMappedType` and got stdlib rows only, because 
 see the module's KSP lookup: `nuget_suspend_func{0..3}_invoke` (a Kotlin suspend lambda invoked
 from C#), `nuget_stateflow_collect`, and the reverse envelope. An `IOException` thrown on those
 routes arrived as `KotlinException`. [ADR-202](202-runtime-route-exception-mapping.md) fixed this
-for the forward routes (see the 2026-10-05 amendment below); the reverse envelope still maps stdlib
-rows only.
+for the forward routes (see the 2026-10-05 amendment below), and ADR-203 for the reverse envelope.
 
 ### `@throws` name resolution
 
@@ -311,7 +310,7 @@ System.Runtime.CompilerServices.SwitchExpressionException base=System.InvalidOpe
 - **ADR-029 amended:** matching is by hierarchy, most specific first; three rows added
   (`kotlinx.io.IOException`, `NullPointerException`, `NoWhenBranchMatchedException`) plus the
   `CancellationException` row.
-- **Deferred:** hierarchy and IO rows on the reverse envelope (the runtime-owned forward routes
+- **Deferred (the reverse envelope, the shared `BuildMapped` and the forward error trace are done, see the 2026-10-05 pointer):** hierarchy and IO rows on the reverse envelope (the runtime-owned forward routes
   followed in ADR-202); `okio.IOException` and ktor 2's IOException rows;
   finer rows (`EOFException -> EndOfStreamException`, `FileNotFoundException`,
   `IndexOutOfBoundsException`, `UninitializedPropertyAccessException`); a forward error trace; sharing
@@ -331,3 +330,14 @@ Verified: a C# fact for the suspend-lambda route; runtime nativeTests that drive
 `nuget_suspend_func{0..3}_invoke` and `nuget_stateflow_collect` with a throwing body and read
 `NugetError.mappedType`. The `StateFlow` route has no C# end-to-end fact (inferred from the kotlinx.coroutines
 contract: a stock `StateFlow` never throws from `collect`), so that route is pinned at the runtime level only.
+
+## Pointer 2026-10-05: the reverse envelope and the forward trace
+
+Two items this ADR deferred are done. [ADR-203](203-reverse-envelope-shared-exception-mapper.md)
+makes the reverse envelope classify with the module's own `nugetMappedType` and map through one
+shared `Kotlin.Native.Interop.KotlinException.CreateMapped`, so a Kotlin-implemented slot that throws
+`kotlinx.io.IOException`, a subclass of a mapped row, `NullPointerException`,
+`NoWhenBranchMatchedException` or `CancellationException` now reaches C# as the mapped type, the same
+as a forward call (breaking in the sense above, on reverse slots). Sharing `BuildMapped` with the
+reverse shim is therefore done, and the forward error trace is the 2026-10-05 amendment to
+[ADR-129](129-nuget-runtime-version-export.md).
