@@ -12,9 +12,17 @@
     <Description>Shared exception and presence contracts for Kotlin/Native NuGet bindings.</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/xxfast/kotlin-native-nuget</RepositoryUrl>
+    <PackageProjectUrl>https://xxfast.github.io/kotlin-native-nuget/</PackageProjectUrl>
+    <PackageTags>kotlin kotlin-native interop</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <IsTrimmable>true</IsTrimmable>
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="icon.png" Pack="true" PackagePath="\" />
+  </ItemGroup>
   <Target Name="RequireVersion" BeforeTargets="Build;Pack">
     <Error Condition="'$(Version)' == ''" Text="`version` missing from the root gradle.properties" />
   </Target>
