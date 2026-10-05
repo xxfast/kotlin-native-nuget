@@ -2,12 +2,14 @@ package io.github.xxfast.kotlin.native.nuget.processor.exports
 
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinIdentifier
 import io.github.xxfast.kotlin.native.nuget.processor.ForwardSymbolTable
+import io.github.xxfast.kotlin.native.nuget.processor.forward.ForwardCallablePlanCatalog
 import io.github.xxfast.kotlin.native.nuget.processor.forward.importIfDefaultPackage
 import io.github.xxfast.kotlin.native.nuget.processor.forward.kotlinPackageReference
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSValueParameter
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import io.github.xxfast.kotlin.native.nuget.processor.cir.FLOW_TYPES
@@ -95,6 +97,20 @@ private fun KSType.isLegacyGenericRouteParameter(): Boolean {
 }
 
 /**
+ * Whether this generic-return route parameter is a nullable value type (an enum or a primitive
+ * other than `String`). It crosses as the ADR-062 plan routes' pair, a `Boolean` has-value slot
+ * named `<name>HasValue` before the value slot, so a null reaches Kotlin as null. A nullable
+ * `String` needs no slot: both halves marshal a null string transparently. Reads both sides
+ * because `expandAliases()` drops a use-site `?` on an alias.
+ */
+internal fun KSValueParameter.isLegacyHasValueParameter(): Boolean {
+  val declared: KSType = type.resolve()
+  val expanded: KSType = declared.expandAliases()
+  val isNullable: Boolean = declared.isMarkedNullable || expanded.isMarkedNullable
+  return isNullable && expanded.declaration.qualifiedName?.asString() != "kotlin.String"
+}
+
+/**
  * Named legacy adapter for top-level functions that remain outside the ordinary plan path:
  * generic-declaration returns. Ordinary synchronous top-level callables (including ADR-002
  * nullable-primitive two-call) are planned and emitted via [addForwardKotlinPlanExport].
@@ -111,8 +127,10 @@ internal fun FileSpec.Builder.addFunctionExports(
   func: KSFunctionDeclaration,
   /** ADR-163: the one symbol table, the same string `translateFunction` pins as its entryPoint. */
   symbols: ForwardSymbolTable,
+  /** ADR-090: the planner's overload number, so two overloads on this route do not collide. */
+  callableCatalog: ForwardCallablePlanCatalog,
 ) {
-  val cname: String = symbols.topLevel(func)
+  val cname: String = symbols.topLevel(func) + callableCatalog.overloadSuffix(func)
   // ADR-163: the call is fully qualified, so two same-named top-level functions in two packages
   // do not import to one ambiguous simple name in the generated file.
   val funcName: String =
@@ -131,13 +149,15 @@ internal fun FileSpec.Builder.addFunctionExports(
     val isEnum: Boolean = (resolved.declaration as? KSClassDeclaration)
       ?.classKind == com.google.devtools.ksp.symbol.ClassKind.ENUM_CLASS
 
-    if (!isEnum) return@joinToString name
-
-    val enumName: String = resolved.declaration.qualifiedName?.asString()
-      ?: resolved.declaration.simpleName.asString()
-
-    "($enumName.entries.getOrNull($name) ?: throw IllegalArgumentException(" +
-        "\"Ordinal \" + $name + \" is out of bounds for enum $enumName\"))"
+    val decoded: String = if (isEnum) {
+      val enumName: String = resolved.declaration.qualifiedName?.asString()
+        ?: resolved.declaration.simpleName.asString()
+      "($enumName.entries.getOrNull($name) ?: throw IllegalArgumentException(" +
+          "\"Ordinal \" + $name + \" is out of bounds for enum $enumName\"))"
+    } else {
+      name
+    }
+    if (param.isLegacyHasValueParameter()) "if (${name}HasValue) $decoded else null" else decoded
   }
 
   // ADR-163: the default package has no qualifier to spell, so the bare call needs this import.

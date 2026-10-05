@@ -352,6 +352,23 @@ Crate<int> crate = Crates.CrateOfInt();
 Crate<Snapshot> snapshotCrate = Crates.CrateOfSnapshot(); // qualified: Crate<global::...Snapshot>
 ```
 
+Such a function can take enum, primitive and `String` parameters. An enum crosses as its ordinal, a
+nullable enum or primitive keeps its `null`, and overloads bind side by side:
+
+```kotlin
+fun treatsFor(mood: Mood): Box<Int> = Box(mood.ordinal + 1)
+fun treatsFor(name: String): Box<Int> = Box(name.length)
+fun snackPlan(mood: Mood?, naps: Int?): Box<Int> =
+  Box(((mood?.ordinal ?: -1) + 1) * 100 + (naps ?: -1))
+```
+
+```C#
+using Box<int> treats = CatMoodTrackerKt.TreatsFor(Mood.Grumpy);
+using Box<int> plan = CatMoodTrackerKt.SnackPlan(null, 0); // Mood? and int?
+```
+
+A parameter of an exported class type is not carried on this route: the function is skipped, named.
+
 A generic `abstract class` returns the same way. The value is an internal subclass that forwards to the
 Kotlin object, as described in [An abstract class as a return type](interfaces-abstract-sealed.md#an-abstract-class-as-a-return-type).
 

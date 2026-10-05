@@ -468,18 +468,6 @@ internal enum class ForwardDiagnosticKind(
    *  at without threading nodes through the whole CIR model (ADR-162 Deferred scope), so the
    *  whole-round guard reports one nodeless diagnostic of this kind for those. */
   ERROR_INTERNAL_GENERATOR_FAILURE(ForwardDiagnosticSeverity.ERROR),
-
-  /** ADR-162 (ROADMAP line 236): enum parameters on a top-level function whose return shape is
-   *  carried by a legacy route that hand-builds its native call and so never casts an enum
-   *  parameter down to its ordinal (a nullable, lambda, `Flow`, collection or handle return).
-   *  Emitting the bridge anyway would produce C# that does not compile.
-   *
-   *  The last fatal forward diagnostic to live outside this enum: it was a bare `logger.error` in
-   *  `CirFunctionTranslator` with no `[nuget:KIND]` tag, so it was the one build failure from this
-   *  processor a consumer could not grep for by kind. Kept fatal rather than downgraded to a
-   *  `SKIPPED_*` (ADR-162 Q5 records the downgrade as a follow-up): the translator already returns
-   *  `emptyList()`, so the behaviour is preserved and only the label changes here. */
-  ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE(ForwardDiagnosticSeverity.ERROR),
   ;
 
   /** The word [ForwardDiagnostic.format] opens the message with, derived from the name prefix so

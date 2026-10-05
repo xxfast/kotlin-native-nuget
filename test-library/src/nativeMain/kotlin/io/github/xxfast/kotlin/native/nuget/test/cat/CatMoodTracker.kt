@@ -266,6 +266,28 @@ class CatMoodTracker(private val catName: String) {
 fun sulkBox(): Box<Mood> = Box(Mood.GRUMPY)
 
 /**
+ * An enum parameter on the generic-return route: the C# enum crosses as its ordinal. A happy cat
+ * gets one treat per extra mood step, so each mood boxes a distinct count.
+ */
+fun treatsFor(mood: Mood): Box<Int> = Box(mood.ordinal + 1)
+
+/** Two enum parameters on the same route: Oreo's mood counts tens, Mylo's counts units. */
+fun standoff(oreo: Mood, mylo: Mood): Box<Int> = Box(oreo.ordinal * 10 + mylo.ordinal + 1)
+
+/**
+ * The overload of [treatsFor] on the same route: a cat named by a string gets a treat per letter.
+ * It takes the planner's overload number, so the two do not collide on one C entry point.
+ */
+fun treatsFor(name: String): Box<Int> = Box(name.length)
+
+/**
+ * Nullable enum and primitive parameters on the same route. An unknown mood counts zero hundreds
+ * and unknown naps count -1, so every null is distinguishable from every value, including 0 naps.
+ */
+fun snackPlan(mood: Mood?, naps: Int?): Box<Int> =
+  Box(((mood?.ordinal ?: -1) + 1) * 100 + (naps ?: -1))
+
+/**
  * A nullable type argument on the generic-return route keeps its `?` (`Box<int?>`,
  * `Box<string?>`), so a null item reads back as null rather than `0` or an empty string.
  */

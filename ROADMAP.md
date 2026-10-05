@@ -54,7 +54,6 @@ Complete.
 Complete.
 
 ## Phase 5: Exception handling
-- [ ] `ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE` could downgrade to a `SKIPPED_*`, since the function is simply absent and nothing depends on it ([ADR-162](docs/adr/162-per-declaration-error-containment.md) Q5). ([details](docs/backlog/enum-parameter-route-fatal-could-downgrade-to-skip.md))
 - [ ] **The propagated `KotlinException.KotlinStackTrace` carries dozens of host-process frames below the `@CName` entry point, unsymbolizable and actively misleading.** ([details](docs/backlog/kotlinstacktrace-host-process-frames.md))
 - [ ] Deferred by [ADR-107](docs/adr/107-throwable-property-mapping.md): `Throwable` at a method-return position or a parameter position, `List<Throwable>`, and a module-local non-exported `Throwable` subclass (e.g. `class MyError : Exception()` not in the export set), which the classifier's klib-origin-only supertype walk leaves classified as `Unsupported` rather than `Throwable`.
 - [ ] Runtime-owned routes map stdlib rows only (`nuget_suspend_func{0..3}_invoke`, `nuget_stateflow_collect`, the reverse envelope), so a `kotlinx.io.IOException` on them stays a bare `KotlinException`; needs the module lookup to reach the runtime (per-object capture or a per-library registration). Discovered by [ADR-177](docs/adr/177-exception-mapping-by-class-hierarchy.md). There is still no forward-direction error trace (`NUGET_INTEROP_TRACE` is the ADR-054 reverse-registration trace only).

@@ -1923,9 +1923,10 @@ an existing one:
 - `ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE`: `CirFunctionTranslator`'s `enumParamsUnsupported`, a
   pre-existing bare `logger.error` with no kind at all, is the last fatal forward diagnostic ADR-162
   folded into this enum. Behaviour (which functions are refused, and why) is unchanged; only the tag
-  changes.
+  changes. (Removed 2026-10-05: the shape binds now, so the kind no longer exists; see the
+  [ADR-162](162-per-declaration-error-containment.md) enum-parameter amendment.)
 
-Both are installed through ADR-162's `guarded(...)` boundary or its plan-time equivalent, not through
+Both were installed through ADR-162's `guarded(...)` boundary or its plan-time equivalent, not through
 a producer calling `ForwardDiagnosticSink.emit` directly at a throw site the way every other kind in
 this file is. See ADR-162 for the containment mechanism (per-declaration, not per-round) and for why
 the ROADMAP's own "continues, as the `SKIPPED_*` diagnostics do" wording for this family was replaced

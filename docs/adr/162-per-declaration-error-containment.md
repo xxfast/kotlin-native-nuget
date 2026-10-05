@@ -27,7 +27,8 @@ research spikes needed to touch the same files to close them:
   as two owners of one C entry point.
 - `enumParamsUnsupported` (`CirFunctionTranslator`) was the last fatal forward diagnostic that still
   lived outside `ForwardDiagnosticKind`: a bare `logger.error` with no `[nuget:KIND]` tag, so it was
-  the one build failure from this processor nobody could grep for by kind.
+  the one build failure from this processor nobody could grep for by kind. (Superseded: the kind
+  was removed by binding the shape, see the 2026-10-05 enum-parameter amendment at the end.)
 
 ### Spikes, not argument
 
@@ -167,7 +168,8 @@ cannot cast an enum parameter's ordinal back down) now routes through `ForwardDi
 behaviour it already had. After this change the sink (`ForwardDiagnosticSink.emit`) is the only
 `logger.error(` call left in `nuget-processor/src/main`. Downgrading this to a `SKIPPED_*` (the
 function is simply absent from the generated API, nothing else depends on it) was considered and
-deferred, not decided against; see Deferred scope.
+deferred, not decided against; see Deferred scope. (Superseded 2026-10-05: the shape now binds and
+the kind is removed; see the enum-parameter amendment at the end.)
 
 ### The re-emitted console line gets a location
 
@@ -219,7 +221,8 @@ fields are optional on read, so a `NugetDiagnostics.json` written by an older pr
   `ERROR_CSHARP_SIGNATURE_COLLISION` (CS0111 wording, naming the method and the generated `Dispose`)
   instead of the generic `ERROR_C_ENTRY_POINT_COLLISION` two phases later. `fun close()` is unaffected.
 - `enumParamsUnsupported`'s failure is now `ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE`, greppable by kind
-  for the first time; behaviour (which functions are refused, and how) is unchanged.
+  for the first time; behaviour (which functions are refused, and how) is unchanged. (Superseded
+  2026-10-05: the kind is removed, see the enum-parameter amendment at the end.)
 - A `nugetReportDiagnostics` console line now leads with `<path>:<line>: ` when the diagnostic has a
   location, in addition to the existing trailing `at <path>:<line>` inside the message body.
 - No fixtures were added to `test-library/`: an `ERROR_*`-triggering declaration there would break
@@ -248,7 +251,8 @@ fields are optional on read, so a `NugetDiagnostics.json` written by an older pr
   user-reachable family surveyed in the research memo's census.
 - **Downgrading `ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE` to a `SKIPPED_*`** (the function is simply
   absent, nothing else depends on it, and the translator already returns `emptyList()`). Recorded as a
-  follow-up rather than decided against; new ROADMAP line.
+  follow-up rather than decided against; new ROADMAP line. (Closed 2026-10-05 by binding the shape
+  instead; see the enum-parameter amendment at the end.)
 - **Gradle Problems API adoption** for the re-emit, and an opt-in `failOnSkippedDeclarations`
   (ADR-100's own deferred item), both of which the additive `file`/`line` JSON fields prepare for
   without committing to either.
@@ -352,3 +356,56 @@ translator guards in `CirTranslator`, and the planner's internal guard (`planOrS
 per-declaration loop that calls neither guard is also invisible to the test, since the step only
 proves the sites that call it. The `Error` path (an `Error` is deliberately not caught) is not tested
 end to end.
+
+## Amendment (2026-10-05): the enum-parameter refusal is resolved by binding the shape
+
+This answers Q5, the deferred "downgrade `ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE` to a `SKIPPED_*`"
+question. The decision is neither fatal nor skip: the one shape that raised the kind now binds, so
+there is nothing left to refuse, and the kind is removed.
+
+**What the kind refused.** A top-level, non-suspend function with an enum parameter and a return of
+a generic class at a closed type (`fun treatsFor(mood: Mood): Box<Int>`). That return still rides
+the legacy hand-built route, which called the native function with the enum uncast while the
+DllImport already took the `int` ordinal. The Kotlin half was never omitted: it emitted a complete
+export that decoded the ordinal, and only the C# half refused. A plain severity downgrade would
+therefore have left a Kotlin export with no C# import, so "nothing else depends on it" was wrong.
+
+**Rule.** The route casts an enum parameter to its ordinal at the native call
+(`TreatsFor_native((int)mood, out IntPtr error)`), the same expression the other routes already
+use. Nothing is skipped and no new kind exists. `ERROR_UNSUPPORTED_ENUM_PARAMETER_ROUTE` and
+`enumParamsUnsupported` are deleted, and with them the six collection-return call sites. A
+consumer's build that used to fail with this kind now passes.
+
+**The six collection call sites were already dead.** A collection return is plan-owned (ADR-062),
+and `hasLegacyGenericReturnRoute()` refuses it before the legacy translator runs, so only the
+generic-class arm could raise the kind. The ADR's "nine call sites" count above was already stale
+when this was written.
+
+**Folded in on the same route**, because the hand-built call had to change anyway:
+
+- A nullable enum or nullable primitive parameter crosses with its null through a has-value flag,
+  as on the plan routes: `fun snackPlan(mood: Mood?, naps: Int?): Box<Int>` binds as
+  `SnackPlan(Mood? mood, int? naps)` and calls
+  `SnackPlan_native(mood.HasValue, (int)mood.GetValueOrDefault(), naps.HasValue, naps.GetValueOrDefault(), ...)`.
+  Before, `Int?` silently bound as a non-null `int` and dropped the null. A nullable `String` needs
+  no flag and already bound correctly.
+- Overloads on this route no longer share one C entry point. The route takes the planner's overload
+  number (ADR-090): `TreatsFor(Mood)` and `TreatsFor(string)` bind side by side and the second
+  export is `treatsFor_2`. The number reaches the C# extern name as well as the entry point
+  (ADR-118), since numbering the entry point alone would leave two same-wire overloads with one
+  extern name. No existing entry point moves, because the first occurrence is unnumbered.
+- Unchanged and pinned: a class-typed parameter on this route is still a named
+  `SKIPPED_UNSUPPORTED_RETURN` skip on both halves.
+
+**Evidence.** Verified: `Tier1EnumParameterRouteTest` (enum parameters, including two in one call,
+beside an overload; the collection-return cell passed before any production change, which is what
+shows those call sites were unreachable), `Tier1GenericReturnRouteParametersTest` (nullable
+parameters, nullable `String` binding, class parameter skipping, overload numbering), and
+`EnumParameterGenericReturnTests` through the native pipeline. IntegrationTests passed 3187 and
+LeakTests 189. Each enum value boxes a distinct count, so an uncast or misordered ordinal cannot
+pass. No `LeakTests` row: these parameters mint no handle, and the returned `Box<int>` route is
+already covered by `EnumStateFlowElement_RepeatedValueReads_ReturnToBaseline`.
+
+**Release note.** This removes a shipped `ERROR_*` kind. Nothing that parsed the console or
+`NugetDiagnostics.json` for it can still see it, and a library that previously failed on it now
+builds.
